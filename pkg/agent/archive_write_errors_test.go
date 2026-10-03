@@ -317,3 +317,124 @@ func TestArchiveWriteError_PositiveControl_HealthyArchivePersistsFinalReply(t *t
 	require.Equal(t, "assistant", archive[1].Role)
 	require.Equal(t, reply, archive[1].Content)
 }
+
+// refuseArchiveAppends applies the same genuine filesystem condition as
+// TestArchiveWriteError_FinalAssistantReply_TurnMustNotReportSuccess — the
+// archive file is replaced by a directory so the next append-open fails
+// EISDIR uid-independently — with the same capability probe, and returns a
+// restore func that puts the exact pre-failure bytes back so post-failure
+// archive state can be verified. (Shared helper for the follow-up site
+// tests; the committed every-turn test keeps its own inline copy so its
+// bytes stay stable for the developer working from 27a521fdb.)
+func (h *archiveErrHarness) refuseArchiveAppends(t *testing.T) (restore func()) {
+	t.Helper()
+	archivePath := h.archiveFilePath(t)
+
+	// Positive instrument check: the healthy archive accepts an append-open
+	// before the swap (open only — a canary byte would corrupt the JSONL).
+	healthy, err := os.OpenFile(archivePath, os.O_WRONLY|os.O_APPEND, 0o644)
+	require.NoError(t, err, "healthy archive must accept an append-open before the swap")
+	require.NoError(t, healthy.Close(), "close the probe handle")
+
+	preserved, err := os.ReadFile(archivePath)
+	require.NoError(t, err, "read archive bytes before the swap")
+
+	require.NoError(t, os.Remove(archivePath), "remove the archive file for the swap")
+	require.NoError(t, os.Mkdir(archivePath, 0o755), "stand a directory in the archive's place")
+
+	// Capability probe: the instrument must ACTUALLY prevent the targeted
+	// write; otherwise fail loudly instead of reporting a green that
+	// verified nothing.
+	blocked, err := os.OpenFile(archivePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err == nil {
+		blocked.Close()
+		t.Fatal("BLOCKED: archive path still accepts an append-open after the swap — " +
+			"this environment bypasses the filesystem condition (privileged runner?), " +
+			"so the test cannot inject a genuine write failure here")
+	}
+	var pathErr *fs.PathError
+	require.ErrorAs(t, err, &pathErr, "refusal must be an fs path error, got %T", err)
+	require.True(t,
+		errors.Is(err, syscall.EISDIR) || errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM),
+		"refusal must be a write-refusal errno (EISDIR for a directory at the path, "+
+			"EACCES/EPERM for permission-family refusals on other platforms), got %v", err)
+
+	return func() {
+		if err := os.RemoveAll(archivePath); err != nil {
+			t.Fatalf("restore: remove swapped-in directory: %v", err)
+		}
+		if err := os.WriteFile(archivePath, preserved, 0o644); err != nil {
+			t.Fatalf("restore: write archive bytes back: %v", err)
+		}
+	}
+}
+
+// Site 3 of the fire-and-forget seam: the D6 continuation flush.
+// pkg/agent/loop_truncation.go::flushContinuationAccumulator clears the
+// accumulator BEFORE the archive append, so a refused append destroys the
+// only copy of text that — per the function's own invariant comment — "has
+// NOT yet been persisted anywhere": after reload the continuation prefix is
+// gone from every surface while the turn proceeds as if it had been
+// settled.
+//
+// Oracle (derived from existing authority, never observed): (1) the clear is
+// predicated on a successful persist — the accumulator holds exactly the
+// text not yet persisted, and only flushed content "must never be
+// re-emitted" (the function's own doc comment), so after a refusal the
+// pending text must still sit in the accumulator; (2) the failure must be
+// visible through the same latch every migrated admission uses —
+// pkg/agent/window_runtime.go::turnState.appendWindowMessage's
+// setContextWindowError, which pkg/agent/tool_result_checkpoint.go::
+// contextWindowTurnExit ("storage/projection failures are real failed
+// turns") already turns into a visibly failed turn; (3) the refusal must
+// genuinely have prevented the write — the restored archive holds the
+// earlier user line and no assistant continuation line.
+func TestArchiveWriteError_ContinuationFlush_RefusedAppendMustNotDestroyPendingText(t *testing.T) {
+	h := newArchiveErrHarness(t, "arch-err-flush")
+	userText := "user asks for a long answer"
+	pendingChunk := "the continuation prefix not yet persisted anywhere"
+
+	h.persistUserInput(t, userText)
+	ts := newArchiveErrTurnState(h.agent, h.key, userText)
+
+	// Stage the accumulator exactly as the D6 continuation machinery leaves
+	// it: one unresolved chunk, guarded by the same mutex the flush uses.
+	ts.mu.Lock()
+	ts.continuationAccum = pendingChunk
+	ts.mu.Unlock()
+
+	restore := h.refuseArchiveAppends(t)
+	defer restore()
+
+	var chain []providers.Message
+	h.al.flushContinuationAccumulator(ts, &chain)
+
+	// 1. The only copy of the not-yet-persisted text must survive a refused
+	// flush — the clear is the second half of a successful settle, not a
+	// step that may run before it.
+	ts.mu.Lock()
+	gotAccum := ts.continuationAccum
+	ts.mu.Unlock()
+	require.Equal(t, pendingChunk, gotAccum,
+		"a refused archive append must leave the pending continuation text in the "+
+			"accumulator: the flush cleared it before persisting, so the only copy "+
+			"was destroyed and the prefix is lost from every surface after reload")
+
+	// 2. The failure must be latched where the migrated admission path
+	// latches it, so the existing contextWindowTurnExit consumer ends the
+	// turn visibly instead of continuing as if the prefix had settled.
+	require.Error(t, ts.contextWindowError(),
+		"a refused continuation flush must latch the window error (the twin "+
+			"appendWindowMessage mechanism) so the turn exits visibly; nil here "+
+			"means the loss was swallowed")
+
+	// 3. The refusal genuinely prevented the targeted write.
+	restore()
+	archive, readErr := h.store.ReadArchive(context.Background(), h.key)
+	require.NoError(t, readErr, "archive must be readable again after the file is restored")
+	require.Len(t, archive, 1,
+		"archive must hold exactly the earlier user line: the continuation chunk "+
+			"was refused by the filesystem and must not appear from a failed append")
+	require.Equal(t, "user", archive[0].Role, "earlier setup data must survive untouched")
+	require.Equal(t, userText, archive[0].Content)
+}
