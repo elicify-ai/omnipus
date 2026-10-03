@@ -115,33 +115,21 @@ const CANCEL_RACE_WINDOW_MS = 8_000
  */
 export const STOP_ALL_CONFIRM_WINDOW_MS = 3_000
 
-export function useCancelState(
-  isStreaming: boolean,
-  // The store action's full signature — the D9 tree paths call
-  // `cancelStream(undefined, 'tree')` (ADR-20260928 MAJ-002); every other
-  // path keeps the bare single-session call.
-  cancelStream: (sessionId?: string, scope?: CancelFrame['scope']) => void,
-): UseCancelStateResult {
-  const [stopLabel, setStopLabel] = useState<StopLabel>('stop')
-
-  // T25: track when stopLabel last transitioned to 'stopping' so the reset
-  // effect below can enforce a minimum display duration. Without this, a
-  // very fast LLM response causes the done frame to arrive within
-  // milliseconds of the click, immediately triggering the effect and making
-  // "Stopping..." vanish before any assertion (or user eye) can catch it.
-  const stoppingStartedAt = useRef<number>(0)
-
-  // T23: track when streaming last started. Used by the global Escape
-  // handler to decide whether Escape should still trigger a cancel in the
-  // race window where isStreaming just went false (done frame arrived) but
-  // the user pressed Escape intending to cancel a turn they just observed
-  // streaming.
-  const streamingStartedAt = useRef<number>(0)
-
-  // ── D9 Stop-all confirmation window ────────────────────────────────────
-  // `stopAllArmed` mirrors the ref for rendering only; every behavioral
-  // read goes through the ref so the global Escape listener (registered
-  // with its own closure) can never act on stale arm state.
+/**
+ * ADR-20260928 D9 Stop-all confirmation window, extracted verbatim out of
+ * `useCancelState` (function-size budget; no behavior change): the armed
+ * ref+state pair, the 3 s expiry timer, the blur and session-switch disarm
+ * effects, and the unmount timer cleanup.
+ *
+ * `stopAllArmed` mirrors the ref for rendering only; every behavioral read
+ * goes through the ref so the global Escape listener (registered with its
+ * own closure) can never act on stale arm state.
+ *
+ * `useCancelState` calls this at the same position in its body where this
+ * block was originally declared, so React registers these effects in the
+ * same order as before the extraction.
+ */
+function useStopAllConfirmWindow() {
   const [stopAllArmed, setStopAllArmed] = useState(false)
   const stopAllArmedRef = useRef(false)
   const stopAllTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -193,6 +181,42 @@ export function useCancelState(
       }
     }
   }, [])
+
+  return { stopAllArmed, stopAllArmedRef, armStopAll, disarmStopAll }
+}
+
+export function useCancelState(
+  isStreaming: boolean,
+  // The store action's full signature — the D9 tree paths call
+  // `cancelStream(undefined, 'tree')` (ADR-20260928 MAJ-002); every other
+  // path keeps the bare single-session call.
+  cancelStream: (sessionId?: string, scope?: CancelFrame['scope']) => void,
+): UseCancelStateResult {
+  const [stopLabel, setStopLabel] = useState<StopLabel>('stop')
+
+  // T25: track when stopLabel last transitioned to 'stopping' so the reset
+  // effect below can enforce a minimum display duration. Without this, a
+  // very fast LLM response causes the done frame to arrive within
+  // milliseconds of the click, immediately triggering the effect and making
+  // "Stopping..." vanish before any assertion (or user eye) can catch it.
+  const stoppingStartedAt = useRef<number>(0)
+
+  // T23: track when streaming last started. Used by the global Escape
+  // handler to decide whether Escape should still trigger a cancel in the
+  // race window where isStreaming just went false (done frame arrived) but
+  // the user pressed Escape intending to cancel a turn they just observed
+  // streaming.
+  const streamingStartedAt = useRef<number>(0)
+
+  // ── D9 Stop-all confirmation window ────────────────────────────────────
+  // `stopAllArmed` mirrors the ref for rendering only; every behavioral
+  // read goes through the ref so the global Escape listener (registered
+  // with its own closure) can never act on stale arm state. Extracted
+  // verbatim into `useStopAllConfirmWindow` (function-size budget, no
+  // behavior change); called at the same position in the hook body, so its
+  // effects still register in the original order.
+  const { stopAllArmed, stopAllArmedRef, armStopAll, disarmStopAll } =
+    useStopAllConfirmWindow()
 
   // The self-confirming tree stop (D9): `/cancel`, the dedicated Stop-all
   // control, and the confirmation of the visible offer all land here — one
