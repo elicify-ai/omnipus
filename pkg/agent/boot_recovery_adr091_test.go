@@ -290,57 +290,216 @@ func TestBoot_RenudgesUnconsumedEntriesOnce_EligibleOnly(t *testing.T) {
 	}
 }
 
+// TestBoot_RepairsHalfWrittenCompletion — W3 RED reconcile (fresh-context
+// qa-lead), ADR-20260928 sub-agent control plane (frozen asset cd20cf8b).
+// The pre-migration oracle demanded that boot promote a steered record to
+// completed from an inbox final alone in every crash cut — the inbox-first
+// repair D2 retired: "finishFromFinal must not turn a non-terminal record
+// into done/failed merely because an inbox final exists: require the
+// matching lifecycle/outbox commit (otherwise report the inconsistent record
+// visibly and do not consume the id). Parent consumption/ack never acts as
+// the lifecycle winner." The three crash cuts are migrated INDIVIDUALLY:
+//
+//  1. inbox final WITHOUT a committed outcome — reported visibly, never
+//     promoted, the id never consumed (no re-wake as a final answer, no
+//     acknowledgement), and the entry left recoverable exactly once for a
+//     correct boot repair (D2/D8.5).
+//  2. a COMMITTED terminal/outbox cut off before the inbox append — the
+//     legitimate positive: the exact committed payload publishes once
+//     through the deliverer with its durable delivery facts (D2 "Publish
+//     only a committed outbox", D8.1). Built through the same ONE real
+//     LifecycleStore.Mutate the production commit boundary performs
+//     (commitAllGenDoneFinal) — never a hand-seeded terminal record, which
+//     in production cannot exist without its protected commit tuple.
+//  3. a committed outbox whose parent-inbox append already landed — the
+//     existing id retries the downstream wake without a second final (D2).
+//
+// Unit boundary: the same real stores and SteerBootRecovery.Run the boot
+// suite always uses; the recording deliverer appends to the REAL parent
+// inbox. Specification source: the frozen ADR text quoted above — no
+// expected value below is derived from observed behaviour of the code under
+// test. Known gaps (deliberate): no FramesPersisted fact is asserted (the
+// pinned tree has no frames writer — audited and reported separately, no
+// fake boolean fact); the D8.3 stopped(restart) landing of the uncommitted
+// run is W3b, so case 1 pins non-promotion, not the landing state;
+// CHECK mutations (promote-on-inbox-presence, dropped phantom notice,
+// byte-divergent publication, duplicate append on the already-appended id,
+// skipped UpdateFinalDelivery facts) are deferred to CHECK.
 func TestBoot_RepairsHalfWrittenCompletion(t *testing.T) {
-	for _, tc := range []struct {
-		name          string
-		inboxFirst    bool
-		terminalFirst bool
-	}{
-		{name: "inbox first", inboxFirst: true},
-		{name: "terminal first", terminalFirst: true},
-		{name: "both written before wake", inboxFirst: true, terminalFirst: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			h := newBootRecoveryHarness(t)
-			parent := h.rootSession(t)
-			child := h.newSession(t, session.SessionTypeDelegate, parent)
-			state := session.LifecycleRunning
-			if tc.terminalFirst {
-				state = session.LifecycleCompleted
-				if err := h.sessions.AppendTranscriptStrict(child, session.TranscriptEntry{Role: "assistant", Content: "finished"}); err != nil {
-					t.Fatalf("append child result: %v", err)
-				}
-			}
-			h.persist(t, h.steeredRecord(child, parent, state))
-			finalID := child + ":1:final"
-			if tc.inboxFirst {
-				if _, err := h.inbox.Append(parent, bootHandback(t, child, parent, finalID)); err != nil {
-					t.Fatalf("Append final: %v", err)
-				}
-			}
+	t.Run("inbox final without commit is reported, never promoted or consumed", func(t *testing.T) {
+		h := newBootRecoveryHarness(t)
+		parent := h.rootSession(t)
+		child := h.newSession(t, session.SessionTypeDelegate, parent)
+		h.persist(t, h.steeredRecord(child, parent, session.LifecycleRunning))
+		finalID := child + ":1:final"
+		if _, err := h.inbox.Append(parent, bootHandback(t, child, parent, finalID)); err != nil {
+			t.Fatalf("Append final: %v", err)
+		}
 
-			if err := h.recovery().Run(context.Background()); err != nil {
-				t.Fatalf("Run: %v", err)
+		if err := h.recovery().Run(context.Background()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		rec, err := h.lifecycle.Load(child)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if rec.State == session.LifecycleCompleted {
+			t.Fatal("an inbox final with NO committed lifecycle/outbox outcome promoted the record to completed — D2: the promotion requires the matching commit; an inbox final alone is never a lifecycle winner")
+		}
+		if rec.FinalDelivery != nil {
+			t.Fatalf("a protected commit was minted from inbox presence alone (commit %q) — D2: recovery never mints an outbox commit from a phantom final", rec.FinalDelivery.CommitID)
+		}
+		if rec.Generation != 1 {
+			t.Fatalf("tail generation = %d, want 1 — reconciliation from a phantom final must not mint a newer generation (D8.5)", rec.Generation)
+		}
+		joined := strings.Join(h.notices, "\n")
+		if !strings.Contains(joined, child) || !strings.Contains(joined, finalID) {
+			t.Fatalf("the inconsistent record was not reported visibly (notices %q) — D2: report the inconsistent record visibly, naming the session and the unconsumed final %s", joined, finalID)
+		}
+		for _, event := range h.deliverer.snapshot() {
+			envelope := bootEnvelope(t, event.Message)
+			if envelope.MessageID == finalID && event.Outcome == steer.OutcomeFinalAnswer {
+				t.Fatalf("the phantom final %s was re-woken as a final answer — D2: do not consume the id; the inbox final is never re-published as the completion", finalID)
 			}
-			rec, _ := h.lifecycle.Load(child)
-			if rec.State != session.LifecycleCompleted {
-				t.Fatalf("state = %q, want completed", rec.State)
+		}
+		entries, err := h.inbox.Entries(parent)
+		if err != nil {
+			t.Fatalf("Entries(parent): %v", err)
+		}
+		for _, entry := range entries {
+			if entry.Kind == session.InboxEntryAck && slices.Contains(entry.AckedIDs, finalID) {
+				t.Fatalf("the phantom final %s was acknowledged — D2: parent consumption/ack never acts as the lifecycle winner, and a consumed id could never be repaired", finalID)
 			}
-			messages, _, _, err := h.inbox.Drain(parent, child, "", 20)
-			if err != nil {
-				t.Fatalf("Drain: %v", err)
+		}
+		messages, _, _, err := h.inbox.Drain(parent, child, "", 20)
+		if err != nil {
+			t.Fatalf("Drain: %v", err)
+		}
+		count := 0
+		for _, message := range messages {
+			if bootEnvelope(t, message).MessageID == finalID {
+				count++
 			}
-			count := 0
-			for _, message := range messages {
-				if bootEnvelope(t, message).MessageID == finalID {
-					count++
-				}
+		}
+		if count != 1 {
+			t.Fatalf("phantom final entries in the parent inbox = %d, want exactly 1 — the id is not consumed and the record stays recoverable for a correct boot repair (D2)", count)
+		}
+	})
+
+	t.Run("committed outbox cut before append publishes exactly once at the terminal tail", func(t *testing.T) {
+		h := newBootRecoveryHarness(t)
+		parent := h.rootSession(t)
+		child := h.newSession(t, session.SessionTypeDelegate, parent)
+		commitID := "commit-g1-repairs-terminal-first"
+		finalID, payload, payloadHash := commitAllGenDoneFinal(t, h, child, parent, commitID,
+			"committed, never appended: the crash cut before the parent inbox append")
+
+		if err := h.recovery().Run(context.Background()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		rec, err := h.lifecycle.Load(child)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if rec.State != session.LifecycleCompleted {
+			t.Fatalf("state = %q, want completed — the committed terminal outcome stands; a delivery retry never blanket-fails a committed generation (D2)", rec.State)
+		}
+		if rec.FinalDelivery == nil || rec.FinalDelivery.CommitID != commitID ||
+			rec.FinalDelivery.MessageID != finalID || rec.FinalDelivery.PayloadHash != payloadHash {
+			t.Fatalf("the protected commit identity changed: %+v — D2: outcome, final id and payload identity are immutable once committed", rec.FinalDelivery)
+		}
+		messages := realDelivererInboxMessages(t, h.inbox, parent)
+		got, ok := messages[finalID]
+		if !ok {
+			t.Fatalf("the committed final %s never reached the parent inbox (ids %v) — D2/D8.1: the exact committed message is published to the direct parent", finalID, realDelivererMessageIDs(messages))
+		}
+		if got != string(payload) {
+			t.Fatalf("published final %s bytes diverge from the committed payload — D2: the exact committed upward message is published", finalID)
+		}
+		if len(messages) != 1 {
+			t.Fatalf("parent inbox holds %d message entries (%v), want exactly the one committed final — publish once, the replay id is the duplicate guard (D2)", len(messages), realDelivererMessageIDs(messages))
+		}
+		wakes := 0
+		for _, event := range h.deliverer.snapshot() {
+			if bootEnvelope(t, event.Message).MessageID == finalID && event.Outcome == steer.OutcomeFinalAnswer {
+				wakes++
 			}
-			if count != 1 || len(h.deliverer.snapshot()) != 1 {
-				t.Fatalf("final entries = %d, wakes = %d", count, len(h.deliverer.snapshot()))
+		}
+		if wakes != 1 {
+			t.Fatalf("committed final %s woke the parent %d times, want exactly 1 (D2)", finalID, wakes)
+		}
+		progress, revision, retired, err := h.lifecycle.FinalDeliveryState(child, 1, commitID)
+		if err != nil {
+			t.Fatalf("FinalDeliveryState(G): %v", err)
+		}
+		if retired || revision < 1 || !progress.InboxAppended || !progress.WakeRecorded {
+			t.Fatalf("delivery facts after boot = %+v revision %d retired %v — the pass must record the durable inbox append and wake through UpdateFinalDelivery (D2)", progress, revision, retired)
+		}
+	})
+
+	t.Run("committed outbox with the inbox append already durable does not duplicate", func(t *testing.T) {
+		h := newBootRecoveryHarness(t)
+		parent := h.rootSession(t)
+		child := h.newSession(t, session.SessionTypeDelegate, parent)
+		commitID := "commit-g1-repairs-both-written"
+		finalID, payload, payloadHash := commitAllGenDoneFinal(t, h, child, parent, commitID,
+			"committed and already appended: the crash cut before the wake")
+		var committed generated.SessionMessage
+		if err := committed.UnmarshalJSON(payload); err != nil {
+			t.Fatalf("decode committed payload: %v", err)
+		}
+		if _, err := h.inbox.Append(parent, committed); err != nil {
+			t.Fatalf("Append committed final: %v", err)
+		}
+		if seeded := realDelivererInboxMessages(t, h.inbox, parent); len(seeded) != 1 {
+			t.Fatalf("fixture control: parent inbox holds %d entries before boot, want exactly the appended committed final", len(seeded))
+		}
+
+		if err := h.recovery().Run(context.Background()); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		rec, err := h.lifecycle.Load(child)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if rec.State != session.LifecycleCompleted {
+			t.Fatalf("state = %q, want completed — the committed terminal outcome stands (D2)", rec.State)
+		}
+		if rec.FinalDelivery == nil || rec.FinalDelivery.CommitID != commitID ||
+			rec.FinalDelivery.MessageID != finalID || rec.FinalDelivery.PayloadHash != payloadHash {
+			t.Fatalf("the protected commit identity changed: %+v — D2: the commit identity is immutable once committed", rec.FinalDelivery)
+		}
+		messages := realDelivererInboxMessages(t, h.inbox, parent)
+		got, ok := messages[finalID]
+		if !ok {
+			t.Fatalf("the committed final %s vanished from the parent inbox (ids %v) — the already-appended id stays", finalID, realDelivererMessageIDs(messages))
+		}
+		if got != string(payload) {
+			t.Fatalf("stored final %s bytes diverge from the committed payload — D2: an existing id with the same committed identity is retried, never replaced", finalID)
+		}
+		if len(messages) != 1 {
+			t.Fatalf("parent inbox holds %d message entries (%v), want exactly 1 — an existing id with the same committed payload is never appended a second time (D2)", len(messages), realDelivererMessageIDs(messages))
+		}
+		wakes := 0
+		for _, event := range h.deliverer.snapshot() {
+			if bootEnvelope(t, event.Message).MessageID == finalID && event.Outcome == steer.OutcomeFinalAnswer {
+				wakes++
 			}
-		})
-	}
+		}
+		if wakes != 1 {
+			t.Fatalf("committed final %s woke the parent %d times, want exactly 1 — the downstream wake retries once for the already-appended id (D2)", finalID, wakes)
+		}
+		progress, revision, retired, err := h.lifecycle.FinalDeliveryState(child, 1, commitID)
+		if err != nil {
+			t.Fatalf("FinalDeliveryState(G): %v", err)
+		}
+		if retired || revision < 1 || !progress.InboxAppended || !progress.WakeRecorded {
+			t.Fatalf("delivery facts after boot = %+v revision %d retired %v — the durable receipts must be recorded through UpdateFinalDelivery (D2)", progress, revision, retired)
+		}
+	})
 }
 
 func TestBoot_ClassifiesAllClasses(t *testing.T) {
