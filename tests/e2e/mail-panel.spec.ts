@@ -220,9 +220,17 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     // CI-only OBSERVATION for the flaky popup-close diagnosis. Listeners only:
     // no wait, no poll, no timing change, no oracle change — so the race is
     // observed exactly as it happens, not perturbed. Remove with the diagnosis.
+    // The '[ui4-diag]' arm is REQUIRED, not cosmetic: the production diagnostics
+    // are console.debug, and Playwright does not print browser console to the CI
+    // log on its own — only what this listener forwards appears. Without this arm
+    // the diagnostic lines would be emitted and never seen, which is a silent
+    // no-op instrument.
     const forward = (label: string) => (m: ConsoleMessage) => {
       const text = m.text()
-      if (m.type() === 'error' || text.includes('side-panel') || text.includes('Full-screen')) {
+      if (m.type() === 'error'
+        || text.includes('side-panel')
+        || text.includes('Full-screen')
+        || text.includes('[ui4-diag]')) {
         console.log(`[ui4 ${label}] ${m.type()}: ${text}`)
       }
     }
