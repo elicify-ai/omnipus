@@ -34,6 +34,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { ComposerRuntime } from '@assistant-ui/react'
+import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
 import { generateId } from '@/lib/constants'
 import { fetchCommands, fetchSkills } from '@/lib/api'
 import type { SlashCommand, Skill, Agent } from '@/lib/api'
@@ -79,6 +80,41 @@ export interface UseSlashMenuParams {
   startNewSession: () => void
   /** `/cancel` delegates here — see useCancelState.cancelIfStreaming's doc comment for why this variant (not the unconditional one) is correct for a client command. */
   cancelIfStreaming: () => void
+  /**
+   * D9: true only when the CURRENT chat targets a helper session — a
+   * "delegate"-type session (ADR-057 FR-008: the subordinate type a child
+   * session gains when minted by a delegation). The caller derives it from
+   * the attached session's server-minted wire metadata (the session store's
+   * `attachedSessionType`, recorded from `session.type` on every
+   * `attachToSession`), never from client-side guessing. Fail-closed by
+   * construction (seam ruling §3.2): any unresolvable or non-helper identity
+   * — a fresh "/new" chat (null), a root chat/ task / channel session — is
+   * `false`, so `/stop-redirect` takes the root-style refusal there.
+   *
+   * Optional with a `false` default (fail-closed): a caller that omits it is
+   * treated as the root chat, which is exactly the "Unknown → root refuses"
+   * D9 ruling. The live caller (OmnipusComposer) always passes the real
+   * identity; pre-existing callers (the older test packs' `baseParams`)
+   * omit it and get root behavior without needing edits in QA-owned files.
+   */
+  isHelperSession?: boolean
+  /**
+   * D9: sends the dedicated generated RedirectFrame
+   * `{type:'redirect', session_id, instruction}` to the server over the WS
+   * (the frame never touches message intake, which is what lets a redirect
+   * execute mid-stream). The caller owns the transport — connection lookup,
+   * the `connection.send` call and a VISIBLE error when the send fails —
+   * mirroring how `cancelIfStreaming` keeps its transport in the chat store.
+   * The hook only constructs the frame (exact generated shape, no extra
+   * properties) after its own helper/root and usage gates pass.
+   *
+   * Optional in the type only because pre-existing callers (the older test
+   * packs' `baseParams`) never reach the send path. The send line calls it
+   * DIRECTLY — not `?.` — so a caller that claims `isHelperSession: true`
+   * while omitting the transport fails loudly instead of silently dropping
+   * the frame; the live caller always provides it.
+   */
+  sendRedirectFrame?: (frame: RedirectFrame) => void
 }
 
 export interface UseSlashMenuResult {
@@ -193,6 +229,21 @@ const GHOST_TEXT_PLACEHOLDER = '<message>'
 // silently drift from this one.
 export const SECTION_CAP = 8
 
+// D9 user-facing texts for the /stop-redirect client branches below. The ADR
+// fixes the interaction ("refuse with guidance to target a helper"; the
+// command shape is "/stop-redirect <instruction>") without pinning exact SPA
+// wording; both texts satisfy the pack's oracle substrings ("helper" in the
+// refusal, "/stop-redirect" in the usage) and name the way out.
+const STOP_REDIRECT_ROOT_REFUSAL =
+  '`/stop-redirect` only works in a helper\'s chat — it stops that helper\'s current turn and continues it with a new instruction. Open the helper session you want to redirect and run the command there. To stop this conversation\'s current turn, use `/stop`.'
+const STOP_REDIRECT_USAGE =
+  'Usage: `/stop-redirect <instruction>` — stops this helper\'s current turn and continues it with your new instruction. The instruction text is required; whitespace alone is not an instruction.'
+// Fail-closed edge (not expected in a real helper chat): the helper flag said
+// "helper" but no session is attached to aim the frame at. Refuse visibly
+// rather than sending a frame at an unresolvable target.
+const STOP_REDIRECT_NO_SESSION =
+  '`/stop-redirect` could not resolve the helper session to redirect — no active session is attached to this chat. Re-open the helper\'s chat and try again.'
+
 // Root-cause fix (cancel-cross-channel T24a investigation, sendfile-fix):
 // the composer's `inputEnabled` (ChatScreen.tsx) depends only on the WS
 // being connected — never on this hook's own `['commands','web']` query
@@ -222,6 +273,22 @@ export const SECTION_CAP = 8
 // behavior) missed anything where the typed text wasn't the very start of
 // the name.
 type MatchRank = 'prefix' | 'substring' | 'none'
+
+/**
+ * A client-delivery command resolved from a typed composer string, plus the
+ * argument text when the command takes one. Produced by `resolveClientCommand`.
+ */
+interface ResolvedClientCommand {
+  command: SlashCommand
+  /**
+   * For an argument-bearing client command (D9 "/stop-redirect
+   * <instruction>"): everything after the label, trimmed at both ends
+   * (JS trim is Unicode-aware — NBSP/em-space separators don't survive).
+   * Internal spacing and multibyte content are untouched. '' for an
+   * exact-label match.
+   */
+  argument: string
+}
 
 /** Case-insensitive: `text` either starts with, contains, or doesn't contain `lowerFilter` (already lowercased). */
 function matchRank(text: string, lowerFilter: string): MatchRank {
@@ -257,8 +324,221 @@ function rankByFilter<T>(items: T[], filter: string, getRank: (item: T, lowerFil
   return [...prefixMatches, ...substringMatches]
 }
 
+// Extracted from useSlashMenu (pure relocation, 2026-10-02): the D9 branches
+// grew the hook function past its grandfathered function-size ceiling
+// (scripts/budgets/functions.txt pins useSlashMenu). The body is
+// byte-identical to the pre-extraction nested function; the variables it
+// closed over are now passed explicitly as `deps`.
+// runClientCommand — shared handler for client-delivery slash commands.
+// Called both from palette selection (executeSlashCommand) and from the
+// send-path interception so that typing "/new"+Enter (or its legacy
+// alias "/clear"+Enter) converges with selecting /new from the palette —
+// both run client-side, never reaching the backend.
+//
+// `argument` carries the text after an argument-bearing client command's
+// label (D9 "/stop-redirect <instruction>"), already trimmed of the
+// separating whitespace by resolveClientCommand. '' for every bare
+// command.
+//
+// Returns true when the command was handled (caller must NOT send the
+// text), false when the name is not a known client command (caller
+// should fall through to inserting as text — Issue 3 fallback).
+interface ClientCommandDeps {
+  allCommands: SlashCommand[]
+  startNewSession: UseSlashMenuParams['startNewSession']
+  appendMessage: UseSlashMenuParams['appendMessage']
+  cancelIfStreaming: UseSlashMenuParams['cancelIfStreaming']
+  isHelperSession: boolean
+  sendRedirectFrame: UseSlashMenuParams['sendRedirectFrame']
+  composerRuntime: ComposerRuntime
+  setInputValue: (value: string) => void
+  setSlashOpen: (open: boolean) => void
+}
+
+function runClientSlashCommand(name: string, argument: string, deps: ClientCommandDeps): boolean {
+  const { allCommands, startNewSession, appendMessage, cancelIfStreaming, isHelperSession, sendRedirectFrame, composerRuntime, setInputValue, setSlashOpen } = deps
+  if (name === 'new' || name === 'clear') {
+    // Renamed /clear → /new (the palette advertises /new; 'clear' survives
+    // as a hidden backend alias for CLI/channel muscle memory). Starts a
+    // new conversation (startNewSession), not just a local wipe.
+    startNewSession()
+    return true
+  }
+
+  if (name === 'help') {
+    // US-4/AC-2: build the help text from the fetched command list.
+    const helpLines = allCommands
+      .map((c) => `- \`${c.label}\` — ${c.description}`)
+      .join('\n')
+    const helpText = `**Omnipus commands:**\n${helpLines}\n\n**Tips:**\n- Press **Enter** to send, **Shift+Enter** for newline\n- Type **@** at the start of the input to switch agents\n- Click tool call headers to expand/collapse details\n- Hover over messages to copy them`
+    appendMessage({
+      id: generateId(),
+      role: 'system',
+      content: helpText,
+      timestamp: new Date().toISOString(),
+      status: 'done',
+    })
+    return true
+  }
+
+  if (name === 'model') {
+    // US-4/AC-2: open the model selector in the composer card
+    // (composer/ModelPicker.tsx).
+    // Setting modelSelectorOpen=true drives the controlled Popover in
+    // ModelSelector without the user having to click it directly. Per A4:
+    // web-only client action; opens the chat model selector, not the
+    // server agent default.
+    useUiStore.getState().setModelSelectorOpen(true)
+    return true
+  }
+
+  if (name === 'agents') {
+    // Open the agent selector in the composer card (composer/AgentPicker.tsx) via the ui store flag.
+    useUiStore.getState().setAgentSelectorOpen(true)
+    return true
+  }
+
+  if (name === 'skills') {
+    // D9: set input to "/skills" to trigger the skills-only filter in the
+    // menu. The menu handles this: when inputValue === "/skills",
+    // isSkillsFilter is true and only the Skills section shows. Re-open
+    // the menu after the clear.
+    composerRuntime.setText('/skills')
+    setInputValue('/skills')
+    setSlashOpen(true)
+    return true
+  }
+
+  if (name === 'cancel') {
+    // FR-3a: /cancel uses the same cancelIfStreaming() as the local
+    // Escape handler — only morph the button to "Stopping..." if the turn
+    // is actively streaming.
+    cancelIfStreaming()
+    return true
+  }
+
+  if (name === 'stop') {
+    // D9 row 1: /stop (root OR helper) = stop only this session's current
+    // turn — the same server behaviour as one Stop-button press (the tree
+    // cascade stays /cancel's and the confirmed second press's; /stop never
+    // cascades). The SPA consumer is therefore exactly the Stop button's
+    // single-press path: cancelIfStreaming() — the caller's useCancelState
+    // wiring sends the scope-less (session-default) cancel frame and runs
+    // the same "Stopping..." state machine the button uses. Not the
+    // redirect branch below; no /steer alias exists (founder O4).
+    cancelIfStreaming()
+    return true
+  }
+
+  if (name === 'stop-redirect') {
+    // D9 rows 2–3: /stop-redirect <instruction> redirects THAT helper
+    // (stop first, then continue with the instruction) — valid only in a
+    // helper's chat. Fail-closed on identity (seam ruling §3.2): the
+    // caller's isHelperSession derives from the attached session's
+    // server-minted "delegate" type; anything unresolvable is root here.
+    // Root refusal comes FIRST — a root user gets the targeting guidance
+    // whatever they typed after the command, never a usage hint implying
+    // the command could work here.
+    if (!isHelperSession) {
+      appendMessage({
+        id: generateId(),
+        role: 'system',
+        content: STOP_REDIRECT_ROOT_REFUSAL,
+        timestamp: new Date().toISOString(),
+        status: 'done',
+      })
+      return true
+    }
+
+    // Usage gate: an empty instruction (bare command, or whitespace-only —
+    // JS .trim() is Unicode-aware, so NBSP/em-space-only residue is empty)
+    // replies usage and changes nothing: no frame, no message, no stop.
+    if (argument === '') {
+      appendMessage({
+        id: generateId(),
+        role: 'system',
+        content: STOP_REDIRECT_USAGE,
+        timestamp: new Date().toISOString(),
+        status: 'done',
+      })
+      return true
+    }
+
+    // The frame targets the CURRENTLY OPEN session (D9 row 2 —
+    // conversation-scoped, #955: the helper's own chat redirects that
+    // helper). Read fresh from the store in this write path — never a
+    // render-captured value.
+    const sessionId = useSessionStore.getState().activeSessionId
+    if (!sessionId) {
+      appendMessage({
+        id: generateId(),
+        role: 'system',
+        content: STOP_REDIRECT_NO_SESSION,
+        timestamp: new Date().toISOString(),
+        status: 'done',
+      })
+      return true
+    }
+
+    // Exactly one frame, exactly the generated shape — type, session_id,
+    // instruction and nothing else (no scope property exists on
+    // RedirectFrame; the schema's additionalProperties:false). The
+    // instruction is delivered verbatim after the command parse (trimmed
+    // at both ends above, internal spacing and multibyte content intact).
+    // The caller's sendRedirectFrame owns the transport and surfaces a
+    // visible error if the send fails — nothing here swallows one.
+    //
+    // The transport callback is optional only so pre-existing callers that
+    // never reach this line type-check. A caller that claims a helper
+    // session here but passed no transport is broken — fail LOUDLY (never
+    // `?.`; a silently dropped redirect would leave the helper's turn
+    // running while the UI pretends it redirected).
+    if (!sendRedirectFrame) {
+      throw new Error(
+        'useSlashMenu: /stop-redirect reached the send path with no sendRedirectFrame transport — the caller claimed isHelperSession but provided no frame sender.',
+      )
+    }
+    sendRedirectFrame({ type: 'redirect', session_id: sessionId, instruction: argument })
+    return true
+  }
+
+  if (name === 'resume') {
+    // Web-only: open the cross-workspace session search modal to pick a
+    // session to resume — same single instance the sidebar icon opens.
+    useUiStore.getState().openSearchModal()
+    return true
+  }
+
+  if (name === 'workspace') {
+    // Web-only: open the SAME SearchModal instance /resume opens, but in
+    // its 'workspaces' mode — ALL workspaces listed, ArrowUp/Down walks
+    // workspace headers, Enter switches (SearchModal's handleSwitchWorkspace,
+    // same as clicking a group header's switch arrow), not a dedicated
+    // picker of its own.
+    useUiStore.getState().openWorkspaceSwitcher()
+    return true
+  }
+
+  // Issue 3 fallback: unknown client command — do NOT silently drop.
+  // Return false so the caller inserts it as text rather than clearing
+  // the composer.
+  return false
+}
+
 export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
-  const { isStreaming, isReplaying, inputEnabled, composerRuntime, appendMessage, startNewSession, cancelIfStreaming } = params
+  const {
+    isStreaming,
+    isReplaying,
+    inputEnabled,
+    composerRuntime,
+    appendMessage,
+    startNewSession,
+    cancelIfStreaming,
+    // Fail-closed default: an omitted identity is the root chat (D9 —
+    // "Unknown → root refuses"), never a helper.
+    isHelperSession = false,
+    sendRedirectFrame,
+  } = params
 
   const [inputValue, setInputValue] = useState('')
   const [slashOpen, setSlashOpen] = useState(false)
@@ -701,106 +981,40 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     setSlashHighlight(0)
   }
 
-  // runClientCommand — shared handler for client-delivery slash commands.
-  // Called both from palette selection (executeSlashCommand) and from the
-  // send-path interception so that typing "/new"+Enter (or its legacy
-  // alias "/clear"+Enter) converges with selecting /new from the palette —
-  // both run client-side, never reaching the backend.
-  //
-  // Returns true when the command was handled (caller must NOT send the
-  // text), false when the name is not a known client command (caller
-  // should fall through to inserting as text — Issue 3 fallback).
-  function runClientCommand(name: string): boolean {
-    if (name === 'new' || name === 'clear') {
-      // Renamed /clear → /new (the palette advertises /new; 'clear' survives
-      // as a hidden backend alias for CLI/channel muscle memory). Starts a
-      // new conversation (startNewSession), not just a local wipe.
-      startNewSession()
-      return true
-    }
-
-    if (name === 'help') {
-      // US-4/AC-2: build the help text from the fetched command list.
-      const helpLines = allCommands
-        .map((c) => `- \`${c.label}\` — ${c.description}`)
-        .join('\n')
-      const helpText = `**Omnipus commands:**\n${helpLines}\n\n**Tips:**\n- Press **Enter** to send, **Shift+Enter** for newline\n- Type **@** at the start of the input to switch agents\n- Click tool call headers to expand/collapse details\n- Hover over messages to copy them`
-      appendMessage({
-        id: generateId(),
-        role: 'system',
-        content: helpText,
-        timestamp: new Date().toISOString(),
-        status: 'done',
-      })
-      return true
-    }
-
-    if (name === 'model') {
-      // US-4/AC-2: open the model selector in the composer card
-      // (composer/ModelPicker.tsx).
-      // Setting modelSelectorOpen=true drives the controlled Popover in
-      // ModelSelector without the user having to click it directly. Per A4:
-      // web-only client action; opens the chat model selector, not the
-      // server agent default.
-      useUiStore.getState().setModelSelectorOpen(true)
-      return true
-    }
-
-    if (name === 'agents') {
-      // Open the agent selector in the composer card (composer/AgentPicker.tsx) via the ui store flag.
-      useUiStore.getState().setAgentSelectorOpen(true)
-      return true
-    }
-
-    if (name === 'skills') {
-      // D9: set input to "/skills" to trigger the skills-only filter in the
-      // menu. The menu handles this: when inputValue === "/skills",
-      // isSkillsFilter is true and only the Skills section shows. Re-open
-      // the menu after the clear.
-      composerRuntime.setText('/skills')
-      setInputValue('/skills')
-      setSlashOpen(true)
-      return true
-    }
-
-    if (name === 'cancel') {
-      // FR-3a: /cancel uses the same cancelIfStreaming() as the local
-      // Escape handler — only morph the button to "Stopping..." if the turn
-      // is actively streaming.
-      cancelIfStreaming()
-      return true
-    }
-
-    if (name === 'resume') {
-      // Web-only: open the cross-workspace session search modal to pick a
-      // session to resume — same single instance the sidebar icon opens.
-      useUiStore.getState().openSearchModal()
-      return true
-    }
-
-    if (name === 'workspace') {
-      // Web-only: open the SAME SearchModal instance /resume opens, but in
-      // its 'workspaces' mode — ALL workspaces listed, ArrowUp/Down walks
-      // workspace headers, Enter switches (SearchModal's handleSwitchWorkspace,
-      // same as clicking a group header's switch arrow), not a dedicated
-      // picker of its own.
-      useUiStore.getState().openWorkspaceSwitcher()
-      return true
-    }
-
-    // Issue 3 fallback: unknown client command — do NOT silently drop.
-    // Return false so the caller inserts it as text rather than clearing
-    // the composer.
-    return false
+  // runClientCommand — thin per-render adapter over runClientSlashCommand
+  // (module scope: extracted to bring this hook back under its grandfathered
+  // function-size ceiling). Plain function, deliberately NOT useCallback, and
+  // the deps object is rebuilt on every call — the module function receives
+  // THIS render's values, the same closure semantics the pre-extraction
+  // nested function had (see the "Deliberately NOT wrapped in useCallback"
+  // note on interceptClientCommand below).
+  function runClientCommand(name: string, argument = ''): boolean {
+    return runClientSlashCommand(name, argument, {
+      allCommands,
+      startNewSession,
+      appendMessage,
+      cancelIfStreaming,
+      isHelperSession,
+      sendRedirectFrame,
+      composerRuntime,
+      setInputValue,
+      setSlashOpen,
+    })
   }
 
   // executeSlashCommand — called when the user selects a palette entry.
   // `label` is the full label string from the SlashCommand (e.g. "/new").
-  // FR-009: dispatch by `delivery`:
-  //   - 'client' → run the local handler via runClientCommand; do NOT send.
-  //   - 'agent'  → insert the label as text into the composer so the user
-  //                can complete it and forward it via the message frame on
-  //                send.
+  // FR-009 (as extended by D9): dispatch by `delivery` and argument:
+  //   - 'client', bare       → run the local handler via runClientCommand;
+  //                            do NOT send.
+  //   - 'client' with an
+  //     argument_hint        → complete "/label " into the composer (same
+  //                            flow as 'agent'): the argument must be typed
+  //                            before the send-path interception parses and
+  //                            runs it ("/stop-redirect <instruction>").
+  //   - 'agent'              → insert the label as text into the composer so
+  //                            the user can complete it and forward it via
+  //                            the message frame on send.
   function executeSlashCommand(label: string) {
     closeSlash()
 
@@ -821,7 +1035,15 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       return
     }
 
-    if (def.delivery === 'agent') {
+    // An argument-bearing command completes into the composer instead of
+    // running: agent-delivery commands always need their text sent as a
+    // message, and — since D9 — a client-delivery command that DECLARES an
+    // argument_hint ("/stop-redirect <instruction>") needs its argument
+    // typed before the send-path interception can parse and run it.
+    // Completing both through the same "/label " + ghost-hint flow keeps
+    // one interaction convention for "this command wants more text": bare
+    // client commands ("/new", "/cancel", …) still run immediately below.
+    if (def.delivery === 'agent' || (def.delivery === 'client' && def.argument_hint)) {
       // Insert "/name " as text so the user can complete it and send.
       composerRuntime.setText(`${def.label} `)
       setInputValue(`${def.label} `)
@@ -913,21 +1135,44 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // function always closes over the current render's values, matching the
   // original (pre-extraction) composer's own behavior exactly.
   // Resolves a trimmed, "/"-prefixed composer string to its client-delivery
-  // command definition, or null. Shared by `interceptClientCommand` and the
-  // deferred-flush effect below so both can never disagree about what
-  // counts as a client command.
+  // command definition — plus the argument text when the command takes one —
+  // or null. Shared by `interceptClientCommand` and the deferred-flush effect
+  // below so both can never disagree about what counts as a client command.
   //
   // LOW S7/C3: lowercase both sides — commands are ASCII, so "/Clear" or
   // "/NEW" + Enter must resolve identically to the canonical-case form
   // instead of silently falling through to the LLM as chat text.
-  function resolveClientCommand(trimmed: string): SlashCommand | null {
+  function resolveClientCommand(trimmed: string): ResolvedClientCommand | null {
     const trimmedLower = trimmed.toLowerCase()
     const typedNameLower = trimmed.slice(1).toLowerCase()
-    return (
-      allCommands.find(
-        (c) => c.delivery === 'client' && (c.label.toLowerCase() === trimmedLower || c.aliases?.some((a) => a.toLowerCase() === typedNameLower)),
-      ) ?? null
+    // Exact match first — the historical behavior, unchanged in precedence:
+    // a bare "/stop-redirect" is the command with an EMPTY argument (usage
+    // reply), not a prefix of something else.
+    const exact = allCommands.find(
+      (c) => c.delivery === 'client' && (c.label.toLowerCase() === trimmedLower || c.aliases?.some((a) => a.toLowerCase() === typedNameLower)),
     )
+    if (exact) return { command: exact, argument: '' }
+    // D9: an argument-bearing client command — the command's label followed
+    // by whitespace, the remainder being the instruction ("/stop-redirect
+    // focus on the failing tests"). Matched only against the canonical
+    // label: client-delivery commands carry no aliases (D9/F-20 — the exact
+    // alias set is {clear} on /new, which is argument-less), so an
+    // alias-with-argument grammar would be an invention. Restricted to
+    // commands that DECLARE an argument_hint — a bare client command
+    // followed by text ("/new foo", "/cancel foo") is NOT a command match;
+    // it stays whatever it always was (the readiness gate / not-a-command).
+    const withArg = allCommands.find((c) => {
+      if (c.delivery !== 'client' || !c.argument_hint) return false
+      const labelLower = c.label.toLowerCase()
+      if (!trimmedLower.startsWith(labelLower)) return false
+      const rest = trimmed.slice(c.label.length)
+      // The label must end at a word boundary — "/stop-redirectfoo" is not
+      // "/stop-redirect". Whitespace (Unicode-aware, same class .trim()
+      // strips) is the separator; without it there is no argument grammar.
+      return rest.length > 0 && /^\s/.test(rest)
+    })
+    if (!withArg) return null
+    return { command: withArg, argument: trimmed.slice(withArg.label.length).trim() }
   }
 
   // A slash submit that arrived before the command list had loaded, parked
@@ -941,8 +1186,8 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     const currentText = composerRuntime.getState().text ?? inputValue
     const trimmed = currentText.trim()
     if (!trimmed.startsWith('/')) return false
-    const def = resolveClientCommand(trimmed)
-    if (!def) {
+    const resolved = resolveClientCommand(trimmed)
+    if (!resolved) {
       // READINESS GATE. A miss means one of two very different things, and
       // conflating them is what let a correctly-typed command escape to the
       // LLM as chat: either this genuinely isn't a command (a skill, or
@@ -976,7 +1221,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     }
     composerRuntime.setText('')
     setInputValue('')
-    runClientCommand(def.name)
+    runClientCommand(resolved.command.name, resolved.argument)
     return true
   }
 
@@ -1008,11 +1253,11 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     deferredSlashSubmitRef.current = false
     const trimmed = (composerRuntime.getState().text ?? '').trim()
     if (trimmed === '') return
-    const def = trimmed.startsWith('/') ? resolveClientCommand(trimmed) : null
-    if (def) {
+    const resolved = trimmed.startsWith('/') ? resolveClientCommand(trimmed) : null
+    if (resolved) {
       composerRuntime.setText('')
       setInputValue('')
-      runClientCommand(def.name)
+      runClientCommand(resolved.command.name, resolved.argument)
       return
     }
     // Not a client command after all (a skill, an agent-delivery command, or

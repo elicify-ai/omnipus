@@ -55,6 +55,7 @@ import { useChatStore } from '@/store/chat'
 import { findFirstSendMessage, getPendingFirstSend } from '@/store/chat/first-send'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
+import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
 import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
@@ -2012,6 +2013,14 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const appendMessage = useChatStore((s) => s.appendMessage)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const startNewSession = useSessionStore((s) => s.startNewSession)
+  // D9 helper identity: the attached session's server-minted type. Only a
+  // "delegate" session (ADR-057 FR-008 — the subordinate type a session is
+  // minted with when created by a delegation) is a helper chat; a fresh
+  // "/new" chat (null), a root/task/channel session are not. Recorded by
+  // attachToSession from `session.type` on every attach, so this is the
+  // server's classification, never a client-side guess — and fail-closed:
+  // anything unresolvable reads as root here (seam ruling §3.2).
+  const attachedSessionType = useSessionStore((s) => s.attachedSessionType)
   const [abandonFirstSend, setAbandonFirstSend] = useState<{ clientMessageId: string; workspaceId: string | null } | null>(null)
   const requestNewSession = useCallback(() => {
     const pending = getPendingFirstSend(useChatStore.getState())
@@ -2113,6 +2122,29 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
 
   const cancelState = useCancelState(isStreaming, cancelStream)
   const fileUpload = useFileUpload(composerRuntime)
+  // D9: the /stop-redirect transport — send the dedicated generated
+  // RedirectFrame over the WS, with a VISIBLE error when it cannot be sent
+  // (the same toast pattern cancelStream uses for a failed cancel send).
+  // The frame never touches message intake, which is what lets a redirect
+  // execute mid-stream; a swallowed failure here would leave the user
+  // believing a helper was stopped when its turn is still running.
+  const sendRedirectFrame = useCallback((frame: RedirectFrame) => {
+    const { connection } = useConnectionStore.getState()
+    if (!connection) {
+      useUiStore.getState().addToast({
+        message: 'Could not send the redirect — the gateway connection is down. Reconnect and run /stop-redirect again.',
+        variant: 'error',
+      })
+      return
+    }
+    const sent = connection.send(frame)
+    if (!sent) {
+      useUiStore.getState().addToast({
+        message: 'Could not send the redirect — connection dropped. The helper\'s turn was NOT stopped; run /stop-redirect again.',
+        variant: 'error',
+      })
+    }
+  }, [])
   const slashMenu = useSlashMenu({
     isStreaming,
     isReplaying,
@@ -2121,6 +2153,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     appendMessage,
     startNewSession: requestNewSession,
     cancelIfStreaming: cancelState.cancelIfStreaming,
+    isHelperSession: attachedSessionType === 'delegate',
+    sendRedirectFrame,
   })
 
   // Fix E (bugfixes3 sign-off): `shouldShowSlash` alone is not "the menu
