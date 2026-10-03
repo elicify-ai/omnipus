@@ -1225,7 +1225,7 @@ wsHandlerReadLoopLoop1:
 			}
 		}
 
-		switch wh.dispatchFrame(data, peek) {
+		switch wh.dispatchFrameOrRedirect(data, peek) {
 		case wsHandlerReadLoopContinue:
 			continue wsHandlerReadLoopLoop1
 		}
@@ -1412,6 +1412,13 @@ func wsFrameSchemaName(frameType string) string {
 		return "MessageFrame"
 	case string(generated.WsFrameTypeCancel):
 		return "CancelFrame"
+	case string(generated.WsFrameTypeRedirect):
+		// ADR-20260928 D9: the /stop-redirect transport (architect seam
+		// ruling §3.1 — the /cancel CancelFrame pattern). Schema-gates the
+		// wire shape; the runtime checks the schema cannot express (Unicode
+		// blank, 16384-byte ceiling, helper identity) live in
+		// websocket_redirect.go::handleRedirectFrame.
+		return "RedirectFrame"
 	case string(generated.WsFrameTypeAttachSession):
 		return "AttachSessionFrame"
 	case string(generated.WsFrameTypeDevicePairingResponse):

@@ -330,6 +330,12 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 	if opts != nil {
 		sessionKey := opts.SessionKey
 		rt.SessionID = func() string { return sessionKey }
+		// Inject the D9 root-vs-helper gate for /stop-redirect: the ACTUAL
+		// SteeredBy edge decides (ADR-20260928 D9 row 2/3). sessionIsHelper
+		// is fail-closed (seam ruling §3.2) — unreadable/absent identity is
+		// false, so a root chat (or anything unverifiable) refuses the
+		// redirect with guidance and nothing is issued.
+		rt.IsHelperSession = func() bool { return al.sessionIsHelper(sessionKey) }
 	}
 
 	// Inject the agent loop so CancelActiveTurn can call

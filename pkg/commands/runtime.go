@@ -28,6 +28,22 @@ var ErrNoActiveTurn = errors.New("no active turn")
 // "canceled" and not "nothing to cancel".
 var ErrCancelArmed = errors.New("cancel acknowledged, pending turn registration")
 
+// ErrNotHelperSession is returned by StopSessionTurn's redirect sibling,
+// RedirectSessionTurn, when the target session is not a steered helper —
+// either the current chat is the workspace root (ADR-20260928 D9 row 3:
+// refuse with guidance to target a helper; the root's own /stop still
+// works) or helper identity was re-checked server-side and failed
+// fail-closed. Callers MUST reply with the helper-targeting guidance
+// instead of surfacing it as a transport failure.
+var ErrNotHelperSession = errors.New("redirect targets a helper session, not this chat")
+
+// ErrNothingToRedirect is returned by RedirectSessionTurn when the target
+// helper has already reached a terminal outcome (done/failed): per D2's
+// stop table there is nothing to stop or resume — "already finished — use
+// RESUME". This is guidance, not a failure; callers MUST reply with the
+// RESUME guidance as a normal (non-error) message.
+var ErrNothingToRedirect = errors.New("session already finished — nothing to redirect")
+
 // AgentLoopInterface is a minimal interface for the agent-loop methods needed by
 // the commands runtime. Using an interface here avoids a hard import cycle
 // between pkg/commands and pkg/agent.
@@ -64,6 +80,31 @@ type AgentLoopInterface interface {
 	// exact bug this signature was widened to fix: an armed cancel silently
 	// reported as ErrNoActiveTurn.
 	RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (fired bool, armed bool, err error)
+
+	// StopSessionTurn stops ONLY the named session's current turn — ADR-20260928
+	// D9 /stop (scope session, no cascade; D2 stop semantics: non-terminal,
+	// never ends a goal, keeps an open question open). It must delegate to the
+	// SAME StopTurns(subtree=false) chain the gateway's single Stop press uses
+	// — one shared stop implementation, never a divergent second path.
+	// Primitive types only, per this interface's no-pkg/agent-import constraint.
+	//
+	// Three-outcome contract identical to RequestCancelForSession:
+	//   (fired=true, armed=false, nil)  — stop fired.
+	//   (fired=false, armed=true, nil)  — pre-registration latch armed.
+	//   (fired=false, armed=false, nil) — nothing to stop.
+	//   err non-nil                     — real failure, must surface.
+	StopSessionTurn(ctx context.Context, sessionID, userID, channel string) (fired, armed bool, err error)
+
+	// RedirectSessionTurn performs the D2 redirect on the named session:
+	// fence + stop_note cause redirect_pause under lock, interrupt the live
+	// turn (skipped when already stopped), same-generation resume with
+	// instruction as the newest message; its subtree keeps working. Returns
+	// named sentinel errors for guidance outcomes — ErrNotHelperSession
+	// (root-style refusal with guidance), ErrNothingToRedirect (already
+	// finished → "use RESUME") — so handlers reply truthfully instead of one
+	// opaque error (mirrors ErrNoActiveTurn/ErrCancelArmed). Primitive types
+	// only, per this interface's no-pkg/agent-import constraint.
+	RedirectSessionTurn(ctx context.Context, sessionID, instruction, userID, channel string) error
 }
 
 // Canceller identifies who/what issued a cancel — populated for audit attribution.
@@ -90,6 +131,15 @@ type Runtime struct {
 	// SessionID returns the session key for the current request context. Used by
 	// handlers that need to address a specific session (e.g., /cancel).
 	SessionID func() string
+	// IsHelperSession reports whether the current chat targets a helper
+	// (steered) session — ADR-20260928 D9's root-vs-helper gate for
+	// /stop-redirect. Fail-closed (seam ruling §3.2): unresolvable identity —
+	// no lifecycle record, unreadable store, blank session id — is FALSE, so
+	// /stop-redirect gets the root-style refusal and nothing is redirected.
+	// false ⇒ workspace root. Populated by the agent loop via
+	// buildCommandsRuntime; nil behaves as false for the same fail-closed
+	// reason.
+	IsHelperSession func() bool
 	// agentLoop is the agent loop implementation used by CancelActiveTurn.
 	// Populated by the agent loop via buildCommandsRuntime.
 	agentLoop AgentLoopInterface
