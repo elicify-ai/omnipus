@@ -19,6 +19,10 @@
  * pattern of fixtures/session-setup.ts::createSession, agent 'mia') and let
  * the mock announce THAT server-real id, so the history fetch succeeds with
  * an empty transcript and the thread renders. No product code was touched.
+ * Second fixture repair (same day, pre-CI, dispatcher review): the mint
+ * validates the response against the GENERATED Session schema (no `as {id}`
+ * cast) and rides the browser context's HttpOnly `omnipus-session` cookie +
+ * a fresh X-CSRF-Token echo — the storageState bearer reader is gone.
  *
  * The RED-author header below claimed the fully-mocked chat WS was an
  * "established pattern (whatsapp-qr.spec.ts, reconnect-mid-turn.spec.ts)".
@@ -62,10 +66,12 @@
  * CLAUDE.md — "E2E tests always target the embedded SPA (Go binary)"
  */
 
-import * as fs from 'fs'
-import * as path from 'path'
 import type { WebSocketRoute } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+// Generated wire schema (contract-first, hard-constraint #8): the POST
+// /api/v1/sessions response is validated against it, never a hand-written
+// cast. Value-import precedent in e2e specs: mail-panel.spec.ts.
+import { Session as SessionSchema } from '../../src/lib/api/generated/schemas'
 import { chatInput, userMessages, waitForConnected } from './fixtures/selectors'
 
 interface CapturedFrame {
@@ -86,48 +92,30 @@ const TURN_CHUNKS = ['Stop', '-scope ', 'e2e ', 'turn ', 'running.']
 const ASSISTANT_STREAM_TEXT = TURN_CHUNKS.join('')
 
 /**
- * Auth token for Node-side REST calls, read the same way
- * fixtures/session-setup.ts::getStoredAuthToken reads it: a Playwright
- * storageState file (OMNIPUS_AUTH_FILE, default fixtures/.auth/admin.json)
- * whose localStorage carries omnipus_auth_token. Null when absent —
- * dev-bypass environments (ui-render shard) need no auth at all.
- */
-function getStoredAuthToken(): string | null {
-  const authFile = process.env.OMNIPUS_AUTH_FILE
-    ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
-    : path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures', '.auth', 'admin.json')
-  if (!fs.existsSync(authFile)) return null
-  try {
-    const state = JSON.parse(fs.readFileSync(authFile, 'utf-8')) as {
-      origins?: Array<{
-        origin: string
-        localStorage?: Array<{ name: string; value: string }>
-      }>
-    }
-    for (const origin of state.origins ?? []) {
-      for (const item of origin.localStorage ?? []) {
-        if (item.name === 'omnipus_auth_token') return item.value
-      }
-    }
-  } catch {
-    // Auth file may not exist or may not parse — treat as unauthenticated.
-  }
-  return null
-}
-
-/**
  * Mint a REAL, empty chat session over REST so the WS mock can announce a
- * session id that actually exists server-side. Provenance: the exact pattern
- * of fixtures/session-setup.ts::createSession (agent 'mia' — the seeded
- * default of the roster; the historical 'main' id no longer resolves and
- * would lock the composer read-only). Auth/CSRF headers are attached when
- * available, mirroring session-setup's apiHeaders, so this works in both
- * the dev-bypass ui-render shard and an authed run.
+ * session id that actually exists server-side. Provenance: the exact POST
+ * pattern of fixtures/session-setup.ts::createSession (agent 'mia' — the
+ * seeded default of the roster; the historical 'main' id no longer resolves
+ * and would lock the composer read-only).
+ *
+ * Auth: the browser context's real `omnipus-session` HttpOnly cookie rides
+ * along automatically — page.request shares the BrowserContext cookie jar
+ * (Playwright APIRequestContext contract), the same credentials:'include'
+ * channel src/lib/api.ts documents. No bearer token is read or sent: the SPA
+ * keeps no JS-visible token (ADR-044), and cloning session-setup's
+ * storageState file reader would silently degrade to unauthenticated on a
+ * malformed file. CSRF mirrors src/lib/api.ts::readCSRFCookie: X-CSRF-Token
+ * echoes the __Host-csrf (plain-HTTP `csrf`) cookie, read FRESH from the
+ * context jar on every call.
+ *
+ * The response is validated against the GENERATED Session schema
+ * (src/lib/api/generated/schemas.ts::Session — the contract type OpenAPI
+ * gives POST /api/v1/sessions), never a hand-written cast. Failure errors
+ * carry the HTTP status + a fixed sentence only — the raw body is never
+ * echoed into a thrown error, it can carry server-side data.
  */
 async function mintRealSession(page: import('@playwright/test').Page): Promise<string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  const authToken = getStoredAuthToken()
-  if (authToken) headers.Authorization = `Bearer ${authToken}`
   const csrf = (await page.context().cookies()).find(
     (c) => c.name === '__Host-csrf' || c.name === 'csrf',
   )
@@ -137,12 +125,26 @@ async function mintRealSession(page: import('@playwright/test').Page): Promise<s
     data: { agent_id: 'mia', type: 'chat' },
   })
   if (!resp.ok()) {
-    const body = await resp.text()
-    throw new Error(`POST /api/v1/sessions failed: ${resp.status()} — ${body}`)
+    throw new Error(`POST /api/v1/sessions failed with HTTP ${resp.status()}`)
   }
-  const meta = (await resp.json()) as { id: string }
-  if (!meta.id) throw new Error('POST /api/v1/sessions returned no id')
-  return meta.id
+  let body: unknown
+  try {
+    body = await resp.json()
+  } catch {
+    throw new Error(`POST /api/v1/sessions returned HTTP ${resp.status()} with a non-JSON body`)
+  }
+  const parsed = SessionSchema.safeParse(body)
+  if (!parsed.success) {
+    throw new Error(
+      `POST /api/v1/sessions returned HTTP ${resp.status()} but its body failed the generated Session schema (src/lib/api/generated/schemas.ts::Session)`,
+    )
+  }
+  // The generated schema types id as a plain string — an empty id passes it,
+  // and a phantom id is exactly what broke the first CI run.
+  if (!parsed.data.id) {
+    throw new Error('POST /api/v1/sessions returned an empty session id')
+  }
+  return parsed.data.id
 }
 
 /**
