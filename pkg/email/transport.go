@@ -184,6 +184,16 @@ type Message struct {
 	Body string `json:"body,omitempty"`
 	// Seen reflects the \Seen IMAP flag at fetch time.
 	Seen bool `json:"seen"`
+	// MessageRef is the issued opaque reference (w5-integration US-9,
+	// register rows 8/16; ADR-20261001 correction I-03) minted by THE one
+	// issuer (message_ref.go::IssueMessageRef) on the same lease that
+	// fetched the message — bound to the folder epoch observed on that
+	// session plus the UID, so the next attachment/seen/detail action
+	// addresses THIS message without the optional Message-ID. Populated by
+	// Client.ReadMessage; a Transport implementation that does not issue
+	// leaves it empty and the read_message tool asks the same issuer with
+	// the evidence it holds — never a locally formatted reference.
+	MessageRef string `json:"message_ref,omitempty"`
 }
 
 // InboxOptions controls ReadInbox.
@@ -638,6 +648,14 @@ func (c *Client) ReadMessage(ctx context.Context, uid uint32) (*Message, error) 
 	}
 	var msg *Message
 	err := c.withMailSession(ctx, "INBOX", true, func(ctx context.Context, client *imapclient.Client, _ uint32) error {
+		// The epoch rides the same session as the fetch (the lease
+		// pre-selected INBOX; this SELECT re-reads it, the ReadView/
+		// ReadFolderPage pattern) so the issued reference carries the live
+		// folder epoch — the binding W2's same-lease validation compares.
+		uv, _, serr := c.selectFolder(ctx, client, "INBOX")
+		if serr != nil {
+			return serr
+		}
 		msgs, err := c.fetchMessages(ctx, client, imap.UIDSetNum(imap.UID(uid)), true)
 		if err != nil {
 			return err
@@ -651,6 +669,10 @@ func (c *Client) ReadMessage(ctx context.Context, uid uint32) (*Message, error) 
 			return err
 		}
 		msg = &msgs[0]
+		// w5-integration US-9 (register rows 8/16): issue the reference on
+		// the lease that fetched the message — the production surface's
+		// issued ref, bound to the live epoch + UID.
+		msg.MessageRef = IssueMessageRef(MessageRefClaims{UIDValidity: uv, UID: msg.UID})
 		return nil
 	})
 	if err != nil {
