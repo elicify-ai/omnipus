@@ -351,6 +351,17 @@ func (t *ReadMessageTool) Execute(ctx context.Context, args map[string]any) *Too
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("read_message failed: %v", err))
 	}
+	// w5-integration US-9 (register rows 8/16; ADR correction I-03): the
+	// result carries the issued opaque reference so the attachment journey
+	// addresses this message without the optional Message-ID. The
+	// production client issues on its fetch lease (transport.go::ReadMessage);
+	// a Transport implementation that does not issue leaves the field empty
+	// and the tool asks THE one issuer (email.IssueMessageRef) with the
+	// evidence it holds — never a locally formatted reference (no second
+	// issuer; the tools never mint locally).
+	if msg.MessageRef == "" {
+		msg.MessageRef = email.IssueMessageRef(email.MessageRefClaims{UID: msg.UID})
+	}
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("read_message: marshal: %v", err))
