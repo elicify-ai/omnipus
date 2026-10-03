@@ -2010,7 +2010,7 @@ type MailMessageSummary = {
   from_name: string | null;
   to: Array<string>;
   cc: Array<string>;
-  date: string;
+  date: string | null;
   seen: boolean;
   is_draft: boolean;
   is_omnipus_draft: boolean;
@@ -2028,7 +2028,7 @@ type MailMessage = {
   from_name: string | null;
   to: Array<string>;
   cc: Array<string>;
-  date: string;
+  date: string | null;
   seen: boolean;
   is_draft: boolean;
   is_omnipus_draft: boolean;
@@ -6118,7 +6118,7 @@ export const MailMessageSummary: z.ZodType<MailMessageSummary> = z.object({
   from_name: z.string().nullable(),
   to: z.array(z.string()),
   cc: z.array(z.string()),
-  date: z.string().datetime({ offset: true }),
+  date: z.string().datetime({ offset: true }).nullable(),
   seen: z.boolean(),
   is_draft: z.boolean(),
   is_omnipus_draft: z.boolean(),
@@ -6152,7 +6152,7 @@ export const MailMessage: z.ZodType<MailMessage> = z.object({
   from_name: z.string().nullable(),
   to: z.array(z.string()),
   cc: z.array(z.string()),
-  date: z.string().datetime({ offset: true }),
+  date: z.string().datetime({ offset: true }).nullable(),
   seen: z.boolean(),
   is_draft: z.boolean(),
   is_omnipus_draft: z.boolean(),

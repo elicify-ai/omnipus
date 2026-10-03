@@ -219,6 +219,10 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 		"folder":      client.DraftsFolderName(),
 		"attachments": mailAuditAttachments(in.Attachments),
 	})
+	// Date stays unset on purpose: this fresh draft copy has no fetch-derived
+	// date, and the required-but-nullable wire field (the W0 amendment)
+	// serializes the unset pointer as the contract's null "No date" state —
+	// never a fabricated 0001-01-01 zero date (US-6.AC-4).
 	resp := gen.MailMessage{
 		Folder: gen.MailMessageFolderDrafts, Uid: mailUIDToWire(newUID), Uidvalidity: mailUIDToWire(newUV),
 		Subject: req.Subject, To: mailNonNilSlice(req.To), Cc: mailNonNilSlice(derefStrings(req.Cc)),

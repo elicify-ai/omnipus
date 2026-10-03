@@ -36,7 +36,7 @@ func TestWireDateIsNullable(t *testing.T) {
 func TestWireNeverSerializesAZeroDate(t *testing.T) {
 	// The message with neither usable date source: the summary that goes on
 	// the wire must carry date: null — never "0001-01-01T00:00:00Z".
-	sum := generated.MailMessageSummary{Date: time.Time{}}
+	sum := generated.MailMessageSummary{Date: nil}
 	data, err := json.Marshal(sum)
 	if err != nil {
 		t.Fatalf("marshal summary: %v", err)

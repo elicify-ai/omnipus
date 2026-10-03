@@ -19272,8 +19272,8 @@ type MailMessage struct {
 	// Cc Cc addresses (D26).
 	Cc []string `json:"cc"`
 
-	// Date Message date (RFC 3339). Deferred nullability (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express the founder's #1175 "No date" state — date is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w4/w3 feature waves supply it; a consumer must treat an absent date as unknown (no date) and never as false or a zero/epoch value.
-	Date time.Time `json:"date"`
+	// Date Message date (RFC 3339), required-but-nullable — the W0 amendment (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02). Null is the founder's #1175 "No date" state: the Date header was missing or unparsable and no internal date exists; a consumer renders it as unknown (no date), never as false or a zero/epoch value (US-6.AC-4). When the effective date (a valid Date header, else the internal date) IS known, producers carry that true value — never blank, never fabricated.
+	Date *time.Time `json:"date"`
 
 	// DraftCleanupWarning Set when the OLD draft copy could not be removed after a successful update-APPEND of the new copy (MAJ-009/MC-28 — the panel warns of a possible duplicate draft). Same underlying mechanism as the send path's draft_cleanup_warning (MailSendResponse), triggered by update instead of send. Null when cleanup succeeded, and always null on the read paths (GET message, list messages) — only the update endpoint can set it.
 	DraftCleanupWarning *string `json:"draft_cleanup_warning,omitempty"`
@@ -19349,8 +19349,8 @@ type MailMessagePage struct {
 		// Cc Cc addresses (D26 — recipient lists on every mail surface).
 		Cc []string `json:"cc"`
 
-		// Date Message date (RFC 3339). Deferred nullability (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express the founder's #1175 "No date" state — date is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w4/w3 feature waves supply it; a consumer must treat an absent date as unknown (no date) and never as false or a zero/epoch value.
-		Date time.Time `json:"date"`
+		// Date Message date (RFC 3339), required-but-nullable — the W0 amendment (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02). Null is the founder's #1175 "No date" state: the Date header was missing or unparsable and no internal date exists; a consumer renders it as unknown (no date), never as false or a zero/epoch value (US-6.AC-4). When the effective date (a valid Date header, else the internal date) IS known, producers carry that true value — never blank, never fabricated.
+		Date *time.Time `json:"date"`
 
 		// Folder The folder slug the message was listed from (MC-5).
 		Folder MailMessagePageMessagesFolder `json:"folder"`
@@ -19443,8 +19443,8 @@ type MailMessageSummary struct {
 	// Cc Cc addresses (D26 — recipient lists on every mail surface).
 	Cc []string `json:"cc"`
 
-	// Date Message date (RFC 3339). Deferred nullability (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express the founder's #1175 "No date" state — date is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w4/w3 feature waves supply it; a consumer must treat an absent date as unknown (no date) and never as false or a zero/epoch value.
-	Date time.Time `json:"date"`
+	// Date Message date (RFC 3339), required-but-nullable — the W0 amendment (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02). Null is the founder's #1175 "No date" state: the Date header was missing or unparsable and no internal date exists; a consumer renders it as unknown (no date), never as false or a zero/epoch value (US-6.AC-4). When the effective date (a valid Date header, else the internal date) IS known, producers carry that true value — never blank, never fabricated.
+	Date *time.Time `json:"date"`
 
 	// Folder The folder slug the message was listed from (MC-5).
 	Folder MailMessageSummaryFolder `json:"folder"`

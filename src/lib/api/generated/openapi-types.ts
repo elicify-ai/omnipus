@@ -12603,10 +12603,10 @@ export interface components {
             cc: string[];
             /**
              * Format: date-time
-             * @description Message date (RFC 3339). Deferred nullability (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express the founder's #1175 "No date" state — date is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w4/w3 feature waves supply it; a consumer must treat an absent date as unknown (no date) and never as false or a zero/epoch value.
+             * @description Message date (RFC 3339), required-but-nullable — the W0 amendment (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02). Null is the founder's #1175 "No date" state: the Date header was missing or unparsable and no internal date exists; a consumer renders it as unknown (no date), never as false or a zero/epoch value (US-6.AC-4). When the effective date (a valid Date header, else the internal date) IS known, producers carry that true value — never blank, never fabricated.
              * @example 2026-09-26T10:30:00Z
              */
-            date: string;
+            date: string | null;
             /** @description Whether the message carries the \Seen flag. */
             seen: boolean;
             /** @description Whether the message carries the \Draft flag (MC-14). */
@@ -12705,10 +12705,10 @@ export interface components {
             cc: string[];
             /**
              * Format: date-time
-             * @description Message date (RFC 3339). Deferred nullability (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express the founder's #1175 "No date" state — date is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w4/w3 feature waves supply it; a consumer must treat an absent date as unknown (no date) and never as false or a zero/epoch value.
+             * @description Message date (RFC 3339), required-but-nullable — the W0 amendment (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02). Null is the founder's #1175 "No date" state: the Date header was missing or unparsable and no internal date exists; a consumer renders it as unknown (no date), never as false or a zero/epoch value (US-6.AC-4). When the effective date (a valid Date header, else the internal date) IS known, producers carry that true value — never blank, never fabricated.
              * @example 2026-09-26T10:30:00Z
              */
-            date: string;
+            date: string | null;
             /** @description Whether the message carries the \Seen flag. */
             seen: boolean;
             /** @description Whether the message carries the \Draft flag (MC-14). */

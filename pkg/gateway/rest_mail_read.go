@@ -34,6 +34,19 @@ func mailNonNilSlice[T any](items []T) []T {
 	return items
 }
 
+// mailWireDateOrNull maps the transport's effective date onto the
+// required-but-nullable wire field (the W0 amendment): the zero time is
+// F6's "neither usable date source" unknown state and serializes as
+// explicit null (US-6.AC-4) — never a fabricated 0001-01-01 zero date —
+// while a known date is carried as the true value.
+func mailWireDateOrNull(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	d := t
+	return &d
+}
+
 func (a *restAPI) handleMailFolders(w http.ResponseWriter, r *http.Request, workspaceID, agentID string) {
 	client := a.mailPairClient(w, agentID, workspaceID)
 	if client == nil {
@@ -157,7 +170,7 @@ func (a *restAPI) handleMailList(w http.ResponseWriter, r *http.Request, workspa
 		// until their producers land (the is_knowledge_base precedent).
 		out.Messages = append(out.Messages, struct {
 			Cc             []string                          `json:"cc"`
-			Date           time.Time                         `json:"date"`
+			Date           *time.Time                        `json:"date"`
 			Folder         gen.MailMessagePageMessagesFolder `json:"folder"`
 			From           string                            `json:"from"`
 			FromName       *string                           `json:"from_name"`
@@ -174,7 +187,7 @@ func (a *restAPI) handleMailList(w http.ResponseWriter, r *http.Request, workspa
 			Uidvalidity    int64                             `json:"uidvalidity"`
 		}{
 			Cc:             mailNonNilSlice(row.Cc),
-			Date:           row.Date,
+			Date:           mailWireDateOrNull(row.Date),
 			Folder:         gen.MailMessagePageMessagesFolder(folder),
 			From:           row.From,
 			FromName:       fnPtr,
@@ -234,7 +247,7 @@ func (a *restAPI) handleMailFolderMessage(w http.ResponseWriter, r *http.Request
 	v := mv
 	out := gen.MailMessage{
 		Cc:             mailNonNilSlice(v.Cc),
-		Date:           v.Date,
+		Date:           mailWireDateOrNull(v.Date),
 		Folder:         gen.MailMessageFolder(folder),
 		From:           v.From,
 		HasHtml:        v.HasHTML,
