@@ -201,7 +201,12 @@ func t27LandSelectedRunStopped(t *testing.T, al *AgentLoop, sessionID string, ge
 
 // t27ResumeAndRequeue runs the explicit same-generation RESUME and re-admits
 // the replacement behind the blocker (queued case), asserting both halves.
-func t27ResumeAndRequeue(t *testing.T, al *AgentLoop, canceller *SteerCanceller, sessionID string, generation int) {
+// wantQueueLen is the expected start-queue length after the re-admission:
+// the child's ORIGINAL admission entry is still queued whenever the old
+// stop's removal half is still gated (removing it IS that gated effect), so
+// the stale tests re-queue on top of it (2), while the ungated positive
+// control re-queues after its own stop already removed the original (1).
+func t27ResumeAndRequeue(t *testing.T, al *AgentLoop, canceller *SteerCanceller, sessionID string, generation, wantQueueLen int) {
 	t.Helper()
 	resumed, err := canceller.Revive(context.Background(), sessionID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "t27-owner"})
 	if err != nil {
@@ -220,9 +225,24 @@ func t27ResumeAndRequeue(t *testing.T, al *AgentLoop, canceller *SteerCanceller,
 	if rec.State != session.LifecycleQueued {
 		t.Fatalf("setup: replacement record = %q, want queued behind the blocker", rec.State)
 	}
-	if got := al.steerAdmission().queueLen(); got != 1 {
-		t.Fatalf("setup: replacement admission entry missing (start queue length = %d, want 1)", got)
+	if got := al.steerAdmission().queueLen(); got != wantQueueLen {
+		t.Fatalf("setup: start queue length after the re-admission = %d, want %d", got, wantQueueLen)
 	}
+}
+
+// t27AwaitFinalState polls the record until the turn-exit completion has
+// landed (the commit is asynchronous to ts.Finished), then returns it.
+func t27AwaitFinalState(t *testing.T, lifecycle *session.LifecycleStore, sessionID string) *session.LifecycleRecord {
+	t.Helper()
+	t27WaitFor(t, 30*time.Second, "the turn-exit completion to land on the record", func() bool {
+		rec, err := lifecycle.Load(sessionID)
+		return err == nil && rec.State != session.LifecycleRunning && rec.State != session.LifecycleQueued
+	})
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		t.Fatalf("Load(final): %v", err)
+	}
+	return rec
 }
 
 func TestT27_StaleStopCallback_QueuedReplacementKeepsQueueEntry(t *testing.T) {
@@ -272,12 +292,16 @@ func TestT27_StaleStopCallback_QueuedReplacementKeepsQueueEntry(t *testing.T) {
 		rec, err := lifecycle.Load(childID)
 		return err == nil && rec.Stop != nil && rec.Stop.Generation == rec.Generation && rec.StopNote != nil
 	})
+	// While gated, the child's original admission entry is still queued —
+	// removing it IS the gated live effect, so its presence here is the
+	// barrier proof. (After the re-admission below the queue holds both
+	// entries: the original and the replacement's.)
 	if got := al.steerAdmission().queueLen(); got != 1 {
 		t.Fatalf("barrier proof failed: start queue length while the old callback is gated = %d, want 1 — the gate must be withholding the live effect", got)
 	}
 
 	t27LandSelectedRunStopped(t, al, childID, childGen)
-	t27ResumeAndRequeue(t, al, canceller, childID, childGen)
+	t27ResumeAndRequeue(t, al, canceller, childID, childGen, 2)
 
 	gate.openGate()
 	select {
@@ -289,9 +313,11 @@ func TestT27_StaleStopCallback_QueuedReplacementKeepsQueueEntry(t *testing.T) {
 		t.Fatal("the old stop never returned after the gate opened")
 	}
 
+	// The old callback may remove its OWN matching original admission; the
+	// replacement's entry must survive it.
 	if got := al.steerAdmission().queueLen(); got != 1 {
 		t.Errorf("start queue length after the old stop's delayed effect = %d, want 1 — "+
-			"the stale callback removed the replacement's queued admission: removeQueuedSession is keyed by session id, "+
+			"the stale callback removed the replacement's queued admission along with its own: removeQueuedSession is keyed by session id, "+
 			"so the old execution's effect and a genuinely newer stop of the same-generation replacement are indistinguishable "+
 			"(D5/T27: the delayed effect stays bound to the execution it selected)", got)
 	}
@@ -377,17 +403,15 @@ func TestT27_StaleStopCallback_ActiveReplacementFinishesItsTurn(t *testing.T) {
 		t.Fatal("the old stop never returned after the gate opened")
 	}
 
-	// Let the replacement finish its own work normally.
+	// Let the replacement finish its own work normally, then wait out the
+	// asynchronous completion commit before reading the record.
 	replacementGate.letFinish()
 	select {
 	case <-ts.Finished():
 	case <-time.After(30 * time.Second):
 		t.Fatal("the replacement's turn never finished after its park was released")
 	}
-	final, err := lifecycle.Load(childID)
-	if err != nil {
-		t.Fatalf("Load(after replacement finished): %v", err)
-	}
+	final := t27AwaitFinalState(t, lifecycle, childID)
 	if final.State != session.LifecycleCompleted {
 		t.Errorf("replacement's record after finishing = %q (note=%v), want completed — "+
 			"the old stop's delayed callback aborted the SAME-generation replacement's live turn: "+
@@ -454,7 +478,7 @@ func TestT27_StaleStopCallback_DelegateToolQueueRemovalSparesReplacement(t *test
 	}
 
 	t27LandSelectedRunStopped(t, al, childID, childGen)
-	t27ResumeAndRequeue(t, al, NewSteerCanceller(lifecycle), childID, childGen)
+	t27ResumeAndRequeue(t, al, NewSteerCanceller(lifecycle), childID, childGen, 2)
 
 	gate.openGate()
 	select {
@@ -467,12 +491,12 @@ func TestT27_StaleStopCallback_DelegateToolQueueRemovalSparesReplacement(t *test
 	}
 
 	// BOTH queue-removal callers fired here: SteerGenerationCancel's own and
-	// cancelDelegatedSubtree's post-cascade loop. The replacement's entry
-	// must survive both.
+	// cancelDelegatedSubtree's post-cascade loop. The old stop may remove its
+	// OWN matching original admission; the replacement's entry must survive.
 	if got := al.steerAdmission().queueLen(); got != 1 {
 		t.Errorf("start queue length after the old delegate cancel's delayed effects = %d, want 1 — "+
-			"the stale effect removed the replacement's queued admission through the delegate tool's queue-removal caller(s) "+
-			"(D5/T27: both queue-removal callers are delayed effects bound to the execution the old stop selected)", got)
+			"the stale effect removed the replacement's queued admission (along with the original) through the delegate tool's "+
+			"queue-removal caller(s) (D5/T27: both queue-removal callers are delayed effects bound to the execution the old stop selected)", got)
 	}
 	if rec, err := lifecycle.Load(childID); err != nil {
 		t.Fatalf("Load(after stale effects): %v", err)
@@ -522,7 +546,10 @@ func TestT27_NewStop_AfterResumeStillStopsReplacement(t *testing.T) {
 			t.Fatalf("first StopTurns: %v", err)
 		}
 		t27StopLanded(t, lifecycle, childID, childGen)
-		t27ResumeAndRequeue(t, al, canceller, childID, childGen)
+		if got := al.steerAdmission().queueLen(); got != 0 {
+			t.Fatalf("setup: the ungated first stop must remove the child's own queued admission (start queue length = %d, want 0)", got)
+		}
+		t27ResumeAndRequeue(t, al, canceller, childID, childGen, 1)
 
 		// The genuinely newer stop: ungated, same production wiring.
 		if _, err := canceller.StopTurns(context.Background(), childID, owner, false, stopTurn); err != nil {
@@ -590,10 +617,7 @@ func TestT27_NewStop_AfterResumeStillStopsReplacement(t *testing.T) {
 		case <-time.After(30 * time.Second):
 			t.Fatal("the replacement's turn was not aborted by the genuinely newer stop")
 		}
-		final, err := lifecycle.Load(childID)
-		if err != nil {
-			t.Fatalf("Load(after newer stop): %v", err)
-		}
+		final := t27AwaitFinalState(t, lifecycle, childID)
 		if final.State != session.LifecycleStopped || final.StopNote == nil {
 			t.Errorf("replacement record after the newer stop = state %q note %v, want stopped with a note", final.State, final.StopNote)
 		}
