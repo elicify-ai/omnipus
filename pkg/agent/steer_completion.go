@@ -394,8 +394,10 @@ func (al *AgentLoop) commitSteeredTerminal(
 	})
 	switch {
 	case mutateErr == nil:
-		al.endSessionOwnedGoalOnTerminal(rec.SessionID,
-			goalEndingForTerminalState(nextState, outcome), goalSessionEndedReasonForState(nextState, outcome))
+		// MAJ-003 (sub-agent control plane): this terminal write ends the
+		// TURN, never the child's session-owned goal — the FD1=A pair-end is
+		// retired. Only natural met/exhaustion adjudication and an explicit
+		// clear (/goal clear, authorized clear_goal) end a session goal.
 		return true, nil
 	case errors.Is(mutateErr, errCompleteStaleGeneration),
 		errors.Is(mutateErr, errCompleteStoppedDuringDelivery),
@@ -925,9 +927,21 @@ func (al *AgentLoop) steeredCompletionWriteActive(sessionID string) bool {
 
 // hasRunningOrQueuedDescendant reports whether parentID has any descendant
 // that is genuinely still working — a `queued` child (admitted or not, it
-// WILL run), or a `running` child that is actually executing: a live turn
-// registered under its own SessionID, or (task-origin only) a task run the
-// executor is still holding.
+// WILL run), a `needs_input` child (D6b: a child waiting for an answer
+// holds back its parent's done), or a `running` child that is actually
+// executing: a live turn registered under its own SessionID, or
+// (task-origin only) a task run the executor is still holding.
+//
+// Completion-frontier semantics (sub-agent control-plane ADR, D6 Q2=B /
+// D6b): a `stopped` descendant neither blocks nor is it enqueued — it CUTS
+// the traversal, so a working or waiting descendant BEYOND a stopped node is
+// invisible to this frontier. Per D8.6 the stopped node's direct parent is
+// told about its stopped child by the D6 stopped-child notice — not by a
+// blocking frontier row — and decides about the branch; that notice delivery
+// is a separate D6 deliverable, not wired by this function. When that
+// parent explicitly resumes, the record's state
+// (queued/running/needs_input) blocks again — the cut follows the record's
+// state, never its identity.
 //
 // ADR-091 fix lane RX-HANG: a `running` child is deliberately NOT enough on
 // its own. completionDisposition's steer.OutcomeLifecycleNotice case keeps
@@ -1011,6 +1025,20 @@ func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error)
 			switch child.State {
 			case session.LifecycleQueued:
 				return true, nil
+			case session.LifecycleNeedsInput:
+				// D6b: a descendant waiting for an answer holds back the
+				// parent's completion until the question is answered or its
+				// 24-hour limit lands a visible failure. Unconditional — a
+				// parked session has no live turn by definition.
+				return true, nil
+			case session.LifecycleStopped:
+				// D6 Q2=B / D8.6: a stopped descendant does not block, and it
+				// CUTS the traversal — its subtree is invisible to this
+				// frontier. D8.6 routes the telling to the D6 stopped-child
+				// notice to the direct parent, not to this frontier; that
+				// notice delivery is a separate D6 deliverable, not wired
+				// here. A resumed record blocks again by state, not identity.
+				continue
 			case session.LifecycleRunning:
 				if al.steeredCompletionWriteActive(child.SessionID) {
 					return true, nil
@@ -1044,9 +1072,10 @@ func (al *AgentLoop) hasRunningOrQueuedDescendant(parentID string) (bool, error)
 // wholesale: the disposition derives the outcome from runErr (nil → the
 // child's answer as a normal final-answer completion; non-nil → a failed
 // child whose reason names the judge), Deliver runs first, the terminal
-// write carries the existing sentinels, and the Mutate-success path's
-// pair-end (e)① circled-one ends the goal when the write lands with the goal
-// still active.
+// write carries the existing sentinels, and the Mutate-success path ends
+// only the child's TURN: under MAJ-003 the terminal write never ends the
+// session-owned goal — only natural met/exhaustion adjudication or an
+// explicit clear (/goal clear, authorized clear_goal) does that.
 //
 // Every error here is logged and swallowed: the goal decision is already
 // settled at this point, so a delivery or persist failure is a repairable
@@ -1083,8 +1112,9 @@ func (al *AgentLoop) completeSteeredTurnAfterGoal(ctx context.Context, sessionID
 // on a turn exit or cancel, so without this call nothing re-enters it — the
 // child record stays `running` until the next boot sweep repairs it (architect
 // finding F4, #984 follow-up). The goal record itself is already ended by the
-// caller; the tail's Deliver + terminal write + pair-end (e)① then run with
-// the goal gone, so the (a) gate passes and nothing loops.
+// caller; the tail's Deliver + terminal write then run with the goal gone —
+// the write ends only the child's turn, never the goal — so the (a) gate
+// passes and nothing loops.
 //
 // A LIVE turn is deliberately left alone: its own exit re-runs the gate (the
 // goal is gone by then) and completes it through the same tail. NeedsInput

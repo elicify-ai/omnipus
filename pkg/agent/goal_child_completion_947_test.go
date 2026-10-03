@@ -351,9 +351,14 @@ func TestGoalChildCompletion947_JudgeUnavailableFailsChildAfterThreeAttempts(t *
 	if gerr != nil {
 		t.Fatalf("Get(goal): %v", gerr)
 	}
-	if !goal.IsTerminalState(g.State) {
-		t.Errorf("goal record state after judge outage = %q, want terminal — "+
-			"the note ends the goal record when the re-drive is exhausted", g.State)
+	// D6 Goal row (changed-test list entry 2): the child landing `failed`
+	// must NOT end its session-owned goal — only /goal clear / clear_goal
+	// ends a goal. The parent is told (the wake-eligible error above) and
+	// decides what happens to the goal, exactly as for a stop.
+	if g.State != generated.GoalStateActive {
+		t.Errorf("goal record state after judge outage = %q, want active — "+
+			"a failed child leaves its session-owned goal open (D6 Goal row: "+
+			"only clear_goal ends a goal)", g.State)
 	}
 }
 

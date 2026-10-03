@@ -753,12 +753,16 @@ operations:
       $ref: '#/channels/chat'
     summary: >
       The goal outcome line (founder decision 2026-09-14) — one push per
-      goal ENDING (met, round limit reached, stopped by the user, or any
-      other terminal brake), carrying the structured GoalOutcome.
-      Session-scoped. The same outcome is persisted as a `type: system,
-      system_subtype: goal_outcome` transcript entry and re-emitted as this
-      same frame type on replay. An intermediate unmet Judge round is not
-      an ending and never produces one.
+      goal ENDING (met, round limit reached, explicitly cleared by the
+      user, or any other terminal brake), carrying the structured
+      GoalOutcome. Only natural met/round-exhaustion adjudication and an
+      explicit clear (`/goal clear`, authorized
+      `delegate(action="clear_goal")`) end a goal: a session Stop,
+      timeout, plan stop, restart or failure is NOT an ending and never
+      produces one. Session-scoped. The same outcome is persisted as a
+      `type: system, system_subtype: goal_outcome` transcript entry and
+      re-emitted as this same frame type on replay. An intermediate unmet
+      Judge round is not an ending and never produces one.
     messages:
       - $ref: '#/channels/chat/messages/GoalOutcomeFrame'
 
@@ -6677,6 +6681,13 @@ components:
             - rounds_exhausted
             - stopped_by_user
             - other
+          description: >
+            WHY the goal ended (mirror of components/schemas/GoalOutcome.yaml
+            `ending` — edit both together). `stopped_by_user` is an EXPLICIT
+            user ending only: the owning session's `/goal clear` or an
+            authorized parent's `delegate(action="clear_goal")`. NEVER
+            written for a session lifecycle transition — a Stop, timeout,
+            plan stop, restart or failure keeps the goal record active.
         rounds_used:
           type: integer
           minimum: 0

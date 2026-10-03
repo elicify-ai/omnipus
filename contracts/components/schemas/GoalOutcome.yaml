@@ -54,8 +54,13 @@ properties:
       (Goal.state `met`). `rounds_exhausted` — the round limit was reached
       with no met verdict, including the bare-claim round-bound path
       (Goal.state `exhausted`, terminal note "round bound reached …").
-      `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel|
-      none` (Goal.state `cleared`, terminal note "cleared by user").
+      `stopped_by_user` — an EXPLICIT user ending only: the owning
+      session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an
+      authorized parent's `delegate(action="clear_goal")` (Goal.state
+      `cleared`, terminal note "cleared by user"). NEVER written for a
+      session lifecycle transition — a Stop, timeout, plan stop, restart
+      or failure keeps the goal record active; only natural met /
+      round-exhaustion adjudication and these explicit clears end a goal.
       `other` — every remaining ending (today: the idle-expiry sweep, or
       the working agent being deleted; any future terminal brake lands
       here too). Deliberately NOT subdivided: the goal outcome line for

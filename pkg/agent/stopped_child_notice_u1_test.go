@@ -228,9 +228,11 @@ func replayU1StoppedNotices(t *testing.T, al *AgentLoop, lifecycleDir, inboxDir 
 	wireSteerCompletionDeps(t, al)
 	recovery := &SteerBootRecovery{
 		Lifecycle: lifecycle, Sessions: al.GetSessionStore(), Inbox: inbox,
-		Classifier:     NewSteerRecordClassifier(lifecycle, al.GetSessionStore()),
-		Deliverer:      al.getUpwardDeliverer(),
-		EndSessionGoal: al.EndSessionOwnedGoalOnTerminal,
+		Classifier: NewSteerRecordClassifier(lifecycle, al.GetSessionStore()),
+		Deliverer:  al.getUpwardDeliverer(),
+		// No EndSessionGoal: MAJ-003 — no stop of any kind (boot replay
+		// included) ends a session-owned goal. The field itself is retired
+		// and removed by the backend's Commit B.
 		OperatorNotice: func(message string) {
 			t.Errorf("boot recovery reported a delivery/recovery problem: %s", message)
 		},
