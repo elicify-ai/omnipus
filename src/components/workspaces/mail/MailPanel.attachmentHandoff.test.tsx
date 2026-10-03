@@ -207,7 +207,7 @@ afterEach(() => {
   sessionStorage.clear()
 })
 
-describe('MailPanel attachment handoff (C5: scenarios 6.3, 6.5–6.7, 7.1–7.5; MC-W3-6/8)', () => {
+describe('MailPanel attachment handoff — Open (C5: scenarios 6.3, 7.1–7.2; MC-W3-6/8)', () => {
   it('scenario 6.3 / MC-W3-6 — Open mints and hands ONLY the generated descriptor; no path, no LibraryEntry', async () => {
     const { mounted } = await openReportPdf()
     const handoff = mounted.handoff!
@@ -338,7 +338,12 @@ describe('MailPanel attachment handoff (C5: scenarios 6.3, 6.5–6.7, 7.1–7.5;
     })
     await waitFor(() => expect(announcerText()).toBe("report.pdf's message is no longer in this folder. Focus moved to the folder tab."))
   })
+})
 
+// The handoff describe is split at the Open/Save boundary to stay under the
+// function-size budget (a describe callback is a function to that guard);
+// every assertion below is unchanged from the single-describe original.
+describe('MailPanel attachment handoff — Save to Library and open outcomes (C5: scenarios 6.5–6.7, 7.5)', () => {
   it('scenario 6.5 / S-15 — Save success announces "Saved to Library as <name>." and enables Open in Library, without moving focus', async () => {
     await openReportPdf()
     const saveButton = screen.getByRole('button', { name: 'Save report.pdf to Library' })
