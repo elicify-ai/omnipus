@@ -141,9 +141,9 @@ type TaskExecutor struct {
 	// *session.LifecycleStore instance. Nil in test harnesses and any boot
 	// sequence that has not wired it yet: every access below
 	// (mintTaskLifecycleRecord, transitionTaskLifecycle) nil-guards it via
-	// getLifecycleStore and is a silent no-op, exactly mirroring
-	// createTaskSessionSync's own sessStore-nil handling — a missing/unwired
-	// durable record must never block or fail task dispatch.
+	// getLifecycleStore and is a silent no-op — a missing/unwired durable
+	// lifecycle record must never block or fail task dispatch. The transcript
+	// session itself is required by createTaskSessionSync before dispatch.
 	//
 	// FR-118/G-13 gap this closes: before this field existed, the ONLY
 	// production constructor of session.LifecycleRecord was
@@ -661,16 +661,29 @@ func (te *TaskExecutor) executeTask(
 	// then immediately escape a concurrently-running Stop fan-out (the fan-
 	// out's snapshot, taken microseconds earlier under the same lock, would
 	// have seen no SessionID for it yet). Mirrors StartTaskNow's synchronous
-	// pattern. A setup error aborts before worker execution and is recorded
-	// as Failed; a missing store still returns the existing ("", nil) result.
+	// pattern: a real transcript session is required before any in-progress
+	// event, live running slot or execution goroutine is created. A setup
+	// error aborts before worker execution and is recorded as Failed.
 	taskSessionID, sessErr := te.createTaskSessionSync(t)
 	if sessErr != nil {
 		release()
-		return te.failTaskBeforeDispatch(taskID, sessErr)
+		// failTaskBeforeDispatch persists the Failed disposition visibly,
+		// terminates the goal record and emits the status event, joining any
+		// Failed-write error onto the returned cause.
+		failErr := te.failTaskBeforeDispatch(taskID, sessErr)
+		// ClaimForRun already persisted in_progress. Verify settlement against
+		// the saved task, not the claimed pointer or the fact that the failure
+		// helper was called.
+		settled, settleErr := te.store.Get(taskID)
+		if settleErr != nil {
+			return errors.Join(failErr, fmt.Errorf("could not verify failed task %q: %w", taskID, settleErr))
+		}
+		if settled.Status != task.StatusFailed {
+			return errors.Join(failErr, fmt.Errorf("task %q remains %s after provisioning failure", taskID, settled.Status))
+		}
+		return failErr
 	}
-	if taskSessionID != "" {
-		t.SessionID = taskSessionID
-	}
+	t.SessionID = taskSessionID
 
 	te.emitStatusChanged(t, task.StatusInProgress)
 
@@ -688,19 +701,14 @@ func (te *TaskExecutor) executeTask(
 // meta (Title/TaskID/WorkspaceID), persists SessionID on the task record via
 // te.store.Update, and appends the initial prompt transcript entry — all
 // synchronously, in the CALLER's own goroutine (M1/FR-029; see ExecuteTask's
-// doc comment for why this matters). ExecuteTask calls this; StartTaskNow
-// performs the equivalent block inline. Both retry the binding write once
+// doc comment for why this matters). Shared by ExecuteTask; StartTaskNow
+// performs the equivalent block inline. Both refuse to dispatch when the
+// agent store is missing or NewSession fails, retry the binding write once,
 // and fail the dispatch visibly if it cannot be persisted.
-//
-// Returns ("", nil) when sessStore is nil (no agent store configured for
-// t.AgentID) — callers treat that as "no session", not an error, exactly as
-// before this refactor moved the block out of runTask's goroutine.
 func (te *TaskExecutor) createTaskSessionSync(t *task.Task) (string, error) {
 	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
 	if sessStore == nil {
-		logger.ErrorCF("task_executor", "Agent store not found, task will have no session",
-			map[string]any{"task_id": t.ID, "agent_id": t.AgentID})
-		return "", nil
+		return "", fmt.Errorf("task_executor: agent store %q not found for task %q", t.AgentID, t.ID)
 	}
 	meta, err := sessStore.NewSession(session.SessionTypeTask, "system", t.AgentID)
 	if err != nil {
@@ -1202,8 +1210,8 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 		// createTaskSessionSync.
 		_ = te.activateTaskGoal(t, taskSessionID)
 	} else {
-		logger.WarnCF("task_executor", "StartTaskNow: no agent store found, task will have no session",
-			map[string]any{"task_id": taskID, "agent_id": t.AgentID})
+		release()
+		return "", fmt.Errorf("task_executor: StartTaskNow: agent store %q not found for task %q", t.AgentID, taskID)
 	}
 
 	te.emitStatusChanged(t, task.StatusInProgress)

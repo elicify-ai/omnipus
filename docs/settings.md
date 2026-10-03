@@ -107,7 +107,7 @@ Each tab and neighbor screen has one job.
 | Screen or tab | What it is for |
 |---|---|
 | Settings, Providers | Connect providers, manage keys and sign-ins, set the default model |
-| Settings, Models | Context budget: how much of each tool result stays in the conversation, and which context length each model is assumed to have |
+| Settings, Models | Context budget: per-result caps, the combined share of the model's context window used by tool results, and model context-length overrides |
 | Settings, Integrations | Web-search and voice-input providers, with their keys |
 | Settings, Security | Sandbox mode, credential vault, audit log, and the per-agent rate limits |
 | Settings, Gateway | The address and port the gateway listens on; restarting it; god mode in its danger zone |
@@ -115,10 +115,14 @@ Each tab and neighbor screen has one job.
 | Settings, Memory | What the team remembers: recap and retrospective settings |
 | Settings, Devices | Pairing additional devices; hidden unless enabled on your install |
 | Settings, Performance | How many tool calls an agent may make in one turn, how many agents may run at once, how deep delegation may go, and how long a delegation may run |
-| Settings, Chat | Chat display, including the verbose view of tool calls |
+| Settings, Chat | Chat display, including the verbose view of tool calls; the **Verbose chat** toggle shows or hides the context-window retry notice, "Context window exceeded. Compressing history and retrying..." |
 | Settings, About | Version and build information |
 | Profile | Your name, timezone, font size, password, and workspace context |
 | Usage | Token totals by period, agent, model, and session |
+
+**Tool-result share limit**, under **Settings → Models**, sets the maximum share of the active model's context window that all tool results together may occupy before trimming is needed. The context window is how much information the model can read at once. This is a percentage of the whole window, not the smaller budget left after reserving space for output and instructions, and it replaces the absolute character count. The default is **50%**. Enter a percentage **greater than 0% and no more than 100%**; fractional percentages are accepted.
+
+For scripts, the same setting is `context.tool_result_share_fraction` in configuration and `tool_result_share_fraction` on `GET` / `PUT /api/v1/settings/context`. Send the fraction, not the percentage: `0.125` means 12.5%. An omitted field in a partial update keeps the saved value; it does not reset to 50%. Null, text, booleans, zero and values outside the interval are rejected. A successful update takes effect on the next turn without a restart.
 
 Usage counts tokens, not money. It shows totals by period, agent, model, and session, split into cached and uncached tokens. Cached tokens are included in the total. See the provider's invoice for costs.
 

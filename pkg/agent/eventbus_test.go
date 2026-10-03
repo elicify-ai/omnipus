@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -745,6 +746,62 @@ func TestAgentLoop_EmitsSteeringAndSkippedToolEvents(t *testing.T) {
 	}
 }
 
+// recordingFailFirstProvider records EVERY request it receives (copied per
+// call, so later in-place mutation of the loop's slice cannot rewrite what
+// was observed) and fails the first N calls with failError before answering
+// with successResp. The serialization instrument for the plain-history
+// recovery repairs (ruling §3 row 3): the strictly-smaller-retry proof needs
+// the actual bytes of attempt 1 and attempt 2, not just call counts. Test-
+// local to this file; loop_test.go is size-pinned and must not grow.
+type recordingFailFirstProvider struct {
+	mu          sync.Mutex
+	requests    [][]providers.Message
+	failures    int
+	failError   error
+	successResp string
+}
+
+func (p *recordingFailFirstProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	tools []providers.ToolDefinition,
+	model string,
+	opts map[string]any,
+) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	snap := make([]providers.Message, len(messages))
+	copy(snap, messages)
+	p.requests = append(p.requests, snap)
+	call := len(p.requests)
+	p.mu.Unlock()
+	if call <= p.failures {
+		return nil, p.failError
+	}
+	return &providers.LLMResponse{
+		Content:   p.successResp,
+		ToolCalls: []providers.ToolCall{},
+	}, nil
+}
+
+func (p *recordingFailFirstProvider) GetDefaultModel() string {
+	return "mock-fail-model"
+}
+
+func (p *recordingFailFirstProvider) request(n int) []providers.Message {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if n < 1 || n > len(p.requests) {
+		return nil
+	}
+	return p.requests[n-1]
+}
+
+func (p *recordingFailFirstProvider) calls() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.requests)
+}
+
 func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 	tmpDirOuter, err := os.MkdirTemp("", "agent-eventbus-compress-*")
 	if err != nil {
@@ -789,7 +846,7 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 	cfg.Context.DefaultContextWindow = intPtr(131072)
 
 	contextErr := stringError("InvalidParameter: Total tokens of image and text exceed max message tokens")
-	provider := &failFirstMockProvider{
+	provider := &recordingFailFirstProvider{
 		failures:    1,
 		failError:   contextErr,
 		successResp: "Recovered from context error",
@@ -801,13 +858,38 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 		t.Fatal("expected default agent")
 	}
 
-	defaultAgent.Sessions.SetHistory("session-1", []providers.Message{
-		{Role: "user", Content: "Old message 1"},
-		{Role: "assistant", Content: "Old response 1"},
-		{Role: "user", Content: "Old message 2"},
-		{Role: "assistant", Content: "Old response 2"},
-		{Role: "user", Content: "Trigger message"},
-	})
+	// Plain-history recovery fixture, repaired per the 2026-10-01 ruling §3
+	// row 1 and its E14 caveat: the seed must carry genuinely NET-removable
+	// text. The old ~90-byte pair could never overcome the ≥254 bytes of
+	// required breadcrumb framing (header installed in system content AND
+	// system parts), so the force path correctly stopped with the actual
+	// rejection — a fixture defect, not a production one. Two completed old
+	// plain exchanges with multi-KB deterministic text are seeded in THIS
+	// test's exact active scope ("session-1" is both the seed key and the
+	// runAgentLoop invocation key), each with a unique marker the assertions
+	// trace through the recorded requests. Only exchange 1 is older than the
+	// newest plain assistant (exchange 2's assistant is the floor, ruling
+	// §1), so exactly one eligible eviction endpoint exists and the strict
+	// shrink is attributable to it.
+	const (
+		seedMark1 = "SEEDMARK-ALPHA-7f3a"
+		seedMark2 = "SEEDMARK-BETA-7f3a"
+	)
+	seedExchange := func(mark, word string) []providers.Message {
+		filler := strings.Repeat(word, 240) // ~2.6KB deterministic removable text per message
+		return []providers.Message{
+			// The marker sits AFTER the filler, beyond rune 80: the eviction
+			// breadcrumb quotes the 80-rune HEAD snippet of every evicted
+			// line (breadcrumb_archive.go::archiveBreadcrumbEntry), and a
+			// head-positioned marker would ride that snippet into the retry
+			// request even after its exchange legitimately slid away.
+			{Role: "user", Content: filler + " " + mark},
+			{Role: "assistant", Content: filler},
+		}
+	}
+	seed := append(seedExchange(seedMark1, "alpha lore "), seedExchange(seedMark2, "beta lore ")...)
+	seed = append(seed, providers.Message{Role: "user", Content: "Trigger message"})
+	defaultAgent.Sessions.SetHistory("session-1", seed)
 
 	sub := al.SubscribeEvents(16)
 	defer al.UnsubscribeEvents(sub.ID)
@@ -825,6 +907,39 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 	}
 	if resp != "Recovered from context error" {
 		t.Fatalf("expected retry success, got %q", resp)
+	}
+
+	// Positive control (ruling §3 row 1): the FIRST recorded provider request
+	// must actually contain both seed markers — the seed sat in the active
+	// scope and was really sent, so the retry's shrink is attributable to the
+	// seeded history and not to unrelated framing churn.
+	req1 := provider.request(1)
+	if !requestContains(req1, seedMark1) || !requestContains(req1, seedMark2) {
+		t.Fatalf("fixture positive control failed: the first provider request must carry both seed markers")
+	}
+	// MAJ-CW-012's serialization instrument: the retry's normalized retained
+	// payload — the exact measure the forced pass itself is guarded by
+	// (retainedPayloadSize: breadcrumbs and marks in, transient model-only
+	// notice out) — must be STRICTLY smaller than the rejected one, and only
+	// the eligible prefix may leave: exchange 1's marker is gone, exchange
+	// 2's marker is still there because exchange 2's assistant is the floor.
+	req2 := provider.request(2)
+	size1, sizeErr := retainedPayloadSize(nil, req1)
+	if sizeErr != nil {
+		t.Fatalf("normalize request 1: %v", sizeErr)
+	}
+	size2, sizeErr := retainedPayloadSize(nil, req2)
+	if sizeErr != nil {
+		t.Fatalf("normalize request 2: %v", sizeErr)
+	}
+	if size2 >= size1 {
+		t.Fatalf("FR-032/MAJ-CW-012: the retry's retained payload must shrink strictly; req1=%d req2=%d normalized bytes", size1, size2)
+	}
+	if requestContains(req2, seedMark1) {
+		t.Fatal("the eligible oldest prefix (exchange 1) must be gone from the retry request")
+	}
+	if !requestContains(req2, seedMark2) {
+		t.Fatal("exchange 2 must survive the relief: only the eligible prefix leaves (newest plain assistant is the floor)")
 	}
 
 	events := collectEventStream(sub.C)

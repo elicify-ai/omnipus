@@ -75,6 +75,12 @@ func (p ProjectionSet) Clone() ProjectionSet {
 type ProjectionMeta struct {
 	Entries  ProjectionSet
 	Hydrated bool
+	// SourceRunes records the exact retained source limit, excluding the mark.
+	// Presence, including zero, wins over later cap-setting changes.
+	SourceRunes map[ProjectionKey]int
+	// TranscriptLine is the actual zero-based nonempty transcript record index.
+	// It exists for full results too; absence means no recorded transcript identity.
+	TranscriptLine map[ProjectionKey]int
 }
 
 // validProjectionState reports whether s is one of the two known states.
@@ -101,9 +107,11 @@ func validateProjectionWrite(pk ProjectionKey, state ProjectionState) error {
 // slice sorted by (archive_line, tool_call_id) — deterministic bytes so a
 // meta file written twice from the same state is identical.
 type projectionEntry struct {
-	ToolCallID  string          `json:"tool_call_id"`
-	ArchiveLine int             `json:"archive_line"`
-	State       ProjectionState `json:"state"`
+	ToolCallID     string          `json:"tool_call_id"`
+	ArchiveLine    int             `json:"archive_line"`
+	State          ProjectionState `json:"state,omitempty"`
+	SourceRunes    *int            `json:"retained_source_runes,omitempty"`
+	TranscriptLine *int            `json:"transcript_line,omitempty"`
 }
 
 // projectionToEntries flattens a set for persistence.
@@ -136,18 +144,6 @@ func projectionFromEntries(entries []projectionEntry) ProjectionSet {
 			continue
 		}
 		out[pk] = e.State
-	}
-	return out
-}
-
-// pruneProjectionBelow drops every entry whose archive_line < skip
-// (US-6.AC9 — evicted lines have no window view to project).
-func pruneProjectionBelow(p ProjectionSet, skip int) ProjectionSet {
-	out := make(ProjectionSet, len(p))
-	for k, v := range p {
-		if k.ArchiveLine >= skip {
-			out[k] = v
-		}
 	}
 	return out
 }

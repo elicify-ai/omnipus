@@ -166,6 +166,7 @@ type Message = {
         | "tool_call"
         | "turn_canceled"
         | "judge_verdict"
+        | "context_window_notice"
       )
     | undefined;
   role?: ("user" | "assistant" | "system") | undefined;
@@ -188,6 +189,7 @@ type Message = {
   descendants_canceled?: Array<string> | undefined;
   model?: string | undefined;
   verdict?: JudgeVerdict | undefined;
+  context_window_notice?: ContextWindowNotice | undefined;
   system_subtype?:
     | (
         | "browser_handover_notice"
@@ -372,6 +374,10 @@ type CriterionVerdict = {
         quote: string;
       }>
     | undefined;
+};
+type ContextWindowNotice = {
+  kind: "provider_retry" | "mid_turn";
+  message: string;
 };
 type GoalOutcome = {
   goal_id: string;
@@ -1706,7 +1712,7 @@ type ContextSettings = {
   mcp_result_cap: number;
   builtin_success_cap: number;
   builtin_failure_cap: number;
-  absolute_trigger_chars: number;
+  tool_result_share_fraction: number;
   ingest_bound_bytes: number;
   default_context_window?: (number | null) | undefined;
   model_overrides: Array<ContextModelOverride>;
@@ -1720,7 +1726,7 @@ type ContextSettingsUpdate = Partial<{
   mcp_result_cap: number;
   builtin_success_cap: number;
   builtin_failure_cap: number;
-  absolute_trigger_chars: number;
+  tool_result_share_fraction: number;
   ingest_bound_bytes: number;
   default_context_window: number | null;
   model_overrides: Array<ContextModelOverride>;
@@ -3419,6 +3425,10 @@ export const JudgeVerdict: z.ZodType<JudgeVerdict> = z.object({
   judged_at: z.string().datetime({ offset: true }),
   judge_agent_id: z.string(),
 });
+export const ContextWindowNotice: z.ZodType<ContextWindowNotice> = z.object({
+  kind: z.enum(["provider_retry", "mid_turn"]),
+  message: z.string().min(1).max(2048),
+});
 export const GoalOutcome: z.ZodType<GoalOutcome> = z.object({
   goal_id: z.string().min(1),
   goal_text: z.string().min(1),
@@ -3440,6 +3450,7 @@ export const Message: z.ZodType<Message> = z.object({
       "tool_call",
       "turn_canceled",
       "judge_verdict",
+      "context_window_notice",
     ])
     .optional(),
   role: z.enum(["user", "assistant", "system"]).optional(),
@@ -3462,6 +3473,7 @@ export const Message: z.ZodType<Message> = z.object({
   descendants_canceled: z.array(z.string()).optional(),
   model: z.string().optional(),
   verdict: JudgeVerdict.optional(),
+  context_window_notice: ContextWindowNotice.optional(),
   system_subtype: z
     .enum([
       "browser_handover_notice",
@@ -4284,7 +4296,7 @@ export const ContextSettings: z.ZodType<ContextSettings> = z.object({
   mcp_result_cap: z.number().int().gte(1).lte(150000),
   builtin_success_cap: z.number().int().gte(1).lte(150000),
   builtin_failure_cap: z.number().int().gte(1).lte(150000),
-  absolute_trigger_chars: z.number().int().gte(1),
+  tool_result_share_fraction: z.number().gt(0).lte(1),
   ingest_bound_bytes: z.number().int().gte(1).lte(8388607),
   default_context_window: z.number().int().gte(1).nullish(),
   model_overrides: z.array(ContextModelOverride),
@@ -4294,7 +4306,7 @@ export const ContextSettingsUpdate: z.ZodType<ContextSettingsUpdate> = z
     mcp_result_cap: z.number().int().gte(1).lte(150000),
     builtin_success_cap: z.number().int().gte(1).lte(150000),
     builtin_failure_cap: z.number().int().gte(1).lte(150000),
-    absolute_trigger_chars: z.number().int().gte(1),
+    tool_result_share_fraction: z.number().gt(0).lte(1),
     ingest_bound_bytes: z.number().int().gte(1).lte(8388607),
     default_context_window: z.number().int().gte(1).nullable(),
     model_overrides: z.array(ContextModelOverride),
@@ -13073,7 +13085,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "get",
     path: "/settings/context",
     alias: "getContextSettings",
-    description: `Returns the per-surface tool-result caps, the absolute trigger, the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Models. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
+    description: `Returns the per-surface tool-result caps, tool_result_share_fraction (finite fraction of the resolved model window W, 0 &lt; f ≤ 1, default 0.5), the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Models; Tool-result share limit displays a percentage. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
 `,
     requestFormat: "json",
     response: ContextSettings,
@@ -13089,7 +13101,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "put",
     path: "/settings/context",
     alias: "updateContextSettings",
-    description: `Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 naming the field and the limit on: any cap &gt; 150,000 or &lt; 1; absolute_trigger_chars &lt; 1; ingest_bound_bytes ≥ 8,388,608 or &lt; 1; model_overrides[].context_window &lt; 1. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
+    description: `Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 ErrorResponse naming the field and valid interval on: any cap &gt; 150,000 or &lt; 1; tool_result_share_fraction must be a finite JSON number with 0 &lt; f ≤ 1 (numeric 1 is allowed; null, strings, booleans, zero, negatives and values &gt; 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or &lt; 1; model_overrides[].context_window &lt; 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. The wire carries a fraction, not a percentage; 12.5% is 0.125. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
 `,
     requestFormat: "json",
     parameters: [
@@ -15775,7 +15787,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "provider_fallback", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created"]);
 
 export const AuthFrame = z
   .object({
@@ -15930,7 +15942,7 @@ export const DoneFrame = z
 
 export const LLMError = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "delegated_task_limit", "context_unrecoverable", "context_window_unknown", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "delegated_task_limit", "context_window_unknown", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     detail: z.string().max(2048).optional(),
@@ -15947,7 +15959,7 @@ export const LLMError = z
 
 export const LLMErrorReplay = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "delegated_task_limit", "context_unrecoverable", "context_window_unknown", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "delegated_task_limit", "context_window_unknown", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     provider_message: z.boolean().optional(),
@@ -16248,6 +16260,26 @@ export const ProviderRetryFrame = z
     attempt: z.number().int().min(2),
     max_attempts: z.number().int().min(1),
     error_code: z.string().max(64),
+    seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const ContextWindowNoticeFrameNotice = z
+  .object({
+    kind: z.enum(["provider_retry", "mid_turn"]),
+    message: z.string().min(1).max(2048),
+  })
+  .strict();
+
+export const ContextWindowNoticeFrame = z
+  .object({
+    type: z.literal("context_window_notice"),
+    session_id: z.string().min(1).max(128),
+    turn_id: z.string().min(1).max(128),
+    agent_id: z.string().min(1).max(128),
+    entry_id: z.string().min(1).max(128),
+    timestamp: z.string(),
+    notice: ContextWindowNoticeFrameNotice,
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -17110,6 +17142,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   ToolResultProjectionFrame,
   RateLimitFrame,
   ProviderRetryFrame,
+  ContextWindowNoticeFrame,
   ProviderFallbackFrame,
   ProviderFallbackNote,
   LibraryChangedFrame,

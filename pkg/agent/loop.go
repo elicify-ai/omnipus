@@ -2217,6 +2217,37 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 		}
 	}()
 
+	// The SYMMETRIC gap in the invariant above: markTurnFailed's doc comment
+	// names four call sites, and only site (4) — the turnStatus==Error defer
+	// just above — keeps turnStatus in step with turnFailed. Sites (2) (the
+	// tool-iteration-limit branch, finalizeTurn in loop_run_turn.go) and (3)
+	// (generic empty-content exhaustion, same function) call markTurnFailed()
+	// directly without ever touching turnStatus, which this function set to
+	// TurnEndStatusCompleted by default above and nothing downstream
+	// reconciles — so a turn that hit the tool-iteration cap closed with
+	// done.stats.turn_failed=true (correct) AND turn.end.status="completed"
+	// (wrong): the exact same-turn contradiction the comment above calls out
+	// for the other direction, just unguarded here. Caught by
+	// TestWS_TerminalOutcome_IterationCap_AgreesAcrossSurfaces
+	// (pkg/gateway/terminal_outcome_acceptance_test.go), which asserts
+	// turn.end.status == TurnEndStatusError whenever the done frame reports
+	// turn_failed. Registered after the Error→markTurnFailed defer so LIFO
+	// runs this one first — ts.turnFailed from sites (2)/(3) is already set
+	// by the time any defer here runs (finalizeTurn returns before runTurn's
+	// own defers fire), so this only ever promotes turnStatus, never races
+	// the other defer's own markTurnFailed() call.
+	defer func() {
+		// Unlocked read, matching this same function's result-construction
+		// read of ts.turnFailed a few lines below (loop_run_turn.go's
+		// finalizeTurn, turnResult{turnFailed: ts.turnFailed, ...}): by the
+		// time any of runTurn's own defers run, finalizeTurn has already
+		// returned, so nothing else in this turn's goroutine still writes
+		// ts.turnFailed.
+		if rz.rc.rx.rr.rq.ri.rf.rt.ts.turnFailed && rz.rc.rx.rr.rq.ri.turnStatus != TurnEndStatusError {
+			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
+		}
+	}()
+
 	switch rz.rc.prepareTurn() {
 	case agentLoopRunTurnConductorReturn:
 		return rz.rc.ret0, rz.rc.ret1
@@ -2301,8 +2332,6 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 	switch code {
 	case CodeTurnTimedOut:
 		sentinel, status = ErrTurnTimedOut, TurnEndStatusError
-	case CodeContextUnrecoverable:
-		sentinel, status, level = ErrContextUnrecoverable, TurnEndStatusError, logger.ErrorCF
 	}
 	llm := typedExitError(code, cause)
 

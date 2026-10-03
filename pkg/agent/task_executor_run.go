@@ -117,11 +117,10 @@ func (te *TaskExecutor) runTask(
 		return
 	}
 
-	// ADR-050 RD5 run-open (task-run-history-spec.md §3.2): now that
-	// taskSessionID is settled (created successfully, or left empty on a
-	// session-store failure), open this execution's TaskRun record using the
-	// session the dispatch actually minted — see openRun's own doc comment
-	// for why run-open cannot happen any earlier than this point.
+	// ADR-050 RD5 run-open (task-run-history-spec.md §3.2): the dispatch owner
+	// created taskSessionID successfully before launching this goroutine.
+	// Open this execution's TaskRun with that real session — see openRun's
+	// own doc comment for why run-open cannot happen any earlier.
 	run = te.openRun(t.ID, occurrenceMs, kind, taskSessionID)
 
 	taskCtx := tools.WithAgentID(ctx, t.AgentID)
@@ -147,12 +146,8 @@ func (te *TaskExecutor) runTask(
 
 	sessionKey := taskTurnSessionKey(t.AgentID, t.ID)
 
-	taskChatID := taskSessionID
-	if taskChatID == "" {
-		taskChatID = "task:" + t.ID
-	}
 	turn := func(prompt string) (string, error) {
-		return te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
+		return te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskSessionID)
 	}
 	redispatchTaskID = te.executeTaskRun(ctx, t, taskSessionID, "", run, turn)
 }
@@ -451,9 +446,9 @@ func (te *TaskExecutor) emitRunStatus(taskID, runID string, occurrenceMs *int64,
 }
 
 // runTaskFromInProgress is the goroutine body for tasks launched via
-// StartTaskNow. The session has already been created and the session_id
-// persisted; it skips the session-creation block that runTask performs and
-// goes straight to execution, reusing the shared completion logic.
+// StartTaskNow. The dispatch owner has already created the session and
+// persisted its session_id; like runTask, this goes straight to execution,
+// reusing the shared completion logic.
 //
 // BLK-3 (operator decision 2026-07-20): it DOES open an ADR-050 RD5/RD7
 // TaskRun record (task-run-history-spec.md §3.2), threading the resulting
@@ -540,9 +535,8 @@ func (te *TaskExecutor) runTaskFromInProgress(
 		map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "session_id": taskSessionID})
 
 	// ADR-050 RD5/RD7 run-open (task-run-history-spec.md §3.2): taskSessionID
-	// was already created and persisted synchronously by StartTaskNow before
-	// this goroutine was launched (unlike runTask, which must wait for its
-	// own session-creation block to settle), so it is available immediately.
+	// was already created and persisted synchronously by the dispatch owner
+	// before this goroutine was launched, so it is available immediately.
 	run = te.openRun(t.ID, nil, task.RunKindManual, taskSessionID)
 
 	taskCtx := tools.WithAgentID(ctx, t.AgentID)
@@ -560,12 +554,8 @@ func (te *TaskExecutor) runTaskFromInProgress(
 
 	sessionKey := taskTurnSessionKey(t.AgentID, t.ID)
 
-	taskChatID := taskSessionID
-	if taskChatID == "" {
-		taskChatID = "task:" + t.ID
-	}
 	turn := func(prompt string) (string, error) {
-		return te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
+		return te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskSessionID)
 	}
 	redispatchTaskID = te.executeTaskRun(ctx, t, taskSessionID, " (StartTaskNow path)", run, turn)
 }

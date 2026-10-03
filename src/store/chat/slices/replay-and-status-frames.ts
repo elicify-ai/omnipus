@@ -23,6 +23,7 @@ import type {
   SessionStateFrame,
   BrowserHandoverNoticeFrame,
   GoalOutcomeFrame,
+  ContextWindowNoticeFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
@@ -1066,6 +1067,35 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
           if (!targetSid) break
           const handoverFrame = frame as BrowserHandoverNoticeFrame
           withBucket(targetSid, (b) => buildBrowserHandoverInsertion(b, handoverFrame) ?? {})
+          break
+        }
+
+        case 'context_window_notice': {
+          if (!targetSid) break
+          const noticeFrame: ContextWindowNoticeFrame = frame
+          // Live and replay share this carrier. Preference never controls storage.
+          withBucket(targetSid, (b) => {
+            if (b.messagesById[noticeFrame.entry_id]) return {}
+            return produce(b, (draft) => {
+              draft.messagesById[noticeFrame.entry_id] = {
+                id: noticeFrame.entry_id,
+                session_id: noticeFrame.session_id,
+                role: 'system',
+                type: noticeFrame.type,
+                content: noticeFrame.notice.message,
+                timestamp: noticeFrame.timestamp,
+                status: 'done',
+                agentId: noticeFrame.agent_id,
+                turnId: noticeFrame.turn_id,
+                contextWindowNotice: noticeFrame.notice,
+              }
+              insertHistoryMessageId(draft.messageOrder, draft.messagesById, noticeFrame.entry_id)
+              if (draft.messageOrder.length > MAX_MESSAGES_PER_SESSION) {
+                evictMessageFromBucket(draft, draft.messageOrder[0])
+                draft.trimmedCount += 1
+              }
+            })
+          })
           break
         }
 

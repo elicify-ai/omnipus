@@ -678,7 +678,15 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 		if isOverContextBudgetTokens(agentContextBudget(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent), rp.rc.rx.rr.rq.ri.messages, nonMessageTokens) {
 			logger.WarnCF("agent", "Proactive window trim: context budget exceeded before LLM call",
 				map[string]any{"session_key": rp.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey})
-			if compression, ok := rp.rc.rx.rr.rq.ri.rf.rt.al.windowTrim(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent, rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.TranscriptSessionID, rp.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); ok {
+			compression, ok := rp.rc.rx.rr.rq.ri.rf.rt.al.windowTrim(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent, rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.TranscriptSessionID, rp.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey)
+			if compression.Err != nil {
+				rt := rp.rc.rx.rr.rq.ri.rf.rt
+				var status TurnEndStatus
+				rp.rc.ret0, status, rp.rc.ret1 = rt.al.contextWindowTurnExit(rt.ts, rt.iteration, rt.llmModel, compression.Err)
+				rp.rc.rx.rr.rq.ri.turnStatus = status
+				return agentLoopRunTurnConductorReturn
+			}
+			if ok {
 				rp.rc.rx.rr.rq.ri.rf.rt.al.emitEvent(
 					EventKindContextCompress,
 					rp.rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.context.compress"),
@@ -715,10 +723,12 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 			Content: rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage,
 			Media:   append([]string(nil), rp.rc.rx.rr.rq.ri.rf.rt.ts.media...),
 		}
-		if len(rootMsg.Media) > 0 {
-			rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(rp.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey, rootMsg)
-		} else {
-			rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddMessage(rp.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey, rootMsg.Role, rootMsg.Content)
+		if err := rp.rc.rx.rr.rq.ri.rf.rt.ts.appendWindowMessage(rootMsg); err != nil {
+			rt := rp.rc.rx.rr.rq.ri.rf.rt
+			var status TurnEndStatus
+			rp.rc.ret0, status, rp.rc.ret1 = rt.al.contextWindowTurnExit(rt.ts, rt.iteration, rt.llmModel, err)
+			rp.rc.rx.rr.rq.ri.turnStatus = status
+			return agentLoopRunTurnConductorReturn
 		}
 	}
 
@@ -832,9 +842,23 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 		// structurally unreachable, issue #595). Nothing behavioural is
 		// lost: the turn already terminates unconditionally below.
 		//
+		// Synthetic context is not a user-facing outcome. Deliver the same
+		// classified notice live and durably, even after earlier narration.
+		llm := LLMError{Code: CodeUnknown, Message: UserMessageForCode(CodeUnknown)}
+		rq.ri.rf.rt.al.emitEvent(
+			EventKindError,
+			rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.error"),
+			ErrorPayload{
+				Stage: "tool_assembly", ChatID: rq.ri.rf.rt.ts.opts.ChatID,
+				Code: string(llm.Code), Message: llm.Message,
+				SessionID: string(rq.ri.rf.rt.ts.routingSessionID),
+			},
+		)
+		rq.ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "tool_assembly", llm)
+
 		// Fail the LLM call for this iteration by returning an error turn result.
 		rq.ri.turnStatus = TurnEndStatusError
-		rq.ret0 = turnResult{status: TurnEndStatusError, finalContent: denyMsg}
+		rq.ret0 = turnResult{status: TurnEndStatusError, finalContent: llm.Message}
 		rq.ret1 = dedupErr
 		return agentLoopRunTurnRequestReturn
 	}
@@ -897,6 +921,11 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 // prepareCallMessages repairs history and injects the current ephemeral instruction messages.
 func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
 	repairedHistory := rq.ri.messages
+	if err := validateWindowGroups(repairedHistory); err != nil {
+		rq.ri.rf.rt.ts.setContextWindowError(err)
+		rq.ri.rf.callMessages = repairedHistory
+		return
+	}
 	if rq.ri.rf.rt.ts.opts.TranscriptStore != nil && rq.ri.rf.rt.ts.opts.TranscriptSessionID != "" && rq.ri.rf.rt.ts.agent != nil && rq.ri.rf.rt.ts.agent.Tools != nil {
 		repaired, _ := repairHistory(rq.ri.rf.rt.turnCtx, rq.ri.messages, rq.ri.rf.rt.ts.opts.TranscriptStore, rq.ri.rf.rt.ts.opts.TranscriptSessionID, rq.ri.rf.rt.ts.agent.Tools, rq.ri.rf.rt.ts.agent.ID, rq.ri.rf.rt.ts.agent.LoadToolPolicy())
 		repairedHistory = repaired
@@ -1036,6 +1065,14 @@ func (rq *agentLoopRunTurnRequest) prepareLLMRequest() agentLoopRunTurnRequestFl
 			return agentLoopRunTurnRequestReturn
 		}
 	}
+
+	// No checkpoint on this seam: checkpointRequest runs once per actual send
+	// attempt from the callLLM closure (loop_run_turn_response.go) — MAJ-CW-004's
+	// one post-assembly pre-send measurement — and a prepare-side call here
+	// re-measured the same unchanged candidate, double-counting
+	// midTurnChecksTotal (B-33 count: N + N+1 required, duplicate measured 152
+	// for 50 results). Validation and relief still cover every actual send,
+	// inside the closure.
 
 	// The exact tool set this request offers, captured AFTER every step that
 	// shapes providerToolDefs (goal-door narrowing, compressed manifest,
@@ -1245,15 +1282,19 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 			&offloadSink{workDir: ri.wsDir}, ri.turnCatalog, ri.turnRefcounter,
 			ri.rf.rt.ts.opts.WorkspaceID,
 		)
+		ri.rf.rt.ts.protectWindowControls(resolvedPending)
 		totalContentLen := 0
 		for i, pm := range ri.pendingMessages {
+			// Persist original compact media refs before using the resolved
+			// provider-only message. Failed admission cannot emit an applied receipt.
+			if err := ri.rf.rt.ts.appendWindowMessage(pm); err != nil {
+				var status TurnEndStatus
+				ri.ret0, status, ri.ret1 = ri.rf.rt.al.contextWindowTurnExit(ri.rf.rt.ts, ri.rf.rt.iteration, ri.rf.rt.llmModel, err)
+				ri.turnStatus = status
+				return agentLoopRunTurnIterationReturn
+			}
 			ri.messages = append(ri.messages, resolvedPending[i])
 			totalContentLen += len(pm.Content)
-			if !ri.rf.rt.ts.opts.NoHistory {
-				// Persist the original (unresolved) message to session history to preserve
-				// compact media refs; resolved (base64) form is only used for the LLM request.
-				ri.rf.rt.ts.agent.Sessions.AddFullMessage(ri.rf.rt.ts.sessionKey, pm)
-			}
 			logger.InfoCF("agent", "Injected steering message into context",
 				map[string]any{
 					"agent_id":    ri.rf.rt.ts.agent.ID,
@@ -1376,7 +1417,21 @@ func (rf *agentLoopRunTurnFallbacks) synthesizeImageRejection(pe *ProviderError,
 
 // callProviderOnce calls the configured provider or fallback chain once and records streaming progress.
 // Delegated-turn rate-limit retries wrap this method in loop_provider_retry.go.
-func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
+func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (response *providers.LLMResponse, err error) {
+	if cwErr := rt.ts.contextWindowError(); cwErr != nil {
+		return nil, cwErr
+	}
+	if cwErr := validateWindowGroups(messagesForCall); cwErr != nil {
+		return nil, cwErr
+	}
+	if cwErr := rt.ts.validateWindowControls(messagesForCall); cwErr != nil {
+		return nil, cwErr
+	}
+	defer func() {
+		if err == nil {
+			rt.ts.completeWindowRequest()
+		}
+	}()
 	// Clear tool-argument progress when the round ends, on EVERY exit
 	// path (success, error, retry, recovery). Placed here rather than
 	// at the four call sites so no future path can forget it.
@@ -1396,7 +1451,7 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 	// paths (which rebuild callMessages via BuildMessages and continue back
 	// here) are always normalized. The fast path is allocation-free on valid
 	// histories, so per-call cost is negligible.
-	messagesForCall = normalizeMessagesForProvider(messagesForCall)
+	messagesForCall = normalizeWindowMessages(rt.ts, messagesForCall)
 
 	providerCtx, providerCancel := context.WithCancel(rt.turnCtx)
 	rt.ts.setProviderCancel(providerCancel)

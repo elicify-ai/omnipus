@@ -626,20 +626,55 @@ func TestMidTurnBudget_SameBudgetAsWindowTrim(t *testing.T) {
 	})
 
 	t.Run("the mid-turn site reads the same budget (T066-13)", func(t *testing.T) {
-		src := readOwnedFileForTest(t, "midturn_budget.go")
-		if !strings.Contains(src, "agentContextBudget(ts.agent)") {
-			t.Error("midTurnWindowCheck must derive B via agentContextBudget(ts.agent) — the same helper every other site reads (FR-028)")
+		// CORRECTED 2026-10-01: R1's consolidation (#1081, eeb4126eb) moved
+		// the budget READ itself out of midTurnWindowCheck and into the
+		// shared checkpointWindow (window_checkpoint.go) that both the
+		// mid-turn and the forced-retry sites now call through —
+		// midturn_budget.go no longer mentions agentContextBudget at all
+		// (verified: zero grep matches).
+		midTurnSrc := readOwnedFileForTest(t, "midturn_budget.go")
+		if !strings.Contains(midTurnSrc, "al.checkpointWindow(") {
+			t.Error("midTurnWindowCheck must delegate to the shared checkpointWindow, which derives B (FR-028/FR-030 consolidation)")
 		}
-		if strings.Contains(src, "SummarizeTokenPercent") {
+		checkpointSrc := readOwnedFileForTest(t, "window_checkpoint.go")
+		if !strings.Contains(checkpointSrc, "agentContextBudget(ts.agent)") {
+			t.Error("checkpointWindow must derive B via agentContextBudget(ts.agent) — the same helper every other site reads (FR-028)")
+		}
+		if strings.Contains(midTurnSrc, "SummarizeTokenPercent") || strings.Contains(checkpointSrc, "SummarizeTokenPercent") {
 			t.Error("the mid-turn site must not consult the deleted summarize_token_percent")
 		}
+
+		// CORRECTED 2026-10-01: R1's consolidation (#1081) moved ~10
+		// duplicated `.midTurnWindowCheck(` call sites in loop*.go into two
+		// shared helpers, admitAndCheckpoint and checkpointRecordedResult
+		// (tool_result_checkpoint.go — outside the loop*.go glob). A scan
+		// for only the literal `.midTurnWindowCheck(` text in loop*.go
+		// alone now undercounts (2 direct inline calls remain:
+		// loop_truncation.go, loop_run_turn_tools.go); the real "every
+		// admitted-result append is followed by the check" invariant holds
+		// through the two helpers instead. First prove the helpers
+		// structurally DO call the check (so routing a call through them is
+		// a real guarantee, not just a name):
+		helperSrc := readOwnedFileForTest(t, "tool_result_checkpoint.go")
+		helperChecks := regexp.MustCompile(`\.midTurnWindowCheck\(`).FindAllString(helperSrc, -1)
+		if got := len(helperChecks); got < 2 {
+			t.Fatalf("tool_result_checkpoint.go: expected admitAndCheckpoint and checkpointRecordedResult to each call midTurnWindowCheck, found %d call(s)", got)
+		}
+
 		// The tool loop hands EVERY admitted result to the check: the count
 		// of loop.go call sites must cover the append sites (8 denial-family
-		// + the main result site + the skipped-results site).
+		// + the main result site + the skipped-results site), whether they
+		// call the check directly or route through one of the two helpers.
+		// Verified by grep (2026-10-01): 2 direct + 15 .admitAndCheckpoint(
+		// + 1 .checkpointRecordedResult( = 18 real covered append sites.
 		loopSrc := readLoopSourcesForTest(t)
-		midTurnCalls := regexp.MustCompile(`\.midTurnWindowCheck\(\s*(?:[A-Za-z_]\w*\.)*ts\s*,\s*(?:[A-Za-z_]\w*\.)*messages\s*,\s*(?:[A-Za-z_]\w*\.)*providerToolDefs\s*\)`).FindAllString(loopSrc, -1)
-		if got := len(midTurnCalls); got < 10 {
-			t.Errorf("loop.go has %d midTurnWindowCheck sites; every admitted-result append must be followed by the check (want ≥ 10)", got)
+		directCalls := regexp.MustCompile(`\.midTurnWindowCheck\(\s*(?:[A-Za-z_]\w*\.)*ts\s*,\s*(?:[A-Za-z_]\w*\.)*messages\s*,\s*(?:[A-Za-z_]\w*\.)*providerToolDefs\s*\)`).FindAllString(loopSrc, -1)
+		admitCalls := regexp.MustCompile(`\.admitAndCheckpoint\(`).FindAllString(loopSrc, -1)
+		recordedCalls := regexp.MustCompile(`\.checkpointRecordedResult\(`).FindAllString(loopSrc, -1)
+		got := len(directCalls) + len(admitCalls) + len(recordedCalls)
+		if got < 10 {
+			t.Errorf("loop.go has %d midTurnWindowCheck-covered append sites (%d direct + %d admitAndCheckpoint + %d checkpointRecordedResult); every admitted-result append must be followed by the check (want ≥ 10)",
+				got, len(directCalls), len(admitCalls), len(recordedCalls))
 		}
 	})
 

@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -203,6 +202,11 @@ type turnState struct {
 	// emptying is undone together with its archive tail and its Skip
 	// advance. nil when the store had nothing projected (or no store).
 	initialEmptiedSet memory.ProjectionSet
+	// Captured once from the atomic store, including the actual cursor/anchor.
+	initialWindow  *memory.WindowState
+	windowError    error
+	windowControls []providers.Message
+	windowNotice   contextReliefNotice
 	// emptiedTranscriptPrev holds, for every transcript tool_call record the
 	// D5 pass rewrote during this turn (content_state emptied + projected
 	// result), the record's PREVIOUS state — so an abort can put the
@@ -845,32 +849,25 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 		ts.agentID = agent.ID
 	}
 
-	// Bind session store and capture the turn-start restore triple (ADR-066
-	// FR-020): initialHistoryLength, initialArchiveLen and initialEmptiedSet.
-	// initialArchiveLen is the number of physical lines in the archive at turn
-	// start; used by restoreSession and HardAbort to roll back only the messages
-	// appended during this turn (Skip-preserving rollback via RollbackAppended).
-	// initialEmptiedSet is the projection state at turn start, restored in
-	// the same write. All three are captured ONCE, here, and never moved.
+	// Capture the actual transaction state once, before any turn append/slide.
 	if agent != nil && agent.Sessions != nil {
 		ts.session = agent.Sessions
-		ts.initialHistoryLength = len(agent.Sessions.GetHistory(opts.SessionKey))
-		if entries := agent.Sessions.Projection(opts.SessionKey).Entries; len(entries) > 0 {
-			ts.initialEmptiedSet = entries.Clone()
-		}
-		if archived, err := agent.Sessions.ReadArchive(context.Background(), opts.SessionKey); err == nil {
-			ts.initialArchiveLen = len(archived)
-		} else {
-			// ReadArchive failed (new session, missing file, transient I/O error).
-			// Use math.MaxInt so that any subsequent RollbackAppended call is a
-			// guaranteed no-op (RollbackAppended treats target >= Count as no-op).
-			// Falling back to initialHistoryLength (the post-Skip window length,
-			// which is SMALLER than the true archive) would cause a rollback to
-			// truncate the archive to fewer lines than it already has — silently
-			// destroying evicted turns (SC-001 violation).
-			logger.WarnCF("agent", "newTurnState: ReadArchive failed; rollback will be no-op for this turn",
-				map[string]any{"session_key": opts.SessionKey, "error": err.Error()})
-			ts.initialArchiveLen = math.MaxInt
+		if !opts.NoHistory {
+			store, ok := agent.Sessions.(session.ContextWindowStore)
+			if !ok {
+				ts.windowError = fmt.Errorf("context checkpoint: session store does not support atomic context checkpoints")
+			} else {
+				snap, err := store.SnapshotWindow(context.Background(), opts.SessionKey)
+				ts.windowError = err
+				if err == nil {
+					start := snap.State.Clone()
+					ts.initialWindow = &start
+					history, _ := memory.WindowHistory(snap)
+					ts.initialHistoryLength = len(history)
+					ts.initialArchiveLen = start.Count
+					ts.initialEmptiedSet = start.Projection.Entries.Clone()
+				}
+			}
 		}
 	}
 

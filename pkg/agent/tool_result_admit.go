@@ -45,8 +45,8 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"regexp"
 	"strings"
@@ -348,6 +348,10 @@ type toolResultAdmission struct {
 
 // admittedToolResult is what the producer gets back.
 type admittedToolResult struct {
+	// Err prevents a producer from installing or emitting an uncommitted result.
+	Err error
+	// Projection is internal; capped_failure maps to public capped.
+	Projection memory.ProjectionState
 	// Message is the window form: what goes into the in-memory slice and
 	// therefore into the next request. Role "tool", ToolCallID set.
 	Message providers.Message
@@ -425,7 +429,7 @@ func (al *AgentLoop) admitToolResult(ts *turnState, adm toolResultAdmission) adm
 		// the store's scanner limit makes every later read of the session
 		// fail and GetHistory answer with an empty slice — the whole history
 		// gone from the agent's point of view, permanently. Refuse the
-		// archive and tell the model what happened instead.
+		// archive and return a visible admission error.
 		logger.ErrorCF("agent", "tool result cannot be archived within the encoded line bound; not archived",
 			map[string]any{
 				"tool":           adm.Tool,
@@ -435,16 +439,7 @@ func (al *AgentLoop) admitToolResult(ts *turnState, adm toolResultAdmission) adm
 				"encoded_len":    encodedArchiveLineLen(archived),
 				"line_bound":     memory.EncodedLineBound,
 			})
-		notice := toolResultMessage(adm.ToolCallID,
-			"[tool result discarded: it could not be stored within the archive line bound "+
-				"and was dropped to keep this session readable]", nil)
-		return admittedToolResult{
-			Message:       notice,
-			Archived:      notice,
-			ArchiveLine:   -1,
-			OriginalRunes: origRunes,
-			EffectiveCap:  capChars,
-		}
+		return failedResultAdmission(ts, fmt.Errorf("context admission: tool result %q exceeds the archive line bound of %d bytes", adm.ToolCallID, memory.EncodedLineBound))
 	}
 	if lineCut {
 		logger.WarnCF("agent", "tool result cut to the encoded archive-line bound (ADR-066 FR-012)",
@@ -474,39 +469,13 @@ func (al *AgentLoop) admitToolResult(ts *turnState, adm toolResultAdmission) adm
 			})
 	}
 
-	// Archive the full filtered content (US-3.AC5). The archive read that
-	// follows is needed only on the capped path — the mark cites the line
-	// and the turn number, both of which only the archive knows.
-	line := -1
-	var archive []memory.ArchivedMessage
-	persist := ts != nil && ts.agent != nil && ts.agent.Sessions != nil && !ts.opts.NoHistory
-	if persist {
-		ts.agent.Sessions.AddFullMessage(ts.sessionKey, archived)
-		if overCap {
-			if read, err := ts.agent.Sessions.ReadArchive(context.Background(), ts.sessionKey); err == nil && len(read) > 0 {
-				archive = read
-				line = len(read) - 1
-			} else if err != nil {
-				logger.WarnCF("agent", "choke point: archive read after append failed; cap mark cites no line",
-					map[string]any{"session_key": ts.sessionKey, "tool_call_id": adm.ToolCallID, "error": err.Error()})
-			}
-		}
+	// Archive full filtered bytes and persist the exact first cut before the
+	// producer receives a result. No append, read or projection error is hidden.
+	window, line, projection, err := admitResultWindow(ts, adm, archived, capChars)
+	if err != nil {
+		return failedResultAdmission(ts, err)
 	}
-
-	window := archived
 	if overCap {
-		window.Content = cutHeadAndTail(archived.Content, capChars, capMarkOrEmpty(adm.Tool, adm.ToolCallID, line, archived.Content, turnNumberForArchiveLine(archive, line)))
-		if persist && line >= 0 {
-			// Record WHICH surface produced the live cut: the window carries
-			// no IsError, so without this the reload re-cuts a failure at
-			// the success cap (FR-019 / B-22 byte identity).
-			cappedState := memory.ProjectionCapped
-			if adm.IsError {
-				cappedState = memory.ProjectionCappedFailure
-			}
-			ts.agent.Sessions.SetProjectionState(ts.sessionKey,
-				memory.ProjectionKey{ToolCallID: adm.ToolCallID, ArchiveLine: line}, cappedState)
-		}
 		logger.InfoCF("agent", "tool result capped at the door (ADR-066 D4)",
 			map[string]any{
 				"tool":          adm.Tool,
@@ -550,6 +519,7 @@ func (al *AgentLoop) admitToolResult(ts *turnState, adm toolResultAdmission) adm
 		Message:       window,
 		Archived:      archived,
 		Capped:        overCap,
+		Projection:    projection,
 		ArchiveLine:   line,
 		OriginalRunes: origRunes,
 		EffectiveCap:  capChars,

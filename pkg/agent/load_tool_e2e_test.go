@@ -29,6 +29,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -175,6 +176,30 @@ func newE2ECfg(t *testing.T, workspaceDir string) *config.Config {
 	// tests downstream of this fixture exist to pin.
 	cfg.Sandbox.ToolPolicies = config.DefaultConfig().Sandbox.ToolPolicies
 	coreagent.SeedConfig(cfg)
+	// Per-test agent homes (cross-test leak fix, 2026-10-02): SeedConfig seeds
+	// the roster WITHOUT a per-agent Home, and Defaults.Home does NOT cover
+	// named agents — resolveAgentHome (FUNC-11, pkg/agent/instance.go) falls
+	// back to defaults.Home only for an agent with NO ID, and resolves every
+	// NAMED Home-less agent to <omnipusHome()>/agents/<id>. With TestMain
+	// (test_helpers_test.go) pinning HOME once per binary run, that is one
+	// directory SHARED by every Home-less roster in the package: a prior
+	// test's turns under session_key=agent:mia:main persist their window
+	// history into <...>/agents/mia/sessions (measured artifact:
+	// .context/agent_mia_main.jsonl), and a later test inheriting the same
+	// agent+bucket starts its turn with foreign messages already in the
+	// window — TestLoadTool_EndToEndMessageHistoryIntegrity failed its
+	// normalization-is-noop assertions 5→4 / 7→6 on exactly this (a prior
+	// test's "hold slot 1"/"hold slot 2" user messages, merged by the
+	// normalizer into one adjacent-user pair). Pointing each seeded agent at
+	// its own directory under the CALLER-SUPPLIED workspaceDir root is the
+	// production field resolveAgentHome prefers (config.AgentConfig.Home,
+	// pkg/config/config.go) and makes this helper's "caller can control where
+	// sessions are written" contract true for named agents too.
+	for i := range cfg.Agents.List {
+		if strings.TrimSpace(cfg.Agents.List[i].Home) == "" {
+			cfg.Agents.List[i].Home = filepath.Join(workspaceDir, "agents", cfg.Agents.List[i].ID)
+		}
+	}
 	return cfg
 }
 

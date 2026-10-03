@@ -51,6 +51,9 @@ const (
 	// completion marker so the two cannot silently disagree — the Judge System
 	// Agent's verdict is never inferred from absence (NFR-2).
 	EntryTypeJudgeVerdict EntryType = "judge_verdict"
+	// EntryTypeContextWindowNotice carries a classified, Verbose-only context
+	// diagnostic, never an ordinary message or model-history entry.
+	EntryTypeContextWindowNotice EntryType = "context_window_notice"
 )
 
 // SessionStatus classifies the lifecycle state of a session.
@@ -271,18 +274,21 @@ type SessionStats struct {
 
 // TranscriptEntry represents one line in a partition JSONL file.
 type TranscriptEntry struct {
-	ID          string       `json:"id"`
-	Type        EntryType    `json:"type,omitempty"` // EntryTypeMessage | EntryTypeCompaction | EntryTypeSystem; empty = message
-	Role        string       `json:"role,omitempty"` // "user" | "assistant" | "system"
-	Content     string       `json:"content,omitempty"`
-	Summary     string       `json:"summary,omitempty"` // for compaction entries
-	Timestamp   time.Time    `json:"timestamp"`
-	Tokens      int          `json:"tokens,omitempty"`
-	Cost        float64      `json:"cost,omitempty"`
-	Status      string       `json:"status,omitempty"` // "ok" | "error" | "interrupted"
-	Attachments []Attachment `json:"attachments,omitempty"`
-	ToolCalls   []ToolCall   `json:"tool_calls,omitempty"`
-	AgentID     string       `json:"agent_id"` // which agent produced this entry (FR-002)
+	ID      string    `json:"id"`
+	Type    EntryType `json:"type,omitempty"` // EntryTypeMessage | EntryTypeCompaction | EntryTypeSystem; empty = message
+	Role    string    `json:"role,omitempty"` // "user" | "assistant" | "system"
+	Content string    `json:"content,omitempty"`
+	// ContextWindowNotice is required when Type is context_window_notice. The
+	// generated payload survives REST history without becoming ordinary Content.
+	ContextWindowNotice *generated.ContextWindowNotice `json:"context_window_notice,omitempty"`
+	Summary             string                         `json:"summary,omitempty"` // for compaction entries
+	Timestamp           time.Time                      `json:"timestamp"`
+	Tokens              int                            `json:"tokens,omitempty"`
+	Cost                float64                        `json:"cost,omitempty"`
+	Status              string                         `json:"status,omitempty"` // "ok" | "error" | "interrupted"
+	Attachments         []Attachment                   `json:"attachments,omitempty"`
+	ToolCalls           []ToolCall                     `json:"tool_calls,omitempty"`
+	AgentID             string                         `json:"agent_id"` // which agent produced this entry (FR-002)
 	// Model records which model produced this assistant message. Populated
 	// on every assistant message written via pkg/agent/turn.go (FR-013).
 	// Empty for legacy turns written before this field existed; the UI
@@ -340,9 +346,12 @@ type TranscriptEntry struct {
 	// See ADR-087 D2.
 	TruncationReason string `json:"truncation_reason,omitempty"`
 
+	// TurnID preserves the producing turn for cancellations and classified
+	// context-window diagnostics.
+	TurnID string `json:"turn_id,omitempty"`
+
 	// Cancel-specific fields — only populated for EntryTypeTurnCancelled entries
 	// (FR-15). All are omitempty so they are invisible on other entry types.
-	TurnID               string   `json:"turn_id,omitempty"`
 	CancelledByUser      string   `json:"canceled_by_user,omitempty"`
 	CancelledByChannel   string   `json:"canceled_by_channel,omitempty"`
 	CancelMethod         string   `json:"cancel_method,omitempty"` // "graceful" | "hard"

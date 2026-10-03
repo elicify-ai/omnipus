@@ -1650,4 +1650,16 @@ type wsStreamer struct {
 	// token (see `accumulated` above) but withholds the live TokenFrame send.
 	shadowResolved bool
 	isShadowStream bool
+
+	// finalizedMessageID is the id of the transcript entry Finalize's
+	// persistTranscript actually wrote for this streamer — set there (see
+	// its own comment). It may differ from messageID: persistTranscript
+	// mints a FRESH id for a distinct terminal notice that follows
+	// already-persisted narration (the notice is a separate entry, not a
+	// continuation of the narration's own message). publishDone hands this
+	// to the channel's turnIdentity record (webchat_channel.go) so a later
+	// Send() fallback delivery can stamp a frame with this SAME durable
+	// identity instead of leaving it nil. Guarded by statsMu like every
+	// other Finalize-written field.
+	finalizedMessageID string
 }
