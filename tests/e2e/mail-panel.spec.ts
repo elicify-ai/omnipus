@@ -11,7 +11,7 @@
  * (GatewayProcess) and a blank storage state so it does not touch the shared
  * session. It does not call the login route itself.
  */
-import { test, expect, type Browser, type Page } from '@playwright/test'
+import { test, expect, type Browser, type ConsoleMessage, type Page } from '@playwright/test'
 import { GatewayProcess } from './fixtures/gateway-process'
 import { startFakeMail, type FakeMail } from './fixtures/fake-mail-server'
 import { getFreePort } from './setup.js'
@@ -217,6 +217,16 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
   // away from the workspace chat route.
   test('expand to fullscreen, then Escape, returns to the docked panel with the open message intact (CRIT-001/FR-013)', async ({ browser }) => {
     const page = await mailPage(browser)
+    // CI-only OBSERVATION for the flaky popup-close diagnosis. Listeners only:
+    // no wait, no poll, no timing change, no oracle change — so the race is
+    // observed exactly as it happens, not perturbed. Remove with the diagnosis.
+    const forward = (label: string) => (m: ConsoleMessage) => {
+      const text = m.text()
+      if (m.type() === 'error' || text.includes('side-panel') || text.includes('Full-screen')) {
+        console.log(`[ui4 ${label}] ${m.type()}: ${text}`)
+      }
+    }
+    page.on('console', forward('page-console'))
     await openMail(page)
     const inboxTab = page.getByRole('tab', { name: /inbox/i })
     await expect(inboxTab).toHaveAttribute('aria-selected', 'true')
@@ -237,6 +247,10 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     const opened = page.context().waitForEvent('page')
     await page.getByTestId('panel-expand').click()
     const pop = await opened
+    // Listeners attached at the earliest possible moment. Observation only.
+    pop.on('console', forward('pop-console'))
+    pop.on('pageerror', (e: Error) => console.log(`[ui4 pop-pageerror] ${e.message}`))
+    pop.on('close', () => console.log(`[ui4 pop-close] at ${new Date().toISOString()}`))
     await expect(pop).toHaveURL(/\/panel\/mail/)
     await expect(page.getByTestId('side-panel')).toHaveCount(0)
 
