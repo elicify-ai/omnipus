@@ -853,8 +853,8 @@ func TestCacheFile_SealedWithoutAADRefusesNoFallback(t *testing.T) {
 	out.Write(ct)
 
 	path := snapshotPath(base, scope.PairID)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatalf("mkdir cache dir: %v", err)
+	if mkdirErr := os.MkdirAll(filepath.Dir(path), 0o700); mkdirErr != nil {
+		t.Fatalf("mkdir cache dir: %v", mkdirErr)
 	}
 	if writeErr := os.WriteFile(path, out.Bytes(), 0o600); writeErr != nil {
 		t.Fatalf("write envelope: %v", writeErr)
