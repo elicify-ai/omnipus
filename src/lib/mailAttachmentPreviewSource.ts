@@ -151,6 +151,10 @@ export class MailAttachmentPreviewSource {
    * raw URL never reaches a renderer attribute.
    */
   resolveRemoteImage(_rawUrl: string): ResolvedResource {
+    // `_rawUrl` is the contract's input, deliberately never read: the
+    // consent gate's product is the preview's pinned proxy path, and the
+    // sender-authored URL must never reach a renderer attribute (C-4).
+    void _rawUrl
     if (this.revoked || !this.remoteImagesAllowed) return null
     return { url: `${this.byteUrl}/img-consented` }
   }
@@ -161,6 +165,11 @@ export class MailAttachmentPreviewSource {
    * the ordinary renderer's workspace lookup is never reached.
    */
   resolveWorkspaceTarget(_target: string): ResolvedResource {
+    // `_target` is deliberately never read: every workspace/wikilink target
+    // refuses unconditionally from a temporary mail source (C-2/C-3) — the
+    // parameter exists so the ordinary renderer's workspace lookup is never
+    // reached, keeping the resolver's call shape identical to the real one.
+    void _target
     return null
   }
 

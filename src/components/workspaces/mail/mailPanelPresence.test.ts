@@ -183,7 +183,7 @@ describe('mailPanelPresence — the US-5 lifecycle (U6–U10, D-8)', () => {
 
   describe('U9 — logout tears down with the socket (scenario 5.4, US-5 AS-4)', () => {
     it('close after the sender is gone (logout) sends NO frame; re-login starts fresh', () => {
-      let sender: MailPresenceSender | null = stubSender().sender
+      const sender: MailPresenceSender | null = stubSender().sender
       const frames: MailPanelObserverFrame[] = []
       const recording: MailPresenceSender = {
         send(frame) {
