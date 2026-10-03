@@ -402,13 +402,27 @@ func dialIMAPCandidates(ctx context.Context, addr string, tlsCfg *tls.Config) (*
 	})
 }
 
+// ErrLegacyDialReached is the typed wiring refusal (gate F1; FR-W1-2's
+// facade rule mirrored at the dial): a client WITH an injected session
+// source reached the legacy per-call dial — the calling method was never
+// rewired onto the lease. Opening the connection anyway would be a private,
+// uncounted socket invisible to the pool's maxSocketsPerMailbox/maxSocketsGlobal
+// ceilings, so the dial refuses instead: a missed rewiring surfaces as a
+// visible wiring error, never as a silent pool bypass.
+var ErrLegacyDialReached = errors.New("email transport: pooled client reached the legacy dial; method not rewired")
+
 // dialIMAP dials the IMAP server over implicit TLS, logs in, and selects INBOX.
 // It returns the SELECT response (whose NumMessages count drives the
 // trailing-range read path) alongside the client. The caller must Close the
 // returned client. This is the LEGACY per-call path: used when no shared
 // session source is injected (and no manager is wired) — W2's view.go reads
-// still ride it until their rewiring onto the lease.
+// still ride it until their rewiring onto the lease. A client that HAS a
+// session source must never get here: the tripwire below returns
+// ErrLegacyDialReached rather than opening an uncounted connection.
 func (c *Client) dialIMAP(ctx context.Context) (*imapclient.Client, *imap.SelectData, error) {
+	if c.sessions != nil {
+		return nil, nil, ErrLegacyDialReached
+	}
 	addr := fmt.Sprintf("%s:%d", c.acct.IMAPHost, c.acct.IMAPPort)
 	tlsCfg := &tls.Config{ServerName: c.acct.IMAPHost, MinVersion: tls.VersionTLS12}
 
