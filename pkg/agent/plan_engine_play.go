@@ -734,6 +734,11 @@ type PlayResult struct {
 // if a commitResolver is wired; fresh attempt otherwise), clears the durable
 // unmet signature, and increments the generation. The plan then re-enters
 // the normal approved→running admission path on the next tick.
+//
+// D8.10: each non-done member keeps its Task.SessionID (RestartResetKeepSession).
+// PlayPlan itself does not resume the member session, does not dispatch, and
+// does not emit a new stop notice. A step that never had a session stays
+// unbound until a later admission creates one.
 func (pe *PlanEngine) PlayPlan(ctx context.Context, planID string) (*PlayResult, error) {
 	pe.planDecisionMu.Lock()
 	defer pe.planDecisionMu.Unlock()
@@ -766,7 +771,7 @@ func (pe *PlanEngine) PlayPlan(ctx context.Context, planID string) (*PlayResult,
 		t := &tasks[i]
 		if task.IsTerminal(t.Status) && t.Status != task.StatusDone {
 			// Failed/cancelled member — reset for re-dispatch.
-			if _, rerr := pe.taskStore.RestartReset(t.ID); rerr != nil {
+			if _, rerr := pe.taskStore.RestartResetKeepSession(t.ID); rerr != nil {
 				logger.WarnCF("plan_engine", "PlayPlan: could not reset member",
 					map[string]any{"plan_id": planID, "task_id": t.ID, "error": rerr.Error()})
 				stillFailed = append(stillFailed, t.ID)

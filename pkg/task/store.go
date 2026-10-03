@@ -1561,9 +1561,29 @@ var ErrNotRestartable = errors.New("task: not restartable: task is not failed")
 // dependency is not yet `done` — the same dependency recompute Update applies
 // when BlockedBy is patched (DS-5: restart resets a member to "next/blocked").
 //
+// SessionID is cleared. An explicit plan restart must not use this method:
+// D8.10 requires the stopped member's conversation to stay addressable, and
+// RestartResetKeepSession is that path. Standalone task restart
+// (POST /tasks/{id}/restart), correction targeted-retry / auto-reset, and
+// boot intent replay stay here and still drop the previous run's session.
+//
 // Returns ErrNotRestartable when the task is not currently `failed`. Takes
 // the per-task lock once internally.
 func (s *Store) RestartReset(id string) (*Task, error) {
+	return s.restartReset(id, false)
+}
+
+// RestartResetKeepSession is RestartReset for an explicit plan restart
+// (sub-agent control plane ADR D8.10 / F0929-R2-Q3=A). The failed member
+// returns to next/blocked with attempt count, cancel reason, result and
+// resume baseline cleared, but Task.SessionID is retained so readmission
+// resumes the same member session and transcript. A step that never had a
+// session keeps the empty id; only that case may create one later.
+func (s *Store) RestartResetKeepSession(id string) (*Task, error) {
+	return s.restartReset(id, true)
+}
+
+func (s *Store) restartReset(id string, keepSession bool) (*Task, error) {
 	if err := validateID(id); err != nil {
 		return nil, err
 	}
@@ -1583,7 +1603,9 @@ func (s *Store) RestartReset(id string) (*Task, error) {
 	t.AttemptCount = 0
 	t.Result = ""
 	t.Artifacts = nil
-	t.SessionID = ""
+	if !keepSession {
+		t.SessionID = ""
+	}
 	// Clear any stale Play resume baseline (D13/G-12). PlayPlan calls
 	// recordMemberResumePoint immediately after this reset to set a fresh
 	// value (the last boundary commit, or "" for a fresh attempt); clearing
