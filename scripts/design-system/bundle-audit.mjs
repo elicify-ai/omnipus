@@ -13,7 +13,17 @@ export const INITIAL_GZIP_BUDGET_BYTES = 25 * 1024
 // +60,083 bytes of release/v0.1.1 drift unrelated to Mail that accumulated
 // against the frozen baseline (commit 92aeb4d5d, 2026-09-17) since D50 —
 // investigation tracked in #1135 rather than blocking Mail's ship on it.
-export const TOTAL_RAW_BUDGET_BYTES = 383 * 1024
+// Founder-authorised raise (2026-10-03, goal: land the Mail live-access feature):
+// raised again, 383 KiB to 422 KiB, to cover the Mail live-access feature's
+// measured +39,764 raw bytes (attachment handoff/viewer, cache-first view,
+// presence, paging, reply context), measured with bundle-measure.mjs as
+// fork-point ee936a385 26,520,425 -> head 26,560,189. The fork point was already
+// at +389,120 of the +392,192 budget (99.2%), leaving 3,072 bytes of headroom —
+// release drift, not this feature, had consumed the budget. 422 KiB leaves
+// ~3.2 KiB (8%) margin over the feature's addition, matching the 383-raise's
+// ~7.4% margin. ROOT CAUSE — the budget is sized against the frozen baseline
+// 92aeb4d5d (2026-09-17) instead of the current release tip — tracked in #1183.
+export const TOTAL_RAW_BUDGET_BYTES = 422 * 1024
 
 export function compareProductionBundles(baseline, candidate, provenance = null) {
   const initialGzipDelta = candidate.initial.gzipBytes - baseline.initial.gzipBytes
