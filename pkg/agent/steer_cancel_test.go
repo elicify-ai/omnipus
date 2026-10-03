@@ -216,7 +216,26 @@ func TestCascade_SecondPassStampsLateChild(t *testing.T) {
 	}
 }
 
-func TestRevive_NewGeneration_OldMarkerInert(t *testing.T) {
+// TestRevive_LiveFenceSuperseded_SameGenerationQueued supersedes the retired
+// generation-bumping oracle TestRevive_NewGeneration_OldMarkerInert.
+//
+// Setup classification versus ADR-20260928 D2 (asset cd20cf8b): a RUNNING
+// record carrying a CURRENT-GENERATION Stop fence is a stopped record in the
+// IN-FLIGHT shape — LifecycleRecord.Stopped() (pkg/session/lifecycle_edge.go)
+// covers both the landed state and the live fence. It is NOT the LANDED
+// stopped shape and NOT terminal, so D2 CRIT-001 applies: an explicit RESUME
+// supersedes the in-flight stop (D5's precedence table — RESUME on a stopped
+// child resumes), clears the fence and any note atomically, and queues at
+// the SAME generation. Only done/failed mints G+1
+// (TestRevive_TerminalFollowUpMintsGeneration, unchanged).
+//
+// The old oracle's intent is preserved and still asserted: the pre-existing
+// marker must not block the revived dispatch — reserveDispatch must admit
+// the same generation the fence used to fence. What changed is the
+// mechanism D2 prescribes: the fence is cleared atomically with the resume,
+// not retained as inert history (retaining the durable who/why is the stop
+// NOTE's job, and the ledger's).
+func TestRevive_LiveFenceSuperseded_SameGenerationQueued(t *testing.T) {
 	store := session.NewLifecycleStore(t.TempDir())
 	rec := testSteerLifecycleRecord("child", "root", session.LifecycleRunning, 2)
 	rec.Stop = &session.Stop{
@@ -232,8 +251,8 @@ func TestRevive_NewGeneration_OldMarkerInert(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if persisted.Generation != generation || persisted.State != session.LifecycleRunning {
-			return errors.New("revival state was emitted before the durable running write")
+		if persisted.Generation != generation || persisted.State != session.LifecycleQueued {
+			return errors.New("revival state was emitted before the durable queued write")
 		}
 		emittedGeneration = generation
 		return nil
@@ -243,21 +262,24 @@ func TestRevive_NewGeneration_OldMarkerInert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Revive: %v", err)
 	}
-	if generation != 3 || emittedGeneration != 3 {
-		t.Fatalf("generation = %d, emitted = %d, want 3", generation, emittedGeneration)
+	if generation != 2 || emittedGeneration != 2 {
+		t.Fatalf("generation = %d, emitted = %d, want 2 — the RESUME supersedes the in-flight stop on the SAME generation (D2 CRIT-001)", generation, emittedGeneration)
 	}
 	revived, err := store.Load("child")
 	if err != nil {
 		t.Fatalf("load revived child: %v", err)
 	}
-	if revived.State != session.LifecycleRunning || revived.Generation != 3 {
-		t.Fatalf("revived record = state %q generation %d", revived.State, revived.Generation)
+	if revived.State != session.LifecycleQueued || revived.Generation != 2 {
+		t.Fatalf("revived record = state %q generation %d, want queued at generation 2", revived.State, revived.Generation)
 	}
-	if revived.Stop == nil || revived.Stop.Generation != 2 {
-		t.Fatalf("old Stop marker = %#v, want generation 2 retained as inert history", revived.Stop)
+	if revived.Stop != nil && revived.Stop.Generation == revived.Generation {
+		t.Fatalf("current-generation Stop fence = %#v, want cleared atomically with the resume (D2 CRIT-001)", revived.Stop)
 	}
-	if ok, reason := reserveDispatch(revived, 3); !ok {
-		t.Fatalf("new generation refused by old marker: %s", reason)
+	if revived.StopNote != nil {
+		t.Fatalf("stop note = %+v, want cleared with the resume", revived.StopNote)
+	}
+	if ok, reason := reserveDispatch(revived, 2); !ok {
+		t.Fatalf("the same generation the fence was fencing is refused after the resume: %s", reason)
 	}
 }
 
@@ -288,6 +310,22 @@ func TestRevive_TerminalFollowUpMintsGeneration(t *testing.T) {
 	}
 }
 
+// TestStopRevive_OrderUnderLock is the same-generation migration of the
+// retired TestStopRevive_OrderUnderLock oracle (which expected generation 2
+// after the race). Setup classification versus ADR-20260928 D2: a RUNNING
+// record with a current-generation fence is the IN-FLIGHT stopped shape, so
+// neither concurrent operation may mint a generation — the stamp refreshes
+// the fence/note at the same generation (or no-ops as already-stamped) and
+// the RESUME supersedes it at the same generation. Only done/failed mints
+// G+1. The race/lock property itself is unchanged and still asserted: 100
+// concurrent stamp/Revive pairs must serialize under the record lock and
+// always leave a coherent record. The two legal end shapes, both at
+// generation 1:
+//   - stamp won the lock first (already-stamped no-op), Revive superseded:
+//     queued, no fence, no note;
+//   - Revive won first, the stamp landed a fresh stop of the resumed
+//     session: queued, current fence, note present (D2's same-mutation
+//     fence+note rule).
 func TestStopRevive_OrderUnderLock(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		store := session.NewLifecycleStore(t.TempDir())
@@ -330,11 +368,15 @@ func TestStopRevive_OrderUnderLock(t *testing.T) {
 		if err != nil {
 			t.Fatalf("iteration %d load: %v", i, err)
 		}
-		if got.Generation != 2 {
-			t.Fatalf("iteration %d generation = %d, want 2", i, got.Generation)
+		if got.Generation != 1 {
+			t.Fatalf("iteration %d generation = %d, want 1 — neither a stamp nor an explicit RESUME of the in-flight shape mints a generation (D2 CRIT-001; only done/failed does)", i, got.Generation)
 		}
-		if got.State != session.LifecycleRunning || got.Stop == nil || (got.Stop.Generation != 1 && got.Stop.Generation != 2) {
-			t.Fatalf("iteration %d has torn Stop/Revive state: %+v", i, got)
+		if got.State != session.LifecycleQueued {
+			t.Fatalf("iteration %d state = %q, want queued — Revive queues the same generation and a fresh stamp of a resumed session leaves it queued", i, got.State)
+		}
+		fenced := got.Stop != nil && got.Stop.Generation == 1
+		if fenced != (got.StopNote != nil) {
+			t.Fatalf("iteration %d has torn Stop/Revive state: fence=%v note=%v — D2 writes the fence and the note in the same mutation, and the resume clears both", i, got.Stop, got.StopNote)
 		}
 	}
 }
