@@ -599,7 +599,6 @@ func classMatch(seg string, b byte) bool {
 	first := true
 	for i < len(seg) {
 		if seg[i] == ']' && !first {
-			i++
 			break
 		}
 		first = false

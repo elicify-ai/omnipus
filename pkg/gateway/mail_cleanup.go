@@ -315,7 +315,7 @@ func (a *restAPI) mailRemovalCascadeSteps(agentID, workspaceID string) []string 
 	// re-authorize, and deleting the state is itself the refuse-to-serve
 	// guarantee.
 	if _, err := config.AdvanceMailPairEpoch(a.homePath, agentID, workspaceID); err != nil {
-		slog.Warn("mail removal: config epoch advance failed — outcome pends", "agent_id", agentID, "workspace_id", workspaceID)
+		logsafeWarn("mail removal: config epoch advance failed — outcome pends", "agent_id", agentID, "workspace_id", workspaceID)
 		pending = append(pending, mailEpochAdvanceFailed)
 	}
 	// Revoke the pair's preview grants (US-5.1: grants/presence revoked
@@ -352,7 +352,7 @@ func (a *restAPI) runMailboxRemovalCascade(agentID, workspaceID string) (outcome
 // intent it keeps.
 func (a *restAPI) runMailboxDisableCascade(agentID, workspaceID string) {
 	if _, err := config.AdvanceMailPairEpoch(a.homePath, agentID, workspaceID); err != nil {
-		slog.Warn("mail disable: config epoch advance failed", "agent_id", agentID, "workspace_id", workspaceID)
+		logsafeWarn("mail disable: config epoch advance failed", "agent_id", agentID, "workspace_id", workspaceID)
 	}
 	if store := a.mailPreviewTokenStoreOf(); store != nil {
 		store.invalidatePair(agentID, workspaceID)
