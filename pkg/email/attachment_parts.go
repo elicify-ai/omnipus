@@ -178,51 +178,48 @@ func fetchBodyStructure(ctx context.Context, client *imapclient.Client, uid uint
 	return bufs[0].BodyStructure, nil
 }
 
-// selectAndValidateRef opens one connection, SELECTs the slug's folder and
-// — for a uid: ref — compares the ref's epoch against the folder's live
-// UIDVALIDITY BEFORE any part data moves (I-03, same-lease validation). A
-// mid: ref self-validates by Message-ID search inside the addressed folder.
-// The caller owns the returned client's lifetime.
-func (c *Client) selectAndValidateRef(ctx context.Context, slug, ref string) (*imapclient.Client, uint32, error) {
+// withValidatedRef rides one pooled session lease (Wave C rewiring of the
+// former selectAndValidateRef): it SELECTs the slug's folder and — for a
+// uid: ref — compares the ref's epoch against the folder's live UIDVALIDITY
+// BEFORE any part data moves (I-03, same-lease validation). A mid: ref
+// self-validates by Message-ID search inside the addressed folder. fn runs
+// with the validated client and UID on that same lease; the lease releases
+// on every path including errors — the caller never owns the client's
+// lifetime anymore.
+func (c *Client) withValidatedRef(ctx context.Context, slug, ref string, fn func(ctx context.Context, client *imapclient.Client, uid uint32) error) error {
 	name, err := c.folderNameFor(slug)
 	if err != nil {
-		return nil, 0, err
+		return err
 	}
 	r, err := parseMailRef(ref)
 	if err != nil {
-		return nil, 0, err
+		return err
 	}
-	client, _, err := c.dialIMAP(ctx)
-	if err != nil {
-		return nil, 0, err
-	}
-	uv, _, err := c.selectFolder(ctx, client, name)
-	if err != nil {
-		client.Close()
-		return nil, 0, err
-	}
-	uid := r.uid
-	if r.kind == "uid" {
-		if verr := refEpochMismatch(r, uv); verr != nil {
-			// The folder was recreated under a new epoch: the old UID names
-			// a different message now. Typed refusal, connection closed,
-			// zero fetches — never a fetch against whatever the folder now
-			// holds. Same rule as view.go (refEpochMismatch, W2 §3.16).
-			client.Close()
-			return nil, 0, verr
-		}
-	} else {
-		uid, err = c.searchMessageID(ctx, client, r.messageID)
+	return c.withMailSession(ctx, name, false, func(ctx context.Context, client *imapclient.Client, _ uint32) error {
+		uv, _, err := c.selectFolder(ctx, client, name)
 		if err != nil {
-			client.Close()
-			return nil, 0, err
+			return err
 		}
-		if uid == 0 {
-			client.Close()
-			return nil, 0, fmt.Errorf("email transport: %w: no message %s in %s", ErrMessageNotFound, ref, slug)
+		uid := r.uid
+		if r.kind == "uid" {
+			if verr := refEpochMismatch(r, uv); verr != nil {
+				// The folder was recreated under a new epoch: the old UID names
+				// a different message now. Typed refusal, zero fetches — never
+				// a fetch against whatever the folder now holds. Same rule as
+				// view.go (refEpochMismatch, W2 §3.16).
+				return verr
+			}
+		} else {
+			uid, err = c.searchMessageID(ctx, client, r.messageID)
+			if err != nil {
+				return err
+			}
+			if uid == 0 {
+				return fmt.Errorf("email transport: %w: no message %s in %s", ErrMessageNotFound, ref, slug)
+			}
 		}
-	}
-	return client, uid, nil
+		return fn(ctx, client, uid)
+	})
 }
 
 // ListAttachmentParts returns every leaf part descriptor of one message —
@@ -230,34 +227,37 @@ func (c *Client) selectAndValidateRef(ctx context.Context, slug, ref string) (*i
 // (text/markdown leaves), the part's own MIME header peek. No body bytes
 // move; no flag changes. The returned slice is in stable leaf order.
 func (c *Client) ListAttachmentParts(ctx context.Context, slug, ref string) ([]AttachmentPartDescriptor, error) {
-	client, uid, err := c.selectAndValidateRef(ctx, slug, ref)
-	if err != nil {
-		return nil, err
-	}
-	defer client.Close()
-	bs, err := fetchBodyStructure(ctx, client, uid)
-	if err != nil {
-		return nil, err
-	}
-	sections := walkAttachmentSections(bs)
-
-	// Draft-marker candidates: the Omnipus draft-body part is text/markdown
-	// by construction (renderMarkdownPart writes it). A genuine user
-	// attachment may carry the same shape, so the marker HEADER — never the
-	// name/type pair — decides. The peek is per candidate and cheap (a
-	// header, not a body); the count is bounded by the server-reported
-	// structure itself.
-	out := make([]AttachmentPartDescriptor, len(sections))
-	for i, sec := range sections {
-		d := sec.descriptor
-		if d.ContentType == "text/markdown" && d.IsAttachment {
-			marker, merr := c.fetchPartIsDraftMarker(ctx, client, uid, sec.section)
-			if merr != nil {
-				return nil, merr
-			}
-			d.OmnipusDraftBody = marker
+	var out []AttachmentPartDescriptor
+	err := c.withValidatedRef(ctx, slug, ref, func(ctx context.Context, client *imapclient.Client, uid uint32) error {
+		bs, err := fetchBodyStructure(ctx, client, uid)
+		if err != nil {
+			return err
 		}
-		out[i] = d
+		sections := walkAttachmentSections(bs)
+
+		// Draft-marker candidates: the Omnipus draft-body part is text/markdown
+		// by construction (renderMarkdownPart writes it). A genuine user
+		// attachment may carry the same shape, so the marker HEADER — never the
+		// name/type pair — decides. The peek is per candidate and cheap (a
+		// header, not a body); the count is bounded by the server-reported
+		// structure itself.
+		descriptors := make([]AttachmentPartDescriptor, len(sections))
+		for i, sec := range sections {
+			d := sec.descriptor
+			if d.ContentType == "text/markdown" && d.IsAttachment {
+				marker, merr := c.fetchPartIsDraftMarker(ctx, client, uid, sec.section)
+				if merr != nil {
+					return merr
+				}
+				d.OmnipusDraftBody = marker
+			}
+			descriptors[i] = d
+		}
+		out = descriptors
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -339,51 +339,54 @@ func (c *Client) readAttachmentPart(ctx context.Context, slug, ref string, partI
 	if partIndex < 0 {
 		return nil, fmt.Errorf("%w: negative part index", ErrMailPartNotFound)
 	}
-	client, uid, err := c.selectAndValidateRef(ctx, slug, ref)
-	if err != nil {
-		return nil, err
-	}
-	defer client.Close()
-	bs, err := fetchBodyStructure(ctx, client, uid)
-	if err != nil {
-		return nil, err
-	}
-	sections := walkAttachmentSections(bs)
-	if partIndex >= len(sections) {
-		return nil, fmt.Errorf("%w: part index %d of %d leaves", ErrMailPartNotFound, partIndex, len(sections))
-	}
-	sec := sections[partIndex]
+	var part *AttachmentPart
+	err := c.withValidatedRef(ctx, slug, ref, func(ctx context.Context, client *imapclient.Client, uid uint32) error {
+		bs, err := fetchBodyStructure(ctx, client, uid)
+		if err != nil {
+			return err
+		}
+		sections := walkAttachmentSections(bs)
+		if partIndex >= len(sections) {
+			return fmt.Errorf("%w: part index %d of %d leaves", ErrMailPartNotFound, partIndex, len(sections))
+		}
+		sec := sections[partIndex]
 
-	bufs, err := runIMAP(ctx, "fetch part", func() ([]*imapclient.FetchMessageBuffer, error) {
-		return client.Fetch(imap.UIDSetNum(imap.UID(uid)), &imap.FetchOptions{
-			UID: true,
-			BodySection: []*imap.FetchItemBodySection{{
-				Part: sec.section,
-				Peek: true,
-			}},
-		}).Collect()
+		bufs, err := runIMAP(ctx, "fetch part", func() ([]*imapclient.FetchMessageBuffer, error) {
+			return client.Fetch(imap.UIDSetNum(imap.UID(uid)), &imap.FetchOptions{
+				UID: true,
+				BodySection: []*imap.FetchItemBodySection{{
+					Part: sec.section,
+					Peek: true,
+				}},
+			}).Collect()
+		})
+		if err != nil {
+			return fmt.Errorf("email transport: fetch part %d: %w", partIndex, err)
+		}
+		var raw []byte
+		for _, bsec := range bufs[0].BodySection {
+			raw = bsec.Bytes
+		}
+		if len(raw) == 0 {
+			part = &AttachmentPart{AttachmentPartDescriptor: sec.descriptor, DataUnavailable: true}
+			return nil
+		}
+
+		part = &AttachmentPart{AttachmentPartDescriptor: sec.descriptor}
+		decoded, derr := decodePartBytes(io.LimitReader(bytes.NewReader(raw), maxEncodedPartBytes()), sec.encoding, capped)
+		if derr != nil {
+			// Over-cap and decode failures are BOTH honest unavailable outcomes
+			// carrying the typed error — never a silent empty read (the
+			// loud-degrade contract at the part level).
+			part.DataUnavailable = true
+			return derr
+		}
+		part.Data = decoded
+		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("email transport: fetch part %d: %w", partIndex, err)
+		return nil, err
 	}
-	var raw []byte
-	for _, bsec := range bufs[0].BodySection {
-		raw = bsec.Bytes
-	}
-	if len(raw) == 0 {
-		return &AttachmentPart{AttachmentPartDescriptor: sec.descriptor, DataUnavailable: true}, nil
-	}
-
-	part := &AttachmentPart{AttachmentPartDescriptor: sec.descriptor}
-	decoded, derr := decodePartBytes(io.LimitReader(bytes.NewReader(raw), maxEncodedPartBytes()), sec.encoding, capped)
-	if derr != nil {
-		// Over-cap and decode failures are BOTH honest unavailable outcomes
-		// carrying the typed error — never a silent empty read (the
-		// loud-degrade contract at the part level).
-		part.DataUnavailable = true
-		return part, derr
-	}
-	part.Data = decoded
 	return part, nil
 }
 
@@ -410,44 +413,46 @@ type MessageMeta struct {
 // check (no body is fetched, flags never change). The reference is validated
 // on the same connection that performs the fetch.
 func (c *Client) ReadMessageMeta(ctx context.Context, slug, ref string) (*MessageMeta, error) {
-	client, uid, err := c.selectAndValidateRef(ctx, slug, ref)
-	if err != nil {
-		return nil, err
-	}
-	defer client.Close()
-	bufs, err := runIMAP(ctx, "fetch meta", func() ([]*imapclient.FetchMessageBuffer, error) {
-		return client.Fetch(imap.UIDSetNum(imap.UID(uid)), &imap.FetchOptions{
-			UID: true, Flags: true, Envelope: true,
-		}).Collect()
+	var meta *MessageMeta
+	err := c.withValidatedRef(ctx, slug, ref, func(ctx context.Context, client *imapclient.Client, uid uint32) error {
+		bufs, err := runIMAP(ctx, "fetch meta", func() ([]*imapclient.FetchMessageBuffer, error) {
+			return client.Fetch(imap.UIDSetNum(imap.UID(uid)), &imap.FetchOptions{
+				UID: true, Flags: true, Envelope: true,
+			}).Collect()
+		})
+		if err != nil {
+			return fmt.Errorf("email transport: fetch meta: %w", err)
+		}
+		if len(bufs) == 0 || bufs[0] == nil || bufs[0].Envelope == nil {
+			return fmt.Errorf("email transport: %w: no message %s in %s", ErrMessageNotFound, ref, slug)
+		}
+		buf := bufs[0]
+		meta = &MessageMeta{Subject: strings.TrimSpace(buf.Envelope.Subject), MessageID: buf.Envelope.MessageID}
+		for _, f := range buf.Flags {
+			meta.Flags = append(meta.Flags, string(f))
+		}
+		if len(buf.Envelope.From) > 0 {
+			meta.From = addressString(buf.Envelope.From[0])
+			meta.FromName = buf.Envelope.From[0].Name
+		}
+		if len(buf.Envelope.ReplyTo) > 0 {
+			meta.ReplyTo = addressString(buf.Envelope.ReplyTo[0])
+		}
+		meta.To = splitAddressList(addressListString(buf.Envelope.To))
+		meta.Cc = splitAddressList(addressListString(buf.Envelope.Cc))
+		if len(buf.Envelope.Bcc) > 0 {
+			meta.Bcc = splitAddressList(addressListString(buf.Envelope.Bcc))
+		}
+		if !buf.Envelope.Date.IsZero() {
+			meta.Date = buf.Envelope.Date.UTC()
+		}
+		if len(buf.Envelope.InReplyTo) > 0 {
+			meta.InReplyTo = buf.Envelope.InReplyTo[0]
+		}
+		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("email transport: fetch meta: %w", err)
-	}
-	if len(bufs) == 0 || bufs[0] == nil || bufs[0].Envelope == nil {
-		return nil, fmt.Errorf("email transport: %w: no message %s in %s", ErrMessageNotFound, ref, slug)
-	}
-	buf := bufs[0]
-	meta := &MessageMeta{Subject: strings.TrimSpace(buf.Envelope.Subject), MessageID: buf.Envelope.MessageID}
-	for _, f := range buf.Flags {
-		meta.Flags = append(meta.Flags, string(f))
-	}
-	if len(buf.Envelope.From) > 0 {
-		meta.From = addressString(buf.Envelope.From[0])
-		meta.FromName = buf.Envelope.From[0].Name
-	}
-	if len(buf.Envelope.ReplyTo) > 0 {
-		meta.ReplyTo = addressString(buf.Envelope.ReplyTo[0])
-	}
-	meta.To = splitAddressList(addressListString(buf.Envelope.To))
-	meta.Cc = splitAddressList(addressListString(buf.Envelope.Cc))
-	if len(buf.Envelope.Bcc) > 0 {
-		meta.Bcc = splitAddressList(addressListString(buf.Envelope.Bcc))
-	}
-	if !buf.Envelope.Date.IsZero() {
-		meta.Date = buf.Envelope.Date.UTC()
-	}
-	if len(buf.Envelope.InReplyTo) > 0 {
-		meta.InReplyTo = buf.Envelope.InReplyTo[0]
+		return nil, err
 	}
 	return meta, nil
 }
