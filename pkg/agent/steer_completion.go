@@ -112,9 +112,12 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 // finishing window: the COMMIT (terminal state + protected outbox tuple in
 // one mutation) runs first as the window's prepare half; the PUBLISH
 // (parent inbox append + frames/wake + delivery-progress journal) runs as
-// the transition half, only for a winning commit. A stop that committed
-// first lands stopped and publishes nothing; a non-terminal lifecycle
-// notice keeps its direct delivery.
+// the transition half, only for a winning commit. A stopped disposition
+// first persists its stop note and appends the D6 direct-parent
+// stopped-child notice in this same prepare half — before the landing —
+// so an append failure leaves the fence standing for boot to retry. A stop
+// that had already landed (the losing completion T11 pins) publishes
+// nothing; a non-terminal lifecycle notice keeps its direct delivery.
 func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.LifecycleRecord, outcome steer.Outcome, nextState session.LifecycleState, answer, failureReason string) (bool, error) {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
@@ -123,6 +126,21 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 	var commitRes steeredCommitResult
 	finalWoke := false
 	prepare := func() error {
+		// A stop is not a final hand-back. Persist the note, then the
+		// direct-parent notice, and only then let the transition land.
+		// An append failure returns here so the fence stays and boot can
+		// retry. W2's control ledger is what keeps that retry derivable
+		// after a same-generation resume clears the note. The landing
+		// itself is this prepare's second half: the commit below.
+		if nextState == session.LifecycleStopped {
+			noted, noteErr := al.ensureCurrentStopNote(rec, outcome)
+			if noteErr != nil {
+				return noteErr
+			}
+			if err := al.deliverStoppedChildNotice(ctx, noted, false); err != nil {
+				return err
+			}
+		}
 		var err error
 		commitRes, err = al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, answer, failureReason)
 		return err
