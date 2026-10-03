@@ -166,12 +166,23 @@ func (a *restAPI) handleMailList(w http.ResponseWriter, r *http.Request, workspa
 		if fn != "" {
 			fnPtr = &fn
 		}
+		// w5-integration US-9.1 (register rows 8/16): the issued reference
+		// rides the list row — minted by THE one issuer
+		// (email.IssueMessageRef) from the page's same-lease epoch, so the
+		// SPA consumes it unchanged instead of reconstructing it from
+		// uid+uidvalidity (no model or UI synthesizes identity). uv comes
+		// from the SELECT on the lease that fetched these rows; a page with
+		// rows but no proven epoch (not a reachable shape today) omits the
+		// optional field rather than minting an epoch-less reference.
+		var messageRef *string
+		if uv != 0 {
+			ref := email.IssueMessageRef(email.MessageRefClaims{UIDValidity: uv, UID: row.UID})
+			messageRef = &ref
+		}
 		// has_attachments stays unset: the list fetch carries envelopes and
 		// flags only — the MIME classifier that could answer it has not
 		// landed, and absent means not-yet-computed (false is confirmed
-		// absence, never fabricated). message_ref stays unset too: no
-		// gateway ref issuer exists yet; both fields are optional on the wire
-		// until their producers land (the is_knowledge_base precedent).
+		// absence, never fabricated).
 		out.Messages = append(out.Messages, struct {
 			Cc             []string                          `json:"cc"`
 			Date           *time.Time                        `json:"date"`
@@ -198,6 +209,7 @@ func (a *restAPI) handleMailList(w http.ResponseWriter, r *http.Request, workspa
 			IsDraft:        row.IsDraft,
 			IsOmnipusDraft: row.IsOmnipusDraft,
 			MessageId:      midPtr,
+			MessageRef:     messageRef,
 			ReadByAgent:    row.ReadByAgent,
 			Seen:           row.Seen,
 			Subject:        row.Subject,
@@ -251,6 +263,17 @@ func (a *restAPI) handleMailFolderMessage(w http.ResponseWriter, r *http.Request
 		return
 	}
 	v := mv
+	// w5-integration US-9.1 (register rows 8/16): the detail result carries
+	// the issued reference, minted by THE one issuer (email.IssueMessageRef)
+	// from the epoch ReadView observed on the same lease that fetched the
+	// message. The consumer presents it unchanged at the next permitted
+	// action; a stale presentation is W2's same-lease refusal (the typed
+	// 409 below on seen, and the landed mapping on the attachment routes).
+	var messageRef *string
+	if v.UIDValidity != 0 {
+		ref := email.IssueMessageRef(email.MessageRefClaims{UIDValidity: v.UIDValidity, UID: v.UID})
+		messageRef = &ref
+	}
 	out := gen.MailMessage{
 		Cc:             mailNonNilSlice(v.Cc),
 		Date:           mailWireDateOrNull(v.Date),
@@ -259,6 +282,7 @@ func (a *restAPI) handleMailFolderMessage(w http.ResponseWriter, r *http.Request
 		HasHtml:        v.HasHTML,
 		IsOmnipusDraft: v.IsOmnipusDraft,
 		MarkdownLossy:  v.MarkdownLossy,
+		MessageRef:     messageRef,
 		Subject:        v.Subject,
 		To:             mailNonNilSlice(v.To),
 		Uid:            mailUIDToWire(v.UID),
@@ -339,9 +363,20 @@ func (a *restAPI) handleMailSeen(w http.ResponseWriter, r *http.Request, workspa
 	_, uid, err := client.ResolveRef(r.Context(), folder, ref)
 	if err != nil {
 		a.emitMailOperationTiming("seen", agentID, workspaceID, started, err, "live", false)
-		if errors.Is(err, email.ErrMailRefInvalid) {
+		// w5-integration US-9.3 (register row 16; W2 R-3.16-4): a presented
+		// stale reference is refused with the typed stale-reference 409 —
+		// the landed MailStaleReferenceError wire body (code
+		// stale_reference, §8 row 6's exact text) — BEFORE any mutation;
+		// never the generic upstream 502 the refusal used to collapse into.
+		// ResolveRef already compared the ref's embedded epoch to the live
+		// folder epoch on its own session (view.go::refEpochMismatch), so
+		// the \Seen STORE below never fires for a stale ref.
+		switch {
+		case errors.Is(err, email.ErrMailStaleReference):
+			jsonErrCode(w, http.StatusConflict, "This message changed or was deleted. Refresh the list.", "stale_reference")
+		case errors.Is(err, email.ErrMailRefInvalid):
 			jsonErr(w, http.StatusBadRequest, err.Error())
-		} else {
+		default:
 			mailErr502(w, err)
 		}
 		return
