@@ -1,0 +1,90 @@
+name: Desktop artifact (dispatch only)
+
+# A bounded, manually-dispatched build of the macOS desktop binary the founder's
+# live instance runs. It exists because no other CI route publishes a
+# darwin/amd64 binary: build.yml uploads no binary, release.yml is tag/release
+# metadata only, and nightly.yml ships Darwin arm64 + Linux only — while the
+# founder's Mac is an Intel x86_64 machine (i7-1068NG7, Mach-O x86_64, toolchain
+# amd64), so the arm64 asset is unusable.
+#
+# Deliberately dispatch-only: it never runs on push or on a schedule, uploads a
+# single artifact, and changes nothing else. It is intended to live on a scratch
+# branch, not to be merged.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to build (defaults to the branch this workflow is dispatched on)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build-darwin-amd64:
+    name: Build darwin/amd64 desktop binary
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Build the SPA and embed it
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          rm -rf pkg/gateway/spa
+          cp -r dist/spa pkg/gateway/spa
+          # The embed stub trap: an empty/absent spa dir produces a broken UI.
+          test -s pkg/gateway/spa/index.html
+          echo "embedded index.html bytes: $(wc -c < pkg/gateway/spa/index.html)"
+
+      - name: Build the binary
+        run: |
+          set -euo pipefail
+          VERSION="$(git describe --tags --always 2>/dev/null || echo dev)"
+          GIT_COMMIT="$(git rev-parse --short=8 HEAD)"
+          BUILD_TIME="$(date +%FT%T%z)"
+          GO_VERSION="$(go version | awk '{print $3}')"
+          CONFIG_PKG="github.com/elicify-ai/omnipus/pkg/config"
+          LDFLAGS="-X ${CONFIG_PKG}.Version=${VERSION} -X ${CONFIG_PKG}.GitCommit=${GIT_COMMIT} -X ${CONFIG_PKG}.BuildTime=${BUILD_TIME} -X ${CONFIG_PKG}.GoVersion=${GO_VERSION} -X ${CONFIG_PKG}.Edition=core -s -w"
+          mkdir -p build
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
+            go build -tags goolm,stdjson -trimpath -ldflags "${LDFLAGS}" \
+            -o build/omnipus-darwin-amd64 ./cmd/omnipus
+          file build/omnipus-darwin-amd64
+          shasum -a 256 build/omnipus-darwin-amd64
+
+      - name: Record build provenance
+        run: |
+          {
+            echo "ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}"
+            echo "commit: $(git rev-parse HEAD)"
+            echo "commit_short: $(git rev-parse --short=8 HEAD)"
+            echo "built_at: $(date -u +%FT%TZ)"
+          } > build/PROVENANCE.txt
+          cat build/PROVENANCE.txt
+
+      - name: Upload the binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnipus-darwin-amd64
+          path: |
+            build/omnipus-darwin-amd64
+            build/PROVENANCE.txt
+          retention-days: 7
