@@ -801,6 +801,15 @@ func TestDialIMAP_ContextCancelledBeforeDial(t *testing.T) {
 		Username: "u@test.local",
 		Password: "pass",
 	})
+	// FR-W1-2 wiring gate: once the package's refusal test wires the
+	// process-wide shared manager, a source-less transport call is the typed
+	// ErrSessionSourceMissing refusal before any dial. Inject the pool
+	// harness's session source (it dials whatever endpoint the client
+	// carries — here TEST-NET-1) so the call still reaches the dial path
+	// this test verifies: a cancelled context must surface as the
+	// cancellation error there, not as the wiring refusal.
+	sessions := newSessionsForAddr(t, "192.0.2.1:993", newPoolTestClock())
+	cl.SetSessionSource(sessions)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately so the context is already done
