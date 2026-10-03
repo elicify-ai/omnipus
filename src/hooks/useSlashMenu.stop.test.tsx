@@ -41,6 +41,20 @@
 // Both pass through the cast (STOP_PARAM_CAST below) so this RED pack
 // typecheck-clean under `npm run typecheck` before GREEN adds the params; the
 // behaviour assertions still fail today.
+//
+// ROOT-REFUSAL CORRECTION (qa-lead, test/a-redirect-root-refusal; F1 of the
+// recovery CHECK omnipus-investigations/a-redirect-check-recovery-20261002T0423):
+// the shipped root case ran SESSIONLESS, so removing the production root guard
+// still shipped green — refusal kept happening via the no-attached-session
+// branch, whose text also contains the word "helper" the old substring oracle
+// matched (mut-M4-rootbypass survived 12/12; only a held-out probe killed the
+// mutant, and that probe was never part of this pack). This correction adds
+// the dangerous case — a root chat WITH an attached session, streaming, the
+// realistic input — and strengthens both root oracles to the exact refusal
+// text. The literal is pinned as a UI regression baseline (see
+// ROOT_REFUSAL_TEXT below): ADR D9 (frozen cd20cf8b) fixes the interaction
+// ("refuse with guidance to target a helper; the root's own /stop still
+// works"), not the wording.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
@@ -89,6 +103,16 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
   }
 })
+
+// ROOT_REFUSAL_TEXT — UI regression baseline (characterization pin): the
+// exact developer-chosen SPA wording of the D9 root refusal, bound verbatim.
+// ADR D9 (cd20cf8b) fixes the interaction, not this text; the pin makes any
+// future wording change a visible, owned test failure instead of silent
+// drift. Deliberately NOT imported from the implementation
+// (useSlashMenu.ts::STOP_REDIRECT_ROOT_REFUSAL) — an oracle must not read the
+// constant it judges, or wording regressions ship green.
+const ROOT_REFUSAL_TEXT =
+  '`/stop-redirect` only works in a helper\'s chat — it stops that helper\'s current turn and continues it with a new instruction. Open the helper session you want to redirect and run the command there. To stop this conversation\'s current turn, use `/stop`.'
 
 function makeComposerRuntime(text = '') {
   return {
@@ -154,6 +178,18 @@ beforeEach(() => {
 // RedirectFrame must be THIS session (D9: conversation-scoped, #955 — the
 // helper's own chat redirects that helper).
 function helperSessionStore(sessionId: string) {
+  act(() => {
+    useSessionStore.setState({ activeSessionId: sessionId })
+  })
+}
+
+// attachedRootSessionStore gives the ROOT chat a live session of its own —
+// deliberately a separate, differently-named setup from helperSessionStore:
+// the root conversation is itself a session with a nonempty activeSessionId,
+// and root identity is the server-minted helper flag (isHelperSession: false)
+// alone, never store emptiness. A guard keyed on "no session in the store"
+// instead of "not a helper" is exactly the F1 regression this pack closes.
+function attachedRootSessionStore(sessionId: string) {
   act(() => {
     useSessionStore.setState({ activeSessionId: sessionId })
   })
@@ -327,12 +363,52 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     })
     // Handled client-side: the caller must NOT dispatch anything.
     expect(intercepted).toBe(true)
-    // Guidance names the helper target (D9's own word).
+    // Exact refusal text (UI regression baseline — see ROOT_REFUSAL_TEXT):
+    // the old 'helper' substring was satisfied by three different messages,
+    // including the no-attached-session text, which is how the removed-guard
+    // mutant shipped 12/12 green in the recovery CHECK (F1).
     expect(appendMessage).toHaveBeenCalledTimes(1)
     const guidance = appendMessage.mock.calls[0][0] as { role: string; content: string }
     expect(guidance.role).toBe('system')
-    expect(guidance.content.toLowerCase()).toContain('helper')
+    expect(guidance.content).toBe(ROOT_REFUSAL_TEXT)
     // And nothing leaves the composer: no message send, no stop, no frame.
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+    expect(cancelIfStreaming).not.toHaveBeenCalled()
+    expect(sendRedirectFrame).not.toHaveBeenCalled()
+  })
+
+  // F1 regression (recovery CHECK a-redirect-check-recovery-20261002T0423):
+  // the SESSIONLESS root case above cannot see the root guard being removed —
+  // refusal keeps happening via the no-attached-session branch. The dangerous
+  // case is a root chat WITH an attached session: the root conversation is
+  // itself a session, and under a removed guard this input falls through to
+  // the frame send (exactly the mutant the held-out probe had to catch
+  // because the shipped pack could not). Streaming is the realistic state —
+  // the command is visible mid-stream (available_while_streaming), so a root
+  // user can type it while their own turn runs. Identity is the server-minted
+  // helper flag alone; store non-emptiness must never enable the redirect.
+  it('in the ROOT chat with an attached session refuses with the exact guidance and sends nothing (helper identity, not store emptiness, gates the redirect)', () => {
+    attachedRootSessionStore('root-session-1')
+    const composerRuntime = makeComposerRuntime('/stop-redirect do the other thing')
+    const appendMessage = vi.fn()
+    const cancelIfStreaming = vi.fn()
+    const sendRedirectFrame = vi.fn()
+    const { result } = renderHook(() =>
+      useSlashMenu(baseParams({ composerRuntime, appendMessage, cancelIfStreaming, sendRedirectFrame, isHelperSession: false, isStreaming: true })))
+    let intercepted: boolean | undefined
+    act(() => {
+      intercepted = result.current.interceptClientCommand()
+    })
+    // Handled client-side: the caller must NOT dispatch anything.
+    expect(intercepted).toBe(true)
+    // Exactly one system guidance message, exactly the pinned refusal text.
+    expect(appendMessage).toHaveBeenCalledTimes(1)
+    const guidance = appendMessage.mock.calls[0][0] as { role: string; content: string }
+    expect(guidance.role).toBe('system')
+    expect(guidance.content).toBe(ROOT_REFUSAL_TEXT)
+    // Nothing leaves the composer: no message send, no stop (the root's own
+    // /stop keeps working separately — the redirect refusal is not a stop),
+    // no redirect frame.
     expect(composerRuntime.send).not.toHaveBeenCalled()
     expect(cancelIfStreaming).not.toHaveBeenCalled()
     expect(sendRedirectFrame).not.toHaveBeenCalled()
