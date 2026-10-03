@@ -171,6 +171,26 @@ func parseMailRef(ref string) (mailRef, error) {
 	return mailRef{}, fmt.Errorf("%w: must be uid:<uidvalidity>:<uid> or mid:<message-id>", ErrMailRefInvalid)
 }
 
+// refEpochMismatch applies the same-lease reference-validation rule (W2 spec
+// §3.16 R-3.16-1/2) to a parsed uid: ref against the folder's live
+// UIDVALIDITY from the SAME session: a reference minted under an earlier
+// epoch names a DIFFERENT message once the folder has been recreated
+// server-side, so it is refused with the typed stale-reference error BEFORE
+// any command uses the UID — never silently resolved against the new epoch,
+// never fallen back to. A ref carrying no epoch (uidvalidity 0, the
+// degenerate parse shape) has nothing to compare; this is the same rule
+// attachment_parts.go::selectAndValidateRef applies, shared here so every
+// reference consumer states it once. The wording deliberately avoids
+// upstream-class tokens ("folder", "auth", "tls", …) so a stale refusal
+// cannot misclassify as a transport failure in the string-matching
+// classifier before the gateway's typed 409 mapping (R-3.16-2) is wired.
+func refEpochMismatch(r mailRef, liveUIDValidity uint32) error {
+	if r.uidvalidity == 0 || r.uidvalidity == liveUIDValidity {
+		return nil
+	}
+	return fmt.Errorf("%w: reference epoch %d does not match the live epoch %d", ErrMailStaleReference, r.uidvalidity, liveUIDValidity)
+}
+
 // selectFolder SELECTs the slug's real folder and returns its UIDVALIDITY and
 // message count. Reads are ordinary SELECTs; the fetches behind them are all
 // BODY.PEEK, so no flag is ever written (round-2 MAJ-003).
@@ -527,6 +547,15 @@ func (c *Client) ReadView(ctx context.Context, slug, ref string) (*MailView, err
 	if err != nil {
 		return nil, err
 	}
+	if r.kind == "uid" {
+		// W2 §3.16 R-3.16-1/2: the ref's embedded epoch is compared to the
+		// live folder epoch ON THIS SESSION before any command uses the UID —
+		// a stale ref must never fetch (a recreated folder would render a
+		// different message's body as the clicked message).
+		if verr := refEpochMismatch(r, uidvalidity); verr != nil {
+			return nil, verr
+		}
+	}
 
 	uid := r.uid
 	if r.kind == "mid" {
@@ -881,25 +910,26 @@ func (c *Client) MarkSeenIn(ctx context.Context, slug string, uid uint32) error 
 	if err != nil {
 		return err
 	}
-	client, _, err := c.dialIMAP(ctx)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-	if _, _, err := c.selectFolder(ctx, client, name); err != nil {
-		return err
-	}
-	storeFlags := &imap.StoreFlags{
-		Op:     imap.StoreFlagsAdd,
-		Flags:  []imap.Flag{imap.FlagSeen},
-		Silent: true,
-	}
-	if _, err := runIMAP(ctx, "store seen", func() (struct{}, error) {
-		return struct{}{}, client.Store(imap.UIDSetNum(imap.UID(uid)), storeFlags, nil).Close()
-	}); err != nil {
-		return fmt.Errorf("email transport: mark seen uid %d in %s: %w", uid, slug, err)
-	}
-	return nil
+	// Pooled mutation (Wave C): the \Seen write rides a mutation lease —
+	// never coalesced, never automatically replayed (W1 §4.5.4); without an
+	// injected session source the legacy per-call dial keeps the identical
+	// command sequence.
+	return c.withMailSession(ctx, name, true, func(ctx context.Context, client *imapclient.Client, _ uint32) error {
+		if _, _, err := c.selectFolder(ctx, client, name); err != nil {
+			return err
+		}
+		storeFlags := &imap.StoreFlags{
+			Op:     imap.StoreFlagsAdd,
+			Flags:  []imap.Flag{imap.FlagSeen},
+			Silent: true,
+		}
+		if _, err := runIMAP(ctx, "store seen", func() (struct{}, error) {
+			return struct{}{}, client.Store(imap.UIDSetNum(imap.UID(uid)), storeFlags, nil).Close()
+		}); err != nil {
+			return fmt.Errorf("email transport: mark seen uid %d in %s: %w", uid, slug, err)
+		}
+		return nil
+	})
 }
 
 // DeleteDraft flags a draft \Deleted and, when the server supports UIDPLUS,
@@ -924,39 +954,46 @@ func (c *Client) DeleteDraftStatus(ctx context.Context, uid uint32) (expunged bo
 	if err != nil {
 		return false, err
 	}
-	client, _, err := c.dialIMAP(ctx)
+	// Pooled mutation (Wave C): the \Deleted flag and the UIDPLUS expunge
+	// ride a mutation lease — never coalesced, never automatically replayed
+	// (W1 §4.5.4); without an injected session source the legacy per-call
+	// dial keeps the identical command sequence.
+	err = c.withMailSession(ctx, name, true, func(ctx context.Context, client *imapclient.Client, _ uint32) error {
+		if _, _, serr := c.selectFolder(ctx, client, name); serr != nil {
+			return serr
+		}
+		storeFlags := &imap.StoreFlags{
+			Op:     imap.StoreFlagsAdd,
+			Flags:  []imap.Flag{imap.FlagDeleted},
+			Silent: true,
+		}
+		if _, serr := runIMAP(ctx, "store deleted", func() (struct{}, error) {
+			return struct{}{}, client.Store(imap.UIDSetNum(imap.UID(uid)), storeFlags, nil).Close()
+		}); serr != nil {
+			return fmt.Errorf("email transport: flag draft uid %d deleted: %w", uid, serr)
+		}
+		if client.Caps().Has(imap.CapUIDPlus) {
+			if _, xerr := runIMAP(ctx, "uid expunge", func() (struct{}, error) {
+				return struct{}{}, client.UIDExpunge(imap.UIDSetNum(imap.UID(uid))).Close()
+			}); xerr != nil {
+				return fmt.Errorf("email transport: expunge draft uid %d: %w", uid, xerr)
+			}
+			expunged = true
+		}
+		return nil
+	})
 	if err != nil {
 		return false, err
-	}
-	defer client.Close()
-	if _, _, err := c.selectFolder(ctx, client, name); err != nil {
-		return false, err
-	}
-	storeFlags := &imap.StoreFlags{
-		Op:     imap.StoreFlagsAdd,
-		Flags:  []imap.Flag{imap.FlagDeleted},
-		Silent: true,
-	}
-	if _, err := runIMAP(ctx, "store deleted", func() (struct{}, error) {
-		return struct{}{}, client.Store(imap.UIDSetNum(imap.UID(uid)), storeFlags, nil).Close()
-	}); err != nil {
-		return false, fmt.Errorf("email transport: flag draft uid %d deleted: %w", uid, err)
-	}
-	if client.Caps().Has(imap.CapUIDPlus) {
-		if _, err := runIMAP(ctx, "uid expunge", func() (struct{}, error) {
-			return struct{}{}, client.UIDExpunge(imap.UIDSetNum(imap.UID(uid))).Close()
-		}); err != nil {
-			return false, fmt.Errorf("email transport: expunge draft uid %d: %w", uid, err)
-		}
-		expunged = true
 	}
 	return expunged, nil
 }
 
 // ResolveRef resolves a folder-scoped ref to its current (uidvalidity, uid)
-// without fetching the body: uid-form refs ride the live folder epoch;
-// mid-form refs search only the addressed folder among non-\Deleted messages,
-// resolving multiple hits to the highest UID (round-2 MIN-005). The gateway's
+// without fetching the body: uid-form refs validate their embedded epoch
+// against the live folder epoch (W2 §3.16 R-3.16-1/2 — a stale ref refuses
+// with the typed stale-reference error, never a resolution); mid-form refs
+// search only the addressed folder among non-\Deleted messages, resolving
+// multiple hits to the highest UID (round-2 MIN-005). The gateway's
 // staleness preconditions and the seen action resolve through this so list
 // rows, reads and mutations address one consistently-defined target.
 func (c *Client) ResolveRef(ctx context.Context, slug, ref string) (uint32, uint32, error) {
@@ -968,24 +1005,42 @@ func (c *Client) ResolveRef(ctx context.Context, slug, ref string) (uint32, uint
 	if err != nil {
 		return 0, 0, err
 	}
-	client, _, err := c.dialIMAP(ctx)
+	var (
+		uv  uint32
+		uid uint32
+	)
+	// Pooled read (Wave C): the resolution rides one lease on the addressed
+	// folder; without an injected session source the legacy per-call dial
+	// keeps the identical command sequence.
+	err = c.withMailSession(ctx, name, false, func(ctx context.Context, client *imapclient.Client, _ uint32) error {
+		liveUV, _, serr := c.selectFolder(ctx, client, name)
+		if serr != nil {
+			return serr
+		}
+		uv = liveUV
+		if r.kind == "uid" {
+			// W2 §3.16 R-3.16-1/2: the live epoch is never paired with a stale
+			// UID — a ref minted under an earlier epoch is refused with the typed
+			// stale-reference error, never silently resolved (the resolved value
+			// feeds the panel's seen action, which would flag the WRONG message).
+			if verr := refEpochMismatch(r, uv); verr != nil {
+				return verr
+			}
+			uid = r.uid
+			return nil
+		}
+		resolved, serr := c.searchMessageID(ctx, client, r.messageID)
+		if serr != nil {
+			return serr
+		}
+		if resolved == 0 {
+			return fmt.Errorf("email transport: no message %s in %s", ref, slug)
+		}
+		uid = resolved
+		return nil
+	})
 	if err != nil {
 		return 0, 0, err
-	}
-	defer client.Close()
-	uv, _, err := c.selectFolder(ctx, client, name)
-	if err != nil {
-		return 0, 0, err
-	}
-	if r.kind == "uid" {
-		return uv, r.uid, nil
-	}
-	uid, err := c.searchMessageID(ctx, client, r.messageID)
-	if err != nil {
-		return 0, 0, err
-	}
-	if uid == 0 {
-		return 0, 0, fmt.Errorf("email transport: no message %s in %s", ref, slug)
 	}
 	return uv, uid, nil
 }

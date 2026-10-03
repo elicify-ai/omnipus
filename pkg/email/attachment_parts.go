@@ -203,13 +203,13 @@ func (c *Client) selectAndValidateRef(ctx context.Context, slug, ref string) (*i
 	}
 	uid := r.uid
 	if r.kind == "uid" {
-		if r.uidvalidity != 0 && r.uidvalidity != uv {
+		if verr := refEpochMismatch(r, uv); verr != nil {
 			// The folder was recreated under a new epoch: the old UID names
 			// a different message now. Typed refusal, connection closed,
 			// zero fetches — never a fetch against whatever the folder now
-			// holds.
+			// holds. Same rule as view.go (refEpochMismatch, W2 §3.16).
 			client.Close()
-			return nil, 0, fmt.Errorf("%w: reference epoch %d does not match folder epoch %d", ErrMailStaleReference, r.uidvalidity, uv)
+			return nil, 0, verr
 		}
 	} else {
 		uid, err = c.searchMessageID(ctx, client, r.messageID)
