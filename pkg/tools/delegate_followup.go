@@ -446,6 +446,13 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	newRec.State = session.LifecycleQueued
 	newRec.FailedReason = ""
 	newRec.NeedsInput = nil
+	// ADR-20260928 D2: explicit RESUME of a committed done/failed G creating
+	// G+1 neither copies G's committed final outbox into G+1 nor hides it —
+	// G's entry stays discoverable for delivery retry through
+	// LifecycleStore.ListPendingFinalDeliveries. The whole-struct copy would
+	// otherwise carry a tuple whose generation no longer matches (persistLocked
+	// would reject it).
+	newRec.FinalDelivery = nil
 	if rec.Is3P {
 		if err := t.cloneCorrectiveSessionIdentity(sessionID, newSessionID, rec); err != nil {
 			return ErrorResult(fmt.Sprintf("delegate: follow_up: failed to create corrective session: %v", err)).WithError(err)

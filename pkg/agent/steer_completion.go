@@ -17,9 +17,13 @@ import (
 )
 
 // completeSteeredTurn applies the goal-less completion disposition after a
-// real turn exits. Delivery is deliberately first; boot recovery can repair a
-// delivered-but-not-terminal record, while terminal-first could lose the only
-// copy of the child's result.
+// real turn exits. Order is D2 CRIT-001's one outcome/publication commit
+// boundary (steer_completion_commit.go): the single lifecycle mutation
+// commits the terminal state AND the protected, unpublished final-delivery
+// outbox tuple FIRST — so terminal-first can no longer lose the child's only
+// result; the exact committed bytes live in the durable outbox — and only the
+// winning commit is then published to the parent and acknowledged through the
+// delivery-only journal.
 func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.LifecycleRecord, result turnResult, runErr error) error {
 	_, err := al.completeSteeredTurnDurably(ctx, snapshot, result, runErr)
 	return err
@@ -104,38 +108,40 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 	})
 }
 
+// deliverSteeredCompletion is D2 CRIT-001's boundary wired through the
+// finishing window: the COMMIT (terminal state + protected outbox tuple in
+// one mutation) runs first as the window's prepare half; the PUBLISH
+// (parent inbox append + frames/wake + delivery-progress journal) runs as
+// the transition half, only for a winning commit. A stop that committed
+// first lands stopped and publishes nothing; a non-terminal lifecycle
+// notice keeps its direct delivery.
 func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.LifecycleRecord, outcome steer.Outcome, nextState session.LifecycleState, answer, failureReason string) (bool, error) {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
 		return false, errors.New("steer: complete: lifecycle store is not wired")
 	}
-	finalAlreadyStored, err := al.completionFinalAlreadyStored(rec, outcome)
-	if err != nil {
-		return false, err
-	}
-	// Keep the wake result separate from the terminal-transition result:
-	// goal completion needs to know whether the parent's durable final woke
-	// it, while the finishing hand-off needs to know whether the child became
-	// terminal and a late steer must revive it.
-	stopBeforeDelivery := rec.Stop
+	var commitRes steeredCommitResult
 	finalWoke := false
 	prepare := func() error {
-		if finalAlreadyStored {
-			return nil
+		var err error
+		commitRes, err = al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, answer, failureReason)
+		return err
+	}
+	transition := func() (bool, error) {
+		switch commitRes.kind {
+		case steeredCommitTerminal:
+			woke, pubErr := al.publishCommittedFinal(ctx, rec, commitRes)
+			finalWoke = woke
+			return true, pubErr
+		case steeredCommitNotice:
+			noticeErr := al.deliverSteeredNotice(ctx, rec, outcome, answer, failureReason)
+			return false, noticeErr
+		default:
+			// steeredCommitStopped: the stop won, nothing to publish.
+			// steeredCommitRefused: mirror the pre-boundary refusal — report
+			// the reloaded record's terminality to the finishing disposal.
+			return commitRes.terminalNow, nil
 		}
-		message, messageErr := al.completionMessage(rec, outcome, answer, failureReason)
-		if messageErr != nil {
-			return messageErr
-		}
-		event := steer.UpwardEvent{
-			ChildSessionID: rec.SessionID,
-			Generation:     rec.Generation,
-			Outcome:        outcome,
-			Message:        message,
-		}
-		var deliverErr error
-		finalWoke, deliverErr = al.deliverSteeredTerminal(ctx, rec, event)
-		return deliverErr
 	}
 	// Round-3 finishing-window protocol (issue #1020): items accepted during
 	// the terminal-transition window are returned via the runTerminalTransitionWithFinishing
@@ -148,9 +154,6 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 	// child stays non-terminal and the items get a consumer via the existing
 	// retry loop).
 	var finishingItems []steeringQueueItem
-	transition := func() (bool, error) {
-		return al.commitSteeredTerminal(lifecycle, rec, stopBeforeDelivery, nextState, outcome, failureReason)
-	}
 	if al.steering == nil {
 		if prepareErr := prepare(); prepareErr != nil {
 			return finalWoke, prepareErr
@@ -171,6 +174,26 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 		return finalWoke, al.processFinishingItems(ctx, rec, transitionErr, finishingItems, terminal)
 	}
 	return finalWoke, transitionErr
+}
+
+// deliverSteeredNotice delivers the one non-terminal upward event this
+// boundary still publishes directly: the tool-iteration lifecycle notice.
+// It commits nothing — the record keeps its current state — and a fenced
+// record never reaches here (commitSteeredCompletion already gave the stop
+// the record).
+func (al *AgentLoop) deliverSteeredNotice(ctx context.Context, rec *session.LifecycleRecord, outcome steer.Outcome, answer, failureReason string) error {
+	message, messageErr := al.completionMessage(rec, outcome, answer, failureReason)
+	if messageErr != nil {
+		return messageErr
+	}
+	event := steer.UpwardEvent{
+		ChildSessionID: rec.SessionID,
+		Generation:     rec.Generation,
+		Outcome:        outcome,
+		Message:        message,
+	}
+	_, err := al.deliverSteeredTerminal(ctx, rec, event)
+	return err
 }
 
 // processFinishingItems disposes of the items accepted during the
@@ -302,152 +325,13 @@ func (al *AgentLoop) deliverSteeredTerminal(
 	return deliveryWokeRecipient(delivery.Outcome), nil
 }
 
-// commitSteeredTerminal performs the durable half of the terminal transition.
-// The queue has been rechecked empty; later enqueues join the finishing buffer
-// and are disposed of after this write according to its terminal outcome.
-func (al *AgentLoop) commitSteeredTerminal(
-	lifecycle *session.LifecycleStore,
-	rec *session.LifecycleRecord,
-	stopBeforeDelivery *session.Stop,
-	nextState session.LifecycleState,
-	outcome steer.Outcome,
-	failureReason string,
-) (bool, error) {
-	if completeStateWriteTestHook != nil {
-		completeStateWriteTestHook(rec.SessionID)
-	}
-
-	mutateErr := lifecycle.Mutate(rec.SessionID, func(cur *session.LifecycleRecord) error {
-		if cur == nil {
-			return fmt.Errorf("steer: complete: record %q vanished during delivery", rec.SessionID)
-		}
-		if cur.Generation != rec.Generation {
-			return errCompleteStaleGeneration
-		}
-		if cur.Terminal() {
-			return errCompleteAlreadyTerminal
-		}
-		// A current-generation Stop marker means one of two DIFFERENT
-		// things, and conflating them strands the session forever:
-		//
-		//   (a) a Stop landed WHILE Deliver was doing I/O -- a genuine
-		//       race. The cascade owns finishing this session; refuse
-		//       and let it, exactly as before.
-		//
-		//   (b) the Stop is the REASON this turn is completing. The
-		//       cascade cancelled a live turn, the turn unwound with
-		//       context.Canceled, and we are now writing the terminal
-		//       state that the Stop asked for. Refusing here left the
-		//       record `running` with its marker FOREVER, and
-		//       hasRunningOrQueuedDescendant kept the parent waiting --
-		//       the exact hang ADR-091 exists to remove, on the most
-		//       common Stop path (a session that HAD a live turn).
-		//
-		// stopBeforeDelivery is the pre-Deliver snapshot, so
-		// stopLandedDuringDelivery distinguishes them the same way
-		// steer_cancel.go::reportSteeredSessionTerminalUpward does.
-		// Keeping the two paths symmetric is the point: they are the
-		// only two writers that land a terminal state on a stopped
-		// session.
-		if stopLandedDuringDelivery(stopBeforeDelivery, cur) {
-			return errCompleteStoppedDuringDelivery
-		}
-		cur.State = nextState
-		cur.NeedsInput = nil
-		// The Stop has now been carried out, so the marker is spent --
-		// clear it (founder decision, 2026-09-24), mirroring
-		// reportSteeredSessionTerminalUpward. persistLocked REJECTS a
-		// terminal record that still carries a current-generation
-		// marker, so leaving it would fail the write outright. An OLDER
-		// marker is inert history a revival deliberately keeps.
-		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
-			cur.Stop = nil
-		}
-		// D2: landing retains an existing stop_note (a prior stampStop
-		// already wrote one, for an OutcomeInterrupted turn a cascade
-		// cancelled — cause stop/cascade depending on whether this session
-		// was the cascade's own target or a swept descendant). Two outcomes
-		// reach LifecycleStopped with no prior stamp and need one
-		// synthesized here: OutcomeTimedOut (a lifetime-budget expiry is
-		// never stamped by any cascade — D2/Vocabulary line 137) always
-		// gets cause timeout; OutcomeInterrupted with no stamp is the
-		// "legacy" RequestCancel path landing directly on a steered
-		// session's own completion (cancel.go, no SteerCanceller stamp
-		// involved) — cause stop, since this record is by definition the
-		// call's own direct target, never a cascade sweep, in that path.
-		// Neither branch has a session.Principal available at this layer,
-		// so the actor is "system".
-		if nextState == session.LifecycleStopped && cur.StopNote == nil {
-			cause := session.StopCauseStop
-			if outcome == steer.OutcomeTimedOut {
-				cause = session.StopCauseTimeout
-			}
-			cur.StopNote = &session.StopNote{
-				At: time.Now().UTC(), By: session.StopActorSystem,
-				Seq: uint64(cur.Generation), Cause: cause,
-			}
-		}
-		if nextState == session.LifecycleFailed {
-			cur.FailedReason = failureReason
-		}
-		return nil
-	})
-	switch {
-	case mutateErr == nil:
-		// MAJ-003 (sub-agent control plane): this terminal write ends the
-		// TURN, never the child's session-owned goal — the FD1=A pair-end is
-		// retired. Only natural met/exhaustion adjudication and an explicit
-		// clear (/goal clear, authorized clear_goal) end a session goal.
-		return true, nil
-	case errors.Is(mutateErr, errCompleteStaleGeneration),
-		errors.Is(mutateErr, errCompleteStoppedDuringDelivery),
-		errors.Is(mutateErr, errCompleteAlreadyTerminal),
-		errors.Is(mutateErr, session.ErrLifecycleTerminalImmutable):
-		// Deliver has already stored the final. Read the current lifecycle:
-		// a concurrent Stop or Revive may have left this child non-terminal,
-		// and its finishing items must then continue on the same generation.
-		current, loadErr := lifecycle.Load(rec.SessionID)
-		if loadErr != nil {
-			return false, fmt.Errorf("steer: complete: reload %q: %w", rec.SessionID, loadErr)
-		}
-		return current.Terminal(), nil
-	default:
-		return false, fmt.Errorf("steer: complete: persist %q: %w", rec.SessionID, mutateErr)
-	}
-}
-
-// completionFinalAlreadyStored reports whether this generation's terminal
-// result exists in the parent's durable inbox AND has been acknowledged.
-// Existence alone proves only that Deliver's append ran; it does not prove the
-// parent wake was queued. An unacknowledged final must therefore re-enter
-// Deliver, whose deterministic id deduplicates storage while retrying the
-// wake. The generation-bound id keeps a revived session's newer final
-// independent from an older attempt.
-func (al *AgentLoop) completionFinalAlreadyStored(rec *session.LifecycleRecord, outcome steer.Outcome) (bool, error) {
-	if !isTerminalOutcome(outcome) {
-		return false, nil
-	}
-	inbox := al.GetMessageInboxStore()
-	ownerKey := deliverOwnerKey(rec)
-	if inbox == nil || ownerKey == "" {
-		return false, nil
-	}
-	entries, err := inbox.Entries(ownerKey)
-	if err != nil {
-		return false, fmt.Errorf("steer: complete: inspect parent inbox %q: %w", ownerKey, err)
-	}
-	wantID := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation)
-	for _, entry := range entries {
-		if entry.Kind == session.InboxEntryMessage && entry.Message != nil && messageIDOf(*entry.Message) == wantID {
-			acked, ackedErr := deliverEntryIsAcked(inbox, ownerKey, rec.SessionID, wantID)
-			if ackedErr != nil {
-				return false, fmt.Errorf("steer: complete: inspect final acknowledgement %q: %w", wantID, ackedErr)
-			}
-			return acked, nil
-		}
-	}
-	return false, nil
-}
+// commitSteeredTerminal and completionFinalAlreadyStored are deleted: D2
+// CRIT-001's one outcome/publication commit boundary
+// (steer_completion_commit.go::commitSteeredCompletion) replaced the
+// deliver-first-then-write ordering, and the committed outbox tuple replaced
+// the inbox-scan dedupe. Delivery retry keys on the committed outbox
+// (UpdateFinalDelivery / ListPendingFinalDeliveries), never on an inbox
+// probe.
 
 func deliveryWokeRecipient(outcome steer.DeliveryOutcome) bool {
 	return outcome == steer.DeliveryWoke || outcome == steer.DeliveryQueuedIntoLiveTurn
@@ -511,13 +395,15 @@ func (al *AgentLoop) completionFlightCurrent(rec *session.LifecycleRecord) (bool
 }
 
 // errCompleteStaleGeneration, errCompleteAlreadyTerminal and
-// errCompleteStoppedDuringDelivery are completeSteeredTurn's Mutate-refusal
-// sentinels (Finding D, above) — the completion-side counterparts of
-// steer_launcher.go's dispatchRefusalError family.
+// errCompleteStoppedDuringDelivery are the commit boundary's Mutate-refusal
+// sentinels (Finding D's successors in
+// steer_completion_commit.go::commitSteeredCompletion) — the
+// completion-side counterparts of steer_launcher.go's dispatchRefusalError
+// family.
 var (
 	errCompleteStaleGeneration       = errors.New("steer: complete: generation changed during delivery")
 	errCompleteAlreadyTerminal       = errors.New("steer: complete: record became terminal during delivery")
-	errCompleteStoppedDuringDelivery = errors.New("steer: complete: a Stop landed during delivery")
+	errCompleteStoppedDuringDelivery = errors.New("steer: complete: a Stop fence owns this record; the stop path lands it")
 	errCompleteSteeringPending       = errors.New("steer: complete: steering arrived before terminal transition")
 )
 
