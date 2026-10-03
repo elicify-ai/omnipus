@@ -104,7 +104,10 @@ describe('MailPanel — draft send success state', () => {
       </QueryClientProvider>,
     )
 
-    await waitFor(() => expect(fetchMailMessages).toHaveBeenCalledWith('ws-1', 'mia', 'drafts', { retry: false }))
+    // Superseded oracle, re-pinned (W3 spec §2.4 "the panel always sends
+    // limit=25 explicitly" + §3.2 cache-first open event; landed in a3a678b34,
+    // 2026-10-02): the drafts list read now carries mode and an explicit limit.
+    await waitFor(() => expect(fetchMailMessages).toHaveBeenCalledWith('ws-1', 'mia', 'drafts', { limit: 25, mode: 'cache_first', retry: false }))
     expect(await screen.findByTestId('mail-message-list')).toHaveTextContent('Review request')
     fireEvent.click(await screen.findByRole('button', { name: /Review request/ }))
     expect(await screen.findByText('Agent draft')).toBeInTheDocument()
