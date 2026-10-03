@@ -2116,10 +2116,10 @@ components:
     DelegateActionRequest:
       description: >
         The `delegate` tool call's argument shape, discriminated by
-        `action` — the corrected 9-action set (ADR-053 §5.1) replacing
+        `action` — the ADR-053 §5.1 action set plus `clear_goal`, replacing
         the legacy `run | status` pair. `run` spawns a new child;
         `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces;
-        `steer`/`respond`/`cancel`/`follow_up` are control surfaces.
+        `steer`/`respond`/`cancel`/`clear_goal`/`follow_up` are control surfaces.
         Steering is always available for a direct delegation (see
         ADR-053 Amendment).
       oneOf:
@@ -2130,6 +2130,7 @@ components:
         - $ref: '#/components/schemas/DelegateSteerAction'
         - $ref: '#/components/schemas/DelegateRespondAction'
         - $ref: '#/components/schemas/DelegateCancelAction'
+        - $ref: '#/components/schemas/DelegateClearGoalAction'
         - $ref: '#/components/schemas/DelegateFollowUpAction'
         - $ref: '#/components/schemas/DelegatePeekAction'
       discriminator:
@@ -2142,6 +2143,7 @@ components:
           steer: '#/components/schemas/DelegateSteerAction'
           respond: '#/components/schemas/DelegateRespondAction'
           cancel: '#/components/schemas/DelegateCancelAction'
+          clear_goal: '#/components/schemas/DelegateClearGoalAction'
           follow_up: '#/components/schemas/DelegateFollowUpAction'
           peek: '#/components/schemas/DelegatePeekAction'
     DelegateRunAction:
@@ -2158,6 +2160,8 @@ components:
       $ref: ./components/schemas/DelegateRespondAction.yaml
     DelegateCancelAction:
       $ref: ./components/schemas/DelegateCancelAction.yaml
+    DelegateClearGoalAction:
+      $ref: ./components/schemas/DelegateClearGoalAction.yaml
     DelegateFollowUpAction:
       $ref: ./components/schemas/DelegateFollowUpAction.yaml
     DelegatePeekAction:

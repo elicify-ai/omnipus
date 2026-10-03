@@ -445,7 +445,10 @@ func (te *TaskExecutor) mintTaskLifecycleRecord(sessionID string, t *task.Task) 
 // lifecycleStore is nil or the initial mint above failed/was skipped) is
 // logged at Warn and never propagated — a durable-record write failure
 // must never fail or mask the outcome of the underlying task run.
-func (te *TaskExecutor) transitionTaskLifecycle(sessionID string, state session.LifecycleState, failedReason string) {
+// note is the StopNote to land when state == LifecycleStopped (D2/D6);
+// ignored for any other target state. See each call site for its own cause
+// reasoning.
+func (te *TaskExecutor) transitionTaskLifecycle(sessionID string, state session.LifecycleState, failedReason string, note *session.StopNote) {
 	ls := te.getLifecycleStore()
 	if ls == nil || sessionID == "" {
 		return
@@ -457,7 +460,7 @@ func (te *TaskExecutor) transitionTaskLifecycle(sessionID string, state session.
 	if te.agentLoop != nil {
 		us = te.agentLoop.ResolveSessionStore(sessionID)
 	}
-	if err := session.TransitionSession(ls, us, sessionID, state, failedReason); err != nil {
+	if err := session.TransitionSession(ls, us, sessionID, state, failedReason, note); err != nil {
 		logger.WarnCF("task_executor", "transitionTaskLifecycle: dual-store transition failed",
 			map[string]any{"session_id": sessionID, "state": string(state), "error": err.Error()})
 	}
@@ -472,10 +475,10 @@ func (te *TaskExecutor) transitionTaskLifecycle(sessionID string, state session.
 // status->lifecycle-state mapping lives in exactly one place.
 func (te *TaskExecutor) finalizeTaskLifecycle(sessionID string, status task.Status) {
 	if status == task.StatusDone {
-		te.transitionTaskLifecycle(sessionID, session.LifecycleCompleted, "")
+		te.transitionTaskLifecycle(sessionID, session.LifecycleCompleted, "", nil)
 		return
 	}
-	te.transitionTaskLifecycle(sessionID, session.LifecycleFailed, "task_failed")
+	te.transitionTaskLifecycle(sessionID, session.LifecycleFailed, "task_failed", nil)
 }
 
 // ExecuteTask starts executing the dispatchable task identified by taskID. It
@@ -657,24 +660,28 @@ func (te *TaskExecutor) executeTask(
 	// SessionID was only assigned asynchronously could be dispatched and
 	// then immediately escape a concurrently-running Stop fan-out (the fan-
 	// out's snapshot, taken microseconds earlier under the same lock, would
-	// have seen no SessionID for it yet). Mirrors StartTaskNow's existing
-	// synchronous pattern: a real transcript session is required before any
-	// in-progress event, live running slot or execution goroutine is created.
+	// have seen no SessionID for it yet). Mirrors StartTaskNow's synchronous
+	// pattern: a real transcript session is required before any in-progress
+	// event, live running slot or execution goroutine is created. A setup
+	// error aborts before worker execution and is recorded as Failed.
 	taskSessionID, sessErr := te.createTaskSessionSync(t)
 	if sessErr != nil {
 		release()
-		te.failTask(taskID, sessErr.Error())
-		// ClaimForRun already persisted in_progress. failTask only logs write
-		// errors, so verify settlement against the saved task, not the claimed
-		// pointer or the fact that the failure helper was called.
+		// failTaskBeforeDispatch persists the Failed disposition visibly,
+		// terminates the goal record and emits the status event, joining any
+		// Failed-write error onto the returned cause.
+		failErr := te.failTaskBeforeDispatch(taskID, sessErr)
+		// ClaimForRun already persisted in_progress. Verify settlement against
+		// the saved task, not the claimed pointer or the fact that the failure
+		// helper was called.
 		settled, settleErr := te.store.Get(taskID)
 		if settleErr != nil {
-			return fmt.Errorf("%w; could not verify failed task %q: %w", sessErr, taskID, settleErr)
+			return errors.Join(failErr, fmt.Errorf("could not verify failed task %q: %w", taskID, settleErr))
 		}
 		if settled.Status != task.StatusFailed {
-			return fmt.Errorf("%w; task %q remains %s after provisioning failure", sessErr, taskID, settled.Status)
+			return errors.Join(failErr, fmt.Errorf("task %q remains %s after provisioning failure", taskID, settled.Status))
 		}
-		return sessErr
+		return failErr
 	}
 	t.SessionID = taskSessionID
 
@@ -696,7 +703,8 @@ func (te *TaskExecutor) executeTask(
 // synchronously, in the CALLER's own goroutine (M1/FR-029; see ExecuteTask's
 // doc comment for why this matters). Shared by ExecuteTask; StartTaskNow
 // performs the equivalent block inline. Both refuse to dispatch when the
-// agent store is missing or NewSession fails.
+// agent store is missing or NewSession fails, retry the binding write once,
+// and fail the dispatch visibly if it cannot be persisted.
 func (te *TaskExecutor) createTaskSessionSync(t *task.Task) (string, error) {
 	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
 	if sessStore == nil {
@@ -718,9 +726,8 @@ func (te *TaskExecutor) createTaskSessionSync(t *task.Task) (string, error) {
 		logger.ErrorCF("task_executor", "Could not set task session meta",
 			map[string]any{"task_id": t.ID, "error": setErr.Error()})
 	}
-	if _, updateErr := te.store.Update(t.ID, task.Patch{SessionID: &taskSessionID}); updateErr != nil {
-		logger.ErrorCF("task_executor", "Could not persist session_id on task",
-			map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": updateErr.Error()})
+	if _, updateErr := te.persistTaskSessionBinding(t.ID, taskSessionID); updateErr != nil {
+		return "", updateErr
 	}
 	// FR-118/G-13: mint the durable S2 lifecycle record for this session — see
 	// mintTaskLifecycleRecord's doc comment for why this is the producer that
@@ -1172,13 +1179,12 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 			logger.ErrorCF("task_executor", "StartTaskNow: could not set task session meta",
 				map[string]any{"task_id": taskID, "error": setErr.Error()})
 		}
-		updated, updateErr := te.store.Update(taskID, task.Patch{SessionID: &taskSessionID})
+		updated, updateErr := te.persistTaskSessionBinding(taskID, taskSessionID)
 		if updateErr != nil {
-			logger.ErrorCF("task_executor", "StartTaskNow: could not persist session_id on task",
-				map[string]any{"task_id": taskID, "session_id": taskSessionID, "error": updateErr.Error()})
-		} else {
-			t = updated
+			release()
+			return "", te.failTaskBeforeDispatch(taskID, updateErr)
 		}
+		t = updated
 		// FR-118/G-13: mint the durable S2 lifecycle record for this session —
 		// see mintTaskLifecycleRecord's doc comment. StartTaskNow is the SECOND
 		// (and only other) task-session creation chokepoint besides

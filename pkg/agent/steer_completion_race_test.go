@@ -134,31 +134,30 @@ func TestComplete_ReviveLandingDuringDeliveryIsNotRolledBack(t *testing.T) {
 	}
 }
 
-// TestComplete_StopThatCausedThisCompletionLandsTerminal proves the OTHER
-// half of the Stop rule, and the half that used to hang forever.
+// TestComplete_StopThatCausedThisCompletionLandsStopped proves the OTHER
+// half of the Stop rule under the corrected sub-agent control-plane ADR
+// (supersedes this test's former name ...LandsTerminal and its terminal
+// oracle; changed-test list entry, justification: ADR D6/F0929-7 — stopped
+// is deliberately NON-terminal and resumable, and the parent decides from
+// the D6 notice instead of a blocking frontier row).
 //
-// When the cascade stops a session that HAS a live turn, it stamps the Stop
-// marker and cancels the turn's context. The turn unwinds with
-// context.Canceled and completeSteeredTurn is the only writer that can land
-// its terminal state. Before the fix, the blanket refusal
-// "cur.Stop != nil && cur.Stop.Generation == cur.Generation" fired on the
-// marker the cascade had JUST stamped, so the write was refused and treated
-// as a legitimate no-op: the record stayed `running` with its marker
-// forever, and hasRunningOrQueuedDescendant kept the parent waiting.
+// When a stop stops a session that HAS a live turn, the turn unwinds with
+// context.Canceled and the completion path is the last writer that could
+// overwrite the landed stop. The stop must survive it as `stopped` with the
+// stamped stop_note intact, and the parent must receive exactly one D6
+// stopped-child notice — never a legacy terminal/fatal completion, and no
+// second wake across retries.
 //
-// That is the most common Stop path -- a session that was actually working --
-// and it is the exact hang ADR-091 exists to remove. The never-ran path
-// (terminaliseNeverRanStop) was the only one that terminalised correctly.
-//
-// The distinction is the PRE-DELIVERY snapshot: a marker already present
-// before Deliver is the reason for this completion, not a race against it.
-// The sibling test above pins the race half; deleting either one leaves the
+// The distinction is the PRE-DELIVERY snapshot: a note already present
+// before this completion is the reason for it, not a race against it. The
+// sibling test above pins the race half; deleting either one leaves the
 // rule half-enforced.
-func TestComplete_StopThatCausedThisCompletionLandsTerminal(t *testing.T) {
+func TestComplete_StopThatCausedThisCompletionLandsStopped(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	parentID := newTestSteeringSession(t, al, "ws-stop-cause")
+	wakeCount := observeU1ParentNoticeWakes(t, al, parentID)
 	rec := launchRunningChild(t, al, parentID, "call-complete-stop-cause")
 
 	lifecycle := al.GetSessionLifecycleStore()
@@ -169,43 +168,66 @@ func TestComplete_StopThatCausedThisCompletionLandsTerminal(t *testing.T) {
 		t.Fatalf("Mutate(reporting target): %v", err)
 	}
 
-	// The cascade stamps the marker, then cancels the turn. Reload so the
-	// snapshot completeSteeredTurn works from carries the marker, exactly
-	// as it does in production.
+	// The stop stamps the in-flight fence AND the lasting stop_note in one
+	// mutation, then cancels the live turn; the record stays `running`
+	// until the turn unwinds (steer_cancel.go::stampStop). Reload so the
+	// snapshot the completion works from carries both, exactly as in
+	// production.
 	canceller := NewSteerCanceller(lifecycle)
 	if _, err := canceller.CancelSubtree(context.Background(), rec.SessionID,
 		steer.Principal{Kind: steer.PrincipalKindHuman, ID: "dan"}); err != nil {
 		t.Fatalf("CancelSubtree: %v", err)
 	}
-	stopped, err := lifecycle.Load(rec.SessionID)
+	stamped, err := lifecycle.Load(rec.SessionID)
 	if err != nil {
 		t.Fatalf("Load after cancel: %v", err)
 	}
-	if stopped.Terminal() {
-		t.Skip("the cascade already terminalised this child; the live-turn path is what this test covers")
+	if stamped.Terminal() {
+		t.Fatalf("premise: want a live-turn child still non-terminal after the stamp (the turn unwinds into the completion), got state=%q", stamped.State)
 	}
-	if stopped.Stop == nil || stopped.Stop.Generation != stopped.Generation {
-		t.Fatalf("premise failed: want a live current-generation Stop marker before completion, got %+v", stopped.Stop)
+	if stamped.Stop == nil || stamped.Stop.Generation != stamped.Generation {
+		t.Fatalf("premise: want a live current-generation Stop marker before completion, got %+v", stamped.Stop)
+	}
+	// This child is the call's own DIRECT target, so its note cause is
+	// `stop`; `cascade` is reserved for swept descendants (steer_cancel.go).
+	if stamped.StopNote == nil || stamped.StopNote.Cause != session.StopCauseStop {
+		t.Fatalf("premise: stop_note after the stamp = %+v, want cause %q (D2: stampStop writes fence and note in one mutation)", stamped.StopNote, session.StopCauseStop)
 	}
 
 	// The turn unwinds with context.Canceled, as a cancelled live turn does.
-	if completeErr := al.completeSteeredTurn(context.Background(), stopped,
+	if completeErr := al.completeSteeredTurn(context.Background(), stamped,
 		turnResult{finalContent: ""}, context.Canceled); completeErr != nil {
-		t.Fatalf("completeSteeredTurn(stopped live turn): %v", completeErr)
+		t.Fatalf("completeSteeredTurn(stamped live turn): %v", completeErr)
 	}
 
+	// D6: the completion caused by the stop lands `stopped` — deliberately
+	// NON-terminal and resumable — at the same generation, with the spent
+	// fence cleared and the lasting note retained (D2).
 	got, err := lifecycle.Load(rec.SessionID)
 	if err != nil {
 		t.Fatalf("Load(child): %v", err)
 	}
-	if !got.Terminal() {
-		t.Fatalf("a stopped session with a live turn was left NON-terminal (state=%q) — "+
-			"its parent's hasRunningOrQueuedDescendant will wait for it forever, "+
-			"which is the hang ADR-091 removes", got.State)
+	if got.State != session.LifecycleStopped || got.Terminal() {
+		t.Fatalf("a stop-caused completion left the child state=%q terminal=%v, want stopped non-terminal (D6/F0929-7: stopped is resumable, never final)", got.State, got.Terminal())
+	}
+	if got.Generation != stamped.Generation {
+		t.Errorf("generation moved %d -> %d on the late completion write, want unchanged (D6: stop keeps the generation)", stamped.Generation, got.Generation)
 	}
 	if got.Stop != nil && got.Stop.Generation == got.Generation {
-		t.Fatalf("the spent Stop marker survived onto a terminal record (state=%q, stop.gen=%d) — "+
-			"persistLocked rejects that shape, so the write could not have landed",
-			got.State, got.Stop.Generation)
+		t.Errorf("the spent Stop marker survived the landing (state=%q) — persistLocked rejects that shape, so the write could not have landed", got.State)
+	}
+	if got.StopNote == nil || got.StopNote.Cause != session.StopCauseStop {
+		t.Fatalf("stop_note after the landing = %+v, want the retained stop note (D2: landing clears the fence, retains the note)", got.StopNote)
+	}
+
+	// D6: exactly one deduplicated stopped-child notice reaches the direct
+	// parent — carrying cause/actor, the RESUME/redirect/decide actions and
+	// the owner-first advice for a human stop — with exactly one wake, and
+	// no legacy terminal/fatal completion beside it. The helper also errors
+	// on any legacy terminal/fatal message this child produced (D2 CRIT-001:
+	// a Stop-fenced completion publishes no final).
+	noticeID, _ := assertU1StoppedChildNotice(t, al, parentID, rec, string(session.StopCauseStop), "dan")
+	if got := wakeCount(noticeID); got != 1 {
+		t.Errorf("working-parent wakes for the stopped-child notice = %d, want exactly 1 (D6)", got)
 	}
 }

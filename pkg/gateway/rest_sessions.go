@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
@@ -36,13 +37,22 @@ import (
 // Messages stay as []session.TranscriptEntry: the Message.yaml schema only
 // requires {id, timestamp, agent_id}, and every other field uses omitempty
 // in Go — so nil slices/maps are omitted, not emitted as null.
+//
+// ls is the durable lifecycle store (sub-agent control plane ADR D4/MAJ-009),
+// used to populate the optional lifecycle_state/stop_note wire fields via
+// computeSessionLifecycle. nil is accepted (no lifecycle store wired — most
+// webchat-only installs never mint one) and degrades to both fields absent,
+// matching Session.yaml's "absent for a session with no lifecycle record"
+// contract.
 func jsonSessionDetail(
 	w http.ResponseWriter,
 	meta *session.UnifiedMeta,
 	messages []session.TranscriptEntry,
 	agentRemoved bool,
+	ls *session.LifecycleStore,
 ) {
 	genSession := unifiedMetaToGenSession(meta)
+	genSession.LifecycleState, genSession.StopNote = computeSessionLifecycle(ls, meta.ID)
 	if messages == nil {
 		messages = []session.TranscriptEntry{}
 	}
@@ -145,6 +155,21 @@ func intPtrIfPositive(n int) *int {
 		return &n
 	}
 	return nil
+}
+
+// stopNoteEntry aliases the oapi-codegen-inlined Session.stop_note element so
+// it can be referenced by name (Go cannot name the anonymous inline struct).
+// Field order/tags must match gen.Session.StopNote exactly (At, BootSeq, By,
+// Cause, Seq) for the two anonymous struct types to be assignment-compatible.
+// BootSeq is declared but deliberately left nil by this package's producers —
+// stamping it belongs to the boot-restart writer (sub-agent control plane
+// ADR D8.3, later E/W3 implementation), not to the REST mapping.
+type stopNoteEntry = struct { // not-wire-format: alias of the codegen-inlined Session.stop_note element; canonical wire schema is contracts/components/schemas/StopNote.yaml, not a new type
+	At      time.Time                `json:"at"`
+	BootSeq *int64                   `json:"boot_seq,omitempty"`
+	By      string                   `json:"by"`
+	Cause   gen.SessionStopNoteCause `json:"cause"`
+	Seq     int64                    `json:"seq"`
 }
 
 // modelEntry aliases the oapi-codegen-inlined Session.Stats.by_model element so
@@ -320,6 +345,48 @@ func computeSessionProtected(homePath string, m *session.UnifiedMeta) *bool {
 	return &protected
 }
 
+// computeSessionLifecycle resolves the optional lifecycle_state and stop_note
+// wire fields (Session.yaml; sub-agent control plane ADR D4/MAJ-009) for
+// session id from its authoritative LifecycleRecord — the same record
+// session.TransitionSession/lifecycleToUnifiedStatus already consume for the
+// coarse `status` mirror (pkg/session/lifecycle_bridge.go). Degrades to
+// (nil, nil) — both wire fields absent — when ls is nil (no lifecycle store
+// wired; most webchat-only installs never mint one) or when id has no
+// LifecycleRecord (the common case for an ordinary chat session), exactly
+// matching Session.yaml's "absent for a session with no lifecycle record"
+// contract. Never panics or errors on either degenerate input.
+func computeSessionLifecycle(ls *session.LifecycleStore, id string) (*gen.SessionLifecycleState, *stopNoteEntry) {
+	if ls == nil || id == "" {
+		return nil, nil
+	}
+	rec, err := ls.Load(id)
+	if err != nil {
+		if !errors.Is(err, session.ErrLifecycleNotFound) {
+			slog.Warn("rest: compute session lifecycle: load failed", "session_id", id, "error", err)
+		}
+		return nil, nil
+	}
+	state := gen.SessionLifecycleState(session.LifecycleStateToDisplay(rec.State))
+	var note *stopNoteEntry
+	// Session.yaml::stop_note: present only when lifecycle_state == stopped,
+	// OR the session's current generation last landed stopped — rec.StopNote
+	// is RETAINED on the record after a same-generation resume (e.g. a
+	// redirect_pause park that later continues without a fresh generation),
+	// so gate on the Seq-stamped generation still matching the record's
+	// CURRENT generation; a generation bump (revive) leaves the old note's
+	// Seq behind, correctly hiding it. Same Seq == Generation check as
+	// pkg/agent/boot_sweep.go::currentGenerationTimeoutStop.
+	if rec.StopNote != nil && rec.StopNote.Seq == uint64(rec.Generation) {
+		note = &stopNoteEntry{
+			At:    rec.StopNote.At,
+			By:    rec.StopNote.By,
+			Cause: gen.SessionStopNoteCause(rec.StopNote.Cause),
+			Seq:   int64(rec.StopNote.Seq),
+		}
+	}
+	return &state, note
+}
+
 // u18DefaultSessionPageLimit is the page size GET /api/v1/sessions uses when
 // the caller omits `limit` (ADR-057 FR-092). The response body scales with
 // this number, not with total session count (FR-092(b) — boundary cost is
@@ -409,6 +476,10 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 		filtered = append(filtered, m)
 	}
 
+	// Resolved once per request (not per row): the lifecycle store feeding
+	// computeSessionLifecycle below (nil when no lifecycle store is wired).
+	lifecycleStore := a.agentLoop.GetSessionLifecycleStore()
+
 	// Always route through unifiedMetaToGenSession so that required array/map
 	// fields (Partitions in particular) marshal as [] not null — Zod on the SPA
 	// rejects null where the contract says type:array and drops the whole list.
@@ -428,6 +499,10 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 			cc := store.ChildCount(m.ID)
 			s.ChildCount = &cc
 		}
+		// Sub-agent control plane ADR D4/MAJ-009: lifecycle_state/stop_note,
+		// absent when this session has no LifecycleRecord (the common case
+		// for an ordinary chat session).
+		s.LifecycleState, s.StopNote = computeSessionLifecycle(lifecycleStore, m.ID)
 		genSessions = append(genSessions, s)
 	}
 
@@ -492,7 +567,7 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 	// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize to
 	// the same JSON layout defined in SessionDetail.yaml and Session.yaml/Message.yaml.
 	// Using jsonSessionDetail avoids an import cycle while staying lint-compliant.
-	jsonSessionDetail(w, meta, messages, agentRemoved)
+	jsonSessionDetail(w, meta, messages, agentRemoved, a.agentLoop.GetSessionLifecycleStore())
 }
 
 func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id string) {
@@ -606,7 +681,9 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read updated session: %v", err))
 		return
 	}
-	jsonOK(w, unifiedMetaToGenSession(meta))
+	s := unifiedMetaToGenSession(meta)
+	s.LifecycleState, s.StopNote = computeSessionLifecycle(a.agentLoop.GetSessionLifecycleStore(), meta.ID)
+	jsonOK(w, s)
 }
 
 // deleteSession handles DELETE /api/v1/sessions/{id}.
@@ -898,7 +975,13 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 			meta = refreshed
 		}
 	}
-	jsonCreated(w, unifiedMetaToGenSession(meta))
+	s := unifiedMetaToGenSession(meta)
+	// A freshly REST-created session rarely has a LifecycleRecord yet (those
+	// are minted by the delegate/task paths, not this handler) — this call
+	// degrades to both fields absent in that common case, same as every
+	// other producer of gen.Session.
+	s.LifecycleState, s.StopNote = computeSessionLifecycle(a.agentLoop.GetSessionLifecycleStore(), meta.ID)
+	jsonCreated(w, s)
 }
 
 // resolveSessionStore finds which agent's UnifiedStore owns the given sessionID.

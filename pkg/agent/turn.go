@@ -69,6 +69,8 @@ type turnResult struct {
 	// whether the turn ended via the engine's error/limit fallback without holding
 	// a reference to the turnState.  Populated by runTurn before it returns.
 	turnFailed bool
+	// stopped prevents a graceful Stop from advancing or adjudicating a goal.
+	stopped bool
 	// goalDeferredAdjudication is JUDGE-FR-098's deferred-dispatch payload
 	// (ADR-084 revision 9 D13, wave E13): checkGoalLoopAfterTurn
 	// (goal_loop.go) populates this instead of calling runGoalAdjudication
@@ -145,6 +147,7 @@ type turnState struct {
 	// cancelMu guards cancelFired to make the first-cancel-wins check atomic.
 	cancelMu       sync.Mutex
 	cancelFired    atomic.Bool               // true once handleCancel has claimed this turn
+	stopRequested  atomic.Bool               // non-terminal Stop: preserve session and goal on disposal
 	abandoned      atomic.Bool               // true once a controller detaches a stuck turn goroutine
 	onCancelFinish func(cancelMethod string) // called exactly once by Finish when cancelFired
 

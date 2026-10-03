@@ -695,14 +695,31 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 // and correctly keep the bounded-retry-with-backoff behavior below.
 func (w *sessionWorker) continueDrainRetry(ctx context.Context, target *continuationTarget) (continued string, attemptsMade int, continueErr error) {
 	al := w.parent
+	return retrySteeringContinuation(ctx, func() (string, error) {
+		return al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID)
+	}, func(err error) bool {
+		return errors.Is(err, errContinuePostDequeueFailure)
+	})
+}
+
+// retrySteeringContinuation is the shared bounded-retry policy for post-turn
+// drains. stopOn identifies errors that must not be replayed because the
+// attempted continuation either crossed the destructive dequeue boundary or
+// became ineligible to run. The backoff shape deliberately remains identical
+// for ordinary session workers and steered children.
+func retrySteeringContinuation(
+	ctx context.Context,
+	run func() (string, error),
+	stopOn func(error) bool,
+) (continued string, attemptsMade int, continueErr error) {
 retryLoop:
 	for attempt := 0; attempt < continueDrainMaxRetries; attempt++ {
 		attemptsMade = attempt + 1
-		continued, continueErr = al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID)
+		continued, continueErr = run()
 		if continueErr == nil {
 			break
 		}
-		if errors.Is(continueErr, errContinuePostDequeueFailure) {
+		if stopOn != nil && stopOn(continueErr) {
 			break
 		}
 		if attempt < len(continueDrainBackoff) {

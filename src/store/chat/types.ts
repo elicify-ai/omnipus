@@ -9,6 +9,7 @@ import type {
   AskUserAnswerFrame,
   SubagentStateFrame,
   MessageFrame,
+  CancelFrame,
   LLMError as GeneratedLLMError,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
@@ -1118,9 +1119,17 @@ export interface ChatStore {
    * scopes this to a specific session — e.g. the browser panel's "Take over"
    * pausing the RIGHT (pinned) session instead of whatever chat is
    * foreground. Omitted (the default) targets the active session, matching
-   * every pre-existing call site (Stop button, Escape, `/cancel`).
+   * every pre-existing call site (Stop button, Escape).
+   *
+   * `scope` (ADR-20260928 MAJ-002, generated `CancelFrame.scope`): omitted
+   * means the wire default — `session`, a single-session stop that never
+   * cascades (the frame goes out WITHOUT the key, byte-identical to the
+   * pre-stop-all path). `'tree'` is the confirmed Stop all: the server stops
+   * the session and every reachable descendant (ADR D7), never up or
+   * sideways. Only the confirmed second activation, the Stop-all control
+   * and `/cancel` pass `'tree'`.
    */
-  cancelStream: (sessionId?: string) => void
+  cancelStream: (sessionId?: string, scope?: CancelFrame['scope']) => void
   respondToPairing: (deviceId: string, decision: 'approve' | 'reject') => void
   /**
    * askuserquestion-tool-spec v3 §3: submit (or cancel) the pending

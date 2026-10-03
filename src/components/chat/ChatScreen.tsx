@@ -19,6 +19,7 @@ import {
   Robot,
   PaperPlaneRight,
   Stop,
+  TreeStructure,
   Copy,
   Check,
   ListChecks,
@@ -55,6 +56,7 @@ import { useChatStore } from '@/store/chat'
 import { findFirstSendMessage, getPendingFirstSend } from '@/store/chat/first-send'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
+import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
 import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
@@ -2012,6 +2014,14 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const appendMessage = useChatStore((s) => s.appendMessage)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const startNewSession = useSessionStore((s) => s.startNewSession)
+  // D9 helper identity: the attached session's server-minted type. Only a
+  // "delegate" session (ADR-057 FR-008 — the subordinate type a session is
+  // minted with when created by a delegation) is a helper chat; a fresh
+  // "/new" chat (null), a root/task/channel session are not. Recorded by
+  // attachToSession from `session.type` on every attach, so this is the
+  // server's classification, never a client-side guess — and fail-closed:
+  // anything unresolvable reads as root here (seam ruling §3.2).
+  const attachedSessionType = useSessionStore((s) => s.attachedSessionType)
   const [abandonFirstSend, setAbandonFirstSend] = useState<{ clientMessageId: string; workspaceId: string | null } | null>(null)
   const requestNewSession = useCallback(() => {
     const pending = getPendingFirstSend(useChatStore.getState())
@@ -2113,6 +2123,29 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
 
   const cancelState = useCancelState(isStreaming, cancelStream)
   const fileUpload = useFileUpload(composerRuntime)
+  // D9: the /stop-redirect transport — send the dedicated generated
+  // RedirectFrame over the WS, with a VISIBLE error when it cannot be sent
+  // (the same toast pattern cancelStream uses for a failed cancel send).
+  // The frame never touches message intake, which is what lets a redirect
+  // execute mid-stream; a swallowed failure here would leave the user
+  // believing a helper was stopped when its turn is still running.
+  const sendRedirectFrame = useCallback((frame: RedirectFrame) => {
+    const { connection } = useConnectionStore.getState()
+    if (!connection) {
+      useUiStore.getState().addToast({
+        message: 'Could not send the redirect — the gateway connection is down. Reconnect and run /stop-redirect again.',
+        variant: 'error',
+      })
+      return
+    }
+    const sent = connection.send(frame)
+    if (!sent) {
+      useUiStore.getState().addToast({
+        message: 'Could not send the redirect — connection dropped. The helper\'s turn was NOT stopped; run /stop-redirect again.',
+        variant: 'error',
+      })
+    }
+  }, [])
   const slashMenu = useSlashMenu({
     isStreaming,
     isReplaying,
@@ -2120,7 +2153,14 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     composerRuntime,
     appendMessage,
     startNewSession: requestNewSession,
-    cancelIfStreaming: cancelState.cancelIfStreaming,
+    // ADR-20260928 D9: /cancel is itself the confirmed Stop all — one
+    // invocation, one scope:"tree" frame (no double-activation window). The
+    // parameter keeps its historical name (the QA pack constructs it
+    // directly); what wires into it is the SELF-CONFIRMING TREE cancel, not
+    // the single-session variant — see UseSlashMenuParams.cancelIfStreaming.
+    cancelIfStreaming: cancelState.cancelAllTreeScoped,
+    isHelperSession: attachedSessionType === 'delegate',
+    sendRedirectFrame,
   })
 
   // Fix E (bugfixes3 sign-off): `shouldShowSlash` alone is not "the menu
@@ -2349,7 +2389,13 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     // cancelStream() → markLastMessageInterrupted(), but there is no streaming
     // button to morph — setting 'stopping' when isStreaming is false would leave
     // the button stuck because the reset effect does not fire again.
-    if (e.key === 'Escape' && (isStreaming || cancelState.stopLabel === 'stopping')) {
+    // ADR-20260928 D9: an armed Stop-all window is itself a live
+    // confirmation surface — the second Esc confirms (cancelIfStreaming
+    // routes the armed case to the tree-scoped cancel) even though the
+    // first activation already ended the turn locally (isStreaming false,
+    // label reset). Higher-priority surfaces keep precedence: the
+    // menu-close branch above runs first and stops propagation.
+    if (e.key === 'Escape' && (isStreaming || cancelState.stopLabel === 'stopping' || cancelState.stopAllArmed)) {
       e.preventDefault()
       cancelState.cancelIfStreaming()
       return
@@ -2885,6 +2931,32 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             )}
           </div>
 
+          {/* ADR-20260928 D9 — the visible "Stop all" offer the first
+              Stop/Esc activation must show for the rest of its 3-second
+              window. Deliberately OUTSIDE the streaming ternary below: the
+              first activation itself ends the turn locally
+              (markLastMessageInterrupted flips isStreaming; the T25 reset
+              clears the label ~1s later), and the offer must survive that —
+              it is the window's confirmation surface, not a streaming
+              affordance. Clicking it confirms: one scope:"tree" frame. The
+              window closes itself after 3 s, on blur and on session switch
+              (useCancelState). */}
+          {cancelState.stopAllArmed && (
+            <Button
+              tabIndex={6}
+              variant="ghost"
+              onClick={cancelState.cancelAllTreeScoped}
+              className={cn(
+                'h-9 shrink-0 rounded-lg mb-[var(--space-0-5)] px-[var(--space-2-5)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium',
+                'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 hover:text-[var(--color-error)]',
+              )}
+              title="Confirmed Stop all — stop this turn and every helper session below it"
+            >
+              <TreeStructure size={13} weight="fill" />
+              <span>Stop all</span>
+            </Button>
+          )}
+
           {isStreaming || cancelState.stopLabel === 'stopping' ? (
             // tabIndex={6}: this button replaces Send in the exact same ring
             // slot mid-stream (see the composer tab-ring map in
@@ -2926,6 +2998,34 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 <Stop size={15} weight="fill" />
                 {cancelState.stopLabel === 'stopping' && <span>Stopping...</span>}
               </Button>
+              {/* ADR-20260928 D9 — the two Stop-all surfaces of the
+                  composer, exactly one of which is visible at a time:
+                  • No confirmation window open (stopLabel 'stop'): the
+                    dedicated Stop-all control. It IS the confirmation (one
+                    click → one scope:"tree" frame — this session and every
+                    reachable descendant, never up or sideways), so it sits
+                    one step away from the plain Stop and carries an
+                    explicit label, not a hidden double-press.
+                  • Window open (stopAllArmed, after the first Stop/Esc):
+                    the visible "Stop all" offer the first activation must
+                    show. Clicking it confirms — the same tree-scoped
+                    cancel as the control above. The window closes itself
+                    after 3 s / on blur / on session switch (useCancelState). */}
+              {!cancelState.stopAllArmed && cancelState.stopLabel !== 'stopping' && (
+                <Button
+                  tabIndex={6}
+                  variant="ghost"
+                  onClick={cancelState.cancelAllTreeScoped}
+                  className={cn(
+                    'w-9 h-9 p-0 shrink-0 rounded-lg mb-[var(--space-0-5)]',
+                    'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 hover:text-[var(--color-error)]',
+                  )}
+                  aria-label="Stop all"
+                  title="Stop all — stop this turn and every helper session below it"
+                >
+                  <TreeStructure size={15} weight="fill" />
+                </Button>
+              )}
               {/* Mid-turn steering Send — a PLAIN button, deliberately not
                   ComposerPrimitive.Send: verified (see submitMidStreamMessage's
                   doc comment above) that the primitive's own useComposerSend()

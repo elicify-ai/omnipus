@@ -117,7 +117,7 @@ func TestPublishChildUnderParentLock_ChildWriteFailureRestoresExistingParent(t *
 		if !existed {
 			t.Fatal("existing parent was not loaded")
 		}
-		current.State = LifecyclePaused
+		current.State = LifecycleStopped
 		return &LifecycleRecord{
 			SessionID: childID, Generation: 1, State: LifecycleQueued,
 			OwnerScopeKind: OwnerScopeParentSession,
@@ -193,13 +193,13 @@ func TestLifecycleStore_PersistAndReload(t *testing.T) {
 	}
 }
 
-func TestLifecycleStore_AllEightStatesValid(t *testing.T) {
+func TestLifecycleStore_AllSixStatesValid(t *testing.T) {
 	states := []LifecycleState{
-		LifecycleQueued, LifecycleRunning, LifecycleNeedsInput, LifecyclePaused,
-		LifecycleCompleted, LifecycleFailed, LifecycleCancelled, LifecycleTimedOut,
+		LifecycleQueued, LifecycleRunning, LifecycleNeedsInput, LifecycleStopped,
+		LifecycleCompleted, LifecycleFailed,
 	}
-	if len(states) != 8 {
-		t.Fatalf("expected exactly 8 canonical states in this test table, got %d", len(states))
+	if len(states) != 6 {
+		t.Fatalf("expected exactly 6 canonical states in this test table, got %d", len(states))
 	}
 	for _, st := range states {
 		if !IsValidLifecycleState(st) {
@@ -363,6 +363,40 @@ func TestOwnerScopeKind_MirrorsWireEnum(t *testing.T) {
 	}
 }
 
+// TestLifecycleStateToDisplay_MirrorsWireEnum pins LifecycleStateToDisplay's
+// collapse of the 6-value LifecycleState onto the 5-value generated
+// SessionLifecycleState wire enum (Session.yaml::lifecycle_state). Unlike
+// TestOwnerScopeKind_MirrorsWireEnum's straight 1:1 cast, this mapping
+// genuinely collapses two domain states (queued, running) onto one wire
+// value (working) — so this table pins the FULL mapping table, including
+// both members of that collapsed pair, rather than relying on a plain
+// string-equality assertion to catch drift.
+func TestLifecycleStateToDisplay_MirrorsWireEnum(t *testing.T) {
+	specs := []struct {
+		name   string
+		domain LifecycleState
+		wire   generated.SessionLifecycleState
+	}{
+		{"queued_to_working", LifecycleQueued, generated.SessionLifecycleStateWorking},
+		{"running_to_working", LifecycleRunning, generated.SessionLifecycleStateWorking},
+		{"needs_input_to_waiting_for_answer", LifecycleNeedsInput, generated.SessionLifecycleStateWaitingForAnswer},
+		{"completed_to_done", LifecycleCompleted, generated.SessionLifecycleStateDone},
+		{"failed_to_failed", LifecycleFailed, generated.SessionLifecycleStateFailed},
+		{"stopped_to_stopped", LifecycleStopped, generated.SessionLifecycleStateStopped},
+	}
+	for _, s := range specs {
+		t.Run(s.name, func(t *testing.T) {
+			got := LifecycleStateToDisplay(s.domain)
+			if string(got) != string(s.wire) {
+				t.Errorf("LifecycleStateToDisplay(%q) = %q, want %q (wire) — domain and wire enum have drifted; align pkg/session/lifecycle_bridge.go to pkg/api/generated", s.domain, got, s.wire)
+			}
+			if !s.wire.Valid() {
+				t.Errorf("wire value %q is not a valid generated SessionLifecycleState member", s.wire)
+			}
+		})
+	}
+}
+
 // --- Mutate primitive (Correctness-MAJOR-3) ---
 
 // TestLifecycleStore_Mutate_NotFoundFnReceivesNil proves fn receives nil when
@@ -403,7 +437,12 @@ func TestLifecycleStore_Mutate_AppliesAndPersists(t *testing.T) {
 		if rec.State != LifecycleRunning {
 			t.Fatalf("expected to see running, got %s", rec.State)
 		}
-		rec.State = LifecyclePaused
+		rec.State = LifecycleStopped
+		// D2/CRIT-001: landing LifecycleStopped now requires a StopNote
+		// (persistLocked rejects the write otherwise). This mutation is a
+		// direct single-session stop, so cause "stop" per StopCauseStop's
+		// own doc comment.
+		rec.StopNote = &StopNote{At: time.Now().UTC(), By: "human:qa-lead", Seq: uint64(rec.Generation), Cause: StopCauseStop}
 		return nil
 	})
 	if err != nil {
@@ -413,8 +452,8 @@ func TestLifecycleStore_Mutate_AppliesAndPersists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if rec.State != LifecyclePaused {
-		t.Errorf("state = %q, want paused", rec.State)
+	if rec.State != LifecycleStopped {
+		t.Errorf("state = %q, want stopped", rec.State)
 	}
 }
 

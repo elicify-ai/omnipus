@@ -424,7 +424,7 @@ func TestTimeout_TimedOutChild_StartsNoFurtherToolCallsAndTellsOneOwner(t *testi
 			"child must START NO FURTHER TOOL CALLS (loop_run_turn_tools.go::"+
 			"agentLoopRunTurnToolsExecute.validateCall's turn-context-done skip)", got)
 	}
-	f.awaitState(t, childID, session.LifecycleTimedOut, childBudget+15*time.Second)
+	f.awaitState(t, childID, session.LifecycleStopped, childBudget+15*time.Second)
 
 	if got := provider.calls.Load(); got != 1 {
 		t.Fatalf("the model was called %d times, want exactly 1 — a timed-out child must not go back to "+
@@ -494,7 +494,7 @@ func TestWake_TimeoutBudgetIsTheSessionLifetimeNotThisWake(t *testing.T) {
 	if _, err := f.launcher.Dispatch(context.Background(), childID, childGen); err != nil {
 		t.Fatalf("Dispatch(child): %v", err)
 	}
-	f.awaitState(t, childID, session.LifecycleTimedOut, budget+4*time.Second)
+	f.awaitState(t, childID, session.LifecycleStopped, budget+4*time.Second)
 	elapsed := time.Since(started)
 
 	if elapsed >= restartedThreshold {

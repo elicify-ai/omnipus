@@ -15,7 +15,7 @@
 
 import { z } from "zod";
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error"]);
 
 export const AuthFrame = z
   .object({
@@ -51,6 +51,15 @@ export const CancelFrame = z
   .object({
     type: z.literal("cancel"),
     session_id: z.string().min(1).max(128),
+    scope: z.enum(["session", "tree"]).optional(),
+  })
+  .strict();
+
+export const RedirectFrame = z
+  .object({
+    type: z.literal("redirect"),
+    session_id: z.string().min(1).max(128),
+    instruction: z.string().min(1).max(16384).regex(/\S/),
   })
   .strict();
 
@@ -352,11 +361,20 @@ export const SubagentStateFrame = z
     session_id: z.string().min(1),
     child_session_id: z.string().optional(),
     span_id: z.string().min(1),
-    state: z.enum(["queued", "running", "needs_input", "paused", "completed", "failed", "cancelled", "timed_out"]),
-    steering_receipt: z
+    state: z.enum(["queued", "running", "needs_input", "stopped", "completed", "failed"]),
+    control_receipt: z
     .object({
-      correlation_id: z.string(),
-      applied_at: z.string(),
+      seq: z.number().int().min(0),
+      control_id: z.string().min(1),
+      verb: z.enum(["steer", "stop", "stop_all", "redirect", "resume", "respond", "escalate", "clear_goal"]),
+      state: z.enum(["queued", "delivered", "applied", "superseded"]),
+      accepted_at: z.string(),
+      delivered_at: z.string().optional(),
+      applied_at: z.string().optional(),
+      superseded_at: z.string().optional(),
+      superseded_by_seq: z.number().int().min(0).optional(),
+      reason: z.string().optional(),
+      released_control_ids: z.array(z.string()).optional(),
     })
     .strict().optional(),
     created_at: z.string(),
@@ -1344,6 +1362,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   AuthFrame,
   MessageFrameBase,
   CancelFrame,
+  RedirectFrame,
   PingFrame,
   PongFrame,
   AttachSessionFrame,

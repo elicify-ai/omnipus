@@ -330,12 +330,38 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 		// broke `tsc -b --noEmit` (ADR-091 UAT defect 1); do not "fix" this
 		// by making the pointer field non-optional or by touching the
 		// schema.
-		frame.SteeringReceipt = &struct {
-			AppliedAt     string `json:"applied_at"`
-			CorrelationId string `json:"correlation_id"`
+		//
+		// ControlReceipt replaces the former steering_receipt
+		// (sub-agent-control-plane ADR D4/MIN-001/MIN-003). The per-session
+		// control ledger that assigns a true monotonic Seq and tracks a
+		// control's own AcceptedAt moment ahead of delivery is NOT built in
+		// this PR (ControlReceipt.yaml's own "Train-3 scope note") — Seq is
+		// stamped as a documented stand-in, the child's own generation,
+		// exactly the pattern pkg/session/lifecycle_edge.go::StopNote.Seq
+		// already uses for the same not-yet-a-real-ledger reason. AcceptedAt
+		// reuses the delivered moment: this call site tracks no separate
+		// acceptance instant ahead of the ledger. Verb/State are constants
+		// here because this call site only ever reports a delivered steer.
+		appliedAt := receipt.appliedAt.UTC().Format(time.RFC3339)
+		frame.ControlReceipt = &struct {
+			AcceptedAt         string   `json:"accepted_at"`
+			AppliedAt          *string  `json:"applied_at,omitempty"`
+			ControlId          string   `json:"control_id"`
+			DeliveredAt        *string  `json:"delivered_at,omitempty"`
+			Reason             *string  `json:"reason,omitempty"`
+			ReleasedControlIds []string `json:"released_control_ids,omitempty"`
+			Seq                int64    `json:"seq"`
+			State              string   `json:"state"`
+			SupersededAt       *string  `json:"superseded_at,omitempty"`
+			SupersededBySeq    *int64   `json:"superseded_by_seq,omitempty"`
+			Verb               string   `json:"verb"`
 		}{
-			AppliedAt:     receipt.appliedAt.UTC().Format(time.RFC3339),
-			CorrelationId: receipt.correlationID,
+			Seq:         int64(childRec.Generation),
+			ControlId:   receipt.correlationID,
+			Verb:        "steer",
+			State:       "delivered",
+			AcceptedAt:  appliedAt,
+			DeliveredAt: &appliedAt,
 		}
 	}
 	if err := al.persistSubagentEntry(parentSessionID, id, session.SystemSubtypeSubagentState, func(e *session.TranscriptEntry) {
@@ -491,7 +517,11 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 	if deliverer == nil {
 		return
 	}
-	rec := activeGoalForSession(sessionID)
+	rec, readErr := activeGoalForSession(sessionID)
+	if readErr != nil {
+		al.reportGoalReadError(sessionID, "upward goal-verdict delivery", readErr)
+		return
+	}
 	if rec == nil {
 		logger.WarnCF("agent", "goal-status upward delivery skipped — no active goal record bound to this session",
 			map[string]any{"component": "goal", "session_id": sessionID, "verdict_round": verdict.Round})

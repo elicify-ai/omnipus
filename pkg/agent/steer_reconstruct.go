@@ -6,13 +6,15 @@
 // wake, follow-up) rebuilds a steered session's turn from its lifecycle
 // record through this ONE function, never by hand.
 //
-// reconstructSteeredTurn is called from two entry points:
-// SessionLauncher.Dispatch (first run and revival, steer_launcher.go) and
-// loop_inbound.go::processSteeredSystemWake (the wake path). The latter also
-// appends I-3's consumption marker (step 3: "before executing, the turn
-// appends a `consumed <MessageID>` marker") once the woken turn is certain
-// to run. Boot recovery (boot_sweep.go::SteerBootRecovery) does not call
-// this function — a steered session still mid-flight at boot is marked
+// reconstructSteeredTurn is called from three entry paths:
+// SessionLauncher.Dispatch (first run and revival, steer_launcher.go),
+// loop_inbound.go::processSteeredSystemWake (the wake path), and the bounded
+// post-turn steering drain (steer_turn_drain.go). The wake path also appends
+// I-3's consumption marker (step 3: "before executing, the turn appends a
+// `consumed <MessageID>` marker") once the woken turn is certain to run; the
+// drain writes the equivalent marker through Continue's shared dequeue path.
+// Boot recovery (boot_sweep.go::SteerBootRecovery) does not call this
+// function — a steered session still mid-flight at boot is marked
 // OutcomeInterrupted and delivered to its parent rather than resumed.
 package agent
 
@@ -116,14 +118,37 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 		UserInitiated: wake == nil,
 	}
 	if wake == nil {
-		entries, readErr := store.ReadTranscript(rec.SessionID)
-		if readErr != nil {
-			return nil, fmt.Errorf("steer: reconstruct %q: read launch instruction: %w", rec.SessionID, readErr)
-		}
-		for i := len(entries) - 1; i >= 0; i-- {
-			if entries[i].Role == "user" && strings.TrimSpace(entries[i].Content) != "" {
-				opts.UserMessage = entries[i].Content
-				break
+		// A queued promotion consumes ALL wake content in arrival order. Take
+		// the current list (not the earlier Load snapshot) and clear it in a
+		// single durable mutation BEFORE the turn can start. If that write
+		// fails, return an error: running while the prompts remain persisted
+		// would replay the same content on a later promotion.
+		if len(rec.PendingUserMessages) > 0 {
+			var pending []string
+			if persistErr := al.GetSessionLifecycleStore().Mutate(rec.SessionID, func(r *session.LifecycleRecord) error {
+				if r == nil {
+					return session.ErrLifecycleNotFound
+				}
+				if len(r.PendingUserMessages) == 0 {
+					return fmt.Errorf("steer: reconstruct %q: queued wakes disappeared before promotion", rec.SessionID)
+				}
+				pending = append([]string(nil), r.PendingUserMessages...)
+				r.PendingUserMessages = nil
+				return nil
+			}); persistErr != nil {
+				return nil, fmt.Errorf("steer: reconstruct %q: consume queued wakes: %w", rec.SessionID, persistErr)
+			}
+			opts.UserMessage = strings.Join(pending, "\n\n")
+		} else {
+			entries, readErr := store.ReadTranscript(rec.SessionID)
+			if readErr != nil {
+				return nil, fmt.Errorf("steer: reconstruct %q: read launch instruction: %w", rec.SessionID, readErr)
+			}
+			for i := len(entries) - 1; i >= 0; i-- {
+				if entries[i].Role == "user" && strings.TrimSpace(entries[i].Content) != "" {
+					opts.UserMessage = entries[i].Content
+					break
+				}
 			}
 		}
 	}

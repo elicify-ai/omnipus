@@ -3,7 +3,8 @@
 - **Decision record:** [ADR-091](../architecture/ADR-091-steered-sessions-replace-subagents.md) D4, D5, D6, D10 (list_jobs, seeds, prompts)
 - **Landing order:** [adr-091-landing-order.md](adr-091-landing-order.md) — consumes I-1, I-2, I-3, I-5
 - **Owner files:** landing order §3, row C
-- **Status:** Draft rev 2 (consolidated after three grills; supersedes every earlier sentence of rev 1)
+**Status:** Draft
+- **Revision:** rev 2 (consolidated after three grills; supersedes every earlier sentence of rev 1)
 
 ## Summary
 
@@ -301,7 +302,7 @@ Implementers load the `test-driven-development` skill first.
 | 10 | `TestExternal_NotSteerable` | Unit | US-2/AS-6 |
 | 11 | `TestGate_SelfTargetAllowedBothFronts` | Unit | US-3 |
 | 12 | `TestCompletion_Disposition_PersistedAndValidated` | Integration (table) | US-4/AS-1,2 — writes the record and validates the entry against the generated contract |
-| 13 | `TestCompletion_LastChildCompletesWaitingParent` | Integration | US-4/AS-3 |
+| 13 | `TestCompletion_LastChildWakesParent_NeedsInputSiblingHoldsBackCompletion`, `TestCompletion_LastChildCompletesWaitingParent_NoParkedSibling` | Integration | US-4/AS-3 |
 | 14 | `TestGoalDelegation_Judged` | Integration | US-4/AS-4 |
 | 15 | `TestPlainWork_GoalClaimDenied_Completes` | Integration | US-4/AS-5 |
 | 16 | `TestGoalDelegation_ParentGoalAbsentFromChildInput` | Integration | US-4/AS-7 — asserts on the assembled model input |

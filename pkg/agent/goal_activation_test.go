@@ -69,7 +69,7 @@ func TestGoalActivation_InstantProsePath(t *testing.T) {
 	pe.RegisterActiveCounter("goal", func() (int, error) {
 		admitCalls++
 		if admitCalls == 1 {
-			gateSawActiveGoal = activeGoalForSession(sid) != nil
+			gateSawActiveGoal = mustActiveGoalForSession(t, sid) != nil
 		}
 		return 0, nil
 	})
@@ -173,7 +173,7 @@ func TestGoalActivation_InstantProsePath_CapRefusal(t *testing.T) {
 	if !strings.Contains(reply, "active loops") {
 		t.Fatalf("cap refusal reply = %q, want a cap-reached message", reply)
 	}
-	if goalRecordForSessionOrNil(sid) != nil {
+	if goalRecordForSessionOrNil(t, sid) != nil {
 		t.Fatal("no goal state may be created when admission is refused")
 	}
 	if provider.calls != 0 {
@@ -386,7 +386,7 @@ func TestConfirmInert(t *testing.T) {
 			t.Fatalf("bare 'confirm' must not match the /goal hook at all, got matched=%v handled=%v reply=%q",
 				matched, handled, reply)
 		}
-		if goalRecordForSessionOrNil(sid) != nil {
+		if goalRecordForSessionOrNil(t, sid) != nil {
 			t.Fatal("bare 'confirm' must not create or change any goal state")
 		}
 	})
@@ -400,7 +400,7 @@ func TestConfirmInert(t *testing.T) {
 		if !strings.Contains(reply, "activate immediately") {
 			t.Fatalf("/goal confirm reply = %q, want the instant-activation notice", reply)
 		}
-		if goalRecordForSessionOrNil(sid) != nil {
+		if goalRecordForSessionOrNil(t, sid) != nil {
 			t.Fatal("/goal confirm must NEVER activate a goal literally named 'confirm' (grill B3)")
 		}
 	})

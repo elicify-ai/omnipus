@@ -19,11 +19,9 @@ properties:
       - queued
       - running
       - needs_input
-      - paused
+      - stopped
       - completed
       - failed
-      - cancelled
-      - timed_out
     example: "running"
   latest_checkpoint_summary:
     type: string

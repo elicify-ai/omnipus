@@ -131,7 +131,7 @@ func TestSteeringReceipt_FollowUpGenerationUsesOwnSpan(t *testing.T) {
 	}
 	var got string
 	for i := range entries {
-		if entries[i].SubagentState != nil && entries[i].SubagentState.SteeringReceipt != nil {
+		if entries[i].SubagentState != nil && entries[i].SubagentState.ControlReceipt != nil {
 			got = entries[i].SubagentState.SpanId
 			break
 		}

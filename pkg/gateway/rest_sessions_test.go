@@ -1279,6 +1279,198 @@ func TestUnifiedMetaToGenSession_MapsUpdatedAt(t *testing.T) {
 	assert.True(t, s.CreatedAt.Equal(created), "CreatedAt should still map correctly")
 }
 
+// --- Train-3 lifecycle_state / stop_note producer (sub-agent control plane
+// ADR D4/MAJ-009) ---
+
+// doGetSession drives GET /api/v1/sessions/{id} through the real handler and
+// decodes the SessionDetail envelope into a raw map, so a test can assert on
+// the exact wire keys (present vs. absent) rather than a typed struct that
+// would silently default an absent field to its zero value.
+func doGetSession(t *testing.T, api *restAPI, id string) (map[string]any, int) {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+id, nil)
+	r.URL.Path = "/api/v1/sessions/" + id
+	api.HandleSessions(w, r)
+	var detail map[string]any
+	if w.Code == http.StatusOK {
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &detail), "response body: %s", w.Body.String())
+	}
+	return detail, w.Code
+}
+
+// findSessionRow returns the row (as a raw map) matching id from a
+// sessionPageWire's Sessions slice, or nil if absent.
+func findSessionRow(page sessionPageWire, id string) map[string]any {
+	for _, s := range page.Sessions {
+		if s["id"] == id {
+			return s
+		}
+	}
+	return nil
+}
+
+// TestSessionLifecycle_PopulatesLifecycleStateAndStopNote proves the producer
+// this task adds: a session's REAL LifecycleRecord (state=stopped, with a
+// StopNote whose Seq matches the record's current Generation) is mapped onto
+// the wire lifecycle_state/stop_note fields end-to-end — on BOTH
+// GET /api/v1/sessions (list, rest_sessions.go::listSessions) and
+// GET /api/v1/sessions/{id} (detail, rest_sessions.go::getSession via
+// jsonSessionDetail) — not merely present in the contract/generated types
+// with nothing populating them (Definition of Done: reachable, not just
+// defined).
+func TestSessionLifecycle_PopulatesLifecycleStateAndStopNote(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	sessionID := createTestSession(t, api)
+
+	ls := session.NewLifecycleStore(t.TempDir())
+	api.agentLoop.SetSessionMessagingStores(nil, ls)
+
+	stoppedAt := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	rec := &session.LifecycleRecord{
+		SessionID:      sessionID,
+		State:          session.LifecycleStopped,
+		Generation:     1,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		StopNote: &session.StopNote{
+			At:    stoppedAt,
+			By:    "human:tester-1",
+			Cause: session.StopCauseStop,
+			Seq:   1, // must equal Generation — persistLocked and the handler's gate both require it
+		},
+	}
+	require.NoError(t, ls.Persist(rec), "fixture: persist a stopped lifecycle record")
+
+	// --- GET /api/v1/sessions (list) ---
+	page, code := u18DoListSessions(t, api, "")
+	require.Equal(t, http.StatusOK, code)
+	row := findSessionRow(page, sessionID)
+	require.NotNilf(t, row, "session %q must appear in the list response", sessionID)
+	assert.Equal(t, "stopped", row["lifecycle_state"],
+		"list response must map the real LifecycleRecord.State (stopped) onto lifecycle_state — "+
+			"an unwired producer would leave this key absent instead")
+	stopNote, ok := row["stop_note"].(map[string]any)
+	require.Truef(t, ok, "list response must carry stop_note for a stopped session; got %#v", row["stop_note"])
+	assert.Equal(t, "stop", stopNote["cause"])
+	assert.Equal(t, "human:tester-1", stopNote["by"])
+	assert.EqualValues(t, 1, stopNote["seq"])
+	assert.NotEmpty(t, stopNote["at"])
+
+	// --- GET /api/v1/sessions/{id} (detail) ---
+	detail, code := doGetSession(t, api, sessionID)
+	require.Equal(t, http.StatusOK, code)
+	sessionObj, ok := detail["session"].(map[string]any)
+	require.True(t, ok, "detail response must have a 'session' field")
+	assert.Equal(t, "stopped", sessionObj["lifecycle_state"],
+		"session-detail response must map lifecycle_state exactly like the list response")
+	detailStopNote, ok := sessionObj["stop_note"].(map[string]any)
+	require.Truef(t, ok, "detail response must carry stop_note for a stopped session; got %#v", sessionObj["stop_note"])
+	assert.Equal(t, "stop", detailStopNote["cause"])
+	assert.Equal(t, "human:tester-1", detailStopNote["by"])
+}
+
+// TestSessionLifecycle_NoLifecycleStoreWired_FieldsAbsent proves the
+// nil-safety the brief requires: a session with no LifecycleRecord AT ALL —
+// here, because no lifecycle store is wired — must omit lifecycle_state and
+// stop_note from the wire response (never emit them as null, never panic),
+// exactly matching Session.yaml's "absent for a session with no lifecycle
+// record" contract. newTestRestAPI wires no lifecycle store by default
+// (same fixture assumption rest_adr057_test.go's
+// TestU18DeleteSession_NoLifecycleStore_DegradesToOwnUploadsOnly pins).
+func TestSessionLifecycle_NoLifecycleStoreWired_FieldsAbsent(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+	require.Nil(t, api.agentLoop.GetSessionLifecycleStore(), "fixture: no lifecycle store wired by default")
+
+	sessionID := createTestSession(t, api)
+
+	page, code := u18DoListSessions(t, api, "")
+	require.Equal(t, http.StatusOK, code)
+	row := findSessionRow(page, sessionID)
+	require.NotNil(t, row)
+	_, hasState := row["lifecycle_state"]
+	_, hasNote := row["stop_note"]
+	assert.False(t, hasState, "lifecycle_state must be absent (not null) when no lifecycle store is wired; got %#v", row["lifecycle_state"])
+	assert.False(t, hasNote, "stop_note must be absent (not null) when no lifecycle store is wired; got %#v", row["stop_note"])
+
+	detail, code := doGetSession(t, api, sessionID)
+	require.Equal(t, http.StatusOK, code)
+	sessionObj, ok := detail["session"].(map[string]any)
+	require.True(t, ok)
+	_, hasState = sessionObj["lifecycle_state"]
+	_, hasNote = sessionObj["stop_note"]
+	assert.False(t, hasState, "detail response: lifecycle_state must be absent with no lifecycle store wired")
+	assert.False(t, hasNote, "detail response: stop_note must be absent with no lifecycle store wired")
+}
+
+// TestSessionLifecycle_StoreWiredButNoRecordForThisSession covers the OTHER
+// degenerate input computeSessionLifecycle must handle without panicking: a
+// lifecycle store IS wired (so the nil-store shortcut above is not what is
+// being exercised) but THIS session simply never got a LifecycleRecord — the
+// common case for an ordinary webchat session even on an install that also
+// runs delegations with their own lifecycle-tracked sessions.
+func TestSessionLifecycle_StoreWiredButNoRecordForThisSession(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	ls := session.NewLifecycleStore(t.TempDir())
+	api.agentLoop.SetSessionMessagingStores(nil, ls)
+
+	sessionID := createTestSession(t, api) // no LifecycleRecord ever persisted for this id
+
+	page, code := u18DoListSessions(t, api, "")
+	require.Equal(t, http.StatusOK, code)
+	row := findSessionRow(page, sessionID)
+	require.NotNil(t, row)
+	_, hasState := row["lifecycle_state"]
+	_, hasNote := row["stop_note"]
+	assert.False(t, hasState, "lifecycle_state must be absent when a wired store has no record for this session")
+	assert.False(t, hasNote, "stop_note must be absent when a wired store has no record for this session")
+}
+
+// TestSessionLifecycle_NonStoppedState_HidesStaleStopNote proves two things
+// with one fixture: (1) LifecycleStateToDisplay's mapping reaches the wire
+// correctly for a non-terminal state (needs_input -> waiting_for_answer), and
+// (2) a StopNote whose Seq names an EARLIER generation (left behind on the
+// RETAINED record by a since-superseded stop — D2's "landing clears the
+// fence but keeps the note") is correctly hidden: computeSessionLifecycle's
+// Seq == Generation gate must not resurrect stale stop history onto a
+// session that has since moved on to a new generation.
+func TestSessionLifecycle_NonStoppedState_HidesStaleStopNote(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	sessionID := createTestSession(t, api)
+	ls := session.NewLifecycleStore(t.TempDir())
+	api.agentLoop.SetSessionMessagingStores(nil, ls)
+
+	rec := &session.LifecycleRecord{
+		SessionID:      sessionID,
+		State:          session.LifecycleNeedsInput,
+		Generation:     2, // bumped past the generation the stale StopNote names
+		OwnerScopeKind: session.OwnerScopeHuman,
+		NeedsInput:     &session.NeedsInput{CorrelationID: "corr-1"},
+		StopNote: &session.StopNote{
+			At:    time.Now().UTC(),
+			By:    "human:tester-1",
+			Cause: session.StopCauseStop,
+			Seq:   1, // stale: names generation 1, record is now generation 2
+		},
+	}
+	require.NoError(t, ls.Persist(rec), "fixture: persist a needs_input record carrying a stale generation-1 stop_note")
+
+	page, code := u18DoListSessions(t, api, "")
+	require.Equal(t, http.StatusOK, code)
+	row := findSessionRow(page, sessionID)
+	require.NotNil(t, row)
+	assert.Equal(t, "waiting_for_answer", row["lifecycle_state"],
+		"needs_input must map to waiting_for_answer on the wire")
+	_, hasNote := row["stop_note"]
+	assert.False(t, hasNote, "a StopNote naming an EARLIER generation must not surface as stop_note on a record that has since moved on; got %#v", row["stop_note"])
+}
+
 // TestListSessions_ExcludesVerifierByDefault verifies GET /api/v1/sessions
 // (no include_verifier param) omits verifier-type sessions while still
 // returning ordinary chat sessions.

@@ -82,7 +82,7 @@ func TestBuildCompressedToolDefs_GoalEscapeKeepsFirstMoveDoorsCallable(t *testin
 		// "not_escaped_adds_nothing" subtest asserted the inverse under the
 		// lazy-tier contract; that contract is superseded by ADR-090 §5.4.)
 		ts := recordlessTurn(t, "goal-upfront-web", "webchat")
-		got := names(al.buildCompressedToolDefs(ts, policyFiltered()))
+		got := names(mustBuildCompressedToolDefs(t, al, ts, policyFiltered()))
 		if !got[tools.SetGoalToolName] {
 			t.Fatalf("set_goal is in the ADR-090 upfront set and allowed — must be callable on turn 1 with the record still empty; got %v", got)
 		}
@@ -102,7 +102,7 @@ func TestBuildCompressedToolDefs_GoalEscapeKeepsFirstMoveDoorsCallable(t *testin
 		// already present exactly once, never appended a second time.
 		ts := recordlessTurn(t, "goal-escape-web", "webchat")
 		ts.armGoalNarrowEscape()
-		got := counts(al.buildCompressedToolDefs(ts, policyFiltered()))
+		got := counts(mustBuildCompressedToolDefs(t, al, ts, policyFiltered()))
 		for _, name := range []string{tools.SetGoalToolName, tools.AskUserQuestionToolName, "ToolSearch"} {
 			if got[name] != 1 {
 				t.Fatalf("%s must appear exactly once in the compressed surface (deduped, no double-add); got count %d", name, got[name])
@@ -122,7 +122,7 @@ func TestBuildCompressedToolDefs_GoalEscapeKeepsFirstMoveDoorsCallable(t *testin
 			TranscriptStore: store, TranscriptSessionID: sid, Channel: "webchat",
 		}}
 		ts.armGoalNarrowEscape()
-		got := names(al.buildCompressedToolDefs(ts, policyFiltered()))
+		got := names(mustBuildCompressedToolDefs(t, al, ts, policyFiltered()))
 		if !got[tools.SetGoalToolName] || !got[tools.AskUserQuestionToolName] {
 			t.Fatalf("upfront doors must stay callable regardless of goal-record state; got %v", got)
 		}
@@ -138,7 +138,7 @@ func TestBuildCompressedToolDefs_GoalEscapeKeepsFirstMoveDoorsCallable(t *testin
 		// here as well; what a channel origin must not get is the ask door
 		// OFFERED by goal forcing, which this builder does not control.
 		ts := recordlessTurn(t, "goal-upfront-telegram", "telegram")
-		got := names(al.buildCompressedToolDefs(ts, policyFiltered()))
+		got := names(mustBuildCompressedToolDefs(t, al, ts, policyFiltered()))
 		if !got[tools.SetGoalToolName] {
 			t.Fatalf("set_goal (ADR-090 upfront, allowed) must be callable from a channel origin; got %v", got)
 		}
@@ -162,7 +162,7 @@ func TestBuildCompressedToolDefs_GoalEscapeKeepsFirstMoveDoorsCallable(t *testin
 			},
 		})
 		defer allowGoalToolsPolicy(agentInst)
-		got := names(al.buildCompressedToolDefs(ts, policyFiltered()))
+		got := names(mustBuildCompressedToolDefs(t, al, ts, policyFiltered()))
 		if got[tools.SetGoalToolName] {
 			t.Fatal("a policy-denied set_goal must never be force-included — upfront tier or not, the doors come from the policy-filtered set only")
 		}

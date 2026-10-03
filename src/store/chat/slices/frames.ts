@@ -26,10 +26,10 @@ import {
 } from '@/lib/llm-error'
 import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
-import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, inFlightReattachSids, pendingCancelAckSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
+import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
 import { gateFrameBySeq, cursorFromTerminalFrame, insertHistoryMessageId, CURSOR_MINTING_FRAME_TYPES, type SeqFrameLike } from '../cursor'
-import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
+import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SessionCursor, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
 import { handleReplayAndStatusFrame } from './replay-and-status-frames'
 import { handleCatchUpFrame } from './catchup-frames'
 import { handleProviderFrame } from './provider-frames'
@@ -120,6 +120,71 @@ function advanceReceivedEventTime(
 // design requires (§6.2's gap row: "send attach_session{S, cursor}") using
 // whatever cursor the bucket already has — the server's own §3.3 rule
 // decides whether that cursor is still servable.
+// Resolves a gap re-attach: cancels any pending retry timer for `sid` and
+// resets its attempt counter, so a LATER, unrelated gap starts its own
+// backoff from scratch rather than continuing to count up from a previous,
+// now-resolved incident — same reasoning as catchup-frames.ts's identical
+// reset of replayErrorRetryAttempts/Timers on a genuine catch_up_complete.
+function clearGapReattachRetry(sid: string): void {
+  delete gapReattachRetryAttempts[sid]
+  if (gapReattachRetryTimers[sid]) {
+    clearTimeout(gapReattachRetryTimers[sid])
+    delete gapReattachRetryTimers[sid]
+  }
+}
+
+// Safety hardening, parallel to the backend-side investigation into the
+// steered-session-stop.spec.ts E2E failure (not a proven fix for it — see
+// this function's own call site comment): applySeqGate's gap branch used to
+// be a bare, fire-once `connection.send()` — if that attach_session's
+// response never arrives (e.g. raced against a concurrent attach_session for
+// a DIFFERENT session on the same shared connection), inFlightReattachSids
+// permanently blocks any further attempt and the session is stuck with no
+// recourse but a manual reload. Retries with exponential backoff, on the
+// same shape as scheduleReplayErrorRetry below, but self-rescheduling: a
+// lost ack has no external "it failed again" signal to re-trigger a retry
+// (unlike replay_error's repeated `done` frames), so this function calls
+// itself from inside its own timeout instead of waiting to be invoked again.
+// Each firing re-checks inFlightReattachSids first — if the gap resolved
+// (an 'apply' or cursor-minting frame arrived) while the timer was pending,
+// clearGapReattachRetry already cancelled this timer, but a race between
+// that cancellation and an already-fired callback is still possible, so the
+// check is the authoritative guard, not just the cancellation.
+function scheduleGapReattachRetry(sid: string, cursor: SessionCursor): void {
+  const attempt = (gapReattachRetryAttempts[sid] ?? 0) + 1
+  gapReattachRetryAttempts[sid] = attempt
+  if (gapReattachRetryTimers[sid]) clearTimeout(gapReattachRetryTimers[sid])
+  const delay = Math.min(GAP_REATTACH_BASE_DELAY_MS * 2 ** (attempt - 1), GAP_REATTACH_MAX_DELAY_MS)
+  gapReattachRetryTimers[sid] = setTimeout(() => {
+    delete gapReattachRetryTimers[sid]
+    if (!inFlightReattachSids.has(sid)) return // resolved while this timer was pending
+    console.warn('[chat] sequence gap re-attach retry — no response yet', { sessionId: sid, attempt, have: cursor.seq })
+    logDiagnostic('chatSeqGapReattachRetry', { sessionId: sid, attempt, have: cursor.seq })
+    // Same silent-failure rule as the unknown-frame default case below: a
+    // retry loop the user cannot see is a session that silently stops
+    // updating. Unlike that counter, this one is NOT reset to 0 after
+    // toasting — it drives the exponential backoff — so "exactly once per
+    // stuck episode" comes from equality instead: the attempt count is
+    // strictly monotonic within an episode (armed once per gap, only ever
+    // self-rescheduled) and clearGapReattachRetry deletes it the moment the
+    // gap resolves, so the threshold value is reached exactly once; a later,
+    // unrelated stuck episode starts counting from 1 again.
+    if (attempt === GAP_REATTACH_TOAST_THRESHOLD) {
+      useUiStore.getState().addToast({
+        message: 'This conversation may be out of sync — reconnecting keeps failing. Refresh to reload it.',
+        variant: 'warning',
+      })
+    }
+    useConnectionStore.getState().connection?.send({
+      type: 'attach_session',
+      session_id: sid,
+      since_seq: cursor.seq,
+      boot_id: cursor.bootId,
+    })
+    scheduleGapReattachRetry(sid, cursor)
+  }, delay)
+}
+
 function applySeqGate(
   frame: unknown,
   targetSid: string | null,
@@ -133,6 +198,7 @@ function applySeqGate(
     // that was in flight for this session is now resolved (Opus review
     // round 2 item 7).
     inFlightReattachSids.delete(targetSid)
+    clearGapReattachRetry(targetSid)
     return 'apply'
   }
   const bucket = get().sessionsById[targetSid]
@@ -140,6 +206,7 @@ function applySeqGate(
   if (decision.kind === 'apply') {
     withBucket(targetSid, () => ({ cursor: decision.cursor }))
     inFlightReattachSids.delete(targetSid)
+    clearGapReattachRetry(targetSid)
     return 'apply'
   }
   if (decision.kind === 'gap') {
@@ -159,6 +226,9 @@ function applySeqGate(
         since_seq: decision.cursor.seq,
         boot_id: decision.cursor.bootId,
       })
+      // Safety hardening (see scheduleGapReattachRetry's own doc comment):
+      // arm the retry-with-backoff in case this send's response never comes.
+      scheduleGapReattachRetry(targetSid, decision.cursor)
     }
   }
   return 'drop-or-gap'

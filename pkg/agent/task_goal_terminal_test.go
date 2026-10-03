@@ -23,11 +23,13 @@
 // assertion TestReRunOfTerminatedTaskReactivatesItsGoal below pins, and it is
 // the reason this defect is not cosmetic.
 //
-// Note on the outcome vocabulary: no specification prescribes a task-outcome ->
-// GoalState mapping (goal-entity-spec.md's FR-015/FR-027/FR-028 are silent on
-// it). The mapping under test is derived from Goal.yaml's own definitions of
-// the four terminal states and mirrors what clearGoalStatus already writes for
-// the chat equivalent of each ending — see goalStateForTerminalTask.
+// Note on the outcome vocabulary: the mapping IS prescribed now —
+// ADR-20260928-sub-agent-control-plane.md (D6 Goal row, MAJ-003; D8.10):
+// a task's genuine adjudications still end its paired record (done -> met,
+// failure/attempt-exhaustion -> exhausted), but a USER STOP is not an
+// adjudication — `failed(stopped_by_user)` must never map to a terminal
+// goal state, and the record stays ACTIVE with its original id and session
+// binding (T17/T20). tools.GoalStateForTerminalTask is the mapping point.
 package agent
 
 import (
@@ -116,7 +118,13 @@ func TestTerminatedTaskEndsItsGoalRecord(t *testing.T) {
 			wantGoalState:  generated.GoalStateExhausted,
 		},
 		{
-			name:         "a_user_stop_ends_its_goal_as_cleared",
+			// MAJ-003/D8.10 (sub-agent control-plane ADR): a user Stop is not
+			// an adjudication. The task still lands failed(stopped_by_user),
+			// but its paired goal record stays ACTIVE — original record id,
+			// original session binding, no terminal reason — so plan restart
+			// can reuse the same task-goal id (T17/T20). The former row
+			// ...ends_its_goal_as_cleared asserted the retired FD1=A policy.
+			name:         "a_user_stop_keeps_its_goal_active_with_its_original_id_and_session",
 			activateGoal: true,
 			terminate: func(t *testing.T, al *AgentLoop, tk *task.Task, _ string) {
 				t.Helper()
@@ -126,7 +134,7 @@ func TestTerminatedTaskEndsItsGoalRecord(t *testing.T) {
 				}
 			},
 			wantTaskStatus: task.StatusFailed,
-			wantGoalState:  generated.GoalStateCleared,
+			wantGoalState:  generated.GoalStateActive,
 		},
 		{
 			name: "a_task_stopped_before_it_ever_ran_leaves_its_goal_defining",
@@ -177,15 +185,35 @@ func TestTerminatedTaskEndsItsGoalRecord(t *testing.T) {
 			rec := readTaskGoal(t, stored.ID)
 			if rec.State != tc.wantGoalState {
 				t.Fatalf("goal record state = %q, want %q (task reached %q).\n"+
-					"UAT defect D-2: three terminated tasks left three state=active, round=0 goal records "+
-					"behind. goal_loop.go::terminateGoalRecordByID is owner-kind agnostic, but its only "+
-					"callers are the two CHAT surfaces (clearGoal, goalIdleExpirySweep) — nothing on the "+
-					"task terminal path ever ended the record. A record left ACTIVE also makes the next "+
-					"run of this task skip Goal.Reactivate entirely (activateTaskGoal's default branch is "+
-					"a no-op for an already-active record).",
+					"For the genuine adjudications this is UAT defect D-2's oracle: a terminated task must "+
+					"end its paired record. For the stop row it is MAJ-003's inverse: a user Stop is not an "+
+					"adjudication and must leave the record ACTIVE.",
 					rec.State, tc.wantGoalState, final.Status)
 			}
+			if rec.GoalID != seeded.GoalID {
+				t.Fatalf("goal record id = %q, want the original %q — a paired record's id is stable across "+
+					"every terminal disposition, and T17 makes the surviving original id the thing plan "+
+					"restart reuses",
+					rec.GoalID, seeded.GoalID)
+			}
 			if tc.wantGoalState == generated.GoalStateDefining {
+				return
+			}
+			if tc.wantGoalState == generated.GoalStateActive {
+				// The MAJ-003 stop row: not merely still active — no
+				// adjudication may have been recorded, and the activation
+				// binding must have survived untouched.
+				if rec.TerminalReason != "" {
+					t.Errorf("active goal record carries TerminalReason %q after a user Stop — a stop "+
+						"writes no adjudication (MAJ-003/D8.10); only a genuine met/exhaustion outcome or "+
+						"an explicit clear records a terminal reason", rec.TerminalReason)
+				}
+				if rec.ActiveSessionID != taskSessionID {
+					t.Errorf("active goal record's session binding = %q, want the original %q — a user "+
+						"Stop must not re-bind or un-bind the record (D8.10: the original session binding "+
+						"survives so plan restart reuses the same task-goal/session pair)",
+						rec.ActiveSessionID, taskSessionID)
+				}
 				return
 			}
 			if rec.TerminalReason == "" {

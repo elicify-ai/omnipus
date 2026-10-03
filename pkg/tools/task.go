@@ -303,23 +303,31 @@ const terminalGoalReasonMaxRunes = 2000
 // pkg/agent/goal_loop.go's clearGoalStatus already uses for a chat goal — so a
 // task goal and a chat goal that ended the same way read the same way:
 //
-//	task done                       -> met        (clearGoalStatus's goalClearNoteMet)
-//	task failed, stopped by a user  -> cleared    (clearGoalStatus's goalClearNoteUser)
-//	task failed, any other reason   -> exhausted  (clearGoalStatus's default)
+//	task done                      -> met        (clearGoalStatus's goalClearNoteMet)
+//	task failed, stopped by a user -> NOT goal-terminal (MAJ-003: a Stop is
+//	                                  not an adjudication — the record stays
+//	                                  active for its task's own success/
+//	                                  exhaustion adjudication or an explicit
+//	                                  clear)
+//	task failed, any other reason  -> exhausted  (clearGoalStatus's default)
 //
 // `expired` is deliberately NOT produced here: it belongs to the idle-expiry
 // calendar sweep (goalIdleExpirySweep), which is about a goal nobody touched
 // for days, not about a task that ran and finished.
 //
-// ok is false for a non-terminal status, so a caller that reaches this with a
-// mid-flight task transitions nothing.
+// ok is false for a non-terminal status and for a user Stop, so a caller that
+// reaches this with a mid-flight task — or with a Stop — transitions nothing.
 func GoalStateForTerminalTask(status task.Status, cancelReason task.CancelReason) (generated.GoalState, bool) {
 	switch status {
 	case task.StatusDone:
 		return generated.GoalStateMet, true
 	case task.StatusFailed:
 		if cancelReason == task.CancelReasonStoppedByUser {
-			return generated.GoalStateCleared, true
+			// MAJ-003 (sub-agent control plane): a user Stop keeps the
+			// paired goal record ACTIVE. A stop is not an adjudication; only
+			// the task's own met/exhaustion outcome or an explicit clear
+			// (/goal clear, authorized clear_goal) ends a goal.
+			return "", false
 		}
 		return generated.GoalStateExhausted, true
 	default:
@@ -379,8 +387,9 @@ func TerminateTaskGoalRecord(
 	}
 	state, ok := GoalStateForTerminalTask(status, cancelReason)
 	if !ok {
-		slog.Warn("task goal: refusing to terminate a task's goal record for a non-terminal task status",
-			"task_id", taskID, "status", string(status))
+		slog.Warn("task goal: refusing to end a task's goal record — not a goal-terminal disposition "+
+			"(mid-flight task, or a user Stop, which MAJ-003 keeps goal-active)",
+			"task_id", taskID, "status", string(status), "cancel_reason", string(cancelReason))
 		return
 	}
 

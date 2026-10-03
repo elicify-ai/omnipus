@@ -64,7 +64,7 @@ func collectSteeringReceiptFrames(t *testing.T, c <-chan Event, parentSessionID 
 			}
 			payload, ok := evt.Payload.(SubagentStatePayload)
 			require.True(t, ok, "EventKindSubagentState payload must be SubagentStatePayload, got %T", evt.Payload)
-			if payload.SessionID != parentSessionID || payload.Frame.SteeringReceipt == nil {
+			if payload.SessionID != parentSessionID || payload.Frame.ControlReceipt == nil {
 				continue
 			}
 			frames = append(frames, payload.Frame)
@@ -160,13 +160,15 @@ func TestSteerDelegatedChild_InjectedSteerEmitsSteeringReceipt(t *testing.T) {
 	require.Len(t, frames, 1, "exactly one steering_receipt should have been emitted for the one applied steer")
 
 	frame := frames[0]
-	require.NotNil(t, frame.SteeringReceipt, "SETUP: collectSteeringReceiptFrames only collects frames with a non-nil receipt")
-	assert.Equal(t, steerReceiptCorrelationID, frame.SteeringReceipt.CorrelationId,
-		"the receipt's correlation_id must match the steer that was actually applied")
+	require.NotNil(t, frame.ControlReceipt, "SETUP: collectSteeringReceiptFrames only collects frames with a non-nil receipt")
+	assert.Equal(t, steerReceiptCorrelationID, frame.ControlReceipt.ControlId,
+		"the receipt's control_id must match the steer that was actually applied")
+	assert.Equal(t, "steer", frame.ControlReceipt.Verb, "a steer's receipt must report verb=steer")
+	assert.Equal(t, "delivered", frame.ControlReceipt.State, "a steer's receipt is final at delivered, never applied (D4)")
 
-	appliedAt, perr := time.Parse(time.RFC3339, frame.SteeringReceipt.AppliedAt)
-	require.NoError(t, perr, "applied_at must be a valid RFC3339 timestamp")
-	assert.False(t, appliedAt.IsZero(), "applied_at must be non-zero — the steer was genuinely applied")
+	deliveredAt, perr := time.Parse(time.RFC3339, frame.ControlReceipt.AcceptedAt)
+	require.NoError(t, perr, "accepted_at must be a valid RFC3339 timestamp")
+	assert.False(t, deliveredAt.IsZero(), "accepted_at must be non-zero — the steer was genuinely delivered")
 
 	require.NotNil(t, frame.ChildSessionId, "the receipt frame must report which child applied the steer")
 	assert.Equal(t, launched.SessionID, *frame.ChildSessionId)

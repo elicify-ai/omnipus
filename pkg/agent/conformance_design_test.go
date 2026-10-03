@@ -711,7 +711,7 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	if got := fakeJudge4.callCount(); got != 1 {
 		t.Fatalf("(4) the claim must invoke the Judge exactly once (G-1), got %d", got)
 	}
-	if after4 := goalRecordForSessionOrNil(sid); after4 != nil {
+	if after4 := goalRecordForSessionOrNil(t, sid); after4 != nil {
 		t.Fatalf("(4) a met verdict must clear the goal (done), still ACTIVE: %q", after4.Prompt)
 	}
 
@@ -759,7 +759,7 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	if _, ok := pe.VerifierRegistry().Lookup(verifierUnit); ok {
 		t.Fatal("(6) /goal clear must cancel + unregister the in-flight verifier session (FR-037)")
 	}
-	if after6 := goalRecordForSessionOrNil(sid); after6 != nil {
+	if after6 := goalRecordForSessionOrNil(t, sid); after6 != nil {
 		t.Fatalf("(6) /goal clear must clear the goal, still ACTIVE: %q", after6.Prompt)
 	}
 }
@@ -869,7 +869,7 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 	if after2.AttemptCount != 0 || after2.Status != task.StatusInProgress {
 		t.Fatalf("(2) attempt_count=%d status=%q, want 0 and in_progress", after2.AttemptCount, after2.Status)
 	}
-	if got := activeGoalForSession(taskSessionID); got == nil || got.Round != 1 {
+	if got := mustActiveGoalForSession(t, taskSessionID); got == nil || got.Round != 1 {
 		t.Fatalf("(2) the goal must have spent exactly one try, got %+v", got)
 	}
 
@@ -1531,9 +1531,13 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 		LastUnmetTerminalSignature: "sig-bs",
 	})
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
-		SessionID: "bs-owner", Generation: 1, State: session.LifecyclePaused,
+		SessionID: "bs-owner", Generation: 1, State: session.LifecycleStopped,
 		WorkspaceID: "ws", AgentID: "owner",
 		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-bs",
+		// D2/CRIT-001: same pre-rename `paused` owner fixture as
+		// boot_sweep_test.go's sess-owner; redirect_pause per
+		// delegate_park.go's precedent for this shape.
+		StopNote: &session.StopNote{At: time.Now().UTC(), By: session.StopActorSystem, Seq: 1, Cause: session.StopCauseRedirectPause},
 	})
 	// N-15: an in-flight goal predating the upgrade (stale semantics version).
 	h.pe.currentSemanticsVersionOverride = 3
@@ -1585,7 +1589,7 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 		t.Fatalf("(4) CRIT-1: PreservedAwaitingCorrection = %v, want [bs-owner] (no wedge)", res.PreservedAwaitingCorrection)
 	}
 	owner, _ := h.ls.Load("bs-owner")
-	if owner.State != session.LifecyclePaused {
+	if owner.State != session.LifecycleStopped {
 		t.Errorf("(4) CRIT-1: owner swept to %q (must stay paused — exemption b, no wedge)", owner.State)
 	}
 

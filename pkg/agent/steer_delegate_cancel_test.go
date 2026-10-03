@@ -157,8 +157,11 @@ func TestDelegateCancel_QueuedSubagentIsDroppedAndNeverStarts(t *testing.T) {
 	if loadErr != nil {
 		t.Fatalf("Load(queued): %v", loadErr)
 	}
-	if rec.Stop == nil && !rec.Terminal() {
-		t.Fatalf("the cancelled queued session is neither stopped nor terminal (state=%q) — nothing stops admission promoting it", rec.State)
+	if rec.State != session.LifecycleStopped {
+		t.Fatalf("the cancelled queued session did not land stopped (state=%q) — nothing stops admission promoting it", rec.State)
+	}
+	if rec.StopNote == nil {
+		t.Fatalf("the cancelled queued session landed stopped with no StopNote (state=%q) — D2/CRIT-001 requires one on every stopped landing", rec.State)
 	}
 
 	// Free the slot: the FIFO drain now runs, and the cancelled worker must
@@ -237,8 +240,11 @@ func TestDelegateCancel_RunningSubagentStopsItsGrandchildren(t *testing.T) {
 	if loadErr != nil {
 		t.Fatalf("Load(child): %v", loadErr)
 	}
-	if childRec.Stop == nil {
-		t.Fatalf("the named child carries no Stop marker (state=%q)", childRec.State)
+	if childRec.State != session.LifecycleStopped {
+		t.Fatalf("the named child did not land stopped (state=%q)", childRec.State)
+	}
+	if childRec.StopNote == nil {
+		t.Fatalf("the named child landed stopped with no StopNote (state=%q) — D2/CRIT-001 requires one on every stopped landing", childRec.State)
 	}
 	select {
 	case <-grandTS.Finished():

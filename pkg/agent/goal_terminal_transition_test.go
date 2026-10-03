@@ -432,7 +432,7 @@ func TestTerminalGoalRetainsRecord_JudgeUnavailableAtBoundary_NotTerminal(t *tes
 	// record IS the state, and it is asserted above. What remains worth
 	// asserting here is that the session still resolves to an ACTIVE goal
 	// through the predicate production uses.
-	metaAfter := goalRecordForSessionOrNil(sid)
+	metaAfter := goalRecordForSessionOrNil(t, sid)
 	if metaAfter == nil {
 		t.Fatal("goal must remain active (re-armed) when the judge is unavailable, not terminal")
 	}

@@ -1510,7 +1510,7 @@ func (tp *taskPatch) syncGoalRecord() bool {
 	return false
 }
 
-// launchIfStarted starts the task run when the update moved it into in_progress, reverting on failure.
+// launchIfStarted starts the task run when the update moved it into in_progress, reverting admission failures.
 func (tp *taskPatch) launchIfStarted() bool {
 	// If the task transitioned INTO in_progress (from a different state) and has
 	// an assigned agent, launch the agent immediately via StartTaskNow. The
@@ -1519,8 +1519,9 @@ func (tp *taskPatch) launchIfStarted() bool {
 	// the response carries the newly-minted session_id.
 	//
 	// On failure the task must NOT be left stranded in in_progress with no agent
-	// running. We revert its status back to the pre-update state so the client
-	// observes the failure and can retry. The HTTP status signals the cause:
+	// running. Preserve a Failed disposition the executor already persisted for
+	// this error; otherwise revert to the pre-update state so the client can
+	// retry. The HTTP status signals the cause:
 	//   503 — taskExecutor is nil (gateway degraded / not fully initialized)
 	//   409 — dispatch cap exhausted (retryable congestion)
 	//   500 — any other launch error
@@ -1563,11 +1564,24 @@ func (tp *taskPatch) launchIfStarted() bool {
 		}
 		sessID, startErr := tp.a.taskExecutor.StartTaskNow(tp.r.Context(), tp.id)
 		if startErr != nil {
-			// Revert the task to its prior status so it is not left stranded.
-			revertPatch := buildLaunchRevertPatch()
-			if _, rErr := tp.a.taskStore.Update(tp.id, revertPatch); rErr != nil {
-				slog.Error("rest: could not revert task status after StartTaskNow failure",
-					"id", tp.id, "revert_to", tp.preUpdateStatus, "error", rErr)
+			fresh, readErr := tp.a.taskStore.Get(tp.id)
+			if readErr != nil {
+				jsonErr(tp.w, http.StatusInternalServerError, fmt.Sprintf(
+					"%v; could not read task status before rollback: %v", startErr, readErr))
+				return true
+			}
+			// A successful executor failure write stores the same cause it returns.
+			// Preserve only that disposition, not an unrelated or stale failure.
+			failedDisposition := fresh.Status == task.StatusFailed && fresh.Result != "" && fresh.Result == startErr.Error()
+			if !failedDisposition {
+				revertPatch := buildLaunchRevertPatch()
+				if _, rErr := tp.a.taskStore.Update(tp.id, revertPatch); rErr != nil {
+					slog.Error("rest: could not revert task status after StartTaskNow failure",
+						"id", tp.id, "revert_to", tp.preUpdateStatus, "error", rErr)
+					jsonErr(tp.w, http.StatusInternalServerError, fmt.Sprintf(
+						"%v; could not revert task status: %v", startErr, rErr))
+					return true
+				}
 			}
 			httpStatus := http.StatusInternalServerError
 			switch {
@@ -1589,8 +1603,9 @@ func (tp *taskPatch) launchIfStarted() bool {
 			// see agent.ErrPlanNotExecuting's own doc comment for why the
 			// SAME error is intentionally logged quieter (Debug) inside
 			// TaskExecutor's periodic/event-driven callers.
-			slog.Warn("rest: StartTaskNow failed; task reverted to prior status",
-				"id", tp.id, "agent_id", tp.updated.AgentID, "prior_status", tp.preUpdateStatus, "error", startErr)
+			slog.Warn("rest: StartTaskNow failed",
+				"id", tp.id, "agent_id", tp.updated.AgentID, "prior_status", tp.preUpdateStatus,
+				"failed_disposition_preserved", failedDisposition, "error", startErr)
 			jsonErr(tp.w, httpStatus, startErr.Error())
 			return true
 		}

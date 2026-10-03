@@ -103,7 +103,19 @@ type Session = {
   protected?: boolean | undefined;
   agent_id: string;
   title: string;
-  status: "active" | "archived" | "interrupted";
+  status: "active" | "archived" | "failed";
+  lifecycle_state?:
+    | ("working" | "waiting_for_answer" | "done" | "failed" | "stopped")
+    | undefined;
+  stop_note?:
+    | {
+        at: string;
+        by: string;
+        seq: number;
+        cause: "stop" | "redirect_pause" | "cascade" | "restart" | "timeout";
+        boot_seq?: number | undefined;
+      }
+    | undefined;
   created_at: string;
   updated_at: string;
   model?: string | undefined;
@@ -211,15 +223,30 @@ type Message = {
           | "queued"
           | "running"
           | "needs_input"
-          | "paused"
+          | "stopped"
           | "completed"
-          | "failed"
-          | "cancelled"
-          | "timed_out";
-        steering_receipt?:
+          | "failed";
+        control_receipt?:
           | {
-              correlation_id: string;
-              applied_at: string;
+              seq: number;
+              control_id: string;
+              verb:
+                | "steer"
+                | "stop"
+                | "stop_all"
+                | "redirect"
+                | "resume"
+                | "respond"
+                | "escalate"
+                | "clear_goal";
+              state: "queued" | "delivered" | "applied" | "superseded";
+              accepted_at: string;
+              delivered_at?: string | undefined;
+              applied_at?: string | undefined;
+              superseded_at?: string | undefined;
+              superseded_by_seq?: number | undefined;
+              reason?: string | undefined;
+              released_control_ids?: Array<string> | undefined;
             }
           | undefined;
         created_at: string;
@@ -2851,6 +2878,7 @@ type DelegateActionRequest =
   | DelegateSteerAction
   | DelegateRespondAction
   | DelegateCancelAction
+  | DelegateClearGoalAction
   | DelegateFollowUpAction
   | DelegatePeekAction;
 type DelegateRunAction = {
@@ -2901,6 +2929,10 @@ type DelegateCancelAction = {
   session_id: string;
   hard?: boolean | undefined;
 };
+type DelegateClearGoalAction = {
+  action: "clear_goal";
+  session_id: string;
+};
 type DelegateFollowUpAction = {
   action: "follow_up";
   session_id: string;
@@ -2937,11 +2969,9 @@ type SessionLifecycleRecord = {
     | "queued"
     | "running"
     | "needs_input"
-    | "paused"
+    | "stopped"
     | "completed"
-    | "failed"
-    | "cancelled"
-    | "timed_out";
+    | "failed";
   terminal: boolean;
   owner_scope_kind: "parent_session" | "plan" | "human";
   owner_scope_id?: string | undefined;
@@ -3031,11 +3061,9 @@ type DelegateSessionResponse = {
     | "queued"
     | "running"
     | "needs_input"
-    | "paused"
+    | "stopped"
     | "completed"
-    | "failed"
-    | "cancelled"
-    | "timed_out";
+    | "failed";
 };
 type MessageParentRequest =
   | MessageParentProgress
@@ -3330,7 +3358,25 @@ export const Session: z.ZodType<Session> = z.object({
   protected: z.boolean().optional(),
   agent_id: z.string(),
   title: z.string(),
-  status: z.enum(["active", "archived", "interrupted"]),
+  status: z.enum(["active", "archived", "failed"]),
+  lifecycle_state: z
+    .enum(["working", "waiting_for_answer", "done", "failed", "stopped"])
+    .optional(),
+  stop_note: z
+    .object({
+      at: z.string().datetime({ offset: true }),
+      by: z.string(),
+      seq: z.number().int().gte(0),
+      cause: z.enum([
+        "stop",
+        "redirect_pause",
+        "cascade",
+        "restart",
+        "timeout",
+      ]),
+      boot_seq: z.number().int().gte(1).optional(),
+    })
+    .optional(),
   created_at: z.string().datetime({ offset: true }),
   updated_at: z.string().datetime({ offset: true }),
   model: z.string().optional(),
@@ -3513,16 +3559,32 @@ export const Message: z.ZodType<Message> = z.object({
         "queued",
         "running",
         "needs_input",
-        "paused",
+        "stopped",
         "completed",
         "failed",
-        "cancelled",
-        "timed_out",
       ]),
-      steering_receipt: z
+      control_receipt: z
         .object({
-          correlation_id: z.string(),
-          applied_at: z.string().datetime({ offset: true }),
+          seq: z.number().int().gte(0),
+          control_id: z.string().min(1),
+          verb: z.enum([
+            "steer",
+            "stop",
+            "stop_all",
+            "redirect",
+            "resume",
+            "respond",
+            "escalate",
+            "clear_goal",
+          ]),
+          state: z.enum(["queued", "delivered", "applied", "superseded"]),
+          accepted_at: z.string().datetime({ offset: true }),
+          delivered_at: z.string().datetime({ offset: true }).optional(),
+          applied_at: z.string().datetime({ offset: true }).optional(),
+          superseded_at: z.string().datetime({ offset: true }).optional(),
+          superseded_by_seq: z.number().int().gte(0).optional(),
+          reason: z.string().optional(),
+          released_control_ids: z.array(z.string()).optional(),
         })
         .optional(),
       created_at: z.string().datetime({ offset: true }),
@@ -7127,11 +7189,9 @@ export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
       "queued",
       "running",
       "needs_input",
-      "paused",
+      "stopped",
       "completed",
       "failed",
-      "cancelled",
-      "timed_out",
     ]),
     terminal: z.boolean(),
     owner_scope_kind: z.enum(["parent_session", "plan", "human"]),
@@ -7318,6 +7378,8 @@ export const DelegateCancelAction = z.object({
   session_id: z.string().min(1),
   hard: z.boolean().optional(),
 }) satisfies z.ZodType<DelegateCancelAction>;
+export const DelegateClearGoalAction =
+  z.object({ action: z.literal("clear_goal"), session_id: z.string().min(1) }) satisfies z.ZodType<DelegateClearGoalAction>;
 export const DelegateFollowUpAction =
   z.object({
     action: z.literal("follow_up"),
@@ -7337,6 +7399,7 @@ export const DelegateActionRequest =
     DelegateSteerAction,
     DelegateRespondAction,
     DelegateCancelAction,
+    DelegateClearGoalAction,
     DelegateFollowUpAction,
     DelegatePeekAction,
   ]) satisfies z.ZodType<DelegateActionRequest>;
@@ -7351,11 +7414,9 @@ export const DelegateSessionResponse: z.ZodType<DelegateSessionResponse> =
       "queued",
       "running",
       "needs_input",
-      "paused",
+      "stopped",
       "completed",
       "failed",
-      "cancelled",
-      "timed_out",
     ]),
   });
 export const DelegateStatusResponse: z.ZodType<DelegateStatusResponse> =
@@ -7398,11 +7459,9 @@ export const DelegatePeekResponse = z.object({
     "queued",
     "running",
     "needs_input",
-    "paused",
+    "stopped",
     "completed",
     "failed",
-    "cancelled",
-    "timed_out",
   ]),
   latest_checkpoint_summary: z.string().optional(),
   latest_progress_text: z.string().optional(),
@@ -16250,7 +16309,7 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error"]);
 
 export const AuthFrame = z
   .object({
@@ -16299,6 +16358,15 @@ export const CancelFrame = z
   .object({
     type: z.literal("cancel"),
     session_id: z.string().min(1).max(128),
+    scope: z.enum(["session", "tree"]).optional(),
+  })
+  .strict();
+
+export const RedirectFrame = z
+  .object({
+    type: z.literal("redirect"),
+    session_id: z.string().min(1).max(128),
+    instruction: z.string().min(1).max(16384).regex(/\S/),
   })
   .strict();
 
@@ -16600,11 +16668,20 @@ export const SubagentStateFrame = z
     session_id: z.string().min(1),
     child_session_id: z.string().optional(),
     span_id: z.string().min(1),
-    state: z.enum(["queued", "running", "needs_input", "paused", "completed", "failed", "cancelled", "timed_out"]),
-    steering_receipt: z
+    state: z.enum(["queued", "running", "needs_input", "stopped", "completed", "failed"]),
+    control_receipt: z
     .object({
-      correlation_id: z.string(),
-      applied_at: z.string(),
+      seq: z.number().int().min(0),
+      control_id: z.string().min(1),
+      verb: z.enum(["steer", "stop", "stop_all", "redirect", "resume", "respond", "escalate", "clear_goal"]),
+      state: z.enum(["queued", "delivered", "applied", "superseded"]),
+      accepted_at: z.string(),
+      delivered_at: z.string().optional(),
+      applied_at: z.string().optional(),
+      superseded_at: z.string().optional(),
+      superseded_by_seq: z.number().int().min(0).optional(),
+      reason: z.string().optional(),
+      released_control_ids: z.array(z.string()).optional(),
     })
     .strict().optional(),
     created_at: z.string(),
@@ -17592,6 +17669,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   AuthFrame,
   MessageFrameBase,
   CancelFrame,
+  RedirectFrame,
   PingFrame,
   PongFrame,
   AttachSessionFrame,

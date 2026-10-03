@@ -247,7 +247,7 @@ func asTriple(status, native string, unmapped bool) struct {
 // distinction. An agent that stopped a delegation on purpose and then lost
 // context must not re-dispatch work the user deliberately cancelled.
 func TestIntentionallyStopped_DerivedFromClosedEnums(t *testing.T) {
-	cancelled := normalizeSubagent(&session.LifecycleRecord{State: session.LifecycleCancelled})
+	cancelled := normalizeSubagent(&session.LifecycleRecord{State: session.LifecycleStopped})
 	if !cancelled.stopped {
 		t.Error("a cancelled session must report intentionally_stopped=true")
 	}
@@ -276,6 +276,139 @@ func TestIntentionallyStopped_DerivedFromClosedEnums(t *testing.T) {
 	})
 	if ambiguous.stopped {
 		t.Error("dod_unreachable must report false — it is not a reliable stop signal")
+	}
+}
+
+// TestNormalizeSubagent_RedirectPauseIsDistinctFromFailed is a regression pin.
+//
+// Before the lifecycle-state collapse (commit 4c59cd17a, "replace paused and
+// cancelled states with stopped"), `normalizeSubagent` had a DEDICATED
+// `session.LifecyclePaused` branch reporting `jobStatusBlocked`/
+// `attentionCaller` — see `git show 6fd215138^:pkg/tools/list_jobs_row.go`,
+// which still carried that branch verbatim, and
+// docs/internal/specs/list-jobs-spec.md's operator-ruling-3 table (line 161):
+// "A subagent waiting on an answer | state ∈ {needs_input, paused} | caller |
+// Yes. It is blocked on input only the caller can supply." That table's
+// `needs_input` half still has its dedicated branch today
+// (`session.LifecycleNeedsInput` -> jobStatusBlocked/attentionCaller,
+// unchanged); only the `paused` half was lost.
+//
+// Commit 6fd215138 ("route stopped turns through lifecycle callers") folded
+// `LifecyclePaused` into the unconditional `LifecycleStopped ->
+// jobStatusFailed, stopped:true` branch with no replacement. But
+// `LifecycleStopped`'s own doc comment (pkg/session/lifecycle.go) says it
+// "covers cancellation, timeout, AND a plan-owner session idling while its
+// plan is durably awaiting_supervision" — i.e. the old `paused` condition is
+// still one of the things that can land a session at `LifecycleStopped`
+// today, and `stop_note.cause` (pkg/session/lifecycle_edge.go) is the
+// mechanism the sub-agent control-plane ADR added specifically so a caller
+// can still tell them apart: "stop_note {..., cause: stop/redirect_pause/
+// cascade/restart/timeout} ... merges the prior paused, cancelled, and
+// restart-only interrupted outcomes" (ADR-20260928-sub-agent-control-plane,
+// Vocabulary table, `stopped` row). Of the five causes, `redirect_pause` is
+// documented as "a fresh instruction pausing the CURRENT generation ...
+// rather than stopping the session outright"
+// (session.StopCauseRedirectPause's own doc comment) — the one that means
+// "parked, not stopped", matching the old `paused` semantics this test pins.
+//
+// Without this fix, a legitimately-idling plan-owner (the same case
+// pkg/agent/boot_sweep.go's exemption (b) still explicitly spares from its
+// own sweep) is reported to a list_jobs caller as "failed / intentionally
+// stopped" — indistinguishable from a real cancel — and an agent that lost
+// context could re-dispatch work nobody actually stopped.
+func TestNormalizeSubagent_RedirectPauseIsDistinctFromFailed(t *testing.T) {
+	paused := normalizeSubagent(&session.LifecycleRecord{
+		State:    session.LifecycleStopped,
+		StopNote: &session.StopNote{Cause: session.StopCauseRedirectPause},
+	})
+
+	if paused.status == jobStatusFailed {
+		t.Fatalf("a redirect_pause stop must NOT report status=%q — that is "+
+			"indistinguishable from a genuine stop and loses exactly the "+
+			"distinction stop_note.cause exists to preserve; got status=%q attention=%q",
+			jobStatusFailed, paused.status, paused.attention)
+	}
+	// jobStatusBlocked/attentionCaller are pre-existing FR-006 constants
+	// (this file's own vocabulary comment: "Exactly five values — the
+	// vocabulary is NOT extended"), referenced here, not invented — they are
+	// the exact pair the pre-collapse LifecyclePaused branch reported, and
+	// the exact pair session.LifecycleNeedsInput's still-intact sibling
+	// branch reports today for the same list-jobs-spec.md table row.
+	if paused.status != jobStatusBlocked {
+		t.Errorf("want status=%q (matching the needs_input sibling case and the "+
+			"pre-collapse LifecyclePaused mapping), got %q", jobStatusBlocked, paused.status)
+	}
+	if paused.attention != attentionCaller {
+		t.Errorf("a redirect-paused session is actionable by the caller that issued "+
+			"the redirect: want attention=%q, got %q", attentionCaller, paused.attention)
+	}
+	if paused.stopped {
+		t.Error("a redirect_pause stop must not report intentionally_stopped=true — " +
+			"nothing was stopped, the current generation was merely paused")
+	}
+
+	// Positive control: a genuine direct stop is UNCHANGED by this fix. This
+	// repeats TestIntentionallyStopped_DerivedFromClosedEnums's cancel/crash
+	// pin, but WITH an explicit stop_note, so a fix that special-cases "any
+	// StopNote present" instead of "cause == redirect_pause" cannot flip this
+	// case too and still pass.
+	genuineStop := normalizeSubagent(&session.LifecycleRecord{
+		State:    session.LifecycleStopped,
+		StopNote: &session.StopNote{Cause: session.StopCauseStop},
+	})
+	if genuineStop.status != jobStatusFailed {
+		t.Errorf("a direct stop must still report status=%q, got %q",
+			jobStatusFailed, genuineStop.status)
+	}
+	if !genuineStop.stopped {
+		t.Error("a direct stop must still report intentionally_stopped=true")
+	}
+	if genuineStop.attention != attentionNone {
+		t.Errorf("a direct stop carries no caller action: want attention=%q, got %q",
+			attentionNone, genuineStop.attention)
+	}
+
+	// The property that matters most: the two causes must never collapse
+	// onto the same status, or the distinction stop_note.cause exists to
+	// preserve is gone regardless of which literal values either side uses.
+	if paused.status == genuineStop.status {
+		t.Fatalf("redirect_pause and a genuine stop must report different statuses; "+
+			"both report %q", paused.status)
+	}
+}
+
+// TestNormalizeSubagent_TimeoutIsNotIntentionallyStopped is a second
+// regression pin on the same collapsed LifecycleStopped branch this file's
+// redirect_pause test covers: pre-collapse, `LifecycleTimedOut` (see `git show
+// 6fd215138^:pkg/tools/list_jobs_row.go`) reported status=failed but left
+// `stopped` at its zero value — only the dedicated `LifecycleCancelled`
+// branch set stopped=true. A session's own execution-budget timeout
+// (session.StopCauseTimeout) is not a deliberate cancel, so it must not be
+// reported as intentionally_stopped=true: a caller that saw that flag could
+// wrongly conclude a human or agent chose to cancel the work, when in fact
+// nobody did.
+func TestNormalizeSubagent_TimeoutIsNotIntentionallyStopped(t *testing.T) {
+	timedOut := normalizeSubagent(&session.LifecycleRecord{
+		State:    session.LifecycleStopped,
+		StopNote: &session.StopNote{Cause: session.StopCauseTimeout},
+	})
+	if timedOut.status != jobStatusFailed {
+		t.Errorf("a timed-out session must still report status=%q, got %q",
+			jobStatusFailed, timedOut.status)
+	}
+	if timedOut.stopped {
+		t.Error("a timeout must not report intentionally_stopped=true — nobody " +
+			"deliberately cancelled this session, its own execution budget expired")
+	}
+
+	// Positive control, same shape as the redirect_pause test above: a
+	// genuine direct stop is UNCHANGED by this fix.
+	genuineStop := normalizeSubagent(&session.LifecycleRecord{
+		State:    session.LifecycleStopped,
+		StopNote: &session.StopNote{Cause: session.StopCauseStop},
+	})
+	if !genuineStop.stopped {
+		t.Error("a direct stop must still report intentionally_stopped=true")
 	}
 }
 

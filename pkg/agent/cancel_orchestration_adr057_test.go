@@ -497,7 +497,7 @@ func TestU15Cancel_TransitionsEveryDescendantLifecycleRecord_Depth3(t *testing.T
 	for _, id := range []string{d1, d2, d3} {
 		require.Eventually(t, func() bool {
 			rec, err := lifecycleStore.Load(id)
-			return err == nil && rec.State == session.LifecycleCancelled
+			return err == nil && rec.State == session.LifecycleStopped
 		}, 3*time.Second, 20*time.Millisecond,
 			"FR-025/FR-026: depth-3 descendant %s's persisted lifecycle record must transition to cancelled", id)
 	}

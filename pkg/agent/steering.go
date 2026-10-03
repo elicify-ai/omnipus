@@ -50,9 +50,25 @@ func parseSteeringMode(s string) SteeringMode {
 // steeringQueue is a thread-safe queue of user messages that can be injected
 // into a running agent loop to interrupt it between tool calls.
 type steeringQueue struct {
-	mu     sync.Mutex
-	queues map[string][]steeringQueueItem
-	mode   SteeringMode
+	mu                sync.Mutex
+	queues            map[string][]steeringQueueItem
+	closedGenerations map[string]int
+	terminalizing     map[string]*steeringTerminalTransition
+	mode              SteeringMode
+}
+
+type steeringTerminalTransition struct {
+	done chan struct{}
+	// finishingItems captures steers/wakes that arrive after
+	// runTerminalTransition has taken its open-scope lock but before the
+	// durable terminal commit has fully landed. The closing hand-off
+	// (completeSteeredTurn, issue #1020 round-3) revives the child into a
+	// new generation carrying these items, never refuses them and never
+	// strands them on a now-terminal record. Round-4 correction: every
+	// accepted item of one hand-off goes into ONE revival (or one
+	// same-generation continuation on delivery failure); the buffer is
+	// never GC'd silently.
+	finishingItems []steeringQueueItem
 }
 
 type steeringQueueItem struct {
@@ -75,10 +91,14 @@ type steeringWake struct {
 
 func newSteeringQueue(mode SteeringMode) *steeringQueue {
 	return &steeringQueue{
-		queues: make(map[string][]steeringQueueItem),
-		mode:   mode,
+		queues:            make(map[string][]steeringQueueItem),
+		closedGenerations: make(map[string]int),
+		terminalizing:     make(map[string]*steeringTerminalTransition),
+		mode:              mode,
 	}
 }
+
+var errSteeringScopeClosed = errors.New("steering session finished; use follow_up to continue it")
 
 func normalizeSteeringScope(scope string) string {
 	scope = strings.TrimSpace(scope)
@@ -99,25 +119,201 @@ func (sq *steeringQueue) pushScope(scope string, msg providers.Message) error {
 }
 
 func (sq *steeringQueue) pushItemScope(scope string, item steeringQueueItem) error {
-	sq.mu.Lock()
-	defer sq.mu.Unlock()
+	_, err := sq.pushItemScopeChecked(scope, item, nil)
+	return err
+}
 
+// pushItemScopeChecked serializes enqueue with a lifecycle terminal
+// transition (issue #1020 round-3). The protocol has two windows:
+//
+//  1. An open terminal transition is in flight (runTerminalTransition has
+//     installed one for this scope and is running prepare() / transition()
+//     underneath the closing hand-off). Items arrive into transition.
+//     finishingItems — they are NOT refused, NOT appended to the main
+//     queue (which would deadlock the closing hand-off's own recheck), and
+//     are drained by the hand-off via drainFinishingItems before the
+//     deferred finish() drops the transition. Round-3 turns this into the
+//     revival / drop / continue-from-queue contract completeSteeredTurn
+//     and reportSteeredSessionTerminalUpward implement.
+//  2. No open transition. Items join the main queue under the usual scope
+//     check (terminal record refusal via checkOpen, MaxQueueSize cap).
+//
+// The boolean return is the round-3 finishing-window flag the internal
+// enqueueSteeringItemWithStatus uses to record EnqueueStatusPostFinish on
+// the caller's return shape. False on every other path.
+func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueItem, checkOpen func() error) (finishing bool, err error) {
 	scope = normalizeSteeringScope(scope)
+	sq.mu.Lock()
+	if transition := sq.terminalizing[scope]; transition != nil {
+		// Round-3 finishing window: accept the item into the transition's
+		// own buffer rather than the main queue. The closing hand-off
+		// (runTerminalTransition / completeSteeredTurn) reads this buffer
+		// on exit and either revives the child into a new generation
+		// (post-finish steer) or drops it durably (post-finish wake on a
+		// now-terminal record). The pre-round-3 "committing" refusal was
+		// deleted: it stranded items pushed by hooks running inside
+		// commitSteeredTerminal itself, the exact regression S1 covers.
+		if item.wake != nil {
+			for _, queued := range transition.finishingItems {
+				if queued.wake != nil && queued.wake.messageID == item.wake.messageID {
+					sq.mu.Unlock()
+					return true, nil
+				}
+			}
+		} else if len(transition.finishingItems) >= MaxQueueSize {
+			sq.mu.Unlock()
+			return false, fmt.Errorf("steering queue is full")
+		}
+		transition.finishingItems = append(transition.finishingItems, item)
+		sq.mu.Unlock()
+		return true, nil
+	}
+	if _, closed := sq.closedGenerations[scope]; closed {
+		sq.mu.Unlock()
+		return false, fmt.Errorf("%w: %s", errSteeringScopeClosed, scope)
+	}
+	if checkOpen != nil {
+		if err := checkOpen(); err != nil {
+			sq.mu.Unlock()
+			return false, err
+		}
+	}
 	queue := sq.queues[scope]
 	if item.wake != nil {
-		// A terminal delivery may retry before the parent consumes its first
-		// wake. Keep one pending item per deterministic message id; dequeueing
-		// removes it, so the same id can be admitted again later.
+		// Retries of one durable entry keep one pending wake; dequeueing
+		// removes the identity so a later retry may enqueue it again.
 		for _, queued := range queue {
 			if queued.wake != nil && queued.wake.messageID == item.wake.messageID {
-				return nil
+				sq.mu.Unlock()
+				return false, nil
 			}
 		}
 	} else if len(queue) >= MaxQueueSize {
-		return fmt.Errorf("steering queue is full")
+		sq.mu.Unlock()
+		return false, fmt.Errorf("steering queue is full")
 	}
 	sq.queues[scope] = append(queue, item)
-	return nil
+	sq.mu.Unlock()
+	return false, nil
+}
+
+// runTerminalTransitionWithFinishing is runTerminalTransition's
+// round-3 sibling (issue #1020). onFinishing is invoked exactly once at
+// the close of runTerminalTransition (after prepare, after the durable
+// transition, after the deferred finish), with every item captured in
+// the open transition's finishingItems buffer. completeSteeredTurn uses
+// this to either revive a post-finish steer into a new generation or
+// prepend a refused-commit steer to the main queue so the existing
+// retry loop drains it as a same-generation continuation. Pass nil for
+// the pre-round-3 behaviour (items in the buffer are GC'd at finish) —
+// the round-4 correction is that production callers MUST pass a non-nil
+// onFinishing, since silent GC was removed.
+func (sq *steeringQueue) runTerminalTransitionWithFinishing(
+	scope string,
+	prepare func() error,
+	transition func() (bool, error),
+	onFinishing func(items []steeringQueueItem),
+) (started bool, terminal bool, err error) {
+	scope = normalizeSteeringScope(scope)
+	for {
+		sq.mu.Lock()
+		if current := sq.terminalizing[scope]; current != nil {
+			done := current.done
+			sq.mu.Unlock()
+			<-done
+			continue
+		}
+		if len(sq.queues[scope]) > 0 {
+			sq.mu.Unlock()
+			return false, false, nil
+		}
+		current := &steeringTerminalTransition{done: make(chan struct{})}
+		sq.terminalizing[scope] = current
+		sq.mu.Unlock()
+		finished := false
+		finish := func() {
+			if !finished {
+				sq.finishTerminalTransition(scope, current)
+				finished = true
+			}
+		}
+		defer finish()
+
+		// prepare runs while the open transition accepts new items into
+		// finishingItems; round-3 wants every accepted item claimed by
+		// the caller via the onFinishing closure, so we snapshot items
+		// both on the prepare-error path and after the durable transition
+		// returns.
+		if prepareErr := prepare(); prepareErr != nil {
+			sq.mu.Lock()
+			items := current.finishingItems
+			current.finishingItems = nil
+			sq.mu.Unlock()
+			if onFinishing != nil {
+				onFinishing(items)
+			}
+			return true, false, prepareErr
+		}
+
+		sq.mu.Lock()
+		if len(sq.queues[scope]) > 0 {
+			sq.mu.Unlock()
+			return false, false, nil
+		}
+		// The finishing mark remains installed, but the queue mutex must be
+		// released before the durable transition: a steer arriving even inside
+		// commitSteeredTerminal is accepted into finishingItems. Keeping the
+		// mutex here deadlocks the committing goroutine when it enqueues.
+		sq.mu.Unlock()
+
+		terminal, err = transition()
+		sq.mu.Lock()
+		items := current.finishingItems
+		current.finishingItems = nil
+		sq.mu.Unlock()
+		if onFinishing != nil {
+			onFinishing(items)
+		}
+		return true, terminal, err
+	}
+}
+
+func (sq *steeringQueue) finishTerminalTransition(scope string, transition *steeringTerminalTransition) {
+	sq.mu.Lock()
+	delete(sq.terminalizing, scope)
+	delete(sq.closedGenerations, scope)
+	close(transition.done)
+	sq.mu.Unlock()
+}
+
+func (sq *steeringQueue) scopeEmpty(scope string) bool {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	return len(sq.queues[normalizeSteeringScope(scope)]) == 0
+}
+
+// drainAllScope removes every queued item regardless of steering mode. It is
+// a bounded failure cleanup, not a lifecycle transition, so it never closes
+// the non-terminal scope.
+func (sq *steeringQueue) drainAllScope(scope string) (string, []steeringQueueItem) {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	scope = normalizeSteeringScope(scope)
+	items := append([]steeringQueueItem(nil), sq.queues[scope]...)
+	delete(sq.queues, scope)
+	return scope, items
+}
+
+// reopenScopeForGeneration re-enables enqueue for a non-terminal entry path.
+// A same-generation wake may legitimately re-enter after completion was
+// deferred; a terminal generation is still rejected by the lifecycle check.
+func (sq *steeringQueue) reopenScopeForGeneration(scope string, generation int) {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	scope = normalizeSteeringScope(scope)
+	if closedGeneration, closed := sq.closedGenerations[scope]; closed && generation >= closedGeneration {
+		delete(sq.closedGenerations, scope)
+	}
 }
 
 // dequeue removes and returns pending steering messages from the legacy
@@ -270,7 +466,7 @@ func (al *AgentLoop) Steer(msg providers.Message) error {
 		scope = ts.sessionKey
 		agentID = ts.agentID
 	}
-	_, err := al.enqueueSteeringMessage(scope, agentID, msg, "")
+	_, _, err := al.enqueueSteeringMessage(scope, agentID, msg, "")
 	return err
 }
 
@@ -309,7 +505,7 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 		Content: msg.Content,
 		Media:   append([]string(nil), msg.Media...),
 	}
-	_, err = al.enqueueSteeringMessage(route.SessionKey, ag.ID, pmsg, "")
+	_, _, err = al.enqueueSteeringMessage(route.SessionKey, ag.ID, pmsg, "")
 	return err
 }
 
@@ -527,23 +723,89 @@ func (al *AgentLoop) appendSteeredInstruction(sessionID, agentID, instruction st
 // server-assigned reference"). The resolved id is always returned so the
 // caller (the delegate tool's steer action) can hand it back to whoever
 // steered, to match a later receipt to this instruction.
+//
+// Status is the round-3 typed carrier the delegate tool maps onto its
+// caller-facing result text (issue #1020 round-3): a "post-finish" status
+// means the item landed in a terminal-transition's finishingItems buffer
+// rather than the main queue, and the closing hand-off (completeSteeredTurn)
+// will either revive the child into a new generation carrying it (steer) or
+// drop it durably (wake on a now-terminal record). A normal status means
+// the item joined the main queue as before.
 func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error) {
+	resolved, _, err := al.enqueueSteeringMessage(scope, agentID, msg, correlationID)
+	return resolved, err
+}
+
+// EnqueueSteeringMessageWithStatus is the rich return shape the round-4
+// correction exposes to the delegate tool (issue #1020 round-4
+// correction): returns the EnqueueStatus alongside the correlation id so
+// the delegate tool's executeSteer can map a PostFinish status onto its
+// "queued; the child is finishing and will see it next" caller-facing
+// result text — the spec's visible signal that a late steer landed in a
+// finishing-window buffer rather than the main queue, and the closing
+// hand-off will revive the child into a new generation to consume it.
+//
+// Kept as a parallel method rather than changing EnqueueSteeringMessage's
+// signature so the DelegateSteeringSink interface (pkg/tools/delegate.go)
+// and every existing test fake stay unchanged. delegateSteeringSink converts
+// the named status to int for the delegate tool's optional-capability type
+// assertion (see delegate_followup.go's enqueueSteeringWithStatus), mirroring
+// steerReviver's parallel-capability pattern.
+func (al *AgentLoop) EnqueueSteeringMessageWithStatus(scope, agentID string, msg providers.Message, correlationID string) (string, EnqueueStatus, error) {
 	return al.enqueueSteeringMessage(scope, agentID, msg, correlationID)
 }
 
-func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error) {
+// EnqueueSteeringMessageStatus is the rich return shape of the internal
+// enqueueSteeringMessage. pkg/agent-internal callers that need to react to
+// the round-3 post-finish status read this directly; the public
+// EnqueueSteeringMessage wrapper above strips the status to keep the
+// pkg/tools DelegateSteeringSink interface unchanged.
+func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, EnqueueStatus, error) {
 	correlationID = strings.TrimSpace(correlationID)
 	if correlationID == "" {
 		correlationID = "corr_" + uuid.NewString()
 	}
-	if err := al.enqueueSteeringItem(scope, agentID, steeringQueueItem{message: msg, correlationID: correlationID}); err != nil {
-		return "", err
+	item := steeringQueueItem{message: msg, correlationID: correlationID}
+	// onPostFinish fires only when the closing hand-off's transition buffer
+	// accepted this item during a terminal transition with non-refusal; its
+	// return value becomes enqueueSteeringItemWithStatus's own returned
+	// status, so there is nothing left to reconcile here.
+	status, err := al.enqueueSteeringItemWithStatus(scope, agentID, item, func() EnqueueStatus {
+		return EnqueueStatusPostFinish
+	})
+	if err != nil {
+		return "", status, err
 	}
-	return correlationID, nil
+	return correlationID, status, nil
 }
+
+// EnqueueStatus is the typed carrier for the round-3 finishing-window
+// outcome (issue #1020 round-3, founder ruling Q10 "the subagent decide
+// what to do"). pkg/tools's delegate-steer action maps this onto a
+// caller-facing text ("queued; the child is finishing and will see it
+// next") so a late steer is never silently accepted AND silently dropped.
+type EnqueueStatus int
+
+const (
+	// EnqueueStatusNormal: the item joined the main queue; it will be
+	// consumed by the child's next steering-poll at the next tool boundary.
+	EnqueueStatusNormal EnqueueStatus = iota
+	// EnqueueStatusPostFinish: the item arrived while the closing hand-off
+	// had the scope locked for terminal delivery. It was held in the
+	// transition's finishingItems buffer rather than refused; the closing
+	// hand-off either revives the child into a new generation carrying it
+	// (a steer) or drops it durably (a wake on a now-terminal record).
+	EnqueueStatusPostFinish
+)
 
 // EnqueueSteeringWake queues an upward wake into an already-live turn while
 // retaining the inbox message identity needed by I-3's consumed marker.
+// A wake accepted into a terminal-transition finishingItems buffer (round-3
+// finishing-window protocol, S3/S4) is held there for the closing hand-off
+// to revive or drop; otherwise it joins the main queue as before. The single
+// error return does not surface which case occurred — a caller that needs to
+// distinguish them uses enqueueSteeringItemWithStatus, whose EnqueueStatus
+// does.
 func (al *AgentLoop) EnqueueSteeringWake(scope, agentID, transcriptSessionID, messageID string, msg providers.Message) error {
 	if strings.TrimSpace(transcriptSessionID) == "" || strings.TrimSpace(messageID) == "" {
 		return fmt.Errorf("steering wake requires transcript session id and message id")
@@ -559,21 +821,57 @@ func (al *AgentLoop) EnqueueSteeringWake(scope, agentID, transcriptSessionID, me
 }
 
 func (al *AgentLoop) enqueueSteeringItem(scope, agentID string, item steeringQueueItem) error {
+	_, err := al.enqueueSteeringItemWithStatus(scope, agentID, item, nil)
+	return err
+}
+
+// enqueueSteeringItemWithStatus is enqueueSteeringItem's round-3 sibling:
+// when the underlying pushItemScopeChecked lands the item in a terminal-
+// transition finishingItems buffer (rather than refusing it or joining the
+// main queue), onPostFinish is invoked so the caller can record the
+// post-finish status in its return shape. The onPostFinish hook is nil-safe
+// for callers that don't care (every existing caller except the internal
+// post-finish-revival path).
+func (al *AgentLoop) enqueueSteeringItemWithStatus(scope, agentID string, item steeringQueueItem, onPostFinish func() EnqueueStatus) (EnqueueStatus, error) {
 	if al.steering == nil {
-		return fmt.Errorf("steering queue is not initialized")
+		return EnqueueStatusNormal, fmt.Errorf("steering queue is not initialized")
 	}
 
+	var status EnqueueStatus
 	// Pushed via pushItemScope directly, not pushScope/pushWakeScope: those
 	// two rebuild a steeringQueueItem from only message+wake, which would
 	// silently drop correlationID (issue #870) on every enqueue.
-	err := al.steering.pushItemScope(scope, item)
+	finishing, err := al.steering.pushItemScopeChecked(scope, item, func() error {
+		lifecycle := al.GetSessionLifecycleStore()
+		if lifecycle == nil {
+			return nil
+		}
+		rec, loadErr := lifecycle.Load(normalizeSteeringScope(scope))
+		switch {
+		case errors.Is(loadErr, session.ErrLifecycleNotFound):
+			return nil
+		case loadErr != nil:
+			return fmt.Errorf("check steering session lifecycle: %w", loadErr)
+		case rec.Terminal():
+			return fmt.Errorf("%w: %s", errSteeringScopeClosed, normalizeSteeringScope(scope))
+		default:
+			return nil
+		}
+	})
+	// Round-3 finishing-window flag: when pushItemScopeChecked lands the
+	// item in a terminal-transition finishingItems buffer (rather than
+	// refusing it or joining the main queue), record the post-finish
+	// status on the caller's return shape via onPostFinish.
+	if err == nil && finishing && onPostFinish != nil {
+		status = onPostFinish()
+	}
 	if err != nil {
 		logger.WarnCF("agent", "Failed to enqueue steering message", map[string]any{
 			"error": err.Error(),
 			"role":  item.message.Role,
 			"scope": normalizeSteeringScope(scope),
 		})
-		return err
+		return status, err
 	}
 
 	queueDepth := al.steering.lenScope(scope)
@@ -583,6 +881,7 @@ func (al *AgentLoop) enqueueSteeringItem(scope, agentID string, item steeringQue
 		"media_count": len(item.message.Media),
 		"queue_len":   queueDepth,
 		"scope":       normalizeSteeringScope(scope),
+		"status":      int(status),
 	})
 
 	meta := EventMeta{
@@ -619,7 +918,7 @@ func (al *AgentLoop) enqueueSteeringItem(scope, agentID string, item steeringQue
 		},
 	)
 
-	return nil
+	return status, nil
 }
 
 // SteeringMode returns the current steering mode.
@@ -678,12 +977,17 @@ func (al *AgentLoop) dequeueSteeringMessagesForScopeWithFallback(scope string) (
 // resolved to (scope itself, or the manual fallback scope), the same value a
 // restore call must pass to steeringQueue.prependItemsScope.
 func (al *AgentLoop) dequeueSteeringItemsForScopeWithFallback(scope string) (actualScope string, consumedItems []steeringQueueItem, msgs []providers.Message, correlationIDs []string) {
+	actualScope, consumedItems, msgs, correlationIDs, _ = al.dequeueSteeringItemsForScopeWithFallbackResult(scope)
+	return actualScope, consumedItems, msgs, correlationIDs
+}
+
+func (al *AgentLoop) dequeueSteeringItemsForScopeWithFallbackResult(scope string) (actualScope string, consumedItems []steeringQueueItem, msgs []providers.Message, correlationIDs []string, err error) {
 	if al.steering == nil {
-		return normalizeSteeringScope(scope), nil, nil, nil
+		return normalizeSteeringScope(scope), nil, nil, nil, nil
 	}
 	actualScope, items := al.steering.dequeueItemsScopeWithFallback(scope)
-	msgs, correlationIDs, consumedItems = al.consumeDequeuedSteering(actualScope, items)
-	return actualScope, consumedItems, msgs, correlationIDs
+	msgs, correlationIDs, consumedItems, err = al.consumeDequeuedSteeringResult(actualScope, items)
+	return actualScope, consumedItems, msgs, correlationIDs, err
 }
 
 // consumeDequeuedSteering flattens dequeued steeringQueueItems into their
@@ -701,8 +1005,13 @@ func (al *AgentLoop) dequeueSteeringItemsForScopeWithFallback(scope string) (act
 // item shape that was dequeued, rather than reconstructing an approximation
 // from the flattened msgs/correlationIDs slices that drops the wake pointer.
 func (al *AgentLoop) consumeDequeuedSteering(scope string, items []steeringQueueItem) ([]providers.Message, []string, []steeringQueueItem) {
+	msgs, correlationIDs, consumedItems, _ := al.consumeDequeuedSteeringResult(scope, items)
+	return msgs, correlationIDs, consumedItems
+}
+
+func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steeringQueueItem) ([]providers.Message, []string, []steeringQueueItem, error) {
 	if len(items) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	msgs := make([]providers.Message, 0, len(items))
 	correlationIDs := make([]string, 0, len(items))
@@ -711,16 +1020,17 @@ func (al *AgentLoop) consumeDequeuedSteering(scope string, items []steeringQueue
 		if item.wake != nil {
 			if err := al.writeSteeringConsumedMarker(*item.wake); err != nil {
 				al.steering.prependItemsScope(scope, items[i:])
-				slog.Error("agent: steering wake not consumed; restored to queue",
+				slog.Error("agent: steering wake not consumed; restored unmarked suffix to queue",
 					"scope", scope, "message_id", item.wake.messageID, "error", err)
-				return msgs, correlationIDs, consumedItems
+				return msgs, correlationIDs, consumedItems,
+					fmt.Errorf("write steering consumed marker %q: %w", item.wake.messageID, err)
 			}
 		}
 		msgs = append(msgs, item.message)
 		correlationIDs = append(correlationIDs, item.correlationID)
 		consumedItems = append(consumedItems, item)
 	}
-	return msgs, correlationIDs, consumedItems
+	return msgs, correlationIDs, consumedItems, nil
 }
 
 func (al *AgentLoop) writeSteeringConsumedMarker(wake steeringWake) error {
@@ -809,20 +1119,26 @@ func (al *AgentLoop) agentForSession(sessionKey string) *AgentInstance {
 	return registry.GetDefaultAgent()
 }
 
-// Continue resumes an idle agent by dequeuing any pending steering messages
-// and running them through the agent loop. This is used when the agent's last
-// message was from the assistant (i.e., it has stopped processing) and the
-// user has since enqueued steering messages.
-//
-// If no steering messages are pending, it returns an empty string.
-//
-// workspaceID (FIX 1 re-review) is the workspace this continuation should run
-// inside — the caller (session_worker.go) resolves it once via
-// AgentLoop.resolveWorkspaceIDForContinuation from the ORIGINAL triggering
-// message and threads it straight through; Continue has no message of its
-// own to resolve it from (only the already-collapsed sessionKey/channel/
-// chatID), so it cannot recompute this value itself.
-func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, workspaceID string) (string, error) {
+// continuePendingSteering is the one destructive dequeue-and-run path for an
+// idle session's queued steering. The ordinary session-worker continuation
+// and a steered child's post-turn drain supply different turn runners, but
+// both share the same guards, wake-consumption markers, queue restoration and
+// post-dequeue error classification here. Keeping that machinery singular is
+// what prevents the steered path from becoming a second injection path.
+func (al *AgentLoop) continuePendingSteering(
+	ctx context.Context,
+	sessionKey string,
+	run func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error),
+) (string, error) {
+	return al.continuePendingSteeringWithAgent(ctx, sessionKey, al.agentForSession(sessionKey), run)
+}
+
+func (al *AgentLoop) continuePendingSteeringWithAgent(
+	ctx context.Context,
+	sessionKey string,
+	agent *AgentInstance,
+	run func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error),
+) (string, error) {
 	// Bug 1 fix (design note "Caller survey"): the active-turn guard must be
 	// scoped to THIS session's own key, not the whole activeTurnStates map —
 	// GetActiveTurn() ranges the map and returns the first entry found
@@ -846,12 +1162,14 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, 
 	// than merely stranded in the queue. This reorder is the invariant the
 	// drain-loop redesign (session_worker.go) depends on: every Continue
 	// error return must leave the steering queue exactly as it was.
-	agent := al.agentForSession(sessionKey)
 	if agent == nil {
 		return "", fmt.Errorf("no agent available for session %q", sessionKey)
 	}
 
-	actualScope, consumedItems, steeringMsgs, steeringCorrelationIDs := al.dequeueSteeringItemsForScopeWithFallback(sessionKey)
+	actualScope, consumedItems, steeringMsgs, steeringCorrelationIDs, consumeErr := al.dequeueSteeringItemsForScopeWithFallbackResult(sessionKey)
+	if consumeErr != nil && len(steeringMsgs) == 0 {
+		return "", consumeErr
+	}
 	if len(steeringMsgs) == 0 {
 		return "", nil
 	}
@@ -862,7 +1180,7 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, 
 		}
 	}
 
-	resp, err := al.continueWithSteeringMessages(ctx, agent, sessionKey, channel, chatID, workspaceID, steeringMsgs, steeringCorrelationIDs)
+	resp, err := run(agent, steeringMsgs, steeringCorrelationIDs)
 	if err != nil {
 		// Gate finding, CRITICAL: continueWithSteeringMessages's own turn can
 		// fail with an ordinary error (provider error, mid-turn failure — the
@@ -875,10 +1193,51 @@ func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, 
 		// (session_worker.go processTurn) can tell this apart from a
 		// pre-dequeue guard failure and stop retrying immediately instead of
 		// re-running the same restored turn from scratch.
-		al.steering.prependItemsScope(actualScope, consumedItems)
+		al.steering.prependItemsScope(actualScope, restorableSteeringItems(consumedItems))
 		return "", fmt.Errorf("%w: %w", errContinuePostDequeueFailure, err)
 	}
+	if consumeErr != nil {
+		return resp, consumeErr
+	}
 	return resp, nil
+}
+
+// restorableSteeringItems excludes wakes whose consumed marker was already
+// written before their turn ran. Restoring those items would append the same
+// marker again and could later abandon a wake that recovery already treats as
+// consumed. Plain steering messages have no durable marker and remain safe to
+// restore after a failed turn.
+func restorableSteeringItems(items []steeringQueueItem) []steeringQueueItem {
+	restored := make([]steeringQueueItem, 0, len(items))
+	for _, item := range items {
+		if item.wake == nil {
+			restored = append(restored, item)
+		}
+	}
+	return restored
+}
+
+// Continue resumes an idle agent by dequeuing any pending steering messages
+// and running them through the agent loop. This is used when the agent's last
+// message was from the assistant (i.e., it has stopped processing) and the
+// user has since enqueued steering messages.
+//
+// If no steering messages are pending, it returns an empty string.
+//
+// workspaceID (FIX 1 re-review) is the workspace this continuation should run
+// inside — the caller (session_worker.go) resolves it once via
+// AgentLoop.resolveWorkspaceIDForContinuation from the ORIGINAL triggering
+// message and threads it straight through; Continue has no message of its
+// own to resolve it from (only the already-collapsed sessionKey/channel/
+// chatID), so it cannot recompute this value itself.
+func (al *AgentLoop) Continue(ctx context.Context, sessionKey, channel, chatID, workspaceID string) (string, error) {
+	return al.continuePendingSteering(ctx, sessionKey,
+		func(agent *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error) {
+			return al.continueWithSteeringMessages(
+				ctx, agent, sessionKey, channel, chatID, workspaceID,
+				steeringMsgs, steeringCorrelationIDs,
+			)
+		})
 }
 
 func (al *AgentLoop) InterruptGraceful(hint string) error {
@@ -1532,7 +1891,7 @@ func (al *AgentLoop) DeliverSessionMessage(_ context.Context, childSessionKey, c
 		if strings.TrimSpace(env.Text) == "" {
 			return fmt.Errorf("agent: session message: kind %q: empty text", kind)
 		}
-		_, enqErr := al.enqueueSteeringMessage(childSessionKey, childAgentID, providers.Message{
+		_, _, enqErr := al.enqueueSteeringMessage(childSessionKey, childAgentID, providers.Message{
 			Role:    "user",
 			Content: env.Text,
 		}, "")

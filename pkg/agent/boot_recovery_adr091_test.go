@@ -405,6 +405,100 @@ func TestBoot_ClassifiesAllClasses(t *testing.T) {
 	}
 }
 
+// TestBoot_TimeoutStoppedRecoversAsTimedOut pins the U1 stopped-state
+// consolidation regression (PR #1139 gate finding): a steered session whose
+// lifetime budget expired — stop_note.cause=timeout, the shape
+// steer_completion.go::completeSteeredTurn lands live — and that never
+// stored its final before the gateway restart must reach its parent as
+// steer.OutcomeTimedOut with a "timeout:" text, exactly the pre-consolidation
+// LifecycleTimedOut case of terminalErrorBootMessage did. The merged
+// "stopped" state deliberately erased the cancelled/timed-out state
+// distinction (founder ruling: timed out = stopped); the RETAINED stop_note
+// cause is what keeps the two apart for the parent.
+func TestBoot_TimeoutStoppedRecoversAsTimedOut(t *testing.T) {
+	h := newBootRecoveryHarness(t)
+	parent := h.rootSession(t)
+	child := h.newSession(t, session.SessionTypeDelegate, parent)
+	rec := h.steeredRecord(child, parent, session.LifecycleStopped)
+	rec.StopNote = &session.StopNote{
+		At: time.Now().UTC(), By: session.StopActorSystem,
+		Seq: uint64(rec.Generation), Cause: session.StopCauseTimeout,
+	}
+	h.persist(t, rec)
+
+	if err := h.recovery().Run(context.Background()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	events := h.deliverer.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("deliveries = %d, want 1 (the terminal notice)", len(events))
+	}
+	if events[0].Outcome != steer.OutcomeTimedOut {
+		t.Fatalf("boot-recovered timeout stop outcome = %q, want %q", events[0].Outcome, steer.OutcomeTimedOut)
+	}
+	envelope := bootEnvelope(t, events[0].Message)
+	if envelope.Kind != "error" || !envelope.Fatal || !strings.HasPrefix(envelope.Text, "timeout:") {
+		t.Fatalf("upward message = %+v, want a fatal error with a timeout: prefix", envelope)
+	}
+	after, err := h.lifecycle.Load(child)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// The failed reason follows the boot vocabulary the stored text itself
+	// derives on a later restart (failedReasonFromBootText): "timeout".
+	if after.State != session.LifecycleFailed || after.FailedReason != "timeout" {
+		t.Fatalf("record = state %q reason %q, want failed/timeout", after.State, after.FailedReason)
+	}
+}
+
+// TestBoot_StoppedNonTimeoutStillInterrupted keeps the timeout reroute
+// narrow: a stop-caused stop (a human Stop, current generation) and a STALE
+// timeout note (Seq from an older generation a Revive kept) both recover as
+// a plain interruption, exactly as before the fix.
+func TestBoot_StoppedNonTimeoutStillInterrupted(t *testing.T) {
+	for name, note := range map[string]*session.StopNote{
+		"stop_cause_current_gen": {
+			At: time.Now().UTC(), By: session.StopActorSystem,
+			Seq: 1, Cause: session.StopCauseStop,
+		},
+		"stale_timeout_note": {
+			At: time.Now().UTC(), By: session.StopActorSystem,
+			Seq: 0, Cause: session.StopCauseTimeout, // Seq 0 predates generation 1
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newBootRecoveryHarness(t)
+			parent := h.rootSession(t)
+			child := h.newSession(t, session.SessionTypeDelegate, parent)
+			rec := h.steeredRecord(child, parent, session.LifecycleStopped)
+			rec.StopNote = note
+			h.persist(t, rec)
+
+			if err := h.recovery().Run(context.Background()); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			events := h.deliverer.snapshot()
+			if len(events) != 1 {
+				t.Fatalf("deliveries = %d, want 1", len(events))
+			}
+			if events[0].Outcome != steer.OutcomeInterrupted {
+				t.Fatalf("outcome = %q, want %q", events[0].Outcome, steer.OutcomeInterrupted)
+			}
+			envelope := bootEnvelope(t, events[0].Message)
+			if envelope.Kind != "error" || !envelope.Fatal || !strings.HasPrefix(envelope.Text, "interrupted:") {
+				t.Fatalf("upward message = %+v, want a fatal error with an interrupted: prefix", envelope)
+			}
+			after, err := h.lifecycle.Load(child)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if after.State != session.LifecycleFailed || after.FailedReason != failedReasonInterrupted {
+				t.Fatalf("record = state %q reason %q, want failed/%q", after.State, after.FailedReason, failedReasonInterrupted)
+			}
+		})
+	}
+}
+
 func TestIndexReport_SurfacedToOperator(t *testing.T) {
 	h := newBootRecoveryHarness(t)
 	if err := os.MkdirAll(h.lifecycle.Dir(), 0o700); err != nil {

@@ -48,7 +48,7 @@ export function formatLastUpdateAge(ageMs: number): string {
 export type SubagentLifecycleState = NonNullable<SubagentSpan['lifecycleState']>
 
 /**
- * ADR-091 D7/FR-E-004 (cross-family review finding 21): the eight-state
+ * ADR-091 D7/FR-E-004 (cross-family review finding 21): the six-state
  * `lifecycleState` domain (`subagent_state`, ADR-053) mapped onto the
  * existing dot vocabulary (`toolStatusConfig.tsx::getSpanStatusDot`'s
  * `statusDot`/spinner) — ActivityPanel's row must prefer THIS whenever
@@ -91,16 +91,17 @@ export function getLifecycleStatusDot(
       // pre-ADR-091 span-status equivalent of "waiting on a human") — own
       // label, since this is the precise lifecycle signal, not a fallback.
       return { indicator: statusDot('bg-[var(--color-warning)]'), label: 'needs input' }
-    case 'paused':
-      return { indicator: statusDot('bg-[var(--color-warning)]'), label: 'paused' }
+    case 'stopped':
+      // Non-terminal and actionable, same category as 'needs_input' (not
+      // 'failed') — consolidates the old paused/cancelled/timed_out trio
+      // into one state (founder ruling: "'stopped' replaces 'cancelled' and
+      // 'paused'... timed out = stopped"). Same warning color as the
+      // 'needs_input' case above; own plain label, no euphemism.
+      return { indicator: statusDot('bg-[var(--color-warning)]'), label: 'stopped' }
     case 'completed':
       return { indicator: statusDot('bg-[var(--color-success)]'), label: 'done' }
     case 'failed':
       return { indicator: statusDot('bg-[var(--color-error)]'), label: 'failed' }
-    case 'cancelled':
-      return { indicator: statusDot('bg-[var(--color-cancelled)]'), label: 'cancelled' }
-    case 'timed_out':
-      return { indicator: statusDot('bg-[var(--color-muted)]'), label: 'timed out' }
     default: {
       // Safe fallback for any unexpected state value arriving from the wire.
       const _exhaustive: never = state

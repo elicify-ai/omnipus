@@ -60,11 +60,27 @@ const (
 type SessionStatus string
 
 const (
-	// StatusActive is a session that is currently in use.
+	// StatusActive is a session that is currently in use. Also covers a
+	// session that is working, waiting for an answer, or stopped — see
+	// lifecycle_state (SessionLifecycleState) for the exact distinction
+	// (sub-agent control plane ADR D4/MAJ-009).
 	StatusActive SessionStatus = "active"
 	// StatusArchived is a session that has been intentionally closed.
 	StatusArchived SessionStatus = "archived"
-	// StatusInterrupted is a session that was terminated unexpectedly or canceled.
+	// StatusFailed mirrors a genuine landed lifecycle `failed` (sub-agent
+	// control plane ADR D4/MAJ-009). An explicit RESUME of a done/failed
+	// session resets coarse metadata back to StatusActive.
+	StatusFailed SessionStatus = "failed"
+	// StatusInterrupted is RETIRED from the wire enum (sub-agent control
+	// plane ADR D4/MAJ-009, Session.yaml::status) — "interrupted" is no
+	// longer a valid Session.status value. No production caller writes this
+	// value any longer (pkg/agent/boot_sweep.go::reconcileUnifiedMetaStatus
+	// was the last one, fixed to StatusFailed). The constant is kept only
+	// for tests that assert its ABSENCE (e.g.
+	// pkg/gateway/turn_survives_disconnect_test.go) and for any legacy
+	// on-disk meta.json a pre-ADR install may still carry — reading one
+	// back is not itself an error (greenfield has no upgrade/migration
+	// path; see CLAUDE.md). Do not add a new writer.
 	StatusInterrupted SessionStatus = "interrupted"
 )
 

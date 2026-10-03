@@ -1,17 +1,17 @@
 type: object
 title: SessionLifecycleRecord
 description: >
-  The durable, per-entity-JSONL 8-state session-lifecycle record (ADR-053
-  §Contract Surface, S2). Distinct from `Session.status` (active/archived/
-  interrupted — the older chat-transcript-metadata status) and from
-  `Plan.state` (the 5-state draft/approved/running/done/failed plan
-  state machine) — do not conflate the three. This record is the durable
-  authority the boot sweep (§5), idle settlement, `blocked_by`, and the
-  S4 interlock state machine all read from. The immutable-terminal
-  invariant (L-3) holds: a terminal record (`completed`/`failed`/
-  `cancelled`/`timed_out`) is never mutated in place — `follow_up`/Play
-  mint a NEW record with a new `generation`, linked back via
-  `resumed_from`.
+  The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053
+  §Contract Surface, S2; state consolidated per F0929-2). Distinct from
+  `Session.status` (active/archived/failed — the coarse chat-transcript-
+  metadata status; see `Session.lifecycle_state` for the exact 5-state
+  display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/
+  done/failed plan state machine) — do not conflate the three. This record is
+  the durable authority the boot sweep (§5), idle settlement, `blocked_by`,
+  and the S4 interlock state machine all read from. The immutable-terminal
+  invariant (L-3) holds: a terminal record (`completed`/`failed`) is never
+  mutated in place — `follow_up`/Play mint a NEW record with a new
+  `generation`, linked back via `resumed_from`.
 required:
   - session_id
   - generation
@@ -52,25 +52,24 @@ properties:
       - queued
       - running
       - needs_input
-      - paused
+      - stopped
       - completed
       - failed
-      - cancelled
-      - timed_out
     description: >
-      The durable 8-state lifecycle (S2, the S4 interlock state machine's
-      authority). `paused` covers BOTH cooperative cancel-soft grace AND
-      a plan-owner session idling while its plan is durably
+      The durable 6-state lifecycle (S2, the S4 interlock state machine's
+      authority). `stopped` replaces the former `cancelled`/`timed_out`/
+      `paused` states as one non-terminal state (session alive,
+      continuable) — it covers cancellation, timeout, AND a plan-owner
+      session idling while its plan is durably
       `plan_phase=awaiting_supervision` (that condition itself lives
-      on the Plan record, not as a 9th state here — see `Plan.plan_phase`
-      and R§8.10's lifecycle-to-pill crosswalk).
+      on the Plan record, not as a separate state here — see
+      `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
     example: "running"
   terminal:
     type: boolean
     readOnly: true
     description: >
-      Server-derived: true iff `state` is one of `completed`/`failed`/
-      `cancelled`/`timed_out`.
+      Server-derived: true iff `state` is one of `completed`/`failed`.
     example: false
   owner_scope_kind:
     type: string
@@ -99,7 +98,7 @@ properties:
     description: >
       Set when THIS session is a plan's OWNER session — the reciprocal of
       `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a
-      `paused` owner session whose `owner_scope_kind == human` but which
+      `stopped` owner session whose `owner_scope_kind == human` but which
       is legitimately idle awaiting an owner correction on the named
       plan.
     example: "01J3ZQK8N2H8VXNRP5T7C9M4WE"

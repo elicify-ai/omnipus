@@ -4421,11 +4421,19 @@ export interface components {
              */
             title: string;
             /**
-             * @description Current lifecycle status of the session.
+             * @description Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
              * @example active
              * @enum {string}
              */
-            status: "active" | "archived" | "interrupted";
+            status: "active" | "archived" | "failed";
+            /**
+             * @description Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+             * @example working
+             * @enum {string}
+             */
+            lifecycle_state?: "working" | "waiting_for_answer" | "done" | "failed" | "stopped";
+            /** @description Present only when `lifecycle_state == stopped` (or the session's current generation last landed `stopped`) — the durable, lasting reason for the stop (who/when/why). Absent for every other `lifecycle_state`, and for a session with no lifecycle record. */
+            stop_note?: components["schemas"]["StopNote"];
             /**
              * Format: date-time
              * @description RFC3339 timestamp when the session was created.
@@ -15771,7 +15779,7 @@ export interface components {
              */
             goal_text: string;
             /**
-             * @description WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+             * @description WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
              * @example rounds_exhausted
              * @enum {string}
              */
@@ -16660,7 +16668,7 @@ export interface components {
         };
         /**
          * SessionLifecycleRecord
-         * @description The durable, per-entity-JSONL 8-state session-lifecycle record (ADR-053 §Contract Surface, S2). Distinct from `Session.status` (active/archived/ interrupted — the older chat-transcript-metadata status) and from `Plan.state` (the 5-state draft/approved/running/done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`/ `cancelled`/`timed_out`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+         * @description The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
          */
         SessionLifecycleRecord: {
             /**
@@ -16679,13 +16687,13 @@ export interface components {
              */
             resumed_from?: string | null;
             /**
-             * @description The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+             * @description The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
              * @example running
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
             /**
-             * @description Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
+             * @description Server-derived: true iff `state` is one of `completed`/`failed`.
              * @example false
              */
             readonly terminal: boolean;
@@ -16701,7 +16709,7 @@ export interface components {
              */
             owner_scope_id?: string;
             /**
-             * @description Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `paused` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
+             * @description Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `stopped` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
              * @example 01J3ZQK8N2H8VXNRP5T7C9M4WE
              */
             owns_plan_id?: string;
@@ -17053,8 +17061,8 @@ export interface components {
              */
             resumed_from?: string | null;
         };
-        /** @description The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment). */
-        DelegateActionRequest: components["schemas"]["DelegateRunAction"] | components["schemas"]["DelegateStatusAction"] | components["schemas"]["DelegateInboxAction"] | components["schemas"]["DelegateInboxAckAction"] | components["schemas"]["DelegateSteerAction"] | components["schemas"]["DelegateRespondAction"] | components["schemas"]["DelegateCancelAction"] | components["schemas"]["DelegateFollowUpAction"] | components["schemas"]["DelegatePeekAction"];
+        /** @description The `delegate` tool call's argument shape, discriminated by `action` — the ADR-053 §5.1 action set plus `clear_goal`, replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`clear_goal`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment). */
+        DelegateActionRequest: components["schemas"]["DelegateRunAction"] | components["schemas"]["DelegateStatusAction"] | components["schemas"]["DelegateInboxAction"] | components["schemas"]["DelegateInboxAckAction"] | components["schemas"]["DelegateSteerAction"] | components["schemas"]["DelegateRespondAction"] | components["schemas"]["DelegateCancelAction"] | components["schemas"]["DelegateClearGoalAction"] | components["schemas"]["DelegateFollowUpAction"] | components["schemas"]["DelegatePeekAction"];
         /**
          * DelegateRunAction
          * @description `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Steering is always available for a direct delegation — there is no longer a launch-profile choice gating it (see ADR-053 Amendment).
@@ -17252,6 +17260,22 @@ export interface components {
             hard?: boolean;
         };
         /**
+         * DelegateClearGoalAction
+         * @description `delegate` tool call, `action: clear_goal`. Clears the selected helper's goal without cascading to its descendants.
+         */
+        DelegateClearGoalAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "clear_goal";
+            /**
+             * @description The child session whose goal to clear.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+        };
+        /**
          * DelegateFollowUpAction
          * @description `delegate` tool call, `action: follow_up` (ADR-053 §5.1). Native: warm resume of the SAME session with retained context. 3P: cold — spawns a new session carrying the prior result. A terminal record is never mutated in place; this always mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7).
          */
@@ -17323,7 +17347,7 @@ export interface components {
              * @example queued
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
         };
         /**
          * DelegateStatusResponse
@@ -17401,7 +17425,7 @@ export interface components {
              * @example running
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
             /**
              * @description The most recent checkpoint summary, if any.
              * @example Wrote the write-set-scoped diff extractor; tests pending.
@@ -17637,6 +17661,41 @@ export interface components {
             error?: string;
         };
         /**
+         * StopNote
+         * @description The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
+         */
+        StopNote: {
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp when this stop note was written.
+             * @example 2026-07-22T10:05:00Z
+             */
+            at: string;
+            /**
+             * @description Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a lifetime-budget timeout, a goal-loop attempt supersession), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
+             * @example human:user-123
+             */
+            by: string;
+            /**
+             * Format: int64
+             * @description Stamped from the record's own generation at the moment of write — a documented stand-in until the per-session control ledger (sub-agent control plane ADR D4, "Controls") exists and can supply a true per-control monotonic sequence (`pkg/session/lifecycle_edge.go::StopNote` doc comment).
+             * @example 1
+             */
+            seq: number;
+            /**
+             * @description The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+             * @example stop
+             * @enum {string}
+             */
+            cause: "stop" | "redirect_pause" | "cascade" | "restart" | "timeout";
+            /**
+             * Format: int64
+             * @description Boot epoch of the writer — the monotonic boot counter, persisted in the data dir, of the boot that wrote this note. Present only for physical boot-restart notes — those whose `by` is the literal "restart" (sub-agent control plane ADR D8.3); absent otherwise. A non-boot goal-loop supersession is written by:"system" and carries no boot_seq.
+             * @example 1
+             */
+            boot_seq?: number;
+        };
+        /**
          * SubagentStartFrame
          * @description Server → client (FR-H-004). Opening bracket of a subagent span. Emitted when the agent loop spawns a sub-turn. The SPA uses span_id to group subsequent nested tool_call_start / tool_call_result frames under a collapsible span UI.
          */
@@ -17665,8 +17724,78 @@ export interface components {
             seq?: number;
         };
         /**
+         * ControlReceipt
+         * @description Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one accepted control on a steered session (`steer`, `stop`, `stop_all`, `redirect`, `resume`, `respond`, `escalate`, `clear_goal`). Replaces `SubagentStateFrame.yaml`'s former `steering_receipt` shape (`{correlation_id, applied_at}`, issue #870) with the full control-ledger receipt shape the ADR specifies.
+         *     Train-3 scope note: only the `steer` verb is wired to this shape today, via `pkg/agent/steer_frames.go::deliverSubagentState`. The per-session control ledger that assigns a true monotonic `seq` and tracks a control's own `accepted_at` moment (ADR D4, "Controls") is NOT built in this PR — `seq` and `accepted_at` are stamped as documented stand-ins (the same pattern `pkg/session/lifecycle_edge.go::StopNote.Seq` already uses: the record's own generation substituting for a ledger sequence until the ledger exists). `control_id` reuses the existing correlation id. `verb` and `state` are constants for this call site (`"steer"` / `"delivered"`) until other verbs are wired. Every other field below belongs to the ADR's full future shape and is never populated by this call site.
+         */
+        ControlReceipt: {
+            /**
+             * Format: int64
+             * @description Monotonic per-child control sequence (ADR D4). Stand-in value today — see the schema description above.
+             * @example 1
+             */
+            seq: number;
+            /**
+             * @description The accepted control's identifier — caller-supplied correlation id, or server-assigned when blank.
+             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+             */
+            control_id: string;
+            /**
+             * @description Which control this receipt reports on.
+             * @example steer
+             * @enum {string}
+             */
+            verb: "steer" | "stop" | "stop_all" | "redirect" | "resume" | "respond" | "escalate" | "clear_goal";
+            /**
+             * @description ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
+             * @example delivered
+             * @enum {string}
+             */
+            state: "queued" | "delivered" | "applied" | "superseded";
+            /**
+             * Format: date-time
+             * @description When the control was accepted into the ledger. Stand-in value today (same moment as `delivered_at`/`applied_at` at this call site, since no separate acceptance moment is tracked ahead of the ledger) — see the schema description above.
+             * @example 2026-07-22T10:00:30Z
+             */
+            accepted_at: string;
+            /**
+             * Format: date-time
+             * @description When a `steer` reached `delivered` (durable transcript injection).
+             * @example 2026-07-22T10:00:30Z
+             */
+            delivered_at?: string;
+            /**
+             * Format: date-time
+             * @description When a non-steer control reached `applied` (runtime-enforced effect).
+             * @example 2026-07-22T10:00:30Z
+             */
+            applied_at?: string;
+            /**
+             * Format: date-time
+             * @description When this control was superseded.
+             * @example 2026-07-22T10:00:30Z
+             */
+            superseded_at?: string;
+            /**
+             * Format: int64
+             * @description The superseding control's own `seq`, when `state == superseded`.
+             * @example 2
+             */
+            superseded_by_seq?: number;
+            /**
+             * @description Free-text reason, set for a `superseded` state or a notable transition.
+             * @example superseded by a newer redirect
+             */
+            reason?: string;
+            /**
+             * @description Control ids released together with this receipt (e.g. a RESUME that releases preserved restart-pending controls in sequence, ADR D4 boot reconciliation).
+             * @example []
+             */
+            released_control_ids?: string[];
+        };
+        /**
          * SubagentStateFrame
-         * @description Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
+         * @description Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional control-receipt acknowledgement (sub-agent control plane ADR D4/MIN-003; `control_receipt` replaces the former `steering_receipt`, see `ControlReceipt.yaml`). A dev install replaying an old persisted frame that still carries `steering_receipt` drops that unknown field rather than failing validation (ADR OBS-003) — the field is gone from this schema and Go's default lenient JSON decode on the replay path (`pkg/gateway/replay.go`) already does not reject it.
          */
         SubagentStateFrame: {
             /** @enum {string} */
@@ -17685,20 +17814,9 @@ export interface components {
              * @example running
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
-            /** @description Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3). */
-            steering_receipt?: {
-                /**
-                 * @description The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
-                 * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
-                 */
-                correlation_id: string;
-                /**
-                 * Format: date-time
-                 * @example 2026-07-22T10:00:30Z
-                 */
-                applied_at: string;
-            };
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
+            /** @description Present when this state ping is reporting that a prior control (`steer`/`respond`/...) reached a receipt-worthy state (INV-3). */
+            control_receipt?: components["schemas"]["ControlReceipt"];
             /**
              * Format: date-time
              * @description RFC3339 timestamp this state ping was emitted.
@@ -26865,6 +26983,7 @@ export type DelegateInboxAckAction = components["schemas"]["DelegateInboxAckActi
 export type DelegateSteerAction = components["schemas"]["DelegateSteerAction"];
 export type DelegateRespondAction = components["schemas"]["DelegateRespondAction"];
 export type DelegateCancelAction = components["schemas"]["DelegateCancelAction"];
+export type DelegateClearGoalAction = components["schemas"]["DelegateClearGoalAction"];
 export type DelegateFollowUpAction = components["schemas"]["DelegateFollowUpAction"];
 export type DelegatePeekAction = components["schemas"]["DelegatePeekAction"];
 export type DelegateSessionResponse = components["schemas"]["DelegateSessionResponse"];

@@ -188,7 +188,7 @@ func TestMetTaskGoalLeavesRealHistoryOnRerun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("createTaskSessionSync: %v", err)
 	}
-	rec := activeGoalForSession(sid)
+	rec := mustActiveGoalForSession(t, sid)
 	if rec == nil {
 		t.Fatal("arrange: the task's goal record must be active on the run's session")
 	}
@@ -322,7 +322,7 @@ func TestActivateTaskGoalRecordsRouting(t *testing.T) {
 		if err != nil {
 			t.Fatalf("createTaskSessionSync: %v", err)
 		}
-		rec := activeGoalForSession(sid)
+		rec := mustActiveGoalForSession(t, sid)
 		if rec == nil {
 			t.Fatal("the task's goal record must be active on the run's session")
 		}
@@ -341,7 +341,7 @@ func TestActivateTaskGoalRecordsRouting(t *testing.T) {
 		if err != nil {
 			t.Fatalf("createTaskSessionSync: %v", err)
 		}
-		rec := activeGoalForSession(sid)
+		rec := mustActiveGoalForSession(t, sid)
 		if rec == nil {
 			t.Fatal("the task's goal record must be active on the run's session")
 		}
@@ -396,7 +396,7 @@ func TestKeeperReachesAQuietTaskWithoutTestWiring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("createTaskSessionSync: %v", err)
 	}
-	rec := activeGoalForSession(sid)
+	rec := mustActiveGoalForSession(t, sid)
 	if rec == nil {
 		t.Fatal("the task's goal record must be active on the run's session")
 	}

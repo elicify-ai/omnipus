@@ -1118,7 +1118,7 @@ func TestWake_AppliesConfiguredTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(child): %v", err)
 	}
-	if rec.State != session.LifecycleTimedOut {
+	if rec.State != session.LifecycleStopped {
 		t.Fatalf("child state after a wake that exceeded its configured timeout = %q, want timed_out", rec.State)
 	}
 }

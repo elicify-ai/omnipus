@@ -95,7 +95,11 @@ func (al *AgentLoop) clearGoalWithOutcome(
 // the goal had actually completed.
 func (al *AgentLoop) clearGoalByUser(sessionID string, store *session.UnifiedStore, agentID string) string {
 	in := goalOutcomeInput{ending: generated.GoalOutcomeEndingStoppedByUser, agentID: agentID}
-	if rec := activeGoalForSession(sessionID); rec != nil {
+	rec, err := activeGoalForSession(sessionID)
+	if err != nil {
+		return al.reportGoalReadError(sessionID, "goal clear", err)
+	}
+	if rec != nil {
 		in.roundsUsed = rec.Round
 		in.maxRounds = rec.MaxRounds
 		in.content = fmt.Sprintf("Goal %q was stopped by the user after %d of %d round(s).",
