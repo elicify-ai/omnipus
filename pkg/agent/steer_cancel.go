@@ -158,8 +158,11 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 		return
 	}
 	// Genuine terminal failure: the one outcome/publication commit, then
-	// publish from the committed outbox entry.
-	res, commitErr := al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, "", failureReason)
+	// publish from the committed outbox entry. Turn-less completer: the
+	// claim is the session's currently registered execution (zero when none
+	// — the Finding 5/6 shapes this function exists for), so the boundary's
+	// identity match applies only when a live execution actually claims.
+	res, commitErr := al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, "", failureReason, al.executionClaimFor(sessionID))
 	if commitErr != nil {
 		logger.WarnCF("agent", "steer: terminal report: outcome/outbox commit failed",
 			map[string]any{"session_id": sessionID, "generation": generation, "error": commitErr.Error()})
@@ -491,6 +494,11 @@ func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, _ steer.P
 			// acknowledges or retires it" (D2). persistLocked would reject the
 			// carried tuple anyway — its generation no longer matches.
 			rec.FinalDelivery = nil
+			// The prior execution's identity is not carried either: G+1 has
+			// no current execution until its own admission stamps one
+			// (execution_identity.go) — a new admission never reuses the old
+			// run's identity slot.
+			rec.ExecutionID = nil
 			generation = rec.Generation
 			revived = true
 			return nil
@@ -510,6 +518,9 @@ func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, _ steer.P
 		rec.StopNote = nil
 		rec.NeedsInput = nil
 		rec.FailedReason = ""
+		// Same-generation resume: the stopped-out run's identity is history.
+		// The resuming admission stamps its own before dispatching.
+		rec.ExecutionID = nil
 		revived = true
 		return nil
 	})

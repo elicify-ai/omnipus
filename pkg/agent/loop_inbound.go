@@ -937,8 +937,21 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	// state-written by this path.
 	release := func() {}
 	if rec.SteeredBy != nil {
+		// D2 round-4 R4-MAJ-001: this wake is an admission, so it mints its
+		// run identity and stamps it durably BEFORE the gate enqueues it —
+		// the same order dispatchSteeredSessionWithReservation owes. A
+		// promotion of this wake's queue entry re-stamps the SAME id; the
+		// entry never invents one of its own.
+		wakeRunID := freshRunID()
+		wakeBootSeq := al.bootEpochFor()
+		if stampErr := stampAdmissionExecution(lifecycle, sessionID, generation, wakeRunID, wakeBootSeq); stampErr != nil {
+			return "", fmt.Errorf("steer: wake: %w", stampErr)
+		}
+		if identityErr := ts.setExecutionIdentity(wakeRunID, wakeBootSeq); identityErr != nil {
+			return "", fmt.Errorf("steer: wake: %w", identityErr)
+		}
 		gate := al.steerAdmission()
-		admitted, _, _ := gate.tryAdmit(sessionID, generation)
+		admitted, _, _ := gate.tryAdmitRun(sessionID, generation, wakeRunID)
 		if !admitted {
 			// At the cap. Do not record a consumed marker or acknowledge any
 			// inbox entry yet; this wake must reach the promoted turn. System

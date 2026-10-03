@@ -275,10 +275,16 @@ func resetMemoryAdmissionRefusalLogForTest() {
 // slots free (turn end -> steerAdmission.release -> drainSteerQueue).
 
 // steerQueueEntry is one FIFO-queued dispatch awaiting a free admission
-// slot.
+// slot. runID is the admission's execution identity (execution_identity.go)
+// minted and durably stamped BEFORE this entry was enqueued, copied here
+// unchanged: the promotion dispatches under the SAME identity — a promoted
+// admission never mints a second run_id for the turn it already owns.
+// Empty only for entries enqueued by paths that never stamped (the bare
+// gate unit tests); a promoted empty entry mints fresh at dispatch.
 type steerQueueEntry struct {
 	sessionID  string
 	generation int
+	runID      string
 }
 
 // steerAdmission is the turn-counting admission gate (I-3 "Admission"). cap
@@ -311,7 +317,17 @@ func newSteerAdmission(resolveCap func() int) *steerAdmission {
 // "Dispatch — not Launch — decides atomically under the admission lock").
 // Returns (true, 0) when admitted; (false, 1-based position) when queued —
 // never blocks.
+//
+// The two-argument form is the pre-identity-seam signature the gate's unit
+// tests call; production admissions call tryAdmitRun so the queue entry
+// carries the stamped run identity.
 func (g *steerAdmission) tryAdmit(sessionID string, gen int) (admitted bool, queuePosition, concurrencyLimit int) {
+	return g.tryAdmitRun(sessionID, gen, "")
+}
+
+// tryAdmitRun is tryAdmit with the admission's execution identity: the
+// queue entry it appends copies runID unchanged (execution_identity.go).
+func (g *steerAdmission) tryAdmitRun(sessionID string, gen int, runID string) (admitted bool, queuePosition, concurrencyLimit int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -322,7 +338,7 @@ func (g *steerAdmission) tryAdmit(sessionID string, gen int) (admitted bool, que
 		}
 	}
 	if len(g.active) >= effectiveCap {
-		g.queue = append(g.queue, steerQueueEntry{sessionID: sessionID, generation: gen})
+		g.queue = append(g.queue, steerQueueEntry{sessionID: sessionID, generation: gen, runID: runID})
 		return false, len(g.queue), effectiveCap
 	}
 	g.active[sessionID] = gen
@@ -468,7 +484,7 @@ func (al *AgentLoop) drainSteerQueue(sessionID string, generation int) {
 		return
 	}
 	al.goSteeredTurn(func() {
-		if _, err := al.dispatchSteeredSessionReserved(context.Background(), next.sessionID, next.generation); err != nil {
+		if _, err := al.dispatchSteeredSessionReserved(context.Background(), next.sessionID, next.generation, next.runID); err != nil {
 			if classifyDrainDispatchError(err) {
 				logger.InfoCF("agent", "steer: drain queue: promoted session was no longer dispatchable (legitimate)",
 					map[string]any{"session_id": next.sessionID, "generation": next.generation, "error": err.Error()})

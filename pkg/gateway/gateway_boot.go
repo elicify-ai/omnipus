@@ -1030,6 +1030,9 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 
 	stg.agentLoop.SetSteerAudienceDeps(resolver, observer, deliverer)
 	stg.agentLoop.SetSteerSessionLauncher(launcher)
+	// D2 round-4 R4-MAJ-001: admission identity stamping reads THIS store's
+	// boot epoch; the loop never mints (execution_identity.go).
+	stg.agentLoop.SetBootEpochStore(stg.bootEpoch)
 	if stg.runningServices.ChannelManager != nil {
 		stg.runningServices.ChannelManager.SetSteerAudienceResolver(resolver, observer)
 	}

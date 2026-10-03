@@ -101,6 +101,20 @@ type turnState struct {
 	// exactly as before: nothing compares against a real generation.
 	generation int
 
+	// executionRunID/executionBootSeq are the turn's immutable execution
+	// handle (D2 round-4 R4-MAJ-001): the (run_id, boot_seq) half of the
+	// admission identity this turn runs under, set ONCE by its admission
+	// path (dispatch, wake) after reconstructSteeredTurn and before
+	// registration — never rewritten afterwards, so a completion carrying
+	// this handle provably names the admission that started it, and a
+	// provider-cancel slot fired through this turnState can only ever
+	// belong to THIS admission (a new admission builds a new turnState with
+	// its own cancel funcs). Zero-valued for turnStates no steered admission
+	// built (bare fixtures, non-steered turns); executionIdentity reports
+	// "" then, and the completion boundary treats the turn as claim-less.
+	executionRunID   string
+	executionBootSeq uint64
+
 	channel     string
 	chatID      string
 	userMessage string
@@ -1033,6 +1047,31 @@ func (al *AgentLoop) getActiveTurnState(sessionKey string) *turnState {
 		return ts
 	}
 	return nil
+}
+
+// setExecutionIdentity stamps the turn's immutable execution handle
+// (execution_identity.go): the admission's (run_id, boot_seq), written
+// exactly once by the admission path after reconstructSteeredTurn and
+// before registration. A second call is a wiring bug — the handle must not
+// move under a live turn — so the setter refuses it visibly instead of
+// overwriting.
+func (ts *turnState) setExecutionIdentity(runID string, bootSeq uint64) error {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.executionRunID != "" {
+		return fmt.Errorf("turn: execution identity already set to %q, refusing re-stamp as %q", ts.executionRunID, runID)
+	}
+	ts.executionRunID = runID
+	ts.executionBootSeq = bootSeq
+	return nil
+}
+
+// executionIdentity reads the turn's immutable execution handle under the
+// state lock. ("", 0) means the turn never carried a steered admission.
+func (ts *turnState) executionIdentity() (runID string, bootSeq uint64) {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.executionRunID, ts.executionBootSeq
 }
 
 // getAnyActiveTurnState returns any active turn state (for backward compatibility)
