@@ -259,13 +259,34 @@ type StopNote struct {
 	By    string    `json:"by"`
 	Seq   uint64    `json:"seq"`
 	Cause StopCause `json:"cause"`
+	// BootSeq is the boot epoch of the boot that WROTE this note — the
+	// monotonic boot counter persisted in the data dir (sub-agent control
+	// plane ADR D8.3). Present (>= 1) on restart notes; zero — omitted on
+	// the wire — otherwise, matching StopNote.yaml's optional
+	// absent-not-null integer/int64/minimum-1 shape. No writer stamps it
+	// yet: the boot-epoch store, persist-time range/restart validation and
+	// the first-act-of-boot mint are separate later units, so every note
+	// written today still omits the key.
+	BootSeq uint64 `json:"boot_seq,omitempty"`
 }
 
 // StopActorSystem names a stop_note.by actor with no session.Principal
-// behind it — a lifetime-budget timeout, a boot-recovery restart, or a
-// goal-loop attempt supersession, none of which are performed BY a human or
-// agent principal the way stop/cascade/redirect_pause are.
+// behind it — a lifetime-budget timeout or a goal-loop attempt
+// supersession, neither of which is performed BY a human or agent principal
+// the way stop/cascade/redirect_pause are. A boot-recovery restart is NOT a
+// StopActorSystem note: per sub-agent control plane ADR D8.3 it carries the
+// StopActorRestart literal below.
 const StopActorSystem = "system"
+
+// StopActorRestart is the stop_note.by actor literal for a boot-recovery
+// restart note (sub-agent control plane ADR D8.3: the note is
+// {at, by: "restart", seq, cause: "restart", boot_seq}). Distinct from
+// StopActorSystem: the goal loop's non-boot attempt supersession also
+// writes cause=restart today but keeps StopActorSystem — that split is
+// deliberate (no writer stamps boot_seq on it), and the eventual
+// boot-sequence validation must not read cause=restart as proof of a boot
+// restart while that writer exists.
+const StopActorRestart = "restart"
 
 // StopActorFromPrincipal formats p as a stop_note.by display string
 // ("human:<id>" / "agent:<id>"). Used at every site that has a real
