@@ -246,8 +246,25 @@ func (al *AgentLoop) commitSteeredCompletion(
 	// the control that ordered it (nil when the landing synthesized its note:
 	// no acceptance, no history). Never earlier: a bare intent is not a
 	// landed stop, and the final applied receipt waits for the D6 notice.
+	//
+	// This is the ACTIVE-turn completion's history write, not the never-ran
+	// stop landing's: the turn's caller has already been answered when this
+	// commit runs, so a history failure cannot ride a stop call's return —
+	// surfacing it needs the durable pending-error/status/boot-retry surface
+	// that is W1/W3 scope (reported separately by the W2a history-failure
+	// round). Until that surface exists the failure stays a loud WARN plus
+	// the retained note+effect tuple, which boot reconciliation retries.
 	if res.landedStop && res.landed != nil {
-		al.recordLandedStopLedger(rec.SessionID, *res.landed)
+		if histErr := al.recordLandedStopLedger(rec.SessionID, *res.landed); histErr != nil {
+			logger.WarnCF("agent", "steer: stop landing: landed-stop history not recorded (recoverable from the durable stop note and ledger intent)",
+				map[string]any{
+					"session_id": rec.SessionID,
+					"seq":        res.landed.Seq,
+					"control_id": res.landed.ControlID,
+					"generation": res.landed.Generation,
+					"error":      histErr.Error(),
+				})
+		}
 	}
 	return res, nil
 }

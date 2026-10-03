@@ -80,7 +80,17 @@ func (al *AgentLoop) SteerGenerationCancel(ctx context.Context, sessionID string
 	// [Finding 5, ADR-091 fix lane 2] No live turn was found for this
 	// stamped session — it was only ever queued or parked and never ran a
 	// turn, so nothing else will ever terminalise it or report it upward.
-	al.terminaliseNeverRanStop(ctx, sessionID, generation)
+	// The landing itself is durable (stopped state, note, effect), but a
+	// failed landed-stop history append is RETURNED here so the cascade's
+	// cancelStamped puts the session in report.Unreachable — the visible
+	// channel the stop caller reads — instead of the stop reporting success
+	// with zero history (D2 round-3 MAJ-001). The original note+effect stay
+	// on the record either way: an explicit RESUME (refused while the ledger
+	// stays unwritable) or boot reconciliation retries the append from
+	// exactly that pair.
+	if err := al.terminaliseNeverRanStop(ctx, sessionID, generation); err != nil {
+		return GenerationCancelResult{}, err
+	}
 	return GenerationCancelResult{}, nil
 }
 
@@ -135,27 +145,30 @@ func (al *AgentLoop) WriteSteerRevivalState(_ context.Context, sessionID string,
 // Refuses (logged, never fatal to the caller) when the record has moved
 // past generation, is already terminal, or is already stopped — a Stop, a
 // Revive or another completion racing this write is a legitimate outcome.
+// The STOPPED arm is the one error-bearing exit: a landed-stop history
+// append failure is returned so the stop cascade can surface it
+// (report.Unreachable) — the refusal arms and the terminal-failure arm
+// still return nil, exactly as before.
 func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	ctx context.Context, sessionID string, generation int,
 	nextState session.LifecycleState, outcome steer.Outcome, failureReason string,
-) {
+) error {
 	if al == nil {
-		return
+		return nil
 	}
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
-		return
+		return nil
 	}
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil {
-		return
+		return nil
 	}
 	if rec.Generation != generation || rec.Terminal() {
-		return
+		return nil
 	}
 	if nextState == session.LifecycleStopped {
-		al.landSteeredStopReport(sessionID, generation, outcome)
-		return
+		return al.landSteeredStopReport(sessionID, generation, outcome)
 	}
 	// Genuine terminal failure: the one outcome/publication commit, then
 	// publish from the committed outbox entry.
@@ -163,13 +176,14 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	if commitErr != nil {
 		logger.WarnCF("agent", "steer: terminal report: outcome/outbox commit failed",
 			map[string]any{"session_id": sessionID, "generation": generation, "error": commitErr.Error()})
-		return
+		return nil
 	}
 	if res.kind == steeredCommitTerminal {
 		if _, pubErr := al.publishCommittedFinal(ctx, rec, res); pubErr != nil {
 			logCommittedFinalPublishFailure("steer: terminal report", sessionID, generation, res, pubErr)
 		}
 	}
+	return nil
 }
 
 // landSteeredStopReport is the stop path's durable half: one Mutate that
@@ -185,15 +199,17 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 // receipt cannot precede that notice's durability, so this landing never
 // writes one. A history-append failure is visible and recoverable: the
 // durable stop note plus the ledger intent are exactly what boot
-// reconciliation retries from.
-func (al *AgentLoop) landSteeredStopReport(sessionID string, generation int, outcome steer.Outcome) {
+// reconciliation retries from — and it is RETURNED to the caller, so the
+// stop call surfaces it (report.Unreachable) instead of reporting success
+// with zero history.
+func (al *AgentLoop) landSteeredStopReport(sessionID string, generation int, outcome steer.Outcome) error {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
-		return
+		return nil
 	}
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil {
-		return
+		return nil
 	}
 	// The fence this landing carries out must still be current: an explicit
 	// same-generation RESUME that cleared it (D2) supersedes the stop, and
@@ -232,8 +248,24 @@ func (al *AgentLoop) landSteeredStopReport(sessionID string, generation int, out
 	case mutateErr == nil:
 		// The stop landed. MAJ-003: this write ends the TURN, never the
 		// child's session-owned goal — no goal step belongs in a stop path.
+		// A failed history append keeps the landed state, note and effect
+		// exactly as written (the retry anchor) and returns the failure so
+		// the stop call's caller hears it instead of success-with-no-history.
 		if landed != nil {
-			al.recordLandedStopLedger(sessionID, *landed)
+			if histErr := al.recordLandedStopLedger(sessionID, *landed); histErr != nil {
+				// Full cause (including the ledger's absolute path) stays in
+				// the server-side log only; the returned sentinel is the
+				// path-free public reason the cascade publishes.
+				logger.WarnCF("agent", "steer: stop landing: landed-stop history not recorded (recoverable from the durable stop note and ledger intent)",
+					map[string]any{
+						"session_id": sessionID,
+						"seq":        landed.Seq,
+						"control_id": landed.ControlID,
+						"generation": generation,
+						"error":      histErr.Error(),
+					})
+				return fmt.Errorf("%w (control %s, seq %d)", errLandedStopHistoryNotRecorded, landed.ControlID, landed.Seq)
+			}
 		}
 	case errors.Is(mutateErr, errTerminalReportAlreadyStopped),
 		errors.Is(mutateErr, errTerminalReportFenceSuperseded),
@@ -247,6 +279,7 @@ func (al *AgentLoop) landSteeredStopReport(sessionID string, generation int, out
 		logger.WarnCF("agent", "steer: terminal report: persist stopped state failed",
 			map[string]any{"session_id": sessionID, "generation": generation, "error": mutateErr.Error()})
 	}
+	return nil
 }
 
 // landedStopFromRecord builds the D6 landed-stop history payload from a
@@ -271,25 +304,19 @@ func landedStopFromRecord(cur *session.LifecycleRecord) *session.LandedStop {
 }
 
 // recordLandedStopLedger appends the landed-stop history line after a
-// durable landing. A failure stays visible: the stop itself is already
-// durable, and the stop note plus the ledger intent are exactly what boot
-// reconciliation retries from — the append is idempotent by seq, so the
-// retry verifies the tuple instead of duplicating history.
-func (al *AgentLoop) recordLandedStopLedger(sessionID string, landed session.LandedStop) {
+// durable landing. The returned error is the CALLER's to surface: the stop
+// itself is already durable, and the stop note plus the ledger intent are
+// exactly what boot reconciliation retries from — the append is idempotent
+// by seq, so the retry verifies the tuple instead of duplicating history.
+// A failure confined to a log line while the stop call reports success is
+// the silent loss the W2a history-failure witnesses forbid (D2 round-3
+// MAJ-001: a persistence failure is surfaced, never claimed as delivery).
+func (al *AgentLoop) recordLandedStopLedger(sessionID string, landed session.LandedStop) error {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
-		return
+		return nil
 	}
-	if err := lifecycle.RecordLandedStop(sessionID, landed); err != nil {
-		logger.WarnCF("agent", "steer: stop landing: landed-stop history not recorded (recoverable from the durable stop note and ledger intent)",
-			map[string]any{
-				"session_id": sessionID,
-				"seq":        landed.Seq,
-				"control_id": landed.ControlID,
-				"generation": landed.Generation,
-				"error":      err.Error(),
-			})
-	}
+	return lifecycle.RecordLandedStop(sessionID, landed)
 }
 
 // errTerminalReport* are the stop-landing's Mutate-refusal sentinels — the
@@ -302,6 +329,16 @@ var (
 	errTerminalReportFenceSuperseded = errors.New("steer: terminal report: the stop fence was cleared (superseded by an explicit resume)")
 )
 
+// errLandedStopHistoryNotRecorded is the typed classification of a failed
+// landed-stop history append. Its text is the PUBLIC reason: it says the
+// stop itself LANDED (the failure is the history projection, never the
+// stop), names the repair, and deliberately carries NO underlying detail —
+// the raw append error (which contains the control-ledger's absolute path)
+// stays in the server-side WARN log, never in a CancelReport.Unreachable
+// reason that the gateway publishes to clients. Consumers classify with
+// errors.Is; the durable note+effect tuple is the retry anchor either way.
+var errLandedStopHistoryNotRecorded = errors.New("steer: stop landing: the stop landed, but its landed-stop history could not be recorded; retry after storage is repaired")
+
 // terminaliseNeverRanStop closes Finding 5's gap: SteerGenerationCancel found
 // no live turn to cancel for a session this cascade just stamped Stop for —
 // it was only ever queued or parked and never ran a turn, so nothing will
@@ -309,20 +346,22 @@ var (
 // cancelled turn delivers via completeSteeredTurn. Without this, the
 // session's own parent (hasRunningOrQueuedDescendant, steer_completion.go)
 // keeps seeing a queued/needs_input descendant forever and never completes.
-func (al *AgentLoop) terminaliseNeverRanStop(ctx context.Context, sessionID string, generation int) {
+// The only error-bearing exit is the stopped landing's history append
+// (landSteeredStopReport); every not-ours-to-act arm returns nil.
+func (al *AgentLoop) terminaliseNeverRanStop(ctx context.Context, sessionID string, generation int) error {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
-		return
+		return nil
 	}
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil {
-		return
+		return nil
 	}
 	// Only a session THIS Stop actually stamped, still sitting at the
 	// generation it was stamped for — a concurrent Revive landing in the
 	// meantime must not be clobbered.
 	if rec.Generation != generation || rec.Terminal() || rec.Stop == nil || rec.Stop.Generation != generation {
-		return
+		return nil
 	}
 	// ADR-093 MAJ-001 (test-plan row "Web Stop on a chat root that has
 	// delegated"): a session with NO steering edge — a standing chat root —
@@ -336,9 +375,9 @@ func (al *AgentLoop) terminaliseNeverRanStop(ctx context.Context, sessionID stri
 	// here would also CLEAR that marker (reportSteeredSessionTerminalUpward
 	// spends it in its Mutate), un-delivering the Stop the user pressed.
 	if rec.SteeredBy == nil {
-		return
+		return nil
 	}
-	al.reportSteeredSessionTerminalUpward(ctx, sessionID, generation,
+	return al.reportSteeredSessionTerminalUpward(ctx, sessionID, generation,
 		session.LifecycleStopped, steer.OutcomeInterrupted, "interrupted: the session was cancelled")
 }
 

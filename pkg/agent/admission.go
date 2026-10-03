@@ -482,8 +482,15 @@ func (al *AgentLoop) drainSteerQueue(sessionID string, generation int) {
 			// check is not blocked forever on a worker that will never run.
 			logger.WarnCF("agent", "steer: drain queue: dispatch of the next queued session failed — landing it terminal so its parent is not blocked forever",
 				map[string]any{"session_id": next.sessionID, "generation": next.generation, "error": err.Error()})
-			al.reportSteeredSessionTerminalUpward(context.Background(), next.sessionID, next.generation,
-				session.LifecycleFailed, steer.OutcomeFailed, fmt.Sprintf("dispatch_failed: %v", err))
+			// The FAILED arm's only error-bearing exit is the stopped
+			// landing's history append, which this arm never takes; the
+			// check is explicit so a future error-bearing exit here cannot
+			// silently disappear.
+			if repErr := al.reportSteeredSessionTerminalUpward(context.Background(), next.sessionID, next.generation,
+				session.LifecycleFailed, steer.OutcomeFailed, fmt.Sprintf("dispatch_failed: %v", err)); repErr != nil {
+				logger.WarnCF("agent", "steer: drain queue: terminal landing reported a failure",
+					map[string]any{"session_id": next.sessionID, "generation": next.generation, "error": repErr.Error()})
+			}
 		}
 	})
 }
