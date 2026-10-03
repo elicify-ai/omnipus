@@ -4832,24 +4832,6 @@ func (e LibraryPreviewTokenResponseScope) Valid() bool {
 	}
 }
 
-// Defines values for LibraryUploadResponseEntriesPreviewProfile.
-const (
-	LibraryUploadResponseEntriesPreviewProfileMailRestricted LibraryUploadResponseEntriesPreviewProfile = "mail_restricted"
-	LibraryUploadResponseEntriesPreviewProfileWorkspace      LibraryUploadResponseEntriesPreviewProfile = "workspace"
-)
-
-// Valid indicates whether the value is a known member of the LibraryUploadResponseEntriesPreviewProfile enum.
-func (e LibraryUploadResponseEntriesPreviewProfile) Valid() bool {
-	switch e {
-	case LibraryUploadResponseEntriesPreviewProfileMailRestricted:
-		return true
-	case LibraryUploadResponseEntriesPreviewProfileWorkspace:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for MailAttachmentPreviewRequestFolder.
 const (
 	MailAttachmentPreviewRequestFolderDrafts MailAttachmentPreviewRequestFolder = "drafts"
@@ -18635,57 +18617,8 @@ type LibraryTransferRequest struct {
 // LibraryUploadResponse Response from POST /api/v1/library/{workspace_id}/upload (HTTP 201). Returns the work-tree entries created by the upload — mirrors UploadFilesResponse's shape for the session-scoped uploader, but with LibraryEntry (path-keyed) items rather than UploadedFile.
 type LibraryUploadResponse struct {
 	// Entries Entries created by this upload, in the order the multipart parts were received.
-	Entries []struct {
-		// IsDir True when this entry is a directory.
-		IsDir bool `json:"is_dir"`
-
-		// IsHidden True when this entry's name begins with a dot (".") — the sole, explicit definition of "hidden" for the Library, so client and server cannot drift on it. Excluded from GET .../entries by default (see that operation's include_hidden parameter); the reserved work-tree directory where uploads land, work/.library/, is the prototypical hidden entry. Included and set true here so the SPA can still style a hidden entry distinctly when the caller explicitly asks to see it.
-		IsHidden bool `json:"is_hidden"`
-
-		// IsKnowledgeBase True when this DIRECTORY is itself a knowledge base, using the exact same marker-based detection GET /library/{workspace_id}/knowledge answers per folder (KnowledgeBaseInfo.is_knowledge_base) — computed once per directory entry during listing so the Library explorer's Vault icon is a fact the server states, not something the client infers from whichever folders it happens to have queried this session (a directory never opened yet, or a session whose cache was evicted, used to render as a plain folder even though it was a real knowledge base). Present (true or false) for a directory whenever detection could complete; absent when the entry is a file, or when detection could not complete for this one row (a listing failure on a single entry never fails the whole directory listing). Optional on the wire so SPA builds and fixtures that predate this field keep working.
-		IsKnowledgeBase *bool `json:"is_knowledge_base,omitempty"`
-
-		// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
-		IsTextEditable bool `json:"is_text_editable"`
-
-		// Mime Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
-		Mime *string `json:"mime,omitempty"`
-
-		// ModifiedAt RFC3339 UTC last-modified timestamp of the underlying file or directory.
-		ModifiedAt time.Time `json:"modified_at"`
-
-		// Mount Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
-		// It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
-		Mount *struct {
-			// Broad True when the target is one of the deliberately wide locations — the home directory, the filesystem root, or a top-level system directory. Such a mount is ALLOWED (operator decision, FR-7.4/FR-7.6) but must never be silent: the client is expected to mark it distinctly from an ordinary mount. Recomputed from the path on every read rather than stored, so it cannot go stale against the definition.
-			Broad bool `json:"broad"`
-
-			// HostPath The realpath-resolved absolute path on the operator's machine that this mount grants write access to. Shown in the UI rather than hidden behind a tooltip: it is the whole reason the entry is treated differently, and a grant the operator cannot see is a grant they cannot review.
-			HostPath string `json:"host_path"`
-
-			// Name The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
-			Name string `json:"name"`
-		} `json:"mount,omitempty"`
-
-		// Name Base filename or directory name (final path segment).
-		Name string `json:"name"`
-
-		// Path Workspace-relative path from the work-tree root (workspaces/<id>/work/, the root the Library explorer shows in full — not merely the reserved work/.library/ upload directory), forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
-		Path string `json:"path"`
-
-		// PreviewProfile Preview isolation profile for this file (founder Q5=A, recorded 2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile" row; mail-live-access-landing-order register row 8 — W0 is the single publisher). workspace = the ordinary isolated script-permitting workspace profile. mail_restricted = the file was written by an explicit Save from Mail: original bytes preserved, rendered with scripts OFF by default under the stricter mail-derived policy. The mail-derived marker is written only by explicit Save (never by Open), must survive move, copy, rename and restore-from-backup (provenance survival is a traced, proved implementation obligation), and a missing or corrupt expected marker fails safely rather than silently upgrading a known mail-derived file. Absent on entries that predate this field = ordinary workspace profile.
-		PreviewProfile *LibraryUploadResponseEntriesPreviewProfile `json:"preview_profile,omitempty"`
-
-		// PreviewScriptsAllowed The per-file scripts checkbox (founder Q5=A) — true only when the user explicitly allowed scripts for THIS one file, switching only its preview to the ordinary isolated script-permitting profile. Visible, per file, never silent and never global. Meaningful only with preview_profile=mail_restricted; on ordinary workspace files the isolated profile is the default state and this field is absent.
-		PreviewScriptsAllowed *bool `json:"preview_scripts_allowed,omitempty"`
-
-		// Size File size in bytes. Always 0 for directories.
-		Size int64 `json:"size"`
-	} `json:"entries"`
+	Entries []LibraryEntry `json:"entries"`
 }
-
-// LibraryUploadResponseEntriesPreviewProfile Preview isolation profile for this file (founder Q5=A, recorded 2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile" row; mail-live-access-landing-order register row 8 — W0 is the single publisher). workspace = the ordinary isolated script-permitting workspace profile. mail_restricted = the file was written by an explicit Save from Mail: original bytes preserved, rendered with scripts OFF by default under the stricter mail-derived policy. The mail-derived marker is written only by explicit Save (never by Open), must survive move, copy, rename and restore-from-backup (provenance survival is a traced, proved implementation obligation), and a missing or corrupt expected marker fails safely rather than silently upgrading a known mail-derived file. Absent on entries that predate this field = ordinary workspace profile.
-type LibraryUploadResponseEntriesPreviewProfile string
 
 // LibraryWorkspaceNode One workspace as a node in the Library's virtual root listing (GET /api/v1/library/workspaces) — the sidebar entry point (library-spec.md D-3: "two entry points, one component"). Drilling into a node scopes all subsequent Library operations to that workspace's work tree via {workspace_id}.
 type LibraryWorkspaceNode struct {

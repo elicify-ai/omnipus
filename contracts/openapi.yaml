@@ -329,8 +329,33 @@ components:
       $ref: ./components/schemas/CreateVaultRequest.yaml
     LibraryRenameRequest:
       $ref: ./components/schemas/LibraryRenameRequest.yaml
+    # LibraryUploadResponse is hosted INLINE here (not via its schema file),
+    # following the ADR-034 precedent for AgentCreateRequest: the entries
+    # items must reach LibraryEntry through an INTERNAL component ref. The
+    # former relative form ($ref: './LibraryEntry.yaml' inside
+    # components/schemas/LibraryUploadResponse.yaml) made oapi-codegen inline
+    # the array items as an anonymous struct with a response-named preview
+    # enum, which forced the upload handler to mirror the element in a
+    # hand-written wire struct — the constraint-#8 lint finding this hosting
+    # removes. The element is LibraryEntry on the wire either way; the
+    # now-unreferenced components/schemas/LibraryUploadResponse.yaml is
+    # deleted together with this hosting change.
     LibraryUploadResponse:
-      $ref: ./components/schemas/LibraryUploadResponse.yaml
+      description: >
+        Response from POST /api/v1/library/{workspace_id}/upload (HTTP 201).
+        Returns the work-tree entries created by the upload — mirrors
+        UploadFilesResponse's shape for the session-scoped uploader, but with
+        LibraryEntry (path-keyed) items rather than UploadedFile.
+      type: object
+      additionalProperties: false
+      required:
+        - entries
+      properties:
+        entries:
+          type: array
+          description: Entries created by this upload, in the order the multipart parts were received.
+          items:
+            $ref: '#/components/schemas/LibraryEntry'
     LibraryTransferRequest:
       $ref: ./components/schemas/LibraryTransferRequest.yaml
     LibraryMkdirRequest:

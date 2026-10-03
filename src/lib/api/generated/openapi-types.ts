@@ -5201,10 +5201,7 @@ export interface components {
              */
             to: string;
         };
-        /**
-         * LibraryUploadResponse
-         * @description Response from POST /api/v1/library/{workspace_id}/upload (HTTP 201). Returns the work-tree entries created by the upload — mirrors UploadFilesResponse's shape for the session-scoped uploader, but with LibraryEntry (path-keyed) items rather than UploadedFile.
-         */
+        /** @description Response from POST /api/v1/library/{workspace_id}/upload (HTTP 201). Returns the work-tree entries created by the upload — mirrors UploadFilesResponse's shape for the session-scoped uploader, but with LibraryEntry (path-keyed) items rather than UploadedFile. */
         LibraryUploadResponse: {
             /** @description Entries created by this upload, in the order the multipart parts were received. */
             entries: components["schemas"]["LibraryEntry"][];
