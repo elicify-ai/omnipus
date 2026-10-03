@@ -108,7 +108,12 @@ type gitRepo struct {
 
 // findGitRepo walks up from start looking for a ".git" directory or a ".git"
 // file (worktree/submodule pointer, "gitdir: <path>"). nil with no error
-// means no repository encloses start.
+// means no repository encloses start. The walk runs over the RESOLVED path:
+// git itself works on resolved paths, and a symlinked data-root segment
+// whose target sits inside a repository must find that repository — per-
+// component stats over the logical path saw only logical ancestors and
+// missed an enclosing repo behind a symlink (the F11 finding). A resolution
+// failure is "not provable": the gate refuses rather than guess.
 func findGitRepo(start string) (*gitRepo, error) {
 	dir, err := filepath.Abs(start)
 	if err != nil {
@@ -214,14 +219,23 @@ func (r *gitRepo) tracksUnder(relDir string) (bool, error) {
 // path relative to the repo root) with check-ignore-equivalent semantics.
 func (r *gitRepo) pathIgnored(relDir string) (bool, error) {
 	// Rule sources in git's precedence order, highest first: the .gitignore
-	// stack from the evaluated directory up to the root (deeper overrides
-	// shallower), then $GIT_DIR/info/exclude. Missing sources contribute no
-	// rules; a PRESENT source that cannot be parsed fails closed.
+	// stack from the evaluated directory's PARENT up to the root (deeper
+	// overrides shallower), then $GIT_DIR/info/exclude. Missing sources
+	// contribute no rules; a PRESENT source that cannot be parsed fails
+	// closed.
 	segs := strings.Split(relDir, string(filepath.Separator))
 	var sources []ruleSource
-	// i counts segments of relDir BELOW the repo root: i == len(segs)-1 is the
-	// evaluated directory itself; i == -1 is the repo root's own .gitignore.
-	for i := len(segs) - 1; i >= -1; i-- {
+	// i counts segments of relDir BELOW the repo root: i == len(segs)-2 is
+	// the evaluated directory's parent; i == -1 is the repo root's own
+	// .gitignore. Git decides a directory's ignore state from its parent
+	// chain only — a .gitignore INSIDE the evaluated directory never decides
+	// the directory itself (check-ignore reads it for paths below, never for
+	// the directory), so the directory's own file is not on the stack:
+	// consulting it let a planted bare line ("mail-cache" inside
+	// mail-cache/.gitignore) manufacture the exclusion git would never
+	// apply, while git staged the ciphertext on the next add (the F10
+	// finding).
+	for i := len(segs) - 2; i >= -1; i-- {
 		dirElems := append([]string{r.root}, segs[:i+1]...)
 		rules, err := parseIgnoreFile(filepath.Join(append(dirElems, ".gitignore")...))
 		if err != nil {
@@ -368,7 +382,12 @@ func ruleMatches(rule *ignoreRule, relPath string, baseDepth int, isDir bool) bo
 		return false
 	}
 	segs := strings.Split(relPath, "/")
-	if len(segs) < baseDepth {
+	// A source file's patterns apply only to paths BELOW its directory
+	// (git semantics): a source at baseDepth never decides a path at or
+	// above that depth — in particular a basename rule inside
+	// <dir>/.gitignore never matches <dir> itself, and a basename rule in
+	// a/.gitignore never matches the prefix "a" (only "a/…" below it).
+	if len(segs) <= baseDepth {
 		return false
 	}
 	if rule.anchored {
