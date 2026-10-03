@@ -90,8 +90,13 @@ func (a *restAPI) emitMailOperationTiming(op, agentID, workspaceID string, start
 }
 
 // MailOperationSample is one complete per-operation record in w6-proof
-// §6.1's frozen shape (the envelope, not a second definition).
-type MailOperationSample struct {
+// §6.1's frozen shape (the envelope, not a second definition). The record
+// never crosses the gateway/SPA boundary — w6-proof §16.1 PUBLISHES rules
+// the surface "in-process/log" and assigns W0 "no contract impact": the
+// record is delivered only to the injected in-process sink and mirrored to
+// the server's slog (key-value attrs, not a struct marshal), and the json
+// field names exist to mirror the frozen shape, not to serialize it.
+type MailOperationSample struct { // not-wire-format: w6-proof §16.1's frozen in-process/log observability record ("no contract impact" for W0) — emitted only to the injected Go sink and the slog mirror, never a REST/WS/SPA surface
 	Operation     string `json:"operation"`
 	PairRef       string `json:"pair_ref"`
 	Source        string `json:"source"`
