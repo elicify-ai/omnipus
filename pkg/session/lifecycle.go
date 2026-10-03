@@ -659,6 +659,9 @@ func validateLifecycleRecordForPersist(rec *LifecycleRecord) error {
 		if strings.TrimSpace(rec.ExecutionID.RunID) == "" {
 			return fmt.Errorf("session: lifecycle: execution_id requires a non-empty run_id")
 		}
+		if rec.ExecutionID.BootSeq == 0 {
+			return fmt.Errorf("session: lifecycle: execution_id requires a minted boot_seq")
+		}
 		if rec.ExecutionID.BootSeq > uint64(math.MaxInt64) {
 			return fmt.Errorf("session: lifecycle: execution_id.boot_seq %d exceeds max int64", rec.ExecutionID.BootSeq)
 		}

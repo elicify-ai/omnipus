@@ -157,12 +157,9 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 		al.landSteeredStopReport(sessionID, generation, outcome)
 		return
 	}
-	// Genuine terminal failure: the one outcome/publication commit, then
-	// publish from the committed outbox entry. Turn-less completer: the
-	// claim is the session's currently registered execution (zero when none
-	// — the Finding 5/6 shapes this function exists for), so the boundary's
-	// identity match applies only when a live execution actually claims.
-	res, commitErr := al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, "", failureReason, al.executionClaimFor(sessionID))
+	// Synthetic terminal failure carries the selected admission's stamp.
+	// It must never borrow a replacement's live handle.
+	res, commitErr := al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, "", failureReason, al.executionClaimFor(rec))
 	if commitErr != nil {
 		logger.WarnCF("agent", "steer: terminal report: outcome/outbox commit failed",
 			map[string]any{"session_id": sessionID, "generation": generation, "error": commitErr.Error()})

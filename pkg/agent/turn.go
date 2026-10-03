@@ -109,9 +109,8 @@ type turnState struct {
 	// this handle provably names the admission that started it, and a
 	// provider-cancel slot fired through this turnState can only ever
 	// belong to THIS admission (a new admission builds a new turnState with
-	// its own cancel funcs). Zero-valued for turnStates no steered admission
-	// built (bare fixtures, non-steered turns); executionIdentity reports
-	// "" then, and the completion boundary treats the turn as claim-less.
+	// its own cancel funcs). Zero-valued for non-steered turnStates;
+	// a steered final requires a real immutable admission handle.
 	executionRunID   string
 	executionBootSeq uint64
 
@@ -1056,6 +1055,9 @@ func (al *AgentLoop) getActiveTurnState(sessionKey string) *turnState {
 // move under a live turn — so the setter refuses it visibly instead of
 // overwriting.
 func (ts *turnState) setExecutionIdentity(runID string, bootSeq uint64) error {
+	if runID == "" || bootSeq == 0 {
+		return fmt.Errorf("turn: execution identity requires run_id and a minted boot epoch")
+	}
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	if ts.executionRunID != "" {

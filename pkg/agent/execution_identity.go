@@ -12,9 +12,9 @@
 //     as a live turn — stampAdmissionExecution.
 //   - The admission's run_id is copied UNCHANGED into its queue entry
 //     (steerQueueEntry.runID) and into the turn's immutable execution
-//     handle (turnState.executionRunID/executionBootSeq); a promotion or
-//     retry of the SAME admission re-stamps the same id, a new admission
-//     never reuses a previous one.
+//     handle (turnState.executionRunID/executionBootSeq); a promotion of
+//     the SAME admission validates its existing id, a new admission never
+//     reuses a previous one.
 //   - The terminal completion claims its producing identity
 //     (executionClaim) and commitSteeredCompletion checks the full tuple —
 //     not only the generation — inside the store lock, committing
@@ -32,6 +32,7 @@ import (
 	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/google/uuid"
 )
 
@@ -40,18 +41,16 @@ import (
 // struct field, mirroring steerAdmissionRegistry's rationale: AgentLoop
 // instances are process-lifetime singletons in production, and loop.go must
 // not grow (the side-table precedent admission.go documents). Nil until
-// SetBootEpochStore wires it (post-boot); every consumer treats nil as
-// boot_seq 0 — the same "not minted" value BootEpochStore.Current reports,
-// never a constructed counter.
+// SetBootEpochStore wires it (post-boot). Nil remains "not minted"; the
+// admission boundary refuses that value rather than constructing a counter.
 var (
 	bootEpochRegistry   = map[*AgentLoop]*session.BootEpochStore{}
 	bootEpochRegistryMu sync.Mutex
 )
 
-// SetBootEpochStore wires the gateway-booted boot epoch store onto the loop
-// (pkg/gateway/gateway_boot.go::wireSteerDeps, next to the other steer dep
-// setters). The store stays owned by the boot path: consumers read Current,
-// nobody here ever calls Mint.
+// SetBootEpochStore wires the gateway-minted epoch before schedulers start
+// (pkg/gateway/boot_epoch_warn.go::mintBootEpoch). Consumers only read Current;
+// nobody here calls Mint.
 func (al *AgentLoop) SetBootEpochStore(store *session.BootEpochStore) {
 	bootEpochRegistryMu.Lock()
 	bootEpochRegistry[al] = store
@@ -83,26 +82,30 @@ func freshRunID() string { return uuid.NewString() }
 // reserveDispatch guard against the live tail — a dispatch refused here
 // never stamps — and takes the identity stamp atomically with that guard.
 //
-// Last admission wins: a later admission's stamp overwrites an earlier
-// one's. That is safe by construction because the completion side never
-// trusts the stamp alone — it corroborates it against the claiming
-// execution's live registration (executionClaim, below) — and because a
-// merely-queued admission re-stamps its own unchanged id when it is
-// promoted. bootSeq is the boot epoch read once for this admission via
-// bootEpochFor.
-func stampAdmissionExecution(lifecycle *session.LifecycleStore, sessionID string, gen int, runID string, bootSeq uint64) error {
+// Callers serialize admission preparation through the steered gate's entry
+// lock and reject duplicate active/queued admissions before stamping. A queue
+// promotion validates its existing stamp instead of replacing it. bootSeq is
+// the genuine gateway-minted epoch, read once for this new admission.
+func stampAdmissionExecution(lifecycle *session.LifecycleStore, sessionID string, gen int, runID string, bootSeq uint64, previous *session.ExecutionIdentity) error {
 	if lifecycle == nil {
 		return fmt.Errorf("steer: admission identity %q: no lifecycle store wired", sessionID)
 	}
 	if runID == "" {
 		return fmt.Errorf("steer: admission identity %q: empty run_id", sessionID)
 	}
+	if bootSeq == 0 {
+		return fmt.Errorf("steer: admission identity %q: no minted boot epoch", sessionID)
+	}
 	err := lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
 		if rec == nil {
 			return session.ErrLifecycleNotFound
 		}
 		if ok, reason := reserveDispatch(rec, gen); !ok {
-			return fmt.Errorf("%s", reason)
+			return dispatchRefusalError(reason)
+		}
+		if (rec.ExecutionID == nil) != (previous == nil) ||
+			(previous != nil && *rec.ExecutionID != *previous) {
+			return steer.ErrStaleGeneration
 		}
 		rec.ExecutionID = &session.ExecutionIdentity{RunID: runID, BootSeq: bootSeq}
 		return nil
@@ -113,70 +116,46 @@ func stampAdmissionExecution(lifecycle *session.LifecycleStore, sessionID string
 	return nil
 }
 
-// executionClaim is the producing identity a completion presents, plus the
-// live registration it was corroborated against at claim time:
-//
-//   - RunID/BootSeq name the execution producing this outcome — the turn's
-//     immutable handle for a real turn, or the zero claim for a turn-less
-//     completer.
-//   - LiveRunID is the run_id registered live for the session when the
-//     claim was taken ("" when none). A record whose stamped owner equals
-//     LiveRunID but not RunID is owned by a NEWER execution — the claimant
-//     is stale.
+// executionClaim is the immutable producing or selected admission identity.
+// Registry liveness is not part of ownership: a queued replacement owns its
+// record just as an active one does.
 type executionClaim struct {
-	RunID     string
-	BootSeq   uint64
-	LiveRunID string
+	SessionID  string
+	Generation int
+	RunID      string
+	BootSeq    uint64
 }
 
-// zeroExecutionClaim is the turn-less completer's claim: no execution
-// claims the outcome, so the completion boundary applies only the checks it
-// could already apply (generation, fence, terminal) — never the identity
-// match.
-func zeroExecutionClaim() executionClaim { return executionClaim{} }
+func (claim executionClaim) matches(rec *session.LifecycleRecord) bool {
+	return rec != nil && rec.ExecutionID != nil && claim.RunID != "" && claim.BootSeq != 0 &&
+		claim.SessionID == rec.SessionID && claim.Generation == rec.Generation &&
+		claim.RunID == rec.ExecutionID.RunID && claim.BootSeq == rec.ExecutionID.BootSeq
+}
 
-// tsExecutionClaim builds the claim for a real turn from its immutable
-// execution handle, snapshotting the session's live registration in the
-// same read.
-func (al *AgentLoop) tsExecutionClaim(ts *turnState, sessionID string) executionClaim {
+// tsExecutionClaim reads the producing turn itself, never a replacement
+// looked up by session ID after the producing turn has left the registry.
+func (al *AgentLoop) tsExecutionClaim(ts *turnState, _ string) executionClaim {
 	if ts == nil {
-		return zeroExecutionClaim()
+		return executionClaim{}
 	}
-	runID, bootSeq := ts.executionIdentity()
-	return executionClaim{RunID: runID, BootSeq: bootSeq, LiveRunID: al.liveSteeredRunID(sessionID)}
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return executionClaim{
+		SessionID: ts.sessionKey, Generation: ts.generation,
+		RunID: ts.executionRunID, BootSeq: ts.executionBootSeq,
+	}
 }
 
-// executionClaimFor is the turn-less completer's derivation: the identity
-// of the session's CURRENTLY registered live steered turn, or the zero
-// claim when none is registered. It is how the frozen completion entry
-// points (completeSteeredTurn, deliverSteeredCompletion,
-// reportSteeredSessionTerminalUpward — all called directly by tests and by
-// post-turn synthetic dispositions) reach the same boundary: a claim-less
-// completion keeps today's checks, a claimed one gets the full identity
-// match.
-func (al *AgentLoop) executionClaimFor(sessionID string) executionClaim {
-	live := al.liveSteeredRunID(sessionID)
-	if live == "" {
-		return zeroExecutionClaim()
+// executionClaimFor carries the identity of an already-selected record.
+// A synthetic disposition must retain this snapshot; it cannot claim a
+// replacement's live handle. Missing admission identity remains missing and
+// the final commit refuses it visibly.
+func (al *AgentLoop) executionClaimFor(rec *session.LifecycleRecord) executionClaim {
+	if rec == nil || rec.ExecutionID == nil {
+		return executionClaim{}
 	}
-	// The live turn's boot_seq rides its own handle; read it through the
-	// registry the same way liveSteeredRunID did.
-	if ts := al.getActiveTurnState(sessionID); ts != nil {
-		runID, bootSeq := ts.executionIdentity()
-		return executionClaim{RunID: runID, BootSeq: bootSeq, LiveRunID: live}
+	return executionClaim{
+		SessionID: rec.SessionID, Generation: rec.Generation,
+		RunID: rec.ExecutionID.RunID, BootSeq: rec.ExecutionID.BootSeq,
 	}
-	return zeroExecutionClaim()
-}
-
-// liveSteeredRunID returns the run_id of the turn currently registered live
-// for sessionID, or "" when none is. A turn that never set an execution
-// handle (a non-steered turnState sharing the registry) reports "" too —
-// there is no steered execution to corroborate against.
-func (al *AgentLoop) liveSteeredRunID(sessionID string) string {
-	ts := al.getActiveTurnState(sessionID)
-	if ts == nil {
-		return ""
-	}
-	runID, _ := ts.executionIdentity()
-	return runID
 }

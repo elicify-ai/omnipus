@@ -35,7 +35,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
-	"github.com/google/uuid"
 )
 
 // steeredCommitKind discriminates what commitSteeredCompletion decided.
@@ -108,6 +107,9 @@ func (al *AgentLoop) commitSteeredCompletion(
 	answer, failureReason string,
 	claim executionClaim,
 ) (steeredCommitResult, error) {
+	if lifecycle == nil || rec == nil {
+		return steeredCommitResult{}, errors.New("steer: complete: lifecycle store and selected record are required")
+	}
 	if completeStateWriteTestHook != nil {
 		completeStateWriteTestHook(rec.SessionID)
 	}
@@ -122,13 +124,12 @@ func (al *AgentLoop) commitSteeredCompletion(
 	var payloadHash string
 	var message generated.SessionMessage
 	var messageID string
-	// CommitID is the producing run's execution identity. Inside the mutate
-	// below it is ALWAYS the record's stamped admission run_id when one
-	// exists — never a per-completion stand-in. The uuid fallback survives
-	// only for a record with no ExecutionID (a pre-seam record or hand-seeded
-	// fixture), where no admission identity exists to bind; production
-	// admissions always stamp, so the fallback is unreachable on live flows.
-	commitID := uuid.NewString()
+	// The producing handle owns these bytes. No current replacement or
+	// per-completion UUID may supply its protected commit identity.
+	commitID := claim.RunID
+	if publishable && (claim.SessionID == "" || claim.Generation <= 0 || claim.RunID == "" || claim.BootSeq == 0) {
+		return res, errCompleteNoExecutionIdentity
+	}
 	if publishable {
 		if !isTerminalOutcome(outcome) {
 			return res, fmt.Errorf("%w: state %q outcome %q", errCompleteNoPublishableOutcome, nextState, outcome)
@@ -159,6 +160,18 @@ func (al *AgentLoop) commitSteeredCompletion(
 		if cur.Generation != rec.Generation {
 			res.kind = steeredCommitRefused
 			return errCompleteStaleGeneration
+		}
+		// Check the COMPLETE producing tuple before any outcome, outbox or
+		// stop write. A replacement owns its record while queued too; the
+		// registry's current liveness can never authorize a stale producer.
+		if cur.ExecutionID != nil || claim.RunID != "" || publishable {
+			if cur.ExecutionID == nil || claim.RunID == "" || claim.BootSeq == 0 {
+				return errCompleteNoExecutionIdentity
+			}
+			if !claim.matches(cur) {
+				res.kind = steeredCommitRefused
+				return errCompleteStaleExecution
+			}
 		}
 		if cur.Terminal() {
 			res.kind = steeredCommitRefused
@@ -212,47 +225,9 @@ func (al *AgentLoop) commitSteeredCompletion(
 			res.kind = steeredCommitRefused
 			return errCompleteNoPublishableOutcome
 		}
-		// D2 round-4 R4-MAJ-001: the producing execution must still own this
-		// record. Checked INSIDE the store lock, on the live tail, against
-		// the full identity — not only the generation. A claim-less
-		// completer (no live execution claims the outcome) keeps exactly the
-		// checks that existed before the seam; a claimed completion against a
-		// record whose stamped owner disagrees refuses visibly unless the
-		// stamped owner is provably not-live (queued-not-started, or an
-		// admission that died before registering) — the one shape where the
-		// completing turn is still the record's only live execution.
-		if claim.RunID != "" {
-			if cur.ExecutionID == nil {
-				res.kind = steeredCommitRefused
-				return errCompleteNoExecutionIdentity
-			}
-			owner := cur.ExecutionID
-			switch {
-			case owner.BootSeq != claim.BootSeq:
-				// A different boot epoch admitted the recorded run: this
-				// completion is cross-epoch residue, never the live run's.
-				res.kind = steeredCommitRefused
-				return errCompleteStaleExecution
-			case owner.RunID != claim.RunID &&
-				claim.LiveRunID != "" && owner.RunID == claim.LiveRunID:
-				// The record names the CURRENTLY registered execution and it
-				// is not the claimant: a same-generation replacement took
-				// over, and this late callback is stale (the gap the
-				// generation-only check could not see).
-				res.kind = steeredCommitRefused
-				return errCompleteStaleExecution
-			}
-		}
-		// The winning commit: terminal state AND the protected outbox tuple,
-		// one mutation. publishLocked rejects any later same-generation
-		// terminal write, so the tuple is immutable once committed.
-		// commit_id binds the producing run: the record's stamped admission
-		// identity when it has one (persistLocked rejects anything else on a
-		// stamped record), the uuid correlation fallback only where no
-		// admission identity exists.
-		if cur.ExecutionID != nil {
-			commitID = cur.ExecutionID.RunID
-		}
+		// The winning terminal/outbox commit uses the producing run's ID,
+		// already checked against the locked tail. It never borrows a
+		// replacement's ID to publish this producer's bytes.
 		cur.State = nextState
 		cur.NeedsInput = nil
 		if nextState == session.LifecycleFailed {
@@ -274,6 +249,9 @@ func (al *AgentLoop) commitSteeredCompletion(
 		return nil
 	})
 	if mutateErr != nil {
+		if errors.Is(mutateErr, errCompleteNoExecutionIdentity) {
+			return res, mutateErr
+		}
 		if res.kind == steeredCommitRefused {
 			// The sentinel refusals are legitimate race outcomes, not errors:
 			// reload and report the record's terminality so the finishing

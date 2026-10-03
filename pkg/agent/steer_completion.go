@@ -25,10 +25,9 @@ import (
 // winning commit is then published to the parent and acknowledged through the
 // delivery-only journal.
 func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.LifecycleRecord, result turnResult, runErr error) error {
-	// Turn-less completer: claim the session's currently registered live
-	// execution (zero claim when none). A caller holding the real turn uses
-	// completeSteeredTurnForExecution instead.
-	_, err := al.completeSteeredTurnDurably(ctx, snapshot, result, runErr, al.executionClaimFor(snapshot.SessionID))
+	// A synthetic completion retains its selected record's identity. A
+	// caller holding the producing turn uses its immutable handle instead.
+	_, err := al.completeSteeredTurnDurably(ctx, snapshot, result, runErr, al.executionClaimFor(snapshot))
 	return err
 }
 
@@ -115,7 +114,7 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 	if completeBeforeDeliveryTestHook != nil {
 		completeBeforeDeliveryTestHook(rec.SessionID)
 	}
-	return al.runSteeredCompletionOnce(rec, func() (bool, error) {
+	return al.runSteeredCompletionOnce(rec, claim, func() (bool, error) {
 		return al.deliverSteeredCompletionForExecution(ctx, rec, outcome, nextState, answer, failureReason, claim)
 	})
 }
@@ -128,9 +127,8 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 // first lands stopped and publishes nothing; a non-terminal lifecycle
 // notice keeps its direct delivery.
 func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.LifecycleRecord, outcome steer.Outcome, nextState session.LifecycleState, answer, failureReason string) (bool, error) {
-	// Turn-less completer (direct callers): claim the session's currently
-	// registered live execution, exactly like completeSteeredTurn.
-	return al.deliverSteeredCompletionForExecution(ctx, rec, outcome, nextState, answer, failureReason, al.executionClaimFor(rec.SessionID))
+	// Direct callers carry their selected record, not a later registry lookup.
+	return al.deliverSteeredCompletionForExecution(ctx, rec, outcome, nextState, answer, failureReason, al.executionClaimFor(rec))
 }
 
 // deliverSteeredCompletionForExecution is deliverSteeredCompletion's
@@ -371,6 +369,8 @@ type steeredCompletionFlightKey struct {
 	loop       *AgentLoop
 	sessionID  string
 	generation int
+	bootSeq    uint64
+	runID      string
 }
 
 type steeredCompletionFlight struct {
@@ -380,13 +380,13 @@ type steeredCompletionFlight struct {
 }
 
 // steeredCompletionFlights serializes the side-effecting completion tail per
-// AgentLoop/session/generation. Entries exist only while a completion is in
+// AgentLoop/full execution identity. Entries exist only while a completion is in
 // flight and are removed on every exit, so the process-global coordinator
 // never retains an AgentLoop after the call returns.
 var steeredCompletionFlights sync.Map //nolint:gochecknoglobals
 
-func (al *AgentLoop) runSteeredCompletionOnce(rec *session.LifecycleRecord, complete func() (bool, error)) (bool, error) {
-	key := steeredCompletionFlightKey{loop: al, sessionID: rec.SessionID, generation: rec.Generation}
+func (al *AgentLoop) runSteeredCompletionOnce(rec *session.LifecycleRecord, claim executionClaim, complete func() (bool, error)) (bool, error) {
+	key := steeredCompletionFlightKey{loop: al, sessionID: rec.SessionID, generation: rec.Generation, bootSeq: claim.BootSeq, runID: claim.RunID}
 	candidate := &steeredCompletionFlight{done: make(chan struct{})}
 	actual, loaded := steeredCompletionFlights.LoadOrStore(key, candidate)
 	if loaded {
@@ -1015,7 +1015,7 @@ func (al *AgentLoop) completeSteeredTurnAfterGoal(ctx context.Context, sessionID
 			map[string]any{"session_id": sessionID, "error": errString(err)})
 		return false
 	}
-	finalWoke, err := al.completeSteeredTurnDurably(ctx, snapshot, turnResult{finalContent: answer}, runErr, al.executionClaimFor(sessionID))
+	finalWoke, err := al.completeSteeredTurnDurably(ctx, snapshot, turnResult{finalContent: answer}, runErr, al.executionClaimFor(snapshot))
 	if err != nil {
 		logger.WarnCF("agent", "goal: completion tail failed — boot recovery repairs a delivered-but-not-terminal gap",
 			map[string]any{"session_id": sessionID, "error": err.Error()})

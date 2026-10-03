@@ -119,7 +119,11 @@ func (al *AgentLoop) continueSteeredTurn(
 
 	_, err = al.continuePendingSteeringWithAgent(ctx, sessionID, ts.agent,
 		func(_ *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error) {
-			if !al.registerTurnIfAbsent(ts) {
+			gate := al.steerAdmission()
+			gate.entryMu.Lock()
+			registered := al.registerTurnIfAbsent(ts)
+			gate.entryMu.Unlock()
+			if !registered {
 				return "", fmt.Errorf("steer: post-turn drain: session %q already has an active turn", sessionID)
 			}
 			if _, stateErr := al.steeredDrainRecord(sessionID, generation); stateErr != nil {
