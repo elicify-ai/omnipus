@@ -59,6 +59,13 @@ import (
 // cacheDirName is the cache directory under the resolved data root (§3.8).
 const cacheDirName = "mail-cache"
 
+// ErrCachePathTracked marks the E-3 refusal flavour: the cache path is
+// already tracked by version control. The caller distinguishes it because a
+// tracked file is ALREADY captured — a refused write must leave tracked
+// state exactly as found (no stale-target removal), while the other refusal
+// flavours mean an existing ciphertext sits unexcluded and must go.
+var ErrCachePathTracked = errors.New("a mail cache path is already tracked by version control")
+
 // ensureStagingExclusion returns nil only where the cache directory is
 // provably excluded from data-directory version-control staging. The cache
 // write path calls this BEFORE any filesystem effect, so a refusal leaves
@@ -96,7 +103,7 @@ func ensureStagingExclusion(dataRoot string) error {
 		return fmt.Errorf("staging exclusion not provable: %w", err)
 	}
 	if tracked {
-		return errors.New("a mail cache path is already tracked by version control — ignore rules do not untrack tracked files (E-3)")
+		return fmt.Errorf("%w — ignore rules do not untrack tracked files (E-3)", ErrCachePathTracked)
 	}
 	ignored, err := repo.pathIgnored(rel)
 	if err != nil {

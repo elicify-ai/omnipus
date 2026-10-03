@@ -189,9 +189,12 @@ func (s *FolderSnapshotStore) removeStaleTarget(scope Scope) {
 // Save seals snap and atomically replaces the pair's snapshot. Refusals, in
 // order: unsupported schema version; payload over the 64 KiB budget; a
 // superseded revision; an unusable key; the staging-exclusion gate (§3.8 —
-// evaluated BEFORE any filesystem effect, so a refusal leaves nothing
-// behind, not even the directory). A refusal never truncates, never writes a
-// plaintext fallback, and never leaves a torn file (R-3.7-5).
+// evaluated BEFORE any filesystem effect, so a fresh refusal leaves nothing
+// behind, not even the directory; a refusal that flips after earlier writes
+// also removes the stale target, like the payload-invalid refusals — except
+// the E-3 tracked refusal, which leaves tracked state exactly as found). A
+// refusal never truncates, never writes a plaintext fallback, and never
+// leaves a torn file (R-3.7-5).
 //
 // A payload-INVALID snapshot (unsupported schema version, over-budget
 // payload) means this writer can no longer maintain the on-disk format: the
@@ -228,6 +231,16 @@ func (s *FolderSnapshotStore) Save(scope Scope, snap Snapshot, captured Revision
 		return fmt.Errorf("%w: derived key must be %d bytes, got %d", ErrCacheUnavailable, folderCacheKeyBytes, len(key))
 	}
 	if err := ensureStagingExclusion(s.baseDir); err != nil {
+		// A gate refusal can arrive AFTER files exist (a repository created
+		// under the data root flips a previously-passing gate): the
+		// ciphertext already on disk must not keep sitting unexcluded inside
+		// it — same stale-target removal the payload-invalid refusals
+		// perform (the F12 finding). The E-3 tracked refusal is the one
+		// exception: a tracked file is already captured regardless, and a
+		// refused write must leave tracked state exactly as found.
+		if !errors.Is(err, ErrCachePathTracked) {
+			s.removeStaleTarget(scope)
+		}
 		return fmt.Errorf("%w: %w", ErrCacheUnavailable, err)
 	}
 	envelope, err := sealSnapshot(payload, s.purpose, snap, scope, key)
