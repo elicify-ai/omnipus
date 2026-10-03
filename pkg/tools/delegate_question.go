@@ -77,11 +77,32 @@ func (dt *delegateToolExecuteRespond) acceptStoppedPendingQuestion() (accepted b
 			dt.correlationID, q.AskerGeneration, dt.rec.Generation,
 		)), true
 	}
-	if q.Status == session.QuestionStatusOpen && q.Expired(time.Now()) {
-		return false, ErrorResult(fmt.Sprintf(
-			"delegate: respond: question %q expired at %s",
-			dt.correlationID, q.OriginalDeadline.Format(time.RFC3339Nano),
-		)), true
+	if q.Status == session.QuestionStatusOpen {
+		// Reconcile lifecycle vs sidecar (ADR-20260928 D1.5/D1.7): the
+		// sidecar OPEN record is appended inside park's Mutate callback
+		// before the lifecycle persist, so a failed park leaves an OPEN
+		// record whose park never landed. After a restart the record is
+		// still readable, and answering it would deliver into a session
+		// that never durably parked. The persisted needs_input history
+		// line is the evidence the park landed; without it the record is
+		// an orphan and the respond is refused visibly. The record itself
+		// is left untouched — the refusal is the recovery, not an erase.
+		landed, err := dt.t.lifecycle.HasNeedsInputRecord(dt.sessionID, q.AskerGeneration, q.CorrelationID)
+		if err != nil {
+			return false, ErrorResult(fmt.Sprintf("delegate: respond: reconcile pending question: %v", err)).WithError(err), true
+		}
+		if !landed {
+			return false, ErrorResult(fmt.Sprintf(
+				"delegate: respond: question %q has no persisted park in the session lifecycle (generation %d); refusing to answer a question whose park never landed",
+				dt.correlationID, q.AskerGeneration,
+			)), true
+		}
+		if q.Expired(time.Now()) {
+			return false, ErrorResult(fmt.Sprintf(
+				"delegate: respond: question %q expired at %s",
+				dt.correlationID, q.OriginalDeadline.Format(time.RFC3339Nano),
+			)), true
+		}
 	}
 	dt.pending = q
 	return true, nil, false
@@ -201,8 +222,21 @@ func (dt *delegateToolExecuteRespond) transcriptHasInstruction(instruction strin
 
 // finishPendingResume closes the question and, if Dispatch did not admit the
 // session, queues it for admission. It does not mint a generation.
+//
+// Split ordering (ADR-20260928 D1.5): the lifecycle transition persists
+// FIRST — that is the durable delivery — and only then is the sidecar
+// closed as applied. The applied record must never be appended inside the
+// Mutate callback: a callback runs before Mutate's own persist, so a
+// lifecycle persist failure there would leave the sidecar applied while the
+// child was never durably queued — the false-applied split. When the Mutate
+// fails, this function returns the error visibly, the sidecar keeps
+// answer_pending_delivery with the exact reserved answer and its original
+// deadline, and a later explicit retry of the same respond re-runs the whole
+// path: commitPendingAnswer treats the same answer text as idempotent, the
+// transcript copy keeps its once identity, and only a successful Mutate is
+// ever followed by the applied record.
 func (dt *delegateToolExecuteRespond) finishPendingResume() error {
-	return dt.t.lifecycle.Mutate(dt.sessionID, func(cur *session.LifecycleRecord) error {
+	if err := dt.t.lifecycle.Mutate(dt.sessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return session.ErrLifecycleNotFound
 		}
@@ -221,26 +255,42 @@ func (dt *delegateToolExecuteRespond) finishPendingResume() error {
 		default:
 			return fmt.Errorf("session %s cannot resume from state %s", dt.sessionID, cur.State)
 		}
-		store, err := questionStoreFromLifecycle(dt.t.lifecycle)
-		if err != nil {
-			return err
-		}
-		q, err := store.Load(dt.sessionID)
-		if err != nil {
-			return err
-		}
-		if q.CorrelationID != dt.correlationID {
-			return fmt.Errorf("session %s question changed during respond", dt.sessionID)
-		}
-		if q.Status == session.QuestionStatusApplied {
-			return nil
-		}
-		if q.Status != session.QuestionStatusAnswerPendingDelivery {
-			return fmt.Errorf("question %q is %s", dt.correlationID, q.Status)
-		}
-		q.Status = session.QuestionStatusApplied
-		return store.Append(*q)
-	})
+		return nil
+	}); err != nil {
+		return err
+	}
+	return dt.applyPendingQuestion()
+}
+
+// applyPendingQuestion appends the applied record once the lifecycle
+// delivery above is durable. It takes the per-session lifecycle lock itself
+// (the Mutate has released it; QuestionStore methods hold no lock of their
+// own). A concurrent respond that reserved the same answer between the two
+// steps still converges here: applied is idempotent, and any other status is
+// a visible error, never an overwrite.
+func (dt *delegateToolExecuteRespond) applyPendingQuestion() error {
+	mu := dt.t.lifecycle.Lock(dt.sessionID)
+	mu.Lock()
+	defer mu.Unlock()
+	store, err := questionStoreFromLifecycle(dt.t.lifecycle)
+	if err != nil {
+		return err
+	}
+	q, err := store.Load(dt.sessionID)
+	if err != nil {
+		return err
+	}
+	if q.CorrelationID != dt.correlationID {
+		return fmt.Errorf("session %s question changed during respond", dt.sessionID)
+	}
+	if q.Status == session.QuestionStatusApplied {
+		return nil
+	}
+	if q.Status != session.QuestionStatusAnswerPendingDelivery {
+		return fmt.Errorf("question %q is %s", dt.correlationID, q.Status)
+	}
+	q.Status = session.QuestionStatusApplied
+	return store.Append(*q)
 }
 
 func (dt *delegateToolExecuteRespond) acknowledgedRespond() *ToolResult {

@@ -756,7 +756,12 @@ func (mt *messageParentToolExecute) finishDelivery() *ToolResult {
 			authority = session.QuestionAuthoritySelfOK
 		}
 		if perr := mt.t.parkNeedsInput(mt.childSessionID, mt.correlationID, authority, mt.now); perr != nil {
-			return ErrorResult(fmt.Sprintf("message_parent: question accepted but failed to park session: %v", perr)).WithError(perr)
+			// The sidecar OPEN record is appended inside park's Mutate
+			// callback before the lifecycle persist (ADR-20260928 D1.5/D1.7),
+			// so this failure may have left that record behind. Name that
+			// split visibly: the record stays on disk, and the respond path
+			// refuses it as an orphan until a park for it has persisted.
+			return ErrorResult(fmt.Sprintf("message_parent: question accepted but failed to park session: %v (an unconfirmed pending-question record may have been written before the park persisted; answering it is refused until the park persists)", perr)).WithError(perr)
 		}
 	}
 
