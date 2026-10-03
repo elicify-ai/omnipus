@@ -3,7 +3,8 @@
 - **Decision record:** [ADR-091](../architecture/ADR-091-steered-sessions-replace-subagents.md) D4, D5, D6, D10 (list_jobs, seeds, prompts)
 - **Landing order:** [adr-091-landing-order.md](adr-091-landing-order.md) — consumes I-1, I-2, I-3, I-5
 - **Owner files:** landing order §3, row C
-- **Status:** Draft rev 2 (consolidated after three grills; supersedes every earlier sentence of rev 1)
+**Status:** Draft
+- **Revision:** rev 2 (consolidated after three grills; supersedes every earlier sentence of rev 1)
 
 ## Summary
 
