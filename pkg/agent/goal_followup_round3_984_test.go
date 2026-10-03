@@ -239,9 +239,11 @@ func TestGoal984_StaleGenerationCompletionCannotOccupyRevivedFinal(t *testing.T)
 }
 
 func TestGoal984_CompletionFlightsRemovedOnEveryExit(t *testing.T) {
+	terminalWriteErr := errors.New("injected terminal write failure")
 	tests := []struct {
 		name     string
 		complete func(*AgentLoop, *session.LifecycleRecord) (bool, error)
+		wantErr  error
 	}{
 		{name: "success", complete: func(*AgentLoop, *session.LifecycleRecord) (bool, error) { return true, nil }},
 		{name: "stop", complete: func(al *AgentLoop, rec *session.LifecycleRecord) (bool, error) {
@@ -265,22 +267,93 @@ func TestGoal984_CompletionFlightsRemovedOnEveryExit(t *testing.T) {
 			return true, err
 		}},
 		{name: "terminal write failure", complete: func(*AgentLoop, *session.LifecycleRecord) (bool, error) {
-			return true, errors.New("injected terminal write failure")
-		}},
+			return true, terminalWriteErr
+		}, wantErr: terminalWriteErr},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			al, cleanup := newSteerAL(t)
 			defer cleanup()
+			boot := session.NewBootEpochStore(al.GetConfig().Agents.Defaults.Home)
+			bootSeq, err := boot.Mint()
+			if err != nil {
+				t.Fatalf("Mint(boot epoch): %v", err)
+			}
+			al.SetBootEpochStore(boot)
+			provider, _ := installParkedProvider(t, al)
+			wireSteerCompletionDeps(t, al)
 			parentID := newTestSteeringSession(t, al, "ws-1")
-			rec := launchRunningChild(t, al, parentID, "call-f4-cleanup-"+tt.name)
-			_, _ = al.runSteeredCompletionOnce(rec, func() (bool, error) { return tt.complete(al, rec) })
-			key := steeredCompletionFlightKey{loop: al, sessionID: rec.SessionID, generation: rec.Generation}
+			launcher := NewSteerLauncher(al)
+			child, err := launcher.Launch(context.Background(), steer.LaunchRequest{
+				SteeringSessionID: parentID,
+				TargetAgentID:     testDefaultAgentID,
+				Task:              "do delegated work",
+				Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-f4-cleanup-" + tt.name},
+			})
+			if err != nil {
+				t.Fatalf("Launch: %v", err)
+			}
+			dispatched, err := launcher.Dispatch(context.Background(), child.SessionID, child.Generation)
+			if err != nil {
+				t.Fatalf("Dispatch: %v", err)
+			}
+			if dispatched.State != steer.DispatchRunning || dispatched.Generation != child.Generation {
+				t.Fatalf("Dispatch = %+v, want running generation %d", dispatched, child.Generation)
+			}
+			select {
+			case <-provider.entered:
+			case <-time.After(10 * time.Second):
+				t.Fatal("producing turn did not reach the parked provider")
+			}
+			rec, err := al.GetSessionLifecycleStore().Load(child.SessionID)
+			if err != nil {
+				t.Fatalf("Load(producing child): %v", err)
+			}
+			if rec.ExecutionID == nil || rec.ExecutionID.RunID == "" || bootSeq == 0 {
+				t.Fatal("producing child has no genuine admission identity")
+			}
+			producer := al.getActiveTurnState(child.SessionID)
+			if producer == nil {
+				t.Fatal("producing child has no registered execution handle")
+			}
+			// D2's full tuple is captured BEFORE Stop/Revive. In particular, a
+			// replacement's current lifecycle owner cannot change this key.
+			claim := al.tsExecutionClaim(producer, child.SessionID)
+			wantClaim := executionClaim{SessionID: child.SessionID, Generation: child.Generation,
+				BootSeq: bootSeq, RunID: rec.ExecutionID.RunID}
+			if claim != wantClaim || rec.ExecutionID.BootSeq != bootSeq {
+				t.Fatalf("producer claim = %+v, record identity = %+v, want %+v", claim, rec.ExecutionID, wantClaim)
+			}
+			key := steeredCompletionFlightKey{loop: al, sessionID: claim.SessionID, generation: claim.Generation,
+				bootSeq: claim.BootSeq, runID: claim.RunID}
+			calls := 0
+			woke, completionErr := al.runSteeredCompletionOnce(rec, claim, func() (bool, error) {
+				calls++
+				// Positive control: absence after return is meaningful only if
+				// this exact producing flight was present during completion.
+				if _, present := steeredCompletionFlights.Load(key); !present {
+					t.Fatalf("producing completion flight missing during %s: %+v", tt.name, key)
+				}
+				return tt.complete(al, rec)
+			})
+			if calls != 1 {
+				t.Fatalf("completion calls = %d, want exactly 1", calls)
+			}
+			if !woke || completionErr != tt.wantErr {
+				t.Fatalf("completion result = (%v, %v), want (true, %v)", woke, completionErr, tt.wantErr)
+			}
 			if _, retained := steeredCompletionFlights.Load(key); retained {
 				steeredCompletionFlights.Delete(key)
-				t.Fatalf("completion flight retained after %s", tt.name)
+				t.Fatalf("completion flight retained after %s: %+v", tt.name, key)
 			}
+			steeredCompletionFlights.Range(func(rawKey, _ any) bool {
+				if other, ok := rawKey.(steeredCompletionFlightKey); ok && other.loop == al {
+					steeredCompletionFlights.Delete(rawKey)
+					t.Errorf("unexpected completion flight retained after %s: %+v", tt.name, other)
+				}
+				return true
+			})
 		})
 	}
 }
