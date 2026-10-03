@@ -24,9 +24,12 @@ import (
 // control. There is also no pause between CancelSubtree's fence commit and
 // its live effect. Those checks wait on the identity seam.
 //
-// Superseded oracles, left in place for the corrective lane:
-// TestRevive_NewGeneration_OldMarkerInert and TestStopRevive_OrderUnderLock
-// still expect generation++.
+// Superseded oracles migrated (steer_cancel_test.go, same package):
+// TestRevive_LiveFenceSuperseded_SameGenerationQueued and
+// TestStopRevive_OrderUnderLock now derive their oracles from ADR-20260928
+// D2 — the old TestRevive_NewGeneration_OldMarkerInert /
+// TestStopRevive_OrderUnderLock expected generation++ for the in-flight
+// fence shape, which D2 supersedes.
 func TestT27_StoppedResume_KeepsGenerationAndQueues(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
