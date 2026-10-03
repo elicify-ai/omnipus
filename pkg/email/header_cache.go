@@ -217,7 +217,21 @@ func (c *HeaderCache) PutCounts(scope Scope, captured Revision, counts Counts) e
 	if captured != c.currentRev(scope) {
 		return fmt.Errorf("%w: captured revision %d is no longer current (§3.10)", ErrStalePublication, captured)
 	}
-	c.usedBytes += countsMetadataOverhead
+	// Account the replaced entry exactly as Put does (gate F3): a
+	// republication replaces the scope's single counts entry, so its charge
+	// is net-zero — the replaced entry's bytes come off before the new
+	// entry's go on. Charging unconditionally leaked countsMetadataOverhead
+	// bytes on EVERY refresh (a stale-gated counts trigger fires ~every five
+	// minutes per open panel), stranding phantom charges in usedBytes that
+	// no InvalidateFolder/drop could ever reclaim — weeks later the
+	// founder-set budget exhausts and every header Put refuses with
+	// ErrCacheBudgetExceeded for every mailbox until restart, a symptom
+	// pointing nowhere near its cause.
+	oldBytes := 0
+	if _, ok := c.counts[scope]; ok {
+		oldBytes = countsMetadataOverhead
+	}
+	c.usedBytes = c.usedBytes - oldBytes + countsMetadataOverhead
 	c.counts[scope] = cachedCounts{counts: counts, validatedAt: c.now(), revision: captured}
 	return nil
 }
