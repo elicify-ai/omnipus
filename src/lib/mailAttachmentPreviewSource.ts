@@ -46,9 +46,12 @@ export const MAIL_SAVE_FIRST_EXPLANATION = 'Save to Library first'
 
 /**
  * The resolved shape renderers consume: a URL the preview is authorized to
- * load, or null for a structural refusal (never a guessed fallback).
+ * load, or null for a structural refusal (never a guessed fallback). Purely
+ * in-process: the resolvers' return value is read by renderers to decide
+ * which URL may mount — it is never serialized, sent to the gateway, or
+ * persisted, so it carries no wire surface to contract for.
  */
-export type ResolvedResource = { url: string } | null
+export type ResolvedResource = { url: string } | null // not-wire-format: in-process resolver return value consumed only by preview renderers; never serialized or sent to the gateway
 
 export class MailAttachmentPreviewSource {
   readonly kind = 'mail_attachment' as const
