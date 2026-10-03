@@ -133,50 +133,54 @@ func NewDiscovery(cl *Client) *Discovery {
 // including structural not-found) fails the whole read — a mailbox without
 // an inbox is a broken account (§3.4).
 func (d *Discovery) Resolve(ctx context.Context, scope Scope, overrides Overrides) (RoleMapping, error) {
-	client, _, err := d.client.dialIMAP(ctx)
+	var mapping RoleMapping
+	// Pooled read (Wave C): the whole ladder rides one INBOX lease; without
+	// an injected session source the legacy per-call dial keeps the
+	// identical command sequence.
+	err := d.client.withMailSession(ctx, "INBOX", false, func(ctx context.Context, client *imapclient.Client, _ uint32) error {
+		// INBOX is protocol-fixed (R-3.1-3): no discovery, no absent state; the
+		// probe records its validated epoch for the snapshot. Its mapping source
+		// is none-of-the-discovery-values: the name is fixed by the protocol, not
+		// resolved by any ladder step.
+		inboxEpoch, err := statusUIDValidity(ctx, client, "INBOX")
+		if err != nil {
+			return fmt.Errorf("email discovery: inbox: %s: %w", ClassifyMailError(err), err)
+		}
+		mapping = RoleMapping{
+			Inbox: RoleResolution{
+				Name:         "INBOX",
+				Source:       MappingSourceNone,
+				UIDValidity:  inboxEpoch,
+				Availability: AvailabilityPresent,
+			},
+		}
+
+		// Capability detection from the post-auth set (OQ-3 default): BOTH names
+		// are required for the attribute path; anything less is "use the
+		// candidate list".
+		caps := client.Caps()
+		useAttrs := caps.Has(imap.CapListExtended) && caps.Has(imap.CapSpecialUse)
+
+		// One enumeration serves every role that needs discovery and carries the
+		// absence evidence (§3.4 proof 1). With both roles overridden no server
+		// enumeration is needed at all (§3.2 step 1, CX-2's discrete claim).
+		var listing []folderListingEntry
+		if overrides.SentFolderName == "" || overrides.DraftsFolderName == "" {
+			listing, err = enumerateFolders(ctx, client, useAttrs)
+			if err != nil {
+				return fmt.Errorf("email discovery: %s: %w", ClassifyMailError(err), err)
+			}
+		}
+
+		mapping.Sent = resolveRole(ctx, client, overrides.SentFolderName, useAttrs, listing,
+			imap.MailboxAttrSent, sentFolderCandidates)
+		mapping.Drafts = resolveRole(ctx, client, overrides.DraftsFolderName, useAttrs, listing,
+			imap.MailboxAttrDrafts, draftsFolderCandidates)
+		return nil
+	})
 	if err != nil {
 		return RoleMapping{}, fmt.Errorf("email discovery: %s: %w", ClassifyMailError(err), err)
 	}
-	defer client.Close()
-
-	// INBOX is protocol-fixed (R-3.1-3): no discovery, no absent state; the
-	// probe records its validated epoch for the snapshot. Its mapping source
-	// is none-of-the-discovery-values: the name is fixed by the protocol, not
-	// resolved by any ladder step.
-	inboxEpoch, err := statusUIDValidity(ctx, client, "INBOX")
-	if err != nil {
-		return RoleMapping{}, fmt.Errorf("email discovery: inbox: %s: %w", ClassifyMailError(err), err)
-	}
-	mapping := RoleMapping{
-		Inbox: RoleResolution{
-			Name:         "INBOX",
-			Source:       MappingSourceNone,
-			UIDValidity:  inboxEpoch,
-			Availability: AvailabilityPresent,
-		},
-	}
-
-	// Capability detection from the post-auth set (OQ-3 default): BOTH names
-	// are required for the attribute path; anything less is "use the
-	// candidate list".
-	caps := client.Caps()
-	useAttrs := caps.Has(imap.CapListExtended) && caps.Has(imap.CapSpecialUse)
-
-	// One enumeration serves every role that needs discovery and carries the
-	// absence evidence (§3.4 proof 1). With both roles overridden no server
-	// enumeration is needed at all (§3.2 step 1, CX-2's discrete claim).
-	var listing []folderListingEntry
-	if overrides.SentFolderName == "" || overrides.DraftsFolderName == "" {
-		listing, err = enumerateFolders(ctx, client, useAttrs)
-		if err != nil {
-			return RoleMapping{}, fmt.Errorf("email discovery: %s: %w", ClassifyMailError(err), err)
-		}
-	}
-
-	mapping.Sent = resolveRole(ctx, client, overrides.SentFolderName, useAttrs, listing,
-		imap.MailboxAttrSent, sentFolderCandidates)
-	mapping.Drafts = resolveRole(ctx, client, overrides.DraftsFolderName, useAttrs, listing,
-		imap.MailboxAttrDrafts, draftsFolderCandidates)
 	return mapping, nil
 }
 
