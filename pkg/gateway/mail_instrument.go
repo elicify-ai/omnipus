@@ -62,26 +62,48 @@ func mailInstrumentOperationOf(op string) string {
 }
 
 // emitMailOperationTiming emits the one w6 §6.1 record for a completed
-// gateway Mail operation — success AND failure alike — with the real
-// duration and the safe outcome class. acquire_wait_ms/socket_count stay
-// at their zero values until W1's context-carrying Instrument seam lands
-// (see mail_runtime.go's Instrument paragraph): they are reported
-// truthfully as unknown-by-this-seam, never fabricated.
+// gateway Mail operation — success AND failure alike — with the measured
+// duration and the safe outcome class.
+//
+// duration_ms is > 0 on every completed operation (w6 §6.1 MC-P1): the
+// elapsed time is rounded UP to the record's millisecond resolution, so
+// sub-millisecond work reports 1 — "under 1 ms" — instead of the fabricated
+// 0 the truncating Milliseconds() read produced (a zero reads as a
+// measurement, and the summary boundary is sub-millisecond in the common
+// case). A boundary that never captured its start time has NO measured
+// duration: the record is skipped loudly rather than completed with an
+// invented number.
 func (a *restAPI) emitMailOperationTiming(op, agentID, workspaceID string, started time.Time, err error, source string, hit bool) {
 	member := mailInstrumentOperationOf(op)
 	if member == "" {
 		return
+	}
+	if started.IsZero() {
+		// A boundary that never captured its start has no measured duration:
+		// emitting any number would fabricate one. The record is skipped
+		// loudly instead of completed with an invented timing. (Unreachable
+		// today — every call site captures started before the operation —
+		// but the emitter must not be the place a fabricated value is born.)
+		slog.Warn("mail.operation record dropped: boundary captured no start time",
+			"operation", member)
+		return
+	}
+	durationMs := time.Since(started).Milliseconds()
+	if durationMs < 1 {
+		// A completed operation always consumed > 0 of the monotonic clock.
+		// The record's millisecond resolution floors sub-millisecond work
+		// onto 0, which reads as a measurement it is not (w6 §6.1: > 0 on
+		// completion). Round UP to the resolution: 1 means "completed in
+		// under 1 ms", never "instantaneous".
+		durationMs = 1
 	}
 	sample := MailOperationSample{
 		Operation:  member,
 		PairRef:    a.mailRuntimeFor().mailPairRef(agentID, workspaceID),
 		Source:     source,
 		Hit:        hit,
-		DurationMs: time.Since(started).Milliseconds(),
+		DurationMs: durationMs,
 		Outcome:    "ok",
-	}
-	if sample.DurationMs < 0 {
-		sample.DurationMs = 0
 	}
 	if err != nil {
 		sample.Outcome = email.ClassifyMailError(err)
