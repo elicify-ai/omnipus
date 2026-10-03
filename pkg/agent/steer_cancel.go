@@ -542,13 +542,13 @@ func reserveDispatch(rec *session.LifecycleRecord, gen int) (ok bool, reason str
 	if rec == nil {
 		return false, steer.ErrInvalidEdge.Error()
 	}
-	if gen < rec.Generation {
+	if gen != rec.Generation {
 		return false, steer.ErrStaleGeneration.Error()
 	}
 	if rec.Terminal() {
 		return false, steer.ErrTerminal.Error()
 	}
-	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+	if rec.Stopped() {
 		return false, steer.ErrDispatchCancelled.Error()
 	}
 	return true, ""
