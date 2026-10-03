@@ -100,11 +100,7 @@ func (a *restAPI) handleMailDraftUpdate(w http.ResponseWriter, r *http.Request, 
 	}
 	cur, err := client.ReadView(r.Context(), email.FolderDrafts, ref)
 	if err != nil {
-		if errors.Is(err, email.ErrMailRefInvalid) {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-		} else {
-			mailErr502(w, err)
-		}
+		mailDraftViewErr(w, err)
 		return
 	}
 	if status, code, msg := mailDraftStaleness(cur, req.Uid, req.Uidvalidity); status != 0 {
@@ -339,6 +335,29 @@ func mailDraftUIDPreconditionsValid(bodyUID, bodyUV int64) bool {
 	return bodyUID >= 0 && bodyUID <= maxUint32 && bodyUV >= 0 && bodyUV <= maxUint32
 }
 
+// mailDraftViewErr maps a ReadView failure on the draft update/send paths to
+// the response email-mail-view-spec §2.3 pins for this surface: a malformed
+// ref is 400; a ref refused by the same-lease stale-reference validation
+// (W2 spec §3.16 R-3.16-1/2 — view.go::refEpochMismatch's typed
+// ErrMailStaleReference) IS the spec's stale precondition and is answered
+// 409 with body code "stale_draft" — the exact triple mailDraftStaleness
+// writes for a body describing a superseded copy (MC-16, round-2
+// MAJ-008.1) — never the generic upstream 502 the refusal used to collapse
+// into. The guard stands: the stale ref is refused BEFORE any command uses
+// its UID — never resolved, never fetched, never handed to SMTP. Any other
+// failure stays in the closed 502 class (MC-8). One helper for both draft
+// mutation paths so the two cannot drift apart again.
+func mailDraftViewErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, email.ErrMailRefInvalid):
+		jsonErr(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, email.ErrMailStaleReference):
+		jsonErrCode(w, http.StatusConflict, "stale draft", "stale_draft")
+	default:
+		mailErr502(w, err)
+	}
+}
+
 // mailDraftStaleness is the MC-16 POST-READ check: a body describing
 // anything other than the CURRENT copy is stale. Returns (409,
 // "stale_draft", ...) so callers emit the closed code on the wire.
@@ -403,11 +422,7 @@ func (a *restAPI) handleMailDraftSendInner(w http.ResponseWriter, r *http.Reques
 	}
 	cur, err := client.ReadView(r.Context(), email.FolderDrafts, ref)
 	if err != nil {
-		if errors.Is(err, email.ErrMailRefInvalid) {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-		} else {
-			mailErr502(w, err)
-		}
+		mailDraftViewErr(w, err)
 		return
 	}
 	key := bracketMessageID(cur.MessageID)
