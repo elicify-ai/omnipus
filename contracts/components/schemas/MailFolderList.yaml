@@ -1,7 +1,12 @@
 title: MailFolderList
 description: >
-  The three mail folders (D5) of one mailbox with live counts — the response
-  of GET /workspaces/{id}/mail/{agentId}/folders.
+  The three mail folders (D5) of one mailbox with counts and freshness —
+  the response of GET /workspaces/{id}/mail/{agentId}/folders
+  (mail-live-access-landing-order register rows 2/3; ADR-20261001
+  "Freshness metadata" row). The list-level metadata describes THIS read;
+  each folder carries its own mapping and count metadata, because a
+  mapping validation and a count fetch are separate successes with
+  separate timestamps.
 type: object
 additionalProperties: false
 required:
@@ -12,3 +17,10 @@ properties:
     description: Exactly the three D5 folders (Inbox, Sent, Drafts).
     items:
       $ref: ./MailFolder.yaml
+  metadata:
+    $ref: ./MailReadMetadata.yaml
+    description: >
+      Optional on the wire until the cache/read producers land (the
+      is_knowledge_base precedent — pre-field fixtures keep working);
+      producers emit it always once landed. Describes THIS read; each
+      folder's mapping/count metadata are separate.

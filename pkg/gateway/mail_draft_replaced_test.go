@@ -208,9 +208,30 @@ func TestMailDraftRead_RejectsSupersededUnflaggedCopy(t *testing.T) {
 	require.Equal(t, http.StatusOK, newDetail.Code, "newest copy must remain viewable: %s", newDetail.Body.String())
 }
 
-// A replaced draft may not mint another token for the old HTML body; the
-// current UID must still mint and render its edited body through the same API.
-func TestMailDraftRead_RefusesStalePreviewMint(t *testing.T) {
+// RE-DERIVED for the metadata-only mint (2026-10-03). The pre-redesign
+// oracle pinned the EAGER mint: a replaced draft's old ref was refused 404
+// AT MINT — knowable only by dialing the mailbox at mint time. That
+// behaviour was superseded by w5 spec US-6.3 acceptance item 3 ("it dials
+// nothing: mint authorizes the pair and issues the ref-bound token; the
+// first serve performs the fetch and surfaces 404 (missing) ... a mint that
+// would have failed under today's eager fetch now fails at serve with the
+// same safe classes") and Scenario B-26 ("the first serve ... surfaces the
+// same safe 404 class the eager mint used to produce — the failure moved,
+// it did not disappear"), both standing on §13 Q5's decided default: no
+// mail dial at metadata mint. MC-13 orders exactly this re-derivation
+// ("existing preview control assertions re-derived for metadata-only
+// grants, never weakened"); the same treatment already re-derived
+// TestMailPreviewMint_NinthIs429AndMintNeverDials.
+// The protection is kept at the same strength, at the settled place: the
+// stale ref is still never silently resolved — its first serve is refused
+// 404 and leaks neither the old nor any other message's content — and the
+// current draft still previews its edited body. The mint's zero-dial
+// property itself is pinned by TestMailPreviewMint_NinthIs429AndMintNeverDials
+// ("a mint dials nothing, successful or refused", US-6.3/MC-12) with an
+// accept-counting listener; this test pins the dial-free mint's observable
+// consequence for THIS case (a 200 + real token for a ref the mint has not
+// checked) rather than duplicating that counter behind a forwarding proxy.
+func TestMailDraftRead_StalePreviewRefIsRefusedAtServe(t *testing.T) {
 	env := newMailRedEnv(t)
 	imapPort, imapClient := startPlainIMAP(t)
 	pointMailboxAt(t, env, imapPort, 1)
@@ -232,8 +253,25 @@ func TestMailDraftRead_RefusesStalePreviewMint(t *testing.T) {
 	var current gen.MailMessage
 	require.NoError(t, json.Unmarshal(updated.Body.Bytes(), &current))
 
-	oldMint := mailDo(env.mux, http.MethodPost, mailPreviewMintPath, nextMailIP(), true, string(oldBody))
-	require.Equal(t, http.StatusNotFound, oldMint.Code, "old preview ref must be refused: %s", oldMint.Body.String())
+	// The dial-free metadata mint cannot know the old UID was replaced: it
+	// still authorizes the ref and issues a token (US-6.3 item 3, §13 Q5).
+	// A refusal here would require the forbidden at-mint mailbox dial —
+	// that superseded assertion is gone, not moved.
+	staleMint := mailDo(env.mux, http.MethodPost, mailPreviewMintPath, nextMailIP(), true, string(oldBody))
+	require.Equal(t, http.StatusOK, staleMint.Code, "the metadata mint must not dial to refuse the stale ref (US-6.3/MC-12): %s", staleMint.Body.String())
+	var staleToken gen.MailHtmlPreviewTokenResponse
+	require.NoError(t, json.Unmarshal(staleMint.Body.Bytes(), &staleToken))
+	require.NotEmpty(t, staleToken.Token, "the stale mint must issue a real token — an empty one would turn the serve 404 below into a routing artifact instead of the refusal")
+
+	// B-26: the failure moved, it did not disappear. The first serve of the
+	// stale grant fetches, finds the ref gone, and surfaces the same safe
+	// 404 class the eager mint used to produce — leaking neither the old
+	// draft's body nor any other message's content through the refusal.
+	staleServe := mailDo(env.mux, http.MethodGet, "/mail-preview/html/"+staleToken.Token, nextMailIP(), false, "")
+	require.Equal(t, http.StatusNotFound, staleServe.Code, "the stale ref must be refused at the serve, never silently resolved: %s", staleServe.Body.String())
+	require.NotContains(t, staleServe.Body.String(), "Hello there", "the old draft's body must not be served")
+	require.NotContains(t, staleServe.Body.String(), "edited body", "no other message's content may ride the stale refusal")
+
 	previewReq.MessageRef = strings.TrimPrefix(draftRefPath(uv, uint32(current.Uid)), mailMessagesPath("drafts")+"/")
 	newBody, err := json.Marshal(previewReq)
 	require.NoError(t, err)

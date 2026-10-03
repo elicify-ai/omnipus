@@ -353,6 +353,13 @@ func TestEmailToolset_NamesAndScope(t *testing.T) {
 	want := map[string]bool{
 		"read_inbox": false, "search_email": false, "read_message": false,
 		"send_email": false, "reply": false, "create_email_draft": false,
+		// The three RECEIVED-attachment tools (ADR-20261001 F3, w4 spec
+		// US-3, founder Q4=A 2026-10-02): list/read/download run on the
+		// gateway-issued message_ref, ScopeGeneral/CategoryCommunication
+		// like the rest of the set. The per-tool scope/category assertions
+		// below apply to them too.
+		"list_email_attachments": false, "read_email_attachment": false,
+		"download_email_attachment": false,
 	}
 	for _, tool := range set {
 		if _, ok := want[tool.Name()]; !ok {

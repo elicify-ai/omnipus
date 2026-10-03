@@ -87,12 +87,26 @@ func (c *Client) markAgentRead(ctx context.Context, client *imapclient.Client, s
 
 // MailboxStatus returns the INBOX counters the watcher needs with one STATUS
 // command: unseen count, UIDNEXT and UIDVALIDITY. It mutates no flag (MC-18).
+// With a session source injected it rides a no-folder pool lease; without
+// one it keeps the legacy per-call dial (pool.go::mailboxStatus owns the
+// routing and the watcher's non-blocking variant).
 func (c *Client) MailboxStatus(ctx context.Context) (int, uint32, uint32, error) {
+	return c.mailboxStatus(ctx, false)
+}
+
+// mailboxStatusDirect is the legacy per-call STATUS path: no session source
+// in a manager-unwired process.
+func (c *Client) mailboxStatusDirect(ctx context.Context) (int, uint32, uint32, error) {
 	client, _, err := c.dialIMAP(ctx)
 	if err != nil {
 		return 0, 0, 0, err
 	}
 	defer client.Close()
+	return statusOnClient(ctx, client)
+}
+
+// statusOnClient runs the one STATUS command on the given client.
+func statusOnClient(ctx context.Context, client *imapclient.Client) (int, uint32, uint32, error) {
 	data, err := runIMAP(ctx, "status", func() (*imap.StatusData, error) {
 		return client.Status("INBOX", &imap.StatusOptions{NumUnseen: true, UIDNext: true, UIDValidity: true}).Wait()
 	})

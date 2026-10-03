@@ -888,7 +888,9 @@ func (rs *restartServicesState) restartSchedulersAndDrains() (error, bool) {
 	if tStore := agent.GetTaskStore(rs.al); tStore != nil {
 		credStore := rs.runningServices.credStore
 		provider := email.MailboxProviderFunc(func() []email.Mailbox {
-			return buildMailboxes(rs.al.GetConfig(), credStore)
+			rt := gatewayMailRuntimeFor(rs.homePath)
+			return buildMailboxes(rs.al.GetConfig(), credStore,
+				gatewayMailSessionsFor(rs.homePath), rt.mailGenerationForPair)
 		})
 		// Same shared A8 budget instance as boot (keyed by the state dir):
 		// reload swaps the watcher set, never the gate.

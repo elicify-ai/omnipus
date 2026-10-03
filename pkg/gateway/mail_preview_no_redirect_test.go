@@ -19,6 +19,7 @@ package gateway
 // POSITIVE CONTROL: the same harness over the stdlib mux DOES see the
 // dot-segment redirect whose Location leaves the prefix for /api/v1/state.
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,24 +46,38 @@ func useFreshMailPreviewServeLimiter(t *testing.T) {
 	t.Cleanup(func() { mailPreviewServeLimiter = previous })
 }
 
-// newProductionMailPreviewChain builds the production composition and mints
-// one live grant carrying a real sanitized-HTML page and an inline part.
-func newProductionMailPreviewChain(t *testing.T) (*previewFixture, *mailPreviewTokenStore, string, *httptest.Server, *atomic.Int64) {
+// newProductionMailPreviewChain builds the production composition over a
+// REAL staged mailbox: since the w5-integration metadata-only rewrite
+// (US-6.1/MC-11) a message grant carries authorization/reference metadata
+// only, and every live serve fetches within its own request — so a live
+// token can only serve against a mailbox that answers. The harness stages
+// one inbox message carrying a sanitized-HTML part, a servable inline PNG,
+// and an unavailable (corrupt-transfer-encoding) inline PNG, and mints one
+// metadata grant bound to that message's uid ref. Returns the env, the
+// staged message's uid ref, the minted token, the server and the /api/
+// sentinel hit counter.
+func newProductionMailPreviewChain(t *testing.T) (*mailRedEnv, string, string, *httptest.Server, *atomic.Int64) {
 	t.Helper()
 	useFreshMailPreviewServeLimiter(t)
-	f := newPreviewFixture(t)
-	cm, err := channels.NewManager(f.api.agentLoop.GetConfig(), credentials.SecretBundle{}, bus.NewMessageBus(), nil)
+	env := newMailRedEnv(t)
+	imapPort, cl := startPlainIMAP(t)
+	smtpPort, _ := listenCount(t)
+	pointMailboxAt(t, env, imapPort, smtpPort)
+	appendRaw(t, cl, "INBOX", []byte(mailPreviewChainRaw), nil)
+	uv := inboxUIDValidity(t, cl)
+	ref := fmt.Sprintf("uid:%d:1", uv)
+
+	cm, err := channels.NewManager(env.api.agentLoop.GetConfig(), credentials.SecretBundle{}, bus.NewMessageBus(), nil)
 	require.NoError(t, err)
 	cm.SetupHTTPServer("127.0.0.1:0", nil)
-	f.api.registerMailPreviewRoutes(cm)
-	store := f.api.mailPreviewTokenStoreOf()
+	env.api.registerMailPreviewRoutes(cm)
+	store := env.api.mailPreviewTokenStoreOf()
 	require.NotNil(t, store, "registration must publish the mail token store")
-	html := `<p>hi</p><img src="` + mailPreviewPartPrefix + mailTokenPlaceholder + `/0">`
+	// Metadata-only grant (US-6.1): authorization/reference identity only —
+	// no HTML string, no inline bytes. The content lives in the staged
+	// message the serve request will fetch live.
 	token, merr := store.mint("c:mail-tripwire", mailPreviewGrant{
-		WorkspaceID: f.workspaceID, AgentID: "agent-a", Folder: "inbox", Ref: "<t@x>",
-		HTML: mailSanitizePreviewHTML(html, nil, nil), Inline: []mailPreviewInline{
-			{ContentType: "image/png", Data: []byte{0x89, 'P', 'N', 'G'}},
-		},
+		WorkspaceID: mailRedWS, AgentID: mailRedAgent, Folder: "inbox", Ref: ref,
 	})
 	require.NoError(t, merr, "mint must succeed for the tripwire corpus")
 
@@ -81,10 +96,30 @@ func newProductionMailPreviewChain(t *testing.T) (*previewFixture, *mailPreviewT
 		return inner
 	}))
 	require.NotNil(t, mux, "the manager's mux was not handed to the wrapper")
-	srv := httptest.NewServer(buildProductionMiddlewareChain(f.api, mux))
+	srv := httptest.NewServer(buildProductionMiddlewareChain(env.api, mux))
 	t.Cleanup(srv.Close)
-	return f, store, token, srv, apiHits
+	return env, ref, token, srv, apiHits
 }
+
+// mailPreviewChainRaw is the chain's staged inbox message: a text/html part
+// referencing one inline PNG by cid (the servable part, index 0), followed
+// by an image part whose base64 cannot decode (index 1 — the real
+// transport's unavailable-data condition: view.go leaves Data nil and sets
+// DataUnavailable, exactly the condition servePart must refuse like the
+// attachment download's 413). The corrupt part is LAST so its read failure
+// cannot disturb the parse of the parts before it.
+const mailPreviewChainRaw = "From: a@b.test\r\nTo: mailbox@test.local\r\nSubject: chain\r\n" +
+	"Date: Mon, 02 Jan 2006 15:04:05 +0000\r\nMessage-ID: <chain@b.test>\r\n" +
+	"MIME-Version: 1.0\r\nContent-Type: multipart/related; boundary=chn\r\n\r\n" +
+	"--chn\r\nContent-Type: text/html; charset=utf-8\r\n\r\n" +
+	"<p>chain body <img src=\"cid:chain-good@b.test\"></p>\r\n" +
+	"--chn\r\nContent-Type: image/png\r\nContent-Transfer-Encoding: base64\r\n" +
+	"Content-ID: <chain-good@b.test>\r\n\r\n" +
+	"iVBORw0KGgo=\r\n" +
+	"--chn\r\nContent-Type: image/png\r\nContent-Transfer-Encoding: base64\r\n" +
+	"Content-ID: <chain-bad@b.test>\r\n\r\n" +
+	"!!!!not-base64!!!!\r\n" +
+	"--chn--\r\n"
 
 // TestMailPreview_NothingUnderThePrefixRedirects is the mail tripwire. Every
 // request below targets the prefix. None may answer 3xx, none may carry a

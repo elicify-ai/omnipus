@@ -14,6 +14,7 @@ import (
 )
 
 func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	started := time.Now()
 	cfg := a.agentLoop.GetConfig()
 	// items is ALWAYS a JSON array: zero enabled mailboxes render [] — never
 	// null (MailSummaryList.yaml: items required, array, not nullable;
@@ -102,5 +103,19 @@ func (a *restAPI) handleMailSummary(w http.ResponseWriter, r *http.Request, work
 			WatcherState: gen.MailSummaryListItemsWatcherState(row.WatcherState),
 		})
 	}
+	// w5 US-7.6/MC-18: the summary boundary emits its one record — zero mail
+	// commands by construction (saved watcher state only), so source "none"
+	// with no acquisition.
+	//
+	// The agentID is deliberately EMPTY: a summary request spans every
+	// enabled pair in the workspace, so no single pair identity may be named
+	// (naming one would be a lie about the operation's scope). The record's
+	// pair_ref therefore degrades to mailPairRef's documented opaque
+	// placeholder — and that is all it can do: config.LoadOrMintMailPairIdentity
+	// refuses an empty agent before any write, so no identity file is ever
+	// minted for the degenerate pair. Do not "fix" the empty agentID by
+	// passing one row's agent: per-pair summary records are a w6-publisher
+	// question (the §13-Q8 pattern), not a local choice.
+	a.emitMailOperationTiming("summary", "", workspaceID, started, nil, "none", false)
 	jsonOK(w, out)
 }

@@ -34,6 +34,8 @@ There is no kernel sandbox on Windows: `selectBackendPlatform` returns the appli
 
 Windows also has no available-memory reader. Agent concurrency therefore stays at its unmeasurable-host floor unless you set `performance.max_parallel_agents` explicitly, and the browser pool permits one browser for the whole host. No amount of physical RAM raises those automatic floors. Windows support is degraded and unsupported for these memory-governed features.
 
+The boot counter in the data directory (`boot_epoch.json`) is flushed and then renamed with write-through. Windows cannot flush a directory without privileges Omnipus does not ask for, so a power cut can still lose that rename. The gateway logs this once at startup. Two copies of Omnipus started at the same moment on one data directory can also pick the same boot number, because Windows does not provide the file lock used on Linux and macOS. That shared-number case is accepted; other recovery guarantees are not relaxed with it.
+
 This differs from Linux with an unreadable `/proc/meminfo`, such as a gVisor, distroless, or hardened-seccomp deployment. That remains a supported deployment, but Omnipus cannot measure its available memory and therefore applies the same conservative floors. Restore a readable procfs or set the agent limit explicitly when the deployment can support more concurrency.
 
 ### Linux riscv64, loong64, armv7, mipsle

@@ -184,6 +184,16 @@ type Message struct {
 	Body string `json:"body,omitempty"`
 	// Seen reflects the \Seen IMAP flag at fetch time.
 	Seen bool `json:"seen"`
+	// MessageRef is the issued opaque reference (w5-integration US-9,
+	// register rows 8/16; ADR-20261001 correction I-03) minted by THE one
+	// issuer (message_ref.go::IssueMessageRef) on the same lease that
+	// fetched the message — bound to the folder epoch observed on that
+	// session plus the UID, so the next attachment/seen/detail action
+	// addresses THIS message without the optional Message-ID. Populated by
+	// Client.ReadMessage; a Transport implementation that does not issue
+	// leaves it empty and the read_message tool asks the same issuer with
+	// the evidence it holds — never a locally formatted reference.
+	MessageRef string `json:"message_ref,omitempty"`
 }
 
 // InboxOptions controls ReadInbox.
@@ -267,17 +277,32 @@ type Transport interface {
 	MarkSeen(ctx context.Context, uid uint32) error
 }
 
-// Client is the production pure-Go Transport over IMAPS + SMTP. It is
-// connectionless between calls: each operation dials, authenticates, performs
-// the operation, and tears down. This keeps the agent's tool calls stateless
-// and avoids holding an idle IMAP connection between heartbeats.
+// Client is the production pure-Go Transport over IMAPS + SMTP. Without an
+// injected session source it is connectionless between calls: each operation
+// dials, authenticates, performs the operation, and tears down. With the
+// shared session manager injected (W1 §3.1, SetSessionSource) the same
+// operations borrow sessions from the pool instead — one application-owned
+// connection manager below this facade, never a private one.
 type Client struct {
 	acct Account
+	// sessions is the injected shared session source (W1 §3.1). Nil keeps
+	// the legacy per-call dial in processes where no manager is wired; once
+	// a manager exists, a nil-source production dial is the typed
+	// ErrSessionSourceMissing wiring error — never a silent uncounted dial
+	// (FR-W1-2). Set before the client's first operation.
+	sessions *MailSessions
+	// sessionPair / sessionGeneration are the pool-identity components only
+	// the construction site knows; w5-integration injects them together with
+	// the source (SetSessionScope). Unset, the client pools under the
+	// endpoint-only identity.
+	sessionPair       string
+	sessionGeneration string
 }
 
 // NewClient constructs a Client for the given account. It validates that the
 // minimum connection parameters are present; it does NOT dial (auth is verified
-// on first operation).
+// on first operation). A client never constructs a session manager itself —
+// production wiring injects the shared one (FR-W1-1).
 func NewClient(acct Account) (*Client, error) {
 	if acct.IMAPHost == "" {
 		return nil, fmt.Errorf("email transport: imap_host is required")
@@ -354,17 +379,12 @@ func runIMAP[T any](ctx context.Context, op string, fn func() (T, error)) (T, er
 	}
 }
 
-// dialIMAP dials the IMAP server over implicit TLS, logs in, and selects INBOX.
-// It returns the SELECT response (whose NumMessages count drives the
-// trailing-range read path) alongside the client. The caller must Close the
-// returned client.
-func (c *Client) dialIMAP(ctx context.Context) (*imapclient.Client, *imap.SelectData, error) {
-	addr := fmt.Sprintf("%s:%d", c.acct.IMAPHost, c.acct.IMAPPort)
-	tlsCfg := &tls.Config{ServerName: c.acct.IMAPHost, MinVersion: tls.VersionTLS12}
-
-	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
-	defer cancel()
-
+// dialIMAPCandidates dials the IMAP server (no LOGIN, no SELECT) over
+// implicit TLS, falling back across resolved addresses. It is the ONE dial
+// stack both the legacy per-call path (dialIMAP) and the pool's session
+// establishment share — no second dial stack exists (W1 §3.2 "existing seams
+// kept").
+func dialIMAPCandidates(ctx context.Context, addr string, tlsCfg *tls.Config) (*imapclient.Client, error) {
 	// Bounded DNS retry inside the overall dial bound (round-8 F2,
 	// FR-037/MC-33/B-42): the hostname resolves through the dialResolver seam
 	// (3 lookups, 250/500 ms backoff on failure) and the dial targets the
@@ -375,9 +395,9 @@ func (c *Client) dialIMAP(ctx context.Context) (*imapclient.Client, *imap.Select
 	// and spends no dial attempt.
 	targets := []string{addr}
 	if host, port, serr := net.SplitHostPort(addr); serr == nil && !isIPLiteral(host) {
-		resolved, rerr := resolveHostBounded(dialCtx, dialResolver, host)
+		resolved, rerr := resolveHostBounded(ctx, dialResolver, host)
 		if rerr != nil {
-			return nil, nil, rerr
+			return nil, rerr
 		}
 		targets = make([]string, 0, len(resolved))
 		for _, resolvedAddr := range resolved {
@@ -385,11 +405,41 @@ func (c *Client) dialIMAP(ctx context.Context) (*imapclient.Client, *imap.Select
 		}
 	}
 
-	client, err := dialAddressCandidates(dialCtx, targets, "dial TLS", func(ctx context.Context, target string) (*imapclient.Client, error) {
+	return dialAddressCandidates(ctx, targets, "dial TLS", func(ctx context.Context, target string) (*imapclient.Client, error) {
 		return imapDial(ctx, target, tlsCfg)
 	}, func(client *imapclient.Client) {
 		_ = client.Close()
 	})
+}
+
+// ErrLegacyDialReached is the typed wiring refusal (gate F1; FR-W1-2's
+// facade rule mirrored at the dial): a client WITH an injected session
+// source reached the legacy per-call dial — the calling method was never
+// rewired onto the lease. Opening the connection anyway would be a private,
+// uncounted socket invisible to the pool's maxSocketsPerMailbox/maxSocketsGlobal
+// ceilings, so the dial refuses instead: a missed rewiring surfaces as a
+// visible wiring error, never as a silent pool bypass.
+var ErrLegacyDialReached = errors.New("email transport: pooled client reached the legacy dial; method not rewired")
+
+// dialIMAP dials the IMAP server over implicit TLS, logs in, and selects INBOX.
+// It returns the SELECT response (whose NumMessages count drives the
+// trailing-range read path) alongside the client. The caller must Close the
+// returned client. This is the LEGACY per-call path: used when no shared
+// session source is injected (and no manager is wired) — W2's view.go reads
+// still ride it until their rewiring onto the lease. A client that HAS a
+// session source must never get here: the tripwire below returns
+// ErrLegacyDialReached rather than opening an uncounted connection.
+func (c *Client) dialIMAP(ctx context.Context) (*imapclient.Client, *imap.SelectData, error) {
+	if c.sessions != nil {
+		return nil, nil, ErrLegacyDialReached
+	}
+	addr := fmt.Sprintf("%s:%d", c.acct.IMAPHost, c.acct.IMAPPort)
+	tlsCfg := &tls.Config{ServerName: c.acct.IMAPHost, MinVersion: tls.VersionTLS12}
+
+	dialCtx, cancel := context.WithTimeout(ctx, dialTimeout)
+	defer cancel()
+
+	client, err := dialIMAPCandidates(dialCtx, addr, tlsCfg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -417,47 +467,67 @@ func (c *Client) dialIMAP(ctx context.Context) (*imapclient.Client, *imap.Select
 // and cursor paging go through a bounded UIDSearch instead.
 func (c *Client) ReadInbox(ctx context.Context, opts InboxOptions) ([]Message, error) {
 	limit := clampLimit(opts.Limit)
-	client, selData, err := c.dialIMAP(ctx)
+	var out []Message
+	err := c.withMailSession(ctx, "INBOX", false, func(ctx context.Context, client *imapclient.Client, numMessages uint32) error {
+		if opts.UnseenOnly || opts.BeforeUID > 0 {
+			rows, err := c.readInboxSearch(ctx, client, opts, limit)
+			if err != nil {
+				return err
+			}
+			out = rows
+			return nil
+		}
+		rows, err := c.readInboxTrailing(ctx, client, numMessages, limit)
+		if err != nil {
+			return err
+		}
+		out = rows
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
+	return out, nil
+}
 
-	if opts.UnseenOnly || opts.BeforeUID > 0 {
-		crit := &imap.SearchCriteria{NotFlag: []imap.Flag{imap.FlagDeleted}}
-		if opts.UnseenOnly {
-			crit.NotFlag = append(crit.NotFlag, imap.FlagSeen)
-		}
-		switch {
-		case opts.BeforeUID == 1:
-			// Nothing has a UID strictly below 1.
-			return []Message{}, nil
-		case opts.BeforeUID > 1:
-			var s imap.UIDSet
-			s.AddRange(imap.UID(1), imap.UID(opts.BeforeUID-1))
-			crit.UID = []imap.UIDSet{s}
-		}
-		searchData, err := runIMAP(ctx, "search inbox", func() (*imap.SearchData, error) {
-			return client.UIDSearch(crit, nil).Wait()
-		})
-		if err != nil {
-			return nil, fmt.Errorf("email transport: search inbox: %w", err)
-		}
-		uids := searchData.AllUIDs()
-		if len(uids) == 0 {
-			return []Message{}, nil
-		}
-		sort.Slice(uids, func(i, j int) bool { return uids[i] > uids[j] })
-		if len(uids) > limit {
-			uids = uids[:limit]
-		}
-		return c.fetchMessages(ctx, client, imap.UIDSetNum(uids...), false)
+// readInboxSearch is ReadInbox's unseen-only / cursor-paged path.
+func (c *Client) readInboxSearch(ctx context.Context, client *imapclient.Client, opts InboxOptions, limit int) ([]Message, error) {
+	crit := &imap.SearchCriteria{NotFlag: []imap.Flag{imap.FlagDeleted}}
+	if opts.UnseenOnly {
+		crit.NotFlag = append(crit.NotFlag, imap.FlagSeen)
 	}
+	switch {
+	case opts.BeforeUID == 1:
+		// Nothing has a UID strictly below 1.
+		return []Message{}, nil
+	case opts.BeforeUID > 1:
+		var s imap.UIDSet
+		s.AddRange(imap.UID(1), imap.UID(opts.BeforeUID-1))
+		crit.UID = []imap.UIDSet{s}
+	}
+	searchData, err := runIMAP(ctx, "search inbox", func() (*imap.SearchData, error) {
+		return client.UIDSearch(crit, nil).Wait()
+	})
+	if err != nil {
+		return nil, fmt.Errorf("email transport: search inbox: %w", err)
+	}
+	uids := searchData.AllUIDs()
+	if len(uids) == 0 {
+		return []Message{}, nil
+	}
+	sort.Slice(uids, func(i, j int) bool { return uids[i] > uids[j] })
+	if len(uids) > limit {
+		uids = uids[:limit]
+	}
+	return c.fetchMessages(ctx, client, imap.UIDSetNum(uids...), false)
+}
 
-	// Default path: inspect trailing sequence ranges without a full-mailbox
-	// SEARCH. A deleted UID can occupy one of the newest slots, so fetch
-	// preceding ranges until the page has `limit` visible messages.
-	n := selData.NumMessages
+// readInboxTrailing is ReadInbox's default path: inspect trailing sequence
+// ranges without a full-mailbox SEARCH. A deleted UID can occupy one of the
+// newest slots, so fetch preceding ranges until the page has `limit` visible
+// messages.
+func (c *Client) readInboxTrailing(ctx context.Context, client *imapclient.Client, numMessages uint32, limit int) ([]Message, error) {
+	n := numMessages
 	out := make([]Message, 0, limit)
 	for n > 0 && len(out) < limit {
 		start := uint32(1)
@@ -495,44 +565,46 @@ func (c *Client) Search(ctx context.Context, query string, opts SearchOptions) (
 		return SearchResult{Messages: []Message{}}, nil
 	}
 	limit := clampLimit(opts.Limit)
-	client, _, err := c.dialIMAP(ctx)
-	if err != nil {
-		return SearchResult{}, err
-	}
-	defer client.Close()
+	var res SearchResult
+	err := c.withMailSession(ctx, "INBOX", false, func(ctx context.Context, client *imapclient.Client, _ uint32) error {
+		crit := buildSearchCriteria(q, opts.Body, opts.BeforeUID)
+		searchData, err := runIMAP(ctx, "search", func() (*imap.SearchData, error) {
+			return client.UIDSearch(crit, nil).Wait()
+		})
+		if err != nil {
+			return fmt.Errorf("email transport: search %q: %w", q, err)
+		}
+		uids := searchData.AllUIDs()
+		total := len(uids)
+		if total == 0 {
+			res = SearchResult{Messages: []Message{}}
+			return nil
+		}
+		sort.Slice(uids, func(i, j int) bool { return uids[i] > uids[j] })
 
-	crit := buildSearchCriteria(q, opts.Body, opts.BeforeUID)
-	searchData, err := runIMAP(ctx, "search", func() (*imap.SearchData, error) {
-		return client.UIDSearch(crit, nil).Wait()
+		truncated := false
+		if total > limit {
+			uids = uids[:limit]
+			truncated = true
+		}
+		msgs, err := c.fetchMessages(ctx, client, imap.UIDSetNum(uids...), false)
+		if err != nil {
+			return err
+		}
+		res = SearchResult{
+			Messages:     msgs,
+			TotalMatches: total,
+			Truncated:    truncated,
+		}
+		if truncated && len(msgs) > 0 {
+			// Cursor for the next page: everything strictly older than the smallest
+			// UID we returned (results are newest-first, so that is the last one).
+			res.NextBeforeUID = msgs[len(msgs)-1].UID
+		}
+		return nil
 	})
 	if err != nil {
-		return SearchResult{}, fmt.Errorf("email transport: search %q: %w", q, err)
-	}
-	uids := searchData.AllUIDs()
-	total := len(uids)
-	if total == 0 {
-		return SearchResult{Messages: []Message{}}, nil
-	}
-	sort.Slice(uids, func(i, j int) bool { return uids[i] > uids[j] })
-
-	truncated := false
-	if total > limit {
-		uids = uids[:limit]
-		truncated = true
-	}
-	msgs, err := c.fetchMessages(ctx, client, imap.UIDSetNum(uids...), false)
-	if err != nil {
 		return SearchResult{}, err
-	}
-	res := SearchResult{
-		Messages:     msgs,
-		TotalMatches: total,
-		Truncated:    truncated,
-	}
-	if truncated && len(msgs) > 0 {
-		// Cursor for the next page: everything strictly older than the smallest
-		// UID we returned (results are newest-first, so that is the last one).
-		res.NextBeforeUID = msgs[len(msgs)-1].UID
 	}
 	return res, nil
 }
@@ -566,30 +638,47 @@ func buildSearchCriteria(q string, body bool, beforeUID uint32) *imap.SearchCrit
 	return crit
 }
 
-// ReadMessage fetches a single message (with a decoded body) by UID.
+// ReadMessage fetches a single message (with a decoded body) by UID. The
+// lease is flagged as a mutation because the read marks \Seen +
+// $OmnipusAgentRead (MC-36): a flag write is never coalesced and never
+// automatically replayed (W1 §4.5.4).
 func (c *Client) ReadMessage(ctx context.Context, uid uint32) (*Message, error) {
 	if uid == 0 {
 		return nil, fmt.Errorf("email transport: uid is required")
 	}
-	client, _, err := c.dialIMAP(ctx)
+	var msg *Message
+	err := c.withMailSession(ctx, "INBOX", true, func(ctx context.Context, client *imapclient.Client, _ uint32) error {
+		// The epoch rides the same session as the fetch (the lease
+		// pre-selected INBOX; this SELECT re-reads it, the ReadView/
+		// ReadFolderPage pattern) so the issued reference carries the live
+		// folder epoch — the binding W2's same-lease validation compares.
+		uv, _, serr := c.selectFolder(ctx, client, "INBOX")
+		if serr != nil {
+			return serr
+		}
+		msgs, err := c.fetchMessages(ctx, client, imap.UIDSetNum(imap.UID(uid)), true)
+		if err != nil {
+			return err
+		}
+		if len(msgs) == 0 {
+			return fmt.Errorf("email transport: message uid %d not found", uid)
+		}
+		// MC-36: reading marks \Seen + the read-by-agent keyword in one STORE,
+		// with a \Seen-only fallback when the server rejects keywords.
+		if err := c.markAgentRead(ctx, client, imap.UIDSetNum(imap.UID(uid))); err != nil {
+			return err
+		}
+		msg = &msgs[0]
+		// w5-integration US-9 (register rows 8/16): issue the reference on
+		// the lease that fetched the message — the production surface's
+		// issued ref, bound to the live epoch + UID.
+		msg.MessageRef = IssueMessageRef(MessageRefClaims{UIDValidity: uv, UID: msg.UID})
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
-
-	msgs, err := c.fetchMessages(ctx, client, imap.UIDSetNum(imap.UID(uid)), true)
-	if err != nil {
-		return nil, err
-	}
-	if len(msgs) == 0 {
-		return nil, fmt.Errorf("email transport: message uid %d not found", uid)
-	}
-	// MC-36: reading marks \Seen + the read-by-agent keyword in one STORE,
-	// with a \Seen-only fallback when the server rejects keywords.
-	if err := c.markAgentRead(ctx, client, imap.UIDSetNum(imap.UID(uid))); err != nil {
-		return nil, err
-	}
-	return &msgs[0], nil
+	return msg, nil
 }
 
 // fetchMessages fetches envelopes (and, when withBody, the FULL raw message so
@@ -969,29 +1058,28 @@ func addressListString(addrs []imap.Address) string {
 	return strings.Join(parts, ", ")
 }
 
-// MarkSeen sets the \Seen flag on the message with the given UID.
+// MarkSeen sets the \Seen flag on the message with the given UID. The lease
+// is flagged as a mutation: a lost STORE acknowledgment fails visibly and is
+// never replayed automatically — the caller decides whether to repeat it
+// (W1 §4.5.4, MC-W1-10).
 func (c *Client) MarkSeen(ctx context.Context, uid uint32) error {
 	if uid == 0 {
 		return fmt.Errorf("email transport: uid is required")
 	}
-	client, _, err := c.dialIMAP(ctx)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-
-	uidSet := imap.UIDSetNum(imap.UID(uid))
-	storeFlags := &imap.StoreFlags{
-		Op:     imap.StoreFlagsAdd,
-		Flags:  []imap.Flag{imap.FlagSeen},
-		Silent: true,
-	}
-	if _, err := runIMAP(ctx, "store", func() (struct{}, error) {
-		return struct{}{}, client.Store(uidSet, storeFlags, nil).Close()
-	}); err != nil {
-		return fmt.Errorf("email transport: mark seen uid %d: %w", uid, err)
-	}
-	return nil
+	return c.withMailSession(ctx, "INBOX", true, func(ctx context.Context, client *imapclient.Client, _ uint32) error {
+		uidSet := imap.UIDSetNum(imap.UID(uid))
+		storeFlags := &imap.StoreFlags{
+			Op:     imap.StoreFlagsAdd,
+			Flags:  []imap.Flag{imap.FlagSeen},
+			Silent: true,
+		}
+		if _, err := runIMAP(ctx, "store", func() (struct{}, error) {
+			return struct{}{}, client.Store(uidSet, storeFlags, nil).Close()
+		}); err != nil {
+			return fmt.Errorf("email transport: mark seen uid %d: %w", uid, err)
+		}
+		return nil
+	})
 }
 
 // Send delivers an outbound message via SMTP (STARTTLS on 587/custom, implicit

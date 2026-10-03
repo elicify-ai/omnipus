@@ -95,15 +95,12 @@ func TestMailSummaryEndpoint(t *testing.T) {
 		pointMailboxAt(t, env, imapPort, smtpPort)
 		appendRaw(t, cl, "INBOX", []byte("From: a@b.test\r\nTo: mailbox@test.local\r\nSubject: s1\r\nMessage-ID: <s1@b.test>\r\n\r\none\r\n"), nil)
 		appendRaw(t, cl, "INBOX", []byte("From: a@b.test\r\nTo: mailbox@test.local\r\nSubject: s2\r\nMessage-ID: <s2@b.test>\r\n\r\ntwo\r\n"), nil)
-		cl2, err := email.NewClient(email.Account{
-			IMAPHost: "127.0.0.1",
-			IMAPPort: imapPort,
-			SMTPHost: "127.0.0.1",
-			SMTPPort: smtpPort,
-			Username: "mailbox@test.local",
-			Password: "s3cret",
-		})
-		require.NoError(t, err)
+		// The watcher transport rides the shared pool the production way
+		// (rest_mailbox.go::buildMailboxes — wiring site 3): a bare
+		// email.NewClient in a manager-wired process is the typed wiring
+		// error by design (FR-W1-2). Pinned to THIS subtest's fixture so
+		// the cycle counts the messages staged above.
+		cl2 := mailWatcherTransportForPairAt(t, env, mailRedAgent, mailRedWS, imapPort, smtpPort)
 		_ = runWatcherCycle(t, env, cl2)
 		out := decodeSummary(t, mailDo(env.mux, http.MethodGet, summaryPath(), nextMailIP(), true, ""))
 		require.Len(t, out.Items, 1)
@@ -128,7 +125,9 @@ func TestMailSummaryEndpoint(t *testing.T) {
 
 	t.Run("corrupt state file must not silently render ok", func(t *testing.T) {
 		env := newMailRedEnv(t)
-		stateFile := runWatcherCycle(t, env, watcherTransport(t))
+		// Production-parity pooled wiring (wiring site 3): a bare client is
+		// the typed wiring error once the process-wide manager is wired.
+		stateFile := runWatcherCycle(t, env, mailWatcherTransportForPair(t, env, mailRedAgent, mailRedWS))
 		require.NoError(t, os.WriteFile(stateFile, []byte("{corrupt watcher state"), 0o600))
 		out := decodeSummary(t, mailDo(env.mux, http.MethodGet, summaryPath(), nextMailIP(), true, ""))
 		require.Len(t, out.Items, 1, "MC-23: a corrupt state file drops the row entirely - the mailbox vanishes from the panel")
@@ -144,7 +143,8 @@ func TestMailSummaryEndpoint(t *testing.T) {
 
 	t.Run("error with a deferred next attempt renders backoff", func(t *testing.T) {
 		env := newMailRedEnv(t)
-		stateFile := runWatcherCycle(t, env, watcherTransport(t))
+		// Production-parity pooled wiring (wiring site 3).
+		stateFile := runWatcherCycle(t, env, mailWatcherTransportForPair(t, env, mailRedAgent, mailRedWS))
 		future := time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)
 		st := email.WatcherState{
 			AgentID:        mailRedAgent,
@@ -168,7 +168,8 @@ func TestMailSummaryEndpoint(t *testing.T) {
 
 	t.Run("error without a deferred attempt renders error", func(t *testing.T) {
 		env := newMailRedEnv(t)
-		stateFile := runWatcherCycle(t, env, watcherTransport(t))
+		// Production-parity pooled wiring (wiring site 3).
+		stateFile := runWatcherCycle(t, env, mailWatcherTransportForPair(t, env, mailRedAgent, mailRedWS))
 		st := email.WatcherState{
 			AgentID:        mailRedAgent,
 			WorkspaceID:    mailRedWS,
@@ -195,23 +196,13 @@ func TestMailSummaryEndpoint(t *testing.T) {
 	})
 }
 
-// watcherTransport dials a fresh in-memory IMAP fixture and returns a
-// transport for a watcher cycle whose state file the subtest rewrites.
-func watcherTransport(t *testing.T) email.Transport {
-	t.Helper()
-	imapPort, _ := startPlainIMAP(t)
-	smtpPort, _ := listenCount(t)
-	cl, err := email.NewClient(email.Account{
-		IMAPHost: "127.0.0.1",
-		IMAPPort: imapPort,
-		SMTPHost: "127.0.0.1",
-		SMTPPort: smtpPort,
-		Username: "mailbox@test.local",
-		Password: "s3cret",
-	})
-	require.NoError(t, err)
-	return cl
-}
+// The watcher transports this file drives are built through the shared
+// pool (mail_fixture_red_test.go::mailWatcherTransportForPair /
+// mailWatcherTransportForPairAt) — the way production builds every watcher
+// transport (rest_mailbox.go::buildMailboxes, wiring site 3). A bare
+// email.NewClient is the typed wiring error in a manager-wired process
+// (FR-W1-2), and the pool's credential resolver reads the process runtime
+// holder, which newMailRedEnv boots at construction.
 
 func TestMailSummary_ZeroEnabledMailboxes_ItemsEmptyArray(t *testing.T) {
 	// Architect confirmation 1 (coordination/logs/email-arch-sigcsp.log,

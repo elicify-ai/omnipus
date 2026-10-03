@@ -189,11 +189,17 @@ func TestAgentAttachment_SamePolicyResolution(t *testing.T) {
 	if NewSendEmailTool(nil).Name() != "send_email" {
 		t.Fatalf("MC-35: tool name = %s, want send_email", NewSendEmailTool(nil).Name())
 	}
-	for _, tool := range EmailToolset(EmailTransports{}) {
-		if strings.Contains(tool.Name(), "attach") {
-			t.Fatalf("MC-35: separate attachment tool %q", tool.Name())
-		}
-	}
+	// The original MC-35 loop failed the toolset on ANY tool whose name
+	// contains "attach". That ruled the OUTGOING side only: D33 (email-mail-
+	// view-spec) attaches workspace files to sent mail via send_email's
+	// attachments parameter, with no separate tool and no extra gate — and
+	// that rule still stands, asserted by the parameter check above and the
+	// AutoAsks/policy checks below. The RECEIVED side is a different, later
+	// founder decision: Q4=A (2026-10-02, ADR-20261001 F3, w4 spec US-3)
+	// deliberately adds list/read/download tools for received attachments
+	// with the ordinary classes and "no special mechanism", so the
+	// name-contains-"attach" sweep is superseded for them. Their policy
+	// parity is pinned by auto_approve_mail_test.go.
 	if AutoApproveClassOf("send_email") != AutoAsks {
 		t.Fatalf("MC-35: send_email auto-approve class = %s, want asks", AutoApproveClassOf("send_email").String())
 	}

@@ -329,8 +329,33 @@ components:
       $ref: ./components/schemas/CreateVaultRequest.yaml
     LibraryRenameRequest:
       $ref: ./components/schemas/LibraryRenameRequest.yaml
+    # LibraryUploadResponse is hosted INLINE here (not via its schema file),
+    # following the ADR-034 precedent for AgentCreateRequest: the entries
+    # items must reach LibraryEntry through an INTERNAL component ref. The
+    # former relative form ($ref: './LibraryEntry.yaml' inside
+    # components/schemas/LibraryUploadResponse.yaml) made oapi-codegen inline
+    # the array items as an anonymous struct with a response-named preview
+    # enum, which forced the upload handler to mirror the element in a
+    # hand-written wire struct — the constraint-#8 lint finding this hosting
+    # removes. The element is LibraryEntry on the wire either way; the
+    # now-unreferenced components/schemas/LibraryUploadResponse.yaml is
+    # deleted together with this hosting change.
     LibraryUploadResponse:
-      $ref: ./components/schemas/LibraryUploadResponse.yaml
+      description: >
+        Response from POST /api/v1/library/{workspace_id}/upload (HTTP 201).
+        Returns the work-tree entries created by the upload — mirrors
+        UploadFilesResponse's shape for the session-scoped uploader, but with
+        LibraryEntry (path-keyed) items rather than UploadedFile.
+      type: object
+      additionalProperties: false
+      required:
+        - entries
+      properties:
+        entries:
+          type: array
+          description: Entries created by this upload, in the order the multipart parts were received.
+          items:
+            $ref: '#/components/schemas/LibraryEntry'
     LibraryTransferRequest:
       $ref: ./components/schemas/LibraryTransferRequest.yaml
     LibraryMkdirRequest:
@@ -1796,6 +1821,28 @@ components:
       $ref: ./components/schemas/CreateEmailDraftResult.yaml
     MailUnavailableError:
       $ref: ./components/schemas/MailUnavailableError.yaml
+    MailReadMetadata:
+      $ref: ./components/schemas/MailReadMetadata.yaml
+    MailStaleReferenceError:
+      $ref: ./components/schemas/MailStaleReferenceError.yaml
+    MailAttachmentPreviewRequest:
+      $ref: ./components/schemas/MailAttachmentPreviewRequest.yaml
+    MailAttachmentPreviewResponse:
+      $ref: ./components/schemas/MailAttachmentPreviewResponse.yaml
+    MailAttachmentContentSource:
+      $ref: ./components/schemas/MailAttachmentContentSource.yaml
+    MailAttachmentSaveRequest:
+      $ref: ./components/schemas/MailAttachmentSaveRequest.yaml
+    MailAttachmentSaveResponse:
+      $ref: ./components/schemas/MailAttachmentSaveResponse.yaml
+    MailReplyContextRequest:
+      $ref: ./components/schemas/MailReplyContextRequest.yaml
+    MailReplyContextResponse:
+      $ref: ./components/schemas/MailReplyContextResponse.yaml
+    MailboxRemovalResult:
+      $ref: ./components/schemas/MailboxRemovalResult.yaml
+    MailboxCleanupRequest:
+      $ref: ./components/schemas/MailboxCleanupRequest.yaml
     BackupCreateResponse:
       $ref: ./components/schemas/BackupCreateResponse.yaml
     OnboardingStatusResponse:
@@ -5106,7 +5153,15 @@ paths:
         Removes the mailbox the agent holds in the given workspace from config
         and deletes its stored password from the credential store. The agent's
         email tools for this workspace are de-registered on the next reload;
-        mailboxes the agent holds in OTHER workspaces are untouched.
+        mailboxes the agent holds in OTHER workspaces are untouched. The
+        response is the truthful removal discrimination
+        (MailboxRemovalResult: removed versus removed_cleanup_pending with an
+        opaque cleanup intent and the separately authorized Retry-cleanup
+        operation, ADR-20261001 "Removal with incomplete cleanup" row): the
+        pair is always disabled and removed from config first — a
+        removed_cleanup_pending outcome never serves residual files — and a
+        failed cache/watcher-state cleanup step is NEVER reported as a
+        completed purge.
       tags:
       - Agents
       security:
@@ -5128,11 +5183,13 @@ paths:
         example: ws_my_workspace
       responses:
         '200':
-          description: Mailbox removed.
+          description: >
+            Mailbox removed, or removed with cleanup pending — the truthful
+            outcome discrimination with the opaque retry intent.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/OperationResult'
+                $ref: '#/components/schemas/MailboxRemovalResult'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
@@ -5167,6 +5224,58 @@ paths:
                 $ref: '#/components/schemas/MailboxListResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /mailboxes/cleanup:
+    post:
+      operationId: retryMailboxCleanup
+      summary: Retry the pending cleanup of a removed mailbox (removal cascade)
+      description: >
+        Separately authorized Retry-cleanup operation for a mailbox removal
+        that ended removed_cleanup_pending (ADR-20261001 "Removal with
+        incomplete cleanup" row; mail-live-access-landing-order register
+        rows 5/22 — W0 is the single publisher). Keyed ONLY by the opaque
+        cleanup_intent — it keeps working after the mailbox's config row is
+        gone, because the intent is the sole address of the pending
+        cleanup. Never reports success for a logged unlink failure: the
+        truthful outcome discrimination (removed versus
+        removed_cleanup_pending) returns again. An unknown, expired or
+        already-completed intent is 404. The pair stays disabled and
+        acquires nothing until this returns removed.
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MailboxCleanupRequest'
+      responses:
+        '200':
+          description: >
+            Truthful cleanup outcome — removed when every pending step has
+            now succeeded; removed_cleanup_pending again (with the same
+            intent) when a step still failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailboxRemovalResult'
+        '400':
+          description: Malformed body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Unknown, expired or already-completed cleanup intent.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           $ref: '#/components/responses/500InternalServerError'
   /config/gateway/rotate-token:
@@ -10371,19 +10480,85 @@ paths:
           code=backoff, the watcher's last error class and next_attempt_at.
           true = human-initiated (mount, folder switch, Retry click, open
           message): bypasses the backoff gate for this one request; the
-          concurrency cap and coalescing still apply.
+          concurrency cap and coalescing still apply. Retry never bypasses
+          capacity, security checks or mutation safeguards, and an
+          automatic refresh never sets it (ADR-20261001 failure table).
         schema:
           type: boolean
           default: false
+      - name: mode
+        in: query
+        required: false
+        description: >
+          Cache-first versus live read (ADR-20261001 "Cached read versus
+          genuine refresh" row; register rows 2/6). Omitted or live =
+          today's live read. cache_first = serve the labelled cached
+          mapping/counts immediately without dialing; a cache hit consumes
+          no A8 work slot and opens no socket. A cache-first response is
+          metadata-labelled (MailFolderList.metadata) and is never evidence
+          of a live success; on one eligible stale/dirty event the panel
+          makes at most one separate mode=live request, which either
+          returns validated data or a visible error — it can never return
+          the same stale page as a successful refresh. A cache miss falls
+          through once to live under the normal budget. Requests without
+          valid panel presence may execute live request-scoped work but
+          cannot start detached panel refreshes or retain sockets.
+        schema:
+          type: string
+          enum:
+          - cache_first
+          - live
+      - name: refresh_mapping
+        in: query
+        required: false
+        description: >
+          Force the folder-mapping validation on this read (ADR-20261001
+          cached-read row: "For the rail, add refresh_mapping Boolean").
+          false/absent = a normal live count refresh reuses a valid
+          mapping. true = this read also validates the mapping — the
+          panel-open with a missing/>24-hour mapping case, the manual
+          Refresh click, and the one permitted rediscovery after a
+          missing-folder failure or observed folder-version change set it
+          explicitly. It is never turned on by the 5-minute count refresh.
+        schema:
+          type: boolean
+          default: false
+      - name: observer_id
+        in: query
+        required: false
+        description: >
+          Opaque per-panel observer ID (mail-live-access-landing-order
+          register row 6; ADR-20261001 "Mail panel presence" row) from the
+          mail_panel_observer WebSocket frame — the read opts into panel
+          semantics when the ID is bound to this authenticated
+          connection/workspace: the read may retain pooled sockets while
+          that observer remains open, and its cache reads ride the panel's
+          retention. Absent or unknown observer = conservative
+          request-scoped work; REST can never claim another socket/user's
+          observer. Never grants authorization by itself — the pair scope
+          is checked independently.
+        schema:
+          type: string
+          minLength: 1
+        example: "obs_5f3a"
       responses:
         '200':
-          description: The mailbox's three folders with live counts.
+          description: The mailbox's three folders with counts and freshness metadata.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/MailFolderList'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '409':
+          description: >
+            Stale reference/cursor — the typed MailStaleReferenceError body
+            (code=stale_reference); the client refreshes the list view
+            once.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailStaleReferenceError'
         '404':
           description: Workspace, agent, or mailbox pair not found (getAgentMailbox precedent).
           content:
@@ -10460,6 +10635,13 @@ paths:
           Page size. Zero, negative or absent means the default 20; values
           above 100 are clamped to 100 (MC-6, mirrors clampLimit in
           pkg/email/transport.go). A non-integer value is rejected 400.
+          These 20/100 bounds are the pre-ADR-20261001 state and stay the
+          operative bounds until the consumer-timed W0 amendment raises
+          list paging to the ADR's 25-row page and 200-row view limits
+          (register row 4; lands in the same step as the cursor switch in
+          w3's consumer work) — the search parameter's "same 25-row page"
+          statement on this operation describes that amended state, not
+          this one.
         schema:
           type: integer
           default: 20
@@ -10481,25 +10663,111 @@ paths:
           code=backoff, the watcher's last error class and next_attempt_at.
           true = human-initiated (mount, folder switch, Retry click, open
           message): bypasses the backoff gate for this one request; the
-          concurrency cap and coalescing still apply.
+          concurrency cap and coalescing still apply. Retry never bypasses
+          capacity, security checks or mutation safeguards, and an
+          automatic refresh never sets it (ADR-20261001 failure table).
         schema:
           type: boolean
           default: false
+      - name: mode
+        in: query
+        required: false
+        description: >
+          Cache-first versus live read (ADR-20261001 "Cached read versus
+          genuine refresh" row; register rows 2/6). Omitted or live =
+          today's live read. cache_first = serve the labelled cached newest
+          page immediately without dialing; a cache hit consumes no A8 work
+          slot and opens no socket, and the response's
+          MailMessagePage.metadata states its source and age. A cache-first
+          response is never evidence of a live success; on one eligible
+          stale/dirty event the panel makes at most one separate mode=live
+          request. Search sequences and pages beyond the cached newest
+          window always run live.
+        schema:
+          type: string
+          enum:
+          - cache_first
+          - live
+      - name: refresh_mapping
+        in: query
+        required: false
+        description: >
+          Force the folder-mapping validation on this read (register rows
+          2/6; the list rides the same flag so a folder switch with its
+          list can validate the mapping in one event). false/absent = a
+          normal live refresh reuses a valid mapping.
+        schema:
+          type: boolean
+          default: false
+      - name: observer_id
+        in: query
+        required: false
+        description: >
+          Opaque per-panel observer ID (register row 6; ADR-20261001 "Mail
+          panel presence" row) — the read opts into panel semantics when
+          the ID is bound to this authenticated connection/workspace.
+          Absent or unknown observer = conservative request-scoped work.
+        schema:
+          type: string
+          minLength: 1
+        example: "obs_5f3a"
+      - name: search
+        in: query
+        required: false
+        description: >
+          Folder-scoped server-side search query (ADR-20261001 "Paging and
+          search" row; register row 4). Starts a bounded search sequence
+          under the same 25-row page and 200-row view limits, matched
+          server-side — no local index, no full-text/offline search, and
+          never a whole-mailbox fetch. Matching fields and bounds are
+          founder-settled (decision Q-D answered 2026-10-02, option A):
+          subject plus sender/recipient substring matching, server-side
+          header search, the same 25/200 bounds; the mail-live-access
+          W2/W3 specs fix the exact search semantics within that decision.
+          Presenting search and cursor together is rejected 400.
+        schema:
+          type: string
+          minLength: 1
+      - name: cursor
+        in: query
+        required: false
+        description: >
+          Opaque continuation cursor from MailMessagePage.next_cursor
+          (register row 4) — continues the browse or search sequence it
+          was issued in. A stale or mismatched cursor (folder epoch
+          changed, configuration generation changed, sequence mismatch) is
+          refused with the typed 409 stale-cursor result — the client
+          resets the view once. Supersedes before_uid, which is retained
+          only until the panel consumer migration lands.
+        schema:
+          type: string
+          minLength: 1
+        example: "MWI6NDU2OjEyMztCMQ"
       responses:
         '200':
-          description: One explicit-truncation page of envelopes.
+          description: >
+            One explicit page of envelopes with cursor paging and freshness
+            metadata.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/MailMessagePage'
         '400':
-          description: Unknown folder slug or malformed limit.
+          description: Unknown folder slug, malformed limit, or search+cursor together.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '409':
+          description: >
+            Stale cursor/reference — the typed MailStaleReferenceError body;
+            code=stale_cursor restarts the list view once.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailStaleReferenceError'
         '404':
           description: Workspace, agent, or mailbox pair not found.
           content:
@@ -10613,6 +10881,19 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '409':
+          description: >
+            Stale reference — the typed MailStaleReferenceError body
+            (code=stale_reference): the ref's embedded folder epoch, pair or
+            configuration generation no longer matches the live folder,
+            refused on the same lease that would have served the fetch
+            (correction I-03). The client refreshes the list once; the
+            response never serves whatever the folder now holds under the
+            old identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailStaleReferenceError'
         '404':
           description: Message not found in the addressed folder (includes a pair with no mailbox; MC-13 — no body or folder leakage).
           content:
@@ -10702,6 +10983,17 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '409':
+          description: >
+            Stale reference — the typed MailStaleReferenceError body
+            (code=stale_reference): the ref failed its epoch/pair/generation
+            validation on the same lease that would have performed the flag
+            write (correction I-03 — the flag write never lands against a
+            recreated folder under an old identity).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailStaleReferenceError'
         '404':
           description: Message not found in the addressed folder.
           content:
@@ -10722,7 +11014,7 @@ paths:
   /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}:
     get:
       operationId: getMailAttachment
-      summary: Download one attachment part of one message
+      summary: Download one attachment part of one message (browser-Download byte path)
       description: >
         Streams one MIME attachment part (D28, email-mail-view-spec §2.3).
         Served with Content-Disposition: attachment always — an .html
@@ -10732,6 +11024,19 @@ paths:
         dual-encoded filename from the sanitized MailAttachment.filename. No
         CSP on attachment responses (Library MV-13 second half). The
         download never changes flags.
+
+        This operation is the BROWSER-DOWNLOAD byte path only
+        (mail-live-access-landing-order register rows 5/8; ADR correction
+        I-05): attachment disposition, its existing filename/destination
+        behaviour, and a streaming role that serves larger-than-preview
+        files to the browser without ever becoming a preview source. The
+        temporary viewer's bytes come from the SEPARATE preview-purpose
+        resource carried by
+        MailAttachmentPreviewResponse.content_source.byte_url — token-bound
+        to the minted grant, inline-disposition, no-store, capped at 25 MiB
+        actual decoded bytes. One unlimited path shared by both purposes is
+        forbidden: this endpoint must never serve as the preview source,
+        and the preview endpoint must never serve as a browser download.
       tags:
       - Mail
       security:
@@ -10810,6 +11115,17 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/401Unauthorized'
+        '409':
+          description: >
+            Stale reference — the typed MailStaleReferenceError body
+            (code=stale_reference): the ref failed its epoch/pair/generation
+            validation on the same lease that would have streamed the part
+            (correction I-03). No bytes are served against a recreated
+            folder under an old identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailStaleReferenceError'
         '404':
           description: Message or attachment part absent.
           content:
@@ -10831,6 +11147,270 @@ paths:
             code=busy (cap-overflow queue timeout, MIN-003). The upstream
             enum in the 502 description is unchanged; busy/backoff are
             gateway-availability codes, not mail-server failure classes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailUnavailableError'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}/save-to-library:
+    post:
+      operationId: saveMailAttachmentToLibrary
+      summary: Save one attachment part into the workspace Library (F2)
+      description: >
+        Explicit user-directed export of one attachment part into the
+        workspace Library hierarchy mail → <mailbox> → <year-month>
+        (ADR-20261001 "Save-to-workspace request/response (F2)" row;
+        register rows 8/22 — W0 is the single publisher; correction M-02
+        reconciliation). The mailbox component, sanitized unique leaf name
+        and save-time UTC month are SERVER-selected — no arbitrary save
+        path and no overwrite switch; an existing name gets a numbered
+        suffix, never an overwrite. This is NOT an attachment cache
+        exception: the save is a normal Library write audited as
+        mail.attachment_saved. The same save path serves the agent's
+        download_email_attachment result (F3) under its normal tool
+        permission. The save mutation is never coalesced or replayed; a
+        lost response resolves ONLY via the explicit same-token retry,
+        which returns the prior receipt for an already-committed save —
+        exactly one file (correction M-02). Refusals are typed errors with
+        a safe reason and no invented path: missing mailbox/workspace
+        authority, permission refusal (effective deny or declined ask),
+        stale/deleted message or part (typed 409), over-cap bytes (413),
+        filesystem policy, unsafe path, missing/broken root, parent-file
+        conflict, exhausted names, disk full or failed transfer. Browser
+        Download is a separate action and never a synonym for Save.
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Workspace ID.
+        schema:
+          type: string
+        example: ws_my_workspace
+      - name: agentId
+        in: path
+        required: true
+        description: ID of the mailbox-owning agent.
+        schema:
+          type: string
+        example: mia
+      - name: folder
+        in: path
+        required: true
+        description: Folder slug — exactly inbox, sent or drafts (MC-5).
+        schema:
+          type: string
+          enum:
+          - inbox
+          - sent
+          - drafts
+      - name: ref
+        in: path
+        required: true
+        description: >
+          Folder-scoped message reference — the gateway-issued
+          MailMessageSummary.message_ref (correction I-03), validated on
+          the same lease that performs the save.
+        schema:
+          type: string
+          minLength: 5
+        example: "uid:456:123"
+      - name: partIndex
+        in: path
+        required: true
+        description: Stable MIME leaf index from MailAttachment.part_index.
+        schema:
+          type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MailAttachmentSaveRequest'
+      responses:
+        '200':
+          description: >
+            Saved. The real Library entry, final path, actual size and
+            truthful audit status; only this success enables Open in
+            Library. The retry of an already-committed save returns this
+            same receipt (correction M-02).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailAttachmentSaveResponse'
+        '400':
+          description: Malformed ref, part index or body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '403':
+          description: Permission refusal — effective tool deny, declined/unattended ask, or missing workspace authority.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Message or attachment part absent, or workspace root missing/broken.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >
+            Stale reference — the typed MailStaleReferenceError body
+            (code=stale_reference): the ref failed its epoch/pair/generation
+            validation on the lease that would perform the save. Nothing is
+            written against a recreated folder under an old identity.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailStaleReferenceError'
+        '413':
+          description: The part exceeds the 25 MiB decoded-byte cap — larger files are browser Download only.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: >
+            Mail server failure while refetching the part — sanitized error
+            class in the body's code field (MC-8). A failed transfer leaves
+            no partial file.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >
+            Not dialed: code=backoff or code=busy (same semantics as the
+            read paths), with the optional typed reason field.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailUnavailableError'
+        '500':
+          description: >
+            Write/cleanup failure on the destination — no partial file is
+            reported as saved; a cleanup failure after a refused write is
+            surfaced, never logged away.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/reply-context:
+    post:
+      operationId: getMailReplyContext
+      summary: Assemble the reply/quote context for one message (F5)
+      description: >
+        Session-authenticated message subresource assembling reply/recipients
+        and the quoted original (ADR-20261001 "Reply / Reply all context
+        (F5)" row; register row 8 — W0 is the single publisher). Gateway
+        and agent adapter call the ONE shared recipient rule
+        (BuildReplyRecipients); the SPA consumes the result and implements
+        no second recipient algorithm. reply = sender/Reply-To only;
+        reply_all = To plus Cc (original To + Cc minus own address and
+        primary, deduplicated, never the original Bcc). Produces
+        current-compose state ONLY — never a server draft, never a body
+        cache, never a send; the existing generated send payload remains
+        the final human-reviewed recipient/body source. A stale response
+        for a different message/mailbox is discarded by the consumer.
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        description: Workspace ID.
+        schema:
+          type: string
+        example: ws_my_workspace
+      - name: agentId
+        in: path
+        required: true
+        description: ID of the mailbox-owning agent.
+        schema:
+          type: string
+        example: mia
+      - name: folder
+        in: path
+        required: true
+        description: Folder slug — exactly inbox, sent or drafts (MC-5).
+        schema:
+          type: string
+          enum:
+          - inbox
+          - sent
+          - drafts
+      - name: ref
+        in: path
+        required: true
+        description: >
+          Folder-scoped message reference — the gateway-issued
+          MailMessageSummary.message_ref (correction I-03), validated on
+          the same lease that assembles the context.
+        schema:
+          type: string
+          minLength: 5
+        example: "uid:456:123"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MailReplyContextRequest'
+      responses:
+        '200':
+          description: Recipients, subject and editable quoted context.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailReplyContextResponse'
+        '400':
+          description: Malformed ref, unknown mode, or failed Message-ID validation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Message not found in the addressed folder (no body or folder leakage).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >
+            Stale reference — the typed MailStaleReferenceError body
+            (code=stale_reference): the ref failed its epoch/pair/generation
+            validation on the lease that would assemble the context.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailStaleReferenceError'
+        '502':
+          description: >
+            Mail server failure while reading the message — sanitized error
+            class in the body's code field (MC-8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >
+            Not dialed: code=backoff or code=busy (same semantics as the
+            read paths), with the optional typed reason field.
           content:
             application/json:
               schema:
@@ -11260,6 +11840,153 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+
+  /mail/attachment-preview-token:
+    post:
+      operationId: mintMailAttachmentPreview
+      summary: Mint a metadata-only preview grant for one attachment part (F1)
+      description: >
+        Mints the temporary attachment-preview credential (ADR-20261001
+        "Temporary preview mint (F1)" row; mail-live-access-landing-order
+        register rows 5/8 — the preview-versus-download wire split,
+        correction I-05). Session-authenticated and STAYS in the API
+        namespace, like the HTML preview mint; the byte serving route is
+        the token-only non-API preview-purpose endpoint named by the
+        response's content_source.byte_url (the serving-prefix family is
+        deliberately not enumerated as operations in this document — §2.3a,
+        Library serving-prefix precedent). Minting is metadata-only: it
+        creates no file, retains no bytes and writes nothing to disk — the
+        grant holds authorization/reference metadata only, and every byte
+        read is a fresh request-scoped fetch through the preview-purpose
+        endpoint (inline disposition, Cache-Control: no-store, the 25 MiB
+        actual-decoded-byte cap enforced BEFORE any success state is
+        committed; a mid-transfer size or decode failure aborts with a
+        visible typed error, so a truncated stream can never render as a
+        completed preview). This is the ONE live-IMAP fetch of the Open
+        flow: only the selected part is fetched (part-specific PEEK — flags
+        unchanged), never the whole message or an unrelated part. The grant
+        dies on view exit, expiry, revoke and panel close. This mint is
+        NEVER the browser-Download path — that remains
+        getMailAttachment's exclusive role.
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MailAttachmentPreviewRequest'
+      responses:
+        '200':
+          description: >
+            Grant minted; the temporary Library viewer renders through
+            content_source.byte_url. Metadata only — no payload.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailAttachmentPreviewResponse'
+        '400':
+          description: Validation failure — unknown folder slug, malformed message_ref or part index.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Workspace, agent, mailbox pair, message, or attachment part not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >
+            Stale reference — the typed MailStaleReferenceError body
+            (code=stale_reference): the message_ref failed its
+            epoch/pair/generation validation on the lease that would serve
+            the preview fetch (correction I-03).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailStaleReferenceError'
+        '413':
+          description: >
+            The part exceeds the 25 MiB actual-decoded-byte preview cap —
+            the larger-file path is the browser Download (getMailAttachment),
+            never a truncated preview.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '502':
+          description: >
+            Upstream mail failure during the mint's one part fetch —
+            sanitized error class in the body's code field (MC-8).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >
+            Not dialed: code=backoff or code=busy (same semantics as the
+            read paths), with the optional typed reason field.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MailUnavailableError'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /mail/attachment-preview-token/{previewId}:
+    delete:
+      operationId: revokeMailAttachmentPreview
+      summary: Revoke one attachment preview grant (F1 ownership lifecycle)
+      description: >
+        Revokes one metadata-only preview grant (ADR-20261001 F1 lifecycle
+        table: "Back, Close, another attachment/message, workspace
+        navigation, Mail/Library panel close or logout — revoke its source
+        token"). After a successful revoke the preview-purpose byte
+        endpoint answers 404 only — expired/unknown/revoked are
+        deliberately indistinguishable (MC-43/MC-45 convention). Revoking
+        an unknown or already-expired grant is 404, not an error the
+        client must distinguish; bounded token expiry remains the backstop
+        when a close could not be delivered. The SPA calls this on every
+        temporary-view exit path; a late mint's grant is discarded and
+        revoked, never rendered.
+      tags:
+      - Mail
+      security:
+      - BearerAuth: []
+      parameters:
+      - name: previewId
+        in: path
+        required: true
+        description: Opaque grant identifier from MailAttachmentPreviewResponse.preview_id.
+        schema:
+          type: string
+          minLength: 1
+        example: "at_9f2c1e"
+      responses:
+        '200':
+          description: Grant revoked (or already gone).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationResult'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '404':
+          description: Unknown or expired grant identifier.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
 
   /mail/signature-preview-token:
     post:

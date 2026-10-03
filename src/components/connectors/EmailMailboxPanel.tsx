@@ -73,7 +73,7 @@ import {
   isApiError,
   ApiError,
 } from '@/lib/api'
-import { mintMailSignaturePreviewToken } from '@/lib/api/mail'
+import { fetchMailFolders, mintMailSignaturePreviewToken } from '@/lib/api/mail'
 import type { Mailbox, MailboxConfigureRequest } from '@/lib/api'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
@@ -114,6 +114,12 @@ interface MailboxFormState {
   /** US-1/MC-1: operator HTML, sanitized server-side on save; the panel
    * enforces the 16,384-char bound client-side and shows a live preview. */
   signature_html: string
+  /** US-4: the per-mailbox Sent/Drafts folder-name overrides. Empty =
+   * automatic discovery (the placeholder spells it out on screen); a value
+   * is a deliberate override used verbatim. Saving an empty value clears
+   * the override (the backend's existing clear-to-automatic behaviour). */
+  sent_folder_name: string
+  drafts_folder_name: string
 }
 
 const EMPTY_FORM: MailboxFormState = {
@@ -126,6 +132,8 @@ const EMPTY_FORM: MailboxFormState = {
   agent_id: '',
   workspace_id: '',
   signature_html: '',
+  sent_folder_name: '',
+  drafts_folder_name: '',
 }
 
 // not-wire-format: client-side validation errors for the mailbox form
@@ -137,6 +145,10 @@ interface FieldErrors {
   agent_id?: string
   workspace_id?: string
   signature_html?: string
+  /** US-4: the folder-name fields carry no format validation — the keys
+   * exist so the shared error-association pattern covers them uniformly. */
+  sent_folder_name?: string
+  drafts_folder_name?: string
 }
 
 function PasswordField({
@@ -302,6 +314,10 @@ const FIELD_ROW_ID: Record<keyof FieldErrors, string> = {
   imap_host: 'mailbox-imap-host',
   smtp_host: 'mailbox-smtp-host',
   signature_html: 'mailbox-signature',
+  // US-4: the folder-name fields carry no validation errors today — the
+  // mapping exists so the Record stays total if one is ever added.
+  sent_folder_name: 'mailbox-sent-folder',
+  drafts_folder_name: 'mailbox-drafts-folder',
 }
 const FIELD_VISUAL_ORDER: (keyof FieldErrors)[] = [
   'workspace_id',
@@ -469,6 +485,11 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
       agent_id: mailbox.agent_id,
       workspace_id: mailbox.workspace_id,
       signature_html: mailbox.signature_html ?? '',
+      // US-4 AS-5: a stored name predating this feature shows as the field
+      // value (a deliberate override) until the user clears it — the panel
+      // never discards it on the user's behalf.
+      sent_folder_name: mailbox.sent_folder_name ?? '',
+      drafts_folder_name: mailbox.drafts_folder_name ?? '',
     })
   }, [open, mailbox])
 
@@ -524,6 +545,12 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
       // makes clearing it a real save, not a no-op (US-1 AS-3 — an edited
       // or cleared signature applies to the NEXT message, no stale copy).
       req.signature_html = form.signature_html
+      // US-4 AS-2: sending the (possibly empty) folder names makes clearing
+      // either override a real save — an explicitly empty value clears to
+      // automatic (the backend preserves omitted values and clears
+      // explicitly-empty ones; no extra checkbox is added).
+      req.sent_folder_name = form.sent_folder_name.trim()
+      req.drafts_folder_name = form.drafts_folder_name.trim()
 
       // The mailbox endpoint is keyed by the (agent, workspace) PAIR
       // (PUT /agents/{id}/mailboxes/{workspaceId}) — there is no rename.
@@ -608,6 +635,27 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
   // move is pending — the credential is keyed to the OLD pair and will not
   // carry over, so the "(stored)" hint would be misleading.
   const hasStoredCredential = !isMoveTarget(form, mailbox) && Boolean(mailbox?.configured)
+
+  // US-4 AS-4: an override naming an unconfirmable folder must warn in
+  // settings, naming the field — never silently ignored. The folder state
+  // arrives cache-first (mode=cache_first NEVER dials IMAP — a settings
+  // form must not open a mailbox connection); a response without the
+  // discovery fields (pre-producer wire) warns about nothing.
+  const folderStateQuery = useQuery({
+    queryKey: ['mail-folder-state', form.workspace_id, form.agent_id],
+    queryFn: () => fetchMailFolders(form.workspace_id, form.agent_id, { mode: 'cache_first' }),
+    enabled: open && mailbox != null && form.workspace_id !== '' && form.agent_id !== '',
+    staleTime: 30_000,
+  })
+  const folderBySlug = (slug: 'sent' | 'drafts') =>
+    folderStateQuery.data?.folders.find((folder) => folder.slug === slug)
+  const overrideUnresolved = (slug: 'sent' | 'drafts'): boolean => {
+    const folder = folderBySlug(slug)
+    return folder?.availability === 'unknown'
+      && (folder.mapping_source === 'override' || folder.mapping_source === 'saved')
+  }
+  const sentOverrideUnresolved = overrideUnresolved('sent')
+  const draftsOverrideUnresolved = overrideUnresolved('drafts')
 
   // Non-worker agents only — email mailbox owner must be a conversational agent.
   // ADR-033 (operator-decided): the owning agent must be a core_team member
@@ -819,6 +867,81 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
                 aria-describedby={describedByFor('mailbox-smtp-host', 'mailbox-smtp-host-help', fieldErrors.smtp_host)}
                 aria-invalid={fieldErrors.smtp_host ? true : undefined}
               />
+            </FieldRow>
+          </div>
+
+          {/* US-4: the visible Sent/Drafts folder-name overrides. Empty =
+              automatic (the placeholder spells it out); a value is a
+              deliberate override used verbatim on the mail server. */}
+          <div className="space-y-[var(--space-3)]">
+            <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
+              Folder names
+            </h3>
+
+            <FieldRow
+              id="mailbox-sent-folder"
+              label="Sent folder name"
+              error={fieldErrors.sent_folder_name}
+              helpId="mailbox-sent-folder-help"
+              helpText={
+                form.sent_folder_name.trim() === ''
+                  ? 'Leave empty to find the folder automatically.'
+                  : 'Uses this exact folder name on your mail server.'
+              }
+            >
+              <Input
+                id="mailbox-sent-folder"
+                data-testid="mailbox-sent-folder"
+                type="text"
+                value={form.sent_folder_name}
+                onChange={(e) => setField('sent_folder_name', e.target.value)}
+                placeholder="Automatic"
+                className="text-[length:var(--type-utility-xs-size)]"
+                aria-describedby={describedByFor('mailbox-sent-folder', 'mailbox-sent-folder-help', fieldErrors.sent_folder_name)}
+              />
+              {sentOverrideUnresolved && (
+                <p
+                  role="status"
+                  data-testid="mailbox-sent-folder-unresolved"
+                  className="mt-[var(--space-1)] flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
+                >
+                  <Warning size={13} className="shrink-0 mt-[var(--space-0-5)]" />
+                  Omnipus couldn't confirm this Sent folder on your mail server. Check the name, or clear the field to find the folder automatically.
+                </p>
+              )}
+            </FieldRow>
+
+            <FieldRow
+              id="mailbox-drafts-folder"
+              label="Drafts folder name"
+              error={fieldErrors.drafts_folder_name}
+              helpId="mailbox-drafts-folder-help"
+              helpText={
+                form.drafts_folder_name.trim() === ''
+                  ? 'Leave empty to find the folder automatically.'
+                  : 'Uses this exact folder name on your mail server.'
+              }
+            >
+              <Input
+                id="mailbox-drafts-folder"
+                data-testid="mailbox-drafts-folder"
+                type="text"
+                value={form.drafts_folder_name}
+                onChange={(e) => setField('drafts_folder_name', e.target.value)}
+                placeholder="Automatic"
+                className="text-[length:var(--type-utility-xs-size)]"
+                aria-describedby={describedByFor('mailbox-drafts-folder', 'mailbox-drafts-folder-help', fieldErrors.drafts_folder_name)}
+              />
+              {draftsOverrideUnresolved && (
+                <p
+                  role="status"
+                  data-testid="mailbox-drafts-folder-unresolved"
+                  className="mt-[var(--space-1)] flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
+                >
+                  <Warning size={13} className="shrink-0 mt-[var(--space-0-5)]" />
+                  Omnipus couldn't confirm this Drafts folder on your mail server. Check the name, or clear the field to find the folder automatically.
+                </p>
+              )}
             </FieldRow>
           </div>
 

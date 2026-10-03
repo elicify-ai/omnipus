@@ -84,7 +84,20 @@ func newMailRedEnv(t *testing.T) *mailRedEnv {
 	seedWorkspaceFile(t, api.homePath, mailRedWS)
 	mux := http.NewServeMux()
 	api.registerAdditionalEndpoints(&testMuxRegistrar{mux: mux})
-	return &mailRedEnv{api: api, mux: mux}
+	env := &mailRedEnv{api: api, mux: mux}
+	// Boot replay: production establishes the process-wide mail runtime
+	// before any request can reach the pooled path (gateway.go::
+	// loadConfigAndProvider → initGatewayMailRuntime; initializeAgentLoop
+	// then publishes the live loop). Without it the pool's
+	// establishment-time credential resolver
+	// (mail_runtime.go::resolveCredentials) reads an unbooted holder and
+	// answers "config not wired yet", so every pooled operation fails
+	// before any dial — the sweep's duration_ms=1 / socket_count=-1
+	// instrument rows, mislabeled class "dns" by the classifier. Seeding
+	// order matters: credStore and the mailbox rows exist above, so the
+	// resolver sees exactly what a booted gateway sees.
+	bootTestMailRuntime(t, env)
+	return env
 }
 
 func mailDo(mux *http.ServeMux, method, path, ip string, authed bool, body string) *httptest.ResponseRecorder {
@@ -380,9 +393,30 @@ func TestMailMutations_EleventhRequestIs429(t *testing.T) {
 	}
 }
 
-func TestMailPreviewMint_EleventhIs429AndDoesNotDial(t *testing.T) {
-	// MC-44: the mint has its own per-IP limiter, 10/minute. The refused call
-	// must not dial IMAP. The listener counts accepts on the mailbox port.
+func TestMailPreviewMint_NinthIs429AndMintNeverDials(t *testing.T) {
+	// RE-DERIVED for the metadata-only mint (w5 spec §2.4 orders the pinned
+	// preview assertions re-derived for metadata-only grants, never
+	// weakened). The pre-wave oracle — mints 1..10 pass, the eleventh is
+	// 429 — pinned MC-44's 10/min per-IP limiter, observable only while a
+	// failed eager mint left the token table empty. Since US-6.3 the mint
+	// SUCCEEDS and dials nothing, so live message tokens accumulate and
+	// MC-13's frozen per-session control fires first: "message cap 8, ninth
+	// mint 429/no eviction". Both protections are pinned here in their new
+	// form:
+	//   - mints 1..8 succeed with a token (the cap boundary proven from
+	//     below, not a corpus of refusals);
+	//   - mints 9 AND 10 are 429 with the cap's actionable text — and the
+	//     tenth still refusing proves the refusal evicted nothing (an
+	//     evicting cap would let mint 10 back in). The cap refusal carries
+	//     its actionable text instead of Retry-After: MC-13/US-6.4 require
+	//     only "429, no eviction" of the cap, and "when" depends on when
+	//     the caller closes an older preview — the limiter's 429 below is
+	//     the one that carries Retry-After, as it always did;
+	//   - the eleventh is STILL 429 with Retry-After — MC-44's limiter
+	//     stands behind the cap (its 429 names the rate limit, not the cap);
+	//   - the IMAP listener counts ZERO accepts across all eleven requests:
+	//     a mint never dials, successful or refused (US-6.3/MC-12 — a
+	//     strictly stronger property than the old single-refusal dial pin).
 	env := newMailRedEnv(t)
 	path := "/api/v1/mail/html-preview-token"
 	requireMailLive(t, env.mux, http.MethodPost, path, "MC-44 / spec §2.3")
@@ -412,21 +446,39 @@ func TestMailPreviewMint_EleventhIs429AndDoesNotDial(t *testing.T) {
 
 	body := fmt.Sprintf(`{"workspace_id":%q,"agent_id":%q,"folder":"inbox","message_ref":"uid:1:1","load_remote":false}`, mailRedWS, mailRedAgent)
 	ip := nextMailIP()
-	for i := 1; i <= 10; i++ {
+	for i := 1; i <= 8; i++ {
 		rec := mailDo(env.mux, http.MethodPost, path, ip, true, body)
-		if rec.Code == http.StatusTooManyRequests {
-			t.Fatalf("MC-44: mint %d of 10 was already 429", i)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("MC-13: mint %d of 8 = %d, want 200 — the cap boundary must be proven from below. body=%s", i, rec.Code, rec.Body.String())
+		}
+		var minted struct {
+			Token string `json:"token"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &minted))
+		if len(minted.Token) < 43 {
+			t.Fatalf("MC-43: mint %d token %q is shorter than a 256-bit base64url value", i, minted.Token)
 		}
 	}
-	before := dials.Load()
+	for _, nth := range []int{9, 10} {
+		rec := mailDo(env.mux, http.MethodPost, path, ip, true, body)
+		if rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("MC-13: mint %d = %d, want 429 — the per-session cap refuses the ninth live token", nth, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "too many concurrent previews") {
+			t.Fatalf("MC-13: mint %d refusal must be the CAP's actionable text, not another limiter's: %s", nth, rec.Body.String())
+		}
+	}
 	rec := mailDo(env.mux, http.MethodPost, path, ip, true, body)
 	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("MC-44: 11th mint = %d, want 429. body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("MC-44: 11th mint = %d, want 429 — the 10/min limiter stands behind the cap. body=%s", rec.Code, rec.Body.String())
 	}
 	if rec.Header().Get("Retry-After") == "" {
 		t.Fatal("MC-44: 429 is missing Retry-After")
 	}
-	if dials.Load() != before {
-		t.Fatalf("MC-44: the refused mint dialed IMAP (%d accepts before, %d after)", before, dials.Load())
+	if strings.Contains(rec.Body.String(), "too many concurrent previews") {
+		t.Fatalf("MC-44: the 11th refusal must be the LIMITER's (the cap fired at 9), got the cap text: %s", rec.Body.String())
+	}
+	if dials.Load() != 0 {
+		t.Fatalf("US-6.3/MC-12: a metadata mint dialed IMAP (%d accepts) — a mint dials nothing, successful or refused", dials.Load())
 	}
 }

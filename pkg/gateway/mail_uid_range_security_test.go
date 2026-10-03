@@ -160,6 +160,42 @@ func TestMailUIDWireConversionsAvoidArchitectureSizedInt(t *testing.T) {
 		if parseErr != nil {
 			t.Fatalf("parse %s: %v", path, parseErr)
 		}
+		// Nullable wire fields cannot take the int64 call result directly:
+		// the compliant indirection is `v := mailUIDToWire(x)` followed by
+		// `field: &v` (the uidvalidity-unknown pattern, ADR P1.3). Pass 1
+		// collects every variable the conversion feeds, directly or through
+		// one &-alias, so pass 2 can accept exactly that pattern — a raw
+		// value or a non-convertible expression still fails below.
+		converted := map[string]bool{}
+		aliases := map[string]string{}
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			assign, ok := node.(*ast.AssignStmt)
+			if !ok || len(assign.Rhs) != 1 || len(assign.Lhs) != 1 {
+				return true
+			}
+			name, isIdent := assign.Lhs[0].(*ast.Ident)
+			if !isIdent {
+				return true
+			}
+			switch rhs := assign.Rhs[0].(type) {
+			case *ast.CallExpr:
+				if fn, ok := rhs.Fun.(*ast.Ident); ok && fn.Name == "mailUIDToWire" {
+					converted[name.Name] = true
+				}
+			case *ast.UnaryExpr:
+				if rhs.Op == token.AND {
+					if target, ok := rhs.X.(*ast.Ident); ok {
+						aliases[name.Name] = target.Name
+					}
+				}
+			}
+			return true
+		})
+		for name, target := range aliases {
+			if converted[target] {
+				converted[name] = true
+			}
+		}
 		ast.Inspect(parsed, func(node ast.Node) bool {
 			if call, ok := node.(*ast.CallExpr); ok {
 				if name, isIdent := call.Fun.(*ast.Ident); isIdent && name.Name == "mailUIDToWire" {
@@ -179,6 +215,12 @@ func TestMailUIDWireConversionsAvoidArchitectureSizedInt(t *testing.T) {
 				return true
 			}
 			wireAssignments++
+			if ident, isIdent := field.Value.(*ast.Ident); isIdent {
+				if !converted[ident.Name] {
+					t.Errorf("%s must route %s through mailUIDToWire", fset.Position(field.Pos()), key.Name)
+				}
+				return true
+			}
 			call, ok := field.Value.(*ast.CallExpr)
 			if !ok {
 				t.Errorf("%s must route %s through mailUIDToWire", fset.Position(field.Pos()), key.Name)
@@ -195,8 +237,11 @@ func TestMailUIDWireConversionsAvoidArchitectureSizedInt(t *testing.T) {
 		t.Fatal("no UID response assignments found; conversion guard did not exercise production call sites")
 	}
 	expectedCallSites := map[string][]string{
-		"rest_mail_draft.go":   {"newUID", "newUV"},
-		"rest_mail_read.go":    {"rows[len(rows)-1].UID", "row.UID", "uv", "v.UID", "v.UIDValidity"},
+		"rest_mail_draft.go": {"newUID", "newUV"},
+		// s.UIDValidity is handleMailFolders' STATUS call site (folder
+		// discovery, commit 7c7e076c1) — its landing missed this map and the
+		// guard has been red since; the entry records the real call site.
+		"rest_mail_read.go":    {"s.UIDValidity", "rows[len(rows)-1].UID", "row.UID", "uv", "v.UID", "v.UIDValidity"},
 		"rest_mail_summary.go": {"st.LastSeenUID"},
 	}
 	if !reflect.DeepEqual(callSites, expectedCallSites) {

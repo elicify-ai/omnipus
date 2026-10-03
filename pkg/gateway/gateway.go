@@ -786,6 +786,19 @@ func (rc *runContextWithOptions) loadConfigAndProvider() (error, bool) {
 	// above. Keyed by the data dir, so this is the SAME instance the watcher
 	// set (gateway_boot/reload) and the REST handlers resolve.
 	agent.SetSharedMailBudget(email.SharedMailBudget(rc.homePath))
+	// Shared Mail runtime (w5-integration, MC-1): construct the ONE pooled
+	// session manager for this data root and install it — plus the pair
+	// generation resolver (register row 12's single construction) — BEFORE
+	// NewAgentLoop, by the same ordering rule. The tools capture both at
+	// registration; the watcher set and the REST handlers resolve the same
+	// state-dir-keyed instance themselves (mail_runtime.go's wiring table).
+	// The runtime holder also carries the boot config/credential store so
+	// the pool's establishment-time credential resolver works from the first
+	// tool registration onward; initializeAgentLoop publishes the live loop
+	// the moment it exists.
+	mailRT := initGatewayMailRuntime(rc.homePath, rc.cfg, rc.credStore)
+	agent.SetSharedMailSessions(gatewayMailSessionsFor(rc.homePath))
+	agent.SetMailGenerationResolver(mailRT.mailGenerationForPair)
 	// ADR-067 FR-012: the provider FACTORY dispatches on the protocol this
 	// same document carries, so it must read the same instance — otherwise
 	// the gateway would resolve windows from the pulled document while
@@ -799,6 +812,9 @@ func (rc *runContextWithOptions) initializeAgentLoop() (error, bool) {
 	rc.msgBus = bus.NewMessageBus()
 
 	rc.agentLoop, rc.err = agent.NewAgentLoop(rc.cfg, rc.msgBus, rc.provider)
+	if rt := gatewayMail.Load(); rt != nil {
+		rt.setAgentLoop(rc.agentLoop)
+	}
 	if rc.err != nil {
 		// B1.2(b): when the failure is an audit logger construction error and
 		// the operator explicitly requested audit logging (cfg.Sandbox.AuditLog

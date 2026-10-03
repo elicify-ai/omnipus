@@ -1,0 +1,22 @@
+title: MailboxCleanupRequest
+description: >
+  Request of the separately authorized Retry-cleanup operation (ADR-20261001
+  "Removal with incomplete cleanup" row; w5 spec §8 step 5 — W0 is the
+  single publisher). Keyed by the opaque cleanup_intent returned with a
+  removed_cleanup_pending outcome; deliberately carries nothing else — the
+  intent is the only address, so the retry keeps working after the
+  mailbox's config row is gone.
+type: object
+additionalProperties: false
+required:
+  - cleanup_intent
+properties:
+  cleanup_intent:
+    type: string
+    minLength: 1
+    description: >
+      Opaque cleanup intent from MailboxRemovalResult.cleanup_intent —
+      server-issued, never synthesized. Unknown, expired or already
+      completed intents are refused with 404, not silently treated as
+      success.
+    example: "cln_4b81"

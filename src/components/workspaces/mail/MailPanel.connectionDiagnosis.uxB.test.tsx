@@ -51,7 +51,11 @@ describe('F3 — configured mailbox cannot connect', () => {
     expect(screen.getByRole('combobox', { name: 'Mailbox' })).toHaveTextContent('Mia · mia-outage@example.test')
     expect(screen.queryByTestId('mail-choose-mailbox')).not.toBeInTheDocument()
     fireEvent.click(within(error).getByRole('button', { name: 'Retry' }))
-    await waitFor(() => expect(fetchMailFolders).toHaveBeenLastCalledWith('ws-1', 'mia', { retry: true }))
+    // Superseded oracle, re-pinned (W3 spec §3.2 cache-first read params;
+    // landed in a3a678b34, 2026-10-02): folder reads carry mode, and the human
+    // Retry re-enters the open event's cache_first sequence — retry=true still
+    // marks the human dial (its semantics are unchanged per §2.4 row 1).
+    await waitFor(() => expect(fetchMailFolders).toHaveBeenLastCalledWith('ws-1', 'mia', { mode: 'cache_first', retry: true }))
   })
 
   it('names the underlying connection class during watcher backoff rather than diagnosing backoff as the cause', async () => {

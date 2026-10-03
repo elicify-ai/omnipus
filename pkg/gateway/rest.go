@@ -23,6 +23,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
+	"github.com/elicify-ai/omnipus/pkg/mailattachment"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
@@ -93,9 +94,18 @@ type restAPI struct {
 	// constructed restAPI (the unit-test literal) shares the same gate.
 	mailBudget     *email.MailBudget
 	mailBudgetOnce sync.Once
-	configMu       sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
-	taskStore      *task.Store         // unified task persistence
-	taskExecutor   *agent.TaskExecutor // task execution engine
+	// mailSessions is the restAPI's handle on the shared pooled session
+	// manager (w5-integration, MC-1): ONE process-wide instance per data
+	// root, injected at boot (gateway_boot.go) and resolved lazily — via the
+	// same state-dir-keyed email.SharedMailSessions — when a directly
+	// constructed restAPI omits it. Every client this restAPI constructs
+	// (mailPairClient) borrows sessions from THIS manager; a second pool
+	// cannot form below the facade.
+	mailSessions     *email.MailSessions
+	mailSessionsOnce sync.Once
+	configMu         sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
+	taskStore        *task.Store         // unified task persistence
+	taskExecutor     *agent.TaskExecutor // task execution engine
 
 	// limitAgentStore is the agent store the #904 global tool-iteration
 	// lowering (PUT /performance, D11) reads and writes. Nil in production
@@ -240,6 +250,27 @@ type restAPI struct {
 	// logout revocation. Nil until registered; readers go through
 	// mailPreviewTokenStoreOf(), which is nil-safe.
 	mailPreviewTokens atomic.Pointer[mailPreviewTokenStore]
+
+	// mailAttachmentTokens is the attachment PREVIEW grant store
+	// (rest_mail_attachment.go, F1) — metadata-only grants, published by
+	// newMailAttachmentRoutes at registration time; logout revocation walks
+	// it the same way. Nil until registered.
+	mailAttachmentTokens atomic.Pointer[mailAttachmentGrantStore]
+
+	// mailCleanupIntents holds the pending-cleanup intents of the Mail
+	// removal cascade (mail_cleanup.go, US-5.2): the opaque retry addresses
+	// POST /api/v1/mailboxes/cleanup consumes, kept so a truthful
+	// removed_cleanup_pending stays retryable after the mailbox config row
+	// is gone. Lazily built; a gateway restart drops intents BY DESIGN — the
+	// boot reconciler then owns the same state through the orphan sweep.
+	mailCleanupIntents *mailCleanupIntentStore
+	mailCleanupOnce    sync.Once
+
+	// mailSaveReceipts is the process-lifetime save-operation receipt store
+	// (rest_mail_attachment.go, correction M-02): one store per process,
+	// lazily built, no eviction — the restart is the only bound (grill-2
+	// F-9). Nil until the first save.
+	mailSaveReceipts atomic.Pointer[mailattachment.SaveReceiptStore]
 
 	// devServers is the gateway-wide Tier 3 dev-server registry. Shared with
 	// the web_serve tool (dev mode) and workspace.shell_bg tool via the agent
@@ -697,6 +728,10 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	// mint endpoint and the token-only /mail-preview/ serve prefix, sharing
 	// one token store published on the restAPI for logout revocation.
 	rae.a.registerMailPreviewRoutes(rae.cm)
+	// Attachment preview mint/revoke + the preview-purpose byte/HTML serve
+	// prefix (w4, F1) — registered AFTER the generic /mail-preview/ route;
+	// the mux prefers the more specific prefix.
+	rae.a.registerMailAttachmentRoutes(rae.cm)
 	// GET/PUT /api/v1/providers/default-model (ADR-068 FR-018/FR-042,
 	// T068-11): its OWN route with the high-blast-radius adminWrap chain
 	// (withAuth → RequireNotBypass — 401 unauthenticated, 503 under
@@ -738,6 +773,11 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	// M11: list all configured mailboxes (never 404s; empty list = none) so the
 	// SPA doesn't have to probe every agent's /agents/{id}/mailbox endpoint.
 	rae.cm.RegisterHTTPHandler("/api/v1/mailboxes", rae.a.withAuth(rae.a.listMailboxes))
+	// w5-integration (US-5.2/MC-8): the separately authorized Retry-cleanup
+	// operation for a mailbox removal that ended removed_cleanup_pending —
+	// keyed ONLY by the opaque cleanup intent, so it keeps working after the
+	// mailbox's config row is gone.
+	rae.cm.RegisterHTTPHandler("/api/v1/mailboxes/cleanup", rae.a.withAuth(rae.a.handleMailboxCleanup))
 	rae.cm.RegisterHTTPHandler("/api/v1/config/gateway/rotate-token", rae.a.withAuth(rae.a.rotateGatewayToken))
 	rae.cm.RegisterHTTPHandler("/api/v1/activity", rae.a.withAuth(rae.a.HandleActivity))
 }

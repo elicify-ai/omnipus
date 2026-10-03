@@ -1,5 +1,7 @@
 /**
- * RED contract — Mail panel states. Spec §16, US-3, US-6, D25, D29/R2-8, MC-36.
+ * RED contract — Mail panel states. Spec §16, US-3, US-6, D29/R2-8, MC-36;
+ * folder-refresh cadence per founder ruling Q-C (2026-10-02), which supersedes
+ * the D25 30-second refetch (W3 §4 US-1 AS-7, MC-W3-2, MC-W3-10).
  *
  * Implement src/components/workspaces/mail/MailPanel.tsx exporting MailPanel.
  * Props: { workspaceId: string }.
@@ -8,7 +10,9 @@
  *   fetchMailFolders(workspaceId, agentId)
  *   fetchMailMessages(workspaceId, agentId, folder)
  *   fetchMailSummary(workspaceId)
- * While mounted it refetches folders every 30 seconds and stops when unmounted (D25).
+ * Folders refresh at most once per eligible event (panel open with absent or
+ * older-than-five-minute data, folder switch, manual Refresh, own action) —
+ * never on a repeating timer, and nothing refreshes while the panel is closed.
  */
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -80,7 +84,7 @@ const folders = {
   ],
 }
 
-describe('Mail panel states (US-3, US-6, D25)', () => {
+describe('Mail panel states (US-3, US-6; refresh cadence per Q-C, superseding D25)', () => {
   beforeEach(() => {
     fetchAgents.mockReset()
     fetchMailboxes.mockReset()
@@ -186,20 +190,47 @@ describe('Mail panel states (US-3, US-6, D25)', () => {
     expect(await screen.findByText(/retrying at/i)).toBeInTheDocument()
   })
 
-  it('refetches folders after 30 seconds and not after the panel is closed (D25)', async () => {
+  it('refreshes folders once per open event, never on a timer and never after close (Q-C supersedes D25)', async () => {
+    // Founder ruling Q-C (mail-feature-decisions.md, 2026-10-02), restoring the
+    // ADR P1.1 stale-gating and superseding the D25 30-second refetch:
+    //   "A — the design's stale-gating stands (a live refresh on panel open or
+    //   folder switch only when the data is absent or older than five minutes;
+    //   manual Refresh always; own-action refresh unchanged). This restores what
+    //   the founder already directed ('counts and lists should not be frequent')."
+    // W3 spec §4 US-1 AS-7: when 30 seconds elapse repeatedly the folder rail and
+    // message list issue no timer-driven requests ("the D25 cadence is gone") while
+    // the watcher banner's saved-state summary poll is unchanged — so fetchMailSummary
+    // calls are deliberately NOT asserted here. MC-W3-10 ("Timer removal is real"):
+    // a 35-second advanced-clock test asserts zero folder/list requests after mount.
+    // §7 Scenario 1.3: a closed panel never refreshes. §3.1: at most one live request
+    // per eligible event, issued only when the data is absent or older than five
+    // minutes. The fixture below carries no freshness metadata, so the data is
+    // absent/unknown (US-2 AS-7 — never "just checked") and the stale-gate is open:
+    // the open event issues exactly one folders fetch.
     vi.useFakeTimers()
     try {
       const MailPanel = await loadPanel()
       const view = renderPanel(<MailPanel workspaceId="ws-1" />)
       await act(async () => { await vi.advanceTimersByTimeAsync(0) })
-      const before = fetchMailFolders.mock.calls.length
-      expect(before).toBeGreaterThan(0)
+      // The open event itself: exactly one folders fetch — the absent-data arm
+      // of the stale-gate (§3.1), never zero and never a second one.
+      expect(fetchMailFolders.mock.calls.length).toBe(1)
+      // The retired D25 interval itself: 30 seconds must produce nothing (US-1 AS-7).
       await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
-      expect(fetchMailFolders.mock.calls.length).toBeGreaterThan(before)
-      const atClose = fetchMailFolders.mock.calls.length
+      expect(fetchMailFolders.mock.calls.length).toBe(1)
+      // MC-W3-10's 35-second form: still nothing — a timer at any cadence up to
+      // and including 35 s would have fired by now.
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+      expect(fetchMailFolders.mock.calls.length).toBe(1)
+      // §7 scenario 1.6's second leg: the clock advances to 70 seconds total —
+      // still no folder or list request fired after the open event's requests.
+      await act(async () => { await vi.advanceTimersByTimeAsync(35_000) })
+      expect(fetchMailFolders.mock.calls.length).toBe(1)
+      expect(fetchMailMessages.mock.calls.length).toBe(1)
+      // Closed panel never refreshes (§7 Scenario 1.3): unmounting stops everything.
       view.unmount()
       await act(async () => { await vi.advanceTimersByTimeAsync(30_000) })
-      expect(fetchMailFolders.mock.calls.length).toBe(atClose)
+      expect(fetchMailFolders.mock.calls.length).toBe(1)
     } finally {
       vi.useRealTimers()
     }

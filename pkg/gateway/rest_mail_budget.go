@@ -99,7 +99,10 @@ func (a *restAPI) mailBudgetErr(w http.ResponseWriter, err error) bool {
 // the caller should render v. Generic in the dial's result type T: the caller
 // receives the value AS T — a shape drift is a compile error at the call
 // site, not an unchecked runtime assertion. A package-level function (not a
-// method) because Go methods cannot carry type parameters.
+// method) because Go methods cannot carry type parameters. rowsOf, when
+// non-nil, derives the instrument record's optional rows member from the
+// dial's value — invoked only on success (a failed operation's row count is
+// unknown, and an unknown stays absent rather than degrading to a zero).
 func mailBudgetWrap[T any](
 	a *restAPI,
 	w http.ResponseWriter,
@@ -109,8 +112,10 @@ func mailBudgetWrap[T any](
 	op string,
 	params map[string]any,
 	dial func(context.Context) (T, error),
+	rowsOf func(T) *int,
 ) (T, bool) {
 	var zero T
+	started := time.Now()
 	budget := a.mailBudgetFor()
 	req := email.MailBudgetRequest{
 		Account:     client.AccountKey(),
@@ -121,6 +126,14 @@ func mailBudgetWrap[T any](
 		Retry:       mailRetryParam(r),
 	}
 	v, err := email.CallValue(budget, r.Context(), req, dial)
+	var rows *int
+	if err == nil && rowsOf != nil {
+		rows = rowsOf(v)
+	}
+	// w5 US-7.6/MC-18: exactly one safe record per operation, success and
+	// failure alike — emitted here, the single seam every panel read and
+	// preview serve passes through.
+	a.emitMailOperationTimingRows(op, agentID, workspaceID, started, err, "live", false, rows)
 	if a.mailBudgetErr(w, err) {
 		return zero, true
 	}

@@ -32,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -639,6 +640,15 @@ func validateLifecycleRecordForPersist(rec *LifecycleRecord) error {
 		if want := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation); fd.MessageID != want {
 			return fmt.Errorf("session: lifecycle: final_delivery.message_id %q must be the deterministic replay id %q", fd.MessageID, want)
 		}
+	}
+	// Boot epoch on a stop note (ADR D8.3). Any populated boot_seq must fit
+	// the int64 wire, whoever wrote it. Only by=restart must carry one;
+	// by=system cause=restart with no boot_seq stays valid.
+	if rec.StopNote != nil && rec.StopNote.BootSeq > uint64(math.MaxInt64) {
+		return fmt.Errorf("session: lifecycle: stop_note.boot_seq %d exceeds max int64 (by=%q)", rec.StopNote.BootSeq, rec.StopNote.By)
+	}
+	if rec.StopNote != nil && rec.StopNote.By == StopActorRestart && rec.StopNote.BootSeq == 0 {
+		return fmt.Errorf("session: lifecycle: stop_note.by %q requires boot_seq >= 1", rec.StopNote.By)
 	}
 	return nil
 }
