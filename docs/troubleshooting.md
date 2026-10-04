@@ -9,7 +9,7 @@ A symptom-first fix list for startup failures, unreachable gateways, login and A
 ## How to start diagnosing
 
 1. Open `$OMNIPUS_HOME/logs/gateway_panic.log` (default: `~/.omnipus/logs/`). A startup crash always writes there, even when nothing appears on screen.
-2. Open `$OMNIPUS_HOME/logs/gateway.log` — the running gateway's log stream, and the reason behind most failed requests.
+2. Open `$OMNIPUS_HOME/logs/gateway.log` — the running gateway's log stream, and the reason behind most failed requests. If you set `OMNIPUS_LOG_FILE`, read that file instead; see [choosing the diagnostic log file](operations/debug.md#choosing-the-diagnostic-log-file).
 3. Run `omnipus doctor`, which checks your configuration for known unsafe settings.
 4. Still unexplained? Restart with `omnipus start --debug` — see [debugging](operations/debug.md).
 

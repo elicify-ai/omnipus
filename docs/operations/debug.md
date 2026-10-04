@@ -14,6 +14,18 @@ omnipus start -d
 
 In this mode, the system formats logs extensively and displays previews of system prompts and tool execution results.
 
+## Choosing the diagnostic log file
+
+Set `OMNIPUS_LOG_FILE` before starting the gateway to send its JSON diagnostic records to a specific file instead of the normal gateway log in the data directory:
+
+```bash
+export OMNIPUS_LOG_FILE=/var/log/omnipus/gateway.jsonl
+```
+
+The gateway creates the parent directory if needed and appends to the file. The setting applies from the first startup record onward, including structured agent-turn diagnostics. An unset or empty value keeps the default destination. A home-relative value is expanded using `HOME`, when that variable is set.
+
+Restart the gateway after changing the value. If the selected file cannot be opened, startup fails with `error enabling file logging`; it does not silently switch back to the default file. Check the destination's permissions and available disk space. This setting moves diagnostic records only; the separate panic log and security audit log keep their own destinations.
+
 ## Disabling Log Truncation (Full Logs)
 
 By default, Omnipus truncates very long strings (such as the *System Prompt* or large JSON output results) in the debug logs to keep the console readable.
