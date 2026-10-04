@@ -135,8 +135,12 @@ func (al *AgentLoop) RedirectSteeredSession(ctx context.Context, sessionID strin
 	// instruction is appended only AFTER the stop is durable (never raced
 	// into the dying turn's steering queue), so the dying turn can never
 	// consume it mid-flight; ReviveStoppedSession appends it as the newest
-	// instruction and re-validates atomically under the record lock.
-	go al.awaitStoppedAndRevive(bg, sessionID, by, instruction)
+	// instruction and re-validates atomically under the record lock. rec is
+	// handed to the waiter as the launch-time parent-discovery fallback: it
+	// is the record this call successfully loaded before the stop was
+	// stamped, so when the record can no longer be read mid-wait the parent
+	// is still known from it — never invented.
+	go al.awaitStoppedAndRevive(bg, rec, by, instruction)
 	return nil
 }
 
@@ -145,21 +149,39 @@ func (al *AgentLoop) RedirectSteeredSession(ctx context.Context, sessionID strin
 // the race), then revives it with the replacement instruction — stopped:
 // same conversation, same generation; terminal: next round. On the
 // deadline it reports the undelivered instruction to the parent visibly.
-func (al *AgentLoop) awaitStoppedAndRevive(ctx context.Context, sessionID string, by steer.Principal, instruction string) {
+//
+// Delivery is never silent: every exit that leaves the replacement
+// unapplied reports the undelivered instruction to the parent through
+// reportUndeliveredRedirect — a revive refusal (both the error return and
+// the (false, nil) decline), a record that cannot be read mid-wait, and a
+// record that no longer exists all tell the parent, never a log line
+// alone. initial is the record RedirectSteeredSession loaded before the
+// stop was stamped; it is the parent-discovery fallback for the exits
+// where the record itself can no longer be read or no longer exists. The
+// launch-time edge is the only parent ever reported to — when it is
+// unknown there is nobody to tell, and none is invented.
+func (al *AgentLoop) awaitStoppedAndRevive(ctx context.Context, initial *session.LifecycleRecord, by steer.Principal, instruction string) {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
 		return
 	}
+	sessionID := initial.SessionID
 	deadline := time.Now().Add(redirectWaitDeadline)
 	for {
 		time.Sleep(redirectPollInterval)
 		rec, err := lifecycle.Load(sessionID)
 		if err != nil {
 			if errors.Is(err, session.ErrLifecycleNotFound) {
-				return // the session was reaped; nothing to revive
+				logger.ErrorCF("agent", "steer: redirect: the session no longer exists — the replacement instruction was NOT delivered",
+					map[string]any{"session_id": sessionID})
+				al.reportUndeliveredRedirect(sessionID, initial,
+					errors.New("the session no longer exists; the replacement instruction was never applied"))
+				return
 			}
 			logger.ErrorCF("agent", "steer: redirect: cannot read the record while waiting for the stop to land",
 				map[string]any{"session_id": sessionID, "error": err.Error()})
+			al.reportUndeliveredRedirect(sessionID, initial,
+				fmt.Errorf("the session record could not be read while waiting for the stop to land: %w", err))
 			return
 		}
 		if rec.Stopped() || rec.Terminal() {
@@ -168,8 +190,18 @@ func (al *AgentLoop) awaitStoppedAndRevive(ctx context.Context, sessionID string
 				logger.ErrorCF("agent", "steer: redirect: the replacement instruction could not be delivered",
 					map[string]any{"session_id": sessionID, "error": rerr.Error()})
 				al.reportUndeliveredRedirect(sessionID, rec, rerr)
+				return
 			}
-			_ = revived
+			if !revived {
+				// (false, nil): Revive re-read the record under its own lock
+				// and found it live again — resumed or revived elsewhere in
+				// the window since this poll observed stopped/terminal. The
+				// replacement was NOT applied; the parent must know.
+				logger.ErrorCF("agent", "steer: redirect: the replacement instruction was not applied — the session was already live again",
+					map[string]any{"session_id": sessionID})
+				al.reportUndeliveredRedirect(sessionID, rec,
+					errors.New("the session was resumed or revived elsewhere before the replacement could be applied"))
+			}
 			return
 		}
 		if time.Now().After(deadline) {

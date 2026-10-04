@@ -43,6 +43,15 @@ type MessageParentLifecycleStore interface {
 	Lock(sessionID string) *sync.Mutex
 	// Mutate is the atomic read-modify-write primitive (Correctness-MAJOR-3).
 	Mutate(sessionID string, fn func(*session.LifecycleRecord) error) error
+	// RecordFencelessLandedStopLocked appends the landed-stop history line
+	// for a FENCE-LESS stop (ADR-20260928 Correction C3) under the lifecycle
+	// lock the caller already holds from inside a Mutate callback —
+	// signature-identical to
+	// *session.LifecycleStore.RecordFencelessLandedStopLocked, so a real
+	// store satisfies it trivially and the embedding test fakes inherit it.
+	// A stop whose transition cannot be ledgered must not land: the ledger,
+	// not the resumable stop note, is the stop's durable history.
+	RecordFencelessLandedStopLocked(sessionID string, landed session.LandedStop) (int64, error)
 	// List returns every LifecycleRecord matching filter — signature-
 	// identical to *session.LifecycleStore.List, so a real store satisfies
 	// this trivially and every existing test fake that embeds

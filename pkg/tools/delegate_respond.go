@@ -132,20 +132,47 @@ func (dt *delegateToolExecuteRespond) dispatchThirdParty() (*ToolResult, bool) {
 		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
 			cur.Stop = nil
 		}
+		// Correction C3, the same discipline every other fence-less stop
+		// obeys (boot_sweep.go::failInterrupted): the transition is ledgered
+		// IN THIS SAME lock hold — the ledger, not the resumable stop note,
+		// is the stop's durable history and the direct-parent notice's
+		// discovery source. The note's Seq is the allocated ledger sequence,
+		// never the generation. A ledger failure refuses the whole mutation:
+		// the stop does not land note-only, and the original stays live.
+		at := dt.t.now().UTC()
+		actor := session.StopActorAgent(ToolAgentID(dt.ctx))
+		landed := session.LandedStop{
+			ParentSessionID: cur.SteeringSessionID(),
+			Generation:      cur.Generation,
+			Cause:           session.StopCauseRedirectPause,
+			Actor:           actor,
+			At:              at,
+		}
+		if cur.ExecutionID != nil {
+			landed.RunID = cur.ExecutionID.RunID
+			landed.BootSeq = cur.ExecutionID.BootSeq
+		}
+		seq, ledgerErr := dt.t.lifecycle.RecordFencelessLandedStopLocked(cur.SessionID, landed)
+		if ledgerErr != nil {
+			return fmt.Errorf("steer: respond: supersede stop for %q not landed: its transition could not be ledgered: %w",
+				cur.SessionID, ledgerErr)
+		}
 		cur.StopNote = &session.StopNote{
-			At:    dt.t.now().UTC(),
-			By:    session.StopActorAgent(ToolAgentID(dt.ctx)),
-			Seq:   uint64(cur.Generation),
+			At:    at,
+			By:    actor,
+			Seq:   uint64(seq),
 			Cause: session.StopCauseRedirectPause,
 		}
 		return nil
 	}); merr != nil {
 		// The corrective successor is already running by this point —
 		// returning an error here would misleadingly tell the caller
-		// "respond failed" when the answer was in fact delivered. Log it
-		// instead; the original record is a display/bookkeeping nicety at
-		// this stage, not the source of truth for whether the answer landed.
-		slog.Warn("delegate: respond: 3P corrective successor dispatched but the original could not be marked superseded",
+		// "respond failed" when the answer was in fact delivered. But this
+		// failure is not a display nicety: with the transition refused, the
+		// supersede STOP DID NOT LAND — the original keeps its pre-respond
+		// state and is not superseded until a retry lands the ledgered stop.
+		// The Warn below is the visible record of that.
+		slog.Warn("delegate: respond: 3P corrective successor dispatched but the supersede stop DID NOT LAND — the original session remains live and unsuperseded",
 			"session_id", dt.sessionID, "error", merr)
 	}
 	return dispatch, true
