@@ -7,9 +7,10 @@
 // proceeds only on confirm and a cancel leaves store, URL and panel
 // untouched. No silent data loss on any path (CRIT-001)."
 //
-// This file covers TWO of FR-013's named entry points — ChatControls'
-// "Open browser" and "Open library" buttons — as its "open-other from ANY
-// entry point (... ChatControls ...)" instance. Other entry points (header
+// This file covers ChatControls' "Open browser" button as its "open-other
+// from ANY entry point (... ChatControls ...)" instance. The chat-header
+// "Open library" button is gone. The sidebar Library button's leave gate is
+// proved by Sidebar.panelGuard.test.tsx. Other entry points (header
 // Close/Expand, tab toggle, deep-link replace, workspace switch) are covered
 // in their own files: WorkspaceTabBar.toggle.test.tsx (tab toggle),
 // workspaces.$workspaceId.chat.panel.test.tsx (deep-link replace).

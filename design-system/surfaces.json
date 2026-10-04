@@ -6566,10 +6566,6 @@
       "lane": 3
     },
     {
-      "source": "src/components/chat/ChatModeBadge.tsx",
-      "lane": 3
-    },
-    {
       "source": "src/components/chat/ChatScreen.tsx",
       "lane": 3
     },
@@ -6815,6 +6811,10 @@
     },
     {
       "source": "src/components/layout/Sidebar.tsx",
+      "lane": 7
+    },
+    {
+      "source": "src/components/layout/SidebarShowButton.tsx",
       "lane": 7
     },
     {

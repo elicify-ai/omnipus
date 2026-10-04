@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "component": "TextToggle",
+  "exports": [
+    "TextToggle"
+  ],
+  "category": "composite",
+  "source": "src/components/ui/text-toggle.tsx",
+  "documentation": "docs/internal/design/components/text-toggle.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "off",
+    "on",
+    "disabled"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/text-toggle.stories.tsx",
+      "exports": [
+        "Default",
+        "On",
+        "Disabled"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "text-toggle-unit",
+      "kind": "unit",
+      "file": "src/components/ui/text-toggle.test.tsx",
+      "test": "TextToggle — labelled on/off button shows the word and reports pressed when on",
+      "applicable": true
+    },
+    {
+      "id": "text-toggle-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/text-toggle.stories.tsx",
+      "test": "Default",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "text-toggle-disabled-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/text-toggle.stories.tsx",
+      "test": "Disabled",
+      "story": "Disabled",
+      "applicable": true
+    },
+    {
+      "id": "text-toggle-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "TextToggle [check:text-toggle-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "text-toggle-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "TextToggle [check:text-toggle-keyboard] keyboard",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "text-toggle-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "TextToggle [check:text-toggle-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "text-toggle-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "TextToggle [check:text-toggle-pointer] pointer",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "text-toggle-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "TextToggle [check:text-toggle-reduced-motion] reduced-motion",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "text-toggle-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "TextToggle [check:text-toggle-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "text-toggle-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "TextToggle [check:text-toggle-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "text-toggle-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "TextToggle [check:text-toggle-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "text-toggle-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "TextToggle [check:text-toggle-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    }
+  ]
+}

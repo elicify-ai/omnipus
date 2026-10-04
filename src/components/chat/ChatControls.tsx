@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Monitor, SpinnerGap, Files } from '@phosphor-icons/react'
+import { Monitor, SpinnerGap } from '@phosphor-icons/react'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -7,7 +7,6 @@ import { createSession } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { leaveGateThen } from '@/components/panel-shell/leaveGate'
-import { ChatModeBadge } from './ChatModeBadge'
 
 interface ChatControlsProps {
   className?: string
@@ -33,32 +32,6 @@ export function ChatControls({ className }: ChatControlsProps) {
   const { activeAgentId, activeSessionId, setActiveSession } = useSessionStore()
   const addToast = useUiStore((s) => s.addToast)
   const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
-
-  // library-spec D-3, second entry point. Opening from HERE passes the active
-  // workspace id, so the explorer lands directly in that workspace's work/
-  // tree. Opening from the sidebar passes nothing, which selects the virtual
-  // root listing every workspace — same component, different initial
-  // selection. Unlike the browser launcher above there is no session to
-  // create first: the Library is a view over files on disk, not a live
-  // attachment to a running agent, so it opens immediately.
-  //
-  // CRIT-001: this launcher REPLACES whatever panel is open (SP-7's
-  // single-panel shell, side-panel-shell-spec.md §8.1), so the outgoing
-  // panel's leave gate (the Library's unsaved-edit confirmation) runs FIRST —
-  // Cancel leaves the store and URL untouched.
-  const handleOpenLibrary = () => {
-    const scope = activeWorkspaceId
-    const outgoingPanelId = useUiStore.getState().activePanel?.id ?? null
-    leaveGateThen(outgoingPanelId, () => {
-      if (!scope) {
-        // Fall back to the virtual root rather than refusing outright — with no
-        // active workspace, "all workspaces" is still a useful, correct view.
-        useUiStore.getState().openPanel('library', {})
-        return
-      }
-      useUiStore.getState().openPanel('library', { workspaceId: scope })
-    })
-  }
 
   // ADR-039 D-A1: persistent "Open browser" launcher. The backend
   // BrowserManager.Session() lazily creates a blank tab on WS attach, so
@@ -172,12 +145,6 @@ export function ChatControls({ className }: ChatControlsProps) {
           redundant (Hick's Law). It lives where the user already is: the
           sidebar's per-workspace "New chat" row and the /new slash command. */}
 
-      {/* ADR-092: resolved permission-mode badge — Ask / Auto / "Auto — no
-          sandbox" (caution). Natural DOM tab order (no explicit tabIndex):
-          it's a status indicator, not an action in the closed composer tab
-          ring. */}
-      <ChatModeBadge className="mr-[var(--space-1)]" />
-
       {/* Open browser — ADR-039 D-A1: user-initiated live browser session,
           independent of any agent tool call. */}
       <Button
@@ -219,30 +186,6 @@ export function ChatControls({ className }: ChatControlsProps) {
       >
         {creatingBrowserSession ? <SpinnerGap size={15} className="animate-spin" /> : <Monitor size={15} />}
         <span className="hidden @2xl:inline">Open browser</span>
-      </Button>
-
-      {/* Open Library — library-spec D-3's second entry point. Scoped to the
-          active workspace (the sidebar entry opens the all-workspaces virtual
-          root instead). tabIndex 8 continues the closed composer ring
-          documented on the browser button above; it sits after browser=7 so
-          the existing 1-7 order is untouched. */}
-      <Button
-        type="button"
-        variant="ghost"
-        onClick={handleOpenLibrary}
-        tabIndex={8}
-        aria-label="Open library"
-        data-panel-trigger="library"
-        title="Browse this workspace's files"
-        className={cn(
-          'shrink-0 px-[var(--space-2)] h-8 gap-[var(--space-1)]',
-          'text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]',
-          'text-[length:var(--type-utility-xs-size)] whitespace-nowrap',
-          'pointer-coarse:min-h-[44px] pointer-coarse:px-[var(--space-2-5)]',
-        )}
-      >
-        <Files size={15} />
-        <span className="hidden @2xl:inline">Library</span>
       </Button>
     </div>
   )

@@ -143,11 +143,8 @@ async function waitTurnDoneAfterReload(page: Page) {
   await waitTurnDone(page)
 }
 
-// Sidebar toggle: ScreenHeader.tsx's hamburger, aria-label="Toggle
-// navigation sidebar" (NOT the "sidebar-toggle" testid the previous draft
-// of this scenario guessed at and silently swallowed the failure of via
-// `.catch(() => {})` — that selector does not exist in the app).
-const sidebarToggle = (page: Page) => page.getByRole('button', { name: 'Toggle navigation sidebar' })
+// A wide window starts with the sidebar docked, so session rows are already
+// in the main navigation. There is no header menu button while it is docked.
 
 // A session's sidebar row (Sidebar.tsx's SidebarSessionRow) is a ghost
 // Button whose accessible name is the session's title — there is no
@@ -165,30 +162,8 @@ const sidebarToggle = (page: Page) => page.getByRole('button', { name: 'Toggle n
 // open indefinitely — not a transient fade, exactly what was observed.
 // Scoped to the drawer panel specifically (`#sidebar-overlay-panel`,
 // Sidebar.tsx) so nothing outside it can ever match.
-const sidebarPanel = (page: Page) => page.locator('#sidebar-overlay-panel')
+const sidebarPanel = (page: Page) => page.getByRole('navigation', { name: 'Main navigation' })
 const sessionRowByTitle = (page: Page, title: string) => sidebarPanel(page).getByRole('button', { name: title, exact: true })
-
-// Real-browser follow-up (orchestrator, scenario c): Sidebar.tsx's own
-// "click-outside overlay dismiss" backdrop (`aria-hidden="true"`,
-// `className="absolute inset-0 z-30"`, `onClick={close}`) is wrapped in
-// AnimatePresence with a 150ms exit fade — after close() fires (either the
-// hamburger's own toggle, or a session row's auto-close via onClose), this
-// element stays mounted and still intercepts pointer events for that
-// window. CI evidence: a composer click timed out with this exact element
-// ("<div aria-hidden=true class=absolute inset-0 z-30>") named as the
-// interceptor. Never `force` the composer (masks a real reachability
-// problem for an actual user) — wait for the backdrop to actually leave
-// the DOM instead, the same way a real click has to wait for it.
-const sidebarBackdrop = (page: Page) => page.locator('div[aria-hidden="true"].absolute.inset-0.z-30')
-// Real-browser follow-up (orchestrator): a silently-swallowed timeout here
-// masked the real bug for two whole debugging rounds — the drawer failing
-// to close surfaced as a much more confusing failure much later (a
-// composer click blocked by the same backdrop, in an unrelated helper).
-// Never weaken this to a soft catch again: if the drawer doesn't actually
-// close, this must fail HERE, loudly, at the point that is actually wrong.
-async function waitForSidebarClosed(page: Page) {
-  await sidebarBackdrop(page).waitFor({ state: 'hidden', timeout: 10_000 })
-}
 
 // The currently-active row carries aria-current="page" (SidebarSessionRow).
 // Used to capture chat A's real, server-assigned title (which is a model-
@@ -196,7 +171,6 @@ async function waitForSidebarClosed(page: Page) {
 // reading it back from the DOM, rather than guessing what the title will
 // be, is what makes re-selecting the row later reliable).
 async function activeSidebarTitle(page: Page): Promise<string> {
-  await sidebarToggle(page).click()
   // Real-browser follow-up (orchestrator, traced from the actual trace.zip
   // execution log): even scoped to the sidebar panel, `aria-current="page"`
   // ALSO matches the workspace accordion header (Sidebar.tsx's own
@@ -211,28 +185,7 @@ async function activeSidebarTitle(page: Page): Promise<string> {
   // expanded accordion section, so `.last()` is the real one.
   const row = sidebarPanel(page).locator('button[aria-current="page"]').last()
   await expect(row).toBeVisible({ timeout: 10_000 })
-  const title = (await row.innerText()).trim()
-  // Real-browser follow-up (orchestrator, corrected after a live-traced
-  // misdiagnosis): the drawer panel (#sidebar-overlay-panel, z-40) and its
-  // own click-outside backdrop (z-30) both sit ON TOP of the header while
-  // open — including the hamburger's own screen position, which the panel
-  // visually covers. A `force: true` click still resolves via real
-  // coordinate-based input (Playwright dispatches at the element's
-  // bounding box, but the browser's own hit-testing still delivers it to
-  // whatever is topmost AT THAT SCREEN POINT), so it was actually landing
-  // on the drawer/backdrop rather than the hamburger underneath — the
-  // drawer never genuinely closed (confirmed against the real gateway:
-  // the backdrop stayed for the ENTIRE remainder of the test, not a 150ms
-  // fade). Escape is the sidebar's own designed close key but stays
-  // off-limits regardless — it also cancels a running turn. Fixed per the
-  // orchestrator's own working harness: click the backdrop directly, at a
-  // point clearly OUTSIDE the drawer panel's own width (the right edge of
-  // the viewport) so there is no coordinate ambiguity about which layer
-  // receives the click.
-  const viewport = page.viewportSize() ?? { width: 1280, height: 720 }
-  await sidebarBackdrop(page).click({ position: { x: viewport.width - 20, y: viewport.height / 2 } })
-  await waitForSidebarClosed(page)
-  return title
+  return (await row.innerText()).trim()
 }
 
 // Real sidebar navigation (orchestrator follow-up — the previous draft left
@@ -241,7 +194,6 @@ async function activeSidebarTitle(page: Page): Promise<string> {
 // cancels the running turn (ADR-057's cancel state machine), which would
 // defeat the entire point of this scenario.
 async function switchToSessionByTitle(page: Page, title: string) {
-  await sidebarToggle(page).click()
   // Real-browser follow-up (orchestrator, traced locally against a real
   // gateway): the sidebar title is a plain 60-char truncation of the first
   // message (confirmed: a captured title's own .length was exactly 60,
@@ -256,7 +208,6 @@ async function switchToSessionByTitle(page: Page, title: string) {
   // recently created matching session (the sidebar lists newest-first),
   // which is always the one THIS test just made.
   await sessionRowByTitle(page, title).first().click()
-  await waitForSidebarClosed(page)
 }
 
 // Round-3/round-4 open item (orchestrator, both rounds): the previous version

@@ -25,7 +25,7 @@ Files arrive three ways:
 ## How to open the Library
 
 1. Click **Library** in the sidebar. The panel opens with every workspace listed as a top-level folder.
-2. From a workspace or one of its chats, click the workspace's **Library** tab or the library button in the chat header. The panel opens already inside that workspace's files.
+2. From a workspace, click that workspace's **Library** tab. The panel opens already inside that workspace's files. The sidebar **Library** button is different: it lists every workspace. There is no Library button in the chat header.
 3. Click **Open in new tab** at the top of the panel for a fullscreen Library. The side panel closes, the tab starts where you were, and its address names the selected file, so you can bookmark it. Closing the tab re-opens the panel.
 
 ## How to add files

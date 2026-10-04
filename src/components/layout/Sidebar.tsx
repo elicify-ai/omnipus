@@ -8,8 +8,7 @@ import {
   Buildings,
   ChartBar,
   Gear,
-  PushPin,
-  PushPinSlash,
+  SidebarSimple,
   SignOut,
   Plus,
   Tray,
@@ -72,7 +71,7 @@ const SIDEBAR_FOCUSABLE_SELECTOR =
 
 // US-5: Sidebar — overlay default, pin option, Framer Motion, Zustand
 export function Sidebar() {
-  const { isOpen, isPinned, close, toggle, togglePin } = useSidebarStore()
+  const { isOpen, isPinned, close, toggle, hide } = useSidebarStore()
   const location = useLocation()
   const navigate = useNavigate()
   const { activeWorkspaceId, setActiveWorkspaceId } = useWorkspacesStore()
@@ -385,18 +384,14 @@ export function Sidebar() {
         >
           <MagnifyingGlass size={16} />
         </IconButton>
-        {/* Pin toggle — icon-only in the brand row (not a full-width bottom button) */}
-        {canPin && (
-          <IconButton
-            onClick={togglePin}
-            aria-label={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
-            aria-pressed={isPinned}
-            title={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
-            className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
-          >
-            {isPinned ? <PushPinSlash size={16} /> : <PushPin size={16} />}
-          </IconButton>
-        )}
+        <IconButton
+          onClick={hide}
+          aria-label="Hide sidebar"
+          title="Hide sidebar"
+          className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+        >
+          <SidebarSimple size={16} />
+        </IconButton>
       </div>
 
       {/* Workspaces (primary, scrollable) */}

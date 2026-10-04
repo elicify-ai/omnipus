@@ -1,4 +1,4 @@
-import { Switch } from '@/components/ui/switch'
+import { TextToggle } from '@/components/ui/text-toggle'
 import { Label } from '@/components/ui/label'
 import { Tooltip } from '@/components/ui/tooltip'
 import { useChatStore } from '@/store/chat'
@@ -12,11 +12,10 @@ import { cn } from '@/lib/utils'
  * `sendSessionModeUpdate` — it is a session-scoped WS send this component is
  * the only caller of.
  *
- * Reads its checked state from `useResolvedAutoApprove` (shared with the
- * chat-header mode badge, ChatModeBadge) — which already folds in a pending
+ * Reads its pressed state from `useResolvedAutoApprove` — which already folds in a pending
  * pre-session choice (see below), so this component never needs to compute
- * that fallback itself. Sharing the hook is not enough on its own to agree
- * with ChatModeBadge, though: `godModeActive` is a stronger floor than
+ * that fallback itself. Sharing the hook is not enough on its own:
+ * `godModeActive` is a stronger floor than
  * `resolved` and must be checked explicitly (see below) — see the hook's own
  * doc comment. Toggling always records an explicit
  * true/false for this chat — this is the ONE scope in the whole contract
@@ -72,9 +71,7 @@ import { cn } from '@/lib/utils'
  * disabled under God Mode (see below), which is the one other case.
  *
  * God Mode is a STRONGER floor than Auto (`useResolvedAutoApprove`'s own
- * doc), not the absence of it — ChatModeBadge already checks
- * `godModeActive` first and renders "God Mode" whatever `resolved` says.
- * This switch must agree: under God Mode every tool call runs without
+ * doc), not the absence of it. Under God Mode every tool call runs without
  * asking regardless of this chat's own Auto choice, so the switch shows
  * on-and-disabled (flipping it would change nothing real) with a tooltip
  * saying so, rather than showing `resolved` (possibly off) next to a badge
@@ -122,8 +119,7 @@ export function AutoApprovePicker({
 
   // Founder decision (2026-09-24): Auto works without an enforcing kernel
   // sandbox, but it's still worth a calm caution — appended to the same
-  // tooltip rather than a second visual element, matching ChatModeBadge's
-  // "Auto — no sandbox" wording so the two never disagree.
+  // tooltip rather than a second visual element.
   const autoTooltipContent = resolved && !kernelSandboxActive
     ? `${baseTooltipContent}. No kernel sandbox — shell commands ask first unless read-only or operator-allowed.`
     : baseTooltipContent
@@ -147,14 +143,15 @@ export function AutoApprovePicker({
           className,
         )}
       >
-        <Switch
-          checked={godModeActive ? true : resolved}
+        <TextToggle
+          pressed={godModeActive ? true : resolved}
           disabled={isDisabled}
-          onCheckedChange={handleToggle}
+          onPressedChange={handleToggle}
           aria-label="Auto-approve for this chat"
           data-testid="composer-auto-approve-toggle"
-        />
-        <span className="hidden @2xl:inline">Auto</span>
+        >
+          Auto
+        </TextToggle>
       </Label>
     </Tooltip>
   )

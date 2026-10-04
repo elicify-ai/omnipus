@@ -8,11 +8,11 @@ import type { ReactNode } from 'react'
 // The God Mode dot that used to mark this hamburger is deleted (founder
 // decision 2026-09-25 revision 2 — one app-wide corner dot from AppShell
 // replaces the per-button dots); its matchMedia/api mocks went with it.
-const mockToggle = vi.fn()
+const mockOpen = vi.fn()
 let mockIsOpen = false
 vi.mock('@/store/sidebar', () => ({
-  useSidebarStore: vi.fn((selector: (s: { toggle: () => void; isOpen: boolean; isPinned: boolean; close: () => void }) => unknown) =>
-    selector({ toggle: mockToggle, isOpen: mockIsOpen, isPinned: false, close: vi.fn() })
+  useSidebarStore: vi.fn((selector: (s: { open: () => void; pin: () => void; isOpen: boolean; isPinned: boolean }) => unknown) =>
+    selector({ open: mockOpen, pin: vi.fn(), isOpen: mockIsOpen, isPinned: false })
   ),
   SIDEBAR_PIN_BREAKPOINT: 1024,
 }))
@@ -42,17 +42,21 @@ describe('ScreenHeader', () => {
     expect(screen.getByText('Agents')).toBeTruthy()
   })
 
-  it('renders the hamburger button with accessible label', () => {
+  it('renders Show sidebar while the sidebar is hidden', () => {
     renderHeader({ title: 'Settings' })
-    const btn = screen.getByRole('button', { name: /toggle navigation sidebar/i })
-    expect(btn).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Show sidebar' })).toBeTruthy()
   })
 
-  it('calls sidebar toggle when hamburger is clicked', () => {
+  it('hides the header button while the sidebar is open', () => {
+    mockIsOpen = true
+    renderHeader({ title: 'Settings' })
+    expect(screen.queryByRole('button', { name: 'Show sidebar' })).toBeNull()
+  })
+
+  it('opens the sidebar when Show sidebar is clicked', () => {
     renderHeader({ title: 'Skills & Tools' })
-    const btn = screen.getByRole('button', { name: /toggle navigation sidebar/i })
-    fireEvent.click(btn)
-    expect(mockToggle).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Show sidebar' }))
+    expect(mockOpen).toHaveBeenCalledTimes(1)
   })
 
   it('renders optional actions slot when provided', () => {
@@ -92,22 +96,20 @@ describe('ScreenHeader', () => {
   })
 })
 
-// BDD: Given the sidebar store's isOpen state, When ScreenHeader renders its
-// hamburger, Then aria-expanded reflects it — screen reader users otherwise
-// have no way to know whether activating the button opens or closes the
-// drawer. Traces to: src/components/layout/ScreenHeader.tsx hamburger button.
+// BDD: While the sidebar is hidden, Show sidebar reports aria-expanded="false".
+// While the sidebar is on screen, that button is not in the header — Hide
+// sidebar lives inside the sidebar. Traces to: SidebarShowButton.
 describe('ScreenHeader — hamburger aria-expanded', () => {
   it('is "false" when the sidebar is closed', () => {
     mockIsOpen = false
     renderHeader({ title: 'Agents' })
-    const btn = screen.getByRole('button', { name: /toggle navigation sidebar/i })
+    const btn = screen.getByRole('button', { name: 'Show sidebar' })
     expect(btn.getAttribute('aria-expanded')).toBe('false')
   })
 
-  it('is "true" when the sidebar is open — differentiation from the closed state', () => {
+  it('is absent from the header when the sidebar is open — the Hide control lives in the sidebar', () => {
     mockIsOpen = true
     renderHeader({ title: 'Agents' })
-    const btn = screen.getByRole('button', { name: /toggle navigation sidebar/i })
-    expect(btn.getAttribute('aria-expanded')).toBe('true')
+    expect(screen.queryByRole('button', { name: 'Show sidebar' })).toBeNull()
   })
 })
