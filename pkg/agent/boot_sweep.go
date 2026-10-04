@@ -347,6 +347,18 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 			}
 			r.deliverIfUnconsumed(ctx, rec, message, notice)
 		}
+		if stopLandedByBoot {
+			// C5 (ADR-20260928 Correction, 2026-10-04): pass one above already
+			// stopped THIS run — landed the ledgered restart stop and, through
+			// recoverStoppedChildNotice, delivered its stop notice to the
+			// direct parent. The "interrupted: gateway restarted while
+			// session was running" fatal would be a second, contradictory
+			// verdict on a run the restart already accounted for, and the
+			// failInterrupted call below could only write nothing (the record
+			// already sits in the stopped state that same function landed).
+			// Leave the record stopped and return; the parent has been told.
+			return
+		}
 		message, buildErr := interruptedBootMessage(rec)
 		outcome := steer.OutcomeInterrupted
 		if buildErr == nil && rec.State == session.LifecycleStopped && currentGenerationTimeoutStop(rec) {
@@ -1006,6 +1018,20 @@ func (pe *PlanEngine) bootSweep(ctx context.Context, ls *session.LifecycleStore,
 		// TestBoot_ParkedRecoverableWithoutCheckpoint and
 		// TestBootSweep_AwaitingCorrectionOwnerExempt all failed this way.
 		if standingRootExemptFromSweep(rec) {
+			continue
+		}
+
+		// ADR-20260928 D8 (founder decision, 2026-10-04): a stopped helper is
+		// paused, not failed. After the exemptions above, a record whose state
+		// is already LifecycleStopped stays exactly as it stands — its run
+		// ended BEFORE the restart, so the restart interrupted nothing, and
+		// failed(interrupted) would be a false verdict on a legitimately
+		// paused helper (recoverSteered's own D8 guard keeps the boot
+		// recovery pass off the same record; this is the same rule in the
+		// plan-engine sweep). A stopped helper waits for Revive — a newer
+		// instruction — never for this sweep. A running or queued session
+		// with no live turn is still swept below.
+		if rec.State == session.LifecycleStopped {
 			continue
 		}
 

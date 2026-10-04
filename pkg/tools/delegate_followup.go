@@ -216,6 +216,23 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// before ever reaching here, never inside this closure. Ownership is
 	// deliberately NOT re-checked here — see the comment above for why a
 	// stale ownership read cannot happen.
+	// The same race has a second shape (ADR-20260928, founder decision
+	// 2026-10-04): the helper can LAND LifecycleStopped in the window between
+	// the plain Load above and this lock-protected re-read — its stop
+	// finished unwinding (TransitionSession cleared the fence) and no live
+	// consumer will ever drain the steering queue. Queueing there would
+	// strand the message, so the closure signals the landed-stopped shape out
+	// via stoppedInRace and the revive below runs AFTER the store lock is
+	// released — the same way the earlier stopped branch revives (the
+	// striped lock is not reentrant, so ReviveStoppedSession, which takes the
+	// record lock itself, must never run inside this closure; its own
+	// re-read under that lock re-validates whatever changed since). A stop
+	// fence still IN FLIGHT (stamped for the current generation, state not
+	// yet LifecycleStopped) is neither queueable nor revivable: the old turn
+	// is still registered, so an early revive would strand the record queued
+	// with nobody running it — refused visibly, the caller retries once the
+	// stop has landed.
+	stoppedInRace := false
 	if merr := t.lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return session.ErrLifecycleNotFound
@@ -228,10 +245,38 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		if cur.Terminal() {
 			return fmt.Errorf("session %s is terminal (%s) and cannot be steered", sessionID, cur.State)
 		}
+		if cur.State == session.LifecycleStopped {
+			stoppedInRace = true
+			rec = cur
+			return nil
+		}
+		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
+			return fmt.Errorf("session %s is stopping (a stop is in flight for its current generation); retry the steer once it has stopped", sessionID)
+		}
 		rec = cur
 		return nil
 	}); merr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", merr))
+	}
+
+	if stoppedInRace {
+		if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
+			return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
+		}
+		reviver, ok := t.steering.(steerReviver)
+		if !ok {
+			return ErrorResult(fmt.Sprintf("delegate: steer: session %s is stopped and cannot be revived: no reviver configured", sessionID))
+		}
+		revived, rerr := reviver.ReviveStoppedSession(ctx, sessionID, by, text)
+		if rerr != nil {
+			return ErrorResult(fmt.Sprintf("delegate: steer: revive stopped session %s: %v", sessionID, rerr)).WithError(rerr)
+		}
+		if !revived {
+			return ErrorResult(fmt.Sprintf("delegate: steer: session %s could not be revived", sessionID))
+		}
+		return NewToolResult(fmt.Sprintf(
+			"Session %s was stopped; the steering message resumed it on the same conversation.", sessionID,
+		))
 	}
 
 	if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {

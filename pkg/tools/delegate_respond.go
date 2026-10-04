@@ -213,6 +213,19 @@ func (dt *delegateToolExecuteRespond) deliverNative() *ToolResult {
 	// No field is mutated on the non-error path; the unchanged persist is
 	// harmless because the record is not terminal (the stopped/terminal
 	// case above never reaches this closure).
+	//
+	// The same race has the second shape executeSteer's closure signals out
+	// (ADR-20260928, founder decision 2026-10-04): the child can LAND
+	// LifecycleStopped between the plain Load and this lock-protected
+	// re-read — queueing then strands the answer in a steering queue no live
+	// consumer will ever drain. stoppedInRace sends the caller through the
+	// SAME revive the stopped branch above runs, AFTER the store lock is
+	// released (the striped lock is not reentrant; ReviveStoppedSession
+	// re-validates under its own). A stop fence still IN FLIGHT is neither
+	// queueable nor revivable — the old turn is still registered, so an
+	// early revive would strand the record queued with nobody running it;
+	// refused visibly, the caller retries once the stop has landed.
+	stoppedInRace := false
 	if merr := dt.t.lifecycle.Mutate(dt.sessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return session.ErrLifecycleNotFound
@@ -220,10 +233,33 @@ func (dt *delegateToolExecuteRespond) deliverNative() *ToolResult {
 		if cur.Terminal() {
 			return fmt.Errorf("session %s is terminal (%s) and cannot be responded to", dt.sessionID, cur.State)
 		}
+		if cur.State == session.LifecycleStopped {
+			stoppedInRace = true
+			dt.rec = cur
+			return nil
+		}
+		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
+			return fmt.Errorf("session %s is stopping (a stop is in flight for its current generation); retry the respond once it has stopped", dt.sessionID)
+		}
 		dt.rec = cur
 		return nil
 	}); merr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: respond: %v", merr))
+	}
+
+	if stoppedInRace {
+		reviver, ok := dt.t.steering.(steerReviver)
+		if !ok {
+			return ErrorResult(fmt.Sprintf("delegate: respond: session %s is stopped and cannot be resumed: no reviver configured", dt.sessionID))
+		}
+		revived, rerr := reviver.ReviveStoppedSession(dt.ctx, dt.sessionID, dt.by, dt.instruction)
+		if rerr != nil {
+			return ErrorResult(fmt.Sprintf("delegate: respond: resume session %s: %v", dt.sessionID, rerr)).WithError(rerr)
+		}
+		if !revived {
+			return ErrorResult(fmt.Sprintf("delegate: respond: session %s could not be resumed", dt.sessionID))
+		}
+		return dt.acknowledgedRespond("Answer delivered; session resumed.")
 	}
 
 	if dt.t.steering == nil {

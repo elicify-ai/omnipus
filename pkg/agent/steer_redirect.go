@@ -144,11 +144,20 @@ func (al *AgentLoop) RedirectSteeredSession(ctx context.Context, sessionID strin
 	return nil
 }
 
-// awaitStoppedAndRevive polls the record until the stop has landed
-// (stopped) or the session reached a terminal state (the final answer won
-// the race), then revives it with the replacement instruction — stopped:
-// same conversation, same generation; terminal: next round. On the
-// deadline it reports the undelivered instruction to the parent visibly.
+// awaitStoppedAndRevive polls the record until the stop has LANDED
+// (state LifecycleStopped) or the session reached a terminal state (the
+// final answer won the race), then revives it with the replacement
+// instruction — stopped: same conversation, same generation; terminal: next
+// round. On the deadline it reports the undelivered instruction to the
+// parent visibly.
+//
+// The landed state is the qualifier — never LifecycleRecord.Stopped() alone:
+// Stopped() is also true while a stop fence is still IN FLIGHT (stamped for
+// the current generation, state still running/queued). Reviving on that
+// shape re-queues a generation the old, still-registered turn then refuses,
+// stranding the record queued with nobody running it. Only
+// TransitionSession's landing (fence cleared, state stopped) or a terminal
+// outcome means the old turn is really gone.
 //
 // Delivery is never silent: every exit that leaves the replacement
 // unapplied reports the undelivered instruction to the parent through
@@ -184,7 +193,10 @@ func (al *AgentLoop) awaitStoppedAndRevive(ctx context.Context, initial *session
 				fmt.Errorf("the session record could not be read while waiting for the stop to land: %w", err))
 			return
 		}
-		if rec.Stopped() || rec.Terminal() {
+		// Landed-or-terminal only — an in-flight fence (Stopped() true, state
+		// still running/queued) is not enough; see this function's doc
+		// comment for the stranded-queued shape an early revive produces.
+		if rec.State == session.LifecycleStopped || rec.Terminal() {
 			revived, rerr := al.ReviveStoppedSession(ctx, sessionID, by, instruction)
 			if rerr != nil {
 				logger.ErrorCF("agent", "steer: redirect: the replacement instruction could not be delivered",
