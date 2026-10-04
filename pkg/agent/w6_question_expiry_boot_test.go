@@ -4,86 +4,99 @@
 
 package agent
 
-// W6 D1.8 RED — the original-24h question-park expiry must be enforced by the
-// production BOOT consumer, from the durable pending-question record, using
-// the ORIGINAL TTLDeadline, even for a stopped asker (ADR-20260928 D1.8,
-// T8/T14/T19; F1011-Q2; F0929-6; MAJ-006).
+// W6 D1.8 pack — SUPERSEDED by the steering-commands amendment (ADR-20260928
+// amendment "Steering commands: no person question", 2026-10-04, Correction
+// C2): the 24-hour question-park expiry is REMOVED — the boot arms
+// (expireQuestion, the relay closer, the expiry notice, the pending-question
+// boot reader) are deleted from boot_sweep.go with NO replacement expiry,
+// and the root clarification cards and message_parent are untouched. The
+// ruling this pack now pins, from that amendment: a helper question does not
+// expire, and it does not park (fail) its helper — however old it is, and
+// through any number of boots.
+//
+// The pack was RED for the original D1.8 expiry ("the 24-hour question-park
+// limit", frozen asset a-u1-runtime-contracts-20261002). Its expiry
+// expectations are retired, not deleted; each test now pins the surviving
+// rule over the SAME scenario, at the same strength:
+//
+//	ExpiredOwnerRequired_FailsAskerOwnerUnreachableOnce ->
+//		AgedOwnerRequired_SurvivesBootUnchanged (the aged park and its
+//		sidecar survive two boots untouched; zero fatal notices; the
+//		retired owner-unreachable outcome asserted negatively; the late
+//		answer is not refused)
+//	NotExpiredOwnerRequired_SurvivesBootUnchanged -> unchanged (fresh-park
+//		control: boot changes no parked question)
+//	StoppedAsker/expired_stopped_asker_fails_owner_unreachable ->
+//		aged_stopped_asker_stays_stopped_question_open
+//	StoppedAsker/not_expired_stopped_asker_control_stays_stopped ->
+//		unchanged
+//	ExpiredSelfOK_FailsAnswerTimeout -> AgedSelfOK_SurvivesBootUnchanged
 //
 // Test plan (elicify-test-writing step 1)
 //
 //   behaviour under test: after a process restart, SteerBootRecovery.Run —
 //     the consumer gateway_boot.go::wireSteerDeps wires into its BootHook —
-//     expires a parked question whose original deadline has passed: the asker
-//     fails visibly (failed(owner_unreachable) with the exact text "owner
-//     could not be reached" for owner_required; failed(answer_timeout)
-//     otherwise), exactly one fatal error reaches the DIRECT parent, the
-//     question closes unanswerable (a late answer is refused stale and
-//     consumes nothing), the asker's goal stays active, no run is dispatched
-//     (generation unchanged), and a second boot does not double-fail. A
-//     not-yet-expired question — parked or stopped — survives boot unchanged.
+//     changes NOTHING about a parked question, whatever its age: the asker
+//     keeps its needs_input record (same correlation, same recorded
+//     deadline, same generation), the sidecar stays open and answerable at
+//     the unchanged original deadline, no fatal error reaches the direct
+//     parent, the asker's goal stays active, no run is dispatched, and a
+//     second boot changes nothing. A stopped asker stays stopped with its
+//     question open. A late answer — the question never expired — is not
+//     refused.
 //
-//   specification source: ADR-20260928 section "D1 ... 8. The 24-hour
-//     question-park limit" (frozen copy
-//     a-u1-runtime-contracts-20261002/assets/ADR-20260928-sub-agent-control-plane@cd20cf8b.md),
-//     plus D1.5 ("An expired/withdrawn question cannot be reserved"), D5
-//     ("Any refusal is a visible error to the sender"; fatal upward to the
-//     direct parent), F0929-6/D7 ("question expiry ... never clear[s] an
-//     active goal"), T8 (boot AND periodic, no double-failure, late message
-//     not consumed), T14/T19 (stopped asker keeps the original deadline and
-//     still expires on it). Every expected string and reason below is copied
-//     from the ADR, not from observed code — no expiry consumer exists in
-//     this tree (boot_sweep.go::recoverSteered reads no QuestionStore), which
-//     is exactly what this pack proves RED.
+//   specification source: the amendment's Correction C2 (expiry removed, no
+//     replacement) plus the delegate_respond.go contract the amendment
+//     locked (a respond is an ordinary steering message: no question
+//     reservation, no authority gate, no stale refusal; a stopped record
+//     revives, a live record takes the steering queue — a needs_input
+//     record is neither, so nothing is dispatched and nothing is consumed).
+//     session.PendingQuestion.Answerable reads the STATUS, never the clock
+//     — the recorded deadline is data, and nothing acts on its age. Every
+//     expected value below derives from those rules, never from observed
+//     code.
 //
 //   unit boundary: everything real — LifecycleStore, UnifiedStore,
 //     MessageInboxStore, the QuestionStore sidecar, MessageParentTool's
 //     production park, SteerCanceller.StopTurns, SteerBootRecovery.Run with
-//     the real upward deliverer. The ONLY injected dependency is
-//     MessageParentTool's existing SetClock at park time (a caller-side
-//     dependency that already exists — no production hook is added); boot
-//     itself runs on the real clock. No model turn is ever started: the
-//     resume recorder proves Dispatch is (or is not) asked, and a generation
-//     change would expose any automatic resume.
+//     the real upward deliverer, the production delegate respond. The ONLY
+//     injected dependency is MessageParentTool's existing SetClock at park
+//     time (a caller-side dependency that already exists — no production
+//     hook is added); boot itself runs on the real clock. No model turn is
+//     ever started: the resume recorder proves Dispatch is (or is not)
+//     asked, and a generation change would expose any automatic resume.
 //
 //   case table:
-//     expired owner_required + boot  -> failed(owner_unreachable), 1 fatal
-//       "owner could not be reached" to the direct parent, sidecar closed
-//       unanswerable at the unchanged original deadline, goal active,
-//       generation unchanged, late respond refused with nothing delivered
-//       and nothing applied, second boot changes nothing (T8).
-//     not-expired owner_required + boot (positive control) -> still
-//       needs_input at the SAME deadline, sidecar still open, 0 fatals, goal
-//       active — so a generic "boot fails everything" cannot pass.
-//     stopped expired asker + boot -> failed(owner_unreachable) as above;
-//     stopped not-expired asker + boot (positive control) -> stays stopped
-//       with the question open. MIXED-RISK: if the control leg ever fails
-//       too, the failure is W3b stopped-handling contamination, not isolated
-//       D1.8 expiry RED — the diagnostics name which leg broke.
-//     expired self_ok + boot -> failed(answer_timeout), 1 fatal notice, the
-//       notice must NOT carry the owner-unreachable text.
+//     aged owner_required (48h past its original deadline) + boot x2 ->
+//       needs_input unchanged (correlation, deadline, generation), sidecar
+//       open + answerable at the ORIGINAL deadline, zero fatals (and
+//       specifically none with the retired owner-unreachable text), goal
+//       active, late respond not refused and consuming nothing, second boot
+//       changes nothing.
+//     fresh owner_required + boot x2 (positive control) -> identical
+//       survival — boot changes no parked question, whatever its age.
+//     aged owner_required + Stop + boot -> the asker stays STOPPED (boot
+//       adds no failure), question open + answerable at the original
+//       deadline, zero fatals, goal active.
+//     fresh owner_required + Stop + boot (positive control) -> stays
+//       stopped with the question open, boot adds nothing.
+//     aged self_ok + boot x2 -> needs_input unchanged, zero fatals (and
+//       specifically none with the retired answer-timeout text), sidecar
+//       open + answerable, goal active, late respond not refused.
 //
-//   known gaps (reported BLOCKED, never faked here):
-//     - periodic expiry: this tree has NO periodic consumer — no scheduler
-//       tick or injected sweeper reads the QuestionStore anywhere in
-//       pkg/agent or pkg/gateway — so the periodic leg of D1.8/T8 has no
-//       production caller to drive and is reported BLOCKED, not tested with
-//       an invented fake.
-//     - relay closure on expiry ("closes open relays superseded"): the c8 W6
-//       partial has no relay writer, so no relay chain can be built without
-//       hand-seeding fake records — BLOCKED, not covered here.
-//     - "without consuming its source" (D1.5) is asserted to the depth this
-//       tree allows: the late respond is a visible error, dispatches nothing,
-//       delivers no answer text into the asker transcript and never writes
-//       applied. The full trusted-provenance Who/When/Which/Once writer
-//       (D1.4) is a separate, still-missing surface.
+//   known gaps (deliberately not covered here):
+//     - the relay half lives in w6_question_expiry_relay_test.go (boot must
+//       not close any relay record either).
+//     - the D1.4 trusted-provenance writer and the D1.7 withdrawal audit
+//       seams are unrelated to the expiry and stay with their own packs.
 //
 //   deferred to CHECK (skill step 4 items 2-3): green-after-implementation
-//     and the mutation probes (skip-deadline-check generic failure — killed
-//     by the positive controls; deadline read from NeedsInput instead of the
-//     sidecar — killed by the stopped legs whose NeedsInput Stop cleared;
-//     fatal to a non-direct ancestor — killed by the parent-inbox count;
-//     goal cleared on expiry — killed by the goal assertions; late reserve
-//     allowed — killed by the respond leg).
+//     and the mutation probes — re-adding any expiry consumer (an aged-park
+//     leg fails on state or fatal count); closing or re-baselining the
+//     sidecar on age (killed by the open/answerable/original-deadline
+//     oracle); refusing a late answer (killed by the respond legs);
+//     boot-resuming a parked asker (killed by the generation and
+//     resume-recorder oracles).
 
 import (
 	"context"
@@ -99,7 +112,9 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// Spec literals (ADR D1.8): the failure reasons and the exact owner text.
+// Retired D1.8 literals, kept ONLY as negative oracles: no boot, no stop and
+// no respond may ever produce them again (Correction C2 removed the expiry
+// that owned them).
 const (
 	w6qeReasonOwnerUnreachable = "owner_unreachable"
 	w6qeReasonAnswerTimeout    = "answer_timeout"
@@ -118,7 +133,7 @@ type w6qeResumeCall struct {
 }
 
 func (r *w6qeResumeRecorder) Launch(context.Context, steer.LaunchRequest) (steer.LaunchResult, error) {
-	return steer.LaunchResult{}, fmt.Errorf("expiry must never launch a new session")
+	return steer.LaunchResult{}, fmt.Errorf("boot must never launch a new session")
 }
 
 func (r *w6qeResumeRecorder) Dispatch(_ context.Context, sessionID string, generation int) (steer.DispatchResult, error) {
@@ -127,7 +142,7 @@ func (r *w6qeResumeRecorder) Dispatch(_ context.Context, sessionID string, gener
 }
 
 // w6qeQuestionStore is the same store resolution the production park uses
-// (pkg/tools/delegate_question.go::questionStoreFromLifecycle).
+// (pkg/tools/message_parent.go's question store resolution).
 func w6qeQuestionStore(lc *session.LifecycleStore) *session.QuestionStore {
 	return session.NewQuestionStore(session.PendingQuestionDir(lc.Dir()))
 }
@@ -187,7 +202,9 @@ func w6qeBootRecovery(t *testing.T, al *AgentLoop, lc *session.LifecycleStore, i
 // parkClock. The TTL stays the shipped session.DefaultNeedsInputTTL — never
 // overridden — so the original deadline is parkClock+24h, and the park MUST
 // land both the needs_input record and the open sidecar at that exact
-// instant. Returns the deadline and the asker's generation.
+// instant. The deadline stays RECORDED DATA under the superseding rule;
+// nothing may act on its age. Returns the deadline and the asker's
+// generation.
 func w6qeParkQuestion(t *testing.T, al *AgentLoop, childID, correlationID, authority string, parkClock time.Time) (time.Time, int) {
 	t.Helper()
 	tool := tools.NewMessageParentTool(al.getUpwardDeliverer(), al.GetSessionLifecycleStore())
@@ -283,8 +300,8 @@ func w6qeRespond(t *testing.T, al *AgentLoop, lc *session.LifecycleStore, inbox 
 }
 
 // w6qeCountDelivered counts how many times the exact answer instruction the
-// respond path writes (delegate_park.go::pendingAnswerInstruction's format)
-// appears in the asker's transcript.
+// respond path frames (delegate_respond.go::respondAnswerInstruction's
+// format) appears in the asker's transcript.
 func w6qeCountDelivered(t *testing.T, store *session.UnifiedStore, sessionID, correlationID, answer string) int {
 	t.Helper()
 	want := fmt.Sprintf("Answer to your question (correlation_id=%s): %s", correlationID, answer)
@@ -301,7 +318,8 @@ func w6qeCountDelivered(t *testing.T, store *session.UnifiedStore, sessionID, co
 	return count
 }
 
-// w6qeAssertGoalActive pins F0929-6: question expiry never clears a goal.
+// w6qeAssertGoalActive pins F0929-6: nothing about a question — its age
+// included — ever clears a goal.
 func w6qeAssertGoalActive(t *testing.T, goalID, when string) {
 	t.Helper()
 	g, err := resolveGoalRecordStore().Get(goalID)
@@ -309,20 +327,21 @@ func w6qeAssertGoalActive(t *testing.T, goalID, when string) {
 		t.Fatalf("Get(goal after %s): %v", when, err)
 	}
 	if g.State != generated.GoalStateActive {
-		t.Fatalf("goal state after %s = %q, want active — F0929-6/D1.8: expiry never clears an active goal", when, g.State)
+		t.Fatalf("goal state after %s = %q, want active — F0929-6: nothing about a question clears an active goal", when, g.State)
 	}
 }
 
-// TestW6QuestionExpiryBoot_ExpiredOwnerRequired_FailsAskerOwnerUnreachableOnce
-// is the primary behavioral RED: an owner_required question parked through
-// the production tool 48h ago (shipped 24h TTL → original deadline 24h in
-// the past) must be expired by the production boot consumer — the asker
-// fails(owner_unreachable), exactly one fatal "owner could not be reached"
-// reaches the DIRECT parent, the sidecar closes unanswerable at the
-// UNCHANGED original deadline, the goal stays active, no run is dispatched,
-// a late owner answer is refused consuming nothing, and a second boot does
-// not double-fail (T8).
-func TestW6QuestionExpiryBoot_ExpiredOwnerRequired_FailsAskerOwnerUnreachableOnce(t *testing.T) {
+// TestW6QuestionExpiryBoot_AgedOwnerRequired_SurvivesBootUnchanged (was
+// TestW6QuestionExpiryBoot_ExpiredOwnerRequired_FailsAskerOwnerUnreachableOnce)
+// is the primary behavioral oracle of the superseding rule: an owner_required
+// question parked through the production tool 48h ago (shipped 24h TTL → the
+// original deadline 24h in the past) survives two boots UNCHANGED — the
+// asker stays needs_input with the same park at the same generation, the
+// sidecar stays open and answerable at the UNCHANGED original deadline, no
+// fatal reaches the direct parent (and specifically none with the retired
+// owner-unreachable text), the goal stays active, a late answer is not
+// refused and consumes nothing, and the second boot changes nothing.
+func TestW6QuestionExpiryBoot_AgedOwnerRequired_SurvivesBootUnchanged(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
@@ -330,7 +349,7 @@ func TestW6QuestionExpiryBoot_ExpiredOwnerRequired_FailsAskerOwnerUnreachableOnc
 	root := newTestSteeringSession(t, al, "ws-w6-qexp-boot")
 	parent := u1LaunchChild(t, al, root, "w6-qexp-boot-parent")
 	child := u1LaunchChild(t, al, parent.SessionID, "w6-qexp-boot-child")
-	goalID := activateTestGoalRecord(t, child.SessionID, "W6 expiry boot: goal must stay active")
+	goalID := activateTestGoalRecord(t, child.SessionID, "W6 aged question boot: goal must stay active")
 
 	correlationID := "w6-qexp-boot-owner-required"
 	parkClock := time.Now().Add(-48 * time.Hour)
@@ -340,7 +359,9 @@ func TestW6QuestionExpiryBoot_ExpiredOwnerRequired_FailsAskerOwnerUnreachableOnc
 	lc, inbox := w6qeReopen(t, al)
 
 	// Pre-boot integrity on the FRESH stores: the restart must find the park
-	// and the sidecar at the exact past deadline.
+	// and the sidecar at the exact past deadline — and the sidecar is
+	// genuinely AGED past its original deadline before boot runs, so the
+	// survival asserted below is the no-expiry rule, not a fresh park.
 	rec := w6qeMustLoad(t, lc, child.SessionID)
 	if rec.State != session.LifecycleNeedsInput || rec.NeedsInput == nil || !rec.NeedsInput.TTLDeadline.Equal(deadline) {
 		t.Fatalf("fresh store lost the parked needs_input: state=%s needs_input=%v want deadline %s",
@@ -351,8 +372,12 @@ func TestW6QuestionExpiryBoot_ExpiredOwnerRequired_FailsAskerOwnerUnreachableOnc
 		t.Fatalf("fresh store lost the open sidecar: status=%s deadline=%s want open at %s",
 			before.Status, before.OriginalDeadline.Format(time.RFC3339Nano), deadline.Format(time.RFC3339Nano))
 	}
+	if !before.Expired(time.Now()) {
+		t.Fatalf("setup: the sidecar is not aged past its original deadline %s — the scenario must be the aged shape the retired expiry owned", deadline.Format(time.RFC3339Nano))
+	}
 
-	// The production boot consumer, twice — T8 forbids a double-failure.
+	// The production boot consumer, twice — the second run must change
+	// nothing, exactly as the retired expiry's idempotence guarantee did.
 	var notices []string
 	recovery := w6qeBootRecovery(t, al, lc, inbox, &notices)
 	if err := recovery.Run(context.Background()); err != nil {
@@ -362,57 +387,72 @@ func TestW6QuestionExpiryBoot_ExpiredOwnerRequired_FailsAskerOwnerUnreachableOnc
 		t.Fatalf("SteerBootRecovery.Run #2: %v", err)
 	}
 
+	// ORACLE (Correction C2 — no replacement expiry): the asker is NOT
+	// failed by its question's age — still needs_input with the SAME park at
+	// the SAME generation, however old the question is.
 	after := w6qeMustLoad(t, lc, child.SessionID)
-	if after.State != session.LifecycleFailed {
-		t.Fatalf("expired asker state after boot = %s, want failed — D1.8: the boot expiry check must fail the asker visibly (reason so far %q)",
-			after.State, after.FailedReason)
+	if after.State != session.LifecycleNeedsInput || after.NeedsInput == nil {
+		t.Fatalf("aged asker state after boot = %s needs_input=%v, want needs_input — C2: a helper question does not expire and does not park (fail) its helper",
+			after.State, after.NeedsInput)
 	}
-	if after.FailedReason != w6qeReasonOwnerUnreachable {
-		t.Fatalf("expired asker failed reason = %q, want %q — D1.8 literal: failed(owner_unreachable)", after.FailedReason, w6qeReasonOwnerUnreachable)
+	if after.NeedsInput.CorrelationID != correlationID || !after.NeedsInput.TTLDeadline.Equal(deadline) {
+		t.Fatalf("aged needs_input changed: (corr %q, deadline %s), want (%q, %s) — boot never rewrites or consumes the park",
+			after.NeedsInput.CorrelationID, after.NeedsInput.TTLDeadline.Format(time.RFC3339Nano),
+			correlationID, deadline.Format(time.RFC3339Nano))
 	}
 	if after.Generation != generation {
-		t.Fatalf("asker generation after boot = %d, want %d — expiry must not dispatch a run or mint a generation",
+		t.Fatalf("asker generation after boot = %d, want %d — an aged question must not dispatch a run or mint a generation",
 			after.Generation, generation)
 	}
-	if fatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, w6qeOwnerUnreachableText); fatals != 1 {
-		t.Fatalf("fatal %q notices to the DIRECT parent after two boots = %d, want exactly 1 — D1.8/D5: one fatal upward error, no double-failure",
-			w6qeOwnerUnreachableText, fatals)
+	// ORACLE: no expiry notice exists anymore — zero fatal errors of ANY
+	// text, and specifically none carrying the retired owner-unreachable
+	// outcome.
+	if fatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, ""); fatals != 0 {
+		t.Fatalf("boot produced %d fatal error notice(s) for the aged question, want 0 — the expiry notice is retired with the expiry (C2); nothing fails the helper", fatals)
 	}
+	if ownerFatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, w6qeOwnerUnreachableText); ownerFatals != 0 {
+		t.Fatalf("boot produced %d %q fatal(s), want 0 — that outcome is retired (C2)", ownerFatals, w6qeOwnerUnreachableText)
+	}
+	// ORACLE: the question is still OPEN and ANSWERABLE at its ORIGINAL
+	// deadline — age alone never closes or re-baselines it (Answerable reads
+	// the status, never the clock).
 	afterQ := w6qeMustQuestion(t, lc, child.SessionID)
-	if afterQ.Status != session.QuestionStatusSuperseded {
-		t.Fatalf("expired question status = %s, want superseded — D1.8: the expiry must close the question visibly, not leave it open", afterQ.Status)
-	}
-	if afterQ.Answerable() {
-		t.Fatalf("expired question still answerable — D1.5: an expired question cannot be reserved")
+	if afterQ.Status != session.QuestionStatusOpen || !afterQ.Answerable() {
+		t.Fatalf("aged question after boot = (status %s, answerable %t), want open and answerable — C2: a helper question does not expire", afterQ.Status, afterQ.Answerable())
 	}
 	if !afterQ.OriginalDeadline.Equal(deadline) {
-		t.Fatalf("question deadline after boot = %s, want the ORIGINAL %s unchanged — D1.8: expiry never extends or re-baselines the TTL",
+		t.Fatalf("question deadline after boot = %s, want the ORIGINAL %s unchanged — nothing re-baselines the recorded deadline",
 			afterQ.OriginalDeadline.Format(time.RFC3339Nano), deadline.Format(time.RFC3339Nano))
 	}
-	w6qeAssertGoalActive(t, goalID, "question expiry at boot")
+	w6qeAssertGoalActive(t, goalID, "aged question at boot")
 
-	// A late owner answer after expiry: refused as stale, consuming nothing.
-	const lateAnswer = "late owner answer after expiry"
+	// A late answer long after the original deadline is NOT refused: the
+	// question never expired, and a respond is an ordinary steering message.
+	// A needs_input asker is neither stopped nor terminal, so respond
+	// dispatches nothing and consumes nothing — the parked child takes the
+	// queued answer only when something actually resumes it.
+	const lateAnswer = "late owner answer long after the original deadline"
 	late, resumes := w6qeRespond(t, al, lc, inbox, parent.SessionID, child.SessionID, correlationID, lateAnswer)
-	if !late.IsError {
-		t.Fatalf("late owner answer after expiry was accepted (%q) — D1.5/D1.8: an expired question cannot be reserved; refusal must be a visible error", late.ForLLM)
+	if late.IsError {
+		t.Fatalf("late owner answer after the original deadline was refused (%q) — C2: the question does not expire; there is no stale refusal", late.ForLLM)
 	}
 	if len(resumes.calls) != 0 {
-		t.Fatalf("late answer dispatched %d resumes (%v) — an expired question must resume nothing", len(resumes.calls), resumes.calls)
+		t.Fatalf("respond to a needs_input asker dispatched %d resume(s) (%v) — a parked asker is not a stopped one; respond dispatches nothing", len(resumes.calls), resumes.calls)
 	}
 	if delivered := w6qeCountDelivered(t, al.GetSessionStore(), child.SessionID, correlationID, lateAnswer); delivered != 0 {
-		t.Fatalf("late answer text delivered into the asker transcript %d times — expiry refusal must consume nothing", delivered)
+		t.Fatalf("answer text delivered into the asker transcript %d time(s) — a parked asker consumes nothing until it is resumed", delivered)
 	}
 	finalQ := w6qeMustQuestion(t, lc, child.SessionID)
-	if finalQ.Status == session.QuestionStatusApplied || finalQ.Status == session.QuestionStatusAnswerPendingDelivery {
-		t.Fatalf("question status after late answer = %s — the refused answer must never be reserved or applied", finalQ.Status)
+	if finalQ.Status != session.QuestionStatusOpen || !finalQ.Answerable() {
+		t.Fatalf("question after the late answer = (status %s, answerable %t), want still open and answerable — a respond is an ordinary steering message; it consumes no question record", finalQ.Status, finalQ.Answerable())
 	}
 }
 
 // TestW6QuestionExpiryBoot_NotExpiredOwnerRequired_SurvivesBootUnchanged is
-// the positive control: the identical park 1h ago (deadline 23h out) must
-// survive boot unchanged — a generic "boot fails everything" implementation
-// cannot pass this.
+// the fresh-park control: the identical park 1h ago (deadline 23h out) must
+// survive boot unchanged — boot changes no parked question, whatever its
+// age, and a boot that touched live questions would be a generic failure,
+// not the superseding rule.
 func TestW6QuestionExpiryBoot_NotExpiredOwnerRequired_SurvivesBootUnchanged(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -421,7 +461,7 @@ func TestW6QuestionExpiryBoot_NotExpiredOwnerRequired_SurvivesBootUnchanged(t *t
 	root := newTestSteeringSession(t, al, "ws-w6-qexp-boot-control")
 	parent := u1LaunchChild(t, al, root, "w6-qexp-boot-control-parent")
 	child := u1LaunchChild(t, al, parent.SessionID, "w6-qexp-boot-control-child")
-	goalID := activateTestGoalRecord(t, child.SessionID, "W6 expiry boot control: goal stays active")
+	goalID := activateTestGoalRecord(t, child.SessionID, "W6 fresh question boot control: goal stays active")
 
 	correlationID := "w6-qexp-boot-control"
 	parkClock := time.Now().Add(-time.Hour)
@@ -440,11 +480,11 @@ func TestW6QuestionExpiryBoot_NotExpiredOwnerRequired_SurvivesBootUnchanged(t *t
 
 	after := w6qeMustLoad(t, lc, child.SessionID)
 	if after.State != session.LifecycleNeedsInput || after.NeedsInput == nil {
-		t.Fatalf("POSITIVE CONTROL FAILED — a not-yet-expired parked question was changed at boot: state=%s needs_input=%v; "+
-			"a boot that fails live questions is a generic failure, not D1.8 expiry", after.State, after.NeedsInput)
+		t.Fatalf("POSITIVE CONTROL FAILED — a fresh parked question was changed at boot: state=%s needs_input=%v; "+
+			"a boot that touches live questions is a generic failure, not the superseding rule", after.State, after.NeedsInput)
 	}
 	if after.NeedsInput.CorrelationID != correlationID || !after.NeedsInput.TTLDeadline.Equal(deadline) {
-		t.Fatalf("control needs_input changed: (corr %q, deadline %s), want (%q, %s) — D1.8: only AT OR AFTER the original deadline expires",
+		t.Fatalf("control needs_input changed: (corr %q, deadline %s), want (%q, %s) — boot never rewrites the park",
 			after.NeedsInput.CorrelationID, after.NeedsInput.TTLDeadline.Format(time.RFC3339Nano),
 			correlationID, deadline.Format(time.RFC3339Nano))
 	}
@@ -462,15 +502,14 @@ func TestW6QuestionExpiryBoot_NotExpiredOwnerRequired_SurvivesBootUnchanged(t *t
 	w6qeAssertGoalActive(t, goalID, "control boot")
 }
 
-// TestW6QuestionExpiryBoot_StoppedAsker drives D1.8's "even if the helper
-// was later stopped": Stop preserves the ORIGINAL deadline in the sidecar
-// (NeedsInput is cleared outside needs_input), and the boot consumer must
-// still expire the stopped asker on it — while the not-expired control stays
-// stopped with its question open. MIXED-RISK: if the control subtest fails
-// too, the observed failure is W3b stopped-handling contamination, not
-// isolated D1.8 expiry RED.
+// TestW6QuestionExpiryBoot_StoppedAsker pins the superseding rule for a
+// stopped helper: Stop preserves the question sidecar at the ORIGINAL
+// deadline (NeedsInput is cleared outside needs_input), and boot leaves the
+// stopped asker EXACTLY stopped — however old the question is, boot adds no
+// failure and touches no question record — while the fresh control stays
+// stopped with its question open too.
 func TestW6QuestionExpiryBoot_StoppedAsker(t *testing.T) {
-	t.Run("expired_stopped_asker_fails_owner_unreachable", func(t *testing.T) {
+	t.Run("aged_stopped_asker_stays_stopped_question_open", func(t *testing.T) {
 		al, cleanup := newSteerAL(t)
 		defer cleanup()
 		wireSteerCompletionDeps(t, al)
@@ -478,9 +517,9 @@ func TestW6QuestionExpiryBoot_StoppedAsker(t *testing.T) {
 		root := newTestSteeringSession(t, al, "ws-w6-qexp-stopped")
 		parent := u1LaunchChild(t, al, root, "w6-qexp-stopped-parent")
 		child := u1LaunchChild(t, al, parent.SessionID, "w6-qexp-stopped-child")
-		goalID := activateTestGoalRecord(t, child.SessionID, "W6 stopped expiry: goal must stay active")
+		goalID := activateTestGoalRecord(t, child.SessionID, "W6 stopped aged question: goal must stay active")
 
-		correlationID := "w6-qexp-stopped-expired"
+		correlationID := "w6-qexp-stopped-aged"
 		parkClock := time.Now().Add(-48 * time.Hour)
 		deadline, generation := w6qeParkQuestion(t, al, child.SessionID, correlationID,
 			session.QuestionAuthorityOwnerRequired, parkClock)
@@ -492,8 +531,8 @@ func TestW6QuestionExpiryBoot_StoppedAsker(t *testing.T) {
 			t.Fatalf("setup: Stop did not land stopped: state=%s", stopped.State)
 		}
 		stoppedQ := w6qeMustQuestion(t, lc, child.SessionID)
-		if stoppedQ.Status != session.QuestionStatusOpen || !stoppedQ.OriginalDeadline.Equal(deadline) {
-			t.Fatalf("setup: Stop did not preserve the sidecar at the original deadline: status=%s deadline=%s want open at %s",
+		if stoppedQ.Status != session.QuestionStatusOpen || !stoppedQ.OriginalDeadline.Equal(deadline) || !stoppedQ.Expired(time.Now()) {
+			t.Fatalf("setup: Stop did not preserve the sidecar aged at the original deadline: status=%s deadline=%s want open at %s",
 				stoppedQ.Status, stoppedQ.OriginalDeadline.Format(time.RFC3339Nano), deadline.Format(time.RFC3339Nano))
 		}
 
@@ -506,24 +545,31 @@ func TestW6QuestionExpiryBoot_StoppedAsker(t *testing.T) {
 			t.Fatalf("SteerBootRecovery.Run #2: %v", err)
 		}
 
+		// ORACLE (Correction C2): the aged question neither expires nor
+		// fails its stopped helper — the asker is EXACTLY where Stop left
+		// it, at the same generation, with zero fatals of any text (and
+		// specifically none with the retired owner-unreachable outcome).
 		after := w6qeMustLoad(t, lc, child.SessionID)
-		fatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, w6qeOwnerUnreachableText)
+		if after.State != session.LifecycleStopped {
+			t.Fatalf("aged stopped asker after boot = %s (reason %q), want stopped — C2: a helper question does not expire and does not fail its helper; boot adds no stop and no failure",
+				after.State, after.FailedReason)
+		}
+		if after.Generation != generation {
+			t.Fatalf("stopped asker generation after boot = %d, want %d — boot must not revive or re-generate a stopped asker over an aged question",
+				after.Generation, generation)
+		}
+		if fatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, ""); fatals != 0 {
+			t.Fatalf("boot produced %d fatal error notice(s) for the stopped asker, want 0 — the expiry notice is retired with the expiry (C2)", fatals)
+		}
+		if ownerFatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, w6qeOwnerUnreachableText); ownerFatals != 0 {
+			t.Fatalf("boot produced %d %q fatal(s), want 0 — that outcome is retired (C2)", ownerFatals, w6qeOwnerUnreachableText)
+		}
 		afterQ := w6qeMustQuestion(t, lc, child.SessionID)
-		// MIXED-RISK diagnostic: name exactly which D1.8 expectation broke and
-		// that a wrong-reason failure (e.g. interrupted) is W3b contamination.
-		if after.State != session.LifecycleFailed || after.FailedReason != w6qeReasonOwnerUnreachable ||
-			after.Generation != generation || fatals != 1 || afterQ.Answerable() {
-			t.Fatalf("MIXED-RISK (W3b stopped handling vs D1.8 expiry) — stopped expired asker after boot: "+
-				"state=%s reason=%q want failed/%q generation=%d want=%d fatal_notices=%d want=1 sidecar_status=%s answerable=%t "+
-				"(a failed reason other than %q — e.g. interrupted — is the W3b legacy stop path, not the D1.8 expiry consumer)",
-				after.State, after.FailedReason, w6qeReasonOwnerUnreachable, after.Generation, generation,
-				fatals, afterQ.Status, afterQ.Answerable(), w6qeReasonOwnerUnreachable)
+		if afterQ.Status != session.QuestionStatusOpen || !afterQ.Answerable() || !afterQ.OriginalDeadline.Equal(deadline) {
+			t.Fatalf("aged stopped asker sidecar after boot = (status %s, answerable %t, deadline %s), want open, answerable, %s unchanged — boot touches no question record",
+				afterQ.Status, afterQ.Answerable(), afterQ.OriginalDeadline.Format(time.RFC3339Nano), deadline.Format(time.RFC3339Nano))
 		}
-		if !afterQ.OriginalDeadline.Equal(deadline) {
-			t.Fatalf("stopped asker deadline after boot = %s, want the ORIGINAL %s — expiry must use the preserved deadline",
-				afterQ.OriginalDeadline.Format(time.RFC3339Nano), deadline.Format(time.RFC3339Nano))
-		}
-		w6qeAssertGoalActive(t, goalID, "stopped-asker expiry at boot")
+		w6qeAssertGoalActive(t, goalID, "stopped-asker aged question at boot")
 	})
 
 	t.Run("not_expired_stopped_asker_control_stays_stopped", func(t *testing.T) {
@@ -593,8 +639,7 @@ func TestW6QuestionExpiryBoot_StoppedAsker(t *testing.T) {
 		// Gate BEFORE boot: the child is already stopped with the question
 		// still open and answerable at the original deadline, the inbox
 		// carries the stop's own D6 notice exactly once, and ZERO fatal
-		// errors — owner-unreachable expiry must never fire before boot,
-		// and the deleted interrupted publication must stay deleted.
+		// errors — no expiry may ever fire, before boot or at it.
 		before := w6qeMustLoad(t, lc, child.SessionID)
 		if before.State != session.LifecycleStopped {
 			t.Fatalf("setup: Stop did not land stopped: state=%s", before.State)
@@ -609,7 +654,7 @@ func TestW6QuestionExpiryBoot_StoppedAsker(t *testing.T) {
 				"the Stop's own D6 notice must be present and deduped before boot", beforeNotices)
 		}
 		if fatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, w6qeOwnerUnreachableText); fatals != 0 {
-			t.Fatalf("before-boot inbox holds %d %q fatal(s) — D1.8 expiry must never fire before boot", fatals, w6qeOwnerUnreachableText)
+			t.Fatalf("before-boot inbox holds %d %q fatal(s), want 0 — that outcome is retired (C2)", fatals, w6qeOwnerUnreachableText)
 		}
 		if totalFatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, ""); totalFatals != 0 {
 			t.Fatalf("before-boot inbox holds %d fatal(s) in total, want 0 — a STOPPED landing publishes nothing upward "+
@@ -625,24 +670,24 @@ func TestW6QuestionExpiryBoot_StoppedAsker(t *testing.T) {
 		after := w6qeMustLoad(t, lc, child.SessionID)
 		if after.State != session.LifecycleStopped {
 			t.Fatalf("POSITIVE CONTROL FAILED — a stopped asker with a LIVE question did not stay stopped: state=%s reason=%q; "+
-				"a boot that fails live stopped questions is a generic failure, not D1.8 expiry", after.State, after.FailedReason)
+				"a boot that touches live stopped questions is a generic failure, not the superseding rule", after.State, after.FailedReason)
 		}
 		if after.Generation != generation {
 			t.Fatalf("control generation after boot = %d, want %d", after.Generation, generation)
 		}
 		// Boot must add NOTHING: the D6 notice stays exactly one (deduped —
 		// the boot replay never re-appends a stored notice), zero fatals of
-		// any text appear, and the owner-unreachable expiry text never
-		// appears — a LIVE stopped question is never expired at boot.
+		// any text appear, and the retired expiry text never appears — no
+		// question is ever expired at boot.
 		if afterNotices := stoppedChildNotices(); afterNotices != 1 {
 			t.Fatalf("after boot %d stopped-child notice(s) carry the production text, want exactly 1 — "+
 				"boot must neither duplicate nor remove the stop's own notice", afterNotices)
 		}
 		if fatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, ""); fatals != 0 {
-			t.Fatalf("control holds %d fatal error notice(s) after boot, want 0 — boot must add no expiry fatal to a live stopped question", fatals)
+			t.Fatalf("control holds %d fatal error notice(s) after boot, want 0 — boot must add no fatal to a live stopped question", fatals)
 		}
 		if ownerFatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, w6qeOwnerUnreachableText); ownerFatals != 0 {
-			t.Fatalf("control produced %d %q fatal notices — a LIVE stopped question must never be expired at boot (D1.8/T14/T19)",
+			t.Fatalf("control produced %d %q fatal notices, want 0 — no question is ever expired at boot (C2)",
 				ownerFatals, w6qeOwnerUnreachableText)
 		}
 		afterQ := w6qeMustQuestion(t, lc, child.SessionID)
@@ -653,12 +698,15 @@ func TestW6QuestionExpiryBoot_StoppedAsker(t *testing.T) {
 	})
 }
 
-// TestW6QuestionExpiryBoot_ExpiredSelfOK_FailsAnswerTimeout drives D1.8's
-// other half: an expired self_ok question fails the asker
-// failed(answer_timeout) — never the owner-unreachable text — with exactly
-// one fatal notice to the direct parent, and a late parent answer cannot
-// reserve after expiry.
-func TestW6QuestionExpiryBoot_ExpiredSelfOK_FailsAnswerTimeout(t *testing.T) {
+// TestW6QuestionExpiryBoot_AgedSelfOK_SurvivesBootUnchanged (was
+// TestW6QuestionExpiryBoot_ExpiredSelfOK_FailsAnswerTimeout) pins the
+// superseding rule for the self_ok shape: an aged self_ok question keeps its
+// asker in needs_input — no answer-timeout failure exists anymore, zero
+// fatals reach the direct parent (the retired answer_timeout outcome
+// asserted negatively), the sidecar stays open and answerable at the
+// original deadline, the goal stays active, and a late answer is not
+// refused.
+func TestW6QuestionExpiryBoot_AgedSelfOK_SurvivesBootUnchanged(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
@@ -666,7 +714,7 @@ func TestW6QuestionExpiryBoot_ExpiredSelfOK_FailsAnswerTimeout(t *testing.T) {
 	root := newTestSteeringSession(t, al, "ws-w6-qexp-selfok")
 	parent := u1LaunchChild(t, al, root, "w6-qexp-selfok-parent")
 	child := u1LaunchChild(t, al, parent.SessionID, "w6-qexp-selfok-child")
-	goalID := activateTestGoalRecord(t, child.SessionID, "W6 self_ok expiry: goal must stay active")
+	goalID := activateTestGoalRecord(t, child.SessionID, "W6 self_ok aged question: goal must stay active")
 
 	correlationID := "w6-qexp-boot-self-ok"
 	parkClock := time.Now().Add(-48 * time.Hour)
@@ -684,40 +732,40 @@ func TestW6QuestionExpiryBoot_ExpiredSelfOK_FailsAnswerTimeout(t *testing.T) {
 	}
 
 	after := w6qeMustLoad(t, lc, child.SessionID)
-	if after.State != session.LifecycleFailed || after.FailedReason != w6qeReasonAnswerTimeout {
-		t.Fatalf("expired self_ok asker after boot = (%s, %q), want (failed, %q) — D1.8: failed(answer_timeout) for a non-owner_required question",
-			after.State, after.FailedReason, w6qeReasonAnswerTimeout)
+	if after.State != session.LifecycleNeedsInput || after.NeedsInput == nil {
+		t.Fatalf("aged self_ok asker after boot = (%s, needs_input %v), want needs_input — C2: a helper question does not expire and does not fail its helper",
+			after.State, after.NeedsInput)
 	}
 	if after.Generation != generation {
-		t.Fatalf("asker generation after boot = %d, want %d — expiry must not dispatch a run", after.Generation, generation)
+		t.Fatalf("asker generation after boot = %d, want %d — an aged question must not dispatch a run", after.Generation, generation)
 	}
-	if fatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, ""); fatals != 1 {
-		t.Fatalf("fatal notices to the DIRECT parent = %d, want exactly 1 — D1.8/D5: expiry sends a fatal error upward, once", fatals)
+	if fatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, ""); fatals != 0 {
+		t.Fatalf("fatal notices to the DIRECT parent = %d, want 0 — the expiry fatal is retired with the expiry (C2)", fatals)
 	}
-	if ownerTextFatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, w6qeOwnerUnreachableText); ownerTextFatals != 0 {
-		t.Fatalf("self_ok expiry produced %d %q notices — that text is owner_required-only (D1.8/F1011-Q2)", ownerTextFatals, w6qeOwnerUnreachableText)
+	if timeoutFatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, w6qeReasonAnswerTimeout); timeoutFatals != 0 {
+		t.Fatalf("aged self_ok question produced %d %q fatal(s), want 0 — that outcome is retired (C2)", timeoutFatals, w6qeReasonAnswerTimeout)
 	}
 	afterQ := w6qeMustQuestion(t, lc, child.SessionID)
-	if afterQ.Status != session.QuestionStatusSuperseded || afterQ.Answerable() || !afterQ.OriginalDeadline.Equal(deadline) {
-		t.Fatalf("expired self_ok sidecar = (status %s, answerable %t, deadline %s), want superseded, unanswerable, %s unchanged",
+	if afterQ.Status != session.QuestionStatusOpen || !afterQ.Answerable() || !afterQ.OriginalDeadline.Equal(deadline) {
+		t.Fatalf("aged self_ok sidecar = (status %s, answerable %t, deadline %s), want open, answerable, %s unchanged — C2: a helper question does not expire",
 			afterQ.Status, afterQ.Answerable(), afterQ.OriginalDeadline.Format(time.RFC3339Nano), deadline.Format(time.RFC3339Nano))
 	}
-	w6qeAssertGoalActive(t, goalID, "self_ok expiry at boot")
+	w6qeAssertGoalActive(t, goalID, "self_ok aged question at boot")
 
-	// A late parent answer cannot reserve after expiry.
-	const lateAnswer = "late self_ok answer after expiry"
+	// A late answer cannot be refused — there is no expiry to refuse it.
+	const lateAnswer = "late self_ok answer long after the original deadline"
 	late, resumes := w6qeRespond(t, al, lc, inbox, parent.SessionID, child.SessionID, correlationID, lateAnswer)
-	if !late.IsError {
-		t.Fatalf("late self_ok answer after expiry was accepted (%q) — D1.5: an expired question cannot be reserved", late.ForLLM)
+	if late.IsError {
+		t.Fatalf("late self_ok answer after the original deadline was refused (%q) — C2: the question does not expire; there is no stale refusal", late.ForLLM)
 	}
 	if len(resumes.calls) != 0 {
-		t.Fatalf("late answer dispatched %d resumes (%v)", len(resumes.calls), resumes.calls)
+		t.Fatalf("respond to a needs_input asker dispatched %d resume(s) (%v)", len(resumes.calls), resumes.calls)
 	}
 	if delivered := w6qeCountDelivered(t, al.GetSessionStore(), child.SessionID, correlationID, lateAnswer); delivered != 0 {
-		t.Fatalf("late answer delivered into the asker transcript %d times", delivered)
+		t.Fatalf("late answer delivered into the asker transcript %d time(s) — a parked asker consumes nothing until it is resumed", delivered)
 	}
 	finalQ := w6qeMustQuestion(t, lc, child.SessionID)
-	if finalQ.Status == session.QuestionStatusApplied || finalQ.Status == session.QuestionStatusAnswerPendingDelivery {
-		t.Fatalf("question status after late answer = %s — a refused answer must never be reserved or applied", finalQ.Status)
+	if finalQ.Status != session.QuestionStatusOpen || !finalQ.Answerable() {
+		t.Fatalf("question after the late answer = (status %s, answerable %t), want still open and answerable — a respond is an ordinary steering message; it consumes no question record", finalQ.Status, finalQ.Answerable())
 	}
 }
