@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -412,11 +413,6 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	if classErr != nil {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: classify message: %w", classErr)
 	}
-	// Q1=A (#984 follow-up): the producer's explicit suppression overrides the
-	// class's wake-eligibility. A suppressed event keeps EVERY other property
-	// of a wake-eligible delivery — frames, dedupe fall-through semantics,
-	// ack tracking — except the wake itself; see UpwardEvent.SuppressWake.
-	wakeEligible := class.WakeEligible && !event.SuppressWake
 	if matchErr := validateOutcomeMessage(event.Outcome, class, msg); matchErr != nil {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: %w", matchErr)
 	}
@@ -435,6 +431,30 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 			return steer.Delivery{}, fmt.Errorf("steer: deliver: stamp deterministic id: %w", err)
 		}
 	}
+
+	return d.publishUpward(ctx, al, lifecycle, inbox, ownerKey, childRec, event, msg, class)
+}
+
+// publishUpward is the shared append→dedupe→frames→wake tail of every
+// upward delivery: Deliver (after its guards and terminal id stamp) and the
+// restricted committed-outbox path (deliverCommittedOutboxFinal) both end
+// here, so a committed final's retry cannot drift from a first delivery.
+func (d *SteerUpwardDeliverer) publishUpward(
+	ctx context.Context,
+	al *AgentLoop,
+	lifecycle *session.LifecycleStore,
+	inbox *session.MessageInboxStore,
+	ownerKey string,
+	childRec *session.LifecycleRecord,
+	event steer.UpwardEvent,
+	msg generated.SessionMessage,
+	class session.SessionMessageDeliveryClass,
+) (steer.Delivery, error) {
+	// Q1=A (#984 follow-up): the producer's explicit suppression overrides the
+	// class's wake-eligibility. A suppressed event keeps EVERY other property
+	// of a wake-eligible delivery — frames, dedupe fall-through semantics,
+	// ack tracking — except the wake itself; see UpwardEvent.SuppressWake.
+	wakeEligible := class.WakeEligible && !event.SuppressWake
 
 	res, appendErr := inbox.Append(ownerKey, msg)
 	if appendErr != nil {
@@ -500,6 +520,144 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
 	}
 	return d.wakeOwnerOrStore(ctx, al, lifecycle, ownerKey, childRec, event, msg, res)
+}
+
+// steerCommittedFinalRef names ONE committed final the boot delivery pass is
+// authorized to publish. deliverCommittedOutboxFinal re-reads the protected
+// tuple from the lifecycle journal under the session's lock and refuses
+// unless this identity matches it exactly — a public Deliver call with a
+// guessed Generation or an arbitrary inbox id can never reach publication
+// through this path.
+type steerCommittedFinalRef struct {
+	SessionID       string
+	Generation      int
+	CommitID        string
+	MessageID       string
+	ParentSessionID string
+	Outcome         string
+	PayloadHash     string
+}
+
+// committedOutboxPublisher is the RESTRICTED internal delivery path for an
+// already-committed final (D2/D8.1) — the only way a terminal event whose
+// generation is older than the session's current tail may be published, and
+// only after the lifecycle store itself verifies the commit's provenance
+// under its per-session lock. The public Deliver keeps its generation guard
+// for every ordinary (uncommitted) event; that guard is deliberately NOT
+// relaxed. Implemented by *SteerUpwardDeliverer; the boot delivery pass
+// type-asserts it and falls back to plain Deliver for a deliverer that does
+// not provide the restricted path.
+type committedOutboxPublisher interface {
+	deliverCommittedOutboxFinal(ctx context.Context, ref steerCommittedFinalRef) (steer.Delivery, error)
+}
+
+var _ committedOutboxPublisher = (*SteerUpwardDeliverer)(nil)
+
+// deliverCommittedOutboxFinal publishes ONE store-committed final —
+// including a historical generation behind a newer-generation RESUME — and
+// is the authorized historical-G publication path (D2 "Discovery after a
+// newer-generation RESUME", D8.1 pass two). Order of defense:
+//
+//  1. Provenance under the lifecycle store's per-session lock: the exact
+//     committed tuple must exist and match every ref field. The lock is
+//     released before any parent append or wake — none is held across them.
+//  2. Payload integrity on the store's own bytes: SHA-256 must equal the
+//     protected payload_hash before anything decodes, appends or wakes.
+//  3. Message identity: the committed bytes already carry the deterministic
+//     replay id; this path stamps nothing and publishes the store's bytes.
+//  4. Edge consistency: the CURRENT steering edge must still name the
+//     committed parent.
+//
+// Every refusal is a visible error the caller surfaces; the commit stays
+// pending. G's own metadata moves only through the delivery-only writer
+// (LifecycleStore.UpdateFinalDelivery) in the caller — the current G+1
+// record's state, generation and identity are never touched here, and no
+// LifecycleRecord is written behind the newer generation.
+func (d *SteerUpwardDeliverer) deliverCommittedOutboxFinal(ctx context.Context, ref steerCommittedFinalRef) (steer.Delivery, error) {
+	al := d.agentLoop
+	if al == nil {
+		return steer.Delivery{}, errSteerUpwardDelivererNotWired
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	inbox := al.GetMessageInboxStore()
+	if lifecycle == nil || inbox == nil {
+		return steer.Delivery{}, fmt.Errorf("steer: deliver: session-messaging stores not configured")
+	}
+
+	commit, _, _, _, err := lifecycle.CommittedFinalDelivery(ref.SessionID, ref.Generation, ref.CommitID)
+	if err != nil {
+		return steer.Delivery{}, fmt.Errorf("steer: deliver: committed outbox provenance for %q generation %d commit %q: %w",
+			ref.SessionID, ref.Generation, ref.CommitID, err)
+	}
+	if commit.MessageID != ref.MessageID || commit.ParentSessionID != ref.ParentSessionID ||
+		commit.Outcome != ref.Outcome || commit.PayloadHash != ref.PayloadHash {
+		return steer.Delivery{}, fmt.Errorf(
+			"steer: deliver: committed outbox %q generation %d commit %q identity does not match the protected tuple (message_id %q parent %q outcome %q hash %q) — publication refused (D2)",
+			ref.SessionID, ref.Generation, ref.CommitID,
+			commit.MessageID, commit.ParentSessionID, commit.Outcome, commit.PayloadHash)
+	}
+	if len(commit.Payload) == 0 {
+		return steer.Delivery{}, fmt.Errorf(
+			"steer: deliver: committed outbox %q generation %d commit %q carries no payload bytes — publication refused (D2)",
+			ref.SessionID, ref.Generation, ref.CommitID)
+	}
+	if computed := fmt.Sprintf("%x", sha256.Sum256(commit.Payload)); computed != commit.PayloadHash {
+		return steer.Delivery{}, fmt.Errorf(
+			"steer: deliver: committed outbox %q generation %d commit %q payload hash %s does not match the protected payload_hash %s — publication refused (D2)",
+			ref.SessionID, ref.Generation, ref.CommitID, computed, commit.PayloadHash)
+	}
+
+	// The committed bytes are the ONLY bytes this path publishes.
+	var msg generated.SessionMessage
+	if err := msg.UnmarshalJSON(commit.Payload); err != nil {
+		return steer.Delivery{}, fmt.Errorf(
+			"steer: deliver: committed outbox %q generation %d commit %q payload does not decode: %w — publication refused (D2)",
+			ref.SessionID, ref.Generation, ref.CommitID, err)
+	}
+	if stamped := messageIDOf(msg); stamped != commit.MessageID {
+		return steer.Delivery{}, fmt.Errorf(
+			"steer: deliver: committed outbox %q generation %d commit %q payload carries message_id %q, want the committed %q — publication refused (D2)",
+			ref.SessionID, ref.Generation, ref.CommitID, stamped, commit.MessageID)
+	}
+	class, classErr := session.ClassifySessionMessage(msg)
+	if classErr != nil {
+		return steer.Delivery{}, fmt.Errorf("steer: deliver: classify committed message: %w", classErr)
+	}
+	if err := validateOutcomeMessage(steer.Outcome(commit.Outcome), class, msg); err != nil {
+		return steer.Delivery{}, fmt.Errorf(
+			"steer: deliver: committed outbox %q generation %d commit %q: %w — publication refused (D2)",
+			ref.SessionID, ref.Generation, ref.CommitID, err)
+	}
+
+	childRec, err := lifecycle.Load(ref.SessionID)
+	if err != nil {
+		return steer.Delivery{}, fmt.Errorf("steer: deliver: load child %q: %w", ref.SessionID, err)
+	}
+	ownerKey := deliverOwnerKey(childRec)
+	if ownerKey == "" {
+		return steer.Delivery{}, fmt.Errorf("steer: deliver: child %q has no steering session (no edge)", ref.SessionID)
+	}
+	if ownerKey != commit.ParentSessionID {
+		return steer.Delivery{}, fmt.Errorf(
+			"steer: deliver: child %q steering edge names parent %q but the committed final names %q — publication refused (D2)",
+			ref.SessionID, ownerKey, commit.ParentSessionID)
+	}
+
+	// Frames and spans key on the generation this final belongs to — the
+	// historical G, never the current tail: a G-keyed end frame must not be
+	// mislabeled onto G+1 (where it would also collide with G+1's own future
+	// end frame and silently swallow it via AppendTranscriptStrict's id
+	// dedupe). Everything else about the record is shared.
+	historical := *childRec
+	historical.Generation = commit.Generation
+
+	event := steer.UpwardEvent{
+		ChildSessionID: ref.SessionID,
+		Generation:     commit.Generation,
+		Outcome:        steer.Outcome(commit.Outcome),
+		Message:        msg,
+	}
+	return d.publishUpward(ctx, al, lifecycle, inbox, ownerKey, &historical, event, msg, class)
 }
 
 // wakeOwnerOrStore resolves the steering session's own record and either
