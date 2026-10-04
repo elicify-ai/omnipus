@@ -384,7 +384,7 @@ func TestAdmissionController_ExistingScope_AlwaysAdmitted(t *testing.T) {
 // (ADR-091 fix lane 2): a human's Stop — websocket_cancel.go/rest_sessions.go
 // via cancelSteeredSubtree -> steer.Canceller.CancelSubtree — never touched
 // the steerAdmission start queue; only the agent's own
-// delegate(action="cancel") (steer_delegate_cancel.go::cancelDelegatedSubtree)
+// delegate(action="stop_all") (steer_delegate_cancel.go::cancelDelegatedSubtree)
 // called removeQueuedSession. SteerGenerationCancel is the ONE cancelTurn
 // callback the cascade invokes for every reached (stamped) session,
 // regardless of caller — human Stop or agent Stop alike — so draining the

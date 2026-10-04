@@ -112,7 +112,7 @@ func TestSessionMessagingConsumer_ChildToParent_QuestionReachesInboxAndWakes(t *
 	var q generated.SessionMessage
 	if err := q.FromSessionMessageQuestion(generated.SessionMessageQuestion{
 		MessageId: "q-1", SessionId: "child-sess-1", CreatedAt: time.Now(),
-		Text: "which file should I edit?", Wait: true, CorrelationId: "corr-1",
+		Text: "which file should I edit?", CorrelationId: "corr-1",
 	}); err != nil {
 		t.Fatalf("FromSessionMessageQuestion: %v", err)
 	}

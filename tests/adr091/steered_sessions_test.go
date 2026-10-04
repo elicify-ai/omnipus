@@ -875,7 +875,7 @@ func sameStopMarker(before, after *session.Stop) bool {
 //
 // Why this closes the race a bare Load cannot: a terminal read is a STABLE
 // baseline. lifecycle.go's write choke point (persistLocked) REJECTS any
-// further write to a terminal record's own generation ("a follow_up/Play
+// further write to a terminal record's own generation ("a resume
 // must mint generation N+1 via resumed_from") — so once this loop observes
 // Terminal(), nothing else can touch that generation's record again before a
 // caller's very next read. Two SEPARATE lock acquisitions (this Load, then a

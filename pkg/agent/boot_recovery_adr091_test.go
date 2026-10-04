@@ -190,7 +190,7 @@ func bootQuestion(t *testing.T, child, parent, id string) generated.SessionMessa
 	err := message.FromSessionMessageQuestion(generated.SessionMessageQuestion{
 		MessageId: id, SessionId: child, ParentSessionId: &parent, CreatedAt: time.Now(),
 		Depth: 1, Direction: "child_to_parent", Generation: &gen, Kind: "question",
-		CorrelationId: "corr", Text: "choose", Wait: true, SenderIdentity: "agent-1", UntrustedOrigin: true,
+		CorrelationId: "corr", Text: "choose", SenderIdentity: "agent-1", UntrustedOrigin: true,
 	})
 	if err != nil {
 		t.Fatalf("encode question: %v", err)
