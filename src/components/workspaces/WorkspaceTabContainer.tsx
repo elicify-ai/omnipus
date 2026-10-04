@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef } from 'react'
+import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react'
 import { Outlet, useNavigate, useLocation } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { List } from '@phosphor-icons/react'
@@ -31,6 +31,23 @@ export function useActiveWorkspace(): Workspace {
     throw new Error('useActiveWorkspace must be used within a WorkspaceTabContainer')
   }
   return ws
+}
+
+/** Binds a workspace as the active one for children that read
+ *  `useActiveWorkspace()`, WITHOUT the workspace route shell — the side
+ *  panel's TeamPanel resolves the workspace itself (fetchWorkspace by the
+ *  panel context's workspaceId) and mounts WorkspaceTeamTab, which is
+ *  written against the context, under this provider for both its docked and
+ *  full-screen presentations. The route container above stays the only
+ *  writer during normal workspace navigation. */
+export function WorkspaceContextProvider({
+  workspace,
+  children,
+}: {
+  workspace: Workspace
+  children: ReactNode
+}) {
+  return <WorkspaceContext.Provider value={workspace}>{children}</WorkspaceContext.Provider>
 }
 
 interface WorkspaceTabContainerProps {
