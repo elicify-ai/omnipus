@@ -25,6 +25,7 @@ type delegateToolExecuteRespond struct {
 	rec           *session.LifecycleRecord
 	nextState     session.LifecycleState
 	failedReason  string
+	pending       *session.PendingQuestion
 }
 
 func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
@@ -94,9 +95,15 @@ func (dt *delegateToolExecuteRespond) validateAndLoad() (*ToolResult, bool) {
 	}
 
 	if dt.rec.State != session.LifecycleNeedsInput || dt.rec.NeedsInput == nil || dt.rec.NeedsInput.CorrelationID != dt.correlationID {
-		return ErrorResult(fmt.Sprintf(
-			"delegate: respond: session %s is not parked on correlation_id %q", dt.sessionID, dt.correlationID,
-		)), true
+		accepted, denied, stop := dt.acceptStoppedPendingQuestion()
+		if stop {
+			return denied, true
+		}
+		if !accepted {
+			return ErrorResult(fmt.Sprintf(
+				"delegate: respond: session %s is not parked on correlation_id %q", dt.sessionID, dt.correlationID,
+			)), true
+		}
 	}
 	if cerr := dt.t.checkSteerCaps(dt.sessionID, dt.text); cerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: respond: %v", cerr)).WithError(cerr), true
@@ -106,6 +113,9 @@ func (dt *delegateToolExecuteRespond) validateAndLoad() (*ToolResult, bool) {
 
 // verifyQuestionAuthority confirms the target inbox question permits a parent-authored answer.
 func (dt *delegateToolExecuteRespond) verifyQuestionAuthority() (*ToolResult, bool) {
+	if dt.pending != nil {
+		return dt.pendingQuestionAuthorityResult()
+	}
 	// R§8.2/FR-132: reject a respond targeting an owner_required question.
 	// PHASE-1 SCOPING: this reads the original question's CHILD-AUTHORED
 	// authority tag directly from the inbox — the runtime content-based
@@ -260,6 +270,9 @@ func (dt *delegateToolExecuteRespond) dispatchThirdParty() (*ToolResult, bool) {
 
 // resumeNative delivers the answer and resumes a native parked session.
 func (dt *delegateToolExecuteRespond) resumeNative() *ToolResult {
+	if dt.pending != nil {
+		return dt.resumePendingQuestion()
+	}
 	// Atomic claim: re-verify state + correlation UNDER the lock
 	// (Correctness-MAJOR-3) so a concurrent respond/cancel on this same
 	// session cannot double-apply. This MUST run BEFORE the redispatch below,

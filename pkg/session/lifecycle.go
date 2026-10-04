@@ -478,6 +478,63 @@ func (s *LifecycleStore) tail(sessionID string) (rec *LifecycleRecord, found boo
 	return last, last != nil, nil
 }
 
+// HasNeedsInputRecord reports whether the session's lifecycle JSONL history
+// contains a persisted needs_input record for the exact park identity
+// (generation, correlationID, deadline). The caller passes the sidecar
+// record's OriginalDeadline, which park wrote from the same instant as the
+// lifecycle record's NeedsInput.TTLDeadline — matching all three is what
+// binds this history line to THAT park, not merely to a reused
+// correlation at the same generation (the park path accepts a caller's
+// correlation_id verbatim, so (generation, correlationID) alone is not an
+// original-park identity).
+//
+// This is the durable evidence that a park itself landed. The pending-
+// question sidecar record is appended inside park's Mutate callback, BEFORE
+// Mutate's own persist (ADR-20260928 D1.5/D1.7), so a lifecycle persist
+// failure can leave an OPEN sidecar record behind whose park never reached
+// the lifecycle file — a phantom that must never be answered. The sidecar
+// alone cannot distinguish that split from a real park that a later Stop
+// superseded (Stop persists a non-needs_input state, which clears
+// NeedsInput from the tail); only this history line can. Answer paths
+// consult it before trusting an OPEN sidecar record. not-wire-format:
+// server-internal.
+func (s *LifecycleStore) HasNeedsInputRecord(sessionID string, generation int, correlationID string, deadline time.Time) (bool, error) {
+	if err := validateLifecycleSessionID(sessionID); err != nil {
+		return false, err
+	}
+	f, err := os.Open(s.path(sessionID))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("session: lifecycle: open %q: %w", sessionID, err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var r LifecycleRecord
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			// Skip a torn/corrupt line, matching tail()'s crash-safety.
+			continue
+		}
+		if r.State == LifecycleNeedsInput && r.Generation == generation &&
+			r.NeedsInput != nil && r.NeedsInput.CorrelationID == correlationID &&
+			r.NeedsInput.TTLDeadline.Equal(deadline) {
+			return true, nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return false, fmt.Errorf("session: lifecycle: scan %q: %w", sessionID, err)
+	}
+	return false, nil
+}
+
 // Load returns the current (tail) LifecycleRecord for sessionID.
 // Returns ErrNotFound when no record exists yet.
 func (s *LifecycleStore) Load(sessionID string) (*LifecycleRecord, error) {

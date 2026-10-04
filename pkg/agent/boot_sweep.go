@@ -248,6 +248,30 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		return
 	}
 
+	// ADR-20260928 D1.8: the boot consumer enforces the question-park limit
+	// from the durable sidecar, using the ORIGINAL deadline — never
+	// re-baselined by a park, a Stop, or a restart. A question still OPEN at
+	// or past that instant expires the asker visibly (D5), once (T8); a live
+	// question survives the restart untouched. Stop cleared the record's
+	// NeedsInput outside needs_input, so for a stopped asker the sidecar is
+	// the only place the deadline survives (T14/T19) — which is also why a
+	// landed stop carrying a LIVE question takes the marker arm's
+	// waiting-for-Revive shape below instead of the interrupted sweep: the
+	// sidecar is what still says an answer may arrive (W3b).
+	expirableState := rec.State == session.LifecycleNeedsInput || rec.State == session.LifecycleStopped
+	q, hasOpen := r.openPendingQuestion(rec, notice)
+	switch {
+	case expirableState && hasOpen && q.Expired(time.Now()):
+		r.expireQuestion(ctx, rec, q, notice)
+		return
+	case rec.State == session.LifecycleStopped && hasOpen:
+		// A landed stop spent its marker; the live sidecar question is why
+		// the asker still waits for Revive. No delivery, no sweep, no rewrite
+		// of the question or its deadline.
+		r.ackConsumed(rec, notice)
+		return
+	}
+
 	messages := r.unacknowledged(rec, notice)
 	finalID := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation)
 	final, hasFinal := findBootMessage(messages, finalID)
@@ -335,6 +359,182 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		}
 		r.deliverIfUnconsumed(ctx, rec, message, notice)
 	}
+}
+
+// failedReasonOwnerUnreachable and failedReasonAnswerTimeout are D1.8's two
+// expiry reasons, by the question's authority: only the signed-in owner may
+// answer an owner_required question, so its expiry means the owner could not
+// be reached in time; every other authority is the steering parent's own to
+// answer, so its expiry is an answer timeout (F1011-Q2).
+const (
+	failedReasonOwnerUnreachable = "owner_unreachable"
+	failedReasonAnswerTimeout    = "answer_timeout"
+)
+
+// questionStore resolves the durable pending-question sidecar beside the
+// lifecycle store — the same resolution the production park and respond
+// paths use (pkg/tools/delegate_question.go::questionStoreFromLifecycle).
+func (r *SteerBootRecovery) questionStore() *session.QuestionStore {
+	return session.NewQuestionStore(session.PendingQuestionDir(r.Lifecycle.Dir()))
+}
+
+// openPendingQuestion loads the session's pending-question sidecar and
+// returns it only while it is still OPEN for the record's CURRENT generation
+// — the only shape this sweep reads: D1.8 expiry and the stopped-question
+// preservation both. A missing record is the ordinary no-question shape; an
+// unreadable one is noticed and treated as absent so the record keeps the
+// existing arms' behavior. A question belonging to an older generation
+// (post-revive leftover) is not this generation's to act on.
+func (r *SteerBootRecovery) openPendingQuestion(rec *session.LifecycleRecord, notice func(string, string)) (*session.PendingQuestion, bool) {
+	if rec == nil || rec.Terminal() {
+		return nil, false
+	}
+	q, err := r.questionStore().Load(rec.SessionID)
+	if err != nil {
+		if !errors.Is(err, session.ErrPendingQuestionNotFound) {
+			notice("question:"+rec.SessionID, fmt.Sprintf(
+				"session %s pending-question record unreadable at boot: %v", rec.SessionID, err))
+		}
+		return nil, false
+	}
+	if q == nil || q.Status != session.QuestionStatusOpen || q.AskerGeneration != rec.Generation {
+		return nil, false
+	}
+	return q, true
+}
+
+// expireQuestion enforces D1.8's 24-hour question-park limit for ONE steered
+// asker at boot: a question still OPEN in its sidecar whose ORIGINAL deadline
+// has passed closes the question as superseded (never re-baselining the
+// deadline — D1.8), fails the asker visibly — failed(owner_unreachable) for
+// an owner_required question, failed(answer_timeout) otherwise — and sends
+// exactly ONE fatal error to the DIRECT parent (D5). It never dispatches a
+// run, never mints a generation, and never touches the asker's goal
+// (F0929-6: expiry does not clear an active goal); a superseded question
+// cannot be reserved (D1.5), so a late answer is refused consuming nothing.
+//
+// Ordering is the crash-safe one for THIS consumer: the sidecar closes
+// first, the asker lands terminal second, the parent notice goes out last.
+// The expiry gate reads the sidecar's OPEN status, so a crash after step one
+// makes every later boot skip expiry — which is exactly why the asker's
+// terminal write may not be the step a crash can lose: a non-terminal record
+// with a closed sidecar would strand outside every arm of recoverSteered. A
+// failed terminal write is noticed and returns ownership anyway; the next
+// boot's existing arms then give the record a visible outcome.
+func (r *SteerBootRecovery) expireQuestion(ctx context.Context, rec *session.LifecycleRecord, q *session.PendingQuestion, notice func(string, string)) {
+	reason := failedReasonAnswerTimeout
+	text := fmt.Sprintf("%s: question %q expired at %s with no answer",
+		reason, q.CorrelationID, q.OriginalDeadline.Format(time.RFC3339Nano))
+	if q.Authority == session.QuestionAuthorityOwnerRequired {
+		reason = failedReasonOwnerUnreachable
+		text = fmt.Sprintf("owner_unreachable: owner could not be reached (question %q expired at %s)",
+			q.CorrelationID, q.OriginalDeadline.Format(time.RFC3339Nano))
+	}
+
+	closed := *q
+	closed.Status = session.QuestionStatusSuperseded
+	if err := r.questionStore().Append(closed); err != nil {
+		notice("question-expire:"+rec.SessionID, fmt.Sprintf(
+			"session %s question %q passed its deadline but could not be closed: %v",
+			rec.SessionID, q.CorrelationID, err))
+		// Continue: an OPEN record past its deadline is refused by every
+		// respond path (session.PendingQuestion.Expired), so the asker
+		// failure below stays the one consequence D1.8 requires.
+	}
+
+	if err := r.Lifecycle.Mutate(rec.SessionID, func(cur *session.LifecycleRecord) error {
+		if cur == nil || cur.Terminal() || cur.Generation != rec.Generation {
+			// Another disposition won the race (a concurrent completion or
+			// revival); its outcome, not the expiry, is the record's tail.
+			return nil
+		}
+		cur.State = session.LifecycleFailed
+		cur.FailedReason = reason
+		// Landing the expiry carries a current-generation stop instruction
+		// out — the same spend sweepToFailedInterrupted performs; persistLocked
+		// refuses a terminal record that still carries one.
+		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
+			cur.Stop = nil
+		}
+		return nil
+	}); err != nil {
+		notice("question-expire:"+rec.SessionID, fmt.Sprintf(
+			"session %s could not be failed for its expired question %q: %v",
+			rec.SessionID, q.CorrelationID, err))
+		return
+	}
+
+	if err := r.deliverExpiryNotice(ctx, rec, q, text, notice); err != nil {
+		notice("question-expire:"+rec.SessionID, fmt.Sprintf(
+			"session %s expiry notice for question %q was not delivered: %v",
+			rec.SessionID, q.CorrelationID, err))
+	}
+}
+
+// deliverExpiryNotice delivers the ONE fatal error a D1.8 expiry sends to the
+// asker's DIRECT parent (D5). The terminal-stamped `<child>:<gen>:final` id
+// is what makes a boot replay a no-op (T8): the second boot finds that id
+// already in the parent's inbox and its re-delivery dedupes away. A stop
+// that already spent that id for this generation (terminaliseNeverRanStop's
+// interrupted notice) would swallow the expiry text behind the same dedupe,
+// so in that one shape the notice carries its own deterministic per-question
+// id, `<child>:<gen>:expired:<correlation_id>`, and is appended directly:
+// a replayed expiry cannot re-append it (the sidecar is already superseded,
+// so expiry never runs twice), and a later sweep re-delivery of that entry
+// re-stamps the final id, which dedupes against the stop's entry instead of
+// twinning.
+func (r *SteerBootRecovery) deliverExpiryNotice(ctx context.Context, rec *session.LifecycleRecord, q *session.PendingQuestion, text string, notice func(string, string)) error {
+	parent := deliverOwnerKey(rec)
+	if parent == "" {
+		return fmt.Errorf("session %s has no steering session to notify", rec.SessionID)
+	}
+	message, _, err := errorBootMessage(rec, text, steer.OutcomeFailed)
+	if err != nil {
+		return err
+	}
+	finalID := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation)
+	if r.inboxHasMessageID(parent, finalID) {
+		stamped, serr := withDeterministicMessageID(message,
+			fmt.Sprintf("%s:%d:expired:%s", rec.SessionID, rec.Generation, q.CorrelationID))
+		if serr != nil {
+			return serr
+		}
+		_, aerr := r.Inbox.Append(parent, stamped)
+		return aerr
+	}
+	if r.Deliverer == nil {
+		return fmt.Errorf("session %s expiry notice not delivered: upward deliverer is not configured", rec.SessionID)
+	}
+	event := steer.UpwardEvent{ChildSessionID: rec.SessionID, Outcome: steer.OutcomeFailed, Message: message}
+	delivery, err := r.Deliverer.Deliver(ctx, event)
+	if err != nil {
+		return err
+	}
+	reportUndeliveredWake("steer: boot recovery", event, parent, rec.Generation, delivery)
+	return nil
+}
+
+// inboxHasMessageID reports whether the owner's inbox already holds a
+// message with messageID — the boot-time dedupe probe that keeps a stop's
+// spent terminal id from swallowing the expiry notice behind Deliver's own
+// dedupe.
+func (r *SteerBootRecovery) inboxHasMessageID(ownerKey, messageID string) bool {
+	if ownerKey == "" || r.Inbox == nil {
+		return false
+	}
+	entries, err := r.Inbox.Entries(ownerKey)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.Kind != session.InboxEntryMessage || entry.Message == nil {
+			continue
+		}
+		if envelope, envErr := decodeBootMessage(*entry.Message); envErr == nil && envelope.MessageID == messageID {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *SteerBootRecovery) unacknowledged(rec *session.LifecycleRecord, notice func(string, string)) []generated.SessionMessage {

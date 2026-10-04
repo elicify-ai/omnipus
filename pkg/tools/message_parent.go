@@ -43,6 +43,13 @@ type MessageParentLifecycleStore interface {
 	// parkNeedsInput routes through it so the park transition holds the
 	// per-session striped lock across the whole tail→decide→write RMW.
 	Mutate(sessionID string, fn func(*session.LifecycleRecord) error) error
+	// HasNeedsInputRecord reports whether the lifecycle history contains a
+	// persisted needs_input record for the exact park identity — the durable
+	// evidence that a park landed (ADR-20260928 D1.5/D1.7). Signature-
+	// identical to *session.LifecycleStore.HasNeedsInputRecord, so a real
+	// store satisfies it trivially and every test fake that embeds
+	// *session.LifecycleStore inherits it for free.
+	HasNeedsInputRecord(sessionID string, generation int, correlationID string, deadline time.Time) (bool, error)
 	// List returns every LifecycleRecord matching filter — signature-
 	// identical to *session.LifecycleStore.List, so a real store satisfies
 	// this trivially and every existing test fake that embeds
@@ -751,8 +758,17 @@ func (mt *messageParentToolExecute) finishDelivery() *ToolResult {
 	}
 
 	if mt.waitParks {
-		if perr := mt.t.parkNeedsInput(mt.childSessionID, mt.correlationID, mt.now); perr != nil {
-			return ErrorResult(fmt.Sprintf("message_parent: question accepted but failed to park session: %v", perr)).WithError(perr)
+		authority := session.QuestionAuthorityOwnerRequired
+		if a, ok := stringArg(mt.args, "authority"); ok && a == session.QuestionAuthoritySelfOK {
+			authority = session.QuestionAuthoritySelfOK
+		}
+		if perr := mt.t.parkNeedsInput(mt.childSessionID, mt.correlationID, authority, mt.now); perr != nil {
+			// The sidecar OPEN record is appended inside park's Mutate
+			// callback before the lifecycle persist (ADR-20260928 D1.5/D1.7),
+			// so this failure may have left that record behind. Name that
+			// split visibly: the record stays on disk, and the respond path
+			// refuses it as an orphan until a park for it has persisted.
+			return ErrorResult(fmt.Sprintf("message_parent: question accepted but failed to park session: %v (an unconfirmed pending-question record may have been written before the park persisted; answering it is refused until the park persists)", perr)).WithError(perr)
 		}
 	}
 
@@ -848,18 +864,19 @@ func (mt *messageParentToolExecute) reportUndeliveredWake() {
 // snapshot Execute captured. Callers MUST NOT already hold Lock(sessionID)
 // (sync.Mutex is not reentrant — Mutate takes it once internally). The
 // honesty template is delegate.go transitionLifecycle's doc comment.
-func (t *MessageParentTool) parkNeedsInput(childSessionID string, correlationID string, now time.Time) error {
+func (t *MessageParentTool) parkNeedsInput(childSessionID, correlationID, authority string, now time.Time) error {
 	return t.lifecycle.Mutate(childSessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return session.ErrLifecycleNotFound
 		}
+		deadline := now.Add(t.needsInputTTL)
 		cur.State = session.LifecycleNeedsInput
 		cur.NeedsInput = &session.NeedsInput{
 			CorrelationID:   correlationID,
 			Reconstructable: true, // park-time hint only (m5); boot-sweep re-derives authoritatively
-			TTLDeadline:     now.Add(t.needsInputTTL),
+			TTLDeadline:     deadline,
 		}
-		return nil
+		return t.appendPendingQuestion(cur, correlationID, authority, deadline)
 	})
 }
 
