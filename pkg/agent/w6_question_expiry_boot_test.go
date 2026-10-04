@@ -543,18 +543,30 @@ func TestW6QuestionExpiryBoot_StoppedAsker(t *testing.T) {
 
 		lc, inbox := w6qeReopen(t, al)
 
-		// The oracle absorbs a verified production fact instead of denying
-		// it: stopping a never-ran steered child runs
-		// steer_cancel.go::terminaliseNeverRanStop, whose interrupted report
-		// goes through completionMessage — fatal for every outcome except a
-		// lifecycle notice. The stop therefore writes EXACTLY ONE fatal
-		// parent-inbox entry, its own interrupted notice, at Stop time,
-		// BEFORE any boot. Zero fatals is unsatisfiable; the control pins
-		// that one notice as the baseline and demands boot adds nothing.
-		// (Exact text: the shared helper matches a Contains phrase; the stop
-		// notice is asserted with equality.)
-		const stopInterruptedText = "interrupted: the session was cancelled"
-		stopNoticeFatals := func() int {
+		// The oracle absorbs the verified production facts instead of
+		// denying them: a STOPPED landing publishes NOTHING upward as a
+		// fatal — the pre-ADR "interrupted: the session was cancelled" error
+		// event is deleted (steer_cancel.go::reportSteeredSessionTerminalUpward,
+		// which routes a never-ran stop through landSteeredStopReport). The
+		// direct parent learns through the D6 stopped-child notice: a
+		// NON-fatal error-kind inbox entry whose text is the production
+		// builder's over the LANDED transition
+		// (stopped_notice.go::stoppedChildNoticeText, composed from
+		// LifecycleStore.ListStoppedTransitions) — never a sentence invented
+		// here. The notice is delivered while StopTurns runs
+		// (steer_cancel.go::landSteeredStopReport publishes it only after
+		// the landing and its ledger history are durable), so it is readable
+		// BEFORE any boot.
+		transitions, err := lc.ListStoppedTransitions(child.SessionID)
+		if err != nil {
+			t.Fatalf("ListStoppedTransitions(%s): %v", child.SessionID, err)
+		}
+		if len(transitions) != 1 {
+			t.Fatalf("setup: fresh store holds %d landed stop transitions for the stopped child, want exactly 1 — "+
+				"the D6 notice text cannot be derived without the single landed transition", len(transitions))
+		}
+		wantNoticeText := stoppedChildNoticeText(transitions[0])
+		stoppedChildNotices := func() int {
 			t.Helper()
 			entries, err := inbox.Entries(parent.SessionID)
 			if err != nil {
@@ -570,7 +582,7 @@ func TestW6QuestionExpiryBoot_StoppedAsker(t *testing.T) {
 					continue
 				}
 				e, aerr := entry.Message.AsSessionMessageError()
-				if aerr != nil || !e.Fatal || e.SessionId != child.SessionID || e.Text != stopInterruptedText {
+				if aerr != nil || e.Fatal || e.SessionId != child.SessionID || e.Text != wantNoticeText {
 					continue
 				}
 				count++
@@ -578,15 +590,30 @@ func TestW6QuestionExpiryBoot_StoppedAsker(t *testing.T) {
 			return count
 		}
 
-		// Gate BEFORE boot: exactly one fatal — the stop's own notice. Any
-		// other count means the Stop path or this setup changed under the
-		// oracle; stop and report the actual counts rather than re-baseline.
-		beforeStopNotice := stopNoticeFatals()
-		beforeTotal := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, "")
-		if beforeStopNotice != 1 || beforeTotal != 1 {
-			t.Fatalf("before-boot inbox holds %d fatal(s) whose text is exactly %q and %d fatal(s) in total, want 1 and 1 — "+
-				"the stop's own interrupted notice must be the ONLY fatal the Stop wrote; refusing to loosen the oracle",
-				beforeStopNotice, stopInterruptedText, beforeTotal)
+		// Gate BEFORE boot: the child is already stopped with the question
+		// still open and answerable at the original deadline, the inbox
+		// carries the stop's own D6 notice exactly once, and ZERO fatal
+		// errors — owner-unreachable expiry must never fire before boot,
+		// and the deleted interrupted publication must stay deleted.
+		before := w6qeMustLoad(t, lc, child.SessionID)
+		if before.State != session.LifecycleStopped {
+			t.Fatalf("setup: Stop did not land stopped: state=%s", before.State)
+		}
+		beforeQ := w6qeMustQuestion(t, lc, child.SessionID)
+		if beforeQ.Status != session.QuestionStatusOpen || !beforeQ.Answerable() || !beforeQ.OriginalDeadline.Equal(deadline) {
+			t.Fatalf("setup: Stop did not preserve the sidecar: status=%s answerable=%t deadline=%s want open, answerable, %s",
+				beforeQ.Status, beforeQ.Answerable(), beforeQ.OriginalDeadline.Format(time.RFC3339Nano), deadline.Format(time.RFC3339Nano))
+		}
+		if beforeNotices := stoppedChildNotices(); beforeNotices != 1 {
+			t.Fatalf("before-boot inbox holds %d stopped-child notice(s) with the production text, want exactly 1 — "+
+				"the Stop's own D6 notice must be present and deduped before boot", beforeNotices)
+		}
+		if fatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, w6qeOwnerUnreachableText); fatals != 0 {
+			t.Fatalf("before-boot inbox holds %d %q fatal(s) — D1.8 expiry must never fire before boot", fatals, w6qeOwnerUnreachableText)
+		}
+		if totalFatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, ""); totalFatals != 0 {
+			t.Fatalf("before-boot inbox holds %d fatal(s) in total, want 0 — a STOPPED landing publishes nothing upward "+
+				"as a fatal (steer_cancel.go::reportSteeredSessionTerminalUpward)", totalFatals)
 		}
 
 		var notices []string
@@ -603,17 +630,16 @@ func TestW6QuestionExpiryBoot_StoppedAsker(t *testing.T) {
 		if after.Generation != generation {
 			t.Fatalf("control generation after boot = %d, want %d", after.Generation, generation)
 		}
-		// Boot must add NOTHING to the fatal set: the stop's own notice
-		// stays exactly one, total fatals stay exactly one, and the D1.8
-		// owner-unreachable expiry text never appears — a LIVE stopped
-		// question is never expired at boot.
-		if afterStopNotice := stopNoticeFatals(); afterStopNotice != 1 {
-			t.Fatalf("after boot %d fatal(s) carry exactly %q, want exactly 1 — boot must not touch the stop's own notice",
-				afterStopNotice, stopInterruptedText)
+		// Boot must add NOTHING: the D6 notice stays exactly one (deduped —
+		// the boot replay never re-appends a stored notice), zero fatals of
+		// any text appear, and the owner-unreachable expiry text never
+		// appears — a LIVE stopped question is never expired at boot.
+		if afterNotices := stoppedChildNotices(); afterNotices != 1 {
+			t.Fatalf("after boot %d stopped-child notice(s) carry the production text, want exactly 1 — "+
+				"boot must neither duplicate nor remove the stop's own notice", afterNotices)
 		}
-		if fatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, ""); fatals != 1 {
-			t.Fatalf("control holds %d fatal error notices after boot, want exactly 1 (the stop's own interrupted notice) — "+
-				"a boot that adds fatal notices to a live stopped question is a generic failure, not D1.8 expiry", fatals)
+		if fatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, ""); fatals != 0 {
+			t.Fatalf("control holds %d fatal error notice(s) after boot, want 0 — boot must add no expiry fatal to a live stopped question", fatals)
 		}
 		if ownerFatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, w6qeOwnerUnreachableText); ownerFatals != 0 {
 			t.Fatalf("control produced %d %q fatal notices — a LIVE stopped question must never be expired at boot (D1.8/T14/T19)",
