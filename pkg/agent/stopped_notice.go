@@ -93,6 +93,16 @@ func (al *AgentLoop) deliverLandedStopNotices(ctx context.Context, rec *session.
 	if readErr != nil {
 		return false, fmt.Errorf("steer: stopped notice: read landed history of %s: %w", rec.SessionID, readErr)
 	}
+	// A fence-less landing has no landed history to discover — its notice is
+	// derived from the landing's retained stop note, which IS durable on the
+	// record. Deriving it HERE, in the one publisher both the landing pass
+	// and the boot replay (replayLandedStopNotices) run, is what keeps an
+	// untaken fence-less notice ringing on every delivery pass and after a
+	// restart until the durable ack lands (founder decision, 2026-10-04) —
+	// instead of only once, from the landing's in-memory commit result.
+	if tr, ok := fencelessNoticeTransition(rec, transitions); ok {
+		transitions = append(transitions, tr)
+	}
 	var errs []error
 	for _, tr := range transitions {
 		work, trErr := al.deliverLandedStopNotice(ctx, rec, tr)
@@ -114,7 +124,10 @@ func (al *AgentLoop) deliverLandedStopNotices(ctx context.Context, rec *session.
 // transition is therefore never written to the ledger, and its StopSeq is
 // the synthesized note's own seq — the generation stand-in, the only
 // identity a fence-less stop has. The notice's id stays dedup-stable because
-// the note is retained on the landed record.
+// the note is retained on the landed record; deliverLandedStopNotices
+// re-derives this transition from that retained note on every delivery pass
+// and at boot (fencelessNoticeTransition), so the notice is replayable, not
+// a one-shot delivery from a landing's in-memory commit result.
 func stoppedTransitionFromLandedNote(rec *session.LifecycleRecord, note *session.StopNote) session.StoppedTransition {
 	tr := session.StoppedTransition{
 		SessionID:       rec.SessionID,
@@ -129,6 +142,28 @@ func stoppedTransitionFromLandedNote(rec *session.LifecycleRecord, note *session
 		tr.ControlID = rec.StopEffect.ControlID
 	}
 	return tr
+}
+
+// fencelessNoticeTransition derives a fence-less landing's noticeable
+// transition from the record's RETAINED stop note. ok is false when the
+// record carries no retained note (it never landed stopped, or a same-
+// generation RESUME cleared the note) — or when the landed history already
+// covers the record's CURRENT generation: a fenced landing in that
+// generation is discoverable from the ledger above, its StopSeq is the real
+// control sequence its own note carries, and adding the note derivation
+// beside it would publish a second, stand-in-seq notice for the same
+// landing. Older generations' history never suppresses the current note:
+// a fence-less landing in a new generation keeps its own ring.
+func fencelessNoticeTransition(rec *session.LifecycleRecord, transitions []session.StoppedTransition) (session.StoppedTransition, bool) {
+	if rec == nil || rec.StopNote == nil {
+		return session.StoppedTransition{}, false
+	}
+	for _, tr := range transitions {
+		if tr.Generation == rec.Generation {
+			return session.StoppedTransition{}, false
+		}
+	}
+	return stoppedTransitionFromLandedNote(rec, rec.StopNote), true
 }
 
 // deliverLandedStopNotice delivers ONE landed transition's notice to its
