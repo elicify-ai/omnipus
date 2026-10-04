@@ -64,8 +64,13 @@ func stoppedChildNoticeText(tr session.StoppedTransition) string {
 // landed stop transition in the child's control-ledger history whose
 // original parent is a real session. It is the single publisher both stop
 // producers call after their landing is durable, and the boot retry replays
-// through. Idempotent per transition: an already-stored notice id is not
-// re-appended and never re-wakes (D8.4's one wake per notice).
+// through. Idempotent per transition on the durable NOTE: an already-stored
+// notice id is never re-appended (one durable line per transition). D8.4's
+// "one wake per notice" is amended for the RING (founder decision,
+// 2026-10-04): a stored note the parent has not taken yet re-rings its
+// parent on every delivery pass — startup and any later retry pass — until
+// the durable ack lands; a taken note rings nobody, and no ring repeats the
+// parent's work.
 //
 // pending reports whether at least one transition had UNFINISHED work — a
 // fresh append or a failed one — so the boot caller can tell "nothing
@@ -104,9 +109,14 @@ func (al *AgentLoop) deliverLandedStopNotices(ctx context.Context, rec *session.
 // deliverLandedStopNotice delivers ONE landed transition's notice to its
 // ORIGINAL direct parent. A root stop (empty parent in the history) is
 // history the publisher keeps, never a parent it invents. work reports
-// unfinished or freshly finished work for this transition: a fresh append
-// (followed by its one wake when the parent is working) or a failed append;
-// an already-stored notice is finished work — no second wake.
+// unfinished or freshly finished APPEND work for this transition: a fresh
+// append (followed by its one wake when the parent is working) or a failed
+// append. An already-stored notice is finished append work — the line is
+// never re-appended — but while the parent has not taken it (no durable ack
+// covers its id), that stored note still re-rings the parent on this
+// delivery pass when the parent is working; a taken note rings nobody
+// (founder decision, 2026-10-04, amending D8.4's one-wake rule for the
+// ring). A failed ack-state read or failed ring is returned visibly.
 func (al *AgentLoop) deliverLandedStopNotice(ctx context.Context, rec *session.LifecycleRecord, tr session.StoppedTransition) (work bool, err error) {
 	parentID := strings.TrimSpace(tr.ParentSessionID)
 	if parentID == "" {
@@ -140,12 +150,47 @@ func (al *AgentLoop) deliverLandedStopNotice(ctx context.Context, rec *session.L
 		return true, fmt.Errorf("steer: stopped notice: append %s: %w", id, err)
 	}
 	if res != nil && res.Deduped {
-		return false, nil
+		// The durable note already exists (one line per transition — it is
+		// never re-appended). D8.4's one-wake rule as amended (founder
+		// decision, 2026-10-04): a stored note the parent has NOT taken yet
+		// re-rings on this delivery pass — fall through to the wake below —
+		// and a taken note rings nobody: the parent already did the work.
+		taken, ackErr := stopNoticeTaken(inbox, parentID, id)
+		if ackErr != nil {
+			return false, ackErr
+		}
+		if taken {
+			return false, nil
+		}
 	}
 	if !wake {
 		return true, nil
 	}
 	return true, al.wakeParentForStoppedNotice(ctx, rec, parentID, id, tr)
+}
+
+// stopNoticeTaken reads the parent's durable inbox and reports whether an
+// ack entry covers id — the same durable "the parent took the note" fact the
+// parent's wake consumer writes (loop_inbound.go's inbox.Ack of the message
+// id). Compaction preserves that fact for every retained message entry, so a
+// stored note's ack coverage is decidable from the file alone. A read
+// failure is returned, never swallowed into a guess about taken-ness.
+func stopNoticeTaken(inbox *session.MessageInboxStore, parentID, id string) (bool, error) {
+	entries, err := inbox.Entries(parentID)
+	if err != nil {
+		return false, fmt.Errorf("steer: stopped notice: read ack state of %s for parent %s: %w", id, parentID, err)
+	}
+	for _, e := range entries {
+		if e.Kind != session.InboxEntryAck {
+			continue
+		}
+		for _, acked := range e.AckedIDs {
+			if acked == id {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func stoppedChildNoticeMessage(rec *session.LifecycleRecord, parentID, id string, tr session.StoppedTransition) (generated.SessionMessage, error) {
