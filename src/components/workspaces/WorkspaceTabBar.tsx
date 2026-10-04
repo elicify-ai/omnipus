@@ -52,7 +52,7 @@ export const WORKSPACE_TABS = [
   // Media tab / UUID-blob manifest surface entirely). Wave 1: this strip
   // entry is a REGISTERED panel toggle (see PANEL_TOGGLE_SEGMENTS) —
   // clicking it opens/closes the Library side panel scoped to this
-  // workspace, the same store call ChatControls' "Open library" button
+  // workspace, the same store call the sidebar Library button
   // makes. The route itself (routes/_app/workspaces.$workspaceId.media.tsx)
   // remains a redirect stub for BOOKMARKED /workspaces/{id}/media URLs: it
   // opens the Library panel and replaces the URL with chat?panel=library

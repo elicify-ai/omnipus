@@ -1,11 +1,9 @@
 import { createContext, useContext, useEffect, useRef } from 'react'
 import { Outlet, useNavigate, useLocation } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { List } from '@phosphor-icons/react'
 import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import type { Workspace } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { useSidebarStore } from '@/store/sidebar'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useWorkspaceSetupKickoff } from '@/hooks/useWorkspaceSetupKickoff'
@@ -17,7 +15,7 @@ import type { WorkspacePanelContext } from '@/components/panel-shell/types'
 import { ChatControls } from '@/components/chat/ChatControls'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import { Button } from '@/components/ui/button'
-import { IconButton } from '@/components/ui/icon-button'
+import { SidebarShowButton } from '@/components/layout/SidebarShowButton'
 import { Card } from '@/components/ui/card'
 import { WorkspaceTabBar, resolveActiveSegment } from './WorkspaceTabBar'
 
@@ -52,7 +50,6 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
   const navigate = useNavigate()
   const location = useLocation()
   const { activeWorkspaceId, setActiveWorkspaceId, setActivePlanId } = useWorkspacesStore()
-  const toggle = useSidebarStore((s) => s.toggle)
   const enterWorkspaceChat = useSessionStore((s) => s.enterWorkspaceChat)
   const previousRouteWorkspaceRef = useRef(workspaceId)
 
@@ -203,17 +200,15 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
   }
 
   return (
-    <WorkspaceTabContainerView workspace={workspace} toggle={toggle} />
+    <WorkspaceTabContainerView workspace={workspace} />
   )
 }
 
 /** Inner view — extracted so useLocation can run unconditionally. */
 function WorkspaceTabContainerView({
   workspace,
-  toggle,
 }: {
   workspace: Workspace
-  toggle: () => void
 }) {
   const location = useLocation()
   const activeSegment = resolveActiveSegment(location.pathname, workspace.id)
@@ -238,16 +233,10 @@ function WorkspaceTabContainerView({
           className="@container flex items-center h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"
           data-testid="workspace-top-bar"
         >
-          <IconButton
-            id="sidebar-hamburger"
-            onClick={toggle}
-            aria-label="Toggle navigation sidebar"
-            data-testid="workspace-hamburger"
-            variant="ghost"
+          <SidebarShowButton
+            testId="workspace-hamburger"
             className="h-chrome-header min-h-chrome-header w-11 rounded-none text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
-          >
-            <List size={20} />
-          </IconButton>
+          />
 
           {/* The workspace name renders INSIDE WorkspaceTabBar as the first
               tablist item (→ settings) — one menu component, no stray button. */}

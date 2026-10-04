@@ -14,11 +14,13 @@
 // Deliberately does NOT own picker-only concerns: auto-select-first-agent,
 // the agentSelectorOpen latch reset, and the error/all-draft branch UI all
 // stay in AgentPicker, which is the sole side-effect writer to the session
-// store on mount — a second writer here would race it.
+// store on mount — a second writer here would race it. It does read the
+// open flag below, only as the moment to refresh team membership.
 
 import { useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { queryClient } from '@/lib/queryClient'
+import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchAgents, fetchWorkspaces, isWorker, workspacesQueryKeys } from '@/lib/api'
 import type { Agent, Workspace } from '@/lib/api'
@@ -57,6 +59,8 @@ export interface UseChatAgentsResult {
   agents: Agent[]
   /** Ready-to-chat (active/idle), non-worker agents, scoped to the active workspace's core_team when one is set. A ready Admin is kept even when the team does not list it (ADR-090 standalone operator) — that is not a workspace membership grant. */
   chatAgents: Agent[]
+  /** True when the latest fetch of the active workspace's team list failed. The last successfully fetched team stays in `workspaces` (React Query retains previous data on a failed refetch), so `chatAgents` may be scoped by a team that failed to refresh — surfaces of the open picker show a "could not be refreshed" line instead of letting that list read as current. */
+  teamRefreshFailed: boolean
   isError: boolean
   refetch: () => void
 }
@@ -70,7 +74,13 @@ export function useChatAgents(): UseChatAgentsResult {
   // Scope to the active workspace's core_team — same query AgentPicker
   // always ran (moved here verbatim).
   const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
-  const { data: workspaces = EMPTY_WORKSPACES } = useQuery({
+  const pickerOpen = useUiStore((s) => s.agentSelectorOpen)
+  // The workspaces query's error state is part of this hook's contract: the
+  // picker-open effect below refetches the team list, and on failure React
+  // Query KEEPS the previous `data` — so `workspaces` alone makes a stale team
+  // indistinguishable from a fresh one. `teamRefreshFailed` is the signal
+  // AgentPicker renders so the last known team never reads as current.
+  const { data: workspaces = EMPTY_WORKSPACES, isError: teamRefreshFailed } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
@@ -82,6 +92,8 @@ export function useChatAgents(): UseChatAgentsResult {
   // Focus recovery and agent_created both refresh ['agents'], but team
   // membership can change separately. Refresh the workspace query too, even
   // when structural sharing preserves the same agents array after a refetch.
+  // That refresh is too early for a membership PUT that lands AFTER
+  // agent_created: the team list is read again when the picker opens.
   useEffect(() => {
     if (activeWorkspaceId && agentsUpdatedAt > 0) {
       void queryClient.invalidateQueries({
@@ -89,6 +101,13 @@ export function useChatAgents(): UseChatAgentsResult {
       })
     }
   }, [activeWorkspaceId, agentsUpdatedAt])
+
+  useEffect(() => {
+    if (!activeWorkspaceId || !pickerOpen) return
+    void queryClient.invalidateQueries({
+      queryKey: workspacesQueryKeys.list({ status: 'active' }),
+    })
+  }, [activeWorkspaceId, pickerOpen])
 
   // Fix 10: memoize the filter chain. This hook is shared (AgentPicker AND
   // the "@" mention menu both call it), and consumers put `chatAgents` in
@@ -125,5 +144,5 @@ export function useChatAgents(): UseChatAgentsResult {
     [agents, teamIds],
   )
 
-  return { agents, chatAgents, isError, refetch }
+  return { agents, chatAgents, teamRefreshFailed, isError, refetch }
 }

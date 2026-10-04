@@ -42,7 +42,7 @@ afterEach(() => {
 })
 
 describe('ChatControls browser-session creation race', () => {
-  it('marks both production launcher buttons as tracked panel triggers', () => {
+  it('marks Open browser as a tracked panel trigger and does not render Open library', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(
       <QueryClientProvider client={client}>
@@ -52,10 +52,7 @@ describe('ChatControls browser-session creation race', () => {
 
     const browserTrigger = screen.getByRole('button', { name: 'Open browser' })
     expect(browserTrigger).toHaveAttribute('data-panel-trigger', 'browser')
-    expect(screen.getByRole('button', { name: 'Open library' })).toHaveAttribute(
-      'data-panel-trigger',
-      'library',
-    )
+    expect(screen.queryByRole('button', { name: 'Open library' })).toBeNull()
     client.clear()
   })
 

@@ -141,10 +141,7 @@ test('(d) sign out clears the omnipus-session cookie server-side', async ({ page
   // not api.ts's logout() directly, so this exercises the actual wiring a
   // regression could break (e.g. a future edit that clears local state first
   // and skips the network call entirely).
-  const hamburger = page.locator('#sidebar-hamburger');
-  await expect(hamburger).toBeVisible({ timeout: 10_000 });
-  await hamburger.click();
-
+  // A wide window starts with the sidebar docked, so Sign out is already reachable.
   const profileTrigger = page.locator('[data-testid="sidebar-profile-trigger"]');
   await expect(profileTrigger).toBeVisible({ timeout: 10_000 });
   await profileTrigger.click();

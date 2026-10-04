@@ -3,8 +3,8 @@
 // Oracle: the dispatch's picker-freshness requirements and section "2. Picker"
 // of /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/receipts/ci-e2e-failures-1115.md.
 // Both hooks, the production QueryClient, workspace store, API transport and
-// generated response validators are real. Only HTTP is mocked. Focus is the
-// existing recovery signal mounted by AgentPicker, not a manual query refetch.
+// generated response validators are real. Only HTTP is mocked. Focus and the
+// agent-picker open flag are the production signals, not a manual query refetch.
 
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -17,6 +17,7 @@ import {
   WorkspaceUpdateRequest as WorkspaceUpdateRequestSchema,
 } from '@/lib/api/generated/schemas'
 import { queryClient } from '@/lib/queryClient'
+import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { makeAgent } from '@/test/factories'
 import { useAgentsCrossTabRefresh } from './useAgentsCrossTabRefresh'
@@ -105,6 +106,7 @@ afterEach(() => {
   cleanup()
   queryClient.clear()
   useWorkspacesStore.getState().setActiveWorkspaceId(initialActiveWorkspaceId)
+  useUiStore.getState().setAgentSelectorOpen(false)
   vi.unstubAllGlobals()
 })
 
@@ -181,6 +183,52 @@ describe('useChatAgents — workspace membership freshness (issue #1009)', () =>
     await waitFor(() => {
       expect(result.current.chatAgents.map((agent) => agent.id),
         'Successful workspace membership PUT + return focus must refresh the cached core_team: include the new member, keep the outsider hidden, and require neither reload nor manual refetch')
+        .toEqual(['existing-member', 'new-member'])
+    })
+  })
+
+  it('includes a newly added workspace member when the picker opens after the agents list has already refreshed, without a second focus or reload', async () => {
+    const { result } = mountPickerHooks()
+
+    await waitFor(() => {
+      expect(result.current.chatAgents.map((agent) => agent.id), 'Initial picker must show exactly the existing team member')
+        .toEqual(['existing-member'])
+    })
+
+    // Same order as agent-picker-freshness.spec.ts: agent_created refreshes
+    // the agents list (here, the focus listener) BEFORE the separate
+    // membership PUT. The page stays focused, so nothing focuses it again.
+    serverAgents = [existingMember, newMember, outsider]
+    act(() => { fireEvent(window, new Event('focus')) })
+    await waitFor(() => {
+      expect(result.current.agents.map((agent) => agent.id), 'Agent discovery must already contain the new ready Main agent')
+        .toEqual(['existing-member', 'new-member', 'outsider'])
+      expect(queryClient.getQueryState(['agents'])?.fetchStatus, 'Agents refresh must finish before the membership PUT').toBe('idle')
+      expect(queryClient.getQueryState(workspaceListKey)?.fetchStatus, 'The too-early team refresh must finish before the membership PUT').toBe('idle')
+      expect(result.current.chatAgents.map((agent) => agent.id), 'A created agent is not a workspace member until the separate PUT')
+        .toEqual(['existing-member'])
+    })
+
+    const membershipUpdate: WorkspaceUpdateRequest = {
+      revision: serverWorkspace.revision,
+      core_team: ['existing-member', 'new-member'],
+    }
+    const saved = await fetch(`/api/v1/workspaces/${WORKSPACE_ID}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(membershipUpdate),
+    })
+    expect(saved.status, 'The external membership PUT must succeed before the picker opens').toBe(200)
+    expect(WorkspaceSchema.parse(await saved.json()).core_team, 'The successful PUT response must confirm the new membership')
+      .toEqual(['existing-member', 'new-member'])
+    expect(result.current.chatAgents.map((agent) => agent.id), 'The PUT alone must not be treated as already visible; the picker has not been opened')
+      .toEqual(['existing-member'])
+
+    act(() => { useUiStore.getState().setAgentSelectorOpen(true) })
+
+    await waitFor(() => {
+      expect(result.current.chatAgents.map((agent) => agent.id),
+        'Opening the agent picker after the membership PUT must refresh the cached core_team: include the new member, keep the outsider hidden, and require neither a second focus nor a reload')
         .toEqual(['existing-member', 'new-member'])
     })
   })

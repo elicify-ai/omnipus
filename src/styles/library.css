@@ -34,6 +34,7 @@
 @source "../components/ui/slider.tsx";
 @source "../components/ui/smart-select.tsx";
 @source "../components/ui/switch.tsx";
+@source "../components/ui/text-toggle.tsx";
 @source "../components/ui/table.tsx";
 @source "../components/ui/tabs.tsx";
 @source "../components/ui/textarea.tsx";

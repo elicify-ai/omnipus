@@ -1,9 +1,9 @@
 // M5 Frontend — Sidebar responsive + ARIA tests
 //
 // Covers three M5 accessibility and responsive behaviors:
-//   1. Sidebar is overlay-only at <1024px (pin button hidden when canPin=false)
-//   2. Sidebar allows pinning at ≥1024px (pin button visible when canPin=true)
-//   3. ARIA labels on interactive navigation elements (sign out, pin, nav links)
+//   1. Below 1024px the open sidebar is an overlay and still offers Hide sidebar
+//   2. At 1024px and above Hide sidebar is present; there is no pin control
+//   3. ARIA labels on interactive navigation elements (sign out, hide, nav links)
 //   4. ARIA attributes: aria-modal, aria-label, aria-current on active routes
 //
 // BDD scenarios inferred from M5 changes in src/components/layout/Sidebar.tsx.
@@ -184,28 +184,26 @@ beforeEach(() => {
 // When the sidebar is open,
 // Then the pin button is NOT rendered (canPin=false).
 // Traces to: src/components/layout/Sidebar.tsx — canPin state + SIDEBAR_PIN_BREAKPOINT
-describe('Sidebar — responsive: pin button hidden on narrow viewports', () => {
-  it('does not render pin button when viewport < 1024px (matchMedia returns false)', () => {
+describe('Sidebar — responsive: Hide sidebar stays, the pin control does not', () => {
+  it('renders Hide sidebar, and no pin control, when the overlay is open below 1024px', () => {
     mockMatchMedia(false) // Simulate narrow viewport
 
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    // The pin button relies on canPin being true — at narrow width it must not appear.
-    const pinButton = document.querySelector('button[aria-label="Pin sidebar"]') as HTMLButtonElement | null
-    const unpinButton = document.querySelector('button[aria-label="Unpin sidebar"]') as HTMLButtonElement | null
-    expect(pinButton).toBeNull()
-    expect(unpinButton).toBeNull()
+    expect(screen.getByRole('button', { name: 'Hide sidebar' })).toBeTruthy()
+    expect(document.querySelector('button[aria-label="Pin sidebar"]')).toBeNull()
+    expect(document.querySelector('button[aria-label="Unpin sidebar"]')).toBeNull()
   })
 
-  it('renders pin button when viewport ≥ 1024px (matchMedia returns true)', () => {
+  it('renders Hide sidebar, and no pin control, when the viewport is at least 1024px', () => {
     mockMatchMedia(true) // Simulate wide viewport
 
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    const pinButton = screen.getByRole('button', { name: 'Pin sidebar' })
-    expect(pinButton).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Hide sidebar' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Pin sidebar' })).toBeNull()
   })
 })
 
@@ -265,33 +263,34 @@ describe('Sidebar — ARIA labels on interactive elements', () => {
     expect(nav).toBeTruthy()
   })
 
-  it('pin button has aria-label="Pin sidebar" when unpinned', () => {
+  it('names the control Hide sidebar when the sidebar is open and not docked', () => {
     mockMatchMedia(true)
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    const pinBtn = screen.getByRole('button', { name: 'Pin sidebar' })
-    expect(pinBtn).toBeTruthy()
-    expect(pinBtn.getAttribute('aria-label')).toBe('Pin sidebar')
+    const hideBtn = screen.getByRole('button', { name: 'Hide sidebar' })
+    expect(hideBtn.getAttribute('aria-label')).toBe('Hide sidebar')
+    expect(hideBtn.getAttribute('aria-pressed')).toBeNull()
   })
 
-  it('pin button has aria-label="Unpin sidebar" when pinned', () => {
+  it('names the control Hide sidebar when the sidebar is docked', () => {
     mockMatchMedia(true)
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    const unpinBtn = screen.getByRole('button', { name: 'Unpin sidebar' })
-    expect(unpinBtn).toBeTruthy()
-    expect(unpinBtn.getAttribute('aria-label')).toBe('Unpin sidebar')
+    const hideBtn = screen.getByRole('button', { name: 'Hide sidebar' })
+    expect(hideBtn.getAttribute('aria-label')).toBe('Hide sidebar')
+    expect(hideBtn.getAttribute('aria-pressed')).toBeNull()
   })
 
-  it('pin button has aria-pressed="true" when pinned', () => {
+  it('clicking Hide sidebar clears both docked and overlay state', () => {
     mockMatchMedia(true)
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    const unpinBtn = screen.getByRole('button', { name: 'Unpin sidebar' })
-    expect(unpinBtn.getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }))
+    expect(useSidebarStore.getState().isPinned).toBe(false)
+    expect(useSidebarStore.getState().isOpen).toBe(false)
   })
 
   it('Agents library link has aria-label="Agents"', () => {
@@ -364,5 +363,66 @@ describe('Sidebar — differentiation: pinned vs unpinned renders different stru
     expect(hasOverlayDialog).toBe(true)
     // The two states must produce different markup — proves it's not hardcoded
     expect(hasPinnedDialog).not.toBe(hasOverlayDialog)
+  })
+})
+
+// Cmd/Ctrl+B must change what is on screen. Flipping only isOpen does not:
+// a docked wide window stays docked, and a narrow overlay whose dock flag is
+// still set stays up after close(). Hide clears both flags. Show docks on a
+// wide window and opens a drawer on a narrow one.
+describe('Sidebar — Cmd/Ctrl+B shows and hides', () => {
+  it('hides a fresh docked sidebar on a wide window', () => {
+    mockMatchMedia(true)
+    act(() => { useSidebarStore.setState({ isOpen: false, isPinned: true }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    fireEvent.keyDown(window, { key: 'b', metaKey: true })
+
+    expect(useSidebarStore.getState().isPinned).toBe(false)
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+  })
+
+  it('docks a hidden sidebar on a wide window', () => {
+    mockMatchMedia(true)
+    act(() => { useSidebarStore.setState({ isOpen: false, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true })
+
+    expect(useSidebarStore.getState().isPinned).toBe(true)
+    expect(useSidebarStore.getState().isOpen).toBe(true)
+  })
+
+  it('Escape on a narrow overlay closes the drawer and keeps a saved dock', () => {
+    mockMatchMedia(false)
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+    expect(useSidebarStore.getState().isPinned).toBe(true)
+  })
+
+  it('hides a narrow overlay that is showing, including a saved dock', () => {
+    mockMatchMedia(false)
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    fireEvent.keyDown(window, { key: 'b', metaKey: true })
+
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+    expect(useSidebarStore.getState().isPinned).toBe(false)
+  })
+
+  it('opens a hidden narrow window as a drawer and does not dock it', () => {
+    mockMatchMedia(false)
+    act(() => { useSidebarStore.setState({ isOpen: false, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true })
+
+    expect(useSidebarStore.getState().isOpen).toBe(true)
+    expect(useSidebarStore.getState().isPinned).toBe(false)
   })
 })

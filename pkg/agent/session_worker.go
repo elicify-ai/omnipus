@@ -479,6 +479,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	published := false
 	publishChannel := msg.Channel
 	publishChatID := msg.ChatID
+	publishSessionID := msg.SessionID
 
 	defer func() {
 		defer func() {
@@ -488,7 +489,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 			}
 		}()
 		if finalResponse != "" && !published {
-			al.publishResponseIfNeeded(ctx, activeAgent, publishChannel, publishChatID, finalResponse)
+			al.publishResponseIfNeeded(ctx, activeAgent, publishChannel, publishChatID, finalResponse, publishSessionID)
 			published = true
 		}
 	}()
@@ -519,7 +520,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 				// ctx may be canceled during panic unwinding; use a fresh,
 				// short-lived context so the terminal frame still reaches the client.
 				termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				al.publishResponseIfNeeded(termCtx, activeAgent, publishChannel, publishChatID, finalResponse)
+				al.publishResponseIfNeeded(termCtx, activeAgent, publishChannel, publishChatID, finalResponse, publishSessionID)
 				termCancel()
 				published = true
 			}
@@ -593,7 +594,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	if targetErr != nil {
 		if errors.Is(targetErr, ErrNoContinuationTarget) {
 			if finalResponse != "" {
-				al.publishResponseIfNeeded(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse)
+				al.publishResponseIfNeeded(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse, msg.SessionID)
 				published = true
 			}
 			return
@@ -631,7 +632,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	}
 	if target == nil {
 		if finalResponse != "" {
-			al.publishResponseIfNeeded(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse)
+			al.publishResponseIfNeeded(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse, msg.SessionID)
 			published = true
 		}
 		return
@@ -640,6 +641,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	// Update the defer's publish target to the resolved continuation target.
 	publishChannel = target.Channel
 	publishChatID = target.ChatID
+	publishSessionID = target.SessionID
 
 	// Drain steering messages that were queued during this turn (user typed
 	// a follow-up while the agent was still in its tool loop). The loop ends
@@ -672,7 +674,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	}
 
 	if finalResponse != "" {
-		al.publishResponseIfNeeded(ctx, activeAgent, target.Channel, target.ChatID, finalResponse)
+		al.publishResponseIfNeeded(ctx, activeAgent, target.Channel, target.ChatID, finalResponse, target.SessionID)
 		published = true
 	}
 }
@@ -827,5 +829,5 @@ func (w *sessionWorker) abandonQueuedSteering(ctx context.Context, target *conti
 	notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer notifyCancel()
 	al.publishResponseIfNeeded(notifyCtx, nil, target.Channel, target.ChatID,
-		"Your follow-up message could not be processed and was not delivered — please resend it.")
+		"Your follow-up message could not be processed and was not delivered — please resend it.", target.SessionID)
 }

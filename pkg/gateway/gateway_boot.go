@@ -216,13 +216,23 @@ func installSlogBridge() {
 // fix (two independent reviewers plus a third verifying pass all flagged
 // the same bug: this function used to be called AFTER datamodel.Init).
 func bootLoggingAndDataModel(homePath string) error {
-	logsDir := filepath.Join(homePath, logPath)
+	logFilePath := filepath.Join(homePath, logPath, logFile)
+	// Select the operator's destination before the first subsystem logs. The
+	// logger's standalone ConfigureFromEnv is not called by gateway startup.
+	if override := os.Getenv("OMNIPUS_LOG_FILE"); override != "" {
+		logFilePath = override
+		if strings.HasPrefix(override, "~/") {
+			if home := os.Getenv("HOME"); home != "" {
+				logFilePath = filepath.Join(home, override[2:])
+			}
+		}
+	}
 
 	// Preserves the original inline call site's panic-on-failure behavior
 	// (predates this fix, not itself part of the FIX 1 ordering change) —
 	// EnableFileLogging failing this early means no durable log sink exists
 	// to report the failure into.
-	if err := logger.EnableFileLogging(filepath.Join(logsDir, logFile)); err != nil {
+	if err := logger.EnableFileLogging(logFilePath); err != nil {
 		panic(fmt.Errorf("error enabling file logging: %w", err))
 	}
 

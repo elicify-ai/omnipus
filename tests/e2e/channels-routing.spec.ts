@@ -49,10 +49,7 @@ import { selectNativeOptionByLabel } from './fixtures/selectors'
 test('(a) Channels sidebar item navigates to /#/channels', async ({ page }) => {
   await page.goto('/')
 
-  const hamburger = page.locator('#sidebar-hamburger')
-  await expect(hamburger).toBeVisible({ timeout: 10_000 })
-  await hamburger.click()
-
+  // A wide window starts with the sidebar docked.
   const nav = page.locator('nav[aria-label="Main navigation"]')
   await expect(nav).toBeVisible({ timeout: 5_000 })
 

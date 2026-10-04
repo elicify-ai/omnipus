@@ -71,19 +71,19 @@ The chat switch is the one place that can turn Auto-approve **on** when the agen
 
 This is a deliberate, founder-approved trade: Auto-approve being usable everywhere, in exchange for asking more often on a machine with no kernel sandbox. If that trade does not suit a given agent or workspace, keep the Process Sandbox set to **Enforce** where your platform supports it, or turn Auto-approve off for that agent.
 
-### What the chat header shows
+### What the composer shows
 
-The badge at the top of a chat shows which state applies to that chat right now.
+There is no mode badge in the chat header. The composer has one labelled **Auto** button. The word stays visible. Off is plain text. On is the same word, pressed.
 
-| Badge | Meaning |
+| What you see | Meaning |
 |---|---|
-| **God Mode** | God Mode is on. No sandbox, and tools set to Ask in the global policies run without a prompt. A tool that an agent itself sets to Ask still asks, and Auto-approve is off. |
-| **Ask** | Auto-approve is off for this chat. Every tool set to Ask prompts. |
-| **Auto** | Auto-approve is on and a kernel sandbox is active. Safe calls run; the rest ask. |
-| **Auto — no sandbox** | Auto-approve is on, but there is no active kernel sandbox. Every other tool's safe calls still run as usual; the shell only auto-runs a read-only command or one an operator's rule explicitly allows — everything else asks first (see above). The badge's tooltip explains this. |
-<!-- verify-ui-string: badge label "Auto — no sandbox" and its tooltip text (2026-09-24 rewording of the tooltip only — the label itself never changed) -->
+| **Auto** pressed and greyed out, with the God Mode tooltip | God Mode is on. The button cannot be changed. Every tool runs without asking, except a tool that an agent itself sets to Ask, which still asks, and a tool that an agent has denied, which stays denied. |
+| **Auto** not pressed | Auto-approve is off for this chat. Every tool set to Ask prompts. |
+| **Auto** pressed | Auto-approve is on. Safe calls run; the rest ask. |
+| **Auto** pressed, tooltip adds the no-sandbox caution | Auto-approve is on, but there is no active kernel sandbox. Every other tool's safe calls still run as usual; the shell only auto-runs a read-only command or one an operator's rule explicitly allows — everything else asks first (see above). The caution is in that same tooltip, not a second label. |
+<!-- verify-ui-string: composer Auto button tooltip, including the no-sandbox caution (the old chat-header badge "Auto — no sandbox" is gone) -->
 
-*(Before 2026-09-24 this badge read "Auto → Ask" and Auto-approve had no effect at all in that state. That is no longer how it works — see "Auto-approve and the kernel sandbox" above.)*
+*(Before 2026-09-24 a chat-header badge read "Auto → Ask" and Auto-approve had no effect at all in that state. That badge is gone. See "Auto-approve and the kernel sandbox" above.)*
 
 ### God Mode
 
@@ -139,7 +139,7 @@ Changing God Mode always asks you to re-type your password. After that:
 - Turning it on shows a warning-styled "God-mode enabled" message — or, on a boot not yet authorized, "God-mode authorized — restart the gateway to activate it."
 - Turning it off shows "God-mode disabled."
 
-While God Mode is on, the sidebar shows a small red "God Mode" pill next to the omnipus.ai wordmark — and when the sidebar is hidden, a small red dot sits at the left edge of the screen instead, just below the header bar (clear of the sidebar-open button, and above full-screen panels on phones). Clicking either opens **Settings**, **Gateway**, scrolled to and focused on the God Mode control — switching to the Gateway tab even if Settings is already open; the chat header keeps its red "God Mode" badge. In every other state — off, still loading, unknown, fetch error, or development-mode bypass — neither indicator shows anything at all: there is no amber "God Mode ?" unknown variant (founder decision 2026-09-25). (Changed 2026-09-25 — an app-wide "God-mode is active" banner with its own "Turn off" button used to show on every screen; the Settings → Gateway control's toggle behavior is unchanged, though it gained the click-through focus targeting.)
+While God Mode is on, the sidebar shows a small red "God Mode" pill next to the omnipus.ai wordmark — and when the sidebar is hidden, a small red dot sits at the left edge of the screen instead, just below the header bar (clear of the sidebar-open button, and above full-screen panels on phones). Clicking either opens **Settings**, **Gateway**, scrolled to and focused on the God Mode control — switching to the Gateway tab even if Settings is already open. The chat header does not repeat God Mode; the composer **Auto** button stays pressed and disabled while God Mode is on, and its tooltip says so. In every other state — off, still loading, unknown, fetch error, or development-mode bypass — neither indicator shows anything at all: there is no amber "God Mode ?" unknown variant (founder decision 2026-09-25). (Changed 2026-09-25 — an app-wide "God-mode is active" banner with its own "Turn off" button used to show on every screen; the Settings → Gateway control's toggle behavior is unchanged, though it gained the click-through focus targeting.)
 
 The Security screen's health summary also raises a high-severity "God-mode is armed" warning whenever it is switched on, or authorized and waiting for a restart, with a link back to **Settings**, **Security**, **Danger zone**.
 
@@ -273,7 +273,7 @@ These controls answer different questions.
 | Filesystem model | What agents may read and run | You want open access or a confined list of locations |
 | Shell workspace limit | Whether a command may name paths outside the working folder | You want a command-text check that still applies even when the sandbox is off |
 
-The process sandbox offers three modes. **Enforce** blocks violations. **Permissive** records violations without blocking them. **Off** removes operating-system protection, but it does not disable the shell workspace limit. Only Enforce counts as an active kernel sandbox. *(Changed 2026-09-24 — see "Auto-approve and the kernel sandbox" above.)* In Permissive or Off, the chat header shows **Auto — no sandbox**: Auto-approve still runs for every other tool, but the shell only auto-runs a read-only command or one an operator's rule explicitly allows — every other shell command asks first, with no operating-system check behind the text-based one.
+The process sandbox offers three modes. **Enforce** blocks violations. **Permissive** records violations without blocking them. **Off** removes operating-system protection, but it does not disable the shell workspace limit. Only Enforce counts as an active kernel sandbox. *(Changed 2026-09-24 — see "Auto-approve and the kernel sandbox" above.)* In Permissive or Off, the composer **Auto** button stays pressed and its tooltip adds the no-sandbox caution: Auto-approve still runs for every other tool, but the shell only auto-runs a read-only command or one an operator's rule explicitly allows — every other shell command asks first, with no operating-system check behind the text-based one.
 
 The **Confined** filesystem model limits reads and execution to listed locations. The **Open** model lets agents read and run anything your account can reach, apart from Omnipus secret files. Writes remain limited to the workspace and mounted folders. Changes to the filesystem model take effect after a gateway restart.
 
@@ -340,7 +340,7 @@ Worked example: with the `ask`-before-`npm publish` rule above and no rule at al
 
 ### How a rule interacts with Auto-approve and God Mode
 
-The columns below match the badge at the top of the chat. **Auto** also covers **Auto — no sandbox**: a command rule's `allow`/`ask`/`deny` decision applies the same whether or not a kernel sandbox is active — it is a check on the command's text, not something the kernel sandbox does or does not add. *(Before 2026-09-24, this row said "Ask also covers Auto → Ask" — Auto-approve had no effect without a sandbox back then, so that state behaved like Ask. It no longer does. What "Auto — no sandbox" means changed again later the same day — see "Auto-approve and the kernel sandbox" above — when Auto-approve with no sandbox became stricter about which shell commands still skip the prompt.)*
+The columns below match the composer **Auto** button. **Auto** includes the case with no kernel sandbox: a command rule's `allow`/`ask`/`deny` decision applies the same whether or not a kernel sandbox is active — it is a check on the command's text, not something the kernel sandbox does or does not add. *(Before 2026-09-24, this row said "Ask also covers Auto → Ask" — Auto-approve had no effect without a sandbox back then, so that state behaved like Ask. It no longer does. What the no-sandbox case means changed again later the same day — see "Auto-approve and the kernel sandbox" above — when Auto-approve with no sandbox became stricter about which shell commands still skip the prompt.)*
 
 | Rule action | Ask | Auto | God Mode |
 |---|---|---|---|

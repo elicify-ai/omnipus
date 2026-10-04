@@ -357,21 +357,19 @@ describe('Sidebar — pin icon visibility on mobile', () => {
   // the pin button rather than a Tailwind responsive class. The CSS-based assertion is no
   // longer valid and has been removed.
 
-  it('shows PushPinSlash icon title when pinned', () => {
+  it('shows Hide sidebar while the sidebar is on screen', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
-    const { container } = render(<Sidebar />, { wrapper: makeWrapper() })
-
-    const pinButton = container.querySelector('button[title="Unpin sidebar"]')
-    expect(pinButton).not.toBeNull()
-    expect(pinButton!.getAttribute('title')).toBe('Unpin sidebar')
+    render(<Sidebar />, { wrapper: makeWrapper() })
+    expect(screen.getByRole('button', { name: 'Hide sidebar' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Pin sidebar' })).toBeNull()
   })
 
-  it('shows PushPin icon title when unpinned', () => {
-    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    const { container } = render(<Sidebar />, { wrapper: makeWrapper() })
-
-    const pinButton = container.querySelector('button[title="Pin sidebar"]')
-    expect(pinButton).not.toBeNull()
+  it('hides the sidebar when Hide sidebar is clicked', () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+    fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }))
+    expect(useSidebarStore.getState().isPinned).toBe(false)
+    expect(useSidebarStore.getState().isOpen).toBe(false)
   })
 })
 

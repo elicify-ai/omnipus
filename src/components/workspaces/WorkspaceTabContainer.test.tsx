@@ -78,10 +78,10 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
 })
 
 // Sidebar store — toggle action
-const mockToggle = vi.fn()
+const mockOpen = vi.fn()
 vi.mock('@/store/sidebar', () => ({
-  useSidebarStore: (selector: ((s: { toggle: () => void; isOpen: boolean; isPinned: boolean }) => unknown) | undefined) => {
-    const state = { toggle: mockToggle, isOpen: false, isPinned: false }
+  useSidebarStore: (selector: ((s: { open: () => void; pin: () => void; isOpen: boolean; isPinned: boolean }) => unknown) | undefined) => {
+    const state = { open: mockOpen, pin: vi.fn(), isOpen: false, isPinned: false }
     return selector ? selector(state) : state
   },
   SIDEBAR_PIN_BREAKPOINT: 1024,
@@ -222,7 +222,7 @@ describe('WorkspaceTabContainer — layout', () => {
     const hamburger = screen.getByTestId('workspace-hamburger')
     fireEvent.click(hamburger)
 
-    expect(mockToggle).toHaveBeenCalledOnce()
+    expect(mockOpen).toHaveBeenCalledOnce()
   })
 })
 

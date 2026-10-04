@@ -164,7 +164,7 @@ import { Sidebar } from './Sidebar'
 // restore-on-close effect looks it up by id="sidebar-hamburger" regardless
 // of which component renders it.
 function Hamburger() {
-  return <button id="sidebar-hamburger" type="button" aria-label="Toggle navigation sidebar" />
+  return <button id="sidebar-hamburger" type="button" aria-label="Show sidebar" />
 }
 
 function renderOpenOverlay() {
@@ -253,19 +253,19 @@ describe('Sidebar overlay — Tab is trapped inside the drawer while open', () =
     })
     renderOpenOverlay()
 
-    // The pin toggle is neither the first nor last focusable control.
-    const pinButton = screen.getByRole('button', { name: 'Pin sidebar' })
+    // Hide sidebar is neither the first nor last focusable control.
+    const hideButton = screen.getByRole('button', { name: 'Hide sidebar' })
     act(() => {
-      pinButton.focus()
+      hideButton.focus()
     })
 
-    fireEvent.keyDown(pinButton, { key: 'Tab', bubbles: true })
+    fireEvent.keyDown(hideButton, { key: 'Tab', bubbles: true })
 
     // jsdom doesn't implement native Tab traversal, so the meaningful check
-    // is that our trap handler did NOT force focus away from pinButton (it
+    // is that our trap handler did NOT force focus away from hideButton (it
     // only reroutes at the first/last edges) — a bug here would show up as
     // focus jumping to the first or last control instead of staying put.
-    expect(document.activeElement).toBe(pinButton)
+    expect(document.activeElement).toBe(hideButton)
   })
 })
 
