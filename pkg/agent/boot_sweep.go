@@ -463,6 +463,12 @@ func (r *SteerBootRecovery) expireQuestion(ctx context.Context, rec *session.Lif
 		// Continue: an OPEN record past its deadline is refused by every
 		// respond path (session.PendingQuestion.Expired), so the asker
 		// failure below stays the one consequence D1.8 requires.
+	} else {
+		// ADR-20260928 D1.8: the expiry closes every OPEN relay of this
+		// question as superseded too. Only the successful close of the
+		// asker's own record triggers it — the relays are downstream of the
+		// question that actually expired.
+		r.expireRelayedQuestions(rec, q, notice)
 	}
 
 	if err := r.Lifecycle.Mutate(rec.SessionID, func(cur *session.LifecycleRecord) error {
@@ -492,6 +498,71 @@ func (r *SteerBootRecovery) expireQuestion(ctx context.Context, rec *session.Lif
 			"session %s expiry notice for question %q was not delivered: %v",
 			rec.SessionID, q.CorrelationID, err))
 	}
+}
+
+// expireRelayedQuestions enforces the relay half of ADR-20260928 D1.8's
+// expiry: an expired question closes every OPEN relay of it as superseded.
+// A relay is another session's PendingQuestion record in the SAME
+// QuestionStore directory (pkg/session/question_record.go — stored under the
+// relaying session id) whose Origin or RelayOf names the expired question by
+// its asker session id + correlation id. Each relay is closed with the same
+// superseded append the asker's own record got, at the relay's own unchanged
+// fields. It runs only after the asker's own close succeeded (the caller's
+// else branch) and never blocks the asker's expiry consequences: a relay
+// whose record cannot be read or closed is noticed and skipped, leaving the
+// remaining relays and everything below untouched. This is a boot-time
+// consequence of one expiring question — there is no periodic scheduler here.
+func (r *SteerBootRecovery) expireRelayedQuestions(rec *session.LifecycleRecord, expired *session.PendingQuestion, notice func(string, string)) {
+	store := r.questionStore()
+	entries, err := os.ReadDir(store.Dir())
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			notice("question-relay:"+rec.SessionID, fmt.Sprintf(
+				"session %s expired question %q could not scan its relays: %v",
+				rec.SessionID, expired.CorrelationID, err))
+		}
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".jsonl") || strings.HasPrefix(name, ".tmp-") {
+			continue
+		}
+		relayID := strings.TrimSuffix(name, ".jsonl")
+		if relayID == expired.AskerSessionID {
+			continue // the asker's own record was closed by the caller
+		}
+		relay, err := store.Load(relayID)
+		if err != nil {
+			if !errors.Is(err, session.ErrPendingQuestionNotFound) {
+				notice("question-relay:"+relayID, fmt.Sprintf(
+					"session %s relayed-question record unreadable while closing relays of %q: %v",
+					relayID, expired.CorrelationID, err))
+			}
+			continue
+		}
+		if relay.Status != session.QuestionStatusOpen || !questionRelayOf(relay, expired) {
+			continue
+		}
+		closed := *relay
+		closed.Status = session.QuestionStatusSuperseded
+		if err := store.Append(closed); err != nil {
+			notice("question-relay:"+relayID, fmt.Sprintf(
+				"session %s relayed question %q could not be closed as superseded after %q expired: %v",
+				relayID, relay.CorrelationID, expired.CorrelationID, err))
+		}
+	}
+}
+
+// questionRelayOf reports whether relay is a relay OF the expired question —
+// its Origin or RelayOf link names the question's asker session id AND
+// correlation id, the pair D1.8's relay chain is keyed by. A record whose
+// links name any other question is not this expiry's to close.
+func questionRelayOf(relay, expired *session.PendingQuestion) bool {
+	points := func(link *session.QuestionRelayLink) bool {
+		return link != nil && link.SessionID == expired.AskerSessionID && link.CorrelationID == expired.CorrelationID
+	}
+	return points(relay.Origin) || points(relay.RelayOf)
 }
 
 // deliverExpiryNotice delivers the ONE fatal error a D1.8 expiry sends to the
