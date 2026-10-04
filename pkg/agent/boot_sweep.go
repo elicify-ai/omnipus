@@ -231,66 +231,46 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		notice("load:"+id, fmt.Sprintf("steered session %s refused at boot: %v", id, err))
 		return
 	}
-	// ADR-20260928 D1.8 (T14/T19): the expiry check runs BEFORE the stop
-	// arms, because both of them return for a stopped record — the
-	// stopped-notice replay (stopped_notice.go::recoverStoppedChildNotice
-	// returns true for every non-terminal stopped record) and the fence arm
-	// after it — so an expiry evaluated only after them is unreachable and a
-	// stop protects a question whose ORIGINAL deadline has already passed.
-	// A stopped asker with a still-LIVE question is untouched here and keeps
-	// the stop arms below unchanged; when it IS expired, its landed stop's
-	// direct-parent notice (D6) is still replayed first — the ledger history
-	// is owed for that transition regardless of what the boot then does to
-	// the record (needs_input keeps its own flow: no stop arm reaches it, so
-	// no notice is replayed for it).
-	if rec.State == session.LifecycleNeedsInput || rec.State == session.LifecycleStopped {
-		if q, hasOpen := r.openPendingQuestion(rec, notice); hasOpen && q.Expired(time.Now()) {
-			if rec.State == session.LifecycleStopped {
-				if _, replayErr := r.replayLandedStopNotices(ctx, rec); replayErr != nil {
-					r.reportStoppedNotice(rec, notice, replayErr)
-				}
-			}
-			r.expireQuestion(ctx, rec, q, notice)
-			return
+	// C5 (ADR-20260928 Correction, 2026-10-04) pass one — the CURRENT RUN's
+	// recovery, before any parent wake: a steered record mid-flight at boot
+	// (queued or running, no accepted stop fence) is stopped NOW, whatever
+	// the historical replay below finds. An older notice's replay outcome —
+	// delivered, failed, or not yet attempted — never gates this stop, and
+	// the stop never starts a run (D8.5 kept). The landing is D8.3's
+	// automatic stop: cause restart, its transition ledgered beside the note
+	// (Correction C3), its direct-parent notice discovered from that ledger
+	// history by the replay below. A record carrying a CURRENT-GENERATION
+	// fence is NOT stopped here: the accepted stop's own landing is W3b's
+	// boot reconciliation, reported pending below — never fabricated twice.
+	stopLandedByBoot := false
+	if !rec.Terminal() && rec.State != session.LifecycleNeedsInput &&
+		(rec.State == session.LifecycleRunning || rec.State == session.LifecycleQueued) &&
+		!(rec.Stop != nil && rec.Stop.Generation == rec.Generation) {
+		if err := r.failInterrupted(rec); err != nil {
+			notice("interrupted-write:"+id, fmt.Sprintf("session %s interrupted transition failed: %v", id, err))
+		} else if fresh, loadErr := r.Lifecycle.Load(id); loadErr == nil && fresh != nil {
+			rec = fresh
 		}
+		stopLandedByBoot = true
 	}
 	// Stopped-child notices retry from the control ledger's LANDED history
 	// (stopped_notice.go::recoverStoppedChildNotice) — including after a
-	// same-generation RESUME cleared the active note (founder Q2=A). A stored
-	// final still takes the completion-repair path below; this returns
-	// false for that case, and when the record has no landed history to
-	// replay. A stop accepted but not yet landed publishes nothing and is
-	// reported pending — finishing the fence at boot is W3b's reconciliation.
-	if r.recoverStoppedChildNotice(ctx, rec, notice) {
+	// same-generation RESUME cleared the active note (founder Q2=A). C5:
+	// this replay is pass two, independent of pass one — its outcome never
+	// suppresses the current-run stop above, and a replay failure stays
+	// visibly pending and retried. A stop accepted but not yet landed
+	// publishes nothing and is reported pending — finishing the fence at
+	// boot is W3b's reconciliation. For a record THIS boot just stopped, the
+	// call still runs the replay (the fresh restart stop's notice and every
+	// older untaken one ring here); its true must not short-circuit the
+	// interrupted arm below, which finishes D8.3's parent notification for
+	// the run this restart interrupted.
+	if r.recoverStoppedChildNotice(ctx, rec, notice) && !stopLandedByBoot {
 		return
 	}
 	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
 		// A current-generation Stop is durable. Do not deliver or re-wake any
 		// pending entry; it waits for Revive to mint a newer generation.
-		r.ackConsumed(ctx, rec, notice)
-		return
-	}
-
-	// ADR-20260928 D1.8: the boot consumer enforces the question-park limit
-	// from the durable sidecar, using the ORIGINAL deadline — never
-	// re-baselined by a park, a Stop, or a restart. A question still OPEN at
-	// or past that instant expires the asker visibly (D5), once (T8); a live
-	// question survives the restart untouched. Stop cleared the record's
-	// NeedsInput outside needs_input, so for a stopped asker the sidecar is
-	// the only place the deadline survives (T14/T19) — which is also why a
-	// landed stop carrying a LIVE question takes the marker arm's
-	// waiting-for-Revive shape below instead of the interrupted sweep: the
-	// sidecar is what still says an answer may arrive (W3b).
-	expirableState := rec.State == session.LifecycleNeedsInput || rec.State == session.LifecycleStopped
-	q, hasOpen := r.openPendingQuestion(rec, notice)
-	switch {
-	case expirableState && hasOpen && q.Expired(time.Now()):
-		r.expireQuestion(ctx, rec, q, notice)
-		return
-	case rec.State == session.LifecycleStopped && hasOpen:
-		// A landed stop spent its marker; the live sidecar question is why
-		// the asker still waits for Revive. No delivery, no sweep, no rewrite
-		// of the question or its deadline.
 		r.ackConsumed(ctx, rec, notice)
 		return
 	}
@@ -337,14 +317,16 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 	}
 
 	if !rec.Terminal() && rec.State != session.LifecycleNeedsInput {
-		if rec.State == session.LifecycleStopped {
+		if rec.State == session.LifecycleStopped && !stopLandedByBoot {
 			// ADR-20260928 D8 (founder decision, 2026-10-04): a helper that is
 			// already stopped stays stopped across a restart. The restart
 			// marks nothing failed, rewrites no stop note, and sends no old
 			// "interrupted:"/"timeout:" fatal to the parent — and nothing here
-			// re-wakes a stopped helper; it waits for Revive. The expiry arm
-			// above has already had its chance at this record; a stopped
+			// re-wakes a stopped helper; it waits for Revive. A stopped
 			// record that still reaches this arm leaves exactly as it stands.
+			// A record THIS boot just stopped (C5's pre-stop above) is the
+			// interrupted-mid-flight shape, not the already-stopped shape:
+			// its own boot consequence below still runs.
 			return
 		}
 		for _, message := range messages {
@@ -392,253 +374,6 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		}
 		r.deliverIfUnconsumed(ctx, rec, message, notice)
 	}
-}
-
-// failedReasonOwnerUnreachable and failedReasonAnswerTimeout are D1.8's two
-// expiry reasons, by the question's authority: only the signed-in owner may
-// answer an owner_required question, so its expiry means the owner could not
-// be reached in time; every other authority is the steering parent's own to
-// answer, so its expiry is an answer timeout (F1011-Q2).
-const (
-	failedReasonOwnerUnreachable = "owner_unreachable"
-	failedReasonAnswerTimeout    = "answer_timeout"
-)
-
-// questionStore resolves the durable pending-question sidecar beside the
-// lifecycle store — the same resolution the production park and respond
-// paths use (pkg/tools/delegate_question.go::questionStoreFromLifecycle).
-func (r *SteerBootRecovery) questionStore() *session.QuestionStore {
-	return session.NewQuestionStore(session.PendingQuestionDir(r.Lifecycle.Dir()))
-}
-
-// openPendingQuestion loads the session's pending-question sidecar and
-// returns it only while it is still OPEN for the record's CURRENT generation
-// — the only shape this sweep reads: D1.8 expiry and the stopped-question
-// preservation both. A missing record is the ordinary no-question shape; an
-// unreadable one is noticed and treated as absent so the record keeps the
-// existing arms' behavior. A question belonging to an older generation
-// (post-revive leftover) is not this generation's to act on.
-func (r *SteerBootRecovery) openPendingQuestion(rec *session.LifecycleRecord, notice func(string, string)) (*session.PendingQuestion, bool) {
-	if rec == nil || rec.Terminal() {
-		return nil, false
-	}
-	q, err := r.questionStore().Load(rec.SessionID)
-	if err != nil {
-		if !errors.Is(err, session.ErrPendingQuestionNotFound) {
-			notice("question:"+rec.SessionID, fmt.Sprintf(
-				"session %s pending-question record unreadable at boot: %v", rec.SessionID, err))
-		}
-		return nil, false
-	}
-	if q == nil || q.Status != session.QuestionStatusOpen || q.AskerGeneration != rec.Generation {
-		return nil, false
-	}
-	return q, true
-}
-
-// expireQuestion enforces D1.8's 24-hour question-park limit for ONE steered
-// asker at boot: a question still OPEN in its sidecar whose ORIGINAL deadline
-// has passed closes the question as superseded (never re-baselining the
-// deadline — D1.8), fails the asker visibly — failed(owner_unreachable) for
-// an owner_required question, failed(answer_timeout) otherwise — and sends
-// exactly ONE fatal error to the DIRECT parent (D5). It never dispatches a
-// run, never mints a generation, and never touches the asker's goal
-// (F0929-6: expiry does not clear an active goal); a superseded question
-// cannot be reserved (D1.5), so a late answer is refused consuming nothing.
-//
-// Ordering is the crash-safe one for THIS consumer: the sidecar closes
-// first, the asker lands terminal second, the parent notice goes out last.
-// The expiry gate reads the sidecar's OPEN status, so a crash after step one
-// makes every later boot skip expiry — which is exactly why the asker's
-// terminal write may not be the step a crash can lose: a non-terminal record
-// with a closed sidecar would strand outside every arm of recoverSteered. A
-// failed terminal write is noticed and returns ownership anyway; the next
-// boot's existing arms then give the record a visible outcome.
-func (r *SteerBootRecovery) expireQuestion(ctx context.Context, rec *session.LifecycleRecord, q *session.PendingQuestion, notice func(string, string)) {
-	reason := failedReasonAnswerTimeout
-	text := fmt.Sprintf("%s: question %q expired at %s with no answer",
-		reason, q.CorrelationID, q.OriginalDeadline.Format(time.RFC3339Nano))
-	if q.Authority == session.QuestionAuthorityOwnerRequired {
-		reason = failedReasonOwnerUnreachable
-		text = fmt.Sprintf("owner_unreachable: owner could not be reached (question %q expired at %s)",
-			q.CorrelationID, q.OriginalDeadline.Format(time.RFC3339Nano))
-	}
-
-	closed := *q
-	closed.Status = session.QuestionStatusSuperseded
-	if err := r.questionStore().Append(closed); err != nil {
-		notice("question-expire:"+rec.SessionID, fmt.Sprintf(
-			"session %s question %q passed its deadline but could not be closed: %v",
-			rec.SessionID, q.CorrelationID, err))
-		// Continue: an OPEN record past its deadline is refused by every
-		// respond path (session.PendingQuestion.Expired), so the asker
-		// failure below stays the one consequence D1.8 requires.
-	} else {
-		// ADR-20260928 D1.8: the expiry closes every OPEN relay of this
-		// question as superseded too. Only the successful close of the
-		// asker's own record triggers it — the relays are downstream of the
-		// question that actually expired.
-		r.expireRelayedQuestions(rec, q, notice)
-	}
-
-	if err := r.Lifecycle.Mutate(rec.SessionID, func(cur *session.LifecycleRecord) error {
-		if cur == nil || cur.Terminal() || cur.Generation != rec.Generation {
-			// Another disposition won the race (a concurrent completion or
-			// revival); its outcome, not the expiry, is the record's tail.
-			return nil
-		}
-		cur.State = session.LifecycleFailed
-		cur.FailedReason = reason
-		// Landing the expiry carries a current-generation stop instruction
-		// out — the same spend sweepToFailedInterrupted performs; persistLocked
-		// refuses a terminal record that still carries one.
-		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
-			cur.Stop = nil
-		}
-		return nil
-	}); err != nil {
-		notice("question-expire:"+rec.SessionID, fmt.Sprintf(
-			"session %s could not be failed for its expired question %q: %v",
-			rec.SessionID, q.CorrelationID, err))
-		return
-	}
-
-	if err := r.deliverExpiryNotice(ctx, rec, q, text, notice); err != nil {
-		notice("question-expire:"+rec.SessionID, fmt.Sprintf(
-			"session %s expiry notice for question %q was not delivered: %v",
-			rec.SessionID, q.CorrelationID, err))
-	}
-}
-
-// expireRelayedQuestions enforces the relay half of ADR-20260928 D1.8's
-// expiry: an expired question closes every OPEN relay of it as superseded.
-// A relay is another session's PendingQuestion record in the SAME
-// QuestionStore directory (pkg/session/question_record.go — stored under the
-// relaying session id) whose Origin or RelayOf names the expired question by
-// its asker session id + correlation id. Each relay is closed with the same
-// superseded append the asker's own record got, at the relay's own unchanged
-// fields. It runs only after the asker's own close succeeded (the caller's
-// else branch) and never blocks the asker's expiry consequences: a relay
-// whose record cannot be read or closed is noticed and skipped, leaving the
-// remaining relays and everything below untouched. This is a boot-time
-// consequence of one expiring question — there is no periodic scheduler here.
-func (r *SteerBootRecovery) expireRelayedQuestions(rec *session.LifecycleRecord, expired *session.PendingQuestion, notice func(string, string)) {
-	store := r.questionStore()
-	entries, err := os.ReadDir(store.Dir())
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			notice("question-relay:"+rec.SessionID, fmt.Sprintf(
-				"session %s expired question %q could not scan its relays: %v",
-				rec.SessionID, expired.CorrelationID, err))
-		}
-		return
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".jsonl") || strings.HasPrefix(name, ".tmp-") {
-			continue
-		}
-		relayID := strings.TrimSuffix(name, ".jsonl")
-		if relayID == expired.AskerSessionID {
-			continue // the asker's own record was closed by the caller
-		}
-		relay, err := store.Load(relayID)
-		if err != nil {
-			if !errors.Is(err, session.ErrPendingQuestionNotFound) {
-				notice("question-relay:"+relayID, fmt.Sprintf(
-					"session %s relayed-question record unreadable while closing relays of %q: %v",
-					relayID, expired.CorrelationID, err))
-			}
-			continue
-		}
-		if relay.Status != session.QuestionStatusOpen || !questionRelayOf(relay, expired) {
-			continue
-		}
-		closed := *relay
-		closed.Status = session.QuestionStatusSuperseded
-		if err := store.Append(closed); err != nil {
-			notice("question-relay:"+relayID, fmt.Sprintf(
-				"session %s relayed question %q could not be closed as superseded after %q expired: %v",
-				relayID, relay.CorrelationID, expired.CorrelationID, err))
-		}
-	}
-}
-
-// questionRelayOf reports whether relay is a relay OF the expired question —
-// its Origin or RelayOf link names the question's asker session id AND
-// correlation id, the pair D1.8's relay chain is keyed by. A record whose
-// links name any other question is not this expiry's to close.
-func questionRelayOf(relay, expired *session.PendingQuestion) bool {
-	points := func(link *session.QuestionRelayLink) bool {
-		return link != nil && link.SessionID == expired.AskerSessionID && link.CorrelationID == expired.CorrelationID
-	}
-	return points(relay.Origin) || points(relay.RelayOf)
-}
-
-// deliverExpiryNotice delivers the ONE fatal error a D1.8 expiry sends to the
-// asker's DIRECT parent (D5). The terminal-stamped `<child>:<gen>:final` id
-// is what makes a boot replay a no-op (T8): the second boot finds that id
-// already in the parent's inbox and its re-delivery dedupes away. A stop
-// that already spent that id for this generation (terminaliseNeverRanStop's
-// interrupted notice) would swallow the expiry text behind the same dedupe,
-// so in that one shape the notice carries its own deterministic per-question
-// id, `<child>:<gen>:expired:<correlation_id>`, and is appended directly:
-// a replayed expiry cannot re-append it (the sidecar is already superseded,
-// so expiry never runs twice), and a later sweep re-delivery of that entry
-// re-stamps the final id, which dedupes against the stop's entry instead of
-// twinning.
-func (r *SteerBootRecovery) deliverExpiryNotice(ctx context.Context, rec *session.LifecycleRecord, q *session.PendingQuestion, text string, notice func(string, string)) error {
-	parent := deliverOwnerKey(rec)
-	if parent == "" {
-		return fmt.Errorf("session %s has no steering session to notify", rec.SessionID)
-	}
-	message, _, err := errorBootMessage(rec, text, steer.OutcomeFailed)
-	if err != nil {
-		return err
-	}
-	finalID := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation)
-	if r.inboxHasMessageID(parent, finalID) {
-		stamped, serr := withDeterministicMessageID(message,
-			fmt.Sprintf("%s:%d:expired:%s", rec.SessionID, rec.Generation, q.CorrelationID))
-		if serr != nil {
-			return serr
-		}
-		_, aerr := r.Inbox.Append(parent, stamped)
-		return aerr
-	}
-	if r.Deliverer == nil {
-		return fmt.Errorf("session %s expiry notice not delivered: upward deliverer is not configured", rec.SessionID)
-	}
-	event := steer.UpwardEvent{ChildSessionID: rec.SessionID, Outcome: steer.OutcomeFailed, Message: message}
-	delivery, err := r.Deliverer.Deliver(ctx, event)
-	if err != nil {
-		return err
-	}
-	reportUndeliveredWake("steer: boot recovery", event, parent, rec.Generation, delivery)
-	return nil
-}
-
-// inboxHasMessageID reports whether the owner's inbox already holds a
-// message with messageID — the boot-time dedupe probe that keeps a stop's
-// spent terminal id from swallowing the expiry notice behind Deliver's own
-// dedupe.
-func (r *SteerBootRecovery) inboxHasMessageID(ownerKey, messageID string) bool {
-	if ownerKey == "" || r.Inbox == nil {
-		return false
-	}
-	entries, err := r.Inbox.Entries(ownerKey)
-	if err != nil {
-		return false
-	}
-	for _, entry := range entries {
-		if entry.Kind != session.InboxEntryMessage || entry.Message == nil {
-			continue
-		}
-		if envelope, envErr := decodeBootMessage(*entry.Message); envErr == nil && envelope.MessageID == messageID {
-			return true
-		}
-	}
-	return false
 }
 
 func (r *SteerBootRecovery) unacknowledged(rec *session.LifecycleRecord, notice func(string, string)) []generated.SessionMessage {
@@ -839,6 +574,17 @@ func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, messag
 	return nil
 }
 
+// failInterrupted lands D8.3's automatic restart stop on a record the
+// restart interrupted mid-flight (queued or running). Correction C3 applies
+// to this landing like to any other: the fence-less transition is appended
+// to the control ledger IN THE SAME lock hold that writes the stop note —
+// allocated the next monotonic stop sequence, identifying the interrupted
+// run's execution — so the restart stop's direct-parent notice is discovered
+// from ledger history (Correction C5's pass two) and survives a later RESUME
+// clearing the note. A ledger failure refuses the whole landing (the
+// mutation errors, nothing persists): a stop whose history cannot be
+// recorded must not land note-only, because the note-derived notice fallback
+// is retired. The next boot retries the stop.
 func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error {
 	err := r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
 		if current.Terminal() || (current.Stop != nil && current.Stop.Generation == current.Generation) {
@@ -862,16 +608,35 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 		// run, so the child lands an ordinary, non-terminal stop — never
 		// failed(interrupted) — carrying the restart stop note; no
 		// goal-ending step exists in this path, so the session-owned goal
-		// (and every ancestor's) stays active. Seq stamps the record's own
-		// generation: this note is THIS generation's stop, not retained
-		// history. By=system cause=restart needs no boot_seq under the
+		// (and every ancestor's) stays active. The transition is ledgered
+		// first, fence-less (Correction C3): no accepted Stop control is
+		// fabricated, the interrupted run's own execution identity rides the
+		// landed projection, and the note's Seq is the allocated ledger
+		// sequence. By=system cause=restart needs no boot_seq under the
 		// lifecycle save rule (only by=restart does), so no boot epoch is
 		// stamped here.
+		at := time.Now().UTC()
+		landed := session.LandedStop{
+			ParentSessionID: current.SteeringSessionID(),
+			Generation:      current.Generation,
+			Cause:           session.StopCauseRestart,
+			Actor:           session.StopActorSystem,
+			At:              at,
+		}
+		if current.ExecutionID != nil {
+			landed.RunID = current.ExecutionID.RunID
+			landed.BootSeq = current.ExecutionID.BootSeq
+		}
+		seq, ledgerErr := r.Lifecycle.RecordFencelessLandedStopLocked(current.SessionID, landed)
+		if ledgerErr != nil {
+			return fmt.Errorf("steer: boot: restart stop for %q not landed: its transition could not be ledgered: %w",
+				current.SessionID, ledgerErr)
+		}
 		current.State = session.LifecycleStopped
 		current.StopNote = &session.StopNote{
-			At:    time.Now().UTC(),
+			At:    at,
 			By:    session.StopActorSystem,
-			Seq:   uint64(current.Generation),
+			Seq:   uint64(seq),
 			Cause: session.StopCauseRestart,
 		}
 		current.FailedReason = ""
@@ -919,10 +684,14 @@ func completedBootMessage(rec *session.LifecycleRecord, result string) (generate
 // cancelled/timed_out into the single "stopped" state (timed out = stopped,
 // founder ruling), so the state alone can no longer tell the two apart — the
 // RETAINED StopNote cause does, the same distinction
-// goal_child_completion.go keeps live via the outcome. Seq is stamped from
-// Generation at write (see StopNote's doc comment), so a note whose Seq
-// predates the record's current generation is inert history a Revive
-// deliberately kept: it must not rename THIS generation's stop.
+// goal_child_completion.go keeps live via the outcome. The Seq == Generation
+// shape is the synthesized-note convention this heuristic grew up with;
+// since Correction C3 a fence-less note's Seq is its LEDGER sequence, so a
+// fresh timeout stop no longer matches here — the authoritative record of
+// that stop (its generation and cause) is its ledgered transition instead.
+// The callers left are the retained-note shapes (an older note a Revive
+// deliberately kept must never rename THIS generation's stop); a stopped
+// record never reaches them through the live boot path.
 func currentGenerationTimeoutStop(rec *session.LifecycleRecord) bool {
 	return rec.StopNote != nil &&
 		rec.StopNote.Cause == session.StopCauseTimeout &&

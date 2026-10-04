@@ -47,12 +47,20 @@ type StoppedTransition struct {
 // landed-transition event: the final "applied" receipt cannot precede the
 // D6 direct-parent notice's durability, so a landed stop stays state
 // "queued" until a later unit writes the applied receipt.
+//
+// RunID/BootSeq identify the landing execution of a FENCE-LESS stop — a
+// landed transition with no accepted control behind it (ADR-20260928's
+// Correction C3): the line fabricates no control_id, so the execution the
+// landing carried out is the line's identity instead. Zero on a fenced
+// stop, whose identity is the line's own control_id.
 type landedStopRecord struct {
 	ParentSessionID string    `json:"parent_session_id"`
 	Generation      int       `json:"generation"`
 	Cause           StopCause `json:"cause"`
 	Actor           string    `json:"actor"`
 	At              time.Time `json:"at"`
+	RunID           string    `json:"run_id,omitempty"`
+	BootSeq         uint64    `json:"boot_seq,omitempty"`
 }
 
 // controlLedgerLine is one append-only control-ledger record. The
@@ -194,9 +202,11 @@ func landedTransition(sessionID string, rec controlLedgerLine) (StoppedTransitio
 	if !IsValidStopCause(landed.Cause) {
 		return StoppedTransition{}, fmt.Errorf("landed stop cause %q is not valid", landed.Cause)
 	}
-	if rec.ControlID == "" {
-		return StoppedTransition{}, fmt.Errorf("landed stop is missing control_id")
-	}
+	// An empty control_id is the FENCE-LESS landed shape (Correction C3): the
+	// transition carries its landing execution's identity in the projection
+	// instead of an accepted control, and fabricating a control id for it is
+	// forbidden. A landing of a record never admitted an execution to name —
+	// both are legitimately empty there, so neither is required.
 	return StoppedTransition{
 		SessionID:       sessionID,
 		ParentSessionID: landed.ParentSessionID,

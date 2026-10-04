@@ -127,13 +127,13 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 // prepare half — no note rewrite, no parent inbox append, no wake: a
 // lifecycle write fault after the fence must not leak a parent effect. The
 // D6 direct-parent stopped-child notice is published by the transition half
-// AFTER the landing, composed from the control ledger's landed history — or,
-// for a fence-less landing with no landed history, from the landing's
-// retained stop note (stopped_notice.go::deliverLandedStopNotices); a notice
-// append failure there leaves the delivery pending and retryable and never
-// un-lands the stop. A stop that had already landed (the losing completion
-// T11 pins) publishes nothing; a non-terminal lifecycle notice keeps its
-// direct delivery.
+// AFTER the landing, composed from the control ledger's landed history —
+// which every landing writes, fenced or fence-less (Correction C3) — so an
+// untaken notice re-rings on every delivery pass and at boot until the
+// parent takes it; a notice append failure there leaves the delivery pending
+// and retryable and never un-lands the stop. A stop that had already landed
+// (the losing completion T11 pins) publishes nothing; a non-terminal
+// lifecycle notice keeps its direct delivery.
 func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.LifecycleRecord, outcome steer.Outcome, nextState session.LifecycleState, answer, failureReason string) (bool, error) {
 	// Direct callers carry their selected record, not a later registry lookup.
 	return al.deliverSteeredCompletionForExecution(ctx, rec, outcome, nextState, answer, failureReason, al.executionClaimFor(rec))
@@ -177,11 +177,10 @@ func (al *AgentLoop) deliverSteeredCompletionForExecution(ctx context.Context, r
 			// publishes nothing at all. A notice append failure is returned
 			// visibly — the landing is already durable and stays.
 			if commitRes.landedStop {
-				// The publisher discovers a fenced landing's notice from the
-				// control ledger's landed history and a fence-less landing's
-				// notice from the landing's RETAINED stop note — the record
-				// AS PERSISTED, which rec (the pre-commit load) does not yet
-				// carry when the landing just synthesized that note. Reload,
+				// The publisher discovers every landed transition's notice
+				// from the control ledger's landed history — fenced and
+				// fence-less alike since Correction C3, which has the landing
+				// ledger its transition. Reload the record AS PERSISTED,
 				// exactly as the never-ran landing does
 				// (steer_cancel.go::landSteeredStopReport), so both landings
 				// deliver — and later re-ring on every delivery pass and at

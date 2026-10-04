@@ -145,6 +145,14 @@ const (
 // the W1 notice reader skips, never a parent it invents. At is the stop's
 // ORIGINAL note instant, never a reconstruction.
 //
+// A FENCE-LESS stop (Correction C3) carries ControlID empty and names its
+// landing execution in RunID/BootSeq instead — it fabricates no accepted
+// Stop control, and its ledger line's sequence (allocated by
+// RecordFencelessLandedStopLocked, never supplied by the caller) is the
+// transition's stop_seq. Seq is set by the store for both shapes: the
+// fenced writer copies the accepted control's sequence, the fence-less
+// writer allocates the next monotonic one.
+//
 // not-wire-format: internal storage only.
 type LandedStop struct {
 	Seq             int64
@@ -154,6 +162,8 @@ type LandedStop struct {
 	Cause           StopCause
 	Actor           string
 	At              time.Time
+	RunID           string
+	BootSeq         uint64
 }
 
 // newControlID mints a unique control id: a ULID under the "ctl_" prefix,
@@ -451,4 +461,87 @@ func verifyLandedTuple(line controlLedgerLine, landed LandedStop) error {
 			line.Seq, line.Actor, landed.Actor)
 	}
 	return nil
+}
+
+// RecordFencelessLandedStopLocked appends the landed-stop history line for a
+// FENCE-LESS landing (ADR-20260928 Correction C3): a stop that actually
+// landed with no accepted Stop control behind it — a legacy cancel
+// disposition, a lifetime-budget expiry, a restart stop — so its transition
+// is durable history like any fenced stop's, and its direct-parent notice is
+// discovered from the ledger instead of from the record's (resumable,
+// clearable) stop note. The line fabricates NO control: ControlID must be
+// empty, and the landing execution's identity (RunID/BootSeq, the admission
+// the landing carried out) rides the landed projection instead.
+//
+// The transition's stop_seq is ALLOCATED here — the next monotonic control
+// sequence after the session ledger's high water, under the caller's lock,
+// the same discipline AcceptStopControl applies to fenced controls — so two
+// fence-less stops in one generation never share one identity, and the
+// sequence space stays one per-child progression across both shapes. The
+// allocated seq is returned; the caller stamps it wherever its landing
+// records the stop (the synthesized note carries it as its display copy).
+//
+// The caller MUST already hold the session's lifecycle lock — from inside a
+// LifecycleStore.Mutate callback, or between Lock and Unlock — because the
+// whole point is the landing writing its history IN THE SAME lock hold that
+// persists the stopped state; a landing whose history cannot be recorded is
+// refused by its caller rather than persisted note-only (the note-derived
+// fallback that used to recover such a stop's notice is retired).
+//
+// NOT idempotent by tuple: every call allocates a fresh sequence, so a
+// caller that re-runs a landing after a crash between this append and the
+// record persist writes a second line for the same logical stop. That is
+// the accepted crash-window shape — both lines describe a stop that truly
+// landed in the ledger's order, and a doubled notice is preferred over a
+// lost one.
+func (s *LifecycleStore) RecordFencelessLandedStopLocked(sessionID string, landed LandedStop) (int64, error) {
+	if err := validateLifecycleSessionID(sessionID); err != nil {
+		return 0, err
+	}
+	if landed.ControlID != "" {
+		return 0, fmt.Errorf("session: control ledger: a fence-less landed stop must not claim control %q — it fabricates no accepted control", landed.ControlID)
+	}
+	if landed.Seq != 0 {
+		return 0, fmt.Errorf("session: control ledger: a fence-less landed stop does not supply seq %d — the store allocates it", landed.Seq)
+	}
+	if landed.Generation < 1 {
+		return 0, fmt.Errorf("session: control ledger: landed stop generation must be >= 1, got %d", landed.Generation)
+	}
+	if landed.Actor == "" {
+		return 0, fmt.Errorf("session: control ledger: landed stop requires an actor")
+	}
+	if landed.At.IsZero() {
+		return 0, fmt.Errorf("session: control ledger: landed stop requires the stop's original at instant")
+	}
+	if !IsValidStopCause(landed.Cause) {
+		return 0, fmt.Errorf("session: control ledger: invalid landed stop cause %q", landed.Cause)
+	}
+
+	highWater, err := s.controlSeqHighWaterLocked(sessionID)
+	if err != nil {
+		return 0, err
+	}
+	seq := highWater + 1
+	line := controlLedgerLine{
+		Seq:        seq,
+		Verb:       controlVerbStop,
+		State:      controlStateQueued,
+		AcceptedAt: landed.At,
+		Generation: landed.Generation,
+		Cause:      landed.Cause,
+		Actor:      landed.Actor,
+		LandedStop: &landedStopRecord{
+			ParentSessionID: landed.ParentSessionID,
+			Generation:      landed.Generation,
+			Cause:           landed.Cause,
+			Actor:           landed.Actor,
+			At:              landed.At,
+			RunID:           landed.RunID,
+			BootSeq:         landed.BootSeq,
+		},
+	}
+	if err := appendControlLineLocked(s, sessionID, line); err != nil {
+		return 0, fmt.Errorf("session: control ledger: append fence-less landed stop for %q: %w", sessionID, err)
+	}
+	return seq, nil
 }
