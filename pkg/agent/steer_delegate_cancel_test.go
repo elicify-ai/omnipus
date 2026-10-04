@@ -3,9 +3,10 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // ADR-091 landing order §0 / I-6, AC-8 — what an AGENT's own
-// delegate(action="cancel") has to reach, proved through the REAL wired tool
+// delegate(action="stop_all") has to reach, proved through the REAL wired tool
 // on a real *AgentLoop (newSteerAL wires the session-messaging tool surface),
-// never through a stub cancel hook.
+// never through a stub cancel hook. (ADR-20261004 renamed the delegate action
+// cancel → stop_all with no alias; the cascade itself is unchanged.)
 //
 // Two halves of one defect:
 //
@@ -97,12 +98,12 @@ func delegateToolFor(t *testing.T, al *AgentLoop) *tools.DelegateTool {
 	return dt
 }
 
-// runDelegateCancel calls the real tool's cancel action as the parent would.
+// runDelegateCancel calls the real tool's stop_all action as the parent would.
 func runDelegateCancel(t *testing.T, al *AgentLoop, callerSessionID, targetSessionID string, hard bool) *tools.ToolResult {
 	t.Helper()
 	ctx := tools.WithTranscriptSessionID(context.Background(), callerSessionID)
 	return delegateToolFor(t, al).Execute(ctx, map[string]any{
-		"action": "cancel", "session_id": targetSessionID, "hard": hard,
+		"action": "stop_all", "session_id": targetSessionID, "hard": hard,
 	})
 }
 
@@ -140,18 +141,18 @@ func TestDelegateCancel_QueuedSubagentIsDroppedAndNeverStarts(t *testing.T) {
 
 	res := runDelegateCancel(t, al, parentID, queuedID, false)
 	if res.IsError {
-		t.Fatalf("delegate(cancel) on a queued session = error %q", res.ForLLM)
+		t.Fatalf("delegate(stop_all) on a queued session = error %q", res.ForLLM)
 	}
 	if strings.Contains(res.ForLLM, "no action needed") {
-		t.Errorf("delegate(cancel) answered %q — a success-shaped no-op for a session it left queued and running-to-be", res.ForLLM)
+		t.Errorf("delegate(stop_all) answered %q — a success-shaped no-op for a session it left queued and running-to-be", res.ForLLM)
 	}
 	if !strings.Contains(res.ForLLM, "queued") || !strings.Contains(res.ForLLM, "never run") {
-		t.Errorf("delegate(cancel) answered %q — it must say plainly that a worker which had not started was dropped", res.ForLLM)
+		t.Errorf("delegate(stop_all) answered %q — it must say plainly that a worker which had not started was dropped", res.ForLLM)
 	}
 
 	gate := al.steerAdmission()
 	if got := gate.queueLen(); got != 0 {
-		t.Errorf("start queue length after the cancel = %d, want 0 — the cancelled worker is still waiting to run", got)
+		t.Errorf("start queue length after the stop = %d, want 0 — the stopped worker is still waiting to run", got)
 	}
 	rec, loadErr := al.GetSessionLifecycleStore().Load(queuedID)
 	if loadErr != nil {
@@ -221,10 +222,10 @@ func TestDelegateCancel_RunningSubagentStopsItsGrandchildren(t *testing.T) {
 
 	res := runDelegateCancel(t, al, parentID, childID, true)
 	if res.IsError {
-		t.Fatalf("delegate(cancel, hard) on a running child = error %q", res.ForLLM)
+		t.Fatalf("delegate(stop_all, hard) on a running child = error %q", res.ForLLM)
 	}
 	if !strings.Contains(res.ForLLM, "hard-cancelled immediately") {
-		t.Errorf("delegate(cancel, hard) answered %q — a worker that WAS stopped must be reported as stopped", res.ForLLM)
+		t.Errorf("delegate(stop_all, hard) answered %q — a worker that WAS stopped must be reported as stopped", res.ForLLM)
 	}
 
 	lifecycle := al.GetSessionLifecycleStore()

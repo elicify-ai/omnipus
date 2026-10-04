@@ -238,7 +238,7 @@ func TestLifecycleStore_TerminalImmutability(t *testing.T) {
 		t.Errorf("expected ErrLifecycleTerminalImmutable, got: %v", err)
 	}
 
-	// A NEW generation (follow_up/Play mint) IS allowed to append after a
+	// A NEW generation (a resume mint) IS allowed to append after a
 	// terminal tail.
 	next := *rec
 	next.Generation = rec.Generation + 1

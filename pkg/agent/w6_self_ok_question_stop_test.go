@@ -4,21 +4,26 @@
 
 package agent
 
-// W6 RED — ADR-20260928 D1.7 / F0929-R2-Q2=A, self_ok half.
+// W6, rewritten for ADR-20261004 ("Steering commands: no person question",
+// locked decisions 5-7). The self_ok question park this file used to pin is
+// gone: a helper question to its parent is an ORDINARY message — it parks
+// nothing (no wait, no authority, no NeedsInput, no TTL) and the child keeps
+// working. What survives — and what this file now pins, behaviorally, over
+// REAL stores — is the durability and the answer path:
 //
-// Stopping a child that is waiting on a self_ok question lands it stopped
-// and keeps that question: the original correlation and the original
-// 24-hour TTLDeadline stay durable across a fresh store open. NeedsInput
-// itself is cleared outside needs_input (persistLocked). An authorized
-// parent respond then delivers that exact answer once, through the existing
-// respond path, and resumes only the child — even when the parent is also
-// stopped.
+//   - the question message is durable in the parent's inbox across a Stop of
+//     both helper and parent and a fresh store reopen;
+//   - the parent's answer (delegate respond) to the STOPPED helper revives
+//     the SAME conversation — through the real wired steering sink's
+//     ReviveStoppedSession — writing the answer to the transcript the revived
+//     turn reads, exactly once;
+//   - only the child resumes; the parent stays stopped;
+//   - a second respond to the now-working helper is another ordinary
+//     message into its steering queue: no second revive, no second
+//     transcript copy.
 //
-// The behavioral oracle is the authorized respond after a fresh store
-// open: the exact answer is delivered once and only the child resumes.
-// The original deadline lives in a separate question record (D1.7), not
-// in the stopped lifecycle tail. No reader for that record exists yet;
-// TestW6QuestionDeadline_SeparateRecordRead_CompileBlocked names that gap.
+// The behavioral oracle is the real revive after a fresh store open: the
+// exact answer lands once and only the child resumes.
 
 import (
 	"context"
@@ -39,9 +44,10 @@ const (
 	w6SelfOKAnswer      = "yes, use the staging key"
 )
 
-// w6ResumeRecorder is the turn-start edge only. The answer text is written
-// to the real session store before Dispatch; this records that the child
-// was resumed and does not start a model turn.
+// w6ResumeRecorder is the launch edge only — and a negative control: respond
+// must RESUME a stopped helper through the steering sink, never LAUNCH a new
+// session, so Launch always fails and Dispatch (which nothing in the respond
+// path may reach for a native child) records.
 type w6ResumeRecorder struct {
 	calls []w6ResumeCall
 }
@@ -52,7 +58,7 @@ type w6ResumeCall struct {
 }
 
 func (r *w6ResumeRecorder) Launch(context.Context, steer.LaunchRequest) (steer.LaunchResult, error) {
-	return steer.LaunchResult{}, fmt.Errorf("respond must resume the parked child, not launch another session")
+	return steer.LaunchResult{}, fmt.Errorf("respond must resume the stopped helper through the steering sink, not launch another session")
 }
 
 func (r *w6ResumeRecorder) Dispatch(_ context.Context, sessionID string, generation int) (steer.DispatchResult, error) {
@@ -60,11 +66,11 @@ func (r *w6ResumeRecorder) Dispatch(_ context.Context, sessionID string, generat
 	return steer.DispatchResult{State: steer.DispatchRunning, Generation: generation}, nil
 }
 
-// TestW6SelfOKQuestion_SurvivesStop_RespondResumesChildWhileParentStaysStopped
-// parks a self_ok question through message_parent, stops the parent and the
-// child with SteerCanceller.StopTurns, and requires the question to survive
-// a fresh store open so the parent's respond can resume only the child.
-func TestW6SelfOKQuestion_SurvivesStop_RespondResumesChildWhileParentStaysStopped(t *testing.T) {
+// TestW6Question_OrdinaryMessage_AnswerRevivesStoppedChildWhileParentStaysStopped
+// asks an ordinary question through message_parent, stops the parent and the
+// child with SteerCanceller.StopTurns, and requires the question to survive a
+// fresh store open so the parent's respond can revive only the child.
+func TestW6Question_OrdinaryMessage_AnswerRevivesStoppedChildWhileParentStaysStopped(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
@@ -72,7 +78,7 @@ func TestW6SelfOKQuestion_SurvivesStop_RespondResumesChildWhileParentStaysStoppe
 	root := newTestSteeringSession(t, al, "ws-w6-self-ok")
 	parent := u1LaunchChild(t, al, root, "w6-self-ok-parent")
 	child := u1LaunchChild(t, al, parent.SessionID, "w6-self-ok-child")
-	corr, deadline, generation := w6ParkSelfOKQuestion(t, al, child.SessionID)
+	corr, askedGen := w6AskOrdinaryQuestion(t, al, child.SessionID)
 
 	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: "dan"}
 	w6StopTurns(t, al, parent.SessionID, by)
@@ -81,47 +87,91 @@ func TestW6SelfOKQuestion_SurvivesStop_RespondResumesChildWhileParentStaysStoppe
 	freshLC, freshInbox := w6ReopenMessagingStores(t, al)
 	stoppedChild := w6MustLoad(t, freshLC, child.SessionID)
 	stoppedParent := w6MustLoad(t, freshLC, parent.SessionID)
+	// Durability: the ordinary question is still in the parent's inbox after
+	// the stops and the fresh reopen.
+	msgs, _, _, err := freshInbox.Drain(parent.SessionID, child.SessionID, "", 10)
+	if err != nil {
+		t.Fatalf("Drain parent inbox after reopen: %v", err)
+	}
+	foundQuestion := false
+	for _, msg := range msgs {
+		if kind, kindErr := msg.Discriminator(); kindErr == nil && kind == "question" {
+			if q, qerr := msg.AsSessionMessageQuestion(); qerr == nil && q.CorrelationId == corr {
+				foundQuestion = true
+			}
+		}
+	}
+	if !foundQuestion {
+		t.Fatalf("the child's question %s did not survive the Stop + fresh store reopen in the parent's inbox (%d messages)", corr, len(msgs))
+	}
 
-	delegate, resumes := w6ParentRespondTool(t, al, freshLC, freshInbox)
+	delegate, launches := w6ParentRespondTool(t, al, freshLC, freshInbox)
 	parentCtx := tools.WithTranscriptSessionID(context.Background(), parent.SessionID)
 	first := delegate.Execute(parentCtx, w6RespondArgs(child.SessionID, corr, w6SelfOKAnswer))
 	want := w6SelfOKDelivery(corr, w6SelfOKAnswer)
-	delivered := w6CountTranscript(t, al.GetSessionStore(), child.SessionID, want)
-	afterChild := w6MustLoad(t, freshLC, child.SessionID)
 	afterParent := w6MustLoad(t, freshLC, parent.SessionID)
-	resumedOnce := w6ChildResumedOnce(first, resumes, child.SessionID, generation, delivered, afterChild, afterParent, stoppedParent.Generation)
 
 	if stoppedChild.State != session.LifecycleStopped || stoppedParent.State != session.LifecycleStopped ||
-		stoppedChild.Generation != generation || !resumedOnce {
-		t.Fatalf("authorized self_ok respond did not deliver %q once and resume only the child after a fresh store open (ADR D1.7): "+
-			"child_state=%s parent_state=%s child_generation=%d want_generation=%d "+
-			"needs_input=%v respond_error=%v respond=%q deliveries=%d dispatches=%v "+
-			"after_child=%s after_parent=%s parked_deadline=%s",
-			w6SelfOKAnswer, stoppedChild.State, stoppedParent.State, stoppedChild.Generation, generation,
-			stoppedChild.NeedsInput, first.IsError, first.ForLLM, delivered, resumes.calls,
-			afterChild.State, afterParent.State, deadline.Format(time.RFC3339Nano))
+		stoppedChild.Generation != askedGen {
+		t.Fatalf("precondition: the stops must land both helpers stopped at the asked generation: child=(%s, %d) parent=%s want_gen=%d",
+			stoppedChild.State, stoppedChild.Generation, stoppedParent.State, askedGen)
+	}
+	if first.IsError {
+		t.Fatalf("the parent's answer to a stopped helper must revive it, got error: %s", first.ForLLM)
+	}
+	// The real revive wrote the answer where the revived turn reads it — the
+	// transcript — exactly once (ReviveStoppedSession appends BEFORE the
+	// generation moves).
+	if delivered := w6CountTranscript(t, al.GetSessionStore(), child.SessionID, want); delivered != 1 {
+		t.Fatalf("the answer must reach the child's transcript exactly once, got %d copies", delivered)
+	}
+	if len(launches.calls) != 0 {
+		t.Fatalf("respond must revive through the steering sink, never launch/dispatch a session: %+v", launches.calls)
+	}
+	if afterParent.State != session.LifecycleStopped || afterParent.Generation != stoppedParent.Generation {
+		t.Fatalf("only the child resumes: parent = (%s, %d), want still stopped at %d",
+			afterParent.State, afterParent.Generation, stoppedParent.Generation)
+	}
+	// The child left stopped at the NEXT generation (Revive mints it). Poll:
+	// the revived turn runs on the harness provider and may already be terminal.
+	waitFor(t, 10*time.Second, func() bool {
+		rec := w6MustLoad(t, freshLC, child.SessionID)
+		return rec.State != session.LifecycleStopped
+	})
+	resumed := w6MustLoad(t, freshLC, child.SessionID)
+	if resumed.Generation != askedGen+1 {
+		t.Fatalf("revived child generation = %d, want %d — the resume continues the SAME conversation as a new generation",
+			resumed.Generation, askedGen+1)
 	}
 
+	// A second respond now addresses a WORKING helper: another ordinary
+	// message into its steering queue — non-error, no second transcript copy,
+	// no second revive.
 	second := delegate.Execute(parentCtx, w6RespondArgs(child.SessionID, corr, w6SelfOKAnswer))
-	if !second.IsError || w6CountTranscript(t, al.GetSessionStore(), child.SessionID, want) != 1 || len(resumes.calls) != 1 {
-		t.Fatalf("self_ok answer must be delivered once: second respond error=%v text=%q deliveries=%d dispatches=%d",
-			second.IsError, second.ForLLM, w6CountTranscript(t, al.GetSessionStore(), child.SessionID, want), len(resumes.calls))
+	if second.IsError {
+		t.Fatalf("a respond to a working helper is an ordinary message and must succeed, got: %s", second.ForLLM)
+	}
+	if got := w6CountTranscript(t, al.GetSessionStore(), child.SessionID, want); got != 1 {
+		t.Fatalf("the second (ordinary) respond must not write a second transcript copy: copies=%d", got)
+	}
+	if len(launches.calls) != 0 {
+		t.Fatalf("no respond may ever launch a session: %+v", launches.calls)
 	}
 }
 
-func w6ParkSelfOKQuestion(t *testing.T, al *AgentLoop, childID string) (string, time.Time, int) {
+// w6AskOrdinaryQuestion sends a helper question to its parent through the
+// production message_parent tool and pins the ordinary-message rule at the
+// record level: no park, no NeedsInput, no generation, correlation id echoed.
+func w6AskOrdinaryQuestion(t *testing.T, al *AgentLoop, childID string) (string, int) {
 	t.Helper()
 	tool := tools.NewMessageParentTool(al.getUpwardDeliverer(), al.GetSessionLifecycleStore())
 	tool.SetSessionMessagingEnabled(func() bool { return true })
-	before := time.Now()
 	ctx := tools.WithDelegateSessionID(tools.WithTranscriptSessionID(context.Background(), childID), childID)
 	result := tool.Execute(ctx, map[string]any{
-		"kind": "question", "text": "should I use the staging key?", "wait": true,
-		"authority": "self_ok", "correlation_id": w6SelfOKCorrelation,
+		"kind": "question", "text": "should I use the staging key?", "correlation_id": w6SelfOKCorrelation,
 	})
-	after := time.Now()
 	if result.IsError {
-		t.Fatalf("message_parent self_ok question: %s", result.ForLLM)
+		t.Fatalf("message_parent question: %s", result.ForLLM)
 	}
 	var resp generated.MessageParentResponse
 	if err := json.Unmarshal([]byte(result.ForLLM), &resp); err != nil {
@@ -131,19 +181,10 @@ func w6ParkSelfOKQuestion(t *testing.T, al *AgentLoop, childID string) (string, 
 		t.Fatalf("message_parent correlation = %v, want %q", resp.CorrelationId, w6SelfOKCorrelation)
 	}
 	rec := w6MustLoad(t, al.GetSessionLifecycleStore(), childID)
-	if rec.State != session.LifecycleNeedsInput || rec.NeedsInput == nil {
-		t.Fatalf("park did not record needs_input: state=%s needs_input=%v", rec.State, rec.NeedsInput)
+	if rec.State == session.LifecycleNeedsInput || rec.NeedsInput != nil {
+		t.Fatalf("an ordinary question must not park the helper: state=%s needs_input=%v", rec.State, rec.NeedsInput)
 	}
-	if rec.NeedsInput.CorrelationID != w6SelfOKCorrelation {
-		t.Fatalf("parked correlation = %q, want %q", rec.NeedsInput.CorrelationID, w6SelfOKCorrelation)
-	}
-	earliest := before.Add(session.DefaultNeedsInputTTL)
-	latest := after.Add(session.DefaultNeedsInputTTL)
-	if rec.NeedsInput.TTLDeadline.Before(earliest) || rec.NeedsInput.TTLDeadline.After(latest) {
-		t.Fatalf("parked TTLDeadline = %s, want the original 24h deadline in [%s, %s]",
-			rec.NeedsInput.TTLDeadline.Format(time.RFC3339Nano), earliest.Format(time.RFC3339Nano), latest.Format(time.RFC3339Nano))
-	}
-	return rec.NeedsInput.CorrelationID, rec.NeedsInput.TTLDeadline, rec.Generation
+	return *resp.CorrelationId, rec.Generation
 }
 
 func w6StopTurns(t *testing.T, al *AgentLoop, sessionID string, by steer.Principal) {
@@ -173,6 +214,12 @@ func w6MustLoad(t *testing.T, lc *session.LifecycleStore, sessionID string) *ses
 	return rec
 }
 
+// w6ParentRespondTool wires the parent's delegate tool over the FRESH stores
+// (the durability surface under test) with the REAL steering sink — the
+// production delegateSteeringSink adapter around the AgentLoop — so the
+// answer to a stopped helper takes the production ReviveStoppedSession path.
+// The recorder launcher is the negative control: nothing in the respond path
+// may launch a session.
 func w6ParentRespondTool(t *testing.T, al *AgentLoop, lc *session.LifecycleStore, inbox *session.MessageInboxStore) (*tools.DelegateTool, *w6ResumeRecorder) {
 	t.Helper()
 	tool := tools.NewDelegateTool("", 0, 0)
@@ -180,6 +227,7 @@ func w6ParentRespondTool(t *testing.T, al *AgentLoop, lc *session.LifecycleStore
 	tool.SetMessageInbox(inbox)
 	tool.SetSessionStore(al.GetSessionStore())
 	tool.SetSessionMessagingEnabled(func() bool { return true })
+	tool.SetSteeringSink(delegateSteeringSink{AgentLoop: al})
 	resumes := &w6ResumeRecorder{}
 	tool.SetSessionLauncher(resumes)
 	return tool, resumes
@@ -191,9 +239,10 @@ func w6RespondArgs(sessionID, corr, answer string) map[string]any {
 	}
 }
 
-// w6SelfOKDelivery is the existing respond path's instruction. D1.7 sends a
-// self_ok answer down that path, so the child transcript must receive this
-// exact text once.
+// w6SelfOKDelivery is the production respond path's instruction framing
+// (pkg/tools/delegate_respond.go::respondAnswerInstruction): the answer text
+// carries the correlation id it answers, so the revived child can tie it to
+// its own open message.
 func w6SelfOKDelivery(corr, answer string) string {
 	return fmt.Sprintf("Answer to your question (correlation_id=%s): %s", corr, answer)
 }
@@ -211,21 +260,4 @@ func w6CountTranscript(t *testing.T, store *session.UnifiedStore, sessionID, wan
 		}
 	}
 	return count
-}
-
-func w6ChildResumedOnce(result *tools.ToolResult, resumes *w6ResumeRecorder, childID string, generation, delivered int, child, parent *session.LifecycleRecord, parentGeneration int) bool {
-	if result == nil || result.IsError || delivered != 1 || len(resumes.calls) != 1 {
-		return false
-	}
-	call := resumes.calls[0]
-	// The recorder only proves Dispatch was asked. It does not run admission,
-	// so a correct explicit resume may be queued (D2) rather than running.
-	// Stopped is not a resume. The parent must stay stopped.
-	if call.sessionID != childID || call.generation != generation {
-		return false
-	}
-	if child.State == session.LifecycleStopped || child.Generation != generation {
-		return false
-	}
-	return parent.State == session.LifecycleStopped && parent.Generation == parentGeneration
 }

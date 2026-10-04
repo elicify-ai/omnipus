@@ -1,99 +1,80 @@
-// delegate_park_test.go: respond/resume behaviour of a parked delegation.
+// delegate_park_test.go: respond to a STOPPED helper. The person-question
+// park this file used to exercise (a NeedsInput record answered through a
+// parked-record resume path) was removed by ADR-20261004 ("Steering commands:
+// no person question"): a helper question parks nothing, and an answer is an
+// ordinary steering message. What remains to pin here is the stopped row of
+// Correction C1's message/state table: the parent's answer RESUMES the
+// stopped helper on the same conversation through the steering sink's
+// ReviveStoppedSession — and a refused revive is reported as an error, never
+// dressed up as a delivered answer.
+//
+// (The old "the answer must land before anything dispatches" integrity rule
+// moved with the resume mechanics into pkg/agent's ReviveStoppedSession —
+// append-before-generation, refuse on append failure — and is pinned there by
+// w6_question_crash_recovery_test.go.)
 
 package tools
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
-	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-// seedParkedChildAwaitingAnswer persists a native child parked on
-// correlationID and seeds the self_ok question respond() re-verifies in the
-// parent's inbox, so the call reaches resumeNative rather than being turned
-// away by an earlier gate.
-func seedParkedChildAwaitingAnswer(t *testing.T, lc *session.LifecycleStore, inbox *session.MessageInboxStore, sessionID, correlationID string) {
+// failingReviverSink implements DelegateSteeringSink and steerReviver, with
+// the revive failing — the "the resume could not land" half at this boundary.
+type failingReviverSink struct {
+	gotSessionID   string
+	gotInstruction string
+	err            error
+}
+
+func (f *failingReviverSink) EnqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error) {
+	return "corr_test", nil
+}
+
+func (f *failingReviverSink) ReviveStoppedSession(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error) {
+	f.gotSessionID = sessionID
+	f.gotInstruction = instruction
+	return false, f.err
+}
+
+// seedStoppedChild persists a native child durably stopped at its current
+// generation — the exact shape SteerCanceller leaves behind (stopped state,
+// StopNote, no live fence). No NeedsInput record is seeded: nothing writes
+// one any more (ADR-20261004 removed the person-question park).
+func seedStoppedChild(t *testing.T, lc *session.LifecycleStore, sessionID string) {
 	t.Helper()
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: sessionID, Generation: 1, State: session.LifecycleNeedsInput,
+		SessionID: sessionID, Generation: 1, State: session.LifecycleStopped,
 		OwnerScopeKind: session.OwnerScopeHuman,
 		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID:    "ws-1", AgentID: "worker",
-		NeedsInput: &session.NeedsInput{CorrelationID: correlationID, TTLDeadline: time.Now().Add(time.Hour)},
+		StopNote: &session.StopNote{
+			At: time.Now().UTC(), By: "human:dan", Seq: 1, Cause: session.StopCauseStop,
+		},
 	}); err != nil {
-		t.Fatalf("seed parked child: %v", err)
-	}
-	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, sessionID, "q-"+correlationID,
-		correlationID, generated.SessionMessageQuestionAuthoritySelfOk)); err != nil {
-		t.Fatalf("seed self_ok question: %v", err)
+		t.Fatalf("seed stopped child: %v", err)
 	}
 }
 
-// TestDelegateTool_Respond_RefusesResumeWhenTheAnswerCannotLand is ADR-091
-// fix lane RX-OUTCOME's exit proof for delegate_park.go::resumeNative.
-//
-// resumeNative called appendFollowUpInstruction and DISCARDED its error, then
-// dispatched regardless — the identical defect the sibling lane already fixed
-// in delegate_followup.go::executeFollowUp, with the identical consequence:
-// agent/steer_reconstruct.go::reconstructSteeredTurn rebuilds the resumed turn
-// from the last `user` transcript entry, so a dropped answer makes the child
-// re-run the instruction it was working on BEFORE it asked its question and
-// report THAT answer upward as if it were the reply.
-func TestDelegateTool_Respond_RefusesResumeWhenTheAnswerCannotLand(t *testing.T) {
-	const sessionID = "child-respond-answer-lost"
-	tool, lc, inbox, _ := newADR053TestTool(t)
-	launcher := &followUpLauncher{dispatch: steer.DispatchResult{State: steer.DispatchRunning, Generation: 1}}
-	tool.SetSessionLauncher(launcher)
-	tool.SetSessionStore(&followUpHistoryStore{appendErr: fmt.Errorf("transcript append failed: disk full")})
-	seedParkedChildAwaitingAnswer(t, lc, inbox, sessionID, "corr-lost")
-
-	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
-	result := tool.Execute(ctx, map[string]any{
-		"action": "respond", "session_id": sessionID, "correlation_id": "corr-lost", "text": "yes, ship it",
-	})
-
-	if launcher.sessionID != "" {
-		t.Fatalf("Dispatch was called for %q even though the answer never landed — the child will re-run its PREVIOUS instruction and report that answer upward as the reply to this response",
-			launcher.sessionID)
-	}
-	if !result.IsError {
-		t.Fatalf("respond reported success though the answer never landed: %s", result.ForLLM)
-	}
-	rec, err := lc.Load(sessionID)
-	if err != nil {
-		t.Fatalf("Load after refusal: %v", err)
-	}
-	// Landed failed, not left running: the Mutate inside resumeNative has
-	// already cleared NeedsInput, so the correlation id respond() re-checks
-	// is gone and this call can never be retried. A `running` record with no
-	// live turn would strand the child AND block its parent's own completion
-	// for ever (agent/steer_completion.go::hasRunningOrQueuedDescendant).
-	if rec.State != session.LifecycleFailed {
-		t.Errorf("state after a refused respond = %q, want %q — a record left running with no live turn strands the child and blocks its parent for ever",
-			rec.State, session.LifecycleFailed)
-	}
-	if rec.FailedReason == "" {
-		t.Error("a refused respond must leave a non-empty FailedReason so a later delegate(status)/peek poll can discover why")
-	}
-}
-
-// TestDelegateTool_Respond_DispatchesWhenTheAnswerLands is the positive half:
-// the refusal above must not have been bought by breaking the happy path.
-// The answer has to be written where the rebuilt turn actually reads it —
-// the TRANSCRIPT — and only then may Dispatch run.
-func TestDelegateTool_Respond_DispatchesWhenTheAnswerLands(t *testing.T) {
-	const sessionID = "child-respond-answer-lands"
-	tool, lc, inbox, _ := newADR053TestTool(t)
-	launcher := &followUpLauncher{dispatch: steer.DispatchResult{State: steer.DispatchRunning, Generation: 1}}
-	tool.SetSessionLauncher(launcher)
-	store := &followUpHistoryStore{}
-	tool.SetSessionStore(store)
-	seedParkedChildAwaitingAnswer(t, lc, inbox, sessionID, "corr-lands")
+// TestDelegateTool_Respond_StoppedChild_ResumesSameConversationViaReviver is
+// the stopped row of the message/state table: the parent's answer to a
+// stopped helper revives the SAME session through the steering sink's
+// ReviveStoppedSession, with the answer framed by the correlation id it
+// replies to.
+func TestDelegateTool_Respond_StoppedChild_ResumesSameConversationViaReviver(t *testing.T) {
+	const sessionID = "child-respond-answer-resumes"
+	tool, lc, _, _ := newADR053TestTool(t)
+	reviver := &fakeReviverSink{}
+	tool.SetSteeringSink(reviver)
+	seedStoppedChild(t, lc, sessionID)
 
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	result := tool.Execute(ctx, map[string]any{
@@ -101,29 +82,58 @@ func TestDelegateTool_Respond_DispatchesWhenTheAnswerLands(t *testing.T) {
 	})
 
 	if result.IsError {
-		t.Fatalf("respond failed on the happy path: %s", result.ForLLM)
+		t.Fatalf("respond to a stopped helper failed: %s", result.ForLLM)
 	}
-	if launcher.sessionID != sessionID {
-		t.Fatalf("Dispatch session id = %q, want %q — the parked turn must actually be resumed", launcher.sessionID, sessionID)
+	revived, gotSessionID, gotInstruction, queued := reviver.snapshot()
+	if !revived {
+		t.Fatalf("respond to a stopped helper must revive it through ReviveStoppedSession (%d messages went via the plain steering queue instead)", queued)
 	}
-	entries, err := store.ReadTranscript(sessionID)
-	if err != nil {
-		t.Fatalf("ReadTranscript: %v", err)
+	if gotSessionID != sessionID {
+		t.Errorf("ReviveStoppedSession session = %q, want %q — the answer resumes the SAME conversation", gotSessionID, sessionID)
 	}
-	var landed bool
-	for _, entry := range entries {
-		if entry.Role == "user" && entry.Content == "Answer to your question (correlation_id=corr-lands): yes, ship it" {
-			landed = true
-		}
+	// respondAnswerInstruction (delegate_respond.go) frames the answer with the
+	// correlation id, so the revived child can tie it to its own open message.
+	if gotInstruction != "Answer to your question (correlation_id=corr-lands): yes, ship it" {
+		t.Errorf("ReviveStoppedSession instruction = %q, want the correlation-framed answer", gotInstruction)
 	}
-	if !landed {
-		t.Fatalf("the answer never reached the transcript the rebuilt turn reads; entries = %#v", entries)
+	// The wire ack (DelegateRespondResponse) is the caller-visible result.
+	if !strings.Contains(result.ForLLM, `"acknowledged":true`) {
+		t.Errorf("respond ack = %q, want the acknowledged:true DelegateRespondResponse payload", result.ForLLM)
+	}
+}
+
+// TestDelegateTool_Respond_RefusesVisiblyWhenTheReviveFails is the refusal
+// half: when the revive cannot land, respond reports the error — the caller
+// must never read a failed resume as a delivered answer.
+func TestDelegateTool_Respond_RefusesVisiblyWhenTheReviveFails(t *testing.T) {
+	const sessionID = "child-respond-answer-refused"
+	tool, lc, _, _ := newADR053TestTool(t)
+	sink := &failingReviverSink{err: errors.New("simulated revive failure: transcript append refused")}
+	tool.SetSteeringSink(sink)
+	seedStoppedChild(t, lc, sessionID)
+
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+	result := tool.Execute(ctx, map[string]any{
+		"action": "respond", "session_id": sessionID, "correlation_id": "corr-lost", "text": "yes, ship it",
+	})
+
+	if !result.IsError {
+		t.Fatalf("respond reported success though the revive failed: %s", result.ForLLM)
+	}
+	if sink.gotSessionID != sessionID {
+		t.Errorf("the refused respond must still have been addressed to the named session, got %q", sink.gotSessionID)
+	}
+	if !strings.Contains(result.ForLLM, "resume session") {
+		t.Errorf("the refusal must name the failed resume step, got: %s", result.ForLLM)
 	}
 	rec, err := lc.Load(sessionID)
 	if err != nil {
-		t.Fatalf("Load after respond: %v", err)
+		t.Fatalf("Load after refusal: %v", err)
 	}
-	if rec.State != session.LifecycleRunning {
-		t.Errorf("state after a successful respond = %q, want %q", rec.State, session.LifecycleRunning)
+	// A refused revive must leave the record exactly as it was — stopped at
+	// the same generation, so a retry addresses the same conversation.
+	if rec.State != session.LifecycleStopped || rec.Generation != 1 {
+		t.Errorf("state/generation after a refused respond = (%s, %d), want (stopped, 1) — the record must be untouched and retryable",
+			rec.State, rec.Generation)
 	}
 }

@@ -3,7 +3,8 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // Tests for ADR-053 §5.1's corrected delegate action set
-// (inbox/inbox_ack/steer/respond/cancel/follow_up/peek) plus the illegal
+// (inbox/inbox_ack/steer/respond/stop_all/resume/redirect/peek — ADR-20261004
+// renamed follow_up→resume and cancel→stop_all with no alias) plus the illegal
 // launch-flag-combo and curated-context-snapshot-cap rejections at `run`.
 // pkg/tools/delegate_test.go's existing TestDelegate* suite already proves
 // run/status regression (unchanged); this file covers only the NEW surface.
@@ -290,23 +291,21 @@ func TestDelegateTool_Steer_RejectsExternalCLI(t *testing.T) {
 	}
 }
 
-func TestDelegateTool_Respond_ParksThenResumes(t *testing.T) {
-	tool, lc, inbox, _ := newADR053TestTool(t)
+// TestDelegateTool_Respond_WorkingChild_QueuesWithoutStopping is the
+// ADR-20261004 locked-decision-5 rule at this boundary: the parent's answer to
+// a WORKING helper is an ordinary steering message. It lands in the child's
+// steering queue (applied at the child's next tool boundary), never stops the
+// child's live turn, never parks it, and never dispatches a second session.
+func TestDelegateTool_Respond_WorkingChild_QueuesWithoutStopping(t *testing.T) {
+	tool, lc, _, steer := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-z", Generation: 1, State: session.LifecycleNeedsInput,
+		SessionID: "child-z", Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
-		NeedsInput: &session.NeedsInput{CorrelationID: "corr-1", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
-	}
-	// Seed the question the respond will answer with a self_ok authority so
-	// the fail-closed authority check (MAJOR-2) can positively verify it.
-	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-z", "q-1", "corr-1",
-		generated.SessionMessageQuestionAuthoritySelfOk)); err != nil {
-		t.Fatalf("seed question message failed: %v", err)
 	}
 
 	result := tool.Execute(ctx, map[string]any{
@@ -315,34 +314,50 @@ func TestDelegateTool_Respond_ParksThenResumes(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("respond failed: %s", result.ForLLM)
 	}
+	msg, scope := steer.last()
+	if msg.Content != "yes, go ahead" {
+		t.Errorf("steering sink content = %q, want the raw answer text (an ordinary message, not a parked-record replay)", msg.Content)
+	}
+	if scope != "child-z" {
+		t.Errorf("steering sink scope = %q, want the child's own scope", scope)
+	}
 	rec, err := lc.Load("child-z")
 	if err != nil {
 		t.Fatalf("Load after respond failed: %v", err)
 	}
-	if rec.State != session.LifecycleRunning {
-		t.Errorf("state after launcher dispatch = %q, want %q", rec.State, session.LifecycleRunning)
+	if rec.State != session.LifecycleRunning || rec.Generation != 1 {
+		t.Errorf("state/generation after respond = (%s, %d), want the helper untouched (running, 1) — a mid-turn answer must not stop or restart the turn",
+			rec.State, rec.Generation)
 	}
 	if rec.NeedsInput != nil {
-		t.Error("NeedsInput should be cleared after respond")
+		t.Error("a question no longer parks the helper: NeedsInput must stay nil (ADR-20261004 removed the person-question pause)")
 	}
 }
 
-func TestDelegateTool_Respond_WrongCorrelationRejected(t *testing.T) {
-	tool, lc, _, _ := newADR053TestTool(t)
+// TestDelegateTool_Respond_UnmatchedCorrelation_IsStillOrdinary pins the other
+// half of the ordinary-message rule: respond's correlation_id is address
+// metadata (it frames the answer text), never an authority check. An answer
+// whose correlation id matches nothing must still be delivered — there is no
+// parked question to verify it against any more.
+func TestDelegateTool_Respond_UnmatchedCorrelation_IsStillOrdinary(t *testing.T) {
+	tool, lc, _, steer := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-w", Generation: 1, State: session.LifecycleNeedsInput,
+		SessionID: "child-w", Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
-		NeedsInput: &session.NeedsInput{CorrelationID: "corr-real", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
 	result := tool.Execute(ctx, map[string]any{
 		"action": "respond", "session_id": "child-w", "correlation_id": "corr-WRONG", "text": "x",
 	})
-	if !result.IsError {
-		t.Fatal("expected respond with a mismatched correlation_id to be rejected")
+	if result.IsError {
+		t.Fatalf("respond with an unmatched correlation_id must still deliver (no authority gate on an ordinary message), got: %s", result.ForLLM)
+	}
+	msg, _ := steer.last()
+	if msg.Content != "x" {
+		t.Errorf("steering sink content = %q, want the answer text", msg.Content)
 	}
 }
 
@@ -350,16 +365,14 @@ func TestDelegateTool_Respond_WrongCorrelationRejected(t *testing.T) {
 // producer-side parent-of gate covers the respond action: a session that is
 // NOT the recorded parent of the target child cannot respond to it. This is
 // the steer/response counterpart of TestDelegateTool_Steer_RejectsCrossOwnerAccess
-// — verifyCallerOwnsSession (delegate.go) runs BEFORE the needs_input/
-// correlation/authority checks, so a non-parent is rejected up front regardless
-// of whether it guessed a valid correlation_id.
+// — verifyCallerPrincipal (delegate.go) runs before any delivery, so ownership
+// survives the ADR-20261004 removal of the question-authority check.
 func TestDelegateTool_Respond_RejectsCrossOwnerAccess(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-co", Generation: 1, State: session.LifecycleNeedsInput,
+		SessionID: "child-co", Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-A", RootSessionID: "parent-A"},
 		WorkspaceID: "ws-1", AgentID: "worker",
-		NeedsInput: &session.NeedsInput{CorrelationID: "corr-co", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
 	}
@@ -379,7 +392,7 @@ func TestDelegateTool_Respond_RejectsCrossOwnerAccess(t *testing.T) {
 	}
 }
 
-func TestDelegateTool_Cancel_SoftThenHardBackstop(t *testing.T) {
+func TestDelegateTool_StopAll_SoftThenHardBackstop(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
@@ -427,9 +440,9 @@ func TestDelegateTool_Cancel_SoftThenHardBackstop(t *testing.T) {
 	)
 	tool.SetCancelGrace(20 * time.Millisecond)
 
-	result := tool.Execute(ctx, map[string]any{"action": "cancel", "session_id": "child-cancel"})
+	result := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": "child-cancel"})
 	if result.IsError {
-		t.Fatalf("cancel failed: %s", result.ForLLM)
+		t.Fatalf("stop_all failed: %s", result.ForLLM)
 	}
 	mu.Lock()
 	sc := softCalled
@@ -448,7 +461,7 @@ func TestDelegateTool_Cancel_SoftThenHardBackstop(t *testing.T) {
 	// at t.TempDir(). Returning on the flag let the test body finish with that
 	// write still in flight, and Go's TempDir cleanup then raced it:
 	//
-	//	TempDir RemoveAll cleanup: unlinkat /tmp/TestDelegateTool_Cancel_SoftThenHardBackstop.../001: directory not empty
+	//	TempDir RemoveAll cleanup: unlinkat /tmp/TestDelegateTool_StopAll_SoftThenHardBackstop.../001: directory not empty
 	//
 	// Observed on CI run 36137133540, job "Tests", release/v0.1.1 @ d81bcb1ec.
 	// Waiting on the persisted state is race-free because it IS the goroutine's
@@ -475,7 +488,7 @@ func TestDelegateTool_Cancel_SoftThenHardBackstop(t *testing.T) {
 	t.Fatal("expected the hard-cancel backstop to fire after the grace window elapsed")
 }
 
-func TestDelegateTool_Cancel_Hard_SkipsGrace(t *testing.T) {
+func TestDelegateTool_StopAll_Hard_SkipsGrace(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
@@ -515,12 +528,12 @@ func TestDelegateTool_Cancel_Hard_SkipsGrace(t *testing.T) {
 		},
 	)
 
-	result := tool.Execute(ctx, map[string]any{"action": "cancel", "session_id": "child-hard", "hard": true})
+	result := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": "child-hard", "hard": true})
 	if result.IsError {
-		t.Fatalf("cancel(hard) failed: %s", result.ForLLM)
+		t.Fatalf("stop_all(hard) failed: %s", result.ForLLM)
 	}
 	if !hardCalled {
-		t.Fatal("expected the hard-cancel hook to be called immediately for hard=true")
+		t.Fatal("expected the hard-stop hook to be called immediately for hard=true")
 	}
 	rec, err := lc.Load("child-hard")
 	if err != nil {
@@ -617,8 +630,13 @@ func TestDelegateTool_Peek_NoLifecycleSideEffect(t *testing.T) {
 	}
 }
 
-func TestDelegateTool_FollowUp_RequiresTerminalSession(t *testing.T) {
-	tool, lc, _, _ := newADR053TestTool(t)
+// TestDelegateTool_Resume_WorkingSession_IsNonErrorNothingStarted pins locked
+// decision 4's working row: a resume names only stopped and done/failed
+// recipients. A working helper has nothing to resume — the answer is a
+// NON-ERROR pointing at steer (an error here drives orchestrating agents into
+// retry loops, the RC-3 amplification shape).
+func TestDelegateTool_Resume_WorkingSession_IsNonErrorNothingStarted(t *testing.T) {
+	tool, lc, _, steer := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-notdone", Generation: 1, State: session.LifecycleRunning,
@@ -627,44 +645,85 @@ func TestDelegateTool_FollowUp_RequiresTerminalSession(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
-	result := tool.Execute(ctx, map[string]any{"action": "follow_up", "session_id": "child-notdone"})
-	if !result.IsError {
-		t.Fatal("expected follow_up on a non-terminal session to be rejected")
+	result := tool.Execute(ctx, map[string]any{"action": "resume", "session_id": "child-notdone"})
+	if result.IsError {
+		t.Fatalf("resume on a working helper must be a non-error no-op, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "already running") {
+		t.Errorf("resume on a working helper must say it is already running, got: %s", result.ForLLM)
+	}
+	if msg, _ := steer.last(); msg.Content != "" {
+		t.Errorf("resume must not enqueue anything into the steering sink, got %q", msg.Content)
 	}
 }
 
-func TestDelegateTool_FollowUp_NativeReusesSessionID(t *testing.T) {
-	tool, lc, _, _ := newADR053TestTool(t)
-	wireFollowUpTestLauncher(tool)
-	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
-	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-done", Generation: 1, State: session.LifecycleCompleted,
-		OwnerScopeKind: session.OwnerScopeHuman,
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
-		WorkspaceID:    "ws-1", AgentID: "worker",
-		Is3P: false,
-	}); err != nil {
-		t.Fatalf("seed failed: %v", err)
-	}
+// TestDelegateTool_Resume_NativeStoppedAndFinished_RevivesViaSink pins the
+// native resume contract at this boundary (locked decision 4): BOTH recipient
+// shapes go through the steering sink's ReviveStoppedSession — a stopped
+// helper continues on the same conversation and generation, a done/failed one
+// starts its next round — and the optional text rides along as the newest
+// input. The generation mint itself is the agent-side reviver's job; the
+// tool's launcher must never fire for a native resume.
+func TestDelegateTool_Resume_NativeStoppedAndFinished_RevivesViaSink(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		state    session.LifecycleState
+		wantText string
+	}{
+		{
+			name:     "stopped helper continues on the same conversation",
+			state:    session.LifecycleStopped,
+			wantText: "resumed on the same conversation and generation",
+		},
+		{
+			name:     "finished helper starts its next round",
+			state:    session.LifecycleCompleted,
+			wantText: "a next round has been started",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tool, lc, _, _ := newADR053TestTool(t)
+			frs := &fakeReviverSink{}
+			tool.SetSteeringSink(frs)
+			ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+			seed := &session.LifecycleRecord{
+				SessionID: "child-resume-" + string(tc.state), Generation: 1, State: tc.state,
+				OwnerScopeKind: session.OwnerScopeHuman,
+				SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
+				WorkspaceID:    "ws-1", AgentID: "worker",
+				Is3P: false,
+			}
+			if tc.state == session.LifecycleStopped {
+				// persistLocked requires a StopNote on every stopped landing
+				// (D2/CRIT-001) — the exact shape SteerCanceller leaves behind.
+				seed.StopNote = &session.StopNote{
+					At: time.Now().UTC(), By: "human:dan", Seq: 1, Cause: session.StopCauseStop,
+				}
+			}
+			if err := lc.Persist(seed); err != nil {
+				t.Fatalf("seed failed: %v", err)
+			}
 
-	result := tool.Execute(ctx, map[string]any{
-		"action": "follow_up", "session_id": "child-done", "task": "one more thing",
-	})
-	if result.IsError {
-		t.Fatalf("follow_up failed: %s", result.ForLLM)
-	}
-
-	// The new generation must be persisted under the SAME session_id
-	// (native warm resume — D5/L-3).
-	rec, err := lc.Load("child-done")
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-	if rec.Generation != 2 {
-		t.Errorf("Generation = %d, want 2", rec.Generation)
-	}
-	if rec.ResumedFrom != "child-done" {
-		t.Errorf("ResumedFrom = %q, want %q", rec.ResumedFrom, "child-done")
+			result := tool.Execute(ctx, map[string]any{
+				"action": "resume", "session_id": seed.SessionID, "text": "carry on from here",
+			})
+			if result.IsError {
+				t.Fatalf("resume failed: %s", result.ForLLM)
+			}
+			revived, sessionID, instruction, delivered := frs.snapshot()
+			if !revived {
+				t.Fatalf("native resume must revive through the steering sink's ReviveStoppedSession (delivered=%d via the plain queue instead)", delivered)
+			}
+			if sessionID != seed.SessionID {
+				t.Errorf("ReviveStoppedSession session = %q, want %q (the SAME conversation)", sessionID, seed.SessionID)
+			}
+			if instruction != "carry on from here" {
+				t.Errorf("ReviveStoppedSession instruction = %q, want the resume text carried through verbatim", instruction)
+			}
+			if !strings.Contains(result.ForLLM, tc.wantText) {
+				t.Errorf("resume result = %q, want it to say %q", result.ForLLM, tc.wantText)
+			}
+		})
 	}
 }
 
@@ -684,36 +743,16 @@ func progressMsgForDelegateTest(t *testing.T, sessionID, messageID string) gener
 	return sm
 }
 
-// questionMsgForDelegateTest builds a SessionMessage of kind=question with the
-// given authority tag — used to seed an inbox for respond-action fail-closed
-// authority tests (MAJOR-2).
-func questionMsgForDelegateTest(
-	t *testing.T, sessionID, messageID, correlationID string,
-	authority generated.SessionMessageQuestionAuthority,
-) generated.SessionMessage {
-	t.Helper()
-	var sm generated.SessionMessage
-	if err := sm.FromSessionMessageQuestion(generated.SessionMessageQuestion{
-		MessageId:      messageID,
-		SessionId:      sessionID,
-		CorrelationId:  correlationID,
-		CreatedAt:      time.Now(),
-		Depth:          1,
-		Direction:      generated.SessionMessageQuestionDirectionChildToParent,
-		Kind:           generated.SessionMessageQuestionKindQuestion,
-		SenderIdentity: "child",
-		Text:           "can I proceed?",
-		Authority:      &authority,
-		Wait:           true,
-	}); err != nil {
-		t.Fatalf("FromSessionMessageQuestion failed: %v", err)
-	}
-	return sm
-}
+// questionMsgForDelegateTest was deleted with the person-question pause
+// (ADR-20261004): the generated SessionMessageQuestion no longer carries
+// wait/authority fields, and no respond-path test needs a seeded question any
+// more — an answer is an ordinary steering message, verified by no inbox
+// state.
 
 // failingDrainInbox implements DelegateInboxStore; its Drain always returns an
-// error, used to prove respond's authority check is fail-closed on a Drain
-// error (MAJOR-2) rather than silently skipping.
+// error. It now proves the ADR-20261004 ordinary-message rule from the negative
+// side: respond never consults the parent inbox at all (the question-authority
+// check it used to feed is deleted), so a broken inbox cannot block an answer.
 type failingDrainInbox struct{}
 
 func (failingDrainInbox) Drain(string, string, string, int) ([]generated.SessionMessage, string, bool, error) {
@@ -734,11 +773,11 @@ func (failingDrainInbox) Peek(string, string) (*session.PeekSnapshot, error) {
 	return &session.PeekSnapshot{}, nil
 }
 
-// MAJOR-1: cancel MUST be denied (not executed) when the lifecycle Load
+// MAJOR-1: stop_all MUST be denied (not executed) when the lifecycle Load
 // errors — the caller-ownership check can no longer be skipped by an induced
-// read error (cross-tenant DoS). Previously cancel fell through to
+// read error (cross-tenant DoS). Previously the stop fell through to
 // cancelHard/cancelSoft on ANY Load error.
-func TestDelegateTool_Cancel_DeniedOnLifecycleLoadError(t *testing.T) {
+func TestDelegateTool_StopAll_DeniedOnLifecycleLoadError(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 
@@ -762,18 +801,18 @@ func TestDelegateTool_Cancel_DeniedOnLifecycleLoadError(t *testing.T) {
 		func(string, steer.Principal, string) ([]string, error) { cancelCalled = true; return nil, nil },
 	)
 
-	result := tool.Execute(ctx, map[string]any{"action": "cancel", "session_id": "child-corrupt", "hard": true})
+	result := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": "child-corrupt", "hard": true})
 	if !result.IsError {
-		t.Fatal("expected cancel to be DENIED on a lifecycle Load error, got success (fail-open regression)")
+		t.Fatal("expected stop_all to be DENIED on a lifecycle Load error, got success (fail-open regression)")
 	}
 	if cancelCalled {
-		t.Fatal("cancel hook was called despite the Load error — the cancel must NOT proceed")
+		t.Fatal("stop hook was called despite the Load error — the stop must NOT proceed")
 	}
 }
 
-// MAJOR-1: cancel MUST be denied when the lifecycle store is not configured
+// MAJOR-1: stop_all MUST be denied when the lifecycle store is not configured
 // at all (can't verify ownership without it).
-func TestDelegateTool_Cancel_DeniedWhenLifecycleUnconfigured(t *testing.T) {
+func TestDelegateTool_StopAll_DeniedWhenLifecycleUnconfigured(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	tool.SetDelegationDenyCheckerBackground(func(ctx context.Context, targetAgentID string) *DelegationDenial { return nil })
 	tool.SetCancelHooks(
@@ -786,111 +825,79 @@ func TestDelegateTool_Cancel_DeniedWhenLifecycleUnconfigured(t *testing.T) {
 			return nil, nil
 		},
 	)
-	result := tool.Execute(context.Background(), map[string]any{"action": "cancel", "session_id": "any", "hard": true})
+	result := tool.Execute(context.Background(), map[string]any{"action": "stop_all", "session_id": "any", "hard": true})
 	if !result.IsError {
-		t.Fatal("expected cancel to be DENIED when no lifecycle store is configured, got success (fail-open)")
+		t.Fatal("expected stop_all to be DENIED when no lifecycle store is configured, got success (fail-open)")
 	}
 }
 
-// MAJOR-2: respond MUST be denied when the inbox Drain errors — the
-// owner_required authority check can no longer be skipped by a Drain error.
-func TestDelegateTool_Respond_DeniedOnInboxDrainError(t *testing.T) {
-	tool, lc, _, _ := newADR053TestTool(t)
+// TestDelegateTool_Respond_DoesNotConsultTheInbox pins the ADR-20261004
+// ordinary-message rule from the negative side: an answer is delivered through
+// the steering queue with NO inbox read, so a broken inbox cannot block or
+// fail it. (The old MAJOR-2 fail-closed Drain check fed the deleted
+// question-authority gate; with no gate there is nothing left to fail closed.)
+func TestDelegateTool_Respond_DoesNotConsultTheInbox(t *testing.T) {
+	tool, lc, _, steer := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-drain-err", Generation: 1, State: session.LifecycleNeedsInput,
+		SessionID: "child-drain-err", Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
-		NeedsInput: &session.NeedsInput{CorrelationID: "corr-1", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
-	// Swap in an inbox whose Drain always errors — simulates a corrupt
-	// tail / I/O failure on the durable inbox. The fail-open bug would have
-	// let the respond proceed (skipping the authority check); fail-closed
-	// MUST deny it.
+	// Swap in an inbox whose Drain always errors — if respond still consulted
+	// the inbox (any residual authority/ack check), this answer could not land.
 	tool.SetMessageInbox(failingDrainInbox{})
 
 	result := tool.Execute(ctx, map[string]any{
 		"action": "respond", "session_id": "child-drain-err", "correlation_id": "corr-1", "text": "x",
 	})
-	if !result.IsError {
-		t.Fatal("expected respond to be DENIED on an inbox Drain error, got success (fail-open regression)")
+	if result.IsError {
+		t.Fatalf("respond must deliver as an ordinary message without consulting the inbox, got: %s", result.ForLLM)
 	}
-	// The record must still be parked at needs_input (not resumed).
-	rec, err := lc.Load("child-drain-err")
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-	if rec.State != session.LifecycleNeedsInput {
-		t.Errorf("state after denied respond = %q, want still %q (must not resume)", rec.State, session.LifecycleNeedsInput)
+	msg, _ := steer.last()
+	if msg.Content != "x" {
+		t.Errorf("steering sink content = %q, want the answer text", msg.Content)
 	}
 }
 
-// MAJOR-2: an owner_required question MUST NOT be answerable by respond even
-// if the parent inbox_ack'd it first. Previously Drain("",0) excluded acked
-// messages, so the owner_required check silently passed on an acked question.
-// Fail-closed now denies it (the question can't be positively verified safe).
-func TestDelegateTool_Respond_OwnerRequiredDeniedEvenWhenAcked(t *testing.T) {
+// TestDelegateTool_Respond_HasNoQuestionAuthorityGate pins the owner-side
+// consequence of locked decision 6: there is no owner-only question and no
+// authority state to verify an answer against. A respond succeeds with a
+// completely EMPTY parent inbox — nothing parked, nothing pending, nothing to
+// ack — where the old flow refused an owner_required answer outright.
+func TestDelegateTool_Respond_HasNoQuestionAuthorityGate(t *testing.T) {
 	tool, lc, inbox, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-owner", Generation: 1, State: session.LifecycleNeedsInput,
+		SessionID: "child-owner", Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
-		NeedsInput: &session.NeedsInput{CorrelationID: "corr-owner", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
-	// Seed an owner_required question, then ACK it — the exact sequence that
-	// used to bypass the authority check (Drain excludes acked messages).
-	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-owner", "q-owner",
-		"corr-owner", generated.SessionMessageQuestionAuthorityOwnerRequired)); err != nil {
-		t.Fatalf("seed owner_required question failed: %v", err)
+	// The parent inbox is deliberately empty: no question, no ack state.
+	msgs, _, _, err := inbox.Drain("parent-1", "child-owner", "", 10)
+	if err != nil {
+		t.Fatalf("Drain: %v", err)
 	}
-	if err := inbox.Ack("parent-1", []string{"q-owner"}); err != nil {
-		t.Fatalf("ack failed: %v", err)
+	if len(msgs) != 0 {
+		t.Fatalf("precondition: expected an empty parent inbox, got %d messages", len(msgs))
 	}
 
 	result := tool.Execute(ctx, map[string]any{
 		"action": "respond", "session_id": "child-owner", "correlation_id": "corr-owner", "text": "x",
 	})
-	if !result.IsError {
-		t.Fatal("expected respond on an acked owner_required question to be DENIED, got success (fail-open regression)")
+	if result.IsError {
+		t.Fatalf("respond must not be gated on any question state, got: %s", result.ForLLM)
 	}
 	rec, err := lc.Load("child-owner")
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
-	if rec.State != session.LifecycleNeedsInput {
-		t.Errorf("state after denied respond = %q, want still %q (owner_required must not resume)", rec.State, session.LifecycleNeedsInput)
-	}
-}
-
-// MAJOR-2 regression: a self_ok question that IS present in the drain (not
-// acked) MUST still be answerable — the fail-closed change must not break the
-// legitimate happy path.
-func TestDelegateTool_Respond_SelfOkQuestionAllowedWhenNotAcked(t *testing.T) {
-	tool, lc, inbox, _ := newADR053TestTool(t)
-	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
-	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-selfok", Generation: 1, State: session.LifecycleNeedsInput,
-		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
-		WorkspaceID: "ws-1", AgentID: "worker",
-		NeedsInput: &session.NeedsInput{CorrelationID: "corr-selfok", TTLDeadline: time.Now().Add(time.Hour)},
-	}); err != nil {
-		t.Fatalf("seed failed: %v", err)
-	}
-	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-selfok", "q-selfok",
-		"corr-selfok", generated.SessionMessageQuestionAuthoritySelfOk)); err != nil {
-		t.Fatalf("seed self_ok question failed: %v", err)
-	}
-
-	result := tool.Execute(ctx, map[string]any{
-		"action": "respond", "session_id": "child-selfok", "correlation_id": "corr-selfok", "text": "go",
-	})
-	if result.IsError {
-		t.Fatalf("respond on a present, unacked self_ok question should succeed, got: %s", result.ForLLM)
+	if rec.State != session.LifecycleRunning || rec.Generation != 1 {
+		t.Errorf("state/generation after respond = (%s, %d), want the helper untouched (running, 1)", rec.State, rec.Generation)
 	}
 }
 
@@ -898,23 +905,19 @@ func TestDelegateTool_Respond_SelfOkQuestionAllowedWhenNotAcked(t *testing.T) {
 // for a 3P child, respond spawns a NEW corrective session (spawnCorrective-
 // FollowUp) and must NOT flip the ORIGINAL record to `running` without a live
 // turn. The original is instead non-terminal `stopped`, superseded by the
-// corrective re-dispatch (ADR D2 line 207; D8 line 418 retains 3P successors).
+// corrective re-dispatch (ADR D2 line 207; D8 line 418 retains 3P successors;
+// ADR-20261004 keeps D5's corrective shape for a 3P answer).
 func TestDelegateTool_Respond_3P_OriginalNotLeftRunning(t *testing.T) {
-	tool, lc, inbox, _ := newADR053TestTool(t)
+	tool, lc, _, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-3p-resp", Generation: 1, State: session.LifecycleNeedsInput,
+		SessionID: "child-3p-resp", Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker-3p",
-		Is3P:       true,
-		NeedsInput: &session.NeedsInput{CorrelationID: "corr-3p", TTLDeadline: time.Now().Add(time.Hour)},
+		Is3P: true,
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
-	}
-	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-3p-resp", "q-3p", "corr-3p",
-		generated.SessionMessageQuestionAuthoritySelfOk)); err != nil {
-		t.Fatalf("seed question failed: %v", err)
 	}
 
 	result := tool.Execute(ctx, map[string]any{

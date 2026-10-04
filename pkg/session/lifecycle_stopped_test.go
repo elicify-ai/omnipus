@@ -38,7 +38,7 @@ func TestLifecycleStopped_ReplacesSupersededStates(t *testing.T) {
 }
 
 // This proves the store's real continuation primitive, not just enum validity.
-// Reachable human-message/follow_up continuation is a separate integration check.
+// Reachable human-message/resume continuation is a separate integration check.
 func TestLifecycleStopped_CanResumeSameGeneration(t *testing.T) {
 	store := NewLifecycleStore(t.TempDir())
 	stopped := &LifecycleRecord{

@@ -25,6 +25,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -329,28 +330,31 @@ func TestConformance_g6_PerChildCeiling_NoisyChildCannotStarveSibling(t *testing
 }
 
 // TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback proves the
-// g7 "full round trip" sequence diagram: a mid-run blocking
-// question(wait=true) parks the child with a correlation_id, the parent's
-// respond routes WARM to the same generation (no cold restart), and a clean
-// handback carries result_so_far/artifacts[]/open_questions[] into the parent
-// inbox — the rung-0 evidence surface. The scoped tests prove each EDGE in
-// isolation (question→inbox, steer→queue, handback→inbox); this scenario
-// proves the BIDIRECTIONAL SEQUENCE as one observed path, which is what the g7
-// diagram draws and what no single existing test asserts.
+// g7 "full round trip" sequence diagram: a mid-run question is an ORDINARY
+// message (ADR-20261004 removed the person-question pause — no wait, no
+// needs_input park; the child keeps working, same generation) that durably
+// reaches the parent inbox with a correlation_id, the parent's respond routes
+// WARM into the same child's steering queue (no cold restart, turn not
+// stopped), and a clean handback carries result_so_far/artifacts[]/
+// open_questions[] into the parent inbox — the rung-0 evidence surface. The
+// scoped tests prove each EDGE in isolation (question→inbox, steer→queue,
+// handback→inbox); this scenario proves the BIDIRECTIONAL SEQUENCE as one
+// observed path, which is what the g7 diagram draws and what no single
+// existing test asserts.
 //
 // Drawn path asserted node-by-node:
-//  1. child question(wait=true) → child parks in needs_input with a
-//     correlation_id (same generation — no restart yet), question durable in
-//     the parent inbox.
+//  1. child question → an ORDINARY message (ADR-20261004: no wait, no park)
+//     with a correlation_id (same generation — no restart), durable in the
+//     parent inbox.
 //  2. parent respond(correlation_id) → consumer routes it WARM into the SAME
-//     child's steering queue (generation unchanged — no cold restart; a
-//     restart would mint a new generation via follow_up/Play).
+//     child's steering queue (generation unchanged — no cold restart, no
+//     stop; a restart would mint a new generation via resume).
 //  3. child handback(final) → result_so_far / artifacts[] / open_questions[]
 //     reach the parent inbox (the rung-0 evidence gate surface the Judge
 //     reads).
 //
-// e2e residue: the needs_input→running state flip on the child's resumed turn
-// (the actual tool-boundary resume) is a real-LLM turn-engine concern; here we
+// e2e residue: the resumed-turn consumption of a queued steering message is a
+// real-LLM turn-engine concern; here we
 // prove the CONTROL PLANE routes the round-trip warm with correlation routing
 // and that the handback's evidence fields are durably delivered.
 func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.T) {
@@ -409,28 +413,38 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 	// SessionID, mirroring pkg/tools/message_parent_test.go's withChildContext.
 	childCtx := tools.WithDelegateSessionID(tools.WithTranscriptSessionID(context.Background(), childSession), childSession)
 
-	// (1) Child → parent: a blocking question parks the child in needs_input
-	// with a correlation_id, same generation, and durably reaches the inbox.
+	// (1) Child → parent: a question is an ORDINARY message — no wait, no
+	// park. The child keeps working in needs-NO-input at the SAME generation,
+	// the question lands durably in the parent inbox with a correlation_id,
+	// and the tool result echoes that id so the parent's respond can reference
+	// it.
 	qRes := mp.Execute(childCtx, map[string]any{
-		"kind": "question", "text": "which spec should I implement against?", "wait": true,
+		"kind": "question", "text": "which spec should I implement against?",
 	})
 	if qRes.IsError {
-		t.Fatalf("(1) question(wait=true) failed: %s", qRes.ForLLM)
+		t.Fatalf("(1) question failed: %s", qRes.ForLLM)
 	}
-	parked, err := ls.Load(childSession)
-	if err != nil {
-		t.Fatalf("(1) load child: %v", err)
+	var qResp generated.MessageParentResponse
+	if unmarshalErr := json.Unmarshal([]byte(qRes.ForLLM), &qResp); unmarshalErr != nil {
+		t.Fatalf("(1) decode message_parent response: %v (body=%s)", unmarshalErr, qRes.ForLLM)
 	}
-	if parked.State != session.LifecycleNeedsInput {
-		t.Fatalf("(1) child state = %q, want needs_input (INV-4/G-6)", parked.State)
+	if qResp.CorrelationId == nil || *qResp.CorrelationId == "" {
+		t.Fatal("(1) expected a non-empty correlation_id on the question response")
 	}
-	if parked.NeedsInput == nil || parked.NeedsInput.CorrelationID == "" {
-		t.Fatal("(1) expected a non-empty correlation_id on the parked needs_input")
+	correlationID := *qResp.CorrelationId
+	asked, loadErr := ls.Load(childSession)
+	if loadErr != nil {
+		t.Fatalf("(1) load child: %v", loadErr)
 	}
-	if parked.Generation != childGen {
-		t.Fatalf("(1) a question park must NOT mint a new generation: got %d, want %d (warm)", parked.Generation, childGen)
+	if asked.State != session.LifecycleRunning {
+		t.Fatalf("(1) child state = %q, want %q — an ordinary question must not park the helper", asked.State, session.LifecycleRunning)
 	}
-	correlationID := parked.NeedsInput.CorrelationID
+	if asked.NeedsInput != nil {
+		t.Fatalf("(1) NeedsInput = %+v, want nil — the person-question pause is removed", asked.NeedsInput)
+	}
+	if asked.Generation != childGen {
+		t.Fatalf("(1) an ordinary question must NOT mint a new generation: got %d, want %d (warm)", asked.Generation, childGen)
+	}
 	waitFor(t, 2*time.Second, func() bool {
 		msgs, _, _, _ := inbox.Drain(parentSession, childSession, "", 10)
 		return len(msgs) == 1
@@ -438,7 +452,8 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 
 	// (2) Parent → child: respond(correlation_id) routes WARM into the SAME
 	// child's steering queue via the bus consumer (deliverParentToChild). The
-	// generation is unchanged — a respond is a warm injection, NOT a restart.
+	// generation is unchanged and the child is not stopped — a respond to a
+	// working helper is a warm injection into its current turn, NOT a restart.
 	var resp generated.SessionMessage
 	if buildErr := resp.FromSessionMessageRespond(generated.SessionMessageRespond{
 		MessageId: "resp-1", SessionId: childSession, CreatedAt: time.Now(),

@@ -16,8 +16,8 @@ import (
 // passed a nil UnifiedStore to session.TransitionSession (the single dual-store
 // mediator), so the mediator's step-2 mirror (lifecycleToUnifiedStatus) never
 // ran for delegate children: the durable lifecycle record said cancelled while
-// sessions/<id>/meta.json stayed status=active — the record the UI and
-// follow_up/Play trust. A later follow_up then hit the "terminal record is
+// sessions/<id>/meta.json stayed status=active — the record the UI and the
+// resume flow trust. A later resume then hit the "terminal record is
 // immutable" warn (symptom 1) against a session the user could still see as
 // Active in GET /api/v1/sessions.
 //

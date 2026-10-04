@@ -462,7 +462,7 @@ func TestT27_StaleStopCallback_DelegateToolQueueRemovalSparesReplacement(t *test
 	toolDone := make(chan *tools.ToolResult, 1)
 	go func() {
 		ctx := tools.WithTranscriptSessionID(context.Background(), parentID)
-		toolDone <- dt.Execute(ctx, map[string]any{"action": "cancel", "session_id": childID, "hard": true})
+		toolDone <- dt.Execute(ctx, map[string]any{"action": "stop_all", "session_id": childID, "hard": true})
 	}()
 	select {
 	case <-gate.entered:

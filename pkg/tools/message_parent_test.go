@@ -8,7 +8,7 @@
 // the real spawnSubTurn context construction). This file's withChildContext
 // helper intentionally stamps the SAME value into both keys, so the ~12 tests
 // here contribute zero independent coverage of that separation — they exist to
-// exercise the inbox/park/wake/egress mechanics, not the session-id distinction.
+// exercise the inbox/wake/egress mechanics, not the session-id distinction.
 
 package tools
 
@@ -18,7 +18,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -146,35 +145,34 @@ func TestMessageParentTool_Progress_AppendsToInbox(t *testing.T) {
 	}
 }
 
-// TestMessageParentTool_Question_Wait_ParksNeedsInput proves the core
-// mechanism: message_parent(question, wait=true) parks the CALLING child's
-// own durable session in needs_input (INV-4/G-6).
-func TestMessageParentTool_Question_Wait_ParksNeedsInput(t *testing.T) {
+// TestMessageParentTool_Question_OrdinaryMessage_DoesNotPark pins ADR-20261004
+// locked decision 6: a helper question to its parent is an ORDINARY message.
+// It lands in the parent's durable inbox and wakes the parent, and it parks
+// NOTHING — the calling child's state, generation, and record are untouched,
+// and there is no wait, no NeedsInput, no TTL.
+func TestMessageParentTool_Question_OrdinaryMessage_DoesNotPark(t *testing.T) {
 	tool, lc, inbox, waker := newMessageParentTestSetup(t)
 	ctx := withChildContext("child-1")
 
 	result := tool.Execute(ctx, map[string]any{
-		"kind": "question", "text": "should I proceed?", "wait": true,
+		"kind": "question", "text": "should I proceed?",
 	})
 	if result.IsError {
-		t.Fatalf("question(wait=true) failed: %s", result.ForLLM)
+		t.Fatalf("question failed: %s", result.ForLLM)
 	}
 
 	rec, err := lc.Load("child-1")
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
-	if rec.State != session.LifecycleNeedsInput {
-		t.Fatalf("state = %q, want %q", rec.State, session.LifecycleNeedsInput)
+	if rec.State != session.LifecycleRunning {
+		t.Errorf("state = %q, want %q — an ordinary question must not park the helper", rec.State, session.LifecycleRunning)
 	}
-	if rec.NeedsInput == nil {
-		t.Fatal("expected NeedsInput to be set")
+	if rec.NeedsInput != nil {
+		t.Errorf("NeedsInput = %+v, want nil — the person-question pause is removed; nothing may write it", rec.NeedsInput)
 	}
-	if rec.NeedsInput.CorrelationID == "" {
-		t.Error("expected a non-empty correlation_id")
-	}
-	if rec.NeedsInput.TTLDeadline.Before(time.Now().Add(23 * time.Hour)) {
-		t.Errorf("expected the default 24h TTL, deadline too soon: %v", rec.NeedsInput.TTLDeadline)
+	if rec.Generation != 1 {
+		t.Errorf("generation = %d, want 1 — an ordinary question must not mint a generation", rec.Generation)
 	}
 
 	// The question message itself must ALSO be in the parent's inbox.
@@ -185,35 +183,85 @@ func TestMessageParentTool_Question_Wait_ParksNeedsInput(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 inbox message, got %d", len(msgs))
 	}
+	kind, _ := msgs[0].Discriminator()
+	if kind != "question" {
+		t.Errorf("kind = %q, want question", kind)
+	}
 
-	// question IS wakeable.
+	// question IS wakeable — the child asks, the parent hears about it now.
 	if len(waker.calls) != 1 || waker.calls[0].kind != "question" {
 		t.Errorf("expected exactly 1 wake call for kind=question, got: %+v", waker.calls)
 	}
 }
 
-// TestMessageParentTool_Question_OmittedAuthority_DefaultsOwnerRequired
-// proves FR-131 (M3): an omitted authority tag defaults to owner_required,
-// fail-closed.
-func TestMessageParentTool_Question_OmittedAuthority_DefaultsOwnerRequired(t *testing.T) {
-	tool, _, inbox, _ := newMessageParentTestSetup(t)
+// TestMessageParentTool_Question_LegacyWaitAuthorityArgs_AreDead pins the
+// no-alias rule on the question surface: the retired wait/authority arguments
+// must not resurrect the pause. Supplying them changes nothing — ordinary
+// message, no park.
+func TestMessageParentTool_Question_LegacyWaitAuthorityArgs_AreDead(t *testing.T) {
+	tool, lc, inbox, _ := newMessageParentTestSetup(t)
 	ctx := withChildContext("child-1")
 
-	result := tool.Execute(ctx, map[string]any{"kind": "question", "text": "x?", "wait": false})
+	result := tool.Execute(ctx, map[string]any{
+		"kind": "question", "text": "may I use the staging key?",
+		"wait": true, "authority": "owner_required",
+	})
 	if result.IsError {
-		t.Fatalf("question failed: %s", result.ForLLM)
+		t.Fatalf("question with legacy args failed: %s", result.ForLLM)
 	}
 
+	rec, err := lc.Load("child-1")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if rec.State != session.LifecycleRunning || rec.NeedsInput != nil {
+		t.Errorf("state/NeedsInput = (%s, %+v), want (running, nil) — wait/authority must not park anything",
+			rec.State, rec.NeedsInput)
+	}
 	msgs, _, _, err := inbox.Drain("parent-1", "child-1", "", 10)
 	if err != nil || len(msgs) != 1 {
 		t.Fatalf("expected 1 inbox message, got %d (err=%v)", len(msgs), err)
 	}
-	q, err := msgs[0].AsSessionMessageQuestion()
-	if err != nil {
-		t.Fatalf("AsSessionMessageQuestion failed: %v", err)
+	if _, qerr := msgs[0].AsSessionMessageQuestion(); qerr != nil {
+		t.Fatalf("AsSessionMessageQuestion failed: %v", qerr)
 	}
-	if q.Authority == nil || string(*q.Authority) != "owner_required" {
-		t.Errorf("expected authority to default to owner_required, got: %v", q.Authority)
+	// The generated SessionMessageQuestion struct carries no Authority/Wait
+	// field at all (compile-time), so an authority value cannot have been
+	// stored — decoding as a plain question IS the assertion.
+}
+
+// TestMessageParentTool_Question_CorrelationID_EchoedOrMinted keeps the
+// correlation contract the deleted park used to carry: a caller-supplied
+// correlation id is echoed back so a later respond/inbox_ack can reference
+// the question precisely; an omitted one is server-minted and still returned.
+func TestMessageParentTool_Question_CorrelationID_EchoedOrMinted(t *testing.T) {
+	tool, _, _, _ := newMessageParentTestSetup(t)
+	ctx := withChildContext("child-1")
+
+	supplied := tool.Execute(ctx, map[string]any{
+		"kind": "question", "text": "which spec?", "correlation_id": "corr-supplied",
+	})
+	if supplied.IsError {
+		t.Fatalf("question with correlation_id failed: %s", supplied.ForLLM)
+	}
+	var withID generated.MessageParentResponse
+	if err := json.Unmarshal([]byte(supplied.ForLLM), &withID); err != nil {
+		t.Fatalf("decode response: %v (body=%s)", err, supplied.ForLLM)
+	}
+	if withID.CorrelationId == nil || *withID.CorrelationId != "corr-supplied" {
+		t.Errorf("correlation = %v, want the caller-supplied id echoed", withID.CorrelationId)
+	}
+
+	minted := tool.Execute(ctx, map[string]any{"kind": "question", "text": "and now?"})
+	if minted.IsError {
+		t.Fatalf("question without correlation_id failed: %s", minted.ForLLM)
+	}
+	var withoutID generated.MessageParentResponse
+	if err := json.Unmarshal([]byte(minted.ForLLM), &withoutID); err != nil {
+		t.Fatalf("decode response: %v (body=%s)", err, minted.ForLLM)
+	}
+	if withoutID.CorrelationId == nil || *withoutID.CorrelationId == "" {
+		t.Errorf("correlation = %v, want a server-assigned non-empty reference", withoutID.CorrelationId)
 	}
 }
 
