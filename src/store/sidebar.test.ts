@@ -9,15 +9,16 @@ beforeEach(() => {
   })
 })
 
-// A wide window starts docked. A saved hidden choice still starts hidden,
-// which the persist tests below cover by writing isPinned first.
+// A fresh visit is not pinned: closed until shown or pinned. A visitor who
+// already saved a pin keeps it — persist rehydrates isPinned over the
+// default, which the persist tests below cover by writing isPinned first.
 describe('sidebar store — default state', () => {
-  it('starts docked, with the overlay closed, when nothing is saved', async () => {
+  it('starts closed and unpinned when nothing is saved', async () => {
     vi.resetModules()
     localStorage.removeItem('omnipus-sidebar')
     const { useSidebarStore: fresh } = await import('./sidebar')
     expect(fresh.getState().isOpen).toBe(false)
-    expect(fresh.getState().isPinned).toBe(true)
+    expect(fresh.getState().isPinned).toBe(false)
   })
 })
 
