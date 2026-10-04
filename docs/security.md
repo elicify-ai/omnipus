@@ -77,7 +77,7 @@ There is no mode badge in the chat header. The composer has one labelled **Auto*
 
 | What you see | Meaning |
 |---|---|
-| **Auto** pressed and greyed out, with the God Mode tooltip | God Mode is on. The button cannot be changed. Every tool runs without asking, except a tool that an agent itself sets to Ask, which still asks. |
+| **Auto** pressed and greyed out, with the God Mode tooltip | God Mode is on. The button cannot be changed. Every tool runs without asking, except a tool that an agent itself sets to Ask, which still asks, and a tool that an agent has denied, which stays denied. |
 | **Auto** not pressed | Auto-approve is off for this chat. Every tool set to Ask prompts. |
 | **Auto** pressed | Auto-approve is on. Safe calls run; the rest ask. |
 | **Auto** pressed, tooltip adds the no-sandbox caution | Auto-approve is on, but there is no active kernel sandbox. Every other tool's safe calls still run as usual; the shell only auto-runs a read-only command or one an operator's rule explicitly allows — everything else asks first (see above). The caution is in that same tooltip, not a second label. |

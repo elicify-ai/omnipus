@@ -365,3 +365,64 @@ describe('Sidebar — differentiation: pinned vs unpinned renders different stru
     expect(hasPinnedDialog).not.toBe(hasOverlayDialog)
   })
 })
+
+// Cmd/Ctrl+B must change what is on screen. Flipping only isOpen does not:
+// a docked wide window stays docked, and a narrow overlay whose dock flag is
+// still set stays up after close(). Hide clears both flags. Show docks on a
+// wide window and opens a drawer on a narrow one.
+describe('Sidebar — Cmd/Ctrl+B shows and hides', () => {
+  it('hides a fresh docked sidebar on a wide window', () => {
+    mockMatchMedia(true)
+    act(() => { useSidebarStore.setState({ isOpen: false, isPinned: true }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    fireEvent.keyDown(window, { key: 'b', metaKey: true })
+
+    expect(useSidebarStore.getState().isPinned).toBe(false)
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+  })
+
+  it('docks a hidden sidebar on a wide window', () => {
+    mockMatchMedia(true)
+    act(() => { useSidebarStore.setState({ isOpen: false, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true })
+
+    expect(useSidebarStore.getState().isPinned).toBe(true)
+    expect(useSidebarStore.getState().isOpen).toBe(true)
+  })
+
+  it('Escape on a narrow overlay closes the drawer and keeps a saved dock', () => {
+    mockMatchMedia(false)
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+    expect(useSidebarStore.getState().isPinned).toBe(true)
+  })
+
+  it('hides a narrow overlay that is showing, including a saved dock', () => {
+    mockMatchMedia(false)
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    fireEvent.keyDown(window, { key: 'b', metaKey: true })
+
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+    expect(useSidebarStore.getState().isPinned).toBe(false)
+  })
+
+  it('opens a hidden narrow window as a drawer and does not dock it', () => {
+    mockMatchMedia(false)
+    act(() => { useSidebarStore.setState({ isOpen: false, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true })
+
+    expect(useSidebarStore.getState().isOpen).toBe(true)
+    expect(useSidebarStore.getState().isPinned).toBe(false)
+  })
+})

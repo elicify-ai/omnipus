@@ -26,7 +26,11 @@ export const useSidebarStore = create<SidebarStore>()(
       isPinned: true,
 
       open: () => set({ isOpen: true }),
-      close: () => set((s) => s.isPinned ? {} : { isOpen: false }),
+      // Drop the overlay only. A saved dock stays saved: on a narrow window
+      // the sidebar is an overlay even when isPinned is true, and Escape, the
+      // backdrop, and choosing a destination all call this. Hide is the only
+      // action that forgets the dock.
+      close: () => set({ isOpen: false }),
       toggle: () => set((s) => ({ isOpen: !s.isOpen })),
 
       pin: () => set({ isPinned: true, isOpen: true }),

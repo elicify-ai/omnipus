@@ -49,6 +49,19 @@ describe('sidebar store — toggle', () => {
     })
     expect(useSidebarStore.getState().isOpen).toBe(false)
   })
+
+  // Review finding: on a narrow window the sidebar is only an overlay, but
+  // Escape, the backdrop, and choosing a destination all call close() while a
+  // saved dock (isPinned) may still be true. close() must drop the overlay
+  // and must not forget that dock. Hide is the only action that clears it.
+  it('close() drops the overlay and keeps a saved dock', () => {
+    act(() => {
+      useSidebarStore.setState({ isPinned: true, isOpen: true })
+      useSidebarStore.getState().close()
+    })
+    expect(useSidebarStore.getState().isPinned).toBe(true)
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+  })
 })
 
 // test_sidebar_store_pin

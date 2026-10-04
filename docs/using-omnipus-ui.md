@@ -33,7 +33,7 @@ Open this page in your first week, or later when you are hunting a control you h
 
 ## The sidebar
 
-The sidebar is a drawer that slides over the screen. Press **Cmd+B** (Mac) or **Ctrl+B** (Windows and Linux), or select the list icon at the top left, to open and close it. On a screen at least 1024 pixels wide, the pin icon at the top of the sidebar keeps it open permanently.
+On a window at least 1024 pixels wide, the sidebar starts docked beside the page, unless you previously hid it. **Hide sidebar**, inside the sidebar, hides it and forgets that dock. **Show sidebar** appears in the header only while the sidebar is hidden. On a wide window, Show docks the sidebar again. On a narrower window, Show opens it as a drawer over the page. On that narrower window, **Escape**, a click outside the drawer, or choosing a destination closes the drawer and does not forget a dock you saved on a wider window. **Cmd+B** (Mac) or **Ctrl+B** (Windows and Linux) hides the sidebar when it is visible, and shows it when it is hidden.
 
 What the sidebar holds:
 
@@ -117,7 +117,7 @@ App-wide settings live behind **Settings** in the account menu, on tabs from pro
 
 ## Limits and things to watch
 
-- The sidebar overlays the screen by default. Pinning needs a window at least 1024 pixels wide; below that, the pin icon does not appear.
+- At 1024 pixels and wider the sidebar starts docked, unless it was previously hidden. **Hide sidebar** inside the sidebar hides it and forgets the dock. **Show sidebar** appears in the header only while it is hidden: it docks on a wide window and opens a drawer on a narrower one. On a narrower window, Escape, a click outside, or choosing a destination closes the drawer and does not forget a saved dock. **Cmd+B** or **Ctrl+B** hides a visible sidebar and shows a hidden one.
 - Sending mid-turn steers the running turn; it does not queue a message for afterwards. To let the agent finish first, wait for the reply before sending.
 - Stop is a request, not a switch: the agent halts where it is, and work already finished stays finished.
 - The activity pill disappears when everything has ended successfully. A failed background item keeps it visible, so failures do not vanish silently.

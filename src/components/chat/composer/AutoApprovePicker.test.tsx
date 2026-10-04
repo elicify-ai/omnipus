@@ -337,9 +337,23 @@ describe('AutoApprovePicker — God Mode is a stronger floor than this chat’s 
       sandboxStatus({ auto_approve_effective: false, kernel_sandbox_active: true, god_mode_active: true }),
     )
     renderPicker()
+    const toggle = await screen.findByTestId('composer-auto-approve-toggle')
     await waitFor(() => {
-      expect(screen.getByTestId('composer-auto-approve-toggle')).toBeDisabled()
+      expect(toggle).toBeDisabled()
     })
+    // God Mode forces the control pressed even when this chat's own Auto is off.
+    // Disabled alone stays green if the control renders unpressed.
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('shows the word Auto on the composer control', async () => {
+    renderPicker()
+    const toggle = await screen.findByTestId('composer-auto-approve-toggle')
+    await waitFor(() => {
+      expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    })
+    expect(toggle).toHaveTextContent('Auto')
+    expect(toggle.textContent).toBe('Auto')
   })
 
   it('the disabled tooltip mentions God Mode and says this chat’s Auto choice does not apply', async () => {

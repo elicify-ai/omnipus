@@ -28,6 +28,7 @@
       "exports": [
         "Default",
         "On",
+        "Pressed",
         "Disabled"
       ]
     }
@@ -44,8 +45,8 @@
       "id": "text-toggle-interaction",
       "kind": "interaction",
       "file": "src/components/ui/text-toggle.stories.tsx",
-      "test": "Default",
-      "story": "Default",
+      "test": "Pressed",
+      "story": "Pressed",
       "applicable": true
     },
     {

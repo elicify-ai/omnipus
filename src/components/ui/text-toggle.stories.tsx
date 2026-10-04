@@ -49,19 +49,19 @@ const meta = {
             property: 'color',
             againstSelector: '[data-testid="text-toggle"]',
             againstProperty: 'backgroundColor',
-            actualSystemColor: 'HighlightText',
-            againstSystemColor: 'Highlight',
+            actualSystemColor: 'CanvasText',
+            againstSystemColor: 'Canvas',
           },
         ],
         focus: ['[data-testid="text-toggle"]'],
-        states: [{ selector: '[data-testid="text-toggle"]', attribute: 'data-state', value: 'on' }],
+        states: [{ selector: '[data-testid="text-toggle"]', attribute: 'data-state', value: 'off' }],
         stateTransitions: [
           {
             selector: '[data-testid="text-toggle"]',
             attribute: 'data-state',
-            from: 'on',
+            from: 'off',
             action: 'click',
-            to: 'off',
+            to: 'on',
             differences: [
               {
                 cue: 'foreground',
@@ -69,8 +69,8 @@ const meta = {
                 property: 'color',
                 againstSelector: '[data-testid="text-toggle"]',
                 againstProperty: 'backgroundColor',
-                actualSystemColor: 'CanvasText',
-                againstSystemColor: 'Canvas',
+                actualSystemColor: 'HighlightText',
+                againstSystemColor: 'Highlight',
               },
             ],
           },
@@ -78,7 +78,7 @@ const meta = {
       },
       reflowExemptions: [],
       browserAssertions: [
-        { selector: '[data-testid="text-toggle"]', attribute: 'aria-pressed', value: 'true' },
+        { selector: '[data-testid="text-toggle"]', attribute: 'aria-pressed', value: 'false' },
         { selector: '[data-testid="text-toggle"]', text: 'Auto' },
       ],
     },
@@ -89,11 +89,12 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const Default: Story = {
+  // The appearance gate photographs this story after play finishes. The
+  // picture is the quiet off state, so play must not press the control first.
   play: async ({ canvasElement }) => {
     const toggle = within(canvasElement).getByRole('button', { name: 'Auto' })
-    await userEvent.click(toggle)
-    await expect(toggle).toHaveAttribute('aria-pressed', 'true')
-    await expect(toggle).toHaveAttribute('data-state', 'on')
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    await expect(toggle).toHaveAttribute('data-state', 'off')
   },
 }
 
@@ -101,11 +102,26 @@ export const On: Story = {
   render: () => <Harness initial />,
 }
 
+export const Pressed: Story = {
+  play: async ({ canvasElement }) => {
+    const toggle = within(canvasElement).getByRole('button', { name: 'Auto' })
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    await userEvent.click(toggle)
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    await expect(toggle).toHaveAttribute('data-state', 'on')
+  },
+}
+
 export const Disabled: Story = {
   render: () => <Harness initial disabled />,
   play: async ({ canvasElement }) => {
     const toggle = within(canvasElement).getByRole('button', { name: 'Auto' })
-    await userEvent.click(toggle)
+    await expect(toggle).toBeDisabled()
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    // Disabled controls set pointer-events: none, so a pointer click is
+    // rejected before it can prove anything. Keyboard activation must not
+    // ask for a change either: the control stays pressed.
+    toggle.focus()
     await userEvent.keyboard('{Space}')
     await expect(toggle).toBeDisabled()
     await expect(toggle).toHaveAttribute('aria-pressed', 'true')
