@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ListChecks,
   Plus,
@@ -21,6 +21,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
+import { Switch } from '@/components/ui/switch'
 import { PlanActionButton } from './PlanActionButton'
 import type { Agent, Plan, Task } from '@/lib/api'
 import {
@@ -116,19 +117,79 @@ export function PlansFilterBand({
   pendingAction = null,
   showNewPlanTile = true,
 }: PlansFilterBandProps) {
-  return (
-    <div
-      role="group"
-      aria-label="Plans filter"
-      className="flex items-stretch gap-[var(--space-2-5)] overflow-x-auto px-[var(--space-4)] py-[var(--space-3)] bg-[var(--color-surface-0)] flex-shrink-0"
-    >
-      <AllTasksTile
-        selected={selectedPlanId === null}
-        onSelect={() => onSelectPlan(null)}
-        totalTasks={tasks.length}
-      />
+  // SP-36 — done plans are hidden by default; the "Show done (N)" switch
+  // reveals them for the session. Only genuinely-`done` plans hide — a
+  // cancelled plan still renders its orange "Cancelled" tile (it is not a
+  // completed plan and must stay triageable).
+  const [showDone, setShowDone] = useState(false)
+  const doneCount = plans.filter((p) => p.state === 'done').length
+  const visiblePlans = showDone ? plans : plans.filter((p) => p.state !== 'done')
 
-      {plans.map((plan) => {
+  // SP-36 — "scroll for more →" shows only while the tile strip actually
+  // overflows its box (the wireframe's `scrollWidth > clientWidth + 2`
+  // tolerance), on any panel width — desktop included. Measured on the strip
+  // element itself (never the window): a ResizeObserver catches panel
+  // resizes, and the `plans`/`showDone` deps re-check after the tile set
+  // changes (a content-only change doesn't necessarily resize the strip's
+  // own box, so the observer alone would miss it).
+  const stripRef = useRef<HTMLDivElement | null>(null)
+  const [overflows, setOverflows] = useState(false)
+  useEffect(() => {
+    const el = stripRef.current
+    if (!el) return
+    const check = () => setOverflows(el.scrollWidth > el.clientWidth + 2)
+    check()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(check)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [plans, showDone])
+
+  return (
+    // SP-36 wraps the tile strip in one announced group: the control row
+    // (Show-done switch + overflow hint) sits above the horizontal strip.
+    <div role="group" aria-label="Plans filter" className="flex flex-col flex-shrink-0">
+      {(doneCount > 0 || overflows) && (
+        <div className="flex flex-shrink-0 items-center gap-[var(--space-2)] px-[var(--space-4)] pt-[var(--space-2)]">
+          {doneCount > 0 && (
+            // A bare "Show done (0)" switch would be noise, so the switch
+            // only renders when there is something to reveal.
+            <label
+              htmlFor="plans-show-done"
+              className="flex cursor-pointer items-center gap-[var(--space-2)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
+            >
+              <Switch
+                id="plans-show-done"
+                checked={showDone}
+                onCheckedChange={(checked) => setShowDone(checked)}
+                aria-label="Show done plans"
+              />
+              <span>Show done ({doneCount})</span>
+            </label>
+          )}
+          {overflows && (
+            // Sighted-only affordance (the whole tile list is already in the
+            // accessibility tree, and the strip is a real scroll container).
+            <span
+              aria-hidden="true"
+              className="ml-auto whitespace-nowrap text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+            >
+              scroll for more →
+            </span>
+          )}
+        </div>
+      )}
+      <div
+        ref={stripRef}
+        className="flex items-stretch gap-[var(--space-2-5)] overflow-x-auto px-[var(--space-4)] py-[var(--space-3)] bg-[var(--color-surface-0)] flex-shrink-0"
+      >
+        <AllTasksTile
+          selected={selectedPlanId === null}
+          onSelect={() => onSelectPlan(null)}
+          totalTasks={tasks.length}
+        />
+
+        {visiblePlans.map((plan) => {
         // "member tasks" = this plan's own top-level tasks — subtasks nest
         // under their parent and would otherwise double-count toward the
         // tile's done/total progress.
@@ -167,6 +228,7 @@ export function PlansFilterBand({
           <span className="text-[length:var(--type-utility-xs-size)] font-medium">New plan</span>
         </Button>
       )}
+      </div>
     </div>
   )
 }
