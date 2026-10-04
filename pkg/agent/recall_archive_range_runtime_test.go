@@ -23,8 +23,12 @@ import (
 // MIN-001 retained-memory plan:
 //   - Generate each archive incrementally on disk from one fixed-size record.
 //   - Keep record size, page cap, offset and length fixed; increase record count.
-//   - Observe reachable heap DURING Execute, after forced garbage collections.
-//     Total allocation and final output size are not retained-memory evidence.
+//   - Observe reachable heap DURING Execute. The assertion reads the peak
+//     from samples taken after a forced garbage collection (the checkpoint
+//     path). The periodic tick only reads heap stats: a full collection on
+//     that tick is slower than the tick, and the meter would spend the call
+//     measuring itself. Total allocation and final output size are not
+//     retained-memory evidence.
 //   - Include a positive control retained across a background observation.
 //   - Independent CHECK must kill a full-concatenation and an all-records mutant.
 //
@@ -39,6 +43,7 @@ type cwRangeHeapMeter struct {
 	during  atomic.Bool
 	samples atomic.Uint64
 	inCall  atomic.Uint64
+	forced  atomic.Uint64
 	request chan chan struct{}
 	stop    chan struct{}
 	stopped chan struct{}
@@ -57,6 +62,9 @@ func cwNewRangeHeapMeter(t *testing.T) *cwRangeHeapMeter {
 	go func() {
 		defer close(m.stopped)
 		// A scheduling interval, not a performance pass/fail threshold.
+		// The tick must not collect. On the 64MiB fixture one forced
+		// collection costs longer than 2ms, so the sampler never keeps
+		// up and the call spends itself in runtime.GC.
 		ticker := time.NewTicker(2 * time.Millisecond)
 		defer ticker.Stop()
 		for {
@@ -64,10 +72,10 @@ func cwNewRangeHeapMeter(t *testing.T) *cwRangeHeapMeter {
 			case <-m.stop:
 				return
 			case ack := <-m.request:
-				m.sample()
+				m.sample(true)
 				close(ack)
 			case <-ticker.C:
-				m.sample()
+				m.sample(false)
 			}
 		}
 	}()
@@ -75,18 +83,32 @@ func cwNewRangeHeapMeter(t *testing.T) *cwRangeHeapMeter {
 	return m
 }
 
-func (m *cwRangeHeapMeter) sample() {
+// sample records one heap observation. forceGC is true only on the explicit
+// checkpoint path. A periodic tick passes false and must not raise peak:
+// HeapAlloc without a collection includes uncollected garbage, so treating
+// it as retained memory would false-fail a bounded live set (churn on the
+// longer range can exceed one EncodedLineBound even when the reachable set
+// does not scale). It would not false-pass a range that stays reachable —
+// that set survives the checkpoint collection and still raises peak. A tick
+// that only bumps a counter is not an observation, so every tick still reads
+// the heap.
+func (m *cwRangeHeapMeter) sample(forceGC bool) {
 	inCall := m.during.Load()
-	runtime.GC() // discard dead allocations; measure live retention, not churn
+	if forceGC {
+		runtime.GC()
+		m.forced.Add(1)
+	}
 	var stats runtime.MemStats
 	runtime.ReadMemStats(&stats)
-	var retained uint64
-	if stats.HeapAlloc > m.base {
-		retained = stats.HeapAlloc - m.base
-	}
-	for old := m.peak.Load(); retained > old; old = m.peak.Load() {
-		if m.peak.CompareAndSwap(old, retained) {
-			break
+	if forceGC {
+		var retained uint64
+		if stats.HeapAlloc > m.base {
+			retained = stats.HeapAlloc - m.base
+		}
+		for old := m.peak.Load(); retained > old; old = m.peak.Load() {
+			if m.peak.CompareAndSwap(old, retained) {
+				break
+			}
 		}
 	}
 	m.samples.Add(1)
@@ -218,7 +240,7 @@ func cwRangeBoundedMemory(t *testing.T) {
 				// The 64-MiB selected range is much larger than this slack.
 				t.Fatalf("retained working memory scales with range: records=%d peak=%d baseline=%d allowed growth=%d", count, peak, baselinePeak, memory.EncodedLineBound)
 			}
-			t.Logf("MIN-001: records=%d selected bytes=%d fixed record bytes=%d page cap=%d peak retained=%d during samples=%d", count, count*len(record), len(record), pageCap, peak, meter.inCall.Load())
+			t.Logf("MIN-001: records=%d selected bytes=%d fixed record bytes=%d page cap=%d peak retained=%d during samples=%d forced collections=%d context polls=%d", count, count*len(record), len(record), pageCap, peak, meter.inCall.Load(), meter.forced.Load(), ctx.polls.Load())
 		})
 	}
 }

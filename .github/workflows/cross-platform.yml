@@ -54,7 +54,7 @@ jobs:
             arch: arm64
 
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 45
 
     env:
       CGO_ENABLED: "0"
@@ -88,8 +88,26 @@ jobs:
       - name: Test
         # Platform-gated tests skip cleanly via pkg/testutil.SkipIfNotLinux et al.
         # The suite runs on all combinations to catch build-time breakage.
+        #
+        # #1184, calibrated 2026-10-04. The hang was disproven and these budgets
+        # are calibrated to measurement — do not tighten them back. The goroutine
+        # dump at the old deadline showed no blocked operation: 62 idle selects
+        # and 9 channel receives (normal background workers), nothing deadlocked.
+        # The one real defect was a test instrument, fixed in b7b48144a: its
+        # memory meter forced a full runtime.GC on a 2ms tick (4,664 collections
+        # to measure one bound); that subtest went 103.92s → 4.24s. Measured on
+        # real macOS/ARM runners: pkg/agent 566s and 610s on identical code
+        # (runners vary ~50%), 541.7s after the instrument fix inside this job;
+        # pkg/gateway 579.763s of test time alone and 602.0s under full-suite
+        # contention, so it missed the 10m per-package cap from contention, not
+        # from being stuck; every other package finished in under 95s. This step
+        # is `go test -short ./...`: 127 packages sharing 3 macOS cores. One
+        # verification run was cancelled at the 20-minute job limit. -timeout
+        # 20m is the per-test-binary deadline (~2× the 602s worst case; a genuine
+        # hang still trips it). The job's timeout-minutes is 45 so the SPA build,
+        # the Go build, and those two packages fit under one ceiling.
         shell: bash
-        run: go test -tags goolm,stdjson -short -timeout 10m ./...
+        run: go test -tags goolm,stdjson -short -timeout 20m ./...
 
       - name: Smoke boot + /health
         # Run the compiled binary once with --allow-empty on the local runner
