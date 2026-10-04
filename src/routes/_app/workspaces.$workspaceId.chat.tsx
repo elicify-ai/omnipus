@@ -1,7 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { WorkspaceChatTab } from '@/components/workspaces/WorkspaceChatTab'
-import { registeredPanelIds } from '@/components/panel-shell/registry'
+import { getPanelDefinition } from '@/components/panel-shell/registry'
 import { usePanelDeepLink } from '@/components/panel-shell/usePanelDeepLink'
+import type { PanelId } from '@/components/panel-shell/types'
 
 // Chat tab — the workspace's default front view (chat-first). Agent picker is
 // scoped to the workspace team; sessions are filtered by this workspace_id.
@@ -20,7 +21,10 @@ import { usePanelDeepLink } from '@/components/panel-shell/usePanelDeepLink'
 function validateSearch(search: Record<string, unknown>): { panel?: string; agent?: string } {
   const result: Record<string, string | undefined> = {}
   for (const key of Object.keys(search)) result[key] = undefined
-  if (typeof search.panel === 'string' && (registeredPanelIds as readonly string[]).includes(search.panel)) {
+  if (
+    typeof search.panel === 'string' &&
+    getPanelDefinition(search.panel as PanelId) !== undefined
+  ) {
     result.panel = search.panel
   }
   if (typeof search.agent === 'string') {

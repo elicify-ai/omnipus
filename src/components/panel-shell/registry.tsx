@@ -177,10 +177,3 @@ export const panels: readonly PanelDefinition[] = [
 export function getPanelDefinition(id: PanelId): PanelDefinition | undefined {
   return panels.find((panel) => panel.id === id)
 }
-
-/** The ids with a shell registration in the PRODUCTION registry — derived
- * from `panels` itself, never a hand-maintained list, so a registration can
- * never drift from the `?panel=` deep-link contract (§8.2: the valid
- * `?panel=` values are the REGISTERED ids). `mail` is absent until wave 2
- * lands its definition here. */
-export const registeredPanelIds: readonly PanelId[] = panels.map((panel) => panel.id)
