@@ -1055,8 +1055,10 @@ func (hcm *wsHandlerHandleChatMessage) adoptExistingSession() bool {
 
 // persistUserMessage records the user's message in the transcript (when the
 // session exists and the message is within the user-message bound) and, once
-// persisted, echoes it to every tab as a user_message frame. A failed ordinary
-// first append rejects intake before its acknowledgement or turn admission.
+// persisted, echoes it to every tab as a user_message frame. An ordinary
+// user append also persists its server-internal provenance in the same
+// session write (ADR-20260928 D1.4). ANY failed append — first or not —
+// rejects intake: a visible error for the sender, no echo, no turn.
 func (hcm *wsHandlerHandleChatMessage) persistUserMessage() bool {
 	// ID-bearing first sends pass their size preflight before session creation.
 	// ADR-066 D4 / FR-015: legacy no-ID first sends and existing-session
@@ -1105,24 +1107,44 @@ func (hcm *wsHandlerHandleChatMessage) persistUserMessage() bool {
 			// never a bubble stranded above history.
 			entry.ClientMessageID = hcm.clientMessageID
 		}
-		if err := hcm.store.AppendTranscript(hcm.sessionID, entry); err != nil {
-			logsafeWarn("ws: could not record user message", "session_id", hcm.sessionID, "error", err)
+		// ADR-20260928 D1.4: an accepted authenticated user message persists
+		// server-internal provenance (server message id, session, exact
+		// accepted text, connection principal, per-session append ordinal) in
+		// the SAME session write as this append. A kickoff trigger is a
+		// system-role pill, not a user message — it keeps the ordinary
+		// append and never mints provenance.
+		var appendErr error
+		if hcm.setupKickoff {
+			appendErr = hcm.store.AppendTranscript(hcm.sessionID, entry)
+		} else {
+			// wc.userID is the WS-authenticated principal (FR-073); empty
+			// only where the connection has none (dev-mode bypass / legacy
+			// env-token auth). The store stamps every other provenance field
+			// from the entry it actually persists.
+			appendErr = hcm.store.AppendTranscriptWithProvenance(hcm.sessionID, entry, hcm.wc.userID)
+		}
+		if appendErr != nil {
+			logsafeWarn("ws: could not record user message", "session_id", hcm.sessionID, "error", appendErr)
 			if hcm.firstMessage {
-				hcm.sendFirstMessageError(firstMessageAppendFailure(err))
+				hcm.sendFirstMessageError(firstMessageAppendFailure(appendErr))
 				return true
 			}
-		} else {
-			hcm.transcriptPersisted = true
-			// A kickoff trigger is a system-role pill, not a user
-			// message — it is never echoed as one.
-			if !hcm.setupKickoff {
-				if hcm.firstMessage {
-					hcm.rememberAcceptedFirstMessage()
-					hcm.acknowledgeNewSession()
-				}
-				hcm.publishUserMessage(entry)
+			if hcm.setupKickoff {
+				// The consume already cleared SetupPending on disk; rejecting
+				// the kickoff without compensation would burn the one-time
+				// interview. Same compensation as the publish-failure path:
+				// restore the flag and delete the just-minted pill-less
+				// session, then reject with the visible error below.
+				hcm.h.rollbackKickoffSession(hcm.store, hcm.workspaceID, hcm.sessionID, hcm.chatID)
 			}
+			// Every failed append is visible to the sender and never
+			// continues the turn (ADR-20260928 D1.4). The previous
+			// warn-and-continue for a non-first append is gone: without the
+			// durable write there is nothing to acknowledge, echo, or admit.
+			hcm.sendAppendFailureError(appendErr)
+			return true
 		}
+		hcm.acceptPersistedUserMessage(entry)
 		// The workspace.setup_consumed audit entry is emitted further
 		// below, AFTER a successful bus publish — not here. Emitting it
 		// at this point (the previous placement) ran before the publish
@@ -1131,6 +1153,44 @@ func (hcm *wsHandlerHandleChatMessage) persistUserMessage() bool {
 		// rolled back this very session.
 	}
 	return false
+}
+
+// acceptPersistedUserMessage runs the success path of a durable append:
+// mark the intake persisted, acknowledge an ordinary first send, and echo
+// the entry to every tab as a user_message frame. A kickoff trigger is a
+// system-role pill, not a user message — it is never echoed as one.
+func (hcm *wsHandlerHandleChatMessage) acceptPersistedUserMessage(entry session.TranscriptEntry) {
+	hcm.transcriptPersisted = true
+	if !hcm.setupKickoff {
+		if hcm.firstMessage {
+			hcm.rememberAcceptedFirstMessage()
+			hcm.acknowledgeNewSession()
+		}
+		hcm.publishUserMessage(entry)
+	}
+}
+
+// sendAppendFailureError reports a failed transcript append to the sender for
+// a message that is not an ID-bearing first send (ADR-20260928 D1.4: a failed
+// append is visible for EVERY message, and never continues the turn). Same
+// discipline as sendFirstMessageError: no filesystem details, and an unsaved
+// or uncertain append never names the session, so nothing looks acknowledged.
+// The sender's deferred message_status "failed" tick still fires on top of
+// this frame through the ordinary rejection path.
+func (hcm *wsHandlerHandleChatMessage) sendAppendFailureError(err error) {
+	message := "Could not save message"
+	if firstMessageAppendFailure(err) == "delivery_unknown" {
+		message = "Delivery not confirmed"
+	}
+	frame := generated.ErrorFrame{
+		Type:    string(generated.WsFrameTypeError),
+		Message: message,
+	}
+	if hcm.clientMessageID != "" {
+		cid := hcm.clientMessageID
+		frame.ClientMessageId = &cid
+	}
+	sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), frame)
 }
 
 // buildInboundMessage assembles the bus.InboundMessage from the turn content (client content, or the server-built kickoff instruction), agent/model metadata, and the accepted media.

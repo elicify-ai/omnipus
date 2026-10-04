@@ -17,10 +17,16 @@ import (
 // actual zero-based nonempty record index. Only result recording needs an index;
 // token-stream appends do not scan the transcript.
 func (us *UnifiedStore) AppendTranscriptIndexed(sessionID string, entry TranscriptEntry) (int, error) {
-	return us.appendTranscript(sessionID, entry, true, "append transcript strict")
+	return us.appendTranscript(sessionID, entry, true, "append transcript strict", nil)
 }
 
-func (us *UnifiedStore) appendTranscript(sessionID string, entry TranscriptEntry, indexed bool, what string) (int, error) {
+// appendTranscript is the single locked transcript-append body shared by
+// AppendTranscript, AppendTranscriptStrict and AppendTranscriptIndexed.
+// provenance is nil for every ordinary caller; when non-nil
+// (AppendTranscriptWithProvenance only) the record is stamped and persisted
+// inside this same session-shard hold, immediately after the transcript line
+// lands — see MessageProvenance for the trust and failure contract.
+func (us *UnifiedStore) appendTranscript(sessionID string, entry TranscriptEntry, indexed bool, what string, provenance *MessageProvenance) (int, error) {
 	if err := validateSessionID(sessionID); err != nil {
 		return -1, err
 	}
@@ -47,6 +53,11 @@ func (us *UnifiedStore) appendTranscript(sessionID string, entry TranscriptEntry
 	}
 	if err := fileutil.AppendJSONL(path, entry); err != nil {
 		return -1, fmt.Errorf("unified_store: append transcript: %w", err)
+	}
+	if provenance != nil {
+		if err := us.appendMessageProvenanceLocked(sessionID, entry, provenance); err != nil {
+			return -1, fmt.Errorf("unified_store: %s: record provenance: %w", what, err)
+		}
 	}
 	accumulateEntryStats(&meta.Stats, entry)
 	meta.UpdatedAt = entry.Timestamp
