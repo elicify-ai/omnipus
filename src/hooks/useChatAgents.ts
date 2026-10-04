@@ -59,6 +59,8 @@ export interface UseChatAgentsResult {
   agents: Agent[]
   /** Ready-to-chat (active/idle), non-worker agents, scoped to the active workspace's core_team when one is set. A ready Admin is kept even when the team does not list it (ADR-090 standalone operator) — that is not a workspace membership grant. */
   chatAgents: Agent[]
+  /** True when the latest fetch of the active workspace's team list failed. The last successfully fetched team stays in `workspaces` (React Query retains previous data on a failed refetch), so `chatAgents` may be scoped by a team that failed to refresh — surfaces of the open picker show a "could not be refreshed" line instead of letting that list read as current. */
+  teamRefreshFailed: boolean
   isError: boolean
   refetch: () => void
 }
@@ -73,7 +75,12 @@ export function useChatAgents(): UseChatAgentsResult {
   // always ran (moved here verbatim).
   const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
   const pickerOpen = useUiStore((s) => s.agentSelectorOpen)
-  const { data: workspaces = EMPTY_WORKSPACES } = useQuery({
+  // The workspaces query's error state is part of this hook's contract: the
+  // picker-open effect below refetches the team list, and on failure React
+  // Query KEEPS the previous `data` — so `workspaces` alone makes a stale team
+  // indistinguishable from a fresh one. `teamRefreshFailed` is the signal
+  // AgentPicker renders so the last known team never reads as current.
+  const { data: workspaces = EMPTY_WORKSPACES, isError: teamRefreshFailed } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
@@ -137,5 +144,5 @@ export function useChatAgents(): UseChatAgentsResult {
     [agents, teamIds],
   )
 
-  return { agents, chatAgents, isError, refetch }
+  return { agents, chatAgents, teamRefreshFailed, isError, refetch }
 }
