@@ -323,21 +323,39 @@ func q2DrainRequireInjection(t *testing.T, al *AgentLoop, childID string, second
 	if matches != 1 {
 		t.Fatalf("exact accepted instruction in SECOND actual provider request = %d copies, want 1", matches)
 	}
+	// Q2=A persistence oracles (ADR-20260928-sub-agent-control-plane D4/T27,
+	// as clarified by Q2=A): the drain's durable record of the accepted
+	// instruction is the CONTEXT ARCHIVE append (turn persistence
+	// ::appendWindowMessage -> context.jsonl on the session's OWN store,
+	// read back by SessionStore.ReadArchive); the transcript carries only
+	// the consumed marker (steering.go ::writeSteeringConsumedMarker).
+	// Each surface is counted on its own real store — one count never
+	// stands in for the other.
 	entries, err := al.GetSessionStore().ReadTranscript(childID)
 	if err != nil {
 		t.Fatalf("ReadTranscript(actual child): %v", err)
 	}
-	injected, consumed := 0, 0
+	consumed := 0
 	for _, entry := range entries {
-		if entry.Role == "user" && entry.Content == q2DrainLateText {
-			injected++
-		}
 		if entry.ID == "consumed-"+q2DrainLateID && entry.Content == "consumed "+q2DrainLateID {
 			consumed++
 		}
 	}
-	if injected != 1 || consumed != 1 {
-		t.Fatalf("persisted accepted instruction/consumed marker = %d/%d, want exactly 1/1", injected, consumed)
+	if second.handle == nil || second.handle.agent == nil || second.handle.agent.Sessions == nil {
+		t.Fatalf("drained turn state carries no live session store to read the context archive from (handle=%p)", second.handle)
+	}
+	archivedMessages, archiveErr := second.handle.agent.Sessions.ReadArchive(context.Background(), childID)
+	if archiveErr != nil {
+		t.Fatalf("ReadArchive(actual child context archive): %v", archiveErr)
+	}
+	archivedCopies := 0
+	for _, message := range archivedMessages {
+		if message.Role == "user" && message.Content == q2DrainLateText {
+			archivedCopies++
+		}
+	}
+	if archivedCopies != 1 || consumed != 1 {
+		t.Fatalf("persisted accepted instruction in context archive/consumed marker in transcript = %d/%d, want exactly 1/1", archivedCopies, consumed)
 	}
 	if pending := al.pendingSteeringCountForScope(childID); pending != 0 {
 		t.Fatalf("pending already-accepted instruction count = %d, want 0 after real injection", pending)
