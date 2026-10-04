@@ -598,57 +598,61 @@ func TestBoot_ClassifiesAllClasses(t *testing.T) {
 	}
 }
 
-// TestBoot_TimeoutStoppedRecoversAsTimedOut pins the U1 stopped-state
-// consolidation regression (PR #1139 gate finding): a steered session whose
-// lifetime budget expired — stop_note.cause=timeout, the shape
-// steer_completion.go::completeSteeredTurn lands live — and that never
-// stored its final before the gateway restart must reach its parent as
-// steer.OutcomeTimedOut with a "timeout:" text, exactly the pre-consolidation
-// LifecycleTimedOut case of terminalErrorBootMessage did. The merged
-// "stopped" state deliberately erased the cancelled/timed-out state
-// distinction (founder ruling: timed out = stopped); the RETAINED stop_note
-// cause is what keeps the two apart for the parent.
-func TestBoot_TimeoutStoppedRecoversAsTimedOut(t *testing.T) {
+// TestBoot_TimeoutStoppedStaysStopped pins ADR-20260928 D8 (founder
+// decision, 2026-10-04): a steered session whose lifetime budget expired —
+// stop_note.cause=timeout, the shape steer_completion.go::completeSteeredTurn
+// lands live — and that never stored its final before the gateway restart
+// STAYS stopped across the restart. The boot neither fails it, nor rewrites
+// its retained timeout note, nor delivers the old "timeout:" fatal to the
+// parent. The merged "stopped" state deliberately erased the
+// cancelled/timed-out state distinction (founder ruling: timed out =
+// stopped); the RETAINED stop_note cause is what the parent's decide-offers
+// notice is composed from (D6), never a boot rewrite. Supersedes the U1-era
+// oracle TestBoot_TimeoutStoppedRecoversAsTimedOut, which pinned the
+// failed(timeout) conversion that boot_sweep.go::recoverSteered and
+// failInterrupted no longer perform.
+func TestBoot_TimeoutStoppedStaysStopped(t *testing.T) {
 	h := newBootRecoveryHarness(t)
 	parent := h.rootSession(t)
 	child := h.newSession(t, session.SessionTypeDelegate, parent)
 	rec := h.steeredRecord(child, parent, session.LifecycleStopped)
-	rec.StopNote = &session.StopNote{
+	note := &session.StopNote{
 		At: time.Now().UTC(), By: session.StopActorSystem,
 		Seq: uint64(rec.Generation), Cause: session.StopCauseTimeout,
 	}
+	rec.StopNote = note
 	h.persist(t, rec)
 
 	if err := h.recovery().Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	events := h.deliverer.snapshot()
-	if len(events) != 1 {
-		t.Fatalf("deliveries = %d, want 1 (the terminal notice)", len(events))
-	}
-	if events[0].Outcome != steer.OutcomeTimedOut {
-		t.Fatalf("boot-recovered timeout stop outcome = %q, want %q", events[0].Outcome, steer.OutcomeTimedOut)
-	}
-	envelope := bootEnvelope(t, events[0].Message)
-	if envelope.Kind != "error" || !envelope.Fatal || !strings.HasPrefix(envelope.Text, "timeout:") {
-		t.Fatalf("upward message = %+v, want a fatal error with a timeout: prefix", envelope)
+	if events := h.deliverer.snapshot(); len(events) != 0 {
+		t.Fatalf("deliveries = %d, want 0 — D8: the restart sends no old timeout fatal for an already-stopped helper", len(events))
 	}
 	after, err := h.lifecycle.Load(child)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	// The failed reason follows the boot vocabulary the stored text itself
-	// derives on a later restart (failedReasonFromBootText): "timeout".
-	if after.State != session.LifecycleFailed || after.FailedReason != "timeout" {
-		t.Fatalf("record = state %q reason %q, want failed/timeout", after.State, after.FailedReason)
+	if after.State != session.LifecycleStopped || after.Terminal() {
+		t.Fatalf("record = state %q (terminal=%v), want stopped non-terminal — D8: an already-stopped helper stays stopped across a restart", after.State, after.Terminal())
+	}
+	if after.FailedReason != "" {
+		t.Fatalf("FailedReason = %q, want empty — D8: the restart marks nothing failed", after.FailedReason)
+	}
+	if after.StopNote == nil || after.StopNote.Cause != session.StopCauseTimeout || after.StopNote.Seq != note.Seq || after.StopNote.By != note.By {
+		t.Fatalf("stop note after boot = %+v, want the retained timeout note unchanged (cause %q seq %d by %q)", after.StopNote, note.Cause, note.Seq, note.By)
 	}
 }
 
-// TestBoot_StoppedNonTimeoutStillInterrupted keeps the timeout reroute
-// narrow: a stop-caused stop (a human Stop, current generation) and a STALE
-// timeout note (Seq from an older generation a Revive kept) both recover as
-// a plain interruption, exactly as before the fix.
-func TestBoot_StoppedNonTimeoutStillInterrupted(t *testing.T) {
+// TestBoot_StoppedNonTimeoutStaysStopped keeps the D8 pin broad across the
+// retained-note vocabulary: a stop-caused stop (a human Stop, current
+// generation) and a STALE timeout note (Seq from an older generation a
+// Revive kept) both stay stopped across the restart — no interrupted fatal,
+// no failed(interrupted), each note kept exactly as stored. Supersedes the
+// U1-era oracle TestBoot_StoppedNonTimeoutStillInterrupted, which pinned the
+// failed(interrupted) conversion that boot_sweep.go::recoverSteered and
+// failInterrupted no longer perform.
+func TestBoot_StoppedNonTimeoutStaysStopped(t *testing.T) {
 	for name, note := range map[string]*session.StopNote{
 		"stop_cause_current_gen": {
 			At: time.Now().UTC(), By: session.StopActorSystem,
@@ -670,23 +674,21 @@ func TestBoot_StoppedNonTimeoutStillInterrupted(t *testing.T) {
 			if err := h.recovery().Run(context.Background()); err != nil {
 				t.Fatalf("Run: %v", err)
 			}
-			events := h.deliverer.snapshot()
-			if len(events) != 1 {
-				t.Fatalf("deliveries = %d, want 1", len(events))
-			}
-			if events[0].Outcome != steer.OutcomeInterrupted {
-				t.Fatalf("outcome = %q, want %q", events[0].Outcome, steer.OutcomeInterrupted)
-			}
-			envelope := bootEnvelope(t, events[0].Message)
-			if envelope.Kind != "error" || !envelope.Fatal || !strings.HasPrefix(envelope.Text, "interrupted:") {
-				t.Fatalf("upward message = %+v, want a fatal error with an interrupted: prefix", envelope)
+			if events := h.deliverer.snapshot(); len(events) != 0 {
+				t.Fatalf("deliveries = %d, want 0 — D8: the restart sends no old interrupted/timeout fatal for an already-stopped helper", len(events))
 			}
 			after, err := h.lifecycle.Load(child)
 			if err != nil {
 				t.Fatalf("Load: %v", err)
 			}
-			if after.State != session.LifecycleFailed || after.FailedReason != failedReasonInterrupted {
-				t.Fatalf("record = state %q reason %q, want failed/%q", after.State, after.FailedReason, failedReasonInterrupted)
+			if after.State != session.LifecycleStopped || after.Terminal() {
+				t.Fatalf("record = state %q (terminal=%v), want stopped non-terminal — D8: an already-stopped helper stays stopped across a restart", after.State, after.Terminal())
+			}
+			if after.FailedReason != "" {
+				t.Fatalf("FailedReason = %q, want empty — D8: the restart marks nothing failed", after.FailedReason)
+			}
+			if after.StopNote == nil || after.StopNote.Cause != note.Cause || after.StopNote.Seq != note.Seq || after.StopNote.By != note.By {
+				t.Fatalf("stop note after boot = %+v, want the retained note unchanged (cause %q seq %d by %q)", after.StopNote, note.Cause, note.Seq, note.By)
 			}
 		})
 	}

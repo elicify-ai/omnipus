@@ -337,6 +337,16 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 	}
 
 	if !rec.Terminal() && rec.State != session.LifecycleNeedsInput {
+		if rec.State == session.LifecycleStopped {
+			// ADR-20260928 D8 (founder decision, 2026-10-04): a helper that is
+			// already stopped stays stopped across a restart. The restart
+			// marks nothing failed, rewrites no stop note, and sends no old
+			// "interrupted:"/"timeout:" fatal to the parent — and nothing here
+			// re-wakes a stopped helper; it waits for Revive. The expiry arm
+			// above has already had its chance at this record; a stopped
+			// record that still reaches this arm leaves exactly as it stands.
+			return
+		}
 		for _, message := range messages {
 			if envelope, envErr := decodeBootMessage(message); finalHandled && envErr == nil && envelope.MessageID == finalID {
 				// The refused phantom id (or the commit-owned id) is not
@@ -348,13 +358,13 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		message, buildErr := interruptedBootMessage(rec)
 		outcome := steer.OutcomeInterrupted
 		if buildErr == nil && rec.State == session.LifecycleStopped && currentGenerationTimeoutStop(rec) {
-			// A timeout-stopped session's run ended BEFORE the restart: the
-			// restart interrupted nothing — its lifetime budget did. Since the
-			// U1 consolidation (timed out = stopped) this is the only reader
-			// a no-final stopped record reaches, so the retained stop cause
-			// must pick the notice here; delivering it with the "timeout:"
-			// text also keeps bootOutcome's OutcomeTimedOut classification
-			// live for this message on any later restart.
+			// Retained for the timeout-stopped shape: the D8 guard above now
+			// returns a stopped record before this point, so this reroute
+			// only fires if that guard's shape ever changes. It keeps the
+			// retained stop cause picking the notice — the restart
+			// interrupted nothing, the lifetime budget ended the run — and
+			// delivering it with the "timeout:" text keeps bootOutcome's
+			// OutcomeTimedOut classification live for this message.
 			message, outcome, buildErr = terminalErrorBootMessage(rec)
 		}
 		if buildErr != nil {
@@ -835,21 +845,17 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 			return nil
 		}
 		if current.State == session.LifecycleStopped {
-			// Already-stopped arm: the record's run had ended BEFORE the
-			// restart, so the restart interrupted nothing — the record
-			// still fails, as "timeout" when its own current-generation
-			// stop note says the lifetime budget did it, with the same
-			// phrasing completionDisposition uses live; "interrupted"
-			// otherwise. Decided on the write-time tail, not the caller's
-			// snapshot, so the landing always matches the record's own
-			// words at write.
-			reason := failedReasonInterrupted
-			if currentGenerationTimeoutStop(current) {
-				reason = failedReasonTimeout
-			}
-			current.State = session.LifecycleFailed
-			current.FailedReason = reason
-			current.NeedsInput = nil
+			// Already-stopped arm (ADR-20260928 D8, founder decision
+			// 2026-10-04): the record's run ended BEFORE the restart, so the
+			// restart interrupted nothing. The record stays stopped exactly
+			// as it stands — never failed(interrupted) or failed(timeout),
+			// its retained stop note untouched (a timeout cause stays
+			// timeout, a stop cause stays stop). This arm writes nothing and
+			// exists so a stopped record can never fall through to the
+			// mid-flight arm below and have a restart stop fabricated over
+			// its real one (D8.5). recoverSteered's D8 guard already keeps
+			// stopped records away from this call; the arm is the same rule
+			// restated at the writer, for any future caller.
 			return nil
 		}
 		// Mid-flight arm (D8.3/F0929-3): the restart interrupted a LIVE
