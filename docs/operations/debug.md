@@ -19,10 +19,10 @@ In this mode, the system formats logs extensively and displays previews of syste
 Set `OMNIPUS_LOG_FILE` before starting the gateway to send its JSON diagnostic records to a specific file instead of the normal gateway log in the data directory:
 
 ```bash
-export OMNIPUS_LOG_FILE=/var/log/omnipus/gateway.jsonl
+export OMNIPUS_LOG_FILE=~/omnipus-logs/gateway.jsonl
 ```
 
-The gateway creates the parent directory if needed and appends to the file. The setting applies from the first startup record onward. An unset or empty value keeps the default destination. A home-relative value is expanded using `HOME`, when that variable is set.
+The gateway creates the parent directory if needed and appends to the file. A file the gateway creates is private to your account (mode `0600`); a file that already exists keeps the permissions it already has, so check an existing destination's permissions. The setting applies from the first startup record onward. An unset or empty value keeps the default destination. A home-relative value is expanded using `HOME`, when that variable is set.
 
 The destination does not change which records are enabled. The gateway defaults to `warn`; set `OMNIPUS_LOG_LEVEL=info` before starting it to include structured agent-turn diagnostics, such as `turn_end`, or use debug mode for more detail.
 
