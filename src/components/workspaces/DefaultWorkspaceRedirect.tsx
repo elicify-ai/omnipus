@@ -4,11 +4,12 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowClockwise, WarningCircle } from '@phosphor-icons/react'
 import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import { Button } from '@/components/ui/button'
-import type { WorkspaceTab } from './WorkspaceTabBar'
+import type { WorkspaceSegment } from './WorkspaceTabBar'
 
 interface DefaultWorkspaceRedirectProps {
-  /** Which workspace tab to land on (default 'chat'). */
-  tab?: WorkspaceTab['segment']
+  /** Which workspace tab to land on (default 'chat'). 'chat' is not a strip
+   * entry (SP-40) but remains the workspace's front view. */
+  tab?: WorkspaceSegment
 }
 
 /**
