@@ -70,7 +70,7 @@ export function AgentPicker({
   const agentSelectorOpen = useUiStore((s) => s.agentSelectorOpen)
   const setAgentSelectorOpen = useUiStore((s) => s.setAgentSelectorOpen)
 
-  const { agents, chatAgents, isError: agentsError, refetch } = useChatAgents()
+  const { agents, chatAgents, isError: agentsError, refetch, teamRefreshFailed } = useChatAgents()
 
   // Agent-picker freshness fix, pull half (2026-09-28, GitHub issue #1009):
   // this component is the sole mount point for the shared ['agents']
@@ -349,6 +349,24 @@ export function AgentPicker({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-96">
+        {/* The open-on-refresh contract (docs/workspaces.md, "How to set who
+            may delegate to whom"): opening re-reads the active workspace's
+            core_team. If THAT read fails, the list below is the last
+            successfully fetched team — React Query keeps previous data on a
+            failed refetch — and without this line it would read as current.
+            Shown only while the menu is open (DropdownMenuContent mounts only
+            when open); it clears itself when a later open refreshes
+            successfully. The Sidebar's agent-list Retry button is the recovery
+            path and is deliberately untouched here. */}
+        {teamRefreshFailed && (
+          <div
+            role="note"
+            data-testid="agent-picker-team-refresh-notice"
+            className="px-[var(--space-2)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
+          >
+            Team list could not be refreshed — showing the last known team.
+          </div>
+        )}
         {chatAgents.map((agent) => (
           <DropdownMenuItem
             key={agent.id}
