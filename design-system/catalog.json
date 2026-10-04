@@ -37,6 +37,16 @@
       "publicTypes": []
     },
     {
+      "source": "src/components/ui/RunningIndicator.tsx",
+      "classification": "domain",
+      "exports": [
+        "RunningIndicatorProps",
+        "RunningIndicator"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
       "source": "src/components/ui/accordion.tsx",
       "classification": "primitive",
       "exports": [
