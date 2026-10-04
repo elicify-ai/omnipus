@@ -483,21 +483,45 @@ func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, messag
 }
 
 func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error {
-	reason := failedReasonInterrupted
-	if rec.State == session.LifecycleStopped && currentGenerationTimeoutStop(rec) {
-		// The record's own words must match the notice its parent just
-		// received: a timeout-stopped session failed as "timeout", with the
-		// same lifetime-limit phrasing completionDisposition uses live —
-		// not the restart-interruption reason, which is false for a run
-		// that had already ended before the restart.
-		reason = failedReasonTimeout
-	}
 	err := r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
 		if current.Terminal() || (current.Stop != nil && current.Stop.Generation == current.Generation) {
 			return nil
 		}
-		current.State = session.LifecycleFailed
-		current.FailedReason = reason
+		if current.State == session.LifecycleStopped {
+			// Already-stopped arm: the record's run had ended BEFORE the
+			// restart, so the restart interrupted nothing — the record
+			// still fails, as "timeout" when its own current-generation
+			// stop note says the lifetime budget did it, with the same
+			// phrasing completionDisposition uses live; "interrupted"
+			// otherwise. Decided on the write-time tail, not the caller's
+			// snapshot, so the landing always matches the record's own
+			// words at write.
+			reason := failedReasonInterrupted
+			if currentGenerationTimeoutStop(current) {
+				reason = failedReasonTimeout
+			}
+			current.State = session.LifecycleFailed
+			current.FailedReason = reason
+			current.NeedsInput = nil
+			return nil
+		}
+		// Mid-flight arm (D8.3/F0929-3): the restart interrupted a LIVE
+		// run, so the child lands an ordinary, non-terminal stop — never
+		// failed(interrupted) — carrying the restart stop note; no
+		// goal-ending step exists in this path, so the session-owned goal
+		// (and every ancestor's) stays active. Seq stamps the record's own
+		// generation: this note is THIS generation's stop, not retained
+		// history. By=system cause=restart needs no boot_seq under the
+		// lifecycle save rule (only by=restart does), so no boot epoch is
+		// stamped here.
+		current.State = session.LifecycleStopped
+		current.StopNote = &session.StopNote{
+			At:    time.Now().UTC(),
+			By:    session.StopActorSystem,
+			Seq:   uint64(current.Generation),
+			Cause: session.StopCauseRestart,
+		}
+		current.FailedReason = ""
 		current.NeedsInput = nil
 		return nil
 	})
