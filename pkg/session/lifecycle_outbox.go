@@ -189,8 +189,12 @@ type lifecycleJournalLine struct {
 
 // decodeJournalLine decodes one JSONL line, discriminating record lines
 // (no `kind` key) from final-delivery envelope lines. A line that parses
-// as neither (a torn write) returns a nil line the caller skips — the same
-// crash-safety posture tail() has always had.
+// as neither returns a nil line, and the CALLER decides by the fault class:
+// an unterminated torn trailing line is the crash-window tolerance (D4),
+// while a newline-terminated malformed line is a durable corrupt line —
+// readJournal surfaces it as a visible consistency error, never skips it
+// (D2: a skipped line can swallow a committed final's record so its payload
+// silently disappears from discovery).
 func decodeJournalLine(line []byte) *lifecycleJournalLine {
 	var probe struct {
 		Kind string `json:"kind"`
@@ -501,8 +505,18 @@ func (s *LifecycleStore) ListPendingFinalDeliveries() ([]PendingFinalDelivery, e
 
 // readJournal reads EVERY parseable line of sessionID's lifecycle JSONL in
 // append order, discriminating record lines from final-delivery envelope
-// lines. A torn trailing line is skipped with a fall-back to the lines
-// before it — the same crash-safety posture tail() applies to records.
+// lines. Two fault classes, decided by the file's own trailing newline:
+//
+//   - an UNTERMINATED torn trailing line is the crash-window tolerance: the
+//     append died mid-line, nothing durable was lost, the journal reads
+//     normally without it (D4) — the same crash-safety posture tail()
+//     applies to records;
+//   - a NEWLINE-TERMINATED malformed line is durable corruption: a visible
+//     consistency error naming the session, never silently skipped — a
+//     skipped line can swallow a committed final's record so its payload
+//     silently disappears from discovery, and a corrupt journal can never
+//     authorize publication or retirement (D2).
+//
 // The caller MUST hold Lock(sessionID) (the journal is append-only, but a
 // concurrent compaction or prune must not race the read).
 func (s *LifecycleStore) readJournal(sessionID string) ([]lifecycleJournalLine, error) {
@@ -515,22 +529,68 @@ func (s *LifecycleStore) readJournal(sessionID string) ([]lifecycleJournalLine, 
 	}
 	defer f.Close()
 
+	// Torn tail = the file's last byte is not the newline that terminates
+	// its last line. Only the final fragment can be unterminated in an
+	// append-only journal; ReadAt does not move the read offset, so the
+	// scanner below still starts at the beginning.
+	tornTail := false
+	if fi, statErr := f.Stat(); statErr == nil && fi.Size() > 0 {
+		var last [1]byte
+		if _, readErr := f.ReadAt(last[:], fi.Size()-1); readErr == nil && last[0] != '\n' {
+			tornTail = true
+		}
+	}
+
 	var lines []lifecycleJournalLine
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	lineNo := 0
+	var corrupt []byte
 	for scanner.Scan() {
+		lineNo++
+		if corrupt != nil {
+			// Another line follows the malformed one: it terminated with a
+			// newline, so it is durable corruption, not a torn tail.
+			return nil, corruptLineErr(sessionID, lineNo-1, corrupt)
+		}
 		raw := strings.TrimSpace(scanner.Text())
 		if raw == "" {
 			continue
 		}
 		if line := decodeJournalLine([]byte(raw)); line != nil {
 			lines = append(lines, *line)
+		} else {
+			corrupt = []byte(raw)
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("session: lifecycle: scan journal %q: %w", sessionID, err)
 	}
+	if corrupt != nil {
+		if tornTail {
+			// Unterminated last fragment: the crash window D4 tolerates —
+			// nothing durable was lost, the journal reads without it.
+			return lines, nil
+		}
+		return nil, corruptLineErr(sessionID, lineNo, corrupt)
+	}
 	return lines, nil
+}
+
+// corruptLineErr builds readJournal's visible consistency error for one
+// newline-terminated malformed journal line. It names the session (and the
+// line) so the corruption is actionable — it must never be silently
+// skipped, and it is deliberately NOT ErrFinalDeliveryRetireNotEarned: a
+// corrupt journal refuses publication and retirement AS THE CORRUPTION
+// itself (D2), never as an unrelated unearned-demand refusal.
+func corruptLineErr(sessionID string, lineNo int, raw []byte) error {
+	const maxQuote = 64
+	quote := raw
+	if len(quote) > maxQuote {
+		quote = quote[:maxQuote]
+	}
+	return fmt.Errorf("session: lifecycle: journal %q: malformed newline-terminated journal line %d (%q) — durable corrupt line, a visible consistency error that can never authorize publication or retirement",
+		sessionID, lineNo, quote)
 }
 
 // appendJournalEnvelope appends one typed delivery envelope line to the
