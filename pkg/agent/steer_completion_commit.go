@@ -74,11 +74,11 @@ type steeredCommitResult struct {
 	landedStop bool
 	// landed is the D6 landed-stop history payload captured from the record
 	// AS PERSISTED when landedStop is true — nil when the landing synthesized
-	// its note (no control-ledger acceptance behind it, no history to write).
-	// That synthesized note is itself durable on the landed record, and the
-	// stopped-notice publisher derives the fence-less notice from it on every
-	// delivery pass (stopped_notice.go::fencelessNoticeTransition) — no
-	// commit-result copy is needed.
+	// its note (no control-ledger acceptance behind it). A fence-less landing
+	// needs no commit-result copy either: since Correction C3 it writes its
+	// own ledger line inside the landing's Mutate
+	// (landSteeredStopLocked), and the notice publisher discovers every
+	// transition from the ledger's landed history.
 	landed *session.LandedStop
 	commit *session.FinalDeliveryCommit
 	// message and messageID carry the committed final's publication payload.
@@ -207,7 +207,7 @@ func (al *AgentLoop) commitSteeredCompletion(
 				}
 				res.kind = steeredCommitStopped
 				res.landedStop = true
-				if err := landSteeredStopLocked(cur, outcome); err != nil {
+				if err := landSteeredStopLocked(lifecycle, cur, outcome); err != nil {
 					return err
 				}
 				res.landed = landedStopFromRecord(cur)
@@ -230,10 +230,13 @@ func (al *AgentLoop) commitSteeredCompletion(
 		}
 		if nextState == session.LifecycleStopped {
 			// A stop disposition with no fence: a legacy RequestCancel path or
-			// a lifetime-budget expiry. Same landing, synthesized note.
+			// a lifetime-budget expiry. Same landing, synthesized note — and,
+			// in the same lock hold, the fence-less transition's ledger line
+			// (Correction C3): the ledger, not the note, is the notice's
+			// identity from here on.
 			res.kind = steeredCommitStopped
 			res.landedStop = true
-			if err := landSteeredStopLocked(cur, outcome); err != nil {
+			if err := landSteeredStopLocked(lifecycle, cur, outcome); err != nil {
 				return err
 			}
 			res.landed = landedStopFromRecord(cur)
@@ -292,8 +295,10 @@ func (al *AgentLoop) commitSteeredCompletion(
 	}
 	// The stopped state is DURABLE — record the D6 landed-stop history for
 	// the control that ordered it (nil when the landing synthesized its note:
-	// no acceptance, no history). Never earlier: a bare intent is not a
-	// landed stop, and the final applied receipt waits for the D6 notice.
+	// no acceptance — a fence-less landing recorded its own history inside
+	// the landing's Mutate, where a failure would have refused the landing).
+	// Never earlier: a bare intent is not a landed stop, and the final
+	// applied receipt waits for the D6 notice.
 	//
 	// This is the ACTIVE-turn completion's history write, not the never-ran
 	// stop landing's: the turn's caller has already been answered when this
@@ -321,7 +326,20 @@ func (al *AgentLoop) commitSteeredCompletion(
 // stop path owns: fence spent (a current-generation marker is cleared), the
 // lasting note kept or synthesized. persistLocked enforces the paired
 // invariants (stopped requires a note and forbids a current fence).
-func landSteeredStopLocked(cur *session.LifecycleRecord, outcome steer.Outcome) error {
+//
+// A FRESH fence-less landing (no note yet — Correction C3) ledgered its
+// transition BEFORE the note is stamped: RecordFencelessLandedStopLocked
+// appends the landed-stop history line with the next monotonic stop
+// sequence under the caller's lock — the same Mutate hold this landing runs
+// in — and identifies the landing execution (the record's admission
+// identity) instead of an accepted control. The synthesized note keeps its
+// own display shape; the transition's identity is the ledger line. A ledger
+// failure REFUSES the whole landing (the mutation errors, nothing
+// persists): a stop whose history cannot be recorded must not land
+// note-only, because the note-derived notice fallback is retired — an
+// unledgered fence-less stop's notice would be lost the moment a RESUME
+// cleared the note. The refused landing is retried by its caller.
+func landSteeredStopLocked(lifecycle *session.LifecycleStore, cur *session.LifecycleRecord, outcome steer.Outcome) error {
 	cur.State = session.LifecycleStopped
 	cur.NeedsInput = nil
 	if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
@@ -332,9 +350,25 @@ func landSteeredStopLocked(cur *session.LifecycleRecord, outcome steer.Outcome) 
 		if outcome == steer.OutcomeTimedOut {
 			cause = session.StopCauseTimeout
 		}
+		at := time.Now().UTC()
+		landed := session.LandedStop{
+			ParentSessionID: cur.SteeringSessionID(),
+			Generation:      cur.Generation,
+			Cause:           cause,
+			Actor:           session.StopActorSystem,
+			At:              at,
+		}
+		if cur.ExecutionID != nil {
+			landed.RunID = cur.ExecutionID.RunID
+			landed.BootSeq = cur.ExecutionID.BootSeq
+		}
+		seq, err := lifecycle.RecordFencelessLandedStopLocked(cur.SessionID, landed)
+		if err != nil {
+			return err
+		}
 		cur.StopNote = &session.StopNote{
-			At: time.Now().UTC(), By: session.StopActorSystem,
-			Seq: uint64(cur.Generation), Cause: cause,
+			At: at, By: session.StopActorSystem,
+			Seq: uint64(seq), Cause: cause,
 		}
 	}
 	// The stop instant is the end of real activity, except a restart

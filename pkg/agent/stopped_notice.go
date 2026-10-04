@@ -93,16 +93,12 @@ func (al *AgentLoop) deliverLandedStopNotices(ctx context.Context, rec *session.
 	if readErr != nil {
 		return false, fmt.Errorf("steer: stopped notice: read landed history of %s: %w", rec.SessionID, readErr)
 	}
-	// A fence-less landing has no landed history to discover — its notice is
-	// derived from the landing's retained stop note, which IS durable on the
-	// record. Deriving it HERE, in the one publisher both the landing pass
-	// and the boot replay (replayLandedStopNotices) run, is what keeps an
-	// untaken fence-less notice ringing on every delivery pass and after a
-	// restart until the durable ack lands (founder decision, 2026-10-04) —
-	// instead of only once, from the landing's in-memory commit result.
-	if tr, ok := fencelessNoticeTransition(rec, transitions); ok {
-		transitions = append(transitions, tr)
-	}
+	// Every landed transition — fenced or fence-less — is discovered from
+	// the ledger's landed history alone (Correction C3): a fence-less
+	// landing ledgered its transition in the same Mutate that wrote its
+	// note, so the note-derived fallback is retired. A RESUME clearing the
+	// active note can therefore never lose an untaken notice, and two
+	// fence-less stops in one generation keep distinct ids.
 	var errs []error
 	for _, tr := range transitions {
 		work, trErr := al.deliverLandedStopNotice(ctx, rec, tr)
@@ -114,56 +110,6 @@ func (al *AgentLoop) deliverLandedStopNotices(ctx context.Context, rec *session.
 		pending = pending || work
 	}
 	return pending, errors.Join(errs...)
-}
-
-// stoppedTransitionFromLandedNote is the in-memory StoppedTransition view of
-// a fence-less landing's retained note — the tuple the publisher composes
-// that landing's direct-parent notice from. A fence-less stop has no
-// control-ledger acceptance behind it, so no landed history exists to
-// discover (and RecordLandedStopLocked refuses to fabricate one); the
-// transition is therefore never written to the ledger, and its StopSeq is
-// the synthesized note's own seq — the generation stand-in, the only
-// identity a fence-less stop has. The notice's id stays dedup-stable because
-// the note is retained on the landed record; deliverLandedStopNotices
-// re-derives this transition from that retained note on every delivery pass
-// and at boot (fencelessNoticeTransition), so the notice is replayable, not
-// a one-shot delivery from a landing's in-memory commit result.
-func stoppedTransitionFromLandedNote(rec *session.LifecycleRecord, note *session.StopNote) session.StoppedTransition {
-	tr := session.StoppedTransition{
-		SessionID:       rec.SessionID,
-		ParentSessionID: rec.SteeringSessionID(),
-		Generation:      rec.Generation,
-		StopSeq:         note.Seq,
-		Cause:           note.Cause,
-		Actor:           note.By,
-		At:              note.At,
-	}
-	if rec.StopEffect != nil {
-		tr.ControlID = rec.StopEffect.ControlID
-	}
-	return tr
-}
-
-// fencelessNoticeTransition derives a fence-less landing's noticeable
-// transition from the record's RETAINED stop note. ok is false when the
-// record carries no retained note (it never landed stopped, or a same-
-// generation RESUME cleared the note) — or when the landed history already
-// covers the record's CURRENT generation: a fenced landing in that
-// generation is discoverable from the ledger above, its StopSeq is the real
-// control sequence its own note carries, and adding the note derivation
-// beside it would publish a second, stand-in-seq notice for the same
-// landing. Older generations' history never suppresses the current note:
-// a fence-less landing in a new generation keeps its own ring.
-func fencelessNoticeTransition(rec *session.LifecycleRecord, transitions []session.StoppedTransition) (session.StoppedTransition, bool) {
-	if rec == nil || rec.StopNote == nil {
-		return session.StoppedTransition{}, false
-	}
-	for _, tr := range transitions {
-		if tr.Generation == rec.Generation {
-			return session.StoppedTransition{}, false
-		}
-	}
-	return stoppedTransitionFromLandedNote(rec, rec.StopNote), true
 }
 
 // deliverLandedStopNotice delivers ONE landed transition's notice to its
@@ -334,11 +280,14 @@ func (al *AgentLoop) wakeParentForStoppedNotice(ctx context.Context, rec *sessio
 // record's LANDED stops at boot. The control ledger's landed history is the
 // only source: each pending notice is composed from its own transition, the
 // record's current note is never re-read or rewritten, and a stop that has
-// not landed publishes nothing (D2 CRIT-001). It returns false when a stored
-// final should still take the existing completion-repair path, or when there
-// is no landed history to replay. Boot never resumes anything and never
-// fabricates a restart stop (D8.5); finishing an accepted-but-unlanded fence
-// at boot is W3b's reconciliation, reported visibly — never minted here.
+// not landed publishes nothing (D2 CRIT-001). It returns true only for the
+// shapes whose boot handling IS this replay — a stopped record, or an
+// accepted-but-unlanded stop fence (W3b's reconciliation, reported visibly,
+// never minted here); every other non-terminal state returns false so the
+// caller's own boot consequence runs. Correction C5: a replay outcome is NOT
+// current-run recovery — a replay failure stays visibly pending and retried
+// below, and it never suppresses the caller's current-run stop nor
+// authorizes a run (boot never dispatches, D8.5).
 func (r *SteerBootRecovery) recoverStoppedChildNotice(ctx context.Context, rec *session.LifecycleRecord, notice func(string, string)) bool {
 	if r == nil || rec == nil || rec.SteeredBy == nil || rec.State == session.LifecycleNeedsInput {
 		return false
@@ -349,7 +298,7 @@ func (r *SteerBootRecovery) recoverStoppedChildNotice(ctx context.Context, rec *
 	// never the ledger — founder Q2=A), or already terminal — and the
 	// committed final's repair path must never hide it. (needs_input stays
 	// excluded above: a parked session's boot handling is its own flow.)
-	pending, replayErr := r.replayLandedStopNotices(ctx, rec)
+	_, replayErr := r.replayLandedStopNotices(ctx, rec)
 	if replayErr != nil {
 		r.reportStoppedNotice(rec, notice, replayErr)
 	}
@@ -368,13 +317,10 @@ func (r *SteerBootRecovery) recoverStoppedChildNotice(ctx context.Context, rec *
 		r.reportPendingFence(rec, notice)
 		return true
 	}
-	if rec.State != session.LifecycleRunning && rec.State != session.LifecycleQueued {
-		return false
-	}
-	if r.hasUnacknowledgedFinal(rec, notice) {
-		return false
-	}
-	return pending || replayErr != nil
+	// Correction C5: running, queued and every other non-terminal state fall
+	// through to the caller's own boot consequence — the interrupted run's
+	// stop — whatever the replay above found.
+	return false
 }
 
 // replayLandedStopNotices runs the loop's landed-history publisher for one
@@ -405,13 +351,6 @@ func (r *SteerBootRecovery) reportPendingFence(rec *session.LifecycleRecord, not
 	}
 	notice("stopped-notice:"+rec.SessionID, fmt.Sprintf(
 		"session %s carries a current stop fence that has not landed; its direct-parent notice stays pending until boot reconciliation finishes the stop", rec.SessionID))
-}
-
-func (r *SteerBootRecovery) hasUnacknowledgedFinal(rec *session.LifecycleRecord, notice func(string, string)) bool {
-	messages := r.unacknowledged(rec, notice)
-	finalID := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation)
-	_, ok := findBootMessage(messages, finalID)
-	return ok
 }
 
 func (r *SteerBootRecovery) noticeLoop() (*AgentLoop, error) {

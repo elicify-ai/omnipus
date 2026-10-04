@@ -234,14 +234,14 @@ func (al *AgentLoop) landSteeredStopReport(ctx context.Context, sessionID string
 		if fencedAtEntry && (cur.Stop == nil || cur.Stop.Generation != cur.Generation) {
 			return errTerminalReportFenceSuperseded
 		}
-		if err := landSteeredStopLocked(cur, outcome); err != nil {
+		if err := landSteeredStopLocked(lifecycle, cur, outcome); err != nil {
 			return err
 		}
 		// Capture from the record AS PERSISTED: the note carries the
 		// original stop instant, the effect names the control. A landing
-		// without effect metadata (a fence-less stop disposition that
-		// synthesized its note) has no control-ledger acceptance behind it
-		// and writes no history.
+		// without effect metadata (a synthesized fence-less note) recorded
+		// its own ledger history inside landSteeredStopLocked — Correction
+		// C3 — so there is nothing left for the post-mutation write below.
 		landed = landedStopFromRecord(cur)
 		return nil
 	})
@@ -299,7 +299,9 @@ func (al *AgentLoop) landSteeredStopReport(ctx context.Context, sessionID string
 // ORIGINAL stop instant — never a time.Now reconstruction), the acceptance's
 // control id and target from StopEffect, and the original direct parent.
 // nil when the landing carries no control-ledger acceptance (a synthesized
-// fence-less note) — that stop has no accepted control to attach history to.
+// fence-less note) — that stop has no accepted control to attach history
+// to, and since Correction C3 it wrote its own ledger line inside the
+// landing instead (landSteeredStopLocked).
 func landedStopFromRecord(cur *session.LifecycleRecord) *session.LandedStop {
 	if cur == nil || cur.StopNote == nil || cur.StopEffect == nil {
 		return nil
