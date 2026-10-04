@@ -774,7 +774,7 @@ func (t *DelegateTool) executeStopAll(ctx context.Context, args map[string]any) 
 		))
 	}
 
-	// ADR-057 FR-028/BDD-29/D8/R-13: delegate action="cancel" now also kills
+	// ADR-057 FR-028/BDD-29/D8/R-13: delegate action="stop_all" now also kills
 	// that child's OWN background shells AND every durable descendant's
 	// (D8-CASCADE) — before this fix, it reached only the single named
 	// session, silently leaking a grandchild's background work (see

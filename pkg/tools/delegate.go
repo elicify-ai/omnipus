@@ -214,7 +214,7 @@ type DelegateTool struct {
 	// (pkg/agent/cancel.go's resolveBackgroundKillSessionIDs loop over
 	// hooks.KillBackgroundSessions) — that path fires on a chat-wide Stop
 	// click and walks the FULL descendant subtree; this one fires on a
-	// delegate(action="cancel") tool call targeting exactly one child
+	// delegate(action="stop_all") tool call targeting exactly one child
 	// session (BDD-29's scope is "that child's" shells, not its subtree,
 	// matching ScopeSelfOnly's own single-target semantics — see
 	// SetCancelHooks' doc comment). Reuses the SAME KillAllForSessions
@@ -548,7 +548,7 @@ func (t *DelegateTool) SetProgressReader(reader DelegateProgressReader) {
 // SetSessionManager installs the shared *SessionManager executeStopAll uses
 // to kill a cancelled child's own background shells (FR-028/BDD-29). See
 // the sessionManager field doc. A nil sessionManager (never called) leaves
-// action="cancel" behaving exactly as before this fix — a silent no-op on
+// action="stop_all" behaving exactly as before this fix — a silent no-op on
 // this specific side effect, matching every other optional capability.
 func (t *DelegateTool) SetSessionManager(sm *SessionManager) {
 	t.sessionManager = sm

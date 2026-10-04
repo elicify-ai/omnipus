@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // steer_delegate_cancel.go — the stop an AGENT performs on a worker it
-// started (delegate(action="cancel")), wired from
+// started (delegate(action="stop_all")), wired from
 // session_messaging_wire.go::wireSessionMessagingForAgent.
 package agent
 
