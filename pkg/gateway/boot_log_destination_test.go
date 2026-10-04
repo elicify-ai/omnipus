@@ -45,11 +45,12 @@ func TestBootLogging_EnvironmentDestination(t *testing.T) {
 				if mode == "home_relative" {
 					t.Setenv("OMNIPUS_LOG_FILE", "~/diagnostics/gateway.jsonl")
 				}
-				if mode == "invalid_destination" {
+				switch mode {
+				case "invalid_destination":
 					require.NoError(t, os.MkdirAll(wantedLog, 0o755))
-				} else if mode == "invalid_parent" {
+				case "invalid_parent":
 					require.NoError(t, os.WriteFile(filepath.Dir(wantedLog), []byte("not a directory"), 0o600))
-				} else {
+				default:
 					require.NoError(t, os.MkdirAll(filepath.Dir(wantedLog), 0o755))
 					require.NoError(t, os.WriteFile(wantedLog, []byte("{\"message\":\"existing operator record\"}\n"), 0o600))
 				}
