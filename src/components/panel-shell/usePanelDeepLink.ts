@@ -27,8 +27,9 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useBlocker, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useUiStore } from '@/store/ui'
 import { leaveGateThen } from './leaveGate'
-import { isWorkspaceScopedPanel, WAVE_1_PANEL_IDS } from './types'
+import { isWorkspaceScopedPanel } from './types'
 import type { ActivePanel, WorkspacePanelContext, WorkspacePanelId } from './types'
+import { registeredPanelIds } from './registry'
 import {
   confirmDiscardLibraryEdits,
   isLibraryEditorDirty,
@@ -38,7 +39,7 @@ type SearchRecord = Record<string, unknown>
 
 function rawPanel(search: SearchRecord): WorkspacePanelId | undefined {
   if (typeof search.panel !== 'string') return undefined
-  if (!(WAVE_1_PANEL_IDS as readonly string[]).includes(search.panel)) return undefined
+  if (!(registeredPanelIds as readonly string[]).includes(search.panel)) return undefined
   const id = search.panel as WorkspacePanelId
   return isWorkspaceScopedPanel(id) ? id : undefined
 }
@@ -67,7 +68,7 @@ function gatedCloseIfOpen(): void {
 
 function projectedPanel(activePanel: ActivePanel | null): WorkspacePanelId | undefined {
   if (activePanel === null) return undefined
-  if (!(WAVE_1_PANEL_IDS as readonly string[]).includes(activePanel.id)) return undefined
+  if (!(registeredPanelIds as readonly string[]).includes(activePanel.id)) return undefined
   return isWorkspaceScopedPanel(activePanel.id) ? activePanel.id : undefined
 }
 

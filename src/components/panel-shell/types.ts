@@ -39,15 +39,6 @@ export function isWorkspaceScopedPanel(id: PanelId): id is WorkspacePanelId {
   return PANEL_POLICIES[id].scope === 'workspace'
 }
 
-/**
- * The ids with a shell REGISTRATION in wave 1 (MAJ-012, §10). The chat route's
- * `validateSearch` accepts exactly these as `?panel=` values; every other
- * PanelId (`mail`, `tasks`, `team`, `calendar`) is unregistered yet and is
- * dropped exactly like an unknown id (US-7 AS-4, §12 dataset row 7). Static
- * values (not derived from `PanelId`) because the schema needs RUNTIME
- * membership; the `satisfies` keeps the list from drifting off the union.
- */
-export const WAVE_1_PANEL_IDS = ['library', 'browser'] as const satisfies readonly PanelId[]
 
 /**
  * What a panel needs to render its content (§8.1: "context carries what the
@@ -138,6 +129,15 @@ export interface PanelDefinition {
   fullScreen: {
     toSearch: (context: PanelContext) => Record<string, string>
     fromSearch: (search: Record<string, unknown>) => PanelContext | null
+    /**
+     * How the docked shell's Expand affordance presents this panel's full
+     * screen. `'popout'` (default — Library/Browser, FR-008/US-6) opens the
+     * shared route in a new browser tab with the full popup/presence/re-dock
+     * lifecycle. `'route'` (SP-38, Tasks/Team/Calendar) navigates the SAME
+     * tab to the shared chrome-less "Back to chat" route — never a new
+     * browser tab.
+     */
+    expand?: 'popout' | 'route'
   }
   /**
    * CRIT-001: the leave gate for panels with unsaved-edit risk. The shell
