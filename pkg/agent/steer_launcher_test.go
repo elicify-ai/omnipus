@@ -11,6 +11,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -110,6 +111,42 @@ func newSteerAL(t *testing.T) (*AgentLoop, func()) {
 	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
 	inbox := session.NewMessageInboxStore(filepath.Join(home, "session_messages"))
 	al.SetSessionMessagingStores(inbox, lifecycle)
+	// SETUP Mint genuine boot epoch: a real BootEpochStore, one Mint,
+	// SetBootEpochStore. Never a hard-coded number. Dispatch admission
+	// (execution_identity.go) refuses boot_seq 0 — an unwired store reads
+	// Current 0 — so every steered session started through this helper
+	// needs one genuinely minted epoch, mirroring the gateway's boot-time
+	// mint (the same setup steer_drain_execution_identity_q2_test.go's
+	// q2DrainHarness performs for itself).
+	//
+	// The store's directory is a dedicated subdirectory of home, NOT home
+	// itself: BootEpochStore persists the counter at <dir>/boot_epoch.json,
+	// and callers that mint their OWN epoch over home after this helper
+	// (setupQueuedReplacementHarness in
+	// execution_identity_queued_replacement_test.go, q2DrainHarness,
+	// goal_followup_round3_984_test.go, steer_turn_drain_1020_test.go)
+	// require THEIR mint to be the first on a fresh <home>/boot_epoch.json
+	// — the queued-replacement harness asserts its mint returns exactly 1
+	// ("one genuine mint on a fresh store"). A Mint here over home would
+	// hand them 2 and fail them in setup. The subdirectory keeps home's
+	// counter file absent for them while admission still reads a genuine,
+	// persisted, nonzero Current from the store wired here.
+	// The gateway mints over an already-existing home; this subdirectory is
+	// new, so create it before Mint — BootEpochStore's flock needs its
+	// parent dir to exist (fileutil.WithFlock opens <dir>/boot_epoch.json.lock).
+	epochDir := filepath.Join(home, "boot_epoch")
+	if mkdirErr := os.MkdirAll(epochDir, 0o700); mkdirErr != nil {
+		t.Fatalf("SETUP create boot epoch dir: %v", mkdirErr)
+	}
+	boot := session.NewBootEpochStore(epochDir)
+	epoch, err := boot.Mint()
+	if err != nil {
+		t.Fatalf("SETUP Mint genuine boot epoch: %v", err)
+	}
+	if epoch == 0 || boot.Current() != epoch {
+		t.Fatalf("SETUP minted/current boot epoch = %d/%d, require one genuine nonzero epoch", epoch, boot.Current())
+	}
+	al.SetBootEpochStore(boot)
 	t.Cleanup(func() { al.Close() })
 	return al, func() {}
 }
