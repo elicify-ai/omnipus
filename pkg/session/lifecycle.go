@@ -330,6 +330,27 @@ type LifecycleRecord struct {
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// LastActivityAt is the last persisted moment this session was actually
+	// working (D8.7). It is not UpdatedAt: every persist, including a boot
+	// stop, stamps UpdatedAt. Restart credit reads this field and must not
+	// see the boot instant substituted for the pre-crash activity.
+	//
+	// not-wire-format: internal disk field. No Session/StopNote wire key.
+	LastActivityAt time.Time `json:"last_activity_at,omitempty"`
+	// ActiveBudgetAnchor is the start of the current lifetime-budget window.
+	// Zero means CreatedAt. An explicit resume after a timeout stop sets it
+	// to the resume instant and clears StoppedForSeconds (D6). A voluntary
+	// resume leaves it unchanged and extends StoppedForSeconds instead.
+	//
+	// not-wire-format: internal disk field. No Session wire key.
+	ActiveBudgetAnchor time.Time `json:"active_budget_anchor,omitempty"`
+	// StoppedForSeconds is active-time credit: whole seconds the session
+	// was stopped or down since ActiveBudgetAnchor (or CreatedAt). The
+	// running deadline is anchor + TimeoutSeconds + this credit (D6).
+	//
+	// not-wire-format: internal disk field. No Session wire key.
+	StoppedForSeconds int64 `json:"stopped_for_seconds,omitempty"`
 }
 
 // Terminal reports whether r's State is one of the two terminal states

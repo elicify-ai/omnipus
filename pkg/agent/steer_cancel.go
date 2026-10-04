@@ -510,6 +510,11 @@ func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, _ steer.P
 		if !rec.Stopped() {
 			return nil
 		}
+		// Budget credit or a timeout reset is part of the same mutation
+		// that clears the note, and it is persisted before this returns
+		// to the caller that dispatches. No lock is held across that
+		// dispatch. A missing note does not invent a boundary.
+		session.ApplyExplicitResumeBudget(rec, time.Now().UTC())
 		rec.State = session.LifecycleQueued
 		rec.Stop = nil
 		rec.StopNote = nil

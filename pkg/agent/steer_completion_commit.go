@@ -288,6 +288,11 @@ func landSteeredStopLocked(cur *session.LifecycleRecord, outcome steer.Outcome) 
 			Seq: uint64(cur.Generation), Cause: cause,
 		}
 	}
+	// The stop instant is the end of real activity, except a restart
+	// landing, which must keep the pre-crash timestamp (D8.7).
+	if cur.StopNote == nil || cur.StopNote.Cause != session.StopCauseRestart {
+		cur.NoteRealActivity(time.Now().UTC())
+	}
 	return nil
 }
 

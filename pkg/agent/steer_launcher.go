@@ -1063,20 +1063,16 @@ func (al *AgentLoop) runDispatchedSteeredTurn(rec *session.LifecycleRecord, ts *
 // so a session re-entered by a wake could run forever regardless of its
 // configured timeout. Both entry paths now share this one helper.
 //
-// A zero rec.CreatedAt used to turn the timeout OFF entirely
-// (!rec.CreatedAt.IsZero() gated the old inline check) — a missing/unset
-// timestamp silently removed a limit instead of just meaning "no better
-// anchor is known yet". Treated here as "the deadline counts from now"
-// instead: still bounded, never silently unlimited.
+// The deadline is the remaining active-time budget (D6): anchor +
+// TimeoutSeconds + stopped credit. With no credit and no reset anchor that
+// is still CreatedAt + TimeoutSeconds. A zero CreatedAt and a zero anchor
+// count from now — a missing timestamp never silently removes the limit.
 func steeredTurnRunContext(base context.Context, rec *session.LifecycleRecord) (context.Context, context.CancelFunc) {
-	if rec == nil || rec.SteeredBy == nil || rec.SteeredBy.Limits.TimeoutSeconds <= 0 {
+	deadline, ok := rec.ActiveBudgetDeadline(time.Now())
+	if !ok {
 		return base, func() {}
 	}
-	anchor := rec.CreatedAt
-	if anchor.IsZero() {
-		anchor = time.Now()
-	}
-	return context.WithDeadline(base, anchor.Add(time.Duration(rec.SteeredBy.Limits.TimeoutSeconds)*time.Second))
+	return context.WithDeadline(base, deadline)
 }
 
 // disposeSteeredTurnResult applies the SAME post-turn disposition to a

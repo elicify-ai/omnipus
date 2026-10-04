@@ -6,6 +6,7 @@ package agent
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -63,6 +64,12 @@ func commitSteeredExecutionState(lifecycle *session.LifecycleStore, claim execut
 		rec.State = state
 		if pendingMessage != "" {
 			rec.PendingUserMessages = append(rec.PendingUserMessages, pendingMessage)
+		}
+		// A running admission is real activity. Queued waiting stays inside
+		// the live CreatedAt window; stamping it here would let a later
+		// restart credit that wait as downtime.
+		if state == session.LifecycleRunning {
+			rec.NoteRealActivity(time.Now().UTC())
 		}
 		committed = rec
 		return nil
