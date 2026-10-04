@@ -186,13 +186,17 @@ func (dt *delegateToolExecuteRespond) dispatchThirdParty() (*ToolResult, bool) {
 // child takes the ordinary steering queue: delivered into the current turn
 // at its next tool boundary, never stopping it (locked decision 5).
 func (dt *delegateToolExecuteRespond) deliverNative() *ToolResult {
-	// A session carrying a Stop marker for its OWN current generation — OR a
-	// terminal record (ADR-093 D4) — is checked off the plain Load above,
-	// mirroring executeSteer: the check-then-act reasoning is identical (a
-	// stamped Stop marker and a terminal record are facts that cannot become
-	// stale), and ReviveStoppedSession re-validates atomically under its own
-	// record lock.
-	if dt.rec.Terminal() || dt.rec.Stopped() {
+	// A terminal record (ADR-093 D4) or a record whose stop has already
+	// LANDED (state LifecycleStopped; TransitionSession cleared the fence
+	// when it landed) is checked off the plain Load above, mirroring
+	// executeSteer: both shapes revive through ReviveStoppedSession below,
+	// which re-validates atomically under its own record lock — a landed
+	// stop-state is left only through Revive, so the fact cannot become
+	// stale under this Load the way a live fence can: a fence not yet
+	// landed can land at any moment, and that moving fact is exactly what
+	// the closure's own in-flight-fence check below re-reads under the
+	// lock.
+	if dt.rec.Terminal() || dt.rec.State == session.LifecycleStopped {
 		reviver, ok := dt.t.steering.(steerReviver)
 		if !ok {
 			return ErrorResult(fmt.Sprintf("delegate: respond: session %s is stopped and cannot be resumed: no reviver configured", dt.sessionID))
@@ -205,6 +209,20 @@ func (dt *delegateToolExecuteRespond) deliverNative() *ToolResult {
 			return ErrorResult(fmt.Sprintf("delegate: respond: session %s could not be resumed", dt.sessionID))
 		}
 		return dt.acknowledgedRespond("Answer delivered; session resumed.")
+	}
+
+	// A stop fence still IN FLIGHT (stamped for the current generation
+	// while the state is still running or queued) is neither queueable nor
+	// revivable — an in-flight fence is not a landed stop: the dying turn
+	// is still registered, so an early revive would strand the record
+	// queued with nobody running it, and queueing would put the answer in a
+	// queue the dying turn's unwinding may never drain. Refuse visibly —
+	// never queue, never revive; the caller retries once the stop has
+	// landed. (A fence for an EARLIER generation is inert history —
+	// Stopped() is false for it — and takes the ordinary queueing path
+	// below.)
+	if dt.rec.Stop != nil && dt.rec.Stop.Generation == dt.rec.Generation {
+		return ErrorResult(fmt.Sprintf("delegate: respond: session %s is stopping (a stop is in flight for its current generation); retry the respond once it has stopped", dt.sessionID))
 	}
 
 	// TOCTOU race guard: the terminal check evaluated INSIDE the Mutate

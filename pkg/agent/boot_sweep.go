@@ -334,9 +334,11 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 			// "interrupted:"/"timeout:" fatal to the parent — and nothing here
 			// re-wakes a stopped helper; it waits for Revive. A stopped
 			// record that still reaches this arm leaves exactly as it stands.
-			// A record THIS boot just stopped (C5's pre-stop above) is the
-			// interrupted-mid-flight shape, not the already-stopped shape:
-			// its own boot consequence below still runs.
+			// A record THIS boot just stopped (C5's pre-stop above) never
+			// reaches this arm: stopLandedByBoot excludes it here, and the
+			// stopLandedByBoot return below skips the interrupted fatal —
+			// its parent notice already went out through
+			// recoverStoppedChildNotice above.
 			return
 		}
 		for _, message := range messages {

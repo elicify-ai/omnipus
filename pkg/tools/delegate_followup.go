@@ -142,30 +142,38 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		))
 	}
 
-	// [Finding 1, ADR-091 fix lane 2 — Q17/D8] A session carrying a Stop
-	// marker for its OWN current generation — OR a terminal record (ADR-093
-	// D4) — is checked FIRST, off the plain Load above: the founder's
+	// [Finding 1, ADR-091 fix lane 2 — Q17/D8] A terminal record (ADR-093
+	// D4) or a record whose stop has already LANDED (state LifecycleStopped;
+	// TransitionSession cleared the current-generation fence the moment it
+	// landed) is checked FIRST, off the plain Load above: the founder's
 	// decision is that only a newer instruction revives a stopped session,
 	// as a new generation, never the steering queue (which a stopped session
-	// has no live consumer left to drain). BOTH states revive through
-	// ReviveStoppedSession in the branch below. Deliberately NOT folded into the
-	// Mutate-based terminal-rejection closure below: a Stop marker, once
-	// stamped for a generation, is retained forever as inert history (see
-	// SteerCanceller.Revive's own doc comment) — the same "checked off a
-	// naked Load is safe because the fact cannot become stale" reasoning
-	// executeRespond's own delivery uses for its terminal predicate.
-	// Reviver.ReviveStoppedSession re-validates atomically under Revive's
-	// own record lock regardless, so no window is opened here. This ALSO
-	// avoids a real bug the Mutate-closure version of this check had: once
-	// a stamped-but-never-ran session is terminalised by its own Stop
-	// (Finding 5, pkg/agent/steer_cancel.go::terminaliseNeverRanStop),
-	// persisting an UNCHANGED copy of that now-terminal record through
-	// Mutate (the "harmless no-op" pattern the terminal-rejection closure
-	// below relies on) trips the store's own immutable-terminal invariant
-	// (ErrLifecycleTerminalImmutable) — Mutate's no-op persist is only
-	// harmless when the record is NOT terminal.
+	// has no live consumer left to drain). BOTH shapes revive through
+	// ReviveStoppedSession in the branch below. A stop fence still IN FLIGHT
+	// (stamped for the current generation while the state is still running
+	// or queued) is NEITHER shape — an in-flight fence is not a landed stop:
+	// the dying turn is still registered, so a revive here would clear the
+	// fence, re-queue the record and strand it queued with nobody running it
+	// (admission then refuses because the dying turn is still registered).
+	// It is refused visibly right below, before any queueing; the caller
+	// retries once the stop has landed. Deliberately NOT folded into the
+	// Mutate-based terminal-rejection closure below: a landed stop-state is
+	// left only through Revive, which re-validates atomically under Revive's
+	// own record lock, so the fact cannot become stale under this Load the
+	// way a live fence can — a fence not yet landed can land, and
+	// TransitionSession then clears it, at any moment; that moving fact is
+	// exactly what the closure's own in-flight-fence check below re-reads
+	// under the lock. This ALSO avoids a real bug the Mutate-closure version
+	// of this check had: once a stamped-but-never-ran session is terminalised
+	// by its own Stop (Finding 5, pkg/agent/steer_cancel.go::
+	// terminaliseNeverRanStop), persisting an UNCHANGED copy of that
+	// now-terminal record through Mutate (the "harmless no-op" pattern the
+	// terminal-rejection closure below relies on) trips the store's own
+	// immutable-terminal invariant (ErrLifecycleTerminalImmutable) —
+	// Mutate's no-op persist is only harmless when the record is NOT
+	// terminal.
 	// ADR-093 D4: a terminal record, stopped or not, takes this same revive.
-	if rec.Terminal() || rec.Stopped() {
+	if rec.Terminal() || rec.State == session.LifecycleStopped {
 		if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
 			return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
 		}
@@ -190,6 +198,18 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		))
 	}
 
+	// A current-generation fence that has NOT yet landed (state still
+	// running or queued) is neither queueable nor revivable: the dying turn
+	// is still registered, so reviving now would strand the record queued
+	// with nobody running it, and queueing would put the message in a queue
+	// the dying turn's unwinding may never drain. Refuse visibly — never
+	// queue, never revive; the caller retries once the stop has landed.
+	// (A fence for an EARLIER generation is inert history — Stopped() is
+	// false for it — and takes the ordinary queueing path below.)
+	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+		return ErrorResult(fmt.Sprintf("delegate: steer: session %s is stopping (a stop is in flight for its current generation); retry the steer once it has stopped", sessionID))
+	}
+
 	// TOCTOU race guard: a plain Load() followed by a branch on
 	// rec.Terminal() was a check-then-act race against the concurrent
 	// atomic terminal transition in pkg/agent/task_executor.go
@@ -212,8 +232,9 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// persisting an unchanged copy of the tail record is a harmless,
 	// deliberate byproduct of reusing the RMW primitive purely for its
 	// locking guarantee, PROVIDED the record is not terminal — which is
-	// exactly why the Stop-marker (possibly-terminal) case above is handled
-	// before ever reaching here, never inside this closure. Ownership is
+	// exactly why the stop cases above are handled before ever reaching
+	// here (landed-stopped and terminal revive; an in-flight fence refuses),
+	// never inside this closure. Ownership is
 	// deliberately NOT re-checked here — see the comment above for why a
 	// stale ownership read cannot happen.
 	// The same race has a second shape (ADR-20260928, founder decision
@@ -237,11 +258,12 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		if cur == nil {
 			return session.ErrLifecycleNotFound
 		}
-		// A record already terminal (or Stop-stamped) never reaches this
-		// closure — the branch above revived it. This check exists ONLY for
-		// the race where the record becomes terminal between the plain Load
-		// and this lock-protected re-read; its "cannot be steered" string is
-		// a refusal for that race alone.
+		// A record already terminal never reaches this closure — the branch
+		// above revived it — and one carrying a live in-flight fence is
+		// refused by the branch above too. These checks exist ONLY for the
+		// race where the record becomes terminal or Stop-stamped between the
+		// plain Load and this lock-protected re-read; their strings are
+		// refusals for those races alone.
 		if cur.Terminal() {
 			return fmt.Errorf("session %s is terminal (%s) and cannot be steered", sessionID, cur.State)
 		}
