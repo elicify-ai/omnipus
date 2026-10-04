@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -33,8 +34,13 @@ import (
 // Wire boundary — who can read one:
 //
 //   - Records live in the session's own provenance.jsonl, a file no SPA,
-//     REST or WebSocket surface reads; TranscriptEntry deliberately gains
-//     NO provenance fields, so nothing client-visible changes shape.
+//     REST or WebSocket surface reads; TranscriptEntry gains NO provenance
+//     DATA (no principal, no ordinal — nothing client-meaningful), so
+//     nothing client-visible changes shape. Its one addition is the
+//     server-internal write-phase marker TranscriptEntry.ProvenancePending
+//     (Correction C4's abrupt-exit rule): it says only that a paired save
+//     was once in flight for that line, carries no record content, and is
+//     cleared once the record is durably written.
 //   - The programmatic read path is LookupMessageProvenance (by server
 //     message id), for the D1.4 answer acceptor this writer precedes.
 type MessageProvenance struct {
@@ -166,6 +172,115 @@ func rollbackTranscriptAppend(path string, preSize int64, existed bool) error {
 		return fmt.Errorf("close rolled-back transcript: %w", err)
 	}
 	return nil
+}
+
+// clearProvenancePendingLocked removes the paired append's write-phase marker
+// (TranscriptEntry.ProvenancePending) from the entry's transcript line once
+// its MessageProvenance record is durably written — Correction C4's "clear it
+// when the sender record lands". The caller holds sessionID's shard
+// (appendTranscript's hold). The rewrite is the store's established
+// whole-file atomic form (transcript_rewrite.go): read, mutate in memory,
+// WriteFileAtomic — no torn intermediate state, and every untouched line,
+// malformed ones included, round-trips verbatim. A missing transcript file is
+// nothing to clear (the session was deleted mid-flight); a line that no
+// longer carries the marker is equally a no-op.
+func (us *UnifiedStore) clearProvenancePendingLocked(sessionID, messageID string) error {
+	path := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("unified_store: clear provenance pending: read transcript: %w", err)
+	}
+	lines := bytes.Split(data, []byte{'\n'})
+	changed := false
+	for i, raw := range lines {
+		trimmed := bytes.TrimSpace(raw)
+		if len(trimmed) == 0 {
+			continue
+		}
+		var entry TranscriptEntry
+		if json.Unmarshal(trimmed, &entry) != nil {
+			continue // Malformed line stays verbatim, as every rewrite treats it.
+		}
+		if entry.ID != messageID || !entry.ProvenancePending {
+			continue
+		}
+		entry.ProvenancePending = false
+		rewritten, mErr := json.Marshal(entry)
+		if mErr != nil {
+			return fmt.Errorf("unified_store: clear provenance pending: marshal entry %q: %w", messageID, mErr)
+		}
+		lines[i] = rewritten
+		changed = true
+		break // Entry IDs are unique; the marker line is the one just appended.
+	}
+	if !changed {
+		return nil
+	}
+	var buf bytes.Buffer
+	for _, raw := range lines {
+		buf.Write(raw)
+		buf.WriteByte('\n') // Next O_APPEND record must start on its own line.
+	}
+	if err := fileutil.WriteFileAtomic(path, buf.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("unified_store: clear provenance pending: write transcript: %w", err)
+	}
+	return nil
+}
+
+// filterUnpairedProvenanceLines applies Correction C4's abrupt-exit rule to a
+// parsed transcript read: a line that still carries the write-phase marker
+// AND has no MessageProvenance record for its ID is crash residue from an
+// incomplete paired save — it is not shown and not admitted, from every
+// reader's perspective neither half of the pair is kept, while its bytes
+// remain on disk as inert residue. Every other line passes untouched:
+// entries without the marker (all agent and tool lines, and every historical
+// user line that was never part of a paired save) are never checked against
+// provenance at all, and a marker line whose record EXISTS is the accepted
+// pair whose clearing rewrite did not land — it stays visible.
+//
+// The provenance read is the only extra I/O, and only when a marker-bearing
+// line is actually present: the steady state after any paired append (and
+// every session that never used one) does none. An unreadable provenance
+// file leaves acceptance unestablishable, so marker lines fail safe to
+// hidden (the next read after a transient concurrent-append tear shows them
+// once the pair and its clearing rewrite completed) while every non-marker
+// line is unaffected; the acceptor-side reads (append, lookup) keep failing
+// loudly on the same conditions — this projection never understates what the
+// acceptor will still reject.
+func (us *UnifiedStore) filterUnpairedProvenanceLines(sessionID string, entries []TranscriptEntry) []TranscriptEntry {
+	pending := -1
+	for i := range entries {
+		if entries[i].ProvenancePending {
+			pending = i
+			break
+		}
+	}
+	if pending < 0 {
+		return entries
+	}
+	records, err := readMessageProvenance(us.messageProvenancePath(sessionID))
+	if err != nil {
+		slog.Warn("unified_store: provenance history unreadable; withholding provenance-pending lines",
+			"session_id", sessionID, "error", err)
+		records = nil
+	}
+	paired := make(map[string]struct{}, len(records))
+	for _, record := range records {
+		paired[record.MessageID] = struct{}{}
+	}
+	kept := make([]TranscriptEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.ProvenancePending {
+			if _, ok := paired[entry.ID]; !ok {
+				continue // Crash residue: the paired save never completed.
+			}
+		}
+		kept = append(kept, entry)
+	}
+	return kept
 }
 
 // appendMessageProvenanceLocked stamps and appends the provenance record for
