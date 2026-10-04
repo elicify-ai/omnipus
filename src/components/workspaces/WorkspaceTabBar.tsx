@@ -1,14 +1,12 @@
-import { Link, useLocation, useNavigate } from '@tanstack/react-router'
+import { useLocation, useNavigate } from '@tanstack/react-router'
 import { motion } from 'framer-motion'
 import {
-  ChatCircle,
+  List,
   SquaresFour,
   CalendarBlank,
   UsersThree,
   Files,
   Buildings,
-  CaretDown,
-  Tray,
 } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
 import {
@@ -23,21 +21,24 @@ import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import type { WorkspacePanelId } from '@/components/panel-shell/types'
 import { cn } from '@/lib/utils'
 
-// The workspace container surface — the MAJ-007 mixed-mode strip (US-5):
-// entries are EITHER navigation links to their deep-linkable sub-route,
-// OR, for a REGISTERED side panel, a toggle button with aria-pressed.
-// Chat is the default landing tab and the panel-host route.
+// The workspace container surface — the strip (US-5, SP-11). Wave 3
+// (side-panel-shell-spec.md §10, SP-32..SP-42 amendments): EVERY entry is a
+// REGISTERED side-panel toggle button with aria-pressed — mixed mode is
+// ended (MAJ-012's links are gone).
 //
-// Entry kinds (side-panel-shell-spec.md §10 / MAJ-007 / MAJ-012):
+// Entry kinds:
 //   - workspace name → settings button (chrome, not a view; aria-current
 //     when the settings route is the page)
-//   - Chat → the panel-host page: a button that navigates to the chat route
-//     and carries aria-current="page" while it IS the underlying page
-//   - Library ('media', wave 1) and Mail ('mail', wave 2) → REGISTERED
-//     panel toggles: aria-pressed, opens/closes the panel scoped to this
-//     workspace via the leave gate — NO navigation (US-5 AS-1/AS-2)
-//   - Tasks/Calendar/Team → unregistered panels (wave 3): ordinary
-//     navigation Links, no aria-pressed (MAJ-012 mixed mode)
+//   - Tasks ('board' segment), Calendar, Library ('media' segment), Team →
+//     REGISTERED panel toggles: aria-pressed, opens/closes the panel scoped
+//     to this workspace via the leave gate — NO navigation (US-5 AS-1/AS-2).
+//     Chat is NOT an entry (SP-40): chat is the base route the shell sits
+//     over — the page underneath — and closing whichever panel is open
+//     reveals it. Chat is never rendered as a strip or dropdown entry.
+//
+// The routes behind the segments (workspaces.$workspaceId.board/calendar/
+// media/team) are deep-link targets only: they redirect to
+// chat?panel=<id> (§8.2), which owns the actual panel open.
 //
 // ADR-051 D1 — "Tasks" screen: Board/List/Graph collapse into ONE screen
 // (WorkspaceTasksTab, rendered under the `board` route segment — kept
@@ -45,28 +46,18 @@ import { cn } from '@/lib/utils'
 // The `list` and `graph` top-level tabs are retired; their route files now
 // redirect to `board` (see workspaces.$workspaceId.list.tsx / .graph.tsx).
 export const WORKSPACE_TABS = [
-  { segment: 'chat', label: 'Chat', Icon: ChatCircle },
   { segment: 'board', label: 'Tasks', Icon: SquaresFour },
   { segment: 'calendar', label: 'Calendar', Icon: CalendarBlank },
   // Renamed Media -> Library (library-spec.md supersedes the old workspace
-  // Media tab / UUID-blob manifest surface entirely). Wave 1: this strip
-  // entry is a REGISTERED panel toggle (see PANEL_TOGGLE_SEGMENTS) —
-  // clicking it opens/closes the Library side panel scoped to this
-  // workspace, the same store call the sidebar Library button
-  // makes. The route itself (routes/_app/workspaces.$workspaceId.media.tsx)
-  // remains a redirect stub for BOOKMARKED /workspaces/{id}/media URLs: it
-  // opens the Library panel and replaces the URL with chat?panel=library
-  // (§8.2), so an old link never dead-ends on a page with no content of its
-  // own.
+  // Media tab / UUID-blob manifest surface entirely). This strip entry is a
+  // REGISTERED panel toggle (see PANEL_TOGGLE_SEGMENTS) — clicking it
+  // opens/closes the Library side panel scoped to this workspace, the same
+  // store call ChatControls' "Open library" button makes. The route itself
+  // (routes/_app/workspaces.$workspaceId.media.tsx) remains a redirect stub
+  // for BOOKMARKED /workspaces/{id}/media URLs: it opens the Library panel
+  // and replaces the URL with chat?panel=library (§8.2), so an old link
+  // never dead-ends on a page with no content of its own.
   { segment: 'media', label: 'Library', Icon: Files },
-  // Mail (email-mail-view-spec.md US-3): the workspace Mail panel. Wave 2
-  // (side-panel-shell-spec.md §10 + §15 item 1): a REGISTERED panel toggle
-  // exactly like Library — aria-pressed, leave-gated open/close, no
-  // navigation. The route itself (routes/_app/workspaces.$workspaceId.mail.tsx)
-  // remains the expand target and the bookmarked-/draft-link stub: it
-  // consumes the §17 params into the panel intent and retargets to
-  // chat?panel=mail (§8.2).
-  { segment: 'mail', label: 'Mail', Icon: Tray },
   { segment: 'team', label: 'Team', Icon: UsersThree },
   // NOTE: workspace settings is deliberately NOT a tab — settings is chrome,
   // not a view. It's reached by clicking the workspace NAME in the top bar
@@ -74,53 +65,33 @@ export const WORKSPACE_TABS = [
   // Notion-style. The /settings route still exists.
 ] as const
 
-/** Registered-panel strip entries: strip segment → panel id. Wave 1:
- * Library ('media') only; wave 2 adds Mail (side-panel-shell-spec.md §10 +
- * §15 item 1 — "Mail joins in wave 2"); waves 2-3 leave Tasks/Calendar/
- * Team on the Link path until registered (MAJ-012 mixed mode), at which
- * point those segments move here too (their routes stay as the expand
- * targets). */
+/** Registered-panel strip entries: strip segment → panel id. Since wave 3
+ * (SP-6) every strip segment maps to a registered panel — Tasks/Calendar/
+ * Team joined Library, ending MAJ-012's mixed mode; their route files stay
+ * as the deep-link targets only (§10). */
 const PANEL_TOGGLE_SEGMENTS: Partial<Record<TabSegment, WorkspacePanelId>> = {
+  board: 'tasks',
+  calendar: 'calendar',
   media: 'library',
-  mail: 'mail',
+  team: 'team',
 }
 
 /** Every real WORKSPACE_TABS segment — derived from the array itself (not a
  * hand-maintained union), so adding/renaming/removing a tab there can never
- * silently drift out of sync with this type, including the SEGMENT_LABELS
- * completeness check below. */
+ * silently drift out of sync with this type. */
 export type TabSegment = (typeof WORKSPACE_TABS)[number]['segment']
-export type WorkspaceSegment = TabSegment | 'settings'
+/** Segment values resolveActiveSegment can report. 'chat' is deliberately
+ * NOT a WORKSPACE_TABS entry (SP-40: chat is the base page underneath, never
+ * a strip/dropdown entry) but remains a real segment — it is the panel-host
+ * page and the redirect target of every panel deep link. 'settings' is
+ * reached via the workspace-name button / compact dropdown's settings entry. */
+export type WorkspaceSegment = TabSegment | 'chat' | 'settings'
 
 export interface WorkspaceTab {
   segment: TabSegment
   label: string
   Icon: Icon
 }
-
-/** Single source for every segment's display label — the four WORKSPACE_TABS
- * labels plus 'settings', which deliberately has no WORKSPACE_TABS entry. All
- * three usages of this map are inside the ONE compact dropdown (the
- * view-switcher trigger button + its settings menu entry, both below @6xl) —
- * the full strip reads `label` directly off WORKSPACE_TABS and never
- * touches this map. Before this map existed, the compact dropdown re-derived
- * its own `activeTab?.label ?? (segment === 'settings' ? ... : 'Chat')`
- * fallback at each of those three call sites, and that duplication is what
- * previously let them drift ('Workspace settings' vs 'Settings') for the same
- * state. Built via `reduce` (not `Object.fromEntries`, whose lib type always
- * widens to a `{[k: string]: string}` index signature — TypeScript's
- * `Object.fromEntries` has no literal-key-preserving overload) so the
- * `tab.segment` key assignment below is checked against the declared
- * `Record<WorkspaceSegment, string>` on every iteration, derived straight
- * from `TabSegment` — a tab added to WORKSPACE_TABS without a label is a
- * compile error here, not a silent runtime gap. */
-const SEGMENT_LABELS: Record<WorkspaceSegment, string> = WORKSPACE_TABS.reduce(
-  (acc, tab) => {
-    acc[tab.segment] = tab.label
-    return acc
-  },
-  { settings: 'Settings' } as Record<WorkspaceSegment, string>,
-)
 
 interface WorkspaceTabBarProps {
   workspaceId: string
@@ -130,33 +101,34 @@ interface WorkspaceTabBarProps {
 
 /**
  * Workspace tab bar — Sovereign Deep, Outfit labels, gold active underline
- * that slides between route entries with a spring transition.
+ * on the workspace-name entry.
+ *
+ * Wave 3 (SP-40/SP-11): every strip entry is a panel toggle (aria-pressed +
+ * accent colour when its panel is open — never the underline, which would
+ * make Framer's shared-layout animation fight the pressed state). Chat is
+ * NOT an entry: chat is the base page underneath; closing the open panel
+ * reveals it. There is no page-semantic route entry left in the strip, so
+ * the only aria-current carrier is the workspace-name → settings entry.
  *
  * Responsive strategy (container-query, relative to the @container top-bar):
- *   ≥ 72rem (1152px): full strip — name → settings, Chat, the Library toggle,
- *     and the mixed-mode links (hidden @6xl:flex)
- *   < 72rem (1152px): single "Active ▾" view-switcher dropdown (flex
- *     @6xl:hidden) — registered panel entries use the same toggle model as
- *     the full strip; page entries navigate. It also carries settings,
- *     since narrow viewports have no other settings entry point here.
+ *   ≥ 72rem (1152px): full strip — name → settings, then the four panel
+ *     toggles (hidden @6xl:flex)
+ *   < 72rem (1152px): an icon-only menu trigger (flex @6xl:hidden, SP-11 —
+ *     a plain menu icon, no text label) opening the same set: the four
+ *     toggles plus settings, since narrow viewports have no other settings
+ *     entry point here.
  *
- * The underline layoutId tracks the ROUTE entry only (the page you are on).
- * A pressed panel toggle shows its state via aria-pressed + accent colour,
- * not the underline — two elements sharing the layoutId at once (page entry
- * + pressed toggle) would make Framer's shared-layout animation fight
- * itself. The full strip retains all workspace-tab-<segment> test ids so
- * Playwright tests at 1280px viewport (container ≥1152px) still find them.
+ * The full strip retains all workspace-tab-<segment> test ids so Playwright
+ * tests at 1280px viewport (container ≥1152px) still find them.
  *
  * Sits inline inside the WorkspaceTabContainer top-bar row (Row 1). The parent
  * row owns the background (no border — flat shell alignment); this component
  * only renders the entry strip.
  */
 export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarProps) {
-  const location = useLocation()
   const navigate = useNavigate()
-  const activeSegment = resolveActiveSegment(location.pathname, workspaceId)
-  const activeTab = WORKSPACE_TABS.find((t) => t.segment === activeSegment)
-  const settingsActive = activeSegment === 'settings'
+  const settingsActive =
+    resolveActiveSegment(useLocation().pathname, workspaceId) === 'settings'
   const activePanelId = useUiStore((s) => s.activePanel?.id ?? null)
 
   /** US-5 AS-1/AS-2: toggle a registered panel scoped to this workspace —
@@ -175,10 +147,6 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
     })
   }
 
-  const navigateToSegment = (segment: TabSegment) => {
-    void navigate({ to: `/workspaces/$workspaceId/${segment}`, params: { workspaceId } })
-  }
-
   const tabUnderline = (active: boolean) =>
     active ? (
       <motion.div
@@ -191,12 +159,12 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
   return (
     <div className="flex-shrink-0 flex items-stretch">
       {/* ── Full entry strip: shown when container ≥ 1152px (72rem).
-          MAJ-007: this is NOT a role="tablist" — it is a mixed set of
-          navigation links, a page entry and panel toggles, so the tablist
+          MAJ-007: this is NOT a role="tablist" — it is a set of panel
+          toggles (plus the name → settings entry), so the tablist
           tab semantics would be wrong. NO overflow-x-auto: a scrollable
           strip let mouse-wheel/touch gestures scroll it up/down (overflow
           containers clip + scroll BOTH axes) — chrome must never move. The
-          strip's content is bounded (name + 5 entries, name truncated) so
+          strip's content is bounded (name + 4 toggles, name truncated) so
           overflow can't occur. ─────── */}
       <div
         data-testid="workspace-tab-strip"
@@ -228,110 +196,59 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
         </Button>
 
         {WORKSPACE_TABS.map(({ segment, label, Icon }) => {
-          // Registered panel (wave 1: Library) → toggle button, no navigation.
+          // Every strip entry is a registered panel toggle (wave 3, SP-6/SP-11):
+          // a button with aria-pressed — opens/closes the panel scoped to this
+          // workspace, NO navigation. The deep-linkable route behind the
+          // segment stays reachable by URL only (it redirects to
+          // chat?panel=<id>).
           const panelId = PANEL_TOGGLE_SEGMENTS[segment]
-          if (panelId) {
-            const pressed = activePanelId === panelId
-            return (
-              <Button
-                key={segment}
-                variant="ghost"
-                onClick={() => togglePanel(panelId)}
-                title={label}
-                aria-pressed={pressed}
-                data-panel-trigger={panelId}
-                data-testid={`workspace-tab-${segment}`}
-                className={cn(
-                  // h-chrome-header fills the exact 44px tokenized chrome row;
-                  // h-11 is rem-based and is only 38.5px at the app root size.
-                  'group relative flex items-center gap-[var(--space-1)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap outline-none transition-colors rounded-t-sm',
-                  pressed
-                    ? 'text-[var(--color-accent)]'
-                    : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-                )}
-              >
-                <Icon size={16} weight={pressed ? 'fill' : 'regular'} />
-                <span>{label}</span>
-              </Button>
-            )
-          }
-          // Chat — the panel-host page. A button that navigates (same
-          // treatment as the name entry) so the page-activeness attribute
-          // lives on OUR element, not a routed anchor's prop whitelist;
-          // aria-current="page" while chat IS the underlying page (US-5).
-          if (segment === 'chat') {
-            const isActive = segment === activeSegment
-            return (
-              <Button
-                key={segment}
-                variant="ghost"
-                onClick={() => navigateToSegment(segment)}
-                title={label}
-                aria-current={isActive ? 'page' : undefined}
-                data-testid={`workspace-tab-${segment}`}
-                className={cn(
-                  'group relative flex items-center gap-[var(--space-1)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap outline-none transition-colors rounded-t-sm',
-                  isActive
-                    ? 'text-[var(--color-accent)]'
-                    : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-                )}
-              >
-                <Icon size={16} weight={isActive ? 'fill' : 'regular'} />
-                <span>{label}</span>
-                {tabUnderline(isActive)}
-              </Button>
-            )
-          }
-          // Unregistered panels (Tasks/Calendar/Team, waves 2-3) — MAJ-012
-          // mixed mode: ordinary navigation links to their full-page routes,
-          // no aria-pressed. aria-current marks the one you are on.
-          const isActive = segment === activeSegment
+          if (!panelId) return null
+          const pressed = activePanelId === panelId
           return (
-            <Link
+            <Button
               key={segment}
-              to={`/workspaces/$workspaceId/${segment}`}
-              params={{ workspaceId }}
-              tabIndex={0}
-              aria-current={isActive ? 'page' : undefined}
-              aria-label={label}
+              variant="ghost"
+              onClick={() => togglePanel(panelId)}
+              title={label}
+              aria-pressed={pressed}
+              data-panel-trigger={panelId}
               data-testid={`workspace-tab-${segment}`}
               className={cn(
+                // h-chrome-header fills the exact 44px tokenized chrome row;
+                // h-11 is rem-based and is only 38.5px at the app root size.
                 'group relative flex items-center gap-[var(--space-1)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap outline-none transition-colors rounded-t-sm',
-                isActive
+                pressed
                   ? 'text-[var(--color-accent)]'
                   : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
               )}
             >
-              <Icon size={16} weight={isActive ? 'fill' : 'regular'} />
+              <Icon size={16} weight={pressed ? 'fill' : 'regular'} />
               <span>{label}</span>
-              {tabUnderline(isActive)}
-            </Link>
+            </Button>
           )
         })}
       </div>
 
-      {/* ── View-switcher dropdown: shown when container < 1152px (72rem) ── */}
+      {/* ── Compact panels menu: shown when container < 1152px (72rem).
+          SP-11 (amended): the trigger is an ICON only — a plain menu icon,
+          no text label. With Chat never a strip entry (SP-40) there is no
+          page name left for a label to show. ── */}
       <div className="flex @6xl:hidden items-center px-[var(--space-2)]">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
               data-testid="workspace-view-switcher"
-              aria-label={`Switch view, currently ${SEGMENT_LABELS[activeSegment]}`}
+              aria-label="Open panels menu"
+              aria-haspopup="menu"
               className={cn(
-                'h-11 gap-[var(--space-1)] px-[var(--space-2-5)] font-headline whitespace-nowrap',
+                'h-11 w-11 justify-center px-0 whitespace-nowrap',
                 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
                 'outline-none',
                 'pointer-coarse:min-h-[44px]',
               )}
             >
-              {settingsActive ? (
-                <Buildings size={16} weight="fill" className="text-[var(--color-accent)]" />
-              ) : (
-                activeTab && <activeTab.Icon size={16} weight="fill" className="text-[var(--color-accent)]" />
-              )}
-              <span className="text-[var(--color-accent)]">{SEGMENT_LABELS[activeSegment]}</span>
-              <CaretDown size={13} className="opacity-60" />
+              <List size={18} aria-hidden="true" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-44">
@@ -351,7 +268,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
               )}
             >
               <Buildings size={15} weight={settingsActive ? 'fill' : 'regular'} />
-              <span>{SEGMENT_LABELS.settings}</span>
+              <span>Settings</span>
               {settingsActive && (
                 <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-accent)]" aria-hidden="true">
                   ●
@@ -359,54 +276,28 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
               )}
             </DropdownMenuItem>
             {WORKSPACE_TABS.map(({ segment, label, Icon }) => {
-              const isActive = segment === activeSegment
               const panelId = PANEL_TOGGLE_SEGMENTS[segment]
-              if (panelId) {
-                const pressed = activePanelId === panelId
-                return (
-                  <DropdownMenuItem
-                    key={segment}
-                    data-testid={`workspace-view-switcher-${segment}`}
-                    data-panel-trigger={panelId}
-                    aria-pressed={pressed}
-                    onClick={() => togglePanel(panelId)}
-                    className={cn(
-                      'flex items-center gap-[var(--space-2)]',
-                      pressed ? 'text-[var(--color-accent)]' : undefined,
-                    )}
-                  >
-                    <Icon size={15} weight={pressed ? 'fill' : 'regular'} />
-                    <span>{label}</span>
-                    {pressed && (
-                      <span
-                        className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-accent)]"
-                        aria-hidden="true"
-                      >
-                        ●
-                      </span>
-                    )}
-                  </DropdownMenuItem>
-                )
-              }
+              if (!panelId) return null
+              const pressed = activePanelId === panelId
               return (
                 <DropdownMenuItem
                   key={segment}
-                  aria-current={isActive ? 'page' : undefined}
-                  onClick={() => {
-                    void navigate({
-                      to: `/workspaces/$workspaceId/${segment}`,
-                      params: { workspaceId },
-                    })
-                  }}
+                  data-testid={`workspace-view-switcher-${segment}`}
+                  data-panel-trigger={panelId}
+                  aria-pressed={pressed}
+                  onClick={() => togglePanel(panelId)}
                   className={cn(
                     'flex items-center gap-[var(--space-2)]',
-                    isActive ? 'text-[var(--color-accent)]' : undefined,
+                    pressed ? 'text-[var(--color-accent)]' : undefined,
                   )}
                 >
-                  <Icon size={15} weight={isActive ? 'fill' : 'regular'} />
+                  <Icon size={15} weight={pressed ? 'fill' : 'regular'} />
                   <span>{label}</span>
-                  {isActive && (
-                    <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-accent)]" aria-hidden="true">
+                  {pressed && (
+                    <span
+                      className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-accent)]"
+                      aria-hidden="true"
+                    >
                       ●
                     </span>
                   )}
@@ -421,8 +312,11 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
 }
 
 /**
- * Derive the active tab segment from a pathname. Returns 'chat' for the bare
- * container path (the index redirect target).
+ * Derive the active segment from a pathname. 'chat' is NOT a WORKSPACE_TABS
+ * entry (SP-40 — chat is the base page underneath, never a strip entry) but
+ * remains the default: the bare container path, an unknown segment and the
+ * chat route itself all resolve to it. The chat-only header controls
+ * (WorkspaceTabContainer) and ChatControls gating key off this return value.
  */
 export function resolveActiveSegment(
   pathname: string,
@@ -435,8 +329,8 @@ export function resolveActiveSegment(
   // 'settings' is a real segment but deliberately NOT in WORKSPACE_TABS (it's
   // reached via the workspace-name button or the compact dropdown's settings
   // entry, not a tab). It must still resolve — otherwise /settings falls
-  // through to 'chat', wrongly marking the Chat tab active and rendering the
-  // chat-only header controls on the settings page.
+  // through to 'chat', wrongly rendering the chat-only header controls on the
+  // settings page.
   if (segment === 'settings') return 'settings'
   const match = WORKSPACE_TABS.find((t) => t.segment === segment)
   return match?.segment ?? 'chat'

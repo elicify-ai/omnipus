@@ -43,9 +43,16 @@ export interface SidePanelShellProps {
   sidebarWidth?: number
   /** The chat column — the shell's other half of the row. */
   chat: ReactNode
+  /**
+   * Router-owned handler for panels whose full screen is the shared in-app
+   * route (definition.fullScreen.expand === 'route' — SP-38: Tasks/Team/
+   * Calendar expand in the SAME tab, never a new browser tab). Absent (the
+   * wave-0 demo stories) with such a definition, Expand is a no-op there.
+   */
+  onExpandRoute?: (definition: PanelDefinition, context: PanelContext) => void
 }
 
-export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: SidePanelShellProps) {
+export function SidePanelShell({ panels, username, sidebarWidth = 0, chat, onExpandRoute }: SidePanelShellProps) {
   const shell = usePanelShell(panels, username)
   const activePanel = shell.activePanel
   usePanelUrlHistory(activePanel)
@@ -164,12 +171,20 @@ export function SidePanelShell({ panels, username, sidebarWidth = 0, chat }: Sid
     widthSettleListenerRef.current = { id: activePanel.id, listener }
   }, [activePanel])
 
-  // SP-12 expand with fail-visible popup-block handling.
+  // SP-12 expand with fail-visible popup-block handling. SP-38: a panel
+  // registered with fullScreen.expand === 'route' never enters the popout
+  // flow — the router-owned handler navigates this tab to the shared
+  // chrome-less full-screen route.
   const [expandFailure, setExpandFailure] = useState<'blocked' | 'error' | null>(null)
   const handleExpand = async () => {
     setExpandFailure(null)
     const registered = expandContextRef.current
     const getter = registered !== null && registered.id === activePanel?.id ? registered.getter : undefined
+    if (def?.fullScreen.expand === 'route') {
+      const context = getter ? getter() : activePanel?.context
+      if (def && activePanel && context && onExpandRoute) onExpandRoute(def, context)
+      return
+    }
     const result = await shell.requestExpand(getter)
     if (result === 'blocked' || result === 'error') setExpandFailure(result)
   }

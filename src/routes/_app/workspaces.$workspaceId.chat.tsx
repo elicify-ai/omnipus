@@ -1,7 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { WorkspaceChatTab } from '@/components/workspaces/WorkspaceChatTab'
-import { WAVE_2_PANEL_IDS } from '@/components/panel-shell/types'
+import { getPanelDefinition } from '@/components/panel-shell/registry'
 import { usePanelDeepLink } from '@/components/panel-shell/usePanelDeepLink'
+import type { PanelId } from '@/components/panel-shell/types'
 
 // Chat tab — the workspace's default front view (chat-first). Agent picker is
 // scoped to the workspace team; sessions are filtered by this workspace_id.
@@ -19,7 +20,27 @@ import { usePanelDeepLink } from '@/components/panel-shell/usePanelDeepLink'
 function validateSearch(search: Record<string, unknown>): { panel?: string; agent?: string } {
   const result: Record<string, string | undefined> = {}
   for (const key of Object.keys(search)) result[key] = undefined
-  if (typeof search.panel === 'string' && (WAVE_2_PANEL_IDS as readonly string[]).includes(search.panel)) {
+  if (
+    typeof search.panel === 'string' &&
+    getPanelDefinition(search.panel as any) !== undefined
+  ) {
+// `agent`, meaningful only with panel=mail in a later wave, SP-23). The
+// hand-rolled validateSearch (no zod needed for two optional strings) keeps a
+// `panel` value ONLY when it names a REGISTERED panel id (§8.2: the valid
+// `?panel=` values are the production registry's ids; until wave 2 lands,
+// `mail` is dropped like any unknown id): an unknown or unregistered id
+// (`bogus`) is dropped, and `agent` is kept as a declared key regardless. The
+// router MERGES this return onto the raw search (`{...raw, ...validated}`),
+// so a dropped key survives unless it is returned as `undefined`. That still
+// does not rewrite the address bar — the visible replace is usePanelDeepLink's
+// job.
+function validateSearch(search: Record<string, unknown>): { panel?: string; agent?: string } {
+  const result: Record<string, string | undefined> = {}
+  for (const key of Object.keys(search)) result[key] = undefined
+  if (
+    typeof search.panel === 'string' &&
+    getPanelDefinition(search.panel as PanelId) !== undefined
+  ) {
     result.panel = search.panel
   }
   if (typeof search.agent === 'string') {
