@@ -153,14 +153,16 @@ func w6OwnerQuestionUntouched(result *tools.ToolResult, resumes *w6ResumeRecorde
 	return child.State == session.LifecycleStopped && child.Generation == generation
 }
 
-// TestW6QuestionDeadline_SeparateRecordRead_CompileBlocked is not a
-// behavioral RED. D1.7 keeps the original TTLDeadline in a pending-question
-// record separate from NeedsInput. This tree has no reader for that record
-// and no expiry sweeper, so the deadline cannot be checked without pinning
-// the stopped lifecycle tail.
-func TestW6QuestionDeadline_SeparateRecordRead_CompileBlocked(t *testing.T) {
-	t.Fatal("COMPILE-BLOCKED: no durable pending-question reader and no question-expiry sweeper — required by ADR D1.7/D1.8 so the original TTLDeadline can be read after a fresh store open. The stopped lifecycle tail is not that record. Not a behavioral RED.")
-}
+// D1.7's original-TTLDeadline read is covered behaviorally by the
+// question-expiry boot pack in w6_question_expiry_boot_test.go, which reads
+// the durable pending-question record (pkg/session/question_record.go
+// QuestionStore) and expires the park at the original deadline through the
+// production boot hook:
+// TestW6QuestionExpiryBoot_ExpiredOwnerRequired_FailsAskerOwnerUnreachableOnce,
+// TestW6QuestionExpiryBoot_StoppedAsker and
+// TestW6QuestionExpiryBoot_ExpiredSelfOK_FailsAnswerTimeout expire it;
+// TestW6QuestionExpiryBoot_NotExpiredOwnerRequired_SurvivesBootUnchanged is
+// the not-expired positive control.
 
 // TestW6OwnerAnswer_ProvenanceWhoWhenWhichOnce_CompileBlocked is not a
 // behavioral RED. D1.4's signed-in owner answer (direct child and relay
