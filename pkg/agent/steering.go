@@ -546,7 +546,9 @@ func (al *AgentLoop) reviveInactiveInbound(route routing.ResolvedRoute, msg bus.
 	// message into the dying turn's steering queue, and falling through
 	// would revive a session whose turn has not exited yet.
 	if lifecycleInFlightStopFence(rec) {
-		return false, fmt.Errorf("enqueueSteeringFromMessage: session %q is stopping (a stop is in flight for its current generation); retry once the stop has landed", sessionID)
+		// curatedTurnError: Omnipus-authored refusal text, publishable as
+		// written (translate_error.go::userVisibleTurnError).
+		return false, &curatedTurnError{text: fmt.Sprintf("enqueueSteeringFromMessage: session %q is stopping (a stop is in flight for its current generation); retry once the stop has landed", sessionID)}
 	}
 	if !rec.Terminal() && !rec.Stopped() {
 		return false, nil
@@ -632,7 +634,9 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 	// reach here). A landed LifecycleStopped record and a terminal record
 	// still take the revive paths below, exactly as before.
 	if lifecycleInFlightStopFence(rec) {
-		return false, fmt.Errorf("steer: revive %q: session is stopping (a stop is in flight for its current generation); retry once the stop has landed", sessionID)
+		// curatedTurnError: Omnipus-authored refusal text, publishable as
+		// written (translate_error.go::userVisibleTurnError).
+		return false, &curatedTurnError{text: fmt.Sprintf("steer: revive %q: session is stopping (a stop is in flight for its current generation); retry once the stop has landed", sessionID)}
 	}
 	// Neither terminal nor durably stopped for this generation: nothing to
 	// revive — the caller's ordinary path applies. (A terminal child takes

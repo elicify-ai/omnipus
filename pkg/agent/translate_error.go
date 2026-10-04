@@ -987,6 +987,22 @@ func turnErrorUserText(err error) string {
 	return defaultUserMessage(llm.Code)
 }
 
+// userVisibleTurnError is what the session worker publishes as a failed
+// turn's reply (session_worker.go::processTurn): a curatedTurnError's own
+// text when one is anywhere in err's chain — the in-flight stop-fence
+// refusals and the hook/budget aborts Omnipus wrote, actionable as written —
+// and TranslateTurnError's catalogue message for everything else, byte for
+// byte what processTurn published before this helper existed. It is NOT
+// turnErrorUserText applied broadly: that function returns the plain message
+// for the TYPED code, a different translation of the same error.
+func userVisibleTurnError(err error) string {
+	var curated *curatedTurnError
+	if errors.As(err, &curated) {
+		return curated.Error()
+	}
+	return TranslateTurnError(err).Message
+}
+
 // Typed turn-exit sentinels (ADR-066 D7, FR-034). runTurn's formerly silent
 // return sites wrap one of these together with the raw cause
 // (`fmt.Errorf("%w: %w", ErrTurnCanceled, cause)`), so a caller can errors.Is
