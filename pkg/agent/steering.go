@@ -539,6 +539,15 @@ func (al *AgentLoop) reviveInactiveInbound(route routing.ResolvedRoute, msg bus.
 			map[string]any{"session_id": sessionID, "error": err.Error()})
 		return false, fmt.Errorf("enqueueSteeringFromMessage: load %q: %w", sessionID, err)
 	}
+	// [2026-10-04, in-flight fence] Same split ReviveStoppedSession makes,
+	// before any revive: a stop fence still in flight for the record's
+	// current generation (state still live) is NOT a landed stop. It is a
+	// visible error — false, nil would send the caller to enqueue the
+	// message into the dying turn's steering queue, and falling through
+	// would revive a session whose turn has not exited yet.
+	if lifecycleInFlightStopFence(rec) {
+		return false, fmt.Errorf("enqueueSteeringFromMessage: session %q is stopping (a stop is in flight for its current generation); retry once the stop has landed", sessionID)
+	}
 	if !rec.Terminal() && !rec.Stopped() {
 		return false, nil
 	}
@@ -610,6 +619,20 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil {
 		return false, err
+	}
+	// [2026-10-04, in-flight fence] Stopped() is true for TWO shapes: a
+	// landed LifecycleStopped record, OR a stop fence still stamped for the
+	// record's CURRENT generation while the state is still live
+	// (queued/running/needs_input) — the dying turn has not exited yet.
+	// Reviving the fence shape would clear the fence, mark the record queued
+	// and clear its ExecutionID, then dispatch a helper turn that admission
+	// refuses because the dying turn is still registered — the helper left
+	// queued with nobody running it. Refuse visibly instead (the delegate
+	// steer/respond closures already make this same refusal before they
+	// reach here). A landed LifecycleStopped record and a terminal record
+	// still take the revive paths below, exactly as before.
+	if lifecycleInFlightStopFence(rec) {
+		return false, fmt.Errorf("steer: revive %q: session is stopping (a stop is in flight for its current generation); retry once the stop has landed", sessionID)
 	}
 	// Neither terminal nor durably stopped for this generation: nothing to
 	// revive — the caller's ordinary path applies. (A terminal child takes
