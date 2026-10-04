@@ -294,7 +294,7 @@ func (us *UnifiedStore) writeMetaLocked(sessionID string, meta *UnifiedMeta) err
 // directories (SC-001), matching AppendTranscriptStrict's contract exactly
 // — "a name, not a second behavior" per FR-002's own text.
 func (us *UnifiedStore) AppendTranscript(sessionID string, entry TranscriptEntry) error {
-	_, err := us.appendTranscript(sessionID, entry, false, "append transcript")
+	_, err := us.appendTranscript(sessionID, entry, false, "append transcript", nil)
 	return err
 }
 
