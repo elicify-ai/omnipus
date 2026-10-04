@@ -1041,7 +1041,7 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 		stg.tExecutor.SetSessionLauncher(launcher)
 	}
 	setGatewaySteerCanceller(stg.agentLoop, canceller)
-	// The agent's own Stop — delegate(action="cancel"), wired in
+	// The agent's own Stop all — delegate(action="stop_all"), wired in
 	// pkg/agent/session_messaging_wire.go — cascades through the SAME
 	// instance the human Stop above uses, so both take one cascade lock per
 	// session instead of two (agent.SteerCanceller::cascade).

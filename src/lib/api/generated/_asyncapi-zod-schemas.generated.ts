@@ -357,7 +357,7 @@ export const SubagentStateFrame = z
     .object({
       seq: z.number().int().min(0),
       control_id: z.string().min(1),
-      verb: z.enum(["steer", "stop", "stop_all", "redirect", "resume", "respond", "escalate", "clear_goal"]),
+      verb: z.enum(["steer", "stop", "stop_all", "redirect", "resume", "respond", "clear_goal"]),
       state: z.enum(["queued", "delivered", "applied", "superseded"]),
       accepted_at: z.string(),
       delivered_at: z.string().optional(),

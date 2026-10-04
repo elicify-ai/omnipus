@@ -2030,21 +2030,6 @@ func (e DefaultModelWindowSource) Valid() bool {
 	}
 }
 
-// Defines values for DelegateCancelActionAction.
-const (
-	DelegateCancelActionActionCancel DelegateCancelActionAction = "cancel"
-)
-
-// Valid indicates whether the value is a known member of the DelegateCancelActionAction enum.
-func (e DelegateCancelActionAction) Valid() bool {
-	switch e {
-	case DelegateCancelActionActionCancel:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for DelegateClearGoalActionAction.
 const (
 	DelegateClearGoalActionActionClearGoal DelegateClearGoalActionAction = "clear_goal"
@@ -2054,21 +2039,6 @@ const (
 func (e DelegateClearGoalActionAction) Valid() bool {
 	switch e {
 	case DelegateClearGoalActionActionClearGoal:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for DelegateFollowUpActionAction.
-const (
-	DelegateFollowUpActionActionFollowUp DelegateFollowUpActionAction = "follow_up"
-)
-
-// Valid indicates whether the value is a known member of the DelegateFollowUpActionAction enum.
-func (e DelegateFollowUpActionAction) Valid() bool {
-	switch e {
-	case DelegateFollowUpActionActionFollowUp:
 		return true
 	default:
 		return false
@@ -2150,6 +2120,21 @@ func (e DelegatePeekResponseState) Valid() bool {
 	}
 }
 
+// Defines values for DelegateRedirectActionAction.
+const (
+	DelegateRedirectActionActionRedirect DelegateRedirectActionAction = "redirect"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRedirectActionAction enum.
+func (e DelegateRedirectActionAction) Valid() bool {
+	switch e {
+	case DelegateRedirectActionActionRedirect:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DelegateRespondActionAction.
 const (
 	DelegateRespondActionActionRespond DelegateRespondActionAction = "respond"
@@ -2189,6 +2174,21 @@ func (e DelegateRespondResponseCorrectiveSessionState) Valid() bool {
 	case DelegateRespondResponseCorrectiveSessionStateRunning:
 		return true
 	case DelegateRespondResponseCorrectiveSessionStateStopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateResumeActionAction.
+const (
+	DelegateResumeActionActionResume DelegateResumeActionAction = "resume"
+)
+
+// Valid indicates whether the value is a known member of the DelegateResumeActionAction enum.
+func (e DelegateResumeActionAction) Valid() bool {
+	switch e {
+	case DelegateResumeActionActionResume:
 		return true
 	default:
 		return false
@@ -3152,6 +3152,21 @@ const (
 func (e DelegateSteerActionAction) Valid() bool {
 	switch e {
 	case DelegateSteerActionActionSteer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateStopAllActionAction.
+const (
+	DelegateStopAllActionActionStopAll DelegateStopAllActionAction = "stop_all"
+)
+
+// Valid indicates whether the value is a known member of the DelegateStopAllActionAction enum.
+func (e DelegateStopAllActionAction) Valid() bool {
+	switch e {
+	case DelegateStopAllActionActionStopAll:
 		return true
 	default:
 		return false
@@ -6065,7 +6080,6 @@ func (e MessageSubagentStateControlReceiptState) Valid() bool {
 // Defines values for MessageSubagentStateControlReceiptVerb.
 const (
 	MessageSubagentStateControlReceiptVerbClearGoal MessageSubagentStateControlReceiptVerb = "clear_goal"
-	MessageSubagentStateControlReceiptVerbEscalate  MessageSubagentStateControlReceiptVerb = "escalate"
 	MessageSubagentStateControlReceiptVerbRedirect  MessageSubagentStateControlReceiptVerb = "redirect"
 	MessageSubagentStateControlReceiptVerbRespond   MessageSubagentStateControlReceiptVerb = "respond"
 	MessageSubagentStateControlReceiptVerbResume    MessageSubagentStateControlReceiptVerb = "resume"
@@ -6078,8 +6092,6 @@ const (
 func (e MessageSubagentStateControlReceiptVerb) Valid() bool {
 	switch e {
 	case MessageSubagentStateControlReceiptVerbClearGoal:
-		return true
-	case MessageSubagentStateControlReceiptVerbEscalate:
 		return true
 	case MessageSubagentStateControlReceiptVerbRedirect:
 		return true
@@ -6467,24 +6479,6 @@ const (
 func (e MessageParentProgressKind) Valid() bool {
 	switch e {
 	case MessageParentProgressKindProgress:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for MessageParentQuestionAuthority.
-const (
-	MessageParentQuestionAuthorityOwnerRequired MessageParentQuestionAuthority = "owner_required"
-	MessageParentQuestionAuthoritySelfOk        MessageParentQuestionAuthority = "self_ok"
-)
-
-// Valid indicates whether the value is a known member of the MessageParentQuestionAuthority enum.
-func (e MessageParentQuestionAuthority) Valid() bool {
-	switch e {
-	case MessageParentQuestionAuthorityOwnerRequired:
-		return true
-	case MessageParentQuestionAuthoritySelfOk:
 		return true
 	default:
 		return false
@@ -9788,7 +9782,6 @@ func (e SessionDetailMessagesSubagentStateControlReceiptState) Valid() bool {
 // Defines values for SessionDetailMessagesSubagentStateControlReceiptVerb.
 const (
 	SessionDetailMessagesSubagentStateControlReceiptVerbClearGoal SessionDetailMessagesSubagentStateControlReceiptVerb = "clear_goal"
-	SessionDetailMessagesSubagentStateControlReceiptVerbEscalate  SessionDetailMessagesSubagentStateControlReceiptVerb = "escalate"
 	SessionDetailMessagesSubagentStateControlReceiptVerbRedirect  SessionDetailMessagesSubagentStateControlReceiptVerb = "redirect"
 	SessionDetailMessagesSubagentStateControlReceiptVerbRespond   SessionDetailMessagesSubagentStateControlReceiptVerb = "respond"
 	SessionDetailMessagesSubagentStateControlReceiptVerbResume    SessionDetailMessagesSubagentStateControlReceiptVerb = "resume"
@@ -9801,8 +9794,6 @@ const (
 func (e SessionDetailMessagesSubagentStateControlReceiptVerb) Valid() bool {
 	switch e {
 	case SessionDetailMessagesSubagentStateControlReceiptVerbClearGoal:
-		return true
-	case SessionDetailMessagesSubagentStateControlReceiptVerbEscalate:
 		return true
 	case SessionDetailMessagesSubagentStateControlReceiptVerbRedirect:
 		return true
@@ -10631,24 +10622,6 @@ const (
 func (e SessionMessageProgressKind) Valid() bool {
 	switch e {
 	case SessionMessageProgressKindProgress:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionMessageQuestionAuthority.
-const (
-	SessionMessageQuestionAuthorityOwnerRequired SessionMessageQuestionAuthority = "owner_required"
-	SessionMessageQuestionAuthoritySelfOk        SessionMessageQuestionAuthority = "self_ok"
-)
-
-// Valid indicates whether the value is a known member of the SessionMessageQuestionAuthority enum.
-func (e SessionMessageQuestionAuthority) Valid() bool {
-	switch e {
-	case SessionMessageQuestionAuthorityOwnerRequired:
-		return true
-	case SessionMessageQuestionAuthoritySelfOk:
 		return true
 	default:
 		return false
@@ -15837,24 +15810,10 @@ type DefaultModelUpdateRequest struct {
 	Provider string `json:"provider"`
 }
 
-// DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the ADR-053 §5.1 action set plus `clear_goal`, replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`clear_goal`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment).
+// DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the ADR-053 §5.1 action set plus `clear_goal`, replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`stop_all`/`clear_goal`/`resume`/`redirect` are control surfaces (ADR-20261004: `cancel` is renamed `stop_all` and `follow_up` is renamed `resume`, no alias path; `redirect` and `resume` are new actions). Steering is always available for a direct delegation (see ADR-053 Amendment).
 type DelegateActionRequest struct {
 	union json.RawMessage
 }
-
-// DelegateCancelAction `delegate` tool call, `action: cancel` (ADR-053 §5.1). `hard: false` (default) is the SOFT cooperative stop — a tool-boundary checkpoint flush inside `session_messaging.cancel_grace`. `hard: true` is the backstop `RequestCancel` fired after grace elapses (or immediately, at the parent's discretion).
-type DelegateCancelAction struct {
-	Action DelegateCancelActionAction `json:"action"`
-
-	// Hard False (default) — cooperative soft cancel with grace. True — immediate hard cancel, bypassing the grace window.
-	Hard *bool `json:"hard,omitempty"`
-
-	// SessionId The child session to cancel.
-	SessionId string `json:"session_id"`
-}
-
-// DelegateCancelActionAction defines model for DelegateCancelAction.Action.
-type DelegateCancelActionAction string
 
 // DelegateClearGoalAction `delegate` tool call, `action: clear_goal`. Clears the selected helper's goal without cascading to its descendants.
 type DelegateClearGoalAction struct {
@@ -15866,20 +15825,6 @@ type DelegateClearGoalAction struct {
 
 // DelegateClearGoalActionAction defines model for DelegateClearGoalAction.Action.
 type DelegateClearGoalActionAction string
-
-// DelegateFollowUpAction `delegate` tool call, `action: follow_up` (ADR-053 §5.1). Native: warm resume of the SAME session with retained context. 3P: cold — spawns a new session carrying the prior result. A terminal record is never mutated in place; this always mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7).
-type DelegateFollowUpAction struct {
-	Action DelegateFollowUpActionAction `json:"action"`
-
-	// SessionId The (terminal) child session to follow up on.
-	SessionId string `json:"session_id"`
-
-	// Task Optional additional instructions for the resumed/new session.
-	Task *string `json:"task,omitempty"`
-}
-
-// DelegateFollowUpActionAction defines model for DelegateFollowUpAction.Action.
-type DelegateFollowUpActionAction string
 
 // DelegateInboxAckAction `delegate` tool call, `action: inbox_ack` (ADR-053 §5.1). Explicit ack; the runtime dedupes by `message_id` before surfacing and persists acked messages in the audit log.
 type DelegateInboxAckAction struct {
@@ -15952,7 +15897,21 @@ type DelegatePeekResponse struct {
 // DelegatePeekResponseState defines model for DelegatePeekResponse.State.
 type DelegatePeekResponseState string
 
-// DelegateRespondAction `delegate` tool call, `action: respond` (ADR-053 §5.1). Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe. Native: warm-resumes the SAME child session generation. 3P (external CLI): spawns a NEW corrective session (original prompt + answer folded in, D5) — never an in-place warm resume, since external CLIs have no warm-resume primitive. The runtime REJECTS a `respond` targeting a question whose derived authority is `owner_required` (R§8.2) — a business rule enforced at the handler, not schema- expressible.
+// DelegateRedirectAction `delegate` tool call, `action: redirect` (ADR-20260928 D2, retained by ADR-20260929 ruling 8; ADR-20261004 locked decision 3). Replaces the helper's current turn with the new instruction: the running turn is stopped (single session — never a cascade; descendants keep going) and the replacement turn runs with `text`. On an already-stopped helper it resumes it with the instruction; on a done/failed helper it starts nothing — use `resume`.
+type DelegateRedirectAction struct {
+	Action DelegateRedirectActionAction `json:"action"`
+
+	// SessionId The child session whose current turn is replaced.
+	SessionId string `json:"session_id"`
+
+	// Text The replacement instruction the new turn runs with.
+	Text string `json:"text"`
+}
+
+// DelegateRedirectActionAction defines model for DelegateRedirectAction.Action.
+type DelegateRedirectActionAction string
+
+// DelegateRespondAction `delegate` tool call, `action: respond` (ADR-053 §5.1; ADR-20261004 locked decisions 6–7). The parent's reply to one of the child's messages, referenced by `correlation_id`; the text is delivered downward as an ordinary message, and the recipient's state decides the effect (working: into the current turn; stopped: same-generation resume; done/failed: next round). Native: warm-resumes the SAME child session generation when a resume applies. 3P (external CLI): spawns a NEW corrective session (original prompt + answer folded in, D5) — never an in-place warm resume, since external CLIs have no warm-resume primitive. The former owner-answer authority check was withdrawn with the person-question pause (ADR-20261004); a respond is an ordinary steering message, not an authenticated owner answer.
 type DelegateRespondAction struct {
 	Action DelegateRespondActionAction `json:"action"`
 
@@ -15998,6 +15957,20 @@ type DelegateRespondResponse struct {
 
 // DelegateRespondResponseCorrectiveSessionState The newly-spawned/resumed session's initial lifecycle state.
 type DelegateRespondResponseCorrectiveSessionState string
+
+// DelegateResumeAction `delegate` tool call, `action: resume` (ADR-20261004, locked decision 4 — renamed from `follow_up` with no alias path). Continues a stopped helper on the same conversation and the same generation, or starts the next round when the helper is done or failed. Native: warm resume of the SAME session; a terminal continuation mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7). 3P: cold — spawns a new session carrying the prior result (external CLIs have no warm-resume primitive).
+type DelegateResumeAction struct {
+	Action DelegateResumeActionAction `json:"action"`
+
+	// SessionId The stopped or finished child session to resume.
+	SessionId string `json:"session_id"`
+
+	// Text Optional additional instructions for the resumed/next round.
+	Text *string `json:"text,omitempty"`
+}
+
+// DelegateResumeActionAction defines model for DelegateResumeAction.Action.
+type DelegateResumeActionAction string
 
 // DelegateRunAction `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Steering is always available for a direct delegation — there is no longer a launch-profile choice gating it (see ADR-053 Amendment).
 type DelegateRunAction struct {
@@ -16811,6 +16784,20 @@ type DelegateSteerAction struct {
 
 // DelegateSteerActionAction defines model for DelegateSteerAction.Action.
 type DelegateSteerActionAction string
+
+// DelegateStopAllAction `delegate` tool call, `action: stop_all` (ADR-20261004, locked decision 2 — renamed from `cancel` with no alias path). Stops that helper and every helper under it: each reached session lands `stopped`, never failed, and its parent sees a stop notice. `hard: false` (default) is the SOFT cooperative stop — a tool-boundary checkpoint flush inside `session_messaging.cancel_grace`. `hard: true` is the backstop `RequestCancel` fired after grace elapses (or immediately, at the parent's discretion).
+type DelegateStopAllAction struct {
+	Action DelegateStopAllActionAction `json:"action"`
+
+	// Hard False (default) — cooperative soft stop with grace. True — immediate hard stop, bypassing the grace window.
+	Hard *bool `json:"hard,omitempty"`
+
+	// SessionId The child session whose whole subtree stops.
+	SessionId string `json:"session_id"`
+}
+
+// DelegateStopAllActionAction defines model for DelegateStopAllAction.Action.
+type DelegateStopAllActionAction string
 
 // DevicePaired A device that has been successfully paired. Returned as part of the DevicesResponse from GET /api/v1/devices.
 type DevicePaired struct {
@@ -20545,7 +20532,7 @@ type Message struct {
 		// ChildSessionId Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
 		ChildSessionId *string `json:"child_session_id,omitempty"`
 
-		// ControlReceipt Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one accepted control on a steered session (`steer`, `stop`, `stop_all`, `redirect`, `resume`, `respond`, `escalate`, `clear_goal`). Replaces `SubagentStateFrame.yaml`'s former `steering_receipt` shape (`{correlation_id, applied_at}`, issue #870) with the full control-ledger receipt shape the ADR specifies.
+		// ControlReceipt Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one accepted control on a steered session (`steer`, `stop`, `stop_all`, `redirect`, `resume`, `respond`, `clear_goal`). ADR-20261004 ("Steering commands: no person question") withdrew the `escalate` relay verb with the person-question pause. Replaces `SubagentStateFrame.yaml`'s former `steering_receipt` shape (`{correlation_id, applied_at}`, issue #870) with the full control-ledger receipt shape the ADR specifies.
 		// Train-3 scope note: only the `steer` verb is wired to this shape today, via `pkg/agent/steer_frames.go::deliverSubagentState`. The per-session control ledger that assigns a true monotonic `seq` and tracks a control's own `accepted_at` moment (ADR D4, "Controls") is NOT built in this PR — `seq` and `accepted_at` are stamped as documented stand-ins (the same pattern `pkg/session/lifecycle_edge.go::StopNote.Seq` already uses: the record's own generation substituting for a ledger sequence until the ledger exists). `control_id` reuses the existing correlation id. `verb` and `state` are constants for this call site (`"steer"` / `"delivered"`) until other verbs are wired. Every other field below belongs to the ADR's full future shape and is never populated by this call site.
 		ControlReceipt *struct {
 			// AcceptedAt When the control was accepted into the ledger. Stand-in value today (same moment as `delivered_at`/`applied_at` at this call site, since no separate acceptance moment is tracked ahead of the ledger) — see the schema description above.
@@ -20894,11 +20881,8 @@ type MessageParentProgress struct {
 // MessageParentProgressKind defines model for MessageParentProgress.Kind.
 type MessageParentProgressKind string
 
-// MessageParentQuestion `message_parent` child tool call, `kind: question` (ADR-053 §5.1, R§8.2). `wait: true` parks the CALLING child in `needs_input` (native only — a 3P child never calls this kind, D5). `authority` is child-authored and NEVER trusted at face value — the runtime's `deriveQuestionAuthority(q)` re-derives the effective authority server-side (fail-closed default `owner_required` on omission; a child can only be UPGRADED to `owner_required`, never downgraded). Counts toward the per-child unacked ceiling (D15, max 20 open question+blocker) — payload-only, see `MessageParentProgress` for the request/record split rationale.
+// MessageParentQuestion `message_parent` child tool call, `kind: question` (ADR-053 §5.1). An ordinary upward message: ADR-20261004 ("Steering commands: no person question", locked decision 6) removed the person-question pause — there is no `wait`/`authority`, the calling child is never parked, and no answer expiry exists. Counts toward the per-child unacked ceiling (D15, max 20 open question+blocker) — payload-only, see `MessageParentProgress` for the request/record split rationale.
 type MessageParentQuestion struct {
-	// Authority Child-authored authority tag. Untrusted (M3) — see `SessionMessageQuestion.authority` for the identical fail-closed derivation rule.
-	Authority *MessageParentQuestionAuthority `json:"authority,omitempty"`
-
 	// CorrelationId Optional child-supplied correlation id (server-generated when absent) that a subsequent `respond` will reference.
 	CorrelationId *string                   `json:"correlation_id,omitempty"`
 	Kind          MessageParentQuestionKind `json:"kind"`
@@ -20908,13 +20892,7 @@ type MessageParentQuestion struct {
 
 	// Text Untrusted question text.
 	Text string `json:"text"`
-
-	// Wait True parks the calling child in `needs_input` awaiting a `respond`.
-	Wait bool `json:"wait"`
 }
-
-// MessageParentQuestionAuthority Child-authored authority tag. Untrusted (M3) — see `SessionMessageQuestion.authority` for the identical fail-closed derivation rule.
-type MessageParentQuestionAuthority string
 
 // MessageParentQuestionKind defines model for MessageParentQuestion.Kind.
 type MessageParentQuestionKind string
@@ -24116,7 +24094,7 @@ type SessionDetail struct {
 			// ChildSessionId Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
 			ChildSessionId *string `json:"child_session_id,omitempty"`
 
-			// ControlReceipt Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one accepted control on a steered session (`steer`, `stop`, `stop_all`, `redirect`, `resume`, `respond`, `escalate`, `clear_goal`). Replaces `SubagentStateFrame.yaml`'s former `steering_receipt` shape (`{correlation_id, applied_at}`, issue #870) with the full control-ledger receipt shape the ADR specifies.
+			// ControlReceipt Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one accepted control on a steered session (`steer`, `stop`, `stop_all`, `redirect`, `resume`, `respond`, `clear_goal`). ADR-20261004 ("Steering commands: no person question") withdrew the `escalate` relay verb with the person-question pause. Replaces `SubagentStateFrame.yaml`'s former `steering_receipt` shape (`{correlation_id, applied_at}`, issue #870) with the full control-ledger receipt shape the ADR specifies.
 			// Train-3 scope note: only the `steer` verb is wired to this shape today, via `pkg/agent/steer_frames.go::deliverSubagentState`. The per-session control ledger that assigns a true monotonic `seq` and tracks a control's own `accepted_at` moment (ADR D4, "Controls") is NOT built in this PR — `seq` and `accepted_at` are stamped as documented stand-ins (the same pattern `pkg/session/lifecycle_edge.go::StopNote.Seq` already uses: the record's own generation substituting for a ledger sequence until the ledger exists). `control_id` reuses the existing correlation id. `verb` and `state` are constants for this call site (`"steer"` / `"delivered"`) until other verbs are wired. Every other field below belongs to the ADR's full future shape and is never populated by this call site.
 			ControlReceipt *struct {
 				// AcceptedAt When the control was accepted into the ledger. Stand-in value today (same moment as `delivered_at`/`applied_at` at this call site, since no separate acceptance moment is tracked ahead of the ledger) — see the schema description above.
@@ -24925,11 +24903,8 @@ type SessionMessageProgressDirection string
 // SessionMessageProgressKind Discriminator for the SessionMessage `oneOf`.
 type SessionMessageProgressKind string
 
-// SessionMessageQuestion SessionMessage `oneOf` variant, `kind: question` (ADR-053 §Contract Surface, R§8.2). Child -> parent. `wait: true` parks the child in `needs_input` (native-only; 3P children never advertise this kind, D5). `authority` is child-authored but NEVER trusted at face value — the runtime's `deriveQuestionAuthority(q)` re-derives the effective authority server-side (fail-closed default `owner_required` on omission; a child can only be UPGRADED to `owner_required`, never downgraded to `self_ok`). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+// SessionMessageQuestion SessionMessage `oneOf` variant, `kind: question` (ADR-053 §Contract Surface). Child -> parent. An ordinary upward message — ADR-20261004 ("Steering commands: no person question", locked decision 6) removed the person-question pause: a question parks nothing and carries no `wait`/`authority` fields; the parent answers through ordinary steering (`respond`/`steer`), and C1's message/state table applies to any resume effect. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
 type SessionMessageQuestion struct {
-	// Authority Child-authored authority tag. Untrusted (M3) — the runtime's `deriveQuestionAuthority(q)` is the authoritative determination; an omitted tag is treated as `owner_required` server-side (fail-closed default is NOT a schema `default:` — it is applied at the handler, per the project convention of never mixing `required` semantics with a JSON-Schema `default` on a field the server overrides).
-	Authority *SessionMessageQuestionAuthority `json:"authority,omitempty"`
-
 	// CorrelationId Routes the eventual `respond`/`inbox_ack` back to this question. Out-of-order answers are safe (V-3/M-3).
 	CorrelationId   string                          `json:"correlation_id"`
 	CreatedAt       time.Time                       `json:"created_at"`
@@ -24945,13 +24920,7 @@ type SessionMessageQuestion struct {
 	// Text Untrusted question text.
 	Text            string `json:"text"`
 	UntrustedOrigin bool   `json:"untrusted_origin"`
-
-	// Wait True parks the child in `needs_input` awaiting a `respond` (native only). False is a fire-and-forget question the child does not block on.
-	Wait bool `json:"wait"`
 }
-
-// SessionMessageQuestionAuthority Child-authored authority tag. Untrusted (M3) — the runtime's `deriveQuestionAuthority(q)` is the authoritative determination; an omitted tag is treated as `owner_required` server-side (fail-closed default is NOT a schema `default:` — it is applied at the handler, per the project convention of never mixing `required` semantics with a JSON-Schema `default` on a field the server overrides).
-type SessionMessageQuestionAuthority string
 
 // SessionMessageQuestionDirection defines model for SessionMessageQuestion.Direction.
 type SessionMessageQuestionDirection string
@@ -24959,7 +24928,7 @@ type SessionMessageQuestionDirection string
 // SessionMessageQuestionKind defines model for SessionMessageQuestion.Kind.
 type SessionMessageQuestionKind string
 
-// SessionMessageRespond SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The runtime validator REJECTS a `respond` whose target question's derived authority is `owner_required` (R§8.2) — that rejection is a runtime business rule, not schema-expressible; this schema only shapes the request. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+// SessionMessageRespond SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The text is delivered as an ordinary steering message; the recipient's state decides the effect (ADR-20261004 C1). The former owner-answer authority rejection was withdrawn with the person-question pause (ADR-20261004, locked decision 7). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
 type SessionMessageRespond struct {
 	// CorrelationId The `correlation_id` of the `question`/`decision_request` being answered.
 	CorrelationId string                         `json:"correlation_id"`
@@ -30170,24 +30139,24 @@ func (t *DelegateActionRequest) MergeDelegateRespondAction(v DelegateRespondActi
 	return err
 }
 
-// AsDelegateCancelAction returns the union data inside the DelegateActionRequest as a DelegateCancelAction
-func (t DelegateActionRequest) AsDelegateCancelAction() (DelegateCancelAction, error) {
-	var body DelegateCancelAction
+// AsDelegateStopAllAction returns the union data inside the DelegateActionRequest as a DelegateStopAllAction
+func (t DelegateActionRequest) AsDelegateStopAllAction() (DelegateStopAllAction, error) {
+	var body DelegateStopAllAction
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromDelegateCancelAction overwrites any union data inside the DelegateActionRequest as the provided DelegateCancelAction
-func (t *DelegateActionRequest) FromDelegateCancelAction(v DelegateCancelAction) error {
-	v.Action = "cancel"
+// FromDelegateStopAllAction overwrites any union data inside the DelegateActionRequest as the provided DelegateStopAllAction
+func (t *DelegateActionRequest) FromDelegateStopAllAction(v DelegateStopAllAction) error {
+	v.Action = "stop_all"
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeDelegateCancelAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateCancelAction
-func (t *DelegateActionRequest) MergeDelegateCancelAction(v DelegateCancelAction) error {
-	v.Action = "cancel"
+// MergeDelegateStopAllAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateStopAllAction
+func (t *DelegateActionRequest) MergeDelegateStopAllAction(v DelegateStopAllAction) error {
+	v.Action = "stop_all"
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -30226,24 +30195,52 @@ func (t *DelegateActionRequest) MergeDelegateClearGoalAction(v DelegateClearGoal
 	return err
 }
 
-// AsDelegateFollowUpAction returns the union data inside the DelegateActionRequest as a DelegateFollowUpAction
-func (t DelegateActionRequest) AsDelegateFollowUpAction() (DelegateFollowUpAction, error) {
-	var body DelegateFollowUpAction
+// AsDelegateResumeAction returns the union data inside the DelegateActionRequest as a DelegateResumeAction
+func (t DelegateActionRequest) AsDelegateResumeAction() (DelegateResumeAction, error) {
+	var body DelegateResumeAction
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromDelegateFollowUpAction overwrites any union data inside the DelegateActionRequest as the provided DelegateFollowUpAction
-func (t *DelegateActionRequest) FromDelegateFollowUpAction(v DelegateFollowUpAction) error {
-	v.Action = "follow_up"
+// FromDelegateResumeAction overwrites any union data inside the DelegateActionRequest as the provided DelegateResumeAction
+func (t *DelegateActionRequest) FromDelegateResumeAction(v DelegateResumeAction) error {
+	v.Action = "resume"
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeDelegateFollowUpAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateFollowUpAction
-func (t *DelegateActionRequest) MergeDelegateFollowUpAction(v DelegateFollowUpAction) error {
-	v.Action = "follow_up"
+// MergeDelegateResumeAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateResumeAction
+func (t *DelegateActionRequest) MergeDelegateResumeAction(v DelegateResumeAction) error {
+	v.Action = "resume"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsDelegateRedirectAction returns the union data inside the DelegateActionRequest as a DelegateRedirectAction
+func (t DelegateActionRequest) AsDelegateRedirectAction() (DelegateRedirectAction, error) {
+	var body DelegateRedirectAction
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromDelegateRedirectAction overwrites any union data inside the DelegateActionRequest as the provided DelegateRedirectAction
+func (t *DelegateActionRequest) FromDelegateRedirectAction(v DelegateRedirectAction) error {
+	v.Action = "redirect"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeDelegateRedirectAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateRedirectAction
+func (t *DelegateActionRequest) MergeDelegateRedirectAction(v DelegateRedirectAction) error {
+	v.Action = "redirect"
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -30296,26 +30293,28 @@ func (t DelegateActionRequest) ValueByDiscriminator() (interface{}, error) {
 		return nil, err
 	}
 	switch discriminator {
-	case "cancel":
-		return t.AsDelegateCancelAction()
 	case "clear_goal":
 		return t.AsDelegateClearGoalAction()
-	case "follow_up":
-		return t.AsDelegateFollowUpAction()
 	case "inbox":
 		return t.AsDelegateInboxAction()
 	case "inbox_ack":
 		return t.AsDelegateInboxAckAction()
 	case "peek":
 		return t.AsDelegatePeekAction()
+	case "redirect":
+		return t.AsDelegateRedirectAction()
 	case "respond":
 		return t.AsDelegateRespondAction()
+	case "resume":
+		return t.AsDelegateResumeAction()
 	case "run":
 		return t.AsDelegateRunAction()
 	case "status":
 		return t.AsDelegateStatusAction()
 	case "steer":
 		return t.AsDelegateSteerAction()
+	case "stop_all":
+		return t.AsDelegateStopAllAction()
 	default:
 		return nil, errors.New("unknown discriminator value: " + discriminator)
 	}

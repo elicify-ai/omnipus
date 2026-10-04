@@ -269,7 +269,7 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 	result := string(payload)
 	if dispatch.State == steer.DispatchQueued {
 		result += fmt.Sprintf("\nQueued because the concurrency limit %d is in use; queue position %d. "+
-			`Use delegate(action="cancel") with session_id=%q to drop this queued session.`,
+			`Use delegate(action="stop_all") with session_id=%q to stop this queued session.`,
 			dispatch.ConcurrencyLimit, dispatch.QueuePosition, launch.SessionID)
 	}
 	return NewToolResult(result)
@@ -492,7 +492,6 @@ func resolveDelegateTimeoutSeconds(args map[string]any) (time.Duration, error) {
 // ErrLifecycleTerminalImmutable (logged here, harmless — the record is already
 // terminally correct). Callers MUST NOT already hold Lock(sessionID):
 // sync.Mutex is not reentrant, and Mutate takes the lock ONCE internally.
-// The sibling comment in message_parent.go parkNeedsInput mirrors this one.
 // transitionLifecycle transitions sessionID's durable record to state. note
 // is the StopNote to land when state == LifecycleStopped (D2/D6) — pass nil
 // when a prior write in the SAME stop event (typically a SteerCanceller
@@ -530,11 +529,11 @@ func (t *DelegateTool) transitionLifecycle(sessionID string, state session.Lifec
 // reach the same descendant set a chat-wide Stop does.
 //
 // Returns (killed, failed, walkIncomplete). killed/failed were previously
-// the only return values; executeCancel folds failed into what it tells the
+// the only return values; executeStopAll folds failed into what it tells the
 // user. walkIncomplete is true when collectCancelDescendantSessionIDs hit a
 // t.lifecycle.List failure partway through the walk — in that case
 // killed/failed reflect only the PARTIAL subtree actually reached, and
-// executeCancel MUST surface that rather than reporting a clean success (a
+// executeStopAll MUST surface that rather than reporting a clean success (a
 // caller reading "0 failed" must not conclude "the whole subtree was swept
 // clean" when this is true). A nil sessionManager (SetSessionManager never
 // called) is a silent no-op ((0, 0, false)), matching every other optional
@@ -546,7 +545,7 @@ func (t *DelegateTool) killChildBackgroundShells(sessionID string) (killed, fail
 	descendants, walkErr := t.collectCancelDescendantSessionIDs(sessionID)
 	if walkErr != nil {
 		walkIncomplete = true
-		slog.Warn("delegate: cancel: descendant walk failed partway through — the background-shell kill "+
+		slog.Warn("delegate: stop_all: descendant walk failed partway through — the background-shell kill "+
 			"cascade below is INCOMPLETE; some descendants' background bash/exec work may be left running undetected",
 			"session_id", sessionID, "error", walkErr)
 	}
@@ -557,11 +556,11 @@ func (t *DelegateTool) killChildBackgroundShells(sessionID string) (killed, fail
 		// A REAL kill failure (KillAllForSessions already excludes the
 		// benign lost-the-race case from this count) deserves Warn, not
 		// the same Info level a clean kill gets — this is the actionable
-		// signal executeCancel's own result message is now built from.
-		slog.Warn("delegate: cancel: failed to kill some background shells for cancelled child or its descendants",
+		// signal executeStopAll's own result message is now built from.
+		slog.Warn("delegate: stop_all: failed to kill some background shells for stopped child or its descendants",
 			"session_id", sessionID, "descendant_count", len(descendants), "killed", killed, "failed", failed)
 	case killed > 0:
-		slog.Info("delegate: cancel: killed background shells for cancelled child and/or its descendants",
+		slog.Info("delegate: stop_all: killed background shells for stopped child and/or its descendants",
 			"session_id", sessionID, "descendant_count", len(descendants), "killed", killed)
 	}
 	return killed, failed, walkIncomplete
@@ -671,7 +670,7 @@ func (t *DelegateTool) droppedQueuedResult(sessionID, warnings string) *ToolResu
 		return nil
 	}
 	// note=nil: this call is reached only after the caller's own cancelHard/
-	// cancelSoft hook already ran (executeCancel, below) — that hook is
+	// cancelSoft hook already ran (executeStopAll, below) — that hook is
 	// al.cancelDelegatedSubtree, which stamps the durable Stop marker AND
 	// (steer_cancel.go::stampStop) the stop_note for sessionID itself with
 	// cause "stop" before this lands the terminal write. Retain it.
@@ -682,7 +681,12 @@ func (t *DelegateTool) droppedQueuedResult(sessionID, warnings string) *ToolResu
 	) + warnings)
 }
 
-func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *ToolResult {
+// executeStopAll implements action="stop_all" (ADR-20261004, locked decision
+// 2; renamed from cancel with no alias path). Stops that helper and every
+// helper under it — the confirmed downward cascade — through the SAME
+// durable Stop machinery a human's Stop all uses. The behavior is the
+// former cancel action's, unchanged.
+func (t *DelegateTool) executeStopAll(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, err := requiredStringArg(args, "session_id")
 	if err != nil {
 		return ErrorResult(err.Error())
@@ -702,14 +706,14 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 	// check only ran when Load SUCCEEDED, so any Load error skipped it and
 	// cancelHard/cancelSoft proceeded regardless. Now deny the cancel when
 	// the lifecycle store is unconfigured OR when Load errors, mirroring
-	// executeSteer/executeRespond/executeFollowUp's posture (the rest of
+	// executeSteer/executeRespond/executeResume's posture (the rest of
 	// ADR-053's fail-closed contract).
 	if t.lifecycle == nil {
 		return ErrorResult("delegate: no lifecycle store configured")
 	}
 	rec, lerr := t.lifecycle.Load(sessionID)
 	if lerr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", lerr))
+		return ErrorResult(fmt.Sprintf("delegate: stop_all: %v", lerr))
 	}
 	// The principal is not just the authorisation answer: it is stamped on
 	// the durable Stop marker (session.Stop.By, ADR-091 I-1) and is what the
@@ -718,7 +722,7 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 	// throws it away.
 	by, verr := t.verifyCallerPrincipal(ctx, rec)
 	if verr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", verr))
+		return ErrorResult(fmt.Sprintf("delegate: stop_all: %v", verr))
 	}
 
 	// Cancelling an already-terminal session doesn't corrupt any state
@@ -800,9 +804,9 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 		if t.cancelHard == nil {
 			return ErrorResult("delegate: no hard-cancel hook configured")
 		}
-		descendants, cerr := t.cancelHard(sessionID, by, "delegate cancel(hard=true)")
+		descendants, cerr := t.cancelHard(sessionID, by, "delegate stop_all(hard=true)")
 		if cerr != nil {
-			return ErrorResult(fmt.Sprintf("delegate: cancel: %v", cerr)).WithError(cerr)
+			return ErrorResult(fmt.Sprintf("delegate: stop_all: %v", cerr)).WithError(cerr)
 		}
 		if len(descendants) == 0 {
 			// RC-3: a clean TOCTOU miss (no real kill failure, no incomplete
@@ -817,12 +821,12 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 			// TestDelegateTool_Cancel_NothingToCancel_StillSurfacesShellKillWarnings).
 			if killFailed > 0 || walkIncomplete {
 				return ErrorResult(fmt.Sprintf(
-					"delegate: cancel: session %s terminated between the terminal check and the cancel hook — nothing to cancel",
+					"delegate: stop_all: session %s terminated between the terminal check and the stop hook — nothing to stop",
 					sessionID,
 				) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
 			}
 			return NewToolResult(fmt.Sprintf(
-				"Session %s terminated between the terminal check and the cancel hook — no action needed.",
+				"Session %s terminated between the terminal check and the stop hook — no action needed.",
 				sessionID,
 			) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
 		}
@@ -833,7 +837,7 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 		// which already stamped the stop_note for sessionID (cause "stop",
 		// it is the direct cancel target) via stampStop. Retain it.
 		t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user", nil)
-		msg := fmt.Sprintf("Session %s hard-cancelled immediately.", sessionID)
+		msg := fmt.Sprintf("Session %s stopped immediately (hard).", sessionID)
 		msg += cancelBackgroundShellWarnings(killFailed, walkIncomplete)
 		return NewToolResult(msg)
 	}
@@ -841,9 +845,9 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 	if t.cancelSoft == nil {
 		return ErrorResult("delegate: no soft-cancel hook configured")
 	}
-	softDescendants, cerr := t.cancelSoft(sessionID, by, "delegate cancel(hard=false)")
+	softDescendants, cerr := t.cancelSoft(sessionID, by, "delegate stop_all(hard=false)")
 	if cerr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: cancel: %v", cerr)).WithError(cerr)
+		return ErrorResult(fmt.Sprintf("delegate: stop_all: %v", cerr)).WithError(cerr)
 	}
 	if len(softDescendants) == 0 {
 		// RC-3: mirrors the hard-path branch above — a clean TOCTOU miss is
@@ -851,12 +855,12 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 		// the original error shape (signoff14's MEDIUM-3 requirement).
 		if killFailed > 0 || walkIncomplete {
 			return ErrorResult(fmt.Sprintf(
-				"delegate: cancel: session %s terminated between the terminal check and the cancel hook — nothing to cancel",
+				"delegate: stop_all: session %s terminated between the terminal check and the stop hook — nothing to stop",
 				sessionID,
 			) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
 		}
 		return NewToolResult(fmt.Sprintf(
-			"Session %s terminated between the terminal check and the cancel hook — no action needed.",
+			"Session %s terminated between the terminal check and the stop hook — no action needed.",
 			sessionID,
 		) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
 	}
@@ -887,9 +891,9 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 			// cancelHard returns (nil, nil) and there is nothing left to
 			// transition — skip transitionLifecycle rather than stamping a
 			// redundant LifecycleStopped onto an already-stopped/terminal record.
-			backstopDescendants, cerr := t.cancelHard(sessionID, by, "delegate cancel(hard=false): grace elapsed")
+			backstopDescendants, cerr := t.cancelHard(sessionID, by, "delegate stop_all(hard=false): grace elapsed")
 			if cerr != nil {
-				slog.Warn("delegate: cancel: hard-cancel backstop failed", "session_id", sessionID, "error", cerr)
+				slog.Warn("delegate: stop_all: hard-stop backstop failed", "session_id", sessionID, "error", cerr)
 				return
 			}
 			if len(backstopDescendants) == 0 {
@@ -902,8 +906,8 @@ func (t *DelegateTool) executeCancel(ctx context.Context, args map[string]any) *
 	}
 
 	msg := fmt.Sprintf(
-		"Session %s cooperatively cancelled; a checkpoint flush is expected within %s, "+
-			"after which a hard cancel backstop fires if it has not stopped on its own.",
+		"Session %s and its helpers are stopping cooperatively; a checkpoint flush is expected within %s, "+
+			"after which a hard stop backstop fires if they have not stopped on their own.",
 		sessionID, t.cancelGrace,
 	)
 	msg += cancelBackgroundShellWarnings(killFailed, walkIncomplete)

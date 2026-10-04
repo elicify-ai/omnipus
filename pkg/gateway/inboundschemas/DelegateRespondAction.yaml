@@ -1,15 +1,18 @@
 type: object
 title: DelegateRespondAction
 description: >
-  `delegate` tool call, `action: respond` (ADR-053 §5.1). Answers a
-  `question`/`decision_request` by `correlation_id`; out-of-order answers
-  are safe. Native: warm-resumes the SAME child session generation. 3P
-  (external CLI): spawns a NEW corrective session (original prompt +
-  answer folded in, D5) — never an in-place warm resume, since external
-  CLIs have no warm-resume primitive. The runtime REJECTS a `respond`
-  targeting a question whose derived authority is `owner_required`
-  (R§8.2) — a business rule enforced at the handler, not schema-
-  expressible.
+  `delegate` tool call, `action: respond` (ADR-053 §5.1; ADR-20261004
+  locked decisions 6–7). The parent's reply to one of the child's messages,
+  referenced by `correlation_id`; the text is delivered downward as an
+  ordinary message, and the recipient's state decides the effect (working:
+  into the current turn; stopped: same-generation resume; done/failed:
+  next round). Native: warm-resumes the SAME child session generation when
+  a resume applies. 3P (external CLI): spawns a NEW corrective session
+  (original prompt + answer folded in, D5) — never an in-place warm
+  resume, since external CLIs have no warm-resume primitive. The former
+  owner-answer authority check was withdrawn with the person-question
+  pause (ADR-20261004); a respond is an ordinary steering message, not an
+  authenticated owner answer.
 required:
   - action
   - session_id

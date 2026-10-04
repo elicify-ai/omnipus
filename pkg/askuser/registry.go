@@ -314,6 +314,12 @@ func (r *Registry) CreatePending(set *PendingSet) error {
 	return nil
 }
 
+// relaySteeredQuestions delivers a delegated child's would-be card upward as
+// an ORDINARY message (ADR-20261004, locked decision 6): no wait, no
+// authority, no park — the child keeps working and its parent answers
+// through ordinary steering. The relayed content is the same question text
+// the owner-session card would have shown, delivered as a plain upward
+// question message.
 func relaySteeredQuestions(deliverer steer.UpwardDeliverer, set *PendingSet) error {
 	if deliverer == nil {
 		return fmt.Errorf("askuser: delegated question relay is not wired")
@@ -330,14 +336,12 @@ func relaySteeredQuestions(deliverer steer.UpwardDeliverer, set *PendingSet) err
 		}
 		parts = append(parts, line)
 	}
-	authority := generated.SessionMessageQuestionAuthority("self_ok")
 	created := set.CreatedAt
 	if created.IsZero() {
 		created = time.Now().UTC()
 	}
 	var message generated.SessionMessage
 	if err := message.FromSessionMessageQuestion(generated.SessionMessageQuestion{
-		Authority:       &authority,
 		CorrelationId:   set.CardID,
 		CreatedAt:       created,
 		Depth:           1,
@@ -346,7 +350,6 @@ func relaySteeredQuestions(deliverer steer.UpwardDeliverer, set *PendingSet) err
 		SessionId:       set.TranscriptSessionID,
 		Text:            strings.Join(parts, "\n"),
 		UntrustedOrigin: true,
-		Wait:            true,
 	}); err != nil {
 		return fmt.Errorf("askuser: encode delegated question relay: %w", err)
 	}
@@ -361,15 +364,16 @@ func relaySteeredQuestions(deliverer steer.UpwardDeliverer, set *PendingSet) err
 	// [ADR-091 fix lane RX-OUTCOME, HIGH] This call site used to discard the
 	// Delivery with `_, err :=`. A `question` is always wake-eligible (I-5),
 	// so stored_not_woken here means the entry is durable but the steering
-	// session was NOT woken — and this child has parked itself waiting for
-	// an answer that nothing is going to produce until boot recovery
+	// session was NOT woken — nothing will read it until boot recovery
 	// re-nudges the parent. Logged, not returned as an error: the question
 	// IS durably stored, and failing the relay would tell the caller its
-	// question was lost when it was not. The parent session id is not
-	// resolvable from here (this package holds no lifecycle store) — the
-	// child id and message id are what an operator greps for.
+	// question was lost when it was not. The child does not wait on the
+	// answer (no park — ADR-20261004); it carries on and reports when it
+	// can. The parent session id is not resolvable from here (this package
+	// holds no lifecycle store) — the child id and message id are what an
+	// operator greps for.
 	if delivery.Outcome == steer.DeliveryStoredNotWoken {
-		slog.Error("askuser: delegated question stored but the steering session was NOT woken — the child stays parked until boot recovery re-nudges it",
+		slog.Error("askuser: delegated question stored but the steering session was NOT woken — the parent learns of it only at boot recovery",
 			"child_session_id", set.TranscriptSessionID,
 			"card_id", set.CardID,
 			"message_id", delivery.MessageID,

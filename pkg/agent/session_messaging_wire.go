@@ -39,11 +39,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
-	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -145,7 +143,6 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 	inbox := al.GetMessageInboxStore()
 	lifecycle := al.GetSessionLifecycleStore()
 	egress := al.buildContentEgressFilter()
-	needInputTTL := al.sessionMessagingNeedsInputTTL()
 
 	// Boundary 8 lives in pkg/tools. Re-apply both dependencies here on every
 	// boot/hot-reload wire pass because registerSharedTools replaces the
@@ -182,7 +179,7 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			// interface parameter, producing a NON-nil interface wrapping a
 			// nil pointer. Every one of delegate.go's existing
 			// "t.lifecycle == nil" fail-closed checks (executeInbox,
-			// executeSteer, executeRespond, executeCancel, executeFollowUp,
+			// executeSteer, executeRespond, executeStopAll, executeResume,
 			// executePeek — each returning the operator-visible "delegate: no
 			// lifecycle store configured" ErrorResult) would then evaluate
 			// false and the call would panic on a nil-pointer method call
@@ -274,7 +271,6 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 	// fail-closed posture this comment already documents for inbox/lifecycle. ---
 	mp := tools.NewMessageParentTool(al.getUpwardDeliverer(), lifecycle)
 	mp.SetContentEgressFilter(egress)
-	mp.SetNeedsInputTTL(needInputTTL)
 	// FR-196 kill switch on the SYNC tool path (arch-M2): the live closure
 	// re-reads config per call, mirroring the async consumer's per-event read.
 	mp.SetSessionMessagingEnabled(al.sessionMessagingEnabledLive())
@@ -358,16 +354,6 @@ func (al *AgentLoop) sessionMessagingEnabledLive() func() bool {
 		}
 		return cfg.SessionMessaging.EffectiveEnabled()
 	}
-}
-
-// sessionMessagingNeedsInputTTL reads the live needs_input TTL from the
-// session_messaging config (FR-126/G-6). Returns the default when unset.
-func (al *AgentLoop) sessionMessagingNeedsInputTTL() time.Duration {
-	cfg := al.GetConfig()
-	if cfg == nil {
-		return config.DefaultSMNeedsInputTTL
-	}
-	return cfg.SessionMessaging.EffectiveNeedsInputTTL()
 }
 
 // ====================== The SessionMessageChan kind-router consumer ======================

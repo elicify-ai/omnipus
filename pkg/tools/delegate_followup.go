@@ -104,7 +104,7 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// below, deliberately OUTSIDE the atomic closure — unlike the terminal
 	// check (see the TOCTOU comment below), ownership cannot race: a
 	// session's SteeringSessionID is stamped once at mint time and carried
-	// forward unchanged even across follow_up generations (see
+	// forward unchanged even across resume generations (see
 	// spawnCorrectiveFollowUp's whole-struct-copy comment), so a Load taken
 	// a moment before Mutate observes the exact same value Mutate itself
 	// would. Verifying it here, rather than inside the closure below, is
@@ -129,7 +129,7 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// (pkg/agent/external_dispatch.go) never drains it, so a message queued
 	// here for a 3P child is silently orphaned forever (no live consumer ever
 	// reads it, and there is no "next tool boundary" concept for an external
-	// CLI's own turn loop). Unlike respond/follow_up, steer has no corrective-
+	// CLI's own turn loop). Unlike respond/resume, steer has no corrective-
 	// redispatch fallback to degrade to — injecting an instruction mid-turn is
 	// meaningless for a session that isn't running on this engine's turn loop
 	// at all. Mirrors message_parent's identical Is3P posture (D5).
@@ -137,7 +137,7 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		return ErrorResult(fmt.Sprintf(
 			"delegate: steer: not_steerable: external command-line session %s runs on an external CLI "+
 				"(claude-code/codex/opencode) with no steering-queue drain in its dispatch path; use "+
-				"action=\"respond\" (which redispatches a corrective session) or action=\"follow_up\" instead",
+				"action=\"respond\" (which redispatches a corrective session) or action=\"resume\" instead",
 			sessionID,
 		))
 	}
@@ -153,7 +153,7 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// stamped for a generation, is retained forever as inert history (see
 	// SteerCanceller.Revive's own doc comment) — the same "checked off a
 	// naked Load is safe because the fact cannot become stale" reasoning
-	// executeRespond's own resumeNative uses for its terminal predicate.
+	// executeRespond's own delivery uses for its terminal predicate.
 	// Reviver.ReviveStoppedSession re-validates atomically under Revive's
 	// own record lock regardless, so no window is opened here. This ALSO
 	// avoids a real bug the Mutate-closure version of this check had: once
@@ -324,7 +324,17 @@ func enqueueSteeringWithStatus(
 	return "", fmt.Errorf("delegate: steer: no steering sink configured"), false
 }
 
-func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
+// executeResume implements action="resume" (ADR-20261004, locked decision
+// 4; renamed from follow_up with no alias path). Continues a stopped helper
+// on the same conversation and the same generation, or starts the next
+// round when the helper is done or failed — one primitive for both, which
+// is exactly what ReviveStoppedSession admits. A working helper has nothing
+// to resume: a non-error "already running" result (the same reasoning as
+// executeStopAll's non-error "already terminal" — an error here drives
+// agents into retry loops). A 3P child keeps its D5 corrective re-dispatch
+// (external CLIs have no warm-resume primitive); resume is what it uses in
+// place of the renamed follow_up.
+func (t *DelegateTool) executeResume(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
 	if t.launcher == nil {
 		return ErrorResult("delegate: no session launcher configured")
 	}
@@ -336,85 +346,85 @@ func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any,
 		return ErrorResult(err.Error())
 	}
 
-	// follow_up's own schema documents "text" as the instruction field
-	// (grouped with steer/respond everywhere the schema/description mentions
-	// them together — e.g. session_id's own description lists "steer/
-	// respond/cancel/follow_up/peek" as one family), but this action used to
-	// read ONLY args["task"], silently falling back to a generic "Continue
-	// the previous task." placeholder whenever a caller passed "text" per
-	// the documented sibling-action convention — dropping the caller's real
-	// instruction with no error at all. "task" survives as a deprecated
-	// back-compat alias (text wins when both are present); an instruction
-	// that is blank after trimming both is now a validation error, never a
-	// silent placeholder substitution.
-	instruction, ierr := followUpInstructionArg(args)
+	// text is optional: a bare resume continues the stopped helper with no
+	// new instruction; when present it is the additional instruction for the
+	// continued/next round.
+	instruction, ierr := resumeInstructionArg(args)
 	if ierr != nil {
 		return ErrorResult(ierr.Error())
 	}
 
 	rec, lerr := t.lifecycle.Load(sessionID)
 	if lerr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: follow_up: %v", lerr))
+		return ErrorResult(fmt.Sprintf("delegate: resume: %v", lerr))
 	}
-	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: follow_up: %v", verr))
+	by, verr := t.verifyCallerPrincipal(ctx, rec)
+	if verr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: resume: %v", verr))
 	}
-	// NOTE: this is a naked Load+Terminal check, NOT the LifecycleStore.Mutate
-	// RMW that executeSteer/executeRespond use to close their check-then-act
-	// TOCTOU window. The polarity is inverted here: follow_up RESUMES a
-	// terminal session (spawnCorrectiveFollowUp re-queues it as a new generation), so
-	// the gate is `!rec.Terminal() -> reject`, and the immutable-terminal
-	// invariant (L-3) means a session that is terminal at this Load STAYS
-	// terminal — there is no concurrent transition that can flip it back to
-	// non-terminal under us and race the branch. spawnCorrectiveFollowUp
-	// below performs its OWN Persist under the lifecycle store's per-session
-	// striped lock to mint the new generation; this read only decides whether
-	// to enter that path. Do not "fix" this toward Mutate to match steer —
-	// it would be a no-op lock acquisition on an immutable predicate.
-	if !rec.Terminal() {
-		return ErrorResult(fmt.Sprintf(
-			"delegate: follow_up: session %s is not terminal (state=%s) — follow_up only resumes a finished session",
+
+	// A working helper has nothing to resume — non-error, nothing started
+	// (locked decision 4 names only stopped and done/failed recipients).
+	if !rec.Terminal() && !rec.Stopped() {
+		return NewToolResult(fmt.Sprintf(
+			"Session %s is already running (state=%s) — nothing to resume. Use action=\"steer\" to inject an instruction into the current turn.",
 			sessionID, rec.State,
 		))
 	}
 
-	return t.spawnCorrectiveFollowUp(ctx, sessionID, rec, instruction, cb)
+	if rec.Is3P {
+		// D5: a 3P child never warm-resumes. Its one continuation primitive
+		// is the corrective re-dispatch (a NEW session carrying the prior
+		// context), which serves both the stopped and the finished shape.
+		return t.spawnCorrectiveFollowUp(ctx, sessionID, rec, instruction, cb)
+	}
+
+	// Native: stopped → same-generation resume; done/failed → next round.
+	// Both shapes go through ReviveStoppedSession (SteerCanceller.Revive's
+	// own branch), which appends the instruction BEFORE the generation moves
+	// and refuses visibly when the append fails.
+	reviver, ok := t.steering.(steerReviver)
+	if !ok {
+		return ErrorResult(fmt.Sprintf("delegate: resume: session %s cannot be resumed: no reviver configured", sessionID))
+	}
+	wasTerminal := rec.Terminal()
+	revived, rerr := reviver.ReviveStoppedSession(ctx, sessionID, by, instruction)
+	if rerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: resume: %v", rerr)).WithError(rerr)
+	}
+	if !revived {
+		return ErrorResult(fmt.Sprintf("delegate: resume: session %s could not be resumed", sessionID))
+	}
+	if wasTerminal {
+		return NewToolResult(fmt.Sprintf(
+			"Session %s was finished; a next round has been started on the same conversation.", sessionID,
+		))
+	}
+	return NewToolResult(fmt.Sprintf(
+		"Session %s was stopped; it has been resumed on the same conversation and generation.", sessionID,
+	))
 }
 
-// followUpInstructionArg resolves the new instruction for action="follow_up":
-// "text" is the documented field, "task" is a deprecated back-compat alias
-// consulted only when "text" is absent/blank. Returns an error naming the
-// missing field when neither yields a non-blank string — no silent
-// placeholder substitution.
-func followUpInstructionArg(args map[string]any) (string, error) {
-	if rawText, present := args["text"]; present && rawText != nil {
-		s, ok := rawText.(string)
-		if !ok {
-			return "", fmt.Errorf("text must be a string")
-		}
-		if trimmed := strings.TrimSpace(s); trimmed != "" {
-			return trimmed, nil
-		}
+// resumeInstructionArg resolves the optional additional instruction for
+// action="resume": "text" is the documented field. Absent or blank means a
+// bare continuation — no error, no placeholder substitution.
+func resumeInstructionArg(args map[string]any) (string, error) {
+	rawText, present := args["text"]
+	if !present || rawText == nil {
+		return "", nil
 	}
-	if rawTask, present := args["task"]; present && rawTask != nil {
-		s, ok := rawTask.(string)
-		if !ok {
-			return "", fmt.Errorf("task must be a string")
-		}
-		if trimmed := strings.TrimSpace(s); trimmed != "" {
-			return trimmed, nil
-		}
+	s, ok := rawText.(string)
+	if !ok {
+		return "", fmt.Errorf("text must be a string")
 	}
-	return "", fmt.Errorf(
-		`text is required and must be a non-empty string for action="follow_up" (the new instruction to resume the session with; "task" is accepted as a deprecated alias)`,
-	)
+	return strings.TrimSpace(s), nil
 }
 
-// spawnCorrectiveFollowUp is the shared mechanics behind `follow_up` (native
+// spawnCorrectiveFollowUp is the shared mechanics behind `resume` (native
 // and 3P) and a 3P `respond` (D5 — a 3P child never warm-resumes; every
 // continuation is a NEW corrective session carrying the prior context).
-// Native follow_up reuses sessionID verbatim (warm resume, same session, new
-// generation — the terminal follow-up bumps the record's Generation); 3P mints
+// Native resume reuses sessionID verbatim (warm resume, same session, new
+// generation — the terminal resume bumps the record's Generation); 3P mints
 // a NEW session_id (cold respawn), linked back via ResumedFrom.
 func (t *DelegateTool) spawnCorrectiveFollowUp(
 	ctx context.Context,
@@ -432,7 +442,7 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	// SteeringSessionID/OriginChannel/OriginChatID with it) MUST be carried
 	// forward onto every generation mint. It is deliberately CARRIED FORWARD
 	// from the prior generation rather than re-sourced from ToolAgentID(ctx)
-	// — the follow_up caller is not necessarily the agent that originally
+	// — the resume caller is not necessarily the agent that originally
 	// spawned the session, and re-sourcing would silently re-parent it. Do
 	// not replace this copy with field-by-field construction.
 	// Origin.CallID stays the original run's call id on every generation.
@@ -446,7 +456,7 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	newRec.State = session.LifecycleQueued
 	newRec.FailedReason = ""
 	newRec.NeedsInput = nil
-	// ADR-20260928 D2: explicit RESUME of a committed done/failed G creating
+	// ADR-20260928 D2: an explicit resume of a committed done/failed G creating
 	// G+1 neither copies G's committed final outbox into G+1 nor hides it —
 	// G's entry stays discoverable for delivery retry through
 	// LifecycleStore.ListPendingFinalDeliveries. The whole-struct copy would
@@ -455,11 +465,11 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	newRec.FinalDelivery = nil
 	if rec.Is3P {
 		if err := t.cloneCorrectiveSessionIdentity(sessionID, newSessionID, rec); err != nil {
-			return ErrorResult(fmt.Sprintf("delegate: follow_up: failed to create corrective session: %v", err)).WithError(err)
+			return ErrorResult(fmt.Sprintf("delegate: resume: failed to create corrective session: %v", err)).WithError(err)
 		}
 	}
 	if err := t.lifecycle.Persist(&newRec); err != nil {
-		return ErrorResult(fmt.Sprintf("delegate: follow_up: failed to persist new generation: %v", err)).WithError(err)
+		return ErrorResult(fmt.Sprintf("delegate: resume: failed to persist new generation: %v", err)).WithError(err)
 	}
 	// [Defect 4, ADR-091 fix lane RX-DELIVERY] REFUSE to dispatch when the
 	// new instruction did not land. reconstructSteeredTurn would otherwise
@@ -476,7 +486,7 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 			"generation", newRec.Generation,
 			"agent_id", rec.AgentID,
 			"error", err)
-		return ErrorResult(fmt.Sprintf("delegate: follow_up: %v", err)).WithError(err)
+		return ErrorResult(fmt.Sprintf("delegate: resume: %v", err)).WithError(err)
 	}
 
 	dispatch, err := t.launcher.Dispatch(ctx, newSessionID, newRec.Generation)
@@ -487,10 +497,10 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 			"generation", newRec.Generation,
 			"agent_id", rec.AgentID,
 			"error", err)
-		return ErrorResult(fmt.Sprintf("delegate: follow_up: dispatch failed: %v", err)).WithError(err)
+		return ErrorResult(fmt.Sprintf("delegate: resume: dispatch failed: %v", err)).WithError(err)
 	}
 
-	message := fmt.Sprintf("Follow-up dispatched for session %s at generation %d (state: %s)",
+	message := fmt.Sprintf("Resume dispatched for session %s at generation %d (state: %s)",
 		newSessionID, dispatch.Generation, dispatch.State)
 	if dispatch.State == steer.DispatchQueued {
 		message += fmt.Sprintf(", queue position %d", dispatch.QueuePosition)
@@ -501,7 +511,7 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	// (t.tasks/t.sessionIndex, deleted with the last writer that populated
 	// them; see delegate.go's package doc comment).
 	if rec.Title != "" {
-		message = fmt.Sprintf("Follow-up for %q dispatched for session %s at generation %d (state: %s)",
+		message = fmt.Sprintf("Resume for %q dispatched for session %s at generation %d (state: %s)",
 			rec.Title, newSessionID, dispatch.Generation, dispatch.State)
 	}
 	return NewToolResult(message)
@@ -540,13 +550,10 @@ type followUpInstructionWriter interface {
 //
 // Both halves are fixed here by mirroring the launch path's own write pair
 // (AddMessage AND AppendTranscriptStrict) and returning the strict append's
-// error. The entry id is fresh per call: a follow-up is a new instruction,
+// error. The entry id is fresh per call: a resume instruction is new input,
 // never a duplicate of the last one.
 //
-// The signature deliberately keeps its original two parameters: the OTHER
-// call site (delegate_park.go::resumeNative) belongs to a different fix lane,
-// and adding a parameter would break its compilation rather than let it adopt
-// the new error return on its own schedule. The transcript entry's agent id
+// The transcript entry's agent id
 // is therefore looked up here, best-effort — it is display metadata, never a
 // reason to refuse an instruction that is otherwise durable.
 func (t *DelegateTool) appendFollowUpInstruction(sessionID, instruction string) error {

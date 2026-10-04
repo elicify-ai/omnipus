@@ -3522,7 +3522,6 @@ components:
                 - redirect
                 - resume
                 - respond
-                - escalate
                 - clear_goal
             state:
               type: string
