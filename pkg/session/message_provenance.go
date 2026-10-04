@@ -75,15 +75,18 @@ const provenanceFileName = "provenance.jsonl"
 //
 //   - The transcript append runs first; if it fails, NO provenance is
 //     written and the session's provenance history is untouched.
-//   - The provenance record is mandatory for acceptance: if the provenance
-//     write fails after the transcript line landed, the error is returned
-//     and the caller must treat the message as NOT accepted — no echo, no
-//     acknowledgment, no turn. The already-written transcript line then
-//     stays on disk unprovenanced and unacknowledged; that torn-write
-//     window is inherent to a two-record file write with no transaction and
-//     is documented here rather than hidden. A record read that hits a torn
-//     line (power-loss corner) fails closed the same way: appends and
-//     lookups for that session error until the record file is repaired.
+//   - The provenance record is mandatory for acceptance (founder decision
+//     2026-10-04): the message and its record are saved together, or neither
+//     is kept. If the record cannot be saved after the transcript line
+//     landed, the transcript file is rolled back to its exact pre-append
+//     state — the appended line is truncated away, or the whole file is
+//     removed when this append created it — and the error is returned. No
+//     half-saved message remains; the caller must treat the message as NOT
+//     accepted (no echo, no acknowledgment, no turn). A rollback that itself
+//     fails is wrapped into the returned error, never swallowed.
+//   - A record read that hits a torn line (power-loss corner) fails closed:
+//     appends and lookups for that session error until the record file is
+//     repaired.
 func (us *UnifiedStore) AppendTranscriptWithProvenance(sessionID string, entry TranscriptEntry, principal string) error {
 	_, err := us.appendTranscript(sessionID, entry, false, "append transcript with provenance", &MessageProvenance{Principal: principal})
 	return err
@@ -115,6 +118,54 @@ func (us *UnifiedStore) LookupMessageProvenance(sessionID, messageID string) (Me
 // messageProvenancePath is the session's provenance record file path.
 func (us *UnifiedStore) messageProvenancePath(sessionID string) string {
 	return filepath.Join(us.baseDir, sessionID, provenanceFileName)
+}
+
+// transcriptFilePreState reports the transcript file's size before an append
+// and whether the file exists at all — the exact state
+// rollbackTranscriptAppend restores when the paired provenance record cannot
+// be saved.
+func transcriptFilePreState(path string) (size int64, existed bool, err error) {
+	info, statErr := os.Stat(path)
+	if errors.Is(statErr, os.ErrNotExist) {
+		return 0, false, nil
+	}
+	if statErr != nil {
+		return 0, false, statErr
+	}
+	return info.Size(), true, nil
+}
+
+// rollbackTranscriptAppend restores the transcript to the exact pre-append
+// state transcriptFilePreState captured: the bytes the failed paired append
+// added are truncated away and fsynced — as durable as the append it undoes —
+// or the whole file is removed when the append created it. The caller holds
+// the session shard (appendTranscript's hold), so no other writer can
+// interleave between the append and its rollback. Failures are returned so
+// the caller can surface them alongside the provenance error that triggered
+// the rollback — never logged and dropped.
+func rollbackTranscriptAppend(path string, preSize int64, existed bool) error {
+	if !existed {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("rollback append-created transcript file: %w", err)
+		}
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("open transcript for rollback: %w", err)
+	}
+	if err := f.Truncate(preSize); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("truncate transcript to %d bytes: %w", preSize, err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("sync rolled-back transcript: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close rolled-back transcript: %w", err)
+	}
+	return nil
 }
 
 // appendMessageProvenanceLocked stamps and appends the provenance record for
