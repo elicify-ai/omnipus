@@ -2474,6 +2474,13 @@
     },
     {
       "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/calendar/CalendarMonthGrid.tsx",
+      "syntax": "CalendarMonthGrid#dom-style.backgroundColor<-event.backgroundColor",
+      "reason": "Lead read (2026-10-04): SP-39 month-grid status dot reads the same event.backgroundColor EventChip paints (set by makeEvent from scanned palette consts), token fallback when absent; repair would replace FullCalendar's own event colouring (not invisible)",
+      "owner": "third-party integration boundary exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
       "path": "src/components/calendar/FullCalendarView.tsx",
       "syntax": "EventChip#dom-style.backgroundColor<-arg.event.backgroundColor",
       "reason": "Lead read (2026-09-20): line 135: colour read back from FullCalendar's event arg; set by makeEvent from scanned palette consts; repair would replace FullCalendar's own event colouring (not invisible)",

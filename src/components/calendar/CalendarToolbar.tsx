@@ -2,13 +2,15 @@
  * CalendarToolbar — Responsive Sovereign-Deep toolbar for the workspace calendar.
  *
  * Spec: docs/internal/specs/workspace-calendar-fullcalendar-spec.md (v2)
- *   FR-006: Month/Week/Day/Agenda via custom toolbar driving the FC API.
+ *   FR-006: Month/Week/Day via custom toolbar driving the FC API (SP-39 —
+ *           Agenda dropped; the three views are equal in-panel choices, and
+ *           Month renders the compact in-panel grid, never routing away).
  *   FR-007: phone-width → two rows (nav+title / views+New task); ≥44px targets (I-4, I-9).
  *   US-2/AS-2: prev() / next() / today() preserve calendarApi.getDate().
  *
  * Layout (container-query breakpoint relative to the `@container` wrapper the
  * host CalendarScreen provides):
- *   Wide (≥42rem / 672px, @2xl): ONE ROW — [prev today next] [title] ·· [Month Week Day Agenda] [New task]
+ *   Wide (≥42rem / 672px, @2xl): ONE ROW — [prev today next] [title] ·· [Month Week Day] [New task]
  *   Narrow (<42rem / 672px):     TWO ROWS — row-1: [prev today next] [title]; row-2: [views] [New task]
  *
  * Tailwind v4 container-query sizes (theme.css):
@@ -100,12 +102,6 @@ export function CalendarToolbar({
   // 8am), with no way to jump straight to "now" itself.
   //   - timeGrid views (Week/Day): api.scrollToTime — a real FullCalendar
   //     API for this, takes an "HH:MM:SS" duration-from-midnight string.
-  //   - Agenda (listWeek): no FullCalendar API scrolls a list view to a
-  //     time — `calendarRef`'s `elRef` isn't exposed, so this queries the
-  //     rendered now-marker row directly (present whenever there's at least
-  //     one real event that day — see CalendarScreen's nowMarkerEvent) and
-  //     falls back to today's own day-group header when the marker isn't
-  //     rendered (e.g. a day with zero real events).
   //   - Month: date-only, no time position to scroll to.
   const handleToday = withApi('today', (api) => {
     api.today()
@@ -116,18 +112,6 @@ export function CalendarToolbar({
       const mm = String(now.getMinutes()).padStart(2, '0')
       const ss = String(now.getSeconds()).padStart(2, '0')
       api.scrollToTime(`${hh}:${mm}:${ss}`)
-    } else if (view === 'listWeek') {
-      requestAnimationFrame(() => {
-        const now = new Date()
-        const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-        // .fc-list-day has no dedicated "is today" class — it carries a
-        // data-date="YYYY-MM-DD" attribute (@fullcalendar/list's own
-        // formatDayString), which is what the fallback keys off.
-        const target =
-          document.querySelector('.fc-sovereign-wrapper .fc-sovereign-now-marker-row') ??
-          document.querySelector(`.fc-sovereign-wrapper .fc-list-day[data-date="${todayStr}"]`)
-        target?.scrollIntoView({ block: 'center' })
-      })
     }
   })
 
@@ -270,13 +254,13 @@ export function CalendarToolbar({
           'justify-between @2xl:justify-end',
         )}
       >
-        {/* View switcher — a group of four toggle buttons, NOT a tabpanel-driven
+        {/* View switcher — a group of three toggle buttons, NOT a tabpanel-driven
             tablist: there is no arrow-key roving-tabindex or aria-controls
             wired here, so `role="tablist"`/`role="tab"`/`aria-selected` would
             promise the ARIA tab pattern (Left/Right to move focus, one stop in
             the Tab order) without implementing it — a11y audit fix option (b).
             `SegmentedControl` (`role="group"` + per-item `aria-pressed`, no
-            roving tabindex) correctly describes four independently-tabbable
+            roving tabindex) correctly describes three independently-tabbable
             toggle buttons instead — this is one of its audited real call
             sites (see segmented-control.tsx's own doc comment). */}
         <SegmentedControl
