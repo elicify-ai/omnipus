@@ -25,7 +25,9 @@ func (us *UnifiedStore) AppendTranscriptIndexed(sessionID string, entry Transcri
 // provenance is nil for every ordinary caller; when non-nil
 // (AppendTranscriptWithProvenance only) the record is stamped and persisted
 // inside this same session-shard hold, immediately after the transcript line
-// lands — see MessageProvenance for the trust and failure contract.
+// lands — and a failed record write rolls the transcript line back, so the
+// message and its record are saved together or neither is kept. See
+// MessageProvenance for the trust and failure contract.
 func (us *UnifiedStore) appendTranscript(sessionID string, entry TranscriptEntry, indexed bool, what string, provenance *MessageProvenance) (int, error) {
 	if err := validateSessionID(sessionID); err != nil {
 		return -1, err
@@ -51,11 +53,31 @@ func (us *UnifiedStore) appendTranscript(sessionID string, entry TranscriptEntry
 			return -1, fmt.Errorf("unified_store: %s: count transcript records: %w", what, err)
 		}
 	}
+	// The provenance-paired append may have to roll this write back (founder
+	// decision 2026-10-04: the message and its record are saved together, or
+	// neither is kept), so capture the transcript's exact pre-append state
+	// first. Ordinary appends (provenance == nil) skip this entirely.
+	var preSize int64
+	preExisted := false
+	if provenance != nil {
+		var statErr error
+		preSize, preExisted, statErr = transcriptFilePreState(path)
+		if statErr != nil {
+			return -1, fmt.Errorf("unified_store: %s: stat transcript before paired append: %w", what, statErr)
+		}
+	}
 	if err := fileutil.AppendJSONL(path, entry); err != nil {
 		return -1, fmt.Errorf("unified_store: append transcript: %w", err)
 	}
 	if provenance != nil {
 		if err := us.appendMessageProvenanceLocked(sessionID, entry, provenance); err != nil {
+			// The record could not be saved, so the transcript line must not
+			// survive it: restore the pre-append state and fail the append.
+			// A rollback that itself fails is wrapped into the returned error,
+			// never dropped with only a log line.
+			if rbErr := rollbackTranscriptAppend(path, preSize, preExisted); rbErr != nil {
+				return -1, fmt.Errorf("unified_store: %s: record provenance: %w; transcript rollback also failed: %w", what, err, rbErr)
+			}
 			return -1, fmt.Errorf("unified_store: %s: record provenance: %w", what, err)
 		}
 	}
