@@ -14,17 +14,23 @@ interface SidebarStore {
   pin: () => void
   unpin: () => void
   togglePin: () => void
+  /** Docked or overlay: take the sidebar off the screen. */
+  hide: () => void
 }
 
 export const useSidebarStore = create<SidebarStore>()(
   persist(
     (set, get) => ({
       isOpen: false,
-      // US-5: pin preference persists via localStorage
-      isPinned: false,
+      // A wide window starts with the sidebar docked. Hide persists as unpinned.
+      isPinned: true,
 
       open: () => set({ isOpen: true }),
-      close: () => set((s) => s.isPinned ? {} : { isOpen: false }),
+      // Drop the overlay only. A saved dock stays saved: on a narrow window
+      // the sidebar is an overlay even when isPinned is true, and Escape, the
+      // backdrop, and choosing a destination all call this. Hide is the only
+      // action that forgets the dock.
+      close: () => set({ isOpen: false }),
       toggle: () => set((s) => ({ isOpen: !s.isOpen })),
 
       pin: () => set({ isPinned: true, isOpen: true }),
@@ -32,11 +38,12 @@ export const useSidebarStore = create<SidebarStore>()(
       togglePin: () => {
         const { isPinned } = get()
         if (isPinned) {
-          set({ isPinned: false })
+          set({ isPinned: false, isOpen: false })
         } else {
           set({ isPinned: true, isOpen: true })
         }
       },
+      hide: () => set({ isPinned: false, isOpen: false }),
     }),
     {
       name: 'omnipus-sidebar',

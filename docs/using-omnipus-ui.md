@@ -33,7 +33,7 @@ Open this page in your first week, or later when you are hunting a control you h
 
 ## The sidebar
 
-The sidebar is a drawer that slides over the screen. Press **Cmd+B** (Mac) or **Ctrl+B** (Windows and Linux), or select the list icon at the top left, to open and close it. On a screen at least 1024 pixels wide, the pin icon at the top of the sidebar keeps it open permanently.
+On a window at least 1024 pixels wide, the sidebar starts docked beside the page, unless you previously hid it. **Hide sidebar**, inside the sidebar, hides it and forgets that dock. **Show sidebar** appears in the header only while the sidebar is hidden. On a wide window, Show docks the sidebar again. On a narrower window, Show opens it as a drawer over the page. On that narrower window, **Escape**, a click outside the drawer, or choosing a destination closes the drawer and does not forget a dock you saved on a wider window. When focus is outside a field or text editor, **Cmd+B** (Mac) or **Ctrl+B** (Windows and Linux) hides a visible sidebar and shows a hidden one. Inside a field or editor, the shortcut stays with that control.
 
 What the sidebar holds:
 
@@ -64,7 +64,7 @@ Workspace settings are not an entry: select the workspace's name at the left of 
 
 The chat is a conversation with the workspace's agents. Replies stream in; each tool an agent uses appears as a card you can expand or collapse ([tools](tools.md) explains what agents can do). When an agent wants to do something sensitive, an approval dialog asks you to approve it once, deny it, or always allow it — [security](security.md) covers the rules behind it. Each active [goal](goals.md) shows as its own small pill under the message box.
 
-Two buttons at the top of the chat open side panels: **Open browser** shows the agent's [live browser](browser.md), and **Open library** opens this workspace's files. When an agent builds something reviewable, like a small site, the chat links to it ([previews](previews.md)).
+**Open browser** at the top of the chat shows the agent's [live browser](browser.md). Library is in the sidebar, and opens every workspace's files. When an agent builds something reviewable, like a small site, the chat links to it ([previews](previews.md)).
 
 While a turn is running, the message box stays yours:
 
@@ -100,7 +100,7 @@ When the current first message has no known chat ID, `/new` shows **“Delivery 
 
 ## Panels beside chat
 
-[Library](library.md), [Browser](browser.md), and [Mail](mail.md) use the same panel controls. From a workspace, select **Library** or **Mail** in the workspace bar to toggle that panel. The chat's **Open library** button opens Library; **Open browser** opens the agent's live Browser panel when a browser session is available. Only one panel sits beside Chat at a time. Choosing another replaces it; if the outgoing panel has protected unsaved changes, you are asked before it leaves.
+[Library](library.md), [Browser](browser.md), and [Mail](mail.md) use the same panel controls. **Library** is in the sidebar. **Open browser** at the top of the chat opens the agent's live Browser panel when a browser session is available. Only one panel sits beside Chat at a time. Choosing another replaces it; if the outgoing panel has protected unsaved changes, you are asked before it leaves.
 
 | Control | What it does |
 |---|---|
@@ -117,7 +117,7 @@ App-wide settings live behind **Settings** in the account menu, on tabs from pro
 
 ## Limits and things to watch
 
-- The sidebar overlays the screen by default. Pinning needs a window at least 1024 pixels wide; below that, the pin icon does not appear.
+- At 1024 pixels and wider the sidebar starts docked, unless it was previously hidden. **Hide sidebar** inside the sidebar hides it and forgets the dock. **Show sidebar** appears in the header only while it is hidden: it docks on a wide window and opens a drawer on a narrower one. On a narrower window, Escape, a click outside, or choosing a destination closes the drawer and does not forget a saved dock. When focus is outside a field or text editor, **Cmd+B** (Mac) or **Ctrl+B** (Windows and Linux) hides a visible sidebar and shows a hidden one. Inside a field or editor, the shortcut stays with that control.
 - Sending mid-turn steers the running turn; it does not queue a message for afterwards. To let the agent finish first, wait for the reply before sending.
 - Stop is a request, not a switch: the agent halts where it is, and work already finished stays finished.
 - The activity pill disappears when everything has ended successfully. A failed background item keeps it visible, so failures do not vanish silently.

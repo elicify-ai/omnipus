@@ -82,7 +82,7 @@
  * replay-fidelity.spec.ts, handoff.spec.ts, and retention.spec.ts too) clicks
  * a button named "Open sessions panel", then one named "Open session:
  * <title>". Neither accessible name exists anywhere in current `src/` — the
- * sidebar toggle is now `aria-label="Toggle navigation sidebar"`
+ * sidebar control, while the sidebar is hidden, is `aria-label="Show sidebar"`
  * (ScreenHeader.tsx / WorkspaceTabContainer.tsx) with no per-session button
  * text matching that old pattern. This is a pre-existing drift between that
  * shared fixture and the current UI, unrelated to the interleaving fix and

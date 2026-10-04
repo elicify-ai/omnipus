@@ -8,8 +8,7 @@ import {
   Buildings,
   ChartBar,
   Gear,
-  PushPin,
-  PushPinSlash,
+  SidebarSimple,
   SignOut,
   Plus,
   Tray,
@@ -72,7 +71,7 @@ const SIDEBAR_FOCUSABLE_SELECTOR =
 
 // US-5: Sidebar — overlay default, pin option, Framer Motion, Zustand
 export function Sidebar() {
-  const { isOpen, isPinned, close, toggle, togglePin } = useSidebarStore()
+  const { isOpen, isPinned, close, open, pin, hide } = useSidebarStore()
   const location = useLocation()
   const navigate = useNavigate()
   const { activeWorkspaceId, setActiveWorkspaceId } = useWorkspacesStore()
@@ -268,26 +267,33 @@ export function Sidebar() {
     ...visibleUnpinned,
   ]
 
-  // US-5: Cmd+B / Ctrl+B keyboard shortcut + Escape to close. The Mod-b toggle
-  // belongs to the global sidebar gesture only outside editor surfaces — a
-  // rich-text editor (Tiptap in the Mail draft editor + Mail compose dialog,
-  // AssistantUI's composer, etc.) owns its own keymap (Mod-b = bold,
-  // Mod-i = italic, Mod-k = link, ...) and must not lose keystrokes to a
-  // sidebar toggle. Only the Mod+B branch checks editable targets; Escape
-  // still closes the sidebar from a focused editor or any other control.
+  // Cmd+B / Ctrl+B follows the same Show and Hide actions as the buttons.
+  // Flipping only isOpen does nothing visible on a docked wide window. When
+  // the sidebar is on screen, the shortcut hides it and forgets the dock.
+  // When it is hidden, the shortcut docks it on a wide window and opens the
+  // drawer on a narrow one. The shortcut belongs to the global gesture only
+  // outside editor surfaces — a rich-text editor (Tiptap in the Mail draft
+  // editor + Mail compose dialog, AssistantUI's composer, etc.) owns its own
+  // keymap (Mod-b = bold, Mod-i = italic, Mod-k = link, ...) and must not
+  // lose keystrokes to it. Only the Mod+B branch checks editable targets;
+  // Escape still closes the narrow overlay from a focused editor or any
+  // other control, and does not forget a saved dock.
   const handleKeydown = useCallback(
     (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'b' && !isEditableEventTarget(e.target)) {
         e.preventDefault()
-        toggle()
+        if (isVisible) hide()
+        else if (canPin) pin()
+        else open()
       }
-      // Escape closes the overlay sidebar; the pinned sidebar is never closed by Escape.
-      // When viewport < 1024px pin is ignored, so treat isPinned as false there.
+      // Escape closes the overlay. A docked wide sidebar is not an overlay,
+      // so Escape leaves it. Below 1024px a saved dock is not on screen, and
+      // close() drops the overlay without clearing that dock.
       if (e.key === 'Escape' && isOpen && !effectivelyPinned) {
         close()
       }
     },
-    [toggle, close, isOpen, effectivelyPinned]
+    [isVisible, hide, canPin, pin, open, close, isOpen, effectivelyPinned]
   )
 
   // Track when the viewport crosses the pin breakpoint.
@@ -385,18 +391,14 @@ export function Sidebar() {
         >
           <MagnifyingGlass size={16} />
         </IconButton>
-        {/* Pin toggle — icon-only in the brand row (not a full-width bottom button) */}
-        {canPin && (
-          <IconButton
-            onClick={togglePin}
-            aria-label={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
-            aria-pressed={isPinned}
-            title={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
-            className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
-          >
-            {isPinned ? <PushPinSlash size={16} /> : <PushPin size={16} />}
-          </IconButton>
-        )}
+        <IconButton
+          onClick={hide}
+          aria-label="Hide sidebar"
+          title="Hide sidebar"
+          className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+        >
+          <SidebarSimple size={16} />
+        </IconButton>
       </div>
 
       {/* Workspaces (primary, scrollable) */}

@@ -178,12 +178,10 @@ test('seven_day_old_session_replays_cleanly', async ({ page }) => {
     //
     // The old "Open sessions panel" button and "Open session: <title>" rows
     // no longer exist — the session panel was redesigned into a two-mode
-    // SearchModal (src/components/search/SearchModal.tsx). The sidebar is
-    // closed by default (useSidebarStore: isOpen: false, isPinned: false),
-    // so open it first via the hamburger (aria-label="Toggle navigation
-    // sidebar", ScreenHeader.tsx / WorkspaceTabContainer.tsx), then click
-    // the sidebar's "Search sessions" icon (Sidebar.tsx:316), which opens
-    // SearchModal in its default 'sessions' mode. Session rows render
+    // SearchModal (src/components/search/SearchModal.tsx). A wide window
+    // starts with the sidebar docked (isOpen false, isPinned true), so
+    // Search sessions is already on screen. If a saved choice left the
+    // sidebar hidden, Show sidebar brings it back. Session rows render
     // `{session.title || 'Untitled session'}` inside plain buttons (no
     // per-row aria-label), so the accessible name is just the title text.
     // NOTE on isVisible(): Playwright ^1.49 IGNORES the `timeout` option on
@@ -198,7 +196,7 @@ test('seven_day_old_session_replays_cleanly', async ({ page }) => {
     // alone (an unconditional click would close it).
     const searchSessionsBtn = page.getByRole('button', { name: 'Search sessions' });
     if (!(await searchSessionsBtn.isVisible())) {
-      const sidebarToggle = page.getByRole('button', { name: 'Toggle navigation sidebar' });
+      const sidebarToggle = page.getByRole('button', { name: 'Show sidebar' });
       await sidebarToggle.click();
     }
     await expect(searchSessionsBtn).toBeVisible({ timeout: 5_000 });

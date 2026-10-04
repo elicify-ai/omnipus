@@ -29,8 +29,7 @@ function makeClient() {
 }
 
 // A full, realistic SandboxStatus (every required field present, not just
-// the Auto-approve-related optional ones) — see ChatModeBadge.test.tsx's
-// identical helper for why: a fixture that only ever mocked the optional
+// the Auto-approve-related optional ones). A fixture that only ever mocked the optional
 // fields, cast through `as never`, is exactly what hid ADR-092 review
 // finding A (the real handler omitted these fields entirely).
 function sandboxStatus(overrides: Partial<SandboxStatus> = {}): SandboxStatus {
@@ -71,14 +70,14 @@ describe('AutoApprovePicker — resolution', () => {
     vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({ auto_approve_effective: true, kernel_sandbox_active: true }))
     renderPicker()
     await waitFor(() => {
-      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-pressed', 'true')
     })
   })
 
   it('reflects global off', async () => {
     renderPicker()
     await waitFor(() => {
-      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-checked', 'false')
+      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-pressed', 'false')
     })
   })
 
@@ -87,7 +86,7 @@ describe('AutoApprovePicker — resolution', () => {
     vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({ auto_approve_effective: true, kernel_sandbox_active: true }))
     renderPicker()
     await waitFor(() => {
-      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-checked', 'false')
+      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-pressed', 'false')
     })
   })
 
@@ -101,7 +100,7 @@ describe('AutoApprovePicker — resolution', () => {
     })
     renderPicker()
     await waitFor(() => {
-      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-pressed', 'true')
     })
   })
 })
@@ -114,7 +113,7 @@ describe('AutoApprovePicker — sends the human-only per-chat toggle', () => {
     })
     renderPicker()
     const toggle = await screen.findByTestId('composer-auto-approve-toggle')
-    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-pressed', 'false'))
     fireEvent.click(toggle)
     expect(spy).toHaveBeenCalledWith('sess_1', true)
   })
@@ -148,7 +147,7 @@ describe('AutoApprovePicker — sends the human-only per-chat toggle', () => {
     renderPicker()
     const toggle = await screen.findByTestId('composer-auto-approve-toggle')
     expect(toggle).not.toBeDisabled()
-    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-pressed', 'false'))
     fireEvent.click(toggle)
     expect(spy).toHaveBeenCalledWith('sess_1', true)
   })
@@ -183,7 +182,7 @@ describe('AutoApprovePicker — usable in a brand-new chat with no real session 
     })
     renderPicker()
     const toggle = await screen.findByTestId('composer-auto-approve-toggle')
-    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-pressed', 'false'))
     fireEvent.click(toggle)
     expect(spy).not.toHaveBeenCalled()
     expect(useChatStore.getState().pendingAutoApproveChoice).toBe(true)
@@ -195,9 +194,9 @@ describe('AutoApprovePicker — usable in a brand-new chat with no real session 
     })
     renderPicker()
     const toggle = await screen.findByTestId('composer-auto-approve-toggle')
-    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'))
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-pressed', 'false'))
     fireEvent.click(toggle)
-    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'))
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-pressed', 'true'))
   })
 })
 
@@ -275,7 +274,7 @@ describe('AutoApprovePicker — explains itself via the catalogued Tooltip, not 
 
 // Founder decision (2026-09-24): Auto works without an enforcing kernel
 // sandbox — it must never flip back to disabled/off, but the tooltip adds a
-// calm caution matching ChatModeBadge's "Auto — no sandbox" wording.
+// calm caution in the same tooltip. There is no second badge.
 describe('AutoApprovePicker — no-sandbox caution (2026-09-24)', () => {
   it('is still checked (Auto stays on) when resolved true and no kernel sandbox is enforcing', async () => {
     vi.mocked(api.fetchSandboxStatus).mockResolvedValue(
@@ -283,7 +282,7 @@ describe('AutoApprovePicker — no-sandbox caution (2026-09-24)', () => {
     )
     renderPicker()
     await waitFor(() => {
-      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-pressed', 'true')
     })
   })
 
@@ -293,7 +292,7 @@ describe('AutoApprovePicker — no-sandbox caution (2026-09-24)', () => {
     )
     renderPicker()
     await waitFor(() => {
-      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-checked', 'true')
+      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-pressed', 'true')
     })
     const trigger = screen.getByTestId('composer-auto-approve-tooltip-trigger')
     fireEvent.focus(trigger)
@@ -314,7 +313,7 @@ describe('AutoApprovePicker — no-sandbox caution (2026-09-24)', () => {
     )
     renderPicker()
     await waitFor(() => {
-      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-checked', 'false')
+      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-pressed', 'false')
     })
     const trigger = screen.getByTestId('composer-auto-approve-tooltip-trigger')
     fireEvent.focus(trigger)
@@ -323,7 +322,7 @@ describe('AutoApprovePicker — no-sandbox caution (2026-09-24)', () => {
   })
 })
 
-// Code-review finding 3: ChatModeBadge checks `godModeActive` FIRST and
+// Code-review finding 3: the composer checks `godModeActive` FIRST and
 // renders "God Mode" whatever `resolved` says (it's a STRONGER floor than
 // Auto, not the absence of it — useResolvedAutoApprove's own contract). This
 // picker used to ignore `godModeActive` entirely and just render `resolved`
@@ -338,9 +337,23 @@ describe('AutoApprovePicker — God Mode is a stronger floor than this chat’s 
       sandboxStatus({ auto_approve_effective: false, kernel_sandbox_active: true, god_mode_active: true }),
     )
     renderPicker()
+    const toggle = await screen.findByTestId('composer-auto-approve-toggle')
     await waitFor(() => {
-      expect(screen.getByTestId('composer-auto-approve-toggle')).toBeDisabled()
+      expect(toggle).toBeDisabled()
     })
+    // God Mode forces the control pressed even when this chat's own Auto is off.
+    // Disabled alone stays green if the control renders unpressed.
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('shows the word Auto on the composer control', async () => {
+    renderPicker()
+    const toggle = await screen.findByTestId('composer-auto-approve-toggle')
+    await waitFor(() => {
+      expect(toggle).toHaveAttribute('aria-pressed', 'false')
+    })
+    expect(toggle).toHaveTextContent('Auto')
+    expect(toggle.textContent).toBe('Auto')
   })
 
   it('the disabled tooltip mentions God Mode and says this chat’s Auto choice does not apply', async () => {

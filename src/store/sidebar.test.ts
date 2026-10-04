@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
 import { useSidebarStore } from './sidebar'
 
@@ -9,13 +9,15 @@ beforeEach(() => {
   })
 })
 
-// test_sidebar_store_default_state
-// Traces to: wave0-brand-design-spec.md Scenario: Sidebar is closed on first load (US-5 AC1)
+// A wide window starts docked. A saved hidden choice still starts hidden,
+// which the persist tests below cover by writing isPinned first.
 describe('sidebar store — default state', () => {
-  it('initializes with isOpen: false and isPinned: false', () => {
-    const state = useSidebarStore.getState()
-    expect(state.isOpen).toBe(false)
-    expect(state.isPinned).toBe(false)
+  it('starts docked, with the overlay closed, when nothing is saved', async () => {
+    vi.resetModules()
+    localStorage.removeItem('omnipus-sidebar')
+    const { useSidebarStore: fresh } = await import('./sidebar')
+    expect(fresh.getState().isOpen).toBe(false)
+    expect(fresh.getState().isPinned).toBe(true)
   })
 })
 
@@ -45,6 +47,19 @@ describe('sidebar store — toggle', () => {
       useSidebarStore.setState({ isOpen: true })
       useSidebarStore.getState().close()
     })
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+  })
+
+  // Review finding: on a narrow window the sidebar is only an overlay, but
+  // Escape, the backdrop, and choosing a destination all call close() while a
+  // saved dock (isPinned) may still be true. close() must drop the overlay
+  // and must not forget that dock. Hide is the only action that clears it.
+  it('close() drops the overlay and keeps a saved dock', () => {
+    act(() => {
+      useSidebarStore.setState({ isPinned: true, isOpen: true })
+      useSidebarStore.getState().close()
+    })
+    expect(useSidebarStore.getState().isPinned).toBe(true)
     expect(useSidebarStore.getState().isOpen).toBe(false)
   })
 })
@@ -115,11 +130,21 @@ describe('sidebar store — togglePin', () => {
     expect(state.isOpen).toBe(true)
   })
 
-  it('togglePin() unpins when pinned', () => {
+  it('togglePin() unpins and closes when pinned', () => {
     act(() => {
       useSidebarStore.setState({ isPinned: true, isOpen: true })
       useSidebarStore.getState().togglePin()
     })
     expect(useSidebarStore.getState().isPinned).toBe(false)
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+  })
+
+  it('hide() clears both the docked and overlay states', () => {
+    act(() => {
+      useSidebarStore.setState({ isPinned: true, isOpen: true })
+      useSidebarStore.getState().hide()
+    })
+    expect(useSidebarStore.getState().isPinned).toBe(false)
+    expect(useSidebarStore.getState().isOpen).toBe(false)
   })
 })

@@ -736,6 +736,20 @@
       "publicTypes": []
     },
     {
+      "source": "src/components/ui/text-toggle.tsx",
+      "classification": "composite",
+      "exports": [
+        "TextToggle",
+        "TextToggleProps"
+      ],
+      "publicExports": [
+        "TextToggle"
+      ],
+      "publicTypes": [
+        "TextToggleProps"
+      ]
+    },
+    {
       "source": "src/components/ui/textarea.tsx",
       "classification": "primitive",
       "exports": [

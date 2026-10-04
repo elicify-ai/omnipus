@@ -63,7 +63,7 @@ test('W5 — a second Library toggle focuses the existing tab and does not open 
   await page.getByTestId('panel-expand').click()
   await opened
   const before = context.pages().length
-  await page.getByRole('button', { name: /^library$/i }).click()
+  await page.getByTestId('workspace-tab-media').click()
   await expect.poll(() => context.pages().length).toBe(before)
 })
 

@@ -5,7 +5,7 @@
  * enforcing kernel sandbox — `resolved` must be true whenever the session/
  * pending/agent/global resolution says so, REGARDLESS of
  * `kernel_sandbox_active`. `kernelSandboxActive` is exposed only as a
- * separate, warning-only flag for callers (ChatModeBadge, AutoApprovePicker)
+ * separate, warning-only flag for callers (the composer Auto button)
  * to build a caution from — it must never gate `resolved` here.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'

@@ -12,7 +12,7 @@ export interface ResolvedAutoApprove {
    * this is WARNING-ONLY. Auto works for every tool, shell included, on
    * every platform (Windows too), whether or not the sandbox is enforcing —
    * this flag no longer gates `resolved` or switches Auto off. A caller
-   * (e.g. ChatModeBadge) uses it only to decide whether to show a caution
+   * (the composer Auto button) uses it only to decide whether to show a caution
    * that shell commands, with no sandbox to check them against, are cleared
    * by reading the command text only.
    */
@@ -20,8 +20,8 @@ export interface ResolvedAutoApprove {
   /**
    * SandboxStatus.god_mode_active — the global God Mode override. When
    * true, every agent's tool policy is floored at "allow" regardless of
-   * Auto-approve state; a caller (e.g. ChatModeBadge) must check this FIRST
-   * and render "God Mode", never fall through to "Ask" — God Mode is not
+   * Auto-approve state; a caller (the composer Auto button) must check this FIRST
+   * and stay pressed, never fall through to off — God Mode is not
    * the absence of Auto, it is a stronger floor than Auto.
    */
   godModeActive: boolean
@@ -32,11 +32,10 @@ export interface ResolvedAutoApprove {
 /**
  * useResolvedAutoApprove — the single source of ADR-092's Auto-approve
  * resolution, shared by the composer's per-chat toggle (AutoApprovePicker)
- * and the chat-header mode badge (ChatModeBadge) so both read the same
- * underlying state. Agreement is NOT automatic just from sharing this hook,
- * though: `godModeActive` is a stronger floor than `resolved` (see its own
- * field doc below) and every caller must check it FIRST, exactly as
- * ChatModeBadge does. A caller that reads only `resolved` and ignores
+ * so every surface reads the same underlying state. Agreement is NOT
+ * automatic just from sharing this hook, though: `godModeActive` is a
+ * stronger floor than `resolved` (see its own field doc below) and every
+ * caller must check it FIRST. A caller that reads only `resolved` and ignores
  * `godModeActive` — AutoApprovePicker used to be exactly this caller — can
  * still show state that visibly contradicts one that checks both, even
  * though both are reading the same hook.

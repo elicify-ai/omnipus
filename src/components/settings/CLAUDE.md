@@ -28,10 +28,9 @@ the script or test for each.
   (`SecuritySection.tsx::AutoApproveControl`, re-auth gated, writes
   `sandbox.auto_approve`), the per-agent "Never auto-approve for this agent"
   checkbox (`src/components/agents/ToolsAndPermissions.tsx`, off-only), and
-  the per-chat composer switch
-  (`src/components/chat/composer/AutoApprovePicker.tsx`). God Mode stays in
-  `GodModeControl.tsx`; the chat-header state is
-  `src/components/chat/ChatModeBadge.tsx`. Operator command rules are
+  the per-chat composer control
+  (`src/components/chat/composer/AutoApprovePicker.tsx`, a labelled Auto button). God Mode stays in
+  `GodModeControl.tsx`; the chat header no longer shows a mode badge. Operator command rules are
   config-file-only — no settings screen reads or writes them.
 
 ## Tests
