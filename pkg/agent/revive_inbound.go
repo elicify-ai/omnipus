@@ -86,7 +86,11 @@ func (al *AgentLoop) inboundStopFenceInFlight(sessionID string) error {
 	if !lifecycleInFlightStopFence(rec) {
 		return nil
 	}
-	return fmt.Errorf("session %s is stopping (a stop is in flight for its current generation); retry once the stop has landed", sessionID)
+	// curatedTurnError, not a plain error: the text is Omnipus-authored and
+	// provider-free, so the session worker publishes it as written
+	// (translate_error.go::userVisibleTurnError) instead of the generic
+	// "can't tell why" sentence the classifier would give an untyped error.
+	return &curatedTurnError{text: fmt.Sprintf("session %s is stopping (a stop is in flight for its current generation); retry once the stop has landed", sessionID)}
 }
 
 // inboundRevivable reports whether sessionID's lifecycle record is terminal

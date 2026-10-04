@@ -535,13 +535,18 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 		// ADR-051 §RD5: never surface raw err text in the assistant-facing
 		// reply. Route through the classifier so provider-originated body /
 		// status / model identity is replaced with the typed copy. The raw
-		// err stays in worker logging for operator triage.
+		// err stays in worker logging for operator triage — the error-level
+		// log below is that record.
 		//
-		// TranslateTurnError, not TranslateLLMError(nil, err.Error()): passing
-		// the error VALUE keeps the sentinels intact, so a turn refused for a
-		// known reason (agent on no workspace) says so instead of falling to
-		// the "we can't tell why" copy.
-		response = TranslateTurnError(err).Message
+		// userVisibleTurnError, not TranslateLLMError(nil, err.Error()):
+		// passing the error VALUE keeps the sentinels intact, so a turn
+		// refused for a known reason (agent on no workspace) says so instead
+		// of falling to the "we can't tell why" copy, and a curatedTurnError
+		// in the chain (the in-flight stop-fence refusals, hook/budget
+		// aborts) is published as written.
+		logger.ErrorCF("agent.worker", "Turn failed — raw error for operator triage",
+			map[string]any{"session_id": msg.SessionID, "error": err.Error()})
+		response = userVisibleTurnError(err)
 	}
 	finalResponse = response
 
