@@ -37,8 +37,12 @@ const TextToggle = React.forwardRef<HTMLButtonElement, TextToggleProps>(
         'h-7 min-w-0 rounded px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-medium',
         'pointer-coarse:h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]',
         pressed
-          ? 'bg-[var(--color-surface-3)] text-[var(--color-accent)] shadow-sm hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)] forced-colors:bg-[Highlight] forced-colors:text-[HighlightText]'
-          : 'bg-transparent text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] forced-colors:bg-[Canvas] forced-colors:text-[CanvasText]',
+          ? 'bg-[var(--color-surface-3)] text-[var(--color-accent)] shadow-sm hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)] forced-colors:bg-[Highlight] forced-colors:text-[HighlightText] forced-colors:hover:bg-[Highlight] forced-colors:hover:text-[HighlightText]'
+          : 'bg-transparent text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] forced-colors:bg-[Canvas] forced-colors:text-[CanvasText] forced-colors:hover:bg-[Canvas] forced-colors:hover:text-[CanvasText]',
+        // The plain forced-colors: pair loses to the hover: utilities above
+        // while the pointer rests on the control (":hover" raises specificity
+        // to 0-2-0 against 0-1-0), so forced mode needs its own hover pair —
+        // the system colors must hold with the pointer over the control too.
         className,
       )}
       {...props}
