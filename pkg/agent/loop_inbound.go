@@ -85,6 +85,7 @@ func scheduledJobContextFrom(ctx context.Context) (ScheduledJobInfo, bool) {
 
 type continuationTarget struct {
 	SessionKey string
+	SessionID  string
 	Channel    string
 	ChatID     string
 	// WorkspaceID is the workspace this continuation's turn should run inside
@@ -110,6 +111,7 @@ func (al *AgentLoop) buildContinuationTarget(msg bus.InboundMessage) (*continuat
 
 	return &continuationTarget{
 		SessionKey:  resolveScopeKey(route, msg.SessionKey),
+		SessionID:   msg.SessionID,
 		Channel:     msg.Channel,
 		ChatID:      msg.ChatID,
 		WorkspaceID: al.resolveWorkspaceIDForContinuation(msg),

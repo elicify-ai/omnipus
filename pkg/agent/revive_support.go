@@ -185,7 +185,7 @@ func (al *AgentLoop) runRevivedOrdinaryTurn(msg bus.InboundMessage, sessionKey s
 						}()
 						termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
 						defer termCancel()
-						al.publishResponseIfNeeded(termCtx, ag, msg.Channel, msg.ChatID, response)
+						al.publishResponseIfNeeded(termCtx, ag, msg.Channel, msg.ChatID, response, msg.SessionID)
 					}()
 					published = true
 				}
@@ -231,7 +231,7 @@ func (al *AgentLoop) runRevivedOrdinaryTurn(msg bus.InboundMessage, sessionKey s
 			}
 		}
 		if response != "" {
-			al.publishResponseIfNeeded(turnCtx, ag, msg.Channel, msg.ChatID, response)
+			al.publishResponseIfNeeded(turnCtx, ag, msg.Channel, msg.ChatID, response, msg.SessionID)
 			published = true
 		}
 	}()
