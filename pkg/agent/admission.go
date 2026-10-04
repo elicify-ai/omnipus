@@ -15,7 +15,6 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
-	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
@@ -275,10 +274,21 @@ func resetMemoryAdmissionRefusalLogForTest() {
 // slots free (turn end -> steerAdmission.release -> drainSteerQueue).
 
 // steerQueueEntry is one FIFO-queued dispatch awaiting a free admission
-// slot.
+// slot. runID is the admission's execution identity (execution_identity.go)
+// minted and durably stamped BEFORE this entry was enqueued, copied here
+// unchanged: the promotion dispatches under the SAME identity — a promoted
+// admission never mints a second run_id for the turn it already owns.
+// Entries without a genuine identity can be inspected by the queue primitive,
+// but production promotion refuses them; it never synthesizes an identity.
 type steerQueueEntry struct {
 	sessionID  string
 	generation int
+	runID      string
+	bootSeq    uint64
+}
+
+func (entry steerQueueEntry) executionClaim() executionClaim {
+	return executionClaim{SessionID: entry.sessionID, Generation: entry.generation, RunID: entry.runID, BootSeq: entry.bootSeq}
 }
 
 // steerAdmission is the turn-counting admission gate (I-3 "Admission"). cap
@@ -286,8 +296,11 @@ type steerQueueEntry struct {
 // AdmissionController.resolveCap's live-resolution rationale — an operator's
 // PUT /api/v1/performance write must reach this gate without a restart).
 type steerAdmission struct {
+	// entryMu covers preparation only: duplicate check, durable stamp and
+	// registration/queue insertion. Never held while a turn runs or exits.
+	entryMu    sync.Mutex
 	mu         sync.Mutex
-	active     map[string]int // sessionKey -> generation, only while THIS gate admitted the turn
+	active     map[string]steerQueueEntry
 	queue      []steerQueueEntry
 	resolveCap func() int
 	// turns counts the DETACHED goroutines this gate's dispatch front has
@@ -304,14 +317,24 @@ type steerAdmission struct {
 }
 
 func newSteerAdmission(resolveCap func() int) *steerAdmission {
-	return &steerAdmission{active: make(map[string]int), resolveCap: resolveCap}
+	return &steerAdmission{active: make(map[string]steerQueueEntry), resolveCap: resolveCap}
 }
 
 // tryAdmit atomically decides running vs queued for sessionID/gen (I-2
 // "Dispatch — not Launch — decides atomically under the admission lock").
 // Returns (true, 0) when admitted; (false, 1-based position) when queued —
 // never blocks.
+//
+// The two-argument form is the pre-identity-seam signature the gate's unit
+// tests call; production admissions call tryAdmitRun so the queue entry
+// carries the stamped run identity.
 func (g *steerAdmission) tryAdmit(sessionID string, gen int) (admitted bool, queuePosition, concurrencyLimit int) {
+	return g.tryAdmitRun(sessionID, gen, "", 0)
+}
+
+// tryAdmitRun is tryAdmit with the admission's execution identity: the
+// queue entry it appends copies runID unchanged (execution_identity.go).
+func (g *steerAdmission) tryAdmitRun(sessionID string, gen int, runID string, bootSeq uint64) (admitted bool, queuePosition, concurrencyLimit int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -321,11 +344,13 @@ func (g *steerAdmission) tryAdmit(sessionID string, gen int) (admitted bool, que
 			effectiveCap = c
 		}
 	}
-	if len(g.active) >= effectiveCap {
-		g.queue = append(g.queue, steerQueueEntry{sessionID: sessionID, generation: gen})
+	entry := steerQueueEntry{sessionID: sessionID, generation: gen, runID: runID, bootSeq: bootSeq}
+	_, sameSessionActive := g.active[sessionID]
+	if len(g.active) >= effectiveCap || sameSessionActive {
+		g.queue = append(g.queue, entry)
 		return false, len(g.queue), effectiveCap
 	}
-	g.active[sessionID] = gen
+	g.active[sessionID] = entry
 	return true, 0, effectiveCap
 }
 
@@ -337,17 +362,35 @@ func (g *steerAdmission) tryAdmit(sessionID string, gen int) (admitted bool, que
 func (g *steerAdmission) release(sessionID string, generation int) (next steerQueueEntry, hasNext bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if activeGeneration, ok := g.active[sessionID]; !ok || activeGeneration != generation {
+	if active, ok := g.active[sessionID]; !ok || active.generation != generation {
 		return steerQueueEntry{}, false
 	}
+	return g.releaseLocked(sessionID)
+}
+
+// releaseExecution is the production release boundary. An older same-
+// generation run cannot release a replacement's reservation.
+func (g *steerAdmission) releaseExecution(claim executionClaim) (steerQueueEntry, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	active, ok := g.active[claim.SessionID]
+	if !ok || active.executionClaim() != claim {
+		return steerQueueEntry{}, false
+	}
+	return g.releaseLocked(claim.SessionID)
+}
+
+func (g *steerAdmission) releaseLocked(sessionID string) (steerQueueEntry, bool) {
 	delete(g.active, sessionID)
-	if len(g.queue) == 0 {
-		return steerQueueEntry{}, false
+	for i, entry := range g.queue {
+		if _, alreadyActive := g.active[entry.sessionID]; alreadyActive {
+			continue
+		}
+		g.queue = append(g.queue[:i], g.queue[i+1:]...)
+		g.active[entry.sessionID] = entry
+		return entry, true
 	}
-	next = g.queue[0]
-	g.queue = g.queue[1:]
-	g.active[next.sessionID] = next.generation
-	return next, true
+	return steerQueueEntry{}, false
 }
 
 // hasReservation reports whether release promoted this exact generation into
@@ -356,7 +399,27 @@ func (g *steerAdmission) release(sessionID string, generation int) (next steerQu
 func (g *steerAdmission) hasReservation(sessionID string, generation int) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.active[sessionID] == generation
+	entry, ok := g.active[sessionID]
+	return ok && entry.generation == generation
+}
+
+func (g *steerAdmission) hasExecutionReservation(claim executionClaim) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	entry, ok := g.active[claim.SessionID]
+	return ok && entry.executionClaim() == claim
+}
+
+// removeQueuedExecution rolls back only the admission whose state write failed.
+func (g *steerAdmission) removeQueuedExecution(claim executionClaim) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for i, entry := range g.queue {
+		if entry.executionClaim() == claim {
+			g.queue = append(g.queue[:i], g.queue[i+1:]...)
+			return
+		}
+	}
 }
 
 // removeQueued rolls back one exact queue entry after its queued-state write
@@ -462,13 +525,13 @@ func (al *AgentLoop) steerAdmission() *steerAdmission {
 // back-reference to release through for a steered turn (see Finish's own
 // comment on why the slot is not released there). The dispatch of the next
 // queued session runs in a goroutine so the caller never blocks on it.
-func (al *AgentLoop) drainSteerQueue(sessionID string, generation int) {
-	next, hasNext := al.steerAdmission().release(sessionID, generation)
+func (al *AgentLoop) drainSteerQueue(claim executionClaim) {
+	next, hasNext := al.steerAdmission().releaseExecution(claim)
 	if !hasNext {
 		return
 	}
 	al.goSteeredTurn(func() {
-		if _, err := al.dispatchSteeredSessionReserved(context.Background(), next.sessionID, next.generation); err != nil {
+		if _, err := al.dispatchSteeredSessionReserved(context.Background(), next.sessionID, next.generation, next.runID, next.bootSeq); err != nil {
 			if classifyDrainDispatchError(err) {
 				logger.InfoCF("agent", "steer: drain queue: promoted session was no longer dispatchable (legitimate)",
 					map[string]any{"session_id": next.sessionID, "generation": next.generation, "error": err.Error()})
@@ -482,8 +545,10 @@ func (al *AgentLoop) drainSteerQueue(sessionID string, generation int) {
 			// check is not blocked forever on a worker that will never run.
 			logger.WarnCF("agent", "steer: drain queue: dispatch of the next queued session failed — landing it terminal so its parent is not blocked forever",
 				map[string]any{"session_id": next.sessionID, "generation": next.generation, "error": err.Error()})
-			al.reportSteeredSessionTerminalUpward(context.Background(), next.sessionID, next.generation,
-				session.LifecycleFailed, steer.OutcomeFailed, fmt.Sprintf("dispatch_failed: %v", err))
+			if reportErr := al.reportSteeredExecutionFailure(context.Background(), next.executionClaim(), fmt.Sprintf("dispatch_failed: %v", err)); reportErr != nil {
+				logger.ErrorCF("agent", "steer: promoted admission failure remains pending",
+					map[string]any{"session_id": next.sessionID, "run_id": next.runID, "error": reportErr.Error()})
+			}
 		}
 	})
 }

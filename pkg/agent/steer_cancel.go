@@ -157,9 +157,9 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 		al.landSteeredStopReport(ctx, sessionID, generation, outcome)
 		return
 	}
-	// Genuine terminal failure: the one outcome/publication commit, then
-	// publish from the committed outbox entry.
-	res, commitErr := al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, "", failureReason)
+	// Synthetic terminal failure carries the selected admission's stamp.
+	// It must never borrow a replacement's live handle.
+	res, commitErr := al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, "", failureReason, al.executionClaimFor(rec))
 	if commitErr != nil {
 		logger.WarnCF("agent", "steer: terminal report: outcome/outbox commit failed",
 			map[string]any{"session_id": sessionID, "generation": generation, "error": commitErr.Error()})
@@ -577,6 +577,11 @@ func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, _ steer.P
 			// The prior generation's stop targeting metadata never rides
 			// into the minted one (same rule as the outbox tuple above).
 			rec.StopEffect = nil
+			// The prior execution's identity is not carried either: G+1 has
+			// no current execution until its own admission stamps one
+			// (execution_identity.go) — a new admission never reuses the old
+			// run's identity slot.
+			rec.ExecutionID = nil
 			generation = rec.Generation
 			revived = true
 			return nil
@@ -622,6 +627,9 @@ func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, _ steer.P
 		rec.StopEffect = nil
 		rec.NeedsInput = nil
 		rec.FailedReason = ""
+		// Same-generation resume: the stopped-out run's identity is history.
+		// The resuming admission stamps its own before dispatching.
+		rec.ExecutionID = nil
 		revived = true
 		return nil
 	})
@@ -646,13 +654,13 @@ func reserveDispatch(rec *session.LifecycleRecord, gen int) (ok bool, reason str
 	if rec == nil {
 		return false, steer.ErrInvalidEdge.Error()
 	}
-	if gen < rec.Generation {
+	if gen != rec.Generation {
 		return false, steer.ErrStaleGeneration.Error()
 	}
 	if rec.Terminal() {
 		return false, steer.ErrTerminal.Error()
 	}
-	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+	if rec.Stopped() {
 		return false, steer.ErrDispatchCancelled.Error()
 	}
 	return true, ""

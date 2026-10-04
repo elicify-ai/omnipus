@@ -25,7 +25,18 @@ import (
 // winning commit is then published to the parent and acknowledged through the
 // delivery-only journal.
 func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.LifecycleRecord, result turnResult, runErr error) error {
-	_, err := al.completeSteeredTurnDurably(ctx, snapshot, result, runErr)
+	// A synthetic completion retains its selected record's identity. A
+	// caller holding the producing turn uses its immutable handle instead.
+	_, err := al.completeSteeredTurnDurably(ctx, snapshot, result, runErr, al.executionClaimFor(snapshot))
+	return err
+}
+
+// completeSteeredTurnForExecution is completeSteeredTurn's claim-carrying
+// form: the completion presents the producing turn's immutable execution
+// handle (execution_identity.go), so the boundary's identity match has a
+// real claim to check — not the registry's best guess.
+func (al *AgentLoop) completeSteeredTurnForExecution(ctx context.Context, snapshot *session.LifecycleRecord, result turnResult, runErr error, claim executionClaim) error {
+	_, err := al.completeSteeredTurnDurably(ctx, snapshot, result, runErr, claim)
 	return err
 }
 
@@ -34,7 +45,7 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 // entry is durable and its delivery produced a parent wake (or queued the
 // entry into an already-live parent turn). Goal completion uses that fact to
 // decide whether a wake-suppressed met verdict may be acknowledged.
-func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *session.LifecycleRecord, result turnResult, runErr error) (finalWoke bool, err error) {
+func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *session.LifecycleRecord, result turnResult, runErr error, claim executionClaim) (finalWoke bool, err error) {
 	if al == nil || snapshot == nil || snapshot.SteeredBy == nil {
 		return false, nil
 	}
@@ -103,8 +114,8 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 	if completeBeforeDeliveryTestHook != nil {
 		completeBeforeDeliveryTestHook(rec.SessionID)
 	}
-	return al.runSteeredCompletionOnce(rec, func() (bool, error) {
-		return al.deliverSteeredCompletion(ctx, rec, outcome, nextState, answer, failureReason)
+	return al.runSteeredCompletionOnce(rec, claim, func() (bool, error) {
+		return al.deliverSteeredCompletionForExecution(ctx, rec, outcome, nextState, answer, failureReason, claim)
 	})
 }
 
@@ -123,6 +134,14 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 // publishes nothing; a non-terminal lifecycle notice keeps its direct
 // delivery.
 func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.LifecycleRecord, outcome steer.Outcome, nextState session.LifecycleState, answer, failureReason string) (bool, error) {
+	// Direct callers carry their selected record, not a later registry lookup.
+	return al.deliverSteeredCompletionForExecution(ctx, rec, outcome, nextState, answer, failureReason, al.executionClaimFor(rec))
+}
+
+// deliverSteeredCompletionForExecution is deliverSteeredCompletion's
+// claim-carrying form: the identity the commit boundary checks rides the
+// producing turn's immutable handle instead of a registry snapshot.
+func (al *AgentLoop) deliverSteeredCompletionForExecution(ctx context.Context, rec *session.LifecycleRecord, outcome steer.Outcome, nextState session.LifecycleState, answer, failureReason string, claim executionClaim) (bool, error) {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
 		return false, errors.New("steer: complete: lifecycle store is not wired")
@@ -135,7 +154,7 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 		// notice publisher runs only in the transition half, from the landed
 		// history, after it.
 		var err error
-		commitRes, err = al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, answer, failureReason)
+		commitRes, err = al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, answer, failureReason, claim)
 		return err
 	}
 	transition := func() (bool, error) {
@@ -379,6 +398,8 @@ type steeredCompletionFlightKey struct {
 	loop       *AgentLoop
 	sessionID  string
 	generation int
+	bootSeq    uint64
+	runID      string
 }
 
 type steeredCompletionFlight struct {
@@ -388,13 +409,13 @@ type steeredCompletionFlight struct {
 }
 
 // steeredCompletionFlights serializes the side-effecting completion tail per
-// AgentLoop/session/generation. Entries exist only while a completion is in
+// AgentLoop/full execution identity. Entries exist only while a completion is in
 // flight and are removed on every exit, so the process-global coordinator
 // never retains an AgentLoop after the call returns.
 var steeredCompletionFlights sync.Map //nolint:gochecknoglobals
 
-func (al *AgentLoop) runSteeredCompletionOnce(rec *session.LifecycleRecord, complete func() (bool, error)) (bool, error) {
-	key := steeredCompletionFlightKey{loop: al, sessionID: rec.SessionID, generation: rec.Generation}
+func (al *AgentLoop) runSteeredCompletionOnce(rec *session.LifecycleRecord, claim executionClaim, complete func() (bool, error)) (bool, error) {
+	key := steeredCompletionFlightKey{loop: al, sessionID: claim.SessionID, generation: claim.Generation, bootSeq: claim.BootSeq, runID: claim.RunID}
 	candidate := &steeredCompletionFlight{done: make(chan struct{})}
 	actual, loaded := steeredCompletionFlights.LoadOrStore(key, candidate)
 	if loaded {
@@ -591,7 +612,7 @@ func (al *AgentLoop) finishSteeredGoalTurn(ts *turnState, rec *session.Lifecycle
 	// tool-iteration lifecycle notice), which this condition correctly
 	// leaves alone — that child is resumable, not dead.
 	if _, nextState, _ := completionDisposition(*result, runErr, strings.TrimSpace(result.finalContent)); session.IsTerminalLifecycleState(nextState) || nextState == session.LifecycleStopped {
-		if err := al.completeSteeredTurn(context.Background(), rec, *result, runErr); err != nil {
+		if err := al.completeSteeredTurnForExecution(context.Background(), rec, *result, runErr, al.tsExecutionClaim(ts, rec.SessionID)); err != nil {
 			logger.WarnCF("agent", "steer: report a dead goal-bearing child upward failed",
 				map[string]any{"session_id": rec.SessionID, "state": string(nextState), "error": err.Error()})
 		}
@@ -1023,7 +1044,7 @@ func (al *AgentLoop) completeSteeredTurnAfterGoal(ctx context.Context, sessionID
 			map[string]any{"session_id": sessionID, "error": errString(err)})
 		return false
 	}
-	finalWoke, err := al.completeSteeredTurnDurably(ctx, snapshot, turnResult{finalContent: answer}, runErr)
+	finalWoke, err := al.completeSteeredTurnDurably(ctx, snapshot, turnResult{finalContent: answer}, runErr, al.executionClaimFor(snapshot))
 	if err != nil {
 		logger.WarnCF("agent", "goal: completion tail failed — boot recovery repairs a delivered-but-not-terminal gap",
 			map[string]any{"session_id": sessionID, "error": err.Error()})

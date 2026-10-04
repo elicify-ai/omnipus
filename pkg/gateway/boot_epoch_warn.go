@@ -40,5 +40,8 @@ func (stg *setupAndStartServicesState) mintBootEpoch() error {
 	if _, err := stg.bootEpoch.Mint(); err != nil {
 		return fmt.Errorf("gateway: boot epoch mint failed: %w", err)
 	}
+	// Consumers must have the genuine epoch before schedulers or channels
+	// can admit work. This setter never mints another epoch.
+	stg.agentLoop.SetBootEpochStore(stg.bootEpoch)
 	return nil
 }

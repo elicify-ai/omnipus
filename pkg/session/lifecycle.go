@@ -148,6 +148,28 @@ func (n *NeedsInput) Expired(now time.Time) bool {
 	return !now.Before(n.TTLDeadline)
 }
 
+// ExecutionIdentity is the internal execution identity of ONE admission
+// (sub-agent control plane ADR-20260928 D2, round-4 R4-MAJ-001): the
+// (session_id, generation, boot_seq, run_id) tuple every turn/run is
+// admitted under. session_id and generation come from the record this
+// struct hangs off — they are never duplicated here — so the stamped pair
+// is exactly (boot_seq, run_id).
+//
+// RunID is minted fresh for every new turn/run; two runs of the same
+// generation carry different RunIDs. A promotion/retry of the SAME
+// admission keeps its RunID; a new admission never reuses a previous one.
+// BootSeq is the boot epoch of the boot that admitted the run, read from
+// the one BootEpochStore the process minted at gateway boot (consumers use
+// Current and never Mint).
+//
+// not-wire-format: internal disk field on LifecycleRecord with no
+// gateway/SPA bytes. Exposing any of it over the wire later is
+// contract-first work against SessionLifecycleRecord.yaml.
+type ExecutionIdentity struct {
+	RunID   string `json:"run_id"`
+	BootSeq uint64 `json:"boot_seq"`
+}
+
 // LifecycleRecord is the durable, per-generation session-lifecycle record
 // (ADR-053 §Contract Surface — SessionLifecycleRecord). Field shapes mirror
 // the generated pkg/api/generated.SessionLifecycleRecord one-for-one (minus
@@ -206,6 +228,20 @@ type LifecycleRecord struct {
 	// FinalDelivery (see StopEffect's own doc comment in
 	// lifecycle_control_ledger_writer.go).
 	StopEffect *StopEffect `json:"stop_effect,omitempty"`
+
+	// ExecutionID is the execution identity of the admission that most
+	// recently entered this session (D2 round-4 R4-MAJ-001): stamped by the
+	// admission path under the lifecycle lock BEFORE the turn is enqueued or
+	// registered live, and again — unchanged — when a queued admission is
+	// promoted. nil means this record has never been admitted through the
+	// execution-identity seam (records written before it existed, and hand-
+	// seeded fixtures). Revive clears it alongside the prior generation's
+	// outbox: a minted G+1 starts with no current execution.
+	//
+	// not-wire-format: internal steered-admission bookkeeping, omitted from
+	// the wire SessionLifecycleRecord (this is not session status). See
+	// ExecutionIdentity's own doc comment for the tuple's shape.
+	ExecutionID *ExecutionIdentity `json:"execution_id,omitempty"`
 
 	// FinalDelivery is the protected terminal/outbox commit tuple (ADR-20260928
 	// sub-agent control plane, D2 CRIT-001): the one outcome/publication
@@ -629,6 +665,25 @@ func validateLifecycleRecordForPersist(rec *LifecycleRecord) error {
 	// be matched back to its ledger intent, so the control id is required.
 	if rec.StopEffect != nil && rec.StopEffect.ControlID == "" {
 		return fmt.Errorf("session: lifecycle: stop_effect requires control_id")
+	}
+	// D2 round-4 R4-MAJ-001: a stamped execution identity must be well-formed,
+	// and a final-delivery commit on a stamped record must name THE producing
+	// run — CommitID is the admission's run_id, never a per-completion
+	// correlation id. A record with no ExecutionID carries no binding
+	// obligation (records written before the seam existed).
+	if rec.ExecutionID != nil {
+		if strings.TrimSpace(rec.ExecutionID.RunID) == "" {
+			return fmt.Errorf("session: lifecycle: execution_id requires a non-empty run_id")
+		}
+		if rec.ExecutionID.BootSeq == 0 {
+			return fmt.Errorf("session: lifecycle: execution_id requires a minted boot_seq")
+		}
+		if rec.ExecutionID.BootSeq > uint64(math.MaxInt64) {
+			return fmt.Errorf("session: lifecycle: execution_id.boot_seq %d exceeds max int64", rec.ExecutionID.BootSeq)
+		}
+	}
+	if rec.FinalDelivery != nil && rec.ExecutionID != nil && rec.FinalDelivery.CommitID != rec.ExecutionID.RunID {
+		return fmt.Errorf("session: lifecycle: final_delivery.commit_id %q must equal the producing run_id %q", rec.FinalDelivery.CommitID, rec.ExecutionID.RunID)
 	}
 	// ADR-20260928 D2 CRIT-001: the protected final-delivery tuple exists only
 	// on the terminal commit that produced it — never on a non-terminal or

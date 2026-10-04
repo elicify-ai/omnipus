@@ -45,11 +45,14 @@ func (al *AgentLoop) drainSteeredTurn(
 	initialErr error,
 ) (*turnState, turnResult, error) {
 	lastTS, lastResult, lastErr := initialTS, initialResult, initialErr
+	// Founder Q2=A: this bounded drain is the original admitted job. Keep
+	// its selected immutable claim, even if the session now has a replacement.
+	claim := al.tsExecutionClaim(initialTS, "")
 	if snapshot == nil {
 		return lastTS, lastResult, lastErr
 	}
 
-	if _, stateErr := al.steeredDrainRecord(snapshot.SessionID, snapshot.Generation); stateErr != nil {
+	if _, stateErr := al.steeredDrainRecord(snapshot.SessionID, snapshot.Generation, claim); stateErr != nil {
 		switch {
 		case errors.Is(stateErr, errSteeredDrainStopped):
 			return lastTS, lastResult, context.Canceled
@@ -65,7 +68,7 @@ func (al *AgentLoop) drainSteeredTurn(
 		var attempted steeredContinuationAttempt
 		continued, attempts, continueErr := retrySteeringContinuation(ctx, func() (string, error) {
 			var err error
-			attempted, err = al.continueSteeredTurn(ctx, snapshot.SessionID, snapshot.Generation)
+			attempted, err = al.continueSteeredTurn(ctx, snapshot.SessionID, snapshot.Generation, claim)
 			return attempted.result.finalContent, err
 		}, func(err error) bool {
 			return errors.Is(err, errContinuePostDequeueFailure) ||
@@ -86,7 +89,7 @@ func (al *AgentLoop) drainSteeredTurn(
 			// A Stop may have landed while a tool-capable continuation was
 			// unwinding. Its restored queue belongs to a future revival and
 			// must not be abandoned as an ordinary continuation failure.
-			if _, stateErr := al.steeredDrainRecord(snapshot.SessionID, snapshot.Generation); errors.Is(stateErr, errSteeredDrainStopped) {
+			if _, stateErr := al.steeredDrainRecord(snapshot.SessionID, snapshot.Generation, claim); errors.Is(stateErr, errSteeredDrainStopped) {
 				return lastTS, lastResult, context.Canceled
 			}
 			al.abandonSteeredQueuedSteering(lastTS, snapshot.SessionID, continueErr, attempts)
@@ -106,8 +109,9 @@ func (al *AgentLoop) continueSteeredTurn(
 	ctx context.Context,
 	sessionID string,
 	generation int,
+	claim executionClaim,
 ) (attempt steeredContinuationAttempt, err error) {
-	rec, err := al.steeredDrainRecord(sessionID, generation)
+	rec, err := al.steeredDrainRecord(sessionID, generation, claim)
 	if err != nil {
 		return attempt, err
 	}
@@ -119,12 +123,31 @@ func (al *AgentLoop) continueSteeredTurn(
 
 	_, err = al.continuePendingSteeringWithAgent(ctx, sessionID, ts.agent,
 		func(_ *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error) {
-			if !al.registerTurnIfAbsent(ts) {
+			gate := al.steerAdmission()
+			gate.entryMu.Lock()
+			if rec.SteeredBy != nil {
+				if identityErr := ts.setExecutionIdentity(claim.RunID, claim.BootSeq); identityErr != nil {
+					gate.entryMu.Unlock()
+					return "", identityErr
+				}
+			}
+			registered := al.registerTurnIfAbsent(ts)
+			gate.entryMu.Unlock()
+			if !registered {
 				return "", fmt.Errorf("steer: post-turn drain: session %q already has an active turn", sessionID)
 			}
-			if _, stateErr := al.steeredDrainRecord(sessionID, generation); stateErr != nil {
+			if _, stateErr := al.steeredDrainRecord(sessionID, generation, claim); stateErr != nil {
 				al.clearActiveTurnStateEntry(sessionID, ts)
 				return "", stateErr
+			}
+			if rec.SteeredBy != nil {
+				if _, stateErr := commitSteeredExecutionState(al.GetSessionLifecycleStore(), claim, session.LifecycleRunning, ""); stateErr != nil {
+					al.clearActiveTurnStateEntry(sessionID, ts)
+					if _, currentErr := al.steeredDrainRecord(sessionID, generation, claim); currentErr != nil {
+						return "", currentErr
+					}
+					return "", stateErr
+				}
 			}
 			if continueSteeredTurnBeforeRunTestHook != nil {
 				continueSteeredTurnBeforeRunTestHook(sessionID, generation)
@@ -142,7 +165,7 @@ func (al *AgentLoop) continueSteeredTurn(
 	return attempt, err
 }
 
-func (al *AgentLoop) steeredDrainRecord(sessionID string, generation int) (*session.LifecycleRecord, error) {
+func (al *AgentLoop) steeredDrainRecord(sessionID string, generation int, claim executionClaim) (*session.LifecycleRecord, error) {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
 		return nil, errors.New("steer: post-turn drain: lifecycle store is not wired")
@@ -152,6 +175,9 @@ func (al *AgentLoop) steeredDrainRecord(sessionID string, generation int) (*sess
 		return nil, fmt.Errorf("steer: post-turn drain: load %q: %w", sessionID, err)
 	}
 	if rec.Generation != generation || rec.Terminal() {
+		return rec, errSteeredDrainInactive
+	}
+	if rec.SteeredBy != nil && !claim.matches(rec) {
 		return rec, errSteeredDrainInactive
 	}
 	if rec.Stopped() {
