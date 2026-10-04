@@ -10,9 +10,13 @@ package agent
 // consumeDequeuedSteeringResult persists "consumed <messageID>" through
 // writeSteeringConsumedMarker AT DEQUEUE, while the instruction itself is
 // only seeded as pendingMessages (pkg/agent/loop_run_turn.go, from
-// InitialSteeringMessages) and appended to the steering session's transcript
-// later, inside the turn iteration. A crash in between leaves the marker in
-// the steering session's transcript with no archived instruction.
+// InitialSteeringMessages) and admitted into the TURN'S DURABLE CONTEXT
+// ARCHIVE later, inside the turn iteration, through
+// pkg/agent/window_runtime.go::turnState.appendWindowMessage ->
+// session.ContextWindowStore.AppendWindowMessage. The transcript only ever
+// gains the consumed marker, never the instruction. A crash in between
+// leaves the marker in the steering session's transcript with no archived
+// instruction.
 //
 // Specification (the dispatch brief, the oracle for both tests below — not
 // observed behaviour): "A crash in that gap must not acknowledge the parent
@@ -30,6 +34,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -144,20 +149,45 @@ func TestBoot_ConsumedMarkerWithoutArchivedInstruction_IsRedeliveredAndUnacknowl
 
 // TestBoot_ConsumedMarkerWithArchivedInstruction_StaysAcknowledgedWithoutRedelivery
 // is the executed control: the same marker PLUS the archived instruction —
-// the user-role entry the continuation turn persists once it actually runs
-// (content is the wake's delivery summary, the text
-// pkg/agent/steer_audience.go::deliverySummary injects for a question).
+// the user-role message the continuation turn admits into its durable
+// context archive once it actually runs (content is the wake's delivery
+// summary, the text pkg/agent/steer_audience.go::deliverySummary injects
+// for a question). The write goes through the EXACT production seam the
+// turn drives for pendingMessages injection —
+// pkg/agent/window_runtime.go::turnState.appendWindowMessage ->
+// session.ContextWindowStore.AppendWindowMessage — keyed by the session id
+// the reconstructed turn runs under (pkg/agent/steer_reconstruct.go sets
+// SessionKey: rec.SessionID, so the archive lands on the session's own
+// store, which in this single-store harness is the same UnifiedStore boot
+// recovery reads). It deliberately does NOT append a user transcript line:
+// the transcript holds only the consumed marker, and recovery never reads
+// a user transcript entry.
 // Marker + archived instruction is a genuine delivery: the idempotency
 // boundary stands (acknowledged, no duplicate delivery). Green on the
 // current source and required to stay green after the fix.
 func TestBoot_ConsumedMarkerWithArchivedInstruction_StaysAcknowledgedWithoutRedelivery(t *testing.T) {
 	h := newBootRecoveryHarness(t)
 	parent, child, messageID := persistedCrashGap(t, h)
-	if err := h.sessions.AppendTranscriptStrict(parent, session.TranscriptEntry{
-		Type: session.EntryTypeMessage, Role: "user",
-		Content: "A delegated session is asking: choose",
-	}); err != nil {
-		t.Fatalf("AppendTranscriptStrict archived instruction: %v", err)
+	archived := providers.Message{Role: "user", Content: "A delegated session is asking: choose"}
+	if _, err := h.sessions.AppendWindowMessage(context.Background(), parent, archived); err != nil {
+		t.Fatalf("AppendWindowMessage archived instruction: %v", err)
+	}
+	// Instrument check: the archive write must read back from the same
+	// store recovery reads — a silently swallowed append would leave this
+	// control's premise unrepresented.
+	snap, err := h.sessions.SnapshotWindow(context.Background(), parent)
+	if err != nil {
+		t.Fatalf("SnapshotWindow archived instruction: %v", err)
+	}
+	archivedVisible := false
+	for _, line := range snap.Archive {
+		if line.Role == "user" && line.Content == "A delegated session is asking: choose" {
+			archivedVisible = true
+			break
+		}
+	}
+	if !archivedVisible {
+		t.Fatalf("archived instruction is not readable back from session %q's durable context archive", parent)
 	}
 	deliverer := &bootArchiveRecordingDeliverer{}
 
