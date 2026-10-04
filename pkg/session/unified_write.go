@@ -542,6 +542,15 @@ func (us *UnifiedStore) UpdateToolCallStatusAndResult(
 }
 
 // ReadTranscript returns all entries from {session-id}/transcript.jsonl.
+// A transcript line that still carries the provenance write-phase marker
+// (TranscriptEntry.ProvenancePending) AND has no MessageProvenance record for
+// its ID is crash residue from an incomplete paired save (ADR-20261004
+// Correction C4): it is not shown and not admitted. This is the single
+// filter every person- and model-facing reader reaches the store through —
+// transcript render, replay and model-context assembly all read via this
+// method — while lines without the marker (all agent and tool lines, and
+// every historical user line that was never part of a paired save) always
+// pass. See filterUnpairedProvenanceLines.
 func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, error) {
 	if err := validateSessionID(sessionID); err != nil {
 		return nil, err
@@ -573,7 +582,7 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 		}
 		entries = append(entries, entry)
 	}
-	return entries, nil
+	return us.filterUnpairedProvenanceLines(sessionID, entries), nil
 }
 
 // AddMessage implements SessionStore — appends a simple role/content message to context.jsonl.

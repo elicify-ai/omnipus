@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -26,7 +27,12 @@ func (us *UnifiedStore) AppendTranscriptIndexed(sessionID string, entry Transcri
 // (AppendTranscriptWithProvenance only) the record is stamped and persisted
 // inside this same session-shard hold, immediately after the transcript line
 // lands — and a failed record write rolls the transcript line back, so the
-// message and its record are saved together or neither is kept. See
+// message and its record are saved together or neither is kept. The paired
+// line additionally carries the server-internal write-phase marker
+// TranscriptEntry.ProvenancePending from the moment it lands: an abrupt exit
+// between the two writes leaves marker-without-record on disk, which every
+// reader skips (Correction C4's reopen-hide rule), and the marker is cleared
+// by an atomic rewrite once the record is durably written. See
 // MessageProvenance for the trust and failure contract.
 func (us *UnifiedStore) appendTranscript(sessionID string, entry TranscriptEntry, indexed bool, what string, provenance *MessageProvenance) (int, error) {
 	if err := validateSessionID(sessionID); err != nil {
@@ -65,6 +71,11 @@ func (us *UnifiedStore) appendTranscript(sessionID string, entry TranscriptEntry
 		if statErr != nil {
 			return -1, fmt.Errorf("unified_store: %s: stat transcript before paired append: %w", what, statErr)
 		}
+		// Correction C4 abrupt-exit rule: the paired line lands marked, so a
+		// process death between this write and the provenance record leaves
+		// marker-without-record — the residue every reader skips on reopen.
+		// The marker is cleared below, once the record is durably written.
+		entry.ProvenancePending = true
 	}
 	if err := fileutil.AppendJSONL(path, entry); err != nil {
 		return -1, fmt.Errorf("unified_store: append transcript: %w", err)
@@ -79,6 +90,19 @@ func (us *UnifiedStore) appendTranscript(sessionID string, entry TranscriptEntry
 				return -1, fmt.Errorf("unified_store: %s: record provenance: %w; transcript rollback also failed: %w", what, err, rbErr)
 			}
 			return -1, fmt.Errorf("unified_store: %s: record provenance: %w", what, err)
+		}
+		// The pair is complete and durable — the message is accepted. Clear
+		// the write-phase marker so the line stops reading as in-flight. A
+		// failed clear does NOT fail the append: both halves are already on
+		// disk, so returning an error would make the gateway reject an
+		// accepted message and a retry would duplicate it. The leftover
+		// marker is inert by design — readers skip a marker line only when
+		// no provenance record exists for its ID, and here the record
+		// exists, so the line stays visible — but the failure is surfaced
+		// loudly, never silently dropped.
+		if err := us.clearProvenancePendingLocked(sessionID, entry.ID); err != nil {
+			slog.Error("unified_store: paired append accepted but its pending marker clear failed",
+				"session_id", sessionID, "message_id", entry.ID, "error", err)
 		}
 	}
 	accumulateEntryStats(&meta.Stats, entry)
