@@ -220,7 +220,7 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
 		// A current-generation Stop is durable. Do not deliver or re-wake any
 		// pending entry; it waits for Revive to mint a newer generation.
-		r.ackConsumed(rec, notice)
+		r.ackConsumed(ctx, rec, notice)
 		return
 	}
 
@@ -316,7 +316,42 @@ func (r *SteerBootRecovery) consumedIDs(parentID string) (map[string]bool, error
 	return consumed, nil
 }
 
-func (r *SteerBootRecovery) ackConsumed(rec *session.LifecycleRecord, notice func(string, string)) {
+// instructionArchived reports whether the child session's durable context
+// archive already holds the instruction this inbox message carried. The
+// consumed marker on the steering (parent) transcript is written AT DEQUEUE
+// (steering.go::consumeDequeuedSteeringResult), while the instruction only
+// reaches the child's context archive inside the turn iteration
+// (window_runtime.go::appendWindowMessage, keyed by steer_reconstruct.go's
+// SessionKey = rec.SessionID). A crash in between leaves the marker without
+// the archived line, so the marker alone is NOT proof of delivery: recovery
+// acknowledges a consumed entry only when the archive holds a user-role line
+// whose content equals steer_audience.go::deliverySummary of the SAME inbox
+// message — the exact text the live wake injects. An empty summary never
+// counts as archived.
+func (r *SteerBootRecovery) instructionArchived(ctx context.Context, rec *session.LifecycleRecord, message generated.SessionMessage) (bool, error) {
+	summary := deliverySummary(message)
+	if strings.TrimSpace(summary) == "" {
+		return false, nil
+	}
+	archive, err := r.Sessions.ReadArchive(ctx, rec.SessionID)
+	if err != nil {
+		return false, err
+	}
+	for _, line := range archive {
+		if line.Role == "user" && line.Content == summary {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ackConsumed acknowledges unacknowledged inbox entries whose consumed marker
+// is on the steering transcript AND whose instruction is verifiably in the
+// child's context archive. A marker whose instruction never reached the
+// archive (the crash gap) is left unacknowledged — the next deliverIfUnconsumed
+// pass re-delivers it. An archive read failure is surfaced through the notice
+// path and acknowledges nothing.
+func (r *SteerBootRecovery) ackConsumed(ctx context.Context, rec *session.LifecycleRecord, notice func(string, string)) {
 	if rec.SteeredBy == nil {
 		return
 	}
@@ -327,10 +362,19 @@ func (r *SteerBootRecovery) ackConsumed(rec *session.LifecycleRecord, notice fun
 	}
 	for _, message := range r.unacknowledged(rec, notice) {
 		envelope, envErr := decodeBootMessage(message)
-		if envErr == nil && consumed[envelope.MessageID] {
-			if err := r.Inbox.Ack(rec.SteeredBy.SteeringSessionID, []string{envelope.MessageID}); err != nil {
-				notice("ack:"+envelope.MessageID, fmt.Sprintf("session %s consumed inbox entry %s could not be acknowledged: %v", rec.SessionID, envelope.MessageID, err))
-			}
+		if envErr != nil || !consumed[envelope.MessageID] {
+			continue
+		}
+		archived, archErr := r.instructionArchived(ctx, rec, message)
+		if archErr != nil {
+			notice("archive:"+rec.SessionID, fmt.Sprintf("session %s instruction archive read failed: %v", rec.SessionID, archErr))
+			continue
+		}
+		if !archived {
+			continue
+		}
+		if err := r.Inbox.Ack(rec.SteeredBy.SteeringSessionID, []string{envelope.MessageID}); err != nil {
+			notice("ack:"+envelope.MessageID, fmt.Sprintf("session %s consumed inbox entry %s could not be acknowledged: %v", rec.SessionID, envelope.MessageID, err))
 		}
 	}
 }
@@ -347,10 +391,23 @@ func (r *SteerBootRecovery) deliverIfUnconsumed(ctx context.Context, rec *sessio
 		return
 	}
 	if consumed[envelope.MessageID] {
-		if err := r.Inbox.Ack(rec.SteeredBy.SteeringSessionID, []string{envelope.MessageID}); err != nil {
-			notice("ack:"+envelope.MessageID, fmt.Sprintf("session %s consumed inbox entry %s could not be acknowledged: %v", rec.SessionID, envelope.MessageID, err))
+		// The marker alone is not delivery: it is written at dequeue, before
+		// the instruction reaches the child's durable context archive. Require
+		// the archived instruction (a user-role line carrying deliverySummary
+		// of THIS message) before acknowledging; a read failure surfaces and
+		// acknowledges nothing. Marker without the archived line is the crash
+		// gap — fall through and deliver once.
+		archived, archErr := r.instructionArchived(ctx, rec, message)
+		if archErr != nil {
+			notice("archive:"+rec.SessionID, fmt.Sprintf("session %s instruction archive read failed: %v", rec.SessionID, archErr))
+			return
 		}
-		return
+		if archived {
+			if err := r.Inbox.Ack(rec.SteeredBy.SteeringSessionID, []string{envelope.MessageID}); err != nil {
+				notice("ack:"+envelope.MessageID, fmt.Sprintf("session %s consumed inbox entry %s could not be acknowledged: %v", rec.SessionID, envelope.MessageID, err))
+			}
+			return
+		}
 	}
 	class, classErr := session.ClassifySessionMessage(message)
 	if classErr != nil {
