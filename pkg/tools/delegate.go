@@ -636,8 +636,7 @@ func (t *DelegateTool) Description() string {
 		"action=\"respond\" replies to one of the child's messages by correlation_id — the text is " +
 		"delivered to the child as an ordinary message, always available for a delegation you started. " +
 		"action=\"stop_all\" stops that child and every helper under it (cooperatively by default; " +
-		"hard=true bypasses the grace window); a single helper that must stop alone while its own " +
-		"helpers keep going is stopped with action=\"redirect\" or left to finish. " +
+		"hard=true bypasses the grace window). action=\"redirect\" does not stop a helper; it replaces that helper's current turn. " +
 		delegateClearGoalDescription +
 		"action=\"resume\" continues a stopped child on the same conversation, or starts its next " +
 		"round when it is done or failed; optional text adds instructions. " +
@@ -794,9 +793,8 @@ func (t *DelegateTool) Parameters() map[string]any {
 				"description": "Optional (action=\"inbox\" only): maximum messages to return.",
 			},
 			"text": map[string]any{
-				"type": "string",
-				"description": "Required for action=\"steer\"/\"respond\"/\"follow_up\": the instruction/answer/" +
-					"new-instruction text (for follow_up, \"task\" is accepted as a deprecated alias).",
+				"type":        "string",
+				"description": "Required for action=\"steer\", \"respond\", \"resume\" and \"redirect\": the instruction or answer text.",
 			},
 			"correlation_id": map[string]any{
 				"type":        "string",
@@ -804,8 +802,8 @@ func (t *DelegateTool) Parameters() map[string]any {
 			},
 			"hard": map[string]any{
 				"type": "boolean",
-				"description": "Optional (action=\"cancel\" only, default false): false is a cooperative soft " +
-					"cancel with grace; true bypasses the grace window immediately.",
+				"description": "Optional (action=\"stop_all\" only, default false): false is a cooperative soft " +
+					"stop with grace; true bypasses the grace window immediately.",
 			},
 		},
 		// Nothing is unconditionally required at the schema level — requiredness

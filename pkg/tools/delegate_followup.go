@@ -180,8 +180,13 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		if !revived {
 			return ErrorResult(fmt.Sprintf("delegate: steer: session %s could not be revived", sessionID))
 		}
+		if rec.Terminal() {
+			return NewToolResult(fmt.Sprintf(
+				"Session %s had finished; the steering message started its next round.", sessionID,
+			))
+		}
 		return NewToolResult(fmt.Sprintf(
-			"Session %s was stopped; the steering message revived it as a new generation and it has been redispatched.", sessionID,
+			"Session %s was stopped; the steering message resumed it on the same conversation.", sessionID,
 		))
 	}
 
