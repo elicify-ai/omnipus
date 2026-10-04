@@ -245,9 +245,30 @@ func t27AwaitFinalState(t *testing.T, lifecycle *session.LifecycleStore, session
 	return rec
 }
 
+// t27MintBootEpoch mints the genuine boot epoch every real Dispatch
+// admission requires — steer_launcher.go refuses admission when
+// bootEpochFor() is 0 ("admission requires its genuine current boot epoch
+// and run_id"), and newSteerAL wires no store. This is the Q2 drain tests'
+// "SETUP Mint genuine boot epoch" block, verbatim in shape: a real
+// BootEpochStore under this test's own home (newAL's t.TempDir), one real
+// Mint, never a hard-coded epoch number.
+func t27MintBootEpoch(t *testing.T, al *AgentLoop) {
+	t.Helper()
+	boot := session.NewBootEpochStore(al.GetConfig().Agents.Defaults.Home)
+	epoch, err := boot.Mint()
+	if err != nil {
+		t.Fatalf("SETUP Mint genuine boot epoch: %v", err)
+	}
+	if epoch == 0 || boot.Current() != epoch {
+		t.Fatalf("SETUP minted/current boot epoch = %d/%d, require one genuine nonzero epoch", epoch, boot.Current())
+	}
+	al.SetBootEpochStore(boot)
+}
+
 func TestT27_StaleStopCallback_QueuedReplacementKeepsQueueEntry(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
+	t27MintBootEpoch(t, al)
 	wireSteerCompletionDeps(t, al)
 	al.GetConfig().Performance.MaxParallelAgents = 1
 	park := installT27ParkProvider(t, al)
@@ -335,6 +356,7 @@ func TestT27_StaleStopCallback_QueuedReplacementKeepsQueueEntry(t *testing.T) {
 func TestT27_StaleStopCallback_ActiveReplacementFinishesItsTurn(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
+	t27MintBootEpoch(t, al)
 	wireSteerCompletionDeps(t, al)
 	al.GetConfig().Performance.MaxParallelAgents = 2
 	park := installT27ParkProvider(t, al)
@@ -427,6 +449,7 @@ func TestT27_StaleStopCallback_ActiveReplacementFinishesItsTurn(t *testing.T) {
 func TestT27_StaleStopCallback_DelegateToolQueueRemovalSparesReplacement(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
+	t27MintBootEpoch(t, al)
 	wireSteerCompletionDeps(t, al)
 	al.GetConfig().Performance.MaxParallelAgents = 1
 	park := installT27ParkProvider(t, al)
@@ -516,6 +539,7 @@ func TestT27_NewStop_AfterResumeStillStopsReplacement(t *testing.T) {
 	t.Run("queued_replacement", func(t *testing.T) {
 		al, cleanup := newSteerAL(t)
 		defer cleanup()
+		t27MintBootEpoch(t, al)
 		wireSteerCompletionDeps(t, al)
 		al.GetConfig().Performance.MaxParallelAgents = 1
 		park := installT27ParkProvider(t, al)
@@ -569,6 +593,7 @@ func TestT27_NewStop_AfterResumeStillStopsReplacement(t *testing.T) {
 	t.Run("active_replacement", func(t *testing.T) {
 		al, cleanup := newSteerAL(t)
 		defer cleanup()
+		t27MintBootEpoch(t, al)
 		wireSteerCompletionDeps(t, al)
 		al.GetConfig().Performance.MaxParallelAgents = 2
 		park := installT27ParkProvider(t, al)
