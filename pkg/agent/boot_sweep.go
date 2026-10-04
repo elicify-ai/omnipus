@@ -248,10 +248,20 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		!(rec.Stop != nil && rec.Stop.Generation == rec.Generation) {
 		if err := r.failInterrupted(rec); err != nil {
 			notice("interrupted-write:"+id, fmt.Sprintf("session %s interrupted transition failed: %v", id, err))
-		} else if fresh, loadErr := r.Lifecycle.Load(id); loadErr == nil && fresh != nil {
+		} else if fresh, loadErr := r.Lifecycle.Load(id); loadErr != nil || fresh == nil {
+			// The stop write itself succeeded, but its landing cannot be
+			// confirmed on the record. Say so visibly and keep
+			// stopLandedByBoot false: a stale pre-stop record is never proof
+			// the boot stop landed. Processing continues on the stale copy —
+			// the fields the replay and the interrupted arm read (session
+			// id, generation, parent edge, agent) are untouched by the stop
+			// landing, and the arm's own failInterrupted re-reads under the
+			// record lock.
+			notice("interrupted-reload:"+id, fmt.Sprintf("session %s interrupted transition landed but the record could not be re-read (%v); continuing on the stale pre-stop record — the boot stop's landing is unconfirmed", id, loadErr))
+		} else {
 			rec = fresh
+			stopLandedByBoot = true
 		}
-		stopLandedByBoot = true
 	}
 	// Stopped-child notices retry from the control ledger's LANDED history
 	// (stopped_notice.go::recoverStoppedChildNotice) — including after a
