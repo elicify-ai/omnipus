@@ -3,42 +3,61 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // W1 direct-parent stopped-child notice — FENCE-LESS re-ring until taken
-// (founder decision, 2026-10-04, this dispatch's brief): "a stop notice keeps
-// ringing until the parent takes it, including a stop that has no saved
-// control history, and including after a restart. A second ring must not make
-// the parent do the work twice. There is no periodic timer."
+// (founder decision, 2026-10-04): "a stop notice keeps ringing until the
+// parent takes it, including a stop that has no saved control history, and
+// including after a restart. A second ring must not make the parent do the
+// work twice. There is no periodic timer."
+//
+// Updated the same day to ADR-20260928 Correction C3 (every landed stop
+// ledgered): the fence-less landing now appends its transition to the
+// control ledger in the same Mutate that writes the stop note
+// (steer_completion_commit.go::landSteeredStopLocked ->
+// session.LifecycleStore.RecordFencelessLandedStopLocked), so the notice's
+// identity and its rediscovery come from the LEDGER's landed history alone.
+// The note-derived fallback this file once used for identity
+// (stoppedTransitionFromLandedNote, the synthesized note's generation
+// stand-in seq) is retired: a RESUME clearing the active note must never be
+// able to lose an untaken notice, and two fence-less stops in one generation
+// must never share one notice id. The store allocates the fence-less line's
+// stop_seq as the next monotonic control sequence (never supplied by the
+// caller, never the generation stand-in).
 //
 // Scenario: a real live child's stop lands with NO accepted control and NO
 // fence — the synthesized-note landing (steer_completion_commit.go::
 // landSteeredStopLocked, reached here through the production completion
 // boundary with a cancelled disposition, the same landing a lifetime-budget
-// expiry or a legacy cancel produces). Its StopSeq is the synthesized note's
-// own generation stand-in; no control-ledger landed history exists for it
-// (RecordLandedStopLocked refuses to fabricate one).
+// expiry or a legacy cancel produces). Its ledger line fabricates no
+// accepted Stop control: ControlID is empty and the landing execution's
+// run_id/boot_seq ride the landed projection instead.
 //
-// Known-red reason at the pre-fix pin (verified by reading, before any run):
-// the landing pass delivered the notice ONCE from the in-memory commit
-// result (steer_completion.go's landed == nil && landedNote != nil branch),
-// while the replay path — stopped_notice.go::deliverLandedStopNotices —
-// discovers notices ONLY from ListStoppedTransitions. A later delivery pass
-// and a restart therefore had nothing to discover: the boot passes below
-// rang ZERO times, and an untaken fence-less notice sat silent forever. The
-// fix makes the retained note — already durable on the landed record —
-// discoverable by that same replay path; the tests then pass every oracle.
-//
-// Oracles (one row each, all from the founder decision):
-//   - the fence-less landing publishes exactly one notice with the EXISTING
-//     stopped-child id (generation stand-in seq) and text, and rings once
-//   - no ledger history is fabricated for it (one landing, zero controls)
+// Oracles (one row each; spec sources are the founder decision above plus
+// Correction C3 and the ledger's own allocation contract — never the code
+// under test):
+//   - the fence-less landing ledgered EXACTLY ONE transition in the landing
+//     itself: ControlID empty (no fabricated accepted control), the store-
+//     allocated stop_seq (the first landed line of a fresh child is seq 1 —
+//     the same one per-child monotonic progression the fenced writer
+//     applies), the child's generation, the direct parent, cause stop
+//   - the notice is composed from that ledger transition: the existing
+//     stopped-notice id (parent, child, generation, REAL stop_seq) and text,
+//     exactly one durable line, and it rings once
 //   - an unacked note re-rings on the next delivery pass (boot) — exactly
-//     once per pass
+//     once per pass, including after a restart
 //   - repeated rings keep ONE durable line, never re-stop the child, never
-//     write history
+//     append history
 //   - after the parent's production ack, further passes ring ZERO times
 //
 // Reuses the shared W1 harness and the fenced pack's restart/ack helpers
 // (stopped_notice_rering_test.go) unchanged: same production boot entry, same
 // durable stores, same ring observation seam.
+//
+// Deferred to CHECK (elicify-test-writing step 4 items 2-3, this dispatch's
+// rules): green-after-implementation and the mutation probes — re-deriving
+// the notice from the retained note again (killed by the ledger-exactly-one
+// oracle), reusing the generation as the fence-less stop_seq (killed by the
+// two-stops identity pack in stopped_notice_fenceless_ledger_test.go),
+// re-appending on retry (killed by the one-durable-line oracle), ringing
+// after the ack (killed by the taken-note leg).
 package agent
 
 import (
@@ -60,7 +79,8 @@ func TestStoppedNotice_FenceLessStop_ReringsUntilTaken(t *testing.T) {
 	childID, generation := rec.SessionID, rec.Generation
 
 	// Preconditions for THE fence-less landing: no fence, no note, no
-	// control-ledger history — the landing below synthesizes the note.
+	// control-ledger history — the landing below synthesizes the note and
+	// ledgeres this child's first landed stop.
 	pre, err := lifecycle.Load(childID)
 	if err != nil {
 		t.Fatalf("setup: Load(%s): %v", childID, err)
@@ -69,7 +89,7 @@ func TestStoppedNotice_FenceLessStop_ReringsUntilTaken(t *testing.T) {
 		t.Fatalf("setup: child carries Stop=%v StopNote=%v, want neither — the landing must be genuinely fence-less", pre.Stop, pre.StopNote)
 	}
 	if trs, err := lifecycle.ListStoppedTransitions(childID); err != nil || len(trs) != 0 {
-		t.Fatalf("setup: landed history = %s (err %v), want none — a fence-less stop has no accepted control", w1hFormatTransitions(trs), err)
+		t.Fatalf("setup: landed history = %s (err %v), want none — the fence-less landing below must be this child's first landed stop", w1hFormatTransitions(trs), err)
 	}
 
 	// The production completion boundary lands the stop with a cancelled
@@ -91,26 +111,41 @@ func TestStoppedNotice_FenceLessStop_ReringsUntilTaken(t *testing.T) {
 		t.Fatalf("after the landing StopNote=%v Stop=%v, want a retained note and no fence — the fence-less landing's identity", cur.StopNote, cur.Stop)
 	}
 
-	// ORACLE (D6 id and content, existing format only): the notice carries
-	// the existing stopped-child id composed from the retained note's
-	// generation stand-in seq, and the existing stopped-child text for that
-	// note's tuple. No second message format is invented.
-	tr := stoppedTransitionFromLandedNote(cur, cur.StopNote)
-	noticeID := w1hNoticeID(parentID, childID, generation, uint64(generation))
-	if tr.StopSeq != uint64(generation) || tr.ParentSessionID != parentID {
-		t.Fatalf("note-derived transition = %s, want {seq:%d parent:%q} — the synthesized note's generation stand-in", w1hFormatTransitions([]session.StoppedTransition{tr}), generation, parentID)
+	// ORACLE (C3 — the notice's identity lives in the CONTROL LEDGER): the
+	// landing ledgered exactly one transition in the same lock hold that
+	// wrote the note. It fabricates no accepted Stop control (empty
+	// ControlID) and carries the store-allocated stop_seq — the first landed
+	// line of a fresh child takes the ledger's first monotonic sequence (1),
+	// the same one per-child progression the fenced writer applies (D4);
+	// never the note's generation stand-in. A landing without this line
+	// would lose its notice the moment a RESUME cleared the note.
+	trs, err := lifecycle.ListStoppedTransitions(childID)
+	if err != nil {
+		t.Fatalf("ListStoppedTransitions(after the fence-less landing): %v", err)
 	}
+	if len(trs) != 1 {
+		t.Fatalf("landed history after the fence-less landing = %s, want exactly 1 transition — the landing ledgered it in the same lock hold (C3); an unledgered fence-less stop's notice could not survive a resume clearing the note", w1hFormatTransitions(trs))
+	}
+	tr := trs[0]
+	if tr.ControlID != "" {
+		t.Fatalf("fence-less transition carries control_id %q, want empty — a fence-less stop fabricates no accepted Stop control (C3)", tr.ControlID)
+	}
+	if tr.StopSeq != 1 || tr.Generation != generation || tr.ParentSessionID != parentID || tr.Cause != session.StopCauseStop {
+		t.Fatalf("fence-less transition = %s, want {seq:1 gen:%d parent:%q cause:stop} — the store allocates the first monotonic stop_seq for a fresh child's first landed stop (D4), the landing names the direct parent, and the cancelled disposition is a stop", w1hFormatTransitions(trs), generation, parentID)
+	}
+
+	// ORACLE (D6 id and content, existing format only): the notice carries
+	// the existing stopped-child id composed from the LEDGER transition's
+	// real stop_seq, and the existing stopped-child text for that
+	// transition's tuple. No second message format is invented.
+	noticeID := w1hNoticeID(parentID, childID, generation, tr.StopSeq)
 	notices := w1hNoticesWithID(t, al, parentID, noticeID)
 	if len(notices) != 1 {
-		t.Fatalf("parent inbox holds %d line(s) of %s after the landing, want exactly 1 — the fence-less landing publishes the one D6 notice", len(notices), noticeID)
+		t.Fatalf("parent inbox holds %d line(s) of %s after the landing, want exactly 1 — the fence-less landing publishes the one D6 notice discovered from the ledger", len(notices), noticeID)
 	}
 	w1hAssertNoticeMatchesTransition(t, notices[0], parentID, tr)
 	if c := wakes.count(noticeID); c != 1 {
 		t.Fatalf("the landing rang the parent %d time(s) for %s, want exactly 1", c, noticeID)
-	}
-	// ORACLE (D8.5/D4): the fence-less landing fabricates no ledger history.
-	if trs, err := lifecycle.ListStoppedTransitions(childID); err != nil || len(trs) != 0 {
-		t.Fatalf("landed history after the fence-less landing = %s (err %v), want none — no accepted control, no fabricated history", w1hFormatTransitions(trs), err)
 	}
 	if rerNoteAcked(t, al, parentID, noticeID) {
 		t.Fatalf("the notice %s is already acked at the landing — the re-ring scenario requires an untaken note", noticeID)
@@ -125,10 +160,12 @@ func TestStoppedNotice_FenceLessStop_ReringsUntilTaken(t *testing.T) {
 	}
 
 	// ORACLE (founder decision — after a restart): the boot pass rings the
-	// parent again for the unacked fence-less note — exactly once.
+	// parent again for the unacked fence-less note — exactly once. The
+	// replay discovers the transition from the LEDGER history: the record's
+	// note is never re-read.
 	rerStartupPass(t, restart, childID)
 	if got := rings.count(noticeID); got != 1 {
-		t.Errorf("after the boot pass the restart rang the parent %d time(s) for the unacked fence-less notice %s, want exactly 1 — a stop with no saved control history still keeps ringing after a restart", got, noticeID)
+		t.Errorf("after the boot pass the restart rang the parent %d time(s) for the unacked fence-less notice %s, want exactly 1 — a stop with no accepted control still keeps ringing after a restart", got, noticeID)
 	}
 
 	// ORACLE (the ring rides the stored note): still exactly one line, the
@@ -150,12 +187,13 @@ func TestStoppedNotice_FenceLessStop_ReringsUntilTaken(t *testing.T) {
 	}
 
 	// ORACLE (a second ring never applies the stop twice): one durable line,
-	// still zero ledger history, the child still stopped at its generation.
+	// still exactly the ONE ledgered transition — unchanged tuple, never a
+	// second line — and the child still stopped at its generation.
 	if got := len(w1hNoticesWithID(t, restart, parentID, noticeID)); got != 1 {
 		t.Errorf("parent inbox holds %d line(s) of %s after two rings, want exactly 1 — repeated rings never duplicate the note", got, noticeID)
 	}
-	if trs, err := restart.GetSessionLifecycleStore().ListStoppedTransitions(childID); err != nil || len(trs) != 0 {
-		t.Errorf("landed history after the rings = %s (err %v), want still none — a ring is a doorbell, it never fabricates history", w1hFormatTransitions(trs), err)
+	if trs2, err := restart.GetSessionLifecycleStore().ListStoppedTransitions(childID); err != nil || len(trs2) != 1 || w1hFormatTransitions(trs2) != w1hFormatTransitions(trs) {
+		t.Errorf("landed history after the rings = %s (err %v), want still exactly [%s] — a ring is a doorbell, it never appends history", w1hFormatTransitions(trs2), err, w1hFormatTransitions(trs))
 	}
 	rungCur, err := restart.GetSessionLifecycleStore().Load(childID)
 	if err != nil {

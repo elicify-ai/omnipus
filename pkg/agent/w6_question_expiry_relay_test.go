@@ -4,65 +4,70 @@
 
 package agent
 
-// W6 D1.8 RED — the relay half of the question-park expiry: when the boot
-// consumer expires a question, every OPEN relay OF that question must be
-// closed as superseded too (ADR-20260928 D1.8 "question expiry closes open
-// relays as superseded").
+// W6 D1.8 relay pack — SUPERSEDED by the steering-commands amendment
+// (Correction C2): the question expiry AND its relay closer are REMOVED from
+// boot with no replacement. The rule this pack now pins: boot NEVER closes
+// any question record — not an asker's own aged park, not a relay linked to
+// it by RelayOf or Origin, not an unrelated record — whatever any record's
+// age. Every open record boot finds stays open and answerable with its own
+// fields preserved.
 //
-// This is exactly the gap w6_question_expiry_boot_test.go's header reported
-// BLOCKED: "the c8 W6 partial has no relay writer, so no relay chain can be
-// built without hand-seeding fake records". Nothing here is a fake store:
-// every record — the expired asker's park AND the relays — lives in the REAL
-// session.QuestionStore over PendingQuestionDir (the durable JSONL sidecar
-// pkg/session/question_record.go defines; no production relay writer exists in
-// this tree yet, so the relay records are seeded through that real store's
-// own Append with the record shape it validates, which is the production
-// write path any relay feature must use).
+// (The pack was RED for the original D1.8 relay closure: "question expiry
+// closes open relays as superseded". That outcome is retired, not deleted;
+// the same scenario — a real park plus relay records seeded through the REAL
+// session.QuestionStore, then the production boot consumer twice — now pins
+// the superseding no-closure rule at the same strength, with the retired
+// superseded-closure outcome asserted negatively through the status oracle.)
+//
+// Nothing here is a fake store: every record — the aged asker's park AND the
+// relays — lives in the REAL session.QuestionStore over PendingQuestionDir
+// (the durable JSONL sidecar pkg/session/question_record.go defines), seeded
+// through that real store's own Append with the record shape it validates.
 //
 // Test plan (elicify-test-writing step 1)
 //
 //   behaviour under test: after a process restart, SteerBootRecovery.Run —
 //     driven exactly as w6_question_expiry_boot_test.go drives it (park
-//     through the production message_parent tool, reopen the stores, run the
-//     production boot consumer twice) — expires the asker's overdue question
-//     AND closes, as superseded, every other OPEN record in the same
-//     QuestionStore directory whose Origin or RelayOf names the expired
-//     question (asker session id + correlation id). A record whose links name
-//     a DIFFERENT question, and a record with no links at all, stay open.
-//     The asker's existing expiry behaviour is unchanged: failed
-//     (owner_unreachable), exactly one fatal "owner could not be reached" to
-//     the DIRECT parent, the superseded sidecar at the UNCHANGED original
-//     deadline, the goal still active, no generation minted, and a second
-//     boot does not double-fail (T8).
+//     through the production message_parent tool, reopen the stores, run
+//     the production boot consumer twice) — leaves every OPEN record in the
+//     same QuestionStore directory open and answerable: records whose
+//     Origin or RelayOf name the asker's aged question, a record whose
+//     links name a different question, and a record with no links at all.
+//     The asker itself keeps its needs_input record unchanged, with no
+//     fatal notice to its direct parent and its goal still active.
 //
-//   specification source: ADR-20260928 section "D1 ... 8. The 24-hour
-//     question-park limit" — "closes open relays superseded" — plus D1.5
-//     (an expired question cannot be reserved) and D5 (one fatal error to
-//     the direct parent).
+//   specification source: the amendment's Correction C2 (the expiry, its
+//     relay closer and its notice are removed; no replacement expiry) —
+//     never the code under test.
 //
 //   unit boundary: everything real — LifecycleStore, UnifiedStore,
 //     MessageInboxStore, session.QuestionStore (park AND relay seeding),
 //     MessageParentTool's production park, SteerBootRecovery.Run with the
-//     real upward deliverer. No periodic scheduler exists in this tree and
-//     none is invented here — the periodic leg of D1.8/T8 stays BLOCKED per
-//     w6_question_expiry_boot_test.go's header.
+//     real upward deliverer. No scheduler exists in this tree and none is
+//     invented here.
 //
-//   case table:
-//     expired owner_required asker + OPEN relay with RelayOf -> the relay's
-//       tail record reads superseded with its own fields preserved.
-//     expired owner_required asker + OPEN relay with Origin -> same closure.
-//     OPEN record whose Origin names a question that did NOT expire ->
-//       stays open (the closure is keyed to the expired question's pair).
-//     OPEN record with no links -> stays open (boot must not close records
-//       it cannot tie to the expired question).
-//     the asker itself -> the unchanged D1.8 expiry of
-//       TestW6QuestionExpiryBoot_ExpiredOwnerRequired_FailsAskerOwnerUnreachableOnce.
+//   case table (one row per seeded record):
+//     the asker's own park (48h past its original deadline) -> stays
+//       needs_input / open / answerable at the ORIGINAL deadline; zero
+//       fatals; goal active.
+//     OPEN relay with RelayOf naming the aged question (aged past its own
+//       deadline) -> stays open, fields preserved.
+//     OPEN record with Origin naming the aged question (aged past its own
+//       deadline) -> stays open, fields preserved.
+//     OPEN record whose Origin names a DIFFERENT correlation (fresh) ->
+//       stays open.
+//     OPEN record with no links (fresh) -> stays open.
+//     all of the above re-asserted after the SECOND boot (no flip).
 //
-//   deferred to CHECK: mutation probes (drop the relay scan entirely —
-//     killed by the two closure legs; match on correlation id only — killed
-//     by the unrelated-origin leg; close every open record — killed by the
-//     bystander leg; close relays but break the asker's own expiry — killed
-//     by the unchanged-behaviour assertions).
+//   deferred to CHECK (skill step 4 items 2-3): green-after-implementation
+//     and the mutation probes — re-adding any closure keyed to the asker's
+//     question (killed by the two linked-record legs), closing every open
+//     record (killed by the bystander leg), closing only aged records
+//     (killed by the mixed-age seeding), failing the asker (killed by the
+//     asker oracle).
+//
+//   known gaps: the D1.4 provenance writer stays with its own pack; no
+//     periodic scheduler exists to drive (none is invented here).
 
 import (
 	"context"
@@ -72,11 +77,12 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
-// TestW6QuestionExpiryRelay_ExpiredQuestionClosesRelaysSuperseded drives
-// D1.8's relay closure: an expired question's boot expiry supersedes the
-// OPEN relay records that name it, leaves every unrelated OPEN record alone,
-// and leaves the asker's own expiry exactly as the boot test pins it.
-func TestW6QuestionExpiryRelay_ExpiredQuestionClosesRelaysSuperseded(t *testing.T) {
+// TestW6QuestionExpiryRelay_BootNeverClosesQuestionRecords (was
+// TestW6QuestionExpiryRelay_ExpiredQuestionClosesRelaysSuperseded) drives
+// the superseding rule: boot closes NO question record — the asker's aged
+// park, relays linked to it, and unlinked bystanders all stay open and
+// answerable with their own fields preserved, across two boots.
+func TestW6QuestionExpiryRelay_BootNeverClosesQuestionRecords(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
@@ -84,7 +90,7 @@ func TestW6QuestionExpiryRelay_ExpiredQuestionClosesRelaysSuperseded(t *testing.
 	root := newTestSteeringSession(t, al, "ws-w6-qexp-relay")
 	parent := u1LaunchChild(t, al, root, "w6-qexp-relay-parent")
 	child := u1LaunchChild(t, al, parent.SessionID, "w6-qexp-relay-asker")
-	goalID := activateTestGoalRecord(t, child.SessionID, "W6 relay expiry: goal must stay active")
+	goalID := activateTestGoalRecord(t, child.SessionID, "W6 relay no-closure: goal must stay active")
 	relayOfRec := u1LaunchChild(t, al, parent.SessionID, "w6-qexp-relay-of")
 	originRec := u1LaunchChild(t, al, parent.SessionID, "w6-qexp-relay-origin")
 	otherRec := u1LaunchChild(t, al, parent.SessionID, "w6-qexp-relay-other")
@@ -98,20 +104,21 @@ func TestW6QuestionExpiryRelay_ExpiredQuestionClosesRelaysSuperseded(t *testing.
 	lc, inbox := w6qeReopen(t, al)
 
 	// Seed the relay records through the REAL QuestionStore — the same
-	// durable sidecar boot reads. Each relay is itself NOT overdue (its
-	// deadline is in the future), so the ONLY thing that can close it is the
-	// asker's expiry cascading down — that is the D1.8 behaviour under test,
-	// not the relay's own deadline.
+	// durable sidecar boot would have read. Two linked records are seeded
+	// AGED (their own deadlines long past) and two unlinked/other records
+	// FRESH, so the no-closure rule is pinned for every age: no record's
+	// status may depend on any deadline.
 	store := w6qeQuestionStore(lc)
-	relayDeadline := time.Now().Add(48 * time.Hour)
-	seedRelay := func(rec *session.LifecycleRecord, corr string, origin, relayOf *session.QuestionRelayLink) {
+	agedDeadline := time.Now().Add(-48 * time.Hour)
+	freshDeadline := time.Now().Add(48 * time.Hour)
+	seedRelay := func(rec *session.LifecycleRecord, corr string, recordDeadline time.Time, origin, relayOf *session.QuestionRelayLink) {
 		t.Helper()
 		q := session.PendingQuestion{
 			CorrelationID:    corr,
 			AskerSessionID:   rec.SessionID,
 			AskerGeneration:  rec.Generation,
 			Authority:        session.QuestionAuthoritySelfOK,
-			OriginalDeadline: relayDeadline,
+			OriginalDeadline: recordDeadline,
 			Origin:           origin,
 			RelayOf:          relayOf,
 			Status:           session.QuestionStatusOpen,
@@ -128,92 +135,84 @@ func TestW6QuestionExpiryRelay_ExpiredQuestionClosesRelaysSuperseded(t *testing.
 				rec.SessionID, seeded.Status, seeded.AskerSessionID)
 		}
 	}
-	seedRelay(relayOfRec, "w6-qexp-relay-relayof", nil,
+	seedRelay(relayOfRec, "w6-qexp-relay-relayof", agedDeadline, nil,
 		&session.QuestionRelayLink{SessionID: child.SessionID, CorrelationID: correlationID})
-	seedRelay(originRec, "w6-qexp-relay-origin",
+	seedRelay(originRec, "w6-qexp-relay-origin", agedDeadline,
 		&session.QuestionRelayLink{SessionID: child.SessionID, CorrelationID: correlationID}, nil)
-	seedRelay(otherRec, "w6-qexp-relay-unrelated",
+	seedRelay(otherRec, "w6-qexp-relay-unrelated", freshDeadline,
 		&session.QuestionRelayLink{SessionID: child.SessionID, CorrelationID: "w6-qexp-relay-never-expired"}, nil)
-	seedRelay(bystanderRec, "w6-qexp-relay-bystander", nil, nil)
+	seedRelay(bystanderRec, "w6-qexp-relay-bystander", freshDeadline, nil, nil)
 
-	// The production boot consumer, twice — T8 forbids a double-failure.
+	// The production boot consumer, twice — the second run must change
+	// nothing, exactly as the retired expiry's idempotence guarantee did.
 	var notices []string
 	recovery := w6qeBootRecovery(t, al, lc, inbox, &notices)
 	if err := recovery.Run(context.Background()); err != nil {
 		t.Fatalf("SteerBootRecovery.Run #1: %v", err)
 	}
 
-	assertRelayClosed := func(sessionID, corr string, link *session.QuestionRelayLink, when string) {
+	assertRecordStillOpen := func(sessionID, corr string, recordDeadline time.Time, link *session.QuestionRelayLink, when string) {
 		t.Helper()
 		q := w6qeMustQuestion(t, lc, sessionID)
-		if q.Status != session.QuestionStatusSuperseded {
-			t.Fatalf("relay %s (%s) status %s after %s, want superseded — D1.8: an expired question closes its open relays as superseded",
-				sessionID, corr, q.Status, when)
+		if q.Status != session.QuestionStatusOpen || !q.Answerable() {
+			t.Fatalf("record %s (%s) = (status %s, answerable %t) after %s, want open and answerable — "+
+				"C2: boot closes no question record, whatever its age or links", sessionID, corr, q.Status, q.Answerable(), when)
 		}
-		if q.Answerable() {
-			t.Fatalf("relay %s (%s) still answerable after %s — a superseded relay cannot be reserved (D1.5)", sessionID, corr, when)
-		}
-		if !q.OriginalDeadline.Equal(relayDeadline) {
-			t.Fatalf("relay %s (%s) deadline %s after %s, want its OWN %s unchanged — closing a relay must not rewrite its fields",
+		if !q.OriginalDeadline.Equal(recordDeadline) {
+			t.Fatalf("record %s (%s) deadline %s after %s, want its OWN %s unchanged — boot must not rewrite any record's fields",
 				sessionID, corr, q.OriginalDeadline.Format(time.RFC3339Nano), when,
-				relayDeadline.Format(time.RFC3339Nano))
+				recordDeadline.Format(time.RFC3339Nano))
 		}
 		if link != nil {
 			got := q.RelayOf
 			if got == nil || got.SessionID != link.SessionID || got.CorrelationID != link.CorrelationID {
-				t.Fatalf("relay %s (%s) RelayOf after %s = %v, want %v preserved — closing a relay must not rewrite its fields",
+				t.Fatalf("record %s (%s) RelayOf after %s = %v, want %v preserved — boot must not rewrite any record's fields",
 					sessionID, corr, when, got, link)
 			}
 		}
 	}
-	assertRelayOpen := func(sessionID, corr string, when string) {
-		t.Helper()
-		q := w6qeMustQuestion(t, lc, sessionID)
-		if q.Status != session.QuestionStatusOpen || !q.Answerable() {
-			t.Fatalf("relay %s (%s) = (status %s, answerable %t) after %s, want open and answerable — "+
-				"a record whose links do not name the EXPIRED question is not that expiry's to close",
-				sessionID, corr, q.Status, q.Answerable(), when)
-		}
-	}
 
-	assertRelayClosed(relayOfRec.SessionID, "w6-qexp-relay-relayof",
+	assertRecordStillOpen(relayOfRec.SessionID, "w6-qexp-relay-relayof", agedDeadline,
 		&session.QuestionRelayLink{SessionID: child.SessionID, CorrelationID: correlationID}, "boot #1")
-	assertRelayClosed(originRec.SessionID, "w6-qexp-relay-origin", nil, "boot #1")
-	assertRelayOpen(otherRec.SessionID, "w6-qexp-relay-unrelated", "boot #1")
-	assertRelayOpen(bystanderRec.SessionID, "w6-qexp-relay-bystander", "boot #1")
+	assertRecordStillOpen(originRec.SessionID, "w6-qexp-relay-origin", agedDeadline, nil, "boot #1")
+	assertRecordStillOpen(otherRec.SessionID, "w6-qexp-relay-unrelated", freshDeadline, nil, "boot #1")
+	assertRecordStillOpen(bystanderRec.SessionID, "w6-qexp-relay-bystander", freshDeadline, nil, "boot #1")
 
 	if err := recovery.Run(context.Background()); err != nil {
 		t.Fatalf("SteerBootRecovery.Run #2: %v", err)
 	}
 
-	// The closures survive the second boot unchanged (no flip, no re-close).
-	assertRelayClosed(relayOfRec.SessionID, "w6-qexp-relay-relayof", nil, "boot #2")
-	assertRelayClosed(originRec.SessionID, "w6-qexp-relay-origin", nil, "boot #2")
-	assertRelayOpen(otherRec.SessionID, "w6-qexp-relay-unrelated", "boot #2")
-	assertRelayOpen(bystanderRec.SessionID, "w6-qexp-relay-bystander", "boot #2")
+	// The no-closure rule survives the second boot unchanged (no flip).
+	assertRecordStillOpen(relayOfRec.SessionID, "w6-qexp-relay-relayof", agedDeadline, nil, "boot #2")
+	assertRecordStillOpen(originRec.SessionID, "w6-qexp-relay-origin", agedDeadline, nil, "boot #2")
+	assertRecordStillOpen(otherRec.SessionID, "w6-qexp-relay-unrelated", freshDeadline, nil, "boot #2")
+	assertRecordStillOpen(bystanderRec.SessionID, "w6-qexp-relay-bystander", freshDeadline, nil, "boot #2")
 
-	// The asker's existing expiry behaviour is unchanged — the same pins
-	// TestW6QuestionExpiryBoot_ExpiredOwnerRequired_FailsAskerOwnerUnreachableOnce
-	// holds, now with relays in the same directory.
+	// ORACLE: the asker's own aged park survives too — still needs_input
+	// with the same park at the same generation, its sidecar open and
+	// answerable at the ORIGINAL deadline, zero fatal notices of any text
+	// (and specifically none with the retired owner-unreachable outcome),
+	// and its goal still active.
 	after := w6qeMustLoad(t, lc, child.SessionID)
-	if after.State != session.LifecycleFailed || after.FailedReason != w6qeReasonOwnerUnreachable {
-		t.Fatalf("expired asker after boot = (%s, %q), want (failed, %q) — relay closure must not change D1.8's own expiry",
-			after.State, after.FailedReason, w6qeReasonOwnerUnreachable)
+	if after.State != session.LifecycleNeedsInput || after.NeedsInput == nil {
+		t.Fatalf("aged asker after boot = (%s, needs_input %v), want needs_input — C2: a helper question does not expire and does not fail its helper",
+			after.State, after.NeedsInput)
 	}
 	if after.Generation != generation {
-		t.Fatalf("asker generation after boot = %d, want %d — expiry must not dispatch a run or mint a generation",
+		t.Fatalf("asker generation after boot = %d, want %d — boot must not dispatch a run for an aged question",
 			after.Generation, generation)
 	}
-	if fatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, w6qeOwnerUnreachableText); fatals != 1 {
-		t.Fatalf("fatal %q notices to the DIRECT parent after two boots = %d, want exactly 1 — "+
-			"relay closure must not add or duplicate the asker's parent notice",
-			w6qeOwnerUnreachableText, fatals)
+	if fatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, ""); fatals != 0 {
+		t.Fatalf("boot produced %d fatal error notice(s) for the aged asker, want 0 — the expiry notice is retired with the expiry (C2)", fatals)
+	}
+	if ownerFatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, w6qeOwnerUnreachableText); ownerFatals != 0 {
+		t.Fatalf("boot produced %d %q fatal(s), want 0 — that outcome is retired (C2)", ownerFatals, w6qeOwnerUnreachableText)
 	}
 	afterQ := w6qeMustQuestion(t, lc, child.SessionID)
-	if afterQ.Status != session.QuestionStatusSuperseded || afterQ.Answerable() || !afterQ.OriginalDeadline.Equal(deadline) {
-		t.Fatalf("asker sidecar after boot = (status %s, answerable %t, deadline %s), want superseded, unanswerable, %s unchanged",
+	if afterQ.Status != session.QuestionStatusOpen || !afterQ.Answerable() || !afterQ.OriginalDeadline.Equal(deadline) {
+		t.Fatalf("asker sidecar after boot = (status %s, answerable %t, deadline %s), want open, answerable, %s unchanged — boot closes no question record",
 			afterQ.Status, afterQ.Answerable(), afterQ.OriginalDeadline.Format(time.RFC3339Nano),
 			deadline.Format(time.RFC3339Nano))
 	}
-	w6qeAssertGoalActive(t, goalID, "relay expiry at boot")
+	w6qeAssertGoalActive(t, goalID, "relay no-closure at boot")
 }

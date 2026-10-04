@@ -13,8 +13,12 @@ package agent
 //	case 4 — a delivery failure stays pending and is VISIBLY reported, and
 //	         a boot retry after repair delivers exactly once;
 //	case 6 — the D6 Goal row: the session-owned goal stays active across
-//	         every stop path (the question-expiry leg is BLOCKED pending the
-//	         D1.8 expiry sweeper).
+//	         every stop path; since the steering-commands amendment's
+//	         Correction C2 removed the 24-hour question expiry with no
+//	         replacement, the former question-expiry leg now pins the
+//	         superseding rule instead — a question parked long past its
+//	         original deadline neither expires nor stops or fails its
+//	         helper, and the goal stays active across its boot.
 //
 // Oracles are the ADR rows only (D6/D8/D2, F0929-6/7, MIN-001/MIN-005);
 // helpers live in stopped_child_notice_u1_test.go. The plan-stop transition
@@ -594,9 +598,36 @@ func TestU1GoalStaysActiveAcrossEveryStopPath(t *testing.T) {
 		}
 		assertGoalActive(t, goalID, "failed completion")
 	})
-	t.Run("question expiry", func(t *testing.T) {
-		t.Fatal("BLOCKED: no question-expiry sweeper is implemented to drive the 24-hour " +
-			"question-park limit (ADR D1.8/MIN-005) — required by the D6 Goal row, which " +
-			"pins that expiry ('Expiry does not clear the goal (F0929-6)') keeps the goal active")
+	t.Run("aged question", func(t *testing.T) {
+		al, cleanup := newSteerAL(t)
+		defer cleanup()
+		parent := newTestSteeringSession(t, al, "ws-u1-goal-aged-question")
+		rec := u1LaunchChild(t, al, parent, "u1-goal-aged-question")
+		goalID := activateTestGoalRecord(t, rec.SessionID, "U1 goal open across an aged question")
+		// A question parked 24h past its original deadline — the exact shape
+		// the retired 24h expiry (ADR D1.8, removed by the steering-commands
+		// amendment's Correction C2 with no replacement) used to fail the
+		// helper on. u1BootRecovery wires the completion deps this park's
+		// message_parent tool delivers through.
+		w6qeParkQuestion(t, al, rec.SessionID, "u1-goal-aged-question-corr",
+			session.QuestionAuthorityOwnerRequired, time.Now().Add(-48*time.Hour))
+		var operatorNotices []string
+		recovery := u1BootRecovery(t, al, &operatorNotices)
+		if err := recovery.Run(context.Background()); err != nil {
+			t.Fatalf("SteerBootRecovery.Run: %v", err)
+		}
+		// The aged question neither expires nor stops or fails its helper:
+		// after boot the helper is still parked in needs_input — never
+		// stopped, never failed — and its goal stays active (F0929-6).
+		cur := w6qeMustLoad(t, al.GetSessionLifecycleStore(), rec.SessionID)
+		if cur.State != session.LifecycleNeedsInput || cur.NeedsInput == nil {
+			t.Fatalf("helper with an aged question after boot = (%s, needs_input %v), want needs_input — "+
+				"C2: a helper question does not expire and does not park (fail) its helper", cur.State, cur.NeedsInput)
+		}
+		if cur.Generation != rec.Generation {
+			t.Fatalf("helper generation after boot = %d, want %d — an aged question must not dispatch a run or mint a generation",
+				cur.Generation, rec.Generation)
+		}
+		assertGoalActive(t, goalID, "aged question boot sweep")
 	})
 }
