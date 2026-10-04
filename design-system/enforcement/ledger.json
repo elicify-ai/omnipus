@@ -4935,6 +4935,27 @@
       "syntax": "MockAttachmentRemove#className",
       "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
       "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/RunningIndicator.tsx",
+      "syntax": "RunningIndicator#className",
+      "reason": "Category: caller pass-through — migration plan §5. RunningIndicator's own destructured prop `className` is forwarded unmodified to the root span's className via clsx('…', className) in src/components/ui/RunningIndicator.tsx — no transformation, conditional replacement, or non-forwarding read. Same registered category as AutoSaveIndicator#className; new-domain-component registration mirroring src/components/chat/composer/TokenCounter.tsx's className prop.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/RunningIndicator.tsx",
+      "syntax": "RunningIndicator#className",
+      "reason": "Category: caller pass-through — migration plan §5. RunningIndicator's own destructured prop `className` is forwarded unmodified to the root span's className via clsx('…', className) in src/components/ui/RunningIndicator.tsx — no transformation, conditional replacement, or non-forwarding read. Same registered category as AutoSaveIndicator#className; new-domain-component registration mirroring src/components/chat/composer/TokenCounter.tsx's className prop.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/RunningIndicator.tsx",
+      "syntax": "RunningIndicator#className",
+      "reason": "Category: caller pass-through — migration plan §5. RunningIndicator's own destructured prop `className` is forwarded unmodified to the root span's className via clsx('…', className) in src/components/ui/RunningIndicator.tsx — no transformation, conditional replacement, or non-forwarding read. Same registered category as AutoSaveIndicator#className; new-domain-component registration mirroring src/components/chat/composer/TokenCounter.tsx's className prop.",
+      "owner": "caller pass-through exception registry"
     }
   ],
   "reviewedBoundaries": [
@@ -8192,6 +8213,11 @@
       "path": "src/components/ui/zoomable-view.stories.tsx",
       "kind": "story",
       "reason": "Storybook story file (exact .stories.js|jsx|ts|tsx suffix). Consumed only by the .storybook/main.ts glob, never by the production import graph (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/ui/RunningIndicator.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Finding is the direct import of the domain component under test (controls/shadcn-low-level-import resolves '@/components/ui/RunningIndicator' to a src/components/ui path) — domain components are deliberately not in the public barrel, so the test must import the source module; mirrors AutoSaveIndicator.test.tsx's registered import. Test-only styling debt never ships; the file renders no raw controls."
     }
   ]
 }
