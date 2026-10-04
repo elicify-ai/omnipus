@@ -231,6 +231,29 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		notice("load:"+id, fmt.Sprintf("steered session %s refused at boot: %v", id, err))
 		return
 	}
+	// ADR-20260928 D1.8 (T14/T19): the expiry check runs BEFORE the stop
+	// arms, because both of them return for a stopped record — the
+	// stopped-notice replay (stopped_notice.go::recoverStoppedChildNotice
+	// returns true for every non-terminal stopped record) and the fence arm
+	// after it — so an expiry evaluated only after them is unreachable and a
+	// stop protects a question whose ORIGINAL deadline has already passed.
+	// A stopped asker with a still-LIVE question is untouched here and keeps
+	// the stop arms below unchanged; when it IS expired, its landed stop's
+	// direct-parent notice (D6) is still replayed first — the ledger history
+	// is owed for that transition regardless of what the boot then does to
+	// the record (needs_input keeps its own flow: no stop arm reaches it, so
+	// no notice is replayed for it).
+	if rec.State == session.LifecycleNeedsInput || rec.State == session.LifecycleStopped {
+		if q, hasOpen := r.openPendingQuestion(rec, notice); hasOpen && q.Expired(time.Now()) {
+			if rec.State == session.LifecycleStopped {
+				if _, replayErr := r.replayLandedStopNotices(ctx, rec); replayErr != nil {
+					r.reportStoppedNotice(rec, notice, replayErr)
+				}
+			}
+			r.expireQuestion(ctx, rec, q, notice)
+			return
+		}
+	}
 	// Stopped-child notices retry from the control ledger's LANDED history
 	// (stopped_notice.go::recoverStoppedChildNotice) — including after a
 	// same-generation RESUME cleared the active note (founder Q2=A). A stored
