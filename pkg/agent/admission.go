@@ -545,6 +545,11 @@ func (al *AgentLoop) drainSteerQueue(claim executionClaim) {
 			// check is not blocked forever on a worker that will never run.
 			logger.WarnCF("agent", "steer: drain queue: dispatch of the next queued session failed — landing it terminal so its parent is not blocked forever",
 				map[string]any{"session_id": next.sessionID, "generation": next.generation, "error": err.Error()})
+			// Failed promotion is an admission-identity failure, not a stop
+			// landing. The claim-bound writer keeps the queued run's identity;
+			// a generation-only terminal report could land the failure on a
+			// later same-generation owner. The promotion goroutine has no
+			// caller, so the returned error is logged rather than dropped.
 			if reportErr := al.reportSteeredExecutionFailure(context.Background(), next.executionClaim(), fmt.Sprintf("dispatch_failed: %v", err)); reportErr != nil {
 				logger.ErrorCF("agent", "steer: promoted admission failure remains pending",
 					map[string]any{"session_id": next.sessionID, "run_id": next.runID, "error": reportErr.Error()})

@@ -218,6 +218,16 @@ type LifecycleRecord struct {
 	// record has never landed LifecycleStopped for any generation.
 	// persistLocked requires it non-nil whenever State == LifecycleStopped.
 	StopNote *StopNote `json:"stop_note,omitempty"`
+	// StopEffect is the lifecycle-internal stop targeting metadata (D2
+	// round-4 R4-MAJ-001): which accepted control this stop is and which
+	// execution it selected, written in the SAME mutation as the fence and
+	// the note. An explicit RESUME clears it atomically with the note (D2
+	// CRIT-001); a landing retains it so the landing half can append the
+	// landed-stop history to the control ledger. Internal storage only —
+	// not part of the generated SessionLifecycleRecord schema, like
+	// FinalDelivery (see StopEffect's own doc comment in
+	// lifecycle_control_ledger_writer.go).
+	StopEffect *StopEffect `json:"stop_effect,omitempty"`
 
 	// ExecutionID is the execution identity of the admission that most
 	// recently entered this session (D2 round-4 R4-MAJ-001): stamped by the
@@ -689,6 +699,12 @@ func validateLifecycleRecordForPersist(rec *LifecycleRecord) error {
 	}
 	if rec.FinalDelivery != nil && rec.ExecutionID != nil && rec.FinalDelivery.CommitID != rec.ExecutionID.RunID {
 		return fmt.Errorf("session: lifecycle: final_delivery.commit_id %q must equal the producing run_id %q", rec.FinalDelivery.CommitID, rec.ExecutionID.RunID)
+	}
+	// ADR-20260928 D2: the stop-effect metadata names the accepted control
+	// whose fence/note this record carries. An anonymous effect could never
+	// be matched back to its ledger intent, so the control id is required.
+	if rec.StopEffect != nil && rec.StopEffect.ControlID == "" {
+		return fmt.Errorf("session: lifecycle: stop_effect requires control_id")
 	}
 	// ADR-20260928 D2 CRIT-001: the protected final-delivery tuple exists only
 	// on the terminal commit that produced it — never on a non-terminal or
