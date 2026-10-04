@@ -14,11 +14,13 @@
 // Deliberately does NOT own picker-only concerns: auto-select-first-agent,
 // the agentSelectorOpen latch reset, and the error/all-draft branch UI all
 // stay in AgentPicker, which is the sole side-effect writer to the session
-// store on mount — a second writer here would race it.
+// store on mount — a second writer here would race it. It does read the
+// open flag below, only as the moment to refresh team membership.
 
 import { useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { queryClient } from '@/lib/queryClient'
+import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchAgents, fetchWorkspaces, isWorker, workspacesQueryKeys } from '@/lib/api'
 import type { Agent, Workspace } from '@/lib/api'
@@ -70,6 +72,7 @@ export function useChatAgents(): UseChatAgentsResult {
   // Scope to the active workspace's core_team — same query AgentPicker
   // always ran (moved here verbatim).
   const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
+  const pickerOpen = useUiStore((s) => s.agentSelectorOpen)
   const { data: workspaces = EMPTY_WORKSPACES } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
@@ -82,6 +85,8 @@ export function useChatAgents(): UseChatAgentsResult {
   // Focus recovery and agent_created both refresh ['agents'], but team
   // membership can change separately. Refresh the workspace query too, even
   // when structural sharing preserves the same agents array after a refetch.
+  // That refresh is too early for a membership PUT that lands AFTER
+  // agent_created: the team list is read again when the picker opens.
   useEffect(() => {
     if (activeWorkspaceId && agentsUpdatedAt > 0) {
       void queryClient.invalidateQueries({
@@ -89,6 +94,13 @@ export function useChatAgents(): UseChatAgentsResult {
       })
     }
   }, [activeWorkspaceId, agentsUpdatedAt])
+
+  useEffect(() => {
+    if (!activeWorkspaceId || !pickerOpen) return
+    void queryClient.invalidateQueries({
+      queryKey: workspacesQueryKeys.list({ status: 'active' }),
+    })
+  }, [activeWorkspaceId, pickerOpen])
 
   // Fix 10: memoize the filter chain. This hook is shared (AgentPicker AND
   // the "@" mention menu both call it), and consumers put `chatAgents` in
