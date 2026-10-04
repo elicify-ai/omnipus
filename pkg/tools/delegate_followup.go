@@ -174,28 +174,7 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// terminal.
 	// ADR-093 D4: a terminal record, stopped or not, takes this same revive.
 	if rec.Terminal() || rec.State == session.LifecycleStopped {
-		if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
-			return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
-		}
-		reviver, ok := t.steering.(steerReviver)
-		if !ok {
-			return ErrorResult(fmt.Sprintf("delegate: steer: session %s is stopped and cannot be revived: no reviver configured", sessionID))
-		}
-		revived, rerr := reviver.ReviveStoppedSession(ctx, sessionID, by, text)
-		if rerr != nil {
-			return ErrorResult(fmt.Sprintf("delegate: steer: revive stopped session %s: %v", sessionID, rerr)).WithError(rerr)
-		}
-		if !revived {
-			return ErrorResult(fmt.Sprintf("delegate: steer: session %s could not be revived", sessionID))
-		}
-		if rec.Terminal() {
-			return NewToolResult(fmt.Sprintf(
-				"Session %s had finished; the steering message started its next round.", sessionID,
-			))
-		}
-		return NewToolResult(fmt.Sprintf(
-			"Session %s was stopped; the steering message resumed it on the same conversation.", sessionID,
-		))
+		return t.steerReviveStopped(ctx, sessionID, by, text, rec.Terminal())
 	}
 
 	// A current-generation fence that has NOT yet landed (state still
@@ -282,23 +261,7 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	}
 
 	if stoppedInRace {
-		if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
-			return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
-		}
-		reviver, ok := t.steering.(steerReviver)
-		if !ok {
-			return ErrorResult(fmt.Sprintf("delegate: steer: session %s is stopped and cannot be revived: no reviver configured", sessionID))
-		}
-		revived, rerr := reviver.ReviveStoppedSession(ctx, sessionID, by, text)
-		if rerr != nil {
-			return ErrorResult(fmt.Sprintf("delegate: steer: revive stopped session %s: %v", sessionID, rerr)).WithError(rerr)
-		}
-		if !revived {
-			return ErrorResult(fmt.Sprintf("delegate: steer: session %s could not be revived", sessionID))
-		}
-		return NewToolResult(fmt.Sprintf(
-			"Session %s was stopped; the steering message resumed it on the same conversation.", sessionID,
-		))
+		return t.steerReviveStopped(ctx, sessionID, by, text, false)
 	}
 
 	if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
@@ -333,6 +296,42 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	return NewToolResult(fmt.Sprintf(
 		"Steering message queued for session %s (correlation_id=%s); it will apply at the child's next tool boundary.",
 		sessionID, resolvedCorrelationID,
+	))
+}
+
+// steerReviveStopped is the shared mechanics of executeSteer's two
+// landed-stopped revive shapes — the plain-Load branch that observed
+// Terminal() or LifecycleStopped, and the stoppedInRace shape the Mutate
+// closure signals out — which were line-for-line identical apart from the
+// final message. It runs the steer caps check first (a rejected steer must
+// be visible to the parent, never silently dropped), then revives the
+// session through ReviveStoppedSession with the steering message as the new
+// instruction, and reports the outcome. nextRound is true only for a record
+// that was already terminal (the message starts its next round); the
+// stoppedInRace shape is always a stopped resume. Behaviour and result
+// texts are exactly the two branches' own.
+func (t *DelegateTool) steerReviveStopped(ctx context.Context, sessionID string, by steer.Principal, text string, nextRound bool) *ToolResult {
+	if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
+	}
+	reviver, ok := t.steering.(steerReviver)
+	if !ok {
+		return ErrorResult(fmt.Sprintf("delegate: steer: session %s is stopped and cannot be revived: no reviver configured", sessionID))
+	}
+	revived, rerr := reviver.ReviveStoppedSession(ctx, sessionID, by, text)
+	if rerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: steer: revive stopped session %s: %v", sessionID, rerr)).WithError(rerr)
+	}
+	if !revived {
+		return ErrorResult(fmt.Sprintf("delegate: steer: session %s could not be revived", sessionID))
+	}
+	if nextRound {
+		return NewToolResult(fmt.Sprintf(
+			"Session %s had finished; the steering message started its next round.", sessionID,
+		))
+	}
+	return NewToolResult(fmt.Sprintf(
+		"Session %s was stopped; the steering message resumed it on the same conversation.", sessionID,
 	))
 }
 
