@@ -446,7 +446,9 @@ func (rc *agentLoopRequestCancel) claimOrArm() (CancelOutcome, error, bool) {
 	// unconditionally; a session with no pending set is a cheap no-op. ---
 	rc.al.cancelPendingAskForScope(rc.sessionID)
 	if rc.scope.TurnOnly {
-		rc.al.steerAdmission().removeQueued(rc.sessionID, rc.scope.Generation)
+		if err := rc.removeSelectedStopAdmission(); err != nil {
+			return CancelOutcome{}, err, true
+		}
 		// Parked/queued sessions have no live turn, but their approvals still
 		// belong to this Stop. The gateway hook matches only this exact ID.
 		if rc.hooks.CancelPendingApprovals != nil {

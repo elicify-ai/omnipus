@@ -191,7 +191,15 @@ func (al *AgentLoop) commitSteeredCompletion(
 				// turn is carrying the stop out, so this completion lands it
 				// (fence spent, lasting note kept) — the refuser here would
 				// strand a running+fenced record with no live turn left to
-				// land it.
+				// land it. A selected effect names one execution; a claim for
+				// any other run does not get to spend that fence.
+				if cur.StopEffect != nil && cur.StopEffect.Target.Selected() {
+					target := cur.StopEffect.Target
+					if cur.StopEffect.ControlID == "" || claim.RunID != target.RunID || claim.BootSeq != target.BootSeq || claim.Generation != target.Generation {
+						res.kind = steeredCommitRefused
+						return errCompleteStaleExecution
+					}
+				}
 				res.kind = steeredCommitStopped
 				res.landedStop = true
 				if err := landSteeredStopLocked(cur, outcome); err != nil {

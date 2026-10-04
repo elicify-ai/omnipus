@@ -17,7 +17,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -57,25 +56,23 @@ type RevivalStateWriter func(ctx context.Context, sessionID string, generation i
 // SteerGenerationCancel adapts the active-turn registry to the durable
 // generation-aware cancellation contract used by SteerCanceller.
 func (al *AgentLoop) SteerGenerationCancel(ctx context.Context, sessionID string, generation int) (GenerationCancelResult, error) {
-	// [Finding 4, ADR-091 fix lane 2] This is the ONE cancelTurn callback the
-	// cascade invokes for every reached (stamped) session — a human's Stop
-	// (websocket_cancel.go/rest_sessions.go, always via CancelSubtree) and
-	// the agent's own hard delegate(cancel) alike. admission.go::
-	// removeQueuedSession exists so a cancelled worker stops counting toward
-	// queue positions reported to a model and shown in the side panel; before
-	// this it was called only from the agent's own soft/hard cancel
-	// (steer_delegate_cancel.go), never from a human's Stop. Draining here —
-	// inside the cascade's per-node step, not one caller — covers both
-	// without a second call site, and is a harmless no-op for a session that
-	// was never queued.
-	al.steerAdmission().removeQueuedSession(sessionID)
-
-	ok, reason := al.requestCancelForGeneration(sessionID, generation)
-	if ok {
-		return GenerationCancelResult{Found: true, Cancelled: true}, nil
+	// The callback receives the generation the cascade stamped. The selected
+	// execution is the stop effect captured at acceptance, not whatever
+	// admission now occupies this session. Removal and the live abort run
+	// after this lookup, and neither holds the lifecycle lock across the abort.
+	effects, err := al.stopEffectsForCallback(sessionID, generation)
+	if err != nil {
+		return GenerationCancelResult{}, err
 	}
-	if strings.HasPrefix(reason, "stale generation:") {
-		return GenerationCancelResult{Found: true, SkippedNewerGeneration: true}, nil
+	al.removeQueuedStopEffects(sessionID, effects)
+
+	ts := al.getActiveTurnState(sessionID)
+	if ts != nil {
+		if !liveTurnMatchesStop(ts, effects) {
+			return GenerationCancelResult{Found: true, SkippedNewerGeneration: true}, nil
+		}
+		ts.requestHardAbort()
+		return GenerationCancelResult{Found: true, Cancelled: true}, nil
 	}
 	// [Finding 5, ADR-091 fix lane 2] No live turn was found for this
 	// stamped session — it was only ever queued or parked and never ran a
@@ -453,7 +450,14 @@ func (c *SteerCanceller) cascade(
 
 	lock := c.cascadeLock(sessionID)
 	lock.Lock()
-	defer lock.Unlock()
+	held := true
+	unlock := func() {
+		if held {
+			lock.Unlock()
+			held = false
+		}
+	}
+	defer unlock()
 
 	stamped := make(map[string]int)
 	seen := make(map[string]struct{})
@@ -505,10 +509,13 @@ func (c *SteerCanceller) cascade(
 	}
 	process([]string{sessionID}, session.StopCauseStop)
 	process(first, session.StopCauseCascade)
+	unlock()
 	fireLiveCancels()
 	if !subtree {
 		return report, nil
 	}
+	lock.Lock()
+	held = true
 
 	second, secondErr := CollectDescendantSessionIDs(c.Lifecycle, sessionID)
 	if secondErr != nil {
@@ -516,6 +523,7 @@ func (c *SteerCanceller) cascade(
 	}
 	lateStart := len(stamped)
 	process(second, session.StopCauseCascade)
+	unlock()
 	if len(stamped) > lateStart {
 		fireLiveCancels()
 	}

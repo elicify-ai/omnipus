@@ -2,7 +2,12 @@
 
 package agent
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/elicify-ai/omnipus/pkg/session"
+)
 
 // activeTurnForCancel keeps legacy routing-root cancellation separate from a
 // Stop targeting a session's own turn. ScopeSelfOnly with a raw root ID is not
@@ -63,6 +68,24 @@ func (ts *turnState) claimCancel(stopOnly bool) bool {
 	}
 	ts.cancelFired.Store(true)
 	return true
+}
+
+// removeSelectedStopAdmission drops only the queued admission named by the
+// stop effect this TurnOnly Stop accepted. A missing record is an ordinary
+// chat with nothing in the steer queue. Any other lookup failure is returned.
+func (rc *agentLoopRequestCancel) removeSelectedStopAdmission() error {
+	if rc.al.GetSessionLifecycleStore() == nil || rc.sessionID == "" {
+		return nil
+	}
+	effects, err := rc.al.stopEffectsForCallback(rc.sessionID, rc.scope.Generation)
+	if err != nil {
+		if errors.Is(err, session.ErrLifecycleNotFound) {
+			return nil
+		}
+		return err
+	}
+	rc.al.removeQueuedStopEffects(rc.sessionID, effects)
+	return nil
 }
 
 func (rc *agentLoopRequestCancel) claimActiveTurn() bool {

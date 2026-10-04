@@ -285,11 +285,15 @@ func (s *LifecycleStore) AcceptStopControl(
 		return 0, ControlGrant{}, generation, err
 	}
 	grant := ControlGrant{Seq: highWater + 1, ControlID: controlID}
-	// The execution-identity capture point (D2 round-4 R4-MAJ-001): the
-	// target the stop selected, read under the same lock that stamps it.
-	// Until the runtime identity carrier integrates, Exec/RunID are honestly
-	// absent and BootSeq is 0 (never fabricated) — only Generation is real.
+	// The execution the stop selected, copied under this same lock from the
+	// admission already stamped on the record. Exec stays unset: nothing here
+	// mints a second id. An unadmitted record keeps an empty run and a zero
+	// boot sequence — those are not filled from the generation.
 	target := StopEffectTarget{Generation: generation}
+	if cur.ExecutionID != nil && cur.ExecutionID.RunID != "" && cur.ExecutionID.BootSeq != 0 {
+		target.RunID = cur.ExecutionID.RunID
+		target.BootSeq = cur.ExecutionID.BootSeq
+	}
 	line := controlLedgerLine{
 		Seq:        grant.Seq,
 		ControlID:  grant.ControlID,

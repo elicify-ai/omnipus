@@ -74,12 +74,20 @@ func (al *AgentLoop) cancelDelegatedSubtree(sessionID string, by steer.Principal
 		return nil, fmt.Errorf("steer: delegate cancel %q: %w", sessionID, err)
 	}
 
-	gate := al.steerAdmission()
 	for _, id := range report.Reached {
-		// A stamped session must not stay in the start queue — see
-		// admission.go::removeQueuedSession for why this matters even though
-		// reserveDispatch would refuse the promotion.
-		gate.removeQueuedSession(id)
+		// The cascade already stamped this id. Remove only the admission that
+		// stamp selected. A later same-generation replacement stays queued.
+		// Soft Stop does not run the live callback, so this loop is its only
+		// removal; a hard Stop's callback removes the same claim first.
+		rec, loadErr := al.GetSessionLifecycleStore().Load(id)
+		if loadErr != nil {
+			return nil, fmt.Errorf("steer: delegate cancel %q: selected stop effect: %w", id, loadErr)
+		}
+		effects, effectErr := al.stopEffectsForCallback(id, rec.Generation)
+		if effectErr != nil {
+			return nil, fmt.Errorf("steer: delegate cancel %q: selected stop effect: %w", id, effectErr)
+		}
+		al.removeQueuedStopEffects(id, effects)
 		if hard {
 			continue
 		}
