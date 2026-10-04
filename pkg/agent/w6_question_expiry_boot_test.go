@@ -542,6 +542,53 @@ func TestW6QuestionExpiryBoot_StoppedAsker(t *testing.T) {
 		w6qeStopChild(t, al, child.SessionID)
 
 		lc, inbox := w6qeReopen(t, al)
+
+		// The oracle absorbs a verified production fact instead of denying
+		// it: stopping a never-ran steered child runs
+		// steer_cancel.go::terminaliseNeverRanStop, whose interrupted report
+		// goes through completionMessage — fatal for every outcome except a
+		// lifecycle notice. The stop therefore writes EXACTLY ONE fatal
+		// parent-inbox entry, its own interrupted notice, at Stop time,
+		// BEFORE any boot. Zero fatals is unsatisfiable; the control pins
+		// that one notice as the baseline and demands boot adds nothing.
+		// (Exact text: the shared helper matches a Contains phrase; the stop
+		// notice is asserted with equality.)
+		const stopInterruptedText = "interrupted: the session was cancelled"
+		stopNoticeFatals := func() int {
+			t.Helper()
+			entries, err := inbox.Entries(parent.SessionID)
+			if err != nil {
+				t.Fatalf("Inbox.Entries(%s): %v", parent.SessionID, err)
+			}
+			count := 0
+			for _, entry := range entries {
+				if entry.Kind != session.InboxEntryMessage || entry.Message == nil {
+					continue
+				}
+				kind, kerr := entry.Message.Discriminator()
+				if kerr != nil || kind != "error" {
+					continue
+				}
+				e, aerr := entry.Message.AsSessionMessageError()
+				if aerr != nil || !e.Fatal || e.SessionId != child.SessionID || e.Text != stopInterruptedText {
+					continue
+				}
+				count++
+			}
+			return count
+		}
+
+		// Gate BEFORE boot: exactly one fatal — the stop's own notice. Any
+		// other count means the Stop path or this setup changed under the
+		// oracle; stop and report the actual counts rather than re-baseline.
+		beforeStopNotice := stopNoticeFatals()
+		beforeTotal := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, "")
+		if beforeStopNotice != 1 || beforeTotal != 1 {
+			t.Fatalf("before-boot inbox holds %d fatal(s) whose text is exactly %q and %d fatal(s) in total, want 1 and 1 — "+
+				"the stop's own interrupted notice must be the ONLY fatal the Stop wrote; refusing to loosen the oracle",
+				beforeStopNotice, stopInterruptedText, beforeTotal)
+		}
+
 		var notices []string
 		recovery := w6qeBootRecovery(t, al, lc, inbox, &notices)
 		if err := recovery.Run(context.Background()); err != nil {
@@ -556,8 +603,21 @@ func TestW6QuestionExpiryBoot_StoppedAsker(t *testing.T) {
 		if after.Generation != generation {
 			t.Fatalf("control generation after boot = %d, want %d", after.Generation, generation)
 		}
-		if fatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, ""); fatals != 0 {
-			t.Fatalf("control produced %d fatal error notices — a live stopped question must produce none", fatals)
+		// Boot must add NOTHING to the fatal set: the stop's own notice
+		// stays exactly one, total fatals stay exactly one, and the D1.8
+		// owner-unreachable expiry text never appears — a LIVE stopped
+		// question is never expired at boot.
+		if afterStopNotice := stopNoticeFatals(); afterStopNotice != 1 {
+			t.Fatalf("after boot %d fatal(s) carry exactly %q, want exactly 1 — boot must not touch the stop's own notice",
+				afterStopNotice, stopInterruptedText)
+		}
+		if fatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, ""); fatals != 1 {
+			t.Fatalf("control holds %d fatal error notices after boot, want exactly 1 (the stop's own interrupted notice) — "+
+				"a boot that adds fatal notices to a live stopped question is a generic failure, not D1.8 expiry", fatals)
+		}
+		if ownerFatals := w6qeCountFatalErrors(t, inbox, parent.SessionID, child.SessionID, w6qeOwnerUnreachableText); ownerFatals != 0 {
+			t.Fatalf("control produced %d %q fatal notices — a LIVE stopped question must never be expired at boot (D1.8/T14/T19)",
+				ownerFatals, w6qeOwnerUnreachableText)
 		}
 		afterQ := w6qeMustQuestion(t, lc, child.SessionID)
 		if afterQ.Status != session.QuestionStatusOpen || !afterQ.Answerable() || !afterQ.OriginalDeadline.Equal(deadline) {
