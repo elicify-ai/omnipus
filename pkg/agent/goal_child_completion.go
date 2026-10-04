@@ -192,7 +192,6 @@ func (al *AgentLoop) deliverGoalParkUpward(sessionID string, blocked bool, text 
 	}
 	now := time.Now().UTC()
 	parent := rec.SteeredBy.SteeringSessionID
-	authority := generated.SessionMessageQuestionAuthority("owner_required")
 	var (
 		message generated.SessionMessage
 		outcome steer.Outcome
@@ -212,6 +211,9 @@ func (al *AgentLoop) deliverGoalParkUpward(sessionID string, blocked bool, text 
 			Severity:        generated.SessionMessageBlockerSeverityMedium,
 		})
 	} else {
+		// ADR-20261004 (locked decision 6): a question is an ordinary upward
+		// message — no wait, no authority, no park. The parent replies
+		// through ordinary steering.
 		outcome = steer.OutcomeParkedQuestion
 		berr = message.FromSessionMessageQuestion(generated.SessionMessageQuestion{
 			MessageId:       uuid.NewString(),
@@ -222,9 +224,7 @@ func (al *AgentLoop) deliverGoalParkUpward(sessionID string, blocked bool, text 
 			UntrustedOrigin: true,
 			SenderIdentity:  rec.AgentID,
 			Text:            text,
-			Wait:            true,
 			CorrelationId:   uuid.NewString(),
-			Authority:       &authority,
 		})
 	}
 	if berr != nil {

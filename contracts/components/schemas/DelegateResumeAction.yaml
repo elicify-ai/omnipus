@@ -1,0 +1,31 @@
+type: object
+title: DelegateResumeAction
+description: >
+  `delegate` tool call, `action: resume` (ADR-20261004, locked decision 4
+  — renamed from `follow_up` with no alias path). Continues a stopped
+  helper on the same conversation and the same generation, or starts the
+  next round when the helper is done or failed. Native: warm resume of
+  the SAME session; a terminal continuation mints a new `generation` via
+  `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7). 3P: cold —
+  spawns a new session carrying the prior result (external CLIs have no
+  warm-resume primitive).
+required:
+  - action
+  - session_id
+additionalProperties: false
+properties:
+  action:
+    type: string
+    enum:
+      - resume
+    example: "resume"
+  session_id:
+    type: string
+    minLength: 1
+    description: The stopped or finished child session to resume.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  text:
+    type: string
+    maxLength: 10000
+    description: Optional additional instructions for the resumed/next round.
+    example: "Also cross-check the anomalies against last month's baseline."

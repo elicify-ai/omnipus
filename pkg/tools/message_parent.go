@@ -29,8 +29,10 @@ import (
 
 // MessageParentLifecycleStore is the subset of *session.LifecycleStore
 // message_parent needs: reading the CALLING child's own durable record (to
-// resolve its parent/owner scope) and parking it in needs_input for a
-// wait=true question.
+// resolve its parent/owner scope). ADR-20261004 ("Steering commands: no
+// person question", locked decision 6) removed the person-question pause:
+// message_parent never parks the calling child, so the park/needs_input
+// mutation surface is gone from this interface.
 //
 // delegate.go's DelegateTool also declares its own lifecycle field with this
 // exact type (rather than a second, narrower interface) so both tools share
@@ -40,30 +42,21 @@ type MessageParentLifecycleStore interface {
 	Persist(rec *session.LifecycleRecord) error
 	Lock(sessionID string) *sync.Mutex
 	// Mutate is the atomic read-modify-write primitive (Correctness-MAJOR-3).
-	// parkNeedsInput routes through it so the park transition holds the
-	// per-session striped lock across the whole tail→decide→write RMW.
 	Mutate(sessionID string, fn func(*session.LifecycleRecord) error) error
-	// HasNeedsInputRecord reports whether the lifecycle history contains a
-	// persisted needs_input record for the exact park identity — the durable
-	// evidence that a park landed (ADR-20260928 D1.5/D1.7). Signature-
-	// identical to *session.LifecycleStore.HasNeedsInputRecord, so a real
-	// store satisfies it trivially and every test fake that embeds
-	// *session.LifecycleStore inherits it for free.
-	HasNeedsInputRecord(sessionID string, generation int, correlationID string, deadline time.Time) (bool, error)
 	// List returns every LifecycleRecord matching filter — signature-
 	// identical to *session.LifecycleStore.List, so a real store satisfies
 	// this trivially and every existing test fake that embeds
 	// *session.LifecycleStore (callCountingLifecycleStore,
 	// fix6FaultyLifecycleStore) inherits it for free.
 	//
-	// ADR-057 D8/R-13: delegate.go's executeCancel uses this to walk the
-	// durable SteeringSessionID edge from the cancel target down to its own
+	// ADR-057 D8/R-13: delegate.go's executeStopAll uses this to walk the
+	// durable SteeringSessionID edge from the stop target down to its own
 	// descendants (collectCancelDescendantSessionIDs, delegate.go) so the
 	// background-shell-kill cascade reaches a grandchild's own background
 	// bash/exec work, not just the directly-named session's. Before this,
 	// killChildBackgroundShells only ever killed the ONE named session's
 	// shells — a live leak the UAT gap-closure report (2026-08-03) proved
-	// against a real jim->ray->worker chain: cancelling ray left worker's
+	// against a real jim->ray->worker chain: stopping ray left worker's
 	// detached background HTTP server running for minutes.
 	List(filter session.LifecycleFilter) ([]session.LifecycleRecord, error)
 }
@@ -157,8 +150,7 @@ type MessageParentTool struct {
 	sessionMessagingEnabled func() bool
 	sessionMessagingWired   atomic.Bool
 
-	needsInputTTL time.Duration
-	now           func() time.Time
+	now func() time.Time
 }
 
 // NewMessageParentTool constructs a MessageParentTool. deliverer and
@@ -175,10 +167,9 @@ type MessageParentTool struct {
 // comment for steer.UpwardDeliverer.
 func NewMessageParentTool(deliverer steer.UpwardDeliverer, lifecycle MessageParentLifecycleStore) *MessageParentTool {
 	return &MessageParentTool{
-		deliverer:     deliverer,
-		lifecycle:     lifecycle,
-		needsInputTTL: session.DefaultNeedsInputTTL,
-		now:           time.Now,
+		deliverer: deliverer,
+		lifecycle: lifecycle,
+		now:       time.Now,
 	}
 }
 
@@ -219,14 +210,6 @@ func (t *MessageParentTool) sessionMessagingPlaneEnabled() bool {
 	return t.sessionMessagingEnabled()
 }
 
-// SetNeedsInputTTL overrides the default 24h needs_input park TTL
-// (session_messaging.needs_input_ttl, FR-195/FR-126).
-func (t *MessageParentTool) SetNeedsInputTTL(d time.Duration) {
-	if d > 0 {
-		t.needsInputTTL = d
-	}
-}
-
 // SetClock overrides the tool's time source for deterministic tests.
 func (t *MessageParentTool) SetClock(now func() time.Time) {
 	if now != nil {
@@ -262,9 +245,10 @@ func (t *MessageParentTool) Description() string {
 	return "Push a typed message into your parent session's inbox. kind=\"progress\" for a lightweight " +
 		"narration line, \"checkpoint\" for a durable 1-3 sentence summary of work so far, \"artifact\" to " +
 		"report output file paths, \"blocker\" to flag something stopping progress, \"question\" to ask your " +
-		"parent something (wait=true pauses you until answered — native sessions only), or \"handback\" to " +
-		"report a final result or a cooperative pause. Every call is delivered at-least-once and deduped by " +
-		"message_id; a rejected call (rate/ceiling/size limit) always returns a clear error, never a silent drop."
+		"parent something (an ordinary message — you keep working while you wait for the reply), or " +
+		"\"handback\" to report a final result or a cooperative pause. Every call is delivered at-least-once " +
+		"and deduped by message_id; a rejected call (rate/ceiling/size limit) always returns a clear error, " +
+		"never a silent drop."
 }
 
 func (t *MessageParentTool) Scope() ToolScope       { return ScopeCore }
@@ -323,23 +307,10 @@ func (t *MessageParentTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Optional (question only): server-generated when omitted; routes the eventual answer.",
 			},
-			"wait": map[string]any{
-				"type": "boolean",
-				"description": "Required for question: true parks THIS session in needs_input awaiting an " +
-					"answer (native sessions only). false is fire-and-forget.",
-			},
-			"authority": map[string]any{
-				"type": "string",
-				"enum": []string{"self_ok", "owner_required"},
-				"description": "Optional (question only): your own assessment of whether your parent may " +
-					"answer directly (self_ok) or must escalate to the human owner (owner_required). " +
-					"Untrusted — an omitted value defaults to owner_required (fail-closed) and the runtime " +
-					"may upgrade self_ok to owner_required on its own judgment; it can never be downgraded.",
-			},
 			"mode": map[string]any{
 				"type":        "string",
 				"enum":        []string{"final", "pause"},
-				"description": "Required for handback: final (terminal) or pause (cooperative, resumable via delegate follow_up).",
+				"description": "Required for handback: final (terminal) or pause (cooperative, resumable via delegate resume).",
 			},
 			"artifacts": map[string]any{
 				"type":        "array",
@@ -414,7 +385,6 @@ type messageParentToolExecute struct {
 	parentSessionID *string
 	sm              generated.SessionMessage
 	correlationID   string
-	waitParks       bool
 	delivery        steer.Delivery
 }
 
@@ -651,31 +621,19 @@ func (mt *messageParentToolExecute) encodeMessage() (*ToolResult, bool) {
 		}
 
 	case "question":
+		// ADR-20261004 ("Steering commands: no person question", locked
+		// decision 6): a question is an ORDINARY upward message. There is no
+		// wait/authority parameter and no park — the calling child keeps
+		// working; the parent's reply arrives through ordinary steering
+		// (respond/steer), and the message/state table of that amendment's
+		// Correction C1 governs any resume effect.
 		text, ok := stringArg(mt.args, "text")
 		if !ok || strings.TrimSpace(text) == "" {
 			return ErrorResult("text is required and must be a non-empty string for kind=question"), true
 		}
-		waitRaw, present := mt.args["wait"]
-		if !present || waitRaw == nil {
-			return ErrorResult("wait is required (boolean) for kind=question"), true
-		}
-		wait, ok := waitRaw.(bool)
-		if !ok {
-			return ErrorResult("wait must be a boolean for kind=question"), true
-		}
 		mt.correlationID, _ = stringArg(mt.args, "correlation_id")
 		if strings.TrimSpace(mt.correlationID) == "" {
 			mt.correlationID = uuid.NewString()
-		}
-		// FR-131 (M3, fail-closed default): an omitted/absent authority tag
-		// defaults to owner_required. FR-139's runtime content-based upgrade
-		// (deriveQuestionAuthority — credential/spend/irreversible/
-		// out-of-scope detection) is Group F, Phase 2; this wave implements
-		// only the mandatory fail-closed default a Phase-2 caller layers the
-		// upgrade heuristic on top of.
-		authority := generated.SessionMessageQuestionAuthority("owner_required")
-		if a, ok := stringArg(mt.args, "authority"); ok && a == "self_ok" {
-			authority = generated.SessionMessageQuestionAuthority("self_ok")
 		}
 		v := generated.SessionMessageQuestion{
 			MessageId:       mt.messageID,
@@ -686,14 +644,11 @@ func (mt *messageParentToolExecute) encodeMessage() (*ToolResult, bool) {
 			UntrustedOrigin: true,
 			SenderIdentity:  mt.rec.AgentID,
 			Text:            mt.t.filterText(text),
-			Wait:            wait,
 			CorrelationId:   mt.correlationID,
-			Authority:       &authority,
 		}
 		if encodeErr := mt.sm.FromSessionMessageQuestion(v); encodeErr != nil {
 			return ErrorResult(fmt.Sprintf("message_parent: encode question: %v", encodeErr)), true
 		}
-		mt.waitParks = wait
 
 	case "handback":
 		mode, _ := stringArg(mt.args, "mode")
@@ -757,21 +712,6 @@ func (mt *messageParentToolExecute) finishDelivery() *ToolResult {
 		return ErrorResult(fmt.Sprintf("message_parent: %v", mt.err)).WithError(mt.err)
 	}
 
-	if mt.waitParks {
-		authority := session.QuestionAuthorityOwnerRequired
-		if a, ok := stringArg(mt.args, "authority"); ok && a == session.QuestionAuthoritySelfOK {
-			authority = session.QuestionAuthoritySelfOK
-		}
-		if perr := mt.t.parkNeedsInput(mt.childSessionID, mt.correlationID, authority, mt.now); perr != nil {
-			// The sidecar OPEN record is appended inside park's Mutate
-			// callback before the lifecycle persist (ADR-20260928 D1.5/D1.7),
-			// so this failure may have left that record behind. Name that
-			// split visibly: the record stays on disk, and the respond path
-			// refuses it as an orphan until a park for it has persisted.
-			return ErrorResult(fmt.Sprintf("message_parent: question accepted but failed to park session: %v (an unconfirmed pending-question record may have been written before the park persisted; answering it is refused until the park persists)", perr)).WithError(perr)
-		}
-	}
-
 	// The wake itself (eligibility, identity, debounce bypass) already
 	// happened inside Deliver, called from Execute above.
 	//
@@ -805,16 +745,6 @@ func (mt *messageParentToolExecute) finishDelivery() *ToolResult {
 	} else {
 		result = NewToolResult(string(payload))
 	}
-	// C2 (ADR-057 UAT 2026-08-03): signal pkg/agent/loop.go's runTurn to stop
-	// the calling child's turn NOW, immediately after this tool call's own
-	// bookkeeping — waitParks is only ever true once parkNeedsInput (above)
-	// has already succeeded, so this is reached exclusively on the genuine
-	// success path. Without this flag the in-memory turn loop has no way to
-	// learn its own session was just durably parked into needs_input and
-	// keeps iterating past it (the exact defect this fix closes).
-	if mt.waitParks {
-		result.ParksTurn = true
-	}
 	return result
 }
 
@@ -845,39 +775,6 @@ func (mt *messageParentToolExecute) reportUndeliveredWake() {
 		"generation", generation,
 		"kind", mt.kind,
 		"delivery_outcome", string(mt.delivery.Outcome))
-}
-
-// parkNeedsInput transitions the calling child's own durable record to
-// needs_input (INV-4/G-6).
-//
-// NOTE ON LOCKING (Comments-MAJOR-1 — the prior comment here was false): a
-// naked Persist over the `rec` Execute loaded earlier (at line ~304) is NOT
-// atomic — there IS a Load+Persist race window, because the unlocked work
-// between Execute's Load and this Persist (encoding the message, the inbox
-// Append, the wake) can be raced by a concurrent transition on the SAME
-// session_id (e.g. a parent cancel landing between the Load and the park),
-// and `rec` would be stale by the time it is copied here. This now routes
-// the whole transition through session.LifecycleStore.Mutate — the atomic
-// RMW primitive that holds the per-session striped lock across tail→decide→
-// write (Correctness-MAJOR-3). Mutate RE-LOADS the current tail under the
-// lock, so the park always lands against the live record, not the stale
-// snapshot Execute captured. Callers MUST NOT already hold Lock(sessionID)
-// (sync.Mutex is not reentrant — Mutate takes it once internally). The
-// honesty template is delegate.go transitionLifecycle's doc comment.
-func (t *MessageParentTool) parkNeedsInput(childSessionID, correlationID, authority string, now time.Time) error {
-	return t.lifecycle.Mutate(childSessionID, func(cur *session.LifecycleRecord) error {
-		if cur == nil {
-			return session.ErrLifecycleNotFound
-		}
-		deadline := now.Add(t.needsInputTTL)
-		cur.State = session.LifecycleNeedsInput
-		cur.NeedsInput = &session.NeedsInput{
-			CorrelationID:   correlationID,
-			Reconstructable: true, // park-time hint only (m5); boot-sweep re-derives authoritatively
-			TTLDeadline:     deadline,
-		}
-		return t.appendPendingQuestion(cur, correlationID, authority, deadline)
-	})
 }
 
 // toIntArg is the ONE integer-argument parser for this package's tool

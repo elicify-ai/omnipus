@@ -237,7 +237,6 @@ type Message = {
                 | "redirect"
                 | "resume"
                 | "respond"
-                | "escalate"
                 | "clear_goal";
               state: "queued" | "delivered" | "applied" | "superseded";
               accepted_at: string;
@@ -2686,9 +2685,7 @@ type SessionMessageQuestion = {
   sender_identity: string;
   untrusted_origin: boolean;
   text: string;
-  wait: boolean;
   correlation_id: string;
-  authority?: ("self_ok" | "owner_required") | undefined;
 };
 type SessionMessageDecisionRequest = {
   message_id: string;
@@ -2877,9 +2874,10 @@ type DelegateActionRequest =
   | DelegateInboxAckAction
   | DelegateSteerAction
   | DelegateRespondAction
-  | DelegateCancelAction
+  | DelegateStopAllAction
   | DelegateClearGoalAction
-  | DelegateFollowUpAction
+  | DelegateResumeAction
+  | DelegateRedirectAction
   | DelegatePeekAction;
 type DelegateRunAction = {
   action: "run";
@@ -2924,8 +2922,8 @@ type DelegateRespondAction = {
   text: string;
   correlation_id: string;
 };
-type DelegateCancelAction = {
-  action: "cancel";
+type DelegateStopAllAction = {
+  action: "stop_all";
   session_id: string;
   hard?: boolean | undefined;
 };
@@ -2933,10 +2931,15 @@ type DelegateClearGoalAction = {
   action: "clear_goal";
   session_id: string;
 };
-type DelegateFollowUpAction = {
-  action: "follow_up";
+type DelegateResumeAction = {
+  action: "resume";
   session_id: string;
-  task?: string | undefined;
+  text?: string | undefined;
+};
+type DelegateRedirectAction = {
+  action: "redirect";
+  session_id: string;
+  text: string;
 };
 type DelegatePeekAction = {
   action: "peek";
@@ -3101,8 +3104,6 @@ type MessageParentQuestion = {
   kind: "question";
   message_id?: string | undefined;
   text: string;
-  wait: boolean;
-  authority?: ("self_ok" | "owner_required") | undefined;
   correlation_id?: string | undefined;
 };
 type MessageParentHandback = {
@@ -3574,7 +3575,6 @@ export const Message: z.ZodType<Message> = z.object({
             "redirect",
             "resume",
             "respond",
-            "escalate",
             "clear_goal",
           ]),
           state: z.enum(["queued", "delivered", "applied", "superseded"]),
@@ -7028,9 +7028,7 @@ export const SessionMessageQuestion =
     sender_identity: z.string().min(1),
     untrusted_origin: z.boolean(),
     text: z.string().max(32768),
-    wait: z.boolean(),
     correlation_id: z.string().min(1),
-    authority: z.enum(["self_ok", "owner_required"]).optional(),
   }) satisfies z.ZodType<SessionMessageQuestion>;
 export const SessionMessageDecisionRequest =
   z.object({
@@ -7373,19 +7371,26 @@ export const DelegateRespondAction = z.object(
     correlation_id: z.string().min(1),
   }
 ) satisfies z.ZodType<DelegateRespondAction>;
-export const DelegateCancelAction = z.object({
-  action: z.literal("cancel"),
-  session_id: z.string().min(1),
-  hard: z.boolean().optional(),
-}) satisfies z.ZodType<DelegateCancelAction>;
+export const DelegateStopAllAction = z.object(
+  {
+    action: z.literal("stop_all"),
+    session_id: z.string().min(1),
+    hard: z.boolean().optional(),
+  }
+) satisfies z.ZodType<DelegateStopAllAction>;
 export const DelegateClearGoalAction =
   z.object({ action: z.literal("clear_goal"), session_id: z.string().min(1) }) satisfies z.ZodType<DelegateClearGoalAction>;
-export const DelegateFollowUpAction =
+export const DelegateResumeAction = z.object({
+  action: z.literal("resume"),
+  session_id: z.string().min(1),
+  text: z.string().max(10000).optional(),
+}) satisfies z.ZodType<DelegateResumeAction>;
+export const DelegateRedirectAction =
   z.object({
-    action: z.literal("follow_up"),
+    action: z.literal("redirect"),
     session_id: z.string().min(1),
-    task: z.string().max(10000).optional(),
-  }) satisfies z.ZodType<DelegateFollowUpAction>;
+    text: z.string().min(1).max(10000),
+  }) satisfies z.ZodType<DelegateRedirectAction>;
 export const DelegatePeekAction = z.object({
   action: z.literal("peek"),
   session_id: z.string().min(1),
@@ -7398,9 +7403,10 @@ export const DelegateActionRequest =
     DelegateInboxAckAction,
     DelegateSteerAction,
     DelegateRespondAction,
-    DelegateCancelAction,
+    DelegateStopAllAction,
     DelegateClearGoalAction,
-    DelegateFollowUpAction,
+    DelegateResumeAction,
+    DelegateRedirectAction,
     DelegatePeekAction,
   ]) satisfies z.ZodType<DelegateActionRequest>;
 export const DelegateSessionResponse: z.ZodType<DelegateSessionResponse> =
@@ -7502,8 +7508,6 @@ export const MessageParentQuestion = z.object(
     kind: z.literal("question"),
     message_id: z.string().optional(),
     text: z.string().min(1).max(32768),
-    wait: z.boolean(),
-    authority: z.enum(["self_ok", "owner_required"]).optional(),
     correlation_id: z.string().optional(),
   }
 ) satisfies z.ZodType<MessageParentQuestion>;
@@ -16673,7 +16677,7 @@ export const SubagentStateFrame = z
     .object({
       seq: z.number().int().min(0),
       control_id: z.string().min(1),
-      verb: z.enum(["steer", "stop", "stop_all", "redirect", "resume", "respond", "escalate", "clear_goal"]),
+      verb: z.enum(["steer", "stop", "stop_all", "redirect", "resume", "respond", "clear_goal"]),
       state: z.enum(["queued", "delivered", "applied", "superseded"]),
       accepted_at: z.string(),
       delivered_at: z.string().optional(),

@@ -16155,7 +16155,7 @@ export interface components {
         };
         /**
          * SessionMessageQuestion
-         * @description SessionMessage `oneOf` variant, `kind: question` (ADR-053 §Contract Surface, R§8.2). Child -> parent. `wait: true` parks the child in `needs_input` (native-only; 3P children never advertise this kind, D5). `authority` is child-authored but NEVER trusted at face value — the runtime's `deriveQuestionAuthority(q)` re-derives the effective authority server-side (fail-closed default `owner_required` on omission; a child can only be UPGRADED to `owner_required`, never downgraded to `self_ok`). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         * @description SessionMessage `oneOf` variant, `kind: question` (ADR-053 §Contract Surface). Child -> parent. An ordinary upward message — ADR-20261004 ("Steering commands: no person question", locked decision 6) removed the person-question pause: a question parks nothing and carries no `wait`/`authority` fields; the parent answers through ordinary steering (`respond`/`steer`), and C1's message/state table applies to any resume effect. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
          */
         SessionMessageQuestion: {
             /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WK */
@@ -16193,21 +16193,10 @@ export interface components {
              */
             text: string;
             /**
-             * @description True parks the child in `needs_input` awaiting a `respond` (native only). False is a fire-and-forget question the child does not block on.
-             * @example true
-             */
-            wait: boolean;
-            /**
              * @description Routes the eventual `respond`/`inbox_ack` back to this question. Out-of-order answers are safe (V-3/M-3).
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
              */
             correlation_id: string;
-            /**
-             * @description Child-authored authority tag. Untrusted (M3) — the runtime's `deriveQuestionAuthority(q)` is the authoritative determination; an omitted tag is treated as `owner_required` server-side (fail-closed default is NOT a schema `default:` — it is applied at the handler, per the project convention of never mixing `required` semantics with a JSON-Schema `default` on a field the server overrides).
-             * @example self_ok
-             * @enum {string}
-             */
-            authority?: "self_ok" | "owner_required";
         };
         /**
          * SessionMessageDecisionRequest
@@ -16543,7 +16532,7 @@ export interface components {
         };
         /**
          * SessionMessageRespond
-         * @description SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The runtime validator REJECTS a `respond` whose target question's derived authority is `owner_required` (R§8.2) — that rejection is a runtime business rule, not schema-expressible; this schema only shapes the request. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         * @description SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The text is delivered as an ordinary steering message; the recipient's state decides the effect (ADR-20261004 C1). The former owner-answer authority rejection was withdrawn with the person-question pause (ADR-20261004, locked decision 7). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
          */
         SessionMessageRespond: {
             /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WW */
@@ -17061,8 +17050,8 @@ export interface components {
              */
             resumed_from?: string | null;
         };
-        /** @description The `delegate` tool call's argument shape, discriminated by `action` — the ADR-053 §5.1 action set plus `clear_goal`, replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`clear_goal`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment). */
-        DelegateActionRequest: components["schemas"]["DelegateRunAction"] | components["schemas"]["DelegateStatusAction"] | components["schemas"]["DelegateInboxAction"] | components["schemas"]["DelegateInboxAckAction"] | components["schemas"]["DelegateSteerAction"] | components["schemas"]["DelegateRespondAction"] | components["schemas"]["DelegateCancelAction"] | components["schemas"]["DelegateClearGoalAction"] | components["schemas"]["DelegateFollowUpAction"] | components["schemas"]["DelegatePeekAction"];
+        /** @description The `delegate` tool call's argument shape, discriminated by `action` — the ADR-053 §5.1 action set plus `clear_goal`, replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`stop_all`/`clear_goal`/`resume`/`redirect` are control surfaces (ADR-20261004: `cancel` is renamed `stop_all` and `follow_up` is renamed `resume`, no alias path; `redirect` and `resume` are new actions). Steering is always available for a direct delegation (see ADR-053 Amendment). */
+        DelegateActionRequest: components["schemas"]["DelegateRunAction"] | components["schemas"]["DelegateStatusAction"] | components["schemas"]["DelegateInboxAction"] | components["schemas"]["DelegateInboxAckAction"] | components["schemas"]["DelegateSteerAction"] | components["schemas"]["DelegateRespondAction"] | components["schemas"]["DelegateStopAllAction"] | components["schemas"]["DelegateClearGoalAction"] | components["schemas"]["DelegateResumeAction"] | components["schemas"]["DelegateRedirectAction"] | components["schemas"]["DelegatePeekAction"];
         /**
          * DelegateRunAction
          * @description `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Steering is always available for a direct delegation — there is no longer a launch-profile choice gating it (see ADR-053 Amendment).
@@ -17214,7 +17203,7 @@ export interface components {
         };
         /**
          * DelegateRespondAction
-         * @description `delegate` tool call, `action: respond` (ADR-053 §5.1). Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe. Native: warm-resumes the SAME child session generation. 3P (external CLI): spawns a NEW corrective session (original prompt + answer folded in, D5) — never an in-place warm resume, since external CLIs have no warm-resume primitive. The runtime REJECTS a `respond` targeting a question whose derived authority is `owner_required` (R§8.2) — a business rule enforced at the handler, not schema- expressible.
+         * @description `delegate` tool call, `action: respond` (ADR-053 §5.1; ADR-20261004 locked decisions 6–7). The parent's reply to one of the child's messages, referenced by `correlation_id`; the text is delivered downward as an ordinary message, and the recipient's state decides the effect (working: into the current turn; stopped: same-generation resume; done/failed: next round). Native: warm-resumes the SAME child session generation when a resume applies. 3P (external CLI): spawns a NEW corrective session (original prompt + answer folded in, D5) — never an in-place warm resume, since external CLIs have no warm-resume primitive. The former owner-answer authority check was withdrawn with the person-question pause (ADR-20261004); a respond is an ordinary steering message, not an authenticated owner answer.
          */
         DelegateRespondAction: {
             /**
@@ -17239,22 +17228,22 @@ export interface components {
             correlation_id: string;
         };
         /**
-         * DelegateCancelAction
-         * @description `delegate` tool call, `action: cancel` (ADR-053 §5.1). `hard: false` (default) is the SOFT cooperative stop — a tool-boundary checkpoint flush inside `session_messaging.cancel_grace`. `hard: true` is the backstop `RequestCancel` fired after grace elapses (or immediately, at the parent's discretion).
+         * DelegateStopAllAction
+         * @description `delegate` tool call, `action: stop_all` (ADR-20261004, locked decision 2 — renamed from `cancel` with no alias path). Stops that helper and every helper under it: each reached session lands `stopped`, never failed, and its parent sees a stop notice. `hard: false` (default) is the SOFT cooperative stop — a tool-boundary checkpoint flush inside `session_messaging.cancel_grace`. `hard: true` is the backstop `RequestCancel` fired after grace elapses (or immediately, at the parent's discretion).
          */
-        DelegateCancelAction: {
+        DelegateStopAllAction: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            action: "cancel";
+            action: "stop_all";
             /**
-             * @description The child session to cancel.
+             * @description The child session whose whole subtree stops.
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             session_id: string;
             /**
-             * @description False (default) — cooperative soft cancel with grace. True — immediate hard cancel, bypassing the grace window.
+             * @description False (default) — cooperative soft stop with grace. True — immediate hard stop, bypassing the grace window.
              * @example false
              */
             hard?: boolean;
@@ -17276,25 +17265,46 @@ export interface components {
             session_id: string;
         };
         /**
-         * DelegateFollowUpAction
-         * @description `delegate` tool call, `action: follow_up` (ADR-053 §5.1). Native: warm resume of the SAME session with retained context. 3P: cold — spawns a new session carrying the prior result. A terminal record is never mutated in place; this always mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7).
+         * DelegateResumeAction
+         * @description `delegate` tool call, `action: resume` (ADR-20261004, locked decision 4 — renamed from `follow_up` with no alias path). Continues a stopped helper on the same conversation and the same generation, or starts the next round when the helper is done or failed. Native: warm resume of the SAME session; a terminal continuation mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7). 3P: cold — spawns a new session carrying the prior result (external CLIs have no warm-resume primitive).
          */
-        DelegateFollowUpAction: {
+        DelegateResumeAction: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            action: "follow_up";
+            action: "resume";
             /**
-             * @description The (terminal) child session to follow up on.
+             * @description The stopped or finished child session to resume.
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             session_id: string;
             /**
-             * @description Optional additional instructions for the resumed/new session.
+             * @description Optional additional instructions for the resumed/next round.
              * @example Also cross-check the anomalies against last month's baseline.
              */
-            task?: string;
+            text?: string;
+        };
+        /**
+         * DelegateRedirectAction
+         * @description `delegate` tool call, `action: redirect` (ADR-20260928 D2, retained by ADR-20260929 ruling 8; ADR-20261004 locked decision 3). Replaces the helper's current turn with the new instruction: the running turn is stopped (single session — never a cascade; descendants keep going) and the replacement turn runs with `text`. On an already-stopped helper it resumes it with the instruction; on a done/failed helper it starts nothing — use `resume`.
+         */
+        DelegateRedirectAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "redirect";
+            /**
+             * @description The child session whose current turn is replaced.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+            /**
+             * @description The replacement instruction the new turn runs with.
+             * @example Stop refactoring — ship the current state and report back.
+             */
+            text: string;
         };
         /**
          * DelegatePeekAction
@@ -17558,7 +17568,7 @@ export interface components {
         };
         /**
          * MessageParentQuestion
-         * @description `message_parent` child tool call, `kind: question` (ADR-053 §5.1, R§8.2). `wait: true` parks the CALLING child in `needs_input` (native only — a 3P child never calls this kind, D5). `authority` is child-authored and NEVER trusted at face value — the runtime's `deriveQuestionAuthority(q)` re-derives the effective authority server-side (fail-closed default `owner_required` on omission; a child can only be UPGRADED to `owner_required`, never downgraded). Counts toward the per-child unacked ceiling (D15, max 20 open question+blocker) — payload-only, see `MessageParentProgress` for the request/record split rationale.
+         * @description `message_parent` child tool call, `kind: question` (ADR-053 §5.1). An ordinary upward message: ADR-20261004 ("Steering commands: no person question", locked decision 6) removed the person-question pause — there is no `wait`/`authority`, the calling child is never parked, and no answer expiry exists. Counts toward the per-child unacked ceiling (D15, max 20 open question+blocker) — payload-only, see `MessageParentProgress` for the request/record split rationale.
          */
         MessageParentQuestion: {
             /**
@@ -17576,17 +17586,6 @@ export interface components {
              * @example Should I overwrite the existing config.json backup?
              */
             text: string;
-            /**
-             * @description True parks the calling child in `needs_input` awaiting a `respond`.
-             * @example true
-             */
-            wait: boolean;
-            /**
-             * @description Child-authored authority tag. Untrusted (M3) — see `SessionMessageQuestion.authority` for the identical fail-closed derivation rule.
-             * @example self_ok
-             * @enum {string}
-             */
-            authority?: "self_ok" | "owner_required";
             /**
              * @description Optional child-supplied correlation id (server-generated when absent) that a subsequent `respond` will reference.
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
@@ -17725,7 +17724,7 @@ export interface components {
         };
         /**
          * ControlReceipt
-         * @description Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one accepted control on a steered session (`steer`, `stop`, `stop_all`, `redirect`, `resume`, `respond`, `escalate`, `clear_goal`). Replaces `SubagentStateFrame.yaml`'s former `steering_receipt` shape (`{correlation_id, applied_at}`, issue #870) with the full control-ledger receipt shape the ADR specifies.
+         * @description Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one accepted control on a steered session (`steer`, `stop`, `stop_all`, `redirect`, `resume`, `respond`, `clear_goal`). ADR-20261004 ("Steering commands: no person question") withdrew the `escalate` relay verb with the person-question pause. Replaces `SubagentStateFrame.yaml`'s former `steering_receipt` shape (`{correlation_id, applied_at}`, issue #870) with the full control-ledger receipt shape the ADR specifies.
          *     Train-3 scope note: only the `steer` verb is wired to this shape today, via `pkg/agent/steer_frames.go::deliverSubagentState`. The per-session control ledger that assigns a true monotonic `seq` and tracks a control's own `accepted_at` moment (ADR D4, "Controls") is NOT built in this PR — `seq` and `accepted_at` are stamped as documented stand-ins (the same pattern `pkg/session/lifecycle_edge.go::StopNote.Seq` already uses: the record's own generation substituting for a ledger sequence until the ledger exists). `control_id` reuses the existing correlation id. `verb` and `state` are constants for this call site (`"steer"` / `"delivered"`) until other verbs are wired. Every other field below belongs to the ADR's full future shape and is never populated by this call site.
          */
         ControlReceipt: {
@@ -17745,7 +17744,7 @@ export interface components {
              * @example steer
              * @enum {string}
              */
-            verb: "steer" | "stop" | "stop_all" | "redirect" | "resume" | "respond" | "escalate" | "clear_goal";
+            verb: "steer" | "stop" | "stop_all" | "redirect" | "resume" | "respond" | "clear_goal";
             /**
              * @description ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
              * @example delivered
@@ -26982,9 +26981,10 @@ export type DelegateInboxAction = components["schemas"]["DelegateInboxAction"];
 export type DelegateInboxAckAction = components["schemas"]["DelegateInboxAckAction"];
 export type DelegateSteerAction = components["schemas"]["DelegateSteerAction"];
 export type DelegateRespondAction = components["schemas"]["DelegateRespondAction"];
-export type DelegateCancelAction = components["schemas"]["DelegateCancelAction"];
+export type DelegateStopAllAction = components["schemas"]["DelegateStopAllAction"];
 export type DelegateClearGoalAction = components["schemas"]["DelegateClearGoalAction"];
-export type DelegateFollowUpAction = components["schemas"]["DelegateFollowUpAction"];
+export type DelegateResumeAction = components["schemas"]["DelegateResumeAction"];
+export type DelegateRedirectAction = components["schemas"]["DelegateRedirectAction"];
 export type DelegatePeekAction = components["schemas"]["DelegatePeekAction"];
 export type DelegateSessionResponse = components["schemas"]["DelegateSessionResponse"];
 export type DelegateStatusResponse = components["schemas"]["DelegateStatusResponse"];

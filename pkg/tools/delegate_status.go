@@ -396,7 +396,7 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 	// Previously the ownership check only ran when Load SUCCEEDED, so any
 	// Load error skipped it and the inbox was drained regardless. Now deny
 	// when the lifecycle store is unconfigured OR when Load errors, mirroring
-	// executeCancel/executeSteer/executeRespond/executeFollowUp's posture
+	// executeStopAll/executeSteer/executeRespond/executeResume's posture
 	// (the rest of ADR-053's fail-closed contract — see delegate.go:1808).
 	if t.lifecycle == nil {
 		return ErrorResult("delegate: no lifecycle store configured")

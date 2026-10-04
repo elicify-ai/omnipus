@@ -372,7 +372,7 @@ export interface SubagentStateFrame {
   control_receipt?: {
     seq: number;
     control_id: string;
-    verb: "steer" | "stop" | "stop_all" | "redirect" | "resume" | "respond" | "escalate" | "clear_goal";
+    verb: "steer" | "stop" | "stop_all" | "redirect" | "resume" | "respond" | "clear_goal";
     state: "queued" | "delivered" | "applied" | "superseded";
     accepted_at: string;
     delivered_at?: string;

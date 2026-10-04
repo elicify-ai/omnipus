@@ -4,11 +4,11 @@ description: >
   SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract
   Surface). Parent -> child. Answers a `question`/`decision_request` by
   `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The
-  runtime validator REJECTS a `respond` whose target question's derived
-  authority is `owner_required` (R§8.2) — that rejection is a runtime
-  business rule, not schema-expressible; this schema only shapes the
-  request. Envelope fields are duplicated inline (ADR-034 precedent, see
-  SessionMessageProgress for the rationale).
+  text is delivered as an ordinary steering message; the recipient's state
+  decides the effect (ADR-20261004 C1). The former owner-answer authority
+  rejection was withdrawn with the person-question pause (ADR-20261004,
+  locked decision 7). Envelope fields are duplicated inline (ADR-034
+  precedent, see SessionMessageProgress for the rationale).
 required:
   - message_id
   - session_id

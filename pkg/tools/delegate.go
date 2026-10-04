@@ -206,7 +206,7 @@ type DelegateTool struct {
 
 	// sessionManager, when set via SetSessionManager, is the shared
 	// *SessionManager (pkg/tools/session.go — same package, no interface
-	// indirection needed) executeCancel uses to kill a cancelled child's
+	// indirection needed) executeStopAll uses to kill a stopped child's
 	// OWN background bash/exec shells (ADR-057 FR-028/BDD-29): "delegate
 	// action=cancel MUST kill that child's background shells (today no such
 	// call exists on that path)". This is deliberately independent of, and
@@ -214,7 +214,7 @@ type DelegateTool struct {
 	// (pkg/agent/cancel.go's resolveBackgroundKillSessionIDs loop over
 	// hooks.KillBackgroundSessions) — that path fires on a chat-wide Stop
 	// click and walks the FULL descendant subtree; this one fires on a
-	// delegate(action="cancel") tool call targeting exactly one child
+	// delegate(action="stop_all") tool call targeting exactly one child
 	// session (BDD-29's scope is "that child's" shells, not its subtree,
 	// matching ScopeSelfOnly's own single-target semantics — see
 	// SetCancelHooks' doc comment). Reuses the SAME KillAllForSessions
@@ -267,7 +267,7 @@ type DelegateTool struct {
 	// They return every session id the stop REACHED — the named session plus
 	// every descendant found through the durable parent-child edge — and an
 	// empty slice when it reached nothing, which is the miss signal
-	// executeCancel uses to detect its TOCTOU window. They previously
+	// executeStopAll uses to detect its TOCTOU window. They previously
 	// wrapped the live-turn interrupt pair (Interrupt/InterruptSessionHard),
 	// which reached nothing at all for a session whose turn had not started
 	// and missed a running child's own grandchildren; see SetCancelHooks.
@@ -432,7 +432,7 @@ func (t *DelegateTool) SetRequireParentAgentID(fn func() bool) {
 // guard and its action set have one source of truth.
 func isSessionMessagingAction(action string) bool {
 	switch action {
-	case "inbox", "inbox_ack", "steer", "respond", "cancel", "clear_goal", "follow_up", "peek":
+	case "inbox", "inbox_ack", "steer", "respond", "stop_all", "clear_goal", "resume", "redirect", "peek":
 		return true
 	}
 	return false
@@ -440,7 +440,7 @@ func isSessionMessagingAction(action string) bool {
 
 // SetCancelHooks installs the soft (cooperative) and hard (immediate) stop
 // functions. Each returns the session ids the stop actually REACHED, which is
-// how executeCancel tells "I stopped something" from "there was nothing to
+// how executeStopAll tells "I stopped something" from "there was nothing to
 // stop".
 //
 // The canonical wiring (pkg/agent/session_messaging_wire.go) is a pair of
@@ -455,7 +455,7 @@ func isSessionMessagingAction(action string) bool {
 //
 // `by` is the principal the stop is recorded against — it lands on the
 // durable Stop marker (session.Stop.By, I-1) and is what the UI and the audit
-// trail show as who stopped the session. executeCancel derives it from
+// trail show as who stopped the session. executeStopAll derives it from
 // verifyCallerPrincipal, never manufactures it.
 //
 // WARNING — the hook MUST be invoked with the delegate's sessionKey
@@ -466,7 +466,7 @@ func isSessionMessagingAction(action string) bool {
 // turnState.routingSessionID's own doc comment, pkg/agent/turn.go — the
 // ROUTING id, not the transcript id, is what a chat-wide Stop cascades via)
 // — sessionKey is the unique per-delegation address, unrelated to either.
-// executeCancel passes its session_id argument here verbatim — that
+// executeStopAll passes its session_id argument here verbatim — that
 // argument IS the delegateSessionID by contract.
 func (t *DelegateTool) SetCancelHooks(
 	soft func(sessionKey string, by steer.Principal, hint string) ([]string, error),
@@ -545,10 +545,10 @@ func (t *DelegateTool) SetProgressReader(reader DelegateProgressReader) {
 	t.progressReader = reader
 }
 
-// SetSessionManager installs the shared *SessionManager executeCancel uses
+// SetSessionManager installs the shared *SessionManager executeStopAll uses
 // to kill a cancelled child's own background shells (FR-028/BDD-29). See
 // the sessionManager field doc. A nil sessionManager (never called) leaves
-// action="cancel" behaving exactly as before this fix — a silent no-op on
+// action="stop_all" behaving exactly as before this fix — a silent no-op on
 // this specific side effect, matching every other optional capability.
 func (t *DelegateTool) SetSessionManager(sm *SessionManager) {
 	t.sessionManager = sm
@@ -624,21 +624,24 @@ func (t *DelegateTool) Description() string {
 		"action=\"run\" (default) launches a session. It returns at once with the child's session_id " +
 		"and whether it is running or queued (with its place in line). You get a message when the " +
 		"child finishes, asks a question, or hits a problem. Check on it with delegate status, " +
-		"redirect it with delegate steer, stop it with delegate cancel. A delegation is " +
-		"force-cancelled after timeout_seconds (default 1800s / 30 min) if it has not finished by then. " +
+		"redirect it with delegate redirect, stop it with delegate stop_all. A delegation is " +
+		"force-stopped after timeout_seconds (default 1800s / 30 min) if it has not finished by then. " +
 		"action=\"status\" checks on a previously-delegated session by its session_id — the only way " +
 		"to address a child; use list_jobs to see everything you have outstanding. " +
 		"action=\"inbox\" drains messages the child has pushed back to you (progress/" +
 		"checkpoint/artifact/blocker/question/handback); action=\"inbox_ack\" acknowledges " +
 		"them. action=\"steer\" injects an instruction at the child's next tool boundary " +
 		"(NOT available for a delegation running on an external CLI, subagent_3p: " +
-		"claude-code/codex/opencode — use respond or follow_up instead); " +
-		"action=\"respond\" answers a child's open question by correlation_id — " +
-		"always available for a delegation you started. " +
-		"action=\"cancel\" stops a child (cooperatively by default; hard=true bypasses " +
-		"the grace window). " +
+		"claude-code/codex/opencode — use respond or resume instead); " +
+		"action=\"respond\" replies to one of the child's messages by correlation_id — the text is " +
+		"delivered to the child as an ordinary message, always available for a delegation you started. " +
+		"action=\"stop_all\" stops that child and every helper under it (cooperatively by default; " +
+		"hard=true bypasses the grace window). action=\"redirect\" does not stop a helper; it replaces that helper's current turn. " +
 		delegateClearGoalDescription +
-		"action=\"follow_up\" warm-resumes a finished child with additional instructions. " +
+		"action=\"resume\" continues a stopped child on the same conversation, or starts its next " +
+		"round when it is done or failed; optional text adds instructions. " +
+		"action=\"redirect\" replaces the child's current turn with the new instruction — text is " +
+		"required (NOT available for an external CLI child; use stop_all or resume). " +
 		"action=\"peek\" reads a child's latest checkpoint/progress without side effects. " +
 		"Optionally provide agent_id to target a specific agent from your delegation " +
 		"allowlist; omit it to run a generic subagent under your own agent."
@@ -697,8 +700,7 @@ func (t *DelegateTool) Parameters() map[string]any {
 			"task": map[string]any{
 				"type": "string",
 				"description": "The task for the subagent to complete. Required when action is \"run\" (the " +
-					"default). DEPRECATED alias for \"text\" under action=\"follow_up\" — \"text\" wins when " +
-					"both are present.",
+					"default).",
 			},
 			"label": map[string]any{
 				"type":        "string",
@@ -711,17 +713,19 @@ func (t *DelegateTool) Parameters() map[string]any {
 			},
 			"action": map[string]any{
 				"type": "string",
-				"enum": []string{"run", "status", "inbox", "inbox_ack", "steer", "respond", "cancel", "clear_goal", "follow_up", "peek"},
+				"enum": []string{"run", "status", "inbox", "inbox_ack", "steer", "respond", "stop_all", "clear_goal", "resume", "redirect", "peek"},
 				"description": "\"run\" (default) delegates a new task. \"status\" checks progress. \"inbox\" " +
 					"drains child->parent messages. \"inbox_ack\" acknowledges them. \"steer\" injects an " +
-					"instruction. \"respond\" answers an open question. \"cancel\" stops a child. " +
-					"\"follow_up\" warm-resumes a finished child. \"peek\" reads latest checkpoint/progress." +
+					"instruction. \"respond\" answers one of the child's messages. \"stop_all\" stops the " +
+					"child and every helper under it. \"resume\" continues a stopped child or starts its " +
+					"next round. \"redirect\" replaces the child's current turn with a new instruction. " +
+					"\"peek\" reads latest checkpoint/progress." +
 					delegateClearGoalActionDescription,
 			},
 			"session_id": map[string]any{
 				"type": "string",
 				"description": "The durable child session to target — the only way to address a " +
-					"child. Required for status/inbox/inbox_ack/steer/respond/cancel/follow_up/peek." +
+					"child. Required for status/inbox/inbox_ack/steer/respond/stop_all/resume/redirect/peek." +
 					delegateClearGoalSessionIDDescription,
 			},
 			"criteria": map[string]any{
@@ -789,9 +793,8 @@ func (t *DelegateTool) Parameters() map[string]any {
 				"description": "Optional (action=\"inbox\" only): maximum messages to return.",
 			},
 			"text": map[string]any{
-				"type": "string",
-				"description": "Required for action=\"steer\"/\"respond\"/\"follow_up\": the instruction/answer/" +
-					"new-instruction text (for follow_up, \"task\" is accepted as a deprecated alias).",
+				"type":        "string",
+				"description": "Required for action=\"steer\", \"respond\", \"resume\" and \"redirect\": the instruction or answer text.",
 			},
 			"correlation_id": map[string]any{
 				"type":        "string",
@@ -799,8 +802,8 @@ func (t *DelegateTool) Parameters() map[string]any {
 			},
 			"hard": map[string]any{
 				"type": "boolean",
-				"description": "Optional (action=\"cancel\" only, default false): false is a cooperative soft " +
-					"cancel with grace; true bypasses the grace window immediately.",
+				"description": "Optional (action=\"stop_all\" only, default false): false is a cooperative soft " +
+					"stop with grace; true bypasses the grace window immediately.",
 			},
 		},
 		// Nothing is unconditionally required at the schema level — requiredness
@@ -815,12 +818,11 @@ func (t *DelegateTool) Parameters() map[string]any {
 // and dispatch have returned, so there is no later completion for a callback
 // to report. The AsyncCallback that used to be threaded in here reached four
 // levels down (executeRun -> launchAndDispatch, executeRespond /
-// executeFollowUp -> spawnCorrectiveFollowUp) and was discarded, unread, at
+// executeResume -> spawnCorrectiveFollowUp) and was discarded, unread, at
 // every one of those leaves — a callback the registry could hand over but
 // that could never fire. The remaining `nil` arguments below are the last
 // trace of it; the `AsyncCallback` parameters on delegate_run.go,
-// delegate_park.go and delegate_followup.go go with them, and those three
-// files are outside this lane's ownership.
+// delegate_respond.go and delegate_followup.go go with them.
 func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	return t.execute(ctx, args)
 }
@@ -857,17 +859,19 @@ func (t *DelegateTool) execute(ctx context.Context, args map[string]any) *ToolRe
 		return t.executeSteer(ctx, args)
 	case "respond":
 		return t.executeRespond(ctx, args, nil)
-	case "cancel":
-		return t.executeCancel(ctx, args)
+	case "stop_all":
+		return t.executeStopAll(ctx, args)
 	case "clear_goal":
 		return t.executeClearGoal(ctx, args)
-	case "follow_up":
-		return t.executeFollowUp(ctx, args, nil)
+	case "resume":
+		return t.executeResume(ctx, args, nil)
+	case "redirect":
+		return t.executeRedirect(ctx, args)
 	case "peek":
 		return t.executePeek(ctx, args)
 	default:
 		return ErrorResult(fmt.Sprintf(
-			"invalid action %q: must be one of run, status, inbox, inbox_ack, steer, respond, cancel, clear_goal, follow_up, peek",
+			"invalid action %q: must be one of run, status, inbox, inbox_ack, steer, respond, stop_all, clear_goal, resume, redirect, peek",
 			action,
 		))
 	}

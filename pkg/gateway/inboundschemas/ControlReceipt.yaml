@@ -3,7 +3,9 @@ title: ControlReceipt
 description: >
   Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one
   accepted control on a steered session (`steer`, `stop`, `stop_all`,
-  `redirect`, `resume`, `respond`, `escalate`, `clear_goal`). Replaces
+  `redirect`, `resume`, `respond`, `clear_goal`). ADR-20261004 ("Steering
+  commands: no person question") withdrew the `escalate` relay verb with
+  the person-question pause. Replaces
   `SubagentStateFrame.yaml`'s former `steering_receipt` shape
   (`{correlation_id, applied_at}`, issue #870) with the full control-ledger
   receipt shape the ADR specifies.
@@ -51,7 +53,6 @@ properties:
       - redirect
       - resume
       - respond
-      - escalate
       - clear_goal
     description: Which control this receipt reports on.
     example: "steer"
