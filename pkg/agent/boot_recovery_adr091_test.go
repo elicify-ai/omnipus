@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -251,11 +252,12 @@ func TestBoot_RenudgesUnconsumedEntriesOnce_EligibleOnly(t *testing.T) {
 	rec.NeedsInput = &session.NeedsInput{CorrelationID: "corr", TTLDeadline: time.Now().Add(time.Hour)}
 	h.persist(t, rec)
 
+	consumedHandback := bootHandback(t, child, parent, "handback-consumed")
 	for _, message := range []generated.SessionMessage{
 		bootHandback(t, child, parent, "handback-open"),
 		bootProgress(t, child, parent, "progress-open"),
 		bootQuestion(t, child, parent, "question-open"),
-		bootHandback(t, child, parent, "handback-consumed"),
+		consumedHandback,
 	} {
 		if _, err := h.inbox.Append(parent, message); err != nil {
 			t.Fatalf("Append: %v", err)
@@ -265,6 +267,38 @@ func TestBoot_RenudgesUnconsumedEntriesOnce_EligibleOnly(t *testing.T) {
 		ID: "consumed-handback", Type: session.EntryTypeSystem, Role: "system", Content: "consumed handback-consumed",
 	}); err != nil {
 		t.Fatalf("AppendTranscriptStrict: %v", err)
+	}
+
+	// A genuinely delivered handback, not the crash gap: the delivery rule
+	// (boot_sweep.go::instructionArchived) counts the consumed marker as
+	// delivery only when the CHILD session's durable context archive holds
+	// the user-role instruction the live wake injected —
+	// steer_audience.go::deliverySummary of the SAME inbox message. Archive
+	// it the way the turn does (window_runtime.go::turnState.appendWindowMessage),
+	// child session only; the parent transcript keeps only the consumed
+	// marker. Without this line the fixture is the crash gap and the
+	// handback is legitimately re-woken.
+	archived := providers.Message{Role: "user", Content: deliverySummary(consumedHandback)}
+	if _, err := h.sessions.AppendWindowMessage(context.Background(), child, archived); err != nil {
+		t.Fatalf("AppendWindowMessage archived handback instruction: %v", err)
+	}
+	// Instrument check: the archive write must read back from the child
+	// archive recovery's accepted-drain oracle reads — a silently swallowed
+	// append would leave the fixture asserting the very crash-gap shape it
+	// exists to rule out.
+	snap, err := h.sessions.SnapshotWindow(context.Background(), child)
+	if err != nil {
+		t.Fatalf("SnapshotWindow archived handback instruction: %v", err)
+	}
+	archivedVisible := false
+	for _, line := range snap.Archive {
+		if line.Role == "user" && line.Content == deliverySummary(consumedHandback) {
+			archivedVisible = true
+			break
+		}
+	}
+	if !archivedVisible {
+		t.Fatalf("archived handback instruction %q is not readable back from session %q's durable context archive", deliverySummary(consumedHandback), child)
 	}
 
 	if err := h.recovery().Run(context.Background()); err != nil {
