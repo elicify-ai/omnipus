@@ -157,8 +157,22 @@ func (al *AgentLoop) deliverSteeredCompletion(ctx context.Context, rec *session.
 			// publishes nothing at all. A notice append failure is returned
 			// visibly — the landing is already durable and stays.
 			if commitRes.landedStop {
-				_, pubErr := al.deliverLandedStopNotices(ctx, rec)
-				return false, pubErr
+				if _, pubErr := al.deliverLandedStopNotices(ctx, rec); pubErr != nil {
+					return false, pubErr
+				}
+				// A fence-less landing has no accepted control behind it, so
+				// no landed-stop history exists for the publisher to discover
+				// — without this the parent never learns the child stopped.
+				// Its notice is delivered HERE, once, through the same
+				// publisher function and message format, composed from the
+				// landing's retained note. The boot replay has no history to
+				// re-deliver, so this one append and one wake are the whole
+				// delivery.
+				if commitRes.landed == nil && commitRes.landedNote != nil {
+					_, noticeErr := al.deliverLandedStopNotice(ctx, rec, stoppedTransitionFromLandedNote(rec, commitRes.landedNote))
+					return false, noticeErr
+				}
+				return false, nil
 			}
 			return false, nil
 		default:

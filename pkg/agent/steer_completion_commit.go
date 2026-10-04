@@ -76,10 +76,15 @@ type steeredCommitResult struct {
 	// landed is the D6 landed-stop history payload captured from the record
 	// AS PERSISTED when landedStop is true — nil when the landing synthesized
 	// its note (no control-ledger acceptance behind it, no history to write).
-	landed    *session.LandedStop
-	commit    *session.FinalDeliveryCommit
-	message   generated.SessionMessage
-	messageID string
+	landed *session.LandedStop
+	// landedNote is the landing's retained stop note AS PERSISTED when
+	// landedStop is true — for a synthesized (fence-less) note it is the
+	// only tuple the direct-parent notice can be composed from, since no
+	// landed history exists to discover.
+	landedNote *session.StopNote
+	commit     *session.FinalDeliveryCommit
+	message    generated.SessionMessage
+	messageID  string
 }
 
 // errCompleteNoPublishableOutcome refuses a terminal commit whose outcome
@@ -166,6 +171,7 @@ func (al *AgentLoop) commitSteeredCompletion(
 					return err
 				}
 				res.landed = landedStopFromRecord(cur)
+				res.landedNote = cur.StopNote
 				return nil
 			}
 			// A terminal/notice disposition racing a fresh fence: refuse. The
@@ -192,6 +198,7 @@ func (al *AgentLoop) commitSteeredCompletion(
 				return err
 			}
 			res.landed = landedStopFromRecord(cur)
+			res.landedNote = cur.StopNote
 			return nil
 		}
 		if nextState == session.LifecycleRunning {

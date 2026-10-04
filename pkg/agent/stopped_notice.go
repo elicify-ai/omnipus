@@ -106,6 +106,31 @@ func (al *AgentLoop) deliverLandedStopNotices(ctx context.Context, rec *session.
 	return pending, errors.Join(errs...)
 }
 
+// stoppedTransitionFromLandedNote is the in-memory StoppedTransition view of
+// a fence-less landing's retained note — the tuple the publisher composes
+// that landing's direct-parent notice from. A fence-less stop has no
+// control-ledger acceptance behind it, so no landed history exists to
+// discover (and RecordLandedStopLocked refuses to fabricate one); the
+// transition is therefore never written to the ledger, and its StopSeq is
+// the synthesized note's own seq — the generation stand-in, the only
+// identity a fence-less stop has. The notice's id stays dedup-stable because
+// the note is retained on the landed record.
+func stoppedTransitionFromLandedNote(rec *session.LifecycleRecord, note *session.StopNote) session.StoppedTransition {
+	tr := session.StoppedTransition{
+		SessionID:       rec.SessionID,
+		ParentSessionID: rec.SteeringSessionID(),
+		Generation:      rec.Generation,
+		StopSeq:         note.Seq,
+		Cause:           note.Cause,
+		Actor:           note.By,
+		At:              note.At,
+	}
+	if rec.StopEffect != nil {
+		tr.ControlID = rec.StopEffect.ControlID
+	}
+	return tr
+}
+
 // deliverLandedStopNotice delivers ONE landed transition's notice to its
 // ORIGINAL direct parent. A root stop (empty parent in the history) is
 // history the publisher keeps, never a parent it invents. work reports
