@@ -156,10 +156,11 @@ func TestBoot_ConsumedMarkerWithoutArchivedInstruction_IsRedeliveredAndUnacknowl
 // turn drives for pendingMessages injection —
 // pkg/agent/window_runtime.go::turnState.appendWindowMessage ->
 // session.ContextWindowStore.AppendWindowMessage — keyed by the session id
-// the reconstructed turn runs under (pkg/agent/steer_reconstruct.go sets
-// SessionKey: rec.SessionID, so the archive lands on the session's own
-// store, which in this single-store harness is the same UnifiedStore boot
-// recovery reads). It deliberately does NOT append a user transcript line:
+// the reconstructed turn runs under: pkg/agent/steer_reconstruct.go sets
+// SessionKey: rec.SessionID, so the archive lands on the CHILD session's
+// own context-window archive — the id recovery's accepted-drain oracle
+// reads back — never on the steering session's store. It deliberately does
+// NOT append a user transcript line:
 // the transcript holds only the consumed marker, and recovery never reads
 // a user transcript entry.
 // Marker + archived instruction is a genuine delivery: the idempotency
@@ -169,13 +170,13 @@ func TestBoot_ConsumedMarkerWithArchivedInstruction_StaysAcknowledgedWithoutRede
 	h := newBootRecoveryHarness(t)
 	parent, child, messageID := persistedCrashGap(t, h)
 	archived := providers.Message{Role: "user", Content: "A delegated session is asking: choose"}
-	if _, err := h.sessions.AppendWindowMessage(context.Background(), parent, archived); err != nil {
+	if _, err := h.sessions.AppendWindowMessage(context.Background(), child, archived); err != nil {
 		t.Fatalf("AppendWindowMessage archived instruction: %v", err)
 	}
-	// Instrument check: the archive write must read back from the same
-	// store recovery reads — a silently swallowed append would leave this
-	// control's premise unrepresented.
-	snap, err := h.sessions.SnapshotWindow(context.Background(), parent)
+	// Instrument check: the archive write must read back from the child
+	// archive recovery's accepted-drain oracle reads — a silently swallowed
+	// append would leave this control's premise unrepresented.
+	snap, err := h.sessions.SnapshotWindow(context.Background(), child)
 	if err != nil {
 		t.Fatalf("SnapshotWindow archived instruction: %v", err)
 	}
@@ -187,7 +188,7 @@ func TestBoot_ConsumedMarkerWithArchivedInstruction_StaysAcknowledgedWithoutRede
 		}
 	}
 	if !archivedVisible {
-		t.Fatalf("archived instruction is not readable back from session %q's durable context archive", parent)
+		t.Fatalf("archived instruction is not readable back from session %q's durable context archive", child)
 	}
 	deliverer := &bootArchiveRecordingDeliverer{}
 
