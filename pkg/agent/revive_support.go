@@ -227,7 +227,7 @@ func (al *AgentLoop) runRevivedOrdinaryTurn(msg bus.InboundMessage, sessionKey s
 				// ADR-051 §RD5: never surface raw err text in the reply —
 				// TranslateTurnError keeps known-refusal copy and replaces
 				// provider-originated text with typed copy.
-				response = TranslateTurnError(err).Message
+				response = userVisibleTurnError(err)
 			}
 		}
 		if response != "" {
