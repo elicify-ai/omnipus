@@ -41,6 +41,7 @@ describe('DefaultWorkspaceRedirect — folded-route redirect map', () => {
     mockNavigate.mockReset()
     mockFetchWorkspaces.mockReset()
     mockFetchWorkspaces.mockResolvedValue([DEFAULT_WS])
+    window.location.hash = ''
   })
 
   it('defaults to the Chat tab (global "/" front door)', async () => {
@@ -70,6 +71,51 @@ describe('DefaultWorkspaceRedirect — folded-route redirect map', () => {
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith({
         to: '/workspaces/$workspaceId/calendar',
+        params: { workspaceId: 'ws-default' },
+        replace: true,
+      })
+    })
+  })
+
+  it('does not replace a settings navigation that already changed the hash', async () => {
+    let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
+    mockFetchWorkspaces.mockReturnValue(
+      new Promise((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+    )
+    const { client } = renderRedirect()
+    await waitFor(() => expect(mockFetchWorkspaces).toHaveBeenCalledOnce())
+
+    // Hash history writes the destination before the previous route unmounts.
+    window.location.hash = '#/settings?tab=chat'
+    await act(async () => {
+      resolveWorkspaces([DEFAULT_WS])
+    })
+    await waitFor(() => {
+      expect(client.getQueryState(['workspaces', { status: 'active' }])?.status).toBe('success')
+    })
+
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it('still redirects from the index hash and from a folded route hash', async () => {
+    window.location.hash = '#/'
+    renderRedirect()
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith({
+        to: '/workspaces/$workspaceId/chat',
+        params: { workspaceId: 'ws-default' },
+        replace: true,
+      })
+    })
+
+    mockNavigate.mockClear()
+    window.location.hash = '#/tasks'
+    renderRedirect('board')
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith({
+        to: '/workspaces/$workspaceId/board',
         params: { workspaceId: 'ws-default' },
         replace: true,
       })

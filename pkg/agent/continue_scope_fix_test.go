@@ -224,7 +224,7 @@ func TestSessionWorker_Continue_UnrelatedActiveSession_MustNotStrandOwnQueuedFol
 		finalResponse = continued
 	}
 	if finalResponse != "" {
-		al.publishResponseIfNeeded(context.Background(), nil, target.Channel, target.ChatID, finalResponse)
+		al.publishResponseIfNeeded(context.Background(), nil, target.Channel, target.ChatID, finalResponse, target.SessionID)
 	}
 
 	// --- Assertions encode the DESIRED (post-fix) outcome ---

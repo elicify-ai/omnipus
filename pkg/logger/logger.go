@@ -198,7 +198,11 @@ func EnableFileLogging(filePath string) error {
 		return fmt.Errorf("failed to create log directory: %w", err)
 	}
 
-	newFile, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	// The file may contain conversation and tool content, so it is created
+	// private to the owning account (0600), matching the panic log
+	// (initPanicFile). The mode applies at creation only: an existing file
+	// keeps the permissions it already has.
+	newFile, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("failed to open log file: %w", err)
 	}

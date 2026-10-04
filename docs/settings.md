@@ -1,6 +1,6 @@
 # Settings
 
-Settings connects model providers, sets agent limits, records your context, and shows usage. The sidebar user menu opens Settings, Profile, and Usage.
+Settings connects model providers, sets agent limits, records your context, and shows usage. The sidebar user menu opens Settings, Profile, and Usage. Opening Settings stays on Settings. If the app is still choosing your workspace after you sign in, that choice does not replace a Settings page you already opened.
 
 ## What it is
 

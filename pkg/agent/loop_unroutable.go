@@ -107,7 +107,7 @@ func (al *AgentLoop) dispatchUnroutableMessage(runCtx context.Context, msg bus.I
 					}()
 					termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer termCancel()
-					al.publishResponseIfNeeded(termCtx, ag, msg.Channel, msg.ChatID, response)
+					al.publishResponseIfNeeded(termCtx, ag, msg.Channel, msg.ChatID, response, msg.SessionID)
 				}()
 				published = true
 			}
@@ -130,7 +130,7 @@ func (al *AgentLoop) dispatchUnroutableMessage(runCtx context.Context, msg bus.I
 		response = TranslateTurnError(err).Message
 	}
 	if response != "" {
-		al.publishResponseIfNeeded(runCtx, ag, msg.Channel, msg.ChatID, response)
+		al.publishResponseIfNeeded(runCtx, ag, msg.Channel, msg.ChatID, response, msg.SessionID)
 		published = true
 	}
 }

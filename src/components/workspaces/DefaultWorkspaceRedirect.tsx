@@ -6,6 +6,29 @@ import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import type { WorkspaceTab } from './WorkspaceTabBar'
 
+/** Route that is allowed to send the user into a workspace tab. */
+function redirectSourcePath(tab: WorkspaceTab['segment']): string {
+  if (tab === 'board') return '/tasks'
+  if (tab === 'calendar') return '/automations'
+  return '/'
+}
+
+/**
+ * Hash history writes the next address before the previous page unmounts.
+ * An empty hash, "#", or "#/" is still the index (and what the unit harness
+ * uses). Any other path is a navigation that already left this redirect.
+ * Returns null when the hash is still the route that owns `tab`.
+ */
+function foreignHashPath(tab: WorkspaceTab['segment']): string | null {
+  const hash = window.location.hash
+  if (hash === '' || hash === '#' || hash === '#/') return null
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash
+  const pathOnly = (raw.split('?')[0] || '/').replace(/\/+$/, '') || '/'
+  const path = pathOnly.startsWith('/') ? pathOnly : `/${pathOnly}`
+  if (path === '/' || path === redirectSourcePath(tab)) return null
+  return path
+}
+
 interface DefaultWorkspaceRedirectProps {
   /** Which workspace tab to land on (default 'chat'). */
   tab?: WorkspaceTab['segment']
@@ -36,7 +59,9 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
   const documentLeavingRef = useRef(false)
   const beforeUnloadPendingRef = useRef(false)
   const skippedRedirectWarnedRef = useRef(false)
+  const skippedForeignHashWarnedRef = useRef(false)
   const [documentLeaving, setDocumentLeaving] = useState(false)
+  const [hashGeneration, setHashGeneration] = useState(0)
 
   const restoreDocument = useCallback(() => {
     beforeUnloadPendingRef.current = false
@@ -72,14 +97,19 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
         restoreDocument()
       }
     }
+    const noteHashChange = () => setHashGeneration((generation) => generation + 1)
     window.addEventListener('beforeunload', markBeforeUnload)
     window.addEventListener('pagehide', markDocumentLeaving)
     window.addEventListener('pageshow', restoreDocument)
+    window.addEventListener('hashchange', noteHashChange)
+    window.addEventListener('popstate', noteHashChange)
     document.addEventListener('visibilitychange', restoreVisibleDocument)
     return () => {
       window.removeEventListener('beforeunload', markBeforeUnload)
       window.removeEventListener('pagehide', markDocumentLeaving)
       window.removeEventListener('pageshow', restoreDocument)
+      window.removeEventListener('hashchange', noteHashChange)
+      window.removeEventListener('popstate', noteHashChange)
       document.removeEventListener('visibilitychange', restoreVisibleDocument)
     }
   }, [restoreDocument])
@@ -98,6 +128,15 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
       }
       return
     }
+    // A settings (or any other) navigation updates the hash before this page
+    // unmounts. Navigating now would replace that destination with workspace chat.
+    if (target && foreignHashPath(tab)) {
+      if (!skippedForeignHashWarnedRef.current) {
+        skippedForeignHashWarnedRef.current = true
+        console.warn('[workspace redirect] settled redirect skipped because the address already left this route')
+      }
+      return
+    }
     if (target) {
       void navigate({
         to: `/workspaces/$workspaceId/${tab}`,
@@ -105,7 +144,7 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
         replace: true,
       })
     }
-  }, [workspaces, isLoading, isError, navigate, tab, documentLeaving])
+  }, [workspaces, isLoading, isError, navigate, tab, documentLeaving, hashGeneration])
 
   if (isError) {
     return (
