@@ -22,7 +22,11 @@ Set `OMNIPUS_LOG_FILE` before starting the gateway to send its JSON diagnostic r
 export OMNIPUS_LOG_FILE=/var/log/omnipus/gateway.jsonl
 ```
 
-The gateway creates the parent directory if needed and appends to the file. The setting applies from the first startup record onward, including structured agent-turn diagnostics. An unset or empty value keeps the default destination. A home-relative value is expanded using `HOME`, when that variable is set.
+The gateway creates the parent directory if needed and appends to the file. The setting applies from the first startup record onward. An unset or empty value keeps the default destination. A home-relative value is expanded using `HOME`, when that variable is set.
+
+The destination does not change which records are enabled. The gateway defaults to `warn`; set `OMNIPUS_LOG_LEVEL=info` before starting it to include structured agent-turn diagnostics, such as `turn_end`, or use debug mode for more detail.
+
+Diagnostics may contain conversation and tool content, especially in debug mode. Use a private directory that only your account can read; custom destinations do not inherit the default log directory's private permissions.
 
 Restart the gateway after changing the value. If the selected file cannot be opened, startup fails with `error enabling file logging`; it does not silently switch back to the default file. Check the destination's permissions and available disk space. This setting moves diagnostic records only; the separate panic log and security audit log keep their own destinations.
 

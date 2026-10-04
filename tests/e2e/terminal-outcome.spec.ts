@@ -50,7 +50,9 @@ test.describe('terminal outcome agrees across real surfaces', () => {
       try {
         gw = await GatewayProcess.start({
           apiBase: mock.url, model: E2E_MODEL, adminUsername: 'terminal-acceptance',
-          env: { OMNIPUS_LOG_FILE: logPath },
+          // Lifecycle diagnostics are INFO; the gateway's quiet WARN default
+          // deliberately omits them. Enable the real observation surface.
+          env: { OMNIPUS_LOG_FILE: logPath, OMNIPUS_LOG_LEVEL: 'info' },
         });
         // All API-fixture calls precede UI login: one token slot per user.
         const { agent, session } = await createTerminalSession(gw);

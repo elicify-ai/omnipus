@@ -23,7 +23,7 @@ import (
 // expands a home-relative path. Exercise real gateway boot, not just that parser:
 // boot and subsequent structured records must reach the selected file.
 func TestBootLogging_EnvironmentDestination(t *testing.T) {
-	for _, mode := range []string{"default", "absolute", "home_relative", "invalid_destination"} {
+	for _, mode := range []string{"default", "absolute", "home_relative", "invalid_destination", "invalid_parent"} {
 		t.Run(mode, func(t *testing.T) {
 			previousHandler := slog.Default()
 			previousLevel := logger.GetLevel()
@@ -47,13 +47,15 @@ func TestBootLogging_EnvironmentDestination(t *testing.T) {
 				}
 				if mode == "invalid_destination" {
 					require.NoError(t, os.MkdirAll(wantedLog, 0o755))
+				} else if mode == "invalid_parent" {
+					require.NoError(t, os.WriteFile(filepath.Dir(wantedLog), []byte("not a directory"), 0o600))
 				} else {
 					require.NoError(t, os.MkdirAll(filepath.Dir(wantedLog), 0o755))
 					require.NoError(t, os.WriteFile(wantedLog, []byte("{\"message\":\"existing operator record\"}\n"), 0o600))
 				}
 			}
 
-			if mode == "invalid_destination" {
+			if mode == "invalid_destination" || mode == "invalid_parent" {
 				var caught any
 				func() {
 					defer func() { caught = recover() }()
@@ -63,13 +65,17 @@ func TestBootLogging_EnvironmentDestination(t *testing.T) {
 				require.True(t, ok, "an unusable explicit log destination must refuse boot, not fall back; panic=%v", caught)
 				var pathErr *os.PathError
 				require.True(t, errors.As(err, &pathErr), "boot refusal must retain the filesystem cause: %v", err)
-				require.Equal(t, "open", pathErr.Op)
-				require.Equal(t, wantedLog, pathErr.Path)
-				require.Equal(t, fmt.Sprintf("error enabling file logging: failed to open log file: %s", pathErr.Error()), err.Error())
+				wantOp, wantPath, wantWrap := "open", wantedLog, "failed to open log file"
+				if mode == "invalid_parent" {
+					wantOp, wantPath, wantWrap = "mkdir", filepath.Dir(wantedLog), "failed to create log directory"
+				}
+				require.Equal(t, wantOp, pathErr.Op)
+				require.Equal(t, wantPath, pathErr.Path)
+				require.Equal(t, fmt.Sprintf("error enabling file logging: %s: %s", wantWrap, pathErr.Error()), err.Error())
 				_, err = os.Stat(defaultLog)
-				require.True(t, os.IsNotExist(err), "no silent fallback diagnostic file")
+				require.ErrorIs(t, err, os.ErrNotExist, "no silent fallback diagnostic file")
 				_, err = os.Stat(filepath.Join(home, "config.json"))
-				require.True(t, os.IsNotExist(err), "boot must stop before data initialization")
+				require.ErrorIs(t, err, os.ErrNotExist, "boot must stop before data initialization")
 				return
 			}
 
@@ -99,7 +105,7 @@ func TestBootLogging_EnvironmentDestination(t *testing.T) {
 			if mode != "default" {
 				require.Equal(t, 1, existingCount, "configured sink is appended, never truncated")
 				_, err = os.Stat(defaultLog)
-				require.True(t, os.IsNotExist(err), "explicit sink replaces the default destination")
+				require.ErrorIs(t, err, os.ErrNotExist, "explicit sink replaces the default destination")
 			} else {
 				require.Zero(t, existingCount)
 			}
