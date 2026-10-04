@@ -268,7 +268,7 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		// A landed stop spent its marker; the live sidecar question is why
 		// the asker still waits for Revive. No delivery, no sweep, no rewrite
 		// of the question or its deadline.
-		r.ackConsumed(rec, notice)
+		r.ackConsumed(ctx, rec, notice)
 		return
 	}
 

@@ -19,7 +19,10 @@
 // never pair them incorrectly again: every transition funnels through here.
 package session
 
-import "log/slog"
+import (
+	"log/slog"
+	"time"
+)
 
 // LifecycleMutator is the minimal lifecycle-store surface TransitionSession
 // needs: just the atomic Mutate RMW. *LifecycleStore satisfies it directly,
@@ -193,6 +196,11 @@ func TransitionSession(ls LifecycleMutator, us *UnifiedStore, sid string, to Lif
 					stamped := *note
 					stamped.Seq = uint64(rec.Generation)
 					rec.StopNote = &stamped
+				}
+				// A restart stop must not move LastActivityAt up to the boot
+				// or supersession instant. Other stops end real work.
+				if rec.StopNote == nil || rec.StopNote.Cause != StopCauseRestart {
+					rec.NoteRealActivity(time.Now().UTC())
 				}
 				// note == nil: retain whatever rec.StopNote already holds (a
 				// prior write in the same stop event already landed it); if

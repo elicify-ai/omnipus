@@ -208,3 +208,33 @@ func landedTransition(sessionID string, rec controlLedgerLine) (StoppedTransitio
 		At:              landed.At,
 	}, nil
 }
+
+// AcceptedStopEffects returns each accepted stop's targeting metadata, one
+// per control id, in ledger order. A later landed-history line for the same
+// control is not a second effect. A missing ledger is empty. A ledger that
+// cannot be parsed is a visible error.
+func (s *LifecycleStore) AcceptedStopEffects(sessionID string) ([]StopEffect, error) {
+	if err := validateLifecycleSessionID(sessionID); err != nil {
+		return nil, err
+	}
+	mu := s.Lock(sessionID)
+	mu.Lock()
+	defer mu.Unlock()
+	lines, err := s.readControlLedgerLocked(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{})
+	var out []StopEffect
+	for _, line := range lines {
+		if line.StopEffect == nil || line.StopEffect.ControlID == "" {
+			continue
+		}
+		if _, ok := seen[line.StopEffect.ControlID]; ok {
+			continue
+		}
+		seen[line.StopEffect.ControlID] = struct{}{}
+		out = append(out, *line.StopEffect)
+	}
+	return out, nil
+}

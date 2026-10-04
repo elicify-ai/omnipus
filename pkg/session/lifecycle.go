@@ -340,6 +340,27 @@ type LifecycleRecord struct {
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// LastActivityAt is the last persisted moment this session was actually
+	// working (D8.7). It is not UpdatedAt: every persist, including a boot
+	// stop, stamps UpdatedAt. Restart credit reads this field and must not
+	// see the boot instant substituted for the pre-crash activity.
+	//
+	// not-wire-format: internal disk field. No Session/StopNote wire key.
+	LastActivityAt time.Time `json:"last_activity_at,omitempty"`
+	// ActiveBudgetAnchor is the start of the current lifetime-budget window.
+	// Zero means CreatedAt. An explicit resume after a timeout stop sets it
+	// to the resume instant and clears StoppedForSeconds (D6). A voluntary
+	// resume leaves it unchanged and extends StoppedForSeconds instead.
+	//
+	// not-wire-format: internal disk field. No Session wire key.
+	ActiveBudgetAnchor time.Time `json:"active_budget_anchor,omitempty"`
+	// StoppedForSeconds is active-time credit: whole seconds the session
+	// was stopped or down since ActiveBudgetAnchor (or CreatedAt). The
+	// running deadline is anchor + TimeoutSeconds + this credit (D6).
+	//
+	// not-wire-format: internal disk field. No Session wire key.
+	StoppedForSeconds int64 `json:"stopped_for_seconds,omitempty"`
 }
 
 // Terminal reports whether r's State is one of the two terminal states
@@ -717,12 +738,6 @@ func validateLifecycleRecordForPersist(rec *LifecycleRecord) error {
 	if rec.StopNote != nil && !IsValidStopCause(rec.StopNote.Cause) {
 		return fmt.Errorf("session: lifecycle: invalid stop_note.cause %q", rec.StopNote.Cause)
 	}
-	// ADR-20260928 D2: the stop-effect metadata names the accepted control
-	// whose fence/note this record carries. An anonymous effect could never
-	// be matched back to its ledger intent, so the control id is required.
-	if rec.StopEffect != nil && rec.StopEffect.ControlID == "" {
-		return fmt.Errorf("session: lifecycle: stop_effect requires control_id")
-	}
 	// D2 round-4 R4-MAJ-001: a stamped execution identity must be well-formed,
 	// and a final-delivery commit on a stamped record must name THE producing
 	// run — CommitID is the admission's run_id, never a per-completion
@@ -741,6 +756,12 @@ func validateLifecycleRecordForPersist(rec *LifecycleRecord) error {
 	}
 	if rec.FinalDelivery != nil && rec.ExecutionID != nil && rec.FinalDelivery.CommitID != rec.ExecutionID.RunID {
 		return fmt.Errorf("session: lifecycle: final_delivery.commit_id %q must equal the producing run_id %q", rec.FinalDelivery.CommitID, rec.ExecutionID.RunID)
+	}
+	// ADR-20260928 D2: the stop-effect metadata names the accepted control
+	// whose fence/note this record carries. An anonymous effect could never
+	// be matched back to its ledger intent, so the control id is required.
+	if rec.StopEffect != nil && rec.StopEffect.ControlID == "" {
+		return fmt.Errorf("session: lifecycle: stop_effect requires control_id")
 	}
 	// ADR-20260928 D2 CRIT-001: the protected final-delivery tuple exists only
 	// on the terminal commit that produced it — never on a non-terminal or
