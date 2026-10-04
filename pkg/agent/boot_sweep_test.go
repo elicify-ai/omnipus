@@ -247,36 +247,91 @@ func TestBootSweep_AwaitingCorrectionOwnerExempt(t *testing.T) {
 	}
 }
 
-// TestBootSweep_PausedOwnerNotAwaitingCorrection_Swept verifies that a paused
-// session whose plan is NOT awaiting-correction IS swept (the exemption is
-// narrow — only the durable awaiting-correction condition exempts).
-func TestBootSweep_PausedOwnerNotAwaitingCorrection_Swept(t *testing.T) {
+// TestBootSweep_StoppedOwnerNotAwaitingCorrection_StaysStopped pins the
+// founder contract of 2026-10-04 (ADR-20260928 D8): a stopped helper is
+// PAUSED, not failed. A LifecycleStopped steered owner whose plan is NOT
+// awaiting-correction — the shape that used to be swept to
+// failed(interrupted) once exemption (b) narrowed — stays exactly as it
+// stands across a restart: not in SweptToFailed, state still
+// LifecycleStopped, its retained stop note untouched (the restart rewrites
+// no stop note and marks nothing failed). It waits for Revive — a newer
+// instruction — never for this sweep.
+//
+// The running steered control in this test is what makes the exemption
+// observable as a STATE distinction (not "the sweep stopped working"): the
+// same-shaped record in LifecycleRunning IS still swept. The full sweep
+// mechanism for running/queued sessions (checkpoint + undelivered
+// carry-through, hook firing, generation preservation) remains pinned by
+// TestBootSweep_NonTerminalToFailedInterrupted; the control here exists only
+// so this test cannot pass for the wrong reason.
+func TestBootSweep_StoppedOwnerNotAwaitingCorrection_StaysStopped(t *testing.T) {
 	h := newBootSweepHarness(t)
 	mustCreatePlan(t, h.plans, &plan.Plan{
 		ID: "plan-2", Title: "plan-2", WorkspaceID: "ws", OwnerAgentID: "owner-agent",
 		State: plan.StateRunning, PlanPhase: plan.PhaseDispatching, // not awaiting-correction
 	})
-	// ADR-093 D3: a standing root (no SteeredBy) is now exempt from the
-	// sweep outright, which would make this narrow-exemption-(b) case
-	// exempt for the wrong reason (D3, not (b)) and stop testing what this
-	// test is for. Stamped as a steered worker (SteeredBy set) so the paths
-	// stay distinct: exemption (b) still doesn't apply (plan not
-	// awaiting-correction) and D3 doesn't apply either (not a standing
-	// root), so the record reaches the sweep for the reason this test names.
+	// Stamped as a steered worker (SteeredBy set) so ADR-093 D3's
+	// standing-root exemption cannot be what saves it: with D3 out of the
+	// way and exemption (b) not applying (plan-2 is dispatching, not
+	// awaiting-correction), the ONLY thing that can preserve this record is
+	// the D8 stopped-stays-stopped rule this test pins.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "sess-owner-2", Generation: 1, State: session.LifecycleStopped,
 		WorkspaceID: "ws", AgentID: "owner-agent",
 		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-2",
 		Origin:    &session.Origin{Kind: session.OriginKindDelegate},
 		SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-2", RootSessionID: "parent-2"},
-		// D2/CRIT-001: see sess-owner above — same pre-rename `paused`
-		// owner fixture, same redirect_pause justification.
+		// D2/CRIT-001: a LifecycleStopped record carries its stop note. This
+		// fixture's cause is redirect_pause — the pre-rename `paused` owner
+		// shape (a fresh instruction superseding the current generation), per
+		// delegate_park.go's precedent comment.
 		StopNote: &session.StopNote{At: time.Now().UTC(), By: session.StopActorSystem, Seq: 1, Cause: session.StopCauseRedirectPause},
+	})
+	// Control: the same steered-worker shape, state RUNNING — no live turn
+	// at boot, so the sweep still owns it (the founder contract sweeps
+	// running and queued sessions exactly as before).
+	persistLifecycle(t, h.ls, &session.LifecycleRecord{
+		SessionID: "sess-running-2", Generation: 1, State: session.LifecycleRunning,
+		WorkspaceID: "ws", AgentID: "owner-agent",
+		OwnerScopeKind: session.OwnerScopeHuman,
+		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-2", RootSessionID: "parent-2"},
 	})
 
 	res := h.pe.runBootSweep(context.Background())
-	if len(res.SweptToFailed) != 1 {
-		t.Fatalf("SweptToFailed = %v, want the paused non-awaiting owner swept", res.SweptToFailed)
+
+	for _, swept := range res.SweptToFailed {
+		if swept == "sess-owner-2" {
+			t.Fatalf("SweptToFailed = %v — the stopped owner was swept to failed. A stopped helper is paused, not failed: its run ended BEFORE the restart, so the restart interrupted nothing (founder decision 2026-10-04, ADR-20260928 D8)", res.SweptToFailed)
+		}
+	}
+	if len(res.PreservedAwaitingCorrection) != 0 {
+		t.Errorf("PreservedAwaitingCorrection = %v, want none — plan-2 is dispatching, so exemption (b) must not fire; the record must be preserved by the stopped-stays-stopped rule alone", res.PreservedAwaitingCorrection)
+	}
+	owner, err := h.ls.Load("sess-owner-2")
+	if err != nil {
+		t.Fatalf("load stopped owner: %v", err)
+	}
+	if owner.State != session.LifecycleStopped {
+		t.Errorf("stopped owner state = %q, want %q — the sweep must leave a stopped record exactly as it stands", owner.State, session.LifecycleStopped)
+	}
+	if owner.FailedReason != "" {
+		t.Errorf("stopped owner failed_reason = %q, want empty — the restart marks nothing failed", owner.FailedReason)
+	}
+	if owner.StopNote == nil || owner.StopNote.Cause != session.StopCauseRedirectPause {
+		t.Errorf("stopped owner stop note = %+v, want the retained redirect_pause note untouched (the restart rewrites no stop note)", owner.StopNote)
+	}
+
+	// The control IS swept — the exemption is a state distinction, not a
+	// broken sweep.
+	sweptControl := false
+	for _, swept := range res.SweptToFailed {
+		if swept == "sess-running-2" {
+			sweptControl = true
+		}
+	}
+	if !sweptControl {
+		t.Fatalf("SweptToFailed = %v, want sess-running-2 (a running steered session with no live turn is still swept)", res.SweptToFailed)
 	}
 }
 
