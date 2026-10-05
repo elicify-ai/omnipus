@@ -30,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -200,6 +201,12 @@ func TestSteeredTurnDrain1020Round4_PersistentDeliveryFailureIsBoundedAndLoud(t 
 		t.Errorf("delivery-only retry rewrote the committed current lifecycle: before=%+v after=%+v", current, after)
 	}
 	afterPending, err := al.GetSessionLifecycleStore().ListPendingFinalDeliveries()
+	// D2 promises every immutable commit, not scan enumeration order.
+	// Canonicalize only this unordered collection; compare every commit,
+	// payload byte, progress fact, revision and retirement field exactly.
+	// Input delivery ordering above remains a separate, ordered oracle.
+	sort.Slice(pending, func(i, j int) bool { return pending[i].Generation < pending[j].Generation })
+	sort.Slice(afterPending, func(i, j int) bool { return afterPending[i].Generation < afterPending[j].Generation })
 	if err != nil || !reflect.DeepEqual(afterPending, pending) {
 		t.Errorf("retry silently lost/acknowledged owed finals: before=%+v after=%+v error=%v", pending, afterPending, err)
 	}
