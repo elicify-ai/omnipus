@@ -1,10 +1,11 @@
 package agent
 
-// D2/D7: real registered stop_all, unchanged canonical hooks/default timer.
-// This independent positive proves the ORIGINAL soft stop hard-aborts its own
-// still-working A, rather than merely sparing B or accepting a fresh hard Stop.
-// Only external paid-provider I/O is held. No test calls a hard-cancel method.
-// Baseline PASS is positive evidence, not fabricated RED; mutation is CHECK's.
+// D2/D7 under the founder's one-stop decision (2026-10-05): real registered
+// stop_all, unchanged canonical wiring/default timer. This independent positive
+// proves the ORIGINAL stop FORCES its own still-working A at 3 s (polite stop
+// immediately, never the retired 5 s grace), rather than merely sparing B or
+// accepting a fresh stop. Only external paid-provider I/O is held. No test
+// calls a hard-cancel method.
 
 import (
 	"context"
@@ -44,7 +45,7 @@ func (p *originalGraceProvider) Chat(ctx context.Context, _ []providers.Message,
 	return &providers.LLMResponse{Content: "late generated answer must not become a terminal final"}, nil
 }
 
-func TestDelegateStopAll_OriginalPublicGraceHardAbortsOriginalSelectedRun(t *testing.T) {
+func TestDelegateStopAll_OriginalStopForcesOriginalSelectedRunAtThreeSeconds(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 	al, _ := newSteerAL(t)
 	wireSteerCompletionDeps(t, al)
@@ -66,10 +67,11 @@ func TestDelegateStopAll_OriginalPublicGraceHardAbortsOriginalSelectedRun(t *tes
 	if handle == nil || !handle.IsAlive() || al.tsExecutionClaim(handle, old.SessionID) != al.executionClaimFor(old) {
 		t.Fatal("SETUP: actual original immutable handle/owner missing")
 	}
+	stoppedAt := time.Now()
 	result := delegateToolFor(t, al).Execute(tools.WithTranscriptSessionID(context.Background(), parent),
-		map[string]any{"action": "stop_all", "session_id": old.SessionID, "hard": false})
+		map[string]any{"action": "stop_all", "session_id": old.SessionID})
 	if result == nil || result.IsError {
-		t.Fatalf("actual registered public soft Stop-all: %+v", result)
+		t.Fatalf("actual registered public Stop-all: %+v", result)
 	}
 	select {
 	case <-provider.softCancelled:
@@ -84,9 +86,10 @@ func TestDelegateStopAll_OriginalPublicGraceHardAbortsOriginalSelectedRun(t *tes
 	if err != nil || len(beforeEffects) != 1 || !reflect.DeepEqual(beforeEffects[0], *accepted.StopEffect) {
 		t.Fatalf("SETUP: genuine original acceptance inventory=%+v err=%v, want exactly its one full pair", beforeEffects, err)
 	}
-	// The default timer is untouched; only its real callback can request hard
+	// The default timer is untouched; only its real callback can force the
 	// abort here. I/O remains held, so a normal provider completion cannot win.
-	t27WaitFor(t, 30*time.Second, "ORIGINAL public default grace backstop to hard-abort selected A", handle.hardAbortRequested)
+	// The polite stage was immediate; the forced stage is at 3 s, never 5 s.
+	requireOneStopTimeline(t, "original stop of A", handle, stoppedAt)
 	provider.open()
 	joinGoalFixtureRuns(t, al)
 	final := rootReopenedRecord(t, al, old.SessionID)

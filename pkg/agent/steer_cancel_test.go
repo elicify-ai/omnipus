@@ -330,9 +330,16 @@ func TestStopRevive_OrderUnderLock(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		store := session.NewLifecycleStore(t.TempDir())
 		rec := testSteerLifecycleRecord("child", "root", session.LifecycleRunning, 1)
-		rec.Stop = &session.Stop{Generation: 1}
 		persistSteerLifecycle(t, store, rec)
 		canceller := NewSteerCanceller(store)
+		// Build the in-flight shape through the REAL stop path, never by
+		// forging rec.Stop: D2 writes the fence, the stop note and the
+		// stop_effect in ONE mutation, and a hand-forged fence without them is
+		// an invalid record (the ledger refuses it as "no consistent
+		// execution/control pair").
+		if _, outcome, err := canceller.stampStop("child", time.Now().UTC(), steer.Principal{Kind: steer.PrincipalKindHuman, ID: "first-stop"}, session.StopCauseStop); err != nil || outcome != stopStamped {
+			t.Fatalf("iteration %d: SETUP real stop did not stamp the in-flight fence: outcome=%v err=%v", i, outcome, err)
+		}
 
 		start := make(chan struct{})
 		errs := make(chan error, 2)
@@ -375,8 +382,8 @@ func TestStopRevive_OrderUnderLock(t *testing.T) {
 			t.Fatalf("iteration %d state = %q, want queued — Revive queues the same generation and a fresh stamp of a resumed session leaves it queued", i, got.State)
 		}
 		fenced := got.Stop != nil && got.Stop.Generation == 1
-		if fenced != (got.StopNote != nil) {
-			t.Fatalf("iteration %d has torn Stop/Revive state: fence=%v note=%v — D2 writes the fence and the note in the same mutation, and the resume clears both", i, got.Stop, got.StopNote)
+		if fenced != (got.StopNote != nil) || fenced != (got.StopEffect != nil) {
+			t.Fatalf("iteration %d has torn Stop/Revive state: fence=%v note=%v effect=%v — D2 writes the fence, the note and the stop effect in the same mutation, and the resume clears all of them", i, got.Stop, got.StopNote, got.StopEffect)
 		}
 	}
 }

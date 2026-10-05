@@ -96,9 +96,11 @@ func TestWake_StopLandingBeforeTheTurnStopsTheSession(t *testing.T) {
 			return
 		}
 		once.Do(func() {
-			if _, err := canceller.CancelSubtree(context.Background(), childID,
-				steer.Principal{Kind: steer.PrincipalKindHuman, ID: "dan"}); err != nil {
-				t.Errorf("CancelSubtree inside the wake window: %v", err)
+			// The one stop method (founder one-stop decision, 2026-10-05): the
+			// same StopTurns a human's Stop all runs.
+			if _, err := canceller.StopTurns(context.Background(), childID,
+				steer.Principal{Kind: steer.PrincipalKindHuman, ID: "dan"}, true, al.SteerGenerationCancel); err != nil {
+				t.Errorf("Stop inside the wake window: %v", err)
 			}
 		})
 	}
@@ -116,12 +118,19 @@ func TestWake_StopLandingBeforeTheTurnStopsTheSession(t *testing.T) {
 	if loadErr != nil {
 		t.Fatalf("Load(child): %v", loadErr)
 	}
-	if rec.Stop == nil {
-		t.Fatalf("no Stop marker on disk (state=%q) — the wake either never consulted I-6's reservation "+
-			"at all or wrote its stale snapshot back over the marker", rec.State)
+	// D2: a session that never ran lands `stopped` with the in-flight fence
+	// cleared and the stop note kept in the same mutation, so a LANDED stop has
+	// no current fence. The refusal property is the landed state itself: the
+	// wake must not have run, nor written its stale snapshot back over it.
+	if rec.State != session.LifecycleStopped {
+		t.Fatalf("persisted State = %q (stop=%+v); want stopped — the wake either never consulted I-6's reservation "+
+			"at all or wrote its stale snapshot back over the stop", rec.State, rec.Stop)
 	}
-	if rec.State == session.LifecycleRunning {
-		t.Errorf("persisted State = running; the stopped session must be left un-started")
+	if rec.StopNote == nil {
+		t.Errorf("the landed stopped record has no StopNote — D2/CRIT-001 keeps the note on every landing")
+	}
+	if rec.Stop != nil {
+		t.Errorf("the landed stopped record still carries the in-flight fence %+v — landing clears it in the same mutation", rec.Stop)
 	}
 	if ts := al.getActiveTurnState(childID); ts != nil {
 		t.Errorf("a turn is still registered for the stopped session %s — the refused wake must not leave one behind", childID)

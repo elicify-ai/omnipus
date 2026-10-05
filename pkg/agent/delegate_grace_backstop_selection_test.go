@@ -1,16 +1,17 @@
 package agent
 
-// D2/D7/T27: the ORIGINAL public soft Stop-all's grace backstop must not accept
-// a new Stop on a fresh same-generation execution. The canonical registered
-// tool, its hooks and its real timer remain untouched. Only real I/O/lock
-// boundaries are gated; no execution identity or valid lifecycle is fabricated.
+// D2/D7/T27 under the founder's one-stop decision (2026-10-05): the ORIGINAL
+// public Stop-all's FORCED stop (3 s after the polite stop; the tool-side 5 s
+// grace backstop is retired) must not accept a new Stop on, nor touch, a fresh
+// same-generation execution admitted after the original landed. The canonical
+// registered tool and the real timer stay untouched; only the external paid
+// provider edge is gated and the real wall clock is waited out -- no goroutine
+// stack inspection, no cascade-lock barrier, no fabricated identity.
 
 import (
 	"context"
 	"fmt"
 	"reflect"
-	"runtime"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -52,24 +53,7 @@ func (p *graceSelectionProvider) Chat(ctx context.Context, _ []providers.Message
 	}
 }
 func (*graceSelectionProvider) GetDefaultModel() string { return "actual-public-grace-selection" }
-func graceBackstopStacks() string {
-	buf := make([]byte, 1<<20)
-	n := runtime.Stack(buf, true)
-	return string(buf[:n])
-}
-func hasPublicGraceBackstopStack(stacks string, blocked bool) bool {
-	for _, stack := range strings.Split(stacks, "\n\n") {
-		if !strings.Contains(stack, "(*DelegateTool).executeStopAll.func") {
-			continue
-		}
-		if !blocked || (strings.Contains(stack, "(*SteerCanceller).cascade(") && strings.Contains(stack, "[sync.Mutex.Lock]")) {
-			return true
-		}
-	}
-	return false
-}
-
-func TestDelegateStopAll_PublicGraceBackstopSparesSameGenerationResume(t *testing.T) {
+func TestDelegateStopAll_ForcedStopSparesSameGenerationResume(t *testing.T) {
 	for _, queued := range []bool{false, true} {
 		t.Run(fmt.Sprintf("replacement_queued_%v", queued), func(t *testing.T) { publicGraceSelectionCase(t, queued) })
 	}
@@ -111,26 +95,18 @@ func publicGraceSelectionCase(t *testing.T, queued bool) {
 	}
 	tool := delegateToolFor(t, al)
 	ctx := tools.WithTranscriptSessionID(context.Background(), parentID)
-	result := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": old.SessionID, "hard": false})
+	stoppedAt := time.Now()
+	result := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": old.SessionID})
 	if result == nil || result.IsError {
-		t.Fatalf("actual public soft Stop-all failed: %+v", result)
+		t.Fatalf("actual public Stop-all failed: %+v", result)
 	}
 	canceller := al.steerCanceller()
-	// External fault barrier: original public timer enters the REAL cascade but
-	// cannot ACCEPT a stop until the test releases this normal owning mutex.
-	lock := canceller.cascadeLock(old.SessionID)
-	lock.Lock()
-	var once sync.Once
-	unlock := func() { once.Do(lock.Unlock) }
-	defer unlock()
-	waitForGate(t, "actual public grace timer to block before hard acceptance", func() bool { return hasPublicGraceBackstopStack(graceBackstopStacks(), true) })
 	accepted := rootReopenedRecord(t, al, old.SessionID)
 	if accepted.Stop == nil || accepted.StopEffect == nil || accepted.StopEffect.Target.RunID != old.ExecutionID.RunID {
-		t.Fatal("instrument: real original soft acceptance no longer selects A")
+		t.Fatal("instrument: real original stop acceptance no longer selects A")
 	}
-	if !oldHandle.requestHardAbort() {
-		t.Fatal("instrument: selected actual old handle was not aborted")
-	}
+	// A's uncooperative provider returns once its gate opens; its owning tail
+	// then lands the selected stop. The forced stop (3 s) has NOT fired yet.
 	oldGate.open()
 	if queued {
 		// The blocker now owns the released slot; wait for A's real disposal tail,
@@ -168,27 +144,31 @@ func publicGraceSelectionCase(t *testing.T, queued bool) {
 	if !queued && (freshHandle == nil || !al.tsExecutionClaim(freshHandle, old.SessionID).matches(fresh)) {
 		t.Fatal("instrument: actual fresh B handle missing")
 	}
-	unlock()
-	waitForGate(t, "actual original public grace goroutine to finish its full tail", func() bool { return !hasPublicGraceBackstopStack(graceBackstopStacks(), false) })
+	// Outlive the original stop's whole timeline: the forced stop fires 3 s
+	// after the polite one, and the retired 5 s grace would have fired by 6 s.
+	// Both must find A already landed and leave B alone.
+	if wait := 6500*time.Millisecond - time.Since(stoppedAt); wait > 0 {
+		time.Sleep(wait)
+	}
 	after := rootReopenedRecord(t, al, old.SessionID)
 	if after.State != fresh.State || after.Generation != fresh.Generation || !reflect.DeepEqual(after.ExecutionID, fresh.ExecutionID) || !reflect.DeepEqual(after.Stop, fresh.Stop) || !reflect.DeepEqual(after.StopNote, fresh.StopNote) || !reflect.DeepEqual(after.StopEffect, fresh.StopEffect) {
-		t.Errorf("ORIGINAL public grace backstop accepted/landed a NEW stop on B: before=%+v after=%+v", fresh, after)
+		t.Errorf("the ORIGINAL stop's forced stage accepted/landed a NEW stop on B: before=%+v after=%+v", fresh, after)
 	}
 	if queued {
 		if al.steerAdmission().queueLen() != 1 {
-			t.Errorf("old public grace removed actual queued B: queue=%d,want1", al.steerAdmission().queueLen())
+			t.Errorf("the original stop's forced stage removed actual queued B: queue=%d,want1", al.steerAdmission().queueLen())
 		}
 	} else if freshHandle.hardAbortRequested() || !freshHandle.IsAlive() {
-		t.Error("old public grace aborted fresh SAME-generation provider/handle")
+		t.Error("the original stop's forced stage aborted fresh SAME-generation provider/handle")
 	}
 	if goal := mustGoalRecord(t, old.GoalRef); goal.State != generated.GoalStateActive {
-		t.Errorf("old public grace ended goal: %+v", goal)
+		t.Errorf("the original stop's forced stage ended goal: %+v", goal)
 	}
-	// Cleanup may be idempotent in today's RED world. The separate positive
-	// test below begins with a provably live B and proves actual new enforcement.
-	cleanupStop := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": old.SessionID, "hard": true})
+	// Cleanup stop. The separate positive test below begins with a provably
+	// live B and proves a genuinely newer stop still stops it.
+	cleanupStop := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": old.SessionID})
 	if cleanupStop == nil || cleanupStop.IsError {
-		t.Fatalf("public hard Stop cleanup failed: %+v", cleanupStop)
+		t.Fatalf("public Stop cleanup failed: %+v", cleanupStop)
 	}
 	if queued {
 		blocker.open()
@@ -196,13 +176,14 @@ func publicGraceSelectionCase(t *testing.T, queued bool) {
 	joinGoalFixtureRuns(t, al)
 	final := rootReopenedRecord(t, al, old.SessionID)
 	if final.State != session.LifecycleStopped || final.Stop != nil || final.StopNote == nil || final.ExecutionID == nil || *final.ExecutionID != *fresh.ExecutionID {
-		t.Errorf("positive newer public Stop failed to stop actual B: %+v", final)
+		t.Errorf("the newer public Stop failed to stop actual B: %+v", final)
 	}
 }
 
 // Unlike the cleanup in a failing stale-timer case, this control begins with
-// a proven WORKING replacement and proves the new PUBLIC hard Stop's effect.
-func TestDelegateStopAll_NewPublicHardStopsActualSameGenerationReplacement(t *testing.T) {
+// a proven WORKING replacement and proves a genuinely newer PUBLIC Stop's
+// effect (the one stop method; there is no separate hard variant any more).
+func TestDelegateStopAll_NewPublicStopStopsActualSameGenerationReplacement(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 	al, _ := newSteerAL(t)
 	wireSteerCompletionDeps(t, al)
@@ -213,9 +194,9 @@ func TestDelegateStopAll_NewPublicHardStopsActualSameGenerationReplacement(t *te
 	awaitGoalProvider(t, oldGate)
 	tool := delegateToolFor(t, al)
 	ctx := tools.WithTranscriptSessionID(context.Background(), parentID)
-	initial := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": old.SessionID, "hard": true})
+	initial := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": old.SessionID})
 	if initial == nil || initial.IsError {
-		t.Fatalf("initial actual PUBLIC hard Stop: %+v", initial)
+		t.Fatalf("initial actual PUBLIC Stop: %+v", initial)
 	}
 	joinGoalFixtureRuns(t, al)
 	stopped := rootReopenedRecord(t, al, old.SessionID)
@@ -233,14 +214,17 @@ func TestDelegateStopAll_NewPublicHardStopsActualSameGenerationReplacement(t *te
 	if fresh.State != session.LifecycleRunning || fresh.ExecutionID == nil || fresh.ExecutionID.RunID == old.ExecutionID.RunID || fresh.ExecutionID.BootSeq != old.ExecutionID.BootSeq || fresh.Stop != nil || fresh.StopNote != nil || handle == nil || !handle.IsAlive() || handle.hardAbortRequested() {
 		t.Fatalf("positive premise: B is not an actual fresh WORKING run: %+v", fresh)
 	}
-	newer := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": old.SessionID, "hard": true})
+	newer := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": old.SessionID})
 	if newer == nil || newer.IsError {
-		t.Fatalf("genuine new PUBLIC hard Stop: %+v", newer)
+		t.Fatalf("genuine new PUBLIC Stop: %+v", newer)
 	}
 	joinGoalFixtureRuns(t, al)
 	final := rootReopenedRecord(t, al, old.SessionID)
-	if final.State != session.LifecycleStopped || final.Stop != nil || final.StopEffect == nil || final.StopEffect.ControlID == stopped.StopEffect.ControlID || final.StopEffect.Target.RunID != fresh.ExecutionID.RunID || final.StopEffect.Target.BootSeq != fresh.ExecutionID.BootSeq || !handle.hardAbortRequested() {
-		t.Fatalf("new PUBLIC hard Stop did not select/abort/land actual B: %+v", final)
+	if final.State != session.LifecycleStopped || final.Stop != nil || final.StopEffect == nil || final.StopEffect.ControlID == stopped.StopEffect.ControlID || final.StopEffect.Target.RunID != fresh.ExecutionID.RunID || final.StopEffect.Target.BootSeq != fresh.ExecutionID.BootSeq {
+		t.Fatalf("new PUBLIC Stop did not select/land actual B: %+v", final)
+	}
+	if polite, _ := handle.gracefulInterruptRequested(); !polite {
+		t.Fatalf("new PUBLIC Stop never asked actual B politely: %+v", final)
 	}
 	if goal := mustGoalRecord(t, old.GoalRef); goal.State != generated.GoalStateActive {
 		t.Errorf("new public Stop ended active goal: %+v", goal)
