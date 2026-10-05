@@ -115,6 +115,12 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 		completeBeforeDeliveryTestHook(rec.SessionID)
 	}
 	return al.runSteeredCompletionOnce(rec, claim, func() (bool, error) {
+		// #1053 (D6): a genuine failure stops the session's active helpers
+		// first and names them in the fatal hand-back. A current Stop fence
+		// owns the record instead (it lands stopped, not failed).
+		if nextState == session.LifecycleFailed && (rec.Stop == nil || rec.Stop.Generation != rec.Generation) {
+			failureReason += al.stopDescendantsOfFailedSession(ctx, rec)
+		}
 		return al.deliverSteeredCompletionForExecution(ctx, rec, outcome, nextState, answer, failureReason, claim)
 	})
 }
@@ -262,7 +268,8 @@ func (al *AgentLoop) deliverSteeredNotice(ctx context.Context, rec *session.Life
 // terminal-transition finishing window (issue #1020 round-3 / round-4
 // correction).
 //
-// Successful terminal commit: revive the child into a new generation
+// Committed terminal (even when publishing the committed final then failed;
+// the final stays owed in the outbox): revive the child into a new generation
 // carrying every post-finish STEER. A post-finish WAKE is replayed from
 // its real durable inbox entry: revive the terminal recipient without
 // repeating its old instruction, then run the existing wake consumer,
@@ -293,7 +300,11 @@ func (al *AgentLoop) processFinishingItems(
 	// bounded-drain sentinel capped revival at one per session, which
 	// dropped later-arriving items with no consumer; "all accepted steers
 	// of one hand-off go into ONE revival carrying all of them in order").
-	if terminalCommitted && transitionErr == nil {
+	// R1 ruling: once the terminal/outbox commit landed, a later publication
+	// failure does not undo it — the committed final stays owed (retried from
+	// the outbox) and post-commit input still starts the next round. The
+	// publication error is returned alongside.
+	if terminalCommitted {
 		steers := make([]string, 0, len(finishingItems))
 		wakes := make([]steeringQueueItem, 0, len(finishingItems))
 		for _, item := range finishingItems {
@@ -319,7 +330,7 @@ func (al *AgentLoop) processFinishingItems(
 		// because the steering scope is keyed by sessionID, not
 		// generation.
 		if len(steers) == 0 {
-			return al.schedulePostFinishWakes(rec, wakes)
+			return errors.Join(transitionErr, al.schedulePostFinishWakes(rec, wakes))
 		}
 		by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: "system:post-finish-steer"}
 		// Round-4 correction: mark the post-finish revival at the
@@ -336,7 +347,7 @@ func (al *AgentLoop) processFinishingItems(
 		// (the latter is the only place the new generation is created).
 		if _, err := al.ReviveStoppedSession(ctx, rec.SessionID, by, steers[0]); err != nil {
 			al.clearPostFinishRevival(rec.SessionID)
-			return errors.Join(fmt.Errorf("steer: post-finish revive %q: %w", rec.SessionID, err),
+			return errors.Join(transitionErr, fmt.Errorf("steer: post-finish revive %q: %w", rec.SessionID, err),
 				al.schedulePostFinishWakes(rec, wakes))
 		}
 		// Every remaining post-finish steer rides on the revived
@@ -348,11 +359,11 @@ func (al *AgentLoop) processFinishingItems(
 				Role:    "user",
 				Content: text,
 			}, ""); err != nil {
-				return errors.Join(fmt.Errorf("steer: post-finish enqueue onto revived scope %q: %w", rec.SessionID, err),
+				return errors.Join(transitionErr, fmt.Errorf("steer: post-finish enqueue onto revived scope %q: %w", rec.SessionID, err),
 					al.schedulePostFinishWakes(rec, wakes))
 			}
 		}
-		return al.schedulePostFinishWakes(rec, wakes)
+		return errors.Join(transitionErr, al.schedulePostFinishWakes(rec, wakes))
 	}
 	// Commit refused (Stop landed, terminal-write conflict, etc.) OR
 	// prepare failed: drain waiting items as a same-generation
