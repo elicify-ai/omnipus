@@ -1,4 +1,4 @@
-import { lazy, type ReactNode } from 'react'
+import { lazy, useEffect, type ReactNode } from 'react'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import {
   confirmDiscardLibraryEdits,
@@ -57,13 +57,21 @@ function BrowserPanelContent(props: PanelContentProps) {
  * internal layout is content work — this wrapper only adapts the contract. */
 function WorkspaceScopedPanelContent({
   context,
+  registerExpandContext,
   render,
 }: {
   context: PanelContext
+  registerExpandContext?: PanelContentProps['registerExpandContext']
   render: (workspaceId: string) => ReactNode
 }) {
   const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
   const workspaceId = (context as WorkspacePanelContext).workspaceId ?? activeWorkspaceId
+  useEffect(() => {
+    if (!workspaceId || !registerExpandContext) return undefined
+    // Report the workspace actually rendered, including child URL/Back/Forward changes.
+    registerExpandContext(() => ({ workspaceId }))
+    return () => registerExpandContext(null)
+  }, [registerExpandContext, workspaceId])
   if (!workspaceId) {
     return (
       <div
@@ -78,7 +86,13 @@ function WorkspaceScopedPanelContent({
 }
 
 function TasksPanelContent(props: PanelContentProps) {
-  return <WorkspaceScopedPanelContent context={props.context} render={(id) => <WorkspaceTasksPanel workspaceId={id} />} />
+  return (
+    <WorkspaceScopedPanelContent
+      context={props.context}
+      registerExpandContext={props.registerExpandContext}
+      render={(id) => <WorkspaceTasksPanel workspaceId={id} />}
+    />
+  )
 }
 
 function TeamPanelContent(props: PanelContentProps) {
@@ -93,7 +107,13 @@ function TeamPanelContent(props: PanelContentProps) {
 }
 
 function CalendarPanelContent(props: PanelContentProps) {
-  return <WorkspaceScopedPanelContent context={props.context} render={(id) => <CalendarPanel workspaceId={id} />} />
+  return (
+    <WorkspaceScopedPanelContent
+      context={props.context}
+      registerExpandContext={props.registerExpandContext}
+      render={(id) => <CalendarPanel workspaceId={id} />}
+    />
+  )
 }
 
 /** The workspace search codec shared by every workspace-scoped panel: the
