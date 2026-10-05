@@ -534,10 +534,11 @@ func (al *AgentLoop) drainSteerQueue(claim executionClaim) {
 			// Failed promotion is an admission-identity failure, not a stop
 			// landing. The claim-bound writer keeps the queued run's identity;
 			// a generation-only terminal report could land the failure on a
-			// later same-generation owner. The promotion goroutine has no
-			// caller, so the returned error is logged rather than dropped.
+			// later same-generation owner. A failed owning commit reports a
+			// nonfatal persistence error through the existing parent inbox; its
+			// returned error still records that the outcome is not committed.
 			if reportErr := al.reportSteeredExecutionFailure(context.Background(), next.executionClaim(), fmt.Sprintf("dispatch_failed: %v", err)); reportErr != nil {
-				logger.ErrorCF("agent", "steer: promoted admission failure remains pending",
+				logger.ErrorCF("agent", "steer: promoted admission failure could not be fully reported",
 					map[string]any{"session_id": next.sessionID, "run_id": next.runID, "error": reportErr.Error()})
 			}
 		}
