@@ -47,16 +47,16 @@ func q2ConsumerLifecycleFault(t *testing.T, corrupt bool) {
 		t.Fatalf("SETUP real launched-child journal bytes=%d err=%v", len(original), err)
 	}
 	t.Cleanup(func() {
-		if err := os.WriteFile(journal, original, 0o600); err != nil {
-			t.Errorf("restore original launched-child journal: %v", err)
+		if werr := os.WriteFile(journal, original, 0o600); werr != nil {
+			t.Errorf("restore original launched-child journal: %v", werr)
 		}
 	})
 	if corrupt {
-		if err := os.WriteFile(journal, []byte("{not-a-lifecycle-record}\n"), 0o600); err != nil {
-			t.Fatalf("install all-corrupt physical journal: %v", err)
+		if cerr := os.WriteFile(journal, []byte("{not-a-lifecycle-record}\n"), 0o600); cerr != nil {
+			t.Fatalf("install all-corrupt physical journal: %v", cerr)
 		}
-	} else if err := os.Remove(journal); err != nil {
-		t.Fatalf("remove accepted genuine child's journal: %v", err)
+	} else if rerr := os.Remove(journal); rerr != nil {
+		t.Fatalf("remove accepted genuine child's journal: %v", rerr)
 	}
 	meta, err := fixture.store.GetMeta(fixture.childID)
 	if err != nil || meta.ParentSessionID != fixture.parentID {

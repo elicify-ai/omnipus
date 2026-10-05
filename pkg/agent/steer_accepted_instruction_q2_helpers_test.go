@@ -136,8 +136,8 @@ func q2ConsumerReadDurable(t *testing.T, store *session.UnifiedStore, sessionID 
 			continue
 		}
 		var entry session.TranscriptEntry
-		if err := json.Unmarshal(line, &entry); err != nil {
-			t.Fatalf("physical transcript line %d is malformed; cannot trust filtered counts: %v", index+1, err)
+		if uerr := json.Unmarshal(line, &entry); uerr != nil {
+			t.Fatalf("physical transcript line %d is malformed; cannot trust filtered counts: %v", index+1, uerr)
 		}
 		physical = append(physical, entry)
 	}
@@ -146,8 +146,8 @@ func q2ConsumerReadDurable(t *testing.T, store *session.UnifiedStore, sessionID 
 		t.Fatalf("reopen actual transcript store: %v", err)
 	}
 	defer func() {
-		if err := reopened.Close(); err != nil {
-			t.Errorf("close reopened transcript store: %v", err)
+		if cerr := reopened.Close(); cerr != nil {
+			t.Errorf("close reopened transcript store: %v", cerr)
 		}
 	}()
 	visible, err := reopened.ReadTranscript(sessionID)
