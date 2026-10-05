@@ -300,6 +300,115 @@ describe('boardKeyboardCoordinateGetter — column-teleport coordinate math', ()
   })
 })
 
+// Docking recovery RED: SP-33's single-column status stack preserves the
+// canonical lifecycle order. Oracle: founder's approved reproduction brief —
+// Next + Up -> Inbox; Next + Down -> In Progress; repeated Down visits ALL
+// statuses. The getter is REAL. Rectangles are sensor inputs, not output copied
+// from the implementation; unlike jsdom's zero rectangles, all are non-zero,
+// share x/width, and have different tops AND heights. No CSS/source-string oracle.
+const STACKED_STATUS_ORDER = ['inbox', 'next', 'in_progress', 'blocked', 'done', 'failed'] as const
+const STACKED_HEIGHTS = [188, 236, 204, 260, 180, 220] as const
+const STACK_LEFT = 1002 // right-hand dock at the supplied 1600px desktop reproduction
+const STACK_WIDTH = 598
+const STACK_TOP = 235
+const STACK_GAP = 16
+const DRAG_WIDTH = 150
+const DRAG_HEIGHT = 80
+const DRAG_LEFT = STACK_LEFT + 24
+
+function stackedStatusRect(index: number) {
+  const top = STACK_TOP + STACKED_HEIGHTS.slice(0, index).reduce((sum, height) => sum + height + STACK_GAP, 0)
+  const height = STACKED_HEIGHTS[index]!
+  return { top, left: STACK_LEFT, right: STACK_LEFT + STACK_WIDTH, bottom: top + height, width: STACK_WIDTH, height }
+}
+
+function stackedDragTop(index: number): number {
+  const { top, height } = stackedStatusRect(index)
+  // First-principles destination: align the dragged card's centre with the
+  // centre of the specified adjacent status group. X must NOT move in a stack.
+  return top + (height - DRAG_HEIGHT) / 2
+}
+
+function pressStackedArrow(code: string, dragTop: number) {
+  const context = {
+    collisionRect: {
+      top: dragTop, bottom: dragTop + DRAG_HEIGHT, height: DRAG_HEIGHT,
+      left: DRAG_LEFT, right: DRAG_LEFT + DRAG_WIDTH, width: DRAG_WIDTH,
+    },
+    droppableRects: new Map(STACKED_STATUS_ORDER.map((status, index) => [status, stackedStatusRect(index)])),
+  } as unknown as SensorContext
+  const preventDefault = vi.fn()
+  const result = boardKeyboardCoordinateGetter(
+    { code, preventDefault } as unknown as KeyboardEvent,
+    { active: 'stacked-task', currentCoordinates: { x: DRAG_LEFT, y: dragTop }, context },
+  )
+  return { result, preventDefault }
+}
+
+function stackedTraversal(code: string, origin: number, count: number) {
+  let dragTop = stackedDragTop(origin)
+  const trace: ({ x: number; y: number } | undefined)[] = []
+  for (let step = 0; step < count; step += 1) {
+    const { result } = pressStackedArrow(code, dragTop)
+    trace.push(result)
+    // Feed the ACTUAL previous sensor result back into the next measured
+    // collision rectangle. Feeding an expected coordinate would hide a getter
+    // that is stuck on Next. An undefined result stays visible in the trace.
+    if (result !== undefined) dragTop = result.y
+  }
+  return trace
+}
+
+// Planned CHECK mutations (not performed by this RED author): X-only origin
+// resolution; origin off-by-one; ignore stacked Y; wrap at either edge. GREEN
+// and proof-of-failability mutation coverage are deferred to fresh CHECK.
+describe('SP-33 stacked Board keyboard regression', () => {
+  it('Next + ArrowUp targets Inbox, not index zero minus one', () => {
+    const { result, preventDefault } = pressStackedArrow('ArrowUp', stackedDragTop(1))
+    expect(result, 'SP-33: move exactly one status upward from Next').toEqual({ x: DRAG_LEFT, y: stackedDragTop(0) })
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+  })
+
+  it('Next + ArrowDown targets In Progress, not Next again', () => {
+    const { result } = pressStackedArrow('ArrowDown', stackedDragTop(1))
+    expect(result, 'SP-33: move exactly one status downward from Next').toEqual({ x: DRAG_LEFT, y: stackedDragTop(2) })
+  })
+
+  it('repeated ArrowDown traverses Inbox -> Next -> In Progress -> Blocked -> Done -> Failed', () => {
+    const expected = [1, 2, 3, 4, 5].map((index) => ({ x: DRAG_LEFT, y: stackedDragTop(index) }))
+    expect(stackedTraversal('ArrowDown', 0, 5), 'every actual coordinate becomes the next origin').toEqual(expected)
+  })
+
+  it('repeated ArrowUp traverses Failed -> Done -> Blocked -> In Progress -> Next -> Inbox', () => {
+    const expected = [4, 3, 2, 1, 0].map((index) => ({ x: DRAG_LEFT, y: stackedDragTop(index) }))
+    expect(stackedTraversal('ArrowUp', 5, 5), 'reverse traversal must not resolve every origin to Inbox').toEqual(expected)
+  })
+
+  it.each([
+    { origin: 0, code: 'ArrowUp', label: 'Inbox' },
+    { origin: 5, code: 'ArrowDown', label: 'Failed' },
+  ])('$label rejects $code beyond the stack without wrapping or intercepting it', ({ origin, code }) => {
+    const { result, preventDefault } = pressStackedArrow(code, stackedDragTop(origin))
+    expect(result, 'there is no adjacent status beyond this lifecycle edge').toBeUndefined()
+    expect(preventDefault).not.toHaveBeenCalled()
+  })
+
+  it('Tab is not a status movement and remains unintercepted in a stack', () => {
+    const { result, preventDefault } = pressStackedArrow('Tab', stackedDragTop(1))
+    expect(result).toBeUndefined()
+    expect(preventDefault).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { code: 'ArrowRight', left: 215, expectedX: 415, label: 'Next -> In Progress' },
+    { code: 'ArrowLeft', left: 215, expectedX: 15, label: 'Next -> Inbox' },
+  ])('horizontal control: $code keeps the original $label coordinates', ({ code, left, expectedX }) => {
+    // Existing horizontal fixture: 180px groups at x=index*200; the 150px
+    // dragged card lands at destination centre minus 75px, with unchanged Y.
+    expect(pressArrow(code, left).result).toEqual({ x: expectedX, y: 10 })
+  })
+})
+
 // ── Move decision behaviour (the guard drives onTaskMove vs onMoveRejected) ─────
 
 // ── Drag announcement message text (screen-reader live region) ─────────────────
