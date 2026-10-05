@@ -6,8 +6,10 @@ import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import type { WorkspaceSegment } from './WorkspaceTabBar'
 
-/** Route that is allowed to send the user into a workspace tab. */
-function redirectSourcePath(tab: WorkspaceTab['segment']): string {
+/** Route that is allowed to send the user into a workspace tab. Accepts the
+ * full WorkspaceSegment — 'chat' (the default landing tab) has no legacy
+ * top-level route of its own and falls through to '/'. */
+function redirectSourcePath(tab: WorkspaceSegment): string {
   if (tab === 'board') return '/tasks'
   if (tab === 'calendar') return '/automations'
   return '/'
@@ -19,7 +21,7 @@ function redirectSourcePath(tab: WorkspaceTab['segment']): string {
  * uses). Any other path is a navigation that already left this redirect.
  * Returns null when the hash is still the route that owns `tab`.
  */
-function foreignHashPath(tab: WorkspaceTab['segment']): string | null {
+function foreignHashPath(tab: WorkspaceSegment): string | null {
   const hash = window.location.hash
   if (hash === '' || hash === '#' || hash === '#/') return null
   const raw = hash.startsWith('#') ? hash.slice(1) : hash

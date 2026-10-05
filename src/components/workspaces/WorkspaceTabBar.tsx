@@ -6,6 +6,7 @@ import {
   CalendarBlank,
   UsersThree,
   Files,
+  Tray,
   Buildings,
 } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
@@ -29,12 +30,14 @@ import { cn } from '@/lib/utils'
 // Entry kinds:
 //   - workspace name → settings button (chrome, not a view; aria-current
 //     when the settings route is the page)
-//   - Tasks ('board' segment), Calendar, Library ('media' segment), Team →
-//     REGISTERED panel toggles: aria-pressed, opens/closes the panel scoped
-//     to this workspace via the leave gate — NO navigation (US-5 AS-1/AS-2).
-//     Chat is NOT an entry (SP-40): chat is the base route the shell sits
-//     over — the page underneath — and closing whichever panel is open
-//     reveals it. Chat is never rendered as a strip or dropdown entry.
+//   - Tasks ('board' segment), Calendar, Library ('media' segment), Team,
+//     Mail ('mail' segment) → REGISTERED panel toggles: aria-pressed,
+//     opens/closes the panel scoped to this workspace via the leave gate —
+//     NO navigation (US-5 AS-1/AS-2). Chat is NOT an entry (SP-40): chat is
+//     the base route the shell sits over — the page underneath — and closing
+//     whichever panel is open reveals it. Chat is never rendered as a strip
+//     or dropdown entry; SP-40 removes ONLY Chat — Mail (registered in wave
+//     2) keeps its strip/dropdown entry, exactly as on the release line.
 //
 // The routes behind the segments (workspaces.$workspaceId.board/calendar/
 // media/team) are deep-link targets only: they redirect to
@@ -58,6 +61,14 @@ export const WORKSPACE_TABS = [
   // and replaces the URL with chat?panel=library (§8.2), so an old link
   // never dead-ends on a page with no content of its own.
   { segment: 'media', label: 'Library', Icon: Files },
+  // Mail (email-mail-view-spec.md US-3): the workspace Mail panel, registered
+  // in wave 2 — its release-line strip position (between Library and Team)
+  // is preserved. SP-40 removed Chat from the strip; Mail was never named by
+  // SP-40 and stays, matching the release line's entry byte-for-byte
+  // (segment 'mail', label 'Mail', Tray icon). Clicking toggles the docked
+  // Mail panel scoped to this workspace; no mailbox context opens the
+  // shell's "choose a mailbox" state (SP-23).
+  { segment: 'mail', label: 'Mail', Icon: Tray },
   { segment: 'team', label: 'Team', Icon: UsersThree },
   // NOTE: workspace settings is deliberately NOT a tab — settings is chrome,
   // not a view. It's reached by clicking the workspace NAME in the top bar
@@ -67,13 +78,14 @@ export const WORKSPACE_TABS = [
 
 /** Registered-panel strip entries: strip segment → panel id. Since wave 3
  * (SP-6) every strip segment maps to a registered panel — Tasks/Calendar/
- * Team joined Library, ending MAJ-012's mixed mode; their route files stay
- * as the deep-link targets only (§10). */
+ * Team joined Library and Mail (wave 2) keeps its mapping, ending MAJ-012's
+ * mixed mode; their route files stay as the deep-link targets only (§10). */
 const PANEL_TOGGLE_SEGMENTS: Partial<Record<TabSegment, WorkspacePanelId>> = {
   board: 'tasks',
   calendar: 'calendar',
   media: 'library',
   team: 'team',
+  mail: 'mail',
 }
 
 /** Every real WORKSPACE_TABS segment — derived from the array itself (not a
@@ -111,10 +123,10 @@ interface WorkspaceTabBarProps {
  * the only aria-current carrier is the workspace-name → settings entry.
  *
  * Responsive strategy (container-query, relative to the @container top-bar):
- *   ≥ 72rem (1152px): full strip — name → settings, then the four panel
+ *   ≥ 72rem (1152px): full strip — name → settings, then the five panel
  *     toggles (hidden @6xl:flex)
  *   < 72rem (1152px): an icon-only menu trigger (flex @6xl:hidden, SP-11 —
- *     a plain menu icon, no text label) opening the same set: the four
+ *     a plain menu icon, no text label) opening the same set: the five
  *     toggles plus settings, since narrow viewports have no other settings
  *     entry point here.
  *
@@ -164,7 +176,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
           tab semantics would be wrong. NO overflow-x-auto: a scrollable
           strip let mouse-wheel/touch gestures scroll it up/down (overflow
           containers clip + scroll BOTH axes) — chrome must never move. The
-          strip's content is bounded (name + 4 toggles, name truncated) so
+          strip's content is bounded (name + 5 toggles, name truncated) so
           overflow can't occur. ─────── */}
       <div
         data-testid="workspace-tab-strip"

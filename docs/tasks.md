@@ -1,10 +1,10 @@
 # Tasks
 
-The Tasks tab inside a workspace is where you turn work into cards you can assign, start, and follow to completion. This page covers the Board and List views and the task detail panel.
+The Tasks panel inside a workspace is where you turn work into cards you can assign, start, and follow to completion. This page covers the Board and List views and the task detail panel.
 
 ## What it is
 
-Every workspace has a Tasks tab, next to Chat, Calendar, Library, and Team. It holds the workspace's one shared task list — yours and your agents' together — behind three views:
+Every workspace has a **Tasks** control in its top bar, alongside Calendar, Library, Mail, and Team. Click it to open the Tasks panel beside Chat; click it again to close it. Chat is the page underneath, not a separate top-bar entry. The panel holds the workspace's one shared task list — yours and your agents' together — behind three views:
 
 - **Board** — a kanban: one card per task, in one of six status columns.
 - **List** — the same tasks as a table. Each header dropdown sorts or filters by value.
@@ -22,7 +22,7 @@ On the Board, the **Agent** and **Tags** filters narrow further. The List filter
 
 ## How to create and start a task
 
-1. Open the workspace, then its **Tasks** tab.
+1. Open the workspace, then its **Tasks** panel.
 2. Click **New Task** at the top right. A form slides in from the right.
 3. Fill in the required fields: **Title**, **Goal**, at least one **Acceptance criterion**, and at least one **Definition of Done** item.
 4. Pick an **Agent** to own the work, or leave it **Unassigned**. A task with no agent cannot run — it stays on the board as a human to-do.
@@ -75,6 +75,8 @@ The Board has one column per status; the List has a Status column.
 | Failed | The last run failed, was stopped, or a queued start was refused | Retry opens a fresh run |
 
 A task you stop shows as orange **Cancelled** rather than red **Failed**, inside the same Failed column.
+
+An **In Progress** task shows a spinning-arrow indicator on its Board card, List row, and Graph node, including task nodes in a plan's graph. A running plan's tile in the Plans band uses the same indicator. These task and plan indicators show no token counts; Chat keeps its existing token counter. The arrow follows the item's reported status, not a separate measure of model activity. With reduced motion enabled, it stays visible but does not spin.
 
 ```mermaid
 flowchart LR

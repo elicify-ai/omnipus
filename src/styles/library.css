@@ -45,6 +45,7 @@
 @source "../components/ui/skeleton.tsx";
 @source "../components/ui/collection-state.tsx";
 @source "../components/ui/job-status.tsx";
+@source "../components/ui/RunningIndicator.tsx";
 @source "../components/ui/empty-state.tsx";
 @source "../components/ui/error-state.tsx";
 @source "../components/ui/query-error-state.tsx";

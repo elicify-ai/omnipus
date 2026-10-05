@@ -33,8 +33,8 @@ const WorkspaceTasksPanel = lazy(async () => {
 })
 
 const WorkspaceTeamPanel = lazy(async () => {
-  const module = await import('@/components/workspaces/WorkspaceTeamTab')
-  return { default: module.WorkspaceTeamTab }
+  const module = await import('@/components/workspaces/team/TeamPanel')
+  return { default: module.TeamPanel }
 })
 
 const CalendarPanel = lazy(async () => {
@@ -82,7 +82,14 @@ function TasksPanelContent(props: PanelContentProps) {
 }
 
 function TeamPanelContent(props: PanelContentProps) {
-  return <WorkspaceScopedPanelContent context={props.context} render={(id) => <WorkspaceTeamPanel workspaceId={id} />} />
+  // TeamPanel resolves the workspace record and binds the real context that
+  // WorkspaceTeamTab requires, including outside the workspace route shell.
+  return (
+    <WorkspaceScopedPanelContent
+      context={props.context}
+      render={(id) => <WorkspaceTeamPanel shellProps={{ ...props, context: { workspaceId: id } }} />}
+    />
+  )
 }
 
 function CalendarPanelContent(props: PanelContentProps) {
