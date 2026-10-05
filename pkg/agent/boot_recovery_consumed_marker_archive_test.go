@@ -64,6 +64,7 @@ func (h *bootRecoveryHarness) archiveRecovery(deliverer *bootArchiveRecordingDel
 		Lifecycle:      h.lifecycle,
 		Sessions:       h.sessions,
 		Inbox:          h.inbox,
+		BootEpoch:      h.writingBoot,
 		Classifier:     NewSteerRecordClassifier(h.lifecycle, h.sessions),
 		Deliverer:      deliverer,
 		OperatorNotice: func(message string) { h.notices = append(h.notices, message) },
