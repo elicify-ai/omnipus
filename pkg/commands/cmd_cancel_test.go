@@ -3,13 +3,14 @@ package commands
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
-// TestCancelDefinition_NotAliased asserts that the /cancel definition has no
-// aliases. FR-5 forbids /stop, /abort, /kill, and any other alias. This test
-// acts as the exact-set assertion from spec section 10 / T12a: future alias
-// additions break this test loudly.
+// TestCancelDefinition_NotAliased preserves FR-5's zero-alias rule, as amended
+// by frozen ADR-20260928 D9 and preserved by ADR-20261004: /stop and
+// /stop-redirect are executable OWN commands, never aliases of /cancel.
+// /abort and /kill remain forbidden.
 func TestCancelDefinition_NotAliased(t *testing.T) {
 	defs := BuiltinDefinitions()
 
@@ -29,11 +30,29 @@ func TestCancelDefinition_NotAliased(t *testing.T) {
 		t.Errorf("/cancel must have no aliases (FR-5), got: %v", cancelDef.Aliases)
 	}
 
-	// Assert the registered Names across ALL definitions do not include any
-	// forbidden alias names that could be mistaken for cancel.
-	forbidden := []string{"stop", "abort", "kill"}
+	// Required names are distinct definitions, not aliases (D9).
+	for _, name := range []string{"stop", "stop-redirect"} {
+		t.Run(name, func(t *testing.T) {
+			count := 0
+			for _, def := range defs {
+				if def.Name == name {
+					count++
+					if def.Handler == nil || len(def.Aliases) != 0 {
+						t.Errorf("/%s must be executable with zero aliases (D9), handler nil=%v aliases=%v", name, def.Handler == nil, def.Aliases)
+					}
+				}
+			}
+			if count != 1 {
+				t.Fatalf("BLOCKED: /%s has %d own definitions, want exactly 1 — required by preserved ADR D9", name, count)
+			}
+		})
+	}
+	forbidden := []string{"abort", "kill"}
 	for _, def := range defs {
 		for _, alias := range def.Aliases {
+			if alias == "stop" || alias == "stop-redirect" {
+				t.Errorf("/%s must be an own command, never an alias of /%s (D9)", alias, def.Name)
+			}
 			for _, f := range forbidden {
 				if alias == f {
 					t.Errorf("found forbidden alias %q on definition %q (FR-5)", alias, def.Name)
@@ -61,9 +80,11 @@ type stubAgentLoop struct {
 	calledSessionID string
 	calledHint      string
 	callCount       int
-	returnErr       error // if non-nil, returned by simulateInterrupt and RequestCancelForSession
-	returnFired     *bool // if non-nil, overrides the fired return value from RequestCancelForSession
-	returnArmed     bool  // returned as the armed return value from RequestCancelForSession
+	singleCalls     int
+	scopedCalls     []scopedCancelCall
+	returnErr       error // if non-nil, returned by the scoped tree capability
+	returnFired     *bool // if non-nil, overrides the scoped fired result
+	returnArmed     bool  // returned as the scoped armed result
 }
 
 func (s *stubAgentLoop) simulateInterrupt(sessionID, hint string) ([]string, error) {
@@ -73,9 +94,15 @@ func (s *stubAgentLoop) simulateInterrupt(sessionID, hint string) ([]string, err
 	return nil, s.returnErr
 }
 
-func (s *stubAgentLoop) RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (bool, bool, error) {
-	// Delegate to simulateInterrupt for test coverage continuity.
-	// Include both userID and channel in the hint so tests can assert on both.
+func (s *stubAgentLoop) RequestCancelForSession(context.Context, string, string, string) (bool, bool, error) {
+	s.singleCalls++
+	return false, false, errUnscopedPathUsed
+}
+
+// RequestScopedCancelForSession is the tree capability specified by the
+// existing D9 scope pack. The session-only method is a separate negative probe.
+func (s *stubAgentLoop) RequestScopedCancelForSession(_ context.Context, sessionID, userID, channel, scope string) (bool, bool, error) {
+	s.scopedCalls = append(s.scopedCalls, scopedCancelCall{sessionID: sessionID, userID: userID, channel: channel, scope: scope})
 	hint := "cancel from " + userID + " via " + channel
 	_, err := s.simulateInterrupt(sessionID, hint)
 	if err != nil {
@@ -119,8 +146,15 @@ func TestCancelHandler_CallsInterruptSession(t *testing.T) {
 		t.Fatalf("cancel handler returned unexpected error: %v", err)
 	}
 
+	if stub.singleCalls != 0 {
+		t.Fatalf("session-only calls = %d, want 0 — /cancel requires tree scope (D9)", stub.singleCalls)
+	}
+	wantCall := scopedCancelCall{sessionID: "session-abc", userID: "@alice", channel: "telegram", scope: "tree"}
+	if len(stub.scopedCalls) != 1 || stub.scopedCalls[0] != wantCall {
+		t.Fatalf("tree calls = %+v, want exactly [%+v] (D9)", stub.scopedCalls, wantCall)
+	}
 	if stub.callCount != 1 {
-		t.Fatalf("simulateInterrupt call count = %d, want 1", stub.callCount)
+		t.Fatalf("tree stop call count = %d, want 1", stub.callCount)
 	}
 	if stub.calledSessionID != "session-abc" {
 		t.Errorf("simulateInterrupt sessionID = %q, want %q", stub.calledSessionID, "session-abc")
@@ -334,6 +368,10 @@ func TestCancelHandler_ReplyMatchesErrorState(t *testing.T) {
 			if err != nil {
 				t.Fatalf("handler returned unexpected error: %v", err)
 			}
+			wantCall := scopedCancelCall{sessionID: "sess-1", userID: "user_x", channel: "web", scope: "tree"}
+			if stub.singleCalls != 0 || len(stub.scopedCalls) != 1 || stub.scopedCalls[0] != wantCall {
+				t.Errorf("cancel routing: single=%d tree=%+v, want single=0 tree=[%+v]", stub.singleCalls, stub.scopedCalls, wantCall)
+			}
 			if reply != tc.wantReply {
 				t.Errorf("reply = %q, want %q", reply, tc.wantReply)
 			}
@@ -341,7 +379,45 @@ func TestCancelHandler_ReplyMatchesErrorState(t *testing.T) {
 	}
 }
 
-// contains is a helper for string containment without importing strings.
+// singleOnlyCancelLoop deliberately lacks the tree capability. A successful
+// session-only answer must not manufacture a successful Stop all (D7/D9).
+type singleOnlyCancelLoop struct{ calls int }
+
+func (s *singleOnlyCancelLoop) RequestCancelForSession(context.Context, string, string, string) (bool, bool, error) {
+	s.calls++
+	return true, false, nil
+}
+
+func TestCancelActiveTurn_MissingTreeCapabilityFailsVisiblyWithoutFallback(t *testing.T) {
+	loop := &singleOnlyCancelLoop{}
+	rt := (&Runtime{SessionID: func() string { return "root-tree" }}).WithAgentLoop(loop)
+	err := rt.CancelActiveTurn(context.Background(), "root-tree", Canceller{UserID: "owner", Channel: "web"})
+	if loop.calls != 0 {
+		t.Errorf("session-only fallback calls = %d, want 0 — missing tree capability must be a visible error (D9)", loop.calls)
+	}
+	if err == nil {
+		t.Fatal("BLOCKED: missing tree cancellation capability returned success — required by D7/D9, never session-only fallback")
+	}
+	if errors.Is(err, ErrNoActiveTurn) || errors.Is(err, ErrCancelArmed) || !strings.Contains(strings.ToLower(err.Error()), "tree") {
+		t.Fatalf("missing-capability error = %v, want a visible tree-capability error, not an ordinary no-op/armed outcome", err)
+	}
+	var reply string
+	handlerErr := cancelCommand().Handler(context.Background(), Request{
+		Text: "/cancel", SenderID: "owner", Channel: "web",
+		Reply: func(text string) error { reply = text; return nil },
+	}, rt)
+	if handlerErr != nil {
+		t.Fatalf("cancel error reply transport: %v", handlerErr)
+	}
+	if want := "Cancel request failed: " + err.Error(); reply != want {
+		t.Errorf("missing tree reply = %q, want %q", reply, want)
+	}
+	if loop.calls != 0 {
+		t.Errorf("handler used session-only fallback %d times, want 0", loop.calls)
+	}
+}
+
+// contains is a helper for string containment.
 func contains(s, sub string) bool {
 	if len(sub) == 0 {
 		return true
