@@ -123,15 +123,17 @@ interface WorkspaceTabBarProps {
  * the only aria-current carrier is the workspace-name → settings entry.
  *
  * Responsive strategy (container-query, relative to the @container top-bar):
- *   ≥ 72rem (1152px): full strip — name → settings, then the five panel
- *     toggles (hidden @6xl:flex)
- *   < 72rem (1152px): an icon-only menu trigger (flex @6xl:hidden, SP-11 —
+ *   ≥ 72rem: full strip — name → settings, then the five panel toggles
+ *     (hidden @6xl:flex)
+ *   < 72rem: an icon-only menu trigger (flex @6xl:hidden, SP-11 —
  *     a plain menu icon, no text label) opening the same set: the five
  *     toggles plus settings, since narrow viewports have no other settings
  *     entry point here.
+ *   72rem is 1008px at the default 14px root; its pixel equivalent changes
+ *   with the user's 12–20px font-size preference.
  *
- * The full strip retains all workspace-tab-<segment> test ids so Playwright
- * tests at 1280px viewport (container ≥1152px) still find them.
+ * The full strip retains all workspace-tab-<segment> test ids. Tests must
+ * size the container against the rem threshold at the selected root size.
  *
  * Sits inline inside the WorkspaceTabContainer top-bar row (Row 1). The parent
  * row owns the background (no border — flat shell alignment); this component
@@ -170,7 +172,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
 
   return (
     <div className="flex-shrink-0 flex items-stretch">
-      {/* ── Full entry strip: shown when container ≥ 1152px (72rem).
+      {/* ── Full entry strip: shown when container ≥ 72rem (1008px at the default 14px root).
           MAJ-007: this is NOT a role="tablist" — it is a set of panel
           toggles (plus the name → settings entry), so the tablist
           tab semantics would be wrong. NO overflow-x-auto: a scrollable
@@ -241,7 +243,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
         })}
       </div>
 
-      {/* ── Compact panels menu: shown when container < 1152px (72rem).
+      {/* ── Compact panels menu: shown when container < 72rem (1008px at the default 14px root).
           SP-11 (amended): the trigger is an ICON only — a plain menu icon,
           no text label. With Chat never a strip entry (SP-40) there is no
           page name left for a label to show. ── */}

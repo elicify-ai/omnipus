@@ -23,12 +23,13 @@
 //      breakpoint is 648px — the table's documented fixed-column budget
 //      (504px of widthed columns + a 144px Title floor), per SP-33/SP-35's
 //      "measured from the real table's own content".
-//   2. The governed columns STAY IN THE DOM in every state (delivered
-//      deliberately: sort/filter state and the AT tree must not churn) —
-//      hiding is the container-query class in the default `auto` state, a
-//      plain `hidden` class when the user forced them hidden, and no hide
-//      class when revealed. jsdom cannot evaluate the query, so the pack
-//      pins the class mechanism plus the control's state machine.
+//   2. The governed columns STAY IN THE DOM and sort/filter state persists.
+//      Hiding uses display:none: the columns leave the accessibility tree
+//      while hidden and return when the ⋯ control reveals them. Hiding is the
+//      container-query class in the default `auto` state, a plain `hidden`
+//      class when forced hidden, and no hide class when revealed. jsdom cannot
+//      evaluate the query, so the pack pins the class mechanism and control
+//      state machine, not browser accessibility-tree exposure.
 //   3. The "⋯" control carries no test id — it is a real <button> whose
 //      aria-label IS its contract: "Show or hide Tags and Updated columns"
 //      (auto) / "Hide Tags and Updated columns" (revealed) / "Show Tags and

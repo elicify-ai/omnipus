@@ -200,9 +200,8 @@ describe('BoardView narrow — SP-33 mechanism: panel-width container query, not
     // of the old md: viewport collapse. This case was incorrectly converted
     // to an old-behaviour guard in 105e2c072; its original RED requirement is
     // restored. Child BoardView containers cannot satisfy a toolbar query.
-    // BLOCKED production gap: WorkspaceTasksTab.tsx::WorkspaceTasksTab still
-    // uses md:grid / md:grid-cols-[1fr_auto_1fr] on its toolbar and has no
-    // ancestor container for that toolbar. Frontend-lead owns the fix.
+    // Pin the toolbar's own container ancestor and container-query layout
+    // classes; viewport-based grid classes cannot satisfy this requirement.
     const mounted = renderTasksTab()
     const toolbar = mounted.getByTestId('tasks-heading').parentElement?.parentElement
     expect(toolbar, 'the Tasks heading belongs to the real toolbar').not.toBeNull()

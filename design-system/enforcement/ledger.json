@@ -8273,7 +8273,7 @@
     {
       "path": "src/components/ui/RunningIndicator.test.tsx",
       "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Finding is the direct import of the domain component under test (controls/shadcn-low-level-import resolves '@/components/ui/RunningIndicator' to a src/components/ui path) — domain components are deliberately not in the public barrel, so the test must import the source module; mirrors AutoSaveIndicator.test.tsx's registered import. Test-only styling debt never ships; the file renders no raw controls."
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). This exact-path boundary covers the spinner-only test's dynamic whole-module import of '@/components/ui/RunningIndicator' (controls/shadcn-low-level-import). RunningIndicator and its props type are public barrel exports; the scanner treats dynamic module reach as namespace-equivalent even for published components. The boundary is test-only and does not alter production import rules."
     }
   ]
 }

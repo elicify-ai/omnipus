@@ -1,5 +1,6 @@
 // RunningIndicator.test.tsx — wave-3 join pack for side-panel-shell-spec.md
-// Wave 3, FR-022 (NEW requirement, SP-41) — the COMPONENT half:
+// Original Wave 3, FR-022 (SP-41) — the COMPONENT acceptance rationale:
+// PI3 below amends the task/plan token-count scope of this original quote.
 //
 //   "Every running task surfaced in the Tasks panel's Board, List and Graph
 //    views, and in the Plans band, MUST show ONE standard 'running'
@@ -14,21 +15,11 @@
 // (src/lib/formatTokens.ts: "44.0k / 1.2M, under 1000 as-is") — the same
 // vocabulary chat's indicator uses — never from observed output.
 //
-// JOIN STATUS (2026-10-05, work/side-panel-wave3-join-20261005): the slice
-// delivered src/components/ui/RunningIndicator.tsx (catalogued) plus the six
-// tests in the first describe block below. Numeric cases are retained;
-// only the obsolete 3.4s reduced-motion expectation is repinned to the
-// standing static-motion policy under the coordinator's explicit ruling.
-// Their original GREEN claims are not re-labelled independent CHECK evidence.
-// The join adds the 8773803cf RED
-// pack's two remaining oracles the delivered file did not pin:
-//   1. the design-system CATALOG entry (FR-022's "MUST be a catalogued
-//      omnipus-design-system component" — the entry, not just the file), and
-//   2. the formatTokens boundary sweep (0 / 999 / 1k / kilo / mega), derived
-//      from the shared formatter's documented boundaries.
-// Surfaces (which views render it for which tasks) live in
-// RunningIndicator.surfaces.test.tsx — still RED in this join: the indicator
-// is not yet wired into Board/List/Graph/Plans (production gap, FR-022).
+// The 8773803cf acceptance pack adds catalog-membership and shared-formatter
+// boundary oracles (0 / 999 / 1k / kilo / mega). Numeric cases cover the
+// optional-count variant; PI3 below pins spinner-only task/plan usage.
+// Surface placement is covered separately in RunningIndicator.surfaces.test.tsx.
+// These comments describe acceptance criteria, not test execution results.
 
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
@@ -139,16 +130,13 @@ describe('RunningIndicator — PI3 spinner-only mode (task surfaces: NO token co
   // PI3 (founder Q2 = A): Board/List/Graph/Plans surfaces show the animated
   // arrow WITHOUT task token counts — no fake values, no placeholders. The
   // component must therefore render a spinner-only variant whose accessible
-  // identity is "Running", never a count. RED today: the delivered component
-  // has no tokens-less mode (tokens is required and the count is always
-  // rendered) — this test fails naming the missing mode until production
-  // adds it. The `as unknown as` cast is the declared BLOCKED seam, keeping
-  // typecheck honest while the mode is missing.
+  // identity is "Running", never a count. These assertions pin that mode
+  // independently of the retained optional-count cases above.
   it('renders with NO token text: role=status, animated svg, accessible name "Running"', async () => {
     const mod = (await import('@/components/ui/RunningIndicator')) as unknown as {
       RunningIndicator: (props?: { tokens?: number }) => ReactElement
     }
-    // Missing mode is a loud RED, never a type suppression or skipped test.
+    // A render failure is reported explicitly, never suppressed or skipped.
     let mounted: ReturnType<typeof render>
     try {
       mounted = render(<mod.RunningIndicator />)
