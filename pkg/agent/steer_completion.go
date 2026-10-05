@@ -306,6 +306,7 @@ func (al *AgentLoop) processFinishingItems(
 	// publication error is returned alongside.
 	if terminalCommitted {
 		steers := make([]string, 0, len(finishingItems))
+		steerItems := make([]steeringQueueItem, 0, len(finishingItems))
 		wakes := make([]steeringQueueItem, 0, len(finishingItems))
 		for _, item := range finishingItems {
 			if item.wake != nil {
@@ -317,6 +318,7 @@ func (al *AgentLoop) processFinishingItems(
 				continue
 			}
 			steers = append(steers, text)
+			steerItems = append(steerItems, item)
 		}
 		// Carry every accepted post-finish steer in the FIRST revived
 		// generation, exactly in arrival order, so the child's next turn
@@ -350,15 +352,23 @@ func (al *AgentLoop) processFinishingItems(
 			return errors.Join(transitionErr, fmt.Errorf("steer: post-finish revive %q: %w", rec.SessionID, err),
 				al.schedulePostFinishWakes(rec, wakes))
 		}
+		// The first steer's text is now durably in the revived transcript:
+		// its D4 receipt (if any) is delivered.
+		if id := steerItems[0].steerControlID; id != "" {
+			if err := al.GetSessionLifecycleStore().RecordSteerControlState(rec.SessionID, id, session.SteerStateDelivered, ""); err != nil {
+				return errors.Join(transitionErr, fmt.Errorf("steer: post-finish revive %q: record steer %q delivered: %w", rec.SessionID, id, err),
+					al.schedulePostFinishWakes(rec, wakes))
+			}
+		}
 		// Every remaining post-finish steer rides on the revived
 		// generation. They go onto the same sessionID scope, which the
 		// new turn dequeues on its next tool boundary; that is the
 		// round-4 "append to the revived generation's scope" path.
-		for _, text := range steers[1:] {
-			if _, err := al.EnqueueSteeringMessage(rec.SessionID, "", providers.Message{
-				Role:    "user",
-				Content: text,
-			}, ""); err != nil {
+		for _, item := range steerItems[1:] {
+			// Re-queue the accepted item itself (its correlation and D4
+			// receipt identity ride along); it is not a new steer.
+			item.message = providers.Message{Role: "user", Content: strings.TrimSpace(item.message.Content)}
+			if _, err := al.enqueueSteeringItemWithStatus(rec.SessionID, "", item, nil); err != nil {
 				return errors.Join(transitionErr, fmt.Errorf("steer: post-finish enqueue onto revived scope %q: %w", rec.SessionID, err),
 					al.schedulePostFinishWakes(rec, wakes))
 			}

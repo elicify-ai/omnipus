@@ -240,6 +240,18 @@ func (al *AgentLoop) abandonSteeredQueuedSteering(
 		}
 	}
 	parentID := steerParentSessionID(childRec)
+	if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
+		for _, item := range abandonedItems {
+			if item.steerControlID == "" {
+				continue
+			}
+			if err := lifecycle.RecordSteerControlState(normalizeSteeringScope(sessionID), item.steerControlID,
+				session.SteerStateSuperseded, "abandoned after repeated continuation failures"); err != nil {
+				logger.ErrorCF("agent", "steer: abandoned steer receipt not recorded (the parent is still told below)",
+					map[string]any{"session_id": sessionID, "control_id": item.steerControlID, "error": err.Error()})
+			}
+		}
+	}
 	for i, item := range abandonedItems {
 		if ts != nil {
 			ts.appendClassifiedError(EventKindError.String(), "steering_continue", LLMError{

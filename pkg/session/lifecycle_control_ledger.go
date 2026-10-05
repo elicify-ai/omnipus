@@ -78,6 +78,9 @@ type controlLedgerLine struct {
 	Actor      string            `json:"actor,omitempty"`
 	StopEffect *StopEffect       `json:"stop_effect,omitempty"`
 	LandedStop *landedStopRecord `json:"landed_stop,omitempty"`
+	// Text is the exact instruction of a steer control (D4: kept until its
+	// transcript injection is durable). Empty for every other verb.
+	Text string `json:"text,omitempty"`
 }
 
 func (s *LifecycleStore) controlLedgerPath(sessionID string) string {

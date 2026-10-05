@@ -117,6 +117,12 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	var mu sync.Mutex
 	res.Selected = make(map[string]session.StopSelection)
 	stopTurn := func(effectCtx context.Context, id string, generation int) (GenerationCancelResult, error) {
+		// D5: this Stop supersedes the session's older pending steers.
+		if selected, carried := stopSelectionFromContext(effectCtx); carried {
+			if err := al.supersedePendingSteers(id, "superseded by Stop "+selected.Effect.ControlID); err != nil {
+				return GenerationCancelResult{}, err
+			}
+		}
 		outcome, err := al.RequestCancel(effectCtx,
 			CancelScope{SessionID: id, TurnOnly: true, Generation: generation}, canceller, hooksFor(id))
 		mu.Lock()
