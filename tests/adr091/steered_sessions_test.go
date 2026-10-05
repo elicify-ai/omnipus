@@ -256,6 +256,7 @@ func newE2EHarnessCustom(
 	recorder *testutil.OutboundRecorder,
 	registerProbe bool,
 	audienceOverride steer.AudienceResolver,
+	configure ...func(*config.Config),
 ) *e2eHarness {
 	t.Helper()
 	home := t.TempDir()
@@ -292,6 +293,11 @@ func newE2EHarnessCustom(
 			{ID: "adr091-fixture-task-agent", Name: "ADR-091 task fixture agent", Type: config.AgentTypeCustom, Home: filepath.Join(home, "agents", "task")},
 		},
 	}}
+	// Applied before any real admission. With no option, every existing
+	// caller retains the original fixture configuration unchanged.
+	for _, apply := range configure {
+		apply(cfg)
+	}
 	al, err := agent.NewAgentLoop(cfg, msgBus, provider)
 	if err != nil {
 		t.Fatalf("NewAgentLoop: %v", err)
