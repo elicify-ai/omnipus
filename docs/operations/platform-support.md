@@ -18,6 +18,47 @@ The `cross-platform.yml` workflow is a required PR gate and runs on every push t
 
 Source of truth: `.github/workflows/cross-platform.yml:24-34`. Each job runs `go build`, `go test -short`, and a smoke boot of `omnipus start` that hits `/health`. Signed release binaries are produced for these same three targets by `.goreleaser.yaml:52-64`.
 
+## Test-only candidate binaries
+
+A successful **build** GitHub Actions run publishes one candidate artifact named
+`candidate-binaries-<built-commit-sha>-<run-id>-<run-attempt>`, retained for seven
+days. The workflow runs on pull requests, pushes to `main`, and manual runs on a
+selected branch. These are **test-only binaries**, not signed release packages,
+installers, or evidence that a platform has passed runtime acceptance tests.
+This does not change the release matrix above.
+
+| Candidate filename | Platform | Release status |
+|---|---|---|
+| `omnipus-linux-amd64` | Linux x86_64 | Candidate; release platform unchanged |
+| `omnipus-linux-arm64` | Linux arm64 | Candidate; release platform unchanged |
+| `omnipus-darwin-arm64` | macOS Apple Silicon | Candidate; release platform unchanged |
+| `omnipus-darwin-amd64` | macOS Intel | Test-only; not currently released |
+| `omnipus-windows-amd64.exe` | Windows x86_64 | Test-only; not currently released |
+
+The artifact contains exactly these five binaries and `manifest.json`, with no
+configuration, home directories, credentials, source files, dependencies, or
+build logs. Publication fails if any binary is missing, empty, nonregular,
+symlinked, older than the current build, or accompanied by an unlisted entry.
+A failed build or validation step does not publish an artifact.
+
+The JSON manifest records `built_commit_sha` from the actual checkout, the
+`goolm,stdjson` build tags, `CGO_ENABLED=0`, each platform, byte size and SHA256
+checksum, and the artifact's creation time and GitHub run context. For a pull
+request, `creation_context.pull_request_head_sha` records the submitted head
+separately; `checkout_differs_from_pull_request_head` tells you whether it
+matches the built checkout. A default pull-request checkout can build GitHub's
+synthetic merge commit instead of the submitted head. Do not treat the head
+SHA or `creation_context.event_commit_sha` as the built commit without checking
+`built_commit_sha`.
+
+Open the successful **build** run on GitHub's Actions page and select its named
+candidate artifact. GitHub requires you to be logged in to use the artifact
+link, and the artifact expires after seven days. Check the downloaded binaries
+against the manifest's SHA256 checksums before use. GitHub's zipped artifact
+transfer does not preserve executable permissions; restore the executable bit
+on Linux/macOS binaries before running them. Windows keeps the explicit `.exe`
+filename. No release or installer is created by downloading a candidate.
+
 ## Planned but not in v0.1
 
 Each of these targets is deferred from v0.1; the linked tracking issue (where one exists) captures the work required to add it to CI and to the release matrix.
