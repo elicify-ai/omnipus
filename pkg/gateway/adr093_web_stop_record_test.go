@@ -2,13 +2,13 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// ADR-093 test plan, MAJ-001 characterisation: web Stop on a chat root that
-// has delegated leaves the root record running, with a Stop marker for the
-// current generation, and does not write state "cancelled".
+// ADR-093 test plan, MAJ-001, as amended by ADR-20260928 D2/D9: web Stop on a
+// chat root that has delegated and has no turn of its own in flight lands the
+// root `stopped` (fence cleared, StopNote kept, never terminal) and leaves its
+// delegated child untouched.
 //
-// Oracle: docs/internal/architecture/ADR-093-open-conversation-must-keep-
-// delegation.md, test-plan row "Web Stop on a chat root that has delegated."
-// The expected state is that row, not whatever handleCancel does today.
+// Oracle: ADR-20260928 D2 table row "working, running waiting on descendants
+// -> stopped" and D9 (a single Stop is session-scoped, no cascade).
 
 package gateway
 
@@ -43,10 +43,18 @@ func (adr093IdleProvider) Chat(context.Context, []providers.Message, []providers
 
 func (adr093IdleProvider) GetDefaultModel() string { return "adr093-idle" }
 
-// TestAdr093WebStop_DelegatedChatStaysRunningWithCurrentStop drives the web
-// Stop button (handleCancel) on a chat root that already has a child. The
-// root stays running and carries a Stop for its current generation.
-func TestAdr093WebStop_DelegatedChatStaysRunningWithCurrentStop(t *testing.T) {
+// TestAdr093WebStop_DelegatedChatLandsStoppedAndChildIsUntouched drives the
+// web Stop button (handleCancel, session scope) on a chat root that already
+// has a child and has no turn of its own in flight (it is only waiting on its
+// descendants).
+//
+// Oracle (ADR-20260928 D2 table, "working, running waiting on descendants"):
+// the Stop lands the root `stopped`; the landing clears the in-flight fence and
+// keeps the reason note in the same mutation; it is never terminal. D9 / D2
+// scope: a single Stop reaches only the named session, so the delegated child
+// is not touched. (Superseded: the earlier ADR-093 test-plan reading that the
+// root stays `running` with a current fence; D2 replaced it.)
+func TestAdr093WebStop_DelegatedChatLandsStoppedAndChildIsUntouched(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -87,13 +95,18 @@ func TestAdr093WebStop_DelegatedChatStaysRunningWithCurrentStop(t *testing.T) {
 	if persistErr := lifecycle.Persist(parent); persistErr != nil {
 		t.Fatalf("persist parent: %v", persistErr)
 	}
-	if _, launchErr := agent.NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+	launched, launchErr := agent.NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
 		SteeringSessionID: meta.ID,
 		TargetAgentID:     "mia",
 		Task:              "Prepare the spreadsheet",
 		Origin:            steer.Origin{Kind: steer.OriginKindDelegate},
-	}); launchErr != nil {
+	})
+	if launchErr != nil {
 		t.Fatalf("delegate from the chat (the root must already have a child): %v", launchErr)
+	}
+	childBefore, err := lifecycle.Load(launched.SessionID)
+	if err != nil {
+		t.Fatalf("Load child before the Stop: %v", err)
 	}
 
 	h := makeMinimalHandler()
@@ -107,11 +120,27 @@ func TestAdr093WebStop_DelegatedChatStaysRunningWithCurrentStop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load parent after web Stop: %v", err)
 	}
-	if got.State != session.LifecycleRunning {
-		t.Fatalf("parent state after web Stop = %q, want running — ADR-093 test plan: web Stop on a delegated chat root does not cancel the record", got.State)
+	if got.State != session.LifecycleStopped {
+		t.Fatalf("parent state after web Stop = %q, want stopped — D2: a running session waiting on descendants lands stopped", got.State)
 	}
-	if got.Stop == nil || got.Stop.Generation != got.Generation {
-		t.Fatalf("parent Stop after web Stop = %+v, generation %d — want a Stop marker for the current generation", got.Stop, got.Generation)
+	if got.Terminal() {
+		t.Fatalf("parent is terminal after web Stop (state %q) — a stop is never terminal", got.State)
+	}
+	if got.Stop != nil {
+		t.Fatalf("parent still carries an in-flight fence %+v after landing stopped — D2: the landing clears the fence in the same mutation that keeps the note", got.Stop)
+	}
+	if got.StopNote == nil {
+		t.Fatal("parent landed stopped with no StopNote — D2/CRIT-001: the note is kept on every stopped landing")
+	}
+	if got.StopNote.Cause != session.StopCauseStop || got.StopNote.By != session.StopActorHumanUser("user-adr093") {
+		t.Fatalf("parent StopNote = %+v, want cause %q by %q (the human who pressed Stop)", got.StopNote, session.StopCauseStop, session.StopActorHumanUser("user-adr093"))
+	}
+	childAfter, err := lifecycle.Load(launched.SessionID)
+	if err != nil {
+		t.Fatalf("Load child after the Stop: %v", err)
+	}
+	if childAfter.State != childBefore.State || childAfter.Stop != nil || childAfter.StopNote != nil {
+		t.Fatalf("child changed by the root's single Stop: before=%q after=%+v — D9: a single Stop never cascades", childBefore.State, childAfter)
 	}
 	// The delegation itself must still be on record: this is the "has
 	// delegated" row, not a Stop on a chat that never launched anything.

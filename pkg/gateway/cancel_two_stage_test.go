@@ -133,7 +133,7 @@ func TestCancel_TwoStageTimer_GracefulThenHard(t *testing.T) {
 	workspaceDir := filepath.Join(tmpDir, "workspace")
 	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
 
-	// ironProvider blocks for 20 seconds, well past the 3+5=8s hard+detach window.
+	// ironProvider blocks for 20 seconds, well past the 3+3=6s hard+detach window (founder one-stop decision, 2026-10-05).
 	ip := newIronProvider(20 * time.Second)
 
 	cfg := &config.Config{
