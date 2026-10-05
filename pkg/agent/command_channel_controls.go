@@ -1,0 +1,67 @@
+package agent
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/elicify-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/commands"
+)
+
+var _ channels.CancelInterceptor = (*AgentLoop)(nil)
+
+// commandSessionByChannelChat uses the existing instance-keyed channel index,
+// including idle conversations. It never creates a conversation for a control.
+func (al *AgentLoop) commandSessionByChannelChat(channelName, chatID string) (string, error) {
+	if al == nil || channelName == "" || chatID == "" {
+		return "", fmt.Errorf("a channel and chat are required")
+	}
+	if v, ok := al.channelSessionIdx.Load(channelName + "/" + chatID); ok {
+		id, valid := v.(string)
+		if !valid || id == "" {
+			return "", fmt.Errorf("the channel conversation identity could not be resolved")
+		}
+		return id, nil
+	}
+	return al.resolveSessionIDByChannelChat(channelName, chatID), nil
+}
+
+func (al *AgentLoop) requestCommandStopByChannelChat(ctx context.Context, channelName, chatID, userID, scope string) (bool, bool, error) {
+	sessionID, err := al.commandSessionByChannelChat(channelName, chatID)
+	if err != nil {
+		return false, false, err
+	}
+	if sessionID != "" {
+		return al.RequestScopedCancelForSession(ctx, sessionID, userID, channelName, scope)
+	}
+	if scope == "tree" {
+		return false, false, fmt.Errorf("Stop all could not resolve this conversation's tree; nothing was stopped")
+	}
+	// A single-session Stop may arrive before the first turn registers. The
+	// existing channel/chat pre-arm latch is its truthful acknowledged outcome.
+	if userID == "" {
+		return false, false, fmt.Errorf("Stop requires an authenticated sender")
+	}
+	outcome, err := al.RequestCancel(ctx,
+		CancelScope{Channel: channelName, ChatID: chatID, TurnOnly: true},
+		CancelCanceller{UserID: userID, Channel: channelName},
+		CancelHooks{KillBackgroundSessions: killBackgroundSessionsForCancelSurface})
+	return outcome.Fired, outcome.Armed, err
+}
+
+// RequestStopByChannelChat is the before-intake, session-only /stop adapter.
+func (al *AgentLoop) RequestStopByChannelChat(ctx context.Context, channelName, chatID, userID string) (bool, bool, error) {
+	return al.requestCommandStopByChannelChat(ctx, channelName, chatID, userID, "session")
+}
+
+// RequestRedirectByChannelChat is /stop-redirect's before-intake sibling.
+func (al *AgentLoop) RequestRedirectByChannelChat(ctx context.Context, channelName, chatID, userID, instruction string) error {
+	sessionID, err := al.commandSessionByChannelChat(channelName, chatID)
+	if err != nil {
+		return err
+	}
+	if sessionID == "" {
+		return commands.ErrNotHelperSession
+	}
+	return al.RedirectSessionTurn(ctx, sessionID, instruction, userID, channelName)
+}

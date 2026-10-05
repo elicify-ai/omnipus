@@ -101,7 +101,7 @@ flowchart LR
   Main -.->|"one delegate line"| MainChat[Main's chat]
   Worker -.->|"status + Open"| Side[Side panel]
   Side -.->|"Open"| Worker
-  Stop["Stop on Main"] -.->|"stops everything below"| Worker
+  StopAll["Stop all on Main"] -.->|"stops everything below"| Worker
   Queue["At the cap"] -.->|"queued, with place in line"| Worker
 ```
 
@@ -111,8 +111,9 @@ What this looks like in practice:
 - The delegating agent can keep many workers running. Each one shows up in the **side panel** as a row with a one-line status that updates as the worker reports progress, and an **Open** button you can click to open that worker's session and watch it work.
 - The worker reports only to the agent that delegated it, never to the person. It uses a separate `message_parent` channel plus the steering surface (`status`, `steer`, `respond`, `redirect`, `resume`, `stop_all`), and nothing else.
 - The delegating agent never blocks. The tool returns as soon as the worker is launched and dispatched, and the agent carries on. When it needs the worker's answer, the worker wakes it on completion.
-- **Stop on a session stops everything below it.** A Stop on the main agent stops every worker it delegated, including any queued for a slot.
-- **One worker versus the whole tree.** The delegating agent's `stop_all` is the downward cascade: it stops that worker and every helper under it. To act on one helper alone — leaving that helper's own helpers working — the agent uses `redirect`, which replaces just that helper's current turn with a new instruction; a redirect never cascades.
+- **Stop pauses only the current session.** One Stop-button press or `/stop` ends that session's current turn. It shows as **Stopped**, not failed. Its helpers keep working and send their results into its inbox. Work so far stays, the session is resumable on the same conversation and generation (the same round of work), and its goal stays active.
+- **Stop all pauses the whole tree below that session.** `/cancel` is the explicit Stop-all confirmation: it stops the current session and every helper under it, including helpers queued for a slot. It never reaches a parent or a sibling, and it never clears a goal. The delegating agent's `stop_all` uses the same downward scope.
+- **Redirect replaces one helper's current turn.** Open that helper's chat and type `/stop-redirect <instruction>`. It stops that helper first, then continues it with the new instruction; its helpers keep working. A stopped helper continues on the same conversation and generation. A finished helper has no turn to replace: use Resume for its next round. In a root chat, `/stop-redirect` refuses and tells you to open a helper's chat; the root's own `/stop` still works. A blank instruction returns usage and changes nothing. Store or control failures are shown, not reported as a successful redirect.
 - **A message steers too.** A message into a working helper is delivered into its current turn and never stops it. A message into a stopped helper resumes it on the same conversation, and a message into a finished (done or failed) helper starts its next round.
 - **No person-only wait.** When a helper needs a person, it asks its parent with an ordinary message and keeps working; the parent reaches you through ordinary chat text. There is no special pause and no 24-hour expiry — a helper never fails because a person was unavailable.
 - When too many workers are already running, the next one is **queued** — the parent's tool result tells it its place in line, and queued workers start in order as slots free. There is no blocking wait, and `delegate stop_all` stops a queued worker.

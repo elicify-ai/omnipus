@@ -326,19 +326,21 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 		}
 	}
 
-	// Inject the session ID accessor so /cancel can target the current session.
+	// Controls target the issuing conversation, never an agent-wide identity.
 	if opts != nil {
-		sessionKey := opts.SessionKey
-		rt.SessionID = func() string { return sessionKey }
+		sessionID := opts.TranscriptSessionID
+		if sessionID == "" {
+			sessionID = opts.SessionKey
+		}
+		rt.SessionID = func() string { return sessionID }
+		rt.ResolveHelperSession = func() (bool, error) { return al.resolveHelperSession(sessionID) }
+		rt.IsHelperSession = func() bool {
+			helper, err := rt.ResolveHelperSession()
+			return err == nil && helper
+		}
 	}
 
-	// Inject the agent loop so CancelActiveTurn can call
-	// RequestCancelForSession (ADR-057 FR-100/FR-041: InterruptSession, the
-	// symbol this comment used to name, was retired by U8's collapse of the
-	// four legacy interrupt entry points behind Interrupt/InterruptSessionHard
-	// plus a mandatory InterruptScope; CancelActiveTurn's own call has always
-	// gone through RequestCancelForSession, pkg/commands/runtime.go, never
-	// direct to an Interrupt* function).
+	// The loop supplies the distinct session Stop, tree Stop and redirect seams.
 	rt = rt.WithAgentLoop(al)
 
 	return rt

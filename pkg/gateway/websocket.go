@@ -1331,8 +1331,8 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 	switch peek.Type {
 	case string(generated.WsFrameTypeMessage):
 		return wh.handleMessageFrame(data)
-	case string(generated.WsFrameTypeCancel):
-		return wh.handleCancelFrame(data)
+	case string(generated.WsFrameTypeCancel), string(generated.WsFrameTypeRedirect):
+		return wh.handleTurnControlFrame(data, peek.Type)
 	case string(generated.WsFrameTypeAttachSession):
 		var f generated.AttachSessionFrame
 		if err := json.Unmarshal(data, &f); err != nil {
@@ -1449,6 +1449,8 @@ func wsFrameSchemaName(frameType string) string {
 		return "MessageFrame"
 	case string(generated.WsFrameTypeCancel):
 		return "CancelFrame"
+	case string(generated.WsFrameTypeRedirect):
+		return "RedirectFrame"
 	case string(generated.WsFrameTypeAttachSession):
 		return "AttachSessionFrame"
 	case string(generated.WsFrameTypeDevicePairingResponse):
