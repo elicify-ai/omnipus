@@ -163,11 +163,19 @@ func TestDispatch_FinishedTurnReleasesItsSlotAndPromotesTheQueue(t *testing.T) {
 // is stamped after Dispatch has taken its record snapshot and before Dispatch
 // writes `running` back.
 //
-// Three things must hold afterwards: the Stop marker is still on disk, the
-// record is not `running`, and no turn is registered for the session.
+// ADR-20260928 — The sub-agent control plane, D2: "Landing `LifecycleStopped`
+// clears the Stop marker and retains `stop_note` **in the same mutation**."
+// Vocabulary: stopped is "alive and resumable, no compute/slot". The landed
+// note, not the in-flight fence, survives; no turn or provider call may start.
 func TestDispatch_StopLandingAfterTheSnapshotSurvivesAndTheTurnNeverStarts(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
+	provider := &steerCloseCountingProvider{}
+	agentInst, ok := al.GetRegistry().GetAgent(testDefaultAgentID)
+	if !ok {
+		t.Fatal("test agent is not registered")
+	}
+	agentInst.Provider = provider
 	lifecycle := al.GetSessionLifecycleStore()
 	steerer := newTestSteeringSession(t, al, "ws-1")
 	childID, childGen := launchSteeredChild(t, al, steerer, "call-stop-race", "work that must never start")
@@ -199,11 +207,14 @@ func TestDispatch_StopLandingAfterTheSnapshotSurvivesAndTheTurnNeverStarts(t *te
 	if loadErr != nil {
 		t.Fatalf("Load(child): %v", loadErr)
 	}
-	if rec.Stop == nil {
-		t.Fatalf("the Stop marker was erased from disk by Dispatch's write-back — after this there is no record that Stop was ever pressed (state=%q)", rec.State)
+	if rec.State != session.LifecycleStopped {
+		t.Errorf("persisted State = %q, want stopped after Stop landed", rec.State)
 	}
-	if rec.Stop.Generation != rec.Generation {
-		t.Errorf("Stop.Generation = %d, want %d (the record's current generation)", rec.Stop.Generation, rec.Generation)
+	if rec.StopNote == nil {
+		t.Errorf("the landed StopNote was erased from disk by Dispatch's write-back (state=%q)", rec.State)
+	}
+	if rec.Stop != nil {
+		t.Errorf("the landed stopped record still has an in-flight Stop fence: %+v", rec.Stop)
 	}
 	if rec.State == session.LifecycleRunning {
 		t.Errorf("persisted State = running, want the stopped session left un-started")
@@ -213,6 +224,9 @@ func TestDispatch_StopLandingAfterTheSnapshotSurvivesAndTheTurnNeverStarts(t *te
 	}
 	if al.steerAdmission().hasReservation(childID, childGen) {
 		t.Errorf("the refused dispatch kept its admission slot")
+	}
+	if got := provider.callCount(); got != 0 {
+		t.Errorf("provider calls = %d, want 0 — the stopped session's turn must never start", got)
 	}
 }
 
