@@ -95,9 +95,9 @@ func promotionCommitCase(t *testing.T, fault bool) {
 		if len(msgs) != 1 {
 			t.Fatalf("positive failure parent messages=%d, want exactly one committed fatal outcome", len(msgs))
 		}
-		failure, err := msgs[0].AsSessionMessageError()
-		if err != nil || !failure.Fatal || !strings.Contains(failure.Text, "dispatch_failed:") {
-			t.Errorf("positive control did not expose the real promotion failure: %+v err=%v", failure, err)
+		failure, failureErr := msgs[0].AsSessionMessageError()
+		if failureErr != nil || !failure.Fatal || !strings.Contains(failure.Text, "dispatch_failed:") {
+			t.Errorf("positive control did not expose the real promotion failure: %+v err=%v", failure, failureErr)
 		}
 		return
 	}
@@ -108,17 +108,17 @@ func promotionCommitCase(t *testing.T, fault bool) {
 		t.Error("actual promotion outcome/outbox commit failed, but the real caller gave its direct parent no visible failure/pending notice; the original queued claim has no consumer or committed recovery outbox — a log is not error propagation")
 	}
 	for _, msg := range msgs {
-		failure, err := msg.AsSessionMessageError()
-		if err != nil || failure.Fatal || strings.TrimSpace(failure.Text) == "" {
-			t.Errorf("uncommitted promotion error must be an explicit nonempty error notice, never a delivered fatal final: %+v err=%v", failure, err)
+		failure, noticeErr := msg.AsSessionMessageError()
+		if noticeErr != nil || failure.Fatal || strings.TrimSpace(failure.Text) == "" {
+			t.Errorf("uncommitted promotion error must be an explicit nonempty error notice, never a delivered fatal final: %+v err=%v", failure, noticeErr)
 		}
 		if messageIDOf(msg) == fmt.Sprintf("%s:%d:final", id, gen) {
 			t.Error("uncommitted failure consumed the generation's protected final identity")
 		}
 	}
 	// Restore the real writer without dispatching the failed instruction again.
-	if err := os.Chmod(journal, 0o600); err != nil {
-		t.Fatalf("repair owning journal: %v", err)
+	if restoreErr := os.Chmod(journal, 0o600); restoreErr != nil {
+		t.Fatalf("repair owning journal: %v", restoreErr)
 	}
 	pending, err := al.GetSessionLifecycleStore().ListPendingFinalDeliveries()
 	if err != nil {
