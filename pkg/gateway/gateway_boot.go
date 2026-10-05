@@ -1033,6 +1033,7 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 				OperatorNotice: func(message string) {
 					slog.Warn("gateway: ADR-091 boot recovery notice", "message", message)
 				},
+				BootEpoch: deps.BootEpoch,
 			}
 			return recovery.Run(ctx)
 		},
