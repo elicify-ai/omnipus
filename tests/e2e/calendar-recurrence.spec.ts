@@ -252,6 +252,21 @@ async function navigateToCalendar(page: import('@playwright/test').Page): Promis
   await expect(fc).toBeVisible({ timeout: 30_000 });
 }
 
+/**
+ * Select Month through the real toolbar control. SP-39 (side-panel-shell-spec.md
+ * §10 Wave 3): the Calendar docks on WEEK by default, and Month renders the
+ * compact in-place grid (`calendar-month-grid`) whose day cells
+ * (`calendar-month-day-YYYY-MM-DD`) mark events with status dots and carry the
+ * event titles in their `title` tooltip. FullCalendar's own DOM stays mounted
+ * but hidden while Month is active, so Month assertions target the grid.
+ */
+async function selectMonthView(page: import('@playwright/test').Page): Promise<void> {
+  const monthBtn = page.getByTestId('calendar-view-dayGridMonth');
+  await expect(monthBtn).toBeVisible({ timeout: 10_000 });
+  await monthBtn.click();
+  await expect(page.getByTestId('calendar-month-grid')).toBeVisible({ timeout: 10_000 });
+}
+
 /** Navigate to the workspace Board tab and wait for the Inbox column to mount
  *  (every newly-created task lands in `inbox` per TaskCreateRequest's landing
  *  rule, so this is always the right column to wait on). */
@@ -518,17 +533,22 @@ test(
 
     try {
       await navigateToCalendar(page);
+      await selectMonthView(page);
 
-      // Differentiation from a one-off task: several chips, not one.
-      const monthChips = page.locator('.fc-event', { hasText: title });
+      // Differentiation from a one-off task: several marked days, not one. The
+      // compact month grid marks an occurrence with a status dot and names it
+      // in the day cell's title tooltip.
+      const monthChips = page.locator(
+        `[data-testid^="calendar-month-day-"][title*="${title}"]`,
+      );
       await expect(monthChips.first()).toBeVisible({ timeout: 15_000 });
       const chipDates = await monthChips.evaluateAll((els) =>
-        els.map((el) => el.closest('.fc-daygrid-day')?.getAttribute('data-date') ?? null),
+        els.map((el) => el.getAttribute('data-testid')?.replace('calendar-month-day-', '') ?? null),
       );
       expect(chipDates.length).toBeGreaterThanOrEqual(4); // any month grid covers >=4 Mondays
       expect(chipDates.length).toBeLessThanOrEqual(6);
       for (const dateStr of chipDates) {
-        expect(dateStr, 'every occurrence chip must sit in a cell with a data-date').not.toBeNull();
+        expect(dateStr, 'every occurrence mark must sit in a day cell keyed by its date').not.toBeNull();
         const [y, m, d] = (dateStr as string).split('-').map(Number);
         const cellDate = new Date(y, m - 1, d);
         expect(cellDate.getDay(), `${dateStr} must be a Monday`).toBe(1);
@@ -712,11 +732,12 @@ test(
       const onceChip = page.locator('.fc-event', { hasText: onceTitle }).first();
       await expect(onceChip).toBeVisible({ timeout: 15_000 });
 
-      await page.getByTestId('calendar-view-dayGridMonth').click();
-      await expect(page.locator('.fc-dayGridMonth-view')).toBeVisible({ timeout: 10_000 });
-      await expect(page.locator('.fc-event', { hasText: recurringTitle }).first()).toBeVisible({
-        timeout: 10_000,
-      });
+      await selectMonthView(page);
+      await expect(
+        page
+          .locator(`[data-testid^="calendar-month-day-"][title*="${recurringTitle}"]`)
+          .first(),
+      ).toBeVisible({ timeout: 10_000 });
     } finally {
       await deleteTaskApi(manualTask.id);
       await deleteTaskApi(onceTask.id);

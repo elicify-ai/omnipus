@@ -30,15 +30,24 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>
 }
 
-type RouteExpectation = { context: PanelContext; surfaceTestId: string }
-const routeExpectations = {
+type RouteExpectation = {
+  context: PanelContext
+  surfaceTestId: string
+  // Search keys the panel itself writes back once mounted (beyond the codec
+  // output). Mail mirrors its on-screen location into the URL (D48, see
+  // mailPanelDefinition.tsx): a mailbox with no folder/message chosen settles
+  // on folder=inbox and an explicit-null message (the NULL_MARKER, ''). Every
+  // other panel adds nothing.
+  settledSearch?: Record<string, string>
+}
+const routeExpectations: Record<PanelId, RouteExpectation> = {
   library: { context: { workspaceId: 'workspace-current', path: 'Projects/Current.md' }, surfaceTestId: 'library-panel-fullscreen' },
   browser: { context: { sessionId: 'session-current', agentId: 'agent-current' }, surfaceTestId: 'browser-live-panel-fullscreen' },
-  mail: { context: { workspaceId: 'workspace-current', mailboxId: 'agent-current' }, surfaceTestId: 'mail-panel' },
+  mail: { context: { workspaceId: 'workspace-current', mailboxId: 'agent-current' }, surfaceTestId: 'mail-panel', settledSearch: { folder: 'inbox', message: '' } },
   tasks: { context: { workspaceId: 'workspace-current' }, surfaceTestId: 'tasks-heading' },
   team: { context: { workspaceId: 'workspace-current' }, surfaceTestId: 'team-panel-fullscreen' },
   calendar: { context: { workspaceId: 'workspace-current' }, surfaceTestId: 'calendar-toolbar' },
-} satisfies Record<PanelId, RouteExpectation>
+}
 // Spec §8.1 is the inventory oracle, never the production array itself.
 const exactSix = ['browser', 'calendar', 'library', 'mail', 'tasks', 'team']
 
@@ -137,14 +146,25 @@ describe('SP-38 shell-owned full-screen routes retained by PE1', () => {
       expect(router.state.matches.map((match) => match.routeId)).toContain('/_fullscreen/panel/$panelId')
       expect(await screen.findByTestId(expected.surfaceTestId)).toBeInTheDocument()
       expect(router.state.location.pathname).toBe(`/panel/${definition.id}`)
-      expect(router.state.location.search).toEqual(Object.fromEntries(search))
+      expect(router.state.location.search).toEqual({ ...Object.fromEntries(search), ...expected.settledSearch })
       expect(screen.getByRole('button', { name: /^Back to chat$/ })).toBeInTheDocument()
       await assertActualContent(definition.id)
       expect(apiEdges.fetchAppState).toHaveBeenCalled()
       expect(screen.queryByTestId('app-shell')).not.toBeInTheDocument()
       expect(screen.queryByTestId('workspace-top-bar')).not.toBeInTheDocument()
       expect(screen.queryByTestId('workspace-header-menu')).not.toBeInTheDocument()
-      expect(screen.queryByRole('complementary')).not.toBeInTheDocument()
+      // Application chrome = the app sidebar (its "Main navigation" landmark
+      // and its aside) and the app main-content wrapper. Library's note reader
+      // rails (<aside data-testid="knowledge-reader-rails">) are CONTENT inside
+      // the full-screen panel, so they are the only complementary landmark
+      // allowed; any other complementary landmark is chrome.
+      expect(screen.queryByRole('navigation', { name: 'Main navigation' })).not.toBeInTheDocument()
+      expect(screen.queryByTestId('app-main-content')).not.toBeInTheDocument()
+      expect(
+        screen
+          .queryAllByRole('complementary')
+          .filter((landmark) => landmark.getAttribute('data-testid') !== 'knowledge-reader-rails'),
+      ).toEqual([])
       expect(screen.queryByTestId('side-panel-header')).not.toBeInTheDocument()
       mounted.unmount()
       apiEdges.fetchAppState.mockClear()

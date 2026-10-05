@@ -301,8 +301,22 @@ test.describe('native docking regression', () => {
       await info.attach(`${panel}-manual-switch-child.png`, { body: await manual.screenshot(), contentType: 'image/png' })
       await manual.close()
       await page.bringToFront()
+      // Spec §8.3 / US-6.4: when the manual tab closes its presence clears and
+      // the 5 s focus fallback (panelTabSwitch.ts::showPanelTabSwitch ->
+      // panelTabPresence.ts::armPanelFocusFallback) RE-OPENS the dock on its
+      // own — no click. Oracles: PanelTabPresenceBridge.advisory.test.tsx and
+      // PanelTabFocusFallback.regression.test.tsx.
+      await expect(page.getByTestId('side-panel'), 'leave clears exclusive presence; the focus fallback re-opens the dock without a click').toBeVisible({ timeout: 15_000 })
+      await assertSameNativeChat(page, baseline, panel)
+      const alreadyOpen = page.getByText(`${title} is already open in another tab — switch.`, { exact: true })
+      await expect(alreadyOpen, 'presence/affordance is cleared: no stale already-open toast').toHaveCount(0)
+      // The same entry now toggles normally: closes, then opens again with no
+      // exclusive-presence redirect.
       await toggleWorkspacePanel(page, panel)
-      await expect(page.getByTestId('side-panel'), 'leave clears exclusive presence; same entry opens normally').toBeVisible()
+      await expect(page.getByTestId('side-panel'), 'presence cleared: entry toggle closes the restored dock').toHaveCount(0)
+      await toggleWorkspacePanel(page, panel)
+      await expect(page.getByTestId('side-panel'), 'presence cleared: same entry opens normally').toBeVisible()
+      await expect(alreadyOpen).toHaveCount(0)
       await assertSameNativeChat(page, baseline, panel)
     })
   }

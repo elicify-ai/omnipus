@@ -34,7 +34,9 @@
 // treatment for unknown AND unregistered ids only (US-7 AS-4). The `agent`
 // key stays "meaningful only with panel=mail" (SP-23). New tests below; the
 // wave-1 assertions above are unchanged (they were correct then and remain
-// true now: `tasks`/`team`/`calendar` are still unregistered at wave 2).
+// true now, except where noted; WAVE 3 (2026-10-05) registers
+// `tasks`/`team`/`calendar`, so the `tasks` drop test became a keep test and
+// the drop test uses an id that no wave registers).
 //
 // RED evidence (2026-09-27, read
 // src/routes/_app/workspaces.$workspaceId.chat.tsx in full): the route
@@ -73,10 +75,20 @@ describe('workspaces/$workspaceId/chat — panel search schema (§8.2, wave 1)',
     expect(result.panel).toBeUndefined()
   })
 
-  it('drops an unregistered-but-future wave-1 id exactly like an unknown one (MAJ-012, dataset row 7 — "tasks" is unregistered in wave 1)', () => {
-    const result = validate({ panel: 'tasks' }) as Record<string, unknown>
+  it('drops an unregistered id exactly like an unknown one (MAJ-012) — an id outside the six registered panels, never a registered one', () => {
+    // Wave 3 registers tasks/team/calendar (spec §10 Wave 3, dataset row 2),
+    // so `tasks` is no longer "unregistered"; the MAJ-012 drop rule still
+    // applies to every id the registry does not hold.
+    const result = validate({ panel: 'settings' }) as Record<string, unknown>
     expect(result.panel).toBeUndefined()
   })
+
+  it.each(['tasks', 'team', 'calendar'])(
+    'keeps wave-3 registered panel id %s (§12 dataset row 2; MAJ-012: valid values are the REGISTERED ids)',
+    (id) => {
+      expect(validate({ panel: id })).toMatchObject({ panel: id })
+    },
+  )
 
   it('no panel key present at all → no panel (US-7 AS-3, dataset row 4)', () => {
     const result = validate({}) as Record<string, unknown>
