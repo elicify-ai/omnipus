@@ -118,28 +118,7 @@ describe('sidebar store — persistence', () => {
   })
 })
 
-// test_sidebar_store_togglePin
-// Traces to: wave0-brand-design-spec.md Scenario: Pin toggle behaviour (US-5 AC4, AC5)
-describe('sidebar store — togglePin', () => {
-  it('togglePin() pins when unpinned', () => {
-    act(() => {
-      useSidebarStore.setState({ isPinned: false })
-      useSidebarStore.getState().togglePin()
-    })
-    const state = useSidebarStore.getState()
-    expect(state.isPinned).toBe(true)
-    expect(state.isOpen).toBe(true)
-  })
-
-  it('togglePin() unpins and closes when pinned', () => {
-    act(() => {
-      useSidebarStore.setState({ isPinned: true, isOpen: true })
-      useSidebarStore.getState().togglePin()
-    })
-    expect(useSidebarStore.getState().isPinned).toBe(false)
-    expect(useSidebarStore.getState().isOpen).toBe(false)
-  })
-
+describe('sidebar store — hide', () => {
   it('hide() clears both the docked and overlay states', () => {
     act(() => {
       useSidebarStore.setState({ isPinned: true, isOpen: true })

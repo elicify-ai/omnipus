@@ -13,14 +13,13 @@ interface SidebarStore {
   toggle: () => void
   pin: () => void
   unpin: () => void
-  togglePin: () => void
   /** Docked or overlay: take the sidebar off the screen. */
   hide: () => void
 }
 
 export const useSidebarStore = create<SidebarStore>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       isOpen: false,
       // A fresh visit is not pinned: the sidebar stays closed until it is
       // shown or pinned (founder decision, sidebar hotfix). Returning
@@ -38,14 +37,6 @@ export const useSidebarStore = create<SidebarStore>()(
 
       pin: () => set({ isPinned: true, isOpen: true }),
       unpin: () => set({ isPinned: false }),
-      togglePin: () => {
-        const { isPinned } = get()
-        if (isPinned) {
-          set({ isPinned: false, isOpen: false })
-        } else {
-          set({ isPinned: true, isOpen: true })
-        }
-      },
       hide: () => set({ isPinned: false, isOpen: false }),
     }),
     {

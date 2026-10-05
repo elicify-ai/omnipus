@@ -162,7 +162,13 @@ export function Sidebar() {
   }, [navigate, queryClient])
 
   // Workspaces query — refetch every 30s
-  const { data: projects = [], isLoading: projectsLoading, isError: projectsError } = useQuery({
+  const {
+    data: projects = [],
+    isLoading: projectsLoading,
+    isError: projectsError,
+    isSuccess: projectsSuccess,
+    isPaused: projectsPaused,
+  } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
     staleTime: 30_000,
@@ -473,18 +479,39 @@ export function Sidebar() {
             </div>
           )}
 
-          {/* Error state (Fix 6) */}
-          {projectsError && (
+          {/* Failed or offline workspace loading uses the same status row. */}
+          {(projectsError || projectsPaused) && (
             <div className="px-[var(--space-3)] py-[var(--space-1)] flex items-center gap-[var(--space-1)]">
-              <WarningCircle size={14} className="text-[var(--color-error)] flex-shrink-0" />
-              <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex-1">Could not load workspaces</span>
-              <IconButton
-                onClick={() => queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })}
-                aria-label="Retry loading workspaces"
-                className="h-auto w-auto rounded p-[var(--space-0-5)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
-              >
-                <ArrowClockwise size={12} />
-              </IconButton>
+              <WarningCircle size={14} className={cn(
+                'flex-shrink-0',
+                projectsPaused ? 'text-[var(--color-muted)]' : 'text-[var(--color-error)]',
+              )} />
+              <span className={cn(
+                'text-[length:var(--type-utility-xs-size)] flex-1',
+                projectsPaused ? 'text-[var(--color-muted)]' : 'text-[var(--color-error)]',
+              )}>
+                {projectsPaused
+                  ? 'Offline — workspaces will load when you reconnect.'
+                  : 'Could not load workspaces'}
+              </span>
+              {!projectsPaused && (
+                <IconButton
+                  onClick={() => Promise.all([
+                    queryClient.invalidateQueries({
+                      queryKey: workspacesQueryKeys.list({ status: 'active' }),
+                      exact: true,
+                    }),
+                    queryClient.invalidateQueries({
+                      queryKey: workspacesQueryKeys.list({ status: 'archived' }),
+                      exact: true,
+                    }),
+                  ])}
+                  aria-label="Retry loading workspaces"
+                  className="h-auto w-auto rounded p-[var(--space-0-5)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
+                >
+                  <ArrowClockwise size={12} />
+                </IconButton>
+              )}
             </div>
           )}
 
@@ -502,7 +529,7 @@ export function Sidebar() {
           )}
 
           {/* Empty state */}
-          {!projectsLoading && !projectsError && projects.length === 0 && (
+          {projectsSuccess && !projectsPaused && projects.length === 0 && (
             <div className="px-[var(--space-3)] py-[var(--space-1)]">
               <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No workspaces yet — </span>
               <Button
