@@ -1349,8 +1349,8 @@ export const MailPanelObserverAckFrame = z
 export const MailPanelObserverErrorFrame = z
   .object({
     type: z.literal("mail_panel_observer_error"),
-    observer_id: z.string().min(1),
-    workspace_id: z.string().min(1),
+    observer_id: z.string().min(1).optional(),
+    workspace_id: z.string().min(1).optional(),
     code: z.enum(["unauthorized_workspace", "malformed_frame"]),
     error: z.string(),
   })

@@ -111,13 +111,18 @@ func (h *WSHandler) handleMailPanelObserverFrame(wc *wsConn, connID string, f ge
 // dead connection is revoked by teardown regardless.
 func (h *WSHandler) sendMailPanelObserverError(wc *wsConn, f generated.MailPanelObserverFrame, code, message string) {
 	slog.Debug("ws: mail panel observer refused", "code", code)
-	sendConnGenFrame(wc, string(generated.WsFrameTypeMailPanelObserverError), generated.MailPanelObserverErrorFrame{
-		Type:        string(generated.WsFrameTypeMailPanelObserverError),
-		Code:        code,
-		Error:       message,
-		ObserverId:  f.ObserverId,
-		WorkspaceId: f.WorkspaceId,
-	})
+	frame := generated.MailPanelObserverErrorFrame{
+		Type:  string(generated.WsFrameTypeMailPanelObserverError),
+		Code:  code,
+		Error: message,
+	}
+	if observerID := strings.TrimSpace(f.ObserverId); observerID != "" {
+		frame.ObserverId = &observerID
+	}
+	if workspaceID := strings.TrimSpace(f.WorkspaceId); workspaceID != "" {
+		frame.WorkspaceId = &workspaceID
+	}
+	sendConnGenFrame(wc, string(generated.WsFrameTypeMailPanelObserverError), frame)
 }
 
 // revokeMailPanelObservers is the teardown hook: revoke every observer this
