@@ -384,8 +384,8 @@ func TestU1SecondStopOfSameGenerationGetsFreshStopSeqAndNotice(t *testing.T) {
 	if notice1 != w1hNoticeID(parent, rec.SessionID, rec.Generation, first[0].StopSeq) {
 		t.Fatalf("first notice identity %q does not name its own stop_seq %d (D6)", notice1, first[0].StopSeq)
 	}
-	if generation, err := canceller.Revive(context.Background(), rec.SessionID, owner); err != nil || generation != rec.Generation {
-		t.Fatalf("same-generation Revive returned generation=%d err=%v, want %d (D2)", generation, err, rec.Generation)
+	if generation, rerr := canceller.Revive(context.Background(), rec.SessionID, owner); rerr != nil || generation != rec.Generation {
+		t.Fatalf("same-generation Revive returned generation=%d err=%v, want %d (D2)", generation, rerr, rec.Generation)
 	}
 	resumed, err := lifecycle.Load(rec.SessionID)
 	if err != nil {
@@ -588,11 +588,11 @@ func TestU1NoticeDeliveryFailureStaysPendingVisibleAndRetries(t *testing.T) {
 	// Boot retry while still broken: the failure is REPORTED, not silent.
 	var brokenNotices []string
 	recovery := u1BootRecovery(t, al, &brokenNotices)
-	if err := recovery.Run(context.Background()); err != nil {
+	if runErr := recovery.Run(context.Background()); runErr != nil {
 		// Recorded, not fatal: post-GREEN the boot retry must SUCCEED while
 		// reporting (D8.4 keep a durable retry item); an error today is part
 		// of the red picture, and the remaining assertions still run.
-		t.Errorf("boot retry while broken returned an error instead of recording the retry and reporting: %v", err)
+		t.Errorf("boot retry while broken returned an error instead of recording the retry and reporting: %v", runErr)
 	}
 	if len(brokenNotices) == 0 {
 		t.Errorf("boot recovery reported NOTHING while the parent inbox was unwritable — " +
