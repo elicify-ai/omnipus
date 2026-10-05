@@ -109,19 +109,22 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
   const [columnOverflow, setColumnOverflow] = useState<'auto' | 'shown' | 'hidden'>('auto')
   const narrowProbeRef = useRef<HTMLSpanElement | null>(null)
 
-  function handleToggleOverflowColumns() {
+  function handleToggleOverflowColumns(): void {
     const containerNarrow = narrowProbeRef.current
       ? getComputedStyle(narrowProbeRef.current).display !== 'none'
       : false
-    setColumnOverflow((prev) => (prev === 'auto' ? (containerNarrow ? 'shown' : 'hidden') : 'auto'))
+    setColumnOverflow((prev) => {
+      if (prev !== 'auto') return 'auto'
+      return containerNarrow ? 'shown' : 'hidden'
+    })
   }
 
-  const overflowControlLabel =
-    columnOverflow === 'hidden'
-      ? 'Show Tags and Updated columns'
-      : columnOverflow === 'shown'
-        ? 'Hide Tags and Updated columns'
-        : 'Show or hide Tags and Updated columns'
+  let overflowControlLabel = 'Show or hide Tags and Updated columns'
+  if (columnOverflow === 'hidden') {
+    overflowControlLabel = 'Show Tags and Updated columns'
+  } else if (columnOverflow === 'shown') {
+    overflowControlLabel = 'Hide Tags and Updated columns'
+  }
 
   // Per-column value filters (empty set = no filter on that column). Priority
   // keys are stringified ('1'..'5') so all four filters share one Set<string>.
