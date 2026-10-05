@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -126,7 +127,7 @@ func q2ConsumerReadDurable(t *testing.T, store *session.UnifiedStore, sessionID 
 	t.Helper()
 	path := filepath.Join(store.BaseDir(), sessionID, "transcript.jsonl")
 	data, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("read physical transcript: %v", err)
 	}
 	var physical []session.TranscriptEntry
