@@ -34,7 +34,7 @@ A repeat rule keeps firing on its own; use Week or Day to review recorded runs a
 3. Fill in the title and pick the agent who runs it. Write the instruction, which is what the agent does each time the task fires, and add at least one acceptance criterion and one Definition of Done item.
 4. Open the Repeat dropdown. It offers presets computed from the date you picked: Does not repeat, Daily, Weekly on Monday, Monthly on the third Monday, Annually on July 20, Every weekday, and Custom.
 5. Pick Custom for anything else. Choose the frequency, from minutes to years, and a multiplier from 1 to 99. Weekly rules take a weekday selection, monthly rules take a day of the month or an nth weekday. End the rule with Never, On date, or After N occurrences. A plain-English summary of the rule is shown at all times.
-6. Save. Week and Day show individual scheduled occurrences as chips, subject to the server's expansion limits; **More not shown** warns when expansion was capped. Month represents the returned event data with status-coloured dots, including the server's per-day groupings of frequent repeats where they apply; its grid does not show rhythm or count labels.
+6. Save. Week and Day show individual scheduled occurrences as chips, subject to the server's expansion limits; **More not shown** warns when expansion was capped. Month represents the returned event data with status-coloured dots, including the server's per-day groupings of frequent repeats where they apply. The grid itself prints no rhythm or count labels; hovering a date lists its first three event titles and can show a "+N more" count.
 
 Leaving Repeat on Does not repeat, with a time set, creates a one-time task that runs at that moment. The Board and List hide it; use Calendar to manage it.
 
@@ -49,7 +49,7 @@ You edit a series as a whole: you cannot change one occurrence alone or drag its
 
 ## What you see on the calendar
 
-Week and Day use labelled chips with the meanings below. Month represents the event data with status dots rather than these chip labels; when a task repeats more than three times in a day, the server groups that day into a single entry for the broader Month range, and the grid shows only its dot, without a rhythm or count label or the More not shown text. The toolbar also has an agent filter, set to All agents by default, which narrows the grid to one agent or to unassigned work the moment you pick a name.
+Week and Day use labelled chips with the meanings below. Month represents the event data with status dots rather than these chip labels; when a task repeats more than three times in a day, the server groups that day into a single entry for the broader Month range, and the grid shows only its dot. A date's hover text lists up to three event titles and may include that day's grouping label. The toolbar also has an agent filter, set to All agents by default, which narrows the grid to one agent or to unassigned work the moment you pick a name.
 
 | Chip in Week or Day | What it means |
 |---|---|

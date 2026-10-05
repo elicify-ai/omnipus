@@ -26,7 +26,7 @@ Files arrive three ways:
 
 1. Click **Library** in the sidebar. The panel opens with every workspace listed as a top-level folder.
 2. From a workspace, select its **Library** panel toggle in the workspace bar (or the panels menu on a narrow bar). The panel opens already inside that workspace's files. The sidebar **Library** entry is different: it lists every workspace. There is no Library button in the chat header.
-3. Select **Expand Library panel** in the panel heading for a full-screen Library in a new browser tab, or to switch to a tab Omnipus recognises as already showing it. A newly opened tab carries the current workspace and the selected file, if any, in its address, so you can bookmark it. With no file selected, the browsed subfolder is not carried over. The docked panel closes after the handoff. Use **Back to chat** to leave the full-screen view; [panels beside chat](using-omnipus-ui.md#panels-beside-chat) explains how the panel is restored and the same-tab fallback.
+3. Select **Expand Library panel** in the panel heading for a full-screen Library in a new browser tab, or to switch to a tab Omnipus recognises as already showing it. A newly opened tab carries the current workspace and the selected file, if any, in its address. With no file selected, the browsed subfolder is not carried over. The docked panel closes after the handoff. Use **Back to chat** to leave the full-screen view; [panels beside chat](using-omnipus-ui.md#panels-beside-chat) explains how the panel is restored and the same-tab fallback.
 
 ## How to add files
 
