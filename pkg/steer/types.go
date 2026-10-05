@@ -296,5 +296,8 @@ type Deps struct {
 	Classifier     RecordClassifier
 	LifecycleStore *session.LifecycleStore
 	SessionStore   *session.UnifiedStore
-	BootHook       BootHook
+	// BootEpoch is the one store this process minted at gateway boot.
+	// Readers use Current. Mint stays the gateway's single call.
+	BootEpoch *session.BootEpochStore
+	BootHook  BootHook
 }

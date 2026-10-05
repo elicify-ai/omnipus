@@ -21,6 +21,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -40,14 +41,70 @@ func reviveInboundIsHumanTurn(msg bus.InboundMessage) bool {
 	return msg.Metadata["steer_message_id"] == ""
 }
 
+// lifecycleInFlightStopFence reports whether rec carries a stop fence for
+// its CURRENT generation while the record is still live — not terminal and
+// not LifecycleStopped (i.e. queued, running, or needs_input). This is the
+// dying-turn shape LifecycleRecord.Stopped() also reports true for: the stop
+// has been stamped but the turn it targets has not exited yet, so admission
+// still refuses any new work in the session's name (the delegate
+// steer/respond closures refuse it, SteerLauncher.Dispatch refuses it).
+// Reviving this shape would clear the fence, mark the record queued and
+// clear its ExecutionID, then strand a helper nobody runs; running a fresh
+// turn on it would start a SECOND turn on the dying session. A landed
+// LifecycleStopped record and a terminal record are never this shape — both
+// stay revivable.
+func lifecycleInFlightStopFence(rec *session.LifecycleRecord) bool {
+	if rec == nil || rec.Stop == nil {
+		return false
+	}
+	if rec.Terminal() || rec.State == session.LifecycleStopped {
+		return false
+	}
+	return rec.Stop.Generation == rec.Generation
+}
+
+// inboundStopFenceInFlight returns a visible error when msg's session's own
+// lifecycle record carries an in-flight stop fence
+// (lifecycleInFlightStopFence) — the one shape the ordinary inbound-turn
+// admission must neither revive nor run a second turn on
+// (runInboundTurnWithRevival). Everything else — a blank id, a missing
+// store, a missing record, an unreadable record, and every non-fence shape —
+// is nil: the revivable check and the plain turn keep their existing
+// behavior. Not-found and read failures stay inboundRevivable's business
+// (it logs read failures at error level, gate SFH#2); this gate only
+// refuses the fence shape.
+func (al *AgentLoop) inboundStopFenceInFlight(sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	store := al.GetSessionLifecycleStore()
+	if sessionID == "" || store == nil {
+		return nil
+	}
+	rec, err := store.Load(sessionID)
+	if err != nil {
+		return nil
+	}
+	if !lifecycleInFlightStopFence(rec) {
+		return nil
+	}
+	// curatedTurnError, not a plain error: the text is Omnipus-authored and
+	// provider-free, so the session worker publishes it as written
+	// (translate_error.go::userVisibleTurnError) instead of the generic
+	// "can't tell why" sentence the classifier would give an untyped error.
+	return &curatedTurnError{text: fmt.Sprintf("session %s is stopping (a stop is in flight for its current generation); retry once the stop has landed", sessionID)}
+}
+
 // inboundRevivable reports whether sessionID's lifecycle record is terminal
-// or durably stopped at its current generation — the two states ADR-093 D4
-// lets an ordinary human message revive. No record (ErrLifecycleNotFound), a
-// blank id or a missing store is not revivable: nothing to revive, nothing to
-// guess about. Any OTHER Load error is a real read failure: it is logged at
-// error level with the session id and still reads as "not revivable" (the
-// turn must run), but the log keeps a broken record from being
-// indistinguishable from a healthy one afterwards (gate SFH#2).
+// or has LANDED LifecycleStopped — the two states ADR-093 D4 lets an
+// ordinary human message revive. An in-flight stop fence (Stopped() is also
+// true for that shape: a Stop stamped for the current generation while the
+// state is still live) is NOT revivable here — the dying turn is still
+// registered, and inboundStopFenceInFlight refuses it upstream with a
+// visible error. No record (ErrLifecycleNotFound), a blank id or a missing
+// store is not revivable: nothing to revive, nothing to guess about. Any
+// OTHER Load error is a real read failure: it is logged at error level with
+// the session id and still reads as "not revivable" (the turn must run),
+// but the log keeps a broken record from being indistinguishable from a
+// healthy one afterwards (gate SFH#2).
 func (al *AgentLoop) inboundRevivable(sessionID string) bool {
 	sessionID = strings.TrimSpace(sessionID)
 	store := al.GetSessionLifecycleStore()
@@ -62,7 +119,10 @@ func (al *AgentLoop) inboundRevivable(sessionID string) bool {
 		}
 		return false
 	}
-	return rec.Terminal() || rec.Stopped()
+	// Terminal OR landed LifecycleStopped only — deliberately not Stopped():
+	// Stopped() is also true for an in-flight fence, and that shape must
+	// never read as revivable (see lifecycleInFlightStopFence).
+	return rec.Terminal() || rec.State == session.LifecycleStopped
 }
 
 // reviveRecordForHumanTurn revives a terminal or durably-stopped record to a
@@ -117,26 +177,39 @@ func (al *AgentLoop) resetUnifiedMetaStatusActive(sessionID string) {
 // new generation. Revival failure never fails the message: it is logged and
 // the turn runs unrevived, where a delegate call in it hits D2's launch
 // backstop with the D5 sentence rather than a raw store error.
+//
+// The one exception is an in-flight stop fence (a Stop stamped for the
+// record's CURRENT generation while the state is still live): the dying turn
+// is still registered, so reviving would strand a queued helper admission
+// refuses, and running the turn here would start a SECOND turn on the dying
+// session. The message is refused with a visible error instead — the
+// "revive failed, run the turn anyway" path below is for a landed stop or a
+// terminal record whose revive failed, never for this shape.
 func (al *AgentLoop) runInboundTurnWithRevival(
 	ctx context.Context,
 	agent *AgentInstance,
 	msg bus.InboundMessage,
 	opts processOptions,
 ) (string, *AgentInstance, error) {
-	if reviveInboundIsHumanTurn(msg) && al.inboundRevivable(msg.SessionID) {
-		if err := al.reviveRecordForHumanTurn(ctx, msg.SessionID,
-			steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}); err != nil {
-			// Gate SFH#6: this is an error, not a warning. The human message
-			// that was supposed to resume the chat could not revive it, and
-			// everything a delegate refusal says afterwards depends on this
-			// fact being recorded (reviveRecordForHumanTurn already recorded
-			// it in the revival-failure memory, which the D2 launch backstop
-			// consults). The turn still runs unrevived — kept deliberately,
-			// the message itself must not be lost — but a delegate call in it
-			// now refuses with the truthful revival-failed sentence instead
-			// of send-a-new-message, which just failed to work.
-			logger.ErrorCF("agent", "adr093: inbound revival failed; the turn runs unrevived and delegation will refuse truthfully",
-				map[string]any{"session_id": msg.SessionID, "error": err.Error()})
+	if reviveInboundIsHumanTurn(msg) {
+		if ferr := al.inboundStopFenceInFlight(msg.SessionID); ferr != nil {
+			return "", agent, ferr
+		}
+		if al.inboundRevivable(msg.SessionID) {
+			if err := al.reviveRecordForHumanTurn(ctx, msg.SessionID,
+				steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}); err != nil {
+				// Gate SFH#6: this is an error, not a warning. The human message
+				// that was supposed to resume the chat could not revive it, and
+				// everything a delegate refusal says afterwards depends on this
+				// fact being recorded (reviveRecordForHumanTurn already recorded
+				// it in the revival-failure memory, which the D2 launch backstop
+				// consults). The turn still runs unrevived — kept deliberately,
+				// the message itself must not be lost — but a delegate call in it
+				// now refuses with the truthful revival-failed sentence instead
+				// of send-a-new-message, which just failed to work.
+				logger.ErrorCF("agent", "adr093: inbound revival failed; the turn runs unrevived and delegation will refuse truthfully",
+					map[string]any{"session_id": msg.SessionID, "error": err.Error()})
+			}
 		}
 	}
 	resp, err := al.runAgentLoop(ctx, agent, opts)

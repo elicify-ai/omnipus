@@ -60,11 +60,27 @@ const (
 type SessionStatus string
 
 const (
-	// StatusActive is a session that is currently in use.
+	// StatusActive is a session that is currently in use. Also covers a
+	// session that is working, waiting for an answer, or stopped — see
+	// lifecycle_state (SessionLifecycleState) for the exact distinction
+	// (sub-agent control plane ADR D4/MAJ-009).
 	StatusActive SessionStatus = "active"
 	// StatusArchived is a session that has been intentionally closed.
 	StatusArchived SessionStatus = "archived"
-	// StatusInterrupted is a session that was terminated unexpectedly or canceled.
+	// StatusFailed mirrors a genuine landed lifecycle `failed` (sub-agent
+	// control plane ADR D4/MAJ-009). An explicit RESUME of a done/failed
+	// session resets coarse metadata back to StatusActive.
+	StatusFailed SessionStatus = "failed"
+	// StatusInterrupted is RETIRED from the wire enum (sub-agent control
+	// plane ADR D4/MAJ-009, Session.yaml::status) — "interrupted" is no
+	// longer a valid Session.status value. No production caller writes this
+	// value any longer (pkg/agent/boot_sweep.go::reconcileUnifiedMetaStatus
+	// was the last one, fixed to StatusFailed). The constant is kept only
+	// for tests that assert its ABSENCE (e.g.
+	// pkg/gateway/turn_survives_disconnect_test.go) and for any legacy
+	// on-disk meta.json a pre-ADR install may still carry — reading one
+	// back is not itself an error (greenfield has no upgrade/migration
+	// path; see CLAUDE.md). Do not add a new writer.
 	StatusInterrupted SessionStatus = "interrupted"
 )
 
@@ -442,6 +458,26 @@ type TranscriptEntry struct {
 	// design (contrast with ParentSpawnCallID's "never serialized onto a
 	// wire frame").
 	ClientMessageID string `json:"client_message_id,omitempty"`
+
+	// ProvenancePending is the SERVER-INTERNAL write-phase marker of the
+	// provenance-paired append (ADR-20261004 Correction C4 abrupt-exit rule).
+	// It is stamped by UnifiedStore.appendTranscript immediately before the
+	// transcript line of a paired append lands and cleared by an atomic
+	// rewrite once the paired MessageProvenance record is durably written —
+	// so a line still carrying the marker is a line whose paired save did not
+	// complete: either the process died between the two writes (the marker
+	// and no sender record — crash residue), or the record landed but the
+	// clearing rewrite did not (marker and record — accepted). Only the first
+	// state is residue, which is why the reader rule checks BOTH halves:
+	// a line is skipped iff it carries the marker AND no provenance record
+	// exists for its ID (unified_write.go::ReadTranscript — the single filter
+	// every person- and model-facing transcript reader reaches the store
+	// through). It carries no provenance data — no principal, no ordinal,
+	// nothing client-meaningful — and every ordinary append leaves it false,
+	// so legacy lines and all agent/tool lines round-trip byte-identically.
+	// No SPA, REST or WebSocket consumer reads it; nothing client-visible
+	// changes shape.
+	ProvenancePending bool `json:"provenance_pending,omitempty"`
 
 	// SystemSubtype discriminates an EntryTypeSystem entry by what kind of
 	// system event it records (ADR-085 BROWSER-FR-043a, folded into this

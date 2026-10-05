@@ -142,7 +142,7 @@ pkg/channels/telegram/telegram.go	TelegramChannel.handleMessage	32
 pkg/filegrep/filegrep.go	state.walkDir	32
 pkg/gateway/browser_capture_health.go	captureHealthTracker.observe	32
 pkg/gateway/rest_tasks.go	taskPatch.buildPatch	32
-pkg/gateway/websocket.go	wsHandlerReadLoop.dispatchFrame	30
+pkg/gateway/websocket.go	wsHandlerReadLoop.dispatchFrame	28
 pkg/tools/browser/live_input_dispatch.go	buildInputAction	32
 pkg/tools/browser/webrtc/dedicated_input_peer.go	DedicatedInputPeer.bindChannel	32
 pkg/tools/browser/webrtc/ingest.go	Session.attachIngestTrack	32

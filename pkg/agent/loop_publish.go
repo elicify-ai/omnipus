@@ -22,7 +22,7 @@ import (
 // inbound caller with a reply the user has not yet seen goes through this one
 // path: loop.go's unroutable-message frame, the session worker's turn end and
 // terminal frames, and the revived ordinary-root turn (revive_support.go).
-func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, ag *AgentInstance, channel, chatID, response string) {
+func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, ag *AgentInstance, channel, chatID, response, sessionID string) {
 	if response == "" {
 		return
 	}
@@ -49,9 +49,10 @@ func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, ag *AgentInsta
 	}
 
 	if err := al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-		Channel: channel,
-		ChatID:  chatID,
-		Content: response,
+		Channel:   channel,
+		ChatID:    chatID,
+		Content:   response,
+		SessionID: sessionID,
 	}); err != nil {
 		logger.ErrorCF("agent", "Failed to publish outbound response",
 			map[string]any{"channel": channel, "chat_id": chatID, "error": err.Error()})

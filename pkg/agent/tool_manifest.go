@@ -190,7 +190,7 @@ func stripInfraToolDefs(in []tools.Tool) []tools.Tool {
 // When cfg.Tools.Manifest.Compressed is false, the caller must use
 // tools.ToolsToProviderDefs directly — this helper is only called on the
 // compressed code-path.
-func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []tools.Tool) []providers.ToolDefinition {
+func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []tools.Tool) ([]providers.ToolDefinition, error) {
 	bucket := ts.manifestBucket()
 	loaded := al.sessionLoadedTools(bucket)
 
@@ -225,9 +225,11 @@ func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []too
 		}
 	}
 
-	sent = al.appendGoalDoorsAfterEscape(ts, policyFiltered, sent)
-
-	return tools.ToolsToProviderDefs(sent)
+	sent, err := al.appendGoalDoorsAfterEscape(ts, policyFiltered, sent)
+	if err != nil {
+		return nil, err
+	}
+	return tools.ToolsToProviderDefs(sent), nil
 }
 
 // appendGoalDoorsAfterEscape keeps ADR-088 D3's first-move doors callable
@@ -250,13 +252,16 @@ func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []too
 // policy, unlike the infra force-include above), and only while the D3 base
 // predicate still holds. The ask door follows evaluateGoalForcing's own rule:
 // webchat origin and the per-goal question budget unspent.
-func (al *AgentLoop) appendGoalDoorsAfterEscape(ts *turnState, policyFiltered, sent []tools.Tool) []tools.Tool {
+func (al *AgentLoop) appendGoalDoorsAfterEscape(ts *turnState, policyFiltered, sent []tools.Tool) ([]tools.Tool, error) {
 	if ts == nil || !ts.goalNarrowIsEscaped() {
-		return sent
+		return sent, nil
 	}
-	holds, rec := goalTurnRecordState(al, ts)
+	holds, rec, err := goalTurnRecordState(al, ts)
+	if err != nil {
+		return nil, err
+	}
 	if !holds || rec == nil {
-		return sent
+		return sent, nil
 	}
 	includeAsk := ts.channel == goalForcingWebChannel && rec.QuestionRoundsUsed < 1
 	present := make(map[string]bool, len(sent))
@@ -270,7 +275,7 @@ func (al *AgentLoop) appendGoalDoorsAfterEscape(ts *turnState, policyFiltered, s
 		sent = append(sent, door)
 		present[door.Name()] = true
 	}
-	return sent
+	return sent, nil
 }
 
 // buildToolManifestNote renders the compact "More tools" manifest block for

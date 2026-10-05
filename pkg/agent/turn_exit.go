@@ -14,13 +14,7 @@ import (
 // ClaimCancel performs the atomic first-cancel-wins check under cancelMu.
 // Returns true if this call successfully set cancelFired from false→true.
 func (ts *turnState) ClaimCancel() bool {
-	ts.cancelMu.Lock()
-	defer ts.cancelMu.Unlock()
-	if ts.cancelFired.Load() {
-		return false
-	}
-	ts.cancelFired.Store(true)
-	return true
+	return ts.claimCancel(false)
 }
 
 // MarkAbandoned sets the abandoned flag when a controller stops waiting for a

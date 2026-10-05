@@ -5,7 +5,7 @@
 // FIX-6 (parallel fix wave, feature/plan-swimlane-board) — regression
 // coverage for three defects found by review in pkg/tools/delegate.go:
 //
-//   - Defect 1 (BLOCKER): executeCancel reported unconditional success even
+//   - Defect 1 (BLOCKER): the stop action reported unconditional success even
 //     when killChildBackgroundShells found a real kill failure — both
 //     counts were discarded after a log line. Fixed by returning
 //     (killed, failed) from killChildBackgroundShells and folding a real
@@ -139,11 +139,11 @@ func TestKillChildBackgroundShells_ReturnsRealOutcome(t *testing.T) {
 }
 
 // TestDelegateCancel_SurfacesBackgroundShellKillFailure is the end-to-end
-// proof for the BLOCKER: a delegate action="cancel" call whose turn-level
-// cancel succeeds but whose background-shell kill genuinely fails must NOT
-// return the same unconditional success text as a clean cancel.
+// proof for the BLOCKER: a delegate action="stop_all" call whose turn-level
+// stop succeeds but whose background-shell kill genuinely fails must NOT
+// return the same unconditional success text as a clean stop.
 func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
-	t.Run("hard cancel: turn cancel succeeds, shell kill fails -> result carries the warning", func(t *testing.T) {
+	t.Run("hard stop: turn stop succeeds, shell kill fails -> result carries the warning", func(t *testing.T) {
 		origKillFn := killProcessGroupFn
 		t.Cleanup(func() { killProcessGroupFn = origKillFn })
 		wantErr := errors.New("fix6: forced kill failure for test")
@@ -174,21 +174,21 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 		)
 
 		callerCtx := WithTranscriptSessionID(context.Background(), "fix6-cancel-parent-fail")
-		result := tool.Execute(callerCtx, map[string]any{"action": "cancel", "session_id": childID, "hard": true})
+		result := tool.Execute(callerCtx, map[string]any{"action": "stop_all", "session_id": childID, "hard": true})
 		if result.IsError {
-			t.Fatalf("expected the turn-level hard cancel itself to still succeed (independent of the "+
+			t.Fatalf("expected the turn-level hard stop itself to still succeed (independent of the "+
 				"shell-kill failure), got error result: %s", result.ForLLM)
 		}
 		if !strings.Contains(result.ForLLM, "hard-cancelled immediately") {
-			t.Errorf("expected the turn-cancel success text to still be present, got: %s", result.ForLLM)
+			t.Errorf("expected the turn-stop success text to still be present, got: %s", result.ForLLM)
 		}
 		if !strings.Contains(result.ForLLM, "could not be killed") {
-			t.Errorf("BLOCKER (defect 1): expected the cancel result to surface the background-shell kill "+
+			t.Errorf("BLOCKER (defect 1): expected the stop_all result to surface the background-shell kill "+
 				"failure instead of reporting unconditional success, got: %s", result.ForLLM)
 		}
 	})
 
-	t.Run("soft cancel: shell kill fails -> result carries the warning", func(t *testing.T) {
+	t.Run("soft stop: shell kill fails -> result carries the warning", func(t *testing.T) {
 		origKillFn := killProcessGroupFn
 		t.Cleanup(func() { killProcessGroupFn = origKillFn })
 		wantErr := errors.New("fix6: forced kill failure for test")
@@ -219,15 +219,15 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 		)
 
 		callerCtx := WithTranscriptSessionID(context.Background(), "fix6-cancel-parent-fail-soft")
-		result := tool.Execute(callerCtx, map[string]any{"action": "cancel", "session_id": childID, "hard": false})
+		result := tool.Execute(callerCtx, map[string]any{"action": "stop_all", "session_id": childID, "hard": false})
 		if result.IsError {
-			t.Fatalf("expected the turn-level soft cancel itself to still succeed, got error result: %s", result.ForLLM)
+			t.Fatalf("expected the turn-level soft stop itself to still succeed, got error result: %s", result.ForLLM)
 		}
 		if !strings.Contains(result.ForLLM, "cooperatively cancelled") {
-			t.Errorf("expected the turn-cancel success text to still be present, got: %s", result.ForLLM)
+			t.Errorf("expected the turn-stop success text to still be present, got: %s", result.ForLLM)
 		}
 		if !strings.Contains(result.ForLLM, "could not be killed") {
-			t.Errorf("BLOCKER (defect 1): expected the cancel result to surface the background-shell kill "+
+			t.Errorf("BLOCKER (defect 1): expected the stop_all result to surface the background-shell kill "+
 				"failure instead of reporting unconditional success, got: %s", result.ForLLM)
 		}
 	})
@@ -258,7 +258,7 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 		)
 
 		callerCtx := WithTranscriptSessionID(context.Background(), "fix6-cancel-parent-clean")
-		result := tool.Execute(callerCtx, map[string]any{"action": "cancel", "session_id": childID, "hard": true})
+		result := tool.Execute(callerCtx, map[string]any{"action": "stop_all", "session_id": childID, "hard": true})
 		if result.IsError {
 			t.Fatalf("expected success, got error result: %s", result.ForLLM)
 		}

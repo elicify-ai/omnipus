@@ -479,6 +479,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	published := false
 	publishChannel := msg.Channel
 	publishChatID := msg.ChatID
+	publishSessionID := msg.SessionID
 
 	defer func() {
 		defer func() {
@@ -488,7 +489,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 			}
 		}()
 		if finalResponse != "" && !published {
-			al.publishResponseIfNeeded(ctx, activeAgent, publishChannel, publishChatID, finalResponse)
+			al.publishResponseIfNeeded(ctx, activeAgent, publishChannel, publishChatID, finalResponse, publishSessionID)
 			published = true
 		}
 	}()
@@ -519,7 +520,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 				// ctx may be canceled during panic unwinding; use a fresh,
 				// short-lived context so the terminal frame still reaches the client.
 				termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				al.publishResponseIfNeeded(termCtx, activeAgent, publishChannel, publishChatID, finalResponse)
+				al.publishResponseIfNeeded(termCtx, activeAgent, publishChannel, publishChatID, finalResponse, publishSessionID)
 				termCancel()
 				published = true
 			}
@@ -535,13 +536,18 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 		// ADR-051 §RD5: never surface raw err text in the assistant-facing
 		// reply. Route through the classifier so provider-originated body /
 		// status / model identity is replaced with the typed copy. The raw
-		// err stays in worker logging for operator triage.
+		// err stays in worker logging for operator triage — the error-level
+		// log below is that record.
 		//
-		// TranslateTurnError, not TranslateLLMError(nil, err.Error()): passing
-		// the error VALUE keeps the sentinels intact, so a turn refused for a
-		// known reason (agent on no workspace) says so instead of falling to
-		// the "we can't tell why" copy.
-		response = TranslateTurnError(err).Message
+		// userVisibleTurnError, not TranslateLLMError(nil, err.Error()):
+		// passing the error VALUE keeps the sentinels intact, so a turn
+		// refused for a known reason (agent on no workspace) says so instead
+		// of falling to the "we can't tell why" copy, and a curatedTurnError
+		// in the chain (the in-flight stop-fence refusals, hook/budget
+		// aborts) is published as written.
+		logger.ErrorCF("agent.worker", "Turn failed — raw error for operator triage",
+			map[string]any{"session_id": msg.SessionID, "error": err.Error()})
+		response = userVisibleTurnError(err)
 	}
 	finalResponse = response
 
@@ -588,7 +594,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	if targetErr != nil {
 		if errors.Is(targetErr, ErrNoContinuationTarget) {
 			if finalResponse != "" {
-				al.publishResponseIfNeeded(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse)
+				al.publishResponseIfNeeded(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse, msg.SessionID)
 				published = true
 			}
 			return
@@ -626,7 +632,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	}
 	if target == nil {
 		if finalResponse != "" {
-			al.publishResponseIfNeeded(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse)
+			al.publishResponseIfNeeded(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse, msg.SessionID)
 			published = true
 		}
 		return
@@ -635,6 +641,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	// Update the defer's publish target to the resolved continuation target.
 	publishChannel = target.Channel
 	publishChatID = target.ChatID
+	publishSessionID = target.SessionID
 
 	// Drain steering messages that were queued during this turn (user typed
 	// a follow-up while the agent was still in its tool loop). The loop ends
@@ -667,7 +674,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	}
 
 	if finalResponse != "" {
-		al.publishResponseIfNeeded(ctx, activeAgent, target.Channel, target.ChatID, finalResponse)
+		al.publishResponseIfNeeded(ctx, activeAgent, target.Channel, target.ChatID, finalResponse, target.SessionID)
 		published = true
 	}
 }
@@ -695,14 +702,31 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 // and correctly keep the bounded-retry-with-backoff behavior below.
 func (w *sessionWorker) continueDrainRetry(ctx context.Context, target *continuationTarget) (continued string, attemptsMade int, continueErr error) {
 	al := w.parent
+	return retrySteeringContinuation(ctx, func() (string, error) {
+		return al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID)
+	}, func(err error) bool {
+		return errors.Is(err, errContinuePostDequeueFailure)
+	})
+}
+
+// retrySteeringContinuation is the shared bounded-retry policy for post-turn
+// drains. stopOn identifies errors that must not be replayed because the
+// attempted continuation either crossed the destructive dequeue boundary or
+// became ineligible to run. The backoff shape deliberately remains identical
+// for ordinary session workers and steered children.
+func retrySteeringContinuation(
+	ctx context.Context,
+	run func() (string, error),
+	stopOn func(error) bool,
+) (continued string, attemptsMade int, continueErr error) {
 retryLoop:
 	for attempt := 0; attempt < continueDrainMaxRetries; attempt++ {
 		attemptsMade = attempt + 1
-		continued, continueErr = al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID)
+		continued, continueErr = run()
 		if continueErr == nil {
 			break
 		}
-		if errors.Is(continueErr, errContinuePostDequeueFailure) {
+		if stopOn != nil && stopOn(continueErr) {
 			break
 		}
 		if attempt < len(continueDrainBackoff) {
@@ -805,5 +829,5 @@ func (w *sessionWorker) abandonQueuedSteering(ctx context.Context, target *conti
 	notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer notifyCancel()
 	al.publishResponseIfNeeded(notifyCtx, nil, target.Channel, target.ChatID,
-		"Your follow-up message could not be processed and was not delivered — please resend it.")
+		"Your follow-up message could not be processed and was not delivered — please resend it.", target.SessionID)
 }

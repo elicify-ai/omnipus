@@ -2116,12 +2116,14 @@ components:
     DelegateActionRequest:
       description: >
         The `delegate` tool call's argument shape, discriminated by
-        `action` — the corrected 9-action set (ADR-053 §5.1) replacing
+        `action` — the ADR-053 §5.1 action set plus `clear_goal`, replacing
         the legacy `run | status` pair. `run` spawns a new child;
         `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces;
-        `steer`/`respond`/`cancel`/`follow_up` are control surfaces.
-        Steering is always available for a direct delegation (see
-        ADR-053 Amendment).
+        `steer`/`respond`/`stop_all`/`clear_goal`/`resume`/`redirect` are
+        control surfaces (ADR-20261004: `cancel` is renamed `stop_all` and
+        `follow_up` is renamed `resume`, no alias path; `redirect` and
+        `resume` are new actions). Steering is always available for a direct
+        delegation (see ADR-053 Amendment).
       oneOf:
         - $ref: '#/components/schemas/DelegateRunAction'
         - $ref: '#/components/schemas/DelegateStatusAction'
@@ -2129,8 +2131,10 @@ components:
         - $ref: '#/components/schemas/DelegateInboxAckAction'
         - $ref: '#/components/schemas/DelegateSteerAction'
         - $ref: '#/components/schemas/DelegateRespondAction'
-        - $ref: '#/components/schemas/DelegateCancelAction'
-        - $ref: '#/components/schemas/DelegateFollowUpAction'
+        - $ref: '#/components/schemas/DelegateStopAllAction'
+        - $ref: '#/components/schemas/DelegateClearGoalAction'
+        - $ref: '#/components/schemas/DelegateResumeAction'
+        - $ref: '#/components/schemas/DelegateRedirectAction'
         - $ref: '#/components/schemas/DelegatePeekAction'
       discriminator:
         propertyName: action
@@ -2141,8 +2145,10 @@ components:
           inbox_ack: '#/components/schemas/DelegateInboxAckAction'
           steer: '#/components/schemas/DelegateSteerAction'
           respond: '#/components/schemas/DelegateRespondAction'
-          cancel: '#/components/schemas/DelegateCancelAction'
-          follow_up: '#/components/schemas/DelegateFollowUpAction'
+          stop_all: '#/components/schemas/DelegateStopAllAction'
+          clear_goal: '#/components/schemas/DelegateClearGoalAction'
+          resume: '#/components/schemas/DelegateResumeAction'
+          redirect: '#/components/schemas/DelegateRedirectAction'
           peek: '#/components/schemas/DelegatePeekAction'
     DelegateRunAction:
       $ref: ./components/schemas/DelegateRunAction.yaml
@@ -2156,10 +2162,14 @@ components:
       $ref: ./components/schemas/DelegateSteerAction.yaml
     DelegateRespondAction:
       $ref: ./components/schemas/DelegateRespondAction.yaml
-    DelegateCancelAction:
-      $ref: ./components/schemas/DelegateCancelAction.yaml
-    DelegateFollowUpAction:
-      $ref: ./components/schemas/DelegateFollowUpAction.yaml
+    DelegateStopAllAction:
+      $ref: ./components/schemas/DelegateStopAllAction.yaml
+    DelegateClearGoalAction:
+      $ref: ./components/schemas/DelegateClearGoalAction.yaml
+    DelegateResumeAction:
+      $ref: ./components/schemas/DelegateResumeAction.yaml
+    DelegateRedirectAction:
+      $ref: ./components/schemas/DelegateRedirectAction.yaml
     DelegatePeekAction:
       $ref: ./components/schemas/DelegatePeekAction.yaml
     DelegateSessionResponse:

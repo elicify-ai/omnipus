@@ -398,11 +398,27 @@ func TestGoalOutcome_TaskGoalEndingWritesIntoTheTaskSessionOnce(t *testing.T) {
 		name         string
 		status       task.Status
 		cancelReason task.CancelReason
-		wantEnding   generated.GoalOutcomeEnding
+		// wantEntries is the EXACT number of goal outcome entries the
+		// disposition may write into the task session, and wantEnding the
+		// ending that entry must carry. Derived from the contract row
+		// (ADR-20260928-sub-agent-control-plane, D8.10): done and a genuine
+		// failure are adjudications and write exactly one each; a user Stop
+		// is goal-non-terminal, so the shared mapper refuses it and writes
+		// NOTHING (explicit /goal clear keeps its own stopped_by_user
+		// outcome, tested separately below).
+		wantEntries int
+		wantEnding  generated.GoalOutcomeEnding
 	}{
-		{name: "done", status: task.StatusDone, wantEnding: generated.GoalOutcomeEndingMet},
-		{name: "stopped", status: task.StatusFailed, cancelReason: task.CancelReasonStoppedByUser, wantEnding: generated.GoalOutcomeEndingStoppedByUser},
-		{name: "failed", status: task.StatusFailed, wantEnding: generated.GoalOutcomeEndingOther},
+		{name: "done", status: task.StatusDone, wantEntries: 1, wantEnding: generated.GoalOutcomeEndingMet},
+		{
+			// MAJ-003/D8.10: a user Stop is not an adjudication.
+			// TerminateTaskGoalRecord must refuse failed(stopped_by_user):
+			// zero outcome entries, and the paired record stays the ORIGINAL
+			// active goal with its session binding intact.
+			name: "stopped", status: task.StatusFailed, cancelReason: task.CancelReasonStoppedByUser,
+			wantEntries: 0,
+		},
+		{name: "failed", status: task.StatusFailed, wantEntries: 1, wantEnding: generated.GoalOutcomeEndingOther},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -419,8 +435,34 @@ func TestGoalOutcome_TaskGoalEndingWritesIntoTheTaskSessionOnce(t *testing.T) {
 
 			tools.TerminateTaskGoalRecord(resolveGoalRecordStore(), taskID, tc.status, tc.cancelReason, "export shipped")
 			// A second terminal write finds the goal already ended: no second line.
+			// For the refused stop it proves even a REPEATED stop write stays silent.
 			tools.TerminateTaskGoalRecord(resolveGoalRecordStore(), taskID, tc.status, tc.cancelReason, "export shipped")
 
+			if got := countGoalOutcomeEntries(t, store, sid); got != tc.wantEntries {
+				t.Fatalf("session %q holds %d goal outcome entries; want exactly %d for this disposition "+
+					"(D8.10: a user Stop is goal-non-terminal and must write none)", sid, got, tc.wantEntries)
+			}
+			if tc.wantEntries == 0 {
+				// The refused stop: the paired record must still be the
+				// ORIGINAL active goal, binding intact, no adjudication.
+				rec := readTaskGoal(t, taskID)
+				if rec.GoalID != g.GoalID {
+					t.Fatalf("goal record paired to %q has id %q, want the original %q — a Stop must "+
+						"neither end nor replace the record (MAJ-003)", taskID, rec.GoalID, g.GoalID)
+				}
+				if rec.State != generated.GoalStateActive {
+					t.Fatalf("goal state after the refused stop = %q, want active (MAJ-003/D8.10)", rec.State)
+				}
+				if rec.ActiveSessionID != sid {
+					t.Errorf("active goal's session binding = %q, want the original %q — a Stop must not "+
+						"re-bind or un-bind the record (D8.10)", rec.ActiveSessionID, sid)
+				}
+				if rec.TerminalReason != "" {
+					t.Errorf("active goal carries TerminalReason %q after a refused stop — a stop writes "+
+						"no adjudication", rec.TerminalReason)
+				}
+				return
+			}
 			e := requireOneGoalOutcome(t, store, sid, g.GoalID)
 			o := e.GoalOutcome
 			if o.Ending != tc.wantEnding {
@@ -435,13 +477,20 @@ func TestGoalOutcome_TaskGoalEndingWritesIntoTheTaskSessionOnce(t *testing.T) {
 		})
 	}
 	stop()
+	// The live-event total is derived from the table's explicitly
+	// event-producing dispositions, never from whatever the run produced.
+	wantTotal := 0
+	for _, tc := range cases {
+		wantTotal += tc.wantEntries
+	}
 	var total int
 	for _, e := range events.events {
 		if e.Kind == EventKindGoalOutcome {
 			total++
 		}
 	}
-	if total != len(cases) {
-		t.Errorf("%d live goal outcome events; want one per task ending (%d)", total, len(cases))
+	if total != wantTotal {
+		t.Errorf("%d live goal outcome events; want exactly the event-producing dispositions' total "+
+			"(%d) — the refused stop contributes none", total, wantTotal)
 	}
 }

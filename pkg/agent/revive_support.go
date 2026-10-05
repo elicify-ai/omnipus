@@ -185,7 +185,7 @@ func (al *AgentLoop) runRevivedOrdinaryTurn(msg bus.InboundMessage, sessionKey s
 						}()
 						termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
 						defer termCancel()
-						al.publishResponseIfNeeded(termCtx, ag, msg.Channel, msg.ChatID, response)
+						al.publishResponseIfNeeded(termCtx, ag, msg.Channel, msg.ChatID, response, msg.SessionID)
 					}()
 					published = true
 				}
@@ -227,11 +227,11 @@ func (al *AgentLoop) runRevivedOrdinaryTurn(msg bus.InboundMessage, sessionKey s
 				// ADR-051 §RD5: never surface raw err text in the reply —
 				// TranslateTurnError keeps known-refusal copy and replaces
 				// provider-originated text with typed copy.
-				response = TranslateTurnError(err).Message
+				response = userVisibleTurnError(err)
 			}
 		}
 		if response != "" {
-			al.publishResponseIfNeeded(turnCtx, ag, msg.Channel, msg.ChatID, response)
+			al.publishResponseIfNeeded(turnCtx, ag, msg.Channel, msg.ChatID, response, msg.SessionID)
 			published = true
 		}
 	}()

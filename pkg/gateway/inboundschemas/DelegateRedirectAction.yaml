@@ -1,0 +1,32 @@
+type: object
+title: DelegateRedirectAction
+description: >
+  `delegate` tool call, `action: redirect` (ADR-20260928 D2, retained by
+  ADR-20260929 ruling 8; ADR-20261004 locked decision 3). Replaces the
+  helper's current turn with the new instruction: the running turn is
+  stopped (single session — never a cascade; descendants keep going) and
+  the replacement turn runs with `text`. On an already-stopped helper it
+  resumes it with the instruction; on a done/failed helper it starts
+  nothing — use `resume`.
+required:
+  - action
+  - session_id
+  - text
+additionalProperties: false
+properties:
+  action:
+    type: string
+    enum:
+      - redirect
+    example: "redirect"
+  session_id:
+    type: string
+    minLength: 1
+    description: The child session whose current turn is replaced.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  text:
+    type: string
+    minLength: 1
+    maxLength: 10000
+    description: The replacement instruction the new turn runs with.
+    example: "Stop refactoring — ship the current state and report back."

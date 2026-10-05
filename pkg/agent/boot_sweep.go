@@ -85,13 +85,6 @@ type SteerBootRecovery struct {
 	Classifier     steer.RecordClassifier
 	Deliverer      steer.UpwardDeliverer
 	OperatorNotice func(message string)
-	// EndSessionGoal is the FD1=A pair-end hook (#947 defect 1, decision
-	// (e)three): the boot sweep terminalises steered sessions found mid-flight
-	// at boot (failInterrupted); their session-owned goal ends with the
-	// session, the reason recording the interruption. Wired by the gateway
-	// from the live AgentLoop; nil (tests, embedders) skips the pair-end —
-	// same optional-dep posture as every other field here.
-	EndSessionGoal func(sessionID string, reason string)
 }
 
 type bootSessionMessageEnvelope struct {
@@ -168,6 +161,20 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 			notice("refused:"+id, fmt.Sprintf("session %s refused at boot: unknown classification %q", id, class))
 		}
 	}
+
+	// D8.1 pass two: retry publication of every pending committed final,
+	// across ALL generations, even when the session's current tail is a newer
+	// working G+1 (D2/D8.5/D8.9). Delivery-only — the pass never stops a
+	// session, starts a turn, or writes a LifecycleRecord; the automatic boot
+	// stop of an uncommitted current run (D8.3 stopped(restart)) is the
+	// separate pass one this follows. A scan-level consistency error (an
+	// orphan envelope fails the whole store's scan, D2) is surfaced through
+	// the operator notice and never blocks the gateway from starting — the
+	// same posture the sweep itself follows for per-record damage; per-item
+	// failures are noticed inside the pass and stay retryable.
+	if err := r.runFinalDeliveryPass(ctx); err != nil {
+		notice("final-delivery-scan", fmt.Sprintf("committed-final delivery pass failed: %v", err))
+	}
 	return nil
 }
 
@@ -224,10 +231,57 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		notice("load:"+id, fmt.Sprintf("steered session %s refused at boot: %v", id, err))
 		return
 	}
+	// C5 (ADR-20260928 Correction, 2026-10-04) pass one — the CURRENT RUN's
+	// recovery, before any parent wake: a steered record mid-flight at boot
+	// (queued or running, no accepted stop fence) is stopped NOW, whatever
+	// the historical replay below finds. An older notice's replay outcome —
+	// delivered, failed, or not yet attempted — never gates this stop, and
+	// the stop never starts a run (D8.5 kept). The landing is D8.3's
+	// automatic stop: cause restart, its transition ledgered beside the note
+	// (Correction C3), its direct-parent notice discovered from that ledger
+	// history by the replay below. A record carrying a CURRENT-GENERATION
+	// fence is NOT stopped here: the accepted stop's own landing is W3b's
+	// boot reconciliation, reported pending below — never fabricated twice.
+	stopLandedByBoot := false
+	if !rec.Terminal() && rec.State != session.LifecycleNeedsInput &&
+		(rec.State == session.LifecycleRunning || rec.State == session.LifecycleQueued) &&
+		!(rec.Stop != nil && rec.Stop.Generation == rec.Generation) {
+		if err := r.failInterrupted(rec); err != nil {
+			notice("interrupted-write:"+id, fmt.Sprintf("session %s interrupted transition failed: %v", id, err))
+		} else if fresh, loadErr := r.Lifecycle.Load(id); loadErr != nil || fresh == nil {
+			// The stop write itself succeeded, but its landing cannot be
+			// confirmed on the record. Say so visibly and keep
+			// stopLandedByBoot false: a stale pre-stop record is never proof
+			// the boot stop landed. Processing continues on the stale copy —
+			// the fields the replay and the interrupted arm read (session
+			// id, generation, parent edge, agent) are untouched by the stop
+			// landing, and the arm's own failInterrupted re-reads under the
+			// record lock.
+			notice("interrupted-reload:"+id, fmt.Sprintf("session %s interrupted transition landed but the record could not be re-read (%v); continuing on the stale pre-stop record — the boot stop's landing is unconfirmed", id, loadErr))
+		} else {
+			rec = fresh
+			stopLandedByBoot = true
+		}
+	}
+	// Stopped-child notices retry from the control ledger's LANDED history
+	// (stopped_notice.go::recoverStoppedChildNotice) — including after a
+	// same-generation RESUME cleared the active note (founder Q2=A). C5:
+	// this replay is pass two, independent of pass one — its outcome never
+	// suppresses the current-run stop above, and a replay failure stays
+	// visibly pending and retried. A stop accepted but not yet landed
+	// publishes nothing and is reported pending — finishing the fence at
+	// boot is W3b's reconciliation. For a record THIS boot just stopped, the
+	// call still runs the replay (the fresh restart stop's notice and every
+	// older untaken one ring here); its true must not short-circuit the
+	// interrupted arm below, which finishes D8.3's parent notification for
+	// the run this restart interrupted.
+	if r.recoverStoppedChildNotice(ctx, rec, notice) && !stopLandedByBoot {
+		return
+	}
 	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
 		// A current-generation Stop is durable. Do not deliver or re-wake any
 		// pending entry; it waits for Revive to mint a newer generation.
-		r.ackConsumed(rec, notice)
+		r.ackConsumed(ctx, rec, notice)
 		return
 	}
 
@@ -235,34 +289,94 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 	finalID := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation)
 	final, hasFinal := findBootMessage(messages, finalID)
 	finalHandled := false
+	// D2: the record's own tail commit is the only publication authority for
+	// the tail generation. A committed final always sits on a terminal record
+	// line, so a non-terminal tail never carries one — an inbox final on a
+	// non-terminal record is the phantom case D8.5 refuses.
+	committedForTail := rec.FinalDelivery != nil && rec.FinalDelivery.Generation == rec.Generation
 	if !rec.Terminal() && hasFinal {
-		r.deliverIfUnconsumed(ctx, rec, final, notice)
-		finalHandled = true
+		// D2/D8.5: an inbox final alone is never a lifecycle winner.
+		// finishFromFinal refuses the promotion (commit-based reconciliation);
+		// the inconsistent record is reported visibly and the id is not
+		// consumed — neither re-delivered from inbox presence nor promoted.
+		// The record's own boot consequence below (today the legacy
+		// interrupted landing; D8.3's stopped(restart) is W3b's) proceeds.
 		if err := r.finishFromFinal(rec, final); err != nil {
 			notice("repair-record:"+id, fmt.Sprintf("session %s terminal-record repair failed: %v", id, err))
 			return
 		}
-		rec, _ = r.Lifecycle.Load(id)
-	} else if rec.Terminal() && !hasFinal {
-		message, outcome, buildErr := r.terminalMessage(rec)
-		if buildErr != nil {
-			notice("repair-message:"+id, fmt.Sprintf("session %s terminal-inbox repair failed: %v", id, buildErr))
-			return
-		}
-		r.deliver(ctx, rec, outcome, message, notice)
+		notice("phantom-final:"+id, fmt.Sprintf("session %s has inbox final %s without a matching committed lifecycle/outbox outcome — not promoted, not re-woken (D8.5)", id, finalID))
 		finalHandled = true
-		messages = append(messages, message)
+	} else if rec.Terminal() && !hasFinal {
+		if committedForTail {
+			// The committed payload is the only publishable bytes for this
+			// generation (D2: the published bytes are the committed exact
+			// upward message) — the delivery pass below publishes it; a
+			// transcript rebuild here could only diverge from the commit.
+			finalHandled = true
+		} else {
+			message, outcome, buildErr := r.terminalMessage(rec)
+			if buildErr != nil {
+				notice("repair-message:"+id, fmt.Sprintf("session %s terminal-inbox repair failed: %v", id, buildErr))
+				return
+			}
+			r.deliver(ctx, rec, outcome, message, notice)
+			finalHandled = true
+			messages = append(messages, message)
+		}
 	}
 
 	if !rec.Terminal() && rec.State != session.LifecycleNeedsInput {
+		if rec.State == session.LifecycleStopped && !stopLandedByBoot {
+			// ADR-20260928 D8 (founder decision, 2026-10-04): a helper that is
+			// already stopped stays stopped across a restart. The restart
+			// marks nothing failed, rewrites no stop note, and sends no old
+			// "interrupted:"/"timeout:" fatal to the parent — and nothing here
+			// re-wakes a stopped helper; it waits for Revive. A stopped
+			// record that still reaches this arm leaves exactly as it stands.
+			// A record THIS boot just stopped (C5's pre-stop above) never
+			// reaches this arm: stopLandedByBoot excludes it here, and the
+			// stopLandedByBoot return below skips the interrupted fatal —
+			// its parent notice already went out through
+			// recoverStoppedChildNotice above.
+			return
+		}
 		for _, message := range messages {
+			if envelope, envErr := decodeBootMessage(message); finalHandled && envErr == nil && envelope.MessageID == finalID {
+				// The refused phantom id (or the commit-owned id) is not
+				// re-woken from inbox presence (D2: do not consume the id).
+				continue
+			}
 			r.deliverIfUnconsumed(ctx, rec, message, notice)
 		}
+		if stopLandedByBoot {
+			// C5 (ADR-20260928 Correction, 2026-10-04): pass one above already
+			// stopped THIS run — landed the ledgered restart stop and, through
+			// recoverStoppedChildNotice, delivered its stop notice to the
+			// direct parent. The "interrupted: gateway restarted while
+			// session was running" fatal would be a second, contradictory
+			// verdict on a run the restart already accounted for, and the
+			// failInterrupted call below could only write nothing (the record
+			// already sits in the stopped state that same function landed).
+			// Leave the record stopped and return; the parent has been told.
+			return
+		}
 		message, buildErr := interruptedBootMessage(rec)
+		outcome := steer.OutcomeInterrupted
+		if buildErr == nil && rec.State == session.LifecycleStopped && currentGenerationTimeoutStop(rec) {
+			// Retained for the timeout-stopped shape: the D8 guard above now
+			// returns a stopped record before this point, so this reroute
+			// only fires if that guard's shape ever changes. It keeps the
+			// retained stop cause picking the notice — the restart
+			// interrupted nothing, the lifetime budget ended the run — and
+			// delivering it with the "timeout:" text keeps bootOutcome's
+			// OutcomeTimedOut classification live for this message.
+			message, outcome, buildErr = terminalErrorBootMessage(rec)
+		}
 		if buildErr != nil {
 			notice("interrupted-message:"+id, fmt.Sprintf("session %s interrupted message failed: %v", id, buildErr))
 		} else {
-			r.deliver(ctx, rec, steer.OutcomeInterrupted, message, notice)
+			r.deliver(ctx, rec, outcome, message, notice)
 		}
 		if err := r.failInterrupted(rec); err != nil {
 			notice("interrupted-write:"+id, fmt.Sprintf("session %s interrupted transition failed: %v", id, err))
@@ -273,6 +387,14 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 	for _, message := range messages {
 		if envelope, envErr := decodeBootMessage(message); finalHandled && envErr == nil && envelope.MessageID == finalID {
 			continue
+		}
+		if committedForTail && rec.FinalDelivery != nil {
+			if envelope, envErr := decodeBootMessage(message); envErr == nil && envelope.MessageID == rec.FinalDelivery.MessageID {
+				// The tail commit's final is the delivery pass's replay: its
+				// re-wake must record commit-joined delivery facts, so this
+				// legacy re-nudge never double-wakes it (D8.1 pass two).
+				continue
+			}
 		}
 		r.deliverIfUnconsumed(ctx, rec, message, notice)
 	}
@@ -312,7 +434,42 @@ func (r *SteerBootRecovery) consumedIDs(parentID string) (map[string]bool, error
 	return consumed, nil
 }
 
-func (r *SteerBootRecovery) ackConsumed(rec *session.LifecycleRecord, notice func(string, string)) {
+// instructionArchived reports whether the child session's durable context
+// archive already holds the instruction this inbox message carried. The
+// consumed marker on the steering (parent) transcript is written AT DEQUEUE
+// (steering.go::consumeDequeuedSteeringResult), while the instruction only
+// reaches the child's context archive inside the turn iteration
+// (window_runtime.go::appendWindowMessage, keyed by steer_reconstruct.go's
+// SessionKey = rec.SessionID). A crash in between leaves the marker without
+// the archived line, so the marker alone is NOT proof of delivery: recovery
+// acknowledges a consumed entry only when the archive holds a user-role line
+// whose content equals steer_audience.go::deliverySummary of the SAME inbox
+// message — the exact text the live wake injects. An empty summary never
+// counts as archived.
+func (r *SteerBootRecovery) instructionArchived(ctx context.Context, rec *session.LifecycleRecord, message generated.SessionMessage) (bool, error) {
+	summary := deliverySummary(message)
+	if strings.TrimSpace(summary) == "" {
+		return false, nil
+	}
+	archive, err := r.Sessions.ReadArchive(ctx, rec.SessionID)
+	if err != nil {
+		return false, err
+	}
+	for _, line := range archive {
+		if line.Role == "user" && line.Content == summary {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ackConsumed acknowledges unacknowledged inbox entries whose consumed marker
+// is on the steering transcript AND whose instruction is verifiably in the
+// child's context archive. A marker whose instruction never reached the
+// archive (the crash gap) is left unacknowledged — the next deliverIfUnconsumed
+// pass re-delivers it. An archive read failure is surfaced through the notice
+// path and acknowledges nothing.
+func (r *SteerBootRecovery) ackConsumed(ctx context.Context, rec *session.LifecycleRecord, notice func(string, string)) {
 	if rec.SteeredBy == nil {
 		return
 	}
@@ -323,10 +480,19 @@ func (r *SteerBootRecovery) ackConsumed(rec *session.LifecycleRecord, notice fun
 	}
 	for _, message := range r.unacknowledged(rec, notice) {
 		envelope, envErr := decodeBootMessage(message)
-		if envErr == nil && consumed[envelope.MessageID] {
-			if err := r.Inbox.Ack(rec.SteeredBy.SteeringSessionID, []string{envelope.MessageID}); err != nil {
-				notice("ack:"+envelope.MessageID, fmt.Sprintf("session %s consumed inbox entry %s could not be acknowledged: %v", rec.SessionID, envelope.MessageID, err))
-			}
+		if envErr != nil || !consumed[envelope.MessageID] {
+			continue
+		}
+		archived, archErr := r.instructionArchived(ctx, rec, message)
+		if archErr != nil {
+			notice("archive:"+rec.SessionID, fmt.Sprintf("session %s instruction archive read failed: %v", rec.SessionID, archErr))
+			continue
+		}
+		if !archived {
+			continue
+		}
+		if err := r.Inbox.Ack(rec.SteeredBy.SteeringSessionID, []string{envelope.MessageID}); err != nil {
+			notice("ack:"+envelope.MessageID, fmt.Sprintf("session %s consumed inbox entry %s could not be acknowledged: %v", rec.SessionID, envelope.MessageID, err))
 		}
 	}
 }
@@ -343,10 +509,23 @@ func (r *SteerBootRecovery) deliverIfUnconsumed(ctx context.Context, rec *sessio
 		return
 	}
 	if consumed[envelope.MessageID] {
-		if err := r.Inbox.Ack(rec.SteeredBy.SteeringSessionID, []string{envelope.MessageID}); err != nil {
-			notice("ack:"+envelope.MessageID, fmt.Sprintf("session %s consumed inbox entry %s could not be acknowledged: %v", rec.SessionID, envelope.MessageID, err))
+		// The marker alone is not delivery: it is written at dequeue, before
+		// the instruction reaches the child's durable context archive. Require
+		// the archived instruction (a user-role line carrying deliverySummary
+		// of THIS message) before acknowledging; a read failure surfaces and
+		// acknowledges nothing. Marker without the archived line is the crash
+		// gap — fall through and deliver once.
+		archived, archErr := r.instructionArchived(ctx, rec, message)
+		if archErr != nil {
+			notice("archive:"+rec.SessionID, fmt.Sprintf("session %s instruction archive read failed: %v", rec.SessionID, archErr))
+			return
 		}
-		return
+		if archived {
+			if err := r.Inbox.Ack(rec.SteeredBy.SteeringSessionID, []string{envelope.MessageID}); err != nil {
+				notice("ack:"+envelope.MessageID, fmt.Sprintf("session %s consumed inbox entry %s could not be acknowledged: %v", rec.SessionID, envelope.MessageID, err))
+			}
+			return
+		}
 	}
 	class, classErr := session.ClassifySessionMessage(message)
 	if classErr != nil {
@@ -391,55 +570,103 @@ func (r *SteerBootRecovery) deliver(ctx context.Context, rec *session.LifecycleR
 	}
 }
 
+// finishFromFinal is ADR-20260928 D2/D8.5's refusal seam: an inbox final
+// alone is NEVER a lifecycle winner. Promotion requires the matching
+// lifecycle/outbox commit, and a committed final always sits on a terminal
+// record line (the commit boundary writes terminal state AND the tuple in
+// one mutation) — so a non-terminal tail can never present a matching
+// commit, and the only legal repair of a committed-but-unpublished final is
+// PUBLICATION through the delivery pass (boot_final_delivery.go), never a
+// record rewrite from inbox presence. The inconsistent record is reported
+// visibly by the caller and the id is not consumed; the record's own boot
+// consequence proceeds. Pinned by TestBoot984_FinishFromFinal_
+// InboxFinalAloneCannotPromoteOrEndGoal (goal_followup_984_test.go).
 func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, message generated.SessionMessage) error {
-	envelope, err := decodeBootMessage(message)
-	if err != nil {
+	if _, err := decodeBootMessage(message); err != nil {
 		return err
 	}
-	var pairEnded bool
-	err = r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
-		if current.Terminal() {
-			return nil
-		}
-		switch envelope.Kind {
-		case "handback":
-			if envelope.Mode != "final" {
-				return fmt.Errorf("message %s is a non-terminal handback", envelope.MessageID)
-			}
-			current.State = session.LifecycleCompleted
-			pairEnded = true
-		case "error":
-			if !envelope.Fatal {
-				return fmt.Errorf("message %s is a non-fatal error", envelope.MessageID)
-			}
-			current.State = session.LifecycleFailed
-			current.FailedReason = failedReasonFromBootText(envelope.Text)
-			pairEnded = true
-		default:
-			return fmt.Errorf("message %s kind %q is not terminal", envelope.MessageID, envelope.Kind)
-		}
-		current.NeedsInput = nil
-		return nil
-	})
-	if err == nil && pairEnded && r.EndSessionGoal != nil {
-		r.EndSessionGoal(rec.SessionID, failedReasonInterrupted+": the gateway restarted after the session's final report was delivered")
-	}
-	return err
+	// Refusal is unconditional. Promotion would require the matching
+	// committed outbox tuple on the record itself, and a committed final
+	// always sits on a terminal record line (the commit boundary writes
+	// terminal state AND the tuple in one mutation) — so a non-terminal
+	// tail can never present a matching commit, and a terminal one needs no
+	// rewrite. The only legal repair of a committed-but-unpublished final
+	// is PUBLICATION through the delivery pass
+	// (boot_final_delivery.go::runFinalDeliveryPass), never a record
+	// rewrite from inbox presence. The caller reports the inconsistent
+	// record visibly and the id is not consumed.
+	return nil
 }
 
+// failInterrupted lands D8.3's automatic restart stop on a record the
+// restart interrupted mid-flight (queued or running). Correction C3 applies
+// to this landing like to any other: the fence-less transition is appended
+// to the control ledger IN THE SAME lock hold that writes the stop note —
+// allocated the next monotonic stop sequence, identifying the interrupted
+// run's execution — so the restart stop's direct-parent notice is discovered
+// from ledger history (Correction C5's pass two) and survives a later RESUME
+// clearing the note. A ledger failure refuses the whole landing (the
+// mutation errors, nothing persists): a stop whose history cannot be
+// recorded must not land note-only, because the note-derived notice fallback
+// is retired. The next boot retries the stop.
 func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error {
 	err := r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
 		if current.Terminal() || (current.Stop != nil && current.Stop.Generation == current.Generation) {
 			return nil
 		}
-		current.State = session.LifecycleFailed
-		current.FailedReason = failedReasonInterrupted
+		if current.State == session.LifecycleStopped {
+			// Already-stopped arm (ADR-20260928 D8, founder decision
+			// 2026-10-04): the record's run ended BEFORE the restart, so the
+			// restart interrupted nothing. The record stays stopped exactly
+			// as it stands — never failed(interrupted) or failed(timeout),
+			// its retained stop note untouched (a timeout cause stays
+			// timeout, a stop cause stays stop). This arm writes nothing and
+			// exists so a stopped record can never fall through to the
+			// mid-flight arm below and have a restart stop fabricated over
+			// its real one (D8.5). recoverSteered's D8 guard already keeps
+			// stopped records away from this call; the arm is the same rule
+			// restated at the writer, for any future caller.
+			return nil
+		}
+		// Mid-flight arm (D8.3/F0929-3): the restart interrupted a LIVE
+		// run, so the child lands an ordinary, non-terminal stop — never
+		// failed(interrupted) — carrying the restart stop note; no
+		// goal-ending step exists in this path, so the session-owned goal
+		// (and every ancestor's) stays active. The transition is ledgered
+		// first, fence-less (Correction C3): no accepted Stop control is
+		// fabricated, the interrupted run's own execution identity rides the
+		// landed projection, and the note's Seq is the allocated ledger
+		// sequence. By=system cause=restart needs no boot_seq under the
+		// lifecycle save rule (only by=restart does), so no boot epoch is
+		// stamped here.
+		at := time.Now().UTC()
+		landed := session.LandedStop{
+			ParentSessionID: current.SteeringSessionID(),
+			Generation:      current.Generation,
+			Cause:           session.StopCauseRestart,
+			Actor:           session.StopActorSystem,
+			At:              at,
+		}
+		if current.ExecutionID != nil {
+			landed.RunID = current.ExecutionID.RunID
+			landed.BootSeq = current.ExecutionID.BootSeq
+		}
+		seq, ledgerErr := r.Lifecycle.RecordFencelessLandedStopLocked(current.SessionID, landed)
+		if ledgerErr != nil {
+			return fmt.Errorf("steer: boot: restart stop for %q not landed: its transition could not be ledgered: %w",
+				current.SessionID, ledgerErr)
+		}
+		current.State = session.LifecycleStopped
+		current.StopNote = &session.StopNote{
+			At:    at,
+			By:    session.StopActorSystem,
+			Seq:   uint64(seq),
+			Cause: session.StopCauseRestart,
+		}
+		current.FailedReason = ""
 		current.NeedsInput = nil
 		return nil
 	})
-	if err == nil && r.EndSessionGoal != nil {
-		r.EndSessionGoal(rec.SessionID, failedReasonInterrupted+": the gateway restarted while the session was mid-flight")
-	}
 	return err
 }
 
@@ -476,15 +703,51 @@ func completedBootMessage(rec *session.LifecycleRecord, result string) (generate
 	return message, steer.OutcomeFinalAnswer, err
 }
 
+// currentGenerationTimeoutStop reports whether rec's CURRENT generation was
+// stopped by its own lifetime budget. The U1 consolidation merged
+// cancelled/timed_out into the single "stopped" state (timed out = stopped,
+// founder ruling), so the state alone can no longer tell the two apart — the
+// RETAINED StopNote cause does, the same distinction
+// goal_child_completion.go keeps live via the outcome. The Seq == Generation
+// shape is the synthesized-note convention this heuristic grew up with;
+// since Correction C3 a fence-less note's Seq is its LEDGER sequence, so a
+// fresh timeout stop no longer matches here — the authoritative record of
+// that stop (its generation and cause) is its ledgered transition instead.
+// The callers left are the retained-note shapes (an older note a Revive
+// deliberately kept must never rename THIS generation's stop); a stopped
+// record never reaches them through the live boot path.
+func currentGenerationTimeoutStop(rec *session.LifecycleRecord) bool {
+	return rec.StopNote != nil &&
+		rec.StopNote.Cause == session.StopCauseTimeout &&
+		rec.StopNote.Seq == uint64(rec.Generation)
+}
+
 func terminalErrorBootMessage(rec *session.LifecycleRecord) (generated.SessionMessage, steer.Outcome, error) {
 	prefix, outcome := "failed:", steer.OutcomeFailed
 	switch rec.State {
-	case session.LifecycleCancelled:
-		prefix, outcome = "interrupted:", steer.OutcomeInterrupted
-	case session.LifecycleTimedOut:
-		prefix, outcome = "timeout:", steer.OutcomeTimedOut
+	case session.LifecycleStopped:
+		// Unreachable through this function's own caller path (it guards on
+		// rec.Terminal(), which excludes Stopped) — recoverSteered's
+		// no-final arm now routes stopped records here directly instead.
+		// Read the durable StopNote cause rather than hardcoding
+		// "interrupted", so the mapping lives in one place for both arms and
+		// a timeout can never silently read as a plain stop. "timeout:" is
+		// this file's own prefix vocabulary (bootOutcome classifies it back
+		// to OutcomeTimedOut).
+		if currentGenerationTimeoutStop(rec) {
+			prefix, outcome = "timeout:", steer.OutcomeTimedOut
+		} else {
+			prefix, outcome = "interrupted:", steer.OutcomeInterrupted
+		}
 	case session.LifecycleFailed:
-		if rec.FailedReason == failedReasonInterrupted {
+		if currentGenerationTimeoutStop(rec) {
+			// A boot pass swept the timeout-stopped record to
+			// failed(interrupted) before this delivery, or a stored timeout
+			// notice finished it (failedReasonFromBootText derives the same
+			// "timeout"). The sweep's interrupted reason names the restart,
+			// not what ended the run; the retained note is the truth.
+			prefix, outcome = "timeout:", steer.OutcomeTimedOut
+		} else if rec.FailedReason == failedReasonInterrupted {
 			prefix, outcome = "interrupted:", steer.OutcomeInterrupted
 		}
 	}
@@ -568,13 +831,9 @@ func bootOutcome(envelope bootSessionMessageEnvelope) steer.Outcome {
 	}
 }
 
-func failedReasonFromBootText(text string) string {
-	prefix, _, ok := strings.Cut(strings.TrimSpace(text), ":")
-	if ok && prefix != "" {
-		return prefix
-	}
-	return "failed"
-}
+// failedReasonFromBootText is retired with the inbox-first repair it served
+// (ADR-20260928 D2/D8.5): finishFromFinal no longer derives a failed reason
+// from stored boot text, so no reader of that mapping remains.
 
 // runBootSweep is the boot-time crash-recovery pass (FR-118/G-13/INV-9). It is
 // the sole caller of the sweep logic at boot, invoked from Start right after
@@ -721,13 +980,13 @@ func (pe *PlanEngine) bootSweep(ctx context.Context, ls *session.LifecycleStore,
 			// identically -> failed(interrupted)").
 		}
 
-		// Exemption (b): a paused plan-owner session whose plan is durably
+		// Exemption (b): a stopped plan-owner session whose plan is durably
 		// plan_phase=awaiting_supervision is legitimately idle awaiting
 		// the owner (C1/FR-147/INV-9). Resolved via the NAMED linkage
 		// (OwnsPlanID -> plan.PlanPhase), NOT via owner_scope — a top-level
 		// owner session's owner_scope is `human`, which cannot identify the
 		// plan. OwnsPlanID is the reciprocal of plan.Plan.OwnerSessionID.
-		if rec.State == session.LifecyclePaused && rec.OwnsPlanID != "" {
+		if rec.State == session.LifecycleStopped && rec.OwnsPlanID != "" {
 			if pe.planIsAwaitingSupervision(rec.OwnsPlanID) {
 				result.PreservedAwaitingCorrection = append(result.PreservedAwaitingCorrection, rec.SessionID)
 				continue
@@ -761,6 +1020,20 @@ func (pe *PlanEngine) bootSweep(ctx context.Context, ls *session.LifecycleStore,
 		// TestBoot_ParkedRecoverableWithoutCheckpoint and
 		// TestBootSweep_AwaitingCorrectionOwnerExempt all failed this way.
 		if standingRootExemptFromSweep(rec) {
+			continue
+		}
+
+		// ADR-20260928 D8 (founder decision, 2026-10-04): a stopped helper is
+		// paused, not failed. After the exemptions above, a record whose state
+		// is already LifecycleStopped stays exactly as it stands — its run
+		// ended BEFORE the restart, so the restart interrupted nothing, and
+		// failed(interrupted) would be a false verdict on a legitimately
+		// paused helper (recoverSteered's own D8 guard keeps the boot
+		// recovery pass off the same record; this is the same rule in the
+		// plan-engine sweep). A stopped helper waits for Revive — a newer
+		// instruction — never for this sweep. A running or queued session
+		// with no live turn is still swept below.
+		if rec.State == session.LifecycleStopped {
 			continue
 		}
 
@@ -814,21 +1087,6 @@ func (pe *PlanEngine) sweepToFailedInterrupted(ls *session.LifecycleStore, rec *
 		return err
 	}
 	pe.reconcileUnifiedMetaStatus(&failed)
-	// F3 (#984 follow-up): a STEERED record swept to failed(interrupted) ends
-	// its session-owned goal with it — FD1=A "the pair ends together", the
-	// same seam SteerBootRecovery.EndSessionGoal wires at boot. Gated on the
-	// steered edge: ordinary roots are exempt from the sweep upstream
-	// (standingRootExemptFromSweep) and task-origin records carry no steered
-	// edge, so the founder rule "a cancel never ends an ancestor goal" holds
-	// structurally. Best-effort, after the durable write.
-	if rec.SteeredBy != nil {
-		pe.mu.Lock()
-		pairEnd := pe.steeredGoalEndHook
-		pe.mu.Unlock()
-		if pairEnd != nil {
-			pairEnd(rec.SessionID, failedReasonInterrupted+": the gateway restarted while the session was mid-flight")
-		}
-	}
 	// Fire the session.failed hook best-effort (FR-118 deliverable 3): a hook
 	// panic is recovered and LOGGED (the doc above promises "recovered and
 	// logged"), never blocking the sweep. The earlier `recover()` silently
@@ -910,8 +1168,13 @@ func (pe *PlanEngine) reconcileUnifiedMetaStatus(rec *session.LifecycleRecord) {
 	if sessStore == nil {
 		return
 	}
-	interrupted := session.StatusInterrupted
-	setErr := sessStore.SetMeta(rec.SessionID, session.MetaPatch{Status: &interrupted})
+	// Sub-agent control plane ADR D4/MAJ-009: this function is only ever
+	// called on a record just swept to LifecycleFailed
+	// (sweepToFailedInterrupted, above), so the coarse mirror is the
+	// genuinely-failed case — StatusFailed, never the retired
+	// StatusInterrupted.
+	failed := session.StatusFailed
+	setErr := sessStore.SetMeta(rec.SessionID, session.MetaPatch{Status: &failed})
 	if setErr == nil {
 		return
 	}

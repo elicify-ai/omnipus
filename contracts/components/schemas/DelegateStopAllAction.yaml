@@ -1,0 +1,32 @@
+type: object
+title: DelegateStopAllAction
+description: >
+  `delegate` tool call, `action: stop_all` (ADR-20261004, locked decision
+  2 — renamed from `cancel` with no alias path). Stops that helper and
+  every helper under it: each reached session lands `stopped`, never
+  failed, and its parent sees a stop notice. `hard: false` (default) is
+  the SOFT cooperative stop — a tool-boundary checkpoint flush inside
+  `session_messaging.cancel_grace`. `hard: true` is the backstop
+  `RequestCancel` fired after grace elapses (or immediately, at the
+  parent's discretion).
+required:
+  - action
+  - session_id
+additionalProperties: false
+properties:
+  action:
+    type: string
+    enum:
+      - stop_all
+    example: "stop_all"
+  session_id:
+    type: string
+    minLength: 1
+    description: The child session whose whole subtree stops.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  hard:
+    type: boolean
+    description: >
+      False (default) — cooperative soft stop with grace. True —
+      immediate hard stop, bypassing the grace window.
+    example: false

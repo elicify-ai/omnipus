@@ -107,7 +107,7 @@ func (al *AgentLoop) dispatchUnroutableMessage(runCtx context.Context, msg bus.I
 					}()
 					termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer termCancel()
-					al.publishResponseIfNeeded(termCtx, ag, msg.Channel, msg.ChatID, response)
+					al.publishResponseIfNeeded(termCtx, ag, msg.Channel, msg.ChatID, response, msg.SessionID)
 				}()
 				published = true
 			}
@@ -127,10 +127,10 @@ func (al *AgentLoop) dispatchUnroutableMessage(runCtx context.Context, msg bus.I
 		// passing the error VALUE keeps the sentinels intact, so a turn
 		// refused for a known reason (agent on no workspace) says so
 		// instead of falling to the "we can't tell why" copy.
-		response = TranslateTurnError(err).Message
+		response = userVisibleTurnError(err)
 	}
 	if response != "" {
-		al.publishResponseIfNeeded(runCtx, ag, msg.Channel, msg.ChatID, response)
+		al.publishResponseIfNeeded(runCtx, ag, msg.Channel, msg.ChatID, response, msg.SessionID)
 		published = true
 	}
 }

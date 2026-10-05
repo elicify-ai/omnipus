@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// ADR-053 §Contract Surface (S2) — the durable 8-state session-lifecycle
+// ADR-053 §Contract Surface (S2) — the durable session-lifecycle
 // record. This is the single source of truth for "is anything still
 // working?" for a goal-bearing or delegated session — distinct from
 // SessionStatus (daypartition.go — active/archived/interrupted, chat-
@@ -32,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -52,27 +53,22 @@ var ErrLifecycleNotFound = errors.New("session: lifecycle record not found")
 // a new generation instead).
 var ErrLifecycleTerminalImmutable = errors.New("session: lifecycle: terminal record is immutable")
 
-// LifecycleState is the durable 8-state session lifecycle (ADR-053 S2 / the
+// LifecycleState is the durable session lifecycle (ADR-053 S2 / the
 // S4 interlock state machine's authority).
 type LifecycleState string
 
-// The eight canonical lifecycle states. These are the ONLY valid values.
+// The six canonical lifecycle states. These are the ONLY valid values.
 const (
 	LifecycleQueued     LifecycleState = "queued"
 	LifecycleRunning    LifecycleState = "running"
 	LifecycleNeedsInput LifecycleState = "needs_input"
-	// LifecyclePaused covers BOTH cooperative cancel-soft grace AND a
-	// plan-owner session idling while its plan is durably
-	// plan_phase=awaiting_supervision (that condition itself lives on
-	// the Plan record — pkg/plan — not as a 9th state here; see
-	// R§8.10's lifecycle-to-pill crosswalk). This package does not persist
-	// or interpret plan_phase; a caller layering the plan-owner semantics on
-	// top (Phase 2 / another wave) reads OwnsPlanID to resolve that link.
-	LifecyclePaused    LifecycleState = "paused"
+	// LifecycleStopped covers cancellation, timeout, and a plan-owner session
+	// idling while its plan is durably awaiting_supervision. It is non-terminal
+	// so the session can continue. The plan phase itself lives on the Plan
+	// record, resolved by callers through OwnsPlanID.
+	LifecycleStopped   LifecycleState = "stopped"
 	LifecycleCompleted LifecycleState = "completed"
 	LifecycleFailed    LifecycleState = "failed"
-	LifecycleCancelled LifecycleState = "cancelled"
-	LifecycleTimedOut  LifecycleState = "timed_out"
 )
 
 // validLifecycleStates is the set of allowed LifecycleState values.
@@ -80,14 +76,12 @@ var validLifecycleStates = map[LifecycleState]bool{
 	LifecycleQueued:     true,
 	LifecycleRunning:    true,
 	LifecycleNeedsInput: true,
-	LifecyclePaused:     true,
+	LifecycleStopped:    true,
 	LifecycleCompleted:  true,
 	LifecycleFailed:     true,
-	LifecycleCancelled:  true,
-	LifecycleTimedOut:   true,
 }
 
-// IsValidLifecycleState reports whether s is one of the eight canonical
+// IsValidLifecycleState reports whether s is one of the six canonical
 // lifecycle states.
 func IsValidLifecycleState(s LifecycleState) bool { return validLifecycleStates[s] }
 
@@ -96,12 +90,10 @@ func IsValidLifecycleState(s LifecycleState) bool { return validLifecycleStates[
 var terminalLifecycleStates = map[LifecycleState]bool{
 	LifecycleCompleted: true,
 	LifecycleFailed:    true,
-	LifecycleCancelled: true,
-	LifecycleTimedOut:  true,
 }
 
-// IsTerminalLifecycleState reports whether s is one of the four terminal
-// states (completed/failed/cancelled/timed_out).
+// IsTerminalLifecycleState reports whether s is one of the two terminal
+// states (completed/failed).
 func IsTerminalLifecycleState(s LifecycleState) bool { return terminalLifecycleStates[s] }
 
 // OwnerScopeKind discriminates LifecycleRecord.OwnerScopeID's meaning (N-9 —
@@ -156,6 +148,28 @@ func (n *NeedsInput) Expired(now time.Time) bool {
 	return !now.Before(n.TTLDeadline)
 }
 
+// ExecutionIdentity is the internal execution identity of ONE admission
+// (sub-agent control plane ADR-20260928 D2, round-4 R4-MAJ-001): the
+// (session_id, generation, boot_seq, run_id) tuple every turn/run is
+// admitted under. session_id and generation come from the record this
+// struct hangs off — they are never duplicated here — so the stamped pair
+// is exactly (boot_seq, run_id).
+//
+// RunID is minted fresh for every new turn/run; two runs of the same
+// generation carry different RunIDs. A promotion/retry of the SAME
+// admission keeps its RunID; a new admission never reuses a previous one.
+// BootSeq is the boot epoch of the boot that admitted the run, read from
+// the one BootEpochStore the process minted at gateway boot (consumers use
+// Current and never Mint).
+//
+// not-wire-format: internal disk field on LifecycleRecord with no
+// gateway/SPA bytes. Exposing any of it over the wire later is
+// contract-first work against SessionLifecycleRecord.yaml.
+type ExecutionIdentity struct {
+	RunID   string `json:"run_id"`
+	BootSeq uint64 `json:"boot_seq"`
+}
+
 // LifecycleRecord is the durable, per-generation session-lifecycle record
 // (ADR-053 §Contract Surface — SessionLifecycleRecord). Field shapes mirror
 // the generated pkg/api/generated.SessionLifecycleRecord one-for-one (minus
@@ -198,6 +212,49 @@ type LifecycleRecord struct {
 	// generation. Written by the cascade (I-6 Canceller.CancelSubtree) on
 	// the stopped node and every reachable non-terminal descendant.
 	Stop *Stop `json:"stop,omitempty"`
+	// StopNote is the durable, RETAINED record of who last stopped this
+	// session, when, and why (D2/D6; see StopNote's own doc comment in
+	// lifecycle_edge.go for how it differs from Stop above). nil means this
+	// record has never landed LifecycleStopped for any generation.
+	// persistLocked requires it non-nil whenever State == LifecycleStopped.
+	StopNote *StopNote `json:"stop_note,omitempty"`
+	// StopEffect is the lifecycle-internal stop targeting metadata (D2
+	// round-4 R4-MAJ-001): which accepted control this stop is and which
+	// execution it selected, written in the SAME mutation as the fence and
+	// the note. An explicit RESUME clears it atomically with the note (D2
+	// CRIT-001); a landing retains it so the landing half can append the
+	// landed-stop history to the control ledger. Internal storage only —
+	// not part of the generated SessionLifecycleRecord schema, like
+	// FinalDelivery (see StopEffect's own doc comment in
+	// lifecycle_control_ledger_writer.go).
+	StopEffect *StopEffect `json:"stop_effect,omitempty"`
+
+	// ExecutionID is the execution identity of the admission that most
+	// recently entered this session (D2 round-4 R4-MAJ-001): stamped by the
+	// admission path under the lifecycle lock BEFORE the turn is enqueued or
+	// registered live, and again — unchanged — when a queued admission is
+	// promoted. nil means this record has never been admitted through the
+	// execution-identity seam (records written before it existed, and hand-
+	// seeded fixtures). Revive clears it alongside the prior generation's
+	// outbox: a minted G+1 starts with no current execution.
+	//
+	// not-wire-format: internal steered-admission bookkeeping, omitted from
+	// the wire SessionLifecycleRecord (this is not session status). See
+	// ExecutionIdentity's own doc comment for the tuple's shape.
+	ExecutionID *ExecutionIdentity `json:"execution_id,omitempty"`
+
+	// FinalDelivery is the protected terminal/outbox commit tuple (ADR-20260928
+	// sub-agent control plane, D2 CRIT-001): the one outcome/publication
+	// commit writes done/failed AND this unpublished final-delivery entry in
+	// a single mutation, and the upward deliverer publishes only FROM it.
+	// Non-nil only on a terminal (completed/failed) record of the generation
+	// the final was produced for — persistLocked enforces both, plus the
+	// deterministic `<session>:<generation>:final` replay id. Post-commit
+	// delivery progress NEVER mutates this struct: it lives in typed
+	// final_delivery_update journal envelopes written only by
+	// LifecycleStore.UpdateFinalDelivery (lifecycle_outbox.go). Internal
+	// storage only — no gateway/SPA bytes.
+	FinalDelivery *FinalDeliveryCommit `json:"final_delivery,omitempty"`
 
 	OwnerScopeKind OwnerScopeKind `json:"owner_scope_kind"`
 	OwnerScopeID   string         `json:"owner_scope_id,omitempty"`
@@ -265,6 +322,15 @@ type LifecycleRecord struct {
 	LastCheckpointRef     string   `json:"last_checkpoint_ref,omitempty"`
 	UndeliveredMessageIDs []string `json:"undelivered_message_ids,omitempty"`
 
+	// PendingUserMessages preserves every wake's content in arrival order when
+	// admission queues this session. A promoted turn consumes the whole list
+	// before it starts so no queued wake is overwritten or replayed. The
+	// upstream system wake is not guaranteed to have an inbox entry.
+	//
+	// not-wire-format: internal steered-session bookkeeping, omitted from the
+	// wire SessionLifecycleRecord (this is not session status).
+	PendingUserMessages []string `json:"pending_user_messages,omitempty"`
+
 	NeedsInput *NeedsInput `json:"needs_input,omitempty"`
 
 	// FailedReason is set only when State==LifecycleFailed. Left open
@@ -274,9 +340,31 @@ type LifecycleRecord struct {
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// LastActivityAt is the last persisted moment this session was actually
+	// working (D8.7). It is not UpdatedAt: every persist, including a boot
+	// stop, stamps UpdatedAt. Restart credit reads this field and must not
+	// see the boot instant substituted for the pre-crash activity.
+	//
+	// not-wire-format: internal disk field. No Session/StopNote wire key.
+	LastActivityAt time.Time `json:"last_activity_at,omitempty"`
+	// ActiveBudgetAnchor is the start of the current lifetime-budget window.
+	// Zero means CreatedAt. An explicit resume after a timeout stop sets it
+	// to the resume instant and clears StoppedForSeconds (D6). A voluntary
+	// resume leaves it unchanged and extends StoppedForSeconds instead.
+	//
+	// not-wire-format: internal disk field. No Session wire key.
+	ActiveBudgetAnchor time.Time `json:"active_budget_anchor,omitempty"`
+	// StoppedForSeconds is active-time credit: whole seconds the session
+	// was stopped or down since ActiveBudgetAnchor (or CreatedAt). The
+	// running deadline is anchor + TimeoutSeconds + this credit (D6).
+	//
+	// not-wire-format: internal disk field. No Session wire key.
+	StoppedForSeconds int64 `json:"stopped_for_seconds,omitempty"`
 }
 
-// Terminal reports whether r's State is one of the four terminal states.
+// Terminal reports whether r's State is one of the two terminal states
+// (completed/failed).
 func (r *LifecycleRecord) Terminal() bool {
 	if r == nil {
 		return false
@@ -379,6 +467,23 @@ func (s *LifecycleStore) tail(sessionID string) (rec *LifecycleRecord, found boo
 		if line == "" {
 			continue
 		}
+		// Journal-line discriminator (ADR-20260928 D2, delivery-only journal):
+		// a final_delivery_update envelope is NOT a lifecycle record. Decoding
+		// one as a LifecycleRecord would yield a zero-value record (empty
+		// session_id/state) and — at the tail — present delivery progress as a
+		// bogus current state. Skip envelope lines here; UpdateFinalDelivery's
+		// readers join them to their commits (lifecycle_outbox.go).
+		var probe struct {
+			Kind string `json:"kind"`
+		}
+		if err := json.Unmarshal([]byte(line), &probe); err != nil {
+			// Skip a torn/corrupt line; keep the last good record. This is
+			// deliberately non-fatal — see the doc comment above.
+			continue
+		}
+		if probe.Kind == JournalKindFinalDeliveryUpdate {
+			continue
+		}
 		var r LifecycleRecord
 		if err := json.Unmarshal([]byte(line), &r); err != nil {
 			// Skip a torn/corrupt line; keep the last good record. This is
@@ -392,6 +497,63 @@ func (s *LifecycleStore) tail(sessionID string) (rec *LifecycleRecord, found boo
 		return nil, false, fmt.Errorf("session: lifecycle: scan %q: %w", sessionID, err)
 	}
 	return last, last != nil, nil
+}
+
+// HasNeedsInputRecord reports whether the session's lifecycle JSONL history
+// contains a persisted needs_input record for the exact park identity
+// (generation, correlationID, deadline). The caller passes the sidecar
+// record's OriginalDeadline, which park wrote from the same instant as the
+// lifecycle record's NeedsInput.TTLDeadline — matching all three is what
+// binds this history line to THAT park, not merely to a reused
+// correlation at the same generation (the park path accepts a caller's
+// correlation_id verbatim, so (generation, correlationID) alone is not an
+// original-park identity).
+//
+// This is the durable evidence that a park itself landed. The pending-
+// question sidecar record is appended inside park's Mutate callback, BEFORE
+// Mutate's own persist (ADR-20260928 D1.5/D1.7), so a lifecycle persist
+// failure can leave an OPEN sidecar record behind whose park never reached
+// the lifecycle file — a phantom that must never be answered. The sidecar
+// alone cannot distinguish that split from a real park that a later Stop
+// superseded (Stop persists a non-needs_input state, which clears
+// NeedsInput from the tail); only this history line can. Answer paths
+// consult it before trusting an OPEN sidecar record. not-wire-format:
+// server-internal.
+func (s *LifecycleStore) HasNeedsInputRecord(sessionID string, generation int, correlationID string, deadline time.Time) (bool, error) {
+	if err := validateLifecycleSessionID(sessionID); err != nil {
+		return false, err
+	}
+	f, err := os.Open(s.path(sessionID))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("session: lifecycle: open %q: %w", sessionID, err)
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var r LifecycleRecord
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			// Skip a torn/corrupt line, matching tail()'s crash-safety.
+			continue
+		}
+		if r.State == LifecycleNeedsInput && r.Generation == generation &&
+			r.NeedsInput != nil && r.NeedsInput.CorrelationID == correlationID &&
+			r.NeedsInput.TTLDeadline.Equal(deadline) {
+			return true, nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return false, fmt.Errorf("session: lifecycle: scan %q: %w", sessionID, err)
+	}
+	return false, nil
 }
 
 // Load returns the current (tail) LifecycleRecord for sessionID.
@@ -557,6 +719,85 @@ func validateLifecycleRecordForPersist(rec *LifecycleRecord) error {
 		if rec.Terminal() && rec.Stop.Generation == rec.Generation {
 			return fmt.Errorf("session: lifecycle: terminal record (state %q) cannot carry a current-generation stop marker", rec.State)
 		}
+	}
+	// D2/CRIT-001: a landed `stopped` record MUST carry the lasting note
+	// (nothing else preserves who/why/when once Stop itself is cleared) and
+	// MUST NOT still carry a current-generation Stop fence (landing a stop
+	// is what clears it — a record claiming both "stopped" and "still
+	// waiting to be stopped" at once is exactly the contradiction the
+	// existing terminal/current-fence guard above already refuses for
+	// completed/failed).
+	if rec.State == LifecycleStopped {
+		if rec.StopNote == nil {
+			return fmt.Errorf("session: lifecycle: state stopped requires stop_note")
+		}
+		if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+			return fmt.Errorf("session: lifecycle: state stopped cannot carry a current-generation stop marker")
+		}
+	}
+	if rec.StopNote != nil && !IsValidStopCause(rec.StopNote.Cause) {
+		return fmt.Errorf("session: lifecycle: invalid stop_note.cause %q", rec.StopNote.Cause)
+	}
+	// D2 round-4 R4-MAJ-001: a stamped execution identity must be well-formed,
+	// and a final-delivery commit on a stamped record must name THE producing
+	// run — CommitID is the admission's run_id, never a per-completion
+	// correlation id. A record with no ExecutionID carries no binding
+	// obligation (records written before the seam existed).
+	if rec.ExecutionID != nil {
+		if strings.TrimSpace(rec.ExecutionID.RunID) == "" {
+			return fmt.Errorf("session: lifecycle: execution_id requires a non-empty run_id")
+		}
+		if rec.ExecutionID.BootSeq == 0 {
+			return fmt.Errorf("session: lifecycle: execution_id requires a minted boot_seq")
+		}
+		if rec.ExecutionID.BootSeq > uint64(math.MaxInt64) {
+			return fmt.Errorf("session: lifecycle: execution_id.boot_seq %d exceeds max int64", rec.ExecutionID.BootSeq)
+		}
+	}
+	if rec.FinalDelivery != nil && rec.ExecutionID != nil && rec.FinalDelivery.CommitID != rec.ExecutionID.RunID {
+		return fmt.Errorf("session: lifecycle: final_delivery.commit_id %q must equal the producing run_id %q", rec.FinalDelivery.CommitID, rec.ExecutionID.RunID)
+	}
+	// ADR-20260928 D2: the stop-effect metadata names the accepted control
+	// whose fence/note this record carries. An anonymous effect could never
+	// be matched back to its ledger intent, so the control id is required.
+	if rec.StopEffect != nil && rec.StopEffect.ControlID == "" {
+		return fmt.Errorf("session: lifecycle: stop_effect requires control_id")
+	}
+	// ADR-20260928 D2 CRIT-001: the protected final-delivery tuple exists only
+	// on the terminal commit that produced it — never on a non-terminal or
+	// stopped record, never on a foreign generation, and never under any id
+	// but the deterministic `<session>:<generation>:final` replay id. A
+	// stopped record carrying an outbox entry is exactly the "losing final
+	// published anyway" contradiction T11 pins.
+	if rec.FinalDelivery != nil {
+		fd := rec.FinalDelivery
+		if !rec.Terminal() {
+			return fmt.Errorf("session: lifecycle: final_delivery requires a terminal (completed/failed) record, got state %q", rec.State)
+		}
+		if fd.Generation != rec.Generation {
+			return fmt.Errorf("session: lifecycle: final_delivery.generation %d must equal record generation %d", fd.Generation, rec.Generation)
+		}
+		if fd.CommitID == "" {
+			return fmt.Errorf("session: lifecycle: final_delivery requires commit_id (the producing run's identity)")
+		}
+		if fd.ParentSessionID == "" {
+			return fmt.Errorf("session: lifecycle: final_delivery requires parent_session_id")
+		}
+		if fd.PayloadHash == "" || len(fd.Payload) == 0 {
+			return fmt.Errorf("session: lifecycle: final_delivery requires payload_hash and the exact upward payload")
+		}
+		if want := fmt.Sprintf("%s:%d:final", rec.SessionID, rec.Generation); fd.MessageID != want {
+			return fmt.Errorf("session: lifecycle: final_delivery.message_id %q must be the deterministic replay id %q", fd.MessageID, want)
+		}
+	}
+	// Boot epoch on a stop note (ADR D8.3). Any populated boot_seq must fit
+	// the int64 wire, whoever wrote it. Only by=restart must carry one;
+	// by=system cause=restart with no boot_seq stays valid.
+	if rec.StopNote != nil && rec.StopNote.BootSeq > uint64(math.MaxInt64) {
+		return fmt.Errorf("session: lifecycle: stop_note.boot_seq %d exceeds max int64 (by=%q)", rec.StopNote.BootSeq, rec.StopNote.By)
+	}
+	if rec.StopNote != nil && rec.StopNote.By == StopActorRestart && rec.StopNote.BootSeq == 0 {
+		return fmt.Errorf("session: lifecycle: stop_note.by %q requires boot_seq >= 1", rec.StopNote.By)
 	}
 	return nil
 }
@@ -786,7 +1027,7 @@ type LifecycleFilter struct {
 	// in this set.
 	States map[LifecycleState]bool
 	// NonTerminalOnly, when true, is shorthand for "State is not one of the
-	// four terminal states" — the boot sweep's primary query (another
+	// two terminal states" — the boot sweep's primary query (another
 	// wave), exposed here since it is the store's natural output shape.
 	NonTerminalOnly bool
 }
@@ -927,7 +1168,7 @@ func (s *LifecycleStore) Exists(sessionID string) bool {
 }
 
 // PruneTerminal deletes the persisted .jsonl file for every session_id whose
-// TAIL record is terminal (completed/failed/cancelled/timed_out) and whose
+// TAIL record is terminal (completed/failed) and whose
 // UpdatedAt is older than retentionDays*24h — explicit retention for what
 // would otherwise be an unbounded, append-only-per-session-id store with no
 // prune path at all (mirrors UnifiedStore.RetentionSweep's own contract and

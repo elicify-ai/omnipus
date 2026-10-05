@@ -27,7 +27,12 @@
 // writes task.Patch.Status — the one operation through which a task can reach
 // a terminal status. That set must match the table below EXACTLY. Adding a new
 // terminal writer therefore fails this test until its author either wires the
-// hook or writes down why the writer cannot reach a terminal status.
+// hook or writes down why the writer cannot reach a terminal status. One
+// writer is deliberately exempt WHILE reaching a terminal status:
+// PlanEngine.cancelMemberLocked's user Stop — MAJ-003/D8.10
+// (ADR-20260928-sub-agent-control-plane) keep the goal active and the shared
+// mapper tools.GoalStateForTerminalTask refuses that disposition; its row
+// below carries that why, and no other writer may join it without its own.
 package tools
 
 import (
@@ -57,8 +62,10 @@ var goalHookNames = map[string]bool{
 type statusWriter struct {
 	// where is "<pkg dir>.<function>", the key the scan produces.
 	where string
-	// mustHook is true when this writer can move a task to done/failed and
-	// must therefore end the task's paired goal record.
+	// mustHook is true when this writer's terminal disposition is
+	// goal-terminal per tools.GoalStateForTerminalTask (done, or a failure
+	// that is not a resumable user Stop) and must therefore end the task's
+	// paired goal record.
 	mustHook bool
 	// why records the reason a writer is exempt from the hook. Required when
 	// mustHook is false — an exemption with no stated reason is how the
@@ -72,11 +79,27 @@ var knownStatusWriters = []statusWriter{
 	// ---- the terminal writers: each must end the paired goal record ------
 	{where: "pkg/agent.TaskExecutor.completeTaskWithResult", mustHook: true},
 	{where: "pkg/agent.TaskExecutor.failTask", mustHook: true},
-	{where: "pkg/agent.PlanEngine.cancelMemberLocked", mustHook: true},
+	{where: "pkg/agent.TaskExecutor.failTaskBeforeDispatch", mustHook: true},
 	{where: "pkg/gateway.taskPatch.buildPatch", mustHook: true},
 	{where: "pkg/gateway.restAPI.reconcileStuckTasks", mustHook: true},
 	{where: "pkg/tools.taskUpdateToolExecute.buildPatchFields", mustHook: true},
 	{where: "pkg/sysagent/tools.taskUpdateToolExecute.buildPatch", mustHook: true},
+
+	// ---- the one classified exemption that REACHES a terminal status -----
+	// MAJ-003/D8.10 (sub-agent control-plane ADR): a user Stop is not an
+	// adjudication. This row must stay CLASSIFIED (the oracle is set
+	// equality) and must never drift back to mustHook without an ADR
+	// reversal; no other writer may join this exemption without its own
+	// written why.
+	{
+		where: "pkg/agent.PlanEngine.cancelMemberLocked",
+		why: "writes failed(stopped_by_user) — a user Stop, which MAJ-003/D8.10 keep " +
+			"goal-non-terminal: the paired record stays ACTIVE with its original id and " +
+			"session binding so plan restart can reuse it (T17/T20). The policy point is " +
+			"the shared mapper tools.GoalStateForTerminalTask, which refuses that " +
+			"disposition, so no goal-end belongs here; the behavioural pins are " +
+			"pkg/agent/task_goal_terminal_test.go's stop row and the mapper's own test.",
+	},
 
 	// ---- non-terminal writers: each states why it cannot reach done/failed --
 	{

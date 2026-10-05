@@ -23,7 +23,10 @@
 // Boundary, ...) are defined directly in pkg/steer.
 package session
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // OriginKind discriminates what created a lifecycle record — a session's
 // record-level Origin.Kind (I-1). One value per
@@ -154,13 +157,23 @@ type Stop struct {
 	By         Principal `json:"by"`
 }
 
-// Stopped reports whether r is stopped RIGHT NOW — the live-stop predicate
-// every dispatch/delivery/completion path must refuse against. r.Stop
-// encodes a tri-state (D8) that no other method names, so this is the one
-// place that spells out all three shapes plus the fourth,
+// Stopped reports whether r is stopped RIGHT NOW — the predicate every
+// dispatch/delivery/completion/revival path must treat as "durably stopped,"
+// whether the stop is still in flight or has already landed and cleared.
+// Stopped checks landed state OR the current fence — two independent ways in:
+//
+//   - r.State == LifecycleStopped -> LANDED. TransitionSession
+//     (lifecycle_bridge.go) clears r.Stop the instant it lands this state,
+//     keeping only the retained StopNote — so this check alone must catch
+//     the landed-and-cleared shape; it does not require r.Stop to be set.
+//   - the live Stop fence, below -> not yet landed, still in flight.
+//
+// r.Stop itself encodes a tri-state (D8) that no other method names, so
+// this is the one place that spells out all three shapes plus the fourth,
 // unreachable-by-design one:
 //
-//   - r.Stop == nil            -> never stopped. false.
+//   - r.Stop == nil            -> no live fence. false (falls through to
+//     the landed-state check above).
 //   - r.Stop.Generation == r.Generation -> stopped for the record's CURRENT
 //     generation. Live. true.
 //   - r.Stop.Generation <  r.Generation -> stopped once, on an EARLIER
@@ -174,8 +187,144 @@ type Stop struct {
 //     Treated as not-live (false): a Stop naming a generation that has not
 //     happened yet cannot be "stopping" the record's current generation.
 func (r *LifecycleRecord) Stopped() bool {
-	if r == nil || r.Stop == nil {
+	if r == nil {
 		return false
 	}
-	return r.Stop.Generation == r.Generation
+	if r.State == LifecycleStopped {
+		return true
+	}
+	return r.Stop != nil && r.Stop.Generation == r.Generation
+}
+
+// StopCause is the closed vocabulary naming WHY a session last landed
+// LifecycleStopped (sub-agent control plane ADR, D2/D6/Vocabulary lines
+// 133/137). These five values are the ONLY legal ones — persistLocked
+// rejects any other string.
+type StopCause string
+
+const (
+	// StopCauseStop is a direct single-session stop — the session named was
+	// itself the target (a human's Stop button on a steered session, or the
+	// agent's own delegate cancel naming this session_id), not swept in as
+	// someone else's descendant.
+	StopCauseStop StopCause = "stop"
+	// StopCauseRedirectPause is a fresh instruction pausing the CURRENT
+	// generation (D2 line 261's `redirect` control) rather than stopping the
+	// session outright.
+	StopCauseRedirectPause StopCause = "redirect_pause"
+	// StopCauseCascade is a descendant reached (and stamped) by an ancestor's
+	// Stop/Stop-all cascade — never the cascade's own direct target.
+	StopCauseCascade StopCause = "cascade"
+	// StopCauseRestart is boot recovery reverting an interrupted
+	// queued/running record, or a goal loop retiring an attempt's session in
+	// favor of a freshly-minted one.
+	StopCauseRestart StopCause = "restart"
+	// StopCauseTimeout is a session's own lifetime execution budget
+	// (SteeredBy.Limits.TimeoutSeconds) running out mid-turn.
+	StopCauseTimeout StopCause = "timeout"
+)
+
+// validStopCauses is the set backing IsValidStopCause.
+var validStopCauses = map[StopCause]bool{
+	StopCauseStop:          true,
+	StopCauseRedirectPause: true,
+	StopCauseCascade:       true,
+	StopCauseRestart:       true,
+	StopCauseTimeout:       true,
+}
+
+// IsValidStopCause reports whether c is one of the five canonical stop
+// causes (D2/D6).
+func IsValidStopCause(c StopCause) bool { return validStopCauses[c] }
+
+// StopNote is the durable, LASTING record of who stopped a session, when,
+// and why (sub-agent control plane ADR D2/D6, Vocabulary lines 133/137;
+// CRIT-001 line ~209). It is distinct from Stop (the in-flight dispatch
+// fence above): Stop is cleared the instant the stop it names is carried
+// out, while StopNote is written at the SAME moment (for a cause that
+// stamps a fence — stop/cascade/redirect_pause) or at landing time (for a
+// cause with no fence step — restart/timeout), and then RETAINED across the
+// fence's own clearing — a direct parent's stopped-child notice, and any
+// later observer, reads StopNote for who/why/when, never Stop. nil means
+// this record has never landed LifecycleStopped for any generation.
+//
+// Seq is stamped from the record's OWN Generation at the moment of write —
+// a documented stand-in until the per-session control ledger (MAJ-009,
+// "Controls") exists and can supply a true per-control monotonic sequence;
+// every site that sets StopNote today derives Seq the same way, so swapping
+// in the real ledger later is a one-line change per site, not a shape
+// change.
+type StopNote struct {
+	At    time.Time `json:"at"`
+	By    string    `json:"by"`
+	Seq   uint64    `json:"seq"`
+	Cause StopCause `json:"cause"`
+	// BootSeq is the boot epoch of the boot that WROTE this note — the
+	// monotonic boot counter persisted in the data dir (sub-agent control
+	// plane ADR D8.3). Present (>= 1) on restart notes; zero — omitted on
+	// the wire — otherwise, matching StopNote.yaml's optional
+	// absent-not-null integer/int64/minimum-1 shape. No writer stamps it
+	// yet: the boot-epoch store, persist-time range/restart validation and
+	// the first-act-of-boot mint are separate later units, so every note
+	// written today still omits the key.
+	BootSeq uint64 `json:"boot_seq,omitempty"`
+}
+
+// StopActorSystem names a stop_note.by actor with no session.Principal
+// behind it — a lifetime-budget timeout or a goal-loop attempt
+// supersession, neither of which is performed BY a human or agent principal
+// the way stop/cascade/redirect_pause are. A boot-recovery restart is NOT a
+// StopActorSystem note: per sub-agent control plane ADR D8.3 it carries the
+// StopActorRestart literal below.
+const StopActorSystem = "system"
+
+// StopActorRestart is the stop_note.by actor literal for a boot-recovery
+// restart note (sub-agent control plane ADR D8.3: the note is
+// {at, by: "restart", seq, cause: "restart", boot_seq}). Distinct from
+// StopActorSystem: the goal loop's non-boot attempt supersession also
+// writes cause=restart today but keeps StopActorSystem — that split is
+// deliberate (no writer stamps boot_seq on it), and the eventual
+// boot-sequence validation must not read cause=restart as proof of a boot
+// restart while that writer exists.
+const StopActorRestart = "restart"
+
+// StopActorFromPrincipal formats p as a stop_note.by display string
+// ("human:<id>" / "agent:<id>"). Used at every site that has a real
+// session.Principal (steer_cancel.go's cascade, via steer.Principal — a
+// type alias for this same type) rather than only a looser identity.
+func StopActorFromPrincipal(p Principal) string {
+	kind := string(p.Kind)
+	id := strings.TrimSpace(p.ID)
+	switch {
+	case kind == "" && id == "":
+		return ""
+	case id == "":
+		return kind
+	case kind == "":
+		return id
+	default:
+		return kind + ":" + id
+	}
+}
+
+// StopActorAgent formats an agent id as a stop_note.by display string for a
+// call site that has only a bare agent id (e.g. tools.ToolAgentID), not a
+// full Principal.
+func StopActorAgent(agentID string) string {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return "agent"
+	}
+	return "agent:" + agentID
+}
+
+// StopActorHumanUser formats a gateway/channel user id as a stop_note.by
+// display string for a call site that has only a bare user id (e.g.
+// CancelCanceller.UserID), not a full Principal.
+func StopActorHumanUser(userID string) string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return "human"
+	}
+	return "human:" + userID
 }

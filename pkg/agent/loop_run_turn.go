@@ -126,6 +126,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 		status:       rz.rc.rx.rr.rq.ri.turnStatus,
 		followUps:    append([]bus.InboundMessage(nil), rz.rc.rx.rr.rq.ri.rf.rt.ts.followUps...),
 		turnFailed:   rz.rc.rx.rr.rq.ri.rf.rt.ts.turnFailed,
+		stopped:      rz.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load(),
 	}, nil
 }
 
@@ -800,6 +801,9 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 	// loop) read the exact same verdict. See evaluateGoalForcing's own doc
 	// comment for the full predicate.
 	rq.goalForce = rq.ri.rf.rt.al.evaluateGoalForcing(rq.ri.rf.rt.ts, rq.ri.rf.rt.iteration, rq.policyFilteredTools)
+	if rq.goalForce.readErr != nil {
+		return rq.refuseUnreadGoalState(rq.goalForce.readErr)
+	}
 
 	// FR-066: dedup invariant — tools[] must be name-unique after filter+assembly.
 	// If a duplicate is detected, emit HIGH audit and return an error turn result
@@ -869,7 +873,11 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 		// force-through those helpers would otherwise apply.
 		rq.ri.rf.providerToolDefs = tools.ToolsToProviderDefs(rq.goalForce.narrowed)
 	case rq.ri.cfg.Tools.Manifest.Compressed:
-		rq.ri.rf.providerToolDefs = rq.ri.rf.rt.al.buildCompressedToolDefs(rq.ri.rf.rt.ts, rq.policyFilteredTools)
+		var err error
+		rq.ri.rf.providerToolDefs, err = rq.ri.rf.rt.al.buildCompressedToolDefs(rq.ri.rf.rt.ts, rq.policyFilteredTools)
+		if err != nil {
+			return rq.refuseUnreadGoalState(err)
+		}
 	default:
 		// Non-compressed defs path: strip manifest infra tools (ToolSearch)
 		// before surfacing defs to the model. ToolSearch resolves through the

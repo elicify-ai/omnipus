@@ -98,7 +98,7 @@ func discoveryAssertDoorForced(t *testing.T, al *AgentLoop, agentID string) {
 		"role %q: the infra floor must keep ToolSearch on the filtered surface", agentID)
 
 	ts := fakeTurnState(inst, "sess-discovery-door-"+agentID)
-	names := adr090DefNames(al.buildCompressedToolDefs(ts, pf))
+	names := adr090DefNames(mustBuildCompressedToolDefs(t, al, ts, pf))
 	assert.Truef(t, names["ToolSearch"],
 		"role %q: compressed defs must offer ToolSearch (non-deniable discovery door)", agentID)
 	assert.Equalf(t, "allow", al.resolveToolPolicyAtExec(ts, "ToolSearch", pmap),
@@ -157,7 +157,7 @@ func TestADR090_DiscoveryInfrastructure_DeniedTargetsStayDenied(t *testing.T) {
 		"denied target must not ride the infra floor onto the filtered slice")
 
 	ts := fakeTurnState(ava, "sess-discovery-target-deny")
-	names := adr090DefNames(al.buildCompressedToolDefs(ts, pf))
+	names := adr090DefNames(mustBuildCompressedToolDefs(t, al, ts, pf))
 	assert.True(t, names["ToolSearch"], "discovery door stays offered")
 	assert.False(t, names[deniedTarget],
 		"compressed defs must not offer a policy-denied target")
@@ -196,13 +196,13 @@ func TestADR090_DiscoveryInfrastructure_AllowedTargetStillLoads(t *testing.T) {
 		"precondition: jim's %s must survive the filter", allowedTarget)
 
 	ts := fakeTurnState(jim, "sess-discovery-target-allow")
-	pre := adr090DefNames(al.buildCompressedToolDefs(ts, pf))
+	pre := adr090DefNames(mustBuildCompressedToolDefs(t, al, ts, pf))
 	require.False(t, pre[allowedTarget],
 		"precondition: %s is deferred (not callable before discovery)", allowedTarget)
 
 	res := adr090Load(t, al, string(coreagent.IDJim), "sess-discovery-target-allow", allowedTarget)
 	require.False(t, res.IsError, "loading jim's allowed %s must succeed: %s", allowedTarget, res.ForLLM)
-	post := adr090DefNames(al.buildCompressedToolDefs(ts, pf))
+	post := adr090DefNames(mustBuildCompressedToolDefs(t, al, ts, pf))
 	assert.True(t, post[allowedTarget],
 		"%s must be callable in this session after discovery", allowedTarget)
 }

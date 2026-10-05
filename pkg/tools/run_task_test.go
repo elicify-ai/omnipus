@@ -245,6 +245,80 @@ func TestRunTask_DispatchFailure_Reverts(t *testing.T) {
 	}
 }
 
+// TestRunTask_DispatchFailure_UnrelatedStoredFailure_StillReverts proves the
+// caller's Failed-disposition preservation guard (run_task.go's
+// failedDisposition check, "A successful executor failure write stores the
+// same cause it returns. Do not erase that disposition, or mistake an
+// unrelated failure for it.") is scoped to THIS dispatch attempt's own cause.
+// If the store already holds a Failed status with a DIFFERENT nonempty
+// result — e.g. an out-of-band writer recorded its own unrelated failure
+// between the in_progress transition and this dispatch call's own return —
+// run_task must still perform the ordinary revert: restore the prior status,
+// clear StartedAt, and surface this dispatch's own error, exactly as the
+// matching-status-but-no-Failed-write case above does.
+//
+// Oracle: #1026 CHECK round 5 F1 (independent audit,
+// coordination/logs/fix890-opus/1026-check5/REPORT.md). The mutant that
+// replaces the cause-equality comparison at run_task.go:176
+// (`fresh.Result == startErr.Error()`) with `true` survives
+// TestRunTaskTool_SessionBindingFailureRemainsFailed (its store only ever
+// reaches Failed with the SAME cause the executor returns — the real
+// executor's failTaskBeforeDispatch always persists exactly the error it
+// also returns) and TestRunTask_DispatchFailure_Reverts above (its fresh
+// status stays in_progress, so the Failed guard is already false there
+// regardless of the comparison). Only a differing stored cause exercises the
+// equality itself. This fixture installs the differing cause directly via
+// the same (context.Context, string) (string, error) SetStartTaskNow seam
+// every other test in this file already uses — no new mock shape.
+func TestRunTask_DispatchFailure_UnrelatedStoredFailure_StillReverts(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tk := seedStandaloneTask(t, store, task.StatusNext, "worker")
+
+	const unrelatedCause = "disk write failure from an unrelated earlier attempt"
+	dispatchErr := errors.New("dispatch cap reached")
+
+	tool := NewTaskRunTool(store)
+	tool.SetStartTaskNow(func(context.Context, string) (string, error) {
+		// Simulate an out-of-band writer that already recorded the task
+		// Failed for a DIFFERENT reason before this dispatch attempt's own
+		// error comes back (the real executor never produces this shape on
+		// its own dispatch path — its Failed write always carries the exact
+		// error it also returns, which is why the caller's other tests can't
+		// reach this branch). This exercises run_task's own defensive
+		// comparison at the exact (ctx, taskID) (string, error) boundary the
+		// caller already treats as real.
+		failed := task.StatusFailed
+		unrelated := unrelatedCause
+		if _, uerr := store.Update(tk.ID, task.Patch{Status: &failed, Result: &unrelated}); uerr != nil {
+			t.Fatalf("seed unrelated Failed disposition before returning dispatch error: %v", uerr)
+		}
+		return "", dispatchErr
+	})
+
+	res := tool.Execute(context.Background(), map[string]any{"task_id": tk.ID})
+	if !res.IsError {
+		t.Fatal("expected error result on dispatch failure")
+	}
+	if !strings.Contains(res.ForLLM, dispatchErr.Error()) {
+		t.Errorf("result = %q, want this dispatch attempt's own visible error %q", res.ForLLM, dispatchErr.Error())
+	}
+
+	got, err := store.Get(tk.ID)
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if got.Status != task.StatusNext {
+		t.Errorf("status = %q after dispatch failure with an unrelated stored Failed cause, want reverted to next (must not preserve a stale, unrelated Failed disposition)", got.Status)
+	}
+	if got.StartedAt != "" {
+		t.Errorf("started_at = %q after rollback, want cleared (not a phantom timestamp from the reverted in_progress transition)", got.StartedAt)
+	}
+	if got.Result != unrelatedCause {
+		t.Errorf("result = %q after rollback, want the unrelated cause left untouched (%q) — the revert patch must not overwrite Result", got.Result, unrelatedCause)
+	}
+}
+
 // TestRunTask_AlreadyInProgress_Idempotent proves run_task on an already
 // in_progress task calls the (idempotent) dispatcher without erroring.
 func TestRunTask_AlreadyInProgress_Idempotent(t *testing.T) {

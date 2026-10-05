@@ -101,16 +101,17 @@ func newIssue890TerminalParent(t *testing.T) *issue890TerminalParent {
 	return &issue890TerminalParent{al: al, parentID: parentID}
 }
 
-// stampInterruptedUnifiedStatus mirrors what the boot sweep's reconciliation
+// stampFailedUnifiedStatus mirrors what the boot sweep's reconciliation
 // leaves behind (pkg/agent/boot_sweep.go::reconcileUnifiedMetaStatus): the
-// UnifiedMeta.Status of a swept chat reads "interrupted" while its lifecycle
-// record is failed. MIN-002 needs that state so the revival's reset to active
-// is observable.
-func (h *issue890TerminalParent) stampInterruptedUnifiedStatus(t *testing.T) {
+// UnifiedMeta.Status of a swept chat reads "failed" while its lifecycle
+// record is failed (sub-agent control plane ADR D4/MAJ-009 retires the
+// former "interrupted" wire value in favor of this one). MIN-002 needs that
+// state so the revival's reset to active is observable.
+func (h *issue890TerminalParent) stampFailedUnifiedStatus(t *testing.T) {
 	t.Helper()
-	interrupted := session.StatusInterrupted
-	if err := h.al.GetSessionStore().SetMeta(h.parentID, session.MetaPatch{Status: &interrupted}); err != nil {
-		t.Fatalf("SetMeta(parent).Status=interrupted: %v", err)
+	failed := session.StatusFailed
+	if err := h.al.GetSessionStore().SetMeta(h.parentID, session.MetaPatch{Status: &failed}); err != nil {
+		t.Fatalf("SetMeta(parent).Status=failed: %v", err)
 	}
 }
 
@@ -146,7 +147,7 @@ func (h *issue890TerminalParent) delegateRunArgs() map[string]any {
 // succeed; the "new chat" workaround is retired).
 func TestAdr093RootRevival_HumanMessageRevivesTerminalChatAndDelegationSucceeds(t *testing.T) {
 	h := newIssue890TerminalParent(t)
-	h.stampInterruptedUnifiedStatus(t)
+	h.stampFailedUnifiedStatus(t)
 
 	// The ordinary inbound-turn admission path — the path a human message
 	// into the chat takes (ADR-093 D4: "the turn revives the record before

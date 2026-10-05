@@ -795,15 +795,20 @@ func (l *SteerLauncher) Dispatch(ctx context.Context, sessionID string, gen int)
 }
 
 func (al *AgentLoop) dispatchSteeredSession(ctx context.Context, sessionID string, gen int) (steer.DispatchResult, error) {
-	return al.dispatchSteeredSessionWithReservation(ctx, sessionID, gen, false)
+	// A fresh admission: mint its run identity here. (The explicit
+	// RESUME/redirect replacement that must adopt an ACCEPTED D4 ledger
+	// control_id instead is a later unit on the W2a typed store API.)
+	return al.dispatchSteeredSessionWithReservation(ctx, sessionID, gen, false, freshRunID(), al.bootEpochFor())
 }
 
 // dispatchSteeredSessionReserved resumes the FIFO head whose slot was already
 // reserved by steerAdmission.release. It deliberately skips tryAdmit; running
 // the promoted entry through ordinary admission would see its own reservation
-// at the cap and requeue forever.
-func (al *AgentLoop) dispatchSteeredSessionReserved(ctx context.Context, sessionID string, gen int) (steer.DispatchResult, error) {
-	return al.dispatchSteeredSessionWithReservation(ctx, sessionID, gen, true)
+// at the cap and requeue forever. runID is the PROMOTED ADMISSION'S OWN
+// identity, copied unchanged out of its queue entry — a promotion is the
+// same admission starting, not a new one (execution_identity.go).
+func (al *AgentLoop) dispatchSteeredSessionReserved(ctx context.Context, sessionID string, gen int, runID string, bootSeq uint64) (steer.DispatchResult, error) {
+	return al.dispatchSteeredSessionWithReservation(ctx, sessionID, gen, true, runID, bootSeq)
 }
 
 // dispatchRefusalError maps reserveDispatch's reason string back onto the
@@ -818,51 +823,6 @@ func dispatchRefusalError(reason string) error {
 		return steer.ErrTerminal
 	}
 	return fmt.Errorf("steer: dispatch: refused: %s", reason)
-}
-
-// commitSteeredDispatchState re-runs I-6's reserveDispatch guard against the
-// record's CURRENT tail and writes state in the SAME atomic read-modify-write
-// (LifecycleStore.Mutate), which is the primitive lifecycle.go::Persist's own
-// doc comment requires of every read-then-decide-then-write caller:
-// "a naked Load+Persist races a concurrent transition on the same session_id."
-//
-// Dispatch's snapshot is taken before turn reconstruction (a classification
-// pass, a metadata read and a full transcript read), so the window is wide. A
-// Stop or a Revive landing inside it used to be written back out of existence
-// by the stale snapshot: the session started anyway, the Stop marker vanished
-// from disk, and a revival's generation could move backwards.
-//
-// The record returned is the one persisted, so the caller reads post-write
-// truth (edge, goal reference, created-at) rather than its own stale copy.
-//
-// Never wrapped in a manual Lock(sessionID): Mutate takes that same
-// *sync.Mutex internally and sync.Mutex is not reentrant — the reentrancy
-// trap this file's Dispatch doc comment describes.
-func commitSteeredDispatchState(
-	lifecycle *session.LifecycleStore, sessionID string, gen int, state session.LifecycleState,
-) (*session.LifecycleRecord, error) {
-	var committed *session.LifecycleRecord
-	var refusal error
-	err := lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
-		if rec == nil {
-			refusal = fmt.Errorf("steer: dispatch %q: %w", sessionID, session.ErrLifecycleNotFound)
-			return refusal
-		}
-		if ok, reason := reserveDispatch(rec, gen); !ok {
-			refusal = dispatchRefusalError(reason)
-			return refusal
-		}
-		rec.State = state
-		committed = rec
-		return nil
-	})
-	if err != nil {
-		if refusal != nil {
-			return nil, refusal
-		}
-		return nil, fmt.Errorf("steer: dispatch: %w: %w", steer.ErrStoreWrite, err)
-	}
-	return committed, nil
 }
 
 // dispatchStateWriteTestHook is a test-only synchronization seam, fired from
@@ -900,7 +860,7 @@ var turnRegisteredTestHook func(sessionID string, ts *turnState)
 //     counter and registerTurnIfAbsent's sync.Map.LoadOrStore
 //     compare-and-set, both independently atomic.
 //   - "a cancel cascade cannot land between the read of the record and the
-//     start of the turn" is enforced by commitSteeredDispatchState: every
+//     start of the turn" is enforced by commitSteeredExecutionState: every
 //     state write below re-runs reserveDispatch against the live tail
 //     inside LifecycleStore.Mutate's own atomic read-modify-write, and
 //     refuses rather than writing a stale snapshot back over a Stop marker
@@ -913,18 +873,26 @@ var turnRegisteredTestHook func(sessionID string, ts *turnState)
 // function did exactly that and hung a test for its full 10-minute timeout.
 // Mutate is the supported way to get atomicity here: it takes the lock once
 // and hands the caller the record.
-func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, sessionID string, gen int, reserved bool) (steer.DispatchResult, error) {
+func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, sessionID string, gen int, reserved bool, runID string, bootSeq uint64) (steer.DispatchResult, error) {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
 		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: no lifecycle store wired", steer.ErrStoreWrite)
 	}
 	gate := al.steerAdmission()
-	if reserved && !gate.hasReservation(sessionID, gen) {
+	claim := executionClaim{SessionID: sessionID, Generation: gen, RunID: runID, BootSeq: bootSeq}
+	gate.entryMu.Lock()
+	entryLocked := true
+	defer func() {
+		if entryLocked {
+			gate.entryMu.Unlock()
+		}
+	}()
+	if reserved && !gate.hasExecutionReservation(claim) {
 		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: promoted reservation is stale", steer.ErrStaleGeneration)
 	}
 	rollbackReservation := func() {
 		if reserved {
-			al.drainSteerQueue(sessionID, gen)
+			al.drainSteerQueue(claim)
 		}
 	}
 
@@ -937,12 +905,33 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 		rollbackReservation()
 		return steer.DispatchResult{}, dispatchRefusalError(reason)
 	}
+	if runID == "" || bootSeq == 0 || bootSeq != al.bootEpochFor() {
+		rollbackReservation()
+		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: admission requires its genuine current boot epoch and run_id", steer.ErrStoreWrite)
+	}
+	if reserved {
+		// Queue-to-active promotion carries the ORIGINAL full identity. A
+		// stale promotion can never replace the resumed record's owner.
+		if !claim.matches(rec) {
+			rollbackReservation()
+			return steer.DispatchResult{}, steer.ErrStaleGeneration
+		}
+	} else {
+		if duplicateErr := al.checkNewAdmission(rec); duplicateErr != nil {
+			return steer.DispatchResult{}, duplicateErr
+		}
+		// Durable owner BEFORE queue insertion or registration. entryMu
+		// keeps a duplicate from racing this stamp then losing registration.
+		if stampErr := stampAdmissionExecution(lifecycle, sessionID, gen, runID, bootSeq, rec.ExecutionID); stampErr != nil {
+			return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %w", steer.ErrStoreWrite, stampErr)
+		}
+	}
 
 	if !reserved {
-		admitted, position, concurrencyLimit := gate.tryAdmit(sessionID, gen)
+		admitted, position, concurrencyLimit := gate.tryAdmitRun(sessionID, gen, runID, bootSeq)
 		if !admitted {
-			if _, commitErr := commitSteeredDispatchState(lifecycle, sessionID, gen, session.LifecycleQueued); commitErr != nil {
-				gate.removeQueued(sessionID, gen)
+			if _, commitErr := commitSteeredExecutionState(lifecycle, claim, session.LifecycleQueued, ""); commitErr != nil {
+				gate.removeQueuedExecution(claim)
 				return steer.DispatchResult{}, commitErr
 			}
 			return steer.DispatchResult{State: steer.DispatchQueued, ConcurrencyLimit: concurrencyLimit, QueuePosition: position, Generation: gen}, nil
@@ -950,16 +939,21 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 	}
 
 	if rec.Origin != nil && rec.Origin.Kind == session.OriginKindTask && al.taskExecutor != nil {
-		if dispatchErr := al.taskExecutor.dispatchLaunchedTask(rec, func() {
-			al.drainSteerQueue(sessionID, gen)
+		running, commitErr := commitSteeredExecutionState(lifecycle, claim, session.LifecycleRunning, "")
+		if commitErr != nil {
+			al.drainSteerQueue(claim)
+			return steer.DispatchResult{}, commitErr
+		}
+		gate.entryMu.Unlock()
+		entryLocked = false
+		if dispatchErr := al.taskExecutor.dispatchLaunchedTask(running, func() {
+			al.drainSteerQueue(claim)
 		}); dispatchErr != nil {
-			al.drainSteerQueue(sessionID, gen)
+			al.drainSteerQueue(claim)
 			return steer.DispatchResult{}, dispatchErr
 		}
-		running, commitErr := commitSteeredDispatchState(lifecycle, sessionID, gen, session.LifecycleRunning)
-		if commitErr != nil {
-			al.drainSteerQueue(sessionID, gen)
-			return steer.DispatchResult{}, commitErr
+		if al.steering != nil {
+			al.steering.reopenScopeForGeneration(sessionID, gen)
 		}
 		if running.SteeredBy != nil {
 			al.deliverSubagentState(running.SteeringSessionID(), running, string(session.LifecycleRunning), nil)
@@ -969,16 +963,25 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 
 	ts, buildErr := al.reconstructSteeredTurn(rec, nil)
 	if buildErr != nil {
-		al.drainSteerQueue(sessionID, gen)
+		al.drainSteerQueue(claim)
 		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: reconstruct: %w", steer.ErrStoreWrite, buildErr)
+	}
+	// The turn carries THIS admission's identity unchanged — the same run_id
+	// already stamped on the record and (had this admission queued) in its
+	// queue entry — so its completion claims the identity that started it.
+	if identityErr := ts.setExecutionIdentity(runID, bootSeq); identityErr != nil {
+		al.drainSteerQueue(claim)
+		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %w", steer.ErrStoreWrite, identityErr)
 	}
 	if !al.registerTurnIfAbsent(ts) {
 		// Another dispatch already won the race for this sessionKey; ours
 		// takes no turn and releases the admission slot it just claimed.
-		al.drainSteerQueue(sessionID, gen)
+		al.drainSteerQueue(claim)
 		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: concurrent dispatch already registered a turn", steer.ErrStaleGeneration)
 	}
 
+	gate.entryMu.Unlock()
+	entryLocked = false
 	if turnRegisteredTestHook != nil {
 		turnRegisteredTestHook(sessionID, ts)
 	}
@@ -991,11 +994,14 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 	// `running` write re-checks the live record and refuses if a Stop or a
 	// revival landed meanwhile (I-2/I-6). A refusal takes the turn back out
 	// of the registry, so a stopped session never runs one.
-	rec, err = commitSteeredDispatchState(lifecycle, sessionID, gen, session.LifecycleRunning)
+	rec, err = commitSteeredExecutionState(lifecycle, claim, session.LifecycleRunning, "")
 	if err != nil {
 		al.activeTurnStates.CompareAndDelete(sessionID, ts)
-		al.drainSteerQueue(sessionID, gen)
+		al.drainSteerQueue(claim)
 		return steer.DispatchResult{}, err
+	}
+	if al.steering != nil {
+		al.steering.reopenScopeForGeneration(sessionID, gen)
 	}
 	if rec.SteeredBy != nil {
 		al.deliverSubagentState(rec.SteeringSessionID(), rec, string(session.LifecycleRunning), nil)
@@ -1027,12 +1033,14 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 // the oldest queued session").
 func (al *AgentLoop) runDispatchedSteeredTurn(rec *session.LifecycleRecord, ts *turnState, gen int) {
 	sessionID := rec.SessionID
-	defer al.drainSteerQueue(sessionID, gen)
+	claim := al.tsExecutionClaim(ts, sessionID)
+	defer al.drainSteerQueue(claim)
 
 	runCtx, cancel := steeredTurnRunContext(context.Background(), rec)
 	defer cancel()
 	result, runErr := al.runTurn(runCtx, ts)
 	finalAudience := al.audienceFor(runCtx, steer.BoundaryFinalReply, sessionID)
+	ts, result, runErr = al.drainSteeredTurn(runCtx, rec, ts, result, runErr)
 	if runErr == nil && result.finalContent != "" && finalAudience == steer.AudienceUser {
 		if publishErr := al.bus.PublishOutbound(runCtx, bus.OutboundMessage{
 			Channel: ts.channel, ChatID: ts.chatID, Content: result.finalContent, SessionID: sessionID,
@@ -1055,20 +1063,16 @@ func (al *AgentLoop) runDispatchedSteeredTurn(rec *session.LifecycleRecord, ts *
 // so a session re-entered by a wake could run forever regardless of its
 // configured timeout. Both entry paths now share this one helper.
 //
-// A zero rec.CreatedAt used to turn the timeout OFF entirely
-// (!rec.CreatedAt.IsZero() gated the old inline check) — a missing/unset
-// timestamp silently removed a limit instead of just meaning "no better
-// anchor is known yet". Treated here as "the deadline counts from now"
-// instead: still bounded, never silently unlimited.
+// The deadline is the remaining active-time budget (D6): anchor +
+// TimeoutSeconds + stopped credit. With no credit and no reset anchor that
+// is still CreatedAt + TimeoutSeconds. A zero CreatedAt and a zero anchor
+// count from now — a missing timestamp never silently removes the limit.
 func steeredTurnRunContext(base context.Context, rec *session.LifecycleRecord) (context.Context, context.CancelFunc) {
-	if rec == nil || rec.SteeredBy == nil || rec.SteeredBy.Limits.TimeoutSeconds <= 0 {
+	deadline, ok := rec.ActiveBudgetDeadline(time.Now())
+	if !ok {
 		return base, func() {}
 	}
-	anchor := rec.CreatedAt
-	if anchor.IsZero() {
-		anchor = time.Now()
-	}
-	return context.WithDeadline(base, anchor.Add(time.Duration(rec.SteeredBy.Limits.TimeoutSeconds)*time.Second))
+	return context.WithDeadline(base, deadline)
 }
 
 // disposeSteeredTurnResult applies the SAME post-turn disposition to a
@@ -1083,14 +1087,71 @@ func steeredTurnRunContext(base context.Context, rec *session.LifecycleRecord) (
 // matter what it produced. I-3 said "every entry path calls
 // reconstruction"; the symmetric rule this closes is "every EXIT path calls
 // completion".
+//
+// Round-4 finishing-window protocol (issue #1020): the loop is bounded by
+// the SAME continueDrainMaxRetries the session_worker uses
+// (session_worker.go). When the budget is exhausted the queued items are
+// abandoned loudly via abandonSteeredQueuedSteering (each item reported to
+// the parent transcript) — never silently dropped. Real-world deliverers
+// fail zero or once; the budget exists to bound the artificial-deliverer
+// pathological shape without ever throwing away a caller's accepted
+// instruction.
 func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.LifecycleRecord, gen int, result turnResult, runErr error) {
+	// Stop ends the turn, not the session or its goal. In particular, do not
+	// spend the durable marker or write a "session ended" goal outcome here.
+	if ts.stopRequested.Load() {
+		return
+	}
 	sessionID := rec.SessionID
 	if rec.GoalRef != "" {
 		al.finishSteeredGoalTurn(ts, rec, &result, runErr)
 		return
 	}
-	if finishErr := al.completeSteeredTurn(context.Background(), rec, result, runErr); finishErr != nil {
-		logger.WarnCF("agent", "steer: complete turn failed",
-			map[string]any{"session_id": sessionID, "generation": gen, "error": finishErr.Error()})
+	for attempt := 0; attempt < continueDrainMaxRetries; attempt++ {
+		// The turn completes as ITS OWN admission — the immutable execution
+		// handle set when this turn was registered — never as whatever the
+		// registry happens to hold now (a replacement may already be
+		// registered while this dispose unwinds).
+		finishErr := al.completeSteeredTurnForExecution(context.Background(), rec, result, runErr, al.tsExecutionClaim(ts, sessionID))
+		if !errors.Is(finishErr, errCompleteSteeringPending) {
+			if finishErr != nil {
+				logger.WarnCF("agent", "steer: complete turn failed",
+					map[string]any{"session_id": sessionID, "generation": gen, "error": finishErr.Error()})
+			}
+			return
+		}
+		// drainSteeredTurn already calls abandonSteeredQueuedSteering when
+		// its OWN internal retry budget (retrySteeringContinuation) is
+		// exhausted, so by the time we get here the queue has either been
+		// drained or loudly abandoned with each item reported to the
+		// transcript. Continue the outer loop: the next completeSteeredTurn
+		// call may now see an empty queue and produce a terminal commit
+		// without errCompleteSteeringPending, in which case we exit above.
+		drainCtx, cancel := steeredTurnRunContext(context.Background(), rec)
+		ts, result, runErr = al.drainSteeredTurn(drainCtx, rec, ts, result, runErr)
+		cancel()
+		if runErr != nil && !errors.Is(runErr, errContinuePostDequeueFailure) {
+			// abandonSteeredQueuedSteering already fired — every queued
+			// item is now reported to the transcript. Returning here
+			// matches the session_worker's same-loop exit posture.
+			logger.WarnCF("agent", "steer: complete: drain-loop abandoned waiting items — reported to the child transcript",
+				map[string]any{"session_id": sessionID, "generation": gen, "error": runErr.Error()})
+			return
+		}
+		if runErr != nil {
+			// errContinuePostDequeueFailure — drainSteeredTurn's own
+			// restore-on-failure branch already restored the queue. Try
+			// one more outer-loop iteration in case it can land
+			// terminally.
+			runErr = nil
+		}
 	}
+	if al.pendingSteeringCountForScope(sessionID) > 0 {
+		al.abandonSteeredQueuedSteering(ts, sessionID,
+			fmt.Errorf("steer: complete: bounded drain retry exhausted after %d attempts", continueDrainMaxRetries),
+			continueDrainMaxRetries)
+		return
+	}
+	logger.WarnCF("agent", "steer: complete: bounded drain retry exhausted — no queued items remain",
+		map[string]any{"session_id": sessionID, "generation": gen, "attempts": continueDrainMaxRetries})
 }

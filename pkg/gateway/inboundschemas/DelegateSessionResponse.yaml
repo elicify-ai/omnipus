@@ -47,10 +47,8 @@ properties:
       - queued
       - running
       - needs_input
-      - paused
+      - stopped
       - completed
       - failed
-      - cancelled
-      - timed_out
     description: The newly-spawned/resumed session's initial lifecycle state.
     example: "queued"

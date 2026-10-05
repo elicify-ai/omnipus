@@ -970,6 +970,25 @@ function WorkspaceSessionTree({
   )
 }
 
+// ADR-20260928 MAJ-009/T26 — the row's lifecycle label, straight from the
+// wire Session.lifecycle_state (already the 5-value display projection; the
+// server collapses queued/running→working, needs_input→waiting_for_answer,
+// completed→done). F0929-2 vocabulary, rendered verbatim. A session with NO
+// lifecycle_state (no lifecycle record) gets no label at all — never a
+// guess from coarse `status` (a stopped helper has status 'active',
+// lifecycle_state 'stopped'). Colors are state semantics, not decoration:
+// error for stopped/failed, warning for waiting, accent for working,
+// muted for done — held as static literal classes at the use site below
+// (the design-system scanners verify tokenized class literals and refuse a
+// dynamic class lookup they cannot see through).
+const LIFECYCLE_LABELS: Record<NonNullable<Session['lifecycle_state']>, string> = {
+  working: 'Working',
+  waiting_for_answer: 'Waiting for answer',
+  done: 'Done',
+  failed: 'Failed',
+  stopped: 'Stopped',
+}
+
 function SidebarSessionRow({
   row,
   isActive,
@@ -1025,6 +1044,34 @@ function SidebarSessionRow({
         >
           {isActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />}
           <span className="flex-1 truncate">{title}</span>
+          {/* ADR-20260928 MAJ-009/T26: exact lifecycle_state label (five
+              states, F0929-2) — absent lifecycle_state renders nothing. A
+              stopped row also shows its stop_note.cause, the lasting
+              who/when/why (closed vocabulary: stop/redirect_pause/
+              cascade/restart/timeout), rendered verbatim. */}
+          {session.lifecycle_state && LIFECYCLE_LABELS[session.lifecycle_state] && (
+            <span
+              className={cn(
+                'flex-shrink-0 text-[length:var(--type-caption-size)] leading-none',
+                session.lifecycle_state === 'failed' || session.lifecycle_state === 'stopped'
+                  ? 'text-[var(--color-error)]'
+                  : session.lifecycle_state === 'waiting_for_answer'
+                    ? 'text-[var(--color-warning)]'
+                    : session.lifecycle_state === 'working'
+                      ? 'text-[var(--color-accent)]'
+                      : 'text-[var(--color-muted)]',
+              )}
+            >
+              {/* Leading real space: the label is its own word in the row's
+                  text ("…Row 1 Done", never "…Row 1Done") — the five-state
+                  vocabulary is the contract, word-separated. */}
+              {' '}
+              {LIFECYCLE_LABELS[session.lifecycle_state]}
+              {session.lifecycle_state === 'stopped' && session.stop_note && (
+                <span className="text-[var(--color-muted)]"> · {session.stop_note.cause}</span>
+              )}
+            </span>
+          )}
           {session.type === 'heartbeat' && (
             <span className="text-[length:var(--type-caption-size)] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
           )}

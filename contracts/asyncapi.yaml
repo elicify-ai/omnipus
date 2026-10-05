@@ -41,6 +41,8 @@ channels:
         $ref: '#/components/messages/MessageFrame'
       CancelFrame:
         $ref: '#/components/messages/CancelFrame'
+      RedirectFrame:
+        $ref: '#/components/messages/RedirectFrame'
       PingFrame:
         $ref: '#/components/messages/PingFrame'
       AttachSessionFrame:
@@ -260,6 +262,14 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/CancelFrame'
+  sendRedirect:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'Redirect a session — the /stop-redirect command''s transport: stop the named session''s in-progress turn, then resume it on the same generation with the instruction as the newest instruction. Sent by the SPA''s client-side interception of the typed command, never as chat text.
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/RedirectFrame'
   sendPing:
     action: send
     channel:
@@ -771,12 +781,16 @@ operations:
       $ref: '#/channels/chat'
     summary: >
       The goal outcome line (founder decision 2026-09-14) — one push per
-      goal ENDING (met, round limit reached, stopped by the user, or any
-      other terminal brake), carrying the structured GoalOutcome.
-      Session-scoped. The same outcome is persisted as a `type: system,
-      system_subtype: goal_outcome` transcript entry and re-emitted as this
-      same frame type on replay. An intermediate unmet Judge round is not
-      an ending and never produces one.
+      goal ENDING (met, round limit reached, explicitly cleared by the
+      user, or any other terminal brake), carrying the structured
+      GoalOutcome. Only natural met/round-exhaustion adjudication and an
+      explicit clear (`/goal clear`, authorized
+      `delegate(action="clear_goal")`) end a goal: a session Stop,
+      timeout, plan stop, restart or failure is NOT an ending and never
+      produces one. Session-scoped. The same outcome is persisted as a
+      `type: system, system_subtype: goal_outcome` transcript entry and
+      re-emitted as this same frame type on replay. An intermediate unmet
+      Judge round is not an ending and never produces one.
     messages:
       - $ref: '#/channels/chat/messages/GoalOutcomeFrame'
 
@@ -1029,6 +1043,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/CancelFrame'
+    RedirectFrame:
+      name: RedirectFrame
+      title: redirect
+      summary: Redirect a session — stop its in-progress turn, then resume it on the same generation with a new instruction (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RedirectFrame'
     PingFrame:
       name: PingFrame
       title: ping
@@ -1609,6 +1630,7 @@ components:
       - auth
       - message
       - cancel
+      - redirect
       - ping
       - attach_session
       - device_pairing_response
@@ -1835,6 +1857,34 @@ components:
           type: string
           minLength: 1
           maxLength: 128
+        scope:
+          type: string
+          enum:
+          - session
+          - tree
+          default: session
+    RedirectFrame:
+      title: RedirectFrame
+      description: 'Client → server redirect one session: stop its in-progress turn, then resume it on the same generation with the instruction (D2/D9). The instruction ceiling is 16384 UTF-8 bytes (16 KiB) — JSON maxLength counts characters, not bytes, so the byte ceiling is runtime-enforced server-side.'
+      type: object
+      required:
+      - type
+      - session_id
+      - instruction
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: redirect
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        instruction:
+          type: string
+          minLength: 1
+          maxLength: 16384
+          pattern: '\S'
     PingFrame:
       title: PingFrame
       description: Client → server heartbeat.
@@ -3397,8 +3447,14 @@ components:
       description: >
         Server → client (ADR-053 §Contract Surface — "Mid-span subagent
         frames"). A flat projection of SessionLifecycleRecord.state riding
-        between subagent_start/subagent_end, plus an optional steering-
-        receipt. Canonical copy — keep in sync by hand.
+        between subagent_start/subagent_end, plus an optional control-
+        receipt (sub-agent control plane ADR D4/MIN-003; replaces the
+        former steering_receipt — the field is gone, a dev install
+        replaying an old persisted frame that still carries it drops the
+        unknown field rather than failing validation, OBS-003). Canonical
+        copy — keep in sync by hand with
+        contracts/components/schemas/SubagentStateFrame.yaml and
+        contracts/components/schemas/ControlReceipt.yaml.
       type: object
       required:
         - type
@@ -3430,26 +3486,72 @@ components:
             - queued
             - running
             - needs_input
-            - paused
+            - stopped
             - completed
             - failed
-            - cancelled
-            - timed_out
-        steering_receipt:
+        control_receipt:
           type: object
           # Not nullable — see components/schemas/SubagentStateFrame.yaml's
           # own note: this field is emitted via an omitempty Go pointer,
-          # present or absent, never an explicit JSON null.
+          # present or absent, never an explicit JSON null. Train-3 scope
+          # note: only the steer verb is wired today (verb/state are
+          # constants "steer"/"delivered"; seq/accepted_at are documented
+          # stand-ins) — see components/schemas/ControlReceipt.yaml for the
+          # full rationale. Kept in sync by hand with that file.
           required:
-            - correlation_id
-            - applied_at
+            - seq
+            - control_id
+            - verb
+            - state
+            - accepted_at
           additionalProperties: false
           properties:
-            correlation_id:
+            seq:
+              type: integer
+              format: int64
+              minimum: 0
+            control_id:
               type: string
+              minLength: 1
+            verb:
+              type: string
+              enum:
+                - steer
+                - stop
+                - stop_all
+                - redirect
+                - resume
+                - respond
+                - clear_goal
+            state:
+              type: string
+              enum:
+                - queued
+                - delivered
+                - applied
+                - superseded
+            accepted_at:
+              type: string
+              format: date-time
+            delivered_at:
+              type: string
+              format: date-time
             applied_at:
               type: string
               format: date-time
+            superseded_at:
+              type: string
+              format: date-time
+            superseded_by_seq:
+              type: integer
+              format: int64
+              minimum: 0
+            reason:
+              type: string
+            released_control_ids:
+              type: array
+              items:
+                type: string
         created_at:
           type: string
           format: date-time
@@ -6743,6 +6845,13 @@ components:
             - rounds_exhausted
             - stopped_by_user
             - other
+          description: >
+            WHY the goal ended (mirror of components/schemas/GoalOutcome.yaml
+            `ending` — edit both together). `stopped_by_user` is an EXPLICIT
+            user ending only: the owning session's `/goal clear` or an
+            authorized parent's `delegate(action="clear_goal")`. NEVER
+            written for a session lifecycle transition — a Stop, timeout,
+            plan stop, restart or failure keeps the goal record active.
         rounds_used:
           type: integer
           minimum: 0

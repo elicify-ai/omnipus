@@ -2030,30 +2030,15 @@ func (e DefaultModelWindowSource) Valid() bool {
 	}
 }
 
-// Defines values for DelegateCancelActionAction.
+// Defines values for DelegateClearGoalActionAction.
 const (
-	DelegateCancelActionActionCancel DelegateCancelActionAction = "cancel"
+	DelegateClearGoalActionActionClearGoal DelegateClearGoalActionAction = "clear_goal"
 )
 
-// Valid indicates whether the value is a known member of the DelegateCancelActionAction enum.
-func (e DelegateCancelActionAction) Valid() bool {
+// Valid indicates whether the value is a known member of the DelegateClearGoalActionAction enum.
+func (e DelegateClearGoalActionAction) Valid() bool {
 	switch e {
-	case DelegateCancelActionActionCancel:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for DelegateFollowUpActionAction.
-const (
-	DelegateFollowUpActionActionFollowUp DelegateFollowUpActionAction = "follow_up"
-)
-
-// Valid indicates whether the value is a known member of the DelegateFollowUpActionAction enum.
-func (e DelegateFollowUpActionAction) Valid() bool {
-	switch e {
-	case DelegateFollowUpActionActionFollowUp:
+	case DelegateClearGoalActionActionClearGoal:
 		return true
 	default:
 		return false
@@ -2107,34 +2092,43 @@ func (e DelegatePeekActionAction) Valid() bool {
 
 // Defines values for DelegatePeekResponseState.
 const (
-	DelegatePeekResponseStateCancelled  DelegatePeekResponseState = "cancelled"
 	DelegatePeekResponseStateCompleted  DelegatePeekResponseState = "completed"
 	DelegatePeekResponseStateFailed     DelegatePeekResponseState = "failed"
 	DelegatePeekResponseStateNeedsInput DelegatePeekResponseState = "needs_input"
-	DelegatePeekResponseStatePaused     DelegatePeekResponseState = "paused"
 	DelegatePeekResponseStateQueued     DelegatePeekResponseState = "queued"
 	DelegatePeekResponseStateRunning    DelegatePeekResponseState = "running"
-	DelegatePeekResponseStateTimedOut   DelegatePeekResponseState = "timed_out"
+	DelegatePeekResponseStateStopped    DelegatePeekResponseState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the DelegatePeekResponseState enum.
 func (e DelegatePeekResponseState) Valid() bool {
 	switch e {
-	case DelegatePeekResponseStateCancelled:
-		return true
 	case DelegatePeekResponseStateCompleted:
 		return true
 	case DelegatePeekResponseStateFailed:
 		return true
 	case DelegatePeekResponseStateNeedsInput:
 		return true
-	case DelegatePeekResponseStatePaused:
-		return true
 	case DelegatePeekResponseStateQueued:
 		return true
 	case DelegatePeekResponseStateRunning:
 		return true
-	case DelegatePeekResponseStateTimedOut:
+	case DelegatePeekResponseStateStopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRedirectActionAction.
+const (
+	DelegateRedirectActionActionRedirect DelegateRedirectActionAction = "redirect"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRedirectActionAction enum.
+func (e DelegateRedirectActionAction) Valid() bool {
+	switch e {
+	case DelegateRedirectActionActionRedirect:
 		return true
 	default:
 		return false
@@ -2158,34 +2152,43 @@ func (e DelegateRespondActionAction) Valid() bool {
 
 // Defines values for DelegateRespondResponseCorrectiveSessionState.
 const (
-	DelegateRespondResponseCorrectiveSessionStateCancelled  DelegateRespondResponseCorrectiveSessionState = "cancelled"
 	DelegateRespondResponseCorrectiveSessionStateCompleted  DelegateRespondResponseCorrectiveSessionState = "completed"
 	DelegateRespondResponseCorrectiveSessionStateFailed     DelegateRespondResponseCorrectiveSessionState = "failed"
 	DelegateRespondResponseCorrectiveSessionStateNeedsInput DelegateRespondResponseCorrectiveSessionState = "needs_input"
-	DelegateRespondResponseCorrectiveSessionStatePaused     DelegateRespondResponseCorrectiveSessionState = "paused"
 	DelegateRespondResponseCorrectiveSessionStateQueued     DelegateRespondResponseCorrectiveSessionState = "queued"
 	DelegateRespondResponseCorrectiveSessionStateRunning    DelegateRespondResponseCorrectiveSessionState = "running"
-	DelegateRespondResponseCorrectiveSessionStateTimedOut   DelegateRespondResponseCorrectiveSessionState = "timed_out"
+	DelegateRespondResponseCorrectiveSessionStateStopped    DelegateRespondResponseCorrectiveSessionState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the DelegateRespondResponseCorrectiveSessionState enum.
 func (e DelegateRespondResponseCorrectiveSessionState) Valid() bool {
 	switch e {
-	case DelegateRespondResponseCorrectiveSessionStateCancelled:
-		return true
 	case DelegateRespondResponseCorrectiveSessionStateCompleted:
 		return true
 	case DelegateRespondResponseCorrectiveSessionStateFailed:
 		return true
 	case DelegateRespondResponseCorrectiveSessionStateNeedsInput:
 		return true
-	case DelegateRespondResponseCorrectiveSessionStatePaused:
-		return true
 	case DelegateRespondResponseCorrectiveSessionStateQueued:
 		return true
 	case DelegateRespondResponseCorrectiveSessionStateRunning:
 		return true
-	case DelegateRespondResponseCorrectiveSessionStateTimedOut:
+	case DelegateRespondResponseCorrectiveSessionStateStopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateResumeActionAction.
+const (
+	DelegateResumeActionActionResume DelegateResumeActionAction = "resume"
+)
+
+// Valid indicates whether the value is a known member of the DelegateResumeActionAction enum.
+func (e DelegateResumeActionAction) Valid() bool {
+	switch e {
+	case DelegateResumeActionActionResume:
 		return true
 	default:
 		return false
@@ -2971,34 +2974,28 @@ func (e DelegateRunActionGoalTerminalHistoryVerdictScope) Valid() bool {
 
 // Defines values for DelegateSessionResponseState.
 const (
-	DelegateSessionResponseStateCancelled  DelegateSessionResponseState = "cancelled"
 	DelegateSessionResponseStateCompleted  DelegateSessionResponseState = "completed"
 	DelegateSessionResponseStateFailed     DelegateSessionResponseState = "failed"
 	DelegateSessionResponseStateNeedsInput DelegateSessionResponseState = "needs_input"
-	DelegateSessionResponseStatePaused     DelegateSessionResponseState = "paused"
 	DelegateSessionResponseStateQueued     DelegateSessionResponseState = "queued"
 	DelegateSessionResponseStateRunning    DelegateSessionResponseState = "running"
-	DelegateSessionResponseStateTimedOut   DelegateSessionResponseState = "timed_out"
+	DelegateSessionResponseStateStopped    DelegateSessionResponseState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the DelegateSessionResponseState enum.
 func (e DelegateSessionResponseState) Valid() bool {
 	switch e {
-	case DelegateSessionResponseStateCancelled:
-		return true
 	case DelegateSessionResponseStateCompleted:
 		return true
 	case DelegateSessionResponseStateFailed:
 		return true
 	case DelegateSessionResponseStateNeedsInput:
 		return true
-	case DelegateSessionResponseStatePaused:
-		return true
 	case DelegateSessionResponseStateQueued:
 		return true
 	case DelegateSessionResponseStateRunning:
 		return true
-	case DelegateSessionResponseStateTimedOut:
+	case DelegateSessionResponseStateStopped:
 		return true
 	default:
 		return false
@@ -3082,34 +3079,28 @@ func (e DelegateStatusResponseSessionOwnerScopeKind) Valid() bool {
 
 // Defines values for DelegateStatusResponseSessionState.
 const (
-	DelegateStatusResponseSessionStateCancelled  DelegateStatusResponseSessionState = "cancelled"
 	DelegateStatusResponseSessionStateCompleted  DelegateStatusResponseSessionState = "completed"
 	DelegateStatusResponseSessionStateFailed     DelegateStatusResponseSessionState = "failed"
 	DelegateStatusResponseSessionStateNeedsInput DelegateStatusResponseSessionState = "needs_input"
-	DelegateStatusResponseSessionStatePaused     DelegateStatusResponseSessionState = "paused"
 	DelegateStatusResponseSessionStateQueued     DelegateStatusResponseSessionState = "queued"
 	DelegateStatusResponseSessionStateRunning    DelegateStatusResponseSessionState = "running"
-	DelegateStatusResponseSessionStateTimedOut   DelegateStatusResponseSessionState = "timed_out"
+	DelegateStatusResponseSessionStateStopped    DelegateStatusResponseSessionState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the DelegateStatusResponseSessionState enum.
 func (e DelegateStatusResponseSessionState) Valid() bool {
 	switch e {
-	case DelegateStatusResponseSessionStateCancelled:
-		return true
 	case DelegateStatusResponseSessionStateCompleted:
 		return true
 	case DelegateStatusResponseSessionStateFailed:
 		return true
 	case DelegateStatusResponseSessionStateNeedsInput:
 		return true
-	case DelegateStatusResponseSessionStatePaused:
-		return true
 	case DelegateStatusResponseSessionStateQueued:
 		return true
 	case DelegateStatusResponseSessionStateRunning:
 		return true
-	case DelegateStatusResponseSessionStateTimedOut:
+	case DelegateStatusResponseSessionStateStopped:
 		return true
 	default:
 		return false
@@ -3161,6 +3152,21 @@ const (
 func (e DelegateSteerActionAction) Valid() bool {
 	switch e {
 	case DelegateSteerActionActionSteer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateStopAllActionAction.
+const (
+	DelegateStopAllActionActionStopAll DelegateStopAllActionAction = "stop_all"
+)
+
+// Valid indicates whether the value is a known member of the DelegateStopAllActionAction enum.
+func (e DelegateStopAllActionAction) Valid() bool {
+	switch e {
+	case DelegateStopAllActionActionStopAll:
 		return true
 	default:
 		return false
@@ -6047,36 +6053,87 @@ func (e MessageSubagentStartType) Valid() bool {
 	}
 }
 
+// Defines values for MessageSubagentStateControlReceiptState.
+const (
+	MessageSubagentStateControlReceiptStateApplied    MessageSubagentStateControlReceiptState = "applied"
+	MessageSubagentStateControlReceiptStateDelivered  MessageSubagentStateControlReceiptState = "delivered"
+	MessageSubagentStateControlReceiptStateQueued     MessageSubagentStateControlReceiptState = "queued"
+	MessageSubagentStateControlReceiptStateSuperseded MessageSubagentStateControlReceiptState = "superseded"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentStateControlReceiptState enum.
+func (e MessageSubagentStateControlReceiptState) Valid() bool {
+	switch e {
+	case MessageSubagentStateControlReceiptStateApplied:
+		return true
+	case MessageSubagentStateControlReceiptStateDelivered:
+		return true
+	case MessageSubagentStateControlReceiptStateQueued:
+		return true
+	case MessageSubagentStateControlReceiptStateSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentStateControlReceiptVerb.
+const (
+	MessageSubagentStateControlReceiptVerbClearGoal MessageSubagentStateControlReceiptVerb = "clear_goal"
+	MessageSubagentStateControlReceiptVerbRedirect  MessageSubagentStateControlReceiptVerb = "redirect"
+	MessageSubagentStateControlReceiptVerbRespond   MessageSubagentStateControlReceiptVerb = "respond"
+	MessageSubagentStateControlReceiptVerbResume    MessageSubagentStateControlReceiptVerb = "resume"
+	MessageSubagentStateControlReceiptVerbSteer     MessageSubagentStateControlReceiptVerb = "steer"
+	MessageSubagentStateControlReceiptVerbStop      MessageSubagentStateControlReceiptVerb = "stop"
+	MessageSubagentStateControlReceiptVerbStopAll   MessageSubagentStateControlReceiptVerb = "stop_all"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentStateControlReceiptVerb enum.
+func (e MessageSubagentStateControlReceiptVerb) Valid() bool {
+	switch e {
+	case MessageSubagentStateControlReceiptVerbClearGoal:
+		return true
+	case MessageSubagentStateControlReceiptVerbRedirect:
+		return true
+	case MessageSubagentStateControlReceiptVerbRespond:
+		return true
+	case MessageSubagentStateControlReceiptVerbResume:
+		return true
+	case MessageSubagentStateControlReceiptVerbSteer:
+		return true
+	case MessageSubagentStateControlReceiptVerbStop:
+		return true
+	case MessageSubagentStateControlReceiptVerbStopAll:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageSubagentStateState.
 const (
-	MessageSubagentStateStateCancelled  MessageSubagentStateState = "cancelled"
 	MessageSubagentStateStateCompleted  MessageSubagentStateState = "completed"
 	MessageSubagentStateStateFailed     MessageSubagentStateState = "failed"
 	MessageSubagentStateStateNeedsInput MessageSubagentStateState = "needs_input"
-	MessageSubagentStateStatePaused     MessageSubagentStateState = "paused"
 	MessageSubagentStateStateQueued     MessageSubagentStateState = "queued"
 	MessageSubagentStateStateRunning    MessageSubagentStateState = "running"
-	MessageSubagentStateStateTimedOut   MessageSubagentStateState = "timed_out"
+	MessageSubagentStateStateStopped    MessageSubagentStateState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the MessageSubagentStateState enum.
 func (e MessageSubagentStateState) Valid() bool {
 	switch e {
-	case MessageSubagentStateStateCancelled:
-		return true
 	case MessageSubagentStateStateCompleted:
 		return true
 	case MessageSubagentStateStateFailed:
 		return true
 	case MessageSubagentStateStateNeedsInput:
 		return true
-	case MessageSubagentStateStatePaused:
-		return true
 	case MessageSubagentStateStateQueued:
 		return true
 	case MessageSubagentStateStateRunning:
 		return true
-	case MessageSubagentStateStateTimedOut:
+	case MessageSubagentStateStateStopped:
 		return true
 	default:
 		return false
@@ -6422,24 +6479,6 @@ const (
 func (e MessageParentProgressKind) Valid() bool {
 	switch e {
 	case MessageParentProgressKindProgress:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for MessageParentQuestionAuthority.
-const (
-	MessageParentQuestionAuthorityOwnerRequired MessageParentQuestionAuthority = "owner_required"
-	MessageParentQuestionAuthoritySelfOk        MessageParentQuestionAuthority = "self_ok"
-)
-
-// Valid indicates whether the value is a known member of the MessageParentQuestionAuthority enum.
-func (e MessageParentQuestionAuthority) Valid() bool {
-	switch e {
-	case MessageParentQuestionAuthorityOwnerRequired:
-		return true
-	case MessageParentQuestionAuthoritySelfOk:
 		return true
 	default:
 		return false
@@ -9317,11 +9356,38 @@ func (e SearchProviderCheckResponseStatus) Valid() bool {
 	}
 }
 
+// Defines values for SessionLifecycleState.
+const (
+	SessionLifecycleStateDone             SessionLifecycleState = "done"
+	SessionLifecycleStateFailed           SessionLifecycleState = "failed"
+	SessionLifecycleStateStopped          SessionLifecycleState = "stopped"
+	SessionLifecycleStateWaitingForAnswer SessionLifecycleState = "waiting_for_answer"
+	SessionLifecycleStateWorking          SessionLifecycleState = "working"
+)
+
+// Valid indicates whether the value is a known member of the SessionLifecycleState enum.
+func (e SessionLifecycleState) Valid() bool {
+	switch e {
+	case SessionLifecycleStateDone:
+		return true
+	case SessionLifecycleStateFailed:
+		return true
+	case SessionLifecycleStateStopped:
+		return true
+	case SessionLifecycleStateWaitingForAnswer:
+		return true
+	case SessionLifecycleStateWorking:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionStatus.
 const (
-	SessionStatusActive      SessionStatus = "active"
-	SessionStatusArchived    SessionStatus = "archived"
-	SessionStatusInterrupted SessionStatus = "interrupted"
+	SessionStatusActive   SessionStatus = "active"
+	SessionStatusArchived SessionStatus = "archived"
+	SessionStatusFailed   SessionStatus = "failed"
 )
 
 // Valid indicates whether the value is a known member of the SessionStatus enum.
@@ -9331,7 +9397,34 @@ func (e SessionStatus) Valid() bool {
 		return true
 	case SessionStatusArchived:
 		return true
-	case SessionStatusInterrupted:
+	case SessionStatusFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionStopNoteCause.
+const (
+	SessionStopNoteCauseCascade       SessionStopNoteCause = "cascade"
+	SessionStopNoteCauseRedirectPause SessionStopNoteCause = "redirect_pause"
+	SessionStopNoteCauseRestart       SessionStopNoteCause = "restart"
+	SessionStopNoteCauseStop          SessionStopNoteCause = "stop"
+	SessionStopNoteCauseTimeout       SessionStopNoteCause = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the SessionStopNoteCause enum.
+func (e SessionStopNoteCause) Valid() bool {
+	switch e {
+	case SessionStopNoteCauseCascade:
+		return true
+	case SessionStopNoteCauseRedirectPause:
+		return true
+	case SessionStopNoteCauseRestart:
+		return true
+	case SessionStopNoteCauseStop:
+		return true
+	case SessionStopNoteCauseTimeout:
 		return true
 	default:
 		return false
@@ -9662,36 +9755,87 @@ func (e SessionDetailMessagesSubagentStartType) Valid() bool {
 	}
 }
 
+// Defines values for SessionDetailMessagesSubagentStateControlReceiptState.
+const (
+	SessionDetailMessagesSubagentStateControlReceiptStateApplied    SessionDetailMessagesSubagentStateControlReceiptState = "applied"
+	SessionDetailMessagesSubagentStateControlReceiptStateDelivered  SessionDetailMessagesSubagentStateControlReceiptState = "delivered"
+	SessionDetailMessagesSubagentStateControlReceiptStateQueued     SessionDetailMessagesSubagentStateControlReceiptState = "queued"
+	SessionDetailMessagesSubagentStateControlReceiptStateSuperseded SessionDetailMessagesSubagentStateControlReceiptState = "superseded"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateControlReceiptState enum.
+func (e SessionDetailMessagesSubagentStateControlReceiptState) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentStateControlReceiptStateApplied:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptStateDelivered:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptStateQueued:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptStateSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesSubagentStateControlReceiptVerb.
+const (
+	SessionDetailMessagesSubagentStateControlReceiptVerbClearGoal SessionDetailMessagesSubagentStateControlReceiptVerb = "clear_goal"
+	SessionDetailMessagesSubagentStateControlReceiptVerbRedirect  SessionDetailMessagesSubagentStateControlReceiptVerb = "redirect"
+	SessionDetailMessagesSubagentStateControlReceiptVerbRespond   SessionDetailMessagesSubagentStateControlReceiptVerb = "respond"
+	SessionDetailMessagesSubagentStateControlReceiptVerbResume    SessionDetailMessagesSubagentStateControlReceiptVerb = "resume"
+	SessionDetailMessagesSubagentStateControlReceiptVerbSteer     SessionDetailMessagesSubagentStateControlReceiptVerb = "steer"
+	SessionDetailMessagesSubagentStateControlReceiptVerbStop      SessionDetailMessagesSubagentStateControlReceiptVerb = "stop"
+	SessionDetailMessagesSubagentStateControlReceiptVerbStopAll   SessionDetailMessagesSubagentStateControlReceiptVerb = "stop_all"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateControlReceiptVerb enum.
+func (e SessionDetailMessagesSubagentStateControlReceiptVerb) Valid() bool {
+	switch e {
+	case SessionDetailMessagesSubagentStateControlReceiptVerbClearGoal:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptVerbRedirect:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptVerbRespond:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptVerbResume:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptVerbSteer:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptVerbStop:
+		return true
+	case SessionDetailMessagesSubagentStateControlReceiptVerbStopAll:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionDetailMessagesSubagentStateState.
 const (
-	SessionDetailMessagesSubagentStateStateCancelled  SessionDetailMessagesSubagentStateState = "cancelled"
 	SessionDetailMessagesSubagentStateStateCompleted  SessionDetailMessagesSubagentStateState = "completed"
 	SessionDetailMessagesSubagentStateStateFailed     SessionDetailMessagesSubagentStateState = "failed"
 	SessionDetailMessagesSubagentStateStateNeedsInput SessionDetailMessagesSubagentStateState = "needs_input"
-	SessionDetailMessagesSubagentStateStatePaused     SessionDetailMessagesSubagentStateState = "paused"
 	SessionDetailMessagesSubagentStateStateQueued     SessionDetailMessagesSubagentStateState = "queued"
 	SessionDetailMessagesSubagentStateStateRunning    SessionDetailMessagesSubagentStateState = "running"
-	SessionDetailMessagesSubagentStateStateTimedOut   SessionDetailMessagesSubagentStateState = "timed_out"
+	SessionDetailMessagesSubagentStateStateStopped    SessionDetailMessagesSubagentStateState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateState enum.
 func (e SessionDetailMessagesSubagentStateState) Valid() bool {
 	switch e {
-	case SessionDetailMessagesSubagentStateStateCancelled:
-		return true
 	case SessionDetailMessagesSubagentStateStateCompleted:
 		return true
 	case SessionDetailMessagesSubagentStateStateFailed:
 		return true
 	case SessionDetailMessagesSubagentStateStateNeedsInput:
 		return true
-	case SessionDetailMessagesSubagentStateStatePaused:
-		return true
 	case SessionDetailMessagesSubagentStateStateQueued:
 		return true
 	case SessionDetailMessagesSubagentStateStateRunning:
 		return true
-	case SessionDetailMessagesSubagentStateStateTimedOut:
+	case SessionDetailMessagesSubagentStateStateStopped:
 		return true
 	default:
 		return false
@@ -9929,11 +10073,38 @@ func (e SessionDetailMessagesVerdictScope) Valid() bool {
 	}
 }
 
+// Defines values for SessionDetailSessionLifecycleState.
+const (
+	SessionDetailSessionLifecycleStateDone             SessionDetailSessionLifecycleState = "done"
+	SessionDetailSessionLifecycleStateFailed           SessionDetailSessionLifecycleState = "failed"
+	SessionDetailSessionLifecycleStateStopped          SessionDetailSessionLifecycleState = "stopped"
+	SessionDetailSessionLifecycleStateWaitingForAnswer SessionDetailSessionLifecycleState = "waiting_for_answer"
+	SessionDetailSessionLifecycleStateWorking          SessionDetailSessionLifecycleState = "working"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailSessionLifecycleState enum.
+func (e SessionDetailSessionLifecycleState) Valid() bool {
+	switch e {
+	case SessionDetailSessionLifecycleStateDone:
+		return true
+	case SessionDetailSessionLifecycleStateFailed:
+		return true
+	case SessionDetailSessionLifecycleStateStopped:
+		return true
+	case SessionDetailSessionLifecycleStateWaitingForAnswer:
+		return true
+	case SessionDetailSessionLifecycleStateWorking:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionDetailSessionStatus.
 const (
-	SessionDetailSessionStatusActive      SessionDetailSessionStatus = "active"
-	SessionDetailSessionStatusArchived    SessionDetailSessionStatus = "archived"
-	SessionDetailSessionStatusInterrupted SessionDetailSessionStatus = "interrupted"
+	SessionDetailSessionStatusActive   SessionDetailSessionStatus = "active"
+	SessionDetailSessionStatusArchived SessionDetailSessionStatus = "archived"
+	SessionDetailSessionStatusFailed   SessionDetailSessionStatus = "failed"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailSessionStatus enum.
@@ -9943,7 +10114,34 @@ func (e SessionDetailSessionStatus) Valid() bool {
 		return true
 	case SessionDetailSessionStatusArchived:
 		return true
-	case SessionDetailSessionStatusInterrupted:
+	case SessionDetailSessionStatusFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailSessionStopNoteCause.
+const (
+	SessionDetailSessionStopNoteCauseCascade       SessionDetailSessionStopNoteCause = "cascade"
+	SessionDetailSessionStopNoteCauseRedirectPause SessionDetailSessionStopNoteCause = "redirect_pause"
+	SessionDetailSessionStopNoteCauseRestart       SessionDetailSessionStopNoteCause = "restart"
+	SessionDetailSessionStopNoteCauseStop          SessionDetailSessionStopNoteCause = "stop"
+	SessionDetailSessionStopNoteCauseTimeout       SessionDetailSessionStopNoteCause = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailSessionStopNoteCause enum.
+func (e SessionDetailSessionStopNoteCause) Valid() bool {
+	switch e {
+	case SessionDetailSessionStopNoteCauseCascade:
+		return true
+	case SessionDetailSessionStopNoteCauseRedirectPause:
+		return true
+	case SessionDetailSessionStopNoteCauseRestart:
+		return true
+	case SessionDetailSessionStopNoteCauseStop:
+		return true
+	case SessionDetailSessionStopNoteCauseTimeout:
 		return true
 	default:
 		return false
@@ -10045,34 +10243,28 @@ func (e SessionLifecycleRecordOwnerScopeKind) Valid() bool {
 
 // Defines values for SessionLifecycleRecordState.
 const (
-	SessionLifecycleRecordStateCancelled  SessionLifecycleRecordState = "cancelled"
 	SessionLifecycleRecordStateCompleted  SessionLifecycleRecordState = "completed"
 	SessionLifecycleRecordStateFailed     SessionLifecycleRecordState = "failed"
 	SessionLifecycleRecordStateNeedsInput SessionLifecycleRecordState = "needs_input"
-	SessionLifecycleRecordStatePaused     SessionLifecycleRecordState = "paused"
 	SessionLifecycleRecordStateQueued     SessionLifecycleRecordState = "queued"
 	SessionLifecycleRecordStateRunning    SessionLifecycleRecordState = "running"
-	SessionLifecycleRecordStateTimedOut   SessionLifecycleRecordState = "timed_out"
+	SessionLifecycleRecordStateStopped    SessionLifecycleRecordState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the SessionLifecycleRecordState enum.
 func (e SessionLifecycleRecordState) Valid() bool {
 	switch e {
-	case SessionLifecycleRecordStateCancelled:
-		return true
 	case SessionLifecycleRecordStateCompleted:
 		return true
 	case SessionLifecycleRecordStateFailed:
 		return true
 	case SessionLifecycleRecordStateNeedsInput:
 		return true
-	case SessionLifecycleRecordStatePaused:
-		return true
 	case SessionLifecycleRecordStateQueued:
 		return true
 	case SessionLifecycleRecordStateRunning:
 		return true
-	case SessionLifecycleRecordStateTimedOut:
+	case SessionLifecycleRecordStateStopped:
 		return true
 	default:
 		return false
@@ -10430,24 +10622,6 @@ const (
 func (e SessionMessageProgressKind) Valid() bool {
 	switch e {
 	case SessionMessageProgressKindProgress:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionMessageQuestionAuthority.
-const (
-	SessionMessageQuestionAuthorityOwnerRequired SessionMessageQuestionAuthority = "owner_required"
-	SessionMessageQuestionAuthoritySelfOk        SessionMessageQuestionAuthority = "self_ok"
-)
-
-// Valid indicates whether the value is a known member of the SessionMessageQuestionAuthority enum.
-func (e SessionMessageQuestionAuthority) Valid() bool {
-	switch e {
-	case SessionMessageQuestionAuthorityOwnerRequired:
-		return true
-	case SessionMessageQuestionAuthoritySelfOk:
 		return true
 	default:
 		return false
@@ -15636,38 +15810,21 @@ type DefaultModelUpdateRequest struct {
 	Provider string `json:"provider"`
 }
 
-// DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment).
+// DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the ADR-053 §5.1 action set plus `clear_goal`, replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`stop_all`/`clear_goal`/`resume`/`redirect` are control surfaces (ADR-20261004: `cancel` is renamed `stop_all` and `follow_up` is renamed `resume`, no alias path; `redirect` and `resume` are new actions). Steering is always available for a direct delegation (see ADR-053 Amendment).
 type DelegateActionRequest struct {
 	union json.RawMessage
 }
 
-// DelegateCancelAction `delegate` tool call, `action: cancel` (ADR-053 §5.1). `hard: false` (default) is the SOFT cooperative stop — a tool-boundary checkpoint flush inside `session_messaging.cancel_grace`. `hard: true` is the backstop `RequestCancel` fired after grace elapses (or immediately, at the parent's discretion).
-type DelegateCancelAction struct {
-	Action DelegateCancelActionAction `json:"action"`
+// DelegateClearGoalAction `delegate` tool call, `action: clear_goal`. Clears the selected helper's goal without cascading to its descendants.
+type DelegateClearGoalAction struct {
+	Action DelegateClearGoalActionAction `json:"action"`
 
-	// Hard False (default) — cooperative soft cancel with grace. True — immediate hard cancel, bypassing the grace window.
-	Hard *bool `json:"hard,omitempty"`
-
-	// SessionId The child session to cancel.
+	// SessionId The child session whose goal to clear.
 	SessionId string `json:"session_id"`
 }
 
-// DelegateCancelActionAction defines model for DelegateCancelAction.Action.
-type DelegateCancelActionAction string
-
-// DelegateFollowUpAction `delegate` tool call, `action: follow_up` (ADR-053 §5.1). Native: warm resume of the SAME session with retained context. 3P: cold — spawns a new session carrying the prior result. A terminal record is never mutated in place; this always mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7).
-type DelegateFollowUpAction struct {
-	Action DelegateFollowUpActionAction `json:"action"`
-
-	// SessionId The (terminal) child session to follow up on.
-	SessionId string `json:"session_id"`
-
-	// Task Optional additional instructions for the resumed/new session.
-	Task *string `json:"task,omitempty"`
-}
-
-// DelegateFollowUpActionAction defines model for DelegateFollowUpAction.Action.
-type DelegateFollowUpActionAction string
+// DelegateClearGoalActionAction defines model for DelegateClearGoalAction.Action.
+type DelegateClearGoalActionAction string
 
 // DelegateInboxAckAction `delegate` tool call, `action: inbox_ack` (ADR-053 §5.1). Explicit ack; the runtime dedupes by `message_id` before surfacing and persists acked messages in the audit log.
 type DelegateInboxAckAction struct {
@@ -15740,7 +15897,21 @@ type DelegatePeekResponse struct {
 // DelegatePeekResponseState defines model for DelegatePeekResponse.State.
 type DelegatePeekResponseState string
 
-// DelegateRespondAction `delegate` tool call, `action: respond` (ADR-053 §5.1). Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe. Native: warm-resumes the SAME child session generation. 3P (external CLI): spawns a NEW corrective session (original prompt + answer folded in, D5) — never an in-place warm resume, since external CLIs have no warm-resume primitive. The runtime REJECTS a `respond` targeting a question whose derived authority is `owner_required` (R§8.2) — a business rule enforced at the handler, not schema- expressible.
+// DelegateRedirectAction `delegate` tool call, `action: redirect` (ADR-20260928 D2, retained by ADR-20260929 ruling 8; ADR-20261004 locked decision 3). Replaces the helper's current turn with the new instruction: the running turn is stopped (single session — never a cascade; descendants keep going) and the replacement turn runs with `text`. On an already-stopped helper it resumes it with the instruction; on a done/failed helper it starts nothing — use `resume`.
+type DelegateRedirectAction struct {
+	Action DelegateRedirectActionAction `json:"action"`
+
+	// SessionId The child session whose current turn is replaced.
+	SessionId string `json:"session_id"`
+
+	// Text The replacement instruction the new turn runs with.
+	Text string `json:"text"`
+}
+
+// DelegateRedirectActionAction defines model for DelegateRedirectAction.Action.
+type DelegateRedirectActionAction string
+
+// DelegateRespondAction `delegate` tool call, `action: respond` (ADR-053 §5.1; ADR-20261004 locked decisions 6–7). The parent's reply to one of the child's messages, referenced by `correlation_id`; the text is delivered downward as an ordinary message, and the recipient's state decides the effect (working: into the current turn; stopped: same-generation resume; done/failed: next round). Native: warm-resumes the SAME child session generation when a resume applies. 3P (external CLI): spawns a NEW corrective session (original prompt + answer folded in, D5) — never an in-place warm resume, since external CLIs have no warm-resume primitive. The former owner-answer authority check was withdrawn with the person-question pause (ADR-20261004); a respond is an ordinary steering message, not an authenticated owner answer.
 type DelegateRespondAction struct {
 	Action DelegateRespondActionAction `json:"action"`
 
@@ -15786,6 +15957,20 @@ type DelegateRespondResponse struct {
 
 // DelegateRespondResponseCorrectiveSessionState The newly-spawned/resumed session's initial lifecycle state.
 type DelegateRespondResponseCorrectiveSessionState string
+
+// DelegateResumeAction `delegate` tool call, `action: resume` (ADR-20261004, locked decision 4 — renamed from `follow_up` with no alias path). Continues a stopped helper on the same conversation and the same generation, or starts the next round when the helper is done or failed. Native: warm resume of the SAME session; a terminal continuation mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7). 3P: cold — spawns a new session carrying the prior result (external CLIs have no warm-resume primitive).
+type DelegateResumeAction struct {
+	Action DelegateResumeActionAction `json:"action"`
+
+	// SessionId The stopped or finished child session to resume.
+	SessionId string `json:"session_id"`
+
+	// Text Optional additional instructions for the resumed/next round.
+	Text *string `json:"text,omitempty"`
+}
+
+// DelegateResumeActionAction defines model for DelegateResumeAction.Action.
+type DelegateResumeActionAction string
 
 // DelegateRunAction `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Steering is always available for a direct delegation — there is no longer a launch-profile choice gating it (see ADR-053 Amendment).
 type DelegateRunAction struct {
@@ -16434,7 +16619,7 @@ type DelegateStatusResponse struct {
 		Text      *string    `json:"text,omitempty"`
 	} `json:"last_progress,omitempty"`
 
-	// Session The durable, per-entity-JSONL 8-state session-lifecycle record (ADR-053 §Contract Surface, S2). Distinct from `Session.status` (active/archived/ interrupted — the older chat-transcript-metadata status) and from `Plan.state` (the 5-state draft/approved/running/done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`/ `cancelled`/`timed_out`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+	// Session The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
 	Session struct {
 		// AgentId The agent running this session.
 		AgentId string `json:"agent_id"`
@@ -16487,7 +16672,7 @@ type DelegateStatusResponse struct {
 		// OwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 		OwnerScopeKind DelegateStatusResponseSessionOwnerScopeKind `json:"owner_scope_kind"`
 
-		// OwnsPlanId Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `paused` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
+		// OwnsPlanId Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `stopped` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
 		OwnsPlanId *string `json:"owns_plan_id,omitempty"`
 
 		// ResumedFrom The prior generation's `session_id` this record resumed from. Null for generation 1 (the original spawn).
@@ -16496,7 +16681,7 @@ type DelegateStatusResponse struct {
 		// SessionId Unique durable session identifier.
 		SessionId string `json:"session_id"`
 
-		// State The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+		// State The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 		State DelegateStatusResponseSessionState `json:"state"`
 
 		// SteeredBy Present for steered sessions (a session launched by another session's delegate or create_task). Absent for ordinary-root sessions that nobody steers (ADR-091 I-1). No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment).
@@ -16551,7 +16736,7 @@ type DelegateStatusResponse struct {
 			Generation int `json:"generation"`
 		} `json:"stop,omitempty"`
 
-		// Terminal Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
+		// Terminal Server-derived: true iff `state` is one of `completed`/`failed`.
 		Terminal *bool `json:"terminal,omitempty"`
 
 		// UndeliveredMessageIds `message_id`s not yet delivered/acked at the time of the last persist — carried forward across a boot-sweep `failed(interrupted)` transition so the reason is inspectable.
@@ -16574,7 +16759,7 @@ type DelegateStatusResponseSessionOriginKind string
 // DelegateStatusResponseSessionOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 type DelegateStatusResponseSessionOwnerScopeKind string
 
-// DelegateStatusResponseSessionState The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+// DelegateStatusResponseSessionState The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 type DelegateStatusResponseSessionState string
 
 // DelegateStatusResponseSessionSteeredByAuthorizationMode How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
@@ -16599,6 +16784,20 @@ type DelegateSteerAction struct {
 
 // DelegateSteerActionAction defines model for DelegateSteerAction.Action.
 type DelegateSteerActionAction string
+
+// DelegateStopAllAction `delegate` tool call, `action: stop_all` (ADR-20261004, locked decision 2 — renamed from `cancel` with no alias path). Stops that helper and every helper under it: each reached session lands `stopped`, never failed, and its parent sees a stop notice. `hard: false` (default) is the SOFT cooperative stop — a tool-boundary checkpoint flush inside `session_messaging.cancel_grace`. `hard: true` is the backstop `RequestCancel` fired after grace elapses (or immediately, at the parent's discretion).
+type DelegateStopAllAction struct {
+	Action DelegateStopAllActionAction `json:"action"`
+
+	// Hard False (default) — cooperative soft stop with grace. True — immediate hard stop, bypassing the grace window.
+	Hard *bool `json:"hard,omitempty"`
+
+	// SessionId The child session whose whole subtree stops.
+	SessionId string `json:"session_id"`
+}
+
+// DelegateStopAllActionAction defines model for DelegateStopAllAction.Action.
+type DelegateStopAllActionAction string
 
 // DevicePaired A device that has been successfully paired. Returned as part of the DevicesResponse from GET /api/v1/devices.
 type DevicePaired struct {
@@ -17801,7 +18000,7 @@ type GoalOutcome struct {
 	// EndedAt RFC 3339 UTC timestamp of the terminal transition.
 	EndedAt time.Time `json:"ended_at"`
 
-	// Ending WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+	// Ending WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 	Ending GoalOutcomeEnding `json:"ending"`
 
 	// GoalId The goal that ended (`Goal.goal_id`).
@@ -17820,7 +18019,7 @@ type GoalOutcome struct {
 	RoundsUsed int `json:"rounds_used"`
 }
 
-// GoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+// GoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 type GoalOutcomeEnding string
 
 // GodModeStatus O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode. God mode is the single global "bypass-permissions" switch: when enabled, every agent's tool policy is floored at "allow" (no prompts), the kernel sandbox's filesystem confinement and network port controls are off, and outbound network access is open for the shell tool — regardless of per-agent profiles. An agent's own stricter tool policy, an operator deny command rule, and the shell's own outside-workspace write refusal are never overridden — that refusal still applies, it just never prompts. Audit logging, the prompt-injection guard, and rate limiting are never disabled. The override is non-destructive: switching god mode off restores prior behavior exactly.
@@ -20194,7 +20393,7 @@ type Message struct {
 		// EndedAt RFC 3339 UTC timestamp of the terminal transition.
 		EndedAt time.Time `json:"ended_at"`
 
-		// Ending WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+		// Ending WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 		Ending MessageGoalOutcomeEnding `json:"ending"`
 
 		// GoalId The goal that ended (`Goal.goal_id`).
@@ -20328,10 +20527,47 @@ type Message struct {
 		Type      MessageSubagentStartType `json:"type"`
 	} `json:"subagent_start,omitempty"`
 
-	// SubagentState Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
+	// SubagentState Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional control-receipt acknowledgement (sub-agent control plane ADR D4/MIN-003; `control_receipt` replaces the former `steering_receipt`, see `ControlReceipt.yaml`). A dev install replaying an old persisted frame that still carries `steering_receipt` drops that unknown field rather than failing validation (ADR OBS-003) — the field is gone from this schema and Go's default lenient JSON decode on the replay path (`pkg/gateway/replay.go`) already does not reject it.
 	SubagentState *struct {
 		// ChildSessionId Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
 		ChildSessionId *string `json:"child_session_id,omitempty"`
+
+		// ControlReceipt Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one accepted control on a steered session (`steer`, `stop`, `stop_all`, `redirect`, `resume`, `respond`, `clear_goal`). ADR-20261004 ("Steering commands: no person question") withdrew the `escalate` relay verb with the person-question pause. Replaces `SubagentStateFrame.yaml`'s former `steering_receipt` shape (`{correlation_id, applied_at}`, issue #870) with the full control-ledger receipt shape the ADR specifies.
+		// Train-3 scope note: only the `steer` verb is wired to this shape today, via `pkg/agent/steer_frames.go::deliverSubagentState`. The per-session control ledger that assigns a true monotonic `seq` and tracks a control's own `accepted_at` moment (ADR D4, "Controls") is NOT built in this PR — `seq` and `accepted_at` are stamped as documented stand-ins (the same pattern `pkg/session/lifecycle_edge.go::StopNote.Seq` already uses: the record's own generation substituting for a ledger sequence until the ledger exists). `control_id` reuses the existing correlation id. `verb` and `state` are constants for this call site (`"steer"` / `"delivered"`) until other verbs are wired. Every other field below belongs to the ADR's full future shape and is never populated by this call site.
+		ControlReceipt *struct {
+			// AcceptedAt When the control was accepted into the ledger. Stand-in value today (same moment as `delivered_at`/`applied_at` at this call site, since no separate acceptance moment is tracked ahead of the ledger) — see the schema description above.
+			AcceptedAt time.Time `json:"accepted_at"`
+
+			// AppliedAt When a non-steer control reached `applied` (runtime-enforced effect).
+			AppliedAt *time.Time `json:"applied_at,omitempty"`
+
+			// ControlId The accepted control's identifier — caller-supplied correlation id, or server-assigned when blank.
+			ControlId string `json:"control_id"`
+
+			// DeliveredAt When a `steer` reached `delivered` (durable transcript injection).
+			DeliveredAt *time.Time `json:"delivered_at,omitempty"`
+
+			// Reason Free-text reason, set for a `superseded` state or a notable transition.
+			Reason *string `json:"reason,omitempty"`
+
+			// ReleasedControlIds Control ids released together with this receipt (e.g. a RESUME that releases preserved restart-pending controls in sequence, ADR D4 boot reconciliation).
+			ReleasedControlIds *[]string `json:"released_control_ids,omitempty"`
+
+			// Seq Monotonic per-child control sequence (ADR D4). Stand-in value today — see the schema description above.
+			Seq int64 `json:"seq"`
+
+			// State ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
+			State MessageSubagentStateControlReceiptState `json:"state"`
+
+			// SupersededAt When this control was superseded.
+			SupersededAt *time.Time `json:"superseded_at,omitempty"`
+
+			// SupersededBySeq The superseding control's own `seq`, when `state == superseded`.
+			SupersededBySeq *int64 `json:"superseded_by_seq,omitempty"`
+
+			// Verb Which control this receipt reports on.
+			Verb MessageSubagentStateControlReceiptVerb `json:"verb"`
+		} `json:"control_receipt,omitempty"`
 
 		// CreatedAt RFC3339 timestamp this state ping was emitted.
 		CreatedAt time.Time `json:"created_at"`
@@ -20347,15 +20583,7 @@ type Message struct {
 
 		// State The child's current durable lifecycle state (SessionLifecycleRecord.state).
 		State MessageSubagentStateState `json:"state"`
-
-		// SteeringReceipt Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3).
-		SteeringReceipt *struct {
-			AppliedAt time.Time `json:"applied_at"`
-
-			// CorrelationId The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
-			CorrelationId string `json:"correlation_id"`
-		} `json:"steering_receipt,omitempty"`
-		Type MessageSubagentStateType `json:"type"`
+		Type  MessageSubagentStateType  `json:"type"`
 	} `json:"subagent_state,omitempty"`
 
 	// Summary Compaction summary text (present only on type=compaction entries).
@@ -20492,7 +20720,7 @@ type MessageCancelMethod string
 // MessageContextWindowNoticeKind defines model for Message.ContextWindowNotice.Kind.
 type MessageContextWindowNoticeKind string
 
-// MessageGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+// MessageGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 type MessageGoalOutcomeEnding string
 
 // MessageRole Author role. Absent on compaction entries.
@@ -20518,6 +20746,12 @@ type MessageSubagentMessageType string
 
 // MessageSubagentStartType defines model for Message.SubagentStart.Type.
 type MessageSubagentStartType string
+
+// MessageSubagentStateControlReceiptState ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
+type MessageSubagentStateControlReceiptState string
+
+// MessageSubagentStateControlReceiptVerb Which control this receipt reports on.
+type MessageSubagentStateControlReceiptVerb string
 
 // MessageSubagentStateState The child's current durable lifecycle state (SessionLifecycleRecord.state).
 type MessageSubagentStateState string
@@ -20647,11 +20881,8 @@ type MessageParentProgress struct {
 // MessageParentProgressKind defines model for MessageParentProgress.Kind.
 type MessageParentProgressKind string
 
-// MessageParentQuestion `message_parent` child tool call, `kind: question` (ADR-053 §5.1, R§8.2). `wait: true` parks the CALLING child in `needs_input` (native only — a 3P child never calls this kind, D5). `authority` is child-authored and NEVER trusted at face value — the runtime's `deriveQuestionAuthority(q)` re-derives the effective authority server-side (fail-closed default `owner_required` on omission; a child can only be UPGRADED to `owner_required`, never downgraded). Counts toward the per-child unacked ceiling (D15, max 20 open question+blocker) — payload-only, see `MessageParentProgress` for the request/record split rationale.
+// MessageParentQuestion `message_parent` child tool call, `kind: question` (ADR-053 §5.1). An ordinary upward message: ADR-20261004 ("Steering commands: no person question", locked decision 6) removed the person-question pause — there is no `wait`/`authority`, the calling child is never parked, and no answer expiry exists. Counts toward the per-child unacked ceiling (D15, max 20 open question+blocker) — payload-only, see `MessageParentProgress` for the request/record split rationale.
 type MessageParentQuestion struct {
-	// Authority Child-authored authority tag. Untrusted (M3) — see `SessionMessageQuestion.authority` for the identical fail-closed derivation rule.
-	Authority *MessageParentQuestionAuthority `json:"authority,omitempty"`
-
 	// CorrelationId Optional child-supplied correlation id (server-generated when absent) that a subsequent `respond` will reference.
 	CorrelationId *string                   `json:"correlation_id,omitempty"`
 	Kind          MessageParentQuestionKind `json:"kind"`
@@ -20661,13 +20892,7 @@ type MessageParentQuestion struct {
 
 	// Text Untrusted question text.
 	Text string `json:"text"`
-
-	// Wait True parks the calling child in `needs_input` awaiting a `respond`.
-	Wait bool `json:"wait"`
 }
-
-// MessageParentQuestionAuthority Child-authored authority tag. Untrusted (M3) — see `SessionMessageQuestion.authority` for the identical fail-closed derivation rule.
-type MessageParentQuestionAuthority string
 
 // MessageParentQuestionKind defines model for MessageParentQuestion.Kind.
 type MessageParentQuestionKind string
@@ -23541,6 +23766,9 @@ type Session struct {
 	// LastCompactionSummary Summary of the last context compaction pass (present only when compaction has occurred).
 	LastCompactionSummary *string `json:"last_compaction_summary,omitempty"`
 
+	// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+	LifecycleState *SessionLifecycleState `json:"lifecycle_state,omitempty"`
+
 	// Model LLM model name used in this session (may be empty for legacy sessions).
 	Model *string `json:"model,omitempty"`
 
@@ -23601,8 +23829,26 @@ type Session struct {
 		ToolCalls int `json:"tool_calls"`
 	} `json:"stats"`
 
-	// Status Current lifecycle status of the session.
+	// Status Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
 	Status SessionStatus `json:"status"`
+
+	// StopNote The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
+	StopNote *struct {
+		// At RFC3339 timestamp when this stop note was written.
+		At time.Time `json:"at"`
+
+		// BootSeq Boot epoch of the writer — the monotonic boot counter, persisted in the data dir, of the boot that wrote this note. Present only for physical boot-restart notes — those whose `by` is the literal "restart" (sub-agent control plane ADR D8.3); absent otherwise. A non-boot goal-loop supersession is written by:"system" and carries no boot_seq.
+		BootSeq *int64 `json:"boot_seq,omitempty"`
+
+		// By Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a lifetime-budget timeout, a goal-loop attempt supersession), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
+		By string `json:"by"`
+
+		// Cause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+		Cause SessionStopNoteCause `json:"cause"`
+
+		// Seq Stamped from the record's own generation at the moment of write — a documented stand-in until the per-session control ledger (sub-agent control plane ADR D4, "Controls") exists and can supply a true per-control monotonic sequence (`pkg/session/lifecycle_edge.go::StopNote` doc comment).
+		Seq int64 `json:"seq"`
+	} `json:"stop_note,omitempty"`
 
 	// TaskId Associated task ID when this session was created to service a task.
 	TaskId *string `json:"task_id,omitempty"`
@@ -23620,8 +23866,14 @@ type Session struct {
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
-// SessionStatus Current lifecycle status of the session.
+// SessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+type SessionLifecycleState string
+
+// SessionStatus Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
 type SessionStatus string
+
+// SessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+type SessionStopNoteCause string
 
 // SessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
 type SessionType string
@@ -23703,7 +23955,7 @@ type SessionDetail struct {
 			// EndedAt RFC 3339 UTC timestamp of the terminal transition.
 			EndedAt time.Time `json:"ended_at"`
 
-			// Ending WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+			// Ending WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 			Ending SessionDetailMessagesGoalOutcomeEnding `json:"ending"`
 
 			// GoalId The goal that ended (`Goal.goal_id`).
@@ -23837,10 +24089,47 @@ type SessionDetail struct {
 			Type      SessionDetailMessagesSubagentStartType `json:"type"`
 		} `json:"subagent_start,omitempty"`
 
-		// SubagentState Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
+		// SubagentState Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional control-receipt acknowledgement (sub-agent control plane ADR D4/MIN-003; `control_receipt` replaces the former `steering_receipt`, see `ControlReceipt.yaml`). A dev install replaying an old persisted frame that still carries `steering_receipt` drops that unknown field rather than failing validation (ADR OBS-003) — the field is gone from this schema and Go's default lenient JSON decode on the replay path (`pkg/gateway/replay.go`) already does not reject it.
 		SubagentState *struct {
 			// ChildSessionId Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
 			ChildSessionId *string `json:"child_session_id,omitempty"`
+
+			// ControlReceipt Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one accepted control on a steered session (`steer`, `stop`, `stop_all`, `redirect`, `resume`, `respond`, `clear_goal`). ADR-20261004 ("Steering commands: no person question") withdrew the `escalate` relay verb with the person-question pause. Replaces `SubagentStateFrame.yaml`'s former `steering_receipt` shape (`{correlation_id, applied_at}`, issue #870) with the full control-ledger receipt shape the ADR specifies.
+			// Train-3 scope note: only the `steer` verb is wired to this shape today, via `pkg/agent/steer_frames.go::deliverSubagentState`. The per-session control ledger that assigns a true monotonic `seq` and tracks a control's own `accepted_at` moment (ADR D4, "Controls") is NOT built in this PR — `seq` and `accepted_at` are stamped as documented stand-ins (the same pattern `pkg/session/lifecycle_edge.go::StopNote.Seq` already uses: the record's own generation substituting for a ledger sequence until the ledger exists). `control_id` reuses the existing correlation id. `verb` and `state` are constants for this call site (`"steer"` / `"delivered"`) until other verbs are wired. Every other field below belongs to the ADR's full future shape and is never populated by this call site.
+			ControlReceipt *struct {
+				// AcceptedAt When the control was accepted into the ledger. Stand-in value today (same moment as `delivered_at`/`applied_at` at this call site, since no separate acceptance moment is tracked ahead of the ledger) — see the schema description above.
+				AcceptedAt time.Time `json:"accepted_at"`
+
+				// AppliedAt When a non-steer control reached `applied` (runtime-enforced effect).
+				AppliedAt *time.Time `json:"applied_at,omitempty"`
+
+				// ControlId The accepted control's identifier — caller-supplied correlation id, or server-assigned when blank.
+				ControlId string `json:"control_id"`
+
+				// DeliveredAt When a `steer` reached `delivered` (durable transcript injection).
+				DeliveredAt *time.Time `json:"delivered_at,omitempty"`
+
+				// Reason Free-text reason, set for a `superseded` state or a notable transition.
+				Reason *string `json:"reason,omitempty"`
+
+				// ReleasedControlIds Control ids released together with this receipt (e.g. a RESUME that releases preserved restart-pending controls in sequence, ADR D4 boot reconciliation).
+				ReleasedControlIds *[]string `json:"released_control_ids,omitempty"`
+
+				// Seq Monotonic per-child control sequence (ADR D4). Stand-in value today — see the schema description above.
+				Seq int64 `json:"seq"`
+
+				// State ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
+				State SessionDetailMessagesSubagentStateControlReceiptState `json:"state"`
+
+				// SupersededAt When this control was superseded.
+				SupersededAt *time.Time `json:"superseded_at,omitempty"`
+
+				// SupersededBySeq The superseding control's own `seq`, when `state == superseded`.
+				SupersededBySeq *int64 `json:"superseded_by_seq,omitempty"`
+
+				// Verb Which control this receipt reports on.
+				Verb SessionDetailMessagesSubagentStateControlReceiptVerb `json:"verb"`
+			} `json:"control_receipt,omitempty"`
 
 			// CreatedAt RFC3339 timestamp this state ping was emitted.
 			CreatedAt time.Time `json:"created_at"`
@@ -23856,15 +24145,7 @@ type SessionDetail struct {
 
 			// State The child's current durable lifecycle state (SessionLifecycleRecord.state).
 			State SessionDetailMessagesSubagentStateState `json:"state"`
-
-			// SteeringReceipt Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3).
-			SteeringReceipt *struct {
-				AppliedAt time.Time `json:"applied_at"`
-
-				// CorrelationId The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
-				CorrelationId string `json:"correlation_id"`
-			} `json:"steering_receipt,omitempty"`
-			Type SessionDetailMessagesSubagentStateType `json:"type"`
+			Type  SessionDetailMessagesSubagentStateType  `json:"type"`
 		} `json:"subagent_state,omitempty"`
 
 		// Summary Compaction summary text (present only on type=compaction entries).
@@ -24021,6 +24302,9 @@ type SessionDetail struct {
 		// LastCompactionSummary Summary of the last context compaction pass (present only when compaction has occurred).
 		LastCompactionSummary *string `json:"last_compaction_summary,omitempty"`
 
+		// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+		LifecycleState *SessionDetailSessionLifecycleState `json:"lifecycle_state,omitempty"`
+
 		// Model LLM model name used in this session (may be empty for legacy sessions).
 		Model *string `json:"model,omitempty"`
 
@@ -24081,8 +24365,26 @@ type SessionDetail struct {
 			ToolCalls int `json:"tool_calls"`
 		} `json:"stats"`
 
-		// Status Current lifecycle status of the session.
+		// Status Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
 		Status SessionDetailSessionStatus `json:"status"`
+
+		// StopNote The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
+		StopNote *struct {
+			// At RFC3339 timestamp when this stop note was written.
+			At time.Time `json:"at"`
+
+			// BootSeq Boot epoch of the writer — the monotonic boot counter, persisted in the data dir, of the boot that wrote this note. Present only for physical boot-restart notes — those whose `by` is the literal "restart" (sub-agent control plane ADR D8.3); absent otherwise. A non-boot goal-loop supersession is written by:"system" and carries no boot_seq.
+			BootSeq *int64 `json:"boot_seq,omitempty"`
+
+			// By Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a lifetime-budget timeout, a goal-loop attempt supersession), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
+			By string `json:"by"`
+
+			// Cause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+			Cause SessionDetailSessionStopNoteCause `json:"cause"`
+
+			// Seq Stamped from the record's own generation at the moment of write — a documented stand-in until the per-session control ledger (sub-agent control plane ADR D4, "Controls") exists and can supply a true per-control monotonic sequence (`pkg/session/lifecycle_edge.go::StopNote` doc comment).
+			Seq int64 `json:"seq"`
+		} `json:"stop_note,omitempty"`
 
 		// TaskId Associated task ID when this session was created to service a task.
 		TaskId *string `json:"task_id,omitempty"`
@@ -24110,7 +24412,7 @@ type SessionDetailMessagesCancelMethod string
 // SessionDetailMessagesContextWindowNoticeKind defines model for SessionDetail.Messages.ContextWindowNotice.Kind.
 type SessionDetailMessagesContextWindowNoticeKind string
 
-// SessionDetailMessagesGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+// SessionDetailMessagesGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 type SessionDetailMessagesGoalOutcomeEnding string
 
 // SessionDetailMessagesRole Author role. Absent on compaction entries.
@@ -24136,6 +24438,12 @@ type SessionDetailMessagesSubagentMessageType string
 
 // SessionDetailMessagesSubagentStartType defines model for SessionDetail.Messages.SubagentStart.Type.
 type SessionDetailMessagesSubagentStartType string
+
+// SessionDetailMessagesSubagentStateControlReceiptState ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
+type SessionDetailMessagesSubagentStateControlReceiptState string
+
+// SessionDetailMessagesSubagentStateControlReceiptVerb Which control this receipt reports on.
+type SessionDetailMessagesSubagentStateControlReceiptVerb string
 
 // SessionDetailMessagesSubagentStateState The child's current durable lifecycle state (SessionLifecycleRecord.state).
 type SessionDetailMessagesSubagentStateState string
@@ -24167,13 +24475,19 @@ type SessionDetailMessagesVerdictPerCriterionProvenance string
 // SessionDetailMessagesVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type SessionDetailMessagesVerdictScope string
 
-// SessionDetailSessionStatus Current lifecycle status of the session.
+// SessionDetailSessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+type SessionDetailSessionLifecycleState string
+
+// SessionDetailSessionStatus Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
 type SessionDetailSessionStatus string
+
+// SessionDetailSessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+type SessionDetailSessionStopNoteCause string
 
 // SessionDetailSessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
 type SessionDetailSessionType string
 
-// SessionLifecycleRecord The durable, per-entity-JSONL 8-state session-lifecycle record (ADR-053 §Contract Surface, S2). Distinct from `Session.status` (active/archived/ interrupted — the older chat-transcript-metadata status) and from `Plan.state` (the 5-state draft/approved/running/done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`/ `cancelled`/`timed_out`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+// SessionLifecycleRecord The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
 type SessionLifecycleRecord struct {
 	// AgentId The agent running this session.
 	AgentId string `json:"agent_id"`
@@ -24226,7 +24540,7 @@ type SessionLifecycleRecord struct {
 	// OwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 	OwnerScopeKind SessionLifecycleRecordOwnerScopeKind `json:"owner_scope_kind"`
 
-	// OwnsPlanId Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `paused` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
+	// OwnsPlanId Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `stopped` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
 	OwnsPlanId *string `json:"owns_plan_id,omitempty"`
 
 	// ResumedFrom The prior generation's `session_id` this record resumed from. Null for generation 1 (the original spawn).
@@ -24235,7 +24549,7 @@ type SessionLifecycleRecord struct {
 	// SessionId Unique durable session identifier.
 	SessionId string `json:"session_id"`
 
-	// State The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+	// State The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 	State SessionLifecycleRecordState `json:"state"`
 
 	// SteeredBy Present for steered sessions (a session launched by another session's delegate or create_task). Absent for ordinary-root sessions that nobody steers (ADR-091 I-1). No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment).
@@ -24290,7 +24604,7 @@ type SessionLifecycleRecord struct {
 		Generation int `json:"generation"`
 	} `json:"stop,omitempty"`
 
-	// Terminal Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
+	// Terminal Server-derived: true iff `state` is one of `completed`/`failed`.
 	Terminal *bool `json:"terminal,omitempty"`
 
 	// UndeliveredMessageIds `message_id`s not yet delivered/acked at the time of the last persist — carried forward across a boot-sweep `failed(interrupted)` transition so the reason is inspectable.
@@ -24309,7 +24623,7 @@ type SessionLifecycleRecordOriginKind string
 // SessionLifecycleRecordOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 type SessionLifecycleRecordOwnerScopeKind string
 
-// SessionLifecycleRecordState The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+// SessionLifecycleRecordState The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 type SessionLifecycleRecordState string
 
 // SessionLifecycleRecordSteeredByAuthorizationMode How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
@@ -24589,11 +24903,8 @@ type SessionMessageProgressDirection string
 // SessionMessageProgressKind Discriminator for the SessionMessage `oneOf`.
 type SessionMessageProgressKind string
 
-// SessionMessageQuestion SessionMessage `oneOf` variant, `kind: question` (ADR-053 §Contract Surface, R§8.2). Child -> parent. `wait: true` parks the child in `needs_input` (native-only; 3P children never advertise this kind, D5). `authority` is child-authored but NEVER trusted at face value — the runtime's `deriveQuestionAuthority(q)` re-derives the effective authority server-side (fail-closed default `owner_required` on omission; a child can only be UPGRADED to `owner_required`, never downgraded to `self_ok`). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+// SessionMessageQuestion SessionMessage `oneOf` variant, `kind: question` (ADR-053 §Contract Surface). Child -> parent. An ordinary upward message — ADR-20261004 ("Steering commands: no person question", locked decision 6) removed the person-question pause: a question parks nothing and carries no `wait`/`authority` fields; the parent answers through ordinary steering (`respond`/`steer`), and C1's message/state table applies to any resume effect. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
 type SessionMessageQuestion struct {
-	// Authority Child-authored authority tag. Untrusted (M3) — the runtime's `deriveQuestionAuthority(q)` is the authoritative determination; an omitted tag is treated as `owner_required` server-side (fail-closed default is NOT a schema `default:` — it is applied at the handler, per the project convention of never mixing `required` semantics with a JSON-Schema `default` on a field the server overrides).
-	Authority *SessionMessageQuestionAuthority `json:"authority,omitempty"`
-
 	// CorrelationId Routes the eventual `respond`/`inbox_ack` back to this question. Out-of-order answers are safe (V-3/M-3).
 	CorrelationId   string                          `json:"correlation_id"`
 	CreatedAt       time.Time                       `json:"created_at"`
@@ -24609,13 +24920,7 @@ type SessionMessageQuestion struct {
 	// Text Untrusted question text.
 	Text            string `json:"text"`
 	UntrustedOrigin bool   `json:"untrusted_origin"`
-
-	// Wait True parks the child in `needs_input` awaiting a `respond` (native only). False is a fire-and-forget question the child does not block on.
-	Wait bool `json:"wait"`
 }
-
-// SessionMessageQuestionAuthority Child-authored authority tag. Untrusted (M3) — the runtime's `deriveQuestionAuthority(q)` is the authoritative determination; an omitted tag is treated as `owner_required` server-side (fail-closed default is NOT a schema `default:` — it is applied at the handler, per the project convention of never mixing `required` semantics with a JSON-Schema `default` on a field the server overrides).
-type SessionMessageQuestionAuthority string
 
 // SessionMessageQuestionDirection defines model for SessionMessageQuestion.Direction.
 type SessionMessageQuestionDirection string
@@ -24623,7 +24928,7 @@ type SessionMessageQuestionDirection string
 // SessionMessageQuestionKind defines model for SessionMessageQuestion.Kind.
 type SessionMessageQuestionKind string
 
-// SessionMessageRespond SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The runtime validator REJECTS a `respond` whose target question's derived authority is `owner_required` (R§8.2) — that rejection is a runtime business rule, not schema-expressible; this schema only shapes the request. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+// SessionMessageRespond SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The text is delivered as an ordinary steering message; the recipient's state decides the effect (ADR-20261004 C1). The former owner-answer authority rejection was withdrawn with the person-question pause (ADR-20261004, locked decision 7). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
 type SessionMessageRespond struct {
 	// CorrelationId The `correlation_id` of the `question`/`decision_request` being answered.
 	CorrelationId string                         `json:"correlation_id"`
@@ -29834,24 +30139,24 @@ func (t *DelegateActionRequest) MergeDelegateRespondAction(v DelegateRespondActi
 	return err
 }
 
-// AsDelegateCancelAction returns the union data inside the DelegateActionRequest as a DelegateCancelAction
-func (t DelegateActionRequest) AsDelegateCancelAction() (DelegateCancelAction, error) {
-	var body DelegateCancelAction
+// AsDelegateStopAllAction returns the union data inside the DelegateActionRequest as a DelegateStopAllAction
+func (t DelegateActionRequest) AsDelegateStopAllAction() (DelegateStopAllAction, error) {
+	var body DelegateStopAllAction
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromDelegateCancelAction overwrites any union data inside the DelegateActionRequest as the provided DelegateCancelAction
-func (t *DelegateActionRequest) FromDelegateCancelAction(v DelegateCancelAction) error {
-	v.Action = "cancel"
+// FromDelegateStopAllAction overwrites any union data inside the DelegateActionRequest as the provided DelegateStopAllAction
+func (t *DelegateActionRequest) FromDelegateStopAllAction(v DelegateStopAllAction) error {
+	v.Action = "stop_all"
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeDelegateCancelAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateCancelAction
-func (t *DelegateActionRequest) MergeDelegateCancelAction(v DelegateCancelAction) error {
-	v.Action = "cancel"
+// MergeDelegateStopAllAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateStopAllAction
+func (t *DelegateActionRequest) MergeDelegateStopAllAction(v DelegateStopAllAction) error {
+	v.Action = "stop_all"
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -29862,24 +30167,80 @@ func (t *DelegateActionRequest) MergeDelegateCancelAction(v DelegateCancelAction
 	return err
 }
 
-// AsDelegateFollowUpAction returns the union data inside the DelegateActionRequest as a DelegateFollowUpAction
-func (t DelegateActionRequest) AsDelegateFollowUpAction() (DelegateFollowUpAction, error) {
-	var body DelegateFollowUpAction
+// AsDelegateClearGoalAction returns the union data inside the DelegateActionRequest as a DelegateClearGoalAction
+func (t DelegateActionRequest) AsDelegateClearGoalAction() (DelegateClearGoalAction, error) {
+	var body DelegateClearGoalAction
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromDelegateFollowUpAction overwrites any union data inside the DelegateActionRequest as the provided DelegateFollowUpAction
-func (t *DelegateActionRequest) FromDelegateFollowUpAction(v DelegateFollowUpAction) error {
-	v.Action = "follow_up"
+// FromDelegateClearGoalAction overwrites any union data inside the DelegateActionRequest as the provided DelegateClearGoalAction
+func (t *DelegateActionRequest) FromDelegateClearGoalAction(v DelegateClearGoalAction) error {
+	v.Action = "clear_goal"
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeDelegateFollowUpAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateFollowUpAction
-func (t *DelegateActionRequest) MergeDelegateFollowUpAction(v DelegateFollowUpAction) error {
-	v.Action = "follow_up"
+// MergeDelegateClearGoalAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateClearGoalAction
+func (t *DelegateActionRequest) MergeDelegateClearGoalAction(v DelegateClearGoalAction) error {
+	v.Action = "clear_goal"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsDelegateResumeAction returns the union data inside the DelegateActionRequest as a DelegateResumeAction
+func (t DelegateActionRequest) AsDelegateResumeAction() (DelegateResumeAction, error) {
+	var body DelegateResumeAction
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromDelegateResumeAction overwrites any union data inside the DelegateActionRequest as the provided DelegateResumeAction
+func (t *DelegateActionRequest) FromDelegateResumeAction(v DelegateResumeAction) error {
+	v.Action = "resume"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeDelegateResumeAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateResumeAction
+func (t *DelegateActionRequest) MergeDelegateResumeAction(v DelegateResumeAction) error {
+	v.Action = "resume"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsDelegateRedirectAction returns the union data inside the DelegateActionRequest as a DelegateRedirectAction
+func (t DelegateActionRequest) AsDelegateRedirectAction() (DelegateRedirectAction, error) {
+	var body DelegateRedirectAction
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromDelegateRedirectAction overwrites any union data inside the DelegateActionRequest as the provided DelegateRedirectAction
+func (t *DelegateActionRequest) FromDelegateRedirectAction(v DelegateRedirectAction) error {
+	v.Action = "redirect"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeDelegateRedirectAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateRedirectAction
+func (t *DelegateActionRequest) MergeDelegateRedirectAction(v DelegateRedirectAction) error {
+	v.Action = "redirect"
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -29932,24 +30293,28 @@ func (t DelegateActionRequest) ValueByDiscriminator() (interface{}, error) {
 		return nil, err
 	}
 	switch discriminator {
-	case "cancel":
-		return t.AsDelegateCancelAction()
-	case "follow_up":
-		return t.AsDelegateFollowUpAction()
+	case "clear_goal":
+		return t.AsDelegateClearGoalAction()
 	case "inbox":
 		return t.AsDelegateInboxAction()
 	case "inbox_ack":
 		return t.AsDelegateInboxAckAction()
 	case "peek":
 		return t.AsDelegatePeekAction()
+	case "redirect":
+		return t.AsDelegateRedirectAction()
 	case "respond":
 		return t.AsDelegateRespondAction()
+	case "resume":
+		return t.AsDelegateResumeAction()
 	case "run":
 		return t.AsDelegateRunAction()
 	case "status":
 		return t.AsDelegateStatusAction()
 	case "steer":
 		return t.AsDelegateSteerAction()
+	case "stop_all":
+		return t.AsDelegateStopAllAction()
 	default:
 		return nil, errors.New("unknown discriminator value: " + discriminator)
 	}

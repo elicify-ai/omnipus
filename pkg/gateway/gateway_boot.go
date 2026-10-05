@@ -216,13 +216,23 @@ func installSlogBridge() {
 // fix (two independent reviewers plus a third verifying pass all flagged
 // the same bug: this function used to be called AFTER datamodel.Init).
 func bootLoggingAndDataModel(homePath string) error {
-	logsDir := filepath.Join(homePath, logPath)
+	logFilePath := filepath.Join(homePath, logPath, logFile)
+	// Select the operator's destination before the first subsystem logs. The
+	// logger's standalone ConfigureFromEnv is not called by gateway startup.
+	if override := os.Getenv("OMNIPUS_LOG_FILE"); override != "" {
+		logFilePath = override
+		if strings.HasPrefix(override, "~/") {
+			if home := os.Getenv("HOME"); home != "" {
+				logFilePath = filepath.Join(home, override[2:])
+			}
+		}
+	}
 
 	// Preserves the original inline call site's panic-on-failure behavior
 	// (predates this fix, not itself part of the FIX 1 ordering change) —
 	// EnableFileLogging failing this early means no durable log sink exists
 	// to report the failure into.
-	if err := logger.EnableFileLogging(filepath.Join(logsDir, logFile)); err != nil {
+	if err := logger.EnableFileLogging(logFilePath); err != nil {
 		panic(fmt.Errorf("error enabling file logging: %w", err))
 	}
 
@@ -278,10 +288,13 @@ type setupAndStartServicesState struct {
 	tExecutor              *agent.TaskExecutor
 	planStore              *plan.Store
 	lifecycleStore         *session.LifecycleStore
-	intentLog              *plan.IntentLog
-	bootSweepCfg           config.PlanningConfig
-	providerCatalog        *catalog.Catalog
-	api                    *restAPI
+	// bootEpoch is minted once, before any other boot stage. Later recovery
+	// reads this instance; it must not mint a second time.
+	bootEpoch       *session.BootEpochStore
+	intentLog       *plan.IntentLog
+	bootSweepCfg    config.PlanningConfig
+	providerCatalog *catalog.Catalog
+	api             *restAPI
 }
 
 func setupAndStartServices(
@@ -298,6 +311,14 @@ func setupAndStartServices(
 	allowGodMode bool,
 ) (rs *services, retErr error) {
 	stg := &setupAndStartServicesState{ctx: ctx, cfg: cfg, bundle: bundle, agentLoop: agentLoop, msgBus: msgBus, homePath: homePath, credStore: credStore, sandboxResult: sandboxResult, builtinReg: builtinReg, mcpReg: mcpReg, allowGodMode: allowGodMode}
+
+	// First act of boot recovery pass one (ADR D8.5): persist the monotonic
+	// boot epoch before schedulers, channels, or SteerBootRecovery.Run.
+	// Run does not mint. A failure here stops boot; nothing else writes
+	// boot_epoch.json.
+	if err := stg.mintBootEpoch(); err != nil {
+		return nil, err
+	}
 
 	if runningServices, stop, err := stg.startSchedulers(); stop {
 		return runningServices, err
@@ -1000,6 +1021,7 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 		Classifier:     classifier,
 		LifecycleStore: stg.lifecycleStore,
 		SessionStore:   sessionStore,
+		BootEpoch:      stg.bootEpoch,
 		BootHook: func(ctx context.Context) error {
 			deps := stg.runningServices.SteerDeps
 			recovery := &agent.SteerBootRecovery{
@@ -1011,9 +1033,6 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 				OperatorNotice: func(message string) {
 					slog.Warn("gateway: ADR-091 boot recovery notice", "message", message)
 				},
-				// (e)three (FD1=A, #947 defect 1): the boot sweep's
-				// failInterrupted terminal write also ends the session-owned goal.
-				EndSessionGoal: stg.agentLoop.EndSessionOwnedGoalOnTerminal,
 			}
 			return recovery.Run(ctx)
 		},
@@ -1032,7 +1051,7 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 		stg.tExecutor.SetSessionLauncher(launcher)
 	}
 	setGatewaySteerCanceller(stg.agentLoop, canceller)
-	// The agent's own Stop — delegate(action="cancel"), wired in
+	// The agent's own Stop all — delegate(action="stop_all"), wired in
 	// pkg/agent/session_messaging_wire.go — cascades through the SAME
 	// instance the human Stop above uses, so both take one cascade lock per
 	// session instead of two (agent.SteerCanceller::cascade).
@@ -1107,11 +1126,6 @@ func (stg *setupAndStartServicesState) startPlanEngine() (*services, bool, error
 		planEngine.SetSessionFailedHook(func(sessionID, reason string) {
 			slog.Info("gateway: boot sweep: session.failed", "session_id", sessionID, "reason", reason)
 		})
-		// F3 (#984 follow-up): the boot sweep's pair-end for steered records —
-		// a steered session swept to failed(interrupted) ends its session-owned
-		// goal with it, the same seam SteerBootRecovery.EndSessionGoal wires
-		// (wireSteerDeps). Steered-only by construction in the sweep.
-		planEngine.SetSteeredGoalEndHook(stg.agentLoop.EndSessionOwnedGoalOnTerminal)
 		// These two exact call sites supply the real /goal and /loop
 		// active-loop counters (documented boot-ordering requirement on
 		// PlanEngine.RegisterActiveCounter's doc comment); "loop" counts

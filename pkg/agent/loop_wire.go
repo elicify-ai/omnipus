@@ -790,7 +790,7 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 		delegateTool.SetProgressReader(rw.rs.al)
 		delegateTool.SetAgentRegistry(func() tools.DelegateAgentRegistry { return rw.rs.al.GetRegistry() })
 		// FR-028/BDD-29 (ADR-057 U14): wire the shared, process-wide
-		// SessionManager so `delegate action="cancel"` actually kills the
+		// SessionManager so `delegate action="stop_all"` actually kills the
 		// TARGET child's own background bash/exec shells, not just its
 		// turn. Without this, killChildBackgroundShells (delegate.go)
 		// starts with `if t.sessionManager == nil { return }` — always

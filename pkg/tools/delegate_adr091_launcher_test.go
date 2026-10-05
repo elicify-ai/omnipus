@@ -137,7 +137,7 @@ func TestDelegateRun_UsesLauncherAndReportsQueuedDispatch(t *testing.T) {
 
 	parts := strings.SplitN(result.ForLLM, "\n", 2)
 	if len(parts) != 2 || !strings.Contains(parts[1], "concurrency limit 2") ||
-		!strings.Contains(parts[1], "queue position 3") || !strings.Contains(parts[1], `delegate(action="cancel")`) {
+		!strings.Contains(parts[1], "queue position 3") || !strings.Contains(parts[1], `delegate(action="stop_all")`) {
 		t.Fatalf("queued result lacks actionable cap notice: %q", result.ForLLM)
 	}
 	var response generated.DelegateSessionResponse

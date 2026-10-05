@@ -1,9 +1,10 @@
 // Package agent — cancel_lifecycle_bridge_test.go
 //
 // Defect #28 mutation tests: prove the cancel path transitions BOTH stores
-// (LifecycleRecord → cancelled, UnifiedMeta → interrupted) via the single
-// TransitionSession mediator, closing the orphan that the pre-fix cancel path
-// produced by writing UnifiedMeta alone.
+// (LifecycleRecord → stopped, UnifiedMeta → coarse-active per sub-agent
+// control plane ADR D4/MAJ-009: stopped stays active, no mirror write) via
+// the single TransitionSession mediator, closing the orphan that the pre-fix
+// cancel path produced by writing UnifiedMeta alone.
 package agent
 
 import (
@@ -21,7 +22,7 @@ import (
 
 // TestRequestCancel_TransitionsLifecycleRecordToCancelled is the GREEN test for
 // Defect #28: a cancel on a session that HAS a LifecycleRecord must transition
-// that record to LifecycleCancelled — not orphan it. Before the fix, the cancel
+// that record to LifecycleStopped — not orphan it. Before the fix, the cancel
 // path wrote ONLY UnifiedMeta (interrupted), leaving the LifecycleRecord at
 // running/queued until a future boot sweep caught it.
 func TestRequestCancel_TransitionsLifecycleRecordToCancelled(t *testing.T) {
@@ -95,15 +96,35 @@ func TestRequestCancel_TransitionsLifecycleRecordToCancelled(t *testing.T) {
 	// to cancelled. Before the fix it stayed "running" (orphaned).
 	rec, err := ls.Load(sessionID)
 	require.NoError(t, err)
-	assert.Equal(t, session.LifecycleCancelled, rec.State,
+	assert.Equal(t, session.LifecycleStopped, rec.State,
 		"LifecycleRecord must transition to cancelled on cancel, not stay orphaned at %q", rec.State)
 
-	// The UnifiedMeta must ALSO have followed (interrupted) — the mediator's
-	// canonical mapping (cancelled → interrupted).
+	// The UnifiedMeta must stay coarse-active (sub-agent control plane ADR
+	// D4/MAJ-009: stopped/waiting/working all stay `active` — the mediator's
+	// canonical mapping no longer mirrors LifecycleStopped at all). The
+	// exact helper state (stopped) now lives on lifecycle_state, not this
+	// coarse status.
+	//
+	// qa-lead note (issue #1161): lifecycleToUnifiedStatus's Stopped branch
+	// is a genuine no-op (returns ok=false before any SetMeta call — see
+	// pkg/session/lifecycle_bridge.go::lifecycleToUnifiedStatus), and every
+	// session starts at StatusActive (createSessionLocked), so THIS
+	// assertion alone cannot distinguish "the mediator ran and correctly
+	// wrote nothing" from "TransitionSession was deleted and never called
+	// at all" — both leave postMeta.Status at its created-time default. The
+	// rec.State assertion directly above closes that gap: it is driven by
+	// the SAME TransitionSession call (its step 1, the LifecycleRecord
+	// write), so deleting or bypassing that call fails THIS test via
+	// rec.State staying at LifecycleRunning, not via postMeta.Status. The
+	// pair together — not the Status line alone — is the proof the mediator
+	// executed. This Status line still independently catches a DIFFERENT
+	// regression class: lifecycleToUnifiedStatus mis-mapping Stopped to a
+	// wrong status value (e.g. reintroducing the retired StatusInterrupted
+	// or mapping it to StatusFailed) — mutation-proven, see PR notes.
 	postMeta, err := store.GetMeta(sessionID)
 	require.NoError(t, err)
-	assert.Equal(t, session.StatusInterrupted, postMeta.Status,
-		"UnifiedMeta must mirror to interrupted when LifecycleRecord transitions to cancelled")
+	assert.Equal(t, session.StatusActive, postMeta.Status,
+		"UnifiedMeta must stay active when LifecycleRecord transitions to stopped (ADR D4)")
 }
 
 // TestRequestCancel_LifecycleRecordMissing_DoesNotPanic verifies the cancel
@@ -164,9 +185,38 @@ func TestRequestCancel_LifecycleRecordMissing_DoesNotPanic(t *testing.T) {
 	)
 	require.NoError(t, err, "cancel must not error when no LifecycleRecord exists")
 
-	// UnifiedMeta still mirrored (the mediator proceeds past ErrLifecycleNotFound).
+	// UnifiedMeta stays coarse-active (the mediator proceeds past
+	// ErrLifecycleNotFound, but LifecycleStopped no longer mirrors at all —
+	// ADR D4/MAJ-009).
 	postMeta, err := store.GetMeta(sessionID)
 	require.NoError(t, err)
-	assert.Equal(t, session.StatusInterrupted, postMeta.Status,
-		"UnifiedMeta must still mirror to interrupted even without a LifecycleRecord")
+	assert.Equal(t, session.StatusActive, postMeta.Status,
+		"UnifiedMeta must stay active even without a LifecycleRecord (ADR D4)")
+
+	// qa-lead note (issue #1161, LEFT PARTIALLY STRENGTHENED — needs a
+	// design decision, not guessed): the Status assertion above is still
+	// vacuous against full-deletion of TransitionSession/the mediator call.
+	// Unlike TestRequestCancel_TransitionsLifecycleRecordToCancelled above,
+	// this scenario has NO LifecycleRecord to pair against (that absence is
+	// the whole point of this test), and this call site deliberately passes
+	// CancelHooks{} with no SetSessionInterrupted hook (see its own doc
+	// comment: "exercises the mediator path"), so there is also no explicit
+	// converge-write to seed-and-observe the way
+	// TestCancel_AbandonedAfterHardTimeout and
+	// TestConsumeTaskAttempt_SupersededSessionStaysActive do. Traced:
+	// ls.Mutate(sessionID, fn) with fn returning ErrLifecycleNotFound makes
+	// ZERO disk writes (pkg/session/lifecycle.go::(*LifecycleStore).Mutate
+	// returns before persistLocked when next==nil is never set — rec stays
+	// nil, fn returns the error, Mutate returns immediately), and that error
+	// is silenced by cancel.go's caller (errors.Is check) without even a
+	// Warn log — so nothing observable differs between "the mediator ran
+	// and correctly no-opped" and "the mediator's call site was deleted."
+	// Closing this needs a production seam (e.g. an injectable spy/counter
+	// on the mediator call, or a hook fired unconditionally) — a design
+	// decision for backend-lead/architect, not a test-file workaround.
+	// The one real (if narrow) thing this test CAN still assert: a failed
+	// Mutate must not have fabricated a phantom record.
+	_, loadErr := ls.Load(sessionID)
+	require.ErrorIs(t, loadErr, session.ErrLifecycleNotFound,
+		"a cancel on a session with no LifecycleRecord must not create one as a side effect")
 }

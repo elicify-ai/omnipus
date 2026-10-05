@@ -6,7 +6,7 @@
 // pill/avatar-stack reads — FR-E-005) used only `span.status === 'running'`,
 // the PARENT's own "is this span still open" flag (set at subagent_start,
 // cleared at subagent_end). That is a different axis from `lifecycleState`,
-// the ADR-053 eight-state domain a `subagent_state` frame reduces onto the
+// the ADR-053 six-state domain a `subagent_state` frame reduces onto the
 // span. A span is 'running' (status) from the moment subagent_start fires —
 // including a QUEUED launch (the spec: "a queued launch emits
 // subagent_start immediately, before the child actually starts executing")
@@ -168,7 +168,7 @@ describe('useRunningActivity — runningChildren is exactly-lifecycleState-runni
             runningSpan({ spanId: 'span-r1', parentCallId: 'call-r1', lifecycleState: 'running' }),
             runningSpan({ spanId: 'span-r2', parentCallId: 'call-r2', lifecycleState: 'running' }),
             runningSpan({ spanId: 'span-needs-input', parentCallId: 'call-needs-input', lifecycleState: 'needs_input' }),
-            runningSpan({ spanId: 'span-paused', parentCallId: 'call-paused', lifecycleState: 'paused' }),
+            runningSpan({ spanId: 'span-stopped', parentCallId: 'call-stopped', lifecycleState: 'stopped' }),
           ]),
         ],
       })

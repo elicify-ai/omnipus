@@ -4421,11 +4421,19 @@ export interface components {
              */
             title: string;
             /**
-             * @description Current lifecycle status of the session.
+             * @description Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
              * @example active
              * @enum {string}
              */
-            status: "active" | "archived" | "interrupted";
+            status: "active" | "archived" | "failed";
+            /**
+             * @description Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+             * @example working
+             * @enum {string}
+             */
+            lifecycle_state?: "working" | "waiting_for_answer" | "done" | "failed" | "stopped";
+            /** @description Present only when `lifecycle_state == stopped` (or the session's current generation last landed `stopped`) — the durable, lasting reason for the stop (who/when/why). Absent for every other `lifecycle_state`, and for a session with no lifecycle record. */
+            stop_note?: components["schemas"]["StopNote"];
             /**
              * Format: date-time
              * @description RFC3339 timestamp when the session was created.
@@ -15771,7 +15779,7 @@ export interface components {
              */
             goal_text: string;
             /**
-             * @description WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+             * @description WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
              * @example rounds_exhausted
              * @enum {string}
              */
@@ -16147,7 +16155,7 @@ export interface components {
         };
         /**
          * SessionMessageQuestion
-         * @description SessionMessage `oneOf` variant, `kind: question` (ADR-053 §Contract Surface, R§8.2). Child -> parent. `wait: true` parks the child in `needs_input` (native-only; 3P children never advertise this kind, D5). `authority` is child-authored but NEVER trusted at face value — the runtime's `deriveQuestionAuthority(q)` re-derives the effective authority server-side (fail-closed default `owner_required` on omission; a child can only be UPGRADED to `owner_required`, never downgraded to `self_ok`). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         * @description SessionMessage `oneOf` variant, `kind: question` (ADR-053 §Contract Surface). Child -> parent. An ordinary upward message — ADR-20261004 ("Steering commands: no person question", locked decision 6) removed the person-question pause: a question parks nothing and carries no `wait`/`authority` fields; the parent answers through ordinary steering (`respond`/`steer`), and C1's message/state table applies to any resume effect. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
          */
         SessionMessageQuestion: {
             /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WK */
@@ -16185,21 +16193,10 @@ export interface components {
              */
             text: string;
             /**
-             * @description True parks the child in `needs_input` awaiting a `respond` (native only). False is a fire-and-forget question the child does not block on.
-             * @example true
-             */
-            wait: boolean;
-            /**
              * @description Routes the eventual `respond`/`inbox_ack` back to this question. Out-of-order answers are safe (V-3/M-3).
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
              */
             correlation_id: string;
-            /**
-             * @description Child-authored authority tag. Untrusted (M3) — the runtime's `deriveQuestionAuthority(q)` is the authoritative determination; an omitted tag is treated as `owner_required` server-side (fail-closed default is NOT a schema `default:` — it is applied at the handler, per the project convention of never mixing `required` semantics with a JSON-Schema `default` on a field the server overrides).
-             * @example self_ok
-             * @enum {string}
-             */
-            authority?: "self_ok" | "owner_required";
         };
         /**
          * SessionMessageDecisionRequest
@@ -16535,7 +16532,7 @@ export interface components {
         };
         /**
          * SessionMessageRespond
-         * @description SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The runtime validator REJECTS a `respond` whose target question's derived authority is `owner_required` (R§8.2) — that rejection is a runtime business rule, not schema-expressible; this schema only shapes the request. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         * @description SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The text is delivered as an ordinary steering message; the recipient's state decides the effect (ADR-20261004 C1). The former owner-answer authority rejection was withdrawn with the person-question pause (ADR-20261004, locked decision 7). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
          */
         SessionMessageRespond: {
             /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WW */
@@ -16660,7 +16657,7 @@ export interface components {
         };
         /**
          * SessionLifecycleRecord
-         * @description The durable, per-entity-JSONL 8-state session-lifecycle record (ADR-053 §Contract Surface, S2). Distinct from `Session.status` (active/archived/ interrupted — the older chat-transcript-metadata status) and from `Plan.state` (the 5-state draft/approved/running/done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`/ `cancelled`/`timed_out`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+         * @description The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
          */
         SessionLifecycleRecord: {
             /**
@@ -16679,13 +16676,13 @@ export interface components {
              */
             resumed_from?: string | null;
             /**
-             * @description The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+             * @description The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
              * @example running
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
             /**
-             * @description Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
+             * @description Server-derived: true iff `state` is one of `completed`/`failed`.
              * @example false
              */
             readonly terminal: boolean;
@@ -16701,7 +16698,7 @@ export interface components {
              */
             owner_scope_id?: string;
             /**
-             * @description Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `paused` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
+             * @description Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `stopped` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
              * @example 01J3ZQK8N2H8VXNRP5T7C9M4WE
              */
             owns_plan_id?: string;
@@ -17053,8 +17050,8 @@ export interface components {
              */
             resumed_from?: string | null;
         };
-        /** @description The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment). */
-        DelegateActionRequest: components["schemas"]["DelegateRunAction"] | components["schemas"]["DelegateStatusAction"] | components["schemas"]["DelegateInboxAction"] | components["schemas"]["DelegateInboxAckAction"] | components["schemas"]["DelegateSteerAction"] | components["schemas"]["DelegateRespondAction"] | components["schemas"]["DelegateCancelAction"] | components["schemas"]["DelegateFollowUpAction"] | components["schemas"]["DelegatePeekAction"];
+        /** @description The `delegate` tool call's argument shape, discriminated by `action` — the ADR-053 §5.1 action set plus `clear_goal`, replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`stop_all`/`clear_goal`/`resume`/`redirect` are control surfaces (ADR-20261004: `cancel` is renamed `stop_all` and `follow_up` is renamed `resume`, no alias path; `redirect` and `resume` are new actions). Steering is always available for a direct delegation (see ADR-053 Amendment). */
+        DelegateActionRequest: components["schemas"]["DelegateRunAction"] | components["schemas"]["DelegateStatusAction"] | components["schemas"]["DelegateInboxAction"] | components["schemas"]["DelegateInboxAckAction"] | components["schemas"]["DelegateSteerAction"] | components["schemas"]["DelegateRespondAction"] | components["schemas"]["DelegateStopAllAction"] | components["schemas"]["DelegateClearGoalAction"] | components["schemas"]["DelegateResumeAction"] | components["schemas"]["DelegateRedirectAction"] | components["schemas"]["DelegatePeekAction"];
         /**
          * DelegateRunAction
          * @description `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Steering is always available for a direct delegation — there is no longer a launch-profile choice gating it (see ADR-053 Amendment).
@@ -17206,7 +17203,7 @@ export interface components {
         };
         /**
          * DelegateRespondAction
-         * @description `delegate` tool call, `action: respond` (ADR-053 §5.1). Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe. Native: warm-resumes the SAME child session generation. 3P (external CLI): spawns a NEW corrective session (original prompt + answer folded in, D5) — never an in-place warm resume, since external CLIs have no warm-resume primitive. The runtime REJECTS a `respond` targeting a question whose derived authority is `owner_required` (R§8.2) — a business rule enforced at the handler, not schema- expressible.
+         * @description `delegate` tool call, `action: respond` (ADR-053 §5.1; ADR-20261004 locked decisions 6–7). The parent's reply to one of the child's messages, referenced by `correlation_id`; the text is delivered downward as an ordinary message, and the recipient's state decides the effect (working: into the current turn; stopped: same-generation resume; done/failed: next round). Native: warm-resumes the SAME child session generation when a resume applies. 3P (external CLI): spawns a NEW corrective session (original prompt + answer folded in, D5) — never an in-place warm resume, since external CLIs have no warm-resume primitive. The former owner-answer authority check was withdrawn with the person-question pause (ADR-20261004); a respond is an ordinary steering message, not an authenticated owner answer.
          */
         DelegateRespondAction: {
             /**
@@ -17231,46 +17228,83 @@ export interface components {
             correlation_id: string;
         };
         /**
-         * DelegateCancelAction
-         * @description `delegate` tool call, `action: cancel` (ADR-053 §5.1). `hard: false` (default) is the SOFT cooperative stop — a tool-boundary checkpoint flush inside `session_messaging.cancel_grace`. `hard: true` is the backstop `RequestCancel` fired after grace elapses (or immediately, at the parent's discretion).
+         * DelegateStopAllAction
+         * @description `delegate` tool call, `action: stop_all` (ADR-20261004, locked decision 2 — renamed from `cancel` with no alias path). Stops that helper and every helper under it: each reached session lands `stopped`, never failed, and its parent sees a stop notice. `hard: false` (default) is the SOFT cooperative stop — a tool-boundary checkpoint flush inside `session_messaging.cancel_grace`. `hard: true` is the backstop `RequestCancel` fired after grace elapses (or immediately, at the parent's discretion).
          */
-        DelegateCancelAction: {
+        DelegateStopAllAction: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            action: "cancel";
+            action: "stop_all";
             /**
-             * @description The child session to cancel.
+             * @description The child session whose whole subtree stops.
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             session_id: string;
             /**
-             * @description False (default) — cooperative soft cancel with grace. True — immediate hard cancel, bypassing the grace window.
+             * @description False (default) — cooperative soft stop with grace. True — immediate hard stop, bypassing the grace window.
              * @example false
              */
             hard?: boolean;
         };
         /**
-         * DelegateFollowUpAction
-         * @description `delegate` tool call, `action: follow_up` (ADR-053 §5.1). Native: warm resume of the SAME session with retained context. 3P: cold — spawns a new session carrying the prior result. A terminal record is never mutated in place; this always mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7).
+         * DelegateClearGoalAction
+         * @description `delegate` tool call, `action: clear_goal`. Clears the selected helper's goal without cascading to its descendants.
          */
-        DelegateFollowUpAction: {
+        DelegateClearGoalAction: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            action: "follow_up";
+            action: "clear_goal";
             /**
-             * @description The (terminal) child session to follow up on.
+             * @description The child session whose goal to clear.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+        };
+        /**
+         * DelegateResumeAction
+         * @description `delegate` tool call, `action: resume` (ADR-20261004, locked decision 4 — renamed from `follow_up` with no alias path). Continues a stopped helper on the same conversation and the same generation, or starts the next round when the helper is done or failed. Native: warm resume of the SAME session; a terminal continuation mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7). 3P: cold — spawns a new session carrying the prior result (external CLIs have no warm-resume primitive).
+         */
+        DelegateResumeAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "resume";
+            /**
+             * @description The stopped or finished child session to resume.
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             session_id: string;
             /**
-             * @description Optional additional instructions for the resumed/new session.
+             * @description Optional additional instructions for the resumed/next round.
              * @example Also cross-check the anomalies against last month's baseline.
              */
-            task?: string;
+            text?: string;
+        };
+        /**
+         * DelegateRedirectAction
+         * @description `delegate` tool call, `action: redirect` (ADR-20260928 D2, retained by ADR-20260929 ruling 8; ADR-20261004 locked decision 3). Replaces the helper's current turn with the new instruction: the running turn is stopped (single session — never a cascade; descendants keep going) and the replacement turn runs with `text`. On an already-stopped helper it resumes it with the instruction; on a done/failed helper it starts nothing — use `resume`.
+         */
+        DelegateRedirectAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "redirect";
+            /**
+             * @description The child session whose current turn is replaced.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+            /**
+             * @description The replacement instruction the new turn runs with.
+             * @example Stop refactoring — ship the current state and report back.
+             */
+            text: string;
         };
         /**
          * DelegatePeekAction
@@ -17323,7 +17357,7 @@ export interface components {
              * @example queued
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
         };
         /**
          * DelegateStatusResponse
@@ -17401,7 +17435,7 @@ export interface components {
              * @example running
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
             /**
              * @description The most recent checkpoint summary, if any.
              * @example Wrote the write-set-scoped diff extractor; tests pending.
@@ -17534,7 +17568,7 @@ export interface components {
         };
         /**
          * MessageParentQuestion
-         * @description `message_parent` child tool call, `kind: question` (ADR-053 §5.1, R§8.2). `wait: true` parks the CALLING child in `needs_input` (native only — a 3P child never calls this kind, D5). `authority` is child-authored and NEVER trusted at face value — the runtime's `deriveQuestionAuthority(q)` re-derives the effective authority server-side (fail-closed default `owner_required` on omission; a child can only be UPGRADED to `owner_required`, never downgraded). Counts toward the per-child unacked ceiling (D15, max 20 open question+blocker) — payload-only, see `MessageParentProgress` for the request/record split rationale.
+         * @description `message_parent` child tool call, `kind: question` (ADR-053 §5.1). An ordinary upward message: ADR-20261004 ("Steering commands: no person question", locked decision 6) removed the person-question pause — there is no `wait`/`authority`, the calling child is never parked, and no answer expiry exists. Counts toward the per-child unacked ceiling (D15, max 20 open question+blocker) — payload-only, see `MessageParentProgress` for the request/record split rationale.
          */
         MessageParentQuestion: {
             /**
@@ -17552,17 +17586,6 @@ export interface components {
              * @example Should I overwrite the existing config.json backup?
              */
             text: string;
-            /**
-             * @description True parks the calling child in `needs_input` awaiting a `respond`.
-             * @example true
-             */
-            wait: boolean;
-            /**
-             * @description Child-authored authority tag. Untrusted (M3) — see `SessionMessageQuestion.authority` for the identical fail-closed derivation rule.
-             * @example self_ok
-             * @enum {string}
-             */
-            authority?: "self_ok" | "owner_required";
             /**
              * @description Optional child-supplied correlation id (server-generated when absent) that a subsequent `respond` will reference.
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
@@ -17637,6 +17660,41 @@ export interface components {
             error?: string;
         };
         /**
+         * StopNote
+         * @description The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
+         */
+        StopNote: {
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp when this stop note was written.
+             * @example 2026-07-22T10:05:00Z
+             */
+            at: string;
+            /**
+             * @description Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a lifetime-budget timeout, a goal-loop attempt supersession), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
+             * @example human:user-123
+             */
+            by: string;
+            /**
+             * Format: int64
+             * @description Stamped from the record's own generation at the moment of write — a documented stand-in until the per-session control ledger (sub-agent control plane ADR D4, "Controls") exists and can supply a true per-control monotonic sequence (`pkg/session/lifecycle_edge.go::StopNote` doc comment).
+             * @example 1
+             */
+            seq: number;
+            /**
+             * @description The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
+             * @example stop
+             * @enum {string}
+             */
+            cause: "stop" | "redirect_pause" | "cascade" | "restart" | "timeout";
+            /**
+             * Format: int64
+             * @description Boot epoch of the writer — the monotonic boot counter, persisted in the data dir, of the boot that wrote this note. Present only for physical boot-restart notes — those whose `by` is the literal "restart" (sub-agent control plane ADR D8.3); absent otherwise. A non-boot goal-loop supersession is written by:"system" and carries no boot_seq.
+             * @example 1
+             */
+            boot_seq?: number;
+        };
+        /**
          * SubagentStartFrame
          * @description Server → client (FR-H-004). Opening bracket of a subagent span. Emitted when the agent loop spawns a sub-turn. The SPA uses span_id to group subsequent nested tool_call_start / tool_call_result frames under a collapsible span UI.
          */
@@ -17665,8 +17723,78 @@ export interface components {
             seq?: number;
         };
         /**
+         * ControlReceipt
+         * @description Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one accepted control on a steered session (`steer`, `stop`, `stop_all`, `redirect`, `resume`, `respond`, `clear_goal`). ADR-20261004 ("Steering commands: no person question") withdrew the `escalate` relay verb with the person-question pause. Replaces `SubagentStateFrame.yaml`'s former `steering_receipt` shape (`{correlation_id, applied_at}`, issue #870) with the full control-ledger receipt shape the ADR specifies.
+         *     Train-3 scope note: only the `steer` verb is wired to this shape today, via `pkg/agent/steer_frames.go::deliverSubagentState`. The per-session control ledger that assigns a true monotonic `seq` and tracks a control's own `accepted_at` moment (ADR D4, "Controls") is NOT built in this PR — `seq` and `accepted_at` are stamped as documented stand-ins (the same pattern `pkg/session/lifecycle_edge.go::StopNote.Seq` already uses: the record's own generation substituting for a ledger sequence until the ledger exists). `control_id` reuses the existing correlation id. `verb` and `state` are constants for this call site (`"steer"` / `"delivered"`) until other verbs are wired. Every other field below belongs to the ADR's full future shape and is never populated by this call site.
+         */
+        ControlReceipt: {
+            /**
+             * Format: int64
+             * @description Monotonic per-child control sequence (ADR D4). Stand-in value today — see the schema description above.
+             * @example 1
+             */
+            seq: number;
+            /**
+             * @description The accepted control's identifier — caller-supplied correlation id, or server-assigned when blank.
+             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+             */
+            control_id: string;
+            /**
+             * @description Which control this receipt reports on.
+             * @example steer
+             * @enum {string}
+             */
+            verb: "steer" | "stop" | "stop_all" | "redirect" | "resume" | "respond" | "clear_goal";
+            /**
+             * @description ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
+             * @example delivered
+             * @enum {string}
+             */
+            state: "queued" | "delivered" | "applied" | "superseded";
+            /**
+             * Format: date-time
+             * @description When the control was accepted into the ledger. Stand-in value today (same moment as `delivered_at`/`applied_at` at this call site, since no separate acceptance moment is tracked ahead of the ledger) — see the schema description above.
+             * @example 2026-07-22T10:00:30Z
+             */
+            accepted_at: string;
+            /**
+             * Format: date-time
+             * @description When a `steer` reached `delivered` (durable transcript injection).
+             * @example 2026-07-22T10:00:30Z
+             */
+            delivered_at?: string;
+            /**
+             * Format: date-time
+             * @description When a non-steer control reached `applied` (runtime-enforced effect).
+             * @example 2026-07-22T10:00:30Z
+             */
+            applied_at?: string;
+            /**
+             * Format: date-time
+             * @description When this control was superseded.
+             * @example 2026-07-22T10:00:30Z
+             */
+            superseded_at?: string;
+            /**
+             * Format: int64
+             * @description The superseding control's own `seq`, when `state == superseded`.
+             * @example 2
+             */
+            superseded_by_seq?: number;
+            /**
+             * @description Free-text reason, set for a `superseded` state or a notable transition.
+             * @example superseded by a newer redirect
+             */
+            reason?: string;
+            /**
+             * @description Control ids released together with this receipt (e.g. a RESUME that releases preserved restart-pending controls in sequence, ADR D4 boot reconciliation).
+             * @example []
+             */
+            released_control_ids?: string[];
+        };
+        /**
          * SubagentStateFrame
-         * @description Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
+         * @description Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional control-receipt acknowledgement (sub-agent control plane ADR D4/MIN-003; `control_receipt` replaces the former `steering_receipt`, see `ControlReceipt.yaml`). A dev install replaying an old persisted frame that still carries `steering_receipt` drops that unknown field rather than failing validation (ADR OBS-003) — the field is gone from this schema and Go's default lenient JSON decode on the replay path (`pkg/gateway/replay.go`) already does not reject it.
          */
         SubagentStateFrame: {
             /** @enum {string} */
@@ -17685,20 +17813,9 @@ export interface components {
              * @example running
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
-            /** @description Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3). */
-            steering_receipt?: {
-                /**
-                 * @description The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
-                 * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
-                 */
-                correlation_id: string;
-                /**
-                 * Format: date-time
-                 * @example 2026-07-22T10:00:30Z
-                 */
-                applied_at: string;
-            };
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
+            /** @description Present when this state ping is reporting that a prior control (`steer`/`respond`/...) reached a receipt-worthy state (INV-3). */
+            control_receipt?: components["schemas"]["ControlReceipt"];
             /**
              * Format: date-time
              * @description RFC3339 timestamp this state ping was emitted.
@@ -26864,8 +26981,10 @@ export type DelegateInboxAction = components["schemas"]["DelegateInboxAction"];
 export type DelegateInboxAckAction = components["schemas"]["DelegateInboxAckAction"];
 export type DelegateSteerAction = components["schemas"]["DelegateSteerAction"];
 export type DelegateRespondAction = components["schemas"]["DelegateRespondAction"];
-export type DelegateCancelAction = components["schemas"]["DelegateCancelAction"];
-export type DelegateFollowUpAction = components["schemas"]["DelegateFollowUpAction"];
+export type DelegateStopAllAction = components["schemas"]["DelegateStopAllAction"];
+export type DelegateClearGoalAction = components["schemas"]["DelegateClearGoalAction"];
+export type DelegateResumeAction = components["schemas"]["DelegateResumeAction"];
+export type DelegateRedirectAction = components["schemas"]["DelegateRedirectAction"];
 export type DelegatePeekAction = components["schemas"]["DelegatePeekAction"];
 export type DelegateSessionResponse = components["schemas"]["DelegateSessionResponse"];
 export type DelegateStatusResponse = components["schemas"]["DelegateStatusResponse"];

@@ -6,7 +6,7 @@
 // review-wave fixes to pkg/agent/session_messaging_wire.go and
 // pkg/agent/cancel.go:
 //
-//   - Defect 1: a delegate action="cancel" must reach the target child's own
+//   - Defect 1: a delegate action="stop_all" must reach the target child's own
 //     grandchild (D8/R-13), proven END TO END through the REAL wiring call
 //     site — not just the al.Interrupt primitive
 //     session_messaging_wire_adr057_test.go already covers. That file's
@@ -19,7 +19,7 @@
 //     below closes that gap: it drives a REAL *tools.DelegateTool registered
 //     by a REAL *AgentLoop's own boot path, wires it via the REAL
 //     SetSessionMessagingStores → wireSessionMessagingForAgent path, and
-//     invokes the tool's real action="cancel" dispatch — the actual
+//     invokes the tool's real action="stop_all" dispatch — the actual
 //     regression surface a future edit that narrows the reach would break.
 //
 //     [ADR-091] The ASSERTION is unchanged; its FIXTURE is not. The original
@@ -63,12 +63,12 @@ import (
 )
 
 // TestDelegateCancel_WiredThroughRealAgentLoop_ReachesGrandchild is the
-// end-to-end proof for Defect 1: a delegate(action="cancel") issued against
+// end-to-end proof for Defect 1: a delegate(action="stop_all") issued against
 // a REAL *tools.DelegateTool — registered by a REAL *AgentLoop's own default
 // agent, wired via the REAL SetSessionMessagingStores →
 // wireSessionMessagingForAgent path (not a hand-installed stub hook) — must
 // reach the target child's own live descendant (a grandchild delegate),
-// closing the ADR-057 D8/R-13 leak: before this fix, a per-delegation cancel
+// closing the ADR-057 D8/R-13 leak: before this fix, a per-delegation stop
 // left the child's own grandchildren (and their background shells) running
 // forever.
 //
@@ -125,7 +125,7 @@ func TestDelegateCancel_WiredThroughRealAgentLoop_ReachesGrandchild(t *testing.T
 	require.True(t, ok, "'delegate' tool is not a *tools.DelegateTool")
 
 	// FR-196 kill switch: a bare test config has session_messaging.enabled
-	// unset (false), which fails-closed the "cancel" action before it ever
+	// unset (false), which fails-closed the "stop_all" action before it ever
 	// reaches the scope under test. wireSessionMessagingForAgent (called by
 	// SetSessionMessagingStores above) installs that live-false reader, so
 	// this override MUST come AFTER it — exactly mirroring
@@ -134,18 +134,18 @@ func TestDelegateCancel_WiredThroughRealAgentLoop_ReachesGrandchild(t *testing.T
 
 	callerCtx := tools.WithTranscriptSessionID(context.Background(), parent.sessionKey)
 	result := dt.Execute(callerCtx, map[string]any{
-		"action":     "cancel",
+		"action":     "stop_all",
 		"session_id": child.sessionKey,
 		"hard":       false,
 	})
-	require.False(t, result.IsError, "delegate cancel failed: %s", result.ForLLM)
+	require.False(t, result.IsError, "delegate stop_all failed: %s", result.ForLLM)
 
 	childInterrupted, _ := child.gracefulInterruptRequested()
 	assert.True(t, childInterrupted, "the named child's own graceful-interrupt flag must be set")
 
 	grandchildInterrupted, _ := grandchild.gracefulInterruptRequested()
 	assert.True(t, grandchildInterrupted,
-		"delegate action=cancel, dispatched through the REAL wireSessionMessagingForAgent wiring, "+
+		"delegate action=stop_all, dispatched through the REAL wireSessionMessagingForAgent wiring, "+
 			"must reach the child's own grandchild — this is the ADR-057 D8/R-13 fix. Before it, "+
 			"session_messaging_wire.go wired ScopeSelfOnly and this assertion would fail: the "+
 			"grandchild (and any background shells it owns) would be left running forever")

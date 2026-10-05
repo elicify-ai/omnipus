@@ -420,8 +420,9 @@ type BrowserWebRTCStateFrame struct {
 
 // CancelFrame — Client → server cancel in-progress turn.
 type CancelFrame struct {
-	SessionId string `json:"session_id"`
-	Type      string `json:"type"`
+	Scope     *string `json:"scope,omitempty"`
+	SessionId string  `json:"session_id"`
+	Type      string  `json:"type"`
 }
 
 // CancelStageFrame — Server → client cancel progress notification (B3). stage MUST be one of three values — SPA validates via isValidFrame() and drops invalid stages. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
@@ -608,14 +609,15 @@ type GoalOutcomeFrame struct {
 
 // GoalOutcomeFrameOutcome — Hand-synced WS copy of contracts/components/schemas/GoalOutcome.yaml (the REST/transcript carrier — see it for every field's meaning). Named differently because pkg/api/generated holds the OpenAPI and AsyncAPI Go types in one package and cannot declare `GoalOutcome` twice. Any field edit MUST be mirrored in GoalOutcome.yaml.
 type GoalOutcomeFrameOutcome struct {
-	CriteriaTotal *int    `json:"criteria_total,omitempty"`
-	EndedAt       string  `json:"ended_at"`
-	Ending        string  `json:"ending"`
-	GoalId        string  `json:"goal_id"`
-	GoalText      string  `json:"goal_text"`
-	JudgeReason   *string `json:"judge_reason,omitempty"`
-	MaxRounds     int     `json:"max_rounds"`
-	RoundsUsed    int     `json:"rounds_used"`
+	CriteriaTotal *int   `json:"criteria_total,omitempty"`
+	EndedAt       string `json:"ended_at"`
+	// WHY the goal ended (mirror of components/schemas/GoalOutcome.yaml `ending` — edit both together). `stopped_by_user` is an EXPLICIT user ending only: the owning session's `/goal clear` or an authorized parent's `delegate(action="clear_goal")`. NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active.
+	Ending      string  `json:"ending"`
+	GoalId      string  `json:"goal_id"`
+	GoalText    string  `json:"goal_text"`
+	JudgeReason *string `json:"judge_reason,omitempty"`
+	MaxRounds   int     `json:"max_rounds"`
+	RoundsUsed  int     `json:"rounds_used"`
 }
 
 // GoalStatusFrame — Server → client. Status push for a session's active /goal loop (ADR-049 D6/D7/US-8; state enum + goal_id extended by ADR-053 §Contract Surface — "Pill-state enum"/R§8.10). Emitted on round completion, state change, and clear/stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep in sync by hand with components/schemas/GoalStatusFrame.yaml. Class not yet assigned by the ADR-057 W5 audit (FR-089).
@@ -984,6 +986,13 @@ type RateLimitFrame struct {
 	Type      string  `json:"type"`
 }
 
+// RedirectFrame — Client → server redirect one session: stop its in-progress turn, then resume it on the same generation with the instruction (D2/D9). The instruction ceiling is 16384 UTF-8 bytes (16 KiB) — JSON maxLength counts characters, not bytes, so the byte ceiling is runtime-enforced server-side.
+type RedirectFrame struct {
+	Instruction string `json:"instruction"`
+	SessionId   string `json:"session_id"`
+	Type        string `json:"type"`
+}
+
 // ReplayErrorFrame — Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). Emitted by the replay path when the server encounters a TranscriptEntry with Type=system AND Status="error" — produced by appendErrorTranscript for rate-limit denials (kind=rate_limit) and provider LLM call failures (kind=error). The SPA uses this frame's `kind` discriminant to render the rate-limit-denial component or the generic error component instead of falling back to the default "assistant" bubble render path. Without this typed frame, replay treats the entry as a normal assistant message (the previous bug — empty Role falls back to "assistant" via ReplayMessageFrame.Role, so the SPA renders rate-limit text as a regular assistant message).
 type ReplayErrorFrame struct {
 	// Agent that was active when the error fired.
@@ -1188,21 +1197,30 @@ type SubagentStartFrame struct {
 	Type      string `json:"type"`
 }
 
-// SubagentStateFrame — Server → client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A flat projection of SessionLifecycleRecord.state riding between subagent_start/subagent_end, plus an optional steering- receipt. Canonical copy — keep in sync by hand.
+// SubagentStateFrame — Server → client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A flat projection of SessionLifecycleRecord.state riding between subagent_start/subagent_end, plus an optional control- receipt (sub-agent control plane ADR D4/MIN-003; replaces the former steering_receipt — the field is gone, a dev install replaying an old persisted frame that still carries it drops the unknown field rather than failing validation, OBS-003). Canonical copy — keep in sync by hand with contracts/components/schemas/SubagentStateFrame.yaml and contracts/components/schemas/ControlReceipt.yaml.
 type SubagentStateFrame struct {
 	// Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing subagent_start frame's child_session_id carries (ADR-091 I-4).
 	ChildSessionId *string `json:"child_session_id,omitempty"`
-	CreatedAt      string  `json:"created_at"`
+	ControlReceipt *struct {
+		AcceptedAt         string   `json:"accepted_at"`
+		AppliedAt          *string  `json:"applied_at,omitempty"`
+		ControlId          string   `json:"control_id"`
+		DeliveredAt        *string  `json:"delivered_at,omitempty"`
+		Reason             *string  `json:"reason,omitempty"`
+		ReleasedControlIds []string `json:"released_control_ids,omitempty"`
+		Seq                int64    `json:"seq"`
+		State              string   `json:"state"`
+		SupersededAt       *string  `json:"superseded_at,omitempty"`
+		SupersededBySeq    *int64   `json:"superseded_by_seq,omitempty"`
+		Verb               string   `json:"verb"`
+	} `json:"control_receipt,omitempty"`
+	CreatedAt string `json:"created_at"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/SubagentStateFrame.yaml.
-	Seq             *int64 `json:"seq,omitempty"`
-	SessionId       string `json:"session_id"`
-	SpanId          string `json:"span_id"`
-	State           string `json:"state"`
-	SteeringReceipt *struct {
-		AppliedAt     string `json:"applied_at"`
-		CorrelationId string `json:"correlation_id"`
-	} `json:"steering_receipt,omitempty"`
-	Type string `json:"type"`
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	SpanId    string `json:"span_id"`
+	State     string `json:"state"`
+	Type      string `json:"type"`
 }
 
 // SystemOverloadFrame — Server → client system at capacity (FR-016, MAJ-009). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
@@ -1420,6 +1438,7 @@ const (
 	WsFrameTypeAuth                     WsFrameType = "auth"
 	WsFrameTypeMessage                  WsFrameType = "message"
 	WsFrameTypeCancel                   WsFrameType = "cancel"
+	WsFrameTypeRedirect                 WsFrameType = "redirect"
 	WsFrameTypePing                     WsFrameType = "ping"
 	WsFrameTypeAttachSession            WsFrameType = "attach_session"
 	WsFrameTypeDevicePairingResponse    WsFrameType = "device_pairing_response"

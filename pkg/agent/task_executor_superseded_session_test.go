@@ -17,20 +17,36 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
-// TestConsumeTaskAttempt_SupersededSessionTransitionsToInterrupted
+// TestConsumeTaskAttempt_SupersededSessionStaysActive
 // covers the no-signal path (FR-045): a worker response with no TASK_STATUS
 // marker at all routes straight to consumeTaskAttempt without ever
 // needing a judge. With MaxAttempts=2, the first attempt's outcome (newAttempt
 // 1 < maxAttempts 2) takes the RESTART branch, the
 // exact branch this fix's transitionTaskLifecycle call was added to.
 //
-// Positive lower bound (Binding Rule 4): this does not merely assert
-// Status != StatusActive — it pins the EXACT terminal status
-// (StatusInterrupted, via LifecycleCancelled's canonical mirror in
-// lifecycle_bridge.go), and also confirms the redispatch actually happened
-// (non-empty redispatch id, AttemptCount incremented, Status == next) so the
-// test cannot pass vacuously against a branch that silently didn't run.
-func TestConsumeTaskAttempt_SupersededSessionTransitionsToInterrupted(t *testing.T) {
+// Sub-agent control plane ADR D4/MAJ-009 rename note: this test originally
+// pinned StatusInterrupted as the superseded session's exact terminal status
+// (task_executor_judge.go::supersedeTaskSession, via LifecycleStopped's
+// canonical mirror). The ADR retires that wire value and makes stopped stay
+// coarse-active instead, so the session-meta assertion below now checks
+// StatusActive — which is also this session's starting value, so by itself
+// it can no longer prove supersedeTaskSession actually ran (vs. silently not
+// running). The task-level assertions above (non-empty redispatch id,
+// AttemptCount incremented, Status == next) remain the load-bearing proof
+// that the redispatch branch fired.
+//
+// qa-lead follow-up (issue #1161): closed the session-meta gap directly.
+// Unlike the LifecycleStopped-mirror no-op in pkg/session/lifecycle_bridge.go
+// (zero observable write for that target state — see the sibling note in
+// pkg/agent/cancel_lifecycle_bridge_test.go), supersedeTaskSession itself
+// does an EXPLICIT, unconditional
+// `sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusActive})`
+// BEFORE it calls transitionTaskLifecycle — a genuine converge-write, not a
+// skip-if-already-right no-op. The test now seeds the session to a
+// different status right before calling consumeTaskAttempt, so the final
+// StatusActive assertion is only true if that explicit write actually ran;
+// deleting it would leave the session at the seeded non-active value.
+func TestConsumeTaskAttempt_SupersededSessionStaysActive(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 
 	taskStore := GetTaskStore(al)
@@ -67,6 +83,20 @@ func TestConsumeTaskAttempt_SupersededSessionTransitionsToInterrupted(t *testing
 			before.Status, session.StatusActive)
 	}
 
+	// Seed a DIFFERENT status before the act, so the post-action StatusActive
+	// assertion below is only true if supersedeTaskSession's explicit
+	// write-back actually ran (not simply because a freshly-created session
+	// already started Active and nothing touched it). See the qa-lead
+	// follow-up note above this test for why this is sound for THIS
+	// production call specifically.
+	seedStatus := session.StatusFailed
+	// Assign, do not declare: err is this test's function-scoped variable
+	// (declared at the NewSession call above); a fresh declaration here
+	// shadows it and fails the govet shadow check.
+	if err = sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &seedStatus}); err != nil {
+		t.Fatalf("seed session to a non-active status: %v", err)
+	}
+
 	redispatch := al.taskExecutor.consumeTaskAttempt(context.Background(), tk, taskSessionID,
 		"the run ended without a met verdict", nil)
 
@@ -95,10 +125,11 @@ func TestConsumeTaskAttempt_SupersededSessionTransitionsToInterrupted(t *testing
 	if err != nil {
 		t.Fatalf("get session meta after consumeTaskAttempt: %v", err)
 	}
-	if after.Status != session.StatusInterrupted {
-		t.Errorf("superseded attempt's session status = %q, want %q — M6: consumeTaskAttempt's "+
-			"re-dispatch branch supersedes this session (a brand new one is minted for the next attempt) "+
-			"but never transitioned THIS session out of Active, so it would stay Active forever",
-			after.Status, session.StatusInterrupted)
+	if after.Status != session.StatusActive {
+		t.Errorf("superseded attempt's session status = %q, want %q — M6: a superseded, stopped "+
+			"session stays coarse-active (ADR D4/MAJ-009); supersedeTaskSession's explicit write "+
+			"still runs so a session seeded to %q above (simulating drift away from active for any "+
+			"other reason) converges back to active",
+			after.Status, session.StatusActive, seedStatus)
 	}
 }

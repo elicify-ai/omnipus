@@ -16,14 +16,44 @@ import (
 // passed a nil UnifiedStore to session.TransitionSession (the single dual-store
 // mediator), so the mediator's step-2 mirror (lifecycleToUnifiedStatus) never
 // ran for delegate children: the durable lifecycle record said cancelled while
-// sessions/<id>/meta.json stayed status=active — the record the UI and
-// follow_up/Play trust. A later follow_up then hit the "terminal record is
+// sessions/<id>/meta.json stayed status=active — the record the UI and the
+// resume flow trust. A later resume then hit the "terminal record is
 // immutable" warn (symptom 1) against a session the user could still see as
 // Active in GET /api/v1/sessions.
 //
 // RED under the pre-fix code (transitionLifecycle passes nil): the lifecycle
 // record lands cancelled but the mirror is skipped, so meta.json status stays
-// active. GREEN after the fix: the mirror lands interrupted.
+// active.
+//
+// Sub-agent control plane ADR D4/MAJ-009 note: LifecycleStopped (what
+// droppedQueuedResult always lands) no longer mirrors to a distinct coarse
+// status at all — stopped stays active by design. This specific fixture can
+// therefore no longer tell "mirror skipped because the store was nil" apart
+// from "mirror correctly ran and wrote nothing" by status value alone; both
+// now leave meta.json at active. The assertion below still pins the correct
+// CURRENT behavior (status stays active), but the original defect-947
+// regression coverage this test existed for is weakened for this specific
+// fixture.
+//
+// qa-lead follow-up (issue #1161): traced lifecycleToUnifiedStatus
+// (pkg/session/lifecycle_bridge.go) — for LifecycleStopped it returns
+// (_, ok=false) and short-circuits BEFORE any SetMeta call, so there is
+// genuinely zero observable side effect from step 2 alone for this target
+// state; retargeting this specific fixture at LifecycleFailed/Completed (as
+// originally proposed here) would test a different production call site
+// (droppedQueuedResult always lands Stopped — see its own doc comment), not
+// strengthen THIS test, so that proposal is withdrawn. What DOES close the
+// gap for THIS test: pairing the "Mirror half" assertion below with the
+// "Lifecycle half" rec.State assertion immediately above it. Both are driven
+// by the SAME transitionLifecycle -> session.TransitionSession call
+// (delegate_run.go::droppedQueuedResult), so deleting that call, or the
+// delegate's whole transitionLifecycle wiring, fails THIS test via rec.State staying
+// LifecycleQueued — not via the Mirror-half assertion, which (same as
+// TestRequestCancel_TransitionsLifecycleRecordToCancelled in
+// pkg/agent/cancel_lifecycle_bridge_test.go) cannot see that deletion in
+// isolation. The two together are the proof the mediator ran; the
+// Mirror-half line still independently catches lifecycleToUnifiedStatus
+// mis-mapping Stopped to the wrong status.
 func TestDelegateChildTransition_MirrorsTerminalStatusToUnifiedMeta(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	us, err := session.NewUnifiedStore(t.TempDir())
@@ -43,13 +73,21 @@ func TestDelegateChildTransition_MirrorsTerminalStatusToUnifiedMeta(t *testing.T
 
 	// Seed the stranded queued child the cancel backstop drops
 	// (delegate_run.go::droppedQueuedResult — a production
-	// transitionLifecycle caller).
+	// transitionLifecycle caller). In production this point is reached only
+	// after cancelHard/cancelSoft (al.cancelDelegatedSubtree) already ran
+	// steer_cancel.go::stampStop, which stamps StopNote onto the record in
+	// the SAME mutation that sets the Stop fence — while State is still
+	// queued/running, not yet stopped (D2/CRIT-001). Seed that StopNote here
+	// so this direct call to droppedQueuedResult (which itself passes
+	// note=nil and relies on an already-landed note, delegate_run.go:673-677)
+	// matches that real precondition instead of skipping it.
 	if perr := lc.Persist(&session.LifecycleRecord{
 		SessionID: childID, Generation: 1, State: session.LifecycleQueued,
 		OwnerScopeKind: session.OwnerScopeHuman,
 		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
 		AgentID:        "worker-1",
 		CreatedAt:      time.Now().UTC().Add(-time.Hour),
+		StopNote:       &session.StopNote{At: time.Now().UTC(), By: "human:qa-lead", Seq: 1, Cause: session.StopCauseStop},
 	}); perr != nil {
 		t.Fatalf("seed lifecycle record: %v", perr)
 	}
@@ -64,18 +102,19 @@ func TestDelegateChildTransition_MirrorsTerminalStatusToUnifiedMeta(t *testing.T
 	if err != nil {
 		t.Fatalf("load lifecycle record: %v", err)
 	}
-	if rec.State != session.LifecycleCancelled {
+	if rec.State != session.LifecycleStopped {
 		t.Errorf("lifecycle state = %q, want cancelled", rec.State)
 	}
 
-	// Mirror half (the defect): sessions/<id>/meta.json must NOT stay active.
+	// Mirror half: sessions/<id>/meta.json must stay active (ADR D4/MAJ-009 —
+	// stopped is coarse-active; see the note above this test).
 	got, err := us.GetMeta(childID)
 	if err != nil {
 		t.Fatalf("get meta: %v", err)
 	}
-	if got.Status != session.StatusInterrupted {
-		t.Errorf("meta.json status = %q, want %q — a delegate child transitioned to a terminal state must mirror onto UnifiedMeta (issue #947 defect 2)",
-			got.Status, session.StatusInterrupted)
+	if got.Status != session.StatusActive {
+		t.Errorf("meta.json status = %q, want %q — a stopped delegate child stays coarse-active (ADR D4)",
+			got.Status, session.StatusActive)
 	}
 }
 
@@ -86,12 +125,16 @@ func TestDelegateChildTransition_MirrorsTerminalStatusToUnifiedMeta(t *testing.T
 // shape anymore.
 func TestDelegateChildTransition_UnwiredUnifiedStore_StillTransitions(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
+	// Same D2/CRIT-001 precondition as the sibling test above: production
+	// only reaches droppedQueuedResult after a prior stampStop already
+	// landed StopNote on this generation.
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-947-unwired", Generation: 1, State: session.LifecycleQueued,
 		OwnerScopeKind: session.OwnerScopeHuman,
 		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
 		AgentID:        "worker-1",
 		CreatedAt:      time.Now().UTC().Add(-time.Hour),
+		StopNote:       &session.StopNote{At: time.Now().UTC(), By: "human:qa-lead", Seq: 1, Cause: session.StopCauseStop},
 	}); err != nil {
 		t.Fatalf("seed lifecycle record: %v", err)
 	}
@@ -104,7 +147,7 @@ func TestDelegateChildTransition_UnwiredUnifiedStore_StillTransitions(t *testing
 	if err != nil {
 		t.Fatalf("load lifecycle record: %v", err)
 	}
-	if rec.State != session.LifecycleCancelled {
+	if rec.State != session.LifecycleStopped {
 		t.Errorf("lifecycle state = %q, want cancelled (the unwired store must not block the transition)", rec.State)
 	}
 }

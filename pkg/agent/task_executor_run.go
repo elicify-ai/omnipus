@@ -101,7 +101,7 @@ func (te *TaskExecutor) runTask(
 	// FR-118/G-13: the goroutine is now genuinely executing this attempt —
 	// mirrors pkg/tools/delegate.go's transitionLifecycle(..., LifecycleRunning,
 	// "") at the start of its own dispatch path.
-	te.transitionTaskLifecycle(taskSessionID, session.LifecycleRunning, "")
+	te.transitionTaskLifecycle(taskSessionID, session.LifecycleRunning, "", nil)
 
 	// Test seam: when goroutineCtxHook is set, invoke it and return without
 	// performing real agent execution — mirrors runTaskFromInProgress's
@@ -518,7 +518,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 	// to intercept before real execution is still simulating a goroutine that
 	// truly started, so the durable record should show running, not queued,
 	// at the moment of interception.
-	te.transitionTaskLifecycle(taskSessionID, session.LifecycleRunning, "")
+	te.transitionTaskLifecycle(taskSessionID, session.LifecycleRunning, "", nil)
 
 	// Test seam: when goroutineCtxHook is set, invoke it and return without
 	// performing real agent execution. The hook receives the goroutine's context so

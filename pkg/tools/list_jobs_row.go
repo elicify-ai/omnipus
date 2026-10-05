@@ -497,10 +497,14 @@ type normalizedSubagent struct {
 // normalizeSubagent maps a durable lifecycle state onto the FR-006
 // vocabulary.
 //
-// `cancelled` maps to `failed` with intentionally_stopped=true rather than to
-// a sixth status value: an agent that stopped a delegation on purpose and then
-// lost context would otherwise see a bare `failed` and re-dispatch work the
-// user deliberately cancelled.
+// `stopped` maps to one of three outcomes by StopNote.Cause, never to a
+// sixth status value: redirect_pause -> blocked (a parked generation is not
+// a stop, see the case below); timeout -> failed with intentionally_stopped
+// false; every other cause, including a missing StopNote, -> failed with
+// intentionally_stopped true. Keeping intentionally_stopped true on that
+// last group means an agent that stopped a delegation on purpose and then
+// lost context does not see a bare `failed` and re-dispatch work the user
+// deliberately cancelled.
 func normalizeSubagent(rec *session.LifecycleRecord) normalizedSubagent {
 	switch rec.State {
 	case session.LifecycleQueued:
@@ -522,12 +526,6 @@ func normalizeSubagent(rec *session.LifecycleRecord) normalizedSubagent {
 			nativeStatus: string(session.LifecycleNeedsInput),
 			attention:    attentionCaller,
 		}
-	case session.LifecyclePaused:
-		return normalizedSubagent{
-			status:       jobStatusBlocked,
-			nativeStatus: string(session.LifecyclePaused),
-			attention:    attentionCaller,
-		}
 	case session.LifecycleCompleted:
 		return normalizedSubagent{
 			status:       jobStatusCompleted,
@@ -540,18 +538,28 @@ func normalizeSubagent(rec *session.LifecycleRecord) normalizedSubagent {
 			nativeStatus: withFailedReason(string(session.LifecycleFailed), rec.FailedReason),
 			attention:    attentionNone,
 		}
-	case session.LifecycleTimedOut:
-		return normalizedSubagent{
-			status:       jobStatusFailed,
-			nativeStatus: withFailedReason(string(session.LifecycleTimedOut), rec.FailedReason),
-			attention:    attentionNone,
+	case session.LifecycleStopped:
+		if rec.StopNote != nil && rec.StopNote.Cause == session.StopCauseRedirectPause {
+			// redirect_pause parks the CURRENT generation pending a fresh
+			// instruction — it is not a stop. Report it like the still-intact
+			// needs_input sibling case (FR-006; list-jobs-spec.md operator
+			// ruling 3), matching the pre-collapse LifecyclePaused mapping,
+			// instead of failed/intentionally_stopped.
+			return normalizedSubagent{
+				status:       jobStatusBlocked,
+				nativeStatus: withFailedReason(string(session.LifecycleStopped), rec.FailedReason),
+				attention:    attentionCaller,
+			}
 		}
-	case session.LifecycleCancelled:
+		// A timeout is not an intentional stop — pre-collapse LifecycleTimedOut
+		// never set stopped=true; only a deliberate cancel did. Every other
+		// cause (including no StopNote at all, and a genuine direct stop)
+		// keeps the prior unconditional stopped=true.
 		return normalizedSubagent{
 			status:       jobStatusFailed,
-			nativeStatus: withFailedReason(string(session.LifecycleCancelled), rec.FailedReason),
+			nativeStatus: withFailedReason(string(session.LifecycleStopped), rec.FailedReason),
 			attention:    attentionNone,
-			stopped:      true,
+			stopped:      rec.StopNote == nil || rec.StopNote.Cause != session.StopCauseTimeout,
 		}
 	default:
 		return normalizedSubagent{

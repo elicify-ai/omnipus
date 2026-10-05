@@ -85,6 +85,7 @@ func scheduledJobContextFrom(ctx context.Context) (ScheduledJobInfo, bool) {
 
 type continuationTarget struct {
 	SessionKey string
+	SessionID  string
 	Channel    string
 	ChatID     string
 	// WorkspaceID is the workspace this continuation's turn should run inside
@@ -110,6 +111,7 @@ func (al *AgentLoop) buildContinuationTarget(msg bus.InboundMessage) (*continuat
 
 	return &continuationTarget{
 		SessionKey:  resolveScopeKey(route, msg.SessionKey),
+		SessionID:   msg.SessionID,
 		Channel:     msg.Channel,
 		ChatID:      msg.ChatID,
 		WorkspaceID: al.resolveWorkspaceIDForContinuation(msg),
@@ -890,6 +892,9 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	if err != nil {
 		return "", fmt.Errorf("steer: wake: load %q: %w", sessionID, err)
 	}
+	if al.steering != nil && !rec.Terminal() {
+		al.steering.reopenScopeForGeneration(sessionID, generation)
+	}
 	store := al.ResolveSessionStore(sessionID)
 	if store == nil {
 		return "", fmt.Errorf("steer: wake: transcript store for %q is not available", sessionID)
@@ -921,7 +926,7 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	//     RIGHT NOW (D9; founder round 9, "live turns only"). A woken turn
 	//     that never called tryAdmit ran entirely outside the gate, so
 	//     max_parallel_agents counted dispatches rather than work.
-	//   - I-6's reservation: commitSteeredDispatchState re-runs
+	//   - I-6's reservation: commitSteeredExecutionState re-runs
 	//     reserveDispatch against the record's LIVE tail inside one atomic
 	//     read-modify-write. steer_audience.go::Deliver's FR-B-013 check
 	//     reads the recipient's record at SEND time; a Stop landing between
@@ -933,21 +938,50 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	// a human's own chat, not a delegated worker; it is neither gated nor
 	// state-written by this path.
 	release := func() {}
+	gate := al.steerAdmission()
+	entryLocked := false
+	defer func() {
+		if entryLocked {
+			gate.entryMu.Unlock()
+		}
+	}()
+	var claim executionClaim
 	if rec.SteeredBy != nil {
-		gate := al.steerAdmission()
-		admitted, _, _ := gate.tryAdmit(sessionID, generation)
+		gate.entryMu.Lock()
+		entryLocked = true
+		if duplicateErr := al.checkNewAdmission(rec); duplicateErr != nil {
+			return "", duplicateErr
+		}
+		// D2 round-4 R4-MAJ-001: this wake is an admission, so it mints its
+		// run identity and stamps it durably BEFORE the gate enqueues it —
+		// the same order dispatchSteeredSessionWithReservation owes. A
+		// promotion validates this wake's SAME durable id; it never invents
+		// a new owner for a queued admission.
+		wakeRunID := freshRunID()
+		wakeBootSeq := al.bootEpochFor()
+		if stampErr := stampAdmissionExecution(lifecycle, sessionID, generation, wakeRunID, wakeBootSeq, rec.ExecutionID); stampErr != nil {
+			return "", fmt.Errorf("steer: wake: %w", stampErr)
+		}
+		if identityErr := ts.setExecutionIdentity(wakeRunID, wakeBootSeq); identityErr != nil {
+			return "", fmt.Errorf("steer: wake: %w", identityErr)
+		}
+		claim = executionClaim{SessionID: sessionID, Generation: generation, RunID: wakeRunID, BootSeq: wakeBootSeq}
+		admitted, _, _ := gate.tryAdmitRun(sessionID, generation, wakeRunID, wakeBootSeq)
 		if !admitted {
-			// At the cap. The wake entry is deliberately left UNCONSUMED —
-			// no marker, no acknowledgement — so the turn the FIFO promotion
-			// eventually starts (admission.go::drainSteerQueue ->
-			// dispatchSteeredSessionReserved) still finds it pending.
-			if _, commitErr := commitSteeredDispatchState(lifecycle, sessionID, generation, session.LifecycleQueued); commitErr != nil {
-				gate.removeQueued(sessionID, generation)
+			// At the cap. Do not record a consumed marker or acknowledge any
+			// inbox entry yet; this wake must reach the promoted turn. System
+			// wakes need not have an inbox entry, so append their content to
+			// the lifecycle record in the same durable mutation that queues
+			// the session. The promotion consumes the whole ordered list before
+			// starting; otherwise it would replay the launch instruction or
+			// lose an earlier wake when a second one arrives.
+			if _, commitErr := commitSteeredExecutionState(lifecycle, claim, session.LifecycleQueued, msg.Content); commitErr != nil {
+				gate.removeQueuedExecution(claim)
 				return "", commitErr
 			}
 			return "", nil
 		}
-		release = func() { al.drainSteerQueue(sessionID, generation) }
+		release = func() { al.drainSteerQueue(claim) }
 	}
 
 	ts.opts.UserMessage = msg.Content
@@ -955,6 +989,10 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	if !al.registerTurnIfAbsent(ts) {
 		release()
 		return "", steer.ErrStaleGeneration
+	}
+	if entryLocked {
+		gate.entryMu.Unlock()
+		entryLocked = false
 	}
 	if turnRegisteredTestHook != nil {
 		turnRegisteredTestHook(sessionID, ts)
@@ -967,12 +1005,12 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		if dispatchStateWriteTestHook != nil {
 			dispatchStateWriteTestHook(sessionID, generation)
 		}
-		running, commitErr := commitSteeredDispatchState(lifecycle, sessionID, generation, session.LifecycleRunning)
+		running, commitErr := commitSteeredExecutionState(lifecycle, claim, session.LifecycleRunning, "")
 		if commitErr != nil {
 			abort()
 			return "", commitErr
 		}
-		// commitSteeredDispatchState returns post-write truth (edge, goal
+		// commitSteeredExecutionState returns post-write truth (edge, goal
 		// reference, created-at) — the same reason runDispatchedSteeredTurn
 		// (steer_launcher.go) uses its own commit's return value rather than
 		// its stale pre-write snapshot for the completion disposition below.
@@ -1009,6 +1047,7 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	runCtx, cancel := steeredTurnRunContext(ctx, rec)
 	defer cancel()
 	result, err := al.runTurn(runCtx, ts)
+	ts, result, err = al.drainSteeredTurn(runCtx, rec, ts, result, err)
 	al.disposeSteeredTurnResult(ts, rec, generation, result, err)
 	return result.finalContent, err
 }

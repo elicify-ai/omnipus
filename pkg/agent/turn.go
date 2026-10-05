@@ -69,6 +69,8 @@ type turnResult struct {
 	// whether the turn ended via the engine's error/limit fallback without holding
 	// a reference to the turnState.  Populated by runTurn before it returns.
 	turnFailed bool
+	// stopped prevents a graceful Stop from advancing or adjudicating a goal.
+	stopped bool
 	// goalDeferredAdjudication is JUDGE-FR-098's deferred-dispatch payload
 	// (ADR-084 revision 9 D13, wave E13): checkGoalLoopAfterTurn
 	// (goal_loop.go) populates this instead of calling runGoalAdjudication
@@ -98,6 +100,19 @@ type turnState struct {
 	// that never sets this field (today's non-steered turns) keeps working
 	// exactly as before: nothing compares against a real generation.
 	generation int
+
+	// executionRunID/executionBootSeq are the turn's immutable execution
+	// handle (D2 round-4 R4-MAJ-001): the (run_id, boot_seq) half of the
+	// admission identity this turn runs under, set ONCE by its admission
+	// path (dispatch, wake) after reconstructSteeredTurn and before
+	// registration — never rewritten afterwards, so a completion carrying
+	// this handle provably names the admission that started it, and a
+	// provider-cancel slot fired through this turnState can only ever
+	// belong to THIS admission (a new admission builds a new turnState with
+	// its own cancel funcs). Zero-valued for non-steered turnStates;
+	// a steered final requires a real immutable admission handle.
+	executionRunID   string
+	executionBootSeq uint64
 
 	channel     string
 	chatID      string
@@ -145,6 +160,7 @@ type turnState struct {
 	// cancelMu guards cancelFired to make the first-cancel-wins check atomic.
 	cancelMu       sync.Mutex
 	cancelFired    atomic.Bool               // true once handleCancel has claimed this turn
+	stopRequested  atomic.Bool               // non-terminal Stop: preserve session and goal on disposal
 	abandoned      atomic.Bool               // true once a controller detaches a stuck turn goroutine
 	onCancelFinish func(cancelMethod string) // called exactly once by Finish when cancelFired
 
@@ -1030,6 +1046,34 @@ func (al *AgentLoop) getActiveTurnState(sessionKey string) *turnState {
 		return ts
 	}
 	return nil
+}
+
+// setExecutionIdentity stamps the turn's immutable execution handle
+// (execution_identity.go): the admission's (run_id, boot_seq), written
+// exactly once by the admission path after reconstructSteeredTurn and
+// before registration. A second call is a wiring bug — the handle must not
+// move under a live turn — so the setter refuses it visibly instead of
+// overwriting.
+func (ts *turnState) setExecutionIdentity(runID string, bootSeq uint64) error {
+	if runID == "" || bootSeq == 0 {
+		return fmt.Errorf("turn: execution identity requires run_id and a minted boot epoch")
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.executionRunID != "" {
+		return fmt.Errorf("turn: execution identity already set to %q, refusing re-stamp as %q", ts.executionRunID, runID)
+	}
+	ts.executionRunID = runID
+	ts.executionBootSeq = bootSeq
+	return nil
+}
+
+// executionIdentity reads the turn's immutable execution handle under the
+// state lock. ("", 0) means the turn never carried a steered admission.
+func (ts *turnState) executionIdentity() (runID string, bootSeq uint64) {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.executionRunID, ts.executionBootSeq
 }
 
 // getAnyActiveTurnState returns any active turn state (for backward compatibility)

@@ -9,8 +9,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatStore } from './store'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
+import { useUiStore } from '@/store/ui'
 import { emptySessionState } from './session'
-import { inFlightReattachSids, replayErrorRetryAttempts, replayErrorRetryTimers } from './runtime-state'
+import { gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, replayErrorRetryAttempts, replayErrorRetryTimers } from './runtime-state'
 import type { ChatMessage } from './types'
 import type { WsReceiveFrame } from '@/lib/ws'
 
@@ -32,6 +33,11 @@ beforeEach(() => {
   // for the same reason as inFlightReattachSids just above.
   for (const sid of Object.keys(replayErrorRetryAttempts)) delete replayErrorRetryAttempts[sid]
   for (const sid of Object.keys(replayErrorRetryTimers)) { clearTimeout(replayErrorRetryTimers[sid]); delete replayErrorRetryTimers[sid] }
+  // Safety hardening (subagent-control-plane stream): gapReattachRetryAttempts/
+  // Timers are module-scoped too — same leak risk as replayErrorRetryAttempts/
+  // Timers just above.
+  for (const sid of Object.keys(gapReattachRetryAttempts)) delete gapReattachRetryAttempts[sid]
+  for (const sid of Object.keys(gapReattachRetryTimers)) { clearTimeout(gapReattachRetryTimers[sid]); delete gapReattachRetryTimers[sid] }
 })
 
 function bucket() {
@@ -341,6 +347,141 @@ describe('applySeqGate gap recovery (§6.2 "gap" row) — the re-attach SIDE EFF
     } as WsReceiveFrame)
 
     expect(send).not.toHaveBeenCalled()
+  })
+})
+
+describe('safety hardening (subagent-control-plane stream) — gap re-attach retries with backoff when its response is lost', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('re-sends attach_session{since_seq, boot_id} after the base delay if nothing resolved the gap, and backs off further on a second miss', () => {
+    const sent: unknown[] = []
+    useConnectionStore.setState({
+      connection: { send: (f: unknown) => { sent.push(f); return true } },
+    } as never)
+
+    // Establish a cursor at seq 5, then a genuine gap at seq 9 — mirrors D8.
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 5, boot_id: 'boot-gap',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'GAP', turn_id: 't1', message_id: 'm2', seq: 9,
+    } as WsReceiveFrame)
+    expect(sent).toHaveLength(1) // the original fire-once send (D8)
+
+    // Nothing ever answers this attach_session (its response is lost, e.g.
+    // raced against a concurrent attach_session for a different session on
+    // the same shared connection) — before the fix this left the session
+    // stuck forever. Not sent yet — backoff hasn't elapsed.
+    vi.advanceTimersByTime(999)
+    expect(sent).toHaveLength(1)
+    vi.advanceTimersByTime(1)
+    expect(sent).toHaveLength(2)
+    expect(sent[1]).toEqual({ type: 'attach_session', session_id: SID, since_seq: 5, boot_id: 'boot-gap' })
+
+    // Still no response — the SECOND retry backs off longer (2x base), not
+    // the same delay again.
+    vi.advanceTimersByTime(1999)
+    expect(sent).toHaveLength(2)
+    vi.advanceTimersByTime(1)
+    expect(sent).toHaveLength(3)
+    expect(sent[2]).toEqual({ type: 'attach_session', session_id: SID, since_seq: 5, boot_id: 'boot-gap' })
+  })
+
+  it('stops retrying once the gap genuinely resolves (a cursor-minting frame arrives)', () => {
+    const sent: unknown[] = []
+    useConnectionStore.setState({
+      connection: { send: (f: unknown) => { sent.push(f); return true } },
+    } as never)
+
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 5, boot_id: 'boot-gap',
+    } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'GAP', turn_id: 't1', message_id: 'm2', seq: 9,
+    } as WsReceiveFrame)
+    expect(sent).toHaveLength(1)
+
+    // The server's response finally lands, resolving the gap — BEFORE the
+    // first retry timer fires.
+    useChatStore.getState().handleFrame({
+      type: 'catch_up_complete', session_id: SID, seq: 5, boot_id: 'boot-gap', mode: 'incremental',
+    } as WsReceiveFrame)
+
+    // The pending retry must not fire now that the gap is resolved.
+    vi.advanceTimersByTime(60_000)
+    expect(sent).toHaveLength(1)
+  })
+
+  // Silent-failure fix (8-reviewer gate finding): a stuck session used to
+  // retry forever with NO user-facing signal — only console.warn and a
+  // diagnostic no ordinary user sees. The toast fires ONCE per stuck
+  // episode, at the 5th unanswered attempt (~31s of backoff: 1+2+4+8+16s),
+  // and retries themselves continue.
+  it('toasts the user exactly once per stuck episode once the re-attach keeps failing, while retries continue', () => {
+    const sent: unknown[] = []
+    useConnectionStore.setState({
+      connection: { send: (f: unknown) => { sent.push(f); return true } },
+    } as never)
+    // Replace the toast action in the real ui store (zustand actions are
+    // state properties) rather than vi.mock-ing the module — this test
+    // deliberately drives the real chat store, and a property swap survives
+    // the store's internal set() replacing the state object identity.
+    const addToast = vi.fn()
+    const originalAddToast = useUiStore.getState().addToast
+    useUiStore.setState({ addToast } as never)
+
+    try {
+      // Establish a cursor at seq 5, then a genuine gap at seq 9 — mirrors D8.
+      useChatStore.getState().handleFrame({
+        type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 5, boot_id: 'boot-gap',
+      } as WsReceiveFrame)
+      useChatStore.getState().handleFrame({
+        type: 'token', session_id: SID, content: 'GAP', turn_id: 't1', message_id: 'm2', seq: 9,
+      } as WsReceiveFrame)
+      expect(sent).toHaveLength(1)
+
+      // Attempts 1-4 fire at 1s/2s/4s/8s (cumulative 15s) — ordinary backoff
+      // territory for a re-attach that may still land; NO warning yet.
+      vi.advanceTimersByTime(15_000)
+      expect(sent).toHaveLength(5)
+      expect(addToast).not.toHaveBeenCalled()
+
+      // Attempt 5 fires at cumulative ~31s — the gap has now survived every
+      // retry, so the user is told the session may be out of sync and to
+      // refresh. Exactly ONE toast, still 'warning' like the unknown-frame one.
+      vi.advanceTimersByTime(16_000)
+      expect(sent).toHaveLength(6)
+      expect(addToast).toHaveBeenCalledTimes(1)
+      expect(addToast.mock.calls[0][0]).toMatchObject({ variant: 'warning' })
+      expect(String((addToast.mock.calls[0][0] as { message?: string }).message)).toMatch(/refresh/i)
+
+      // Retries CONTINUE after the toast (30s-capped backoff: attempts 6 and
+      // 7 land by t=91s) — this fix added visibility, not a retry cap —
+      // and the toast is NOT repeated on those later attempts.
+      vi.advanceTimersByTime(60_000)
+      expect(sent).toHaveLength(8)
+      expect(addToast).toHaveBeenCalledTimes(1)
+
+      // Once per EPISODE, not once ever: resolving the gap resets the
+      // attempt counter, so a LATER stuck episode warns the user again.
+      useChatStore.getState().handleFrame({
+        type: 'catch_up_complete', session_id: SID, seq: 5, boot_id: 'boot-gap', mode: 'incremental',
+      } as WsReceiveFrame)
+      useChatStore.getState().handleFrame({
+        type: 'token', session_id: SID, content: 'GAP2', turn_id: 't1', message_id: 'm3', seq: 20,
+      } as WsReceiveFrame)
+      expect(sent).toHaveLength(9) // the fresh episode's first re-attach
+      vi.advanceTimersByTime(31_000) // episode 2's attempts 1-5
+      expect(sent).toHaveLength(14)
+      expect(addToast).toHaveBeenCalledTimes(2)
+    } finally {
+      useUiStore.setState({ addToast: originalAddToast } as never)
+    }
   })
 })
 

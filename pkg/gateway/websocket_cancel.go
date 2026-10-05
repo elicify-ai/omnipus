@@ -4,6 +4,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -208,6 +209,12 @@ func (h *WSHandler) sendExternalCancelPartialNotice(ctx context.Context, session
 // record exists. Ordinary chats with no steering record keep using the legacy
 // live-turn cancel path and must not be falsely reported as partial.
 func cancelSteeredSubtree(ctx context.Context, al *agent.AgentLoop, sessionID string, by steer.Principal) (steer.CancelReport, bool) {
+	return applySteeredCancel(al, sessionID, func(canceller steer.Canceller) (steer.CancelReport, error) {
+		return canceller.CancelSubtree(ctx, sessionID, by)
+	})
+}
+
+func applySteeredCancel(al *agent.AgentLoop, sessionID string, apply func(steer.Canceller) (steer.CancelReport, error)) (steer.CancelReport, bool) {
 	var report steer.CancelReport
 	if al == nil {
 		return report, false
@@ -230,7 +237,7 @@ func cancelSteeredSubtree(ctx context.Context, al *agent.AgentLoop, sessionID st
 		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: "steer canceller is not configured"})
 		return report, true
 	}
-	result, err := canceller.CancelSubtree(ctx, sessionID, by)
+	result, err := apply(canceller)
 	if err != nil {
 		result.Unreachable = append(result.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: err.Error()})
 	}
@@ -362,9 +369,12 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 		SetSessionInterrupted: func(sid string) {
 			store := h.resolveSessionStore(sid)
 			if store != nil {
-				status := session.StatusInterrupted
+				// A cancel is a stop, not a failure — sub-agent control
+				// plane ADR D4/MAJ-009: stopped stays coarse-active (the
+				// retired StatusInterrupted is never written here).
+				status := session.StatusActive
 				if err := store.SetMeta(sid, session.MetaPatch{Status: &status}); err != nil {
-					slog.Warn("ws: could not mark session interrupted",
+					slog.Warn("ws: could not mark session active",
 						"session_id", sid, "error", err)
 				}
 			}
@@ -425,6 +435,34 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 	}
 }
 
+// handleCancelFrame is the frame dispatcher's entry point for a `cancel`
+// frame: parse, validate session_id, resolve the session/tree scope, and
+// route to handleCancelWithScope. Kept out of dispatchFrame's own body —
+// same reasoning as stringPtrOrEmpty and handleSessionCloseFrame /
+// handleSessionModeUpdateFrame elsewhere in that switch — so dispatchFrame's
+// grandfathered gocyclo budget (scripts/budgets/gocyclo.txt) doesn't grow;
+// the session-vs-tree scope check (stopAll) was the one that pushed it over.
+func (wh *wsHandlerReadLoop) handleCancelFrame(data []byte) wsHandlerReadLoopFlow {
+	var f generated.CancelFrame
+	if err := json.Unmarshal(data, &f); err != nil {
+		slog.Warn("ws: malformed cancel frame", "error", err)
+		return wsHandlerReadLoopContinue
+	}
+	if f.SessionId == "" {
+		wh.wc.inboundDropped.Add(1)
+		slog.Warn("ws: cancel frame missing required session_id — dropping",
+			"chat_id", wh.chatID)
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "cancel requires session_id",
+		})
+		return wsHandlerReadLoopContinue
+	}
+	stopAll := f.Scope != nil && *f.Scope == "tree"
+	wh.h.handleCancelWithScope(wh.wc, f.SessionId, stopAll)
+	return wsHandlerReadLoopNext
+}
+
 // handleCancel delegates to agentLoop.RequestCancel — the canonical cancel
 // state machine that provides uniform audit, transcript, abuse-detection, and
 // 2-stage timer behavior across all four cancel entry points (web SPA,
@@ -434,6 +472,10 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 // This function is intentionally thin: it builds scope/canceller/hooks and
 // delegates. All state-machine logic lives in pkg/agent.RequestCancel.
 func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
+	h.handleCancelWithScope(wc, sessionID, false)
+}
+
+func (h *WSHandler) handleCancelWithScope(wc *wsConn, sessionID string, stopAll bool) {
 	if sessionID == "" {
 		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
@@ -442,27 +484,12 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 		return
 	}
 
-	report, cascaded := cancelSteeredSubtree(context.Background(), h.agentLoop, sessionID, steer.Principal{
-		Kind: steer.PrincipalKindHuman,
-		ID:   wc.userID,
-	})
+	report, cascaded, outcome, err := h.requestScopedStop(wc, sessionID, stopAll)
 	if cascaded {
 		h.sendCancelPartialNotice(wc, sessionID, report)
 		h.sendExternalCancelPartialNotice(context.Background(), sessionID, report)
 	}
 
-	scope := agent.CancelScope{SessionID: sessionID}
-	canceller := agent.CancelCanceller{
-		UserID:  wc.userID,
-		Channel: "web",
-	}
-	var reportForHooks *steer.CancelReport
-	if cascaded {
-		reportForHooks = &report
-	}
-	hooks := h.buildCancelHooksWithReport(wc, reportForHooks)
-
-	outcome, err := h.agentLoop.RequestCancel(context.Background(), scope, canceller, hooks)
 	if err != nil {
 		slog.Warn("ws: handleCancel: RequestCancel error",
 			"session_id", sessionID, "error", err)

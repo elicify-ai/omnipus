@@ -21,7 +21,6 @@ func newTestInboxStore(t *testing.T) *MessageInboxStore {
 func questionMsg(t *testing.T, sessionID, messageID string) generated.SessionMessage {
 	t.Helper()
 	var sm generated.SessionMessage
-	auth := generated.SessionMessageQuestionAuthority("self_ok")
 	if err := sm.FromSessionMessageQuestion(generated.SessionMessageQuestion{
 		MessageId:      messageID,
 		SessionId:      sessionID,
@@ -29,9 +28,7 @@ func questionMsg(t *testing.T, sessionID, messageID string) generated.SessionMes
 		Depth:          1,
 		SenderIdentity: "child-agent",
 		Text:           "May I proceed?",
-		Wait:           true,
 		CorrelationId:  messageID + "-corr",
-		Authority:      &auth,
 	}); err != nil {
 		t.Fatalf("FromSessionMessageQuestion failed: %v", err)
 	}
