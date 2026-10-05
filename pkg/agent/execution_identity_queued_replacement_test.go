@@ -335,7 +335,7 @@ func queueReplacementBehindBlocker(t *testing.T, al *AgentLoop, oldRunID string,
 	}
 	stoppedRec := waitRecordState(t, lifecycle, childID, "the stop to land stopped (fence spent, note kept)", func(rec *session.LifecycleRecord) bool {
 		return rec.State == session.LifecycleStopped && rec.StopNote != nil &&
-			!(rec.Stop != nil && rec.Stop.Generation == rec.Generation)
+			(rec.Stop == nil || rec.Stop.Generation != rec.Generation)
 	})
 	if stoppedRec.Generation != childGen {
 		t.Fatalf("premise: stop moved the generation %d -> %d, want the same generation", childGen, stoppedRec.Generation)

@@ -188,8 +188,8 @@ func TestW1HistoricalLedgerNotice_AppendFailureKeepsStopLandedAndResumedRetryDel
 
 	// Explicit same-generation RESUME: the active note clears, the
 	// historical event and its pending notice survive it.
-	if _, err := NewSteerCanceller(lifecycle).Revive(context.Background(), childID, owner); err != nil {
-		t.Fatalf("Revive (explicit RESUME): %v", err)
+	if _, reviveErr := NewSteerCanceller(lifecycle).Revive(context.Background(), childID, owner); reviveErr != nil {
+		t.Fatalf("Revive (explicit RESUME): %v", reviveErr)
 	}
 	resumedRec, err := lifecycle.Load(childID)
 	if err != nil {

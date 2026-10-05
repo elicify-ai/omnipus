@@ -340,7 +340,7 @@ func TestGoal984_CompletionFlightsRemovedOnEveryExit(t *testing.T) {
 			if calls != 1 {
 				t.Fatalf("completion calls = %d, want exactly 1", calls)
 			}
-			if !woke || completionErr != tt.wantErr {
+			if !woke || !errors.Is(completionErr, tt.wantErr) {
 				t.Fatalf("completion result = (%v, %v), want (true, %v)", woke, completionErr, tt.wantErr)
 			}
 			if _, retained := steeredCompletionFlights.Load(key); retained {

@@ -76,8 +76,8 @@ func TestW1HistoricalLedgerNotice_TwoSameGenerationStopsDeliverTwoDistinctOrigin
 		t.Fatalf("first StopTurns: %v", err)
 	}
 	if !w1hWaitFor(t, 15*time.Second, "child lands stopped (stop 1)", func() bool {
-		cur, err := lifecycle.Load(childID)
-		return err == nil && cur.State == session.LifecycleStopped
+		cur, loadErr := lifecycle.Load(childID)
+		return loadErr == nil && cur.State == session.LifecycleStopped
 	}) {
 		t.Fatalf("stop 1 never landed the child stopped")
 	}
@@ -146,20 +146,20 @@ func TestW1HistoricalLedgerNotice_TwoSameGenerationStopsDeliverTwoDistinctOrigin
 	}
 
 	// ---- Second real turn, second accepted stop. ----
-	if _, err := NewSteerLauncher(al).Dispatch(context.Background(), childID, generation); err != nil {
-		t.Fatalf("Dispatch(after RESUME): %v", err)
+	if _, dispatchErr := NewSteerLauncher(al).Dispatch(context.Background(), childID, generation); dispatchErr != nil {
+		t.Fatalf("Dispatch(after RESUME): %v", dispatchErr)
 	}
 	select {
 	case <-provider.entered:
 	case <-time.After(30 * time.Second):
 		t.Fatal("the resumed child never reached its provider — no second live turn to stop")
 	}
-	if _, err := canceller.StopTurns(context.Background(), childID, owner, false, al.SteerGenerationCancel); err != nil {
-		t.Fatalf("second StopTurns: %v", err)
+	if _, secondStopErr := canceller.StopTurns(context.Background(), childID, owner, false, al.SteerGenerationCancel); secondStopErr != nil {
+		t.Fatalf("second StopTurns: %v", secondStopErr)
 	}
 	if !w1hWaitFor(t, 15*time.Second, "child lands stopped (stop 2)", func() bool {
-		cur, err := lifecycle.Load(childID)
-		return err == nil && cur.State == session.LifecycleStopped
+		cur, loadErr := lifecycle.Load(childID)
+		return loadErr == nil && cur.State == session.LifecycleStopped
 	}) {
 		t.Fatalf("stop 2 never landed the child stopped")
 	}
@@ -228,8 +228,8 @@ func TestW1HistoricalLedgerNotice_TwoSameGenerationStopsDeliverTwoDistinctOrigin
 		t.Fatalf("retained note vanished before the repeat stop — the landed stopped record must keep its note")
 	}
 	retained := *before.StopNote
-	if _, err := canceller.StopTurns(context.Background(), childID, owner, false, al.SteerGenerationCancel); err != nil {
-		t.Fatalf("repeat StopTurns on an already stopped child: %v", err)
+	if _, repeatStopErr := canceller.StopTurns(context.Background(), childID, owner, false, al.SteerGenerationCancel); repeatStopErr != nil {
+		t.Fatalf("repeat StopTurns on an already stopped child: %v", repeatStopErr)
 	}
 	after, err := lifecycle.Load(childID)
 	if err != nil {
