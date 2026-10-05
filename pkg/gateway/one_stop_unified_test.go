@@ -270,3 +270,79 @@ func TestOneStop_WebStopAllFrame_SameTimelineAsRestDelete(t *testing.T) {
 		"drive the production CancelFrame decoder/dispatcher, not an internal handler")
 	requireForcedAtThreeSeconds(t, f.probe, since, "web Stop all frame")
 }
+
+// TestOneStop_RestDeletePlainChatWithLiveTurn_SameStopThenDeleteOrVisibleError
+// pins team-lead's ruling on the last REST gap: DELETE of a plain chat that has
+// a LIVE turn but no lifecycle record (most webchat conversations) goes through
+// the same stop method before anything is deleted -- polite stop immediately,
+// forced stop at ~3 s. The delete then either completes after the stop landed
+// (the turn's tool was cancelled before the 200) or returns a visible error
+// with nothing deleted. Never "200 and the turn keeps running".
+func TestOneStop_RestDeletePlainChatWithLiveTurn_SameStopThenDeleteOrVisibleError(t *testing.T) {
+	f := newOneStopGatewayFixture(t)
+	// A plain chat: a real session with a live turn and NO lifecycle record.
+	meta, err := f.al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "mia")
+	require.NoError(t, err)
+	require.NoError(t, f.al.GetSessionStore().SetMeta(meta.ID, session.MetaPatch{WorkspaceID: strPtr(testHarnessWorkspaceMembershipID)}))
+	_, loadErr := f.lifecycle.Load(meta.ID)
+	require.ErrorIs(t, loadErr, session.ErrLifecycleNotFound, "SETUP: the plain chat must have no lifecycle record")
+
+	// The fixture's helper already tripped f.probe; use a fresh probe-bearing
+	// tool for the plain chat's own turn by waiting on a second tool instance.
+	probe := newOneStopProbeTool()
+	f.al.RegisterTool(probe)
+	inst, ok := f.al.GetRegistry().GetAgent("mia")
+	require.True(t, ok)
+	inst.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{oneStopProbeToolName: "allow"}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = f.al.ProcessScheduled(ctx, "mia", meta.ID, "work until stopped", "webchat", meta.ID)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(cancelTestTurnStartDeadline):
+			t.Errorf("plain chat turn did not finish during cleanup")
+		}
+	})
+	select {
+	case <-probe.started:
+	case <-time.After(cancelTestTurnStartDeadline):
+		t.Fatal("SETUP: the plain chat's turn never entered the probe tool")
+	}
+	require.NoError(t, probeNotCancelled(probe), "SETUP: nothing may be cancelled before the DELETE")
+
+	api := &restAPI{agentLoop: f.al, allowedOrigin: "http://localhost:3000", homePath: config.OmnipusHomeDir()}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/sessions/"+meta.ID, nil)
+	r.URL.Path = "/api/v1/sessions/" + meta.ID
+	since := time.Now()
+	returned := make(chan time.Time, 1)
+	go func() {
+		api.HandleSessions(w, r)
+		returned <- time.Now()
+	}()
+
+	requireForcedAtThreeSeconds(t, probe, since, "REST DELETE of a plain chat with a live turn")
+
+	var returnedAt time.Time
+	select {
+	case returnedAt = <-returned:
+	case <-time.After(15 * time.Second):
+		t.Fatal("DELETE neither completed nor returned an error within 15s of the stop")
+	}
+	_, metaErr := f.al.GetSessionStore().GetMeta(meta.ID)
+	if w.Code == http.StatusOK {
+		assert.Error(t, metaErr, "a 200 means the session was deleted")
+		assert.False(t, returnedAt.Before(time.Unix(0, probe.cancelAt.Load())),
+			"the delete completed before the live turn was stopped: it must complete only after the stop landed")
+	} else {
+		assert.GreaterOrEqual(t, w.Code, 400, "a non-200 outcome must be an error status; body=%s", w.Body.String())
+		assert.NotEmpty(t, w.Body.String(), "the error must be visible to the caller")
+		assert.NoError(t, metaErr, "an error outcome must leave the session undeleted")
+	}
+}
