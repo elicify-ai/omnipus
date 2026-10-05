@@ -47,7 +47,7 @@ func TestEnableFileLogging_FileMode(t *testing.T) {
 			t.Fatalf("existing log file setup permissions = %04o, want 0644", got)
 		}
 
-		if err := EnableFileLogging(path); err != nil {
+		if err = EnableFileLogging(path); err != nil {
 			t.Fatalf("enable logging for existing file: %v", err)
 		}
 		info, err = os.Stat(path)
