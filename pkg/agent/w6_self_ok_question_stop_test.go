@@ -75,9 +75,10 @@ func TestW6Question_OrdinaryMessage_AnswerRevivesStoppedChildWhileParentStaysSto
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 
+	provider, _ := installParkedProvider(t, al)
 	root := newTestSteeringSession(t, al, "ws-w6-self-ok")
-	parent := u1LaunchChild(t, al, root, "w6-self-ok-parent")
-	child := u1LaunchChild(t, al, parent.SessionID, "w6-self-ok-child")
+	parent := g2HeldMessagingChild(t, al, provider, root, "w6-self-ok-parent")
+	child := g2HeldMessagingChild(t, al, provider, parent.SessionID, "w6-self-ok-child")
 	corr, askedGen := w6AskOrdinaryQuestion(t, al, child.SessionID)
 
 	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: "dan"}
@@ -132,16 +133,20 @@ func TestW6Question_OrdinaryMessage_AnswerRevivesStoppedChildWhileParentStaysSto
 		t.Fatalf("only the child resumes: parent = (%s, %d), want still stopped at %d",
 			afterParent.State, afterParent.Generation, stoppedParent.Generation)
 	}
-	// The child left stopped at the NEXT generation (Revive mints it). Poll:
-	// the revived turn runs on the harness provider and may already be terminal.
+	// Frozen control-plane ADR D2 CRIT-001: "resumes a stopped child on the
+	// same generation ... only done/failed mints a next generation".
+	// ADR-20261004 C1 preserves this rule for respond's ordinary message.
 	waitFor(t, 10*time.Second, func() bool {
 		rec := w6MustLoad(t, freshLC, child.SessionID)
 		return rec.State != session.LifecycleStopped
 	})
 	resumed := w6MustLoad(t, freshLC, child.SessionID)
-	if resumed.Generation != askedGen+1 {
-		t.Fatalf("revived child generation = %d, want %d — the resume continues the SAME conversation as a new generation",
-			resumed.Generation, askedGen+1)
+	if resumed.Generation != askedGen {
+		t.Fatalf("revived child generation = %d, want %d — D2 requires same-generation stopped resume",
+			resumed.Generation, askedGen)
+	}
+	if resumed.ExecutionID == nil || stoppedChild.ExecutionID == nil || resumed.ExecutionID.RunID == stoppedChild.ExecutionID.RunID || resumed.ExecutionID.BootSeq != al.bootEpochFor() {
+		t.Fatalf("stopped resume must admit a fresh execution in this boot: stopped=%+v resumed=%+v", stoppedChild.ExecutionID, resumed.ExecutionID)
 	}
 
 	// A second respond now addresses a WORKING helper: another ordinary
@@ -189,10 +194,12 @@ func w6AskOrdinaryQuestion(t *testing.T, al *AgentLoop, childID string) (string,
 
 func w6StopTurns(t *testing.T, al *AgentLoop, sessionID string, by steer.Principal) {
 	t.Helper()
-	canceller := NewSteerCanceller(al.GetSessionLifecycleStore())
-	if _, err := canceller.StopTurns(context.Background(), sessionID, by, false, al.SteerGenerationCancel); err != nil {
-		t.Fatalf("StopTurns(%s): %v", sessionID, err)
+	before := w6MustLoad(t, al.GetSessionLifecycleStore(), sessionID)
+	result, err := al.StopSession(context.Background(), StopRequest{SessionID: sessionID, By: by})
+	if err != nil || result.RootErr != nil || len(result.Report.Unreachable) != 0 {
+		t.Fatalf("StopSession(%s) = %+v, %v", sessionID, result, err)
 	}
+	awaitSteeringRepairStopped(t, al, sessionID, before.Generation)
 }
 
 func w6ReopenMessagingStores(t *testing.T, al *AgentLoop) (*session.LifecycleStore, *session.MessageInboxStore) {

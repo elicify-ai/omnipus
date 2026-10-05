@@ -124,32 +124,27 @@ func TestReviveInactiveInbound_LandedAndClearedRecordIsRevived(t *testing.T) {
 	t.Cleanup(cleanup)
 	parentID := newTestSteeringSession(t, al, adr093Workspace)
 
-	rec := adr093Record(parentID, 1, session.LifecycleStopped)
-	rec.StopNote = &session.StopNote{
-		At:    time.Now(),
-		By:    "human:tester",
-		Seq:   1,
-		Cause: session.StopCauseStop,
-	}
-	// rec.Stop deliberately nil — landed and cleared.
-	adr093Persist(t, al, rec)
+	previous := g2StoppedOrdinaryRoot(t, al, parentID)
+	provider, _ := installParkedProvider(t, al)
 
-	// handled==false today means the message falls through to the plain
-	// enqueue path (no active turn to wait on, so this call returns
-	// promptly without needing a parked provider or a background
-	// goroutine): the bug this test targets is a synchronous decision, not
-	// a dispatch race.
+	// Frozen control-plane ADR D2 CRIT-001: "resumes a stopped child on the
+	// same generation ... only done/failed mints a next generation".
+	// Admission is asynchronous: hold the real model boundary, then inspect
+	// the actual running execution rather than race its queued transition.
 	if err := al.enqueueSteeringFromMessage(adr093HumanMessage("Right, carry on with the plan.", parentID)); err != nil {
 		t.Fatalf("enqueueSteeringFromMessage: %v", err)
 	}
 
+	adr093WaitForEntered(t, provider, 30*time.Second)
 	got := adr093Load(t, al, parentID)
-	if got.Generation != 2 || got.State != session.LifecycleRunning {
-		t.Fatalf("record after a human message into a landed-and-cleared stopped record = generation %d state %q, want generation 2 running — "+
-			"ADR-093 D4: a human message into a durably-stopped session revives it (next generation via resumed_from), but reviveInactiveInbound's "+
-			"`!rec.Terminal() && !rec.Stopped()` gate (steering.go:347) does not recognize state=%q with the fence already cleared as stopped, so "+
-			"handled comes back false and the message was silently enqueued into a steering queue no live turn will ever drain "+
-			"(ADR-20260928-sub-agent-control-plane.md line ~636: Stopped() must check landed state OR current fence)",
-			got.Generation, got.State, session.LifecycleStopped)
+	if got.Generation != previous.Generation || got.State != session.LifecycleRunning {
+		t.Fatalf("record after a human message into a landed-and-cleared stopped record = generation %d state %q, want the stopped generation %d running (D2/C1)",
+			got.Generation, got.State, previous.Generation)
+	}
+	if got.ExecutionID == nil || previous.ExecutionID == nil || got.ExecutionID.RunID == previous.ExecutionID.RunID || got.ExecutionID.BootSeq != al.bootEpochFor() {
+		t.Fatalf("stopped ordinary root must resume with a fresh execution in this boot: stopped=%+v resumed=%+v", previous.ExecutionID, got.ExecutionID)
+	}
+	if got.Stop != nil || got.StopNote != nil {
+		t.Fatalf("resume did not atomically clear the spent fence/note: fence=%+v note=%+v", got.Stop, got.StopNote)
 	}
 }

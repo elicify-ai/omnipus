@@ -54,9 +54,10 @@ func w6AssertQuestionSurvivesStopAndAnswerRevives(t *testing.T, stopAll bool) {
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 
+	provider, _ := installParkedProvider(t, al)
 	root := newTestSteeringSession(t, al, "ws-w6-owner-required")
-	parent := u1LaunchChild(t, al, root, "w6-owner-parent")
-	child := u1LaunchChild(t, al, parent.SessionID, "w6-owner-child")
+	parent := g2HeldMessagingChild(t, al, provider, root, "w6-owner-parent")
+	child := g2HeldMessagingChild(t, al, provider, parent.SessionID, "w6-owner-child")
 	w6AskQuestion(t, al, parent.SessionID, child.SessionID)
 
 	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: "dan"}
@@ -101,9 +102,14 @@ func w6AssertQuestionSurvivesStopAndAnswerRevives(t *testing.T, stopAll bool) {
 	if afterChild.State == session.LifecycleStopped {
 		t.Errorf("the answer must revive the stopped child, state still %s", afterChild.State)
 	}
-	if afterChild.Generation != stoppedChild.Generation+1 {
-		t.Errorf("revived child generation = %d, want %d — the resume continues the SAME conversation as a new generation",
-			afterChild.Generation, stoppedChild.Generation+1)
+	// Frozen control-plane ADR D2 CRIT-001: "resumes a stopped child on the
+	// same generation ... only done/failed mints a next generation".
+	if afterChild.Generation != stoppedChild.Generation {
+		t.Errorf("revived child generation = %d, want %d — D2 requires same-generation stopped resume",
+			afterChild.Generation, stoppedChild.Generation)
+	}
+	if afterChild.ExecutionID == nil || stoppedChild.ExecutionID == nil || afterChild.ExecutionID.RunID == stoppedChild.ExecutionID.RunID || afterChild.ExecutionID.BootSeq != al.bootEpochFor() {
+		t.Errorf("stopped resume must admit a fresh execution in this boot: stopped=%+v resumed=%+v", stoppedChild.ExecutionID, afterChild.ExecutionID)
 	}
 	afterParent := w6MustLoad(t, freshLC, parent.SessionID)
 	if afterParent.State != session.LifecycleStopped || afterParent.Generation != stoppedParent.Generation {
@@ -148,14 +154,26 @@ func w6AskQuestion(t *testing.T, al *AgentLoop, parentID, childID string) {
 
 func w6StopScope(t *testing.T, al *AgentLoop, parentID, childID string, by steer.Principal, stopAll bool) {
 	t.Helper()
-	canceller := NewSteerCanceller(al.GetSessionLifecycleStore())
+	target := childID
 	if stopAll {
-		if _, err := canceller.StopTurns(context.Background(), parentID, by, true, al.SteerGenerationCancel); err != nil {
-			t.Fatalf("StopTurns(stop all): %v", err)
-		}
-		return
+		target = parentID
 	}
-	if _, err := canceller.StopTurns(context.Background(), childID, by, false, al.SteerGenerationCancel); err != nil {
-		t.Fatalf("StopTurns(child): %v", err)
+	beforeChild := w6MustLoad(t, al.GetSessionLifecycleStore(), childID)
+	result, err := al.StopSession(context.Background(), StopRequest{SessionID: target, By: by, Tree: stopAll})
+	if err != nil || result.RootErr != nil || len(result.Report.Unreachable) != 0 {
+		t.Fatalf("StopSession(stop all=%t) = %+v, %v", stopAll, result, err)
+	}
+	awaitSteeringRepairStopped(t, al, childID, beforeChild.Generation)
+	if !stopAll {
+		// The existing answer oracle requires a stopped parent too. A single
+		// child Stop must NOT arrange that by cascading upward: stop the parent
+		// separately, just as the two-single-Stop fixture does.
+		parent := w6MustLoad(t, al.GetSessionLifecycleStore(), parentID)
+		if parent.Stopped() {
+			t.Fatal("single child Stop unexpectedly stopped its parent")
+		}
+		w6StopTurns(t, al, parentID, by)
+	} else {
+		awaitSteeringRepairStopped(t, al, parentID, beforeChild.Generation)
 	}
 }
