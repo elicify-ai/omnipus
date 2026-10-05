@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { onlineManager, QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react-query'
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router'
+import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import type { Workspace } from '@/lib/api/generated/openapi-types'
 import { useSidebarStore } from '@/store/sidebar'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -31,9 +32,11 @@ const archivedWorkspace: Workspace = {
 
 const initialSidebar = useSidebarStore.getState()
 const initialWorkspaces = useWorkspacesStore.getState()
+const initialOnline = onlineManager.isOnline()
 const queryClients: QueryClient[] = []
 
 beforeEach(() => {
+  onlineManager.setOnline(true)
   vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
     matches: query === '(min-width: 1024px)',
     media: query,
@@ -47,6 +50,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   for (const client of queryClients.splice(0)) client.clear()
+  onlineManager.setOnline(initialOnline)
   useSidebarStore.setState(initialSidebar, true)
   useWorkspacesStore.setState(initialWorkspaces, true)
   vi.unstubAllGlobals()
@@ -73,6 +77,46 @@ async function renderSidebar() {
     await router.load()
     render(<RouterProvider router={router} />)
   })
+  return queryClient
+}
+
+function stubWorkspaceRequests(activeResponses: Response[]) {
+  const requests = { active: 0, archived: 0, unrelated: 0 }
+  vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input) => {
+    const url = new URL(String(input), 'http://localhost')
+    if (url.pathname === '/api/v1/workspaces') {
+      const status = url.searchParams.get('status')
+      if (status === 'active') {
+        requests.active += 1
+        const response = activeResponses[requests.active - 1]
+        if (!response) throw new Error(`Unexpected active workspace-list request: ${requests.active}`)
+        return response
+      }
+      if (status === 'archived') {
+        requests.archived += 1
+        return Response.json([archivedWorkspace])
+      }
+      if (status === null) {
+        requests.unrelated += 1
+        return Response.json([activeWorkspace])
+      }
+      throw new Error(`Unexpected workspace-list status: ${status}`)
+    }
+    switch (url.pathname) {
+      case '/api/v1/sessions': return Response.json({ sessions: [] })
+      case '/api/v1/agents': return Response.json([])
+      case '/api/v1/state': return Response.json({
+        onboarding_complete: true,
+        dev_mode_bypass: false,
+        identity: { mode: 'local', edition: 'core', signed_in: true },
+      })
+      case '/api/v1/gateway/god-mode': return Response.json({
+        enabled: false, persisted: false, available: true, supported: true,
+      })
+      default: throw new Error(`Unexpected request: ${url.pathname}${url.search}`)
+    }
+  }))
+  return requests
 }
 
 describe('Sidebar — workspace-list Retry', () => {
@@ -142,5 +186,96 @@ describe('Sidebar — workspace-list Retry', () => {
     // Final exact counts also guard against duplicate requests during recovery.
     expect(activeRequests()).toHaveLength(2)
     expect(archivedRequests()).toHaveLength(archiveOpen ? 2 : 0)
+  })
+
+  it('R2: does not refetch an unrelated actively observed workspace query on Retry', async () => {
+    const requests = stubWorkspaceRequests([
+      Response.json({ error: 'Workspace list unavailable' }, { status: 503 }),
+      Response.json([activeWorkspace]),
+    ])
+    const queryClient = await renderSidebar()
+    expect(await screen.findByText('Could not load workspaces')).toBeVisible()
+
+    // Seed the Agents screen's separate key and keep it actively observed.
+    // Its one mount fetch proves the network counter can see this query.
+    queryClient.setQueryData<Workspace[]>(['workspaces'], [activeWorkspace])
+    const observer = new QueryObserver(queryClient, {
+      queryKey: ['workspaces'],
+      queryFn: () => fetchWorkspaces(),
+      staleTime: 0,
+    })
+    const unsubscribe = observer.subscribe(() => undefined)
+    try {
+      await waitFor(() => expect(observer.getCurrentResult()).toMatchObject({
+        status: 'success', fetchStatus: 'idle',
+      }))
+      expect(requests).toEqual({ active: 1, archived: 0, unrelated: 1 })
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry loading workspaces' }))
+      expect(await screen.findByRole('button', { name: activeWorkspace.name })).toBeVisible()
+      await waitFor(() => expect(queryClient.isFetching()).toBe(0))
+      // R2: one explicit Retry adds only the active-list request; closed Archive
+      // and the unrelated query must not make any additional requests.
+      expect(requests).toEqual({ active: 2, archived: 0, unrelated: 1 })
+      expect(observer.getCurrentResult().data).toEqual([activeWorkspace])
+      expect(screen.queryByText('Could not load workspaces')).not.toBeInTheDocument()
+    } finally {
+      unsubscribe()
+    }
+  })
+
+  it('R3: keeps the error and Retry after a second failure and recovers on request three', async () => {
+    const requests = stubWorkspaceRequests([
+      Response.json({ error: 'Workspace list unavailable' }, { status: 503 }),
+      Response.json({ error: 'Workspace list still unavailable' }, { status: 503 }),
+      Response.json([activeWorkspace]),
+    ])
+    const queryClient = await renderSidebar()
+    expect(await screen.findByText('Could not load workspaces')).toBeVisible()
+    expect(requests).toEqual({ active: 1, archived: 0, unrelated: 0 })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading workspaces' }))
+    await waitFor(() => expect(requests.active).toBe(2))
+    await waitFor(() => expect(queryClient.getQueryState(
+      workspacesQueryKeys.list({ status: 'active' }),
+    )).toMatchObject({ status: 'error', fetchStatus: 'idle' }))
+    expect(await screen.findByText('Could not load workspaces')).toBeVisible()
+    const retryAgain = screen.getByRole('button', { name: 'Retry loading workspaces' })
+    expect(retryAgain).toBeVisible()
+    expect(requests).toEqual({ active: 2, archived: 0, unrelated: 0 })
+
+    fireEvent.click(retryAgain)
+    expect(await screen.findByRole('button', { name: activeWorkspace.name })).toBeVisible()
+    expect(screen.queryByText('Could not load workspaces')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Retry loading workspaces' })).not.toBeInTheDocument()
+    // R3 specifies two failed attempts, then a successful third request.
+    expect(requests).toEqual({ active: 3, archived: 0, unrelated: 0 })
+  })
+
+  it('R4: shows the offline notice instead of an empty list while Retry is paused, then recovers on reconnect', async () => {
+    const requests = stubWorkspaceRequests([
+      Response.json({ error: 'Workspace list unavailable' }, { status: 503 }),
+      Response.json([activeWorkspace]),
+    ])
+    const queryClient = await renderSidebar()
+    expect(await screen.findByText('Could not load workspaces')).toBeVisible()
+    expect(requests).toEqual({ active: 1, archived: 0, unrelated: 0 })
+
+    act(() => onlineManager.setOnline(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading workspaces' }))
+    await waitFor(() => expect(queryClient.getQueryState(
+      workspacesQueryKeys.list({ status: 'active' }),
+    )?.fetchStatus).toBe('paused'))
+    expect(screen.queryByText(/No workspaces yet/)).not.toBeInTheDocument()
+    expect(await screen.findByText('Offline — workspaces will load when you reconnect.')).toBeVisible()
+    // R4: offline Retry is paused, not a second network attempt.
+    expect(requests).toEqual({ active: 1, archived: 0, unrelated: 0 })
+
+    act(() => onlineManager.setOnline(true))
+    expect(await screen.findByRole('button', { name: activeWorkspace.name })).toBeVisible()
+    expect(screen.queryByText('Offline — workspaces will load when you reconnect.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Could not load workspaces')).not.toBeInTheDocument()
+    expect(screen.queryByText(/No workspaces yet/)).not.toBeInTheDocument()
+    expect(requests).toEqual({ active: 2, archived: 0, unrelated: 0 })
   })
 })
