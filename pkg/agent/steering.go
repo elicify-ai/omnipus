@@ -1066,10 +1066,28 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 				return msgs, correlationIDs, consumedItems,
 					fmt.Errorf("write steering consumed marker %q: %w", item.wake.messageID, err)
 			}
+			// The durable inbox entry behind this wake is acknowledged once its
+			// consumed marker exists, by whichever consumer gets here (the
+			// acknowledgement is idempotent), exactly as the system-wake path
+			// does. A failed acknowledgement is returned, never only logged.
+			ackErr := al.ackConsumedSteeringWake(*item.wake)
 			if !claimed {
 				// Another consumer already consumed this accepted identity:
 				// a retry is not a second delivery (ADR-20261004 C1).
+				if ackErr != nil {
+					al.steering.prependItemsScope(scope, items[i+1:])
+					return msgs, correlationIDs, consumedItems, ackErr
+				}
 				continue
+			}
+			if ackErr != nil {
+				// This consumer owns the input (its marker is written): deliver
+				// it, restore the rest, and surface the acknowledgement failure.
+				msgs = append(msgs, item.message)
+				correlationIDs = append(correlationIDs, item.correlationID)
+				consumedItems = append(consumedItems, item)
+				al.steering.prependItemsScope(scope, items[i+1:])
+				return msgs, correlationIDs, consumedItems, ackErr
 			}
 		}
 		msgs = append(msgs, item.message)
@@ -1094,6 +1112,19 @@ func (al *AgentLoop) writeSteeringConsumedMarker(wake steeringWake) (claimed boo
 		Content: "consumed " + wake.messageID,
 		AgentID: wake.agentID,
 	})
+}
+
+// ackConsumedSteeringWake acknowledges the wake's durable inbox entry in its
+// recipient's inbox once its consumed marker exists.
+func (al *AgentLoop) ackConsumedSteeringWake(wake steeringWake) error {
+	inbox := al.GetMessageInboxStore()
+	if inbox == nil {
+		return nil
+	}
+	if err := inbox.Ack(wake.transcriptSessionID, []string{wake.messageID}); err != nil {
+		return fmt.Errorf("acknowledge consumed steering wake %q: %w", wake.messageID, err)
+	}
+	return nil
 }
 
 func (al *AgentLoop) pendingSteeringCountForScope(scope string) int {
