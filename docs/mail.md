@@ -58,7 +58,7 @@ From the draft preview, select **Send** to send the current saved draft, or **Di
 
 ## If something goes wrong
 
-Mail uses a best-effort presence check to help manage its connections. If that check is refused, the refusal does not stop the Mail request: access falls back to being handled per request. The presence refusal itself shows no pop-up or notification.
+Mail uses a best-effort presence check to help manage its connections; Mail requests do not wait for that check. If Omnipus recognises a presence refusal, it can record technical details without showing a pop-up or notification; Mail requests can still run with per-request access. This is not a guarantee that a connection or Mail request succeeds; request errors still appear in Mail.
 
 | What you see | What to do |
 |---|---|

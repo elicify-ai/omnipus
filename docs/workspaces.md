@@ -49,6 +49,8 @@ The Tasks panel shows three views of workspace work, switched with the selector 
 
 Delegation is one agent handing work to another: passing a research question to a worker, or creating a task for a builder. Whether that is allowed is decided inside each workspace, on the **Team** panel. There is no global trust setting anywhere in the product.
 
+While Team first loads, it shows **Loading team…**. If loading fails before the team is available, it shows a reason and **Retry**; the reason stays visible during a retry. A successful retry shows the normal Team editor without reloading the page.
+
 1. Open the workspace's **Team** panel. Each agent on the team appears as a node in a picture.
 2. To grow the team, click **Add agent** and pick from your agents. Membership saves on its own; the indicator in the header shows when it has saved.
    If you added the agent in another tab or window, open the agent picker in this chat and it refreshes the team so the new member appears. If that refresh fails, the picker keeps showing the last known team — with a note that it could not be refreshed — until you open the picker again. Returning to this chat's tab updates the picker and the `@` menu as well. You do not need to reload the page. An ordinary agent who is not on the team does not appear in either list, but Admin still appears because that operator is not limited to the team.
