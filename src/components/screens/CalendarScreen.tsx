@@ -486,7 +486,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   const isMonth = currentView === 'dayGridMonth'
 
   return (
-    <div className="absolute inset-0 flex flex-col overflow-x-hidden bg-[var(--color-surface-0)] text-[var(--color-secondary)]">
+    <div className="relative flex h-full min-h-0 min-w-0 flex-col overflow-x-hidden bg-[var(--color-surface-0)] text-[var(--color-secondary)]">
       <div className="@container flex-shrink-0 w-full min-w-0">
         <CalendarToolbar
           calendarRef={calendarRef}
