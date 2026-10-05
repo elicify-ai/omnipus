@@ -220,7 +220,7 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 		// underlying agent error is wrapped so it stays inspectable.
 		if ctx2.Err() == context.DeadlineExceeded {
 			if stopErr != nil {
-				runErr = fmt.Errorf("scheduled run timed out after %ds: %w; the deadline stop failed: %v", timeout, context.DeadlineExceeded, stopErr)
+				runErr = fmt.Errorf("scheduled run timed out after %ds: %w; the deadline stop failed: %w", timeout, context.DeadlineExceeded, stopErr)
 			} else {
 				runErr = fmt.Errorf("scheduled run timed out after %ds: %w", timeout, context.DeadlineExceeded)
 			}
