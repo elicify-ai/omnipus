@@ -253,19 +253,21 @@ describe('Sidebar overlay — Tab is trapped inside the drawer while open', () =
     })
     renderOpenOverlay()
 
-    // Hide sidebar is neither the first nor last focusable control.
-    const hideButton = screen.getByRole('button', { name: 'Hide sidebar' })
+    // Pin sidebar (the brand row's keep-open control, rendered on this
+    // file's wide-viewport stub) is neither the first nor last focusable
+    // control.
+    const pinButton = screen.getByRole('button', { name: 'Pin sidebar' })
     act(() => {
-      hideButton.focus()
+      pinButton.focus()
     })
 
-    fireEvent.keyDown(hideButton, { key: 'Tab', bubbles: true })
+    fireEvent.keyDown(pinButton, { key: 'Tab', bubbles: true })
 
     // jsdom doesn't implement native Tab traversal, so the meaningful check
-    // is that our trap handler did NOT force focus away from hideButton (it
+    // is that our trap handler did NOT force focus away from pinButton (it
     // only reroutes at the first/last edges) — a bug here would show up as
     // focus jumping to the first or last control instead of staying put.
-    expect(document.activeElement).toBe(hideButton)
+    expect(document.activeElement).toBe(pinButton)
   })
 })
 

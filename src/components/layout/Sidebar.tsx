@@ -8,7 +8,7 @@ import {
   Buildings,
   ChartBar,
   Gear,
-  SidebarSimple,
+  PushPinSimple,
   SignOut,
   Plus,
   Tray,
@@ -71,7 +71,7 @@ const SIDEBAR_FOCUSABLE_SELECTOR =
 
 // US-5: Sidebar — overlay default, pin option, Framer Motion, Zustand
 export function Sidebar() {
-  const { isOpen, isPinned, close, open, pin, hide } = useSidebarStore()
+  const { isOpen, isPinned, close, open, pin, unpin, hide } = useSidebarStore()
   const location = useLocation()
   const navigate = useNavigate()
   const { activeWorkspaceId, setActiveWorkspaceId } = useWorkspacesStore()
@@ -267,23 +267,24 @@ export function Sidebar() {
     ...visibleUnpinned,
   ]
 
-  // Cmd+B / Ctrl+B follows the same Show and Hide actions as the buttons.
-  // Flipping only isOpen does nothing visible on a docked wide window. When
-  // the sidebar is on screen, the shortcut hides it and forgets the dock.
-  // When it is hidden, the shortcut docks it on a wide window and opens the
-  // drawer on a narrow one. The shortcut belongs to the global gesture only
-  // outside editor surfaces — a rich-text editor (Tiptap in the Mail draft
-  // editor + Mail compose dialog, AssistantUI's composer, etc.) owns its own
-  // keymap (Mod-b = bold, Mod-i = italic, Mod-k = link, ...) and must not
-  // lose keystrokes to it. Only the Mod+B branch checks editable targets;
-  // Escape still closes the narrow overlay from a focused editor or any
-  // other control, and does not forget a saved dock.
+  // Cmd+B / Ctrl+B follows the same Show action as the header hamburger and
+  // the Hide action the keyboard still owns. Flipping only isOpen does
+  // nothing visible on a docked wide window. When the sidebar is on screen,
+  // the shortcut hides it and forgets the dock. When it is hidden, the
+  // shortcut shows it — open() on any width; showing never pins (founder
+  // decision, sidebar hotfix: pinning is the in-sidebar control's click).
+  // The shortcut belongs to the global gesture only outside editor
+  // surfaces — a rich-text editor (Tiptap in the Mail draft editor + Mail
+  // compose dialog, AssistantUI's composer, etc.) owns its own keymap
+  // (Mod-b = bold, Mod-i = italic, Mod-k = link, ...) and must not lose
+  // keystrokes to it. Only the Mod+B branch checks editable targets;
+  // Escape still closes the overlay from a focused editor or any other
+  // control, and does not forget a saved dock.
   const handleKeydown = useCallback(
     (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'b' && !isEditableEventTarget(e.target)) {
         e.preventDefault()
         if (isVisible) hide()
-        else if (canPin) pin()
         else open()
       }
       // Escape closes the overlay. A docked wide sidebar is not an overlay,
@@ -293,7 +294,7 @@ export function Sidebar() {
         close()
       }
     },
-    [isVisible, hide, canPin, pin, open, close, isOpen, effectivelyPinned]
+    [isVisible, hide, open, close, isOpen, effectivelyPinned]
   )
 
   // Track when the viewport crosses the pin breakpoint.
@@ -391,14 +392,22 @@ export function Sidebar() {
         >
           <MagnifyingGlass size={16} />
         </IconButton>
-        <IconButton
-          onClick={hide}
-          aria-label="Hide sidebar"
-          title="Hide sidebar"
-          className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
-        >
-          <SidebarSimple size={16} />
-        </IconButton>
+        {/* Pin toggle — icon-only in the brand row, where the old pin lived.
+            Wide windows only (below 1024px the sidebar is always an overlay).
+            Showing the sidebar — hamburger or Cmd/Ctrl+B — never pins; this
+            is the only keep-open control. Unpin leaves the sidebar open so a
+            following click outside closes it. */}
+        {canPin && (
+          <IconButton
+            onClick={() => (isPinned ? unpin() : pin())}
+            aria-label={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
+            aria-pressed={isPinned}
+            title={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
+            className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+          >
+            <PushPinSimple size={16} weight={isPinned ? 'fill' : 'regular'} />
+          </IconButton>
+        )}
       </div>
 
       {/* Workspaces (primary, scrollable) */}
