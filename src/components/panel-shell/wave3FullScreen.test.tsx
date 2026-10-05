@@ -13,7 +13,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import type { PanelContext, PanelId, WorkspacePanelId } from './types'
 import {
-  apiEdges, signedInState, PanelChannelEdge, BrowserSocketEdge, popupEdge,
+  apiEdges, signedInState, PanelChannelEdge, BrowserSocketEdge, popupEdge, occurrenceHttpEdge,
 } from '../../../tests/fixtures/pe1-panel-process-edges'
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -80,6 +80,8 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks()
   apiEdges.fetchAppState.mockReset().mockResolvedValue(signedInState)
+  occurrenceHttpEdge.reset(globalThis.fetch)
+  vi.stubGlobal('fetch', occurrenceHttpEdge.fetch)
   vi.stubGlobal('ResizeObserver', RowResizeObserver)
   vi.stubGlobal('BroadcastChannel', PanelChannelEdge)
   vi.stubGlobal('WebSocket', BrowserSocketEdge)
@@ -104,6 +106,7 @@ afterEach(() => {
   BrowserSocketEdge.reset()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  occurrenceHttpEdge.verifyNoUnsupportedFetches()
 })
 
 function renderSource() {

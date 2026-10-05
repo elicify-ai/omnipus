@@ -4,9 +4,10 @@ import { vi } from 'vitest'
 import type {
   AppState, Workspace, WorkspaceDelegation, LibraryEntry, LibraryWorkspaceNode,
   LibraryContentResponse, KnowledgeBaseInfo, Mailbox, MailFolderList,
-  MailMessagePage, MailMessage, MailSummaryList,
+  MailMessagePage, MailMessage, MailSummaryList, operations,
 } from '../../src/lib/api/generated/openapi-types'
 import type { BrowserAttachFrame, BrowserStatusFrame } from '../../src/lib/api/generated/asyncapi-types'
+import { TaskOccurrenceSet as TaskOccurrenceSetSchema } from '../../src/lib/api/generated/schemas'
 
 export const signedInState: AppState = {
   onboarding_complete: true,
@@ -161,4 +162,75 @@ export function popupEdge() {
   }
   child.close.mockImplementation(() => { child.closed = true })
   return child
+}
+
+// not-wire-format: HTTP process-edge integrity state and request receipts.
+// useOccurrences deliberately fetches outside lib/api. Keep that real client,
+// generated validation and Calendar error handling intact. This fixture's
+// empty task list implies the contract's EMPTY ARRAY, never null or a hook mock.
+const unsupportedFetches: Error[] = []
+let previousFetch: typeof fetch | null = null
+export const occurrenceHttpEdge = {
+  fetch: vi.fn<typeof fetch>(async (input, init) => {
+    const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    const request = typeof Request === 'function' && input instanceof Request ? input : undefined
+    const method = init?.method ?? request?.method ?? 'GET'
+    const credentials = init?.credentials ?? request?.credentials
+    const reject = (reason: string): never => {
+      const error = new Error(`PE1 HTTP fixture rejected ${method} ${rawUrl}: ${reason}`)
+      unsupportedFetches.push(error)
+      console.error(error)
+      throw error
+    }
+    const passthrough = () => {
+      if (!previousFetch) return reject('fixture was not initialized')
+      console.info('[pe1-http-passthrough]', JSON.stringify({ url: rawUrl, method, behavior: 'original fetch, no response replacement or error catch' }))
+      return previousFetch(input, init)
+    }
+    let url: URL
+    try {
+      url = new URL(rawUrl, window.location.href)
+    } catch {
+      return passthrough()
+    }
+    const endpoint = new URL(`${import.meta.env.VITE_API_URL ?? ''}/api/v1/tasks/occurrences`, window.location.href)
+    if (url.origin !== endpoint.origin || url.pathname !== endpoint.pathname) return passthrough()
+    if (method !== 'GET' || credentials !== 'include' || init?.body != null) {
+      return reject('unsupported occurrence transport')
+    }
+    if ([...url.searchParams.keys()].sort().join(',') !== 'from_ms,to_ms,tz,workspace_id') return reject('wrong occurrence query keys')
+    const query: operations['listTaskOccurrences']['parameters']['query'] = {
+      workspace_id: url.searchParams.get('workspace_id') ?? '',
+      from_ms: Number(url.searchParams.get('from_ms')),
+      to_ms: Number(url.searchParams.get('to_ms')),
+      tz: url.searchParams.get('tz') ?? '',
+    }
+    if (!['ws-1', 'workspace-current'].includes(query.workspace_id) || !/^-?\d+$/.test(url.searchParams.get('from_ms') ?? '') || !/^-?\d+$/.test(url.searchParams.get('to_ms') ?? '') || !Number.isSafeInteger(query.from_ms) || !Number.isSafeInteger(query.to_ms) || query.from_ms >= query.to_ms || !query.tz) {
+      return reject('invalid occurrence query for this fixture')
+    }
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: query.tz })
+    } catch {
+      return reject('invalid occurrence time zone')
+    }
+    const body: operations['listTaskOccurrences']['responses'][200]['content']['application/json'] = []
+    TaskOccurrenceSetSchema.array().parse(body)
+    const response = new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    console.info('[pe1-occurrence-http-edge]', JSON.stringify({
+      request: { url: rawUrl, method, credentials, query },
+      response: { status: response.status, contentType: response.headers.get('Content-Type'), body },
+      contract: 'listTaskOccurrences:TaskOccurrenceSet[]',
+    }))
+    return response
+  }),
+  reset(originalFetch: typeof fetch) {
+    previousFetch = originalFetch
+    unsupportedFetches.length = 0
+    this.fetch.mockClear()
+  },
+  verifyNoUnsupportedFetches() {
+    if (unsupportedFetches.length > 0) {
+      throw new Error(`PE1 HTTP fixture saw unsupported fetches: ${unsupportedFetches.map((error) => error.message).join('; ')}`)
+    }
+  },
 }
