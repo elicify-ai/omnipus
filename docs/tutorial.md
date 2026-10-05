@@ -36,13 +36,13 @@ You need an artificial intelligence provider account or a local provider. Keep i
 
 4. **Have your first conversation with Mia.** Select **Start chatting**. In **My Workspace**, type: `Give me three useful ways to test this workspace.` Send the message.
 
-   **What you see:** The **Chat** tab opens with Mia selected in the agent picker. Mia's answer appears in the conversation.
+   **What you see:** **Chat** opens with Mia selected in the agent picker. Mia's answer appears in the conversation.
 
    **If it does not look like that:** If the composer says it is connecting, wait for the connection before sending. If sending fails, return to the provider check in Settings and confirm that the selected model is available.
 
 5. **Create a workspace for real work.** Open the sidebar and select **New workspace**. Name it `First project` and confirm the name.
 
-   **What you see:** Omnipus opens the new workspace on its **Chat** tab. Its other tabs are **Tasks**, **Calendar**, **Library**, and **Team**. Select the workspace name to open its Settings. [Workspaces](workspaces.md) explains what belongs inside one.
+   **What you see:** Omnipus opens the new workspace on **Chat**, its base page. The workspace bar offers **Tasks**, **Calendar**, **Library**, **Mail**, and **Team** as panel toggles. Select the workspace name, or **Settings** in the compact panels menu, to open workspace settings. [Workspaces](workspaces.md) explains what belongs inside one.
 
    **If it does not look like that:** A blank name cannot be saved. If creation fails, keep working in **My Workspace** and retry after checking the error message.
 
@@ -56,7 +56,7 @@ You need an artificial intelligence provider account or a local provider. Keep i
 
    **What you see:** The agent appears in **Team & delegation**. It also becomes available where the workspace asks you to choose an agent.
 
-   **If it does not look like that:** The picker only offers agents that are not already on the team. Return to **Agents** and confirm that your new agent exists, then reopen the Team tab. [Workspaces](workspaces.md) covers team membership and delegation.
+   **If it does not look like that:** The picker only offers agents that are not already on the team. Return to **Agents** and confirm that your new agent exists, then reopen the Team panel. [Workspaces](workspaces.md) covers team membership and delegation.
 
 8. **Give the agent a task.** Open **Tasks**, choose **Board**, and select **New task**. Enter a short title and a concrete goal. Add at least one acceptance criterion and one definition-of-done item. Choose your new agent, then select **Create & Run**.
 
@@ -72,7 +72,7 @@ You need an artificial intelligence provider account or a local provider. Keep i
 
    **If it does not look like that:** Refresh the workspace if the Board stops updating. Open the task detail before rerunning anything: it may be waiting for an approval or information from you. Use [tasks](tasks.md) for recovery choices.
 
-10. **Set one goal in chat.** Return to the workspace **Chat** tab, choose Mia or your new agent, and send a goal command. For example: `/goal Produce a final customer interview brief with five questions and an opening script.`
+10. **Set one goal in chat.** Close the open workspace panel to return to **Chat**, choose Mia or your new agent, and send a goal command. For example: `/goal Produce a final customer interview brief with five questions and an opening script.`
 
     **What you see:** The goal starts immediately. Chat shows goal-specific progress while the agent frames the goal and its acceptance criteria. The active goal remains visible while work continues.
 
@@ -89,16 +89,16 @@ The table below shows the trail you should have after this walkthrough.
 | You created | Where you can find it | What confirms it worked |
 |---|---|---|
 | Admin account and provider | Settings | You can sign in and Mia can answer |
-| `First project` workspace | Sidebar | Its Chat, Tasks, Calendar, Library, Team, and Settings tabs open |
-| Teammate agent | Agents and the workspace Team tab | The agent is available for workspace work |
-| First task | Workspace Tasks tab | Its Board card reaches a final status |
-| First goal | Workspace Chat tab | Chat reports a met or not-met outcome |
+| `First project` workspace | Sidebar | Chat opens; Tasks, Calendar, Library, Mail and Team toggle panels; the workspace name or compact-menu Settings opens workspace settings |
+| Teammate agent | Agents and the workspace Team panel | The agent is available for workspace work |
+| First task | Workspace Tasks panel | Its Board card reaches a final status |
+| First goal | Workspace Chat | Chat reports a met or not-met outcome |
 
 ## Limits and things to watch
 
 - This walkthrough uses a small, reversible task. Review provider permissions, agent tools, and workspace access before assigning sensitive work.
 - A task and a goal are related but different. The task is a Board item. The chat goal is a running outcome that the Judge checks. Follow [tasks](tasks.md) and [goals](goals.md) for their separate controls.
-- Creating an agent does not add it to every workspace. Add it from the workspace's Team tab where you want it to work.
+- Creating an agent does not add it to every workspace. Add it from the workspace's Team panel where you want it to work.
 - Provider errors can appear after setup if a key expires, a model becomes unavailable, or the provider limits requests. Recheck the provider in Settings before changing the task.
 - **Done** is final for a task. Read the task detail and result before deciding whether you need a new task.
 

@@ -27,7 +27,7 @@ On a fresh install, Jim and Ray have browser tools; Mia and Ava do not. Operator
 2. Alternatively, click **Watch live** on a browser action in the thread.
 3. Wait for the picture. A spinner shows until the first frame arrives.
 4. Read the status chip in the toolbar: "<Agent> is browsing…" while the agent drives, "Click to drive" when idle, "Also viewing" when someone else has the panel open.
-5. Click **Pop out** for a window of its own, or **Close** to dismiss it. Closing the panel does not stop the agent's run.
+5. Select **Expand Browser panel** in the panel heading to open the full-screen Browser in a new browser tab, or to switch to a recognised existing tab for that Browser session and agent. Use the heading's **Close** control to dismiss the docked panel; closing it does not stop the agent's run. The full-screen view has **Back to chat**; [panels beside chat](using-omnipus-ui.md#panels-beside-chat) explains how it returns.
 
 ## How to take over from the agent
 
@@ -62,7 +62,7 @@ The panel has two rows of controls above the live picture.
 | Status chip | Who is driving, or the connection state |
 | Annotate | Draw a region and send a comment to the chat |
 | Mute | Turn page sound on or off; shown when the page has sound |
-| Pop out | Move the panel into its own window |
+| Expand Browser panel | Open or switch to the full-screen Browser tab for the current session and agent |
 | Take over | Shown while the agent works; click to hold the browser |
 | Retry | Shown with an error; starts a fresh video connection |
 
