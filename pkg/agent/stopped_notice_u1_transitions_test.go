@@ -152,8 +152,14 @@ func u1BootRecovery(t *testing.T, al *AgentLoop, operatorNotices *[]string) *Ste
 	wireSteerCompletionDeps(t, al)
 	lifecycle := al.GetSessionLifecycleStore()
 	inbox := al.GetMessageInboxStore()
+	// The actual store instance minted for this simulated writing boot is
+	// retained, not reconstructed from an execution's admitting boot number.
+	bootEpochRegistryMu.Lock()
+	writingBoot := bootEpochRegistry[al]
+	bootEpochRegistryMu.Unlock()
 	return &SteerBootRecovery{
 		Lifecycle: lifecycle, Sessions: al.GetSessionStore(), Inbox: inbox,
+		BootEpoch:  writingBoot,
 		Classifier: NewSteerRecordClassifier(lifecycle, al.GetSessionStore()),
 		Deliverer:  al.getUpwardDeliverer(),
 		// No EndSessionGoal: MAJ-003 — boot recovery never ends a
