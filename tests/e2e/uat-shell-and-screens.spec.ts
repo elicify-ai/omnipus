@@ -243,18 +243,61 @@ async function expectOnPath(
   });
 }
 
-/** Open Alpha/default → Team and click "Add agent"; returns the popover locator. */
-async function openAddAgentPicker(page: import('@playwright/test').Page) {
-  const wsId = await defaultWorkspaceId(page);
-  await ensureSession(page, `${BASE_URL}/#/workspaces/${wsId}/team`);
-  await expectOnPath(page, `/workspaces/${wsId}/team`);
+/**
+ * Wave 3 (side-panel-shell-spec.md §10, FR-007/SP-40, §8.2): Chat is
+ * the base route; Team/Tasks/Calendar are panels, not separate pages.
+ * Assert the complete address, including the expected workspace and search,
+ * so a wrong workspace, wrong panel or extra search value cannot pass.
+ */
+async function expectWorkspacePanel(
+  page: import('@playwright/test').Page,
+  wsId: string,
+  panelId: 'team' | 'tasks' | 'calendar',
+) {
+  await expect(
+    page,
+    `expected workspace ${wsId} Chat with exactly panel=${panelId}`,
+  ).toHaveURL(`${BASE_URL}/#/workspaces/${wsId}/chat?panel=${panelId}`, {
+    timeout: 20_000,
+  });
 
-  const addAgent = page.getByTestId('team-add-agent');
-  await expect(addAgent).toBeVisible({ timeout: 20_000 });
+  const title = { team: 'Team', tasks: 'Tasks', calendar: 'Calendar' }[panelId];
+  const panel = page.getByRole('complementary', { name: title, exact: true });
+  await expect(panel, `${title} panel must render, not just its URL parameter`).toBeVisible({
+    timeout: 20_000,
+  });
+  return panel;
+}
 
-  // The nav drawer is an overlay and can sit over the Team canvas after a
-  // fresh load; Escape closes it without navigating away.
+/** Open the real Team toggle, with Chat underneath (FR-007/SP-40). */
+async function openTeamPanel(page: import('@playwright/test').Page, wsId: string) {
+  await ensureSession(page, `${BASE_URL}/#/workspaces/${wsId}/chat`);
+  await expect(page).toHaveURL(`${BASE_URL}/#/workspaces/${wsId}/chat`, {
+    timeout: 20_000,
+  });
+  await expect(page.getByTestId('workspace-tab-strip')).toBeAttached({ timeout: 20_000 });
+
+  // Close the nav drawer BEFORE opening Team. Escape inside the Team panel
+  // now closes the panel itself (US-1.3), unlike the retired Team page.
   await page.keyboard.press('Escape');
+  const teamToggle = page.getByTestId('workspace-tab-team');
+  if (await teamToggle.isVisible()) {
+    await teamToggle.click();
+  } else {
+    // FR-007 requires the same toggle through the compact panels menu.
+    await page.getByTestId('workspace-view-switcher').click();
+    await page.getByTestId('workspace-view-switcher-team').click();
+  }
+  await expect(teamToggle).toHaveAttribute('aria-pressed', 'true');
+  const team = await expectWorkspacePanel(page, wsId, 'team');
+  await expect(team.getByTestId('team-add-agent')).toBeVisible({ timeout: 20_000 });
+}
+
+/** Click "Add agent" in the visible Team panel; returns the popover locator. */
+async function openAddAgentPicker(page: import('@playwright/test').Page, wsId: string) {
+  const team = await expectWorkspacePanel(page, wsId, 'team');
+  const addAgent = team.getByTestId('team-add-agent');
+  await expect(addAgent).toBeVisible({ timeout: 20_000 });
   await addAgent.click();
 
   const popover = page.locator('[data-radix-popper-content-wrapper]').last();
@@ -273,11 +316,11 @@ test('UAT-47 (a) the add-agent control discloses the live-login grant before any
   // disclosure that is only reachable after the roster has already changed.
   // Before the picker is even opened there is nothing to read — which is fine,
   // and is exactly why the text has to be IN the picker.
-  await ensureSession(page, `${BASE_URL}/#/workspaces/${wsId}/team`);
-  await expectOnPath(page, `/workspaces/${wsId}/team`);
+  await openTeamPanel(page, wsId);
+  await expectWorkspacePanel(page, wsId, 'team');
   await expect(page.getByTestId('team-add-agent')).toBeVisible({ timeout: 20_000 });
 
-  const popover = await openAddAgentPicker(page);
+  const popover = await openAddAgentPicker(page, wsId);
   const disclosure = popover.getByText(/this workspace/i).first();
   await expect(
     disclosure,
@@ -306,7 +349,9 @@ test('UAT-47 (a) the add-agent control discloses the live-login grant before any
 test('UAT-47 (b) the disclosure is plain text in the picker, not a tooltip and not gated on a hover', async ({
   page,
 }) => {
-  const popover = await openAddAgentPicker(page);
+  const wsId = await defaultWorkspaceId(page);
+  await openTeamPanel(page, wsId);
+  const popover = await openAddAgentPicker(page, wsId);
 
   const disclosure = popover.getByText(/act as whoever|acts as whoever/i).first();
   await expect(disclosure).toBeVisible({ timeout: 10_000 });
@@ -433,12 +478,23 @@ test('shell: the workspace tabs the plan drives all render', async ({ page }) =>
 });
 
 test('shell: the retired Command Center surfaces stay retired (plan N-14)', async ({ page }) => {
-  // /tasks and /automations must be redirects into the workspace board and
-  // calendar, never screens of their own. Boot at /#/tasks so the redirect is
-  // exercised from the router's initial location.
+  const wsId = await defaultWorkspaceId(page);
+  // N-14 + wave 3: the retired routes redirect through Board/Calendar to the
+  // SAME default workspace's Chat with its Tasks/Calendar panel open.
+  // Boot at /#/tasks so the redirect is exercised from the initial location.
   await ensureSession(page, `${BASE_URL}/#/tasks`);
-  await expect(page).toHaveURL(/\/workspaces\/[^/]+\/board/, { timeout: 20_000 });
+  const tasks = await expectWorkspacePanel(page, wsId, 'tasks');
+  await expect(tasks.getByRole('heading', { name: 'Team Task Backlog', exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByText('Command Center', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Schedules', exact: true })).toHaveCount(0);
 
   await page.goto(`${BASE_URL}/#/automations`);
-  await expect(page).toHaveURL(/\/workspaces\/[^/]+\/calendar/, { timeout: 20_000 });
+  const calendar = await expectWorkspacePanel(page, wsId, 'calendar');
+  const today = calendar.getByTestId('calendar-today');
+  await expect(today).toBeVisible({ timeout: 20_000 });
+  await expect(today).toHaveText('Today');
+  await expect(page.getByText('Command Center', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Schedules', exact: true })).toHaveCount(0);
 });
