@@ -14,6 +14,8 @@ Above the views, the Plans band scopes the screen: click a plan tile to see that
 
 On the Board, the **Agent** and **Tags** filters narrow further. The List filters per column instead, like a spreadsheet: each header offers sorting and value checkboxes. The list refreshes itself about every 15 seconds, so an agent's changes appear without a reload.
 
+The toolbar follows the panel's own width, not the browser window. When the panel narrows, its heading, view selector, filters, and New Task action stack or wrap instead of covering one another. Board, List, and Graph remain available.
+
 ## When you would use it
 
 - You want to hand a piece of work to an agent and follow it without watching the chat.
