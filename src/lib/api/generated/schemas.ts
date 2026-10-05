@@ -2925,7 +2925,6 @@ type DelegateRespondAction = {
 type DelegateStopAllAction = {
   action: "stop_all";
   session_id: string;
-  hard?: boolean | undefined;
 };
 type DelegateClearGoalAction = {
   action: "clear_goal";
@@ -7372,11 +7371,7 @@ export const DelegateRespondAction = z.object(
   }
 ) satisfies z.ZodType<DelegateRespondAction>;
 export const DelegateStopAllAction = z.object(
-  {
-    action: z.literal("stop_all"),
-    session_id: z.string().min(1),
-    hard: z.boolean().optional(),
-  }
+  { action: z.literal("stop_all"), session_id: z.string().min(1) }
 ) satisfies z.ZodType<DelegateStopAllAction>;
 export const DelegateClearGoalAction =
   z.object({ action: z.literal("clear_goal"), session_id: z.string().min(1) }) satisfies z.ZodType<DelegateClearGoalAction>;
