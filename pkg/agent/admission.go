@@ -285,6 +285,8 @@ type steerQueueEntry struct {
 	generation int
 	runID      string
 	bootSeq    uint64
+	// Native pending wake identities belong to this full admission owner.
+	wakeInputs []steeringQueueItem
 }
 
 func (entry steerQueueEntry) executionClaim() executionClaim {
