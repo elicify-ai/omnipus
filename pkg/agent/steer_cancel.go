@@ -237,6 +237,7 @@ func (al *AgentLoop) landSteeredStopReport(ctx context.Context, sessionID string
 	}
 	claim := al.executionClaimFor(rec)
 	var landed *session.LandedStop
+	var landedRecord *session.LifecycleRecord
 	mutateErr := lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return errTerminalReportVanished
@@ -270,10 +271,14 @@ func (al *AgentLoop) landSteeredStopReport(ctx context.Context, sessionID string
 		// its own ledger history inside landSteeredStopLocked — Correction
 		// C3 — so there is nothing left for the post-mutation write below.
 		landed = landedStopFromRecord(cur)
+		landedRecord = cur
 		return nil
 	})
 	switch {
 	case mutateErr == nil:
+		if stateErr := al.publishCurrentStoppedState(landedRecord); stateErr != nil {
+			return stateErr
+		}
 		// The stop landed. MAJ-003: this write ends the TURN, never the
 		// child's session-owned goal — no goal step belongs in a stop path.
 		// A failed history append keeps the landed state, note and effect

@@ -79,8 +79,9 @@ type steeredCommitResult struct {
 	// own ledger line inside the landing's Mutate
 	// (landSteeredStopLocked), and the notice publisher discovers every
 	// transition from the ledger's landed history.
-	landed *session.LandedStop
-	commit *session.FinalDeliveryCommit
+	landed        *session.LandedStop
+	stoppedRecord *session.LifecycleRecord
+	commit        *session.FinalDeliveryCommit
 	// message and messageID carry the committed final's publication payload.
 	message   generated.SessionMessage
 	messageID string
@@ -211,6 +212,7 @@ func (al *AgentLoop) commitSteeredCompletion(
 					return err
 				}
 				res.landed = landedStopFromRecord(cur)
+				res.stoppedRecord = cur
 				return nil
 			}
 			// A terminal/notice disposition racing a fresh fence: refuse. The
@@ -240,6 +242,7 @@ func (al *AgentLoop) commitSteeredCompletion(
 				return err
 			}
 			res.landed = landedStopFromRecord(cur)
+			res.stoppedRecord = cur
 			return nil
 		}
 		if nextState == session.LifecycleRunning {

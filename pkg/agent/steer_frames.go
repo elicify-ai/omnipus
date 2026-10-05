@@ -284,9 +284,9 @@ type steeringReceipt struct {
 // this one already reports — the SAME rule is why the steering_receipt
 // (issue #870) rides this existing builder via an added parameter rather
 // than a second SubagentStateFrame builder of its own.
-func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *session.LifecycleRecord, state string, receipt *steeringReceipt) {
+func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *session.LifecycleRecord, state string, receipt *steeringReceipt) error {
 	if al == nil || parentSessionID == "" || childRec == nil || childRec.Origin == nil || childRec.Origin.CallID == "" {
-		return
+		return nil
 	}
 	originCallID := childRec.Origin.CallID
 	// A follow-up generation (N >= 2) has its own span. The running ping is
@@ -299,6 +299,14 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 		al.ensureFollowUpSpanStart(parentSessionID, childRec)
 	}
 	id := fmt.Sprintf("%s:%d:state:%s", originCallID, childRec.Generation, state)
+	if receipt == nil && childRec.ExecutionID != nil {
+		// Same-generation Resume has a fresh execution. Its current running
+		// frame must not deduplicate against the stopped-out run's frame.
+		id = fmt.Sprintf("%s:run:%d:%s", id, childRec.ExecutionID.BootSeq, childRec.ExecutionID.RunID)
+	}
+	if receipt == nil && state == string(session.LifecycleStopped) && childRec.StopNote != nil {
+		id = fmt.Sprintf("%s:stop:%d", id, childRec.StopNote.Seq)
+	}
 	if receipt != nil {
 		// A single injected round can carry more than one applied steer
 		// (three queued messages -> three receipts, per issue #870's design
@@ -370,13 +378,14 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 	}); err != nil {
 		logger.WarnCF("agent", "steer: persist subagent_state failed",
 			map[string]any{"parent_session_id": parentSessionID, "state": state, "error": err.Error()})
-		return
+		return err
 	}
 	al.emitEvent(
 		EventKindSubagentState,
 		EventMeta{TracePath: "subagent.state", SessionKey: parentSessionID},
 		SubagentStatePayload{SessionID: parentSessionID, MessageID: id, Frame: frame},
 	)
+	return nil
 }
 
 // ensureFollowUpSpanStart persists and emits the subagent_start for a
