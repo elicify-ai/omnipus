@@ -49,6 +49,13 @@ func (rc *agentLoopRequestCancel) validateStopGeneration() (CancelOutcome, error
 	if rec.Generation > rc.scope.Generation {
 		return CancelOutcome{SkippedNewerGeneration: true}, nil, true
 	}
+	selected, carried := stopSelectionFromContext(rc.ctx)
+	if !carried {
+		return CancelOutcome{}, fmt.Errorf("Stop: session %q has no carried accepted execution/control selection", rc.sessionID), true
+	}
+	if !stopSelectionMatchesRecord(selected, rec) {
+		return CancelOutcome{SkippedNewerGeneration: true}, nil, true
+	}
 	if rec.Generation != rc.scope.Generation || rec.Stop == nil || rec.Stop.Generation != rc.scope.Generation {
 		return CancelOutcome{}, fmt.Errorf("Stop: session %q no longer carries generation %d's Stop", rc.sessionID, rc.scope.Generation), true
 	}
@@ -74,17 +81,21 @@ func (ts *turnState) claimCancel(stopOnly bool) bool {
 // stop effect this TurnOnly Stop accepted. A missing record is an ordinary
 // chat with nothing in the steer queue. Any other lookup failure is returned.
 func (rc *agentLoopRequestCancel) removeSelectedStopAdmission() error {
-	if rc.al.GetSessionLifecycleStore() == nil || rc.sessionID == "" {
+	if rc.al.GetSessionLifecycleStore() == nil || rc.sessionID == "" || rc.scope.Generation == 0 {
 		return nil
 	}
-	effects, err := rc.al.stopEffectsForCallback(rc.sessionID, rc.scope.Generation)
+	selected, current, err := rc.al.stopSelectionForCallback(rc.ctx, rc.sessionID, rc.scope.Generation)
 	if err != nil {
 		if errors.Is(err, session.ErrLifecycleNotFound) {
 			return nil
 		}
 		return err
 	}
-	rc.al.removeQueuedStopEffects(rc.sessionID, effects)
+	if !current {
+		rc.skippedNewerGeneration = true
+		return nil
+	}
+	rc.al.removeQueuedStopEffects(rc.sessionID, []session.StopEffect{selected.Effect})
 	return nil
 }
 
@@ -97,6 +108,13 @@ func (rc *agentLoopRequestCancel) claimActiveTurn() bool {
 	}
 	ts, ok := rc.activeTurn.(*turnState)
 	if !ok {
+		return false
+	}
+	if selected, carried := stopSelectionFromContext(rc.ctx); carried && !liveTurnMatchesStop(ts, selected) {
+		rc.skippedNewerGeneration = true
+		return false
+	}
+	if rc.skippedNewerGeneration {
 		return false
 	}
 	ts.mu.RLock()
@@ -125,6 +143,9 @@ func (rc *agentLoopRequestCancel) liveCancelTargets() []*turnState {
 	// Capture identity, not a session-key re-scan. Neither a descendant nor a
 	// replacement turn may inherit this Stop's hard/detach timers.
 	if ts, ok := rc.activeTurn.(*turnState); ok && ts.IsAlive() {
+		if selected, carried := stopSelectionFromContext(rc.ctx); carried && !liveTurnMatchesStop(ts, selected) {
+			return nil
+		}
 		return []*turnState{ts}
 	}
 	return nil
