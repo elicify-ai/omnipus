@@ -584,6 +584,9 @@ func (d *SteerUpwardDeliverer) deliverCommittedOutboxFinal(ctx context.Context, 
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: session-messaging stores not configured")
 	}
 
+	// progress/revision/retired are the publisher's CAS inputs; this
+	// deliverer reads only the protected tuple — the blanks are deliberate.
+	//nolint:dogsled // see above
 	commit, _, _, _, err := lifecycle.CommittedFinalDelivery(ref.SessionID, ref.Generation, ref.CommitID)
 	if err != nil {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: committed outbox provenance for %q generation %d commit %q: %w",
@@ -609,10 +612,10 @@ func (d *SteerUpwardDeliverer) deliverCommittedOutboxFinal(ctx context.Context, 
 
 	// The committed bytes are the ONLY bytes this path publishes.
 	var msg generated.SessionMessage
-	if err := msg.UnmarshalJSON(commit.Payload); err != nil {
+	if decodeErr := msg.UnmarshalJSON(commit.Payload); decodeErr != nil {
 		return steer.Delivery{}, fmt.Errorf(
 			"steer: deliver: committed outbox %q generation %d commit %q payload does not decode: %w — publication refused (D2)",
-			ref.SessionID, ref.Generation, ref.CommitID, err)
+			ref.SessionID, ref.Generation, ref.CommitID, decodeErr)
 	}
 	if stamped := messageIDOf(msg); stamped != commit.MessageID {
 		return steer.Delivery{}, fmt.Errorf(
@@ -623,10 +626,10 @@ func (d *SteerUpwardDeliverer) deliverCommittedOutboxFinal(ctx context.Context, 
 	if classErr != nil {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: classify committed message: %w", classErr)
 	}
-	if err := validateOutcomeMessage(steer.Outcome(commit.Outcome), class, msg); err != nil {
+	if outcomeErr := validateOutcomeMessage(steer.Outcome(commit.Outcome), class, msg); outcomeErr != nil {
 		return steer.Delivery{}, fmt.Errorf(
 			"steer: deliver: committed outbox %q generation %d commit %q: %w — publication refused (D2)",
-			ref.SessionID, ref.Generation, ref.CommitID, err)
+			ref.SessionID, ref.Generation, ref.CommitID, outcomeErr)
 	}
 
 	childRec, err := lifecycle.Load(ref.SessionID)

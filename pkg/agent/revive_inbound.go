@@ -81,7 +81,7 @@ func (al *AgentLoop) inboundStopFenceInFlight(sessionID string) error {
 	}
 	rec, err := store.Load(sessionID)
 	if err != nil {
-		return nil
+		return nil //nolint:nilerr // read failures are inboundRevivable's business (gate SFH#2)
 	}
 	if !lifecycleInFlightStopFence(rec) {
 		return nil

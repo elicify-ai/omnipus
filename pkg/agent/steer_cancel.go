@@ -159,7 +159,7 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	}
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil {
-		return nil
+		return nil //nolint:nilerr // an unreadable record is not ours to act on (doc above)
 	}
 	if rec.Generation != generation || rec.Terminal() {
 		return nil
@@ -173,7 +173,7 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	if commitErr != nil {
 		logger.WarnCF("agent", "steer: terminal report: outcome/outbox commit failed",
 			map[string]any{"session_id": sessionID, "generation": generation, "error": commitErr.Error()})
-		return nil
+		return nil //nolint:nilerr // commit failure logged (WarnCF); retryable from the committed outbox
 	}
 	if res.kind == steeredCommitTerminal {
 		if _, pubErr := al.publishCommittedFinal(ctx, rec, res); pubErr != nil {
@@ -210,7 +210,7 @@ func (al *AgentLoop) landSteeredStopReport(ctx context.Context, sessionID string
 	}
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil {
-		return nil
+		return nil //nolint:nilerr // not ours to act; only the history-append failure is returned (doc above)
 	}
 	// The fence this landing carries out must still be current: an explicit
 	// same-generation RESUME that cleared it (D2) supersedes the stop, and
@@ -369,7 +369,7 @@ func (al *AgentLoop) terminaliseNeverRanStop(ctx context.Context, sessionID stri
 	}
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil {
-		return nil
+		return nil //nolint:nilerr // every not-ours-to-act arm returns nil (doc above)
 	}
 	// Only a session THIS Stop actually stamped, still sitting at the
 	// generation it was stamped for — a concurrent Revive landing in the

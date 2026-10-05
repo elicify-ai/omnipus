@@ -245,7 +245,7 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 	stopLandedByBoot := false
 	if !rec.Terminal() && rec.State != session.LifecycleNeedsInput &&
 		(rec.State == session.LifecycleRunning || rec.State == session.LifecycleQueued) &&
-		!(rec.Stop != nil && rec.Stop.Generation == rec.Generation) {
+		(rec.Stop == nil || rec.Stop.Generation != rec.Generation) {
 		if err := r.failInterrupted(rec); err != nil {
 			notice("interrupted-write:"+id, fmt.Sprintf("session %s interrupted transition failed: %v", id, err))
 		} else if fresh, loadErr := r.Lifecycle.Load(id); loadErr != nil || fresh == nil {

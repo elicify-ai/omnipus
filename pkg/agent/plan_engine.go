@@ -178,13 +178,6 @@ const (
 	// boot sweep writes (FR-118: failed(interrupted)).
 	failedReasonInterrupted = "interrupted"
 
-	// failedReasonTimeout is the FailedReason value the boot recovery writes
-	// for a session whose CURRENT generation was stopped by its own lifetime
-	// budget (stop_note.cause=timeout): the run ended in a timeout, not in
-	// the restart-interruption a plain swept record suffered. Same vocabulary
-	// failedReasonFromBootText derives from a stored "timeout:" notice.
-	failedReasonTimeout = "timeout"
-
 	// planSupervisorAgentID is the id of the PlanSupervisor System Agent —
 	// the adjudicator every SUPERVISION wake is addressed to (ADR-055/FR-012:
 	// the two decision wakes, stall and DoD-UNMET, moved off the plan's owner

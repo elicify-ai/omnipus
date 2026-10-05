@@ -422,24 +422,10 @@ func (g *steerAdmission) removeQueuedExecution(claim executionClaim) {
 	}
 }
 
-// removeQueued rolls back one exact queue entry after its queued-state write
-// fails. It never changes active reservations and therefore cannot release a
-// different turn's slot.
-func (g *steerAdmission) removeQueued(sessionID string, generation int) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	for i, entry := range g.queue {
-		if entry.sessionID == sessionID && entry.generation == generation {
-			g.queue = append(g.queue[:i], g.queue[i+1:]...)
-			return
-		}
-	}
-}
-
 // removeQueuedSession drops EVERY queued entry for sessionID, whatever
-// generation each carries, and reports how many it removed. Unlike
-// removeQueued it is not a rollback of one failed write: it is what the Stop
-// cascade uses (steer_delegate_cancel.go::cancelDelegatedSubtree) to take a
+// generation each carries, and reports how many it removed. It is not a
+// rollback of one failed write: it is what the Stop cascade uses
+// (steer_delegate_cancel.go::cancelDelegatedSubtree) to take a
 // cancelled session out of the start queue.
 //
 // reserveDispatch would refuse the promotion anyway, so this is not what
