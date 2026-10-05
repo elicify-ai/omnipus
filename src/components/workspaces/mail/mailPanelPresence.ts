@@ -48,15 +48,6 @@ export function mailPanelObserverFrame(
  * `send(frame: ClientFrame)` method parameter is bivariant against this
  * narrower frame type); the frame itself rides `WsConnection.send`'s
  * JSON.stringify path at runtime.
- *
- * CONTRACT GAP (reported to team-lead, register row 5 / R-3.2): the landed
- * asyncapi.yaml declares the three mail_panel_observer messages and schemas
- * but has NO `operations` entry binding them as a client send on the chat
- * channel, so the generated `ClientFrame` union does not include the frame
- * yet (the generator derives the union from send-operations only, by
- * design). Until backend-lead (the W0 owner) adds the operation and
- * regenerates, this seam carries the generated frame interface directly —
- * never a hand-written parallel type.
  */
 export type MailPresenceSender = { send(frame: MailPanelObserverFrame): boolean }
 
