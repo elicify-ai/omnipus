@@ -201,22 +201,29 @@ func bootQuestion(t *testing.T, child, parent, id string) generated.SessionMessa
 // TestBoot_FailureDeliveredUpward — ADR-20260928 sub-agent control plane
 // (frozen asset cd20cf8b) D8.3 supersedes the retired failed(interrupted)
 // oracle this test used to pin ("record = failed/interrupted" plus a fatal
-// "interrupted:" upward error). D8.3: a restart-interrupted `running`/`queued`
-// steered session becomes `stopped` — an ordinary, non-terminal stop — with a
-// stop note {at, by: "restart", seq, cause: "restart", boot_seq}; no more
-// failed(interrupted) record. D8.4: its DIRECT parent receives ONE persisted
-// stop notice — id (parent, child, generation, stop_seq), text carrying the
-// stopped_child prefix, cause restart and actor restart, fatal=false — and
-// never the retired second verdict, a fatal "interrupted: ..." final under
-// <child>:<generation>:final.
+// "interrupted:" error delivered upward). D8.3: a restart-interrupted
+// `running`/`queued` steered session becomes `stopped` — an ordinary,
+// non-terminal stop — with a stop note {at, by: "restart", seq, cause:
+// "restart", boot_seq}; no more failed(interrupted) record. D8.4: the parent
+// is told through the persisted D6 stop notice of that ledgered transition,
+// never through the retired second verdict, a fatal "interrupted: ..." final
+// under <child>:<generation>:final.
+//
+// Scope: this fixture's recording deliverer is not a *SteerUpwardDeliverer, so
+// the production notice publisher (SteerBootRecovery.noticeLoop) is not wired
+// here and the notice's inbox bytes are NOT asserted — they are pinned against a
+// real AgentLoop by TestBoot_PauseHandbackRedeliveredAsBlockerNotFinal and
+// TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed. What this
+// test pins is the D8.3 landing itself and that nothing of the retired verdict
+// is delivered upward.
 //
 // Epoch: by=restart requires the WRITING boot's minted epoch (architect
 // BOOT-EPOCH-RULING D1/D2). The fixture's recovery() carries one genuinely
 // minted BootEpochStore for the simulated boot (harness commits 73c8f8b38 /
 // 709fd4dfa on work/a-boot-qa-harness-20261005); this test never supplies an
-// epoch of its own, and asserts only that the note carries a nonzero boot_seq
-// (a minted epoch starts at 1) — the exact boot_seq-equals-Current pin lives
-// in the harness's own boot_seq assertions, which need h.writingBoot.
+// epoch of its own and asserts only that the note carries a nonzero boot_seq (a
+// minted epoch starts at 1) — the exact boot_seq-equals-Current pins live in
+// the harness's own assertions, which need h.writingBoot.
 func TestBoot_FailureDeliveredUpward(t *testing.T) {
 	h := newBootRecoveryHarness(t)
 	parent := h.rootSession(t)
@@ -245,8 +252,9 @@ func TestBoot_FailureDeliveredUpward(t *testing.T) {
 		t.Fatalf("stop note boot_seq = 0 — D8.3: the restart note carries the writing boot's persisted (nonzero) epoch; note %+v", rec.StopNote)
 	}
 
-	// D6/D8.4: the ledgered transition is the notice's authority — one landed
-	// restart stop, the child's first accepted stop (D4: per-child seq from 1).
+	// D6/D8.4: the ledgered transition is the stop notice's authority — one
+	// landed restart stop, the child's first accepted stop (D4: per-child seq
+	// from 1), naming its direct parent.
 	transitions, err := h.lifecycle.ListStoppedTransitions(child)
 	if err != nil {
 		t.Fatalf("ListStoppedTransitions: %v", err)
@@ -260,37 +268,25 @@ func TestBoot_FailureDeliveredUpward(t *testing.T) {
 		t.Fatalf("landed transition = %+v, want {cause restart, actor restart, generation 1, parent %q, stop_seq 1}", tr, parent)
 	}
 
+	// The retired second verdict (a fatal "interrupted: ..." final) is
+	// delivered neither through the upward deliverer nor into the parent's inbox.
+	finalID := child + ":1:final"
+	for _, event := range h.deliverer.snapshot() {
+		envelope := bootEnvelope(t, event.Message)
+		t.Errorf("recovery delivered upward %+v — D8.3/D8.4: a restart stop is told by its D6 stop notice, never by an upward fatal verdict", envelope)
+	}
 	entries, err := h.inbox.Entries(parent)
 	if err != nil {
 		t.Fatalf("Entries(parent): %v", err)
 	}
-	wantID := "stopped-notice:" + parent + ":" + child + ":1:1"
-	finalID := child + ":1:final"
-	notices := 0
 	for _, entry := range entries {
 		if entry.Kind != session.InboxEntryMessage || entry.Message == nil {
 			continue
 		}
 		envelope := bootEnvelope(t, *entry.Message)
-		if envelope.MessageID == finalID || strings.HasPrefix(envelope.Text, "interrupted:") {
-			t.Fatalf("parent inbox holds the retired interrupted verdict %+v — D8.3/D8.4: the parent gets the stop notice only", envelope)
+		if envelope.MessageID == finalID || envelope.Fatal || strings.HasPrefix(envelope.Text, "interrupted:") {
+			t.Errorf("parent inbox holds the retired interrupted verdict %+v — D8.3/D8.4", envelope)
 		}
-		if envelope.MessageID != wantID {
-			continue
-		}
-		notices++
-		if envelope.Kind != "error" || envelope.Fatal {
-			t.Errorf("stop notice = %+v, want kind error with fatal=false — a notice, not a terminal verdict", envelope)
-		}
-		if !strings.HasPrefix(envelope.Text, session.LifecycleNoticePrefixStoppedChild) ||
-			!strings.Contains(envelope.Text, "cause: "+string(session.StopCauseRestart)) ||
-			!strings.Contains(envelope.Text, "actor: "+session.StopActorRestart) {
-			t.Errorf("stop notice text = %q, want the %q prefix naming cause %q and actor %q",
-				envelope.Text, session.LifecycleNoticePrefixStoppedChild, session.StopCauseRestart, session.StopActorRestart)
-		}
-	}
-	if notices != 1 {
-		t.Fatalf("parent inbox holds %d notice(s) with id %s, want exactly 1 (D8.4: one persisted notice per directly stopped child)", notices, wantID)
 	}
 }
 
