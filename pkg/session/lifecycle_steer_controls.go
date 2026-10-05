@@ -92,15 +92,12 @@ func (s *LifecycleStore) RecordSteerControlState(sessionID, controlID, state, re
 	return appendControlLineLocked(s, sessionID, refined)
 }
 
-// RecordSteerDeliveredByCorrelation marks delivered the oldest still-queued
-// steer of sessionID carrying correlationID. The caller has made the steer's
-// text durable in the session's history first (D4: delivered means durably
-// injected). A correlation id with no queued steer receipt (input that was
-// never ledgered) is not an error.
-func (s *LifecycleStore) RecordSteerDeliveredByCorrelation(sessionID, correlationID string) error {
-	if correlationID == "" {
-		return nil
-	}
+// SupersedeSteersByStop marks each listed still-queued steer of sessionID
+// superseded by the Stop control stopControlID (D4S-01, D5): reason "stop"
+// and superseded_by_seq that Stop's own sequence. A steer receipt already
+// final is left unchanged; an unknown steer or Stop control is a visible
+// error and nothing is written.
+func (s *LifecycleStore) SupersedeSteersByStop(sessionID, stopControlID string, steerControlIDs []string) error {
 	if err := validateLifecycleSessionID(sessionID); err != nil {
 		return err
 	}
@@ -111,22 +108,35 @@ func (s *LifecycleStore) RecordSteerDeliveredByCorrelation(sessionID, correlatio
 	if err != nil {
 		return err
 	}
+	stopSeq := int64(0)
 	latest := make(map[string]controlLedgerLine)
-	var order []string
 	for _, line := range lines {
-		if line.Verb != controlVerbSteer {
+		if line.ControlID == stopControlID && line.Verb == controlVerbStop {
+			stopSeq = line.Seq
+		}
+		if line.Verb == controlVerbSteer {
+			latest[line.ControlID] = line
+		}
+	}
+	if stopSeq == 0 {
+		return fmt.Errorf("session: control ledger: Stop %q of %q has no accepted control", stopControlID, sessionID)
+	}
+	var refined []controlLedgerLine
+	for _, id := range steerControlIDs {
+		line, ok := latest[id]
+		if !ok {
+			return fmt.Errorf("session: control ledger: steer %q of %q has no accepted receipt", id, sessionID)
+		}
+		if line.State != controlStateQueued {
 			continue
 		}
-		if _, seen := latest[line.ControlID]; !seen {
-			order = append(order, line.ControlID)
-		}
-		latest[line.ControlID] = line
+		bySeq := stopSeq
+		line.State, line.Reason, line.SupersededBySeq = SteerStateSuperseded, "stop", &bySeq
+		refined = append(refined, line)
 	}
-	for _, id := range order {
-		line := latest[id]
-		if line.CorrelationID == correlationID && line.State == controlStateQueued {
-			line.State, line.Reason = SteerStateDelivered, ""
-			return appendControlLineLocked(s, sessionID, line)
+	for _, line := range refined {
+		if err := appendControlLineLocked(s, sessionID, line); err != nil {
+			return fmt.Errorf("session: control ledger: supersede steer %q of %q: %w", line.ControlID, sessionID, err)
 		}
 	}
 	return nil

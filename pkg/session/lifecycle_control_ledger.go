@@ -81,9 +81,12 @@ type controlLedgerLine struct {
 	// Text is the exact instruction of a steer control (D4: kept until its
 	// transcript injection is durable). Empty for every other verb.
 	Text string `json:"text,omitempty"`
-	// CorrelationID is a steer's caller-facing correlation id: the injection
-	// point names its steers by it when it records them delivered.
+	// CorrelationID is a steer's caller-facing correlation id (the delegate
+	// call's correlation_id), kept beside its receipt.
 	CorrelationID string `json:"correlation_id,omitempty"`
+	// SupersededBySeq is the sequence of the newer control that superseded
+	// this one (D4S-01: a steer superseded by a Stop names that Stop's seq).
+	SupersededBySeq *int64 `json:"superseded_by_seq,omitempty"`
 }
 
 func (s *LifecycleStore) controlLedgerPath(sessionID string) string {

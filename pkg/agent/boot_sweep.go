@@ -251,9 +251,19 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 	// history by the replay below. A record carrying a CURRENT-GENERATION
 	// fence is NOT stopped here: the accepted stop's own landing is W3b's
 	// boot reconciliation, reported pending below — never fabricated twice.
+	//
+	// An accepted Stop of the current generation whose fence never reached
+	// the record is likewise not replaced by a restart stop: the boot
+	// finisher (FinishUnfinishedStopIntents, run after this recovery) lands
+	// that ORIGINAL control — its cause, actor and sequence (D6 QA1).
+	pendingStop, pendingErr := r.acceptedStopPending(rec)
+	if pendingErr != nil {
+		notice("stop-intents:"+id, fmt.Sprintf("session %s accepted Stop controls unreadable at boot: %v", id, pendingErr))
+		return pendingErr
+	}
 	stopLandedByBoot := false
 	var interruptedErr error
-	if !rec.Terminal() && rec.State != session.LifecycleNeedsInput &&
+	if !pendingStop && !rec.Terminal() && rec.State != session.LifecycleNeedsInput &&
 		(rec.State == session.LifecycleRunning || rec.State == session.LifecycleQueued) &&
 		(rec.Stop == nil || rec.Stop.Generation != rec.Generation) {
 		if err := r.failInterrupted(rec); err != nil {
@@ -295,9 +305,10 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 	if stopNoticeRecovered && !stopLandedByBoot {
 		return nil
 	}
-	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
-		// A current-generation Stop is durable. Do not deliver or re-wake any
-		// pending entry; it waits for Revive to mint a newer generation.
+	if pendingStop || (rec.Stop != nil && rec.Stop.Generation == rec.Generation) {
+		// A current-generation Stop is durable (fenced, or accepted and left
+		// to the finisher). Do not deliver or re-wake any pending entry; it
+		// waits for Revive to mint a newer generation.
 		r.ackConsumed(ctx, rec, notice)
 		return nil
 	}
@@ -1617,4 +1628,19 @@ func (pe *PlanEngine) completeAbandonAtBoot(rec plan.IntentRecord) error {
 			rec.IntentID, rec.PlanID, after.State, after.EffectivePlanPhase())
 	}
 	return nil
+}
+
+// acceptedStopPending reports whether rec's session has an accepted,
+// unlanded Stop control selecting its current generation.
+func (r *SteerBootRecovery) acceptedStopPending(rec *session.LifecycleRecord) (bool, error) {
+	intents, err := r.Lifecycle.UnfinishedStopIntents(rec.SessionID)
+	if err != nil {
+		return false, err
+	}
+	for _, intent := range intents {
+		if intent.Selection.Effect.Target.Generation == rec.Generation {
+			return true, nil
+		}
+	}
+	return false, nil
 }

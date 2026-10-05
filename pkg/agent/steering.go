@@ -1120,6 +1120,15 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 	correlationIDs := make([]string, 0, len(items))
 	consumedItems := make([]steeringQueueItem, 0, len(items))
 	for i, item := range items {
+		if item.steerControlID != "" {
+			// D4: a delegate steer is delivered once its exact text is durable
+			// in the session transcript; only then is it handed to the turn
+			// and its queue slot released. A failure keeps it queued.
+			if err := al.recordDeliveredDelegateSteer(scope, item); err != nil {
+				al.steering.prependItemsScope(scope, items[i:])
+				return msgs, correlationIDs, consumedItems, err
+			}
+		}
 		if item.wake != nil {
 			if err := al.recordAcceptedSteeredInstruction(*item.wake, item.message); err != nil {
 				al.steering.prependItemsScope(scope, items[i:])
@@ -1197,28 +1206,44 @@ func (al *AgentLoop) ackConsumedSteeringWake(wake steeringWake) error {
 	return nil
 }
 
-// recordInjectedSteerReceipts marks delivered the D4 receipts of the steers
-// a turn just made durable in its history (the injection point appends each
-// message to the session store first). Every failure is returned.
-func (al *AgentLoop) recordInjectedSteerReceipts(sessionID string, correlationIDs []string) error {
+// recordDeliveredDelegateSteer makes an accepted delegate steer durable in
+// its session's transcript (once per control id, so a retried consumption
+// never writes it twice) and then marks its D4 receipt delivered. Every
+// failure is returned; the receipt stays queued.
+func (al *AgentLoop) recordDeliveredDelegateSteer(scope string, item steeringQueueItem) error {
+	sessionID := normalizeSteeringScope(scope)
 	lifecycle := al.GetSessionLifecycleStore()
-	if lifecycle == nil || sessionID == "" {
-		return nil
+	if lifecycle == nil {
+		return fmt.Errorf("deliver steer %q: no lifecycle store for session %q", item.steerControlID, sessionID)
 	}
-	var errs []error
-	for _, id := range correlationIDs {
-		if err := lifecycle.RecordSteerDeliveredByCorrelation(sessionID, id); err != nil {
-			errs = append(errs, fmt.Errorf("record steer %q delivered: %w", id, err))
-		}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		return fmt.Errorf("deliver steer %q: load lifecycle of %q: %w", item.steerControlID, sessionID, err)
 	}
-	return errors.Join(errs...)
+	store := al.ResolveSessionStore(sessionID)
+	if store == nil {
+		return fmt.Errorf("deliver steer %q: no transcript store for session %q", item.steerControlID, sessionID)
+	}
+	if _, err := store.AppendTranscriptOnce(sessionID, session.TranscriptEntry{
+		ID:      steeredInstructionEntryID(item.steerControlID),
+		Role:    "user",
+		Content: item.message.Content,
+		AgentID: rec.AgentID,
+	}); err != nil {
+		return fmt.Errorf("deliver steer %q: record it in the transcript of %q: %w", item.steerControlID, sessionID, err)
+	}
+	if err := lifecycle.RecordSteerControlState(sessionID, item.steerControlID, session.SteerStateDelivered, ""); err != nil {
+		return fmt.Errorf("deliver steer %q: record its receipt: %w", item.steerControlID, err)
+	}
+	return nil
 }
 
 // supersedePendingSteers is D5's precedence for a newer Stop: the session's
 // still-pending delegate steers are taken off the queue and their receipts
-// marked superseded (never silently dropped, never left queued for ever). A
-// receipt that cannot be written puts its item back and is returned.
-func (al *AgentLoop) supersedePendingSteers(sessionID, reason string) error {
+// marked superseded by that Stop (reason "stop", superseded_by_seq the
+// Stop's sequence; D4S-01) — never silently dropped, never left queued for
+// ever. A receipt that cannot be written puts its item back and is returned.
+func (al *AgentLoop) supersedePendingSteers(sessionID, stopControlID string) error {
 	lifecycle := al.GetSessionLifecycleStore()
 	if al.steering == nil || lifecycle == nil {
 		return nil
@@ -1227,7 +1252,7 @@ func (al *AgentLoop) supersedePendingSteers(sessionID, reason string) error {
 	var restore []steeringQueueItem
 	var errs []error
 	for _, item := range taken {
-		if err := lifecycle.RecordSteerControlState(normalizeSteeringScope(sessionID), item.steerControlID, session.SteerStateSuperseded, reason); err != nil {
+		if err := lifecycle.SupersedeSteersByStop(normalizeSteeringScope(sessionID), stopControlID, []string{item.steerControlID}); err != nil {
 			restore = append(restore, item)
 			errs = append(errs, fmt.Errorf("supersede steer %q: %w", item.steerControlID, err))
 		}

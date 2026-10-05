@@ -14,17 +14,20 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-// finishUnfinishedStopIntents is ADR-20260928 D4's finisher for stop intents
-// whose fence never took hold (D4 crash semantics: "Complete unfinished
-// stop/Stop-all fences"; D6 #1053's durable retry item). For each unfinished
-// intent of sessionID:
-//   - the session moved on (terminal, already stopped, another generation, or
-//     another control's fence) -> the intent is marked superseded;
-//   - otherwise the stop is carried out through the one Stop (StopSession,
-//     this session only, the intent's own cause and actor) and the original
-//     intent is then marked superseded by that new control.
+// finishUnfinishedStopIntents is ADR-20260928 D4's finisher for accepted stop
+// intents that never landed (D4 crash semantics: "Complete unfinished
+// stop/Stop-all fences"; D6 QA1/QA2; #1053's durable retry item). Each intent
+// of sessionID is carried out through the one Stop under its ORIGINAL
+// identity — same control_id, seq, cause and actor; no new acceptance
+// (StopRequest.Continue):
+//   - the fence is (re)applied and the selected execution's settlement lands
+//     it, which records the original control applied with its notice;
+//   - a session that moved on (terminal, already stopped, another generation,
+//     execution or control) gets nothing written to its record and the
+//     intent is marked superseded.
 //
-// A failure leaves the intent queued for the next pass and is returned.
+// A failure leaves the original intent queued for the next pass and is
+// returned naming the session and control.
 func (al *AgentLoop) finishUnfinishedStopIntents(ctx context.Context, sessionID string) error {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil || sessionID == "" {
@@ -35,41 +38,36 @@ func (al *AgentLoop) finishUnfinishedStopIntents(ctx context.Context, sessionID 
 		return err
 	}
 	var errs []error
-	for _, intent := range intents {
-		rec, loadErr := lifecycle.Load(sessionID)
-		if loadErr != nil {
-			if errors.Is(loadErr, session.ErrLifecycleNotFound) {
-				errs = append(errs, lifecycle.RecordStopControlResult(intent.Selection, false, ""))
-				continue
-			}
-			errs = append(errs, fmt.Errorf("Stop retry for %s: %w", sessionID, loadErr))
+	for i := range intents {
+		intent := intents[i]
+		controlID := intent.Selection.Effect.ControlID
+		res, stopErr := al.StopSession(ctx, StopRequest{
+			SessionID: sessionID,
+			By:        principalFromStopActor(intent.Actor),
+			Channel:   "stop-retry",
+			Continue:  &intent,
+		})
+		if errors.Is(stopErr, session.ErrStopIntentSuperseded) {
+			stopErr = nil
+		} else if stopErr == nil {
+			stopErr = res.RootErr
+		}
+		if stopErr == nil && len(res.Report.Unreachable) > 0 {
+			stopErr = fmt.Errorf("%s", res.Report.Unreachable[0].Reason)
+		}
+		if stopErr != nil {
+			errs = append(errs, fmt.Errorf("Stop retry for %s (control %s) did not take hold; it stays pending: %w",
+				sessionID, controlID, stopErr))
 			continue
 		}
-		stillOwed := !rec.Terminal() && rec.State != session.LifecycleStopped &&
-			rec.Generation == intent.Selection.Effect.Target.Generation &&
-			(rec.Stop == nil || rec.Stop.Generation != rec.Generation)
-		if stillOwed {
-			res, stopErr := al.StopSession(ctx, StopRequest{
-				SessionID: sessionID,
-				By:        principalFromStopActor(intent.Actor),
-				Channel:   "stop-retry",
-				Cause:     intent.Cause,
-			})
-			if stopErr == nil {
-				stopErr = res.RootErr
-			}
-			if stopErr == nil && len(res.Report.Unreachable) > 0 {
-				stopErr = fmt.Errorf("%s", res.Report.Unreachable[0].Reason)
-			}
-			if stopErr != nil {
-				errs = append(errs, fmt.Errorf("Stop retry for %s (control %s) did not take hold; it stays pending: %w",
-					sessionID, intent.Selection.Effect.ControlID, stopErr))
-				continue
-			}
+		if len(res.Report.Reached) > 0 {
+			// The original control's own landing records it applied.
+			continue
 		}
-		// The original intent no longer owns the session (moved on, or the
-		// retry's new control does): its receipt becomes superseded.
-		errs = append(errs, lifecycle.RecordStopControlResult(intent.Selection, false, ""))
+		// The intent no longer owns the session: its receipt is superseded.
+		if recordErr := lifecycle.RecordStopControlResult(intent.Selection, false, ""); recordErr != nil {
+			errs = append(errs, fmt.Errorf("Stop retry for %s (control %s): %w", sessionID, controlID, recordErr))
+		}
 	}
 	return errors.Join(errs...)
 }

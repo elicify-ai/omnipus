@@ -241,16 +241,28 @@ func (al *AgentLoop) abandonSteeredQueuedSteering(
 	}
 	parentID := steerParentSessionID(childRec)
 	if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
+		// D4 no orphan: a delegate steer leaves the queue only once its
+		// receipt says superseded. One whose receipt cannot be written stays
+		// queued (receipt and item both), is not reported as dropped, and is
+		// resolved by the next drain or abandonment.
+		kept := abandonedItems[:0]
+		var retained []steeringQueueItem
 		for _, item := range abandonedItems {
-			if item.steerControlID == "" {
-				continue
+			if item.steerControlID != "" {
+				if err := lifecycle.RecordSteerControlState(normalizeSteeringScope(sessionID), item.steerControlID,
+					session.SteerStateSuperseded, "abandoned after repeated continuation failures"); err != nil {
+					logger.ErrorCF("agent", "steer: abandoned steer receipt not recorded; the steer stays queued",
+						map[string]any{"session_id": sessionID, "control_id": item.steerControlID, "error": err.Error()})
+					retained = append(retained, item)
+					continue
+				}
 			}
-			if err := lifecycle.RecordSteerControlState(normalizeSteeringScope(sessionID), item.steerControlID,
-				session.SteerStateSuperseded, "abandoned after repeated continuation failures"); err != nil {
-				logger.ErrorCF("agent", "steer: abandoned steer receipt not recorded (the parent is still told below)",
-					map[string]any{"session_id": sessionID, "control_id": item.steerControlID, "error": err.Error()})
-			}
+			kept = append(kept, item)
 		}
+		if len(retained) > 0 {
+			al.steering.prependItemsScope(abandonedScope, retained)
+		}
+		abandonedItems = kept
 	}
 	for i, item := range abandonedItems {
 		if ts != nil {

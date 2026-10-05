@@ -450,6 +450,38 @@ func (c *SteerCanceller) StopTurnsWithCause(ctx context.Context, sessionID strin
 	return c.cascade(ctx, sessionID, by, subtree, cause, stopTurn)
 }
 
+// ContinueAcceptedStop carries out an ALREADY-ACCEPTED stop control for one
+// session (D4 "complete unfinished stop fences"): under that session's cascade
+// lock it re-applies the control's own fence (same control_id and seq; no new
+// acceptance) and then fires the live effect through stopTurn exactly as a
+// fresh Stop does. A session that moved past the selection returns
+// session.ErrStopIntentSuperseded.
+func (c *SteerCanceller) ContinueAcceptedStop(ctx context.Context, intent session.UnfinishedStopIntent, stopTurn GenerationCancelFunc) (steer.CancelReport, error) {
+	var report steer.CancelReport
+	if c == nil || c.Lifecycle == nil {
+		return report, fmt.Errorf("steer: continue stop: lifecycle store is not configured")
+	}
+	sessionID := intent.Selection.SessionID
+	lock := c.cascadeLock(sessionID)
+	lock.Lock()
+	accepted, err := c.Lifecycle.ResumeAcceptedStop(intent)
+	if err == nil && accepted.Selection != nil && c.retainStopSelection != nil {
+		err = c.retainStopSelection(*accepted.Selection)
+	}
+	lock.Unlock()
+	if err != nil {
+		return report, err
+	}
+	switch accepted.Outcome {
+	case session.StopAcceptGranted:
+		report.Reached = append(report.Reached, sessionID)
+		c.cancelStamped(ctx, map[string]session.StopSelection{sessionID: *accepted.Selection}, &report, stopTurn)
+	case session.StopAcceptTerminal:
+		report.SkippedTerminal = append(report.SkippedTerminal, sessionID)
+	}
+	return report, nil
+}
+
 // cascade runs one Stop cascade under sessionID's cascade lock.
 func (c *SteerCanceller) cascade(
 	ctx context.Context, sessionID string, by steer.Principal, subtree bool, rootCause session.StopCause, cancelTurn GenerationCancelFunc,

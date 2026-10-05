@@ -31,6 +31,7 @@ import (
 // composition root's SteerCanceller satisfies it.
 type StopTurnsCanceller interface {
 	StopTurnsWithCause(ctx context.Context, sessionID string, by steer.Principal, subtree bool, cause session.StopCause, stopTurn GenerationCancelFunc) (steer.CancelReport, error)
+	ContinueAcceptedStop(ctx context.Context, intent session.UnfinishedStopIntent, stopTurn GenerationCancelFunc) (steer.CancelReport, error)
 }
 
 // StopRequest names one Stop. By is the authenticated principal (a person or
@@ -44,6 +45,10 @@ type StopRequest struct {
 	// Cause is the requested session's own stop cause; empty means
 	// StopCauseStop. A plan Stop sweeping its members passes StopCauseCascade.
 	Cause session.StopCause
+	// Continue, when set, carries out that already-accepted stop control
+	// (same control id and seq) for SessionID instead of accepting a new
+	// one. Tree and Cause are ignored: the control fixed them at acceptance.
+	Continue *session.UnfinishedStopIntent
 	// HooksFor returns the transport hooks for one reached session. Nil uses
 	// the default background-shell kill for every reached session.
 	HooksFor func(sessionID string) CancelHooks
@@ -99,7 +104,7 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	stopTurn := func(effectCtx context.Context, id string, generation int) (GenerationCancelResult, error) {
 		// D5: this Stop supersedes the session's older pending steers.
 		if selected, carried := stopSelectionFromContext(effectCtx); carried {
-			if err := al.supersedePendingSteers(id, "superseded by Stop "+selected.Effect.ControlID); err != nil {
+			if err := al.supersedePendingSteers(id, selected.Effect.ControlID); err != nil {
 				return GenerationCancelResult{}, err
 			}
 		}
@@ -133,7 +138,8 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 		stopper = al.steerCanceller()
 	}
 	if _, err := lifecycle.Load(req.SessionID); err != nil {
-		if !errors.Is(err, session.ErrLifecycleNotFound) {
+		if !errors.Is(err, session.ErrLifecycleNotFound) || req.Continue != nil {
+			// An accepted control continues only on its own record.
 			return res, fmt.Errorf("read Stop target: %w", err)
 		}
 		// An ordinary chat may have no lifecycle record of its own while its
@@ -168,11 +174,17 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 		return res, nil
 	}
 
-	cause := req.Cause
-	if cause == "" {
-		cause = session.StopCauseStop
+	var report steer.CancelReport
+	var err error
+	if req.Continue != nil {
+		report, err = stopper.ContinueAcceptedStop(ctx, *req.Continue, stopTurn)
+	} else {
+		cause := req.Cause
+		if cause == "" {
+			cause = session.StopCauseStop
+		}
+		report, err = stopper.StopTurnsWithCause(ctx, req.SessionID, req.By, req.Tree, cause, stopTurn)
 	}
-	report, err := stopper.StopTurnsWithCause(ctx, req.SessionID, req.By, req.Tree, cause, stopTurn)
 	if err != nil {
 		return res, err
 	}
