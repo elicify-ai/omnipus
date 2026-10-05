@@ -1933,90 +1933,128 @@ func TestInterruptSession_NoActiveTurnIsAttemptOnly(t *testing.T) {
 	}
 }
 
-// TestRequestCancelByChannelChat_CascadesToSubTurns verifies that a Tier B cancel
-// originating from a channel+chatID match propagates to sub-turns that share
-// the same transcriptSessionID even though sub-turns have empty channel/chatID.
+// TestRequestCancelByChannelChat_CascadesToSubTurns verifies that a Tier B
+// /cancel originating from a channel+chatID match stops the whole delegation
+// tree below that conversation through the one stop method.
 //
-// BDD: Given a root turn (depth=0, channel="telegram", chatID="123", transcriptSessionID="S")
-// and a sub-turn (depth=1, channel="", chatID="", transcriptSessionID="S"),
-// When RequestCancelByChannelChat(ctx, "telegram", "123", "") is called,
-// Then BOTH turns receive requestGracefulInterrupt (gracefulInterrupt=true).
+// Rebuilt for D9/D2 (the sub-turn model is retired, and a chat command is
+// authorised for the signed-in owner): a REAL tree -- a chat root with a
+// lifecycle record, a running helper and that helper's own running grandchild,
+// each a launched and dispatched session with a real admission identity -- and
+// an authenticated sender. The retired fixture hand-registered turnStates with
+// no identity and passed an empty user id.
 //
-// Refs: FR-6, FR-10.
+// BDD: Given a Telegram chat whose root session has a running helper that has
+// its own running helper, When the owner sends /cancel (RequestCancelByChannelChat),
+// Then both helpers are asked politely, shut down, and land stopped (note kept,
+// fence cleared), and so does the root; fired is reported.
+//
+// Refs: FR-6, FR-10, ADR-20260928 D7/D9.
 func TestRequestCancelByChannelChat_CascadesToSubTurns(t *testing.T) {
-	al, cleanup := newAL(t)
+	al, cleanup := newSteerAL(t)
 	defer cleanup()
+	al.GetConfig().Performance.MaxParallelAgents = 4
+	provider, _ := installParkedProvider(t, al)
 
-	const sid = "channel-chat-cascade-session"
-
-	agent := al.registry.GetDefaultAgent()
-	if agent == nil {
-		t.Fatal("expected default agent")
+	rootID := newTestSteeringSession(t, al, "ws-channel-tree")
+	if err := al.GetSessionLifecycleStore().Persist(&session.LifecycleRecord{
+		SessionID: rootID, Generation: 1, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, WorkspaceID: "ws-channel-tree",
+		AgentID: testDefaultAgentID, Origin: &session.Origin{Kind: session.OriginKindChat},
+	}); err != nil {
+		t.Fatalf("SETUP persist the chat root's lifecycle record: %v", err)
 	}
-
-	// Helper to build a turnState stub with explicit channel/chatID/depth.
-	makeTurn := func(sessionKey, channel, chatID string, depth int, transcriptSID string) (*turnState, chan struct{}) {
-		t.Helper()
-		provCh := make(chan struct{}, 1)
-		opts := processOptions{
-			SessionKey:          sessionKey,
-			Channel:             channel,
-			ChatID:              chatID,
-			TranscriptSessionID: transcriptSID,
-		}
-		scope := al.newTurnEventScope(agent.ID, sessionKey)
-		ts := newTurnState(agent, opts, scope)
-		ts.depth = depth
-		ts.mu.Lock()
-		ts.providerCancel = func() {
-			select {
-			case provCh <- struct{}{}:
-			default:
-			}
-		}
-		ts.mu.Unlock()
-		al.activeTurnStates.Store(sessionKey, ts)
-		t.Cleanup(func() { al.activeTurnStates.Delete(sessionKey) })
-		return ts, provCh
+	launcher := NewSteerLauncher(al)
+	childID, childGen := launchSteeredChild(t, al, rootID, "call-chan-child", "the helper of the chat")
+	if _, err := launcher.Dispatch(context.Background(), childID, childGen); err != nil {
+		t.Fatalf("Dispatch(child): %v", err)
 	}
+	grandID, grandGen := launchSteeredChild(t, al, childID, "call-chan-grand", "the helper of the helper")
+	if _, err := launcher.Dispatch(context.Background(), grandID, grandGen); err != nil {
+		t.Fatalf("Dispatch(grandchild): %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-provider.entered:
+		case <-time.After(30 * time.Second):
+			t.Fatalf("only %d of the 2 helpers reached the provider", i)
+		}
+	}
+	childTS, grandTS := al.getActiveTurnState(childID), al.getActiveTurnState(grandID)
+	if childTS == nil || grandTS == nil {
+		t.Fatal("SETUP: both helpers must have live turns, or this test proves nothing")
+	}
+	// The channel index is populated at intake in production; map this chat to
+	// the real root session exactly as intake would.
+	al.channelSessionIdx.Store("telegram/123", rootID)
 
-	// Root turn: has channel/chatID populated.
-	parentTS, parentPC := makeTurn("parent-key", "telegram", "123", 0, sid)
-	// Sub-turn: inherits transcriptSessionID but has no channel/chatID (depth=1).
-	subTS, subPC := makeTurn("sub-key", "", "", 1, sid)
-
-	if _, _, err := al.RequestCancelByChannelChat(context.Background(), "telegram", "123", ""); err != nil {
+	fired, armed, err := al.RequestCancelByChannelChat(context.Background(), "telegram", "123", "telegram-owner")
+	if err != nil {
 		t.Fatalf("RequestCancelByChannelChat returned unexpected error: %v", err)
 	}
-
-	// Both providerCancel stubs must fire within 200ms (FR-12a).
-	timeout := time.After(200 * time.Millisecond)
-	for i, ch := range []chan struct{}{parentPC, subPC} {
-		select {
-		case <-ch:
-		case <-timeout:
-			t.Fatalf("providerCancel[%d] was not called within 200ms", i)
-		}
+	if !fired || armed {
+		t.Errorf("RequestCancelByChannelChat = fired %v armed %v, want fired true armed false", fired, armed)
 	}
 
-	// Both turns must have gracefulInterrupt set.
-	for i, ts := range []*turnState{parentTS, subTS} {
-		interrupted, _ := ts.gracefulInterruptRequested()
-		if !interrupted {
-			t.Errorf("turn %d: gracefulInterrupt not set after Tier B cascade", i)
+	for name, ts := range map[string]*turnState{"child": childTS, "grandchild": grandTS} {
+		if polite, _ := ts.gracefulInterruptRequested(); !polite {
+			t.Errorf("%s: no polite stop requested after the Tier B cascade", name)
+		}
+		select {
+		case <-ts.Finished():
+		case <-time.After(30 * time.Second):
+			t.Fatalf("the %s's turn is still running 30s after /cancel", name)
+		}
+	}
+	for name, id := range map[string]string{"root": rootID, "child": childID, "grandchild": grandID} {
+		rec := awaitLandedStopped(t, al, id, "the "+name)
+		if rec.StopNote.By != session.StopActorHumanUser("telegram-owner") {
+			t.Errorf("%s StopNote.By = %q, want %q — the signed-in owner who sent /cancel", name, rec.StopNote.By, session.StopActorHumanUser("telegram-owner"))
 		}
 	}
 }
 
-// TestRequestCancelByChannelChat_NoMatchIsNoop verifies that calling
-// RequestCancelByChannelChat when no root turn matches is a silent no-op.
+// TestRequestCancelByChannelChat_NoMatchIsNoop verifies the team-lead ruling
+// for /cancel with nothing running: when the conversation genuinely has
+// nothing to stop (no session is indexed for this channel/chat), the answer is
+// the truthful "nothing to stop" outcome -- no error, nothing fired, nothing
+// armed (the channel layer replies "Nothing to stop."). The retired reading
+// turned this into an error ("could not resolve this conversation's tree").
 func TestRequestCancelByChannelChat_NoMatchIsNoop(t *testing.T) {
 	al, cleanup := newAL(t)
 	defer cleanup()
 
 	// No turns registered — must return nil, not error.
-	if _, _, err := al.RequestCancelByChannelChat(context.Background(), "telegram", "999", ""); err != nil {
+	fired, armed, err := al.RequestCancelByChannelChat(context.Background(), "telegram", "999", "telegram-owner")
+	if err != nil {
 		t.Fatalf("expected nil for no-match, got: %v", err)
+	}
+	if fired || armed {
+		t.Errorf("no-match reported fired=%v armed=%v, want both false (a genuine nothing-to-stop)", fired, armed)
+	}
+}
+
+// TestRequestCancelByChannelChat_UnresolvableTreeIsAVisibleError is the other
+// half of the same ruling: when the conversation's tree CANNOT be resolved
+// because of a real failure (a corrupt channel index entry here), /cancel is a
+// visible error that says nothing was stopped -- never the quiet "Nothing to
+// stop.".
+func TestRequestCancelByChannelChat_UnresolvableTreeIsAVisibleError(t *testing.T) {
+	al, cleanup := newAL(t)
+	defer cleanup()
+	// The index holds a value of the wrong type: the conversation exists but
+	// its identity cannot be read.
+	al.channelSessionIdx.Store("telegram/777", 42)
+
+	fired, armed, err := al.RequestCancelByChannelChat(context.Background(), "telegram", "777", "telegram-owner")
+	if err == nil {
+		t.Fatalf("an unresolvable conversation tree was reported as a quiet no-op (fired=%v armed=%v)", fired, armed)
+	}
+	if !strings.Contains(err.Error(), "nothing was stopped") {
+		t.Errorf("error %q must say plainly that nothing was stopped", err.Error())
+	}
+	if fired || armed {
+		t.Errorf("a failed stop reported fired=%v armed=%v", fired, armed)
 	}
 }
 

@@ -5,8 +5,15 @@
 // ADR-091 landing order §0 / I-6, AC-8 — what an AGENT's own
 // delegate(action="stop_all") has to reach, proved through the REAL wired tool
 // on a real *AgentLoop (newSteerAL wires the session-messaging tool surface),
-// never through a stub cancel hook. (ADR-20261004 renamed the delegate action
+// never through a stub stop hook. (ADR-20261004 renamed the delegate action
 // cancel → stop_all with no alias; the cascade itself is unchanged.)
+//
+// Updated for the founder's one-stop decision (2026-10-05): stop_all is the
+// SAME stop a human's /cancel runs (polite first, forced at 3 s), its reply is
+// one fixed text, the `hard` argument is gone, and -- ADR-20260928 D2/D4 --
+// only the owning execution lands `stopped`, after its running work shut
+// down, so landing is asserted as an eventual state, never as part of the
+// request's own return.
 //
 // Two halves of one defect:
 //
@@ -99,17 +106,45 @@ func delegateToolFor(t *testing.T, al *AgentLoop) *tools.DelegateTool {
 }
 
 // runDelegateCancel calls the real tool's stop_all action as the parent would.
-func runDelegateCancel(t *testing.T, al *AgentLoop, callerSessionID, targetSessionID string, hard bool) *tools.ToolResult {
+func runDelegateCancel(t *testing.T, al *AgentLoop, callerSessionID, targetSessionID string) *tools.ToolResult {
 	t.Helper()
 	ctx := tools.WithTranscriptSessionID(context.Background(), callerSessionID)
 	return delegateToolFor(t, al).Execute(ctx, map[string]any{
-		"action": "stop_all", "session_id": targetSessionID, "hard": hard,
+		"action": "stop_all", "session_id": targetSessionID,
 	})
+}
+
+// oneStopReply is the single stop_all reply text (founder one-stop decision;
+// team-lead ruling).
+func oneStopReply(sessionID string) string {
+	return "Stop requested for session " + sessionID + " and its helpers; " +
+		"they will show as stopped once their running work has shut down."
+}
+
+// awaitLandedStopped waits for the OWNING execution to land id `stopped`:
+// state stopped, fence cleared, note kept, never terminal (D2/CRIT-001).
+func awaitLandedStopped(t *testing.T, al *AgentLoop, id, what string) *session.LifecycleRecord {
+	t.Helper()
+	waitForGate(t, what+" to land stopped with its note and no fence", func() bool {
+		rec, err := al.GetSessionLifecycleStore().Load(id)
+		return err == nil && rec.State == session.LifecycleStopped && rec.Stop == nil && rec.StopNote != nil
+	})
+	rec, err := al.GetSessionLifecycleStore().Load(id)
+	if err != nil {
+		t.Fatalf("Load(%s): %v", id, err)
+	}
+	if rec.Terminal() {
+		t.Fatalf("%s landed terminal (%q); a stop is never terminal", what, rec.State)
+	}
+	return rec
 }
 
 // TestDelegateCancel_QueuedSubagentIsDroppedAndNeverStarts proves the promise
 // the at-limit result makes to the model: a queued worker can be dropped, it
-// leaves the start queue, it never runs, and the tool says so honestly.
+// leaves the start queue, it never runs, and it lands stopped through the
+// owning path (D2 table row "working, queued": stopped, not admitted until
+// resumed, frees its queue position). The reply is the single stop_all text;
+// the retired tool-side "queued ... dropped" wording and writer are gone.
 func TestDelegateCancel_QueuedSubagentIsDroppedAndNeverStarts(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -139,33 +174,21 @@ func TestDelegateCancel_QueuedSubagentIsDroppedAndNeverStarts(t *testing.T) {
 		t.Fatalf("Dispatch(queued) = %+v, want State=queued", queued)
 	}
 
-	res := runDelegateCancel(t, al, parentID, queuedID, false)
+	res := runDelegateCancel(t, al, parentID, queuedID)
 	if res.IsError {
 		t.Fatalf("delegate(stop_all) on a queued session = error %q", res.ForLLM)
 	}
-	if strings.Contains(res.ForLLM, "no action needed") {
-		t.Errorf("delegate(stop_all) answered %q — a success-shaped no-op for a session it left queued and running-to-be", res.ForLLM)
-	}
-	if !strings.Contains(res.ForLLM, "queued") || !strings.Contains(res.ForLLM, "never run") {
-		t.Errorf("delegate(stop_all) answered %q — it must say plainly that a worker which had not started was dropped", res.ForLLM)
+	if res.ForLLM != oneStopReply(queuedID) {
+		t.Errorf("delegate(stop_all) answered %q, want exactly %q", res.ForLLM, oneStopReply(queuedID))
 	}
 
-	gate := al.steerAdmission()
-	if got := gate.queueLen(); got != 0 {
+	// The owner lands the never-ran session; the tool does not.
+	awaitLandedStopped(t, al, queuedID, "the stopped queued session")
+	if got := al.steerAdmission().queueLen(); got != 0 {
 		t.Errorf("start queue length after the stop = %d, want 0 — the stopped worker is still waiting to run", got)
 	}
-	rec, loadErr := al.GetSessionLifecycleStore().Load(queuedID)
-	if loadErr != nil {
-		t.Fatalf("Load(queued): %v", loadErr)
-	}
-	if rec.State != session.LifecycleStopped {
-		t.Fatalf("the cancelled queued session did not land stopped (state=%q) — nothing stops admission promoting it", rec.State)
-	}
-	if rec.StopNote == nil {
-		t.Fatalf("the cancelled queued session landed stopped with no StopNote (state=%q) — D2/CRIT-001 requires one on every stopped landing", rec.State)
-	}
 
-	// Free the slot: the FIFO drain now runs, and the cancelled worker must
+	// Free the slot: the FIFO drain now runs, and the stopped worker must
 	// not be what it starts.
 	releaseAll()
 	if ts := al.getActiveTurnState(busyID); ts != nil {
@@ -178,7 +201,7 @@ func TestDelegateCancel_QueuedSubagentIsDroppedAndNeverStarts(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if ts := al.getActiveTurnState(queuedID); ts != nil {
-			t.Fatalf("the cancelled session %s started a turn once a slot freed", queuedID)
+			t.Fatalf("the stopped session %s started a turn once a slot freed", queuedID)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -186,13 +209,28 @@ func TestDelegateCancel_QueuedSubagentIsDroppedAndNeverStarts(t *testing.T) {
 	if loadErr != nil {
 		t.Fatalf("Load(queued, after the drain): %v", loadErr)
 	}
-	if after.State == session.LifecycleRunning {
-		t.Fatalf("the cancelled session is `running` after a slot freed — it was promoted anyway")
+	if after.State != session.LifecycleStopped {
+		t.Fatalf("the stopped session is %q after a slot freed — it was promoted anyway", after.State)
+	}
+
+	// Chat-transcript meta mirror (replaces the retired tool-side queued-drop
+	// tests, delegate_meta_mirror_947_test.go): a stopped helper stays
+	// coarse-active in sessions/<id>/meta.json (ADR D4/MAJ-009), landed by the
+	// owner, with the lifecycle record itself stopped.
+	meta, metaErr := al.GetSessionStore().GetMeta(queuedID)
+	if metaErr != nil {
+		t.Fatalf("GetMeta(queued): %v", metaErr)
+	}
+	if meta.Status != session.StatusActive {
+		t.Errorf("transcript meta status = %q, want %q — a stopped helper stays coarse-active", meta.Status, session.StatusActive)
 	}
 }
 
 // TestDelegateCancel_RunningSubagentStopsItsGrandchildren proves AC-8 for an
-// agent's own cancel: stopping a worker stops the workers IT started.
+// agent's own stop: stopping a worker stops the workers IT started. Landing is
+// pending-until-tail (D2/D4): the request returns once the stop is accepted;
+// the named child and its grandchild each land `stopped` (note kept, fence
+// cleared) only after their own turns shut down.
 func TestDelegateCancel_RunningSubagentStopsItsGrandchildren(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -220,49 +258,38 @@ func TestDelegateCancel_RunningSubagentStopsItsGrandchildren(t *testing.T) {
 		t.Fatal("no live turn registered for the grandchild; this test would prove nothing")
 	}
 
-	res := runDelegateCancel(t, al, parentID, childID, true)
+	res := runDelegateCancel(t, al, parentID, childID)
 	if res.IsError {
-		t.Fatalf("delegate(stop_all, hard) on a running child = error %q", res.ForLLM)
+		t.Fatalf("delegate(stop_all) on a running child = error %q", res.ForLLM)
 	}
-	if !strings.Contains(res.ForLLM, "hard-cancelled immediately") {
-		t.Errorf("delegate(stop_all, hard) answered %q — a worker that WAS stopped must be reported as stopped", res.ForLLM)
+	if res.ForLLM != oneStopReply(childID) {
+		t.Errorf("delegate(stop_all) answered %q, want exactly %q", res.ForLLM, oneStopReply(childID))
 	}
 
-	lifecycle := al.GetSessionLifecycleStore()
-	grandRec, loadErr := lifecycle.Load(grandID)
-	if loadErr != nil {
-		t.Fatalf("Load(grandchild): %v", loadErr)
-	}
-	if grandRec.Stop == nil || grandRec.Stop.Generation != grandRec.Generation {
-		t.Fatalf("the grandchild carries no Stop marker for its current generation (stop=%+v, generation=%d) — "+
-			"a cancel on its parent never reached it", grandRec.Stop, grandRec.Generation)
-	}
-	childRec, loadErr := lifecycle.Load(childID)
-	if loadErr != nil {
-		t.Fatalf("Load(child): %v", loadErr)
-	}
-	if childRec.State != session.LifecycleStopped {
-		t.Fatalf("the named child did not land stopped (state=%q)", childRec.State)
-	}
-	if childRec.StopNote == nil {
-		t.Fatalf("the named child landed stopped with no StopNote (state=%q) — D2/CRIT-001 requires one on every stopped landing", childRec.State)
-	}
 	select {
 	case <-grandTS.Finished():
 	case <-time.After(30 * time.Second):
-		t.Fatal("the grandchild's live turn is still running 30s after its parent was hard-cancelled")
+		t.Fatal("the grandchild's live turn is still running 30s after its parent was stopped")
+	}
+	childRec := awaitLandedStopped(t, al, childID, "the named child")
+	grandRec := awaitLandedStopped(t, al, grandID, "the grandchild")
+	if childRec.StopNote.Cause != session.StopCauseStop {
+		t.Errorf("named child StopNote.Cause = %q, want %q (it is the direct target)", childRec.StopNote.Cause, session.StopCauseStop)
+	}
+	if grandRec.StopNote.Cause != session.StopCauseCascade {
+		t.Errorf("grandchild StopNote.Cause = %q, want %q (reached through its parent's stop-all)", grandRec.StopNote.Cause, session.StopCauseCascade)
 	}
 }
 
 // TestDelegateCancel_PartialCascadeIsNeverReportedAsCleanSuccess is Finding 3
-// (ADR-091 fix lane 2): cancelDelegatedSubtree consulted report.Unreachable
-// ONLY when nothing was reached at all, and discarded
-// report.SkippedNewerGeneration unconditionally — so reaching one node and
-// losing another read as a clean, unqualified success to the model
-// (pkg/tools/delegate_run.go's "cooperatively cancelled"/"hard-cancelled
-// immediately" wording, driven purely off cerr == nil). A partial cascade
-// must surface as an error, exactly as the neighbouring background-shell-kill
-// warning does for a lesser resource (delegate_run.go::cancelBackgroundShellWarnings).
+// (ADR-091 fix lane 2): the cascade consulted report.Unreachable ONLY when
+// nothing was reached at all, and discarded report.SkippedNewerGeneration
+// unconditionally — so reaching one node and losing another read as a clean,
+// unqualified success to the model. A partial cascade must surface as an
+// error naming the session it could not stop, exactly as the neighbouring
+// background-shell-kill warning does for a lesser resource
+// (delegate_run.go::cancelBackgroundShellWarnings). Driven through the real
+// tool (the one stop method), not an internal cascade function.
 func TestDelegateCancel_PartialCascadeIsNeverReportedAsCleanSuccess(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -285,16 +312,20 @@ func TestDelegateCancel_PartialCascadeIsNeverReportedAsCleanSuccess(t *testing.T
 	}
 	t.Cleanup(func() { _ = os.Chmod(unreachablePath, 0o600) })
 
-	_, err := al.cancelDelegatedSubtree(reachedID, steer.Principal{Kind: steer.PrincipalKindAgent, ID: parentID}, true, "test")
-	if err == nil {
-		t.Fatal("cancelDelegatedSubtree reported a clean success for a cascade that reached a sibling but corrupted a descendant's own record")
+	res := runDelegateCancel(t, al, parentID, reachedID)
+	if !res.IsError {
+		t.Fatalf("stop_all reported a clean success (%q) for a cascade that reached one session but could not read a descendant's own record", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, unreachableID) {
+		t.Errorf("the partial-cascade error %q must name the session that was not stopped (%s)", res.ForLLM, unreachableID)
 	}
 
 	rec, loadErr := lifecycle.Load(reachedID)
 	if loadErr != nil {
 		t.Fatalf("Load(reached): %v", loadErr)
 	}
-	if rec.Stop == nil {
-		t.Fatalf("the reachable session was not actually stamped despite the partial failure — the cascade itself, not just the report, regressed")
+	if rec.StopNote == nil {
+		t.Fatalf("the reachable session was not actually stopped despite the partial failure (state=%q, no StopNote) — "+
+			"the cascade itself, not just the report, regressed", rec.State)
 	}
 }

@@ -201,10 +201,13 @@ func TestCancelHandler_NilRuntimeRepliesUnavailable(t *testing.T) {
 	}
 }
 
-// TestCancelHandler_NilAgentLoopRepliesNothingToCancel verifies that
-// CancelActiveTurn with no agent loop wired returns ErrNoActiveTurn, causing
-// the handler to reply "Nothing to cancel" (C-3 fix: was previously "⏸ Canceling...").
-func TestCancelHandler_NilAgentLoopRepliesNothingToCancel(t *testing.T) {
+// TestCancelHandler_NilAgentLoopRepliesVisibleErrorNothingWasStopped: with no
+// agent loop wired /cancel cannot stop anything and cannot know whether
+// anything runs, so (team-lead ruling, founder one-stop decision 2026-10-05)
+// the reply is a visible error that says nothing was stopped -- never the
+// quiet "Nothing to stop.", which is reserved for a conversation that
+// genuinely has nothing running (see the no_active_turn row below).
+func TestCancelHandler_NilAgentLoopRepliesVisibleErrorNothingWasStopped(t *testing.T) {
 	rt := &Runtime{
 		SessionID: func() string { return "some-session" },
 		// agentLoop intentionally left nil
@@ -225,8 +228,9 @@ func TestCancelHandler_NilAgentLoopRepliesNothingToCancel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if reply != "Nothing to cancel" {
-		t.Errorf("reply = %q, want %q", reply, "Nothing to cancel")
+	const want = "Cancel request failed: tree-scoped Stop all is unavailable; nothing was stopped"
+	if reply != want {
+		t.Errorf("reply = %q, want %q", reply, want)
 	}
 }
 
@@ -327,10 +331,11 @@ func TestCancelHandler_ReplyMatchesErrorState(t *testing.T) {
 		},
 		{
 			// No active turn: loop returns (fired=false, nil).
-			// CancelActiveTurn returns ErrNoActiveTurn → handler replies "Nothing to cancel".
+			// CancelActiveTurn returns ErrNoActiveTurn → handler replies
+			// "Nothing to stop." (team-lead ruling: true, not an error).
 			name:        "no_active_turn",
 			returnFired: &fired,
-			wantReply:   "Nothing to cancel",
+			wantReply:   "Nothing to stop.",
 		},
 		{
 			// No active turn YET, but a pre-registration cancel latch armed:

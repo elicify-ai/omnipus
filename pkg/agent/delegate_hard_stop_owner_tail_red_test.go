@@ -1,7 +1,11 @@
 package agent
 
-// Frozen D2/D4/T27, preserved by October 4 C6: a hard-abort REQUEST does
-// not settle the original execution tail. Only external provider I/O is held.
+// Frozen D2/D4/T27, preserved by October 4 C6 and by the founder's one-stop
+// decision (2026-10-05): the stop's forced stage (3 s after the polite one) is
+// only a REQUEST; it does not settle the original execution tail. Only the
+// owning execution lands `stopped`, after its provider/output tail retires.
+// The agent-only immediate `hard` argument is gone. Only external provider I/O
+// is held.
 import (
 	"context"
 	"reflect"
@@ -14,7 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-func TestDelegateStopAll_HardRequestRetainsFenceUntilOriginalOwnerTail(t *testing.T) {
+func TestDelegateStopAll_ForcedStageRetainsFenceUntilOriginalOwnerTail(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 	al, _ := newSteerAL(t)
 	wireSteerCompletionDeps(t, al)
@@ -38,30 +42,34 @@ func TestDelegateStopAll_HardRequestRetainsFenceUntilOriginalOwnerTail(t *testin
 		t.Fatal("SETUP: original immutable owner handle missing")
 	}
 	goalBefore := mustGoalRecord(t, old.GoalRef)
+	stoppedAt := time.Now()
 	result := delegateToolFor(t, al).Execute(tools.WithTranscriptSessionID(context.Background(), parent),
-		map[string]any{"action": "stop_all", "session_id": old.SessionID, "hard": true})
+		map[string]any{"action": "stop_all", "session_id": old.SessionID})
 	if result == nil || result.IsError {
-		t.Fatalf("actual registered hard Stop-all refused: %+v", result)
+		t.Fatalf("actual registered Stop-all refused: %+v", result)
 	}
 	select {
 	case <-provider.softCancelled:
 	case <-time.After(5 * time.Second):
-		t.Fatal("hard Stop did not reach original provider cancellation boundary")
+		t.Fatal("Stop did not reach original provider cancellation boundary")
 	}
-	if !handle.hardAbortRequested() {
-		t.Error("actual hard request did not target original immutable execution")
+	// Polite first: the stop is NOT forced the moment it is requested.
+	if handle.hardAbortRequested() {
+		t.Error("the stop forced the original execution immediately; the one stop method asks politely and forces only at 3s")
 	}
+	// Then the forced stage targets the original immutable execution at 3 s.
+	requireOneStopTimeline(t, "original stop of A", handle, stoppedAt)
 	// Provider has witnessed cancellation, but cannot return before release.
 	// Therefore the real owning dispatch/completion tail cannot have settled.
 	accepted := rootReopenedRecord(t, al, old.SessionID)
 	if accepted.State != session.LifecycleRunning || accepted.Stop == nil || accepted.Stop.Generation != old.Generation || accepted.StopNote == nil || accepted.StopEffect == nil || !reflect.DeepEqual(accepted.ExecutionID, old.ExecutionID) {
-		t.Errorf("D2/D4: hard-abort request prematurely landed/cleared original owning fence while provider I/O is held: state=%s fence=%+v note=%+v effect=%+v", accepted.State, accepted.Stop, accepted.StopNote, accepted.StopEffect)
+		t.Errorf("D2/D4: the forced stage's abort request prematurely landed/cleared original owning fence while provider I/O is held: state=%s fence=%+v note=%+v effect=%+v", accepted.State, accepted.Stop, accepted.StopNote, accepted.StopEffect)
 	}
 	if accepted.StopEffect == nil {
-		t.Fatal("hard Stop lost its authentic selected control/owner pair")
+		t.Fatal("the stop lost its authentic selected control/owner pair")
 	}
 	if accepted.StopEffect.Target.RunID != old.ExecutionID.RunID || accepted.StopEffect.Target.BootSeq != old.ExecutionID.BootSeq || accepted.StopEffect.Target.Generation != old.Generation {
-		t.Errorf("hard request lost original execution targeting: effect=%+v original=%+v", accepted.StopEffect, old.ExecutionID)
+		t.Errorf("the forced stage lost original execution targeting: effect=%+v original=%+v", accepted.StopEffect, old.ExecutionID)
 	}
 	transitions, err := al.GetSessionLifecycleStore().ListStoppedTransitions(old.SessionID)
 	if err != nil || len(transitions) != 0 {
@@ -78,7 +86,7 @@ func TestDelegateStopAll_HardRequestRetainsFenceUntilOriginalOwnerTail(t *testin
 		t.Errorf("D4: selected stop must land once after tail: transitions=%+v err=%v", transitions, err)
 	}
 	if after := mustGoalRecord(t, old.GoalRef); !reflect.DeepEqual(after, goalBefore) || after.State != generated.GoalStateActive {
-		t.Errorf("hard Stop altered active goal: before=%+v after=%+v", goalBefore, after)
+		t.Errorf("the stop altered active goal: before=%+v after=%+v", goalBefore, after)
 	}
 	f := &bootNoticeControlFixture{al: al, parent: parent, resumed: old}
 	assertBootNoticeNoFatalFinal(t, f)

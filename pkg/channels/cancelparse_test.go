@@ -38,8 +38,10 @@ func TestIsCancelCommand_T11(t *testing.T) {
 
 // TestDispatchCancelIfRecognized_NilInterceptorSafe ensures that a nil
 // interceptor does not panic and still returns true (message consumed). With
-// a nil interceptor the outcome is a genuine no-op (fired=false, armed=false),
-// so the ack is "Nothing to cancel" (Defect #29).
+// no interceptor wired nothing can be stopped, and the channel cannot know
+// whether anything runs: team-lead ruling (founder one-stop decision,
+// 2026-10-05) -- the ack is a visible error saying nothing was stopped, never
+// the quiet "Nothing to stop." reserved for a genuine no-op.
 func TestDispatchCancelIfRecognized_NilInterceptorSafe(t *testing.T) {
 	sent := ""
 	sendFn := func(_ context.Context, _, text string) error {
@@ -50,8 +52,9 @@ func TestDispatchCancelIfRecognized_NilInterceptorSafe(t *testing.T) {
 	if !got {
 		t.Fatal("expected true (message consumed) even with nil interceptor")
 	}
-	if sent != "Nothing to cancel" {
-		t.Errorf("expected ack %q for a nil-interceptor no-op; got %q", "Nothing to cancel", sent)
+	const want = "Cancel request failed: tree-scoped Stop all is unavailable; nothing was stopped"
+	if sent != want {
+		t.Errorf("expected ack %q for an unwired interceptor; got %q", want, sent)
 	}
 }
 
@@ -208,7 +211,7 @@ func TestDispatchCancelIfRecognized_AckTextByOutcome(t *testing.T) {
 	}{
 		{"fired", true, false, "⏸ Canceling..."},
 		{"armed", false, true, "⏸ Cancel acknowledged — nothing is running yet, but it will stop the instant it starts."},
-		{"noop", false, false, "Nothing to cancel"},
+		{"noop", false, false, "Nothing to stop."},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

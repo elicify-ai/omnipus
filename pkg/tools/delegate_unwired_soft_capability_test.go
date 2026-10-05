@@ -1,18 +1,19 @@
 package tools
 
-// Typed cancellation capability boundary, not a runtime-admission fixture.
-// D2/T27 and e275's published SoftCancelFunc contract: an unwired soft
-// capability is a visible error, never a fresh hard fallback or state write.
+// Typed stop capability boundary, not a runtime-admission fixture.
+// D2/T27 plus the founder one-stop decision (2026-10-05): the tool has ONE stop
+// hook; when it is not wired, stop_all is a visible error and the tool never
+// falls back to its own state write or a second mechanism.
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
-	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-func TestDelegateStopAll_UnwiredSoftCapabilityRefusesWithoutStateOrControlWrite(t *testing.T) {
+func TestDelegateStopAll_UnwiredStopHookRefusesWithoutStateOrControlWrite(t *testing.T) {
 	tool, lifecycle, _, _ := newADR053TestTool(t)
 	// Reuse the existing tool-boundary record shape; no execution/control
 	// identity or real runtime-admission claim is invented by this fixture.
@@ -33,18 +34,16 @@ func TestDelegateStopAll_UnwiredSoftCapabilityRefusesWithoutStateOrControlWrite(
 	if err != nil {
 		t.Fatalf("read original control inventory: %v", err)
 	}
-	called := false
-	tool.SetCancelHooks(nil, func(string, steer.Principal, string) ([]string, error) {
-		called = true
-		return []string{child}, nil
-	})
+	// No stop hook is installed: the tool's one stop capability is unwired.
 	result := tool.Execute(WithTranscriptSessionID(context.Background(), "parent-1"),
-		map[string]any{"action": "stop_all", "session_id": child, "hard": false})
-	if result == nil || !result.IsError || result.ForLLM != "delegate: no soft-cancel hook configured" {
-		t.Fatalf("unwired soft capability result=%+v, want exact visible error", result)
+		map[string]any{"action": "stop_all", "session_id": child})
+	if result == nil || !result.IsError {
+		t.Fatalf("unwired stop hook result=%+v, want a visible error", result)
 	}
-	if called {
-		t.Error("unwired soft capability invoked a fresh hard fallback")
+	// Exact wording is the implementer's; it must name the missing stop
+	// capability so the calling agent can tell what is wrong.
+	if !strings.Contains(strings.ToLower(result.ForLLM), "stop") {
+		t.Errorf("unwired stop hook error %q does not mention the stop capability", result.ForLLM)
 	}
 	after, err := lifecycle.Load(child)
 	if err != nil || !reflect.DeepEqual(after, before) {

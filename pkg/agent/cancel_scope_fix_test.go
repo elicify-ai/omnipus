@@ -9,16 +9,11 @@
 //   - Defect 1: a delegate action="stop_all" must reach the target child's own
 //     grandchild (D8/R-13), proven END TO END through the REAL wiring call
 //     site — not just the al.Interrupt primitive
-//     session_messaging_wire_adr057_test.go already covers. That file's
-//     TestSetCancelHooks_ChildCancelReachesSubtree /
-//     TestSetCancelHooks_HardVariantAlsoUsesScopeSubtree call al.Interrupt /
-//     al.InterruptSessionHard DIRECTLY with an explicit scope constant, so
-//     they pass identically regardless of what
-//     wireSessionMessagingForAgent actually wires — they document/pin the
-//     scope CONTRACT but do not exercise the wiring itself. TestDelegate...
-//     below closes that gap: it drives a REAL *tools.DelegateTool registered
-//     by a REAL *AgentLoop's own boot path, wires it via the REAL
-//     SetSessionMessagingStores → wireSessionMessagingForAgent path, and
+//     session_messaging_wire_adr057_test.go already covers (those call
+//     al.Interrupt / al.InterruptSessionHard DIRECTLY with an explicit scope
+//     constant, so they document the scope contract but do not exercise the
+//     wiring). TestDelegate... below closes that gap: it drives a REAL
+//     *tools.DelegateTool registered by a REAL *AgentLoop's own boot path and
 //     invokes the tool's real action="stop_all" dispatch — the actual
 //     regression surface a future edit that narrows the reach would break.
 //
@@ -54,107 +49,87 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // TestDelegateCancel_WiredThroughRealAgentLoop_ReachesGrandchild is the
 // end-to-end proof for Defect 1: a delegate(action="stop_all") issued against
-// a REAL *tools.DelegateTool — registered by a REAL *AgentLoop's own default
-// agent, wired via the REAL SetSessionMessagingStores →
-// wireSessionMessagingForAgent path (not a hand-installed stub hook) — must
-// reach the target child's own live descendant (a grandchild delegate),
-// closing the ADR-057 D8/R-13 leak: before this fix, a per-delegation stop
-// left the child's own grandchildren (and their background shells) running
-// forever.
+// a REAL *tools.DelegateTool -- registered by a REAL *AgentLoop's default agent
+// and wired by the REAL production path (no hand-installed hook) -- must reach
+// the target child's own live descendant (a grandchild delegate), closing the
+// ADR-057 D8/R-13 leak, and must stay a SUBTREE: a sibling helper is untouched.
 //
-// Every turnState here is registered via the real production path
-// (al.registerActiveTurn, via u19FixtureTurns from
-// session_messaging_wire_adr057_test.go) and every lifecycle record is
-// persisted to a REAL on-disk session.LifecycleStore (per binding Rule 1 —
-// no spies).
+// Fixture rebuilt for D2 (identity persisted before admission): every session
+// here is a real launched and dispatched helper with a real admission identity;
+// the earlier hand-built turnStates carried none, so the stop could not select
+// an execution. Both the polite stage and the stop landing are observed on the
+// real immutable handles and records.
 func TestDelegateCancel_WiredThroughRealAgentLoop_ReachesGrandchild(t *testing.T) {
-	al, cleanup := newAL(t)
+	al, cleanup := newSteerAL(t)
 	defer cleanup()
+	al.GetConfig().Performance.MaxParallelAgents = 4
+	provider, _ := installParkedProvider(t, al)
 
-	parent, child, grandchild, fixtureCleanup := u19FixtureTurns(t, al, "e2e-cancel")
-	defer fixtureCleanup()
+	launcher := NewSteerLauncher(al)
+	parentID := newTestSteeringSession(t, al, "ws-cancel-scope")
+	childID, childGen := launchSteeredChild(t, al, parentID, "call-scope-child", "the helper being stopped")
+	siblingID, siblingGen := launchSteeredChild(t, al, parentID, "call-scope-sibling", "an unrelated helper that must keep working")
+	if _, err := launcher.Dispatch(context.Background(), childID, childGen); err != nil {
+		t.Fatalf("Dispatch(child): %v", err)
+	}
+	grandID, grandGen := launchSteeredChild(t, al, childID, "call-scope-grandchild", "the helper the helper started")
+	if _, err := launcher.Dispatch(context.Background(), grandID, grandGen); err != nil {
+		t.Fatalf("Dispatch(grandchild): %v", err)
+	}
+	if _, err := launcher.Dispatch(context.Background(), siblingID, siblingGen); err != nil {
+		t.Fatalf("Dispatch(sibling): %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		select {
+		case <-provider.entered:
+		case <-time.After(30 * time.Second):
+			t.Fatalf("only %d of the 3 helpers reached the provider", i)
+		}
+	}
+	childTS, grandTS, siblingTS := al.getActiveTurnState(childID), al.getActiveTurnState(grandID), al.getActiveTurnState(siblingID)
+	require.NotNil(t, childTS, "SETUP: the child must have a live turn")
+	require.NotNil(t, grandTS, "SETUP: the grandchild must have a live turn")
+	require.NotNil(t, siblingTS, "SETUP: the sibling must have a live turn")
 
-	// The lifecycle record is what delegate.executeCancel's ownership check
-	// and terminal check consult — it must name child.sessionKey (the
-	// "session_id" the tool call below targets) as a direct child of
-	// parent.sessionKey (the caller-owner key the test's context asserts).
-	lifecycleStore := session.NewLifecycleStore(t.TempDir())
-	require.NoError(t, lifecycleStore.Persist(&session.LifecycleRecord{
-		SessionID:      child.sessionKey,
-		Generation:     1,
-		State:          session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeParentSession,
-		OwnerScopeID:   parent.sessionKey,
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: parent.sessionKey, RootSessionID: parent.sessionKey},
-		AgentID:        "main",
-	}))
-	// The grandchild's own record IS the parent-child edge the cascade walks
-	// (ADR-091 I-6 / CollectDescendantSessionIDs). Every delegated session
-	// has one — Launch writes it before the child's first turn exists.
-	require.NoError(t, lifecycleStore.Persist(&session.LifecycleRecord{
-		SessionID:      grandchild.sessionKey,
-		Generation:     1,
-		State:          session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeParentSession,
-		OwnerScopeID:   child.sessionKey,
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: child.sessionKey, RootSessionID: parent.sessionKey},
-		AgentID:        "main",
-	}))
-
-	// Real production wiring: installs the store AND re-wires every
-	// currently-registered agent's delegate tool (SetLifecycleStore +
-	// SetCancelHooks with the FIXED ScopeSubtree scope) — the exact call the
-	// gateway makes at boot.
-	al.SetSessionMessagingStores(nil, lifecycleStore)
-
-	inst := al.GetRegistry().GetDefaultAgent()
-	require.NotNil(t, inst, "AgentLoop has no default agent registered")
-	toolIface, ok := inst.Tools.Get("delegate")
-	require.True(t, ok, "default agent has no 'delegate' tool registered")
-	dt, ok := toolIface.(*tools.DelegateTool)
-	require.True(t, ok, "'delegate' tool is not a *tools.DelegateTool")
-
-	// FR-196 kill switch: a bare test config has session_messaging.enabled
-	// unset (false), which fails-closed the "stop_all" action before it ever
-	// reaches the scope under test. wireSessionMessagingForAgent (called by
-	// SetSessionMessagingStores above) installs that live-false reader, so
-	// this override MUST come AFTER it — exactly mirroring
-	// wiring_adr057_fix_test.go's own pattern for the same precondition.
-	dt.SetSessionMessagingEnabled(func() bool { return true })
-
-	callerCtx := tools.WithTranscriptSessionID(context.Background(), parent.sessionKey)
-	result := dt.Execute(callerCtx, map[string]any{
-		"action":     "stop_all",
-		"session_id": child.sessionKey,
-		"hard":       false,
-	})
+	result := runDelegateCancel(t, al, parentID, childID)
 	require.False(t, result.IsError, "delegate stop_all failed: %s", result.ForLLM)
 
-	childInterrupted, _ := child.gracefulInterruptRequested()
-	assert.True(t, childInterrupted, "the named child's own graceful-interrupt flag must be set")
-
-	grandchildInterrupted, _ := grandchild.gracefulInterruptRequested()
+	childInterrupted, _ := childTS.gracefulInterruptRequested()
+	assert.True(t, childInterrupted, "the named child's own polite stop must be requested")
+	grandchildInterrupted, _ := grandTS.gracefulInterruptRequested()
 	assert.True(t, grandchildInterrupted,
-		"delegate action=stop_all, dispatched through the REAL wireSessionMessagingForAgent wiring, "+
-			"must reach the child's own grandchild — this is the ADR-057 D8/R-13 fix. Before it, "+
-			"session_messaging_wire.go wired ScopeSelfOnly and this assertion would fail: the "+
-			"grandchild (and any background shells it owns) would be left running forever")
+		"delegate action=stop_all, dispatched through the real wiring, must reach the child's own grandchild — "+
+			"the ADR-057 D8/R-13 fix: the grandchild (and any background shells it owns) must not be left running")
+	siblingInterrupted, _ := siblingTS.gracefulInterruptRequested()
+	assert.False(t, siblingInterrupted, "stopping one helper must never reach its sibling")
 
-	// The reach is a SUBTREE, not a sweep: the caller's own turn is never a
-	// descendant of the session it cancelled and must be untouched.
-	parentInterrupted, _ := parent.gracefulInterruptRequested()
-	assert.False(t, parentInterrupted,
-		"cancelling a child must never reach the caller's own turn")
+	for name, ts := range map[string]*turnState{"child": childTS, "grandchild": grandTS} {
+		select {
+		case <-ts.Finished():
+		case <-time.After(30 * time.Second):
+			t.Fatalf("the %s's turn is still running 30s after the stop", name)
+		}
+	}
+	awaitLandedStopped(t, al, childID, "the named child")
+	awaitLandedStopped(t, al, grandID, "the grandchild")
+
+	// The reach is a SUBTREE, not a sweep: the sibling keeps running, unfenced.
+	sibling, err := al.GetSessionLifecycleStore().Load(siblingID)
+	require.NoError(t, err)
+	assert.Equal(t, session.LifecycleRunning, sibling.State, "the sibling must still be running")
+	assert.Nil(t, sibling.Stop, "the sibling must carry no stop fence")
+	assert.Nil(t, sibling.StopNote, "the sibling must carry no stop note")
+	assert.True(t, siblingTS.IsAlive(), "the sibling's live turn must be untouched")
 }
 
 // TestCollectDescendantSessionIDs_PartialFailureReturnsErrorAndPartialSet is
