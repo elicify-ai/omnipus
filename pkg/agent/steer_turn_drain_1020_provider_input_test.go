@@ -1,59 +1,14 @@
 package agent
 
 import (
-	"context"
 	"fmt"
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
-
-// steerRevivalInputProvider1020 records requests at the external provider
-// boundary without changing mockProvider's response. Completion, revival,
-// prompt construction and the registered delegate sink remain real.
-type steerRevivalInputProvider1020 struct {
-	mockProvider
-	mu       sync.Mutex
-	requests [][]providers.Message
-}
-
-func (p *steerRevivalInputProvider1020) Chat(
-	ctx context.Context,
-	messages []providers.Message,
-	tools []providers.ToolDefinition,
-	model string,
-	opts map[string]any,
-) (*providers.LLMResponse, error) {
-	p.mu.Lock()
-	p.requests = append(p.requests, append([]providers.Message(nil), messages...))
-	p.mu.Unlock()
-	return p.mockProvider.Chat(ctx, messages, tools, model, opts)
-}
-
-func (p *steerRevivalInputProvider1020) Requests() [][]providers.Message {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	requests := make([][]providers.Message, len(p.requests))
-	for i := range p.requests {
-		requests[i] = append([]providers.Message(nil), p.requests[i]...)
-	}
-	return requests
-}
-
-func recordSteerRevivalInput1020(t *testing.T, al *AgentLoop) *steerRevivalInputProvider1020 {
-	t.Helper()
-	agent, ok := al.GetRegistry().GetAgent(testDefaultAgentID)
-	if !ok {
-		t.Fatal("SETUP: default test agent is not registered")
-	}
-	provider := &steerRevivalInputProvider1020{}
-	agent.Provider = provider
-	return provider
-}
 
 // The caller's accepted texts are the oracle (CHECK-2 Finding 1), never the
 // fixed provider answer. Check both first delivery order and conservation in

@@ -104,7 +104,8 @@ func TestR1Completion_InputAfterCommitStartsNextGenerationPreservesOwedFinal(t *
 	if current.Generation != child.Generation+1 || current.State != session.LifecycleRunning || current.ExecutionID == nil || current.ExecutionID.RunID == child.ExecutionID.RunID {
 		t.Fatalf("post-commit next-round admission: G=%d state=%q identity=%+v, want G=%d fresh running execution", current.Generation, current.State, current.ExecutionID, child.Generation+1)
 	}
-	old, _, _, _, readErr := al.GetSessionLifecycleStore().CommittedFinalDelivery(child.SessionID, child.Generation, child.ExecutionID.RunID)
+	old, progress, _, retired, readErr := al.GetSessionLifecycleStore().CommittedFinalDelivery(child.SessionID, child.Generation, child.ExecutionID.RunID)
+	_, _ = progress, retired
 	if readErr != nil || !bytes.Equal(old.Payload, raw) || old.MessageID != committed.FinalDelivery.MessageID || old.PayloadHash != committed.FinalDelivery.PayloadHash {
 		t.Fatalf("old committed final was changed/hidden by G+1: old=%+v error=%v", old, readErr)
 	}
