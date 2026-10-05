@@ -188,6 +188,13 @@ func newU2ScopeFixture(t *testing.T) *u2ScopeFixture {
 	closeLoop := func() { closeOnce.Do(al.Close) }
 	t.Cleanup(closeLoop)
 	t.Cleanup(func() { close(p.release) })
+	// Mirror bootstrap before helpers use the real launcher and admission gate.
+	boot := session.NewBootEpochStore(home)
+	epoch, err := boot.Mint()
+	require.NoError(t, err, "SETUP Mint genuine boot epoch")
+	require.NotZero(t, epoch, "SETUP requires one genuine nonzero boot epoch")
+	require.Equal(t, epoch, boot.Current(), "SETUP must wire the epoch minted by this store")
+	al.SetBootEpochStore(boot)
 	lifecycle := session.NewLifecycleStore(t.TempDir())
 	al.SetSessionMessagingStores(session.NewMessageInboxStore(t.TempDir()), lifecycle)
 	setGatewaySteerCanceller(al, agent.NewSteerCanceller(lifecycle, al.SteerGenerationCancel))
