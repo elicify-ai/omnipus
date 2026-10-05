@@ -29,22 +29,28 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('(a) every nav item routes correctly', async ({ page }) => {
-  // A wide window starts with the sidebar docked, so the nav is already on
-  // screen. Docking survives navigation; there is no menu button to reopen.
+  // A fresh visit is not pinned: the sidebar starts closed and the header
+  // shows the hamburger (Show sidebar). Show opens it as an overlay; choosing
+  // a destination closes the overlay again, so each leg re-opens it. The
+  // hamburger is only on screen while the sidebar is off screen.
+  const showSidebar = page.getByRole('button', { name: 'Show sidebar' });
   const nav = page.locator('nav[aria-label="Main navigation"]');
-  await expect(nav).toBeVisible({ timeout: 10_000 });
+  await expect(showSidebar).toBeVisible({ timeout: 10_000 });
 
   for (const item of LIBRARY_NAV_ITEMS) {
+    await showSidebar.click();
+    await expect(nav).toBeVisible({ timeout: 5_000 });
     // HashRouter: links have href="/#/<path>"
     const link = nav.locator(`a[href="${item.href}"]`).first();
     await expect(link).toBeVisible({ timeout: 5_000 });
     await link.click();
     await expect(page).toHaveURL(item.urlPattern, { timeout: 10_000 });
-    await expect(nav).toBeVisible({ timeout: 5_000 });
   }
 
-  // Settings: the docked sidebar's profile dropdown, then its portaled
+  // Settings: the sidebar's profile dropdown, then its portaled
   // "Settings" menu item.
+  await showSidebar.click();
+  await expect(nav).toBeVisible({ timeout: 5_000 });
 
   const profileTrigger = page.locator('[data-testid="sidebar-profile-trigger"]');
   await expect(profileTrigger).toBeVisible({ timeout: 5_000 });
@@ -71,9 +77,10 @@ test('(c) D8: Settings navigated to via the profile menu is clickable on the FIR
   // tab trigger — hit the backdrop instead of the tab, silently closing the
   // (already-hidden) backdrop and doing nothing else. Only the SECOND click
   // actually reached the tab.
-  // Narrow window: pin is ignored, so the saved docked choice does not show
-  // the sidebar. Show sidebar opens the overlay, which is the path whose
-  // backdrop used to swallow the first click on the next page.
+  // Narrow window: below 1024px a pin is ignored and a fresh visit is not
+  // pinned, so the sidebar starts closed and Show sidebar (the hamburger)
+  // opens the overlay — the path whose backdrop used to swallow the first
+  // click on the next page.
   await page.setViewportSize({ width: 800, height: 720 });
   await page.reload();
   const showSidebar = page.getByRole('button', { name: 'Show sidebar' });
@@ -106,26 +113,34 @@ test('(c) D8: Settings navigated to via the profile menu is clickable on the FIR
   await expectA11yClean(page);
 });
 
-test('(b) hiding the sidebar persists across reload, and showing it docks again', async ({ page }) => {
-  const nav = page.locator('[aria-label="Main navigation"]').first();
-  await expect(nav).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByRole('button', { name: 'Show sidebar' })).toHaveCount(0);
+test('(b) pinning persists across reload; a fresh visit stays closed until shown', async ({ page }) => {
+  // Fresh profile, no saved pin: the sidebar is closed and the header shows
+  // the hamburger (Show sidebar).
+  const nav = page.locator('[aria-label="Main navigation"]');
+  await expect(page.getByRole('button', { name: 'Show sidebar' })).toBeVisible({ timeout: 10_000 });
+  await expect(nav).toHaveCount(0);
 
-  await page.getByRole('button', { name: 'Hide sidebar' }).click();
-  await expect(nav).toBeHidden({ timeout: 5_000 });
+  // Opening it does not leave Show sidebar on screen — the hamburger is
+  // hidden while the sidebar is open, and opening never pins.
   const showSidebar = page.getByRole('button', { name: 'Show sidebar' });
+  await showSidebar.click();
+  await expect(nav.first()).toBeVisible({ timeout: 5_000 });
+  await expect(showSidebar).toHaveCount(0);
+
+  // A click outside closes it again and brings the hamburger back.
+  await page.mouse.click(900, 300);
+  await expect(nav).toHaveCount(0);
   await expect(showSidebar).toBeVisible({ timeout: 5_000 });
 
+  // The persistence check: pin from inside the sidebar, reload, and the pin
+  // survives — the sidebar is on screen with no Show sidebar anywhere.
+  await showSidebar.click();
+  await expect(nav.first()).toBeVisible({ timeout: 5_000 });
+  await page.getByRole('button', { name: 'Pin sidebar' }).click();
+  await expect(page.getByRole('button', { name: 'Unpin sidebar' })).toBeVisible({ timeout: 5_000 });
+
   await page.reload();
   await page.waitForLoadState('networkidle');
-  await expect(page.locator('[aria-label="Main navigation"]')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Show sidebar' })).toBeVisible({ timeout: 10_000 });
-
-  await page.getByRole('button', { name: 'Show sidebar' }).click();
-  await expect(page.locator('[aria-label="Main navigation"]').first()).toBeVisible({ timeout: 5_000 });
-
-  await page.reload();
-  await page.waitForLoadState('networkidle');
-  await expect(page.locator('[aria-label="Main navigation"]').first()).toBeVisible({ timeout: 10_000 });
+  await expect(nav.first()).toBeVisible({ timeout: 10_000 });
   await expect(page.getByRole('button', { name: 'Show sidebar' })).toHaveCount(0);
 });

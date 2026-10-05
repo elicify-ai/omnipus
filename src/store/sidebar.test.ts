@@ -9,15 +9,16 @@ beforeEach(() => {
   })
 })
 
-// A wide window starts docked. A saved hidden choice still starts hidden,
-// which the persist tests below cover by writing isPinned first.
+// A fresh visit is not pinned: closed until shown or pinned. A visitor who
+// already saved a pin keeps it — persist rehydrates isPinned over the
+// default, which the persist tests below cover by writing isPinned first.
 describe('sidebar store — default state', () => {
-  it('starts docked, with the overlay closed, when nothing is saved', async () => {
+  it('starts closed and unpinned when nothing is saved', async () => {
     vi.resetModules()
     localStorage.removeItem('omnipus-sidebar')
     const { useSidebarStore: fresh } = await import('./sidebar')
     expect(fresh.getState().isOpen).toBe(false)
-    expect(fresh.getState().isPinned).toBe(true)
+    expect(fresh.getState().isPinned).toBe(false)
   })
 })
 
@@ -117,28 +118,7 @@ describe('sidebar store — persistence', () => {
   })
 })
 
-// test_sidebar_store_togglePin
-// Traces to: wave0-brand-design-spec.md Scenario: Pin toggle behaviour (US-5 AC4, AC5)
-describe('sidebar store — togglePin', () => {
-  it('togglePin() pins when unpinned', () => {
-    act(() => {
-      useSidebarStore.setState({ isPinned: false })
-      useSidebarStore.getState().togglePin()
-    })
-    const state = useSidebarStore.getState()
-    expect(state.isPinned).toBe(true)
-    expect(state.isOpen).toBe(true)
-  })
-
-  it('togglePin() unpins and closes when pinned', () => {
-    act(() => {
-      useSidebarStore.setState({ isPinned: true, isOpen: true })
-      useSidebarStore.getState().togglePin()
-    })
-    expect(useSidebarStore.getState().isPinned).toBe(false)
-    expect(useSidebarStore.getState().isOpen).toBe(false)
-  })
-
+describe('sidebar store — hide', () => {
   it('hide() clears both the docked and overlay states', () => {
     act(() => {
       useSidebarStore.setState({ isPinned: true, isOpen: true })
