@@ -175,17 +175,13 @@ export function updatePanelPopoutWorkspace(
   moveOwned(entry, { ...(entry.context as WorkspacePanelContext), workspaceId })
 }
 
-function closeAllOwned(): void {
+/** Source teardown releases ownership; expanded tabs survive source reload (§8.3). */
+function releaseAllOwned(): void {
   const entries = [...ownedPopouts.values()]
   ownedPopouts.clear()
   for (const entry of entries) {
     entry.stopWatching()
     forgetPanelTabHandle(entry.identity, entry.handle)
-    try {
-      entry.handle.close()
-    } catch {
-      // Page teardown is already in progress; the browser owns final cleanup.
-    }
   }
 }
 
@@ -195,7 +191,7 @@ function ensureInfrastructure(): void {
     lifecycleChannel?.addEventListener('message', handleMessage)
   }
   if (!pagehideListening) {
-    window.addEventListener('pagehide', closeAllOwned)
+    window.addEventListener('pagehide', releaseAllOwned)
     pagehideListening = true
   }
 }
@@ -205,7 +201,7 @@ function maybeStopInfrastructure(): void {
   lifecycleChannel?.removeEventListener('message', handleMessage)
   lifecycleChannel?.close()
   lifecycleChannel = null
-  if (pagehideListening) window.removeEventListener('pagehide', closeAllOwned)
+  if (pagehideListening) window.removeEventListener('pagehide', releaseAllOwned)
   pagehideListening = false
 }
 
@@ -218,7 +214,7 @@ export function startPanelPopoutLifecycleOwner(): () => void {
     if (stopped) return
     stopped = true
     ownerConsumers -= 1
-    if (ownerConsumers === 0) closeAllOwned()
+    if (ownerConsumers === 0) releaseAllOwned()
     maybeStopInfrastructure()
   }
 }
