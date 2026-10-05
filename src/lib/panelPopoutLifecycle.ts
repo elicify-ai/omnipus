@@ -14,6 +14,7 @@ const CHANNEL_NAME = 'omnipus-panel-popout-lifecycle'
 type PanelPopoutMessage = // not-wire-format: same-origin browser lifecycle signal
   | { type: 'context-changed'; panelId: PanelId; popoutId: string; context: PanelContext }
   | { type: 'popout-closed'; panelId: PanelId; popoutId: string; context: PanelContext }
+  | { type: 'document-departed'; panelId: PanelId; popoutId: string; context: PanelContext }
 
 type OwnedPanelPopout = { // not-wire-format: in-memory app-tab ownership record
   ownershipKey: string
@@ -122,7 +123,9 @@ function isContextForPanel(panelId: PanelId, value: unknown): value is PanelCont
 }
 
 function acceptMessage(value: unknown): value is PanelPopoutMessage {
-  if (!isRecord(value) || (value.type !== 'context-changed' && value.type !== 'popout-closed')) return false
+  if (!isRecord(value) ||
+    (value.type !== 'context-changed' && value.type !== 'popout-closed' &&
+      value.type !== 'document-departed')) return false
   return isPanelId(value.panelId) && typeof value.popoutId === 'string' && value.popoutId.length > 0 &&
     isContextForPanel(value.panelId, value.context)
 }
@@ -132,8 +135,9 @@ function handleMessage(event: MessageEvent<unknown>): void {
   if (!acceptMessage(message)) return
   const entry = findOwnedPanelPopout(message.panelId, message.popoutId)
   if (!entry) return
+  // Explicit Back releases immediately; passive departure must prove the Window closed.
   if (message.type === 'context-changed') moveOwned(entry, message.context)
-  else finishOwned(entry, message.context)
+  else if (message.type === 'popout-closed' || entry.handle.closed) finishOwned(entry, message.context)
 }
 
 /** Tell the opener which address the full-screen panel currently shows. */
@@ -145,13 +149,22 @@ export function announcePanelPopoutContext(
   postMessage({ type: 'context-changed', panelId, popoutId, context })
 }
 
-/** Tell the opener that the full-screen panel is leaving. */
+/** Tell the opener that the user explicitly requested closing the full-screen panel. */
 export function announcePanelPopoutClosed(
   panelId: PanelId,
   popoutId: string,
   context: PanelContext,
 ): void {
   postMessage({ type: 'popout-closed', panelId, popoutId, context })
+}
+
+/** A departing child document may be reloading inside its still-open Window. */
+export function announcePanelPopoutDeparture(
+  panelId: PanelId,
+  popoutId: string,
+  context: PanelContext,
+): void {
+  postMessage({ type: 'document-departed', panelId, popoutId, context })
 }
 
 function postMessage(message: PanelPopoutMessage): void {

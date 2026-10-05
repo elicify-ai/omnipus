@@ -17,6 +17,7 @@ import { announcePanelTabPresence, panelIdentityFromContext } from '@/lib/panelT
 import {
   announcePanelPopoutClosed,
   announcePanelPopoutContext,
+  announcePanelPopoutDeparture,
 } from '@/lib/panelPopoutLifecycle'
 
 export const Route = createFileRoute('/_fullscreen/panel/$panelId')({
@@ -156,13 +157,17 @@ function FullScreenPanelRoute() {
     if (!identity) return undefined
     const announcement = announcePanelTabPresence(identity)
     announcementRef.current = announcement
-    window.addEventListener('pagehide', announceClosed)
+    const onPageHide = () => {
+      const context = contextRef.current
+      if (popoutId && context !== null) announcePanelPopoutDeparture(definition.id, popoutId, context)
+    }
+    window.addEventListener('pagehide', onPageHide)
     return () => {
-      window.removeEventListener('pagehide', announceClosed)
+      window.removeEventListener('pagehide', onPageHide)
       if (announcementRef.current === announcement) announcementRef.current = null
       announcement.stop()
     }
-  }, [announceClosed, definition, initialContext])
+  }, [definition, initialContext, popoutId])
 
   useEffect(() => {
     if (!definition?.beforeLeaveRequired) return undefined
