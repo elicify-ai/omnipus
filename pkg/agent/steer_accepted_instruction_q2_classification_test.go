@@ -33,12 +33,15 @@ func TestAcceptedSteeredInstructionQ2_UnreadableChildLifecycleRefusesAndRestores
 func q2ConsumerLifecycleFault(t *testing.T, corrupt bool) {
 	t.Helper()
 	fixture := newQ2ConsumerFixture(t)
-	prefix := q2ReceiptEnqueuePlain(t, fixture.al, fixture.childID, "q2-classification-prefix", "Consumed prefix stays consumed.")
+	// Plain correlated fillers isolate the wake's classification refusal,
+	// as in the original Q2 test. A ledgered delegate prefix must itself
+	// refuse delivery with a missing/unreadable lifecycle under B2.
+	prefix := q2ConsumerEnqueueFiller(t, fixture.al, fixture.childID, "q2-classification-prefix", "Consumed prefix stays consumed.")
 	const messageID = "q2-accepted-before-lifecycle-loss"
 	const text = "Do not silently consume me without the genuine child's lifecycle."
 	failed := q2ConsumerEnqueueWake(t, fixture.al, fixture.childID, messageID, text)
 	laterWake := q2ConsumerEnqueueWake(t, fixture.al, fixture.childID, "q2-classification-later-wake", "Keep the subsequent wake's identity.")
-	tail := q2ReceiptEnqueuePlain(t, fixture.al, fixture.childID, "q2-classification-tail", "Keep the subsequent correlation id.")
+	tail := q2ConsumerEnqueueFiller(t, fixture.al, fixture.childID, "q2-classification-tail", "Keep the subsequent correlation id.")
 	batch := q2ConsumerDequeue(t, fixture.al, fixture.childID, []steeringQueueItem{prefix, failed, laterWake, tail})
 
 	journal := filepath.Join(fixture.al.GetConfig().Agents.Defaults.Home, "session_lifecycle", fixture.childID+".jsonl")
