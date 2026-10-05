@@ -450,8 +450,8 @@ func TestGoalChildCompletion947_CancelPreservesSessionOwnedGoal(t *testing.T) {
 		t.Fatalf("fixture goal id/state = %s/%q, want %s/active", g.GoalID, g.State, rec.GoalRef)
 	}
 	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: "qa-red-947"}
-	// D7: "Cancel (Stop all) pauses that helper and every helper under it"
-	// (ADR-20261004 decision 2). The cascade cause names a DESCENDANT,
+	// ADR-20261004 decision 2: "Cancel, also called Stop all, pauses that
+	// helper and every helper under it." The cascade cause names a DESCENDANT,
 	// "never the cascade's own direct target" (session.StopCauseCascade).
 	// Stop the parent through the owner path; keep the child-cascade oracle.
 	stopped, err := al.StopSession(context.Background(), StopRequest{SessionID: parentMeta.ID, By: by, Tree: true})
