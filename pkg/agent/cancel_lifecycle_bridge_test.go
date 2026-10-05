@@ -1,16 +1,15 @@
 // Package agent — cancel_lifecycle_bridge_test.go
 //
-// Defect #28 mutation tests: prove the cancel path transitions BOTH stores
-// (LifecycleRecord → stopped, UnifiedMeta → coarse-active per sub-agent
-// control plane ADR D4/MAJ-009: stopped stays active, no mirror write) via
-// the single TransitionSession mediator, closing the orphan that the pre-fix
-// cancel path produced by writing UnifiedMeta alone.
+// Frozen control-plane ADR D2/D4 and the one-stop decision: the admitted
+// execution owns stopped settlement; coarse session status stays active.
+// RequestCancel itself no longer writes another execution's lifecycle.
 package agent
 
 import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,113 +17,57 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-// TestRequestCancel_TransitionsLifecycleRecordToCancelled is the GREEN test for
-// Defect #28: a cancel on a session that HAS a LifecycleRecord must transition
-// that record to LifecycleStopped — not orphan it. Before the fix, the cancel
-// path wrote ONLY UnifiedMeta (interrupted), leaving the LifecycleRecord at
-// running/queued until a future boot sweep caught it.
-func TestRequestCancel_TransitionsLifecycleRecordToCancelled(t *testing.T) {
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "bridge-test-model"},
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
-		},
+// TestStopSession_TransitionsLifecycleRecordAfterOwnerTail replaces the
+// deleted RequestCancel mediator writer. Frozen D2 and the one-stop decision:
+// Stop accepts a fence/note; only the real admitted owner lands stopped after
+// its provider/output tail retires, retaining that note and clearing the fence.
+func TestStopSession_TransitionsLifecycleRecordAfterOwnerTail(t *testing.T) {
+	al, _, child, handle, provider := oneStopUncooperativeChild(t, "lifecycle-bridge")
+	res, err := al.StopSession(context.Background(), StopRequest{
+		SessionID: child.SessionID,
+		By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: "tester"},
+		Channel:   "web",
+	})
+	require.NoError(t, err)
+	require.NoError(t, res.RootErr)
+	require.True(t, res.Durable, "the one Stop must accept a durable lifecycle fence")
+	require.True(t, res.Fired, "the selected real execution must receive the Stop")
+	require.Empty(t, res.StillRunning(), "no reached session may report an unreachable Stop")
+	select {
+	case <-provider.softCancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the Stop never reached the owning provider's cancellation boundary")
 	}
-	msgBus := bus.NewMessageBus()
-	t.Cleanup(func() { msgBus.Close() })
-	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
-	t.Cleanup(al.Close)
 
-	// Wire a durable LifecycleStore the same way the gateway boot seam does.
-	ls := session.NewLifecycleStore(filepath.Join(tmpDir, "session_lifecycle"))
-	al.SetSessionMessagingStores(nil, ls)
+	// The external request cannot return until released: this is a real tail,
+	// not a synthetic Finish() that gives an unowned writer permission to land.
+	held := rootReopenedRecord(t, al, child.SessionID)
+	require.True(t, handle.IsAlive(), "the real owner must still be live while its provider is held")
+	require.Equal(t, session.LifecycleRunning, held.State, "D2: stopped must not land before the owning tail")
+	require.NotNil(t, held.Stop, "D2: the current fence remains in flight until owner settlement")
+	require.Equal(t, child.Generation, held.Stop.Generation)
+	require.NotNil(t, held.StopNote, "D2: the lasting reason is accepted with the fence")
+	require.Equal(t, session.StopCauseStop, held.StopNote.Cause)
+	require.Equal(t, "human:tester", held.StopNote.By)
+	require.False(t, held.StopNote.At.IsZero())
+	require.Positive(t, held.StopNote.Seq)
 
-	store := al.GetSessionStore()
-	require.NotNil(t, store)
-
-	// Create a real chat session.
-	meta, err := store.NewSession(session.SessionTypeChat, "web", "main")
-	require.NoError(t, err)
-	sessionID := meta.ID
-
-	// Mint a LifecycleRecord (running) for this session — mirrors what a
-	// task/delegate dispatch would have on disk at cancel time.
-	require.NoError(t, ls.Persist(&session.LifecycleRecord{
-		SessionID:      sessionID,
-		Generation:     1,
-		State:          session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman,
-		AgentID:        "main",
-	}))
-
-	// Register a synthetic root turnState so GetActiveTurnHookForSession finds
-	// it and ClaimCancel succeeds (the cancel cascade's entry gate).
-	ts := &turnState{
-		turnID:              "turn-bridge-001",
-		transcriptSessionID: sessionID,
-		// ADR-057 FR-011/FR-015 fixture repair: GetActiveTurnHookForSession
-		// (the role-B predicate RequestCancel uses to find and claim the
-		// active turn) matches on routingSessionID, not transcriptSessionID.
-		routingSessionID: session.RoutingSessionID(sessionID),
-		depth:            0,
-		finishedChan:     make(chan struct{}),
-		transcriptStore:  store,
-	}
-	ts.providerCancel = func() { ts.Finish(false) }
-	al.activeTurnStates.Store(sessionID, ts)
-	defer al.activeTurnStates.Delete(sessionID)
-
-	// Fire the cancel via the canonical entry point (session-scoped).
-	_, err = al.RequestCancel(context.Background(),
-		CancelScope{SessionID: sessionID},
-		CancelCanceller{UserID: "tester", Channel: "web"},
-		CancelHooks{}, // no SetSessionInterrupted hook — exercises the mediator path
-	)
-	require.NoError(t, err)
-
-	// THE ASSERTION (Defect #28): the LifecycleRecord MUST have transitioned
-	// to cancelled. Before the fix it stayed "running" (orphaned).
-	rec, err := ls.Load(sessionID)
-	require.NoError(t, err)
-	assert.Equal(t, session.LifecycleStopped, rec.State,
-		"LifecycleRecord must transition to cancelled on cancel, not stay orphaned at %q", rec.State)
-
-	// The UnifiedMeta must stay coarse-active (sub-agent control plane ADR
-	// D4/MAJ-009: stopped/waiting/working all stay `active` — the mediator's
-	// canonical mapping no longer mirrors LifecycleStopped at all). The
-	// exact helper state (stopped) now lives on lifecycle_state, not this
-	// coarse status.
-	//
-	// qa-lead note (issue #1161): lifecycleToUnifiedStatus's Stopped branch
-	// is a genuine no-op (returns ok=false before any SetMeta call — see
-	// pkg/session/lifecycle_bridge.go::lifecycleToUnifiedStatus), and every
-	// session starts at StatusActive (createSessionLocked), so THIS
-	// assertion alone cannot distinguish "the mediator ran and correctly
-	// wrote nothing" from "TransitionSession was deleted and never called
-	// at all" — both leave postMeta.Status at its created-time default. The
-	// rec.State assertion directly above closes that gap: it is driven by
-	// the SAME TransitionSession call (its step 1, the LifecycleRecord
-	// write), so deleting or bypassing that call fails THIS test via
-	// rec.State staying at LifecycleRunning, not via postMeta.Status. The
-	// pair together — not the Status line alone — is the proof the mediator
-	// executed. This Status line still independently catches a DIFFERENT
-	// regression class: lifecycleToUnifiedStatus mis-mapping Stopped to a
-	// wrong status value (e.g. reintroducing the retired StatusInterrupted
-	// or mapping it to StatusFailed) — mutation-proven, see PR notes.
-	postMeta, err := store.GetMeta(sessionID)
+	provider.open()
+	joinGoalFixtureRuns(t, al)
+	rec := rootReopenedRecord(t, al, child.SessionID)
+	require.Equal(t, session.LifecycleStopped, rec.State, "the real owner must land stopped after its joined tail")
+	require.False(t, rec.Terminal(), "Stop is resumable, never a terminal cancel")
+	require.Equal(t, child.Generation, rec.Generation, "Stop never mints a generation")
+	require.Nil(t, rec.Stop, "D2: the owner landing clears the in-flight fence")
+	require.NotNil(t, rec.StopNote, "D2: the owner landing keeps the lasting note")
+	assert.Equal(t, *held.StopNote, *rec.StopNote, "D2: landing keeps the original cause, actor, time and sequence")
+	postMeta, err := al.GetSessionStore().GetMeta(child.SessionID)
 	require.NoError(t, err)
 	assert.Equal(t, session.StatusActive, postMeta.Status,
-		"UnifiedMeta must stay active when LifecycleRecord transitions to stopped (ADR D4)")
+		"UnifiedMeta stays coarse-active when the owner's lifecycle lands stopped (ADR D4)")
 }
 
 // TestRequestCancel_LifecycleRecordMissing_DoesNotPanic verifies the cancel
@@ -168,7 +111,7 @@ func TestRequestCancel_LifecycleRecordMissing_DoesNotPanic(t *testing.T) {
 		turnID:              "turn-bridge-002",
 		transcriptSessionID: sessionID,
 		// ADR-057 FR-011/FR-015 fixture repair: see the identical note in
-		// TestRequestCancel_TransitionsLifecycleRecordToCancelled above.
+		// TestStopSession_TransitionsLifecycleRecordAfterOwnerTail above.
 		routingSessionID: session.RoutingSessionID(sessionID),
 		depth:            0,
 		finishedChan:     make(chan struct{}),
@@ -196,7 +139,7 @@ func TestRequestCancel_LifecycleRecordMissing_DoesNotPanic(t *testing.T) {
 	// qa-lead note (issue #1161, LEFT PARTIALLY STRENGTHENED — needs a
 	// design decision, not guessed): the Status assertion above is still
 	// vacuous against full-deletion of TransitionSession/the mediator call.
-	// Unlike TestRequestCancel_TransitionsLifecycleRecordToCancelled above,
+	// Unlike TestStopSession_TransitionsLifecycleRecordAfterOwnerTail above,
 	// this scenario has NO LifecycleRecord to pair against (that absence is
 	// the whole point of this test), and this call site deliberately passes
 	// CancelHooks{} with no SetSessionInterrupted hook (see its own doc

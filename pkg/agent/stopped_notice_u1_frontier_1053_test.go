@@ -38,7 +38,14 @@ func u1PersistSteered(t *testing.T, al *AgentLoop, id, parentID string, state se
 		WorkspaceID: "ws-u1-frontier", AgentID: "agent-1",
 		OwnerScopeKind: session.OwnerScopeHuman,
 		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentID, RootSessionID: parentID},
+		// Launch always writes the direct parent's reporting destination.
+		// A bare edge without it cannot publish the D6 notice (D8.10).
+		SteeredBy: &session.SteeredBy{
+			SteeringSessionID: parentID, RootSessionID: parentID,
+			ReportingTarget: session.ReportingTarget{
+				SessionID: parentID, Channel: "webchat", ChatID: parentID,
+			},
+		},
 	}
 	switch state {
 	case session.LifecycleNeedsInput:
