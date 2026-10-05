@@ -565,7 +565,20 @@ func (s *LifecycleStore) Load(sessionID string) (*LifecycleRecord, error) {
 	mu := s.Lock(sessionID)
 	mu.Lock()
 	defer mu.Unlock()
+	return s.loadLocked(sessionID)
+}
 
+// LoadLocked reads the authoritative tail while the caller holds Lock(sessionID).
+// It performs no mutation, so a current-state publisher can validate ownership
+// and persist its projection in the same lock hold without appending a record.
+func (s *LifecycleStore) LoadLocked(sessionID string) (*LifecycleRecord, error) {
+	if err := validateLifecycleSessionID(sessionID); err != nil {
+		return nil, err
+	}
+	return s.loadLocked(sessionID)
+}
+
+func (s *LifecycleStore) loadLocked(sessionID string) (*LifecycleRecord, error) {
 	rec, found, err := s.tail(sessionID)
 	if err != nil {
 		return nil, err

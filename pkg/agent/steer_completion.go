@@ -177,6 +177,9 @@ func (al *AgentLoop) deliverSteeredCompletionForExecution(ctx context.Context, r
 			// publishes nothing at all. A notice append failure is returned
 			// visibly — the landing is already durable and stays.
 			if commitRes.landedStop {
+				if stateErr := al.publishCurrentStoppedState(commitRes.stoppedRecord); stateErr != nil {
+					return false, stateErr
+				}
 				// The publisher discovers every landed transition's notice
 				// from the control ledger's landed history — fenced and
 				// fence-less alike since Correction C3, which has the landing
