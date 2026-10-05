@@ -235,7 +235,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
   const heading = selectedPlan ? `${selectedPlan.title} — tasks` : 'Team Task Backlog'
 
   return (
-    <div className="@container absolute inset-0 flex flex-col overflow-hidden">
+    <div className="@container relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       {/* ── Plans section ── bold heading + a minimalist "+ New Plan" text
           link, over a thin separator. (Matches the operator mockup: section
           labels + hairline separators + link-style create actions, generous

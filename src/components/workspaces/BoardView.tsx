@@ -152,22 +152,24 @@ export const boardKeyboardCoordinateGetter: KeyboardCoordinateGetter = (event, {
   const { collisionRect, droppableRects } = context
   if (!collisionRect) return undefined
 
-  const rectCenterX = collisionRect.left + collisionRect.width / 2
+  const stacked = isStackedColumnLayout(droppableRects)
+  const axisStart = stacked ? 'top' : 'left'
+  const axisSize = stacked ? 'height' : 'width'
+  const rectCenter = collisionRect[axisStart] + collisionRect[axisSize] / 2
 
-  // Which column is the drag rect currently over? Prefer an exact match;
-  // fall back to the nearest column center (covers the first keypress,
-  // before any move, when the rect is still measured over its origin card
-  // rather than sitting exactly within a column boundary).
+  // Resolve the current column on the layout's axis: stacked columns share
+  // their X bounds, so only Y identifies the current status. Prefer an exact
+  // match, then the nearest column center on the same axis.
   let currentIndex = COLUMN_STATUSES.findIndex((status) => {
     const rect = droppableRects.get(status)
-    return !!rect && rectCenterX >= rect.left && rectCenterX <= rect.left + rect.width
+    return !!rect && rectCenter >= rect[axisStart] && rectCenter <= rect[axisStart] + rect[axisSize]
   })
   if (currentIndex === -1) {
     let closestDistance = Infinity
     COLUMN_STATUSES.forEach((status, index) => {
       const rect = droppableRects.get(status)
       if (!rect) return
-      const distance = Math.abs(rect.left + rect.width / 2 - rectCenterX)
+      const distance = Math.abs(rect[axisStart] + rect[axisSize] / 2 - rectCenter)
       if (distance < closestDistance) {
         closestDistance = distance
         currentIndex = index
@@ -187,7 +189,7 @@ export const boardKeyboardCoordinateGetter: KeyboardCoordinateGetter = (event, {
   // the drag rect onto the target group's vertical center, keeping x, the
   // exact mirror of the wide board's horizontal teleport. Wide (one row):
   // unchanged horizontal teleport, keeping y.
-  if (isStackedColumnLayout(droppableRects)) {
+  if (stacked) {
     return {
       x: currentCoordinates.x,
       y: targetRect.top + targetRect.height / 2 - collisionRect.height / 2,
