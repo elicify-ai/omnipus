@@ -67,12 +67,13 @@ func lifecycleInFlightStopFence(rec *session.LifecycleRecord) bool {
 // lifecycle record carries an in-flight stop fence
 // (lifecycleInFlightStopFence) — the one shape the ordinary inbound-turn
 // admission must neither revive nor run a second turn on
-// (runInboundTurnWithRevival). Everything else — a blank id, a missing
-// store, a missing record, an unreadable record, and every non-fence shape —
-// is nil: the revivable check and the plain turn keep their existing
-// behavior. Not-found and read failures stay inboundRevivable's business
-// (it logs read failures at error level, gate SFH#2); this gate only
-// refuses the fence shape.
+// (runInboundTurnWithRevival). A blank id, a missing store, a gone record
+// (ErrLifecycleNotFound) and every non-fence shape are nil: the revivable
+// check and the plain turn keep their existing behavior. An unreadable
+// record — a read failure other than not-found — is returned wrapped:
+// runInboundTurnWithRevival refuses the message with it, a visible failure
+// the sender can retry, instead of proceeding on a fence check that never
+// ran.
 func (al *AgentLoop) inboundStopFenceInFlight(sessionID string) error {
 	sessionID = strings.TrimSpace(sessionID)
 	store := al.GetSessionLifecycleStore()
@@ -81,7 +82,10 @@ func (al *AgentLoop) inboundStopFenceInFlight(sessionID string) error {
 	}
 	rec, err := store.Load(sessionID)
 	if err != nil {
-		return nil //nolint:nilerr // read failures are inboundRevivable's business (gate SFH#2)
+		if errors.Is(err, session.ErrLifecycleNotFound) {
+			return nil // no record: no fence can be in flight
+		}
+		return fmt.Errorf("steer: inbound stop-fence check: load session %q: %w", sessionID, err)
 	}
 	if !lifecycleInFlightStopFence(rec) {
 		return nil

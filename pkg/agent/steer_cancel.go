@@ -139,13 +139,16 @@ func (al *AgentLoop) WriteSteerRevivalState(_ context.Context, sessionID string,
 //     outbox entry pending and retryable — the record no longer has to stay
 //     non-terminal to stay recoverable, which was Defect 1's compromise.
 //
-// Refuses (logged, never fatal to the caller) when the record has moved
+// Refuses (nil, never fatal to the caller) when the record has moved
 // past generation, is already terminal, or is already stopped — a Stop, a
-// Revive or another completion racing this write is a legitimate outcome.
-// The STOPPED arm is the one error-bearing exit: a landed-stop history
-// append failure is returned so the stop cascade can surface it
-// (report.Unreachable) — the refusal arms and the terminal-failure arm
-// still return nil, exactly as before.
+// Revive or another completion racing this write is a legitimate outcome —
+// and when the record itself is gone (ErrLifecycleNotFound). The
+// error-bearing exits, each returned so the stop cascade surfaces it in
+// report.Unreachable (the visible channel the stop caller reads): the
+// STOPPED arm's landed-stop history append, a lifecycle read failure other
+// than not-found, and the terminal-failure arm's outcome/outbox commit — a
+// failed commit leaves no durable outbox entry to retry from, so nil here
+// would strand the terminal failure with no writer and no receipt.
 func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	ctx context.Context, sessionID string, generation int,
 	nextState session.LifecycleState, outcome steer.Outcome, failureReason string,
@@ -159,7 +162,10 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	}
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil {
-		return nil //nolint:nilerr // an unreadable record is not ours to act on (doc above)
+		if errors.Is(err, session.ErrLifecycleNotFound) {
+			return nil // record gone: raced away, not ours to act (refusal arm)
+		}
+		return fmt.Errorf("steer: terminal report: load session %q: %w", sessionID, err)
 	}
 	if rec.Generation != generation || rec.Terminal() {
 		return nil
@@ -173,7 +179,11 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	if commitErr != nil {
 		logger.WarnCF("agent", "steer: terminal report: outcome/outbox commit failed",
 			map[string]any{"session_id": sessionID, "generation": generation, "error": commitErr.Error()})
-		return nil //nolint:nilerr // commit failure logged (WarnCF); retryable from the committed outbox
+		// A failed commit leaves NO durable outbox entry to retry from, so
+		// this must surface: the stop cascade reports it via
+		// report.Unreachable instead of a success with no receipt.
+		return fmt.Errorf("steer: terminal report: outcome/outbox commit for session %q generation %d: %w",
+			sessionID, generation, commitErr)
 	}
 	if res.kind == steeredCommitTerminal {
 		if _, pubErr := al.publishCommittedFinal(ctx, rec, res); pubErr != nil {
@@ -210,7 +220,10 @@ func (al *AgentLoop) landSteeredStopReport(ctx context.Context, sessionID string
 	}
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil {
-		return nil //nolint:nilerr // not ours to act; only the history-append failure is returned (doc above)
+		if errors.Is(err, session.ErrLifecycleNotFound) {
+			return nil // record gone: raced away, not ours to act
+		}
+		return fmt.Errorf("steer: landed stop report: load session %q: %w", sessionID, err)
 	}
 	// The fence this landing carries out must still be current: an explicit
 	// same-generation RESUME that cleared it (D2) supersedes the stop, and
@@ -360,8 +373,12 @@ var errLandedStopHistoryNotRecorded = errors.New("steer: stop landing: the stop 
 // cancelled turn delivers via completeSteeredTurn. Without this, the
 // session's own parent (hasRunningOrQueuedDescendant, steer_completion.go)
 // keeps seeing a queued/needs_input descendant forever and never completes.
-// The only error-bearing exit is the stopped landing's history append
-// (landSteeredStopReport); every not-ours-to-act arm returns nil.
+// Error-bearing exits: the stopped landing's history append
+// (landSteeredStopReport), a lifecycle read failure other than not-found,
+// and the terminal report's outcome/outbox commit — all returned so the
+// cascade puts the session in report.Unreachable. Every not-ours-to-act
+// arm — including a record that is gone (ErrLifecycleNotFound) — returns
+// nil.
 func (al *AgentLoop) terminaliseNeverRanStop(ctx context.Context, sessionID string, generation int) error {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
@@ -369,7 +386,10 @@ func (al *AgentLoop) terminaliseNeverRanStop(ctx context.Context, sessionID stri
 	}
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil {
-		return nil //nolint:nilerr // every not-ours-to-act arm returns nil (doc above)
+		if errors.Is(err, session.ErrLifecycleNotFound) {
+			return nil // record gone: raced away, not ours to act
+		}
+		return fmt.Errorf("steer: never-ran stop: load session %q: %w", sessionID, err)
 	}
 	// Only a session THIS Stop actually stamped, still sitting at the
 	// generation it was stamped for — a concurrent Revive landing in the
