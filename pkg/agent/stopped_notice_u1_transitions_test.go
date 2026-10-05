@@ -13,12 +13,10 @@ package agent
 //	case 4 — a delivery failure stays pending and is VISIBLY reported, and
 //	         a boot retry after repair delivers exactly once;
 //	case 6 — the D6 Goal row: the session-owned goal stays active across
-//	         every stop path; since the steering-commands amendment's
-//	         Correction C2 removed the 24-hour question expiry with no
-//	         replacement, the former question-expiry leg now pins the
-//	         superseding rule instead — a question parked long past its
-//	         original deadline neither expires nor stops or fails its
-//	         helper, and the goal stays active across its boot.
+//	         every retained stop/completion path. The former aged-question
+//	         subcase is removed: ADR-20261004 locked decision 6 and C2 delete
+//	         the owner_required park itself, needs_input, and its 24-hour
+//	         expiry outright, with no replacement expiry.
 //
 // Oracles are the ADR rows only (D6/D8/D2, F0929-6/7, MIN-001/MIN-005);
 // helpers live in stopped_child_notice_u1_test.go. The plan-stop transition
@@ -295,8 +293,9 @@ func TestU1StoppedNoticeEveryTransitionIntoStopped(t *testing.T) {
 // TestU1StoppedNoticeIdentityDeduplicated pins D6's deterministic inbox
 // identity (parent_id, child_id, child_generation, stop_seq): a live retry
 // of the stop call and a boot replay over fresh store instances neither
-// duplicate the notice nor change its identity, and the working parent is
-// woken exactly once across all of it.
+// duplicate the notice nor change its identity. ADR-20261004 locked decision
+// 1 + C3 require an untaken id to re-ring at boot; dedup applies to the durable
+// entry, not to the total wake count across distinct delivery passes.
 func TestU1StoppedNoticeIdentityDeduplicated(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -329,41 +328,136 @@ func TestU1StoppedNoticeIdentityDeduplicated(t *testing.T) {
 		t.Errorf("wakes after first delivery = %d, want exactly 1 (D6)", got)
 	}
 
-	// Live retry: the stop call replayed on the already-stopped child must
-	// neither re-stamp a fresh stop_seq nor append a second notice.
+	t.Logf("notice wake phase landing: total=%d, want 1", wakes(noticeID))
+	// Live retry: repeating Stop on an already-stopped child changes nothing
+	// (D2/MIN-007); it is not a fresh stop transition or a boot delivery pass.
+	beforeRetry := wakes(noticeID)
 	stop("retry")
+	if afterRetry := wakes(noticeID); afterRetry != beforeRetry {
+		t.Fatalf("QUESTION: live repeat Stop changed wakes %d -> %d without a new transition; do not pin this as an approved re-ring", beforeRetry, afterRetry)
+	}
 	assertU1NoticeStable(t, al, parent, rec, string(session.StopCauseStop), "dan", noticeID, note, wakes)
+	t.Logf("notice wake phase live repeat Stop: delta=%d, want 0", wakes(noticeID)-beforeRetry)
 
-	// Boot replay: fresh store instances prove on-disk deduplication, not an
-	// in-memory one (D8.4: repeated sweeps neither create new transitions
-	// for an already-stopped child nor replay wakes after a consumed id).
+	// Boot replay: fresh stores prove on-disk entry/identity deduplication.
+	// This id remains UNTAKEN, so decision 1/C3 require one new ring on this
+	// boot pass. A second ring must not create another durable work item.
+	if rerNoteAcked(t, al, parent, noticeID) {
+		t.Fatal("setup: notice was taken before boot; the untaken re-ring case is not exercised")
+	}
+	beforeBoot := wakes(noticeID)
 	home := al.GetConfig().Agents.Defaults.Home
 	replayU1StoppedNotices(t, al, filepath.Join(home, "session_lifecycle"), filepath.Join(home, "session_messages"))
-	assertU1NoticeStable(t, al, parent, rec, string(session.StopCauseStop), "dan", noticeID, note, wakes)
+	idAfterBoot, noteAfterBoot := assertU1StoppedChildNotice(t, al, parent, rec, string(session.StopCauseStop), "dan")
+	if idAfterBoot != noticeID || noteAfterBoot != note {
+		t.Errorf("boot replay changed notice identity or stop event: id %q -> %q; note %s -> %s (D6/C3)", noticeID, idAfterBoot, note, noteAfterBoot)
+	}
+	if delta := wakes(noticeID) - beforeBoot; delta != 1 {
+		t.Errorf("untaken notice's boot-pass wake delta = %d, want exactly 1 (ADR-20261004 decision 1/C3)", delta)
+	}
+	t.Logf("notice wake phase boot replay: delta=%d, total=%d, want delta 1 and total 2", wakes(noticeID)-beforeBoot, wakes(noticeID))
 }
 
-// TestU1SecondStopOfSameGenerationGetsFreshStopSeqAndNotice covers the D6
-// dedup key's stop_seq component: stopping the SAME generation a second
-// time (after an explicit same-generation RESUME cleared the note) mints a
-// fresh stop_seq and therefore a FRESH notice — dedup must not swallow it.
-// The same-generation RESUME seam does not exist yet (the delegate action
-// enum has no resume action, and SteerCanceller.Revive mints a NEW
-// generation instead of resuming the same one), so the second half of the
-// behaviour cannot be driven at all.
+// TestU1SecondStopOfSameGenerationGetsFreshStopSeqAndNotice covers D2's
+// fresh execution on same-generation RESUME and D6's stop_seq dedup key.
+// Like the W1 two-stop test, it drives real owners through Stop/Revive/
+// Dispatch. It additionally pins the new run_id and cleared stop metadata;
+// the former unconditional BLOCKED stub is obsolete, not a behaviour oracle.
 func TestU1SecondStopOfSameGenerationGetsFreshStopSeqAndNotice(t *testing.T) {
-	al, cleanup := newSteerAL(t)
-	defer cleanup()
+	al, provider, release := w1hSetup(t)
+	defer release()
 	parent := newTestSteeringSession(t, al, "ws-u1-regen")
-	rec := u1LaunchChild(t, al, parent, "u1-regen")
-	canceller := NewSteerCanceller(al.GetSessionLifecycleStore())
-	if _, err := canceller.CancelSubtree(context.Background(), rec.SessionID,
-		steer.Principal{Kind: steer.PrincipalKindHuman, ID: "dan"}); err != nil {
-		t.Fatalf("CancelSubtree(first): %v", err)
+	rec := w1hLaunchLiveChild(t, al, provider.entered, parent, "u1-regen")
+	lifecycle := al.GetSessionLifecycleStore()
+	canceller := NewSteerCanceller(lifecycle)
+	owner := w1hOwner("dan")
+	stop := func(phase string) {
+		t.Helper()
+		report, err := canceller.StopTurns(context.Background(), rec.SessionID, owner, false, al.SteerGenerationCancel)
+		if err != nil || len(report.Unreachable) != 0 {
+			t.Fatalf("StopTurns(%s): report=%+v err=%v", phase, report, err)
+		}
+		// Wait for the owning execution's entire completion/disposal tail,
+		// not just its landed lifecycle value, before trying another admission.
+		joinGoalFixtureRuns(t, al)
 	}
-	assertU1StoppedChildNotice(t, al, parent, rec, string(session.StopCauseStop), "dan")
-	t.Fatal("BLOCKED: same-generation RESUME is not implemented — required by ADR D2 CRIT-001 " +
-		"(same-generation resume and restart fence) and F0929-5, so a second stop of the same " +
-		"generation can mint a fresh stop_seq and a fresh notice per D6's dedup key")
+	stop("first")
+	notice1, _ := assertU1StoppedChildNotice(t, al, parent, rec, string(session.StopCauseStop), "dan")
+	first, err := lifecycle.ListStoppedTransitions(rec.SessionID)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first stop history = %s, err=%v; want exactly one transition (D6)", w1hFormatTransitions(first), err)
+	}
+	if notice1 != w1hNoticeID(parent, rec.SessionID, rec.Generation, first[0].StopSeq) {
+		t.Fatalf("first notice identity %q does not name its own stop_seq %d (D6)", notice1, first[0].StopSeq)
+	}
+	if generation, err := canceller.Revive(context.Background(), rec.SessionID, owner); err != nil || generation != rec.Generation {
+		t.Fatalf("same-generation Revive returned generation=%d err=%v, want %d (D2)", generation, err, rec.Generation)
+	}
+	resumed, err := lifecycle.Load(rec.SessionID)
+	if err != nil {
+		t.Fatalf("Load(after Revive): %v", err)
+	}
+	if resumed.State != session.LifecycleQueued || resumed.Stop != nil || resumed.StopNote != nil || resumed.StopEffect != nil {
+		t.Fatalf("Revive did not atomically clear stop metadata and queue replacement: state=%q fence=%+v note=%+v effect=%+v (D2)",
+			resumed.State, resumed.Stop, resumed.StopNote, resumed.StopEffect)
+	}
+	result, err := NewSteerLauncher(al).Dispatch(context.Background(), rec.SessionID, rec.Generation)
+	if err != nil || result.State != steer.DispatchRunning {
+		t.Fatalf("Dispatch(after Revive) = %+v, err=%v; want real running replacement", result, err)
+	}
+	select {
+	case <-provider.entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("resumed owner never reached its provider — no second live turn to stop")
+	}
+	// D2's execution-identity clause fixes the admission boundary: persist
+	// the fresh tuple before queue/live admission and copy it into the owner.
+	// Exercise the whole Revive -> Dispatch path, not the standalone Revive
+	// half that has not admitted a replacement yet.
+	resumed, err = lifecycle.Load(rec.SessionID)
+	if err != nil {
+		t.Fatalf("Load(admitted replacement): %v", err)
+	}
+	if resumed.ExecutionID == nil || resumed.ExecutionID.RunID == "" || resumed.ExecutionID.RunID == rec.ExecutionID.RunID ||
+		resumed.ExecutionID.BootSeq != al.bootEpochFor() {
+		t.Fatalf("replacement identity = %+v, want a fresh run_id in the current boot, not original %+v (D2)", resumed.ExecutionID, rec.ExecutionID)
+	}
+	if handle := al.getActiveTurnState(rec.SessionID); handle == nil || al.tsExecutionClaim(handle, rec.SessionID) != al.executionClaimFor(resumed) {
+		t.Fatal("admitted replacement owner does not carry its persisted fresh identity (D2)")
+	}
+	stop("second")
+	landed, err := lifecycle.Load(rec.SessionID)
+	if err != nil {
+		t.Fatalf("Load(after second stop): %v", err)
+	}
+	if landed.State != session.LifecycleStopped || landed.Generation != rec.Generation || landed.Stop != nil || landed.StopNote == nil {
+		t.Fatalf("second stop = state %q generation %d fence=%+v note=%+v, want stopped at unchanged generation %d with note and no fence (D2)",
+			landed.State, landed.Generation, landed.Stop, landed.StopNote, rec.Generation)
+	}
+	both, err := lifecycle.ListStoppedTransitions(rec.SessionID)
+	if err != nil || len(both) != 2 {
+		t.Fatalf("two-stop history = %s, err=%v; want two original transitions (D6)", w1hFormatTransitions(both), err)
+	}
+	if both[0] != first[0] || both[1].StopSeq <= first[0].StopSeq || both[1].Generation != rec.Generation {
+		t.Errorf("two-stop history = %s; want original first stop, same generation and strictly advancing second stop_seq (D2/D6)", w1hFormatTransitions(both))
+	}
+	notice2 := w1hNoticeID(parent, rec.SessionID, rec.Generation, both[1].StopSeq)
+	if notice2 == notice1 {
+		t.Errorf("second stop reused notice identity %q, want a fresh identity (D6)", notice2)
+	}
+	if ids := w1hStoppedNoticeIDsIn(t, al, parent); len(ids) != 2 {
+		t.Errorf("direct-parent notice ids = %v, want exactly two distinct stops' entries (D6)", ids)
+	}
+	for _, transition := range both {
+		id := w1hNoticeID(parent, rec.SessionID, rec.Generation, transition.StopSeq)
+		messages := w1hNoticesWithID(t, al, parent, id)
+		if len(messages) != 1 {
+			t.Errorf("notice entries for %s = %d, want exactly 1 (D6)", id, len(messages))
+		}
+		for _, message := range messages {
+			w1hAssertNoticeMatchesTransition(t, message, parent, transition)
+		}
+	}
 }
 
 // TestU1ParentStateRoutingOfStoppedNotice pins D6's routing table: a working
@@ -458,13 +552,35 @@ func TestU1NoticeDeliveryFailureStaysPendingVisibleAndRetries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(child): %v", err)
 	}
-	// D2: the stop itself is durably registered as the current-generation
-	// fence even while the notice write fails. (The completion path lands
-	// the STATE only after delivery succeeds — deliver-first, boot repairs
-	// the gap — so the state may still read running under a failing writer;
-	// the fence is what must not be lost.)
-	if got.Stop == nil || got.Stop.Generation != got.Generation {
-		t.Errorf("stop fence under a failing notice writer = %+v, want a live current-generation fence — the stop is durably registered even when its notice cannot be written (D2)", got.Stop)
+	// Frozen ADR Vocabulary/D2: a landed stopped record has no current Stop
+	// marker. Notice publication follows the landing; a writer failure leaves
+	// the history pending, never the execution running behind a live fence.
+	if got.State != session.LifecycleStopped || got.Terminal() || got.Generation != rec.Generation {
+		t.Errorf("lifecycle under a failing notice writer = %q, terminal=%v, generation=%d; want non-terminal stopped at generation %d (D2/D6)",
+			got.State, got.Terminal(), got.Generation, rec.Generation)
+	}
+	if got.Stop != nil {
+		t.Errorf("landed stop retains fence under a failing notice writer = %+v, want nil (D2)", got.Stop)
+	}
+	if got.StopNote == nil {
+		t.Fatal("landed stop lost its separate lasting note under a failing notice writer (D2)")
+	}
+	retained := *got.StopNote
+	if retained.Cause != session.StopCauseStop || retained.By != "human:dan" || retained.At.IsZero() || retained.Seq == 0 {
+		t.Errorf("retained stop note = %+v, want cause stop, actor human:dan, original time and positive stop_seq (D2/D6)", retained)
+	}
+	history, err := al.GetSessionLifecycleStore().ListStoppedTransitions(rec.SessionID)
+	if err != nil || len(history) != 1 {
+		t.Fatalf("pending landed history = %s, err=%v; want exactly one durable transition (D6/C3)", w1hFormatTransitions(history), err)
+	}
+	pending := history[0]
+	if pending.SessionID != rec.SessionID || pending.ParentSessionID != parent || pending.Generation != rec.Generation ||
+		pending.StopSeq != retained.Seq || pending.Cause != retained.Cause || pending.Actor != retained.By || !pending.At.Equal(retained.At) {
+		t.Errorf("pending landed transition = %+v, want the retained stop's exact identity/cause/actor/time (D6/C3)", pending)
+	}
+	pendingID := w1hNoticeID(parent, rec.SessionID, rec.Generation, pending.StopSeq)
+	if count := wakes(pendingID); count != 0 {
+		t.Errorf("wakes before a failed notice append is repaired = %d, want 0 — delivery remains pending (D6/D8.4)", count)
 	}
 	entries, err := al.GetMessageInboxStore().Entries(parent)
 	if err != nil {
@@ -488,6 +604,21 @@ func TestU1NoticeDeliveryFailureStaysPendingVisibleAndRetries(t *testing.T) {
 		t.Errorf("boot recovery reported NOTHING while the parent inbox was unwritable — " +
 			"D8.4: keep a durable retry item and report the failure; do not silently claim delivery")
 	}
+	afterBroken, err := al.GetSessionLifecycleStore().Load(rec.SessionID)
+	if err != nil {
+		t.Fatalf("Load(after failed boot retry): %v", err)
+	}
+	if afterBroken.State != session.LifecycleStopped || afterBroken.Stop != nil || afterBroken.StopNote == nil || *afterBroken.StopNote != retained {
+		t.Errorf("failed boot retry changed the landed stop: state=%q fence=%+v note=%+v; want stopped, nil fence and retained note %+v (D2/D8)",
+			afterBroken.State, afterBroken.Stop, afterBroken.StopNote, retained)
+	}
+	stillPending, err := al.GetSessionLifecycleStore().ListStoppedTransitions(rec.SessionID)
+	if err != nil || len(stillPending) != 1 || stillPending[0] != pending {
+		t.Errorf("history after failed boot retry = %s, err=%v; want the same pending transition %+v (D6/C3)", w1hFormatTransitions(stillPending), err, pending)
+	}
+	if count := wakes(pendingID); count != 0 {
+		t.Errorf("failed boot retry rang the undelivered notice %d time(s), want 0 (D6/D8.4)", count)
+	}
 
 	// Repair + retry: the pending notice delivers exactly once, identity
 	// stable, one wake.
@@ -496,6 +627,12 @@ func TestU1NoticeDeliveryFailureStaysPendingVisibleAndRetries(t *testing.T) {
 	}
 	replayU1StoppedNotices(t, al, filepath.Join(home, "session_lifecycle"), filepath.Join(home, "session_messages"))
 	noticeID, note := assertU1StoppedChildNotice(t, al, parent, rec, string(session.StopCauseStop), "dan")
+	if noticeID != pendingID {
+		t.Errorf("repaired notice id = %q, want pending transition id %q — retry must publish the original stop (D6/C3)", noticeID, pendingID)
+	}
+	for _, message := range w1hNoticesWithID(t, al, parent, pendingID) {
+		w1hAssertNoticeMatchesTransition(t, message, parent, pending)
+	}
 	if got := wakes(noticeID); got != 1 {
 		t.Errorf("wakes across failure + repair + retry = %d, want exactly 1 (D6)", got)
 	}
@@ -592,48 +729,37 @@ func TestU1GoalStaysActiveAcrossEveryStopPath(t *testing.T) {
 		assertGoalActive(t, goalID, "done completion")
 	})
 	t.Run("failed", func(t *testing.T) {
+		t.Setenv("OMNIPUS_HOME", t.TempDir())
 		al, cleanup := newSteerAL(t)
 		defer cleanup()
-		parent := newTestSteeringSession(t, al, "ws-u1-goal-failed")
-		rec := u1LaunchChild(t, al, parent, "u1-goal-failed")
 		wireSteerCompletionDeps(t, al)
-		goalID := activateTestGoalRecord(t, rec.SessionID, "U1 goal open across failed")
-		if err := al.completeSteeredTurn(context.Background(), rec,
-			turnResult{finalContent: ""}, errors.New("boom")); err != nil {
-			t.Fatalf("completeSteeredTurn(failed): %v", err)
+		// D2: the producing execution's identity is persisted before admission.
+		// Fail the real admitted owner at the provider edge, not a record that
+		// was only labelled running and never dispatched.
+		provider := newGoalRunGate("", errors.New("boom"))
+		installGoalRunProvider(t, al, provider)
+		parent := newTestSteeringSession(t, al, "ws-u1-goal-failed")
+		rec := launchGoalBearingChild(t, al, parent, "u1-goal-failed", goalChildLaunchOptions{live: true})
+		awaitGoalProvider(t, provider)
+		assertGoalActive(t, rec.GoalRef, "before provider failure")
+		provider.open()
+		joinGoalFixtureRuns(t, al)
+		failed, err := al.GetSessionLifecycleStore().Load(rec.SessionID)
+		if err != nil {
+			t.Fatalf("Load(after provider failure): %v", err)
 		}
-		assertGoalActive(t, goalID, "failed completion")
+		if failed.State != session.LifecycleFailed || failed.Generation != rec.Generation {
+			t.Fatalf("provider failure outcome = %q at generation %d, want failed at admitted generation %d (D2)",
+				failed.State, failed.Generation, rec.Generation)
+		}
+		if failed.FinalDelivery == nil || failed.FinalDelivery.CommitID != rec.ExecutionID.RunID ||
+			failed.FinalDelivery.Outcome != string(steer.OutcomeFailed) {
+			t.Fatalf("failure outbox = %+v, want the real admitted owner's failed commit (D2)", failed.FinalDelivery)
+		}
+		assertGoalActive(t, rec.GoalRef, "failed completion")
 	})
-	t.Run("aged question", func(t *testing.T) {
-		al, cleanup := newSteerAL(t)
-		defer cleanup()
-		parent := newTestSteeringSession(t, al, "ws-u1-goal-aged-question")
-		rec := u1LaunchChild(t, al, parent, "u1-goal-aged-question")
-		goalID := activateTestGoalRecord(t, rec.SessionID, "U1 goal open across an aged question")
-		// A question parked 24h past its original deadline — the exact shape
-		// the retired 24h expiry (ADR D1.8, removed by the steering-commands
-		// amendment's Correction C2 with no replacement) used to fail the
-		// helper on. u1BootRecovery wires the completion deps this park's
-		// message_parent tool delivers through.
-		w6qeParkQuestion(t, al, rec.SessionID, "u1-goal-aged-question-corr",
-			session.QuestionAuthorityOwnerRequired, time.Now().Add(-48*time.Hour))
-		var operatorNotices []string
-		recovery := u1BootRecovery(t, al, &operatorNotices)
-		if err := recovery.Run(context.Background()); err != nil {
-			t.Fatalf("SteerBootRecovery.Run: %v", err)
-		}
-		// The aged question neither expires nor stops or fails its helper:
-		// after boot the helper is still parked in needs_input — never
-		// stopped, never failed — and its goal stays active (F0929-6).
-		cur := w6qeMustLoad(t, al.GetSessionLifecycleStore(), rec.SessionID)
-		if cur.State != session.LifecycleNeedsInput || cur.NeedsInput == nil {
-			t.Fatalf("helper with an aged question after boot = (%s, needs_input %v), want needs_input — "+
-				"C2: a helper question does not expire and does not park (fail) its helper", cur.State, cur.NeedsInput)
-		}
-		if cur.Generation != rec.Generation {
-			t.Fatalf("helper generation after boot = %d, want %d — an aged question must not dispatch a run or mint a generation",
-				cur.Generation, rec.Generation)
-		}
-		assertGoalActive(t, goalID, "aged question boot sweep")
-	})
+	// No aged-question subcase: ADR-20261004 locked decision 6 + C2 delete
+	// owner_required parking and its needs_input lifecycle outright. Keeping
+	// a fixture parked beyond the retired deadline would test a removed state,
+	// not the surviving D6 goal rule. No replacement expiry is designed.
 }
