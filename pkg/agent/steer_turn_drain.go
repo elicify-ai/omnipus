@@ -125,7 +125,8 @@ func (al *AgentLoop) continueSteeredTurn(
 		func(_ *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error) {
 			gate := al.steerAdmission()
 			gate.entryMu.Lock()
-			if rec.SteeredBy != nil {
+			ts.opts.executionDisposition = al.executionDispositionFor(claim)
+			if rec.SteeredBy != nil || ts.opts.executionDisposition != nil {
 				if identityErr := ts.setExecutionIdentity(claim.RunID, claim.BootSeq); identityErr != nil {
 					gate.entryMu.Unlock()
 					return "", identityErr
@@ -177,7 +178,7 @@ func (al *AgentLoop) steeredDrainRecord(sessionID string, generation int, claim 
 	if rec.Generation != generation || rec.Terminal() {
 		return rec, errSteeredDrainInactive
 	}
-	if rec.SteeredBy != nil && !claim.matches(rec) {
+	if claim.RunID != "" && !claim.matches(rec) {
 		return rec, errSteeredDrainInactive
 	}
 	if rec.Stopped() {

@@ -447,6 +447,8 @@ func (w *sessionWorker) runLoop() {
 // so each session worker has its own independent execution path.
 func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage) {
 	al := w.parent
+	ctx, executionEntry := ordinaryExecutionContext(ctx)
+	defer func() { _ = al.finishExecutionDisposition(executionEntry.disposition) }()
 
 	// Mark the worker as inside a turn so concurrent enqueue() calls for the
 	// same scope route to the in-turn steering queue rather than the inbox.

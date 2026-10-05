@@ -229,6 +229,10 @@ type CancelHooks struct {
 	// see cancel_prearm.go's own doc comment for why a longer window is a
 	// worse bug than the one it would be hiding.
 	OnLatchExpired func(scope CancelScope, canceller CancelCanceller)
+
+	// OnStopSettled reports the selected outer producer's eventual storage
+	// failure, after its actual disposition tail. It is not a timer stage.
+	OnStopSettled func(sessionID string, err error)
 }
 
 // agentLoopRequestCancel carries the shared state of RequestCancel across its stages.
@@ -299,6 +303,9 @@ func (al *AgentLoop) RequestCancel(
 
 	rc.cancelBackgroundWork()
 
+	if r0, r1, stop := rc.prepareSelectedStopDisposition(); stop {
+		return r0, r1
+	}
 	if r0, r1, stop := rc.claimOrArm(); stop {
 		return r0, r1
 	}

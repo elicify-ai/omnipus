@@ -1097,6 +1097,7 @@ func (al *AgentLoop) continueWithSteeringMessages(
 		InitialSteeringMessages:       steeringMsgs,
 		InitialSteeringCorrelationIDs: steeringCorrelationIDs,
 		SkipInitialSteeringPoll:       true,
+		executionDisposition:          ordinaryDispositionFromContext(ctx),
 		// FIX 1 (re-review): see AgentLoop.resolveWorkspaceIDForContinuation
 		// (loop.go) for the resolution this value is sourced from — this
 		// function previously left WorkspaceID unset entirely, degrading a

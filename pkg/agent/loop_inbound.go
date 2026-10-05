@@ -1007,6 +1007,14 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		release()
 		return "", steer.ErrStaleGeneration
 	}
+	if rec.SteeredBy != nil {
+		if attachErr := al.attachSteeredDisposition(ts, claim); attachErr != nil {
+			al.activeTurnStates.CompareAndDelete(sessionID, ts)
+			release()
+			return "", attachErr
+		}
+		release = func() { _ = al.finishExecutionDisposition(ts.opts.executionDisposition) }
+	}
 	if entryLocked {
 		gate.entryMu.Unlock()
 		entryLocked = false

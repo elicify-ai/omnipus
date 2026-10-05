@@ -403,6 +403,14 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 		// error... does NOT terminate the WebSocket connection" — precisely
 		// "something the user asked for did not happen", with no enum to
 		// extend and no contract change required.
+		OnStopSettled: func(sid string, err error) {
+			if err != nil && wc != nil {
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type: string(generated.WsFrameTypeError), SessionId: &sid,
+					Message: fmt.Sprintf("Stop for session %s could not finish; required storage or notice publication failed. Retry after storage is repaired.", sid),
+				})
+			}
+		},
 		OnLatchExpired: func(scope agent.CancelScope, canceller agent.CancelCanceller) {
 			if wc == nil {
 				// No live connection to notify — buildCancelHooks(nil) is used

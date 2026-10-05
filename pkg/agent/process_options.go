@@ -134,4 +134,8 @@ type processOptions struct {
 	// != nil (ADR-093 D3's standing-root test); every other turn — root
 	// chat, heartbeat, scheduled, task — leaves it "" and stays unstamped.
 	SteeredSessionID string
+
+	// executionDisposition carries canonical admission ownership separately
+	// from routing, transcript containment and delegate tool authority.
+	executionDisposition *executionDisposition
 }
