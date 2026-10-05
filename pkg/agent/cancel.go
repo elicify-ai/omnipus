@@ -1255,12 +1255,11 @@ func (al *AgentLoop) armChainReactionCancelLatch(sessionID string, scope CancelS
 }
 
 // RequestCancelForSession is the primitive-argument entry to the one session
-// Stop (stop_session.go::StopSession) for fan-outs that reach a session as
-// part of a larger stop: plan_engine.go's Stop session fan-out and
-// goal_loop.go's `/goal clear` verifier cancel. It stops exactly sessionID
-// (no helper cascade), records the stop with cause "cascade" (the session was
-// swept by that larger stop, D2/D6), asks its running turn to stop at once and
-// forces it 3 s later; only the owning execution lands `stopped`. It avoids
+// Stop (stop_session.go::StopSession) for plan_engine.go's Stop fan-out: it
+// stops sessionID AND every helper under it (Stop all — stopping a plan stops
+// all of its work), records the session's stop with cause "cascade" (it was
+// swept by the plan's stop, D2/D6), asks running turns to stop at once and
+// forces them 3 s later; only the owning executions land `stopped`. It avoids
 // importing pkg/agent types in pkg/commands by using primitive types.
 //
 // Returns (fired, armed, err): fired when a running turn was asked to stop or
@@ -1269,6 +1268,13 @@ func (al *AgentLoop) armChainReactionCancelLatch(sessionID string, scope CancelS
 // surfaces fired must also check armed before reporting a no-op. err carries
 // any reached session the stop could not handle.
 func (al *AgentLoop) RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (fired bool, armed bool, err error) {
+	return al.requestSweptStop(ctx, sessionID, userID, channel, true)
+}
+
+// requestSweptStop stops sessionID (and, when tree, every helper under it)
+// through the one Stop with cause "cascade": the session is reached because a
+// larger stop swept it (a plan Stop, a `/goal clear` verifier cancel).
+func (al *AgentLoop) requestSweptStop(ctx context.Context, sessionID, userID, channel string, tree bool) (fired bool, armed bool, err error) {
 	if sessionID == "" {
 		return false, false, fmt.Errorf("RequestCancelForSession: sessionID must not be empty")
 	}
@@ -1276,6 +1282,7 @@ func (al *AgentLoop) RequestCancelForSession(ctx context.Context, sessionID, use
 		SessionID: sessionID,
 		By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: userID},
 		Channel:   channel,
+		Tree:      tree,
 		Cause:     session.StopCauseCascade,
 		HooksFor: func(string) CancelHooks {
 			return CancelHooks{
