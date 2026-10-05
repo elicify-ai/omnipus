@@ -503,6 +503,20 @@ func (r *SteerBootRecovery) deliverIfUnconsumed(ctx context.Context, rec *sessio
 		notice("message:"+rec.SessionID, fmt.Sprintf("session %s has unreadable inbox message: %v", rec.SessionID, err))
 		return
 	}
+	if envelope.Kind == "error" && !envelope.Fatal && rec.State != session.LifecycleNeedsInput {
+		owned, noticeErr := r.landedStopNoticeOwnsReplay(rec, message)
+		if noticeErr != nil {
+			notice("message:"+rec.SessionID, fmt.Sprintf("session %s stopped-notice replay refused: %v", rec.SessionID, noticeErr))
+			return
+		}
+		if owned {
+			// recoverStoppedChildNotice already attempted the ledger-backed
+			// replay. Its publisher owns routing, rings and the taken check;
+			// a generic error replay would ring twice or invent a terminal
+			// verdict. Its failures were surfaced and remain retryable.
+			return
+		}
+	}
 	consumed, err := r.consumedIDs(rec.SteeredBy.SteeringSessionID)
 	if err != nil {
 		notice("transcript:"+rec.SessionID, fmt.Sprintf("session %s consumed-marker read failed: %v", rec.SessionID, err))
