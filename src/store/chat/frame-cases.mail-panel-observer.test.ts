@@ -153,6 +153,18 @@ describe('mail_panel_observer_error is a recognised frame (asyncapi.yaml MailPan
     send(frame)
     expect(unknownFrameTelemetry()).toEqual([])
   })
+
+  // Coordinator ruling (2026-10-05): the error frame is recognised, shows NO
+  // toast/banner (presence is best-effort; Mail keeps working through its
+  // request-scoped fallback), but is never silent: exactly one specific
+  // diagnostic carrying the frame's closed-class `code`.
+  it('an error frame records exactly one mailPanelObserverRefused diagnostic carrying its code, and no unknown-frame diagnostic', () => {
+    send(errUnauthorized)
+    const refused = vi.mocked(logDiagnostic).mock.calls.filter((c: unknown[]) => c[0] === 'mailPanelObserverRefused')
+    expect(refused).toHaveLength(1)
+    expect(refused[0][1]).toEqual(expect.objectContaining({ code: 'unauthorized_workspace' }))
+    expect(unknownFrameTelemetry()).toEqual([])
+  })
 })
 
 describe('control: a genuinely unknown frame type still takes the unknown-frame path', () => {
