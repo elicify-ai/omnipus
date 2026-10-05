@@ -357,69 +357,30 @@ func TestSteeredTurnDrain1020_EmptyQueueAddsNoContinuation(t *testing.T) {
 }
 
 func TestSteeredTurnDrain1020_EnqueueAfterFinalEmptyCheckIsConsumedOrRefused(t *testing.T) {
-	al, cleanup := newSteerAL(t)
-	defer cleanup()
-	provider := &steerTurnDrainProvider1020{}
-	deliverer := newSteerTurnDrainDeliverer1020()
-
-	var hookMu sync.Mutex
+	al, _ := newSteerAL(t)
+	wireSteerCompletionDeps(t, al)
+	parentID := newTestSteeringSession(t, al, "ws-1")
+	child, provider := r1AdmitChild(t, al, parentID, "issue-1020-after-final-empty-check", "issue 1020 response 1", "issue 1020 response 2")
 	var enqueueErr error
-	var hookCalls int
-	var injected bool
-	// Round-4 fixture correction (qa-lead, squad-lead ruling on 098be2a05):
-	// completeStateWriteTestHook fires on EVERY terminal write, not just
-	// this child's original one — production used to clear it after firing
-	// (completeStateWriteTestHook = nil), a production write into a test
-	// hook that 098be2a05 removed as an integrity violation. Injecting
-	// unconditionally meant the REVIVED generation's own commit also saw a
-	// "new" late steer and revived again, forever. Inject exactly once —
-	// on the first call, which fires during the original generation's
-	// commit — and only COUNT every later call.
-	completeStateWriteTestHook = func(sessionID string) {
-		hookMu.Lock()
-		hookCalls++
-		first := !injected
-		if first {
-			injected = true
-		}
-		hookMu.Unlock()
-		if !first {
-			return
-		}
-		_, err := al.EnqueueSteeringMessage(
-			sessionID,
-			testDefaultAgentID,
-			providers.Message{Role: "user", Content: "ISSUE-1020-AFTER-FINAL-EMPTY-CHECK"},
-			"issue-1020-after-final-empty-check",
-		)
-		hookMu.Lock()
-		enqueueErr = err
-		hookMu.Unlock()
+	var status EnqueueStatus
+	r1InjectBeforeCommit(t, al, child, func() {
+		_, status, enqueueErr = al.EnqueueSteeringMessageWithStatus(child.SessionID, testDefaultAgentID,
+			providers.Message{Role: "user", Content: "ISSUE-1020-AFTER-FINAL-EMPTY-CHECK"}, "issue-1020-after-final-empty-check")
+	})
+	provider.open(0)
+	r1AwaitProvider(t, provider, 1)
+	if enqueueErr != nil || status != EnqueueStatusPostFinish {
+		t.Fatalf("enqueue after final empty check status=%v error=%v, want accepted with a consumer", status, enqueueErr)
 	}
-	t.Cleanup(func() { completeStateWriteTestHook = nil })
-
-	childID := launchSteeredTurnDrainChild1020(t, al, provider, deliverer, nil)
-	al.drainSteeredTurns(5 * time.Second)
-
-	hookMu.Lock()
-	errAtEnqueue, calls := enqueueErr, hookCalls
-	hookMu.Unlock()
-	// Derivation: 2 terminal writes total — the child's original
-	// generation (where the fixture's one late steer is injected) and the
-	// generation it revives to (whose own commit finds nothing new to
-	// inject, since this fixture injects only once, and so does not
-	// revive again).
-	if calls != 2 {
-		t.Fatalf("post-drain enqueue hook count = %d, want exactly 2 (one terminal write for the original generation, one for the generation it revives)", calls)
+	r1AssertNoFinal(t, al, child)
+	requests := provider.Requests()
+	if len(requests) != 2 {
+		t.Fatalf("successful enqueue provider calls=%d, want initial + one continuation", len(requests))
 	}
-	if errAtEnqueue == nil {
-		if got := al.pendingSteeringCountForScope(childID); got != 0 {
-			t.Errorf("enqueue reported success after the drain closed, but pending count = %d; want 0 because a successful enqueue must still have a consumer", got)
-		}
-		if got := len(provider.Requests()); got != 2 {
-			t.Errorf("enqueue reported success after the drain closed, but provider request count = %d; want 2 because the late item must run", got)
-		}
-	}
+	assertSteerRevivalInput1020(t, requests[1:], []string{"ISSUE-1020-AFTER-FINAL-EMPTY-CHECK"})
+	provider.open(1)
+	joinGoalFixtureRuns(t, al)
+	r1RequireSameGenerationFinal(t, al, child, "issue 1020 response 2")
 }
 
 // steerDrainAdmissionProviderQ2Fixture is used ONLY by the two direct-call
