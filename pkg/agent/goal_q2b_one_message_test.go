@@ -122,6 +122,7 @@ func q2bKeepTurnAlive(t *testing.T, al *AgentLoop, sessionID string) {
 
 func TestGoalQ2B_EndToEndOneParentWakeAndCompletedChild(t *testing.T) {
 	h := newQ2BHarness(t, "q2b-e2e")
+	h.child = stampG5ExitedExecution(t, h.al, h.child)
 	done := make(chan string, 1)
 	oldDone := goalDeferredAdjudicationDoneFn
 	goalDeferredAdjudicationDoneFn = func(sessionID string) { done <- sessionID }
