@@ -138,7 +138,7 @@ func newAdr093OverlapProvider() *adr093OverlapProvider {
 
 func (p *adr093OverlapProvider) stop() { p.once.Do(func() { close(p.release) }) }
 
-func (p *adr093OverlapProvider) Chat(ctx context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+func (p *adr093OverlapProvider) Chat(_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
 	p.mu.Lock()
 	p.current++
 	p.entries++
@@ -150,10 +150,11 @@ func (p *adr093OverlapProvider) Chat(ctx context.Context, _ []providers.Message,
 	case p.entered <- struct{}{}:
 	default:
 	}
-	select {
-	case <-p.release:
-	case <-ctx.Done():
-	}
+	// Hold the process-edge response until the test releases it, even when
+	// its request is cancelled. Otherwise cancellation can complete the owner
+	// before the in-flight-fence assertion, making that ordering a race.
+	// This models the dying provider call, not a fake lifecycle/Stop landing.
+	<-p.release
 	p.mu.Lock()
 	p.current--
 	p.mu.Unlock()
