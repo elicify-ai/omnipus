@@ -455,9 +455,13 @@ func TestReportSteeredSessionTerminalUpward_LandsRecordFailedAndDeliversUpward(t
 	)
 	parentID := newTestSteeringSession(t, al, "ws-1")
 	strandedID, strandedGen := launchSteeredChild(t, al, parentID, "call-stranded", "promotion fails with a non-cancellation error")
+	// Frozen D2: the genuine failure must claim an actual admitted run.
+	admitSteeringRepairExecution(t, al, strandedID, strandedGen)
 
-	al.reportSteeredSessionTerminalUpward(context.Background(), strandedID, strandedGen,
-		session.LifecycleFailed, steer.OutcomeFailed, "dispatch_failed: disk I/O error")
+	if err := al.reportSteeredSessionTerminalUpward(context.Background(), strandedID, strandedGen,
+		session.LifecycleFailed, steer.OutcomeFailed, "dispatch_failed: disk I/O error"); err != nil {
+		t.Fatalf("report genuine failure: %v", err)
+	}
 
 	rec, err := lifecycle.Load(strandedID)
 	if err != nil {
@@ -468,6 +472,18 @@ func TestReportSteeredSessionTerminalUpward_LandsRecordFailedAndDeliversUpward(t
 	}
 	if rec.FailedReason != "dispatch_failed: disk I/O error" {
 		t.Fatalf("FailedReason = %q, want the dispatch failure reason", rec.FailedReason)
+	}
+	// D2/T11: the committed genuine failure must actually reach the parent.
+	msgs, _, _, drainErr := al.GetMessageInboxStore().Drain(parentID, strandedID, "", 10)
+	if drainErr != nil {
+		t.Fatalf("Drain(parent failure): %v", drainErr)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("parent failure message count = %d, want exactly 1", len(msgs))
+	}
+	failed, decodeErr := msgs[0].AsSessionMessageError()
+	if decodeErr != nil || !failed.Fatal || failed.Text != "dispatch_failed: disk I/O error" || failed.MessageId != strandedID+":1:final" {
+		t.Fatalf("parent failure = %+v, decode error %v, want exact fatal dispatch reason under the committed final id", failed, decodeErr)
 	}
 
 	blocked, err := al.hasRunningOrQueuedDescendant(parentID)

@@ -645,6 +645,8 @@ func TestSteeredTurnDrain1020Round3_NoLateSteerControlExactlyOneFinalNoRevival(t
 	wireSteerCompletionDeps(t, al)
 	rootID := newTestSteeringSession(t, al, "ws-1")
 	child := launchRunningChild(t, al, rootID, "round3-s5-control")
+	// D2 identity-before-admission; unchanged no-late-steer final oracle.
+	child = admitSteeringRepairExecution(t, al, child.SessionID, child.Generation)
 	startGeneration := child.Generation
 
 	if err := al.completeSteeredTurn(context.Background(), child, turnResult{finalContent: "only answer"}, nil); err != nil {

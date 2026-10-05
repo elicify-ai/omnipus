@@ -2134,16 +2134,10 @@ func runDelegateSteer(t *testing.T, al *AgentLoop, callerSessionID, targetSessio
 	})
 }
 
-// TestDelegateSteer_RevivesStoppedQueuedChild is Finding 1's proof of done
-// (ADR-091 fix lane 2, Q17/D8): "a Stop survives a restart; only a newer
-// instruction revives the session, as a new generation." A queued child the
-// Stop cascade stamped never had a live turn, so nothing transitioned it —
-// SteerCanceller.Revive existed with zero production callers, and
-// executeSteer (pkg/tools/delegate_followup.go) enqueued into a steering
-// queue no live turn would ever drain, silently orphaning the message while
-// telling the model it would "apply at the child's next tool boundary" (a
-// false success). A steering message on a stopped-while-queued child must
-// instead revive it as a NEW generation and redispatch it for real.
+// Frozen control-plane ADR D2/Vocabulary: a queued stop lands with a note
+// and no current fence. October-4 amendment C1 / R1-RULING.md preserves the
+// steering input and real redispatch, but stopped-message resumption keeps the
+// SAME generation rather than the retired ADR-091 generation bump.
 func TestDelegateSteer_RevivesStoppedQueuedChild(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -2177,15 +2171,10 @@ func TestDelegateSteer_RevivesStoppedQueuedChild(t *testing.T) {
 	if _, cancelErr := canceller.CancelSubtree(context.Background(), queuedID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"}); cancelErr != nil {
 		t.Fatalf("CancelSubtree(queued): %v", cancelErr)
 	}
-	stopped, err := al.GetSessionLifecycleStore().Load(queuedID)
-	if err != nil {
-		t.Fatalf("Load(queued after stop): %v", err)
-	}
-	if stopped.Stop == nil || stopped.Stop.Generation != stopped.Generation {
-		t.Fatalf("queued child has no current-generation Stop marker after CancelSubtree: %+v", stopped.Stop)
-	}
+	// D2 requires the actual landing, not an in-flight fence, before revival.
+	stopped := awaitSteeringRepairStopped(t, al, queuedID, queuedGen)
 
-	// The founder's decision: only a NEWER instruction revives it — steer it.
+	// October-4 locked decision 5/C1: this NEW steering input resumes it.
 	res := runDelegateSteer(t, al, parentID, queuedID, "please continue")
 	if res.IsError {
 		t.Fatalf("delegate(steer) on a stopped-while-queued child = error %q", res.ForLLM)
@@ -2195,11 +2184,13 @@ func TestDelegateSteer_RevivesStoppedQueuedChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(queued after steer): %v", err)
 	}
-	if revived.Generation != stopped.Generation+1 {
-		t.Fatalf("generation after steer = %d, want %d (a NEW generation)", revived.Generation, stopped.Generation+1)
+	// D2 and C1: only done/failed starts a next generation. The busy sibling
+	// still owns the only slot, so this same-generation replacement is queued.
+	if revived.Generation != stopped.Generation {
+		t.Fatalf("generation after steer = %d, want SAME stopped generation %d (D2/C1)", revived.Generation, stopped.Generation)
 	}
-	if revived.Terminal() {
-		t.Fatalf("revived child is terminal (state=%q) — the steer did not bring it back", revived.State)
+	if revived.State != session.LifecycleQueued || revived.Stop != nil || revived.StopNote != nil || revived.ExecutionID == nil {
+		t.Fatalf("steered replacement = state %q fence=%+v note=%+v identity=%+v, want genuinely admitted queued replacement with old stop cleared (D2/C1)", revived.State, revived.Stop, revived.StopNote, revived.ExecutionID)
 	}
 
 	// Prove it is not merely marked revived on disk — it actually redispatched
@@ -2297,13 +2288,16 @@ func TestReviveStoppedSession_RefusesWhenTheNewInstructionCannotLand(t *testing.
 	// A durably stopped record whose UnifiedStore session does not exist:
 	// the new instruction has nowhere to land.
 	const ghostID = "01JBBBBBBBBBBBBBBBBBBBBBBB"
-	ghost := testSteerLifecycleRecord(ghostID, parentID, session.LifecycleRunning, 1)
+	// Frozen D2/Vocabulary: the stopped landing has already finished.
+	// A running record with a current fence tests the separate in-flight
+	// retry refusal, never the instruction-append failure this case owns.
+	ghost := testSteerLifecycleRecord(ghostID, parentID, session.LifecycleStopped, 1)
 	ghost.AgentID = testDefaultAgentID
-	ghost.Stop = &session.Stop{
-		At: time.Now().UTC(), Generation: 1,
-		By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"},
+	ghost.StopNote = &session.StopNote{
+		At: time.Now().UTC(), By: "human:operator", Seq: 1, Cause: session.StopCauseStop,
 	}
 	persistSteerLifecycle(t, lifecycle, ghost)
+	awaitSteeringRepairStopped(t, al, ghostID, 1)
 
 	revived, err := al.ReviveStoppedSession(context.Background(), ghostID,
 		steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"}, "do this instead")
@@ -2320,5 +2314,9 @@ func TestReviveStoppedSession_RefusesWhenTheNewInstructionCannotLand(t *testing.
 	}
 	if after.Generation != 1 {
 		t.Fatalf("Generation = %d, want 1 — the record was revived before the new instruction was known to be durable", after.Generation)
+	}
+	// D2's note-clear/queued transition cannot precede durable instruction.
+	if after.State != session.LifecycleStopped || after.Stop != nil || after.StopNote == nil || after.StopNote.By != ghost.StopNote.By || after.StopNote.Cause != ghost.StopNote.Cause || after.StopNote.Seq != ghost.StopNote.Seq || !after.StopNote.At.Equal(ghost.StopNote.At) {
+		t.Fatalf("failed instruction altered the stopped record: state=%q fence=%+v note=%+v, want original stopped state/note (D2)", after.State, after.Stop, after.StopNote)
 	}
 }

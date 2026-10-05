@@ -130,7 +130,8 @@ func TestSteeredTurnDrain1020_SameGenerationReentryAcceptsSecondChildWake(t *tes
 		t.Fatalf("parent became terminal before either child completed: state=%q", parentBeforeWake.State)
 	}
 
-	child1 = setLifecycleState1020(t, al, child1.SessionID, session.LifecycleRunning)
+	// Frozen D2: complete a real admitted execution, never a forged run identity.
+	child1 = admitSteeringRepairExecution(t, al, child1.SessionID, child1.Generation)
 	if completeErr := al.completeSteeredTurn(
 		context.Background(), child1, turnResult{finalContent: "child one result"}, nil); completeErr != nil {
 		t.Fatalf("completeSteeredTurn(child 1): %v", completeErr)
@@ -153,7 +154,8 @@ func TestSteeredTurnDrain1020_SameGenerationReentryAcceptsSecondChildWake(t *tes
 		t.Fatal("parent wake/re-entry did not reach its live provider turn")
 	}
 
-	child2 = setLifecycleState1020(t, al, child2.SessionID, session.LifecycleRunning)
+	// Preserve the second-wake oracle; only repair its admission setup (D2).
+	child2 = admitSteeringRepairExecution(t, al, child2.SessionID, child2.Generation)
 	child2Err := al.completeSteeredTurn(
 		context.Background(), child2, turnResult{finalContent: "child two result"}, nil)
 	close(provider.releaseFirst)
