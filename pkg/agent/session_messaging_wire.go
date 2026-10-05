@@ -236,8 +236,8 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			// The durable parent-child edge closes both. See
 			// cancelDelegatedSubtree's own doc comment before changing this.
 			dt.SetCancelHooks(
-				func(sessionKey string, by steer.Principal, hint string) ([]string, error) {
-					return al.cancelDelegatedSubtree(sessionKey, by, false, hint)
+				func(sessionKey string, by steer.Principal, hint string) ([]string, func() error, error) {
+					return al.cancelDelegatedSubtreeSoftWithBackstop(sessionKey, by, hint)
 				},
 				func(sessionKey string, by steer.Principal, hint string) ([]string, error) {
 					return al.cancelDelegatedSubtree(sessionKey, by, true, hint)

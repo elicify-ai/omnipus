@@ -258,20 +258,22 @@ type DelegateTool struct {
 	// mechanism — see DelegateSteeringSink's doc comment).
 	steering DelegateSteeringSink
 	// cancelSoft/cancelHard hold closures over ADR-091's durable Stop
-	// cascade, AgentLoop.cancelDelegatedSubtree (pkg/agent/
+	// cascade, AgentLoop.cancelDelegatedSubtree* (pkg/agent/
 	// steer_delegate_cancel.go), wired in
 	// pkg/agent/session_messaging_wire.go. Injected to avoid a
 	// tools<->agent import cycle, matching every other AgentLoop capability
 	// this tool consumes via a setter (SetSpawner, etc.).
 	//
-	// They return every session id the stop REACHED — the named session plus
+	// Both return every session id the stop REACHED — the named session plus
 	// every descendant found through the durable parent-child edge — and an
 	// empty slice when it reached nothing, which is the miss signal
-	// executeStopAll uses to detect its TOCTOU window. They previously
-	// wrapped the live-turn interrupt pair (Interrupt/InterruptSessionHard),
-	// which reached nothing at all for a session whose turn had not started
-	// and missed a running child's own grandchildren; see SetCancelHooks.
-	cancelSoft func(sessionKey string, by steer.Principal, hint string) ([]string, error)
+	// executeStopAll uses to detect its TOCTOU window. cancelSoft also returns
+	// the grace backstop bound to the executions that cooperative stop itself
+	// accepted; see SoftCancelFunc. They previously wrapped the live-turn
+	// interrupt pair (Interrupt/InterruptSessionHard), which reached nothing
+	// at all for a session whose turn had not started and missed a running
+	// child's own grandchildren; see SetCancelHooks.
+	cancelSoft SoftCancelFunc
 	cancelHard func(sessionKey string, by steer.Principal, hint string) ([]string, error)
 	// cancelGrace is the cooperative-stop grace window before the hard
 	// RequestCancel backstop fires (session_messaging.cancel_grace,
@@ -438,10 +440,20 @@ func isSessionMessagingAction(action string) bool {
 	return false
 }
 
+// SoftCancelFunc is the cooperative stop. It returns the session ids the stop
+// REACHED and a grace backstop bound to the executions THIS stop accepted
+// (the canonical wiring: AgentLoop.cancelDelegatedSubtreeSoftWithBackstop).
+// After the grace window the backstop hard-aborts only those accepted
+// executions; it must never accept a new Stop, because by then the session may
+// hold a fresh same-generation execution that a later Resume admitted. A nil
+// backstop means the soft stop left nothing to abort.
+type SoftCancelFunc func(sessionKey string, by steer.Principal, hint string) (reached []string, backstop func() error, err error)
+
 // SetCancelHooks installs the soft (cooperative) and hard (immediate) stop
 // functions. Each returns the session ids the stop actually REACHED, which is
 // how executeStopAll tells "I stopped something" from "there was nothing to
-// stop".
+// stop". An unwired soft hook makes a cooperative stop_all return an error; it
+// never falls back to a fresh Stop.
 //
 // The canonical wiring (pkg/agent/session_messaging_wire.go) is a pair of
 // closures over `AgentLoop.cancelDelegatedSubtree`, ADR-091's durable Stop
@@ -469,7 +481,7 @@ func isSessionMessagingAction(action string) bool {
 // executeStopAll passes its session_id argument here verbatim — that
 // argument IS the delegateSessionID by contract.
 func (t *DelegateTool) SetCancelHooks(
-	soft func(sessionKey string, by steer.Principal, hint string) ([]string, error),
+	soft SoftCancelFunc,
 	hard func(sessionKey string, by steer.Principal, hint string) ([]string, error),
 ) {
 	t.cancelSoft = soft

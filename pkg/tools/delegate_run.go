@@ -845,7 +845,7 @@ func (t *DelegateTool) executeStopAll(ctx context.Context, args map[string]any) 
 	if t.cancelSoft == nil {
 		return ErrorResult("delegate: no soft-cancel hook configured")
 	}
-	softDescendants, cerr := t.cancelSoft(sessionID, by, "delegate stop_all(hard=false)")
+	softDescendants, backstop, cerr := t.cancelSoft(sessionID, by, "delegate stop_all(hard=false)")
 	if cerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: stop_all: %v", cerr)).WithError(cerr)
 	}
@@ -869,39 +869,20 @@ func (t *DelegateTool) executeStopAll(ctx context.Context, args map[string]any) 
 		return dropped
 	}
 
-	// cancel(soft) = soft cooperative stop + a hard RequestCancel backstop
-	// after the grace window, mirroring Interrupt/InterruptSessionHard's
-	// existing two-phase escalation (steering.go, ScopeSelfOnly). The backstop only fires
-	// if the session has NOT already stopped or reached a terminal state within grace.
-	// (Comments-MINOR-3: the prior `// FR-...` prefix was a placeholder —
-	// cancel is not a numbered FR; see ADR-053 R§Cancel/restart for the
-	// two-phase prose this implements.)
-	if t.cancelHard != nil {
+	// cancel(soft) = soft cooperative stop + a hard backstop after the grace
+	// window, mirroring Interrupt/InterruptSessionHard's two-phase escalation
+	// (ADR-053 R§Cancel/restart). The backstop acts only on the executions the
+	// soft stop above accepted, through the owner's cascade lock and own-lock
+	// landing: one whose stop already landed, or that a later Resume/new Stop
+	// superseded, is left alone. It reads no current session state and accepts
+	// no new Stop.
+	if backstop != nil {
 		grace := t.cancelGrace
 		go func() {
 			time.Sleep(grace)
-			if t.lifecycle != nil {
-				if rec, lerr := t.lifecycle.Load(sessionID); lerr == nil && (rec.Terminal() || rec.State == session.LifecycleStopped) {
-					return // cooperative stop already landed — no backstop needed
-				}
+			if berr := backstop(); berr != nil {
+				slog.Warn("delegate: stop_all: hard-stop backstop failed", "session_id", sessionID, "error", berr)
 			}
-			// The descendants return closes the same TOCTOU window the
-			// synchronous path above guards: if the session terminated
-			// between the terminal check and this hard-cancel call,
-			// cancelHard returns (nil, nil) and there is nothing left to
-			// transition — skip transitionLifecycle rather than stamping a
-			// redundant LifecycleStopped onto an already-stopped/terminal record.
-			backstopDescendants, cerr := t.cancelHard(sessionID, by, "delegate stop_all(hard=false): grace elapsed")
-			if cerr != nil {
-				slog.Warn("delegate: stop_all: hard-stop backstop failed", "session_id", sessionID, "error", cerr)
-				return
-			}
-			if len(backstopDescendants) == 0 {
-				return
-			}
-			// note=nil: t.cancelHard (just above) already stamped the
-			// stop_note for sessionID (cause "stop") via stampStop. Retain it.
-			t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user", nil)
 		}()
 	}
 
