@@ -177,8 +177,8 @@ func (g *goalCommitPublicationGate) Deliver(ctx context.Context, event steer.Upw
 func (g *goalCommitPublicationGate) open() { g.once.Do(func() { close(g.release) }) }
 func installGoalCommitGate(t *testing.T, al *AgentLoop) *goalCommitPublicationGate {
 	t.Helper()
-	real := al.getUpwardDeliverer()
-	gate := &goalCommitPublicationGate{real: real, event: make(chan steer.UpwardEvent, 8), release: make(chan struct{})}
+	actualDeliverer := al.getUpwardDeliverer()
+	gate := &goalCommitPublicationGate{real: actualDeliverer, event: make(chan steer.UpwardEvent, 8), release: make(chan struct{})}
 	al.SetSteerAudienceDeps(al.getSteerAudienceResolver(), steer.NopBoundaryObserver{}, gate)
 	t.Cleanup(gate.open)
 	return gate
@@ -303,9 +303,9 @@ func TestGoalDelegation_DeadChildReportsUpwardAndLandsTerminal(t *testing.T) {
 				if !strings.HasPrefix(e.Text, "failed:") || !strings.Contains(e.Text, tc.providerErr.Error()) {
 					t.Errorf("provider failure text=%q, want failed: plus actual provider error", e.Text)
 				}
-				raw, err := msgs[0].MarshalJSON()
-				if err != nil || !bytes.Equal(raw, got.FinalDelivery.Payload) {
-					t.Errorf("parent payload differs from committed outbox: err=%v", err)
+				raw, marshalErr := msgs[0].MarshalJSON()
+				if marshalErr != nil || !bytes.Equal(raw, got.FinalDelivery.Payload) {
+					t.Errorf("parent payload differs from committed outbox: err=%v", marshalErr)
 				}
 			} else if !strings.HasPrefix(e.Text, "stopped_child:") || !strings.Contains(e.Text, "cause: "+string(tc.cause)) {
 				t.Errorf("nonfatal notice=%q, want stopped_child: cause: %s", e.Text, tc.cause)
@@ -476,8 +476,8 @@ func TestGoalDelegation_DeadChildUnblocksTheWaitingParent(t *testing.T) {
 		t.Fatal("registered parent agent missing")
 	}
 	inst.Provider = &depthEchoProvider{}
-	if _, err := al.processSystemMessage(context.Background(), wake); err != nil {
-		t.Fatalf("real parent wake re-entry: %v", err)
+	if _, wakeErr := al.processSystemMessage(context.Background(), wake); wakeErr != nil {
+		t.Fatalf("real parent wake re-entry: %v", wakeErr)
 	}
 	joinGoalFixtureRuns(t, al)
 	parent, err := al.GetSessionLifecycleStore().Load(parentID)

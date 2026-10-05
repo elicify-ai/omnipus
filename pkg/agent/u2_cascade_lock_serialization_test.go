@@ -294,8 +294,8 @@ type u2DelayedEffect struct {
 	retry   bool
 }
 
-func newU2DelayedEffect(real GenerationCancelFunc, retry bool) *u2DelayedEffect {
-	return &u2DelayedEffect{real: real, entered: make(chan struct{}), release: make(chan struct{}), retry: retry}
+func newU2DelayedEffect(actualCancel GenerationCancelFunc, retry bool) *u2DelayedEffect {
+	return &u2DelayedEffect{real: actualCancel, entered: make(chan struct{}), release: make(chan struct{}), retry: retry}
 }
 func (g *u2DelayedEffect) open() { g.once.Do(func() { close(g.release) }) }
 func (g *u2DelayedEffect) call(ctx context.Context, id string, gen int) (GenerationCancelResult, error) {
@@ -431,9 +431,9 @@ func u2StaleEffectCase(t *testing.T, queued, newerPending bool) {
 		newer.open()
 		u2AssertReached(t, u2AwaitStop(t, newerDone), old.SessionID)
 	} else {
-		report, err := c.StopTurns(context.Background(), old.SessionID, u2Owner(), false, al.SteerGenerationCancel)
-		if err != nil || len(report.Unreachable) != 0 {
-			t.Fatalf("positive newer Stop report=%+v err=%v", report, err)
+		report, stopErr := c.StopTurns(context.Background(), old.SessionID, u2Owner(), false, al.SteerGenerationCancel)
+		if stopErr != nil || len(report.Unreachable) != 0 {
+			t.Fatalf("positive newer Stop report=%+v err=%v", report, stopErr)
 		}
 		u2AssertReached(t, report, old.SessionID)
 	}

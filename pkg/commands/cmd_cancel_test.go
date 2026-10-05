@@ -345,7 +345,7 @@ func TestCancelHandler_ReplyMatchesErrorState(t *testing.T) {
 		{
 			name:      "real_failure",
 			loopErr:   errors.New("audit fsync failed: disk full"),
-			wantReply: "Cancel request failed: cancel: audit fsync failed: disk full",
+			wantReply: "Cancel request failed: audit fsync failed: disk full",
 		},
 	}
 
