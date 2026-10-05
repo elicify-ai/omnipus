@@ -135,12 +135,13 @@ func installT27ParkProvider(t *testing.T, al *AgentLoop) *t27ParkProvider {
 // specifies, built from a normal injected GenerationCancelFunc — on release
 // it delegates to the real adapter, unchanged.
 type t27GatedCancel struct {
-	mu       sync.Mutex
-	stamped  []string
-	entered  chan struct{}
-	open     chan struct{}
-	once     sync.Once
-	realTurn GenerationCancelFunc
+	mu          sync.Mutex
+	stamped     []string
+	entered     chan struct{}
+	open        chan struct{}
+	once        sync.Once
+	realTurn    GenerationCancelFunc
+	acceptedCtx context.Context // ORIGINAL callback context, never reconstructed from a later fence.
 }
 
 func newT27GatedCancel(realTurn GenerationCancelFunc) *t27GatedCancel {
@@ -154,6 +155,9 @@ func newT27GatedCancel(realTurn GenerationCancelFunc) *t27GatedCancel {
 func (g *t27GatedCancel) cancelTurn(ctx context.Context, sessionID string, generation int) (GenerationCancelResult, error) {
 	g.mu.Lock()
 	g.stamped = append(g.stamped, fmt.Sprintf("%s:%d", sessionID, generation))
+	if g.acceptedCtx == nil {
+		g.acceptedCtx = ctx
+	}
 	g.mu.Unlock()
 	var once sync.Once
 	once.Do(func() { close(g.entered) })
@@ -162,6 +166,17 @@ func (g *t27GatedCancel) cancelTurn(ctx context.Context, sessionID string, gener
 }
 
 func (g *t27GatedCancel) openGate() { g.once.Do(func() { close(g.open) }) }
+
+func (g *t27GatedCancel) acceptanceContext(t *testing.T) context.Context {
+	t.Helper()
+	g.mu.Lock()
+	ctx := g.acceptedCtx
+	g.mu.Unlock()
+	if ctx == nil {
+		t.Fatal("SETUP: original accepted callback context was not captured")
+	}
+	return ctx
+}
 
 // t27WaitFor polls cond until it holds or the timeout lapses.
 func t27WaitFor(t *testing.T, timeout time.Duration, what string, cond func() bool) {
@@ -192,10 +207,12 @@ func t27StopLanded(t *testing.T, lifecycle *session.LifecycleStore, sessionID st
 
 // t27LandSelectedRunStopped drives the production landing half for the
 // selected run while the old callback is gated (see file header).
-func t27LandSelectedRunStopped(t *testing.T, al *AgentLoop, sessionID string, generation int) {
+func t27LandSelectedRunStopped(t *testing.T, al *AgentLoop, ctx context.Context, sessionID string, generation int) {
 	t.Helper()
-	al.reportSteeredSessionTerminalUpward(context.Background(), sessionID, generation,
-		session.LifecycleStopped, steer.OutcomeInterrupted, "interrupted: the session was cancelled")
+	if err := al.reportSteeredSessionTerminalUpward(ctx, sessionID, generation,
+		session.LifecycleStopped, steer.OutcomeInterrupted, "interrupted: the session was cancelled"); err != nil {
+		t.Fatalf("land actual original selected stop: %v", err)
+	}
 	t27StopLanded(t, al.GetSessionLifecycleStore(), sessionID, generation)
 }
 
@@ -300,7 +317,7 @@ func TestT27_StaleStopCallback_QueuedReplacementKeepsQueueEntry(t *testing.T) {
 		t.Fatalf("barrier proof failed: start queue length while the old callback is gated = %d, want 1 — the gate must be withholding the live effect", got)
 	}
 
-	t27LandSelectedRunStopped(t, al, childID, childGen)
+	t27LandSelectedRunStopped(t, al, gate.acceptanceContext(t), childID, childGen)
 	t27ResumeAndRequeue(t, al, canceller, childID, childGen, 2)
 
 	gate.openGate()
@@ -342,8 +359,14 @@ func TestT27_StaleStopCallback_ActiveReplacementFinishesItsTurn(t *testing.T) {
 	launcher := NewSteerLauncher(al)
 
 	parentID := newTestSteeringSession(t, al, "ws-t27-stale-active")
-	rec := launchRunningChild(t, al, parentID, "call-t27-stale-active")
-	childID, childGen := rec.SessionID, rec.Generation
+	originalGate := park.newGate("original generated answer loses to the already-accepted stop")
+	childID, childGen := launchSteeredChild(t, al, parentID, "call-t27-stale-active", "actual original admission")
+	dispatchChild(t, al, childID, childGen, true)
+	select {
+	case <-originalGate.entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("SETUP: actual original A never reached its provider")
+	}
 
 	gate := newT27GatedCancel(al.SteerGenerationCancel)
 	defer gate.openGate()
@@ -363,7 +386,11 @@ func TestT27_StaleStopCallback_ActiveReplacementFinishesItsTurn(t *testing.T) {
 		return err == nil && stamped.Stop != nil && stamped.Stop.Generation == stamped.Generation && stamped.StopNote != nil
 	})
 
-	t27LandSelectedRunStopped(t, al, childID, childGen)
+	// A really exits after its accepted fence, before the delayed callback.
+	// Its immutable producing claim owns the production stopped completion.
+	originalGate.letFinish()
+	joinGoalFixtureRuns(t, al)
+	t27StopLanded(t, lifecycle, childID, childGen)
 	if resumed, err := canceller.Revive(context.Background(), childID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "t27-owner"}); err != nil || resumed != childGen {
 		t.Fatalf("Revive = (%d, %v), want (%d, nil) — the replacement resumes at the SAME generation", resumed, err, childGen)
 	}
@@ -477,7 +504,7 @@ func TestT27_StaleStopCallback_DelegateToolQueueRemovalSparesReplacement(t *test
 		t.Fatalf("barrier proof failed: start queue length while the old callback is gated = %d, want 1", got)
 	}
 
-	t27LandSelectedRunStopped(t, al, childID, childGen)
+	t27LandSelectedRunStopped(t, al, gate.acceptanceContext(t), childID, childGen)
 	t27ResumeAndRequeue(t, al, NewSteerCanceller(lifecycle), childID, childGen, 2)
 
 	gate.openGate()
