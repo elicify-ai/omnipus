@@ -1045,6 +1045,13 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 	consumedItems := make([]steeringQueueItem, 0, len(items))
 	for i, item := range items {
 		if item.wake != nil {
+			if err := al.recordAcceptedSteeredInstruction(*item.wake, item.message); err != nil {
+				al.steering.prependItemsScope(scope, items[i:])
+				slog.Error("agent: accepted steered instruction not recorded; restored unmarked suffix to queue",
+					"scope", scope, "message_id", item.wake.messageID, "error", err)
+				return msgs, correlationIDs, consumedItems,
+					fmt.Errorf("record accepted steered instruction %q: %w", item.wake.messageID, err)
+			}
 			if err := al.writeSteeringConsumedMarker(*item.wake); err != nil {
 				al.steering.prependItemsScope(scope, items[i:])
 				slog.Error("agent: steering wake not consumed; restored unmarked suffix to queue",
