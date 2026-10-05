@@ -1118,6 +1118,7 @@ func (p *wakeBlocksUntilCtxDoneProvider) GetDefaultModel() string { return "wake
 func TestWake_AppliesConfiguredTimeout(t *testing.T) {
 	al, cleanup := newSteerALWithProvider(t, &wakeBlocksUntilCtxDoneProvider{})
 	defer cleanup()
+	mintGenuineBootEpochForLoop(t, al)
 	wireSteerCompletionDeps(t, al)
 	rootID := newTestSteeringSession(t, al, "ws-1")
 	child := launchRunningChild(t, al, rootID, "call-wake-timeout")
@@ -1139,13 +1140,21 @@ func TestWake_AppliesConfiguredTimeout(t *testing.T) {
 		Metadata:                 map[string]string{"steer_message_id": "wake-1", "steer_generation": "1"},
 	}
 
+	wakeCtx, cancelWake := context.WithCancel(context.Background())
+	defer cancelWake()
 	done := make(chan error, 1)
 	go func() {
-		_, err := al.processSystemMessage(context.Background(), wake)
+		_, err := al.processSystemMessage(wakeCtx, wake)
 		done <- err
 	}()
 	select {
-	case <-done:
+	case wakeErr := <-done:
+		if !errors.Is(wakeErr, context.DeadlineExceeded) {
+			t.Fatalf("processSystemMessage(wake) error = %v, want configured timeout wrapping context.DeadlineExceeded", wakeErr)
+		}
+		if got, want := wakeErr.Error(), "turn timed out: context deadline exceeded"; got != want {
+			t.Fatalf("processSystemMessage(wake) error = %q, want %q", got, want)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("processSteeredSystemWake did not return within 5s — Finding E: " +
 			"the edge's configured timeout is not being applied on a wake/re-entry")
@@ -1155,8 +1164,19 @@ func TestWake_AppliesConfiguredTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(child): %v", err)
 	}
+	// Q19 folds timed_out into stopped; the durable note distinguishes timeout
+	// from a human Stop or another cause of stopping.
 	if rec.State != session.LifecycleStopped {
-		t.Fatalf("child state after a wake that exceeded its configured timeout = %q, want timed_out", rec.State)
+		t.Fatalf("child state after a wake that exceeded its configured timeout = %q, want %q", rec.State, session.LifecycleStopped)
+	}
+	if rec.StopNote == nil {
+		t.Fatal("child exceeded its configured timeout without a durable stop note")
+	}
+	if rec.StopNote.Cause != session.StopCauseTimeout || rec.StopNote.By != session.StopActorSystem {
+		t.Fatalf("child timeout stop note = %+v, want cause %q by %q", rec.StopNote, session.StopCauseTimeout, session.StopActorSystem)
+	}
+	if rec.Stop != nil {
+		t.Fatalf("child timeout landed with an in-flight Stop fence: %+v, want nil", rec.Stop)
 	}
 }
 
