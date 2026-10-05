@@ -92,7 +92,9 @@ test('W7 — a manually opened Library tab is not duplicated; the switch afforda
 // by squad-lead to the existing private tester; CI/GREEN/CHECK are separate.
 // Planned independent CHECK mutants: screen escapes its body; toolbar/header
 // intercepts Close; viewport breakpoint replaces container; Month/Expand loses
-// workspace or opens a tab. RED author never mutates production or self-CHECKs.
+// workspace/context or fails PE1's NEW-tab requirement. RED author never
+// mutates production or self-CHECKs. PE1 supersedes ONLY the same-tab Expand
+// cases below; containment, phone, Month and editor controls remain unchanged.
 
 async function openNativeDock(page: Page, panel: 'tasks' | 'calendar' | 'team') {
   await page.goto(`/#/workspaces/${workspaceId}/chat`)
@@ -114,11 +116,11 @@ async function openNativeDock(page: Page, panel: 'tasks' | 'calendar' | 'team') 
   return baseline
 }
 
-async function assertSameNativeChat(page: Page, baseline: Awaited<ReturnType<typeof openNativeDock>>, panel?: string) {
+async function assertSameNativeChat(page: Page, baseline: Awaited<ReturnType<typeof openNativeDock>>, panel?: string, expectedTabs = baseline.tabs) {
   const hash = new URL(page.url()).hash
   expect(hash.split('?')[0], 'the original workspace Chat route stays under the dock').toBe(baseline.path)
   expect(new URLSearchParams(hash.split('?')[1]).get('panel')).toBe(panel ?? null)
-  expect(page.context().pages().length, 'no new tab without an explicit Library/Mail/Browser Expand').toBe(baseline.tabs)
+  expect(page.context().pages().length, 'only an explicit Expand may add its ONE child tab (PE1)').toBe(expectedTabs)
   expect(await baseline.chat.evaluate((el) => el.isConnected && el === document.querySelector('[data-testid="chat-column"]')),
     'opening/resizing/closing must preserve the actual chat node').toBe(true)
 }
@@ -192,28 +194,116 @@ test.describe('native docking regression', () => {
   })
 
   for (const panel of ['tasks', 'calendar', 'team'] as const) {
-    test(`${panel} real toggle then Expand carries workspace context into this tab's chrome-less route`, async ({ page }, info) => {
+    test(`${panel} real toggle then Expand opens a NEW workspace child; reuse does not reload; Back restores source`, async ({ page }, info) => {
+      // PE1 replaces only the former same-tab expectation. This observes the
+      // ACTUAL returned child, not page.goto(a preset valid target) or a mock.
       const baseline = await openNativeDock(page, panel)
       await assertNativeHeaderHit(page, 'panel-expand')
-      await page.getByTestId('panel-expand').click() // GENERATED URL, never a pre-filled valid full-screen link
-      await page.waitForURL(new RegExp(`/panel/${panel}`))
-      const hash = new URL(page.url()).hash
-      await info.attach(`${panel}-generated-expand.json`, { body: JSON.stringify({ hash, tabs: page.context().pages().length }), contentType: 'application/json' })
-      await info.attach(`${panel}-generated-expand.png`, { body: await page.screenshot(), contentType: 'image/png' })
+      const opened = page.waitForEvent('popup')
+      await page.getByTestId('panel-expand').click()
+      const child = await opened
+      await child.waitForURL(new RegExp(`/panel/${panel}\\?`))
+      const hash = new URL(child.url()).hash
+      const search = new URLSearchParams(hash.split('?')[1])
       expect(hash.split('?')[0]).toBe(`#/panel/${panel}`)
-      expect(new URLSearchParams(hash.split('?')[1]).get('workspace'), 'SP-38: Expand must carry the SAME workspace, not an incomplete link').toBe(workspaceId)
-      expect(page.context().pages().length, 'SP-38: same-tab route, not a new tab').toBe(baseline.tabs)
-      await expect(page.getByText("Can't open this panel", { exact: true })).toHaveCount(0)
-      await expect(page.getByTestId('fullscreen-panel')).toBeVisible()
-      const marker = panel === 'tasks' ? page.getByTestId('tasks-heading')
+      expect(search.get('workspace'), 'PE1: generated child keeps the SAME workspace').toBe(workspaceId)
+      expect(search.get('popout'), 'FR-008/018: generated opener-owned identity').toMatch(/^[A-Za-z0-9-]+$/)
+      expect([...search.keys()].sort(), 'codec workspace plus opener-owned popout, no session/auth leakage').toEqual(['popout', 'workspace'])
+      expect(page.context().pages().length, 'PE1: actual source + exactly ONE new child').toBe(baseline.tabs + 1)
+      expect(await child.evaluate(() => ({ opener: window.opener, name: window.name })),
+        'FR-008: severed opener and no stable window name').toEqual({ opener: null, name: '' })
+      await expect(page.getByTestId('side-panel'), 'source closes only after the child opens').toHaveCount(0)
+      await assertSameNativeChat(page, baseline, undefined, baseline.tabs + 1)
+      await expect(child.getByText("Can't open this panel", { exact: true })).toHaveCount(0)
+      await expect(child.getByText('Something went wrong', { exact: true })).toHaveCount(0)
+      await expect(child.getByTestId('fullscreen-panel')).toBeVisible()
+      const marker = panel === 'tasks' ? child.getByTestId('tasks-heading')
+        : panel === 'calendar' ? child.getByTestId('calendar-toolbar') : child.getByRole('heading', { name: 'Team & delegation', exact: true })
+      await expect(marker, 'authenticated child renders REAL meaningful content').toBeVisible()
+      if (panel === 'tasks') await expect(child.getByRole('heading', { name: 'Plans', exact: true })).toBeVisible()
+      if (panel === 'calendar') await expect(child.getByTestId('calendar-grid')).toBeVisible()
+      await expect(child.getByTestId('workspace-top-bar'), 'expanded presentation has no app chrome').toHaveCount(0)
+      const contentNode = await marker.elementHandle()
+      if (!contentNode) throw new Error(`BLOCKED: ${panel} child content did not render — PE1`)
+      await info.attach(`${panel}-generated-expand.json`, { body: JSON.stringify({ sourceHash: new URL(page.url()).hash, childHash: hash, tabs: page.context().pages().length }), contentType: 'application/json' })
+      await info.attach(`${panel}-generated-source.png`, { body: await page.screenshot(), contentType: 'image/png' })
+      await info.attach(`${panel}-generated-child.png`, { body: await child.screenshot(), contentType: 'image/png' })
+
+      await page.bringToFront()
+      await toggleWorkspacePanel(page, panel)
+      await expect(page.getByTestId('side-panel'), 'same-scope re-entry focuses, never duplicates the dock').toHaveCount(0)
+      expect(page.context().pages().length).toBe(baseline.tabs + 1)
+      expect(child.url()).toContain(hash)
+      expect(await contentNode.evaluate((node) => node.isConnected),
+        'FR-009: retained child content survives reuse; no blanking/re-navigation').toBe(true)
+      await expect(marker).toBeVisible()
+
+      const closed = child.waitForEvent('close')
+      await child.getByRole('button', { name: /back to chat/i }).click()
+      await closed
+      await expect(page.getByTestId('side-panel'), 'FR-018: child Back re-docks ONLY in its source').toBeVisible()
+      await assertSameNativeChat(page, baseline, panel)
+      const restored = panel === 'tasks' ? page.getByTestId('tasks-heading')
         : panel === 'calendar' ? page.getByTestId('calendar-toolbar') : page.getByRole('heading', { name: 'Team & delegation', exact: true })
-      await expect(marker, 'the expanded route renders the real registered workspace content').toBeVisible()
-      await expect(page.getByTestId('workspace-top-bar'), 'expanded presentation has no app chrome').toHaveCount(0)
-      await page.getByRole('button', { name: /back to chat/i }).click()
+      await expect(restored).toBeVisible()
+      await info.attach(`${panel}-returned-source.png`, { body: await page.screenshot(), contentType: 'image/png' })
+    })
+
+    test(`${panel} actual AppShell manual-tab affordance is VISIBLE; real Switch never duplicates; leave clears it`, async ({ page, context }, info) => {
+      // Q1 B: visibility transferred from unit STORE proof, not removed.
+      // Native application/backend only. Obtain the address from an ACTUAL
+      // first Expand; never hand-complete a URL to hide broken transport.
+      const baseline = await openNativeDock(page, panel)
+      const opened = page.waitForEvent('popup')
+      await page.getByTestId('panel-expand').click()
+      const ownedChild = await opened
+      await ownedChild.waitForURL(new RegExp(`/panel/${panel}\\?`))
+      const generated = new URL(ownedChild.url())
+      const query = new URLSearchParams(generated.hash.split('?')[1])
+      expect(query.get('workspace')).toBe(workspaceId)
+      expect(query.get('popout')).toMatch(/^[A-Za-z0-9-]+$/)
+      query.delete('popout') // a MANUAL tab has no opener-owned lifecycle tag
+      generated.hash = `${generated.hash.split('?')[0]}?${query.toString()}`
+      const closed = ownedChild.waitForEvent('close')
+      await ownedChild.getByRole('button', { name: /back to chat/i }).click()
+      await closed
       await expect(page.getByTestId('side-panel')).toBeVisible()
-      expect(new URL(page.url()).hash.split('?')[0]).toBe(baseline.path)
-      expect(new URLSearchParams(new URL(page.url()).hash.split('?')[1]).get('panel')).toBe(panel)
-      expect(page.context().pages().length).toBe(baseline.tabs)
+      await assertNativeHeaderHit(page, 'panel-close')
+      await page.getByTestId('panel-close').click()
+      await expect(page.getByTestId('side-panel')).toHaveCount(0)
+      await assertSameNativeChat(page, baseline)
+
+      const manual = await context.newPage()
+      await manual.goto(generated.href)
+      const marker = panel === 'tasks' ? manual.getByTestId('tasks-heading')
+        : panel === 'calendar' ? manual.getByTestId('calendar-toolbar') : manual.getByRole('heading', { name: 'Team & delegation', exact: true })
+      await expect(marker).toBeVisible()
+      const contentNode = await marker.elementHandle()
+      if (!contentNode) throw new Error(`BLOCKED: manual ${panel} real content missing — FR-009`)
+      await page.bringToFront()
+      await toggleWorkspacePanel(page, panel)
+      const title = panel === 'tasks' ? 'Tasks' : panel === 'team' ? 'Team' : 'Calendar'
+      await expect(page.getByText(`${title} is already open in another tab — switch.`, { exact: true }),
+        'FR-009: actual APPLICATION toast is visible, never a store-only claim').toBeVisible()
+      await expect(page.getByRole('button', { name: 'Switch', exact: true })).toBeVisible()
+      await expect(page.getByTestId('side-panel')).toHaveCount(0)
+      expect(context.pages().length).toBe(baseline.tabs + 1)
+      await info.attach(`${panel}-manual-affordance-source.png`, { body: await page.screenshot(), contentType: 'image/png' })
+      await page.getByRole('button', { name: 'Switch', exact: true }).click()
+      // Programmatic focus is best-effort by §8.3; no guaranteed frontmost
+      // assertion. The REAL action must preserve target content/address and
+      // cannot open a duplicate tab or local dock.
+      expect(manual.url()).toBe(generated.href)
+      expect(await contentNode.evaluate((node) => node.isConnected)).toBe(true)
+      await expect(marker).toBeVisible()
+      await assertSameNativeChat(page, baseline, undefined, baseline.tabs + 1)
+      await expect(page.getByTestId('side-panel')).toHaveCount(0)
+      await info.attach(`${panel}-manual-switch-child.png`, { body: await manual.screenshot(), contentType: 'image/png' })
+      await manual.close()
+      await page.bringToFront()
+      await toggleWorkspacePanel(page, panel)
+      await expect(page.getByTestId('side-panel'), 'leave clears exclusive presence; same entry opens normally').toBeVisible()
+      await assertSameNativeChat(page, baseline, panel)
     })
   }
 })

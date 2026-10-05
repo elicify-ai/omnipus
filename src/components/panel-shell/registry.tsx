@@ -161,9 +161,6 @@ export const panels: readonly PanelDefinition[] = [
     content: TasksPanelContent,
     fullScreen: {
       ...workspaceFullScreenCodec(),
-      // SP-38: Tasks full screen is the shared chrome-less "Back to chat"
-      // route in the SAME tab — never a new browser tab.
-      expand: 'route',
     },
   },
   {
@@ -172,7 +169,6 @@ export const panels: readonly PanelDefinition[] = [
     content: TeamPanelContent,
     fullScreen: {
       ...workspaceFullScreenCodec(),
-      expand: 'route',
     },
   },
   {
@@ -181,7 +177,6 @@ export const panels: readonly PanelDefinition[] = [
     content: CalendarPanelContent,
     fullScreen: {
       ...workspaceFullScreenCodec(),
-      expand: 'route',
     },
   },
 ]

@@ -1,5 +1,5 @@
-import { useCallback, useEffect } from 'react'
-import { Outlet, useNavigate } from '@tanstack/react-router'
+import { useEffect } from 'react'
+import { Outlet } from '@tanstack/react-router'
 import { Sidebar } from './Sidebar'
 import { NotificationPanel } from './NotificationPanel'
 import { ToastContainer } from '@/components/ui/toast-container'
@@ -24,7 +24,6 @@ import { PANEL_TAKEOVER_PX } from '@/components/panel-shell/panelWidth'
 import { SidePanelShell } from '@/components/panel-shell/SidePanelShell'
 import { PanelTabPresenceBridge } from '@/components/panel-shell/PanelTabPresenceBridge'
 import { panels } from '@/components/panel-shell/registry'
-import type { PanelContext, PanelDefinition } from '@/components/panel-shell/types'
 import { computeAppMetrics } from './appShellViewport'
 
 // US-4: Application shell — sidebar + main content area
@@ -33,23 +32,6 @@ export function AppShell() {
   const reconnect = useConnectionStore((s) => s.reconnect)
   const hydrateNotifications = useNotificationsStore((s) => s.hydrate)
   const username = useAuthStore((s) => s.username)
-  const navigate = useNavigate()
-
-  // SP-38: panels registered with fullScreen.expand === 'route' (Tasks, Team,
-  // Calendar) expand IN THIS TAB to the shared chrome-less full-screen route —
-  // never a new browser tab. The route's "Back to chat" return re-docks the
-  // panel through the chat deep link. Library/Browser keep their popout
-  // expand (FR-008) inside the shell's own handler.
-  const expandPanelInRoute = useCallback(
-    (definition: PanelDefinition, context: PanelContext) => {
-      void navigate({
-        to: '/panel/$panelId',
-        params: { panelId: definition.id },
-        search: definition.fullScreen.toSearch(context),
-      })
-    },
-    [navigate],
-  )
 
   const { data: appState, isError: appStateError } = useQuery({
     queryKey: ['app-state'],
@@ -216,7 +198,6 @@ export function AppShell() {
       <SidePanelShell
         panels={panels}
         username={username ?? 'anonymous'}
-        onExpandRoute={expandPanelInRoute}
         chat={
           <div
             data-testid="app-main-content"
