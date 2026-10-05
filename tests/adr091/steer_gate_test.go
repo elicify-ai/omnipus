@@ -381,9 +381,13 @@ func (f *steerFixture) awaitState(t *testing.T, sessionID string, want session.L
 // still inside slow_tool when its limit fires. Afterwards:
 //   - second_tool must NEVER have executed (nothing further starts),
 //   - the model must not have been called again,
-//   - the record must read timed_out,
-//   - and the timeout notice must have exactly ONE owner: one upward delivery
-//     to the steering session, and nothing at all on the user-facing bus.
+//   - the record must read stopped, with cause timeout (Q19),
+//   - and the timeout notice must have exactly ONE owner: one durable D6 notice
+//     to the direct steering session, no terminal final, and no user-bus leak.
+//
+// Frozen Vocabulary/Q19: "LifecycleTimedOut is retired as a distinct outcome".
+// D6: "Every steered child's transition into stopped ... persists one notice
+// for its direct parent". This supersedes only the old terminal delivery oracle.
 func TestTimeout_TimedOutChild_StartsNoFurtherToolCallsAndTellsOneOwner(t *testing.T) {
 	provider := &twoToolProvider{}
 	f := newSteerFixture(t, provider, false)
@@ -425,7 +429,7 @@ func TestTimeout_TimedOutChild_StartsNoFurtherToolCallsAndTellsOneOwner(t *testi
 		if second.calls.Load() > 0 {
 			break
 		}
-		if record, err := f.lifecycle.Load(childID); err == nil && record.Terminal() {
+		if record, err := f.lifecycle.Load(childID); err == nil && record.State == session.LifecycleStopped {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -442,11 +446,18 @@ func TestTimeout_TimedOutChild_StartsNoFurtherToolCallsAndTellsOneOwner(t *testi
 			"the model for another round", got)
 	}
 
-	// Exactly one owner for the notice: the steering session, through the one
-	// upward path (steer_completion.go::completeSteeredTurn -> Deliver).
-	if got := f.upward.countFor(childID); got != 1 {
-		t.Fatalf("upward deliveries for the timed-out child = %d, want exactly 1 — the timeout notice "+
-			"must have exactly one owner, neither lost nor announced twice", got)
+	// D2/T11: stopped(timeout) owns no terminal final. D6's separate durable
+	// notice still has exactly one owner, with its own dedup identity.
+	stopped, err := f.lifecycle.Load(childID)
+	if err != nil {
+		t.Fatalf("Load(timeout-stopped child): %v", err)
+	}
+	if stopped.StopNote == nil || stopped.StopNote.Cause != session.StopCauseTimeout {
+		t.Fatalf("timeout stop must retain cause timeout, got %+v", stopped.StopNote)
+	}
+	g7AssertDirectStopNotice(t, f.al.GetMessageInboxStore(), f.root, stopped)
+	if got := f.upward.countFor(childID); got != 0 {
+		t.Fatalf("legacy terminal deliveries for the timeout-stopped child = %d, want 0 (D2/T11)", got)
 	}
 	// And nobody else: nothing reaches the user-facing outbound bus.
 	for {
