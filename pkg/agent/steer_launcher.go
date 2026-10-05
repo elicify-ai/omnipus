@@ -464,12 +464,7 @@ func (l *SteerLauncher) launchSteered(
 				// I-1 round 9: this is the steering session's first
 				// delegation — mint its own ordinary_root record now, in
 				// the SAME critical section as the child's publication.
-				parentRec.Generation = 1
-				parentRec.State = session.LifecycleRunning
-				parentRec.OwnerScopeKind = session.OwnerScopeHuman
-				parentRec.WorkspaceID = workspaceID
-				parentRec.AgentID = steererMeta.ActiveAgentID
-				parentRec.Origin = &session.Origin{Kind: session.OriginKind(steererMeta.Type)}
+				initializeOrdinaryRootRecord(parentRec, steererMeta)
 			}
 
 			remainingDepth := l.startingRemainingDepth(parentRec, req.TargetAgentID, parentDepth)

@@ -32,31 +32,32 @@ func ordinaryDispositionFromContext(ctx context.Context) *executionDisposition {
 	return nil
 }
 
-// A zero preparation is valid for an ordinary path with no lifecycle record.
-// Its value type keeps that case distinct from a failed admission.
+// A zero preparation is valid only for a path without a concrete lifecycle
+// store/session. A missing record for a real ordinary session is minted first.
 type ordinaryExecutionPreparation struct{ execution *executionDisposition }
 
 // prepareOrdinaryExecution reuses identity preparation, not steered capacity or
-// FIFO admission. Only existing lifecycle-backed human entry paths use it.
+// FIFO admission. Only an actual human message may revive a saved session.
 func (al *AgentLoop) prepareOrdinaryExecution(ctx context.Context, msg bus.InboundMessage, opts processOptions) (ordinaryExecutionPreparation, error) {
+	if !reviveInboundIsHumanTurn(msg) {
+		return ordinaryExecutionPreparation{}, nil
+	}
+	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}
+	return al.prepareOrdinarySessionExecution(ctx, msg.SessionID, opts, &by)
+}
+
+// prepareOrdinarySessionExecution is shared by human and scheduled entries.
+// A nil revival principal never revives: the ordinary dispatch guard still
+// refuses stopped/terminal records. This does not reserve a worker or FIFO slot.
+func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessionID string, opts processOptions, revival *steer.Principal) (ordinaryExecutionPreparation, error) {
 	store := al.GetSessionLifecycleStore()
-	if !reviveInboundIsHumanTurn(msg) || msg.SessionID == "" || store == nil {
+	if sessionID == "" || store == nil {
 		return ordinaryExecutionPreparation{}, nil
 	}
 	gate := al.steerAdmission()
 	gate.entryMu.Lock()
 	defer gate.entryMu.Unlock()
-	rec, err := store.Load(msg.SessionID)
-	if errors.Is(err, session.ErrLifecycleNotFound) {
-		return ordinaryExecutionPreparation{}, nil
-	}
-	if err != nil {
-		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: read saved session: %w", err)
-	}
-	if fenceErr := al.inboundStopFenceInFlight(msg.SessionID); fenceErr != nil {
-		return ordinaryExecutionPreparation{}, fenceErr
-	}
-	if al.activeTurnForCancel(msg.SessionID, CancelScope{SessionID: msg.SessionID, TurnOnly: true}) != nil {
+	if al.activeTurnForCancel(sessionID, CancelScope{SessionID: sessionID, TurnOnly: true}) != nil {
 		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: %w: an execution is already registered", steer.ErrStaleGeneration)
 	}
 	al.admission.mu.Lock()
@@ -66,11 +67,25 @@ func (al *AgentLoop) prepareOrdinaryExecution(ctx context.Context, msg bus.Inbou
 	if pending {
 		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: previous execution disposition is still pending")
 	}
-	if rec.Terminal() || rec.State == session.LifecycleStopped {
-		if reviveErr := al.reviveRecordForHumanTurn(ctx, msg.SessionID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}); reviveErr != nil {
+	bootSeq := al.bootEpochFor()
+	if bootSeq == 0 {
+		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: no minted boot epoch")
+	}
+	rec, err := store.Load(sessionID)
+	if errors.Is(err, session.ErrLifecycleNotFound) {
+		rec, err = al.ensureOrdinaryRootRecord(store, sessionID, opts.TranscriptStore)
+	}
+	if err != nil {
+		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: read saved session: %w", err)
+	}
+	if fenceErr := al.inboundStopFenceInFlight(sessionID); fenceErr != nil {
+		return ordinaryExecutionPreparation{}, fenceErr
+	}
+	if revival != nil && (rec.Terminal() || rec.State == session.LifecycleStopped) {
+		if reviveErr := al.reviveRecordForHumanTurn(ctx, sessionID, *revival); reviveErr != nil {
 			return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: explicit revival failed: %w", reviveErr)
 		}
-		rec, err = store.Load(msg.SessionID)
+		rec, err = store.Load(sessionID)
 		if err != nil {
 			return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: read revived session: %w", err)
 		}
@@ -78,7 +93,7 @@ func (al *AgentLoop) prepareOrdinaryExecution(ctx context.Context, msg bus.Inbou
 	if err := al.checkNewAdmission(rec); err != nil {
 		return ordinaryExecutionPreparation{}, err
 	}
-	claim := executionClaim{SessionID: rec.SessionID, Generation: rec.Generation, RunID: freshRunID(), BootSeq: al.bootEpochFor()}
+	claim := executionClaim{SessionID: rec.SessionID, Generation: rec.Generation, RunID: freshRunID(), BootSeq: bootSeq}
 	if err := stampAdmissionExecution(store, rec.SessionID, rec.Generation, claim.RunID, claim.BootSeq, rec.ExecutionID); err != nil {
 		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: %w", err)
 	}

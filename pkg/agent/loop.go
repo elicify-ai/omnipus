@@ -1547,7 +1547,7 @@ func (al *AgentLoop) ProcessScheduled(
 		workspaceID = meta.WorkspaceID
 	}
 
-	resp, err := al.runAgentLoop(ctx, agent, processOptions{
+	resp, err := al.runScheduledTurnWithAdmission(ctx, agent, processOptions{
 		SessionKey:          sessionKey,
 		Channel:             channel,
 		ChatID:              chatID,
