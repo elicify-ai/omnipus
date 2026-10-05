@@ -23,7 +23,11 @@ export const INITIAL_GZIP_BUDGET_BYTES = 25 * 1024
 // ~3.2 KiB (8%) margin over the feature's addition, matching the 383-raise's
 // ~7.4% margin. ROOT CAUSE — the budget is sized against the frozen baseline
 // 92aeb4d5d (2026-09-17) instead of the current release tip — tracked in #1183.
-export const TOTAL_RAW_BUDGET_BYTES = 422 * 1024
+// Founder decision AB1 (2026-10-05, Q4=A): raised 422 KiB to 430 KiB to cover
+// the observed Lane A (+436,023 bytes) and sidebar-with-Lane-A (+437,825 bytes)
+// growth. The frozen baseline, provenance checks, and initial-gzip ceiling stay
+// unchanged; the unfinished panel still requires its own build and measurement.
+export const TOTAL_RAW_BUDGET_BYTES = 430 * 1024
 
 export function compareProductionBundles(baseline, candidate, provenance = null) {
   const initialGzipDelta = candidate.initial.gzipBytes - baseline.initial.gzipBytes
