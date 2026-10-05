@@ -249,10 +249,10 @@ test.describe('native docking regression', () => {
       await info.attach(`${panel}-returned-source.png`, { body: await page.screenshot(), contentType: 'image/png' })
     })
 
-    test(`${panel} actual AppShell manual-tab affordance is VISIBLE; real Switch never duplicates; leave clears it`, async ({ page, context }, info) => {
-      // Q1 B: visibility transferred from unit STORE proof, not removed.
-      // Native application/backend only. Obtain the address from an ACTUAL
-      // first Expand; never hand-complete a URL to hide broken transport.
+    // Shared arrange for the two manual-tab cases below. Native
+    // application/backend only. The address comes from an ACTUAL first Expand;
+    // never hand-complete a URL to hide broken transport.
+    async function arrangeManualTab(page: Page, context: import('@playwright/test').BrowserContext, info: TestInfo) {
       const baseline = await openNativeDock(page, panel)
       const opened = page.waitForEvent('popup')
       await page.getByTestId('panel-expand').click()
@@ -283,12 +283,34 @@ test.describe('native docking regression', () => {
       await page.bringToFront()
       await toggleWorkspacePanel(page, panel)
       const title = panel === 'tasks' ? 'Tasks' : panel === 'team' ? 'Team' : 'Calendar'
-      await expect(page.getByText(`${title} is already open in another tab — switch.`, { exact: true }),
-        'FR-009: actual APPLICATION toast is visible, never a store-only claim').toBeVisible()
+      const alreadyOpen = page.getByText(`${title} is already open in another tab — switch.`, { exact: true })
+      await expect(alreadyOpen, 'FR-009: actual APPLICATION toast is visible, never a store-only claim').toBeVisible()
       await expect(page.getByRole('button', { name: 'Switch', exact: true })).toBeVisible()
       await expect(page.getByTestId('side-panel')).toHaveCount(0)
       expect(context.pages().length).toBe(baseline.tabs + 1)
       await info.attach(`${panel}-manual-affordance-source.png`, { body: await page.screenshot(), contentType: 'image/png' })
+      return { baseline, manual, marker, contentNode, generated, alreadyOpen }
+    }
+
+    test(`${panel} W7+W8: manual tab shows the affordance with no dock; after the manual tab closes ONE toggle opens the panel normally`, async ({ page, context }, info) => {
+      // Spec W7: open the page URL manually in a second tab; click the toggle
+      // in tab 1 -> no duplicate, no docked panel here, "already open —
+      // switch" affordance shown. W8 (US-6 AS-4): close the manual tab; click
+      // the toggle -> the panel opens normally. NO Switch click in between.
+      const { baseline, manual, contentNode, generated } = await arrangeManualTab(page, context, info)
+      expect(manual.url()).toBe(generated.href)
+      expect(await contentNode.evaluate((node) => node.isConnected), 'manual tab content untouched').toBe(true)
+      await assertSameNativeChat(page, baseline, undefined, baseline.tabs + 1)
+      await manual.close()
+      await page.bringToFront()
+      await expect(page.getByTestId('side-panel'), 'no Switch was clicked: nothing auto-opens the dock').toHaveCount(0)
+      await toggleWorkspacePanel(page, panel)
+      await expect(page.getByTestId('side-panel'), 'W8: leave clears exclusive presence; one toggle opens the panel normally').toBeVisible()
+      await assertSameNativeChat(page, baseline, panel)
+    })
+
+    test(`${panel} Switch then manual tab close: real Switch never duplicates; the dock re-opens by itself (focus fallback)`, async ({ page, context }, info) => {
+      const { baseline, manual, marker, contentNode, generated, alreadyOpen } = await arrangeManualTab(page, context, info)
       await page.getByRole('button', { name: 'Switch', exact: true }).click()
       // Programmatic focus is best-effort by §8.3; no guaranteed frontmost
       // assertion. The REAL action must preserve target content/address and
@@ -301,8 +323,19 @@ test.describe('native docking regression', () => {
       await info.attach(`${panel}-manual-switch-child.png`, { body: await manual.screenshot(), contentType: 'image/png' })
       await manual.close()
       await page.bringToFront()
+      // Existing, unit-pinned behaviour (NOT part of W8): after a Switch the
+      // 5 s focus fallback (panelTabSwitch.ts::showPanelTabSwitch ->
+      // panelTabPresence.ts::armPanelFocusFallback, commit eda5d40c2) re-opens
+      // the dock on its own when the manual tab closes. Oracles:
+      // PanelTabPresenceBridge.advisory.test.tsx and
+      // PanelTabFocusFallback.regression.test.tsx.
+      await expect(page.getByTestId('side-panel'), 'focus fallback re-opens the dock without a click').toBeVisible({ timeout: 15_000 })
+      await assertSameNativeChat(page, baseline, panel)
+      await expect(alreadyOpen, 'no stale already-open state').toHaveCount(0)
       await toggleWorkspacePanel(page, panel)
-      await expect(page.getByTestId('side-panel'), 'leave clears exclusive presence; same entry opens normally').toBeVisible()
+      await expect(page.getByTestId('side-panel'), 'presence cleared: entry toggle closes the restored dock').toHaveCount(0)
+      await toggleWorkspacePanel(page, panel)
+      await expect(page.getByTestId('side-panel'), 'presence cleared: same entry opens normally').toBeVisible()
       await assertSameNativeChat(page, baseline, panel)
     })
   }
