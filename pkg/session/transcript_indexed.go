@@ -52,8 +52,8 @@ func (us *UnifiedStore) appendTranscript(sessionID string, entry TranscriptEntry
 // AppendTranscriptOnce appends entry unless the transcript already holds an
 // entry with the same non-empty ID. The check and the append run under the
 // same session-shard hold, so concurrent callers with one ID append exactly
-// once. appended reports whether THIS call wrote the entry.
-func (us *UnifiedStore) AppendTranscriptOnce(sessionID string, entry TranscriptEntry) (appended bool, err error) {
+// once. The bool reports whether THIS call wrote the entry.
+func (us *UnifiedStore) AppendTranscriptOnce(sessionID string, entry TranscriptEntry) (bool, error) {
 	if entry.ID == "" {
 		return false, fmt.Errorf("unified_store: append transcript once: entry ID is required")
 	}
