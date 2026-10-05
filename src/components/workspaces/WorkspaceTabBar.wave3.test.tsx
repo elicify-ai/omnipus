@@ -8,7 +8,12 @@
 //
 //   "...with no Chat entry left, the compact trigger no longer needs a text
 //   label at all: it's icon-only now... Tasks / Calendar / Library / Team are
-//   the only entries, all toggle buttons (aria-pressed)." (wireframe §6)
+//   the only entries, all toggle buttons (aria-pressed)." (wireframe §6 —
+//   SUPERSEDED PRE-MAIL MOCKUP QUOTE: that entry list came from a branch cut
+//   before the email lane merged. The approved spec (FR-007 as amended) keeps
+//   every registered panel's entry; Mail joins the inventory. The pack's
+//   inventory oracle below pins the corrected five-entry set, not this
+//   quote.)
 //
 // Wave 3 registers Tasks ('board' segment → 'tasks' panel), Calendar
 // ('calendar') and Team ('team') as workspace panels, so their strip entries
@@ -18,11 +23,19 @@
 //
 // JOIN STATUS (2026-10-05, work/side-panel-wave3-join-20261005): the five
 // production slices are merged. This pack was the 8773803cf RED pack written
-// to fail on base fe0b68fb0; its assertions are UNCHANGED — they already
-// express the SP-40 end state and the joined WorkspaceTabBar delivers it
-// (WORKSPACE_TABS holds board/calendar/media/team; PANEL_TOGGLE_SEGMENTS maps
-// every segment; the compact trigger is the icon-only "Open panels menu"
-// button). Only this header and the file's RED commentary were updated.
+// to fail on base fe0b68fb0. Its SP-40 assertions (Chat absent from strip AND
+// dropdown; icon-only compact trigger; every entry a registered toggle with
+// aria-pressed) pass against the joined bar unchanged. One oracle was
+// STRENGTHENED beyond the 8773803cf original, on the squad lead's ruling:
+// the original "exactly Tasks, Calendar, Library, Team" inventory quoted the
+// wireframe's entry list — that quote is the SUPERSEDED PRE-MAIL MOCKUP
+// (drawn from a branch cut before the email lane), not approved spec. FR-007
+// as amended removes only Chat; Mail (registered wave 2) keeps its toggle
+// entry. The inventory oracle below is therefore the exact five-entry deep
+// equality (strip AND compact dropdown) — RED today because the joined bar
+// dropped Mail (production gap, frontend-lead restores), green exactly when
+// the restore lands. Header and assertions were never both "unchanged": the
+// header has been corrected to say so.
 //
 // Oracle sources (never the implementation):
 //   - docs/internal/specs/side-panel-shell-spec.md §10 Wave 3 table

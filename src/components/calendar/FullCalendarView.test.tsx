@@ -21,7 +21,7 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { SkipForward, Prohibit } from '@phosphor-icons/react'
-import { occurrenceStatusLabel, extTooltip, NowMarkerLine, DayCellRenderer, EventChip } from './FullCalendarView'
+import { occurrenceStatusLabel, extTooltip, DayCellRenderer, EventChip } from './FullCalendarView'
 import { CHIP_TEXT_COLOR, type CalendarEventExtProps } from './types'
 import type { DayCellContentArg, EventContentArg } from '@fullcalendar/core'
 
@@ -143,64 +143,94 @@ describe('extTooltip (L3 — chip tooltip surfacing)', () => {
 })
 
 /**
- * NowMarkerLine — the Agenda (listWeek) "now" divider EventChip branches to
- * instead of the normal chip for a `kind: 'now-marker'` synthetic event (see
- * CalendarScreen — appended to `events` only while Agenda is active and "now"
- * falls inside the visible range). Directly rendered here (rather than via a
- * mounted FullCalendar) for the same reason `occurrenceStatusLabel`/
- * `extTooltip` above are exported for direct testing — jsdom cannot lay out
- * FullCalendar's own DOM, but NowMarkerLine itself is a plain, isolated React
- * component with no FullCalendar dependency, so it renders fine standalone.
+ * NowMarkerLine — RETIRED (SP-39). The Agenda (listWeek) "now" divider
+ * EventChip used to branch to for a `kind: 'now-marker'` synthetic event
+ * existed ONLY to serve the Agenda view; SP-39 drops Agenda
+ * (side-panel-shell-spec.md §13 SP-39 — "the spec names only Day/Week/Month";
+ * wireframe §4), and the join removed the component, the `'now-marker'` event
+ * kind and the divider styles with it. The four old tests below pinned the
+ * divider's own contract (aria-hidden divider, verbatim time label, no chip
+ * structure, label differentiation) — that expected behaviour is expressly
+ * superseded, so the pack now pins the RETIREMENT: the export is gone and
+ * EventChip renders the normal chip for every surviving kind, never the
+ * divider.
  */
-describe('NowMarkerLine (Agenda "now" divider)', () => {
-  it('is aria-hidden — a pure visual divider, not a real list item announced to screen readers', () => {
-    const { container } = render(<NowMarkerLine timeText="3:05 PM" />)
-    const line = container.querySelector('.fc-sovereign-now-marker-line')
-    expect(line).not.toBeNull()
-    expect(line).toHaveAttribute('aria-hidden', 'true')
+describe('NowMarkerLine — RETIRED (SP-39: Agenda dropped, the divider existed only for listWeek)', () => {
+  // One separate supersession case for EACH of the four old divider cases;
+  // no test is deleted or consolidated. The normal task-chip contract stays.
+  it('the retired divider has no exported component or aria-hidden output path', async () => {
+    const mod = (await import('./FullCalendarView')) as unknown as Record<string, unknown>
+    expect(mod.NowMarkerLine, 'the Agenda-only divider is retired with the Agenda view (SP-39)').toBeUndefined()
+    const { container } = render(<EventChip arg={fakeEventContentArg(
+      { kind: 'task-due', taskId: 't1', status: 'next', icon: 'Circle' }, '3:05 PM',
+    )} />)
+    expect(container.querySelector('.fc-sovereign-now-marker-line')).toBeNull()
+    expect(container.querySelector('.fc-sovereign-chip')).not.toHaveAttribute('aria-hidden', 'true')
   })
 
-  it('renders the given time text as its label, matching Week/Day\'s time format verbatim', () => {
-    render(<NowMarkerLine timeText="3:05 PM" />)
+  it('the surviving task chip displays the caller time verbatim, not an Agenda-divider label', () => {
+    // Old case: NowMarkerLine(timeText='3:05 PM') displayed the exact label.
+    // SP-39 retires that component; the actual Week/Day chip retains time.
+    const { container } = render(<EventChip arg={fakeEventContentArg(
+      { kind: 'task-due', taskId: 't1', status: 'next', icon: 'Circle' }, '3:05 PM',
+    )} />)
     expect(screen.getByText('3:05 PM')).toBeInTheDocument()
+    expect(container.querySelector('.fc-sovereign-now-marker-line')).toBeNull()
   })
 
-  it('does NOT render the normal chip structure (no aria-label, no fc-sovereign-chip class, no icon)', () => {
-    const { container } = render(<NowMarkerLine timeText="3:05 PM" />)
-    // The normal EventChip root carries `className="fc-sovereign-chip"` and a
-    // real `aria-label` (title + status + time) — this divider has neither.
-    expect(container.querySelector('.fc-sovereign-chip')).toBeNull()
-    expect(container.querySelector('[aria-label]')).toBeNull()
-    // No Phosphor icon <svg> — the normal chip always renders one.
-    expect(container.querySelector('svg')).toBeNull()
+  it('the surviving task is a real accessible chip with an icon, never the retired icon-less divider', () => {
+    // Old case asserted no chip/name/icon for the Agenda-only divider.
+    // Supersession keeps the real chip structure, rather than a bare divider.
+    const { container } = render(<EventChip arg={fakeEventContentArg(
+      { kind: 'task-due', taskId: 't1', status: 'next', icon: 'Circle' }, '3:05 PM',
+    )} />)
+    const chip = container.querySelector('.fc-sovereign-chip')
+    expect(chip).not.toBeNull()
+    expect(chip).toHaveAttribute('aria-label', expect.stringContaining('Should never be read for now-marker'))
+    expect(chip?.querySelector('svg')).not.toBeNull()
+    expect(container.querySelector('.fc-sovereign-now-marker-line')).toBeNull()
   })
 
-  it('differentiation: two different time strings render two different labels', () => {
-    const { rerender } = render(<NowMarkerLine timeText="9:00 AM" />)
+  it('different caller times still produce different task-chip labels without resurrecting the divider', () => {
+    // Retains the old 9:00 AM → 5:45 PM differentiation state sequence.
+    const ext: CalendarEventExtProps = { kind: 'task-due', taskId: 't1', status: 'next', icon: 'Circle' }
+    const mounted = render(<EventChip arg={fakeEventContentArg(ext, '9:00 AM')} />)
     expect(screen.getByText('9:00 AM')).toBeInTheDocument()
-    rerender(<NowMarkerLine timeText="5:45 PM" />)
+    mounted.rerender(<EventChip arg={fakeEventContentArg(ext, '5:45 PM')} />)
     expect(screen.getByText('5:45 PM')).toBeInTheDocument()
     expect(screen.queryByText('9:00 AM')).toBeNull()
+    expect(mounted.container.querySelector('.fc-sovereign-now-marker-line')).toBeNull()
   })
 })
 
-describe('EventChip — dispatches to NowMarkerLine for now-marker, real chips otherwise', () => {
-  it('a now-marker event renders NowMarkerLine, not the normal chip, using ext.timeLabel (not arg.timeText)', () => {
-    // arg.timeText deliberately left empty here — @fullcalendar/list always
-    // passes "" for it in Agenda view (see types.ts's now-marker doc
-    // comment), so if EventChip regressed to reading arg.timeText instead of
-    // ext.timeLabel, this test would catch the label going missing.
-    const arg = fakeEventContentArg({ kind: 'now-marker', timeLabel: '3:05 PM' }, '')
-    const { container } = render(<EventChip arg={arg} />)
-    expect(container.querySelector('.fc-sovereign-now-marker-line')).not.toBeNull()
-    expect(screen.getByText('3:05 PM')).toBeInTheDocument()
-    // None of the normal chip's structure/content leaked through.
-    expect(container.querySelector('.fc-sovereign-chip')).toBeNull()
-    expect(container.querySelector('[aria-label]')).toBeNull()
-    expect(screen.queryByText('Should never be read for now-marker')).toBeNull()
-  })
+describe('EventChip — renders the normal chip for EVERY surviving kind; the Agenda divider branch is gone (SP-39)', () => {
+  const SURVIVING_KINDS: CalendarEventExtProps[] = [
+    { kind: 'task-due', taskId: 't1', status: 'next', icon: 'Circle' },
+    { kind: 'task-fire', taskId: 't1', status: 'next', icon: 'Clock' },
+    { kind: 'task-occurrence', taskId: 't1', status: 'done', icon: 'CheckCircle', occurrenceMs: 0 },
+    {
+      kind: 'task-occurrence-agg',
+      taskId: 't1',
+      status: 'done',
+      icon: 'CheckCircle',
+      tooltip: 'first at 09:00',
+      dayStartMs: 0,
+      dayEndMs: 0,
+    },
+    { kind: 'task-occurrence-more', taskId: 't1', status: 'next', icon: 'Clock', tooltip: 'more' },
+  ]
 
-  it('a real chip (task-due) renders the normal chip, not NowMarkerLine', () => {
+  it.each(SURVIVING_KINDS.map((ext) => ({ ext, label: ext.kind })))(
+    'a $label event renders the normal chip — never the retired Agenda divider',
+    ({ ext }) => {
+      const arg = fakeEventContentArg(ext, '9:00 AM')
+      const { container } = render(<EventChip arg={arg} />)
+      expect(container.querySelector('.fc-sovereign-chip')).not.toBeNull()
+      expect(container.querySelector('.fc-sovereign-now-marker-line')).toBeNull()
+    },
+  )
+
+  it('a real chip (task-due) keeps its full accessible structure (the old anti-regression half, unchanged)', () => {
     const arg = fakeEventContentArg(
       { kind: 'task-due', taskId: 't1', status: 'next', icon: 'Circle' },
       '9:00 AM',

@@ -74,47 +74,45 @@ beforeEach(() => {
 })
 
 describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
-  it('renders the strip entries — registered panels are toggle buttons, unregistered entries are links (MAJ-007; wave 2 per side-panel-shell-spec.md §15 item 1: "Mail joins in wave 2")', () => {
+  it('renders the strip entries — EVERY entry is a registered panel toggle button (SP-6/SP-11 amended MAJ-007: mixed mode ended; superseded the wave-1 link/toggle branch mix)', () => {
+    // SUPERSEDED by approved spec, wave 3 (§10: "Their tab entries become
+    // toggles (ending mixed mode)"; SP-6/PANEL_TOGGLE_SEGMENTS maps every
+    // strip segment): the old test branched per segment (media/mail toggles,
+    // chat page-entry, others links). No link branch survives — every entry
+    // below must be a toggle button with aria-pressed, no href. The Mail
+    // entry's own presence is pinned exactly (five-entry deep equality) by
+    // WorkspaceTabBar.wave3.test.tsx; this loop covers every entry the
+    // production array carries.
     mockPathname = '/workspaces/ws-1/chat'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
 
     for (const tab of WORKSPACE_TABS) {
       const els = screen.getAllByTestId(`workspace-tab-${tab.segment}`)
       expect(els.length).toBe(1)
-      if (tab.segment === 'media' || tab.segment === 'mail') {
-        // Registered panels (US-5): toggle buttons — no href, aria-pressed.
-        // WAVE 2: mail joins media as a registered toggle (§15 item 1 —
-        // "Tasks / Calendar / Library / Team entries toggle panels (Mail
-        // joins in wave 2)"); at wave 1 it was a plain link.
-        expect(els[0].tagName).toBe('BUTTON')
-        expect(els[0].getAttribute('href')).toBeNull()
-        expect(els[0].getAttribute('aria-pressed')).toBe('false')
-      } else if (tab.segment === 'chat') {
-        // The panel-host page entry: a button that navigates (US-5), so it
-        // carries the page-activeness attribute itself.
-        expect(els[0].tagName).toBe('BUTTON')
-        expect(els[0].getAttribute('href')).toBeNull()
-        expect(els[0].getAttribute('aria-current')).toBe('page')
-      } else {
-        expect(els[0].getAttribute('href')).toBe(`/workspaces/ws-1/${tab.segment}`)
-      }
+      expect(els[0].tagName).toBe('BUTTON')
+      expect(els[0].getAttribute('href')).toBeNull()
+      expect(els[0].getAttribute('aria-pressed')).toBe('false')
+      expect(els[0].getAttribute('data-panel-trigger'), `${tab.segment} maps to a registered panel`).not.toBeNull()
     }
   })
 
-  it('marks the entry matching the current route with aria-current="page" (MAJ-007)', () => {
+  it('NO strip entry carries aria-current — toggles are not pages; only the workspace-name settings entry does (superseded: active-route aria-current on tab links)', () => {
+    // SUPERSEDED by approved spec, wave 3: the old test expected the active
+    // route's tab link to carry aria-current="page" (mixed mode). With every
+    // entry a panel toggle (SP-6/SP-11), aria-current belongs to the one
+    // page-semantic entry left in the strip: the workspace-name → settings
+    // button. Chat is not a strip entry at all (SP-40) — asserted below
+    // where the old chat lookup stood.
     mockPathname = '/workspaces/ws-1/board'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
 
-    // Unregistered-panel links keep navigation semantics: the active one
-    // carries aria-current="page" (WCAG 1.3.1), never aria-selected — the
-    // strip is not a tablist any more.
-    const boardTabs = screen.getAllByTestId('workspace-tab-board')
-    expect(boardTabs[0].getAttribute('aria-current')).toBe('page')
-
-    // Chat is the panel-host page entry; on this route board is the page,
-    // so chat carries no aria-current.
-    const chatTab = screen.getByTestId('workspace-tab-chat')
-    expect(chatTab.getAttribute('aria-current')).toBeNull()
+    for (const tab of WORKSPACE_TABS) {
+      const els = screen.getAllByTestId(`workspace-tab-${tab.segment}`)
+      expect(els[0].getAttribute('aria-current'), `${tab.segment} is a toggle, not a page`).toBeNull()
+    }
+    // SP-40: chat is never a strip entry — the old test's chat lookup
+    // (expected aria-current there) is superseded by absence.
+    expect(screen.queryByTestId('workspace-tab-chat')).not.toBeInTheDocument()
   })
 
   it('full strip has the expected container-query classes (hidden @6xl:flex)', () => {
@@ -127,13 +125,13 @@ describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
     expect(strip.className).toContain('@6xl:flex')
   })
 
-  it('tab order matches the canonical WORKSPACE_TABS order', () => {
-    // 'mail' sits between media and team in the canonical strip (email spec
-    // §16 route row: the mail segment landed as the Mail tab's redirect-stub
-    // route, commit 5524ef853) — the pin below previously omitted it and was
-    // stale-red against the production array.
+  it('tab order matches the canonical WORKSPACE_TABS order — Chat removed (SP-40), Mail kept (FR-007: only Chat was ever removed)', () => {
+    // SUPERSEDED by approved spec, wave 3: SP-40 removes the chat entry and
+    // nothing else — Mail sits between media and team in the canonical strip
+    // (email spec §16 route row, commit 5524ef853). RED today: the joined
+    // production array dropped mail (FR-007 regression, frontend-lead
+    // restores) — the same oracle WorkspaceTabBar.wave3.test.tsx pins.
     expect(WORKSPACE_TABS.map((t) => t.segment)).toEqual([
-      'chat',
       'board',
       'calendar',
       'media',
@@ -156,18 +154,23 @@ describe('WorkspaceTabBar — view-switcher (flex @6xl:hidden)', () => {
     expect(switcher).toBeInTheDocument()
   })
 
-  it('view-switcher shows the active view label', () => {
+  it('the trigger is ICON-ONLY — no active-view text label (superseded by SP-40: no page name is left to show)', () => {
+    // SUPERSEDED by approved spec, wave 3: the old test expected the trigger
+    // to show the active view's text label ("Tasks"). FR-007 as amended
+    // (SP-40): the compact trigger is a menu ICON, not a text label. The
+    // icon-only trigger must still expose an accessible name (next test).
     mockPathname = '/workspaces/ws-1/board'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     const switcher = screen.getByTestId('workspace-view-switcher')
-    expect(switcher.textContent).toContain('Tasks')
+    expect(switcher.textContent?.trim()).toBe('')
   })
 
-  it('view-switcher aria-label references the active view', () => {
+  it('the icon-only trigger still exposes an accessible name (a11y guard across the SP-40 change)', () => {
     mockPathname = '/workspaces/ws-1/calendar'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     const switcher = screen.getByTestId('workspace-view-switcher')
-    expect(switcher.getAttribute('aria-label')).toContain('Calendar')
+    const name = switcher.getAttribute('aria-label') ?? ''
+    expect(name.length).toBeGreaterThan(0)
   })
 
   it('view-switcher is wrapped in a div with the container-query responsive classes (flex @6xl:hidden)', () => {
@@ -188,7 +191,7 @@ describe('WorkspaceTabBar — view-switcher (flex @6xl:hidden)', () => {
     expect(found, `No ancestor div with 'flex @6xl:hidden' found. Container HTML:\n${container.innerHTML}`).toBe(true)
   })
 
-  it('view-switcher menu renders all four view tab options', () => {
+  it('view-switcher menu renders every strip tab option', () => {
     mockPathname = '/workspaces/ws-1/chat'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     // The DropdownMenuContent stub renders with data-testid="view-switcher-menu"
@@ -229,14 +232,21 @@ describe('WorkspaceTabBar — view-switcher (flex @6xl:hidden)', () => {
     // WCAG 1.3.1 — activeness must be conveyed programmatically (aria-current),
     // not only via accent colour + the aria-hidden "●" dot.
     expect(settingsEntry).toHaveAttribute('aria-current', 'page')
-    // The switcher trigger itself should also read "Settings" while active.
+    // The switcher trigger itself stays ICON-ONLY even while settings is
+    // active (superseded by SP-40: the old test expected the trigger text to
+    // read "Settings" — no trigger carries a text label any more; the
+    // activeness above is the programmatic signal).
     const switcher = screen.getByTestId('workspace-view-switcher')
-    expect(switcher.textContent).toContain('Settings')
+    expect(switcher.textContent?.trim()).toBe('')
   })
 
-  it('compact dropdown marks the active view tab item with aria-current="page", and every other tab item with none', () => {
-    // WCAG 1.3.1 — the mapped WORKSPACE_TABS items in the compact dropdown
-    // must also carry aria-current, not just the settings entry.
+  it('compact dropdown tab items carry the toggle state (aria-pressed), never aria-current (superseded: page-activeness on menu tabs)', () => {
+    // SUPERSEDED by approved spec, wave 3: the old test expected the active
+    // view's dropdown item to carry aria-current="page" (the dropdown mirrored
+    // a mixed link model). US-5 AS-5 / MAJ-007 amended: dropdown items are
+    // panel TOGGLES — state is aria-pressed, aria-current stays with the one
+    // page-semantic entry (settings). WCAG 1.3.1 is still served: a pressed
+    // toggle is programmatically conveyed (asserted in the wave-3 pack).
     mockPathname = '/workspaces/ws-1/board'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     const menu = screen.getByTestId('view-switcher-menu')
@@ -246,11 +256,8 @@ describe('WorkspaceTabBar — view-switcher (flex @6xl:hidden)', () => {
         el.textContent?.includes(tab.label),
       )
       expect(item, `no dropdown item found for ${tab.segment}`).toBeTruthy()
-      if (tab.segment === 'board') {
-        expect(item).toHaveAttribute('aria-current', 'page')
-      } else {
-        expect(item).not.toHaveAttribute('aria-current')
-      }
+      expect(item).toHaveAttribute('aria-pressed', 'false')
+      expect(item).not.toHaveAttribute('aria-current')
     }
     // The settings entry is also not active on this route.
     expect(screen.getByTestId('workspace-view-switcher-settings')).not.toHaveAttribute(

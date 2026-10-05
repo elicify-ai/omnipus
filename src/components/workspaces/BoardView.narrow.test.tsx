@@ -142,13 +142,23 @@ function columnGroup(container: HTMLElement, label: string): HTMLElement {
   return within(container).getByRole('group', { name: `${label} column` })
 }
 
+function assertBoardContainer(mounted: ReturnType<typeof renderBoard>) {
+  const root = mounted.container.firstElementChild
+  expect(root, 'the actual Board root owns the container-query boundary').toHaveClass('@container')
+}
+
 describe('BoardView narrow — SP-33 mechanism: panel-width container query, not window width', () => {
   it('the board declares itself a CSS container (@container), so its breakpoints answer to PANEL width', () => {
     const mounted = renderBoard([makeTask({ title: 'Only task' })])
-    const declaresContainer = Array.from(mounted.container.querySelectorAll('*')).some((el) =>
-      el.classList.contains('@container'),
-    )
-    expect(declaresContainer).toBe(true)
+    assertBoardContainer(mounted)
+  })
+
+  it('instrument: removing the actual Board root container class fails the SAME assertion', () => {
+    // Test-side DOM probe, not a production-code mutation or CHECK verdict.
+    const mounted = renderBoard([makeTask({ title: 'Only task' })])
+    expect(() => assertBoardContainer(mounted)).not.toThrow()
+    mounted.container.firstElementChild?.classList.remove('@container')
+    expect(() => assertBoardContainer(mounted)).toThrow(/to have class/)
   })
 
   it('the narrow flip is expressed at the MEASURED container breakpoint (@max-[971px]) — board, header and groups all carry it', () => {
@@ -185,20 +195,21 @@ describe('BoardView narrow — SP-33 mechanism: panel-width container query, not
     expect(windowBreakpointEls.map((el) => el.tagName)).toEqual([])
   })
 
-  it('GUARD (wireframe §2A): the Tasks SCREEN toolbar keeps its window-width stacking — the documented phone fix, not a narrow-panel layout', () => {
-    // The wireframe is explicit that the Tasks toolbar's `md:` 3-column
-    // grid ("stacks below 768px") is "a real phone-width fix already in the
-    // code, cited in its own comment — the panel is always under that
-    // breakpoint, so this stacking is automatic, NOT A NEW NARROW LAYOUT".
-    // SP-33's named container-query conversions are Board (§9A) and List
-    // (§9B); this guard pins the toolbar in its wireframe-documented state —
-    // it fails if someone deletes the stacking (breaking phone) rather than
-    // demanding a conversion the spec never ordered for this row.
+  it('the Tasks toolbar responds to its own panel container, never a viewport layout breakpoint (SP-33)', () => {
+    // SP-33 / wireframe §9 explicitly correct the earlier §2A description
+    // of the old md: viewport collapse. This case was incorrectly converted
+    // to an old-behaviour guard in 105e2c072; its original RED requirement is
+    // restored. Child BoardView containers cannot satisfy a toolbar query.
+    // BLOCKED production gap: WorkspaceTasksTab.tsx::WorkspaceTasksTab still
+    // uses md:grid / md:grid-cols-[1fr_auto_1fr] on its toolbar and has no
+    // ancestor container for that toolbar. Frontend-lead owns the fix.
     const mounted = renderTasksTab()
-    const toolbar = Array.from(mounted.container.querySelectorAll('*')).find((el) =>
-      (el.getAttribute('class') ?? '').includes('md:grid-cols-[1fr_auto_1fr]'),
-    )
-    expect(toolbar, 'the Tasks toolbar keeps its documented md: stacked-rows grid').toBeDefined()
+    const toolbar = mounted.getByTestId('tasks-heading').parentElement?.parentElement
+    expect(toolbar, 'the Tasks heading belongs to the real toolbar').not.toBeNull()
+    expect(toolbar?.closest('[class~="@container"]'), 'SP-33: the toolbar has its own container').not.toBeNull()
+    const classes = Array.from(toolbar?.classList ?? [])
+    expect(classes.filter((cls) => /^(sm|md|lg|xl|2xl):/.test(cls)), 'SP-33: viewport width cannot drive toolbar layout').toEqual([])
+    expect(classes.some((cls) => /^@/.test(cls) && cls !== '@container'), 'the toolbar uses a container-query layout variant').toBe(true)
   })
 })
 

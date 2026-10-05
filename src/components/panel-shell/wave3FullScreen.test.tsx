@@ -37,14 +37,17 @@
 // against the delivered registry; the full-screen route and expand tests
 // pin SP-38's delivered behaviour.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from 'vitest'
 import { render, waitFor, screen, fireEvent, act } from '@testing-library/react'
 import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
+import type { Workspace, WorkspaceDelegation } from '@/lib/api'
 
 // SidePanelShell tracks the panel's own width with ResizeObserver, which
-// jsdom lacks (same stub the shell's own resilience pack uses).
+// jsdom lacks (same stub the shell's own resilience pack uses). The Team
+// panel's delegation-graph canvas additionally needs the React-Flow DOM
+// shims its own tests use (graph/GraphView.test.tsx).
 class RowResizeObserver {
   constructor(private readonly callback: ResizeObserverCallback) {}
   observe() {
@@ -57,6 +60,26 @@ class RowResizeObserver {
   disconnect() {}
 }
 vi.stubGlobal('ResizeObserver', RowResizeObserver)
+
+beforeAll(() => {
+  const g = globalThis as unknown as Record<string, unknown>
+  g.DOMMatrixReadOnly = class {
+    m22 = 1
+  }
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 800 })
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 600 })
+})
+
+// Warm the registry's lazy content modules so the route tests measure
+// RENDERING, not first-import transpile latency (the lazy() imports resolve
+// from the module cache after this).
+beforeAll(async () => {
+  await Promise.all([
+    import('@/components/workspaces/WorkspaceTasksTab'),
+    import('@/components/workspaces/WorkspaceTeamTab'),
+    import('@/components/screens/CalendarScreen'),
+  ])
+})
 
 // The shared chrome-less layout is authenticated; the route-level gate is not
 // what SP-38 tests — stub it so the router can mount the panel route.
@@ -72,7 +95,17 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   fetchTasks: vi.fn(async () => []),
   fetchPlans: vi.fn(async () => []),
   fetchAgents: vi.fn(async () => []),
-  fetchWorkspaceDelegation: vi.fn(async () => null),
+  // Complete workspace/delegation responses at the network boundary. These
+  // do NOT inject a WorkspaceContextProvider into the test: supplying that
+  // provider remains the registered panel's production responsibility.
+  fetchWorkspace: vi.fn(async (): Promise<Workspace> => ({
+    revision: '2'.repeat(64), id: 'ws-1', name: 'QA workspace', status: 'active',
+    pinned: false, pin_order: 0, task_count: 0, core_team: [],
+    created_at: '2026-06-20T00:00:00Z', updated_at: '2026-06-20T00:00:00Z',
+  })),
+  fetchWorkspaceDelegation: vi.fn(async (): Promise<WorkspaceDelegation> => ({
+    revision: '2'.repeat(64), workspace_id: 'ws-1', team: [], edges: [], default_depth: 3,
+  })),
 }))
 
 function makeClient() {
@@ -110,13 +143,22 @@ describe.each([
   },
 )
 
+// PRODUCTION GAP (found by this reachability test, 2026-10-05 — frontend-lead
+// owns the fix): the joined registry mounts WorkspaceTeamTab DIRECTLY
+// (registry.tsx WorkspaceTeamPanel), but WorkspaceTeamTab calls
+// useActiveWorkspace(), which requires the WorkspaceContextProvider that only
+// team/TeamPanel.tsx supplies — and TeamPanel has no consumers. Opening the
+// Team panel (docked OR full screen) crashes with "useActiveWorkspace must be
+// used within a WorkspaceTabContainer"; the route's ErrorBoundary shows
+// "Something went wrong". The team route test below stays RED until the
+// provider wiring lands.
 describe.each([
-  { id: 'tasks', title: 'Tasks' },
-  { id: 'team', title: 'Team' },
-  { id: 'calendar', title: 'Calendar' },
-] as const satisfies readonly { id: WorkspacePanelId; title: string }[])(
+  { id: 'tasks', title: 'Tasks', marker: () => screen.getByTestId('tasks-heading') },
+  { id: 'team', title: 'Team', marker: () => screen.getByText('Team & delegation') },
+  { id: 'calendar', title: 'Calendar', marker: () => screen.getByTestId('calendar-toolbar') },
+] as const satisfies readonly { id: WorkspacePanelId; title: string; marker: () => HTMLElement }[])(
   'wave-3 full screen — $title uses the chrome-less "Back to chat" route (SP-38)',
-  ({ id }) => {
+  ({ id, marker }) => {
     it(`navigating to /panel/${id}?workspace=… renders the chrome-less panel shell with "Back to chat"`, async () => {
       const history = createMemoryHistory({
         initialEntries: [`/panel/${id}?workspace=ws-1`],
@@ -137,11 +179,15 @@ describe.each([
       // the link (a bare /panel/<id> without ?workspace= is the invalid one,
       // by the registry's own single-source codec).
       expect(mounted.queryByText(/can't open this panel/i)).not.toBeInTheDocument()
-      // The panel's own content is mounted inside the chrome-less host (not
-      // a blank frame): the registry's content component for this panel ran.
-      await waitFor(
-        () => expect(mounted.queryByTestId('fullscreen-panel')?.textContent?.length ?? 0).toBeGreaterThan(0),
-      )
+      // REACHABILITY, not just a non-empty frame: the registry's OWN content
+      // component for this panel actually mounted and rendered its real
+      // content marker (a blank <Content/> would pass a text-length check).
+      // Imports are warmed before the case; an ErrorBoundary screen is not
+      // reachable panel content and cannot count as a successful shell.
+      await waitFor(() => {
+        expect(mounted.queryByText('Something went wrong')).not.toBeInTheDocument()
+        expect(marker()).toBeInTheDocument()
+      })
     })
   },
 )
