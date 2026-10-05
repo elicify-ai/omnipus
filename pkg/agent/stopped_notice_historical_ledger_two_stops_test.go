@@ -81,6 +81,18 @@ func TestW1HistoricalLedgerNotice_TwoSameGenerationStopsDeliverTwoDistinctOrigin
 	}) {
 		t.Fatalf("stop 1 never landed the child stopped")
 	}
+	// The landing flips State first and appends the landed history right
+	// after the state mutation (D2: the ledger line is part of the same
+	// landing, but not visible at the instant State flips). Wait for the
+	// asserted event with the bounded wait this test uses for the stop-1
+	// notice below — an oracle race measured on a pristine archive (State
+	// read as stopped, history still empty). The length assertion below stays
+	// exact (== 1), so a missing or duplicate line still fails with its
+	// diagnostics.
+	w1hWaitFor(t, 10*time.Second, "stop-1 landed history visible", func() bool {
+		landed, listErr := lifecycle.ListStoppedTransitions(childID)
+		return listErr == nil && len(landed) >= 1
+	})
 	got, err := lifecycle.ListStoppedTransitions(childID)
 	if err != nil {
 		t.Fatalf("ListStoppedTransitions(after stop 1): %v", err)
@@ -163,6 +175,25 @@ func TestW1HistoricalLedgerNotice_TwoSameGenerationStopsDeliverTwoDistinctOrigin
 	}) {
 		t.Fatalf("stop 2 never landed the child stopped")
 	}
+	// Same ordering as stop 1: State flips before the landed history line and
+	// the direct-parent notice are published. Wait for each asserted event
+	// with the 10s bound used for the stop-1 notice; every assertion below
+	// stays exact (== 2 entries / distinct ids / one notice / one wake), so a
+	// missing, deduplicated or duplicated event still fails.
+	w1hWaitFor(t, 10*time.Second, "stop-2 landed history visible", func() bool {
+		landed, listErr := lifecycle.ListStoppedTransitions(childID)
+		return listErr == nil && len(landed) >= 2
+	})
+	childNoticePrefix := "stopped-notice:" + parentID + ":" + childID + ":"
+	w1hWaitFor(t, 10*time.Second, "stop-2 notice durable", func() bool {
+		n := 0
+		for _, id := range w1hStoppedNoticeIDsIn(t, al, parentID) {
+			if strings.HasPrefix(id, childNoticePrefix) {
+				n++
+			}
+		}
+		return n >= 2
+	})
 
 	// ORACLE (D6), deliberately independent of the ledger's state: two real
 	// landed transitions of one child must have produced TWO DISTINCT notices
@@ -209,6 +240,7 @@ func TestW1HistoricalLedgerNotice_TwoSameGenerationStopsDeliverTwoDistinctOrigin
 		for _, msg := range notices2 {
 			w1hAssertNoticeMatchesTransition(t, msg, parentID, tr2)
 		}
+		w1hWaitFor(t, 10*time.Second, "stop-2 wake observed", func() bool { return wakes.count(id2) >= 1 })
 		if c := wakes.count(id2); c != 1 {
 			t.Errorf("wakes for %s = %d, want 1 (the working parent is woken once per notice)", id2, c)
 		}

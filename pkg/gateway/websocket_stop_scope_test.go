@@ -179,6 +179,17 @@ func newLiveTurnOnlyScopeFixture(t *testing.T) *u2ScopeFixture {
 	closeLoop := func() { closeOnce.Do(al.Close) }
 	t.Cleanup(closeLoop)
 	t.Cleanup(func() { close(p.release) })
+	// Production always mints and registers the boot epoch before the first
+	// admission (gateway_boot.go::setupAndStartServices -> mintBootEpoch); the
+	// ordinary-root admission refuses epoch 0 ("no minted boot epoch"). Mint a
+	// genuine store exactly as the sibling newU2ScopeFixture does — never a
+	// hard-coded epoch (boot-epoch ruling: an epoch-0 positive harness is invalid).
+	boot := session.NewBootEpochStore(home)
+	epoch, mintErr := boot.Mint()
+	require.NoError(t, mintErr, "SETUP Mint genuine boot epoch")
+	require.NotZero(t, epoch, "SETUP requires one genuine nonzero boot epoch")
+	require.Equal(t, epoch, boot.Current(), "SETUP must wire the epoch minted by this store")
+	al.SetBootEpochStore(boot)
 	lifecycle := session.NewLifecycleStore(t.TempDir())
 	al.SetSessionMessagingStores(session.NewMessageInboxStore(t.TempDir()), lifecycle)
 	setGatewaySteerCanceller(al, agent.NewSteerCanceller(lifecycle, al.SteerGenerationCancel))
@@ -225,6 +236,13 @@ func TestRequestScopedStop_LiveTurnStopDoesNotEndGoalOrLandTerminal(t *testing.T
 
 	rec, err := f.lifecycle.Load(f.parent)
 	require.NoError(t, err)
-	assert.NotEqual(t, session.LifecycleStopped, rec.State,
-		"c6bc40804: an ordinary TurnOnly Stop on a live turn must not land the record terminal")
+	// ADR-20260928 (sub-agent control plane) D2: `stopped` REPLACES the old
+	// paused/cancelled states as one alive, resumable, NON-terminal state — a
+	// Stop of a live turn legitimately lands the record `stopped` (the sibling
+	// requireStopped oracle: "stopped is resumable/nonterminal"). The property
+	// c6bc40804 protects is therefore "never terminal" (done/failed), not
+	// "never stopped": the superseded oracle pinned the pre-D2 vocabulary in
+	// which Stopped was the terminal landing.
+	assert.False(t, rec.Terminal(),
+		"c6bc40804 + D2: an ordinary TurnOnly Stop on a live turn must not land the record terminal (state %q); `stopped` is non-terminal", rec.State)
 }

@@ -198,6 +198,25 @@ func bootQuestion(t *testing.T, child, parent, id string) generated.SessionMessa
 	return message
 }
 
+// TestBoot_FailureDeliveredUpward — ADR-20260928 sub-agent control plane
+// (frozen asset cd20cf8b) D8.3 supersedes the retired failed(interrupted)
+// oracle this test used to pin ("record = failed/interrupted" plus a fatal
+// "interrupted:" upward error). D8.3: a restart-interrupted `running`/`queued`
+// steered session becomes `stopped` — an ordinary, non-terminal stop — with a
+// stop note {at, by: "restart", seq, cause: "restart", boot_seq}; no more
+// failed(interrupted) record. D8.4: its DIRECT parent receives ONE persisted
+// stop notice — id (parent, child, generation, stop_seq), text carrying the
+// stopped_child prefix, cause restart and actor restart, fatal=false — and
+// never the retired second verdict, a fatal "interrupted: ..." final under
+// <child>:<generation>:final.
+//
+// Epoch: by=restart requires the WRITING boot's minted epoch (architect
+// BOOT-EPOCH-RULING D1/D2). The fixture's recovery() carries one genuinely
+// minted BootEpochStore for the simulated boot (harness commits 73c8f8b38 /
+// 709fd4dfa on work/a-boot-qa-harness-20261005); this test never supplies an
+// epoch of its own, and asserts only that the note carries a nonzero boot_seq
+// (a minted epoch starts at 1) — the exact boot_seq-equals-Current pin lives
+// in the harness's own boot_seq assertions, which need h.writingBoot.
 func TestBoot_FailureDeliveredUpward(t *testing.T) {
 	h := newBootRecoveryHarness(t)
 	parent := h.rootSession(t)
@@ -211,16 +230,67 @@ func TestBoot_FailureDeliveredUpward(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if rec.State != session.LifecycleFailed || rec.FailedReason != failedReasonInterrupted {
-		t.Fatalf("record = state %q reason %q", rec.State, rec.FailedReason)
+	if rec.State != session.LifecycleStopped || rec.Terminal() || rec.FailedReason != "" {
+		t.Fatalf("record = state %q (terminal=%v) failed_reason %q, want stopped non-terminal with no failed reason — D8.3: a restart-interrupted session becomes an ordinary stop, never failed(interrupted)",
+			rec.State, rec.Terminal(), rec.FailedReason)
 	}
-	events := h.deliverer.snapshot()
-	if len(events) != 1 {
-		t.Fatalf("deliveries = %d, want 1", len(events))
+	if rec.StopNote == nil {
+		t.Fatal("stopped record carries no stop note — D8.3: the restart stop note {by restart, cause restart, boot_seq}")
 	}
-	envelope := bootEnvelope(t, events[0].Message)
-	if envelope.Kind != "error" || !envelope.Fatal || !strings.HasPrefix(envelope.Text, "interrupted:") {
-		t.Fatalf("upward message = %+v", envelope)
+	if rec.StopNote.Cause != session.StopCauseRestart || rec.StopNote.By != session.StopActorRestart {
+		t.Fatalf("stop note = (cause %q, by %q), want (%q, %q) — D8.3: by \"restart\", cause \"restart\"",
+			rec.StopNote.Cause, rec.StopNote.By, session.StopCauseRestart, session.StopActorRestart)
+	}
+	if rec.StopNote.BootSeq == 0 {
+		t.Fatalf("stop note boot_seq = 0 — D8.3: the restart note carries the writing boot's persisted (nonzero) epoch; note %+v", rec.StopNote)
+	}
+
+	// D6/D8.4: the ledgered transition is the notice's authority — one landed
+	// restart stop, the child's first accepted stop (D4: per-child seq from 1).
+	transitions, err := h.lifecycle.ListStoppedTransitions(child)
+	if err != nil {
+		t.Fatalf("ListStoppedTransitions: %v", err)
+	}
+	if len(transitions) != 1 {
+		t.Fatalf("landed history = %+v, want exactly one restart transition", transitions)
+	}
+	tr := transitions[0]
+	if tr.Cause != session.StopCauseRestart || tr.Actor != session.StopActorRestart || tr.Generation != 1 ||
+		tr.ParentSessionID != parent || tr.StopSeq != 1 {
+		t.Fatalf("landed transition = %+v, want {cause restart, actor restart, generation 1, parent %q, stop_seq 1}", tr, parent)
+	}
+
+	entries, err := h.inbox.Entries(parent)
+	if err != nil {
+		t.Fatalf("Entries(parent): %v", err)
+	}
+	wantID := "stopped-notice:" + parent + ":" + child + ":1:1"
+	finalID := child + ":1:final"
+	notices := 0
+	for _, entry := range entries {
+		if entry.Kind != session.InboxEntryMessage || entry.Message == nil {
+			continue
+		}
+		envelope := bootEnvelope(t, *entry.Message)
+		if envelope.MessageID == finalID || strings.HasPrefix(envelope.Text, "interrupted:") {
+			t.Fatalf("parent inbox holds the retired interrupted verdict %+v — D8.3/D8.4: the parent gets the stop notice only", envelope)
+		}
+		if envelope.MessageID != wantID {
+			continue
+		}
+		notices++
+		if envelope.Kind != "error" || envelope.Fatal {
+			t.Errorf("stop notice = %+v, want kind error with fatal=false — a notice, not a terminal verdict", envelope)
+		}
+		if !strings.HasPrefix(envelope.Text, session.LifecycleNoticePrefixStoppedChild) ||
+			!strings.Contains(envelope.Text, "cause: "+string(session.StopCauseRestart)) ||
+			!strings.Contains(envelope.Text, "actor: "+session.StopActorRestart) {
+			t.Errorf("stop notice text = %q, want the %q prefix naming cause %q and actor %q",
+				envelope.Text, session.LifecycleNoticePrefixStoppedChild, session.StopCauseRestart, session.StopActorRestart)
+		}
+	}
+	if notices != 1 {
+		t.Fatalf("parent inbox holds %d notice(s) with id %s, want exactly 1 (D8.4: one persisted notice per directly stopped child)", notices, wantID)
 	}
 }
 
