@@ -949,6 +949,23 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	if rec.SteeredBy != nil {
 		gate.entryMu.Lock()
 		entryLocked = true
+		// Another distinct wake for this queued admission is input, not a new
+		// owner. Keep the queue locked through the claim-bound append so a
+		// promotion cannot consume the pending list before this input lands.
+		gate.mu.Lock()
+		for _, entry := range gate.queue {
+			queuedClaim := entry.executionClaim()
+			if entry.generation == generation && queuedClaim.matches(rec) {
+				if queuedClaim.BootSeq != al.bootEpochFor() {
+					gate.mu.Unlock()
+					return "", steer.ErrStaleGeneration
+				}
+				_, appendErr := commitSteeredExecutionState(lifecycle, queuedClaim, session.LifecycleQueued, msg.Content)
+				gate.mu.Unlock()
+				return "", appendErr
+			}
+		}
+		gate.mu.Unlock()
 		if duplicateErr := al.checkNewAdmission(rec); duplicateErr != nil {
 			return "", duplicateErr
 		}
