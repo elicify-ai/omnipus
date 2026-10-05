@@ -58,6 +58,8 @@ From the draft preview, select **Send** to send the current saved draft, or **Di
 
 ## If something goes wrong
 
+Mail uses a best-effort presence check to help manage its connections. If that check is refused, the refusal does not stop the Mail request: access falls back to being handled per request. The presence refusal itself shows no pop-up or notification.
+
 | What you see | What to do |
 |---|---|
 | **No mailbox is configured for this workspace yet.** | Select **Connect mailbox** and check the agent, workspace, and mailbox status in [Connectors](connectors.md#how-to-add-an-email-mailbox). |
