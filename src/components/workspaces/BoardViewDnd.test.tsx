@@ -347,7 +347,7 @@ function pressStackedArrow(code: string, dragTop: number) {
 
 function stackedTraversal(code: string, origin: number, count: number) {
   let dragTop = stackedDragTop(origin)
-  const trace: ({ x: number; y: number } | undefined)[] = []
+  const trace: ReturnType<typeof boardKeyboardCoordinateGetter>[] = []
   for (let step = 0; step < count; step += 1) {
     const { result } = pressStackedArrow(code, dragTop)
     trace.push(result)
