@@ -36,7 +36,7 @@ Click an entry to open its panel beside Chat. Click it again to close the panel 
 
 For panel resizing and full-screen view, see [panels beside chat](using-omnipus-ui.md#panels-beside-chat). Tasks, Calendar, and Team use a full-screen view in the same tab with **Back to chat** to return. Settings stays a page, not a panel. Click the workspace's name in the top bar, or **Settings** in the compact menu, to rename the workspace, edit its description, write its instructions, and archive or delete it.
 
-The Tasks panel shows three views of the same work, switched with the selector at the top of the screen. Board lays tasks out as cards by status. List is a table. Graph draws each task as a node and each dependency as a line between them, which is where a [plan](plans.md) is easiest to see whole.
+The Tasks panel shows three views of workspace work, switched with the selector at the top of the screen. Board lays tasks out as cards by status. List is a table. Graph shows top-level plan members and tasks with dependency relationships, with dependencies drawn as lines between nodes. Unplanned tasks without dependency relationships and nested tasks are not graph nodes. This is where a [plan](plans.md) is easiest to see whole.
 
 ## How to create a workspace
 

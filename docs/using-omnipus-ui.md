@@ -13,11 +13,11 @@ flowchart LR
   SignIn[Sign-in screen] -->|opens| Workspace[Your default workspace]
   Bar[Sidebar] -->|lists| Workspaces[All your workspaces]
   Bar -->|links to| Screens[Agents, Connectors, Skills and Tools, Library]
-  Workspace -->|tabs and panels| Tabs[Chat, Tasks, Calendar, Library, Mail, Team]
-  Workspace -->|chat tab shows| Chat[Replies, tool calls, activity]
+  Workspace -->|panel toggles| Panels[Tasks, Calendar, Library, Mail, Team]
+  Workspace -->|base page is| Chat[Chat: replies, tool calls, activity]
 ```
 
-The diagram shows the whole shape: signing in drops you into a workspace, the sidebar reaches every workspace and every app-wide screen, and a workspace's tabs hold its work.
+The diagram shows the whole shape: signing in drops you into a workspace, the sidebar reaches every workspace and every app-wide screen, and workspace panels open beside Chat, the base page.
 
 ## When you would use it
 
@@ -26,7 +26,7 @@ Open this page in your first week, or later when you are hunting a control you h
 ## How to get from sign-in to a running agent
 
 1. Open the app's address in your browser. On the sign-in screen, enter your username and password, then select **Sign in**. A wrong combination is refused; too many attempts in a row asks you to wait. (A fresh install has no account yet — [getting started](getting-started.md) covers creating one.)
-2. You land in your default [workspace](workspaces.md), on its **Chat** tab. If setup is not finished, onboarding runs first.
+2. You land in your default [workspace](workspaces.md), on **Chat**, its base page. If setup is not finished, onboarding runs first.
 3. Type in the message box at the bottom of the chat and press **Enter** to send; **Shift+Enter** adds a new line instead. The reply streams in as the agent writes it. Three controls sit above the box: which [agent](agents.md) answers, which model it uses, and the session's token count.
 4. While the agent works, you can steer or stop it (see the table below).
 5. To hand the agent a file, use the **+** button next to the message box, drag a file onto the chat, or paste an image in.
@@ -45,20 +45,19 @@ What the sidebar holds:
 
 The magnifier at the top of the sidebar searches all your conversations.
 
-## A workspace and its tabs
+## A workspace and its panels
 
-A [workspace](workspaces.md) is where one effort lives: conversations, task board, files, team. Switch workspaces from the sidebar. The workspace bar has four page tabs and two controls that open panels alongside Chat:
+A [workspace](workspaces.md) is where one effort lives: conversations, task board, files, team. Switch workspaces from the sidebar. Chat is the base page, not a workspace-bar entry. The bar offers five panel toggles, in this order:
 
-| Entry | What it is for |
+| Panel | What it is for |
 |---|---|
-| Chat | Talking to the workspace's agents; their work and replies appear here. |
 | Tasks | The workspace's work as a [board, list, or graph](tasks.md), including its [plans](plans.md). |
 | Calendar | [Scheduled and recurring work](calendar.md), shown by when it fires. |
-| Library | The workspace's files and notes; opens the [Library](library.md) panel beside Chat on wider screens. |
-| Mail | The workspace agents' configured mailboxes; opens the [Mail](mail.md) panel beside Chat on wider screens. |
+| Library | The workspace's files and notes; opens the [Library](library.md) panel. |
+| Mail | The workspace agents' configured mailboxes; opens the [Mail](mail.md) panel. |
 | Team | Who is on this workspace's team and which [agent](agents.md) may delegate to which. |
 
-Workspace settings are not an entry: select the workspace's name at the left of the bar. On a narrow screen these entries move into one switcher menu.
+Select a toggle to open its panel beside Chat, select it again to close it, or choose another to replace the open panel. On a narrow bar, an icon-only panels menu offers the same five panels and **Settings**. Workspace settings remain a page, reached through the workspace's name in the wide bar or Settings in the compact menu.
 
 ## The chat area
 
@@ -111,14 +110,15 @@ When the current first message has no known chat ID, `/new` shows **“Delivery 
 
 ## Panels beside chat
 
-[Library](library.md), [Browser](browser.md), and [Mail](mail.md) use the same panel controls. **Library** is in the sidebar. **Open browser** at the top of the chat opens the agent's live Browser panel when a browser session is available. Only one panel sits beside Chat at a time. Choosing another replaces it; if the outgoing panel has protected unsaved changes, you are asked before it leaves.
+[Tasks](tasks.md), [Calendar](calendar.md), [Library](library.md), [Mail](mail.md), and Team open from the workspace bar or its compact panels menu and use the shared panel controls, as does [Browser](browser.md). **Library** is also in the sidebar. **Open browser** at the top of the chat opens the agent's live Browser panel when a browser session is available. Only one panel sits beside Chat at a time. Choosing another replaces it; if the outgoing panel has protected unsaved changes, you are asked before it leaves.
 
 | Control | What it does |
 |---|---|
 | Panel heading and **Close** (X) | Shows which panel is open; X closes it and returns focus to Chat. On a narrow screen, the panel replaces the chat area and also has **Back** at the top to return to Chat. |
 | Divider between Chat and the panel | Drag it to change the panel's width. You can focus the divider and press the left or right arrow key; **Home** and **End** jump to its narrowest and widest sizes. Double-click it to reset the width. |
-| **Expand** icon | Opens the current panel in a separate full-screen browser tab, or focuses its existing tab. If pop-ups are blocked, the docked panel stays put and shows **Pop-up blocked — allow pop-ups to expand.** |
-| **Back to chat** in the full-screen tab | Closes an app-opened tab when the browser permits it, returning the panel beside Chat. If that tab cannot close itself, the button goes back to workspace Chat with the panel open. |
+| **Expand** icon | Tasks, Team and Calendar expand in the same tab to a full-screen view without the app sidebar or workspace bar. Library, Browser and Mail retain separate-tab expansion, opening a full-screen browser tab or focusing its existing tab. If pop-ups are blocked for those separate-tab panels, the docked panel stays put and shows **Pop-up blocked — allow pop-ups to expand.** |
+| **Back to chat** for Tasks, Team and Calendar | Returns to workspace Chat in the same tab with that panel open. |
+| **Back to chat** for Library, Browser and Mail | Closes an app-opened tab when the browser permits it, returning the panel beside Chat. If that tab cannot close itself, the button goes back to workspace Chat with the panel open. |
 
 Library and Mail ask before an app-initiated close, panel switch, expansion, or full-screen return when their editors have protected unsaved changes; cancel the prompt to stay. In Mail, that covers changed drafts and Compose messages with a nonempty body, **not** a new Compose message with only recipients or subject filled in. The Browser panel has no equivalent text-edit warning. See the [Mail guide](mail.md#work-with-drafts) for Save and draft-sending steps.
 
