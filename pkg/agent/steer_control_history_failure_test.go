@@ -28,6 +28,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -133,7 +134,7 @@ func historyFailureBlockLedger(t *testing.T, controlsPath, recordPath string) {
 		t.Fatalf("instrument failed: the control ledger is still writable after chmod 0400 — "+
 			"the history-append failure cannot be induced on this filesystem: %s", controlsPath)
 	}
-	if !os.IsPermission(err) {
+	if !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("instrument failed: opening the control ledger O_WRONLY|O_APPEND returned %v, want a permission error", err)
 	}
 	lf, err := os.OpenFile(recordPath, os.O_WRONLY|os.O_APPEND, 0o600)
@@ -248,8 +249,8 @@ func TestHistoryFailure_StopLandsUnderUnwritableLedger_ResumeRefusedThenExactlyO
 	// must fail VISIBLY and leave the tuple untouched (D2 CRIT-001: clearing
 	// the note without its history is a loss, never a success).
 	resumeErr := func() error {
-		_, err := NewSteerCanceller(lifecycle).Revive(context.Background(), childID, historyFailureOwner)
-		return err
+		_, reviveErr := NewSteerCanceller(lifecycle).Revive(context.Background(), childID, historyFailureOwner)
+		return reviveErr
 	}()
 	if resumeErr == nil {
 		t.Fatalf("RESUME succeeded while the landed-stop history could not be written — the resume must be refused " +
@@ -330,15 +331,15 @@ func TestHistoryFailure_StopLandsUnderUnwritableLedger_ResumeRefusedThenExactlyO
 		Actor:           historyFailureActor,
 		At:              note.At,
 	}
-	if err := reopened.RecordLandedStop(childID, retry); err != nil {
-		t.Errorf("idempotent RecordLandedStop retry with the exact tuple: %v, want nil", err)
+	if retryErr := reopened.RecordLandedStop(childID, retry); retryErr != nil {
+		t.Errorf("idempotent RecordLandedStop retry with the exact tuple: %v, want nil", retryErr)
 	}
 	assertExactlyOneStoppedTransition(t, reopened, childID, want)
 
 	// A divergent retry is a visible refusal, never a silent rewrite.
 	divergent := retry
 	divergent.Cause = session.StopCauseCascade
-	if err := reopened.RecordLandedStop(childID, divergent); err == nil {
+	if divergentErr := reopened.RecordLandedStop(childID, divergent); divergentErr == nil {
 		t.Errorf("a divergent landed-stop retry (cause %q vs accepted %q) was accepted — history divergence must be refused visibly",
 			session.StopCauseCascade, session.StopCauseStop)
 	}
@@ -347,8 +348,8 @@ func TestHistoryFailure_StopLandsUnderUnwritableLedger_ResumeRefusedThenExactlyO
 	// A second genuine stop of the SAME generation gets a strictly greater
 	// seq and its own distinct historical event (D4; the seq is what keeps
 	// D6's (parent, child, generation, stop_seq) notice key from colliding).
-	if _, err := NewSteerCanceller(lifecycle).StopTurns(context.Background(), childID, historyFailureOwner, false, al.SteerGenerationCancel); err != nil {
-		t.Fatalf("second StopTurns: %v", err)
+	if _, secondStopErr := NewSteerCanceller(lifecycle).StopTurns(context.Background(), childID, historyFailureOwner, false, al.SteerGenerationCancel); secondStopErr != nil {
+		t.Fatalf("second StopTurns: %v", secondStopErr)
 	}
 	second, err := lifecycle.Load(childID)
 	if err != nil {

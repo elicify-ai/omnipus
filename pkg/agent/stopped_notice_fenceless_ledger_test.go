@@ -100,8 +100,9 @@ func c3LedgerRawLines(t *testing.T, al *AgentLoop, childID string) []c3LandedLin
 	if err != nil {
 		t.Fatalf("read control ledger %s: %v", path, err)
 	}
-	var lines []c3LandedLine
-	for _, line := range jsonLines(raw) {
+	ledgerLines := jsonLines(raw)
+	lines := make([]c3LandedLine, 0, len(ledgerLines))
+	for _, line := range ledgerLines {
 		var l c3LandedLine
 		if err := json.Unmarshal(line, &l); err != nil {
 			t.Fatalf("parse control ledger line of %s: %v", childID, err)
@@ -203,8 +204,8 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 	}
 
 	// Resume (Revive), then dispatch — a live run again, SAME generation.
-	if _, err := lifecycle.Load(childID); err != nil {
-		t.Fatalf("Load(before resume): %v", err)
+	if _, loadErr := lifecycle.Load(childID); loadErr != nil {
+		t.Fatalf("Load(before resume): %v", loadErr)
 	}
 	c3ResumeLiveDispatch(t, al, lifecycle, childID, generation, provider.entered)
 	resumed, err := lifecycle.Load(childID)
@@ -219,8 +220,8 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 	}
 
 	// Fence-less stop #2, same generation.
-	if err := al.completeSteeredTurn(context.Background(), resumed, turnResult{}, context.Canceled); err != nil {
-		t.Fatalf("completeSteeredTurn (fence-less stop 2): %v", err)
+	if stopErr := al.completeSteeredTurn(context.Background(), resumed, turnResult{}, context.Canceled); stopErr != nil {
+		t.Fatalf("completeSteeredTurn (fence-less stop 2): %v", stopErr)
 	}
 	trs2, err := lifecycle.ListStoppedTransitions(childID)
 	if err != nil {
@@ -248,8 +249,8 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 
 	// The parent TAKES the FIRST notice — the production ack the wake
 	// consumer makes.
-	if err := al.GetMessageInboxStore().Ack(parentID, []string{notice1}); err != nil {
-		t.Fatalf("parent ack of %s: %v", notice1, err)
+	if ackErr := al.GetMessageInboxStore().Ack(parentID, []string{notice1}); ackErr != nil {
+		t.Fatalf("parent ack of %s: %v", notice1, ackErr)
 	}
 	if !rerNoteAcked(t, al, parentID, notice1) {
 		t.Fatalf("the ack of %s did not persist — the taken-first scenario is unobservable", notice1)
@@ -272,8 +273,8 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 	if got := len(w1hNoticesWithID(t, al, parentID, notice1)); got != 1 {
 		t.Errorf("parent inbox holds %d line(s) of %s after the pass, want exactly 1", got, notice1)
 	}
-	if trs3, err := lifecycle.ListStoppedTransitions(childID); err != nil || len(trs3) != 2 {
-		t.Errorf("landed history after the pass = %s (err %v), want still 2 — a ring never fabricates history", w1hFormatTransitions(trs3), err)
+	if trs3, trs3Err := lifecycle.ListStoppedTransitions(childID); trs3Err != nil || len(trs3) != 2 {
+		t.Errorf("landed history after the pass = %s (err %v), want still 2 — a ring never fabricates history", w1hFormatTransitions(trs3), trs3Err)
 	}
 	cur, err := lifecycle.Load(childID)
 	if err != nil {
@@ -321,8 +322,8 @@ func TestFencelessLedger_UntakenNoticeStillRingsAfterResumeClearsTheNote(t *test
 	// exactly the mutation that lost an untaken notice under the retired
 	// note-derived fallback.
 	owner := w1hOwner("c3-resume-ring-owner")
-	if _, err := NewSteerCanceller(lifecycle).Revive(context.Background(), childID, owner); err != nil {
-		t.Fatalf("Revive(%s): %v", childID, err)
+	if _, reviveErr := NewSteerCanceller(lifecycle).Revive(context.Background(), childID, owner); reviveErr != nil {
+		t.Fatalf("Revive(%s): %v", childID, reviveErr)
 	}
 	resumed, err := lifecycle.Load(childID)
 	if err != nil {
@@ -331,8 +332,8 @@ func TestFencelessLedger_UntakenNoticeStillRingsAfterResumeClearsTheNote(t *test
 	if resumed.StopNote != nil || resumed.StopEffect != nil {
 		t.Fatalf("after Revive the record still carries StopNote=%v StopEffect=%v — the note was not cleared, the case is not exercised", resumed.StopNote, resumed.StopEffect)
 	}
-	if trsAfter, err := lifecycle.ListStoppedTransitions(childID); err != nil || len(trsAfter) != 1 {
-		t.Fatalf("landed history after the resume = %s (err %v), want still exactly 1 — clearing the note must not delete the ledgered transition (C3)", w1hFormatTransitions(trsAfter), err)
+	if trsAfter, trsAfterErr := lifecycle.ListStoppedTransitions(childID); trsAfterErr != nil || len(trsAfter) != 1 {
+		t.Fatalf("landed history after the resume = %s (err %v), want still exactly 1 — clearing the note must not delete the ledgered transition (C3)", w1hFormatTransitions(trsAfter), trsAfterErr)
 	}
 
 	// The next delivery pass discovers the transition from the LEDGER and

@@ -33,7 +33,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -43,48 +42,6 @@ type followUpLauncher struct {
 	generation int
 	dispatch   steer.DispatchResult
 	err        error
-}
-
-type followUpHistoryStore struct {
-	history map[string][]session.TranscriptEntry
-	// appendErr, when non-nil, is what the transcript write fails with — the
-	// "the new instruction did not land" case of DEFECT 4 (ADR-091 fix lane
-	// RX-DELIVERY).
-	appendErr error
-	messages  map[string][]providers.Message
-}
-
-func (s *followUpHistoryStore) ReadTranscript(sessionID string) ([]session.TranscriptEntry, error) {
-	return s.history[sessionID], nil
-}
-
-func (s *followUpHistoryStore) AddMessage(sessionID, role, content string) {
-	if s.messages == nil {
-		s.messages = make(map[string][]providers.Message)
-	}
-	s.messages[sessionID] = append(s.messages[sessionID], providers.Message{Role: role, Content: content})
-}
-
-// AppendTranscriptStrict is the write reconstructSteeredTurn actually reads
-// back (steer_reconstruct.go scans transcript.jsonl for the last `user`
-// entry), so appendFollowUpInstruction requires it.
-func (s *followUpHistoryStore) AppendTranscriptStrict(sessionID string, entry session.TranscriptEntry) error {
-	if s.appendErr != nil {
-		return s.appendErr
-	}
-	if s.history == nil {
-		s.history = make(map[string][]session.TranscriptEntry)
-	}
-	s.history[sessionID] = append(s.history[sessionID], entry)
-	return nil
-}
-
-func wireFollowUpTestLauncher(tool *DelegateTool) (*followUpLauncher, *followUpHistoryStore) {
-	launcher := &followUpLauncher{dispatch: steer.DispatchResult{State: steer.DispatchRunning}}
-	history := &followUpHistoryStore{}
-	tool.SetSessionLauncher(launcher)
-	tool.SetSessionStore(history)
-	return launcher, history
 }
 
 func (f *followUpLauncher) Launch(context.Context, steer.LaunchRequest) (steer.LaunchResult, error) {

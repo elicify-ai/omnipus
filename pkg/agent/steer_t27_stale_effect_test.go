@@ -215,8 +215,8 @@ func t27ResumeAndRequeue(t *testing.T, al *AgentLoop, canceller *SteerCanceller,
 	if resumed != generation {
 		t.Fatalf("RESUME returned generation %d, want %d (D2 CRIT-001: same-generation resume)", resumed, generation)
 	}
-	if _, err := NewSteerLauncher(al).Dispatch(context.Background(), sessionID, generation); err != nil {
-		t.Fatalf("Dispatch(replacement): %v", err)
+	if _, dispatchErr := NewSteerLauncher(al).Dispatch(context.Background(), sessionID, generation); dispatchErr != nil {
+		t.Fatalf("Dispatch(replacement): %v", dispatchErr)
 	}
 	rec, err := al.GetSessionLifecycleStore().Load(sessionID)
 	if err != nil {

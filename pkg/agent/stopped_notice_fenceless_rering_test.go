@@ -88,14 +88,14 @@ func TestStoppedNotice_FenceLessStop_ReringsUntilTaken(t *testing.T) {
 	if pre.Stop != nil || pre.StopNote != nil {
 		t.Fatalf("setup: child carries Stop=%v StopNote=%v, want neither — the landing must be genuinely fence-less", pre.Stop, pre.StopNote)
 	}
-	if trs, err := lifecycle.ListStoppedTransitions(childID); err != nil || len(trs) != 0 {
-		t.Fatalf("setup: landed history = %s (err %v), want none — the fence-less landing below must be this child's first landed stop", w1hFormatTransitions(trs), err)
+	if trs, trsErr := lifecycle.ListStoppedTransitions(childID); trsErr != nil || len(trs) != 0 {
+		t.Fatalf("setup: landed history = %s (err %v), want none — the fence-less landing below must be this child's first landed stop", w1hFormatTransitions(trs), trsErr)
 	}
 
 	// The production completion boundary lands the stop with a cancelled
 	// disposition and no fence — the synthesized-note (fence-less) landing.
-	if err := al.completeSteeredTurn(context.Background(), rec, turnResult{}, context.Canceled); err != nil {
-		t.Fatalf("completeSteeredTurn (fence-less stop landing): %v", err)
+	if stopErr := al.completeSteeredTurn(context.Background(), rec, turnResult{}, context.Canceled); stopErr != nil {
+		t.Fatalf("completeSteeredTurn (fence-less stop landing): %v", stopErr)
 	}
 
 	// ORACLE (the landing is fence-less and durable): stopped at the same
@@ -192,8 +192,8 @@ func TestStoppedNotice_FenceLessStop_ReringsUntilTaken(t *testing.T) {
 	if got := len(w1hNoticesWithID(t, restart, parentID, noticeID)); got != 1 {
 		t.Errorf("parent inbox holds %d line(s) of %s after two rings, want exactly 1 — repeated rings never duplicate the note", got, noticeID)
 	}
-	if trs2, err := restart.GetSessionLifecycleStore().ListStoppedTransitions(childID); err != nil || len(trs2) != 1 || w1hFormatTransitions(trs2) != w1hFormatTransitions(trs) {
-		t.Errorf("landed history after the rings = %s (err %v), want still exactly [%s] — a ring is a doorbell, it never appends history", w1hFormatTransitions(trs2), err, w1hFormatTransitions(trs))
+	if trs2, trs2Err := restart.GetSessionLifecycleStore().ListStoppedTransitions(childID); trs2Err != nil || len(trs2) != 1 || w1hFormatTransitions(trs2) != w1hFormatTransitions(trs) {
+		t.Errorf("landed history after the rings = %s (err %v), want still exactly [%s] — a ring is a doorbell, it never appends history", w1hFormatTransitions(trs2), trs2Err, w1hFormatTransitions(trs))
 	}
 	rungCur, err := restart.GetSessionLifecycleStore().Load(childID)
 	if err != nil {

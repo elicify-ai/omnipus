@@ -301,8 +301,8 @@ func TestBoot_RenudgesUnconsumedEntriesOnce_EligibleOnly(t *testing.T) {
 		t.Fatalf("archived handback instruction %q is not readable back from session %q's durable context archive", deliverySummary(consumedHandback), child)
 	}
 
-	if err := h.recovery().Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
+	if runErr := h.recovery().Run(context.Background()); runErr != nil {
+		t.Fatalf("Run: %v", runErr)
 	}
 	snapshot := h.deliverer.snapshot()
 	got := make([]string, 0, len(snapshot))
