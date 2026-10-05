@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
@@ -53,58 +54,89 @@ import (
 // something" from "there was nothing to stop". An empty result with an
 // unreachable node is an error, never a quiet success.
 func (al *AgentLoop) cancelDelegatedSubtree(sessionID string, by steer.Principal, hard bool, hint string) ([]string, error) {
+	reached, _, err := al.cancelDelegatedSubtreeSelected(sessionID, by, hard, hint)
+	return reached, err
+}
+
+// cancelDelegatedSubtreeSoftWithBackstop is the soft stop plus the grace
+// backstop bound to what that stop accepted. The returned backstop hard-aborts
+// ONLY the executions the cooperative acceptance selected, through the same
+// cascade lock and the same carried-selection effect boundaries — it accepts no
+// new Stop, so a same-generation Resume admitted during the grace window is
+// never a target. A nil backstop means the soft stop accepted nothing to abort.
+func (al *AgentLoop) cancelDelegatedSubtreeSoftWithBackstop(sessionID string, by steer.Principal, hint string) ([]string, func() error, error) {
+	reached, accepted, err := al.cancelDelegatedSubtreeSelected(sessionID, by, false, hint)
+	if err != nil {
+		return reached, nil, err
+	}
+	canceller := al.steerCanceller()
+	backstop := func() error {
+		report, cerr := canceller.ReapplySelectedStops(context.Background(), sessionID, accepted, al.SteerGenerationCancel)
+		if cerr != nil {
+			return fmt.Errorf("steer: delegate cancel %q: grace backstop: %w", sessionID, cerr)
+		}
+		if len(report.Unreachable) > 0 {
+			return fmt.Errorf("steer: delegate cancel %q: grace backstop: unreachable %d (%s)",
+				sessionID, len(report.Unreachable), unreachableSummary(report.Unreachable))
+		}
+		return nil
+	}
+	return reached, backstop, nil
+}
+
+// cancelDelegatedSubtreeSelected runs the cascade and also returns the
+// acceptance-time selections a cooperative (hard=false) stop carried to its
+// effect, in order, so a later backstop can act on exactly those.
+func (al *AgentLoop) cancelDelegatedSubtreeSelected(sessionID string, by steer.Principal, hard bool, hint string) ([]string, []session.StopSelection, error) {
 	if al == nil {
-		return nil, fmt.Errorf("steer: delegate cancel: no AgentLoop wired")
+		return nil, nil, fmt.Errorf("steer: delegate cancel: no AgentLoop wired")
 	}
 	if al.GetSessionLifecycleStore() == nil {
-		return nil, fmt.Errorf("steer: delegate cancel: lifecycle store is not configured")
+		return nil, nil, fmt.Errorf("steer: delegate cancel: lifecycle store is not configured")
 	}
 	canceller := al.steerCanceller()
 	ctx := context.Background()
 
 	var report steer.CancelReport
 	var err error
+	var accepted []session.StopSelection
 	if hard {
 		report, err = canceller.CancelSubtree(ctx, sessionID, by)
 	} else {
 		report, err = canceller.StopTurns(ctx, sessionID, by, true,
 			func(effectCtx context.Context, id string, generation int) (GenerationCancelResult, error) {
+				if selected, carried := stopSelectionFromContext(effectCtx); carried {
+					accepted = append(accepted, selected)
+				}
 				return al.steerSoftStop(effectCtx, id, generation, hint)
 			})
 	}
 	if err != nil {
-		return nil, fmt.Errorf("steer: delegate cancel %q: %w", sessionID, err)
+		return nil, nil, fmt.Errorf("steer: delegate cancel %q: %w", sessionID, err)
 	}
 	// Both hard and cooperative effects removed their own selected queue entry
 	// in the callback. A post-return lookup by report ID could borrow a newer
 	// Stop's pair, so no second session-based removal or interrupt runs here.
 
 	if len(report.Reached) == 0 && len(report.Unreachable) > 0 {
-		return nil, fmt.Errorf("steer: delegate cancel %q: %s",
+		return nil, nil, fmt.Errorf("steer: delegate cancel %q: %s",
 			report.Unreachable[0].ID, report.Unreachable[0].Reason)
 	}
 	// [Finding 3, ADR-091 fix lane 2] A partial cascade must never read as a
-	// clean success. Before this, Unreachable was consulted ONLY when
-	// nothing was reached at all — reach one node and lose five, and the
-	// five vanished with no error, no warning, no log — and
-	// SkippedNewerGeneration (a node whose live turn had already advanced
-	// past the generation this Stop stamped, so it is STILL RUNNING,
-	// untouched by this cascade) was discarded unconditionally. The tool
-	// layer (pkg/tools/delegate_run.go) reports "cooperatively cancelled"/
-	// "hard-cancelled immediately" purely off cerr == nil, so surfacing
-	// both facts as an error here — naming the counts and ids — is what
-	// keeps that success wording honest, mirroring how the neighbouring
-	// background-shell-kill warning refuses to let a partial sweep read as
-	// clean (delegate_run.go::cancelBackgroundShellWarnings).
+	// clean success: Unreachable and SkippedNewerGeneration surface as an
+	// error naming the counts and ids, so the tool's "cooperatively
+	// cancelled"/"hard-cancelled immediately" wording stays honest (see
+	// delegate_run.go::cancelBackgroundShellWarnings for the neighbouring
+	// shell-kill equivalent).
 	if len(report.Unreachable) > 0 || len(report.SkippedNewerGeneration) > 0 {
-		return report.Reached, fmt.Errorf(
+		return report.Reached, accepted, fmt.Errorf(
 			"steer: delegate cancel %q: partial cascade — reached %d; unreachable %d (%s); still running past a newer generation: %d (%s)",
 			sessionID, len(report.Reached),
 			len(report.Unreachable), unreachableSummary(report.Unreachable),
 			len(report.SkippedNewerGeneration), strings.Join(report.SkippedNewerGeneration, ", "),
 		)
 	}
-	return report.Reached, nil
+	return report.Reached, accepted, nil
 }
 
 // unreachableSummary renders every unreachable session's id and reason for

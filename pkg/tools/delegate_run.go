@@ -681,6 +681,34 @@ func (t *DelegateTool) droppedQueuedResult(sessionID, warnings string) *ToolResu
 	) + warnings)
 }
 
+// hardCancelBackstop is the grace backstop for a tool wired with only the
+// SetCancelHooks pair: a fresh hard cancel of sessionID. nil when no hard hook
+// is configured. The canonical wiring uses SetSelectedSoftCancel instead,
+// whose backstop is bound to the soft stop's own accepted executions.
+func (t *DelegateTool) hardCancelBackstop(sessionID string, by steer.Principal) func() error {
+	if t.cancelHard == nil {
+		return nil
+	}
+	return func() error {
+		// The descendants return closes the same TOCTOU window the synchronous
+		// path guards: a session that terminated between the terminal check and
+		// this cancel returns (nil, nil), and there is nothing left to
+		// transition — skip transitionLifecycle rather than stamping a
+		// redundant LifecycleStopped onto an already-stopped/terminal record.
+		descendants, cerr := t.cancelHard(sessionID, by, "delegate stop_all(hard=false): grace elapsed")
+		if cerr != nil {
+			return cerr
+		}
+		if len(descendants) == 0 {
+			return nil
+		}
+		// note=nil: t.cancelHard already stamped the stop_note for sessionID
+		// (cause "stop") via stampStop. Retain it.
+		t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user", nil)
+		return nil
+	}
+}
+
 // executeStopAll implements action="stop_all" (ADR-20261004, locked decision
 // 2; renamed from cancel with no alias path). Stops that helper and every
 // helper under it — the confirmed downward cascade — through the SAME
@@ -842,10 +870,19 @@ func (t *DelegateTool) executeStopAll(ctx context.Context, args map[string]any) 
 		return NewToolResult(msg)
 	}
 
-	if t.cancelSoft == nil {
+	softHint := "delegate stop_all(hard=false)"
+	var softDescendants []string
+	var backstop func() error
+	var cerr error
+	switch {
+	case t.cancelSoftBound != nil:
+		softDescendants, backstop, cerr = t.cancelSoftBound(sessionID, by, softHint)
+	case t.cancelSoft == nil:
 		return ErrorResult("delegate: no soft-cancel hook configured")
+	default:
+		softDescendants, cerr = t.cancelSoft(sessionID, by, softHint)
+		backstop = t.hardCancelBackstop(sessionID, by)
 	}
-	softDescendants, cerr := t.cancelSoft(sessionID, by, "delegate stop_all(hard=false)")
 	if cerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: stop_all: %v", cerr)).WithError(cerr)
 	}
@@ -876,7 +913,7 @@ func (t *DelegateTool) executeStopAll(ctx context.Context, args map[string]any) 
 	// (Comments-MINOR-3: the prior `// FR-...` prefix was a placeholder —
 	// cancel is not a numbered FR; see ADR-053 R§Cancel/restart for the
 	// two-phase prose this implements.)
-	if t.cancelHard != nil {
+	if backstop != nil {
 		grace := t.cancelGrace
 		go func() {
 			time.Sleep(grace)
@@ -885,23 +922,9 @@ func (t *DelegateTool) executeStopAll(ctx context.Context, args map[string]any) 
 					return // cooperative stop already landed — no backstop needed
 				}
 			}
-			// The descendants return closes the same TOCTOU window the
-			// synchronous path above guards: if the session terminated
-			// between the terminal check and this hard-cancel call,
-			// cancelHard returns (nil, nil) and there is nothing left to
-			// transition — skip transitionLifecycle rather than stamping a
-			// redundant LifecycleStopped onto an already-stopped/terminal record.
-			backstopDescendants, cerr := t.cancelHard(sessionID, by, "delegate stop_all(hard=false): grace elapsed")
-			if cerr != nil {
-				slog.Warn("delegate: stop_all: hard-stop backstop failed", "session_id", sessionID, "error", cerr)
-				return
+			if berr := backstop(); berr != nil {
+				slog.Warn("delegate: stop_all: hard-stop backstop failed", "session_id", sessionID, "error", berr)
 			}
-			if len(backstopDescendants) == 0 {
-				return
-			}
-			// note=nil: t.cancelHard (just above) already stamped the
-			// stop_note for sessionID (cause "stop") via stampStop. Retain it.
-			t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user", nil)
 		}()
 	}
 

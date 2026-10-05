@@ -243,6 +243,11 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 					return al.cancelDelegatedSubtree(sessionKey, by, true, hint)
 				},
 			)
+			// The cooperative stop_all's grace backstop is bound to the stop's own
+			// accepted executions (never a fresh Stop on whatever is current).
+			dt.SetSelectedSoftCancel(func(sessionKey string, by steer.Principal, hint string) ([]string, func() error, error) {
+				return al.cancelDelegatedSubtreeSoftWithBackstop(sessionKey, by, hint)
+			})
 			// FR-196 kill switch on the SYNC session-messaging-plane actions
 			// (arch-M2): the live closure re-reads config per call, mirroring
 			// the async consumer's per-event read.

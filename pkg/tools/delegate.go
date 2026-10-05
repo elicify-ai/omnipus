@@ -273,6 +273,11 @@ type DelegateTool struct {
 	// and missed a running child's own grandchildren; see SetCancelHooks.
 	cancelSoft func(sessionKey string, by steer.Principal, hint string) ([]string, error)
 	cancelHard func(sessionKey string, by steer.Principal, hint string) ([]string, error)
+	// cancelSoftBound, when wired, replaces cancelSoft+cancelHard for the
+	// cooperative stop_all: it returns the soft stop's reached ids and a grace
+	// backstop bound to the executions that stop accepted (nil when none).
+	// See SetSelectedSoftCancel.
+	cancelSoftBound func(sessionKey string, by steer.Principal, hint string) ([]string, func() error, error)
 	// cancelGrace is the cooperative-stop grace window before the hard
 	// RequestCancel backstop fires (session_messaging.cancel_grace,
 	// FR-195). Defaults to defaultCancelGrace.
@@ -474,6 +479,21 @@ func (t *DelegateTool) SetCancelHooks(
 ) {
 	t.cancelSoft = soft
 	t.cancelHard = hard
+}
+
+// SetSelectedSoftCancel installs the cooperative stop whose grace backstop is
+// bound to the executions that stop itself accepted (the canonical wiring:
+// AgentLoop.cancelDelegatedSubtreeSoftWithBackstop). It returns the reached ids
+// and a backstop func that, after the grace window, hard-aborts only those
+// accepted executions — it must NOT accept a new Stop, because by then the
+// session may hold a fresh same-generation execution a later Resume admitted.
+// A nil backstop means there is nothing left to abort. When this is unwired
+// executeStopAll keeps the SetCancelHooks pair: cancelSoft, then cancelHard
+// after grace.
+func (t *DelegateTool) SetSelectedSoftCancel(
+	soft func(sessionKey string, by steer.Principal, hint string) ([]string, func() error, error),
+) {
+	t.cancelSoftBound = soft
 }
 
 // SetCancelGrace overrides the default cooperative-stop grace window
