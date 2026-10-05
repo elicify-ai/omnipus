@@ -431,7 +431,7 @@ func (c *SteerCanceller) CancelSubtree(ctx context.Context, sessionID string, by
 	if c != nil {
 		cancelTurn = c.cancelTurn
 	}
-	return c.cascade(ctx, sessionID, by, true, cancelTurn)
+	return c.cascade(ctx, sessionID, by, true, session.StopCauseStop, cancelTurn)
 }
 
 // StopTurns stamps the requested session (and, for stop-all, its durable
@@ -439,12 +439,20 @@ func (c *SteerCanceller) CancelSubtree(ctx context.Context, sessionID string, by
 // generation. It shares the existing cascade lock and late-child pass, but
 // never invokes the administrative cancellation/goal-ending adapter.
 func (c *SteerCanceller) StopTurns(ctx context.Context, sessionID string, by steer.Principal, subtree bool, stopTurn GenerationCancelFunc) (steer.CancelReport, error) {
-	return c.cascade(ctx, sessionID, by, subtree, stopTurn)
+	return c.cascade(ctx, sessionID, by, subtree, session.StopCauseStop, stopTurn)
+}
+
+// StopTurnsWithCause is StopTurns with the requested session's own stop cause
+// named by the caller: StopCauseStop for a session stopped directly, or
+// StopCauseCascade when a larger stop swept it (a plan Stop reaching its
+// members). Every descendant is still stamped StopCauseCascade.
+func (c *SteerCanceller) StopTurnsWithCause(ctx context.Context, sessionID string, by steer.Principal, subtree bool, cause session.StopCause, stopTurn GenerationCancelFunc) (steer.CancelReport, error) {
+	return c.cascade(ctx, sessionID, by, subtree, cause, stopTurn)
 }
 
 // cascade runs one Stop cascade under sessionID's cascade lock.
 func (c *SteerCanceller) cascade(
-	ctx context.Context, sessionID string, by steer.Principal, subtree bool, cancelTurn GenerationCancelFunc,
+	ctx context.Context, sessionID string, by steer.Principal, subtree bool, rootCause session.StopCause, cancelTurn GenerationCancelFunc,
 ) (steer.CancelReport, error) {
 	var report steer.CancelReport
 	if c == nil || c.Lifecycle == nil {
@@ -520,7 +528,7 @@ func (c *SteerCanceller) cascade(
 			report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: walkErr.Error()})
 		}
 	}
-	process([]string{sessionID}, session.StopCauseStop)
+	process([]string{sessionID}, rootCause)
 	process(first, session.StopCauseCascade)
 	unlock()
 	fireLiveCancels()

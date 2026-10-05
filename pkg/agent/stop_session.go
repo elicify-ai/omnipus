@@ -30,7 +30,7 @@ import (
 // StopTurnsCanceller is the durable stamping half StopSession drives. The
 // composition root's SteerCanceller satisfies it.
 type StopTurnsCanceller interface {
-	StopTurns(ctx context.Context, sessionID string, by steer.Principal, subtree bool, stopTurn GenerationCancelFunc) (steer.CancelReport, error)
+	StopTurnsWithCause(ctx context.Context, sessionID string, by steer.Principal, subtree bool, cause session.StopCause, stopTurn GenerationCancelFunc) (steer.CancelReport, error)
 }
 
 // StopRequest names one Stop. By is the authenticated principal (a person or
@@ -41,6 +41,9 @@ type StopRequest struct {
 	By        steer.Principal
 	Channel   string
 	Tree      bool
+	// Cause is the requested session's own stop cause; empty means
+	// StopCauseStop. A plan Stop sweeping its members passes StopCauseCascade.
+	Cause session.StopCause
 	// HooksFor returns the transport hooks for one reached session. Nil uses
 	// the default background-shell kill for every reached session.
 	HooksFor func(sessionID string) CancelHooks
@@ -144,7 +147,11 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	if stopper == nil {
 		stopper = al.steerCanceller()
 	}
-	report, err := stopper.StopTurns(ctx, req.SessionID, req.By, req.Tree, stopTurn)
+	cause := req.Cause
+	if cause == "" {
+		cause = session.StopCauseStop
+	}
+	report, err := stopper.StopTurnsWithCause(ctx, req.SessionID, req.By, req.Tree, cause, stopTurn)
 	if err != nil {
 		return res, err
 	}

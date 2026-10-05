@@ -24,6 +24,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -275,9 +276,6 @@ type agentLoopRequestCancel struct {
 //   - ClaimCancel atomic first-cancel-wins check
 //   - turn_cancel_attempt audit emission (always, even for no-op cancels)
 //   - graceful cascade via Interrupt(sessionID, ScopeSubtree, hint) / providerCancel
-//   - durable descendant lifecycle-record walk, own goroutine, off the
-//     escalation path (ADR-057 FR-025/FR-026 — see
-//     cancelDurableDescendantLifecycleRecords)
 //   - approval auto-deny (via hooks.CancelPendingApprovals)
 //   - cancel_stage frame emission (via hooks.SendStageFrame)
 //   - session status → interrupted (via hooks.SetSessionInterrupted)
@@ -629,21 +627,6 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 	rc.turnID = rc.activeTurn.TurnID()
 	rc.descendants = rc.cancelTurnIDs()
 
-	// --- ADR-057 FR-025/FR-026: durable descendant lifecycle-record walk ---
-	// Runs on its OWN goroutine, off the 3s/3s escalation path below, so a
-	// subtree with many persisted lifecycle records never delays
-	// RequestCancel's return or the graceful/hard cascade timers. Reaches
-	// every descendant with a DURABLE lifecycle record — including one whose
-	// own intermediate parent turn has already finished and is no longer in
-	// al.activeTurnStates, a gap the in-memory descendants list above cannot
-	// close (see collectLiveDescendantTurnStates's KNOWN LIMITATION doc
-	// comment, steering.go) — and transitions each one's persisted record to
-	// cancelled. See cancelDurableDescendantLifecycleRecords's own doc
-	// comment for the full mechanism.
-	if !rc.scope.TurnOnly {
-		go rc.al.cancelDurableDescendantLifecycleRecords(rc.sessionID, rc.canceller)
-	}
-
 	// backgroundSessionsKilled was already computed above (independent of
 	// wasFired, before this function's ClaimCancel gate) and is read here via
 	// atomic — the write happened earlier in this same goroutine, but the
@@ -777,36 +760,10 @@ func (rc *agentLoopRequestCancel) interruptGracefully() {
 		rc.hooks.SendStageFrame(rc.sessionID, "graceful")
 	}
 
-	// --- Transition BOTH stores via the single mediator (Defect #28 fix) ---
-	//
-	// The cancel must transition the durable LifecycleRecord to
-	// LifecycleStopped AND mirror onto UnifiedMeta (interrupted) — the same
-	// paired transition every task/delegate terminal write performs. Before
-	// this fix, this block wrote ONLY UnifiedMeta (via the hook or the default
-	// branch), orphaning the parent session's LifecycleRecord: it stayed
-	// running/queued on disk until a future boot sweep caught it. That is the
-	// SAME defect as a kill -9 crash, produced by NORMAL cancel operation, not
-	// just crashes. The mediator is now the single authority for the
-	// lifecycle-state → unified-status mapping (cancelled → interrupted).
-	//
-	// ErrLifecycleNotFound is expected and silenced here: a normal web CHAT
-	// session may have no LifecycleRecord at all (only task/delegate/plan
-	// sessions mint one), so the lifecycle half is a no-op for those and the
-	// UnifiedMeta mirror still proceeds inside the mediator.
-	if !rc.scope.TurnOnly {
-		lifecycleStore := rc.al.GetSessionLifecycleStore()
-		// cause=stop: this is the direct target of a human/API Stop
-		// (RequestCancel) on its non-TurnOnly path. The one session Stop
-		// (stop_session.go::StopSession) always uses TurnOnly and the
-		// SteerCanceller cascade, which stamps its OWN note via stampStop and
-		// never reaches here. rc.canceller is always a
-		// gateway/channel-authenticated identity, i.e. human-originated.
-		stopNote := &session.StopNote{At: time.Now().UTC(), By: session.StopActorHumanUser(rc.canceller.UserID), Cause: session.StopCauseStop}
-		if err := session.TransitionSession(lifecycleStore, rc.store, rc.sessionID, session.LifecycleStopped, "", stopNote); err != nil && !errors.Is(err, session.ErrLifecycleNotFound) {
-			slog.Warn("agent: RequestCancel: could not transition session to cancelled",
-				"session_id", rc.sessionID, "error", err)
-		}
-	}
+	// No lifecycle write here: RequestCancel only asks turns to stop. A
+	// durable stop is stamped by the one session Stop
+	// (stop_session.go::StopSession) and landed only by the owning execution
+	// after its running work shut down (ADR-20260928 D2).
 	// The hook (if supplied) fires for any additional transport-specific
 	// side-effects the WS layer needs beyond the UnifiedMeta mirror the
 	// mediator already performed (the WS hook itself also writes UnifiedMeta
@@ -1044,9 +1001,8 @@ func stringSliceSetDiff(a, b []string) (onlyInA, onlyInB []string) {
 //
 // This is the same primitive the cancel/approval-cascade paths in both
 // packages share, because a background bash/exec session (FR-027, see
-// resolveBackgroundKillSessionIDs below) and a persisted lifecycle record
-// (FR-025/FR-026, see cancelDurableDescendantLifecycleRecords below) can
-// each OUTLIVE the in-memory turnState that spawned them: a `delegate
+// resolveBackgroundKillSessionIDs below) can
+// OUTLIVE the in-memory turnState that spawned them: a `delegate
 // async=true` child's own turn frequently finishes almost immediately while
 // its spawned background bash job keeps running for minutes. Deriving this
 // set from al.activeTurnStates (which only knows about turns still
@@ -1151,76 +1107,6 @@ func (al *AgentLoop) resolveBackgroundKillSessionIDs(sessionID string) ([]string
 	}
 	descendants, err := al.collectDescendantSessionIDs(sessionID)
 	return append([]string{sessionID}, descendants...), err
-}
-
-// cancelDurableDescendantLifecycleRecords walks the durable steered-by edge
-// transitively from rootSessionID (via collectDescendantSessionIDs) and
-// transitions EVERY reachable descendant's persisted LifecycleRecord to
-// cancelled (FR-026), independent of whether that descendant still has a
-// live turnState in al.activeTurnStates. This is the DURABLE counterpart to
-// the in-memory turn cascade (Interrupt/InterruptSessionHard) RequestCancel
-// fires above: a descendant whose own intermediate parent turn has already
-// finished and been cleared from activeTurnStates is UNREACHABLE via the
-// in-memory parentTurnID chain (steering.go's collectLiveDescendantTurnStates
-// documents this limitation on itself) but remains reachable here, because
-// this walk is keyed on the durable SteeredBy edge persisted to disk,
-// never on any in-memory turn registration.
-//
-// FR-025: RequestCancel launches this via `go
-// al.cancelDurableDescendantLifecycleRecords(...)` — once per Stop, on its
-// OWN goroutine, off the 3s/3s escalation path — so a subtree with many
-// persisted lifecycle records never delays RequestCancel's return or the
-// graceful/hard cascade timers.
-//
-// rootSessionID's OWN lifecycle record is transitioned by RequestCancel's
-// existing session.TransitionSession call (PHASE A, above this function in
-// the file) — this walk starts its BFS AT rootSessionID (to enumerate its
-// direct children) but never re-writes rootSessionID's own record.
-// ErrLifecycleNotFound (no record for this descendant — e.g. it is itself a
-// plain, non-delegate session with no lifecycle record of its own) and
-// ErrLifecycleTerminalImmutable (the descendant already reached a terminal
-// state on its own, e.g. it completed naturally moments before the Stop)
-// are both expected, benign outcomes and are silenced rather than logged.
-func (al *AgentLoop) cancelDurableDescendantLifecycleRecords(rootSessionID string, canceller CancelCanceller) {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Error("agent: cancelDurableDescendantLifecycleRecords: panic",
-				"root_session_id", rootSessionID, "panic", r, "stack", string(debug.Stack()))
-		}
-	}()
-	lifecycleStore := al.GetSessionLifecycleStore()
-	if lifecycleStore == nil {
-		return
-	}
-	ids, walkErr := al.collectDescendantSessionIDs(rootSessionID)
-	if walkErr != nil {
-		// [FIX-5, Defect 2] The walk itself failed partway through — ids is a
-		// PARTIAL view of the true descendant set. Every descendant beneath
-		// the failure point will NOT be transitioned to cancelled by the loop
-		// below and will sit on disk as running/queued until a future boot
-		// sweep catches it (the same class of staleness a kill -9 crash
-		// leaves, but produced here by normal cancel operation). This is a
-		// best-effort, fire-and-forget goroutine (FR-025) with no return
-		// value to propagate the failure through, so a clearly-worded WARN
-		// naming BOTH the root and the partial id count is the load-bearing
-		// signal for this path.
-		slog.Warn("agent: cancelDurableDescendantLifecycleRecords: descendant walk failed partway through — this cascade is INCOMPLETE, some durable lifecycle records beneath the failure point will NOT be transitioned to cancelled",
-			"root_session_id", rootSessionID, "partial_descendants_found", len(ids), "error", walkErr)
-	}
-	// cause=cascade: every id here is a DESCENDANT of rootSessionID, never
-	// the root itself (the doc comment above: "never re-writes
-	// rootSessionID's own record") — reached by this Stop only because an
-	// ancestor was stopped, the defining shape of "cascade" rather than
-	// "stop" (D2/D6).
-	descendantNote := &session.StopNote{At: time.Now().UTC(), By: session.StopActorHumanUser(canceller.UserID), Cause: session.StopCauseCascade}
-	for _, id := range ids {
-		childStore := al.ResolveSessionStore(id)
-		err := session.TransitionSession(lifecycleStore, childStore, id, session.LifecycleStopped, "", descendantNote)
-		if err != nil && !errors.Is(err, session.ErrLifecycleNotFound) && !errors.Is(err, session.ErrLifecycleTerminalImmutable) {
-			slog.Warn("agent: cancelDurableDescendantLifecycleRecords: could not transition descendant to cancelled",
-				"session_id", id, "root_session_id", rootSessionID, "error", err)
-		}
-	}
 }
 
 // turnStatesByTurnID resolves the live turnState pointers registered under
@@ -1368,74 +1254,60 @@ func (al *AgentLoop) armChainReactionCancelLatch(sessionID string, scope CancelS
 	}
 }
 
-// RequestCancelForSession is a primitive-argument adapter for RequestCancel
-// used by the commands.AgentLoopInterface (and, directly, by goal_loop.go's
-// `/goal clear` verifier-cancel and plan_engine.go's Stop session-cancel
-// fan-out). It avoids importing pkg/agent types in pkg/commands (which would
-// create a circular dependency) by accepting and returning only primitive
-// types.
+// RequestCancelForSession is the primitive-argument entry to the one session
+// Stop (stop_session.go::StopSession) for fan-outs that reach a session as
+// part of a larger stop: plan_engine.go's Stop session fan-out and
+// goal_loop.go's `/goal clear` verifier cancel. It stops exactly sessionID
+// (no helper cascade), records the stop with cause "cascade" (the session was
+// swept by that larger stop, D2/D6), asks its running turn to stop at once and
+// forces it 3 s later; only the owning execution lands `stopped`. It avoids
+// importing pkg/agent types in pkg/commands by using primitive types.
 //
-// sessionID must be non-empty. Returns (fired, armed, nil) on success:
-//   - fired is true when an active turn was claimed.
-//   - armed is true when fired is false BECAUSE no turn was registered yet
-//     for sessionID and a pre-registration cancel latch (cancel_prearm.go)
-//     was recorded in its place — see CancelOutcome.Armed's doc comment for
-//     the full contract. armed is NEVER true when fired is true.
-//
-// Every caller that surfaces fired to a user or operator MUST also check
-// armed before reporting a cancel as a no-op: fired=false, armed=true means
-// the cancel WILL still fire — against the next turn to register for this
-// session, within cancelPreArmTTL — not that nothing happened.
-//
-// HISTORY: prior to this widening, this adapter flattened CancelOutcome down
-// to a bare (bool, error), unconditionally discarding Armed at this exact
-// boundary — the structural gap CancelOutcome.Armed's own doc comment warns
-// every RequestCancel caller against, and the one this widening closes at
-// the source rather than in each of the (several) call sites that go through
-// it. See pkg/commands/runtime.go's CancelActiveTurn for the Tier A /cancel
-// consumer this was fixed for; pkg/agent/plan_engine.go's cancelSessions
-// (Stop fan-out) is a further consumer of this same adapter — it now has its
-// own dedicated `armed` bucket on sessionCancelReport (plan_engine.go), kept
-// apart from `failed`/`notFired` for exactly the same reason this doc
-// comment gives, so the "still needs its own bucket" gap noted here at the
-// time of this widening has since been closed, not merely tracked.
+// Returns (fired, armed, err): fired when a running turn was asked to stop or
+// a queued/idle stop landed; armed when nothing had registered yet and a
+// pre-registration latch stands in (never true with fired). Every caller that
+// surfaces fired must also check armed before reporting a no-op. err carries
+// any reached session the stop could not handle.
 func (al *AgentLoop) RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (fired bool, armed bool, err error) {
 	if sessionID == "" {
 		return false, false, fmt.Errorf("RequestCancelForSession: sessionID must not be empty")
 	}
-	outcome, err := al.RequestCancel(ctx,
-		CancelScope{SessionID: sessionID},
-		CancelCanceller{UserID: userID, Channel: channel},
-		CancelHooks{
-			// Tier A /cancel command carries no other transport-specific side
-			// effects, but must still cascade to any background bash/exec
-			// sessions this chat session started (FR-B10/FR-B11).
-			KillBackgroundSessions: killBackgroundSessionsForCancelSurface,
-			// Mirror the WS handleCancel / cron watchDeadline callers (the two
-			// "fixed by hand" consumers of RequestCancel's own Armed field):
-			// give every caller of THIS adapter the same operator-visible
-			// signal when a latch it armed ages out (cancelPreArmTTL) before
-			// any turn consumes it — otherwise a caller that now honestly
-			// reports "acknowledged, pending" (via the armed return above)
-			// has nothing to fall back on if that promise silently expires.
-			// Generic and caller-agnostic by necessity: this primitive
-			// adapter has no per-call hook injection point of its own, so
-			// this fires identically for every caller that reaches it
-			// (Tier A /cancel, goal_loop.go's `/goal clear`, and
-			// plan_engine.go's Stop session-cancel fan-out alike).
-			OnLatchExpired: func(scope CancelScope, canceller CancelCanceller) {
-				slog.Warn("agent: RequestCancelForSession: pre-registration cancel latch expired unconsumed — the cancel this call acknowledged never actually took effect",
-					"session_id", sessionID,
-					"canceller_user", canceller.UserID,
-					"canceller_channel", canceller.Channel,
-				)
-			},
+	res, err := al.StopSession(ctx, StopRequest{
+		SessionID: sessionID,
+		By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: userID},
+		Channel:   channel,
+		Cause:     session.StopCauseCascade,
+		HooksFor: func(string) CancelHooks {
+			return CancelHooks{
+				// Cascade to any background bash/exec sessions this session
+				// started (FR-B10/FR-B11).
+				KillBackgroundSessions: killBackgroundSessionsForCancelSurface,
+				// An armed latch that ages out (cancelPreArmTTL) before any
+				// turn consumes it is reported, never silent.
+				OnLatchExpired: func(scope CancelScope, canceller CancelCanceller) {
+					slog.Warn("agent: RequestCancelForSession: pre-registration cancel latch expired unconsumed — the cancel this call acknowledged never actually took effect",
+						"session_id", sessionID,
+						"canceller_user", canceller.UserID,
+						"canceller_channel", canceller.Channel,
+					)
+				},
+			}
 		},
-	)
+	})
 	if err != nil {
 		return false, false, err
 	}
-	return outcome.Fired, outcome.Armed, nil
+	failures := []error{res.RootErr}
+	for _, unreachable := range res.Report.Unreachable {
+		if unreachable.ID == sessionID && res.RootErr != nil {
+			continue // the same failure, already carried by RootErr
+		}
+		failures = append(failures, fmt.Errorf("Stop for session %s failed: %s", unreachable.ID, unreachable.Reason))
+	}
+	if joined := errors.Join(failures...); joined != nil {
+		return res.Fired, false, joined
+	}
+	return res.Fired, res.Armed, nil
 }
 
 // killBackgroundSessionsForCancelSurface is the CancelHooks.KillBackgroundSessions
