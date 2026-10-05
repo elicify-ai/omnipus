@@ -833,10 +833,11 @@ func (t *DelegateTool) executeStopAll(ctx context.Context, args map[string]any) 
 		if dropped := t.droppedQueuedResult(sessionID, cancelBackgroundShellWarnings(killFailed, walkIncomplete)); dropped != nil {
 			return dropped
 		}
-		// note=nil: t.cancelHard (just above) is al.cancelDelegatedSubtree,
-		// which already stamped the stop_note for sessionID (cause "stop",
-		// it is the direct cancel target) via stampStop. Retain it.
-		t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user", nil)
+		// No landing here (ADR-20260928 D2/D4): the hard-abort request above
+		// only asks the selected execution to stop. Its owning admission lands
+		// LifecycleStopped, clears the fence and records the landed history
+		// once its provider/output tail has retired; a settlement failure is
+		// reported through that owner's settlement path.
 		msg := fmt.Sprintf("Session %s stopped immediately (hard).", sessionID)
 		msg += cancelBackgroundShellWarnings(killFailed, walkIncomplete)
 		return NewToolResult(msg)
