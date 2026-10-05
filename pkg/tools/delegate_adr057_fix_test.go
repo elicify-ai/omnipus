@@ -165,8 +165,8 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 			t.Fatalf("seed lifecycle record failed: %v", err)
 		}
 		tool.SetCancelHooks(
-			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-				return []string{sessionID}, nil
+			func(sessionID string, _ steer.Principal, hint string) ([]string, func() error, error) {
+				return []string{sessionID}, nil, nil
 			},
 			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
 				return []string{sessionID}, nil
@@ -210,8 +210,8 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 			t.Fatalf("seed lifecycle record failed: %v", err)
 		}
 		tool.SetCancelHooks(
-			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-				return []string{sessionID}, nil
+			func(sessionID string, _ steer.Principal, hint string) ([]string, func() error, error) {
+				return []string{sessionID}, nil, nil
 			},
 			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
 				return []string{sessionID}, nil
@@ -249,8 +249,8 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 			t.Fatalf("seed lifecycle record failed: %v", err)
 		}
 		tool.SetCancelHooks(
-			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-				return []string{sessionID}, nil
+			func(sessionID string, _ steer.Principal, hint string) ([]string, func() error, error) {
+				return []string{sessionID}, nil, nil
 			},
 			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
 				return []string{sessionID}, nil

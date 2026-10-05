@@ -404,38 +404,42 @@ func TestDelegateTool_StopAll_SoftThenHardBackstop(t *testing.T) {
 	}
 
 	var softCalled, hardCalled bool
+	var backstopCalls int
+	var acceptedActor string
+	var acceptedAt time.Time
 	var mu sync.Mutex
 	tool.SetCancelHooks(
-		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-			mu.Lock()
-			softCalled = true
-			mu.Unlock()
-			return []string{"child-cancel"}, nil
-		},
-		func(sessionID string, by steer.Principal, hint string) ([]string, error) {
-			mu.Lock()
-			hardCalled = true
-			mu.Unlock()
-			// D2/CRIT-001: this stub stands in for al.cancelDelegatedSubtree,
-			// whose real steer_cancel.go::stampStop lands StopNote (cause
-			// "stop" — the delegate cancel names sessionID directly) in the
-			// SAME mutation the Stop fence is set, BEFORE the caller's
-			// transitionLifecycle(note=nil) below retains it. Without this
-			// stamp the stub is unrealistic: transitionLifecycle correctly
-			// refuses to land LifecycleStopped with no note at all.
-			if merr := lc.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
-				if rec == nil {
-					return session.ErrLifecycleNotFound
-				}
-				rec.StopNote = &session.StopNote{
-					At: time.Now().UTC(), By: session.StopActorFromPrincipal(by),
-					Seq: uint64(rec.Generation), Cause: session.StopCauseStop,
-				}
-				return nil
-			}); merr != nil {
-				return nil, merr
+		func(sessionID string, by steer.Principal, hint string) ([]string, func() error, error) {
+			if sessionID != "child-cancel" {
+				return nil, nil, errors.New("fixture: soft acceptance named the wrong original target")
 			}
-			return []string{"child-cancel"}, nil
+			actor, at := session.StopActorFromPrincipal(by), time.Now().UTC()
+			mu.Lock()
+			softCalled, acceptedActor, acceptedAt = true, actor, at
+			mu.Unlock()
+			// D2/T27: this is the ORIGINAL bound external owner effect, not
+			// a fresh hard hook/current-state selection or a tool-owned landing.
+			return []string{sessionID}, func() error {
+				mu.Lock()
+				hardCalled = true
+				backstopCalls++
+				mu.Unlock()
+				return lc.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
+					if rec == nil {
+						return session.ErrLifecycleNotFound
+					}
+					if rec.Generation != 1 {
+						return errors.New("fixture: original owner generation changed")
+					}
+					rec.State, rec.Stop = session.LifecycleStopped, nil
+					rec.StopNote = &session.StopNote{At: at, By: actor, Seq: 1, Cause: session.StopCauseStop}
+					return nil
+				})
+			}, nil
+		},
+		func(string, steer.Principal, string) ([]string, error) {
+			t.Error("D2/T27: grace must invoke its original bound backstop, never a fresh hard hook")
+			return nil, errors.New("unexpected fresh hard hook")
 		},
 	)
 	tool.SetCancelGrace(20 * time.Millisecond)
@@ -454,19 +458,9 @@ func TestDelegateTool_StopAll_SoftThenHardBackstop(t *testing.T) {
 	// The session never stops on its own in this test, so the
 	// hard backstop MUST fire after the grace window.
 	//
-	// Wait for the PERSISTED stopped state, not for the hook flag. The flag
-	// flips inside cancelHard, but that is not the backstop goroutine's last
-	// act -- pkg/tools/delegate_run.go's backstop calls transitionLifecycle
-	// AFTER cancelHard returns, and that WRITES to the lifecycle store rooted
-	// at t.TempDir(). Returning on the flag let the test body finish with that
-	// write still in flight, and Go's TempDir cleanup then raced it:
-	//
-	//	TempDir RemoveAll cleanup: unlinkat /tmp/TestDelegateTool_StopAll_SoftThenHardBackstop.../001: directory not empty
-	//
-	// Observed on CI run 36137133540, job "Tests", release/v0.1.1 @ d81bcb1ec.
-	// Waiting on the persisted state is race-free because it IS the goroutine's
-	// final act, and it is a strictly stronger oracle: it asserts the backstop's
-	// EFFECT on the record rather than merely that a hook was entered.
+	// Wait for the external OWNER'S persisted stopped effect, not its entry
+	// flag. The timer has no lifecycle write of its own (D2/T27); the fixture
+	// models the real owning cancellation boundary, not runtime admission.
 	deadline := time.Now().Add(2 * time.Second)
 	var sawHook bool
 	for time.Now().Before(deadline) {
@@ -476,6 +470,12 @@ func TestDelegateTool_StopAll_SoftThenHardBackstop(t *testing.T) {
 		if sawHook {
 			// ADR D7 line 397: a completed cancellation cascade lands non-terminal stopped, not terminal cancelled.
 			if rec, err := lc.Load("child-cancel"); err == nil && rec.State == session.LifecycleStopped {
+				mu.Lock()
+				calls, actor, at := backstopCalls, acceptedActor, acceptedAt
+				mu.Unlock()
+				if calls != 1 || rec.Terminal() || rec.Generation != 1 || rec.Stop != nil || rec.StopNote == nil || rec.StopNote.Cause != session.StopCauseStop || rec.StopNote.Seq != 1 || rec.StopNote.By != actor || !rec.StopNote.At.Equal(at) {
+					t.Fatalf("bound ORIGINAL owner landing=%+v note=%+v calls=%d; want one nonterminal stopped target with original cause/actor/instant", rec, rec.StopNote, calls)
+				}
 				return
 			}
 		}
@@ -501,9 +501,9 @@ func TestDelegateTool_StopAll_Hard_SkipsGrace(t *testing.T) {
 
 	var hardCalled bool
 	tool.SetCancelHooks(
-		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+		func(sessionID string, _ steer.Principal, hint string) ([]string, func() error, error) {
 			t.Fatal("soft hook must not be called for hard=true")
-			return nil, nil
+			return nil, nil, nil
 		},
 		func(sessionID string, by steer.Principal, hint string) ([]string, error) {
 			hardCalled = true
@@ -516,6 +516,7 @@ func TestDelegateTool_StopAll_Hard_SkipsGrace(t *testing.T) {
 				if rec == nil {
 					return session.ErrLifecycleNotFound
 				}
+				rec.State, rec.Stop = session.LifecycleStopped, nil
 				rec.StopNote = &session.StopNote{
 					At: time.Now().UTC(), By: session.StopActorFromPrincipal(by),
 					Seq: uint64(rec.Generation), Cause: session.StopCauseStop,
@@ -797,7 +798,10 @@ func TestDelegateTool_StopAll_DeniedOnLifecycleLoadError(t *testing.T) {
 
 	cancelCalled := false
 	tool.SetCancelHooks(
-		func(string, steer.Principal, string) ([]string, error) { cancelCalled = true; return nil, nil },
+		func(string, steer.Principal, string) ([]string, func() error, error) {
+			cancelCalled = true
+			return nil, nil, nil
+		},
 		func(string, steer.Principal, string) ([]string, error) { cancelCalled = true; return nil, nil },
 	)
 
@@ -816,9 +820,9 @@ func TestDelegateTool_StopAll_DeniedWhenLifecycleUnconfigured(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	tool.SetDelegationDenyCheckerBackground(func(ctx context.Context, targetAgentID string) *DelegationDenial { return nil })
 	tool.SetCancelHooks(
-		func(string, steer.Principal, string) ([]string, error) {
+		func(string, steer.Principal, string) ([]string, func() error, error) {
 			t.Fatal("soft hook must not fire")
-			return nil, nil
+			return nil, nil, nil
 		},
 		func(string, steer.Principal, string) ([]string, error) {
 			t.Fatal("hard hook must not fire")
