@@ -33,12 +33,13 @@ func (al *AgentLoop) ensureOrdinaryRootRecord(lifecycle *session.LifecycleStore,
 		return nil, fmt.Errorf("ordinary admission: saved helper lifecycle is missing for %q", sessionID)
 	}
 	var record *session.LifecycleRecord
-	err = lifecycle.PublishChildUnderParentLock(sessionID, func(rec *session.LifecycleRecord, existed bool) (*session.LifecycleRecord, error) {
+	err = lifecycle.PublishChildUnderParentLock(sessionID, func(rec *session.LifecycleRecord, existed bool) (childRec *session.LifecycleRecord, err error) {
 		if !existed {
 			initializeOrdinaryRootRecord(rec, meta)
 		}
 		record = rec
-		return nil, nil
+		// This is a parent-only publication: the API's optional child is unset.
+		return childRec, err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ordinary admission: establish root record: %w", err)
