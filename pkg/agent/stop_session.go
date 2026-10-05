@@ -94,26 +94,6 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 		res.Root, res.RootErr = al.RequestCancel(ctx, CancelScope{SessionID: req.SessionID, TurnOnly: true}, canceller, hooksFor(req.SessionID))
 		return al.finishPlainStop(res), nil
 	}
-	if _, err := lifecycle.Load(req.SessionID); err != nil {
-		if !errors.Is(err, session.ErrLifecycleNotFound) {
-			return res, fmt.Errorf("read Stop target: %w", err)
-		}
-		// An ordinary chat may have no lifecycle record. Prove its tree is
-		// empty before treating its own turn as the entire tree; read failures
-		// or orphaned children are never hidden by a session-only fallback.
-		if req.Tree {
-			children, walkErr := CollectDescendantSessionIDs(lifecycle, req.SessionID)
-			if walkErr != nil {
-				return res, fmt.Errorf("resolve Stop-all tree: %w", walkErr)
-			}
-			if len(children) != 0 {
-				return res, fmt.Errorf("stop-all target has no lifecycle record; its helpers were not stopped")
-			}
-		}
-		res.Root, res.RootErr = al.RequestCancel(ctx, CancelScope{SessionID: req.SessionID, TurnOnly: true}, canceller, hooksFor(req.SessionID))
-		return al.finishPlainStop(res), nil
-	}
-
 	var mu sync.Mutex
 	res.Selected = make(map[string]session.StopSelection)
 	stopTurn := func(effectCtx context.Context, id string, generation int) (GenerationCancelResult, error) {
@@ -152,6 +132,42 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	if stopper == nil {
 		stopper = al.steerCanceller()
 	}
+	if _, err := lifecycle.Load(req.SessionID); err != nil {
+		if !errors.Is(err, session.ErrLifecycleNotFound) {
+			return res, fmt.Errorf("read Stop target: %w", err)
+		}
+		// An ordinary chat may have no lifecycle record of its own while its
+		// helpers do (their durable edge names it). Stop its own turn, and
+		// for Stop all every direct helper's whole tree through the same
+		// cascade; a read failure of the tree is never hidden.
+		var children []session.LifecycleRecord
+		if req.Tree {
+			var listErr error
+			children, listErr = lifecycle.List(session.LifecycleFilter{SteeringSessionID: req.SessionID})
+			if listErr != nil {
+				return res, fmt.Errorf("resolve Stop-all tree: %w", listErr)
+			}
+		}
+		res.Root, res.RootErr = al.RequestCancel(ctx, CancelScope{SessionID: req.SessionID, TurnOnly: true}, canceller, hooksFor(req.SessionID))
+		res = al.finishPlainStop(res)
+		for _, child := range children {
+			report, stopErr := stopper.StopTurnsWithCause(ctx, child.SessionID, req.By, true, session.StopCauseCascade, stopTurn)
+			if stopErr != nil {
+				report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: child.SessionID, Reason: stopErr.Error()})
+			}
+			res.Report.Reached = append(res.Report.Reached, report.Reached...)
+			res.Report.Unreachable = append(res.Report.Unreachable, report.Unreachable...)
+			res.Report.SkippedNewerGeneration = append(res.Report.SkippedNewerGeneration, report.SkippedNewerGeneration...)
+			res.Report.Superseded = append(res.Report.Superseded, report.Superseded...)
+			res.Report.SkippedTerminal = append(res.Report.SkippedTerminal, report.SkippedTerminal...)
+			res.Durable = true
+		}
+		if len(res.Report.Reached) != 0 {
+			res.Fired = true
+		}
+		return res, nil
+	}
+
 	cause := req.Cause
 	if cause == "" {
 		cause = session.StopCauseStop

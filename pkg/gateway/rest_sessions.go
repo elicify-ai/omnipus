@@ -994,8 +994,11 @@ func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
 	if res.RootErr != nil {
 		return "Stop before delete failed; nothing was deleted: " + res.RootErr.Error()
 	}
-	if summary := cancelIncompleteSubtreeSummary(res.Report); summary != "" && len(res.StillRunning()) > 0 {
-		return summary
+	// Option A: only something still running refuses the delete. A session
+	// whose stop already landed (stopped or terminal record) is not running,
+	// even if a follow-up effect such as its parent notice is still pending.
+	if stillRunning := a.stillRunningAfterStop(res.StillRunning()); len(stillRunning) > 0 {
+		return fmt.Sprintf("%s; still running: %s", cancelIncompleteSubtreeSummary(res.Report), strings.Join(stillRunning, ", "))
 	}
 	ids := append([]string{id}, res.Report.Reached...)
 	if live := a.agentLoop.AwaitStoppedTurns(r.Context(), ids); len(live) > 0 {
@@ -1003,4 +1006,20 @@ func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
 			len(live), strings.Join(live, ", "))
 	}
 	return ""
+}
+
+// stillRunningAfterStop keeps the ids whose record is neither stopped nor
+// terminal (an unreadable record counts as possibly running).
+func (a *restAPI) stillRunningAfterStop(ids []string) []string {
+	lifecycle := a.agentLoop.GetSessionLifecycleStore()
+	var out []string
+	for _, sid := range ids {
+		if lifecycle != nil {
+			if rec, err := lifecycle.Load(sid); err == nil && (rec.Terminal() || rec.State == session.LifecycleStopped) {
+				continue
+			}
+		}
+		out = append(out, sid)
+	}
+	return out
 }
