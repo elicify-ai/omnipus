@@ -18,7 +18,7 @@
 // Known RED production gap at 105e2c072: TaskCard, ListView, graph/TaskNode,
 // PlansFilterBand do not consume the catalogued RunningIndicator yet.
 
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Agent, Plan, Task } from '@/lib/api'
@@ -38,18 +38,106 @@ vi.mock('@/lib/api', async (importOriginal) => ({
 }))
 beforeEach(() => { apiMocks.fetchSubtasks.mockReset().mockResolvedValue([]) })
 
+// jsdom has no layout engine. Supply only browser geometry, not graph state.
+// 800×600 is this test's frame; 248×96 is the TaskNode/dagre layout fixture
+// (taskGraph.ts NODE_WIDTH/NODE_HEIGHT), and handles are the rendered h-2/w-2.
+// These sizes are harness inputs, never running-indicator expected values.
+function layoutSize(target: Element) {
+  if (target.matches('.react-flow__handle')) return { width: 8, height: 8 }
+  if (target.matches('.react-flow__node')) return { width: 248, height: 96 }
+  return { width: 800, height: 600 }
+}
+
+const layoutProperties = ['offsetWidth', 'offsetHeight', 'clientWidth', 'clientHeight'] as const
+const originalLayoutProperties = new Map(layoutProperties.map((property) =>
+  [property, Object.getOwnPropertyDescriptor(HTMLElement.prototype, property)] as const))
+const nativeBoundingRect = HTMLElement.prototype.getBoundingClientRect
+let restoreBoundingRect: () => void
+
 beforeAll(() => {
-  class ResizeObserverStub {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
+  // React Flow's browser boundary follows its documented testing shim:
+  // https://reactflow.dev/learn/advanced-use/testing . An empty observe()
+  // leaves node.measured unset and the real node wrapper visibility:hidden.
+  class LayoutResizeObserver implements ResizeObserver {
+    private pending = new Map<Element, ReturnType<typeof setTimeout>>()
+    constructor(private callback: ResizeObserverCallback) {}
+
+    observe(target: Element) {
+      this.unobserve(target)
+      this.pending.set(target, setTimeout(() => {
+        this.pending.delete(target)
+        const { width, height } = layoutSize(target)
+        const size = { inlineSize: width, blockSize: height }
+        const entry: ResizeObserverEntry = {
+          target, contentRect: new DOMRectReadOnly(0, 0, width, height),
+          borderBoxSize: [size], contentBoxSize: [size], devicePixelContentBoxSize: [size],
+        }
+        this.callback([entry], this)
+      }, 0))
+    }
+
+    unobserve(target: Element) {
+      clearTimeout(this.pending.get(target))
+      this.pending.delete(target)
+    }
+
+    disconnect() {
+      for (const target of this.pending.keys()) this.unobserve(target)
+    }
   }
-  vi.stubGlobal('ResizeObserver', ResizeObserverStub)
-  vi.stubGlobal('DOMMatrixReadOnly', class { m22 = 1 })
-  // The existing GraphView harness's layout metrics: browser layout is the
-  // process edge; graph construction and TaskNode rendering remain real.
-  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 800 })
-  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 600 })
+  vi.stubGlobal('ResizeObserver', LayoutResizeObserver)
+  vi.stubGlobal('DOMMatrixReadOnly', class {
+    m22: number
+    constructor(transform: string) {
+      const matrix = transform.match(/^matrix\(([^)]+)\)$/)?.[1].split(',').map(Number)
+      this.m22 = matrix?.[3] ?? Number(transform.match(/scale\(([\d.]+)\)/)?.[1] ?? 1)
+    }
+  })
+  for (const property of layoutProperties) {
+    Object.defineProperty(HTMLElement.prototype, property, {
+      configurable: true,
+      get(this: HTMLElement) {
+        // New client metrics are confined to the graph/frame. Keep unrelated
+        // Board/List/Plans browser inputs at their original jsdom values.
+        if (property.startsWith('client') && !this.closest('.react-flow') && !this.querySelector(':scope > .react-flow')) {
+          const descriptor = originalLayoutProperties.get(property)
+          return descriptor?.get?.call(this) ?? descriptor?.value ?? 0
+        }
+        const size = layoutSize(this)
+        return property.endsWith('Width') ? size.width : size.height
+      },
+    })
+  }
+  const boundingRect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    if (!this.matches('.react-flow, .react-flow__renderer, .react-flow__viewport, .react-flow__node, .react-flow__handle')) {
+      return nativeBoundingRect.call(this)
+    }
+    const { width, height } = layoutSize(this)
+    const node = this.closest<HTMLElement>('.react-flow__node')
+    const position = node?.style.transform.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/)
+    let x = Number(position?.[1] ?? 0)
+    let y = Number(position?.[2] ?? 0)
+    if (!node) return new DOMRect(x, y, width, height)
+    if (this.matches('.react-flow__handle')) {
+      const nodeSize = layoutSize(node)
+      x += this.classList.contains('react-flow__handle-right') ? nodeSize.width - width / 2 : -width / 2
+      y += (nodeSize.height - height) / 2
+    }
+    const transform = this.closest('.react-flow')?.querySelector<HTMLElement>('.react-flow__viewport')?.style.transform ?? ''
+    const pan = transform.match(/translate\(([-\d.]+)px,\s*([-\d.]+)px\)/)
+    const zoom = Number(transform.match(/scale\(([\d.]+)\)/)?.[1] ?? 1)
+    return new DOMRect(Number(pan?.[1] ?? 0) + x * zoom, Number(pan?.[2] ?? 0) + y * zoom, width * zoom, height * zoom)
+  })
+  restoreBoundingRect = () => boundingRect.mockRestore()
+})
+
+afterAll(() => {
+  restoreBoundingRect()
+  for (const [property, descriptor] of originalLayoutProperties) {
+    if (descriptor) Object.defineProperty(HTMLElement.prototype, property, descriptor)
+    else Reflect.deleteProperty(HTMLElement.prototype, property)
+  }
+  vi.unstubAllGlobals()
 })
 
 function makeTask(overrides: Partial<Task> = {}): Task {
@@ -248,8 +336,9 @@ describe('SP-41/PI3 — List running rows', () => {
 })
 
 describe('SP-41/PI3 — Graph running nodes', () => {
-  it('puts exactly one animated, count-free Running status inside the running node, not the done node', () => {
+  it('puts exactly one animated, count-free Running status inside the running node, not the done node', async () => {
     const mounted = renderTaskSurface('graph', [runningTask, doneTask])
+    await waitFor(() => expect(itemBoundaryOf(mounted.container, runningTask.title, 'graph')).toBeVisible())
     assertItemIndicator(itemBoundaryOf(mounted.container, runningTask.title, 'graph'))
     expect(runningIndicatorsIn(itemBoundaryOf(mounted.container, doneTask.title, 'graph'))).toHaveLength(0)
     expect(runningIndicatorsIn(mounted.container)).toHaveLength(1)
@@ -257,7 +346,7 @@ describe('SP-41/PI3 — Graph running nodes', () => {
 })
 
 describe('PI2 — running TASK NODE in a plan-scoped graph', () => {
-  it('animates the running plan member node without a count and excludes other-plan nodes', () => {
+  it('animates the running plan member node without a count and excludes other-plan nodes', async () => {
     const running = makeTask({ ...runningTask, plan_id: 'plan-1' })
     const done = makeTask({ ...doneTask, plan_id: 'plan-1' })
     const foreign = makeTask({ id: 't-foreign', title: 'Other plan work', status: 'in_progress', plan_id: 'plan-2' })
@@ -265,6 +354,7 @@ describe('PI2 — running TASK NODE in a plan-scoped graph', () => {
     // First prove the requested plan's nodes mounted and the other plan did
     // not; only then assert the running member's item-local treatment.
     const member = itemBoundaryOf(mounted.container, running.title, 'graph')
+    await waitFor(() => expect(member).toBeVisible())
     itemBoundaryOf(mounted.container, done.title, 'graph')
     expect(within(mounted.container).queryByText(foreign.title)).not.toBeInTheDocument()
     assertItemIndicator(member)
@@ -348,9 +438,12 @@ describe('PI1 — running PLAN TILE in the Plans band', () => {
 })
 
 describe('SP-41 — one treatment on all four surfaces', () => {
-  it('Board/List/Graph/Plans use the same animated Running status with no counts', () => {
+  it('Board/List/Graph/Plans use the same animated Running status with no counts', async () => {
     for (const kind of ['board', 'list', 'graph'] as const) {
       const mounted = renderTaskSurface(kind, [runningTask])
+      if (kind === 'graph') {
+        await waitFor(() => expect(itemBoundaryOf(mounted.container, runningTask.title, kind)).toBeVisible())
+      }
       assertItemIndicator(itemBoundaryOf(mounted.container, runningTask.title, kind))
       expect(runningIndicatorsIn(mounted.container)).toHaveLength(1)
       mounted.unmount()
