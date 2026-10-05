@@ -192,10 +192,11 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 	if directOwner {
 		ctx, entry = ordinaryExecutionContext(ctx)
 	}
-	d, prepErr := al.prepareOrdinaryExecution(ctx, msg, opts)
+	preparation, prepErr := al.prepareOrdinaryExecution(ctx, msg, opts)
 	if prepErr != nil {
 		return "", agent, prepErr
 	}
+	d := preparation.execution
 	entry.disposition = d
 	opts.executionDisposition = d
 	if directOwner {
