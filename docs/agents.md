@@ -119,9 +119,9 @@ What this looks like in practice:
 
 The exact caps on all of this — how deep a chain may go, how many may run at once, and how long a child may run — live on the Performance tab; see [settings](settings.md#delegation-limits) for the values and their defaults.
 
-A worker has its own settings — its model, its tools, its limits. The delegating agent hands over the task; the worker supplies everything else. Delegation itself is a per-workspace decision: which agent may delegate to which is set on that [workspace](workspaces.md) **Team** tab, and that rule applies only there.
+A worker has its own settings — its model, its tools, its limits. The delegating agent hands over the task; the worker supplies everything else. Delegation itself is a per-workspace decision: which agent may delegate to which is set in that [workspace](workspaces.md) **Team** panel, and that rule applies only there.
 
-**The built-in Worker can delegate onward when permitted.** By default, a workspace seeded with Worker on its team gets a Worker → Worker edge for task and background `delegate` calls, capped at depth 3 or a lower configured limit. Custom workers get no outgoing edge automatically; to let one delegate to another team agent, add the edge on that workspace's Team tab and allow its `delegate` tool. Without an edge, the request is denied; an edge alone does not grant a denied tool. Only built-in Jim and Worker can have an edge to themselves.
+**The built-in Worker can delegate onward when permitted.** By default, a workspace seeded with Worker on its team gets a Worker → Worker edge for task and background `delegate` calls, capped at depth 3 or a lower configured limit. Custom workers get no outgoing edge automatically; to let one delegate to another team agent, add the edge in that workspace's Team panel and allow its `delegate` tool. Without an edge, the request is denied; an edge alone does not grant a denied tool. Only built-in Jim and Worker can have an edge to themselves.
 
 An **external worker** runs on a command-line tool installed on the same machine as Omnipus: Claude Code, Codex, or OpenCode. Its model is a free-text name passed straight to that tool. Before it saves changes to an external worker, Omnipus checks the connection automatically: that the tool's program is present, that it answers, and that it is signed in. If the check fails, the save is refused. The check runs on the first save after you open the worker, and after that only when you change the path to the tool's program, or when the previous check failed — not on every save. It spends no model usage. To try the worker by hand, open it and use **Send a test message** on its **Runtime** tab; this runs a real request through the tool, so it spends a small amount of usage.
 
@@ -135,7 +135,7 @@ Two things to watch with external workers:
 
 A heartbeat is a scheduled check-in for one agent in one workspace. The same agent can have a different heartbeat, or none, in each workspace. Workers cannot have heartbeats.
 
-1. Open the workspace **Team** tab and open the agent from there. The edit slide-over now shows a **Heartbeat** tab.
+1. Open the workspace **Team** panel and open the agent from there. The edit slide-over now shows a **Heartbeat** tab.
 2. Open **Heartbeat** and switch **Enable heartbeat** on.
 3. Set **Interval (minutes)** to five or more.
 4. Write the **Heartbeat body**, which is the prompt the agent receives at each check-in. For example: "Check the inbox and start a task for anything new."
@@ -147,7 +147,7 @@ If nothing needs attention, the agent records an all-clear. Heartbeat sessions s
 
 - The built-in roster is locked. Name, description, persona, color, icon, and skills cannot change. Model and limits stay editable; tool permissions are read-only — create a custom agent to change those.
 - Workers are invisible to chat. They have no voice, no heartbeat, and can never be the default.
-- A worker with no delegation edge does nothing. Wire the edge on the workspace Team tab.
+- A worker with no delegation edge does nothing. Wire the edge in the workspace Team panel.
 - An external worker depends on its tool being installed. If the tool is missing, the create menu shows it greyed out.
 - An agent's own tool-call limit can only be lower than or equal to the global limit in Settings, Performance.
 - Editing autosaves. A red save indicator means the last change failed; correct the field it names and the next change saves.

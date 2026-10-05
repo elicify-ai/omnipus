@@ -19,8 +19,8 @@ Use this page once, on a fresh install or a new machine. If Omnipus is already r
 3. **Start it.** With a native install, run `omnipus start` in a terminal. With Docker, the container from step 2 is already running.
 4. **Open `http://localhost:5000`.** On a fresh install the app takes you straight to the setup wizard. On a Mac, the first start may ask you to approve the binary under System Settings, then Privacy & Security.
 5. **Work through the wizard's three screens.** The wizard table below describes each one. **Finish** creates your account and saves the provider in one step, then logs you in.
-6. **Select Start chatting** on the "Mia — Assistant" screen. The app opens **My Workspace** on its **Chat** tab.
-7. **Type a message and send it.** Mia answers. Use the agent picker next to the message box to talk to a different agent. The workspace's other tabs — Tasks, Calendar, Library, Team — sit at the top of the screen.
+6. **Select Start chatting** on the "Mia — Assistant" screen. The app opens **My Workspace** on **Chat**, its base page.
+7. **Type a message and send it.** Mia answers. Use the agent picker next to the message box to talk to a different agent. The workspace bar at the top offers **Tasks**, **Calendar**, **Library**, **Mail**, and **Team** as panel toggles; on a narrow bar, use the panels menu.
 
 Three ways to install, and what each is good for:
 
@@ -56,7 +56,7 @@ The wizard is three numbered screens plus a closing screen:
 | 1 — What should I call you? | Type the admin username | Accepts any name that is not empty |
 | 2 — Set your password | Choose a password of at least 8 characters, twice | Shows how strong it is |
 | 3 — Add a model key | Pick a provider, paste the key, pick "Model for your first agent" | Checks the connection for the model you picked |
-| Last — Mia, Assistant | Select Start chatting | Logs you in and opens the Chat tab |
+| Last — Mia, Assistant | Select Start chatting | Logs you in and opens Chat |
 
 The check on screen 3 runs when you pick a model, or when you press its Check connection button. **Finish** stays locked until that check passes for the model you selected, so a working key with a broken model cannot get through setup.
 

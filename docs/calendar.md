@@ -8,7 +8,7 @@ Every workspace has a Calendar panel, between Tasks and Library in the top bar. 
 
 The Board and List hide scheduled tasks; use Calendar to manage scheduled and repeating work. The split is deliberate: a card that comes back every week never reaches done, so it does not belong on a board. Old web addresses still resolve: `/tasks` redirects to the Tasks panel and `/automations` redirects to the Calendar.
 
-The calendar also records outcomes. In Week and Day, run chips carry status icons. Clicking a recorded run's chip lets you inspect its status and, when available, its result and a link to the chat it ran in.
+The calendar also records outcomes. In Week and Day, individual recurring-occurrence chips use the recorded run's status icon when a run exists, or the scheduled or no-record state when it does not. One-time scheduled-task chips use a clock icon, with colour taken from the task's status. Clicking a recorded occurrence lets you inspect its status and, when available, its result and a link to the chat it ran in.
 
 ```mermaid
 flowchart LR
@@ -34,13 +34,13 @@ A repeat rule keeps firing on its own; use Week or Day to review recorded runs a
 3. Fill in the title and pick the agent who runs it. Write the instruction, which is what the agent does each time the task fires, and add at least one acceptance criterion and one Definition of Done item.
 4. Open the Repeat dropdown. It offers presets computed from the date you picked: Does not repeat, Daily, Weekly on Monday, Monthly on the third Monday, Annually on July 20, Every weekday, and Custom.
 5. Pick Custom for anything else. Choose the frequency, from minutes to years, and a multiplier from 1 to 99. Weekly rules take a weekday selection, monthly rules take a day of the month or an nth weekday. End the rule with Never, On date, or After N occurrences. A plain-English summary of the rule is shown at all times.
-6. Save. Week and Day show the visible occurrences as chips, with frequent repeats sometimes grouped into one event per day. Month represents the event data with status dots.
+6. Save. Week and Day show individual scheduled occurrences as chips, subject to the server's expansion limits; **More not shown** warns when expansion was capped. Month represents the returned event data with status-coloured dots, including the server's per-day groupings of frequent repeats where they apply. The grid itself prints no rhythm or count labels; hovering a date lists its first three event titles and can show a "+N more" count.
 
 Leaving Repeat on Does not repeat, with a time set, creates a one-time task that runs at that moment. The Board and List hide it; use Calendar to manage it.
 
 ## How to edit or stop a series
 
-1. In Week or Day, click a chip of the series. The panel opens in edit mode and lists the next runs under Upcoming. In Month, switch to Week or Day first; clicking a date creates a new event.
+1. In Week or Day, click a chip of the series to open its editor. For a rule-based repeating series, **Upcoming** appears only when future occurrences have loaded. In Month, switch to Week or Day first; clicking a date creates a new event.
 2. Change the title or the agent and save. The schedule stays untouched.
 3. Change the repeat rule or the time and save. The series restarts its count from now, and the panel says so before you save.
 4. To end a series, edit it and set the end to On date or After N occurrences.
@@ -49,14 +49,14 @@ You edit a series as a whole: you cannot change one occurrence alone or drag its
 
 ## What you see on the calendar
 
-Week and Day use labelled chips with the meanings below. Month represents the event data with status dots rather than these chip labels; it does not display rhythm labels or the More not shown text in its grid. The toolbar also has an agent filter, set to All agents by default, which narrows the grid to one agent or to unassigned work the moment you pick a name.
+Week and Day use labelled chips with the meanings below. Month represents the event data with status dots rather than these chip labels; when a task repeats more than three times in a day, the server groups that day into a single entry for the broader Month range, and the grid shows only its dot. A date's hover text lists up to three event titles and may include that day's grouping label. The toolbar also has an agent filter, set to All agents by default, which narrows the grid to one agent or to unassigned work the moment you pick a name.
 
 | Chip in Week or Day | What it means |
 |---|---|
-| Run chip | One run of a scheduled task, at its fire time; the icon shows that run's status |
-| Aggregated chip | Frequent repeating work grouped into one event per day rather than separate occurrence chips, labelled with its rhythm or daily count |
+| Recurring occurrence chip | One scheduled occurrence of a repeating task, at its fire time; the icon reflects its recorded run or its scheduled or no-record state |
+| One-time chip | A one-time task's scheduled fire, shown with a clock icon and the task's status colour |
 | More not shown | The server capped how many runs it expanded for that task; the days beyond the marker are not empty. This marker does not open run details |
-| Due chip | The deadline of an unscheduled task, shown on its due date |
+| Due chip | A workspace task's deadline, including a task that also has a schedule, shown on its due date |
 
 An agent heartbeat is separate from scheduled task work and does not appear on the calendar. See [agents](agents.md) to configure one.
 
