@@ -32,57 +32,61 @@ func ordinaryDispositionFromContext(ctx context.Context) *executionDisposition {
 	return nil
 }
 
+// A zero preparation is valid for an ordinary path with no lifecycle record.
+// Its value type keeps that case distinct from a failed admission.
+type ordinaryExecutionPreparation struct{ execution *executionDisposition }
+
 // prepareOrdinaryExecution reuses identity preparation, not steered capacity or
 // FIFO admission. Only existing lifecycle-backed human entry paths use it.
-func (al *AgentLoop) prepareOrdinaryExecution(ctx context.Context, msg bus.InboundMessage, opts processOptions) (*executionDisposition, error) {
+func (al *AgentLoop) prepareOrdinaryExecution(ctx context.Context, msg bus.InboundMessage, opts processOptions) (ordinaryExecutionPreparation, error) {
 	store := al.GetSessionLifecycleStore()
 	if !reviveInboundIsHumanTurn(msg) || msg.SessionID == "" || store == nil {
-		return nil, nil
+		return ordinaryExecutionPreparation{}, nil
 	}
 	gate := al.steerAdmission()
 	gate.entryMu.Lock()
 	defer gate.entryMu.Unlock()
 	rec, err := store.Load(msg.SessionID)
 	if errors.Is(err, session.ErrLifecycleNotFound) {
-		return nil, nil
+		return ordinaryExecutionPreparation{}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("ordinary admission: read saved session: %w", err)
+		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: read saved session: %w", err)
 	}
-	if err := al.inboundStopFenceInFlight(msg.SessionID); err != nil {
-		return nil, err
+	if fenceErr := al.inboundStopFenceInFlight(msg.SessionID); fenceErr != nil {
+		return ordinaryExecutionPreparation{}, fenceErr
 	}
 	if al.activeTurnForCancel(msg.SessionID, CancelScope{SessionID: msg.SessionID, TurnOnly: true}) != nil {
-		return nil, fmt.Errorf("ordinary admission: %w: an execution is already registered", steer.ErrStaleGeneration)
+		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: %w: an execution is already registered", steer.ErrStaleGeneration)
 	}
 	al.admission.mu.Lock()
 	owner := al.admission.activeScopes[opts.SessionKey]
 	pending := owner != nil && owner.execution != nil
 	al.admission.mu.Unlock()
 	if pending {
-		return nil, fmt.Errorf("ordinary admission: previous execution disposition is still pending")
+		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: previous execution disposition is still pending")
 	}
 	if rec.Terminal() || rec.State == session.LifecycleStopped {
-		if err := al.reviveRecordForHumanTurn(ctx, msg.SessionID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}); err != nil {
-			return nil, fmt.Errorf("ordinary admission: explicit revival failed: %w", err)
+		if reviveErr := al.reviveRecordForHumanTurn(ctx, msg.SessionID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}); reviveErr != nil {
+			return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: explicit revival failed: %w", reviveErr)
 		}
 		rec, err = store.Load(msg.SessionID)
 		if err != nil {
-			return nil, fmt.Errorf("ordinary admission: read revived session: %w", err)
+			return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: read revived session: %w", err)
 		}
 	}
 	if err := al.checkNewAdmission(rec); err != nil {
-		return nil, err
+		return ordinaryExecutionPreparation{}, err
 	}
 	claim := executionClaim{SessionID: rec.SessionID, Generation: rec.Generation, RunID: freshRunID(), BootSeq: al.bootEpochFor()}
 	if err := stampAdmissionExecution(store, rec.SessionID, rec.Generation, claim.RunID, claim.BootSeq, rec.ExecutionID); err != nil {
-		return nil, fmt.Errorf("ordinary admission: %w", err)
+		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: %w", err)
 	}
 	d := newExecutionDisposition(claim)
 	if err := al.admission.attachExecution(opts.SessionKey, d); err != nil {
-		return nil, err
+		return ordinaryExecutionPreparation{}, err
 	}
-	return d, nil
+	return ordinaryExecutionPreparation{execution: d}, nil
 }
 
 // newTurnStateForAdmission preserves the ordinary routing/history key. The
