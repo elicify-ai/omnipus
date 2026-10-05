@@ -839,13 +839,13 @@ func (al *AgentLoop) enqueueDelegateSteer(scope, agentID string, msg providers.M
 	if err != nil {
 		return "", EnqueueStatusNormal, fmt.Errorf("check steering session lifecycle: %w", err)
 	}
-	grant, err := lifecycle.AcceptSteerControl(sessionID, msg.Content, session.StopActorAgent(agentID))
-	if err != nil {
-		return "", EnqueueStatusNormal, err
-	}
 	correlationID = strings.TrimSpace(correlationID)
 	if correlationID == "" {
 		correlationID = "corr_" + uuid.NewString()
+	}
+	grant, err := lifecycle.AcceptSteerControl(sessionID, msg.Content, session.StopActorAgent(agentID), correlationID)
+	if err != nil {
+		return "", EnqueueStatusNormal, err
 	}
 	item := steeringQueueItem{message: msg, correlationID: correlationID, steerControlID: grant.ControlID}
 	status, pushErr := al.enqueueSteeringItemWithStatus(scope, agentID, item, func() EnqueueStatus {
@@ -1163,17 +1163,6 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 		msgs = append(msgs, item.message)
 		correlationIDs = append(correlationIDs, item.correlationID)
 		consumedItems = append(consumedItems, item)
-		if item.steerControlID != "" {
-			// D4: this steer is handed to its turn now; its receipt becomes
-			// delivered. A failed receipt write keeps the delivered input,
-			// restores the rest and is returned.
-			if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
-				if err := lifecycle.RecordSteerControlState(normalizeSteeringScope(scope), item.steerControlID, session.SteerStateDelivered, ""); err != nil {
-					al.steering.prependItemsScope(scope, items[i+1:])
-					return msgs, correlationIDs, consumedItems, fmt.Errorf("record steer %q delivered: %w", item.steerControlID, err)
-				}
-			}
-		}
 	}
 	return msgs, correlationIDs, consumedItems, nil
 }
@@ -1206,6 +1195,23 @@ func (al *AgentLoop) ackConsumedSteeringWake(wake steeringWake) error {
 		return fmt.Errorf("acknowledge consumed steering wake %q: %w", wake.messageID, err)
 	}
 	return nil
+}
+
+// recordInjectedSteerReceipts marks delivered the D4 receipts of the steers
+// a turn just made durable in its history (the injection point appends each
+// message to the session store first). Every failure is returned.
+func (al *AgentLoop) recordInjectedSteerReceipts(sessionID string, correlationIDs []string) error {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil || sessionID == "" {
+		return nil
+	}
+	var errs []error
+	for _, id := range correlationIDs {
+		if err := lifecycle.RecordSteerDeliveredByCorrelation(sessionID, id); err != nil {
+			errs = append(errs, fmt.Errorf("record steer %q delivered: %w", id, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // supersedePendingSteers is D5's precedence for a newer Stop: the session's

@@ -81,6 +81,9 @@ type controlLedgerLine struct {
 	// Text is the exact instruction of a steer control (D4: kept until its
 	// transcript injection is durable). Empty for every other verb.
 	Text string `json:"text,omitempty"`
+	// CorrelationID is a steer's caller-facing correlation id: the injection
+	// point names its steers by it when it records them delivered.
+	CorrelationID string `json:"correlation_id,omitempty"`
 }
 
 func (s *LifecycleStore) controlLedgerPath(sessionID string) string {

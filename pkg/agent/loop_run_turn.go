@@ -1320,6 +1320,17 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 		// unsteered session — the child lifecycle lookup it performs finds
 		// no steering parent, so nothing is emitted).
 		ri.rf.rt.al.deliverSteeringReceiptsForInjection(ri.rf.rt.ts.sessionKey, ri.pendingSteeringReceipts)
+		// D4: each steer's text is now durably in the session history, so
+		// its ledger receipt becomes delivered. A failure is surfaced.
+		if !ri.rf.rt.ts.opts.NoHistory {
+			if err := ri.rf.rt.al.recordInjectedSteerReceipts(ri.rf.rt.ts.sessionKey, ri.pendingSteeringReceipts); err != nil {
+				logger.ErrorCF("agent", "steer: delivered receipt not recorded",
+					map[string]any{"session_id": ri.rf.rt.ts.sessionKey, "error": err.Error()})
+				ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "steering_receipt", LLMError{
+					Code: CodeUnknown, Message: "A steering instruction was delivered, but its delivery receipt could not be saved: " + err.Error(),
+				})
+			}
+		}
 		ri.pendingMessages = nil
 		ri.pendingSteeringReceipts = nil
 	}

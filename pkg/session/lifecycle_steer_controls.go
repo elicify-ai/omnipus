@@ -23,7 +23,7 @@ const (
 // error: only a session with a lifecycle record has a control ledger.
 //
 // not-wire-format: internal storage only.
-func (s *LifecycleStore) AcceptSteerControl(sessionID, text, actor string) (ControlGrant, error) {
+func (s *LifecycleStore) AcceptSteerControl(sessionID, text, actor, correlationID string) (ControlGrant, error) {
 	var grant ControlGrant
 	if err := validateLifecycleSessionID(sessionID); err != nil {
 		return grant, err
@@ -50,7 +50,7 @@ func (s *LifecycleStore) AcceptSteerControl(sessionID, text, actor string) (Cont
 	line := controlLedgerLine{
 		Seq: grant.Seq, ControlID: grant.ControlID, Verb: controlVerbSteer,
 		State: controlStateQueued, AcceptedAt: time.Now().UTC(),
-		Generation: cur.Generation, Actor: actor, Text: text,
+		Generation: cur.Generation, Actor: actor, Text: text, CorrelationID: correlationID,
 	}
 	if err := appendControlLineLocked(s, sessionID, line); err != nil {
 		return ControlGrant{}, fmt.Errorf("session: control ledger: append steer acceptance for %q: %w", sessionID, err)
@@ -90,4 +90,44 @@ func (s *LifecycleStore) RecordSteerControlState(sessionID, controlID, state, re
 	refined := *latest
 	refined.State, refined.Reason = state, reason
 	return appendControlLineLocked(s, sessionID, refined)
+}
+
+// RecordSteerDeliveredByCorrelation marks delivered the oldest still-queued
+// steer of sessionID carrying correlationID. The caller has made the steer's
+// text durable in the session's history first (D4: delivered means durably
+// injected). A correlation id with no queued steer receipt (input that was
+// never ledgered) is not an error.
+func (s *LifecycleStore) RecordSteerDeliveredByCorrelation(sessionID, correlationID string) error {
+	if correlationID == "" {
+		return nil
+	}
+	if err := validateLifecycleSessionID(sessionID); err != nil {
+		return err
+	}
+	mu := s.Lock(sessionID)
+	mu.Lock()
+	defer mu.Unlock()
+	lines, err := s.readControlLedgerLocked(sessionID)
+	if err != nil {
+		return err
+	}
+	latest := make(map[string]controlLedgerLine)
+	var order []string
+	for _, line := range lines {
+		if line.Verb != controlVerbSteer {
+			continue
+		}
+		if _, seen := latest[line.ControlID]; !seen {
+			order = append(order, line.ControlID)
+		}
+		latest[line.ControlID] = line
+	}
+	for _, id := range order {
+		line := latest[id]
+		if line.CorrelationID == correlationID && line.State == controlStateQueued {
+			line.State, line.Reason = SteerStateDelivered, ""
+			return appendControlLineLocked(s, sessionID, line)
+		}
+	}
+	return nil
 }
