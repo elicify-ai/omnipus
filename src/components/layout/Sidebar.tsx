@@ -470,7 +470,7 @@ export function Sidebar() {
               <WarningCircle size={14} className="text-[var(--color-error)] flex-shrink-0" />
               <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex-1">Could not load workspaces</span>
               <IconButton
-                onClick={() => queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })}
+                onClick={() => queryClient.invalidateQueries({ queryKey: ['workspaces'] })}
                 aria-label="Retry loading workspaces"
                 className="h-auto w-auto rounded p-[var(--space-0-5)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
               >
