@@ -245,10 +245,11 @@ func assertBootNoticeNoFatalFinal(t *testing.T, f *bootNoticeControlFixture) {
 	}
 }
 
-// Characterization-preservation controls: the brief forbids making every
-// prefix/nonfatal error canonical. These parseable lookalikes retain the
-// existing visible validation refusal; its exact text is NOT a new product
-// specification. The canonical/current-run oracle is the independent test above.
+// Characterization controls: dispatcher Q1=A (2026-10-05) approves the precise
+// ledger-authentication rejection, replacing the incidental generic decoder
+// text, NOT a state/provenance oracle. Parseable prefix/nonfatal lookalikes
+// still require an exact cause and ID; no broad nil/error fallback is allowed.
+// The independent canonical/current-run and retention oracles stay unchanged.
 func TestSteerBootRecovery_NoticeLookalikesNeverGainCanonicalExemption(t *testing.T) {
 	cases := []string{"ordinary_nonfatal", "text_prefix_only", "id_prefix_unledgered_seq_zero", "same_id_wrong_body", "same_id_wrong_event_time", "same_id_untrusted_origin", "same_id_wrong_current_parent"}
 	for _, name := range cases {
@@ -312,9 +313,13 @@ func TestSteerBootRecovery_NoticeLookalikesNeverGainCanonicalExemption(t *testin
 			}
 			assertBootNoticeCurrentRunStoppedWithoutDispatch(t, f)
 			assertBootNoticeNoFatalFinal(t, f)
-			want := fmt.Sprintf("session %s wake %s not delivered: steer: deliver: outcome \"failed\" does not match message kind \"error\" (fatal=false)", f.resumed.SessionID, bad.MessageId)
+			cause := bad.MessageId + " does not match its landed transition's canonical message"
+			if name == "text_prefix_only" || name == "id_prefix_unledgered_seq_zero" {
+				cause = bad.MessageId + " has no matching landed transition"
+			}
+			want := fmt.Sprintf("session %s stopped-notice replay refused: steer: stopped notice: %s", f.resumed.SessionID, cause)
 			if wantEligible && !slices.Contains(operatorNotices, want) {
-				t.Errorf("lookalike %q gained a canonical exemption or broad nonfatal fallback: want exact visible refusal %q; got %q", name, want, operatorNotices)
+				t.Errorf("lookalike %q did not return its precise authenticated-domain refusal: want %q; got %q", name, want, operatorNotices)
 			}
 			if !wantEligible {
 				for _, notice := range operatorNotices {
@@ -373,5 +378,35 @@ func corruptBootNoticeInboxEnvelope(t *testing.T, f *bootNoticeControlFixture, r
 	}
 	if err := os.WriteFile(path, bytes.Join(lines, []byte("\n")), 0o600); err != nil {
 		t.Fatalf("write external temporary inbox fault: %v", err)
+	}
+}
+
+// A direct negative-input control for the explicit CURRENT-record edge guard.
+// Every execution/message/ledger ID is real. Only a copied input's parent edge
+// is intentionally mismatched; it is never persisted or called a valid run.
+func TestSteerBootRecovery_CanonicalNoticeRejectsChangedCurrentParentEdge(t *testing.T) {
+	f := newBootNoticeControlFixture(t)
+	reopenBootNoticeControlStores(t, f)
+	var notices []string
+	recovery := u1BootRecovery(t, f.al, &notices)
+	owned, err := recovery.landedStopNoticeOwnsReplay(f.resumed, f.canonical)
+	if err != nil || !owned {
+		t.Fatalf("instrument: genuine ledger-backed canonical notice not recognized: owned=%v err=%v", owned, err)
+	}
+	wrong := *f.resumed
+	edge := *f.resumed.SteeredBy
+	edge.SteeringSessionID = f.otherParent
+	wrong.SteeredBy = &edge
+	owned, err = recovery.landedStopNoticeOwnsReplay(&wrong, f.canonical)
+	want := "steer: stopped notice: " + messageIDOf(f.canonical) + " does not match the current steering edge"
+	if owned || err == nil || err.Error() != want {
+		t.Fatalf("canonical history bypassed the current-parent authority: owned=%v err=%v, want false/%q", owned, err, want)
+	}
+	if current := rootReopenedRecord(t, f.al, f.resumed.SessionID); !reflect.DeepEqual(current, f.resumed) {
+		t.Error("negative matcher input changed the real current execution record")
+	}
+	rows := w1hNoticesWithID(t, f.al, f.parent, messageIDOf(f.canonical))
+	if len(rows) != 1 || !bytes.Equal(bootNoticeMessageBytes(t, rows[0]), bootNoticeMessageBytes(t, f.canonical)) {
+		t.Error("negative matcher input rewrote or lost the authentic durable notice")
 	}
 }
