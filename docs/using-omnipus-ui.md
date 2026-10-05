@@ -33,7 +33,7 @@ Open this page in your first week, or later when you are hunting a control you h
 
 ## The sidebar
 
-On a window at least 1024 pixels wide, the sidebar starts docked beside the page, unless you previously hid it. **Hide sidebar**, inside the sidebar, hides it and forgets that dock. **Show sidebar** appears in the header only while the sidebar is hidden. On a wide window, Show docks the sidebar again. On a narrower window, Show opens it as a drawer over the page. On that narrower window, **Escape**, a click outside the drawer, or choosing a destination closes the drawer and does not forget a dock you saved on a wider window. When focus is outside a field or text editor, **Cmd+B** (Mac) or **Ctrl+B** (Windows and Linux) hides a visible sidebar and shows a hidden one. Inside a field or editor, the shortcut stays with that control.
+Unless you pinned it, the sidebar starts closed and the header shows **Show sidebar** (the hamburger). Show is visible only while the sidebar is off screen, and opening it never pins it: a click shows the sidebar over the page. To keep it there, **Pin sidebar** — inside the sidebar, shown on a window at least 1024 pixels wide — docks it beside the page and remembers that for your next visits; while pinned, a click outside no longer closes it. The same control then reads **Unpin sidebar**: it un-pins but leaves the sidebar open, so the next click outside closes it. While the sidebar is open but not pinned, **Escape**, a click outside it, or choosing a destination closes it (a pin you saved on a wider window stays saved). When focus is outside a field or text editor, **Cmd+B** (Mac) or **Ctrl+B** (Windows and Linux) hides a visible sidebar and shows a hidden one. Inside a field or editor, the shortcut stays with that control.
 
 What the sidebar holds:
 
@@ -44,6 +44,8 @@ What the sidebar holds:
 | Account menu | Your username at the very bottom opens notifications, [usage](#where-settings-and-account-live), [profile](#where-settings-and-account-live), [settings](settings.md), and sign out. |
 
 The magnifier at the top of the sidebar searches all your conversations.
+
+If the sidebar shows **Could not load workspaces**, select **Retry** to reload the workspace list and **Archive** when it is expanded. If loading fails again, the message stays so you can retry again. If loading the list pauses because you are offline, the sidebar says **Offline — workspaces will load when you reconnect.** and loads the list once you are back online.
 
 ## A workspace and its tabs
 
@@ -128,7 +130,7 @@ App-wide settings live behind **Settings** in the account menu, on tabs from pro
 
 ## Limits and things to watch
 
-- At 1024 pixels and wider the sidebar starts docked, unless it was previously hidden. **Hide sidebar** inside the sidebar hides it and forgets the dock. **Show sidebar** appears in the header only while it is hidden: it docks on a wide window and opens a drawer on a narrower one. On a narrower window, Escape, a click outside, or choosing a destination closes the drawer and does not forget a saved dock. When focus is outside a field or text editor, **Cmd+B** (Mac) or **Ctrl+B** (Windows and Linux) hides a visible sidebar and shows a hidden one. Inside a field or editor, the shortcut stays with that control.
+- The sidebar starts closed unless you pinned it. **Show sidebar** (the hamburger in the header) appears only while the sidebar is off screen and shows it without pinning. **Pin sidebar**, inside the sidebar, appears at 1024 pixels and wider and docks it for this and future visits; **Unpin sidebar** un-pins but leaves it open, so the next click outside closes it. While it is open but not pinned, Escape, a click outside, or choosing a destination closes it, and a pin saved on a wider window stays saved. When focus is outside a field or text editor, **Cmd+B** (Mac) or **Ctrl+B** (Windows and Linux) hides a visible sidebar and shows a hidden one. Inside a field or editor, the shortcut stays with that control.
 - Sending mid-turn steers the running turn; it does not queue a message for afterwards. To let the agent finish first, wait for the reply before sending.
 - Stop is a request, not a switch: the agent halts where it is, and work already finished stays finished.
 - The activity pill disappears when everything has ended successfully. A failed background item keeps it visible, so failures do not vanish silently.

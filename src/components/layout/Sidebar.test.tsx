@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSidebarStore } from '@/store/sidebar'
@@ -351,25 +351,76 @@ describe('Sidebar — ADR-052 FR-036: verifier sessions excluded by default', ()
 
 // test_sidebar_pin_icon_hidden_mobile
 // Traces to: wave0-brand-design-spec.md Scenario: Pin icon hidden on phone breakpoint (US-5 AC7, FR-015)
-describe('Sidebar — pin icon visibility on mobile', () => {
-  // DELETED: The "hidden md:flex" CSS class test was written for an older implementation.
-  // The component now uses a JS `canPin` guard (window.matchMedia) to conditionally render
-  // the pin button rather than a Tailwind responsive class. The CSS-based assertion is no
-  // longer valid and has been removed.
-
-  it('shows Hide sidebar while the sidebar is on screen', () => {
-    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
-    render(<Sidebar />, { wrapper: makeWrapper() })
-    expect(screen.getByRole('button', { name: 'Hide sidebar' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Pin sidebar' })).toBeNull()
+// Sidebar hotfix: the brand row's keep-open control is the pin toggle
+// (PushPinSimple), wide windows only. The old Hide sidebar button is gone —
+// hiding is Cmd/Ctrl+B; showing (hamburger or shortcut) never pins.
+describe('Sidebar — pin control visibility and behaviour', () => {
+  // This file's module-level matchMedia stub answers matches:true (wide).
+  // The narrow tests below swap in a matches:false stub for the duration —
+  // and afterEach restores the wide stub, because a leaked narrow stub would
+  // flip canPin to false for every later describe in this file.
+  function mockMatchMedia(matches: boolean) {
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    })
+  }
+  afterEach(() => {
+    mockMatchMedia(true)
   })
 
-  it('hides the sidebar when Hide sidebar is clicked', () => {
+  it('shows Pin sidebar on a wide window while the sidebar is open and unpinned', () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+    const pinBtn = screen.getByRole('button', { name: 'Pin sidebar' })
+    expect(pinBtn).toBeTruthy()
+    // Not pinned: regular weight, not pressed.
+    expect(pinBtn.getAttribute('aria-pressed')).toBe('false')
+    expect(screen.queryByRole('button', { name: 'Unpin sidebar' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Hide sidebar' })).toBeNull()
+  })
+
+  it('shows Unpin sidebar while the sidebar is pinned on a wide window', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
-    fireEvent.click(screen.getByRole('button', { name: 'Hide sidebar' }))
+    const unpinBtn = screen.getByRole('button', { name: 'Unpin sidebar' })
+    expect(unpinBtn).toBeTruthy()
+    // Pinned: pressed state on, no separate Pin label.
+    expect(unpinBtn.getAttribute('aria-pressed')).toBe('true')
+    expect(screen.queryByRole('button', { name: 'Pin sidebar' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Hide sidebar' })).toBeNull()
+  })
+
+  it('renders no pin control below 1024px — the sidebar is always an overlay there', () => {
+    mockMatchMedia(false)
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+    expect(screen.queryByRole('button', { name: 'Pin sidebar' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Unpin sidebar' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Hide sidebar' })).toBeNull()
+  })
+
+  it('clicking Pin sidebar pins and keeps the sidebar open', () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+    fireEvent.click(screen.getByRole('button', { name: 'Pin sidebar' }))
+    expect(useSidebarStore.getState().isPinned).toBe(true)
+    expect(useSidebarStore.getState().isOpen).toBe(true)
+  })
+
+  it('clicking Unpin sidebar unpins but leaves the sidebar open, so a later click outside can close it', () => {
+    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: true }) })
+    render(<Sidebar />, { wrapper: makeWrapper() })
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin sidebar' }))
     expect(useSidebarStore.getState().isPinned).toBe(false)
-    expect(useSidebarStore.getState().isOpen).toBe(false)
+    expect(useSidebarStore.getState().isOpen).toBe(true)
   })
 })
 
