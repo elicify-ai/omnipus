@@ -1064,6 +1064,15 @@ func (pe *PlanEngine) bootSweep(ctx context.Context, ls *session.LifecycleStore,
 			continue
 		}
 
+		// ADR-20260928 D8.3: steered records (a durable SteeredBy edge) belong
+		// to SteerBootRecovery, which stops an interrupted steered run with a
+		// restart note and tells its parent. This sweep never writes them, so
+		// no second writer races the same record and no steered helper is
+		// marked failed(interrupted).
+		if rec.SteeredBy != nil {
+			continue
+		}
+
 		// ADR-20260928 D8 (founder decision, 2026-10-04): a stopped helper is
 		// paused, not failed. After the exemptions above, a record whose state
 		// is already LifecycleStopped stays exactly as it stands — its run
