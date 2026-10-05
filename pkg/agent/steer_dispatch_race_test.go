@@ -216,50 +216,65 @@ func TestDispatch_StopLandingAfterTheSnapshotSurvivesAndTheTurnNeverStarts(t *te
 	}
 }
 
-// TestDispatch_ReviveLandingAfterTheSnapshotIsNotRolledBack proves the third
-// outcome of the same read-modify-write: a Revive that mints a newer
-// generation inside Dispatch's window must not be undone by the stale
-// write-back. A record's generation moving DOWN makes every later
-// generation-carrying cancel miss.
+// TestDispatch_ReviveLandingAfterTheSnapshotIsNotRolledBack retains the
+// stale-write/refused-dispatch/no-leftover-turn oracle. Frozen D2 CRIT-001:
+// "resumes a stopped child on the same generation ... only done/failed mints
+// a next generation". Its execution-identity rule says: "A late completion
+// from a replaced execution cannot commit against the resumed run, even at
+// the same generation." The selected owner must land Stop before resumption.
 func TestDispatch_ReviveLandingAfterTheSnapshotIsNotRolledBack(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	lifecycle := al.GetSessionLifecycleStore()
 	steerer := newTestSteeringSession(t, al, "ws-1")
 	childID, childGen := launchSteeredChild(t, al, steerer, "call-revive-race", "work interrupted by a revival")
-
-	canceller := NewSteerCanceller(lifecycle)
+	provider, _ := installParkedProvider(t, al)
+	var selected executionClaim
 	var once sync.Once
 	dispatchStateWriteTestHook = func(hookSessionID string, _ int) {
 		if hookSessionID != childID {
 			return
 		}
 		once.Do(func() {
-			if _, err := canceller.CancelSubtree(context.Background(), childID,
-				steer.Principal{Kind: steer.PrincipalKindHuman, ID: "dan"}); err != nil {
-				t.Errorf("CancelSubtree inside the dispatch window: %v", err)
-				return
-			}
-			if _, err := canceller.Revive(context.Background(), childID,
-				steer.Principal{Kind: steer.PrincipalKindHuman, ID: "dan"}); err != nil {
-				t.Errorf("Revive inside the dispatch window: %v", err)
+			selected = al.tsExecutionClaim(al.getActiveTurnState(childID), childID)
+			stop, err := al.StopSession(context.Background(), StopRequest{
+				SessionID: childID, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "dan"},
+			})
+			if err != nil || stop.RootErr != nil || len(stop.Report.Unreachable) != 0 {
+				t.Errorf("Stop inside the dispatch window = %+v, %v", stop, err)
 			}
 		})
 	}
 	t.Cleanup(func() { dispatchStateWriteTestHook = nil })
-
 	if _, err := NewSteerLauncher(al).Dispatch(context.Background(), childID, childGen); err == nil {
-		t.Error("Dispatch(revived mid-window) = nil error; want a refusal — the snapshot's generation is stale")
-	}
-
-	rec, loadErr := lifecycle.Load(childID)
-	if loadErr != nil {
-		t.Fatalf("Load(child): %v", loadErr)
-	}
-	if rec.Generation != childGen+1 {
-		t.Fatalf("record generation = %d, want %d — Dispatch's stale write-back rolled the revival backwards", rec.Generation, childGen+1)
+		t.Error("Dispatch(stopped mid-window) = nil error; want a refusal — its selected snapshot was stopped")
 	}
 	if ts := al.getActiveTurnState(childID); ts != nil {
 		t.Errorf("a turn is still registered for %s after a refused dispatch", childID)
+	}
+	awaitSteeringRepairStopped(t, al, childID, childGen)
+	resumedGen, err := al.steerCanceller().Revive(context.Background(), childID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "dan"})
+	if err != nil || resumedGen != childGen {
+		t.Fatalf("same-generation stopped resume = %d, %v, want %d", resumedGen, err, childGen)
+	}
+	if _, err := NewSteerLauncher(al).Dispatch(context.Background(), childID, resumedGen); err != nil {
+		t.Fatalf("Dispatch(actual replacement): %v", err)
+	}
+	adr093WaitForEntered(t, provider, 30*time.Second)
+	replacement := adr093Load(t, al, childID)
+	if replacement.ExecutionID == nil || replacement.ExecutionID.RunID == selected.RunID {
+		t.Fatalf("replacement did not receive a fresh execution: old=%+v new=%+v", selected, replacement.ExecutionID)
+	}
+	// Exercise the same production write boundary with the ORIGINAL admitted
+	// snapshot, not a made-up identity, after the same-generation replacement.
+	if _, err := commitSteeredExecutionState(lifecycle, selected, session.LifecycleRunning, ""); err == nil {
+		t.Fatal("the original dispatch's stale state write was accepted against its replacement")
+	}
+	rec := adr093Load(t, al, childID)
+	if rec.Generation != childGen {
+		t.Fatalf("record generation = %d, want %d — stale write changed the same-generation revival", rec.Generation, childGen)
+	}
+	if rec.State != replacement.State || rec.ExecutionID == nil || *rec.ExecutionID != *replacement.ExecutionID || rec.Stop != nil || rec.StopNote != nil {
+		t.Fatalf("stale Dispatch rolled the replacement backwards: before=%+v after=%+v", replacement, rec)
 	}
 }

@@ -98,9 +98,10 @@ func TestW6RespondToStoppedChild_AppendFailureRefusesVisiblyThenRecovers(t *test
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 
+	provider, _ := installParkedProvider(t, al)
 	root := newTestSteeringSession(t, al, "ws-w6-crash-resume")
-	parent := u1LaunchChild(t, al, root, "w6-crash-resume-parent")
-	child := u1LaunchChild(t, al, parent.SessionID, "w6-crash-resume-child")
+	parent := g2HeldMessagingChild(t, al, provider, root, "w6-crash-resume-parent")
+	child := g2HeldMessagingChild(t, al, provider, parent.SessionID, "w6-crash-resume-child")
 
 	// An ordinary question first (ADR-20261004: no park — the helper keeps
 	// working; the answer below simply references it by correlation id).
@@ -162,9 +163,14 @@ func TestW6RespondToStoppedChild_AppendFailureRefusesVisiblyThenRecovers(t *test
 		return rec.State != session.LifecycleStopped
 	})
 	resumed := w6MustLoad(t, freshLC, child.SessionID)
-	if resumed.Generation != askedGen+1 {
-		t.Fatalf("revived child generation = %d, want %d — the resume continues the SAME conversation as a new generation",
-			resumed.Generation, askedGen+1)
+	// Frozen control-plane ADR D2 CRIT-001: "resumes a stopped child on the
+	// same generation ... only done/failed mints a next generation".
+	if resumed.Generation != askedGen {
+		t.Fatalf("revived child generation = %d, want %d — D2 requires same-generation stopped resume",
+			resumed.Generation, askedGen)
+	}
+	if resumed.ExecutionID == nil || stopped.ExecutionID == nil || resumed.ExecutionID.RunID == stopped.ExecutionID.RunID || resumed.ExecutionID.BootSeq != al.bootEpochFor() {
+		t.Fatalf("stopped resume must admit a fresh execution in this boot: stopped=%+v resumed=%+v", stopped.ExecutionID, resumed.ExecutionID)
 	}
 	if afterParent := w6MustLoad(t, freshLC, parent.SessionID); afterParent.State != session.LifecycleStopped {
 		t.Fatalf("the resume addresses only the child; parent must stay stopped: state=%s", afterParent.State)

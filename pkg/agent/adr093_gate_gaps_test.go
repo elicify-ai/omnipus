@@ -290,7 +290,7 @@ func TestAdr093RevivedRoot_ReplyIsDeliveredOnTheOutboundBus(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	parentID := newTestSteeringSession(t, al, adr093Workspace)
-	adr093StoppedRoot(t, al, parentID)
+	g2StoppedOrdinaryRoot(t, al, parentID)
 	adr093UseProvider(t, al, adr093FixedReplyProvider{reply: adr093RevivedReply})
 
 	msg := adr093HumanMessage("Right, carry on with the plan.", parentID)
@@ -318,7 +318,7 @@ func TestAdr093RevivedRoot_FailedTurnIsNotQueuedAgain(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	parentID := newTestSteeringSession(t, al, adr093Workspace)
-	adr093StoppedRoot(t, al, parentID)
+	g2StoppedOrdinaryRoot(t, al, parentID)
 	provider := &adr093FailingProvider{}
 	adr093UseProvider(t, al, provider)
 
@@ -371,7 +371,6 @@ func TestAdr093RevivedRoot_DoesNotOverlapTheDyingTurn(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	parentID := newTestSteeringSession(t, al, adr093Workspace)
-	adr093Persist(t, al, adr093Record(parentID, 1, session.LifecycleRunning))
 	provider := newAdr093OverlapProvider()
 	t.Cleanup(provider.stop)
 	adr093UseProvider(t, al, provider)
@@ -390,13 +389,23 @@ func TestAdr093RevivedRoot_DoesNotOverlapTheDyingTurn(t *testing.T) {
 		t.Fatal("the in-flight turn never reached the model")
 	}
 
-	stopped := adr093Load(t, al, parentID)
-	stopped.Stop = &session.Stop{At: time.Now(), Generation: stopped.Generation, By: session.Principal{Kind: session.PrincipalKindHuman}}
-	adr093Persist(t, al, stopped)
-
-	go func() {
-		_ = w.enqueue(adr093HumanMessage("Right, carry on with the plan.", parentID))
-	}()
+	selected := adr093Load(t, al, parentID)
+	if selected.ExecutionID == nil {
+		t.Fatal("SETUP: the dying turn has no real admitted execution")
+	}
+	stop, stopErr := al.StopSession(context.Background(), StopRequest{
+		SessionID: parentID, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "user-adr093"},
+	})
+	if stopErr != nil || stop.RootErr != nil || len(stop.Report.Unreachable) != 0 {
+		t.Fatalf("Stop while the selected turn is inside the model = %+v, %v", stop, stopErr)
+	}
+	msg := adr093HumanMessage("Right, carry on with the plan.", parentID)
+	// D2: "Landing LifecycleStopped clears the Stop marker ... in the same
+	// mutation." Until that owner landing, a raw fence is an in-flight Stop,
+	// not permission to run beside the selected execution. Retry after landing.
+	if err := al.enqueueSteeringFromMessage(msg); err == nil || !strings.Contains(err.Error(), "retry once the stop has landed") {
+		t.Fatalf("message during in-flight Stop = %v, want the visible retry refusal", err)
+	}
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -410,6 +419,10 @@ func TestAdr093RevivedRoot_DoesNotOverlapTheDyingTurn(t *testing.T) {
 	case <-firstDone:
 	case <-time.After(15 * time.Second):
 		t.Fatal("the in-flight turn did not finish after release")
+	}
+	awaitSteeringRepairStopped(t, al, parentID, selected.Generation)
+	if !w.enqueue(msg) {
+		t.Fatal("the fresh retry after the owner landed Stop was not accepted")
 	}
 	waitUntil := time.Now().Add(15 * time.Second)
 	for provider.entryCount() < 2 && time.Now().Before(waitUntil) {
@@ -430,7 +443,7 @@ func TestAdr093RevivedRoot_ShutdownCancelsTheTurn(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	parentID := newTestSteeringSession(t, al, adr093Workspace)
-	adr093StoppedRoot(t, al, parentID)
+	g2StoppedOrdinaryRoot(t, al, parentID)
 	provider := newAdr093CancelWatchProvider()
 	t.Cleanup(provider.stop)
 	adr093UseProvider(t, al, provider)
@@ -470,7 +483,7 @@ func TestAdr093StopDuringRevivedTurn_DelegateRefuses(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	parentID := newTestSteeringSession(t, al, adr093Workspace)
-	adr093StoppedRoot(t, al, parentID)
+	previous := g2StoppedOrdinaryRoot(t, al, parentID)
 	provider, release := installParkedProvider(t, al)
 	defer release()
 
@@ -481,15 +494,20 @@ func TestAdr093StopDuringRevivedTurn_DelegateRefuses(t *testing.T) {
 	adr093WaitForEntered(t, provider, 30*time.Second)
 
 	revived := adr093Load(t, al, parentID)
-	if revived.Generation != 2 {
-		t.Fatalf("generation after revival = %d, want 2 before Stop lands (ADR-093 D4)", revived.Generation)
+	// Frozen D2 CRIT-001: "resumes a stopped child on the same generation
+	// ... only done/failed mints a next generation" (C1 preserves this).
+	if revived.Generation != previous.Generation {
+		t.Fatalf("generation after stopped revival = %d, want the stopped generation %d (D2)", revived.Generation, previous.Generation)
+	}
+	if revived.ExecutionID == nil || previous.ExecutionID == nil || revived.ExecutionID.RunID == previous.ExecutionID.RunID {
+		t.Fatalf("same-generation resume reused its selected execution: before=%+v after=%+v", previous.ExecutionID, revived.ExecutionID)
 	}
 
-	if _, err := al.steerCanceller().CancelSubtree(context.Background(), parentID, steer.Principal{
-		Kind: steer.PrincipalKindHuman,
-		ID:   "user-adr093",
-	}); err != nil {
-		t.Fatalf("CancelSubtree while the revived turn is in flight: %v", err)
+	stop, stopErr := al.StopSession(context.Background(), StopRequest{
+		SessionID: parentID, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "user-adr093"}, Tree: true,
+	})
+	if stopErr != nil || stop.RootErr != nil || len(stop.Report.Unreachable) != 0 {
+		t.Fatalf("Stop all while the revived turn is in flight = %+v, %v", stop, stopErr)
 	}
 	release()
 	select {
@@ -519,8 +537,8 @@ func TestAdr093StopDuringRevivedTurn_DelegateRefuses(t *testing.T) {
 		t.Fatalf("lifecycle records after Stop-during-revival = %v, want only the parent %s (no child on the stopped generation)", ids, parentID)
 	}
 	parent := adr093Load(t, al, parentID)
-	if parent.Generation != 2 {
-		t.Fatalf("parent generation = %d, want 2 (the revival's generation, which the newer Stop covers)", parent.Generation)
+	if parent.Generation != previous.Generation {
+		t.Fatalf("parent generation = %d, want %d (the same-generation revival that the newer Stop covers)", parent.Generation, previous.Generation)
 	}
 	if !parent.Stopped() && !parent.Terminal() {
 		t.Fatalf("parent after the concurrent Stop is generation %d state %q with no current Stop — ADR-093: the newer Stop covers that generation", parent.Generation, parent.State)
