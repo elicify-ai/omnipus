@@ -50,6 +50,14 @@ func (al *AgentLoop) stopDescendantsOfFailedSession(ctx context.Context, rec *se
 			incomplete = append(incomplete, fmt.Sprintf("%s (%v)", child.SessionID, res.RootErr))
 		}
 		for _, item := range res.Report.Unreachable {
+			// An intent accepted durably but never fenced is retried at once
+			// and again at boot (D6's durable retry item, D4's finisher).
+			if retryErr := al.finishUnfinishedStopIntents(ctx, item.ID); retryErr == nil {
+				if cur, loadErr := al.GetSessionLifecycleStore().Load(item.ID); loadErr == nil && cur.Stopped() {
+					stopped = append(stopped, item.ID)
+					continue
+				}
+			}
 			incomplete = append(incomplete, fmt.Sprintf("%s (%s)", item.ID, item.Reason))
 		}
 		for _, id := range res.Report.Reached {
