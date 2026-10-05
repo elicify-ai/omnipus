@@ -113,6 +113,8 @@ func TestSteeredTurnDrain1020Round4_CompleteSteeredTurnWithoutLateSteerNoPrefix(
 	wireSteerCompletionDeps(t, al)
 	rootID := newTestSteeringSession(t, al, "ws-1")
 	child := launchRunningChild(t, al, rootID, "round4-no-prefix-control")
+	// D2 repairs the execution fixture; R1 retains this no-input prefix control.
+	child = admitSteeringRepairExecution(t, al, child.SessionID, child.Generation)
 
 	if err := al.completeSteeredTurn(context.Background(), child, turnResult{finalContent: "plain answer"}, nil); err != nil {
 		t.Fatalf("completeSteeredTurn: %v", err)
