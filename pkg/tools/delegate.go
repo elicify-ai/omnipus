@@ -636,7 +636,8 @@ func (t *DelegateTool) Description() string {
 		"action=\"respond\" replies to one of the child's messages by correlation_id — the text is " +
 		"delivered to the child as an ordinary message, always available for a delegation you started. " +
 		"action=\"stop_all\" stops that child and every helper under it (cooperatively by default; " +
-		"hard=true bypasses the grace window). action=\"redirect\" does not stop a helper; it replaces that helper's current turn. " +
+		"hard=true bypasses the grace window). action=\"redirect\" stops the helper's current turn, " +
+		"then resumes it with the new instruction; this does not mark the helper failed or end its goal. " +
 		delegateClearGoalDescription +
 		"action=\"resume\" continues a stopped child on the same conversation, or starts its next " +
 		"round when it is done or failed; optional text adds instructions. " +
