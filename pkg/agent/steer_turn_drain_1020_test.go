@@ -854,20 +854,29 @@ func TestSteeredTurnDrain1020_StopAfterFinalRecordCheckPreventsContinuation(t *t
 	}
 	close(releaseHook)
 
-	select {
-	case <-deliverer.delivered:
-	case <-time.After(10 * time.Second):
-		t.Fatal("timed out waiting for interrupted completion")
-	}
-	al.drainSteeredTurns(5 * time.Second)
+	// Frozen D2: "If Stop's fence commits first, this mutation refuses the
+	// final, writes **no** final outbox entry, appends **no** parent inbox
+	// message/frame, and the stop path lands `stopped`." D6 instead requires
+	// "one notice for its **direct parent** before the control is `applied`".
+	// Only the withdrawn interrupted-final oracle is replaced. The original
+	// provider-call/reached-set checks and the five-second owner-tail budget
+	// stay; synchronizing on the owner proves the notice writer has finished.
+	awaitSteeredDrainOwner1020(t, al)
 	if got := len(provider.Requests()); got != 1 {
 		t.Errorf("provider request count after Stop in the continuation registration gap = %d, want 1 (the initial turn only)", got)
 	}
-	events := deliverer.Events()
-	if len(events) != 1 {
-		t.Fatalf("upward completion event count after Stop = %d, want exactly 1", len(events))
+	if events := deliverer.Events(); len(events) != 0 {
+		t.Fatalf("legacy upward completion event count after Stop = %d, want 0 — D2 permits only the separate D6 notice", len(events))
 	}
-	if events[0].Outcome != steer.OutcomeInterrupted {
-		t.Errorf("upward completion outcome after Stop = %q, want %q", events[0].Outcome, steer.OutcomeInterrupted)
+	stopped, err := al.GetSessionLifecycleStore().Load(child.SessionID)
+	if err != nil {
+		t.Fatalf("Load(stopped owner): %v", err)
 	}
+	if stopped.State != session.LifecycleStopped || stopped.Terminal() || stopped.Generation != child.Generation || stopped.Stop != nil || stopped.StopNote == nil {
+		t.Fatalf("owner stop did not land nonterminal/same-generation with no fence and a durable note: %+v", stopped)
+	}
+	if stopped.StopNote.Cause != session.StopCauseStop {
+		t.Errorf("direct-target stop cause = %q, want %q", stopped.StopNote.Cause, session.StopCauseStop)
+	}
+	assertSteeringRepairStopNotice(t, al, stopped.SteeredBy.SteeringSessionID, stopped)
 }

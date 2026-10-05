@@ -16,6 +16,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 type steeredReentryProvider1020 struct {
@@ -288,37 +289,30 @@ func TestSteeredTurnDrain1020_SteeringAllLaterMarkerFailureDoesNotLoseConsumedPr
 	agent.Provider = provider
 	al.SetSteeringMode(SteeringAll)
 
-	child := launchQueuedSteeredTurnDrainChild1020(
-		t, al, testDefaultAgentID, "exercise partial SteeringAll marker failure")
-	snapshot := setLifecycleState1020(t, al, child.SessionID, session.LifecycleRunning)
-	ts, err := al.reconstructSteeredTurn(snapshot, nil)
-	if err != nil {
-		t.Fatalf("reconstructSteeredTurn: %v", err)
-	}
-	if enqueueErr := al.EnqueueSteeringWake(
-		child.SessionID,
-		testDefaultAgentID,
-		child.SessionID,
-		"issue-1020-batch-wake-a",
-		providers.Message{Role: "user", Content: "ISSUE-1020-BATCH-WAKE-A"},
-	); enqueueErr != nil {
-		t.Fatalf("EnqueueSteeringWake(A): %v", enqueueErr)
-	}
-	if enqueueErr := al.EnqueueSteeringWake(
-		child.SessionID,
-		testDefaultAgentID,
-		"session_01INVALIDBATCHMARKERTARGET",
-		"issue-1020-batch-wake-b",
-		providers.Message{Role: "user", Content: "ISSUE-1020-BATCH-WAKE-B"},
-	); enqueueErr != nil {
-		t.Fatalf("EnqueueSteeringWake(B): %v", enqueueErr)
-	}
-
 	originalBackoff := continueDrainBackoff
 	continueDrainBackoff = []time.Duration{0, 0, 0}
 	t.Cleanup(func() { continueDrainBackoff = originalBackoff })
-	discardSteeredTurnDrain1020(al.drainSteeredTurn(
-		context.Background(), snapshot, ts, turnResult{finalContent: "initial response"}, nil))
+
+	// Frozen D2: "Persist it under the lifecycle lock **before admission**,
+	// and copy it unchanged into the admission entry and live execution
+	// handle." newSteerAL minted the genuine boot epoch; real Dispatch owns
+	// this drain. Inject the identical A/B batch at the real final boundary,
+	// rather than forging RUNNING and reconstructing an unadmitted claim.
+	// R1 preserves the exact consumption/order/abandonment oracles below.
+	deliverer := newSteerTurnDrainDeliverer1020()
+	childID := launchSteeredTurnDrainChild1020(t, al, provider, deliverer, func(sessionID string) error {
+		if err := al.EnqueueSteeringWake(
+			sessionID, testDefaultAgentID, sessionID, "issue-1020-batch-wake-a",
+			providers.Message{Role: "user", Content: "ISSUE-1020-BATCH-WAKE-A"},
+		); err != nil {
+			return fmt.Errorf("EnqueueSteeringWake(A): %w", err)
+		}
+		return al.EnqueueSteeringWake(
+			sessionID, testDefaultAgentID, "session_01INVALIDBATCHMARKERTARGET", "issue-1020-batch-wake-b",
+			providers.Message{Role: "user", Content: "ISSUE-1020-BATCH-WAKE-B"},
+		)
+	})
+	awaitSteeredDrainOwner1020(t, al)
 
 	requests := provider.Requests()
 	if got := countMessagesContaining(flattenProviderRequests1020(requests), "ISSUE-1020-BATCH-WAKE-A"); got != 1 {
@@ -327,11 +321,11 @@ func TestSteeredTurnDrain1020_SteeringAllLaterMarkerFailureDoesNotLoseConsumedPr
 	if got := countMessagesContaining(flattenProviderRequests1020(requests), "ISSUE-1020-BATCH-WAKE-B"); got != 0 {
 		t.Errorf("wake B provider-delivery count = %d, want 0 after its marker failed", got)
 	}
-	if got := al.pendingSteeringCountForScope(child.SessionID); got != 0 {
+	if got := al.pendingSteeringCountForScope(childID); got != 0 {
 		t.Errorf("pending steering after persistent wake-B marker failure = %d, want 0 after loud abandonment", got)
 	}
 
-	entries, readErr := al.GetSessionStore().ReadTranscript(child.SessionID)
+	entries, readErr := al.GetSessionStore().ReadTranscript(childID)
 	if readErr != nil {
 		t.Fatalf("ReadTranscript(child): %v", readErr)
 	}
@@ -358,6 +352,23 @@ func TestSteeredTurnDrain1020_SteeringAllLaterMarkerFailureDoesNotLoseConsumedPr
 	}
 }
 
+// awaitSteeredDrainOwner1020 joins the actual admitted execution, not just
+// its terminal record or delivery value. Keep the existing drain budget, but
+// fail rather than treat a warning-only timeout as proof of a finished writer.
+func awaitSteeredDrainOwner1020(t *testing.T, al *AgentLoop) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		al.steerAdmission().turns.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("admitted drain/disposal owner did not finish within the existing five-second drain budget")
+	}
+}
+
 func flattenProviderRequests1020(requests [][]providers.Message) []providers.Message {
 	// Capacity is the actual sum of each request's length, not
 	// len(request)*len(requests): later provider requests carry more
@@ -381,6 +392,10 @@ func flattenProviderRequests1020(requests [][]providers.Message) []providers.Mes
 func TestSteeredTurnDrain1020_TerminalDisposalReclaimsClosedScopeTombstones(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
+	agent, ok := al.GetRegistry().GetAgent(testDefaultAgentID)
+	if !ok {
+		t.Fatal("SETUP: default test agent is not registered")
+	}
 	deliverer := newSteerTurnDrainDeliverer1020()
 	al.SetSteerAudienceDeps(
 		NewSteerAudienceResolver(NewSteerRecordClassifier(al.GetSessionLifecycleStore(), al.GetSessionStore())),
@@ -390,16 +405,23 @@ func TestSteeredTurnDrain1020_TerminalDisposalReclaimsClosedScopeTombstones(t *t
 
 	const completedSessions = 32
 	for i := 0; i < completedSessions; i++ {
+		// A fresh deterministic provider per independent execution; only the
+		// external model edge is replaced, not admission or disposal.
+		agent.Provider = &steerTurnDrainProvider1020{}
 		child := launchQueuedSteeredTurnDrainChild1020(
 			t, al, testDefaultAgentID, fmt.Sprintf("complete tombstone session %d", i))
-		snapshot := setLifecycleState1020(t, al, child.SessionID, session.LifecycleRunning)
-		ts, err := al.reconstructSteeredTurn(snapshot, nil)
+		// Frozen D2 requires the producing run's persisted execution identity.
+		// Use its real admitted owner and normal drain/disposal, never a
+		// synthetic RUNNING record with an empty claim. newSteerAL already
+		// minted and registered a genuine boot epoch before these dispatches.
+		dispatched, err := NewSteerLauncher(al).Dispatch(context.Background(), child.SessionID, child.Generation)
 		if err != nil {
-			t.Fatalf("session %d reconstructSteeredTurn: %v", i, err)
+			t.Fatalf("session %d real Dispatch: %v", i, err)
 		}
-		ts, result, runErr := al.drainSteeredTurn(
-			context.Background(), snapshot, ts, turnResult{finalContent: fmt.Sprintf("result %d", i)}, nil)
-		al.disposeSteeredTurnResult(ts, snapshot, child.Generation, result, runErr)
+		if dispatched.State != steer.DispatchRunning || dispatched.Generation != child.Generation {
+			t.Fatalf("session %d real admission = %+v, want running generation %d", i, dispatched, child.Generation)
+		}
+		awaitSteeredDrainOwner1020(t, al)
 
 		rec, loadErr := al.GetSessionLifecycleStore().Load(child.SessionID)
 		if loadErr != nil {
