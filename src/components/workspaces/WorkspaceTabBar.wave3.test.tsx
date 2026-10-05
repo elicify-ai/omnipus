@@ -21,21 +21,14 @@
 // over chat with no navigation and the URL gains ?panel=<id> via the shared
 // deep-link sync; second click closes).
 //
-// JOIN STATUS (2026-10-05, work/side-panel-wave3-join-20261005): the five
-// production slices are merged. This pack was the 8773803cf RED pack written
-// to fail on base fe0b68fb0. Its SP-40 assertions (Chat absent from strip AND
-// dropdown; icon-only compact trigger; every entry a registered toggle with
-// aria-pressed) pass against the joined bar unchanged. One oracle was
-// STRENGTHENED beyond the 8773803cf original, on the squad lead's ruling:
-// the original "exactly Tasks, Calendar, Library, Team" inventory quoted the
-// wireframe's entry list — that quote is the SUPERSEDED PRE-MAIL MOCKUP
-// (drawn from a branch cut before the email lane), not approved spec. FR-007
-// as amended removes only Chat; Mail (registered wave 2) keeps its toggle
-// entry. The inventory oracle below is therefore the exact five-entry deep
-// equality (strip AND compact dropdown) — RED today because the joined bar
-// dropped Mail (production gap, frontend-lead restores), green exactly when
-// the restore lands. Header and assertions were never both "unchanged": the
-// header has been corrected to say so.
+// Historical acceptance rationale: the original 8773803cf pack targeted
+// base fe0b68fb0. Its four-entry inventory quoted the SUPERSEDED PRE-MAIL
+// MOCKUP, not the amended FR-007 requirement. On the squad lead's ruling,
+// the inventory oracle was strengthened to exact five-entry equality for
+// both strip and compact dropdown: SP-40 removes only Chat, while Mail
+// (registered in wave 2) keeps its toggle entry. The remaining SP-40 oracles
+// pin Chat's absence, an icon-only trigger and registered aria-pressed
+// toggles. This rationale does not claim a current test execution result.
 //
 // Oracle sources (never the implementation):
 //   - docs/internal/specs/side-panel-shell-spec.md §10 Wave 3 table
@@ -49,9 +42,7 @@
 // pre-Mail base — the approved spec supersedes it, not the implementation.
 // FR-007 as amended removes ONLY Chat; Mail (registered in wave 2) keeps its
 // toggle entry. This pack therefore pins the EXACT five-entry inventory on
-// both the full strip and the compact dropdown — RED against the joined bar
-// (which dropped the mail entry: production gap, frontend-lead restores it),
-// and green exactly when the restore lands. The mail entry's TOGGLE
+// both the full strip and the compact dropdown. The mail entry's TOGGLE
 // semantics stay pinned by the wave-2 pack (WorkspaceTabBar.toggle.test.tsx).
 
 import React from 'react'
@@ -155,9 +146,7 @@ describe('WorkspaceTabBar wave 3 — Chat entry removed (SP-40, FR-007 amended)'
     // been one since wave 2. The 8773803cf pack's four-entry inventory was
     // written against a pre-Mail base and is superseded on this point by the
     // approved spec, not by the implementation: the exact inventory (deep
-    // equality, not a containment check) must include Mail. RED today — the
-    // joined bar dropped the mail entry; production gap, frontend-lead owns
-    // the restore.
+    // equality, not a containment check) must include Mail.
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     const strip = screen.getByTestId('workspace-tab-strip')
     const segments = within(strip)
@@ -214,9 +203,8 @@ describe('WorkspaceTabBar wave 3 — compact trigger is icon-only (SP-40)', () =
   })
 
   it('the icon-only trigger still exposes an accessible name', () => {
-    // GUARD (green by construction today — the current trigger already has an
-    // aria-label): it pins the a11y invariant across the SP-40 change, so
-    // dropping the text label must not orphan the control. Not a RED test.
+    // Guard: dropping the text label must not orphan the control's
+    // accessible name; this pins the accessibility invariant across SP-40.
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     const trigger = screen.getByTestId('workspace-view-switcher')
     const name = trigger.getAttribute('aria-label') ?? ''

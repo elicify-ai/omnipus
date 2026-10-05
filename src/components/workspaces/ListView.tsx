@@ -314,8 +314,10 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
               </th>
               {/* SP-34 — Tags and Updated are the hideable columns: narrow
                   container hides them (container query) unless the user has
-                  forced them shown via the ⋯ control below. Stays in the DOM
-                  either way — sort/filter state and AT tree are unaffected.
+                  forced them shown via the ⋯ control below. DOM nodes and
+                  sort/filter state persist either way, but display:none removes
+                  hidden columns from the accessibility tree. Revealing them
+                  with the ⋯ control restores their accessibility exposure.
                   The visibility classes are spelled out per state as literals
                   so the design-system scanners can resolve every class (a
                   shared computed class-string variable is an unresolved

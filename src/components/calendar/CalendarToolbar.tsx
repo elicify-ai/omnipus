@@ -10,12 +10,14 @@
  *
  * Layout (container-query breakpoint relative to the `@container` wrapper the
  * host CalendarScreen provides):
- *   Wide (≥42rem / 672px, @2xl): ONE ROW — [prev today next] [title] ·· [Month Week Day] [New task]
- *   Narrow (<42rem / 672px):     TWO ROWS — row-1: [prev today next] [title]; row-2: [views] [New task]
+ *   Wide (≥42rem, @2xl): ONE ROW — [prev today next] [title] ·· [Month Week Day] [New task]
+ *   Narrow (<42rem):     TWO ROWS — row-1: [prev today next] [title]; row-2: [views] [New task]
+ *   42rem is 588px at the default 14px root; its pixel equivalent changes
+ *   with the user's 12–20px font-size preference.
  *
  * Tailwind v4 container-query sizes (theme.css):
  *   @sm=24rem, @md=28rem, @lg=32rem, @xl=36rem, @2xl=42rem, @6xl=72rem.
- *   @2xl (42rem=672px) is the collapse breakpoint — matches existing usage in
+ *   @2xl (42rem) is the collapse breakpoint — matches existing usage in
  *   ChatControls.tsx (the established project convention).
  *
  * Implementation note — two-row reflow:
