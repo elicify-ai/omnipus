@@ -297,6 +297,16 @@ func newE2EHarnessCustom(
 		t.Fatalf("NewAgentLoop: %v", err)
 	}
 	t.Cleanup(al.Close)
+	// Mint before the tree's real dispatches; never stamp fixture identities.
+	boot := session.NewBootEpochStore(home)
+	epoch, err := boot.Mint()
+	if err != nil {
+		t.Fatalf("SETUP Mint genuine boot epoch: %v", err)
+	}
+	if epoch == 0 || boot.Current() != epoch {
+		t.Fatalf("SETUP minted/current boot epoch = %d/%d, require one genuine nonzero epoch", epoch, boot.Current())
+	}
+	al.SetBootEpochStore(boot)
 	sessions := al.GetSessionStore()
 	if sessions == nil {
 		t.Fatal("NewAgentLoop did not construct the shared session store")

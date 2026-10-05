@@ -87,6 +87,17 @@ func newSteerFixture(t *testing.T, provider providers.LLMProvider, runLoop bool)
 	}
 	t.Cleanup(al.Close)
 
+	// Dispatch requires the real boot epoch; the launcher mints each run_id.
+	boot := session.NewBootEpochStore(home)
+	epoch, err := boot.Mint()
+	if err != nil {
+		t.Fatalf("SETUP Mint genuine boot epoch: %v", err)
+	}
+	if epoch == 0 || boot.Current() != epoch {
+		t.Fatalf("SETUP minted/current boot epoch = %d/%d, require one genuine nonzero epoch", epoch, boot.Current())
+	}
+	al.SetBootEpochStore(boot)
+
 	lifecycle := session.NewLifecycleStore(filepath.Join(home, "lifecycle"))
 	inbox := session.NewMessageInboxStore(filepath.Join(home, "inbox"))
 	al.SetSessionMessagingStores(inbox, lifecycle)
