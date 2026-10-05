@@ -35,6 +35,7 @@ type bootNoticeControlFixture struct {
 	wakes       func(string) int
 	provider    *goalRunProvider
 	bootSeq     uint64
+	writingBoot *session.BootEpochStore
 }
 
 func newBootNoticeControlFixture(t *testing.T) *bootNoticeControlFixture {
@@ -100,7 +101,7 @@ func newBootNoticeControlFixture(t *testing.T) *bootNoticeControlFixture {
 	}
 	al.SetBootEpochStore(boot)
 	return &bootNoticeControlFixture{al: al, parent: parent, otherParent: otherParent,
-		resumed: resumed, historical: tr, canonical: notices[0], wakes: wakes, provider: provider, bootSeq: epoch}
+		resumed: resumed, historical: tr, canonical: notices[0], wakes: wakes, provider: provider, bootSeq: epoch, writingBoot: boot}
 }
 
 func reopenBootNoticeControlStores(t *testing.T, f *bootNoticeControlFixture) {
@@ -126,9 +127,15 @@ func assertBootNoticeCurrentRunStoppedWithoutDispatch(t *testing.T, f *bootNotic
 	if current.StopNote.BootSeq != f.bootSeq {
 		t.Errorf("D8.3: restart stop note boot_seq=%d, want the actual persisted current boot=%d; note=%+v", current.StopNote.BootSeq, f.bootSeq, current.StopNote)
 	}
+	if current.StopNote.By != session.StopActorRestart {
+		t.Errorf("D8.3: actual boot note actor=%q, want existing restart actor=%q", current.StopNote.By, session.StopActorRestart)
+	}
 	transitions, err := f.al.GetSessionLifecycleStore().ListStoppedTransitions(current.SessionID)
 	if err != nil || len(transitions) != 2 || !reflect.DeepEqual(transitions[0], f.historical) || transitions[1].StopSeq <= f.historical.StopSeq || transitions[1].Cause != session.StopCauseRestart {
 		t.Fatalf("C3/C5: historical and current-run stop obligations diverged: history=%+v err=%v", transitions, err)
+	}
+	if transitions[1].Actor != session.StopActorRestart || current.StopNote.Seq != transitions[1].StopSeq || !current.StopNote.At.Equal(transitions[1].At) {
+		t.Errorf("D8.3/C3: actual restart note and landed ledger must carry the same restart actor/sequence/instant: note=%+v transition=%+v", current.StopNote, transitions[1])
 	}
 	f.provider.mu.Lock()
 	calls := f.provider.next
