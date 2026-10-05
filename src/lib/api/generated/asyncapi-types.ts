@@ -1171,8 +1171,8 @@ export interface MailPanelObserverAckFrame {
 
 export interface MailPanelObserverErrorFrame {
   type: "mail_panel_observer_error";
-  observer_id: string;
-  workspace_id: string;
+  observer_id?: string;
+  workspace_id?: string;
   code: "unauthorized_workspace" | "malformed_frame";
   error: string;
 }
@@ -1284,12 +1284,13 @@ export type ClientFrame =
   | BrowserViewportFrame
   | BrowserTabActionFrame
   | BrowserWebRTCOfferFrame
-  | BrowserInputOfferFrame;
+  | BrowserInputOfferFrame
+  | MailPanelObserverFrame;
 
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "session_close", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer"] as const
+export const ClientFrameTypes = ["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "session_close", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer", "mail_panel_observer"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
@@ -1354,6 +1355,5 @@ export type ServerFrame =
   | CatchUpCompleteFrame
   | UserMessageFrame
   | AgentCreatedFrame
-  | MailPanelObserverFrame
   | MailPanelObserverAckFrame
   | MailPanelObserverErrorFrame;
