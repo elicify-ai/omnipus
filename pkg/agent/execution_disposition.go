@@ -80,6 +80,18 @@ func (al *AgentLoop) finishExecutionDisposition(d *executionDisposition) error {
 	binding := d.stop
 	d.mu.Unlock()
 	var err error
+	if binding == nil {
+		// The durable fence, not the in-memory handoff, is what makes this
+		// execution's Stop pending (D2): a fence accepted for exactly this
+		// claim whose effect has not yet bound here is still this owner's to
+		// land after its tail retired.
+		selected, owned, readErr := al.durableStopSelectionFor(d.claim)
+		if readErr != nil {
+			err = readErr
+		} else if owned {
+			binding = &executionStopBinding{selected: selected}
+		}
+	}
 	if binding != nil {
 		err = al.settleSelectedStop(binding.selected, unlock)
 	}
@@ -142,6 +154,31 @@ func (al *AgentLoop) retainSelectedStop(ctx context.Context, id string, generati
 		al.promoteSteeredExecution(next)
 	}
 	return nil, true, err
+}
+
+// durableStopSelectionFor reads the current fence and reports the accepted
+// selection when its effect targets exactly claim. A missing record or a fence
+// for any other execution is not this owner's; a read failure is returned.
+func (al *AgentLoop) durableStopSelectionFor(claim executionClaim) (session.StopSelection, bool, error) {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil || claim.SessionID == "" || claim.RunID == "" {
+		return session.StopSelection{}, false, nil
+	}
+	rec, err := lifecycle.Load(claim.SessionID)
+	if err != nil {
+		if errors.Is(err, session.ErrLifecycleNotFound) {
+			return session.StopSelection{}, false, nil
+		}
+		return session.StopSelection{}, false, fmt.Errorf("Stop: read selected execution fence for %q: %w", claim.SessionID, err)
+	}
+	if rec.StopEffect == nil {
+		return session.StopSelection{}, false, nil
+	}
+	selected := session.StopSelection{SessionID: claim.SessionID, Effect: *rec.StopEffect}
+	if claimForStopEffect(claim.SessionID, selected.Effect) != claim || !stopSelectionMatchesRecord(selected, rec) {
+		return session.StopSelection{}, false, nil
+	}
+	return selected, true, nil
 }
 
 func (al *AgentLoop) settleSelectedStop(selected session.StopSelection, afterLanding func()) error {

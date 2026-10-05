@@ -65,7 +65,10 @@ func claimForStopEffect(sessionID string, effect session.StopEffect) executionCl
 }
 
 // removeQueuedStopEffects compares the full selected admission under the gate
-// lock. A never-admitted selection cannot remove any queued run.
+// lock. A never-admitted selection cannot remove any queued run. A stale
+// effect (its fence already landed or was cleared by a Resume) still removes
+// its OWN exact admission: that run can never be admitted again, and the
+// full-identity match cannot reach a replacement's admission (D2/T27).
 func (al *AgentLoop) removeQueuedStopEffects(sessionID string, effects []session.StopEffect) {
 	gate := al.steerAdmission()
 	for _, effect := range effects {
@@ -100,6 +103,7 @@ func (al *AgentLoop) steerSoftStop(ctx context.Context, sessionID string, genera
 		return GenerationCancelResult{}, err
 	}
 	if !current {
+		al.removeQueuedStopEffects(sessionID, []session.StopEffect{selected.Effect})
 		return GenerationCancelResult{SkippedNewerGeneration: true}, nil
 	}
 	d, current, retainErr := al.retainSelectedStop(ctx, sessionID, generation, nil)
@@ -107,6 +111,7 @@ func (al *AgentLoop) steerSoftStop(ctx context.Context, sessionID string, genera
 		return GenerationCancelResult{}, retainErr
 	}
 	if !current {
+		al.removeQueuedStopEffects(sessionID, []session.StopEffect{selected.Effect})
 		return GenerationCancelResult{SkippedNewerGeneration: true}, nil
 	}
 	if d == nil {

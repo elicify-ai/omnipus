@@ -63,6 +63,7 @@ func (al *AgentLoop) SteerGenerationCancel(ctx context.Context, sessionID string
 		return GenerationCancelResult{}, err
 	}
 	if !current {
+		al.removeQueuedStopEffects(sessionID, []session.StopEffect{selected.Effect})
 		return GenerationCancelResult{SkippedNewerGeneration: true}, nil
 	}
 	ctx = withStopSelection(ctx, selected)
@@ -71,6 +72,7 @@ func (al *AgentLoop) SteerGenerationCancel(ctx context.Context, sessionID string
 		return GenerationCancelResult{}, retainErr
 	}
 	if !current {
+		al.removeQueuedStopEffects(sessionID, []session.StopEffect{selected.Effect})
 		return GenerationCancelResult{SkippedNewerGeneration: true}, nil
 	}
 	if d == nil {
