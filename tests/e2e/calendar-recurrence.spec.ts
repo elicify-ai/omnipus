@@ -312,10 +312,22 @@ test(
     try {
       await navigateToCalendar(page);
 
-      // Click the Monday day cell — CalendarScreen.handleDateClick opens the
-      // calendar-specific event slide-over (not the generic CreateTaskSlideOver).
-      const dayCell = page.locator(`.fc-daygrid-day[data-date="${mondayDataDate}"]`);
+      // US-1 starts on the Month grid, not the default Week: on a Tuesday,
+      // nextOrTodayMonday is outside the current week's exclusive end. Month
+      // uses CalendarMonthGrid's exact date key; FullCalendar is hidden/inert.
+      await selectMonthView(page);
+      const dayCell = page
+        .getByTestId('calendar-month-grid')
+        .getByTestId(`calendar-month-day-${mondayDataDate}`);
+      // The target is on/after today by at most six days. If the current
+      // Month's trailing days do not include it, one real Next click reaches
+      // its month. The exact-date visibility assertion must still pass.
+      if ((await dayCell.count()) === 0) {
+        await page.getByTestId('calendar-next').click();
+      }
       await expect(dayCell).toBeVisible({ timeout: 15_000 });
+      // A compact Month day click opens the same event panel with that date
+      // at 09:00 (CalendarScreen.handleMonthDayClick → openCreateAt).
       await dayCell.click();
 
       const slideOver = page.locator('[role="dialog"][data-state="open"]');
