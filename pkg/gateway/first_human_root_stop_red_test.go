@@ -151,8 +151,8 @@ func firstHumanRootIntoProvider(t *testing.T, f *u2ScopeFixture, chat string) st
 		select {
 		case data := <-f.reader.wc.sendCh:
 			var frame generated.SessionStartedFrame
-			if err := json.Unmarshal(data, &frame); err != nil {
-				t.Fatalf("decode actual server frame: %v", err)
+			if uerr := json.Unmarshal(data, &frame); uerr != nil {
+				t.Fatalf("decode actual server frame: %v", uerr)
 			}
 			if frame.Type == string(generated.WsFrameTypeSessionStarted) {
 				id = frame.SessionId
@@ -162,9 +162,10 @@ func firstHumanRootIntoProvider(t *testing.T, f *u2ScopeFixture, chat string) st
 		}
 	}
 	bindTestConnToSession(f.reader.h, chat, id, f.reader.wc)
+	contexts := f.contexts
 	select {
 	case providerCtx := <-f.provider.entered:
-		f.contexts[id] = providerCtx
+		contexts[id] = providerCtx
 	case <-time.After(cancelTestTurnStartDeadline):
 		t.Fatal("FIRST HUMAN real bus admission did not enter provider")
 	}
