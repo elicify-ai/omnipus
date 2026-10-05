@@ -157,7 +157,6 @@ func TestOneStop_EveryEntryRunsTheSameTimeline(t *testing.T) {
 		}},
 	}
 	for i, entry := range entries {
-		entry := entry
 		t.Run(entry.name, func(t *testing.T) {
 			al, parentID, child, handle, provider := oneStopUncooperativeChild(t, string(rune('a'+i)))
 			goalBefore := mustGoalRecord(t, child.GoalRef)
