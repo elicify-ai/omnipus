@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { onlineManager, QueryClient, QueryClientProvider, QueryObserver } from '@tanstack/react-query'
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router'
 import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
@@ -277,5 +277,76 @@ describe('Sidebar — workspace-list Retry', () => {
     expect(screen.queryByText('Could not load workspaces')).not.toBeInTheDocument()
     expect(screen.queryByText(/No workspaces yet/)).not.toBeInTheDocument()
     expect(requests).toEqual({ active: 2, archived: 0, unrelated: 0 })
+  })
+
+  it('O1: shows the genuine empty list only after an offline mount reconnects', async () => {
+    const requests = stubWorkspaceRequests([Response.json([])])
+    onlineManager.setOnline(false)
+    const queryClient = await renderSidebar()
+
+    await waitFor(() => expect(queryClient.getQueryState(
+      workspacesQueryKeys.list({ status: 'active' }),
+    )).toMatchObject({ status: 'pending', fetchStatus: 'paused' }))
+    expect(await screen.findByText('Offline — workspaces will load when you reconnect.')).toBeVisible()
+    expect(screen.queryByText(/No workspaces yet/)).not.toBeInTheDocument()
+    // O1: mounting offline makes no request until the connection returns.
+    expect(requests).toEqual({ active: 0, archived: 0, unrelated: 0 })
+
+    act(() => onlineManager.setOnline(true))
+    await waitFor(() => expect(queryClient.getQueryState(
+      workspacesQueryKeys.list({ status: 'active' }),
+    )).toMatchObject({ status: 'success', fetchStatus: 'idle' }))
+    expect(await screen.findByText(/No workspaces yet/)).toBeVisible()
+    const emptyStateRow = screen.getByText(/No workspaces yet/).parentElement!
+    expect(within(emptyStateRow).getByRole('button', { name: 'New workspace' })).toBeVisible()
+    expect(screen.queryByText('Offline — workspaces will load when you reconnect.')).not.toBeInTheDocument()
+    expect(screen.queryByText('Could not load workspaces')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Retry loading workspaces' })).not.toBeInTheDocument()
+    // O1: the confirmed empty result comes from exactly one resumed request.
+    expect(requests).toEqual({ active: 1, archived: 0, unrelated: 0 })
+  })
+
+  it('O2: restores the error and Retry when reconnect fails again, then recovers on request three', async () => {
+    const requests = stubWorkspaceRequests([
+      Response.json({ error: 'Workspace list unavailable' }, { status: 503 }),
+      Response.json({ error: 'Workspace list still unavailable' }, { status: 503 }),
+      Response.json([activeWorkspace]),
+    ])
+    const queryClient = await renderSidebar()
+    expect(await screen.findByText('Could not load workspaces')).toBeVisible()
+    const retry = screen.getByRole('button', { name: 'Retry loading workspaces' })
+    expect(retry).toBeVisible()
+    expect(requests).toEqual({ active: 1, archived: 0, unrelated: 0 })
+
+    act(() => onlineManager.setOnline(false))
+    fireEvent.click(retry)
+    await waitFor(() => expect(queryClient.getQueryState(
+      workspacesQueryKeys.list({ status: 'active' }),
+    )?.fetchStatus).toBe('paused'))
+    expect(await screen.findByText('Offline — workspaces will load when you reconnect.')).toBeVisible()
+    // O2: the paused Retry must not send request two while offline.
+    expect(requests).toEqual({ active: 1, archived: 0, unrelated: 0 })
+
+    act(() => onlineManager.setOnline(true))
+    await waitFor(() => expect(requests.active).toBe(2))
+    await waitFor(() => expect(queryClient.getQueryState(
+      workspacesQueryKeys.list({ status: 'active' }),
+    )).toMatchObject({ status: 'error', fetchStatus: 'idle' }))
+    expect(await screen.findByText('Could not load workspaces')).toBeVisible()
+    const retryAgain = screen.getByRole('button', { name: 'Retry loading workspaces' })
+    expect(retryAgain).toBeVisible()
+    expect(screen.queryByText('Offline — workspaces will load when you reconnect.')).not.toBeInTheDocument()
+    expect(requests).toEqual({ active: 2, archived: 0, unrelated: 0 })
+
+    fireEvent.click(retryAgain)
+    expect(await screen.findByRole('button', { name: activeWorkspace.name })).toBeVisible()
+    await waitFor(() => expect(queryClient.getQueryState(
+      workspacesQueryKeys.list({ status: 'active' }),
+    )).toMatchObject({ status: 'success', fetchStatus: 'idle' }))
+    expect(screen.queryByText('Could not load workspaces')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Retry loading workspaces' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Offline — workspaces will load when you reconnect.')).not.toBeInTheDocument()
+    // O2: two failed responses and one explicit successful Retry total three.
+    expect(requests).toEqual({ active: 3, archived: 0, unrelated: 0 })
   })
 })
