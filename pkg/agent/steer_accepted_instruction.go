@@ -5,12 +5,13 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // steeredInstructionEntryID is the transcript entry ID of an accepted steered
@@ -31,42 +32,46 @@ func steeredInstructionEntryID(messageID string) string {
 //
 // A session with no steering edge (an ordinary chat) is deliberately not
 // touched: its transcript renders to a person, and its inbox entry is already
-// the durable record. Retried consumption is idempotent: an entry already
-// present under the instruction's ID is not appended again. Every failure is
-// returned so the caller restores the unmarked items instead of consuming
-// them.
+// the durable record. A session whose lifecycle record is missing but whose
+// metadata names a parent is a genuine child whose record was lost (I-8
+// row 4, damaged_child), never an ordinary chat: that is a visible error.
+// The append is once-only under the session's own store lock, so retried or
+// concurrent consumption of one instruction writes exactly one entry. Every
+// failure is returned so the caller restores the unmarked items instead of
+// consuming them.
 func (al *AgentLoop) recordAcceptedSteeredInstruction(wake steeringWake, msg providers.Message) error {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
 		return nil
 	}
+	store := al.ResolveSessionStore(wake.transcriptSessionID)
 	rec, err := lifecycle.Load(wake.transcriptSessionID)
 	switch {
 	case errors.Is(err, session.ErrLifecycleNotFound):
-		return nil
+		if store == nil {
+			return fmt.Errorf("no transcript store for session %q", wake.transcriptSessionID)
+		}
+		class, classifyErr := NewSteerRecordClassifier(lifecycle, store).Classify(context.Background(), wake.transcriptSessionID)
+		if classifyErr != nil {
+			return fmt.Errorf("classify session %q without a lifecycle record: %w", wake.transcriptSessionID, classifyErr)
+		}
+		if class == steer.ClassOrdinaryRoot {
+			return nil
+		}
+		return fmt.Errorf("session %q is a %s: its lifecycle record is missing, so the instruction was not injected", wake.transcriptSessionID, class)
 	case err != nil:
 		return fmt.Errorf("load lifecycle of %q: %w", wake.transcriptSessionID, err)
 	case rec.SteeredBy == nil:
 		return nil
 	}
-	store := al.ResolveSessionStore(wake.transcriptSessionID)
 	if store == nil {
 		return fmt.Errorf("no transcript store for session %q", wake.transcriptSessionID)
 	}
-	entryID := steeredInstructionEntryID(wake.messageID)
-	entries, err := store.ReadTranscript(wake.transcriptSessionID)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("read transcript of %q: %w", wake.transcriptSessionID, err)
-	}
-	for _, entry := range entries {
-		if entry.ID == entryID {
-			return nil
-		}
-	}
-	return store.AppendTranscriptStrict(wake.transcriptSessionID, session.TranscriptEntry{
-		ID:      entryID,
+	_, err = store.AppendTranscriptOnce(wake.transcriptSessionID, session.TranscriptEntry{
+		ID:      steeredInstructionEntryID(wake.messageID),
 		Role:    "user",
 		Content: msg.Content,
 		AgentID: wake.agentID,
 	})
+	return err
 }

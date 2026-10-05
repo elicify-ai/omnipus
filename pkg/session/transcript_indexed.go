@@ -46,6 +46,46 @@ func (us *UnifiedStore) appendTranscript(sessionID string, entry TranscriptEntry
 	}
 	h := us.lockSession(sessionID)
 	defer h.Unlock()
+	return us.appendTranscriptLocked(sessionID, entry, indexed, what, provenance)
+}
+
+// AppendTranscriptOnce appends entry unless the transcript already holds an
+// entry with the same non-empty ID. The check and the append run under the
+// same session-shard hold, so concurrent callers with one ID append exactly
+// once. appended reports whether THIS call wrote the entry.
+func (us *UnifiedStore) AppendTranscriptOnce(sessionID string, entry TranscriptEntry) (appended bool, err error) {
+	if entry.ID == "" {
+		return false, fmt.Errorf("unified_store: append transcript once: entry ID is required")
+	}
+	if err := validateSessionID(sessionID); err != nil {
+		return false, err
+	}
+	if err := validateContextWindowNotice(sessionID, entry); err != nil {
+		return false, fmt.Errorf("unified_store: append transcript once: %w", err)
+	}
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now().UTC()
+	}
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
+	existing, err := us.ReadTranscript(sessionID)
+	if err != nil {
+		return false, fmt.Errorf("unified_store: append transcript once: %w", err)
+	}
+	for _, e := range existing {
+		if e.ID == entry.ID {
+			return false, nil
+		}
+	}
+	if _, err := us.appendTranscriptLocked(sessionID, entry, false, "append transcript once", nil); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// appendTranscriptLocked is appendTranscript's body; the caller holds the
+// session shard.
+func (us *UnifiedStore) appendTranscriptLocked(sessionID string, entry TranscriptEntry, indexed bool, what string, provenance *MessageProvenance) (int, error) {
 	// Existence is resolved before any write, including the append's MkdirAll.
 	meta, err := us.readMetaLocked(sessionID)
 	if err != nil {

@@ -1048,12 +1048,18 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 				return msgs, correlationIDs, consumedItems,
 					fmt.Errorf("record accepted steered instruction %q: %w", item.wake.messageID, err)
 			}
-			if err := al.writeSteeringConsumedMarker(*item.wake); err != nil {
+			claimed, err := al.writeSteeringConsumedMarker(*item.wake)
+			if err != nil {
 				al.steering.prependItemsScope(scope, items[i:])
 				slog.Error("agent: steering wake not consumed; restored unmarked suffix to queue",
 					"scope", scope, "message_id", item.wake.messageID, "error", err)
 				return msgs, correlationIDs, consumedItems,
 					fmt.Errorf("write steering consumed marker %q: %w", item.wake.messageID, err)
+			}
+			if !claimed {
+				// Another consumer already consumed this accepted identity:
+				// a retry is not a second delivery (ADR-20261004 C1).
+				continue
 			}
 		}
 		msgs = append(msgs, item.message)
@@ -1063,12 +1069,15 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 	return msgs, correlationIDs, consumedItems, nil
 }
 
-func (al *AgentLoop) writeSteeringConsumedMarker(wake steeringWake) error {
+// writeSteeringConsumedMarker writes the wake's consumed marker once. claimed
+// is true only for the consumer that wrote it: that consumer alone delivers
+// the input; a concurrent or retried consumer of the same identity skips it.
+func (al *AgentLoop) writeSteeringConsumedMarker(wake steeringWake) (claimed bool, err error) {
 	store := al.ResolveSessionStore(wake.transcriptSessionID)
 	if store == nil {
-		return fmt.Errorf("no transcript store for session %q", wake.transcriptSessionID)
+		return false, fmt.Errorf("no transcript store for session %q", wake.transcriptSessionID)
 	}
-	return store.AppendTranscriptStrict(wake.transcriptSessionID, session.TranscriptEntry{
+	return store.AppendTranscriptOnce(wake.transcriptSessionID, session.TranscriptEntry{
 		ID:      "consumed-" + wake.messageID,
 		Type:    session.EntryTypeSystem,
 		Role:    "system",
