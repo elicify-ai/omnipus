@@ -1078,6 +1078,7 @@ func TestGoalDelegation_Judged(t *testing.T) {
 	if persistErr := lifecycle.Persist(rec); persistErr != nil {
 		t.Fatalf("Persist(running): %v", persistErr)
 	}
+	rec = stampG5ExitedExecution(t, al, rec)
 
 	g, err := resolveGoalRecordStore().Get(rec.GoalRef)
 	if err != nil {
