@@ -953,14 +953,11 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		// owner. Keep the queue locked through the claim-bound append so a
 		// promotion cannot consume the pending list before this input lands.
 		gate.mu.Lock()
-		for _, entry := range gate.queue {
+		for i := range gate.queue {
+			entry := &gate.queue[i]
 			queuedClaim := entry.executionClaim()
 			if entry.generation == generation && queuedClaim.matches(rec) {
-				if queuedClaim.BootSeq != al.bootEpochFor() {
-					gate.mu.Unlock()
-					return "", steer.ErrStaleGeneration
-				}
-				_, appendErr := commitSteeredExecutionState(lifecycle, queuedClaim, session.LifecycleQueued, msg.Content)
+				appendErr := al.commitQueuedSystemWakeLocked(lifecycle, entry, generation, messageID, msg.Content, rec.AgentID)
 				gate.mu.Unlock()
 				return "", appendErr
 			}
@@ -992,7 +989,7 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 			// the session. The promotion consumes the whole ordered list before
 			// starting; otherwise it would replay the launch instruction or
 			// lose an earlier wake when a second one arrives.
-			if _, commitErr := commitSteeredExecutionState(lifecycle, claim, session.LifecycleQueued, msg.Content); commitErr != nil {
+			if commitErr := al.commitQueuedSystemWake(lifecycle, claim, generation, messageID, msg.Content, rec.AgentID); commitErr != nil {
 				gate.removeQueuedExecution(claim)
 				return "", commitErr
 			}

@@ -154,11 +154,9 @@ func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueIt
 		// deleted: it stranded items pushed by hooks running inside
 		// commitSteeredTerminal itself, the exact regression S1 covers.
 		if item.wake != nil {
-			for _, queued := range transition.finishingItems {
-				if queued.wake != nil && queued.wake.messageID == item.wake.messageID {
-					sq.mu.Unlock()
-					return true, nil
-				}
+			if queuedSteeringWake(transition.finishingItems, item.wake.messageID) != nil {
+				sq.mu.Unlock()
+				return true, nil
 			}
 		} else if len(transition.finishingItems) >= MaxQueueSize {
 			sq.mu.Unlock()
@@ -182,11 +180,9 @@ func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueIt
 	if item.wake != nil {
 		// Retries of one durable entry keep one pending wake; dequeueing
 		// removes the identity so a later retry may enqueue it again.
-		for _, queued := range queue {
-			if queued.wake != nil && queued.wake.messageID == item.wake.messageID {
-				sq.mu.Unlock()
-				return false, nil
-			}
+		if queuedSteeringWake(queue, item.wake.messageID) != nil {
+			sq.mu.Unlock()
+			return false, nil
 		}
 	} else if len(queue) >= MaxQueueSize {
 		sq.mu.Unlock()
