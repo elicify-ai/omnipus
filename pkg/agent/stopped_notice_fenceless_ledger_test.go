@@ -173,10 +173,26 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 	rec := w1hLaunchLiveChild(t, al, provider.entered, parentID, "call-c3-two-stops")
 	childID, generation := rec.SessionID, rec.Generation
 
-	// Fence-less stop #1 through the production completion boundary.
-	if err := al.completeSteeredTurn(context.Background(), rec, turnResult{}, context.Canceled); err != nil {
-		t.Fatalf("completeSteeredTurn (fence-less stop 1): %v", err)
+	// D2: only the producing execution lands its result. Interrupt the real
+	// owner's provider without accepting a Stop control, then join the entire
+	// completion/disposal tail before Revive; hand-completing its record while
+	// the live execution is registered would leave the old owner in place.
+	stopOwner := func(selected *session.LifecycleRecord) {
+		t.Helper()
+		handle := al.getActiveTurnState(childID)
+		if handle == nil || al.tsExecutionClaim(handle, childID) != al.executionClaimFor(selected) {
+			t.Fatal("setup: fence-less stop has no matching real admitted owner (D2)")
+		}
+		turnIDs, stopErr := al.InterruptSessionHard(childID, ScopeSelfOnly, "fence-less owner cancellation")
+		if stopErr != nil || len(turnIDs) != 1 || turnIDs[0] != handle.turnID {
+			t.Fatalf("InterruptSessionHard reached %v, err=%v; want only owning turn %q", turnIDs, stopErr, handle.turnID)
+		}
+		joinGoalFixtureRuns(t, al)
+		if al.steerAdmission().hasExecutionReservation(al.executionClaimFor(selected)) {
+			t.Fatal("setup: stopped owner's reservation survived its joined disposal (D2)")
+		}
 	}
+	stopOwner(rec)
 	trs, err := lifecycle.ListStoppedTransitions(childID)
 	if err != nil {
 		t.Fatalf("ListStoppedTransitions(after stop 1): %v", err)
@@ -219,10 +235,8 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 		t.Fatalf("after the resume the record still carries StopNote=%v — the note was not cleared, the C3 discovery case is not exercised", resumed.StopNote)
 	}
 
-	// Fence-less stop #2, same generation.
-	if stopErr := al.completeSteeredTurn(context.Background(), resumed, turnResult{}, context.Canceled); stopErr != nil {
-		t.Fatalf("completeSteeredTurn (fence-less stop 2): %v", stopErr)
-	}
+	// Fence-less stop #2, same generation, carried out by its new real owner.
+	stopOwner(resumed)
 	trs2, err := lifecycle.ListStoppedTransitions(childID)
 	if err != nil {
 		t.Fatalf("ListStoppedTransitions(after stop 2): %v", err)
@@ -246,6 +260,12 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 	if c := wakes.count(notice2); c != 1 {
 		t.Fatalf("stop 2's landing rang the parent %d time(s) for %s, want exactly 1", c, notice2)
 	}
+	// Decision 1/C3: the first id is still untaken during stop 2's landing
+	// delivery pass, so it re-rings once too. Only taking it below silences
+	// later passes; entry dedup is not once-ever wake suppression.
+	if c := wakes.count(notice1); c != 2 {
+		t.Fatalf("stop 2's landing left the untaken first notice at %d ring(s), want exactly 2 — one initial ring and one landing-pass re-ring (decision 1/C3)", c)
+	}
 
 	// The parent TAKES the FIRST notice — the production ack the wake
 	// consumer makes.
@@ -262,8 +282,8 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 	if c := wakes.count(notice2); c != 2 {
 		t.Errorf("after taking the first notice, a delivery pass left the second at %d ring(s), want 2 — taking the first must not acknowledge the second stop's distinct notice", c)
 	}
-	if c := wakes.count(notice1); c != 1 {
-		t.Errorf("the taken first notice rang %d time(s) total, want still 1 — a taken note rings nobody", c)
+	if c := wakes.count(notice1); c != 2 {
+		t.Errorf("the taken first notice rang %d time(s) total, want still 2 — taking it adds zero rings on the later pass (decision 1/C3)", c)
 	}
 	// The ring is a doorbell: one durable line per notice, no new history,
 	// the child untouched by it.
