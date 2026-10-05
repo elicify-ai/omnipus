@@ -29,14 +29,10 @@ import (
 )
 
 const (
-	// redirectEscalationDelay bounds how long the cooperative (soft) stop
-	// may take before the generation-aware hard abort fires — the same
-	// two-phase escalation executeStopAll's grace backstop uses, agent-side.
-	redirectEscalationDelay = 5 * time.Second
 	// redirectWaitDeadline bounds how long the replacement waits for the
 	// stop to land before reporting the undelivered instruction visibly
-	// (never a silent drop). Generous beyond the escalation: a hard abort
-	// plus its own 3s/5s internal timers must fit inside it.
+	// (never a silent drop). Generous beyond the one Stop's 3 s forced stop
+	// and its 3 s detach safety net.
 	redirectWaitDeadline = 30 * time.Second
 	// redirectPollInterval is the waiter's record-poll cadence.
 	redirectPollInterval = 200 * time.Millisecond
@@ -77,48 +73,33 @@ func (al *AgentLoop) RedirectSteeredSession(ctx context.Context, sessionID strin
 		return fmt.Errorf("steer: redirect %q: not callable for a %s session (the caller routes those)", sessionID, rec.State)
 	}
 
-	canceller := al.steerCanceller()
 	bg := context.Background()
 
-	// Stop half — single session, cooperative first: stamp the Stop fence
-	// (durable; nothing queued can start and the stop survives a restart),
-	// then ask the live turn to stop at its next tool boundary. subtree=false
-	// means exactly this session: cause stop, no descendants walked, no
-	// administrative cancellation, no goal touched (locked decision 1's stop
-	// shape, which a redirect's stop half shares).
-	var selected session.StopSelection
-	selectedSet := false
-	report, serr := canceller.StopTurns(bg, sessionID, by, false,
-		func(effectCtx context.Context, id string, generation int) (GenerationCancelResult, error) {
-			pair, carried := stopSelectionFromContext(effectCtx)
-			if !carried {
-				return GenerationCancelResult{}, fmt.Errorf("steer: redirect %q: accepted stop selection is missing", id)
-			}
-			selected, selectedSet = pair, true
-			return al.steerSoftStop(effectCtx, id, generation, "delegate redirect")
-		})
+	// Stop half — the one Stop (stop_session.go::StopSession), this session
+	// only: the fence and note are stamped durably first, the live turn is
+	// asked to stop at once and forced 3 s later on the selected execution.
+	// No descendants are walked, no goal is touched (locked decision 1's
+	// stop shape, which a redirect's stop half shares).
+	res, serr := al.StopSession(bg, StopRequest{
+		SessionID: sessionID, By: by, Channel: "agent",
+		HooksFor: func(string) CancelHooks { return CancelHooks{} },
+	})
 	if serr != nil {
 		return fmt.Errorf("steer: redirect %q: stop: %w", sessionID, serr)
 	}
+	if res.RootErr != nil {
+		return fmt.Errorf("steer: redirect %q: stop: %w", sessionID, res.RootErr)
+	}
+	report := res.Report
 	if len(report.Unreachable) > 0 {
 		return fmt.Errorf("steer: redirect %q: %s", sessionID, report.Unreachable[0].Reason)
 	}
 	if len(report.SkippedNewerGeneration) > 0 {
 		return fmt.Errorf("steer: redirect %q: the selected stop was superseded", sessionID)
 	}
-	if len(report.Reached) == 0 || !selectedSet {
+	if _, selected := res.Selected[sessionID]; len(report.Reached) == 0 || !selected {
 		return fmt.Errorf("steer: redirect %q: the stop stamped nothing (already stopped or terminal)", sessionID)
 	}
-	// The timer retains the acceptance-time value. The adapter validates it at
-	// the effect boundary; it never selects a replacement from a later fence.
-	effectCtx := withStopSelection(bg, selected)
-	generation := selected.Effect.Target.Generation
-	time.AfterFunc(redirectEscalationDelay, func() {
-		if _, err := al.SteerGenerationCancel(effectCtx, sessionID, generation); err != nil {
-			logger.ErrorCF("agent", "steer: redirect: hard-stop escalation failed",
-				map[string]any{"session_id": sessionID, "generation": generation, "error": err.Error()})
-		}
-	})
 
 	// Resume half — deliver the replacement once the stop has landed. The
 	// instruction is appended only AFTER the stop is durable (never raced

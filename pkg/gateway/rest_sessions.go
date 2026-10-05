@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -734,33 +735,17 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 		}
 	}
 
-	// Deleting a session is also a REST-originated Stop boundary: stamp and
-	// cancel its durable steering subtree before any session data disappears.
-	// A partial cascade aborts deletion instead of reporting success while an
-	// unreadable descendant may still be running. The current OpenAPI delete
-	// response has no cancel-report fields; until a future response
-	// schema publishes one, the error body carries the same one-line partial summary used by
-	// the WebSocket channel and no undocumented wire fields are emitted.
-	report, cascaded := cancelSteeredSubtree(r.Context(), a.agentLoop, id, steer.Principal{
-		Kind: steer.PrincipalKindHuman,
-		ID:   actorUsername(r),
-	})
-	// [Finding 3, ADR-091 fix lane 2] SkippedNewerGeneration also refuses
-	// deletion: a descendant whose live turn had already advanced past the
-	// generation this Stop stamped is STILL RUNNING, exactly the "may still
-	// be running" case this guard exists to catch. That is deliberately a
-	// WIDER condition than the `partial` flag on the cancel_stage frame,
-	// which per WP-D FR-D-001 means "unreachable" alone: a newer generation
-	// taking over is a CORRECT Stop outcome, but it is still a live turn, and
-	// deleting its session data is what this guard refuses. Hence
-	// cancelIncompleteSubtreeSummary, not cancelPartialSummary — the latter
-	// is empty in the skipped-only case and would leave this 500 with no
-	// reason in its body.
-	if cascaded && (len(report.Unreachable) > 0 || len(report.SkippedNewerGeneration) > 0) {
-		summary := cancelIncompleteSubtreeSummary(report)
-		slog.Warn("rest: delete session: Stop cascade incomplete; deletion refused",
-			"session_id", id, "summary", summary,
-			"unreachable", report.Unreachable, "skipped_newer_generation", report.SkippedNewerGeneration)
+	// Deleting a session is also a Stop boundary, through the one session
+	// Stop every other surface uses (polite at once, forced 3 s later), over
+	// the session and its whole helper tree, including a plain chat's live
+	// turn. Deletion then waits for the stopped turns to exit; if anything is
+	// still running (unreachable, taken over by a newer generation, or not
+	// exited after the forced stop) it is refused and nothing is deleted. The
+	// current OpenAPI delete response has no cancel-report fields, so the
+	// error body carries the same one-line summary the WebSocket channel uses.
+	if summary := a.stopBeforeDelete(r, id); summary != "" {
+		slog.Warn("rest: delete session: Stop incomplete; deletion refused",
+			"session_id", id, "summary", summary)
 		jsonErr(w, http.StatusInternalServerError, summary)
 		return
 	}
@@ -988,4 +973,34 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 // Delegates to the shared AgentLoop method.
 func (a *restAPI) resolveSessionStore(sessionID string) *session.UnifiedStore {
 	return a.agentLoop.ResolveSessionStore(sessionID)
+}
+
+// stopBeforeDelete runs the one Stop (tree scope) for a session about to be
+// deleted and waits for its stopped turns to exit. It returns a non-empty
+// summary when the session may still be running, which refuses the delete.
+func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
+	if a.agentLoop == nil {
+		return ""
+	}
+	res, err := a.agentLoop.StopSession(r.Context(), agent.StopRequest{
+		SessionID: id,
+		By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: actorUsername(r)},
+		Channel:   "web",
+		Tree:      true,
+	})
+	if err != nil {
+		return "Stop before delete failed; nothing was deleted: " + err.Error()
+	}
+	if res.RootErr != nil {
+		return "Stop before delete failed; nothing was deleted: " + res.RootErr.Error()
+	}
+	if summary := cancelIncompleteSubtreeSummary(res.Report); summary != "" && len(res.StillRunning()) > 0 {
+		return summary
+	}
+	ids := append([]string{id}, res.Report.Reached...)
+	if live := a.agentLoop.AwaitStoppedTurns(r.Context(), ids); len(live) > 0 {
+		return fmt.Sprintf("Stop before delete incomplete: %d session(s) still running after the forced stop (%s); nothing was deleted",
+			len(live), strings.Join(live, ", "))
+	}
+	return ""
 }

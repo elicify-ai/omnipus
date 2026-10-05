@@ -146,7 +146,6 @@ func DefaultConfig() *Config {
 			SteerRatePerMinute: DefaultSMSteerRatePerMinute,
 			SteerBody:          DefaultSMSteerBodyBytes,
 
-			CancelGrace:   duration(DefaultSMCancelGrace),
 			NeedsInputTTL: duration(DefaultSMNeedsInputTTL),
 
 			WakeDebounce:   duration(DefaultSMWakeDebounce),

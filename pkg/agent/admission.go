@@ -438,9 +438,9 @@ func (g *steerAdmission) removeQueuedExecution(claim executionClaim) {
 
 // removeQueuedSession drops EVERY queued entry for sessionID, whatever
 // generation each carries, and reports how many it removed. It is not a
-// rollback of one failed write: it is what the Stop cascade uses
-// (steer_delegate_cancel.go::cancelDelegatedSubtree) to take a
-// cancelled session out of the start queue.
+// rollback of one failed write. The Stop path never uses it: a stop effect
+// removes only its own selected admission (removeQueuedExecution, D2), so a
+// session-wide removal could take a same-generation replacement with it.
 //
 // reserveDispatch would refuse the promotion anyway, so this is not what
 // makes a stopped session safe. It is what makes the queue HONEST: a

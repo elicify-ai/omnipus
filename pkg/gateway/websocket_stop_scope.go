@@ -4,79 +4,52 @@ package gateway
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-type scopedTurnStopper interface {
-	StopTurns(ctx context.Context, sessionID string, by steer.Principal, subtree bool, stopTurn agent.GenerationCancelFunc) (steer.CancelReport, error)
-}
-
+// requestScopedStop is the web Stop surface's entry to the one session Stop
+// (agent.StopSession): this session (stopAll false) or its whole helper tree.
+// The returned bool reports whether a durable lifecycle cascade ran.
 func (h *WSHandler) requestScopedStop(wc *wsConn, sessionID string, stopAll bool) (steer.CancelReport, bool, agent.CancelOutcome, error) {
-	ctx := context.Background()
-	var rootOutcome agent.CancelOutcome
-	var rootErr error
-	var killed, failed int
 	// Timers can fire while a large durable cascade is still being collected.
 	// Publish an immutable report atomically; never race a timer with appends.
 	var stageReport atomic.Pointer[steer.CancelReport]
-	stopTurn := func(ctx context.Context, id string, generation int) (agent.GenerationCancelResult, error) {
-		var report *atomic.Pointer[steer.CancelReport]
-		if id == sessionID {
-			report = &stageReport
-		}
-		outcome, err := h.requestTurnStop(ctx, wc, id, generation, report)
-		killed += outcome.BackgroundSessionsKilled
-		failed += outcome.BackgroundSessionsFailed
-		if id == sessionID {
-			rootOutcome, rootErr = outcome, err
-		}
-		result := agent.GenerationCancelResult{
-			Found: outcome.Fired || outcome.Armed, Cancelled: outcome.Fired,
-			SkippedNewerGeneration: outcome.SkippedNewerGeneration,
-		}
-		if err == nil && !result.Found {
-			// id was stamped by this same cascade pass (cancelStamped only
-			// invokes stopTurn for ids in report.Reached) but had no live
-			// turn to cancel and nothing armed for it: it was only ever
-			// queued/parked, never ran a turn. h.requestTurnStop alone never
-			// reaches terminaliseNeverRanStop — only al.SteerGenerationCancel
-			// does (its only call site, pkg/agent/steer_cancel.go). Reuse
-			// that already-correct, already-tested chain (queue-position
-			// cleanup + the never-ran terminal landing + upward report)
-			// instead of reimplementing it here; the redundant second
-			// requestCancelForGeneration attempt inside it is a harmless
-			// no-op given result.Found is already false.
-			fallback, fbErr := h.agentLoop.SteerGenerationCancel(ctx, id, generation)
-			if fbErr != nil {
-				return result, fbErr
+	var stopper agent.StopTurnsCanceller
+	if c, ok := gatewaySteerCanceller(h.agentLoop).(agent.StopTurnsCanceller); ok {
+		stopper = c
+	}
+	res, err := h.agentLoop.StopSession(context.Background(), agent.StopRequest{
+		SessionID: sessionID,
+		By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: wc.userID},
+		Channel:   "web",
+		Tree:      stopAll,
+		Canceller: stopper,
+		HooksFor: func(id string) agent.CancelHooks {
+			var report *atomic.Pointer[steer.CancelReport]
+			if id == sessionID {
+				report = &stageReport
 			}
-			result = fallback
-		}
-		return result, err
-	}
-	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: wc.userID}
-	report, durable := applySteeredCancel(h.agentLoop, sessionID, func(canceller steer.Canceller) (steer.CancelReport, error) {
-		stopper, ok := canceller.(scopedTurnStopper)
-		if !ok {
-			return steer.CancelReport{}, fmt.Errorf("steer canceller does not support scoped Stop")
-		}
-		return stopper.StopTurns(ctx, sessionID, by, stopAll, stopTurn)
+			return h.stopHooks(wc, report)
+		},
 	})
-	if !durable {
-		rootOutcome, rootErr = h.requestTurnStop(ctx, wc, sessionID, 0, nil)
-		return report, false, rootOutcome, rootErr
+	if err != nil {
+		return steer.CancelReport{}, false, agent.CancelOutcome{}, err
 	}
-	stageReport.Store(&report)
-	rootOutcome.BackgroundSessionsKilled = killed
-	rootOutcome.BackgroundSessionsFailed = failed
-	return report, true, rootOutcome, rootErr
+	if !res.Durable {
+		return res.Report, false, res.Root, res.RootErr
+	}
+	stageReport.Store(&res.Report)
+	root := res.Root
+	root.BackgroundSessionsKilled = res.BackgroundKilled
+	root.BackgroundSessionsFailed = res.BackgroundFailed
+	return res.Report, true, root, res.RootErr
 }
 
-func (h *WSHandler) requestTurnStop(ctx context.Context, wc *wsConn, sessionID string, generation int, report *atomic.Pointer[steer.CancelReport]) (agent.CancelOutcome, error) {
+// stopHooks are the web transport hooks for one reached session.
+func (h *WSHandler) stopHooks(wc *wsConn, report *atomic.Pointer[steer.CancelReport]) agent.CancelHooks {
 	hooks := h.buildCancelHooks(wc)
 	// Each reached session receives its own RequestCancel. Do not let a
 	// transport hook silently expand a this-turn Stop back into a subtree.
@@ -96,7 +69,5 @@ func (h *WSHandler) requestTurnStop(ctx context.Context, wc *wsConn, sessionID s
 			h.sendCancelStageFrame(wc, id, stage)
 		}
 	}
-	return h.agentLoop.RequestCancel(ctx, agent.CancelScope{
-		SessionID: sessionID, TurnOnly: true, Generation: generation,
-	}, agent.CancelCanceller{UserID: wc.userID, Channel: "web"}, hooks)
+	return hooks
 }

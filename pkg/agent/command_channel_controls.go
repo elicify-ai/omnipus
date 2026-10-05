@@ -29,13 +29,14 @@ func (al *AgentLoop) commandSessionByChannelChat(channelName, chatID string) (st
 func (al *AgentLoop) requestCommandStopByChannelChat(ctx context.Context, channelName, chatID, userID, scope string) (bool, bool, error) {
 	sessionID, err := al.commandSessionByChannelChat(channelName, chatID)
 	if err != nil {
-		return false, false, err
+		return false, false, fmt.Errorf("Stop could not resolve this conversation (%w); nothing was stopped", err)
 	}
 	if sessionID != "" {
 		return al.RequestScopedCancelForSession(ctx, sessionID, userID, channelName, scope)
 	}
 	if scope == "tree" {
-		return false, false, fmt.Errorf("Stop all could not resolve this conversation's tree; nothing was stopped")
+		// No session is indexed for this chat: genuinely nothing to stop.
+		return false, false, nil
 	}
 	// A single-session Stop may arrive before the first turn registers. The
 	// existing channel/chat pre-arm latch is its truthful acknowledged outcome.

@@ -110,7 +110,7 @@ func DispatchCancelIfRecognized(
 //   - armed  → "⏸ Cancel acknowledged — nothing is running yet, but it will
 //     stop the instant it starts." (a latch stands in; the next turn to
 //     register will be canceled)
-//   - neither → "Nothing to cancel" (genuine no-op)
+//   - neither → "Nothing to stop." (genuine no-op)
 //
 // armed is NEVER true when fired is true (see CancelOutcome.Armed's contract),
 // so the case order is safe.
@@ -121,7 +121,7 @@ func ackTextForCancelOutcome(fired, armed bool) string {
 	case armed:
 		return "⏸ Cancel acknowledged — nothing is running yet, but it will stop the instant it starts."
 	default:
-		return "Nothing to cancel"
+		return "Nothing to stop."
 	}
 }
 

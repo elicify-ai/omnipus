@@ -1,5 +1,5 @@
 // steer_cancel.go implements ADR-091 I-6: SteerCanceller.CancelSubtree/
-// StopSubtree walk the durable steering edge, stamp a Stop marker on every
+// StopTurns walk the durable steering edge, stamp a Stop marker on every
 // reachable non-terminal descendant under the stopped node's own cascade
 // lock, and cancel each live turn with the stamped generation;
 // SteerCanceller.Revive increments a stopped or terminal session's
@@ -431,23 +431,7 @@ func (c *SteerCanceller) CancelSubtree(ctx context.Context, sessionID string, by
 	if c != nil {
 		cancelTurn = c.cancelTurn
 	}
-	return c.cascade(ctx, sessionID, by, true, cancelTurn, nil)
-}
-
-// StopSubtree is CancelSubtree's DURABLE half on its own: the same cascade
-// lock, the same two enumeration passes, the same Stop markers — but the live
-// turns are left to stop themselves.
-//
-// It exists for delegate(action="cancel", hard=false), whose contract
-// (ADR-053 R§Cancel/restart) promises the child a checkpoint-flush window
-// before anything is torn out from under it. The marker still has to land
-// immediately, because it is what stops admission ever promoting a queued
-// session that has been cancelled (reserveDispatch, below) — and a marker is
-// durable where a request to a live turn is not. The caller asks the reached
-// turns to stop cooperatively and escalates after its own grace window;
-// see steer_delegate_cancel.go::cancelDelegatedSubtree.
-func (c *SteerCanceller) StopSubtree(ctx context.Context, sessionID string, by steer.Principal) (steer.CancelReport, error) {
-	return c.cascade(ctx, sessionID, by, true, nil, nil)
+	return c.cascade(ctx, sessionID, by, true, cancelTurn)
 }
 
 // StopTurns stamps the requested session (and, for stop-all, its durable
@@ -455,54 +439,12 @@ func (c *SteerCanceller) StopSubtree(ctx context.Context, sessionID string, by s
 // generation. It shares the existing cascade lock and late-child pass, but
 // never invokes the administrative cancellation/goal-ending adapter.
 func (c *SteerCanceller) StopTurns(ctx context.Context, sessionID string, by steer.Principal, subtree bool, stopTurn GenerationCancelFunc) (steer.CancelReport, error) {
-	return c.cascade(ctx, sessionID, by, subtree, stopTurn, nil)
+	return c.cascade(ctx, sessionID, by, subtree, stopTurn)
 }
 
-// ReapplySelectedStops is the delegate tool's grace backstop: it carries the
-// effect of Stops an EARLIER cooperative acceptance already selected, under
-// the same cascade lock, and accepts nothing new. A selection whose fence is no
-// longer current (landed, resumed, replaced by a newer Stop) is dropped, never
-// re-targeted at the session's current execution.
-func (c *SteerCanceller) ReapplySelectedStops(
-	ctx context.Context, sessionID string, selections []session.StopSelection, cancelTurn GenerationCancelFunc,
-) (steer.CancelReport, error) {
-	if len(selections) == 0 {
-		return steer.CancelReport{}, nil
-	}
-	return c.cascade(ctx, sessionID, steer.Principal{}, false, cancelTurn, selections)
-}
-
-// currentReappliedSelections keeps, under the cascade lock, only the carried
-// selections whose durable fence is still current. A superseded selection is
-// dropped; it is never re-targeted at the session's current execution.
-func (c *SteerCanceller) currentReappliedSelections(reapply []session.StopSelection, report *steer.CancelReport) map[string]session.StopSelection {
-	current := make(map[string]session.StopSelection)
-	for _, selected := range reapply {
-		if _, dup := current[selected.SessionID]; dup {
-			continue
-		}
-		rec, err := c.Lifecycle.Load(selected.SessionID)
-		if err != nil {
-			if !errors.Is(err, session.ErrLifecycleNotFound) {
-				report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: selected.SessionID, Reason: err.Error()})
-			}
-			continue
-		}
-		if !stopSelectionMatchesRecord(selected, rec) {
-			continue
-		}
-		current[selected.SessionID] = selected
-		report.Reached = append(report.Reached, selected.SessionID)
-	}
-	return current
-}
-
-// cascade runs one Stop cascade under sessionID's cascade lock. A non-nil
-// reapply carries already-accepted selections: nothing is stamped or
-// enumerated, and only a selection still matching its durable fence is fired.
+// cascade runs one Stop cascade under sessionID's cascade lock.
 func (c *SteerCanceller) cascade(
 	ctx context.Context, sessionID string, by steer.Principal, subtree bool, cancelTurn GenerationCancelFunc,
-	reapply []session.StopSelection,
 ) (steer.CancelReport, error) {
 	var report steer.CancelReport
 	if c == nil || c.Lifecycle == nil {
@@ -527,17 +469,11 @@ func (c *SteerCanceller) cascade(
 	defer unlock()
 
 	stamped := make(map[string]session.StopSelection)
-	if reapply != nil {
-		stamped = c.currentReappliedSelections(reapply, &report)
-		unlock()
-		c.cancelStamped(ctx, stamped, &report, cancelTurn)
-		return report, nil
-	}
 	seen := make(map[string]struct{})
 	at := time.Now().UTC()
 	// process stamps each id with ONE cause (D2/D6's closed vocabulary):
 	// StopCauseStop for the cascade's own direct target (sessionID — the
-	// session named in the CancelSubtree/StopSubtree call), StopCauseCascade
+	// session named in the CancelSubtree/StopTurns call), StopCauseCascade
 	// for every OTHER id, which is reachable only because it is sessionID's
 	// descendant. Callers below split the combined root+first-pass-
 	// descendants slice the pre-stop_note code processed as one list into

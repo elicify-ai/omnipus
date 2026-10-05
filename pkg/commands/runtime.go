@@ -11,7 +11,7 @@ import (
 // ErrNoActiveTurn is returned by CancelActiveTurn when the agent loop reports
 // that no turn is currently running for the given session AND no
 // pre-registration cancel latch was armed in its place (see ErrCancelArmed).
-// Callers should reply with an informational "Nothing to cancel" message
+// Callers should reply with an informational "Nothing to stop." message
 // rather than treating it as a failure.
 var ErrNoActiveTurn = errors.New("no active turn")
 

@@ -22,8 +22,8 @@ func (al *AgentLoop) StopSessionTurn(ctx context.Context, sessionID, userID, cha
 	return al.RequestScopedCancelForSession(ctx, sessionID, userID, channel, "session")
 }
 
-// RequestScopedCancelForSession runs StopTurns with the explicitly requested
-// scope, using RequestCancel's TurnOnly path for each stamped live effect.
+// RequestScopedCancelForSession is the command surfaces' entry to the one
+// Stop (stop_session.go::StopSession) with the explicitly requested scope.
 func (al *AgentLoop) RequestScopedCancelForSession(ctx context.Context, sessionID, userID, channel, scope string) (bool, bool, error) {
 	if al == nil || strings.TrimSpace(sessionID) == "" {
 		return false, false, fmt.Errorf("Stop requires a session")
@@ -34,81 +34,29 @@ func (al *AgentLoop) RequestScopedCancelForSession(ctx context.Context, sessionI
 	if scope != "session" && scope != "tree" {
 		return false, false, fmt.Errorf("Stop scope must be session or tree")
 	}
-	lifecycle := al.GetSessionLifecycleStore()
-	if lifecycle == nil {
-		if scope == "tree" {
-			return false, false, fmt.Errorf("tree-scoped Stop all is unavailable; nothing was stopped")
-		}
-		outcome, err := al.requestCommandTurnStop(ctx, sessionID, 0, userID, channel)
-		return outcome.Fired, outcome.Armed, err
-	}
-	if _, err := lifecycle.Load(sessionID); err != nil {
-		if !errors.Is(err, session.ErrLifecycleNotFound) {
-			return false, false, fmt.Errorf("read Stop target: %w", err)
-		}
-		// An ordinary chat may have no lifecycle record. Prove its tree is
-		// empty before treating its own turn as the entire tree; read failures
-		// or orphaned children are never hidden by a session-only fallback.
-		if scope == "tree" {
-			children, walkErr := CollectDescendantSessionIDs(lifecycle, sessionID)
-			if walkErr != nil {
-				return false, false, fmt.Errorf("resolve Stop-all tree: %w", walkErr)
-			}
-			if len(children) != 0 {
-				return false, false, fmt.Errorf("stop-all target has no lifecycle record; its helpers were not stopped")
-			}
-		}
-		outcome, stopErr := al.requestCommandTurnStop(ctx, sessionID, 0, userID, channel)
-		return outcome.Fired, outcome.Armed, stopErr
-	}
-
-	var fired, armed bool
-	stopTurn := func(ctx context.Context, id string, generation int) (GenerationCancelResult, error) {
-		outcome, err := al.requestCommandTurnStop(ctx, id, generation, userID, channel)
-		fired = fired || outcome.Fired
-		armed = armed || (id == sessionID && outcome.Armed)
-		result := GenerationCancelResult{
-			Found: outcome.Fired || outcome.Armed, Cancelled: outcome.Fired,
-			SkippedNewerGeneration: outcome.SkippedNewerGeneration,
-		}
-		if err == nil && !result.Found && !result.SkippedNewerGeneration {
-			// The same never-ran landing the gateway's scoped Stop uses.
-			return al.SteerGenerationCancel(ctx, id, generation)
-		}
-		return result, err
-	}
-	report, err := al.steerCanceller().StopTurns(ctx, sessionID,
-		steer.Principal{Kind: steer.PrincipalKindHuman, ID: userID}, scope == "tree", stopTurn)
+	res, err := al.StopSession(ctx, StopRequest{
+		SessionID: sessionID,
+		By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: userID},
+		Channel:   channel,
+		Tree:      scope == "tree",
+	})
 	if err != nil {
-		return fired, false, err
+		return false, false, err
 	}
 	var failures []error
-	for _, unreachable := range report.Unreachable {
+	if res.RootErr != nil {
+		failures = append(failures, res.RootErr)
+	}
+	for _, unreachable := range res.Report.Unreachable {
 		failures = append(failures, fmt.Errorf("Stop for session %s failed: %s", unreachable.ID, unreachable.Reason))
 	}
+	if res.BackgroundFailed != 0 {
+		failures = append(failures, fmt.Errorf("Stop could not terminate %d background sessions", res.BackgroundFailed))
+	}
 	if err := errors.Join(failures...); err != nil {
-		return fired, false, err
+		return res.Fired, false, err
 	}
-	// A queued-only stop still did work: its durable stop landed even without
-	// an active turn. Repeated stops have no Reached entries and are no-ops.
-	if !armed {
-		fired = fired || len(report.Reached) != 0
-	}
-	return fired, !fired && armed, nil
-}
-
-func (al *AgentLoop) requestCommandTurnStop(ctx context.Context, sessionID string, generation int, userID, channel string) (CancelOutcome, error) {
-	outcome, err := al.RequestCancel(ctx,
-		CancelScope{SessionID: sessionID, TurnOnly: true, Generation: generation},
-		CancelCanceller{UserID: userID, Channel: channel},
-		CancelHooks{KillBackgroundSessions: killBackgroundSessionsForCancelSurface})
-	if err != nil {
-		return outcome, err
-	}
-	if outcome.BackgroundSessionsFailed != 0 {
-		return outcome, fmt.Errorf("Stop could not terminate %d background sessions", outcome.BackgroundSessionsFailed)
-	}
-	return outcome, nil
+	return res.Fired, res.Armed, nil
 }
 
 // helperSessionRecord resolves only a real durable edge. Genuine absence gets

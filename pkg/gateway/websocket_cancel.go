@@ -5,11 +5,8 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -203,45 +200,6 @@ func (h *WSHandler) sendExternalCancelPartialNotice(ctx context.Context, session
 		slog.Warn("ws: publish partial Stop notice to originating channel failed",
 			"session_id", sessionID, "channel", target.Channel, "chat_id", target.ChatID, "error", err)
 	}
-}
-
-// cancelSteeredSubtree applies ADR-091 Stop only when a durable lifecycle
-// record exists. Ordinary chats with no steering record keep using the legacy
-// live-turn cancel path and must not be falsely reported as partial.
-func cancelSteeredSubtree(ctx context.Context, al *agent.AgentLoop, sessionID string, by steer.Principal) (steer.CancelReport, bool) {
-	return applySteeredCancel(al, sessionID, func(canceller steer.Canceller) (steer.CancelReport, error) {
-		return canceller.CancelSubtree(ctx, sessionID, by)
-	})
-}
-
-func applySteeredCancel(al *agent.AgentLoop, sessionID string, apply func(steer.Canceller) (steer.CancelReport, error)) (steer.CancelReport, bool) {
-	var report steer.CancelReport
-	if al == nil {
-		return report, false
-	}
-	store := al.GetSessionLifecycleStore()
-	if store == nil {
-		return report, false
-	}
-	if _, err := store.Load(sessionID); err != nil {
-		if errors.Is(err, session.ErrLifecycleNotFound) {
-			if _, statErr := os.Stat(filepath.Join(store.Dir(), sessionID+".jsonl")); errors.Is(statErr, os.ErrNotExist) {
-				return report, false
-			}
-		}
-		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: err.Error()})
-		return report, true
-	}
-	canceller := gatewaySteerCanceller(al)
-	if canceller == nil {
-		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: "steer canceller is not configured"})
-		return report, true
-	}
-	result, err := apply(canceller)
-	if err != nil {
-		result.Unreachable = append(result.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: err.Error()})
-	}
-	return result, true
 }
 
 // u11CollectDescendantSessionIDs walks the durable lifecycle store's

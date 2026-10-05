@@ -861,7 +861,7 @@ type SessionConfig struct {
 	// decision 2). Zero means "unset" — EffectiveStatsFlushInterval
 	// substitutes DefaultSessionStatsFlushInterval (5s). Accepts a JSON
 	// string ("5s", "10s") or a bare number interpreted as seconds, mirroring
-	// SessionMessagingConfig's duration fields (CancelGrace, NeedsInputTTL).
+	// SessionMessagingConfig's duration fields (NeedsInputTTL).
 	// Owned by U28 (pkg/config/**); U6 (pkg/session/unified.go) reads it —
 	// U28 does not wire it into the store.
 	StatsFlushInterval duration `json:"stats_flush_interval,omitempty"`

@@ -35,10 +35,12 @@ import (
 // fast tests instead of sleeping the real production duration).
 var cancelHardAbortDelay = 3 * time.Second
 
-// cancelDetachDelay is PHASE C's escalation delay, measured from PHASE B's
-// own hard-abort firing (not from the original Stop). Declared as a var for
-// the same test-shrinking reason as cancelHardAbortDelay.
-var cancelDetachDelay = 5 * time.Second
+// cancelDetachDelay is PHASE C's safety net, measured from PHASE B's own
+// hard-abort firing (not from the original Stop): a turn that ignored even
+// the forced stop is abandoned (its later writes suppressed) and audited.
+// 3 s like every other stop wait (founder one-stop decision, 2026-10-05).
+// Declared as a var for the same test-shrinking reason as cancelHardAbortDelay.
+var cancelDetachDelay = 3 * time.Second
 
 // CancelScope identifies what to cancel.
 // At least one of SessionID or (Channel + ChatID) must be set; if both are
@@ -282,7 +284,7 @@ type agentLoopRequestCancel struct {
 //   - transcript MarkLastEntryTruncated + turn_canceled entry on Finish
 //   - turn_canceled audit on Finish
 //   - 3s timer → hard abort (InterruptSessionHard(sessionID, ScopeSubtree, hint))
-//   - 5s timer → detached / MarkAbandoned + turn_cancel_stuck audit
+//   - 3s after the hard abort → detached / MarkAbandoned + turn_cancel_stuck audit
 //
 // Returns:
 //   - CancelOutcome{Fired: true, Descendants, TurnID} on a successful claim
@@ -628,7 +630,7 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 	rc.descendants = rc.cancelTurnIDs()
 
 	// --- ADR-057 FR-025/FR-026: durable descendant lifecycle-record walk ---
-	// Runs on its OWN goroutine, off the 3s/5s escalation path below, so a
+	// Runs on its OWN goroutine, off the 3s/3s escalation path below, so a
 	// subtree with many persisted lifecycle records never delays
 	// RequestCancel's return or the graceful/hard cascade timers. Reaches
 	// every descendant with a DURABLE lifecycle record — including one whose
@@ -794,11 +796,10 @@ func (rc *agentLoopRequestCancel) interruptGracefully() {
 	if !rc.scope.TurnOnly {
 		lifecycleStore := rc.al.GetSessionLifecycleStore()
 		// cause=stop: this is the direct target of a human/API Stop
-		// (RequestCancel) — the "legacy" non-cascade path (ordinary chats with
-		// no steering record; see cancelSteeredSubtree's own doc comment,
-		// gateway/websocket_cancel.go, for the routing split with the
+		// (RequestCancel) on its non-TurnOnly path. The one session Stop
+		// (stop_session.go::StopSession) always uses TurnOnly and the
 		// SteerCanceller cascade, which stamps its OWN note via stampStop and
-		// never reaches here for the same stop event). rc.canceller is always a
+		// never reaches here. rc.canceller is always a
 		// gateway/channel-authenticated identity, i.e. human-originated.
 		stopNote := &session.StopNote{At: time.Now().UTC(), By: session.StopActorHumanUser(rc.canceller.UserID), Cause: session.StopCauseStop}
 		if err := session.TransitionSession(lifecycleStore, rc.store, rc.sessionID, session.LifecycleStopped, "", stopNote); err != nil && !errors.Is(err, session.ErrLifecycleNotFound) {
@@ -1167,7 +1168,7 @@ func (al *AgentLoop) resolveBackgroundKillSessionIDs(sessionID string) ([]string
 //
 // FR-025: RequestCancel launches this via `go
 // al.cancelDurableDescendantLifecycleRecords(...)` — once per Stop, on its
-// OWN goroutine, off the 3s/5s escalation path — so a subtree with many
+// OWN goroutine, off the 3s/3s escalation path — so a subtree with many
 // persisted lifecycle records never delays RequestCancel's return or the
 // graceful/hard cascade timers.
 //

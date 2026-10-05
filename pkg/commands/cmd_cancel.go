@@ -43,7 +43,7 @@ func cancelCommand() Definition {
 				return req.Reply("⏸ Cancel acknowledged — nothing is running yet, but it will stop the instant it starts.")
 			case errors.Is(err, ErrNoActiveTurn):
 				// Informational — nothing was running; not a failure.
-				return req.Reply("Nothing to cancel")
+				return req.Reply("Nothing to stop.")
 			default:
 				// Real failure (e.g., fsync error, lock contention).
 				return req.Reply("Cancel request failed: " + err.Error())
