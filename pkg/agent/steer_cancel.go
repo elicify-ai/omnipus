@@ -42,6 +42,12 @@ type GenerationCancelResult struct {
 	Found                  bool
 	Cancelled              bool
 	SkippedNewerGeneration bool
+	// Superseded refines SkippedNewerGeneration: the carried selection no
+	// longer matches the durable fence (it landed, or a Resume/completion
+	// replaced it first), so the effect did nothing (D2/D5). Callers that
+	// only need "may something still be running" keep reading
+	// SkippedNewerGeneration.
+	Superseded bool
 }
 
 // GenerationCancelFunc carries the cascade's acceptance-time StopSelection
@@ -64,7 +70,7 @@ func (al *AgentLoop) SteerGenerationCancel(ctx context.Context, sessionID string
 	}
 	if !current {
 		al.removeQueuedStopEffects(sessionID, []session.StopEffect{selected.Effect})
-		return GenerationCancelResult{SkippedNewerGeneration: true}, nil
+		return GenerationCancelResult{SkippedNewerGeneration: true, Superseded: true}, nil
 	}
 	ctx = withStopSelection(ctx, selected)
 	d, current, retainErr := al.retainSelectedStop(ctx, sessionID, generation, nil)
@@ -73,7 +79,7 @@ func (al *AgentLoop) SteerGenerationCancel(ctx context.Context, sessionID string
 	}
 	if !current {
 		al.removeQueuedStopEffects(sessionID, []session.StopEffect{selected.Effect})
-		return GenerationCancelResult{SkippedNewerGeneration: true}, nil
+		return GenerationCancelResult{SkippedNewerGeneration: true, Superseded: true}, nil
 	}
 	if d == nil {
 		return GenerationCancelResult{}, nil
@@ -884,6 +890,9 @@ func (c *SteerCanceller) cancelStamped(ctx context.Context, stamped map[string]s
 		if err != nil {
 			report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: id, Reason: err.Error()})
 			continue
+		}
+		if result.Superseded {
+			report.Superseded = append(report.Superseded, id)
 		}
 		if result.SkippedNewerGeneration {
 			report.SkippedNewerGeneration = append(report.SkippedNewerGeneration, id)

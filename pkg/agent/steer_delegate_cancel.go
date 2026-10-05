@@ -10,6 +10,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -128,15 +129,29 @@ func (al *AgentLoop) cancelDelegatedSubtreeSelected(sessionID string, by steer.P
 	// cancelled"/"hard-cancelled immediately" wording stays honest (see
 	// delegate_run.go::cancelBackgroundShellWarnings for the neighbouring
 	// shell-kill equivalent).
-	if len(report.Unreachable) > 0 || len(report.SkippedNewerGeneration) > 0 {
+	// A selection superseded by a newer explicit action (D2/D5) left nothing
+	// running because of this Stop, so it is not reported as running past it.
+	stillRunning := withoutSuperseded(report.SkippedNewerGeneration, report.Superseded)
+	if len(report.Unreachable) > 0 || len(stillRunning) > 0 {
 		return report.Reached, accepted, fmt.Errorf(
 			"steer: delegate cancel %q: partial cascade — reached %d; unreachable %d (%s); still running past a newer generation: %d (%s)",
 			sessionID, len(report.Reached),
 			len(report.Unreachable), unreachableSummary(report.Unreachable),
-			len(report.SkippedNewerGeneration), strings.Join(report.SkippedNewerGeneration, ", "),
+			len(stillRunning), strings.Join(stillRunning, ", "),
 		)
 	}
 	return report.Reached, accepted, nil
+}
+
+// withoutSuperseded returns the ids in skipped that are not in superseded.
+func withoutSuperseded(skipped, superseded []string) []string {
+	out := make([]string, 0, len(skipped))
+	for _, id := range skipped {
+		if !slices.Contains(superseded, id) {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // unreachableSummary renders every unreachable session's id and reason for

@@ -104,7 +104,7 @@ func (al *AgentLoop) steerSoftStop(ctx context.Context, sessionID string, genera
 	}
 	if !current {
 		al.removeQueuedStopEffects(sessionID, []session.StopEffect{selected.Effect})
-		return GenerationCancelResult{SkippedNewerGeneration: true}, nil
+		return GenerationCancelResult{SkippedNewerGeneration: true, Superseded: true}, nil
 	}
 	d, current, retainErr := al.retainSelectedStop(ctx, sessionID, generation, nil)
 	if retainErr != nil {
@@ -112,7 +112,7 @@ func (al *AgentLoop) steerSoftStop(ctx context.Context, sessionID string, genera
 	}
 	if !current {
 		al.removeQueuedStopEffects(sessionID, []session.StopEffect{selected.Effect})
-		return GenerationCancelResult{SkippedNewerGeneration: true}, nil
+		return GenerationCancelResult{SkippedNewerGeneration: true, Superseded: true}, nil
 	}
 	if d == nil {
 		return GenerationCancelResult{}, nil
