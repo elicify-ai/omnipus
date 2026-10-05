@@ -817,6 +817,9 @@ func TestBoot984_FailInterruptedLandsStoppedRestartKeepsGoal(t *testing.T) {
 	if loaded.StopNote == nil || loaded.StopNote.Cause != session.StopCauseRestart {
 		t.Fatalf("stop note after failInterrupted = %+v, want cause %q (D8.3: cause restart, not a restart_interrupt note)", loaded.StopNote, session.StopCauseRestart)
 	}
+	if loaded.StopNote.By != session.StopActorRestart || loaded.StopNote.BootSeq != h.writingBoot.Current() {
+		t.Fatalf("stop note after failInterrupted = %+v, want by=%q boot_seq=%d (D8.3: the boot writer's actor and the WRITING boot's minted epoch)", loaded.StopNote, session.StopActorRestart, h.writingBoot.Current())
+	}
 	cg, err := resolveGoalRecordStore().Get(childGoal)
 	if err != nil {
 		t.Fatalf("Get(childGoal): %v", err)

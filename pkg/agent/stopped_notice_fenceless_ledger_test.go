@@ -418,6 +418,15 @@ func TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed(t *testin
 	if c := rings.count(oldNoticeID); c != 0 {
 		t.Fatalf("setup: the fresh process's doorbell already rang %d time(s) for %s — it must start silent", c, oldNoticeID)
 	}
+	// The restarted process mints ONE genuine epoch over the SAME real boot
+	// epoch directory the interrupted process minted from; that persisted
+	// Current is the WRITING boot, strictly after the interrupted admitting boot.
+	writingBoot := session.NewBootEpochStore(filepath.Join(home, "boot_epoch"))
+	writingEpoch, mintErr := writingBoot.Mint()
+	if mintErr != nil || writingEpoch <= resumed.ExecutionID.BootSeq {
+		t.Fatalf("setup: restart Mint=%d err=%v, interrupted admitting boot=%d", writingEpoch, mintErr, resumed.ExecutionID.BootSeq)
+	}
+	restart.SetBootEpochStore(writingBoot)
 
 	// The BOOT pass — recoverSteered, the full entry a restarted process
 	// runs. C5 pass one (the current-run stop) must land even though the old
@@ -427,6 +436,7 @@ func TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed(t *testin
 		Lifecycle:  restart.GetSessionLifecycleStore(),
 		Sessions:   restart.GetSessionStore(),
 		Inbox:      restart.GetMessageInboxStore(),
+		BootEpoch:  writingBoot,
 		Classifier: NewSteerRecordClassifier(restart.GetSessionLifecycleStore(), restart.GetSessionStore()),
 		Deliverer:  restart.getUpwardDeliverer(),
 	}
@@ -445,6 +455,10 @@ func TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed(t *testin
 		t.Fatalf("after the boot pass the child is at generation %d, want %d — boot stops, it never revives (D8.5)", after.Generation, generation)
 	}
 
+	if after.StopNote == nil || after.StopNote.By != session.StopActorRestart || after.StopNote.BootSeq != writingEpoch {
+		t.Fatalf("restart stop note = %+v, want by=%q boot_seq=%d (the freshly minted WRITING boot, D8.3)", after.StopNote, session.StopActorRestart, writingEpoch)
+	}
+
 	// ORACLE (C3 + C5 pass one): the restart stop is its OWN ledgered
 	// transition — cause restart, same generation, seq advancing the old
 	// stop's — and its notice is discovered from that ledger history.
@@ -456,8 +470,8 @@ func TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed(t *testin
 		t.Fatalf("landed history after boot = %s, want exactly 2 transitions — the old stop and the boot's restart stop", w1hFormatTransitions(trs))
 	}
 	restartTr := trs[1]
-	if restartTr.Cause != session.StopCauseRestart || restartTr.Actor != session.StopActorSystem || restartTr.Generation != generation {
-		t.Fatalf("boot transition = %s, want {cause:restart actor:system gen:%d}", w1hFormatTransitions([]session.StoppedTransition{restartTr}), generation)
+	if restartTr.Cause != session.StopCauseRestart || restartTr.Actor != session.StopActorRestart || restartTr.Generation != generation {
+		t.Fatalf("boot transition = %s, want {cause:restart actor:restart gen:%d}", w1hFormatTransitions([]session.StoppedTransition{restartTr}), generation)
 	}
 	if restartTr.StopSeq <= trs[0].StopSeq {
 		t.Fatalf("restart stop_seq %d does not advance the old stop's %d — the fence-less restart stop takes the next monotonic sequence (C3)", restartTr.StopSeq, trs[0].StopSeq)

@@ -50,7 +50,31 @@ type bootRecoveryHarness struct {
 	sessions  *session.UnifiedStore
 	inbox     *session.MessageInboxStore
 	deliverer *bootRecordingDeliverer
-	notices   []string
+	// writingBoot is the actual BootEpochStore minted once for this simulated
+	// writing boot over a real directory (never a hard-coded epoch). Recovery
+	// built by recovery() reads the restart note's boot_seq from it.
+	writingBoot *session.BootEpochStore
+	notices     []string
+}
+
+// mintWritingBootForTest mints ONE genuine boot epoch over a fresh real
+// directory under root and returns the minted store, as the gateway does at
+// startup before recovery runs. The value is whatever Mint persisted.
+func mintWritingBootForTest(t *testing.T, root string) *session.BootEpochStore {
+	t.Helper()
+	dir := filepath.Join(root, "boot_epoch")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("SETUP create boot epoch dir: %v", err)
+	}
+	store := session.NewBootEpochStore(dir)
+	epoch, err := store.Mint()
+	if err != nil {
+		t.Fatalf("SETUP Mint writing boot epoch: %v", err)
+	}
+	if epoch == 0 || store.Current() != epoch {
+		t.Fatalf("SETUP: minted epoch=%d but Current()=%d", epoch, store.Current())
+	}
+	return store
 }
 
 func newBootRecoveryHarness(t *testing.T) *bootRecoveryHarness {
@@ -70,6 +94,7 @@ func newBootRecoveryHarness(t *testing.T) *bootRecoveryHarness {
 		sessions:  sessions,
 		inbox:     session.NewMessageInboxStore(filepath.Join(root, "inbox")),
 	}
+	h.writingBoot = mintWritingBootForTest(t, root)
 	h.deliverer = &bootRecordingDeliverer{inbox: h.inbox, lifecycle: h.lifecycle}
 	return h
 }
@@ -125,6 +150,7 @@ func (h *bootRecoveryHarness) recovery() *SteerBootRecovery {
 		Lifecycle:      h.lifecycle,
 		Sessions:       h.sessions,
 		Inbox:          h.inbox,
+		BootEpoch:      h.writingBoot,
 		Classifier:     NewSteerRecordClassifier(h.lifecycle, h.sessions),
 		Deliverer:      h.deliverer,
 		OperatorNotice: func(message string) { h.notices = append(h.notices, message) },
