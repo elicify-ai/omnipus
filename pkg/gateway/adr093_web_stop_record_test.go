@@ -314,12 +314,58 @@ func (f *u2ScopeFixture) cancelFrame(t *testing.T, scope *string) {
 func (f *u2ScopeFixture) requireStopped(t *testing.T, id string) {
 	t.Helper()
 	require.Equal(t, context.Canceled, f.contexts[id].Err(), "tree must cancel the real live turn for %s", id)
-	rec, err := f.lifecycle.Load(id)
+	// Frozen sub-agent control-plane ADR D2 CRIT-001: a LANDED stopped
+	// record spends its active fence and retains its original reason note.
+	// Observe that published settlement, never stop unrelated work to get it.
+	var rec *session.LifecycleRecord
+	var loadErr error
+	require.Eventually(t, func() bool {
+		rec, loadErr = f.lifecycle.Load(id)
+		if loadErr != nil || rec.State != session.LifecycleStopped || rec.Stop != nil || rec.StopNote == nil {
+			return false
+		}
+		history, err := f.lifecycle.ListStoppedTransitions(id)
+		if err != nil || len(history) != 1 {
+			return false
+		}
+		key := id
+		if f.before[id].SteeredBy == nil {
+			key = "agent:mia:session:" + id
+		}
+		return f.al.GetActiveTurnBySession(key) == nil
+	}, cancelTestTurnStartDeadline, 10*time.Millisecond, "actual selected turn must finish owned retirement and publish its landed history: %s", id)
+	require.NoError(t, loadErr)
+	assert.Equal(t, session.LifecycleStopped, rec.State, "tree must land stopped, not failed: %s", id)
+	assert.False(t, rec.Terminal(), "stopped is resumable/nonterminal: %s", id)
+	assert.Nil(t, rec.Stop, "landed stop must clear the active fence: %s", id)
+	require.NotNil(t, rec.StopNote, "landed stop must retain its original reason: %s", id)
+	assert.Equal(t, 1, rec.Generation, "tree stops the original fixture generation: %s", id)
+	assert.Equal(t, "human:u2-scope-user", rec.StopNote.By, "lasting note retains the actual requesting human: %s", id)
+	cause := session.StopCauseCascade
+	if id == f.parent {
+		cause = session.StopCauseStop
+	}
+	assert.Equal(t, cause, rec.StopNote.Cause, "target/descendant stop cause remains scoped: %s", id)
+	assert.NotZero(t, rec.StopNote.Seq, "landed note retains a real stop sequence: %s", id)
+	assert.False(t, rec.StopNote.At.IsZero(), "landed note retains the stop instant: %s", id)
+	require.NotNil(t, f.before[id].ExecutionID, "fixture must have an original actual admission: %s", id)
+	assert.Equal(t, f.before[id].ExecutionID, rec.ExecutionID, "landing retains original selected execution: %s", id)
+	assert.Nil(t, rec.FinalDelivery, "Stop must not manufacture a terminal outbox: %s", id)
+	effects, err := f.lifecycle.AcceptedStopEffects(id)
 	require.NoError(t, err)
-	require.NotNil(t, rec.Stop, "tree must persist a Stop for %s", id)
-	assert.Equal(t, 1, rec.Stop.Generation, "tree stops the current generation (fixture generation 1): %s", id)
-	assert.Equal(t, session.PrincipalKindHuman, rec.Stop.By.Kind, "Stop must retain the human principal: %s", id)
-	assert.Equal(t, "u2-scope-user", rec.Stop.By.ID, "Stop must retain the requesting user: %s", id)
+	require.Len(t, effects, 1, "one original selected control must remain historical: %s", id)
+	require.NotNil(t, rec.StopEffect, "original accepted effect must remain: %s", id)
+	assert.Equal(t, effects[0], *rec.StopEffect, "landing must not accept a new control: %s", id)
+	assert.Equal(t, 1, effects[0].Target.Generation, "accepted control keeps original generation: %s", id)
+	assert.Equal(t, f.before[id].ExecutionID.RunID, effects[0].Target.RunID, "accepted control keeps original run: %s", id)
+	assert.Equal(t, f.before[id].ExecutionID.BootSeq, effects[0].Target.BootSeq, "accepted control keeps original admitting boot: %s", id)
+	landed, err := f.lifecycle.ListStoppedTransitions(id)
+	require.NoError(t, err)
+	require.Len(t, landed, 1, "one selected stop landing must be recorded: %s", id)
+	assert.Equal(t, effects[0].ControlID, landed[0].ControlID, "history belongs to the original control: %s", id)
+	assert.Equal(t, landed[0].StopSeq, rec.StopNote.Seq, "lasting note belongs to the original control sequence: %s", id)
+	assert.Equal(t, rec.StopNote.By, landed[0].Actor, "history retains requesting human: %s", id)
+	assert.Equal(t, cause, landed[0].Cause, "history retains scoped cause: %s", id)
 }
 
 func (f *u2ScopeFixture) assertUntouched(t *testing.T, id string) {
