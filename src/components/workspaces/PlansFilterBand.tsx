@@ -8,7 +8,6 @@ import {
   Broom,
   CheckCircle,
   XCircle,
-  CircleNotch,
 } from '@phosphor-icons/react'
 import {
   DropdownMenu,
@@ -23,6 +22,7 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Switch } from '@/components/ui/switch'
 import { PlanActionButton } from './PlanActionButton'
+import { RunningIndicator } from '@/components/ui/RunningIndicator'
 import type { Agent, Plan, Task } from '@/lib/api'
 import {
   isPlanCancelled,
@@ -75,7 +75,11 @@ function PlanStateGlyph({ state, cancelled = false, size = 9 }: { state: Plan['s
     case 'approved':
       return <CheckCircle size={size} />
     case 'running':
-      return <CircleNotch size={size} className="animate-spin" />
+      // FR-022 (SP-41) + founder PI1: the running PLAN's tile shows THE
+      // catalogued running indicator — spinner ONLY, no token count. This
+      // replaces the bespoke CircleNotch copy the tile used to render (the
+      // "second, divergent copy" FR-022 forbids).
+      return <RunningIndicator />
     case 'done':
       return <CheckCircle size={size} weight="fill" />
     case 'failed':

@@ -12,7 +12,11 @@ A plan lives in a [workspace](workspaces.md) and has three parts:
 
 The engine runs plans on the server: it hands each unblocked task to its assignee, checks the result against that task's acceptance criteria, and judges the DoD once every member has finished.
 
-You see plans in the **Tasks** tab of a workspace, as tiles above the board showing the state badge, a progress count such as "4 of 6 tasks done", the owner, and one action button. Selecting a tile filters the view to that plan's tasks and switches to the Graph view, where the dependency graph is drawn.
+You see plans in the **Tasks** panel of a workspace, as tiles above the board showing the state badge, a progress count such as "4 of 6 tasks done", the owner, and one action button. Selecting a tile filters the view to that plan's tasks and switches to the Graph view, where the dependency graph is drawn.
+
+The Plans band keeps its horizontal tile strip inside the Tasks panel. Completed plans are hidden by default; use **Show done** to include them. When more tiles are off-screen, **scroll for more →** signals that you can scroll sideways, including on a phone.
+
+A running plan tile shows a spinning arrow without a token count. In the plan's Graph view, each **In Progress** task node uses the same arrow. Board and List running-task indicators also omit token counts; Chat's existing token counter is unchanged. With reduced motion enabled, the arrow stays visible but does not spin.
 
 A plan moves through five states. This table shows what each one means and what you can do from the tile.
 
@@ -45,7 +49,7 @@ Use a plan when several tasks depend on each other and you can state a checkable
 
 ## How to create and run a plan
 
-1. Open your workspace's **Tasks** tab and press **New Plan**. A form opens beside the board.
+1. Open your workspace's **Tasks** panel and press **New Plan**. A form opens beside the board.
 2. Give the plan a title, an optional goal and description, and pick the owner agent from the team. Title and owner are required.
 3. Add Definition of Done items and, if you want different limits, change the Bounds. Save the plan; it appears as a Draft tile.
 4. Add member tasks with the **+ New Task** action: pick the plan, set what the task is blocked by, and give it at least one acceptance criterion. Two fields matter for parallel work — the paths a task creates or edits, and the merge-point marker for a task several parallel tasks feed into.
@@ -92,7 +96,7 @@ After a correction the plan returns to running; three wakes without a valid corr
 ## Related pages
 
 - [tasks](tasks.md) — single tasks, their acceptance criteria, and the board they share with plans.
-- [workspaces](workspaces.md) — where the Tasks tab and its plan band live.
+- [workspaces](workspaces.md) — where the Tasks panel and its plan band live.
 - [agents](agents.md) — the owner agent's role, and the Judge and Plan Supervisor as system agents.
 - [goals](goals.md) — the same judging, applied to a goal set in a conversation.
 - [tools](tools.md) — the permission settings that gate plan tools per agent.

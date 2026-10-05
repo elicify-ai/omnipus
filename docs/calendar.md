@@ -1,12 +1,12 @@
 # Calendar and recurring work
 
-The Calendar tab of a workspace is where everything that runs on a schedule lives: one-time runs, repeating series, and the outcome of each run. If work has to happen every Monday at 9:00, you set it up here.
+The Calendar panel of a workspace is where everything that runs on a schedule lives: one-time runs, repeating series, and the outcome of each run. If work has to happen every Monday at 9:00, you set it up here.
 
 ## What it is
 
-Every workspace has a Calendar tab, between Tasks and Library. It shows a Month, Week, Day, or Agenda grid. Each scheduled run appears as a chip at the moment it fires, the way a recurring meeting appears in a meeting calendar. A repeating task gets a chip on every occurrence in view, not only the next one.
+Every workspace has a Calendar panel, between Tasks and Library in the top bar. It opens beside Chat on **Week** by default. Choose **Day**, **Week**, or **Month** in its toolbar; Month stays inside the same panel, including the phone full-screen view. There is no Agenda view. Each scheduled run appears as a chip at the moment it fires, the way a recurring meeting appears in a meeting calendar. A repeating task gets a chip on every occurrence in view, not only the next one.
 
-All scheduled work lives here and nowhere else. The Tasks screen shows work with no schedule attached; a task with a schedule, one-time or repeating, appears only on the calendar. The split is deliberate: a card that comes back every week never reaches done, so it does not belong on a board. Old web addresses still resolve: `/tasks` redirects to the Tasks screen and `/automations` redirects to the Calendar.
+All scheduled work lives here and nowhere else. The Tasks panel shows work with no schedule attached; a task with a schedule, one-time or repeating, appears only on the calendar. The split is deliberate: a card that comes back every week never reaches done, so it does not belong on a board. Old web addresses still resolve: `/tasks` redirects to the Tasks panel and `/automations` redirects to the Calendar.
 
 The calendar also records outcomes. Each run chip carries a status icon, and clicking a chip opens the event panel with that run's status, its result, and a link to the chat it ran in.
 
@@ -29,14 +29,14 @@ A repeat rule keeps firing on its own; the calendar shows each run and how it we
 
 ## How to schedule repeating work
 
-1. Open the workspace and click the Calendar tab.
+1. Open the workspace and choose **Calendar** in the top bar or panels menu.
 2. Click a day, or a time slot in Week or Day view. The New task button in the toolbar works too. A New event panel opens with the date filled in: a plain day click defaults to 9:00, a time slot takes that exact time.
 3. Fill in the title and pick the agent who runs it. Write the instruction, which is what the agent does each time the task fires, and add at least one acceptance criterion and one Definition of Done item.
 4. Open the Repeat dropdown. It offers presets computed from the date you picked: Does not repeat, Daily, Weekly on Monday, Monthly on the third Monday, Annually on July 20, Every weekday, and Custom.
 5. Pick Custom for anything else. Choose the frequency, from minutes to years, and a multiplier from 1 to 99. Weekly rules take a weekday selection, monthly rules take a day of the month or an nth weekday. End the rule with Never, On date, or After N occurrences. A plain-English summary of the rule is shown at all times.
 6. Save. The task appears as chips on every occurrence in the visible range.
 
-Leaving Repeat on Does not repeat, with a time set, creates a one-time task that runs at that moment. It is scheduled work, so it lives on the calendar rather than the Tasks screen.
+Leaving Repeat on Does not repeat, with a time set, creates a one-time task that runs at that moment. It is scheduled work, so it lives on the calendar rather than the Tasks panel.
 
 ## How to edit or stop a series
 
@@ -72,7 +72,7 @@ An agent heartbeat is separate from scheduled task work and does not appear on t
 
 ## Related pages
 
-- [workspaces](workspaces.md) — what a workspace is; the Calendar is one of its tabs.
+- [workspaces](workspaces.md) — what a workspace is; the Calendar is one of its panels.
 - [tasks](tasks.md) — unscheduled work on the board, and how it differs from scheduled work.
 - [agents](agents.md) — the agents you can assign scheduled work and heartbeats to.
 - [goals](goals.md) — ongoing outcomes that outlive any one recurring task.

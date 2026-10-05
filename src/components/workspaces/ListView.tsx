@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { PriorityBadge } from './PriorityBadge'
 import { TaskActionButton } from './TaskActionButton'
+import { RunningIndicator } from '@/components/ui/RunningIndicator'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 // 6-state unified vocabulary + colour — single source of truth.
@@ -528,6 +529,9 @@ function TaskRow({
   const priority = task.priority ?? 3
   const tags = task.tags ?? []
   const agentName = resolveAgentName(task, agents)
+  // FR-022 (SP-41) + founder PI3: a running task's row shows THE catalogued
+  // running indicator — animated spinner only, no token count.
+  const running = task.status === 'in_progress'
 
   return (
     // The row is mouse-clickable for whole-row convenience; the REAL keyboard/AT
@@ -571,9 +575,12 @@ function TaskRow({
         {/* ADR-052 FR-015/US-8 — a user-cancelled task renders "Cancelled"
             (orange), distinct from a genuine "Failed" (red), via the shared
             taskDisplayColor/taskDisplayLabel helpers (statusColors.ts). */}
-        <span className="text-[length:var(--type-utility-xs-size)] font-medium" style={{ color: taskDisplayColor(task) }}>
-          {taskDisplayLabel(task)}
-        </span>
+        <div className="flex items-center gap-[var(--space-1)]">
+          {running && <RunningIndicator />}
+          <span className="text-[length:var(--type-utility-xs-size)] font-medium" style={{ color: taskDisplayColor(task) }}>
+            {taskDisplayLabel(task)}
+          </span>
+        </div>
       </td>
       <td
         className={cn(

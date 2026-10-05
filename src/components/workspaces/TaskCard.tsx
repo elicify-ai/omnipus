@@ -7,6 +7,7 @@ import { TaskChildren } from './TaskChildren'
 import { TaskActionButton } from './TaskActionButton'
 import { TaskActivityChip } from './TaskActivityChip'
 import { PriorityBadge } from './PriorityBadge'
+import { RunningIndicator } from '@/components/ui/RunningIndicator'
 import { taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
 import type { BoardAltitude } from '@/store/workspacesStore'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
@@ -153,6 +154,9 @@ export function TaskCard({
   showActions = true,
 }: TaskCardProps) {
   const priority = task.priority ?? 3
+  // FR-022/SP-41 with founder decisions PI1/PI2/PI3 (2026-10-05):
+  // running tasks share the animated arrow, without a token count.
+  const running = task.status === 'in_progress'
   const tags = task.tags ?? []
   const visibleTags = tags.slice(0, 3)
   const overflowTagCount = tags.length - visibleTags.length
@@ -277,6 +281,9 @@ export function TaskCard({
         >
           {task.title}
         </p>
+        {/* FR-022 (SP-41) + PI3: the ONE standard running indicator, spinner
+            only, on every running task's card — never on a finished one. */}
+        {running && <RunningIndicator className="flex-shrink-0 mt-[var(--space-0-5)]" />}
       </div>
 
       {/* Cancelled/Failed marker (ADR-052 FR-015/US-8) — a `failed` task
