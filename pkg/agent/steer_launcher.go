@@ -980,6 +980,11 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: concurrent dispatch already registered a turn", steer.ErrStaleGeneration)
 	}
 
+	if attachErr := al.attachSteeredDisposition(ts, claim); attachErr != nil {
+		al.activeTurnStates.CompareAndDelete(sessionID, ts)
+		al.drainSteerQueue(claim)
+		return steer.DispatchResult{}, attachErr
+	}
 	gate.entryMu.Unlock()
 	entryLocked = false
 	if turnRegisteredTestHook != nil {
@@ -997,8 +1002,7 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 	rec, err = commitSteeredExecutionState(lifecycle, claim, session.LifecycleRunning, "")
 	if err != nil {
 		al.activeTurnStates.CompareAndDelete(sessionID, ts)
-		al.drainSteerQueue(claim)
-		return steer.DispatchResult{}, err
+		return steer.DispatchResult{}, errors.Join(err, al.finishExecutionDisposition(ts.opts.executionDisposition))
 	}
 	if al.steering != nil {
 		al.steering.reopenScopeForGeneration(sessionID, gen)
@@ -1027,14 +1031,12 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 // runTask's deferred closure), and NOT turnState.al / turn_exit.go::Finish,
 // which has no back-reference to release through for a steered turn.
 //
-// The release is deferred FIRST so it runs LAST: the turn's terminal write
-// lands before the next queued session starts (D9: "a session whose turn has
-// ended holds no slot"; I-3: "when a turn ends, the admission loop dispatches
-// the oldest queued session").
+// The disposition is deferred FIRST so it runs LAST. Normal completion writes
+// its outcome before release; selected Stop retires its actual execution slot
+// after the full tail, then lands stopped before promoting further work.
 func (al *AgentLoop) runDispatchedSteeredTurn(rec *session.LifecycleRecord, ts *turnState, gen int) {
 	sessionID := rec.SessionID
-	claim := al.tsExecutionClaim(ts, sessionID)
-	defer al.drainSteerQueue(claim)
+	defer al.finishExecutionDisposition(ts.opts.executionDisposition)
 
 	runCtx, cancel := steeredTurnRunContext(context.Background(), rec)
 	defer cancel()
@@ -1099,7 +1101,7 @@ func steeredTurnRunContext(base context.Context, rec *session.LifecycleRecord) (
 func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.LifecycleRecord, gen int, result turnResult, runErr error) {
 	// Stop ends the turn, not the session or its goal. In particular, do not
 	// spend the durable marker or write a "session ended" goal outcome here.
-	if ts.stopRequested.Load() {
+	if ts.stopRequested.Load() || executionStopPending(ts.opts.executionDisposition) {
 		return
 	}
 	sessionID := rec.SessionID

@@ -22,7 +22,7 @@ func (al *AgentLoop) activeTurnForCancel(sessionID string, scope CancelScope) Tu
 	var found *turnState
 	al.activeTurnStates.Range(func(_, value any) bool {
 		ts, ok := value.(*turnState)
-		if ok && ts.IsAlive() && ts.transcriptSessionID == sessionID {
+		if ok && ts.IsAlive() && (ts.transcriptSessionID == sessionID || al.tsExecutionClaim(ts, "").SessionID == sessionID) {
 			found = ts
 			return false
 		}

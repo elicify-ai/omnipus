@@ -192,6 +192,12 @@ func (al *AgentLoop) commitSteeredCompletion(
 		// owns this record. The final is refused outright: no outbox entry,
 		// no parent inbox message, no frame, no wake.
 		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
+			if al.executionDispositionFor(claim) != nil {
+				// Compute completion is not disposal. The selected outer owner
+				// retains its fence until output tails and its slot have retired.
+				res.kind = steeredCommitRefused
+				return errCompleteStoppedDuringDelivery
+			}
 			if nextState == session.LifecycleStopped {
 				// The fence is the REASON this completion runs: the cancelled
 				// turn is carrying the stop out, so this completion lands it

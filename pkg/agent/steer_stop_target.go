@@ -82,7 +82,11 @@ func liveTurnMatchesStop(ts *turnState, selected session.StopSelection) bool {
 		return false
 	}
 	ts.mu.RLock()
-	claim := executionClaim{SessionID: ts.sessionKey, Generation: ts.generation, RunID: ts.executionRunID, BootSeq: ts.executionBootSeq}
+	sessionID := ts.sessionKey
+	if ts.opts.executionDisposition != nil {
+		sessionID = ts.opts.executionDisposition.claim.SessionID
+	}
+	claim := executionClaim{SessionID: sessionID, Generation: ts.generation, RunID: ts.executionRunID, BootSeq: ts.executionBootSeq}
 	ts.mu.RUnlock()
 	return claim == claimForStopEffect(selected.SessionID, selected.Effect)
 }
@@ -98,14 +102,24 @@ func (al *AgentLoop) steerSoftStop(ctx context.Context, sessionID string, genera
 	if !current {
 		return GenerationCancelResult{SkippedNewerGeneration: true}, nil
 	}
-	al.removeQueuedStopEffects(sessionID, []session.StopEffect{selected.Effect})
-	ts := al.getActiveTurnState(sessionID)
+	d, current, retainErr := al.retainSelectedStop(ctx, sessionID, generation, nil)
+	if retainErr != nil {
+		return GenerationCancelResult{}, retainErr
+	}
+	if !current {
+		return GenerationCancelResult{SkippedNewerGeneration: true}, nil
+	}
+	if d == nil {
+		return GenerationCancelResult{}, nil
+	}
+	ts, _ := al.activeTurnForCancel(sessionID, CancelScope{SessionID: sessionID, TurnOnly: true}).(*turnState)
 	if ts == nil {
-		return al.SteerGenerationCancel(ctx, sessionID, generation)
+		return GenerationCancelResult{Found: true, Cancelled: true}, nil
 	}
 	if !liveTurnMatchesStop(ts, selected) {
 		return GenerationCancelResult{Found: true, SkippedNewerGeneration: true}, nil
 	}
+	ts.claimCancel(true)
 	ts.cancelling.Store(true)
 	ts.mu.RLock()
 	cancel := ts.providerCancel
