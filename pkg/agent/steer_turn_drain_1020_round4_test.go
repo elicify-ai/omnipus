@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -39,64 +40,46 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-// TestSteeredTurnDrain1020Round4_PostFinishRevivalHandBackPrefixesLateInstruction
-// pins the round-4 correction item 4: the revived generation's final
-// hand-back to the parent carries "Follow-up after a late instruction: "
-// in the ResultSoFar field. The test drives a post-finish revival, then
-// invokes completionMessage directly with a generation-N+1 record to
-// exercise the prefix path without waiting on the full async turn
-// pipeline (which the round-3 S1 test already covers).
+// R1 preserves the exact prefix and non-replacement oracle on a genuine
+// post-commit next-round fixture, never on input accepted before the commit.
 func TestSteeredTurnDrain1020Round4_PostFinishRevivalHandBackPrefixesLateInstruction(t *testing.T) {
-	al, cleanup := newSteerAL(t)
-	defer cleanup()
+	al, _ := newSteerAL(t)
 	wireSteerCompletionDeps(t, al)
 	rootID := newTestSteeringSession(t, al, "ws-1")
-	child := launchRunningChild(t, al, rootID, "round4-late-steer-prefix")
-
-	completeStateWriteTestHook = func(sessionID string) {
-		_, _ = al.EnqueueSteeringMessage(
-			sessionID, testDefaultAgentID,
-			providers.Message{Role: "user", Content: "ROUND4-LATE-STEER-FOR-PREFIX"}, "")
+	publication := installGoalCommitGate(t, al)
+	child, provider := r1AdmitChild(t, al, rootID, "round4-late-steer-prefix", "pre-late answer", "post-late answer")
+	provider.open(0)
+	select {
+	case <-publication.event:
+	case <-time.After(5 * time.Second):
+		t.Fatal("final did not reach real post-commit publication")
 	}
-	t.Cleanup(func() { completeStateWriteTestHook = nil })
-
-	if err := al.completeSteeredTurn(context.Background(), child, turnResult{finalContent: "pre-late answer"}, nil); err != nil {
-		t.Fatalf("completeSteeredTurn (gen=g): %v", err)
+	committed := rootReopenedRecord(t, al, child.SessionID)
+	if committed.State != session.LifecycleCompleted || committed.FinalDelivery == nil {
+		t.Fatalf("post-commit premise missing: state=%q outbox=%+v", committed.State, committed.FinalDelivery)
 	}
-
-	rec, err := al.GetSessionLifecycleStore().Load(child.SessionID)
-	if err != nil {
-		t.Fatalf("Load(child): %v", err)
+	if _, err := al.EnqueueSteeringMessage(child.SessionID, testDefaultAgentID,
+		providers.Message{Role: "user", Content: "ROUND4-LATE-STEER-FOR-PREFIX"}, "round4-prefix-control"); err != nil {
+		t.Fatalf("post-commit late steer: %v", err)
 	}
-	if rec.Generation != child.Generation+1 || rec.Terminal() {
-		t.Fatalf("revival did not land; generation=%d terminal=%v want gen=%d running", rec.Generation, rec.Terminal(), child.Generation+1)
+	publication.open()
+	r1AwaitProvider(t, provider, 1)
+	rec := rootReopenedRecord(t, al, child.SessionID)
+	if rec.Generation != child.Generation+1 || rec.State != session.LifecycleRunning || rec.Terminal() {
+		t.Fatalf("post-commit revival G=%d state=%q terminal=%v, want G=%d running", rec.Generation, rec.State, rec.Terminal(), child.Generation+1)
 	}
-
-	// Drive the revived gen=g+1 final directly through completionMessage,
-	// which is the production path that consumes the post-finish stamp.
-	// The stamp was set by processFinishingItems before the async
-	// dispatch and is now sitting on the loop, waiting for THIS
-	// generation's completion to read-and-clear it.
-	newGenRec := *rec
-	msg, err := al.completionMessage(&newGenRec, "final_answer", "post-late answer", "")
-	if err != nil {
-		t.Fatalf("completionMessage: %v", err)
+	assertSteerRevivalInput1020(t, provider.Requests()[1:], []string{"ROUND4-LATE-STEER-FOR-PREFIX"})
+	provider.open(1)
+	joinGoalFixtureRuns(t, al)
+	r1AssertFinals(t, al, child, map[string]string{
+		fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation):   "pre-late answer",
+		fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation+1): "Follow-up after a late instruction: post-late answer",
+	})
+	if al.consumePostFinishRevival(child.SessionID, child.Generation+1) {
+		t.Error("real G+1 final did not clear the post-finish prefix stamp")
 	}
-	handback, herr := msg.AsSessionMessageHandback()
-	if herr != nil {
-		t.Fatalf("AsSessionMessageHandback: %v", herr)
-	}
-	if !strings.HasPrefix(handback.ResultSoFar, "Follow-up after a late instruction:") {
-		t.Errorf("gen=%d final ResultSoFar = %q, must carry the late-instruction prefix", newGenRec.Generation, handback.ResultSoFar)
-	}
-	if got := strings.TrimPrefix(handback.ResultSoFar, "Follow-up after a late instruction: "); got != "post-late answer" {
-		t.Errorf("gen=%d final ResultSoFar = %q, after stripping the prefix = %q, want %q (prefix must PREPEND the answer, not REPLACE it)", newGenRec.Generation, handback.ResultSoFar, got, "post-late answer")
-	}
-	// Idempotency: a second read-and-clear for the SAME session/generation
-	// must return false so a later hand-back (e.g. a tool-iteration
-	// lifecycle notice after a revival) is not permanently mislabelled.
-	if al.consumePostFinishRevival(newGenRec.SessionID, newGenRec.Generation) {
-		t.Errorf("consumePostFinishRevival did not clear the stamp after the gen=%d final consumed it", newGenRec.Generation)
+	if got := al.pendingSteeringCountForScope(child.SessionID); got != 0 {
+		t.Errorf("stranded late prefix input=%d, want zero", got)
 	}
 }
 
@@ -145,142 +128,125 @@ const ensurePrefixFormat = "Follow-up after a late instruction: "
 
 var _ = ensurePrefixFormat
 
-// TestSteeredTurnDrain1020Round4_PersistentDeliveryFailureIsBoundedAndLoud
-// covers the round-4 correction's own bound: a deliverer that NEVER
-// succeeds, and that injects a FRESH late steer on every attempt (the
-// pathological shape the qa-lead round-4 fixture correction removed from
-// the other three tests in this suite, kept here on purpose to prove the
-// bound catches it), must not spin disposeSteeredTurnResult's drain-retry
-// loop forever.
-//
-// disposeSteeredTurnResult's outer loop (steer_launcher.go) shares
-// continueDrainMaxRetries (session_worker.go) with the ordinary session
-// worker's own drain-retry. steerTurnDrainProvider1020
-// (steer_turn_drain_1020_test.go) allows exactly two successful Chat calls
-// before erroring on the third; that third call turns the third late
-// steer's continuation into a POST-dequeue failure
-// (steering.go::continuePendingSteeringWithAgent's run() branch, which
-// restores the item to the queue before returning), and
-// retrySteeringContinuation (session_worker.go) does NOT retry a
-// post-dequeue failure — its stopOn matches errContinuePostDequeueFailure
-// on the very first attempt — so drainSteeredTurn (steer_turn_drain.go)
-// calls abandonSteeredQueuedSteering for that one restored item
-// immediately. disposeSteeredTurnResult's own attempt counter is at
-// continueDrainMaxRetries by the same iteration, so the loop exits right
-// after. The two events coincide by this fixture's construction, not by
-// accident: the injection-count assertion below is what actually proves
-// the OUTER loop ran exactly continueDrainMaxRetries times, independent of
-// the provider's own cap.
+// R1: a publication failure does not uncommit G. Bound a real outbox retry
+// pass and separately admit two next rounds; conserve every accepted instruction
+// and keep each failed publication owed, never silently abandoned.
 func TestSteeredTurnDrain1020Round4_PersistentDeliveryFailureIsBoundedAndLoud(t *testing.T) {
-	al, cleanup := newSteerAL(t)
-	defer cleanup()
-	provider := &steerTurnDrainProvider1020{}
-	agent, ok := al.GetRegistry().GetAgent(testDefaultAgentID)
-	if !ok {
-		t.Fatal("SETUP: default test agent is not registered")
-	}
-	agent.Provider = provider
-
-	var child steer.LaunchResult
-	var injectCount int
-	deliverer := &round3FailingDeliverer{onDeliver: func() error {
-		injectCount++
-		_, err := al.EnqueueSteeringMessage(
-			child.SessionID, testDefaultAgentID,
-			providers.Message{Role: "user", Content: fmt.Sprintf("ROUND4-PERSISTENT-LATE-STEER-%d", injectCount)}, "")
-		return err
-	}}
-	classifier := NewSteerRecordClassifier(al.GetSessionLifecycleStore(), al.GetSessionStore())
-	al.SetSteerAudienceDeps(NewSteerAudienceResolver(classifier), nil, deliverer)
-
-	child = launchQueuedSteeredTurnDrainChild1020(t, al, testDefaultAgentID, "round4 persistent delivery failure")
-	snapshot := setLifecycleState1020(t, al, child.SessionID, session.LifecycleRunning)
-	ts, err := al.reconstructSteeredTurn(snapshot, nil)
-	if err != nil {
-		t.Fatalf("reconstructSteeredTurn: %v", err)
-	}
-
-	originalBackoff := continueDrainBackoff
-	continueDrainBackoff = []time.Duration{0, 0, 0}
-	t.Cleanup(func() { continueDrainBackoff = originalBackoff })
-	logPath := filepath.Join(t.TempDir(), "round4-persistent-abandonment.jsonl")
-	if enableErr := logger.EnableFileLogging(logPath); enableErr != nil {
-		t.Fatalf("EnableFileLogging: %v", enableErr)
+	al, _ := newSteerAL(t)
+	wireSteerCompletionDeps(t, al)
+	parentID := newTestSteeringSession(t, al, "ws-round4-persistent")
+	child, provider := r1AdmitChild(t, al, parentID, "round4-persistent-real-owner", "seed answer", "round two answer", "round three answer")
+	logPath := filepath.Join(t.TempDir(), "round4-persistent-publication.jsonl")
+	if err := logger.EnableFileLogging(logPath); err != nil {
+		t.Fatalf("EnableFileLogging: %v", err)
 	}
 	t.Cleanup(logger.DisableFileLogging)
-
-	// Bounded by construction (see the derivation above), so this call is
-	// expected to return quickly; go test's own -timeout is the outer
-	// safety net if a mutation removes the bound (brief item (d)).
-	al.disposeSteeredTurnResult(ts, snapshot, snapshot.Generation, turnResult{finalContent: "seed answer"}, nil)
-	logger.DisableFileLogging()
-
-	if injectCount != continueDrainMaxRetries {
-		t.Fatalf("late-steer injections = %d, want exactly continueDrainMaxRetries (%d): one per disposeSteeredTurnResult outer attempt", injectCount, continueDrainMaxRetries)
+	deliveries := 0
+	failing := &round3FailingDeliverer{onDeliver: func() error { deliveries++; return nil }}
+	al.SetSteerAudienceDeps(al.getSteerAudienceResolver(), nil, failing)
+	provider.openAll()
+	joinGoalFixtureRuns(t, al)
+	accepted := []string{"ROUND4-PERSISTENT-LATE-STEER-1", "ROUND4-PERSISTENT-LATE-STEER-2"}
+	for _, text := range accepted {
+		resumed, err := al.ReviveStoppedSession(context.Background(), child.SessionID,
+			steer.Principal{Kind: steer.PrincipalKindHuman, ID: "round4-parent"}, text)
+		if err != nil || !resumed {
+			t.Fatalf("independent next-round admission %q: resumed=%v error=%v", text, resumed, err)
+		}
+		joinGoalFixtureRuns(t, al)
 	}
-
-	requests := provider.Requests()
-	if len(requests) != continueDrainMaxRetries {
-		t.Fatalf("continuation provider request count = %d, want exactly continueDrainMaxRetries (%d)", len(requests), continueDrainMaxRetries)
+	if deliveries != 3 || len(provider.Requests()) != 3 {
+		t.Fatalf("bounded initial+two independent rounds: deliveries=%d provider calls=%d, want exactly three each", deliveries, len(provider.Requests()))
 	}
-	for i := 0; i < continueDrainMaxRetries; i++ {
-		want := fmt.Sprintf("ROUND4-PERSISTENT-LATE-STEER-%d", i+1)
-		if got := countMessagesContaining(requests[i], want); got != 1 {
-			t.Errorf("continuation request %d occurrences of %q = %d, want exactly 1", i, want, got)
+	assertSteerRevivalInput1020(t, provider.Requests()[1:], accepted)
+	current := rootReopenedRecord(t, al, child.SessionID)
+	if current.Generation != child.Generation+2 || current.State != session.LifecycleCompleted {
+		t.Fatalf("failed publication undid a committed next round: generation=%d state=%q", current.Generation, current.State)
+	}
+	pending, err := al.GetSessionLifecycleStore().ListPendingFinalDeliveries()
+	if err != nil || len(pending) != 3 {
+		t.Fatalf("owed committed finals=%d error=%v, want all three generations", len(pending), err)
+	}
+	for _, item := range pending {
+		if item.SessionID != child.SessionID || !item.Pending() || item.Progress.InboxAppended || len(item.Commit.Payload) == 0 {
+			t.Fatalf("failed publication lost payload or falsely acknowledged it: %+v", item)
 		}
 	}
-
-	rec, err := al.GetSessionLifecycleStore().Load(child.SessionID)
+	var notices []string
+	recovery := &SteerBootRecovery{Lifecycle: al.GetSessionLifecycleStore(), Sessions: al.GetSessionStore(), Inbox: al.GetMessageInboxStore(),
+		Deliverer: failing, OperatorNotice: func(text string) { notices = append(notices, text) }}
+	if retryErr := recovery.runFinalDeliveryPass(context.Background()); retryErr != nil {
+		t.Fatalf("delivery-only retry pass: %v", retryErr)
+	}
+	// One pass visits the three owed commits once; it must not spin or start
+	// additional model work. Each owed final must have its own visible failure.
+	if deliveries != 6 || len(provider.Requests()) != 3 {
+		t.Fatalf("retry was unbounded or ran compute: deliveries=%d provider calls=%d, want 6/3", deliveries, len(provider.Requests()))
+	}
+	if len(notices) != len(pending) {
+		t.Fatalf("publication failure notices=%d, want one per owed committed final (%d): %q", len(notices), len(pending), notices)
+	}
+	for _, item := range pending {
+		visible := 0
+		for _, notice := range notices {
+			if strings.Contains(notice, item.Commit.MessageID+" ") && strings.Contains(notice, "simulated terminal delivery failure") {
+				visible++
+			}
+		}
+		if visible != 1 {
+			t.Errorf("owed final %q has %d failure notices, want exactly one", item.Commit.MessageID, visible)
+		}
+	}
+	after := rootReopenedRecord(t, al, child.SessionID)
+	if !reflect.DeepEqual(after, current) {
+		t.Errorf("delivery-only retry rewrote the committed current lifecycle: before=%+v after=%+v", current, after)
+	}
+	afterPending, err := al.GetSessionLifecycleStore().ListPendingFinalDeliveries()
+	if err != nil || !reflect.DeepEqual(afterPending, pending) {
+		t.Errorf("retry silently lost/acknowledged owed finals: before=%+v after=%+v error=%v", pending, afterPending, err)
+	}
+	if count := al.pendingSteeringCountForScope(child.SessionID); count != 0 {
+		t.Errorf("stranded accepted input=%d, want zero", count)
+	}
+	logger.DisableFileLogging()
+	raw, err := os.ReadFile(logPath)
 	if err != nil {
-		t.Fatalf("Load(child): %v", err)
+		t.Fatalf("ReadFile(publication log): %v", err)
 	}
-	if rec.Terminal() {
-		t.Fatalf("child became terminal despite every terminal delivery failing; state=%q", rec.State)
-	}
-	if got := al.pendingSteeringCountForScope(child.SessionID); got != 0 {
-		t.Errorf("pending steering count after bounded exhaustion = %d, want 0: the last item must be abandoned, never left queued", got)
-	}
-
-	logData, logErr := os.ReadFile(logPath)
-	if logErr != nil {
-		t.Fatalf("ReadFile(abandonment log): %v", logErr)
-	}
-	matchedAbandonment := 0
-	for _, line := range strings.Split(strings.TrimSpace(string(logData)), "\n") {
+	loudFailures := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		var entry map[string]any
-		if decodeErr := json.Unmarshal([]byte(line), &entry); decodeErr != nil {
-			t.Fatalf("decode abandonment log line: %v; line=%q", decodeErr, line)
+		var event map[string]any
+		if decodeErr := json.Unmarshal([]byte(line), &event); decodeErr != nil {
+			t.Fatalf("decode publication log: %v", decodeErr)
 		}
-		if entry["message"] != "steer: persistent Continue failure — abandoning queued steering" ||
-			entry["session_id"] != child.SessionID {
-			continue
-		}
-		matchedAbandonment++
-		if entry["queue_depth"] != float64(1) {
-			t.Errorf("abandonment queue_depth = %v, want exactly 1 (only the third late steer was ever queued at abandonment time)", entry["queue_depth"])
-		}
-		if entry["attempts"] != float64(1) {
-			t.Errorf("abandonment attempts = %v, want exactly 1: a post-dequeue failure (errContinuePostDequeueFailure) is never retried", entry["attempts"])
+		if event["message"] == "steer: complete turn failed" && event["session_id"] == child.SessionID && strings.Contains(fmt.Sprint(event["error"]), "simulated terminal delivery failure") {
+			loudFailures++
 		}
 	}
-	if matchedAbandonment != 1 {
-		t.Fatalf("abandonSteeredQueuedSteering log entries = %d, want exactly 1 — the drain must report the leftover item loudly, exactly once, never a silent drop", matchedAbandonment)
+	if loudFailures != 3 {
+		t.Errorf("loud failed-commit publication reports=%d, want exactly three", loudFailures)
 	}
-
-	entries, readErr := al.GetSessionStore().ReadTranscript(child.SessionID)
-	if readErr != nil {
-		t.Fatalf("ReadTranscript(child): %v", readErr)
+	entries, err := al.GetSessionStore().ReadTranscript(child.SessionID)
+	if err != nil {
+		t.Fatalf("ReadTranscript(child): %v", err)
 	}
-	reports := 0
+	for _, text := range accepted {
+		injections := 0
+		for _, e := range entries {
+			if e.Role == "user" && e.Content == text {
+				injections++
+			}
+		}
+		if injections != 1 {
+			t.Errorf("durable instruction %q injections=%d, want one", text, injections)
+		}
+	}
 	for _, e := range entries {
-		if e.Status == "error" && e.Content == "A queued follow-up message could not be processed and was not delivered. Please send it again." {
-			reports++
+		if e.Status == "error" && strings.Contains(e.Content, "queued follow-up message could not be processed") {
+			t.Errorf("delivered next-round input falsely reported abandoned: %q", e.Content)
 		}
-	}
-	if reports != 1 {
-		t.Errorf("abandonment error transcript entries = %d, want exactly 1 (the one abandoned item)", reports)
 	}
 }

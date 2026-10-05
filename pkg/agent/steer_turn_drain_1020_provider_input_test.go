@@ -3,17 +3,13 @@ package agent
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // steerRevivalInputProvider1020 records requests at the external provider
@@ -118,96 +114,56 @@ func assertSteerRevivalInput1020(t *testing.T, requests [][]providers.Message, a
 
 // CHECK-2 Finding 1: every text accepted by one finishing handoff belongs
 // to one revived generation, in arrival order, not just its first text.
+// R1: all input in this pre-commit handoff belongs to the original admission.
+// The historical name does not authorize forced revival or a candidate final.
 func TestSteeredTurnDrain1020_MultipleLateSteersReachOneRevivedGenerationInOrder(t *testing.T) {
-	al, cleanup := newSteerAL(t)
-	defer cleanup()
+	al, _ := newSteerAL(t)
 	wireSteerCompletionDeps(t, al)
-	provider := recordSteerRevivalInput1020(t, al)
 	parentID := newTestSteeringSession(t, al, "ws-1")
-	child := launchRunningChild(t, al, parentID, "check2-same-handoff-multiple-steers")
+	child, provider := r1AdmitChild(t, al, parentID, "check2-same-handoff-multiple-steers", "original answer before all late steers", "Mock response", "Mock response", "Mock response")
 	accepted := []string{
 		"CHECK2-FIRST-LATE-STEER: inspect the draft",
 		"CHECK2-SECOND-LATE-STEER: keep the caller's wording\nand the line break",
 		"CHECK2-THIRD-LATE-STEER: report the final result",
 	}
-
-	var hookCalls atomic.Int32
 	var statuses []EnqueueStatus
 	var enqueueErrors []error
-	var bufferedTexts []string
-	completeStateWriteTestHook = func(sessionID string) {
-		if hookCalls.Add(1) != 1 {
-			return // Do not create a new handoff during g+1's completion.
-		}
+	var bufferedTexts, bufferedIDs []string
+	r1InjectBeforeCommit(t, al, child, func() {
 		for i, text := range accepted {
-			_, status, err := al.EnqueueSteeringMessageWithStatus(sessionID, testDefaultAgentID,
+			_, status, err := al.EnqueueSteeringMessageWithStatus(child.SessionID, testDefaultAgentID,
 				providers.Message{Role: "user", Content: text}, fmt.Sprintf("check2-late-steer-%d", i))
 			statuses = append(statuses, status)
 			enqueueErrors = append(enqueueErrors, err)
 		}
 		al.steering.mu.Lock()
-		if transition := al.steering.terminalizing[sessionID]; transition != nil {
+		if transition := al.steering.terminalizing[child.SessionID]; transition != nil {
 			for _, item := range transition.finishingItems {
 				bufferedTexts = append(bufferedTexts, item.message.Content)
+				bufferedIDs = append(bufferedIDs, item.correlationID)
 			}
 		}
 		al.steering.mu.Unlock()
-	}
-	t.Cleanup(func() { completeStateWriteTestHook = nil })
-
-	if err := al.completeSteeredTurn(context.Background(), child,
-		turnResult{finalContent: "original answer before all late steers"}, nil); err != nil {
-		t.Fatalf("completeSteeredTurn: %v", err)
-	}
-	al.drainSteeredTurns(10 * time.Second)
+	})
+	provider.open(0)
+	r1AwaitProvider(t, provider, 1)
 	if len(statuses) != len(accepted) || len(enqueueErrors) != len(accepted) {
-		t.Fatalf("finishing hook accepted %d statuses and %d results, want %d late steers", len(statuses), len(enqueueErrors), len(accepted))
+		t.Fatalf("handoff accepted %d statuses/%d results, want %d", len(statuses), len(enqueueErrors), len(accepted))
 	}
-	for i, text := range accepted {
+	for i := range accepted {
 		if enqueueErrors[i] != nil || statuses[i] != EnqueueStatusPostFinish {
-			t.Fatalf("late steer %d %q: status=%v error=%v, want accepted into this handoff's PostFinish buffer", i, text, statuses[i], enqueueErrors[i])
+			t.Fatalf("late steer %d: status=%v error=%v, want accepted PostFinish", i, statuses[i], enqueueErrors[i])
 		}
 	}
-	if !slices.Equal(bufferedTexts, accepted) {
-		t.Fatalf("same-handoff finishing buffer = %q, want all accepted texts in arrival order %q before revival", bufferedTexts, accepted)
+	if !slices.Equal(bufferedTexts, accepted) || !slices.Equal(bufferedIDs, []string{"check2-late-steer-0", "check2-late-steer-1", "check2-late-steer-2"}) {
+		t.Fatalf("finishing text/identity=%q/%q, want unchanged caller text and ordered correlation IDs", bufferedTexts, bufferedIDs)
 	}
-	// One terminal write for g, one for g+1: no second revival may carry
-	// a straggler that should have belonged to the original handoff.
-	if got := hookCalls.Load(); got != 2 {
-		t.Errorf("terminal writes = %d, want exactly 2 (original and one revived generation)", got)
-	}
-	rec, err := al.GetSessionLifecycleStore().Load(child.SessionID)
-	if err != nil {
-		t.Fatalf("Load(child): %v", err)
-	}
-	if rec.Generation != child.Generation+1 || rec.State != session.LifecycleCompleted {
-		t.Errorf("same-handoff revival ended at generation=%d state=%s, want exactly generation=%d state=completed", rec.Generation, rec.State, child.Generation+1)
-	}
-	if got := al.pendingSteeringCountForScope(child.SessionID); got != 0 {
-		t.Errorf("pending steering after same-handoff revival = %d, want 0", got)
-	}
-	assertSteerRevivalInput1020(t, provider.Requests(), accepted)
-
-	msgs, _, _, err := al.GetMessageInboxStore().Drain(parentID, child.SessionID, "", 10)
-	if err != nil {
-		t.Fatalf("Drain(parent): %v", err)
-	}
-	if len(msgs) != 2 {
-		t.Fatalf("same-handoff final count = %d, want exactly 2 (unchanged original and one revived final)", len(msgs))
-	}
-	gotFinals := make(map[string]string)
-	for _, message := range msgs {
-		handback, err := message.AsSessionMessageHandback()
-		if err != nil {
-			t.Fatalf("decode final %q: %v", messageIDOf(message), err)
-		}
-		gotFinals[messageIDOf(message)] = handback.ResultSoFar
-	}
-	wantFinals := map[string]string{
-		fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation):   "original answer before all late steers",
-		fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation+1): "Follow-up after a late instruction: Mock response",
-	}
-	if !reflect.DeepEqual(gotFinals, wantFinals) {
-		t.Errorf("same-handoff finals = %v, want original and one prefixed revived final %v", gotFinals, wantFinals)
-	}
+	r1AssertNoFinal(t, al, child)
+	// The drain may present the three instructions at successive model
+	// boundaries. Stage enough external replies, then assert conservation in
+	// the final actual request, not prematurely after only the first item.
+	provider.openAll()
+	joinGoalFixtureRuns(t, al)
+	assertSteerRevivalInput1020(t, provider.Requests()[1:], accepted)
+	r1RequireSameGenerationFinal(t, al, child, "Mock response")
 }
