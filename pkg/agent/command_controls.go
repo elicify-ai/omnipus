@@ -34,6 +34,11 @@ func (al *AgentLoop) RequestScopedCancelForSession(ctx context.Context, sessionI
 	if scope != "session" && scope != "tree" {
 		return false, false, fmt.Errorf("Stop scope must be session or tree")
 	}
+	if scope == "tree" && al.GetSessionLifecycleStore() == nil {
+		// A person asked for Stop all; without the durable tree the helpers
+		// cannot be reached, so say so instead of stopping only this turn.
+		return false, false, fmt.Errorf("tree-scoped Stop all is unavailable; nothing was stopped")
+	}
 	res, err := al.StopSession(ctx, StopRequest{
 		SessionID: sessionID,
 		By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: userID},

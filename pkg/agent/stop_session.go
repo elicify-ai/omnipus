@@ -89,9 +89,8 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	canceller := CancelCanceller{UserID: req.By.ID, Channel: req.Channel}
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
-		if req.Tree {
-			return res, fmt.Errorf("tree-scoped Stop all is unavailable; nothing was stopped")
-		}
+		// No lifecycle store: no durable helper edges exist, so the session's
+		// own turn is the whole tree.
 		res.Root, res.RootErr = al.RequestCancel(ctx, CancelScope{SessionID: req.SessionID, TurnOnly: true}, canceller, hooksFor(req.SessionID))
 		return al.finishPlainStop(res), nil
 	}
