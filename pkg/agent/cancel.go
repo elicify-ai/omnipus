@@ -1466,18 +1466,5 @@ func (al *AgentLoop) RequestCancelByChannelChat(ctx context.Context, channelName
 	if channelName == "" || chatID == "" {
 		return false, false, fmt.Errorf("RequestCancelByChannelChat: channel and chatID must not be empty")
 	}
-	outcome, err := al.RequestCancel(ctx,
-		CancelScope{Channel: channelName, ChatID: chatID},
-		CancelCanceller{UserID: userID, Channel: channelName},
-		CancelHooks{
-			// Tier B channels carry no other transport-specific side effects,
-			// but must still cascade to any background bash/exec sessions
-			// this chat session started (FR-B10/FR-B11).
-			KillBackgroundSessions: killBackgroundSessionsForCancelSurface,
-		},
-	)
-	if err != nil {
-		return false, false, err
-	}
-	return outcome.Fired, outcome.Armed, nil
+	return al.requestCommandStopByChannelChat(ctx, channelName, chatID, userID, "tree")
 }

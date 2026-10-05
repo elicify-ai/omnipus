@@ -129,7 +129,7 @@ type Manager struct {
 	channelHashes     map[string]string  // channel name → config hash
 	streamFallback    bus.StreamDelegate // optional fallback for channels not in m.channels (e.g., webchat WebSocket)
 	failedChannels    []ChannelInitError // enabled channels that failed to start
-	cancelInterceptor CancelInterceptor  // set after construction via SetCancelInterceptor; may be nil
+	cancelInterceptor CancelRequester    // set after construction via SetCancelInterceptor; may be nil
 
 	// steerAudience is ADR-091 I-5's injected steer.AudienceResolver
 	// (injected into every package that hosts a
@@ -415,16 +415,16 @@ func (m *Manager) SetStreamFallback(d bus.StreamDelegate) {
 	m.streamFallback = d
 }
 
-// SetCancelInterceptor registers the CancelInterceptor (typically the agent
+// SetCancelInterceptor registers the CancelRequester (typically the agent
 // loop) so that Tier B text-parsing channels can fire /cancel. Must be called
 // after the Manager is constructed and before channels receive messages.
 // It is safe to call multiple times (last write wins).
-func (m *Manager) SetCancelInterceptor(ci CancelInterceptor) {
+func (m *Manager) SetCancelInterceptor(ci CancelRequester) {
 	m.mu.Lock()
 	m.cancelInterceptor = ci
 	// Propagate to all channels already initialized.
 	for _, ch := range m.channels {
-		if setter, ok := ch.(interface{ SetCancelInterceptor(ci CancelInterceptor) }); ok {
+		if setter, ok := ch.(interface{ SetCancelInterceptor(ci CancelRequester) }); ok {
 			setter.SetCancelInterceptor(ci)
 		}
 	}
@@ -597,10 +597,10 @@ func (m *Manager) initChannel(name, instanceID, displayName string) error {
 	if setter, ok := ch.(interface{ SetOwner(ch Channel) }); ok {
 		setter.SetOwner(ch)
 	}
-	// Inject CancelInterceptor if one has been registered (may be nil at init time;
+	// Inject CancelRequester if one has been registered (may be nil at init time;
 	// SetCancelInterceptor propagates to all channels when called later).
 	if m.cancelInterceptor != nil {
-		if setter, ok := ch.(interface{ SetCancelInterceptor(ci CancelInterceptor) }); ok {
+		if setter, ok := ch.(interface{ SetCancelInterceptor(ci CancelRequester) }); ok {
 			setter.SetCancelInterceptor(m.cancelInterceptor)
 		}
 	}

@@ -100,7 +100,7 @@ type BaseChannel struct {
 	placeholderRecorder PlaceholderRecorder
 	owner               Channel // the concrete channel that embeds this BaseChannel
 	reasoningChannelID  string
-	cancelInterceptor   CancelInterceptor // injected by Manager; may be nil
+	cancelInterceptor   CancelRequester // injected by Manager; may be nil
 }
 
 func NewBaseChannel(
@@ -269,7 +269,7 @@ func (c *BaseChannel) HandleMessage(
 	media []string,
 	metadata map[string]string,
 	senderOpts ...bus.SenderInfo,
-) {
+) error {
 	// Use SenderInfo-based allow check when available, else fall back to string
 	var sender bus.SenderInfo
 	if len(senderOpts) > 0 {
@@ -277,11 +277,11 @@ func (c *BaseChannel) HandleMessage(
 	}
 	if sender.CanonicalID != "" || sender.PlatformID != "" {
 		if !c.IsAllowedSender(sender) {
-			return
+			return nil
 		}
 	} else {
 		if !c.IsAllowed(senderID) {
-			return
+			return nil
 		}
 	}
 
@@ -289,6 +289,9 @@ func (c *BaseChannel) HandleMessage(
 	// raw senderID for callers that haven't populated the SenderInfo struct.
 	if sender.CanonicalID == "" {
 		sender.CanonicalID = senderID
+	}
+	if handled, err := c.interceptSessionControl(ctx, content, chatID, sender.CanonicalID); handled {
+		return err
 	}
 
 	scope := BuildMediaScope(c.name, chatID, messageID)
@@ -366,7 +369,9 @@ func (c *BaseChannel) HandleMessage(
 			"chat_id": chatID,
 			"error":   err.Error(),
 		})
+		return err
 	}
+	return nil
 }
 
 func (c *BaseChannel) SetRunning(running bool) {
@@ -395,14 +400,14 @@ func (c *BaseChannel) SetOwner(ch Channel) {
 	c.owner = ch
 }
 
-// SetCancelInterceptor injects the CancelInterceptor used by Tier B channels to
+// SetCancelInterceptor injects the CancelRequester used by Tier B channels to
 // fire /cancel from text-parsed messages. Called by Manager.initChannel.
-func (c *BaseChannel) SetCancelInterceptor(ci CancelInterceptor) {
+func (c *BaseChannel) SetCancelInterceptor(ci CancelRequester) {
 	c.cancelInterceptor = ci
 }
 
-// GetCancelInterceptor returns the injected CancelInterceptor (may be nil).
-func (c *BaseChannel) GetCancelInterceptor() CancelInterceptor {
+// GetCancelInterceptor returns the injected CancelRequester (may be nil).
+func (c *BaseChannel) GetCancelInterceptor() CancelRequester {
 	return c.cancelInterceptor
 }
 
