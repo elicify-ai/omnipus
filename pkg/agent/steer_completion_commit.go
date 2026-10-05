@@ -116,6 +116,7 @@ func (al *AgentLoop) commitSteeredCompletion(
 	outcome steer.Outcome,
 	answer, failureReason string,
 	claim executionClaim,
+	inputPending func() bool,
 ) (steeredCommitResult, error) {
 	if lifecycle == nil || rec == nil {
 		return steeredCommitResult{}, errors.New("steer: complete: lifecycle store and selected record are required")
@@ -261,6 +262,16 @@ func (al *AgentLoop) commitSteeredCompletion(
 		if !publishable {
 			res.kind = steeredCommitRefused
 			return errCompleteNoPublishableOutcome
+		}
+		// R1 ruling (ADR-20260928 D2 commit boundary + ADR-20261004 C1): a
+		// provider's final answer is not a completed turn until this commit.
+		// Input accepted for this session before it (decided here, under the
+		// record lock) belongs to the CURRENT generation: refuse the commit so
+		// the caller drains it as a same-generation continuation. Input
+		// accepted after this point starts the next round.
+		if inputPending != nil && inputPending() {
+			res.kind = steeredCommitRefused
+			return errCompleteSteeringPending
 		}
 		// The winning terminal/outbox commit uses the producing run's ID,
 		// already checked against the locked tail. It never borrows a

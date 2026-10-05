@@ -25,7 +25,7 @@ func (al *AgentLoop) reportSteeredExecutionFailure(ctx context.Context, claim ex
 	if err != nil {
 		return err
 	}
-	res, err := al.commitSteeredCompletion(lifecycle, rec, session.LifecycleFailed, steer.OutcomeFailed, "", reason, claim)
+	res, err := al.commitSteeredCompletion(lifecycle, rec, session.LifecycleFailed, steer.OutcomeFailed, "", reason, claim, nil)
 	if err != nil {
 		// No failed outcome or final outbox committed. Validate the original
 		// producer before reporting that persistence error; a replacement or

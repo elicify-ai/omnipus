@@ -155,7 +155,8 @@ func (al *AgentLoop) deliverSteeredCompletionForExecution(ctx context.Context, r
 		// notice publisher runs only in the transition half, from the landed
 		// history, after it.
 		var err error
-		commitRes, err = al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, answer, failureReason, claim)
+		commitRes, err = al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, answer, failureReason, claim,
+			func() bool { return al.steering != nil && al.steering.finishingPending(rec.SessionID) })
 		return err
 	}
 	transition := func() (bool, error) {

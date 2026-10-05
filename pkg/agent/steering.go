@@ -274,6 +274,16 @@ func (sq *steeringQueue) runTerminalTransitionWithFinishing(
 	}
 }
 
+// finishingPending reports whether input was accepted into scope's open
+// terminal transition. The completion commit reads it under the record lock:
+// accepted before the commit means the current generation continues.
+func (sq *steeringQueue) finishingPending(scope string) bool {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	transition := sq.terminalizing[normalizeSteeringScope(scope)]
+	return transition != nil && len(transition.finishingItems) > 0
+}
+
 func (sq *steeringQueue) finishTerminalTransition(scope string, transition *steeringTerminalTransition) {
 	sq.mu.Lock()
 	delete(sq.terminalizing, scope)

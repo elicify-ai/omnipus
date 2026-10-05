@@ -183,7 +183,7 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	}
 	// Synthetic terminal failure carries the selected admission's stamp.
 	// It must never borrow a replacement's live handle.
-	res, commitErr := al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, "", failureReason, al.executionClaimFor(rec))
+	res, commitErr := al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, "", failureReason, al.executionClaimFor(rec), nil)
 	if commitErr != nil {
 		logger.WarnCF("agent", "steer: terminal report: outcome/outbox commit failed",
 			map[string]any{"session_id": sessionID, "generation": generation, "error": commitErr.Error()})
