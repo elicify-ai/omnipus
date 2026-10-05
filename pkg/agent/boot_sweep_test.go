@@ -7,6 +7,7 @@ package agent
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -38,93 +39,88 @@ func persistLifecycle(t *testing.T, ls *session.LifecycleStore, rec *session.Lif
 
 // --- FR-118/G-13: boot sweep reconciles non-terminal sessions ---------------
 
-// TestBootSweep_NonTerminalToFailedInterrupted verifies the core sweep: every
-// persisted non-terminal session with no live runtime turn becomes
-// failed(interrupted) carrying its last checkpoint + undelivered messages,
-// within budget (BDD "Boot sweep reconciles non-terminal sessions").
+// TestBootSweep_NonTerminalToFailedInterrupted keeps the ordinary sweep's
+// exact checkpoint/message/generation and failed-hook contract. Frozen
+// ADR-20260928 D8.3 withdraws failed(interrupted) for steered records: those
+// same queued/running fixtures must remain completely untouched by this writer.
 func TestBootSweep_NonTerminalToFailedInterrupted(t *testing.T) {
 	h := newBootSweepHarness(t)
-
-	// A running session stranded by a crash, with a checkpoint + undelivered
-	// messages that MUST be carried into the failed record. ADR-093 D3:
-	// standing roots (no SteeredBy edge) are now exempt from this sweep, so
-	// this fixture is stamped as a steered WORKER (SteeredBy set) — exactly
-	// the shape D3's own text names as still-honest to sweep ("a worker left
-	// running at boot has no turn behind it") — to keep testing the sweep
-	// MECHANISM itself (checkpoint/undelivered carry-through, hook firing,
-	// generation preservation) rather than the D3 exemption boundary, which
-	// the dedicated D3/standing-root tests cover.
-	persistLifecycle(t, h.ls, &session.LifecycleRecord{
-		SessionID: "sess-running", Generation: 1, State: session.LifecycleRunning,
-		WorkspaceID: "ws", AgentID: "agent-1",
-		OwnerScopeKind:        session.OwnerScopeHuman,
-		Origin:                &session.Origin{Kind: session.OriginKindDelegate},
-		SteeredBy:             &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
-		LastCheckpointRef:     "ckpt-abc",
-		UndeliveredMessageIDs: []string{"msg-1", "msg-2"},
-		CreatedAt:             time.Now().Add(-1 * time.Hour),
-	})
-	// A queued session — also non-terminal, also swept. Same D3 note above.
-	persistLifecycle(t, h.ls, &session.LifecycleRecord{
-		SessionID: "sess-queued", Generation: 1, State: session.LifecycleQueued,
-		WorkspaceID: "ws", AgentID: "agent-1",
-		OwnerScopeKind: session.OwnerScopeHuman,
-		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
-	})
-	// A terminal session — MUST be left alone.
-	persistLifecycle(t, h.ls, &session.LifecycleRecord{
-		SessionID: "sess-done", Generation: 1, State: session.LifecycleCompleted,
-		WorkspaceID: "ws", AgentID: "agent-1",
-		OwnerScopeKind: session.OwnerScopeHuman,
-	})
+	protected := make(map[string]bootSweepRecordSnapshot)
+	for _, state := range []session.LifecycleState{session.LifecycleRunning, session.LifecycleQueued} {
+		for _, steered := range []bool{false, true} {
+			id := "sess-" + string(state)
+			rec := &session.LifecycleRecord{
+				SessionID: id, Generation: 1, State: state,
+				WorkspaceID: "ws", AgentID: "agent-1", OwnerScopeKind: session.OwnerScopeHuman,
+				Origin:            &session.Origin{Kind: session.OriginKindTask, TaskID: "task-" + id},
+				LastCheckpointRef: "ckpt-abc", UndeliveredMessageIDs: []string{"msg-1", "msg-2"},
+				CreatedAt: time.Now().Add(-time.Hour),
+			}
+			if steered {
+				id += "-steered"
+				rec.SessionID = id
+				rec.Origin = &session.Origin{Kind: session.OriginKindDelegate}
+				rec.SteeredBy = &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"}
+			}
+			persistLifecycle(t, h.ls, rec)
+			if steered {
+				protected[id] = snapshotBootSweepRecord(t, h.ls, id)
+			}
+		}
+	}
+	// Both terminal classes remain outside the non-terminal scan.
+	for _, id := range []string{"sess-done", "sess-done-steered"} {
+		rec := &session.LifecycleRecord{
+			SessionID: id, Generation: 1, State: session.LifecycleCompleted,
+			WorkspaceID: "ws", AgentID: "agent-1", OwnerScopeKind: session.OwnerScopeHuman,
+		}
+		if id == "sess-done-steered" {
+			rec.SteeredBy = &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"}
+		}
+		persistLifecycle(t, h.ls, rec)
+		protected[id] = snapshotBootSweepRecord(t, h.ls, id)
+	}
 
 	var failedHooked []string
 	h.pe.SetSessionFailedHook(func(sid, reason string) {
 		if reason != failedReasonInterrupted {
-			t.Errorf("hook reason = %q, want %q", reason, failedReasonInterrupted)
+			t.Errorf("hook(%q) reason = %q, want %q", sid, reason, failedReasonInterrupted)
 		}
 		failedHooked = append(failedHooked, sid)
 	})
-
 	res := h.pe.runBootSweep(context.Background())
-
-	if res.Scanned != 2 {
-		t.Errorf("Scanned = %d, want 2 (running+queued; terminal excluded by filter)", res.Scanned)
+	for id, before := range protected {
+		assertBootSweepRecordUntouched(t, h.ls, id, before)
 	}
-	if len(res.SweptToFailed) != 2 {
-		t.Fatalf("SweptToFailed = %v, want 2 sessions", res.SweptToFailed)
+	if res.Scanned != 4 {
+		t.Errorf("Scanned = %d, want 4 (ordinary and steered running/queued; both terminal records excluded)", res.Scanned)
 	}
-	if len(failedHooked) != 2 {
-		t.Errorf("session.failed hook fired %d times, want 2", len(failedHooked))
+	wantSwept := []string{"sess-queued", "sess-running"}
+	slices.Sort(res.SweptToFailed)
+	if !slices.Equal(res.SweptToFailed, wantSwept) {
+		t.Errorf("SweptToFailed = %v, want exactly %v — only the non-steered records belong to this sweep (D8.3)", res.SweptToFailed, wantSwept)
 	}
-
-	// The swept record carries its checkpoint + undelivered messages.
-	swept, err := h.ls.Load("sess-running")
-	if err != nil {
-		t.Fatalf("load swept record: %v", err)
+	slices.Sort(failedHooked)
+	if !slices.Equal(failedHooked, wantSwept) {
+		t.Errorf("session.failed hook ids = %v, want exactly %v — no hook may report a steered record failed", failedHooked, wantSwept)
 	}
-	if swept.State != session.LifecycleFailed {
-		t.Errorf("swept state = %q, want failed", swept.State)
-	}
-	if swept.FailedReason != failedReasonInterrupted {
-		t.Errorf("swept failed_reason = %q, want %q", swept.FailedReason, failedReasonInterrupted)
-	}
-	if swept.LastCheckpointRef != "ckpt-abc" {
-		t.Errorf("swept checkpoint = %q, want ckpt-abc", swept.LastCheckpointRef)
-	}
-	if len(swept.UndeliveredMessageIDs) != 2 {
-		t.Errorf("swept undelivered = %v, want 2 msgs", swept.UndeliveredMessageIDs)
-	}
-	// Same generation (no follow_up mint on a sweep).
-	if swept.Generation != 1 {
-		t.Errorf("swept generation = %d, want 1", swept.Generation)
-	}
-
-	// Terminal session untouched.
-	done, _ := h.ls.Load("sess-done")
-	if done.State != session.LifecycleCompleted {
-		t.Errorf("terminal session changed state: %q", done.State)
+	for _, id := range wantSwept {
+		swept, err := h.ls.Load(id)
+		if err != nil {
+			t.Fatalf("load ordinary swept record %q: %v", id, err)
+		}
+		if swept.State != session.LifecycleFailed || swept.FailedReason != failedReasonInterrupted {
+			t.Errorf("ordinary %q state/reason = %q/%q, want failed/%q", id, swept.State, swept.FailedReason, failedReasonInterrupted)
+		}
+		if swept.LastCheckpointRef != "ckpt-abc" {
+			t.Errorf("ordinary %q checkpoint = %q, want ckpt-abc", id, swept.LastCheckpointRef)
+		}
+		if !slices.Equal(swept.UndeliveredMessageIDs, []string{"msg-1", "msg-2"}) {
+			t.Errorf("ordinary %q undelivered = %v, want exactly [msg-1 msg-2]", id, swept.UndeliveredMessageIDs)
+		}
+		if swept.Generation != 1 {
+			t.Errorf("ordinary %q generation = %d, want 1 (a sweep never mints)", id, swept.Generation)
+		}
 	}
 }
 
@@ -247,91 +243,53 @@ func TestBootSweep_AwaitingCorrectionOwnerExempt(t *testing.T) {
 	}
 }
 
-// TestBootSweep_StoppedOwnerNotAwaitingCorrection_StaysStopped pins the
-// founder contract of 2026-10-04 (ADR-20260928 D8): a stopped helper is
-// PAUSED, not failed. A LifecycleStopped steered owner whose plan is NOT
-// awaiting-correction — the shape that used to be swept to
-// failed(interrupted) once exemption (b) narrowed — stays exactly as it
-// stands across a restart: not in SweptToFailed, state still
-// LifecycleStopped, its retained stop note untouched (the restart rewrites
-// no stop note and marks nothing failed). It waits for Revive — a newer
-// instruction — never for this sweep.
-//
-// The running steered control in this test is what makes the exemption
-// observable as a STATE distinction (not "the sweep stopped working"): the
-// same-shaped record in LifecycleRunning IS still swept. The full sweep
-// mechanism for running/queued sessions (checkpoint + undelivered
-// carry-through, hook firing, generation preservation) remains pinned by
-// TestBootSweep_NonTerminalToFailedInterrupted; the control here exists only
-// so this test cannot pass for the wrong reason.
+// TestBootSweep_StoppedOwnerNotAwaitingCorrection_StaysStopped pins D6 Boot
+// and D8.2's unchanged landed stop note. D8.3 also preserves the running
+// steered control: neither belongs to this sweep. An ordinary running task
+// root is the positive control that prevents a disabled sweep from passing.
 func TestBootSweep_StoppedOwnerNotAwaitingCorrection_StaysStopped(t *testing.T) {
 	h := newBootSweepHarness(t)
 	mustCreatePlan(t, h.plans, &plan.Plan{
 		ID: "plan-2", Title: "plan-2", WorkspaceID: "ws", OwnerAgentID: "owner-agent",
-		State: plan.StateRunning, PlanPhase: plan.PhaseDispatching, // not awaiting-correction
+		State: plan.StateRunning, PlanPhase: plan.PhaseDispatching,
 	})
-	// Stamped as a steered worker (SteeredBy set) so ADR-093 D3's
-	// standing-root exemption cannot be what saves it: with D3 out of the
-	// way and exemption (b) not applying (plan-2 is dispatching, not
-	// awaiting-correction), the ONLY thing that can preserve this record is
-	// the D8 stopped-stays-stopped rule this test pins.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "sess-owner-2", Generation: 1, State: session.LifecycleStopped,
 		WorkspaceID: "ws", AgentID: "owner-agent",
 		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-2",
 		Origin:    &session.Origin{Kind: session.OriginKindDelegate},
 		SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-2", RootSessionID: "parent-2"},
-		// D2/CRIT-001: a LifecycleStopped record carries its stop note. This
-		// fixture's cause is redirect_pause — the pre-rename `paused` owner
-		// shape (a fresh instruction superseding the current generation), per
-		// delegate_park.go's precedent comment.
-		StopNote: &session.StopNote{At: time.Now().UTC(), By: session.StopActorSystem, Seq: 1, Cause: session.StopCauseRedirectPause},
+		StopNote:  &session.StopNote{At: time.Now().UTC(), By: session.StopActorSystem, Seq: 1, Cause: session.StopCauseRedirectPause},
 	})
-	// Control: the same steered-worker shape, state RUNNING — no live turn
-	// at boot, so the sweep still owns it (the founder contract sweeps
-	// running and queued sessions exactly as before).
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "sess-running-2", Generation: 1, State: session.LifecycleRunning,
-		WorkspaceID: "ws", AgentID: "owner-agent",
-		OwnerScopeKind: session.OwnerScopeHuman,
-		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-2", RootSessionID: "parent-2"},
+		WorkspaceID: "ws", AgentID: "owner-agent", OwnerScopeKind: session.OwnerScopeHuman,
+		Origin:    &session.Origin{Kind: session.OriginKindDelegate},
+		SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-2", RootSessionID: "parent-2"},
 	})
+	persistLifecycle(t, h.ls, &session.LifecycleRecord{
+		SessionID: "sess-ordinary-2", Generation: 1, State: session.LifecycleRunning,
+		WorkspaceID: "ws", AgentID: "owner-agent", OwnerScopeKind: session.OwnerScopeHuman,
+		Origin: &session.Origin{Kind: session.OriginKindTask, TaskID: "task-ordinary-2"},
+	})
+	ownerBefore := snapshotBootSweepRecord(t, h.ls, "sess-owner-2")
+	runningBefore := snapshotBootSweepRecord(t, h.ls, "sess-running-2")
 
 	res := h.pe.runBootSweep(context.Background())
-
-	for _, swept := range res.SweptToFailed {
-		if swept == "sess-owner-2" {
-			t.Fatalf("SweptToFailed = %v — the stopped owner was swept to failed. A stopped helper is paused, not failed: its run ended BEFORE the restart, so the restart interrupted nothing (founder decision 2026-10-04, ADR-20260928 D8)", res.SweptToFailed)
-		}
-	}
+	assertBootSweepRecordUntouched(t, h.ls, "sess-owner-2", ownerBefore)
+	assertBootSweepRecordUntouched(t, h.ls, "sess-running-2", runningBefore)
 	if len(res.PreservedAwaitingCorrection) != 0 {
-		t.Errorf("PreservedAwaitingCorrection = %v, want none — plan-2 is dispatching, so exemption (b) must not fire; the record must be preserved by the stopped-stays-stopped rule alone", res.PreservedAwaitingCorrection)
+		t.Errorf("PreservedAwaitingCorrection = %v, want none — plan-2 is dispatching, so exemption (b) must not fire", res.PreservedAwaitingCorrection)
 	}
-	owner, err := h.ls.Load("sess-owner-2")
+	if len(res.SweptToFailed) != 1 || res.SweptToFailed[0] != "sess-ordinary-2" {
+		t.Errorf("SweptToFailed = %v, want [sess-ordinary-2] only — stopped and running steered records both belong to SteerBootRecovery (D8.3)", res.SweptToFailed)
+	}
+	ordinary, err := h.ls.Load("sess-ordinary-2")
 	if err != nil {
-		t.Fatalf("load stopped owner: %v", err)
+		t.Fatalf("load ordinary positive control: %v", err)
 	}
-	if owner.State != session.LifecycleStopped {
-		t.Errorf("stopped owner state = %q, want %q — the sweep must leave a stopped record exactly as it stands", owner.State, session.LifecycleStopped)
-	}
-	if owner.FailedReason != "" {
-		t.Errorf("stopped owner failed_reason = %q, want empty — the restart marks nothing failed", owner.FailedReason)
-	}
-	if owner.StopNote == nil || owner.StopNote.Cause != session.StopCauseRedirectPause {
-		t.Errorf("stopped owner stop note = %+v, want the retained redirect_pause note untouched (the restart rewrites no stop note)", owner.StopNote)
-	}
-
-	// The control IS swept — the exemption is a state distinction, not a
-	// broken sweep.
-	sweptControl := false
-	for _, swept := range res.SweptToFailed {
-		if swept == "sess-running-2" {
-			sweptControl = true
-		}
-	}
-	if !sweptControl {
-		t.Fatalf("SweptToFailed = %v, want sess-running-2 (a running steered session with no live turn is still swept)", res.SweptToFailed)
+	if ordinary.State != session.LifecycleFailed || ordinary.FailedReason != failedReasonInterrupted || ordinary.Generation != 1 {
+		t.Errorf("ordinary control = %q/%q gen=%d, want failed/%q gen=1 (ordinary sweep unchanged)", ordinary.State, ordinary.FailedReason, ordinary.Generation, failedReasonInterrupted)
 	}
 }
 
@@ -513,10 +471,10 @@ func TestDurableC1_RestartChangedStateReJudges(t *testing.T) {
 	}
 }
 
-// TestBootSweep_AwaitingCorrectionOwnerNotSweptAcrossRestart ties the durable
-// C1 fix to the boot sweep: a paused owner session of an
-// awaiting-correction plan is NOT swept to failed across a restart (the full
-// INV-7-preserved-across-INV-9 regression).
+// TestBootSweep_AwaitingCorrectionOwnerNotSweptAcrossRestart retains the
+// non-steered awaiting-correction exemption and stopped note. Frozen D8.3
+// also leaves the unrelated steered worker untouched; only an ordinary
+// task-root control is swept after reopening the durable lifecycle store.
 func TestBootSweep_AwaitingCorrectionOwnerNotSweptAcrossRestart(t *testing.T) {
 	h := newBootSweepHarness(t)
 	mustCreatePlan(t, h.plans, &plan.Plan{
@@ -533,10 +491,7 @@ func TestBootSweep_AwaitingCorrectionOwnerNotSweptAcrossRestart(t *testing.T) {
 		// redirect_pause justification.
 		StopNote: &session.StopNote{At: time.Now().UTC(), By: session.StopActorSystem, Seq: 1, Cause: session.StopCauseRedirectPause},
 	})
-	// A stranded running session (no plan) that SHOULD be swept — stamped as
-	// a steered worker (ADR-093 D3: a standing root/no-SteeredBy record is
-	// now exempt from the sweep, so an unrelated "still gets processed
-	// normally" control needs a shape D3 does not also exempt).
+	// D8.3: a steered stray remains this other boot writer's responsibility.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "stray", Generation: 1, State: session.LifecycleRunning,
 		WorkspaceID: "ws", AgentID: "a",
@@ -545,29 +500,45 @@ func TestBootSweep_AwaitingCorrectionOwnerNotSweptAcrossRestart(t *testing.T) {
 		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-rs", RootSessionID: "parent-rs"},
 	})
 
+	persistLifecycle(t, h.ls, &session.LifecycleRecord{
+		SessionID: "stray-ordinary", Generation: 1, State: session.LifecycleRunning,
+		WorkspaceID: "ws", AgentID: "a", OwnerScopeKind: session.OwnerScopeHuman,
+		Origin: &session.Origin{Kind: session.OriginKindTask, TaskID: "task-stray"},
+	})
+	ownerBefore := snapshotBootSweepRecord(t, h.ls, "owner-rs")
+	strayBefore := snapshotBootSweepRecord(t, h.ls, "stray")
+	h.ls = session.NewLifecycleStore(h.ls.Dir())
+	h.pe.SetLifecycleStore(h.ls)
+
 	res := h.pe.runBootSweep(context.Background())
-	if len(res.SweptToFailed) != 1 || res.SweptToFailed[0] != "stray" {
-		t.Fatalf("SweptToFailed = %v, want [stray] only (owner exempt)", res.SweptToFailed)
+	assertBootSweepRecordUntouched(t, h.ls, "owner-rs", ownerBefore)
+	assertBootSweepRecordUntouched(t, h.ls, "stray", strayBefore)
+	if len(res.PreservedAwaitingCorrection) != 1 || res.PreservedAwaitingCorrection[0] != "owner-rs" {
+		t.Errorf("PreservedAwaitingCorrection = %v, want [owner-rs] (ordinary exemption b unchanged)", res.PreservedAwaitingCorrection)
 	}
-	owner, _ := h.ls.Load("owner-rs")
-	if owner.State != session.LifecycleStopped {
-		t.Errorf("owner session swept to %q (must stay paused — exemption b)", owner.State)
+	if len(res.SweptToFailed) != 1 || res.SweptToFailed[0] != "stray-ordinary" {
+		t.Errorf("SweptToFailed = %v, want [stray-ordinary] only — the owner is exempt and the steered stray is untouched (D8.3)", res.SweptToFailed)
+	}
+	ordinary, err := h.ls.Load("stray-ordinary")
+	if err != nil {
+		t.Fatalf("load ordinary stray: %v", err)
+	}
+	if ordinary.State != session.LifecycleFailed || ordinary.FailedReason != failedReasonInterrupted {
+		t.Errorf("ordinary stray = %q/%q, want failed/%q", ordinary.State, ordinary.FailedReason, failedReasonInterrupted)
 	}
 }
 
 // --- N-15: live-upgrade re-baseline ---------------------------------------
 
-// TestN15_GoalSemanticsRebaseline verifies the live-upgrade re-baseline hook:
-// an in-flight goal predating a trigger-semantics change is quiesced/
-// re-baselined (folded into the boot sweep), not swept to failed.
+// TestN15_GoalSemanticsRebaseline retains the ordinary versioned-goal
+// classification controls. Frozen D8.3 supersedes failed(interrupted) for
+// steered goal owners: their whole lifecycle/goal binding and journal stay
+// unchanged, whether the version is unrecorded or current.
 func TestN15_GoalSemanticsRebaseline(t *testing.T) {
 	h := newBootSweepHarness(t)
-	// A goal-bearing session. With no versioner wired, it is "unversioned"
-	// -> swept normally (the mechanism is armed but no version is recorded
-	// yet). Stamped as a steered worker (ADR-093 D3: a standing root/no-
-	// SteeredBy record is now exempt from the sweep outright — this fixture
-	// needs to reach the sweep to test N-15's "unversioned -> normal path"
-	// case rather than D3's exemption).
+	// D8.3: this unversioned STEERED goal owner is never failed by the
+	// plan sweep. Its ordinary task-root counterpart still takes the old
+	// unversioned sweep path, proving that path is not disabled globally.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "goal-unversioned", Generation: 1, State: session.LifecycleRunning,
 		WorkspaceID: "ws", AgentID: "a",
@@ -575,12 +546,26 @@ func TestN15_GoalSemanticsRebaseline(t *testing.T) {
 		Origin:    &session.Origin{Kind: session.OriginKindDelegate},
 		SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-g1", RootSessionID: "parent-g1"},
 	})
+	unversionedBefore := snapshotBootSweepRecord(t, h.ls, "goal-unversioned")
+	persistLifecycle(t, h.ls, &session.LifecycleRecord{
+		SessionID: "goal-unversioned-ordinary", Generation: 1, State: session.LifecycleRunning,
+		WorkspaceID: "ws", AgentID: "a", OwnerScopeKind: session.OwnerScopeHuman,
+		GoalRef: "goal-ordinary-1", Origin: &session.Origin{Kind: session.OriginKindTask, TaskID: "task-goal-1"},
+	})
 	res := h.pe.runBootSweep(context.Background())
+	assertBootSweepRecordUntouched(t, h.ls, "goal-unversioned", unversionedBefore)
 	if len(res.RebaselinedGoals) != 0 {
 		t.Errorf("RebaselinedGoals = %v, want none (unversioned)", res.RebaselinedGoals)
 	}
-	if len(res.SweptToFailed) != 1 {
-		t.Errorf("unversioned goal should be swept normally: %v", res.SweptToFailed)
+	if len(res.SweptToFailed) != 1 || res.SweptToFailed[0] != "goal-unversioned-ordinary" {
+		t.Errorf("unversioned swept goals = %v, want [goal-unversioned-ordinary] only — steered goal owners are untouched (D8.3)", res.SweptToFailed)
+	}
+	ordinary, err := h.ls.Load("goal-unversioned-ordinary")
+	if err != nil {
+		t.Fatalf("load ordinary unversioned goal: %v", err)
+	}
+	if ordinary.State != session.LifecycleFailed || ordinary.FailedReason != failedReasonInterrupted || ordinary.GoalRef != "goal-ordinary-1" {
+		t.Errorf("ordinary unversioned goal = %q/%q ref=%q, want failed/%q ref=goal-ordinary-1", ordinary.State, ordinary.FailedReason, ordinary.GoalRef, failedReasonInterrupted)
 	}
 
 	// Now wire a versioner that reports a STALE version for a fresh goal
@@ -593,6 +578,7 @@ func TestN15_GoalSemanticsRebaseline(t *testing.T) {
 		WorkspaceID: "ws", AgentID: "a",
 		OwnerScopeKind: session.OwnerScopeHuman, GoalRef: "goal-2",
 	})
+	staleBefore := snapshotBootSweepRecord(t, h.ls, "goal-stale")
 	h.pe.SetGoalSemanticsVersioner(func(sid string) int {
 		if sid == "goal-stale" {
 			return 1 // predates the current build (3)
@@ -600,6 +586,8 @@ func TestN15_GoalSemanticsRebaseline(t *testing.T) {
 		return 3
 	})
 	res2 := h.pe.runBootSweep(context.Background())
+	assertBootSweepRecordUntouched(t, h.ls, "goal-unversioned", unversionedBefore)
+	assertBootSweepRecordUntouched(t, h.ls, "goal-stale", staleBefore)
 	if len(res2.RebaselinedGoals) != 1 || res2.RebaselinedGoals[0] != "goal-stale" {
 		t.Fatalf("RebaselinedGoals = %v, want [goal-stale]", res2.RebaselinedGoals)
 	}
@@ -612,9 +600,8 @@ func TestN15_GoalSemanticsRebaseline(t *testing.T) {
 		t.Errorf("re-baselined goal state = %q, want running (preserved)", rec.State)
 	}
 
-	// A current-version goal is NOT re-baselined (swept normally, since it is
-	// a stranded running session with no live turn) — same D3 fixture note
-	// as goal-unversioned above.
+	// A current-version steered goal owner stays unchanged too; an ordinary
+	// current-version task root still follows the ordinary interrupted sweep.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "goal-current", Generation: 1, State: session.LifecycleRunning,
 		WorkspaceID: "ws", AgentID: "a",
@@ -622,10 +609,29 @@ func TestN15_GoalSemanticsRebaseline(t *testing.T) {
 		Origin:    &session.Origin{Kind: session.OriginKindDelegate},
 		SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-g3", RootSessionID: "parent-g3"},
 	})
+	currentBefore := snapshotBootSweepRecord(t, h.ls, "goal-current")
+	persistLifecycle(t, h.ls, &session.LifecycleRecord{
+		SessionID: "goal-current-ordinary", Generation: 1, State: session.LifecycleRunning,
+		WorkspaceID: "ws", AgentID: "a", OwnerScopeKind: session.OwnerScopeHuman,
+		GoalRef: "goal-ordinary-3", Origin: &session.Origin{Kind: session.OriginKindTask, TaskID: "task-goal-3"},
+	})
 	h.pe.SetGoalSemanticsVersioner(func(sid string) int { return 3 })
 	res3 := h.pe.runBootSweep(context.Background())
+	assertBootSweepRecordUntouched(t, h.ls, "goal-unversioned", unversionedBefore)
+	assertBootSweepRecordUntouched(t, h.ls, "goal-current", currentBefore)
+	assertBootSweepRecordUntouched(t, h.ls, "goal-stale", staleBefore)
 	if len(res3.RebaselinedGoals) != 0 {
 		t.Errorf("current-version goal rebaselined: %v", res3.RebaselinedGoals)
+	}
+	if len(res3.SweptToFailed) != 1 || res3.SweptToFailed[0] != "goal-current-ordinary" {
+		t.Errorf("current-version swept goals = %v, want [goal-current-ordinary] only (D8.3)", res3.SweptToFailed)
+	}
+	currentOrdinary, loadErr := h.ls.Load("goal-current-ordinary")
+	if loadErr != nil {
+		t.Fatalf("load ordinary current-version goal: %v", loadErr)
+	}
+	if currentOrdinary.State != session.LifecycleFailed || currentOrdinary.FailedReason != failedReasonInterrupted || currentOrdinary.GoalRef != "goal-ordinary-3" {
+		t.Errorf("ordinary current goal = %q/%q ref=%q, want failed/%q ref=goal-ordinary-3", currentOrdinary.State, currentOrdinary.FailedReason, currentOrdinary.GoalRef, failedReasonInterrupted)
 	}
 }
 

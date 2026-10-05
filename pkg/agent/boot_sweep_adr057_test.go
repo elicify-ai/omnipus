@@ -2,34 +2,12 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// boot_sweep_adr057_test.go — ADR-057 unit U19's test for W6b/FR-078 (test
-// #65, BDD-87): "A restart mid-delegation leaves no orphan directory".
-//
-// Per binding Rule 5 this is a NEW file (U19 does not add to the existing
-// boot_sweep_test.go, which several other units' tests already share) and
-// per binding Rule 6 its unexported helpers are prefixed u19.
-//
-// FR-078 has two clauses, both asserted here against REAL, on-disk stores
-// (binding Rule 1 — no spy, no fake):
-//
-//  1. The boot sweep (pkg/agent/boot_sweep.go) reconciles an in-flight
-//     DELEGATE CHILD's lifecycle record to a terminal state across a
-//     process restart. This is the SAME generic non-terminal sweep
-//     boot_sweep_test.go's TestBootSweep_NonTerminalToFailedInterrupted
-//     already covers for a plan-owner session — this test's contribution is
-//     proving the identical mechanism reconciles a record SHAPED like a
-//     real delegate.go `run` mint (OwnerScopeParentSession, a
-//     SteeringSessionID, no OwnsPlanID/GoalRef — see delegate.go:1166-1180),
-//     which no existing boot_sweep_test.go case constructs.
-//  2. A transcript write attempted against the un-minted child id — i.e. a
-//     crash so early that delegate.go's lifecycle Persist (run's FIRST
-//     durable write, :1181) landed but the child's OWN transcript session
-//     (session.CreateSessionWithID, minted later during the actual spawn)
-//     never did — returns a non-nil error from AppendTranscriptStrict and
-//     creates NO directory, even after the boot sweep has run. This is
-//     asserted POSITIVELY (the write attempt happened and failed), not as
-//     "no orphan directory was found lying around" (which a run that wrote
-//     nothing anywhere would satisfy vacuously — grill C-3, spec §4 item 8).
+// ADR-057 FR-078 / BDD-87's no-orphan-directory requirement remains: a
+// refused transcript append to an unminted child must create nothing.
+// Frozen ADR-20260928 D8/D8.3 supersedes the old terminal reconciliation
+// oracle for that steered child. PlanEngine.bootSweep leaves its complete
+// lifecycle and journal untouched across reopening the real store;
+// SteerBootRecovery is responsible for the non-terminal restart stop.
 package agent
 
 import (
@@ -85,26 +63,25 @@ func TestBootSweep_ReconcilesChildAcrossRestart(t *testing.T) {
 		CreatedAt:      time.Now().Add(-1 * time.Minute),
 	})
 
-	// (2) Simulate the restart: run the boot sweep exactly as Start would at
-	// boot, right after bootReconcile.
+	beforeSweep := snapshotBootSweepRecord(t, h.ls, u19UnmintedChildID)
+	// Reopen the real lifecycle store: no in-memory fixture can preserve a
+	// record the on-disk sweep has actually rewritten.
+	h.ls = session.NewLifecycleStore(h.ls.Dir())
+	h.pe.SetLifecycleStore(h.ls)
 	result := h.pe.runBootSweep(context.Background())
-
-	if len(result.SweptToFailed) != 1 || result.SweptToFailed[0] != u19UnmintedChildID {
-		t.Fatalf("SweptToFailed = %v, want exactly [%q]", result.SweptToFailed, u19UnmintedChildID)
+	assertBootSweepRecordUntouched(t, h.ls, u19UnmintedChildID, beforeSweep)
+	if result.Scanned != 1 {
+		t.Errorf("Scanned = %d, want 1 (the durable queued child)", result.Scanned)
 	}
-
+	if len(result.SweptToFailed) != 0 {
+		t.Errorf("SweptToFailed = %v, want none — D8.3 leaves the steered child to SteerBootRecovery", result.SweptToFailed)
+	}
 	reconciled, err := h.ls.Load(u19UnmintedChildID)
 	if err != nil {
-		t.Fatalf("load reconciled child record: %v", err)
+		t.Fatalf("load protected child record: %v", err)
 	}
-	if reconciled.State != session.LifecycleFailed {
-		t.Fatalf("reconciled child state = %q, want %q (terminal)", reconciled.State, session.LifecycleFailed)
-	}
-	if !session.IsTerminalLifecycleState(reconciled.State) {
-		t.Fatalf("reconciled child state %q is not terminal per IsTerminalLifecycleState", reconciled.State)
-	}
-	if reconciled.FailedReason == "" {
-		t.Fatal("reconciled child record has no failed_reason — a terminal failed record MUST name why")
+	if reconciled.State != session.LifecycleQueued || reconciled.Terminal() || reconciled.FailedReason != "" {
+		t.Errorf("child after plan sweep = %q/%q terminal=%v, want queued with no failed reason and non-terminal (D8.3)", reconciled.State, reconciled.FailedReason, reconciled.Terminal())
 	}
 
 	// (3) The second FR-078 clause: even AFTER the boot sweep ran, a
