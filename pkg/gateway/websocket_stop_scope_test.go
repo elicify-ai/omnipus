@@ -2,55 +2,21 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// websocket_stop_scope_test.go pins requestScopedStop's two scoped-Stop
-// contracts documented in websocket_stop_scope.go's own header comment
-// ("both web Stop scopes end turns, never goals") against the TWO cases
-// commit c6bc40804 ("fix(gateway): scope web Stop without ending active
-// goals") touches at once:
-//
-//  1. (regression, RED below) A steered child with a durable steering edge
-//     that was only ever queued/parked — never ran a turn — must still be
-//     landed LifecycleStopped and report "interrupted:" upward on a web
-//     Stop, exactly as pkg/agent's Finding 5
-//     (TestSteerGenerationCancel_NeverRanChildUnblocksParent,
-//     pkg/agent/steer_cancel_test.go) proves for SteerCanceller.CancelSubtree
-//     called directly. requestScopedStop's cancelTurn closure
-//     (websocket_stop_scope.go:26-41, the "stopTurn" func literal) calls
-//     ONLY h.requestTurnStop -> agentLoop.RequestCancel — never
-//     al.SteerGenerationCancel — so SteerCanceller.cascade's cancelStamped
-//     (pkg/agent/steer_cancel.go) never reaches terminaliseNeverRanStop for
-//     this call chain: the never-ran session is stranded at whatever state
-//     it was in before the Stop, forever.
-//
-//     Oracle, derived from the code's own documented contract — never from
-//     running this test against the bug and copying its output:
-//     terminaliseNeverRanStop's own call,
-//     reportSteeredSessionTerminalUpward(ctx, sessionID, generation,
-//     session.LifecycleStopped, steer.OutcomeInterrupted, "interrupted: the
-//     session was cancelled") (pkg/agent/steer_cancel.go), and
-//     deliverSubagentEnd's own outcome->status switch
-//     (pkg/agent/steer_frames.go), which maps steer.OutcomeInterrupted to
-//     SubTurnStatusInterrupted ("interrupted").
-//
-//  2. (positive control, should already be green on current HEAD) An
-//     ordinary TurnOnly web Stop on a LIVE in-flight turn must cancel the
-//     turn but must NOT end that turn's session-owned goal and must NOT
-//     land the record terminal. cancel_stop.go::claimCancel's own comment
-//     ("Administrative cancellation continues to end session-owned goals")
-//     names the ONE case c6bc40804 deliberately changed, and
-//     disposeSteeredTurnResult (pkg/agent/steer_launcher.go) early-returns
-//     on ts.stopRequested before ever calling
-//     completeSteeredTurn/finishSteeredGoalTurn. This test exists so that a
-//     fix for case 1 which routes the never-ran case back through the OLD
-//     administrative CancelSubtree cascade — satisfying case 1 while
-//     silently reintroducing goal-ending on every ordinary live-turn Stop —
-//     cannot pass unnoticed.
+// These real web-Stop tests use the frozen ADR-20260928 control-plane
+// contract: D2/Vocabulary make stopped non-terminal and resumable; D4
+// reports the transition through subagent_state; D6 persists the direct
+// parent's nonfatal stop notice. A never-ran queued child must not publish
+// the retired subagent_end(interrupted) or a terminal final. The live-turn
+// positive control below still protects its unchanged active goal.
 package gateway
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -63,11 +29,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRequestScopedStop_NeverRanChildLandsStoppedAndReportsUpward is the RED
-// case. See the file-header comment (case 1) for the oracle and the exact
-// call chain this exercises.
+// TestRequestScopedStop_NeverRanChildLandsStoppedAndReportsUpward pins
+// D2 CRIT-001, D4 and D6, not the retired interrupted-final mechanism.
 func TestRequestScopedStop_NeverRanChildLandsStoppedAndReportsUpward(t *testing.T) {
 	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
@@ -77,6 +43,7 @@ func TestRequestScopedStop_NeverRanChildLandsStoppedAndReportsUpward(t *testing.
 		},
 	}
 	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
 	al := mustAgentLoop(t, cfg, msgBus, adr093IdleProvider{})
 	lifecycle := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
@@ -132,24 +99,67 @@ func TestRequestScopedStop_NeverRanChildLandsStoppedAndReportsUpward(t *testing.
 
 	after, err := lifecycle.Load(childID)
 	require.NoError(t, err)
-	assert.Equal(t, session.LifecycleStopped, after.State,
-		"a steered child that was only ever queued, never ran a turn, must still be landed Stopped by its own web Stop (terminaliseNeverRanStop, pkg/agent/steer_cancel.go) — requestScopedStop's gateway-local cancelTurn closure never reaches it")
-	require.NotNil(t, after.StopNote, "the Stop instruction must leave a durable StopNote even though the live fence is spent")
-	assert.Equal(t, session.StopCauseStop, after.StopNote.Cause, "the child was the cascade's own direct target, not a cascaded descendant")
-	assert.Nil(t, after.Stop, "landing at Stopped spends the current-generation Stop fence (reportSteeredSessionTerminalUpward's Mutate)")
+	require.Equal(t, session.LifecycleStopped, after.State, "D2: a never-ran queued child lands stopped, not a terminal failure")
+	assert.False(t, after.Terminal(), "D2/Vocabulary: stopped is alive and resumable")
+	assert.Equal(t, before.Generation, after.Generation, "a Stop never mints a replacement generation")
+	assert.Empty(t, after.FailedReason, "a Stop is not a real failure")
+	assert.Nil(t, after.FinalDelivery, "D2 CRIT-001: a Stop winner creates no terminal final outbox")
+	require.NotNil(t, after.StopNote, "D2: the landed stop keeps its durable reason")
+	assert.Equal(t, session.StopCauseStop, after.StopNote.Cause, "the child is the direct Stop target, not a cascaded descendant")
+	assert.Equal(t, "human:"+wc.userID, after.StopNote.By, "the authenticated owner is the stop actor")
+	assert.Equal(t, uint64(1), after.StopNote.Seq, "D4: this child's first stop takes its first monotonic stop sequence")
+	assert.Nil(t, after.Stop, "D2: the stopped landing atomically spends the in-flight fence")
 
 	entries, err := al.GetSessionStore().ReadTranscript(meta.ID)
 	require.NoError(t, err)
-	wantSpanID := agent.SubagentSpanID(callID, 1)
-	var gotEnd *generated.SubagentEndFrame
+	wantSpanID := agent.SubagentSpanID(callID, before.Generation)
+	stoppedFrames, endFrames := 0, 0
 	for i := range entries {
+		if frame := entries[i].SubagentState; frame != nil && frame.SpanId == wantSpanID && frame.State == string(session.LifecycleStopped) {
+			stoppedFrames++
+			assert.Equal(t, string(generated.WsFrameTypeSubagentState), frame.Type, "D4: report a state transition, never a terminal end")
+			assert.Equal(t, meta.ID, frame.SessionId, "the state frame belongs to the direct parent's transcript")
+			require.NotNil(t, frame.ChildSessionId, "the stopped frame identifies the actual child")
+			assert.Equal(t, childID, *frame.ChildSessionId, "the stopped frame must name this child")
+		}
 		if entries[i].SubagentEnd != nil && entries[i].SubagentEnd.SpanId == wantSpanID {
-			gotEnd = entries[i].SubagentEnd
+			endFrames++
 		}
 	}
-	require.NotNil(t, gotEnd, "the never-ran child's Stop must deliver ONE subagent_end upward to the parent transcript (deliverSubagentEnd) — without it the parent never learns the child is gone and waits for ever")
-	assert.Equal(t, string(agent.SubTurnStatusInterrupted), gotEnd.Status,
-		"deliverSubagentEnd's own outcome switch (steer_frames.go) maps steer.OutcomeInterrupted -> SubTurnStatusInterrupted; terminaliseNeverRanStop's only call site passes steer.OutcomeInterrupted")
+	assert.Equal(t, 1, stoppedFrames, "D4: one durable subagent_state(stopped) reports the never-ran child's Stop")
+	assert.Zero(t, endFrames, "D2: a resumable Stop must emit no subagent_end, including the retired interrupted verdict")
+
+	// D6: one notice to the DIRECT parent, with this stopped transition's
+	// tuple, cause/actor/time and all decide-offers. No terminal final id.
+	inboxEntries, err := inbox.Entries(meta.ID)
+	require.NoError(t, err)
+	var notices []generated.SessionMessage
+	for _, entry := range inboxEntries {
+		if entry.Kind == session.InboxEntryMessage && entry.Message != nil {
+			notices = append(notices, *entry.Message)
+		}
+	}
+	require.Len(t, notices, 1, "D6: exactly one nonfatal stopped-child notice; no extra interrupted final")
+	notice, err := notices[0].AsSessionMessageError()
+	require.NoError(t, err, "the D6 notice uses the generated nonfatal error envelope")
+	wantNoticeID := fmt.Sprintf("stopped-notice:%s:%s:%d:%d", meta.ID, childID, before.Generation, after.StopNote.Seq)
+	assert.Equal(t, wantNoticeID, notice.MessageId, "D6's direct-parent/child/generation/stop-sequence dedup identity")
+	assert.NotEqual(t, fmt.Sprintf("%s:%d:final", childID, before.Generation), notice.MessageId, "D2: never reserve a terminal final id for a Stop")
+	assert.Equal(t, childID, notice.SessionId)
+	require.NotNil(t, notice.ParentSessionId)
+	assert.Equal(t, meta.ID, *notice.ParentSessionId)
+	require.NotNil(t, notice.Generation)
+	assert.Equal(t, before.Generation, *notice.Generation)
+	assert.Equal(t, generated.SessionMessageErrorKindError, notice.Kind)
+	assert.Equal(t, generated.SessionMessageErrorDirectionChildToParent, notice.Direction)
+	assert.False(t, notice.Fatal, "D6: this is an alive helper's stop notice, not a fatal final")
+	assert.True(t, notice.CreatedAt.Equal(after.StopNote.At), "the notice retains the landed stop's original instant")
+	assert.Contains(t, notice.Text, "cause: "+string(session.StopCauseStop))
+	assert.Contains(t, notice.Text, "actor: "+after.StopNote.By)
+	assert.Contains(t, notice.Text, after.StopNote.At.UTC().Format(time.RFC3339Nano))
+	for _, offer := range []string{"resume", "redirect", "do the work", "report it open", "clear that helper's goal", "consider asking the owner first"} {
+		assert.Contains(t, strings.ToLower(notice.Text), offer, "D6's notice must offer the parent's decision: %s", offer)
+	}
 }
 
 // newLiveTurnOnlyScopeFixture is u2ScopeFixture's own setup

@@ -164,11 +164,10 @@ func adr093AssertNotTerminalWithin(t *testing.T, al *AgentLoop, id string, windo
 	}
 }
 
-// TestAdr093BootSweep_StandingRootsExempt is ADR-093 D3 / F890-2: after a
-// restart, a standing conversation root — chat, channel, heartbeat,
-// scheduled, or a record with no origin kind — stays usable: the boot sweep
-// must exempt it (stays running), while a steered child and a task root are
-// still swept to failed(interrupted).
+// TestAdr093BootSweep_StandingRootsExempt retains ADR-093 D3 / F890-2's
+// standing-root exemption and ordinary task-root sweep. Frozen
+// ADR-20260928 D8.3 supersedes the old steered-child failed(interrupted)
+// oracle: PlanEngine.bootSweep leaves that record wholly to SteerBootRecovery.
 func TestAdr093BootSweep_StandingRootsExempt(t *testing.T) {
 	h := newBootSweepHarness(t)
 
@@ -195,23 +194,28 @@ func TestAdr093BootSweep_StandingRootsExempt(t *testing.T) {
 		persistLifecycle(t, h.ls, rec)
 	}
 
-	// Two sweepable shapes that MUST stay sweepable (ADR-093 D3).
-	swept := adr093Record("adr093-child-steered", 1, session.LifecycleRunning)
-	swept.Origin = &session.Origin{Kind: session.OriginKindChat}
-	swept.SteeredBy = &session.SteeredBy{SteeringSessionID: "adr093-root-chat", RootSessionID: "adr093-root-chat"}
-	persistLifecycle(t, h.ls, swept)
+	// D8.3: the steered child is scanned but never rewritten by this sweep.
+	child := adr093Record("adr093-child-steered", 1, session.LifecycleRunning)
+	child.Origin = &session.Origin{Kind: session.OriginKindChat}
+	child.SteeredBy = &session.SteeredBy{SteeringSessionID: "adr093-root-chat", RootSessionID: "adr093-root-chat"}
+	persistLifecycle(t, h.ls, child)
+	childBefore := snapshotBootSweepRecord(t, h.ls, child.SessionID)
 
 	taskRoot := adr093Record("adr093-root-task", 1, session.LifecycleRunning)
 	taskRoot.Origin = &session.Origin{Kind: session.OriginKindTask, TaskID: "task-adr093"}
 	persistLifecycle(t, h.ls, taskRoot)
 
 	res := h.pe.runBootSweep(context.Background())
+	assertBootSweepRecordUntouched(t, h.ls, child.SessionID, childBefore)
+	if res.Scanned != len(standingIDs)+2 {
+		t.Errorf("Scanned = %d, want %d (five roots, steered child and ordinary task root)", res.Scanned, len(standingIDs)+2)
+	}
 
 	gotSwept := append([]string{}, res.SweptToFailed...)
 	sort.Strings(gotSwept)
-	wantSwept := []string{"adr093-child-steered", "adr093-root-task"}
+	wantSwept := []string{"adr093-root-task"}
 	if len(gotSwept) != len(wantSwept) {
-		t.Fatalf("swept set = %v, want exactly %v (ADR-093 D3: only the delegation-provable records are swept)", gotSwept, wantSwept)
+		t.Fatalf("swept set = %v, want exactly %v — D8.3 leaves the steered child to SteerBootRecovery; ADR-093 D3 still sweeps the ordinary task root", gotSwept, wantSwept)
 	}
 	for i := range wantSwept {
 		if gotSwept[i] != wantSwept[i] {
