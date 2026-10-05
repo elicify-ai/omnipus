@@ -7,15 +7,18 @@
 // team/WorkspaceTeamGraph.tsx) — mounted under a WorkspaceContextProvider so
 // the tab's useActiveWorkspace() resolves outside the workspace route.
 //
-// This file intentionally adds NO team UI of its own: the docked shell owns
-// the panel header (title / expand / close) and the full-screen route owns
-// the chrome-less "← Back to chat" bar, so the content is exactly the tab.
+// This file adds only workspace-loading and recovery states: the docked shell
+// owns the panel header (title / expand / close) and the full-screen route owns
+// the chrome-less "← Back to chat" bar. Once loaded, the content is exactly the tab.
 // Registration into src/components/panel-shell/registry.tsx is the panel
 // registration lane's change (same shape as LibraryPanelContent there).
 
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchWorkspace, workspacesQueryKeys } from '@/lib/api'
+import { isApiError } from '@/lib/api-error'
+import { QueryErrorState } from '@/components/shared/QueryErrorState'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useUiStore } from '@/store/ui'
 import type {
   PanelContentProps,
@@ -44,12 +47,15 @@ export function TeamPanel({ shellProps }: TeamPanelProps = {}) {
   // The shell hands the panel a workspaceId, not a workspace record; the tab
   // needs the record (core_team, revision). Same resolve-one-workspace-by-id
   // job fetchWorkspace already does for the AgentProfile Heartbeat tab.
-  const { data: workspace } = useQuery({
+  const { data: workspace, isPending, isError, error, refetch } = useQuery({
     queryKey: workspacesQueryKeys.detail(workspaceId ?? ''),
     queryFn: () => fetchWorkspace(workspaceId as string),
     enabled: !!workspaceId,
     staleTime: 30_000,
   })
+  // A cold refetch clears the query's error while pending; keep its safe reason
+  // visible until that attempt settles, scoped to the workspace being retried.
+  const [retryFailure, setRetryFailure] = useState<{ workspaceId: string; message: string } | null>(null)
 
   // Team's panel address is just the workspace — a constant getter is the
   // whole expand context (the shell re-targets the shared full-screen route
@@ -62,8 +68,12 @@ export function TeamPanel({ shellProps }: TeamPanelProps = {}) {
     return () => register(null)
   }, [getExpandContext, shellProps?.registerExpandContext])
 
-  if (!suppliedContext?.workspaceId || !workspace) return null
+  if (!workspaceId) return null
   if (shellProps?.presentation === 'docked' && activePanel?.id !== 'team') return null
+
+  const failureMessage = isError
+    ? isApiError(error) ? error.userMessage : 'Failed to load team. Please try again.'
+    : retryFailure?.workspaceId === workspaceId ? retryFailure.message : null
 
   return (
     <div
@@ -73,9 +83,30 @@ export function TeamPanel({ shellProps }: TeamPanelProps = {}) {
       aria-label="Team panel"
       className="relative h-full min-h-0 w-full min-w-0 overflow-hidden bg-[var(--color-surface-0)]"
     >
-      <WorkspaceContextProvider workspace={workspace}>
-        <WorkspaceTeamTab workspaceId={suppliedContext.workspaceId} />
-      </WorkspaceContextProvider>
+      {!workspace && failureMessage ? (
+        <QueryErrorState
+          layout="fill"
+          message={failureMessage}
+          onRetry={() => {
+            setRetryFailure({ workspaceId, message: failureMessage })
+            void refetch().then(() => {
+              setRetryFailure((current) => current?.workspaceId === workspaceId ? null : current)
+            })
+          }}
+        />
+      ) : !workspace && isPending ? (
+        <div
+          role="status"
+          className="flex h-full flex-col items-center justify-center gap-[var(--space-2-5)] p-[var(--space-4)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
+        >
+          <Skeleton className="h-[var(--space-3)] w-[var(--space-8)]" />
+          <span>Loading team…</span>
+        </div>
+      ) : workspace ? (
+        <WorkspaceContextProvider workspace={workspace}>
+          <WorkspaceTeamTab workspaceId={workspaceId} />
+        </WorkspaceContextProvider>
+      ) : null}
     </div>
   )
 }
