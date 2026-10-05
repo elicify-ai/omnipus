@@ -23,14 +23,14 @@ import (
 // root/bypassing runner defeats the permission instrument; fail BLOCKED.
 func TestAcceptedSteeredInstructionQ2_MarkerFailureRestoresSuffixAndRetriesWithoutDuplicate(t *testing.T) {
 	fixture := newQ2ConsumerFixture(t)
-	prefix := q2ConsumerEnqueuePlain(t, fixture.al, fixture.childID, "q2-marker-prefix", "The consumed prefix is not retried.")
+	prefix := q2ReceiptEnqueuePlain(t, fixture.al, fixture.childID, "q2-marker-prefix", "The consumed prefix is not retried.")
 	const messageID = "q2-marker-fails-after-append"
 	const text = "Persist this instruction exactly once before its consumed marker."
 	failed := q2ConsumerEnqueueWake(t, fixture.al, fixture.childID, messageID, text)
 	const suffixID = "q2-marker-suffix-wake"
 	const suffixText = "The suffix wake must retain its original identity."
 	suffixWake := q2ConsumerEnqueueWake(t, fixture.al, fixture.childID, suffixID, suffixText)
-	tail := q2ConsumerEnqueuePlain(t, fixture.al, fixture.childID, "q2-marker-tail", "The suffix correlation must be conserved.")
+	tail := q2ReceiptEnqueuePlain(t, fixture.al, fixture.childID, "q2-marker-tail", "The suffix correlation must be conserved.")
 	batch := q2ConsumerDequeue(t, fixture.al, fixture.childID, []steeringQueueItem{prefix, failed, suffixWake, tail})
 
 	if err := fixture.al.recordAcceptedSteeredInstruction(*failed.wake, failed.message); err != nil {
@@ -81,7 +81,7 @@ func TestAcceptedSteeredInstructionQ2_MarkerFailureRestoresSuffixAndRetriesWitho
 	if err := os.Chmod(transcript, stat.Mode().Perm()); err != nil {
 		t.Fatalf("repair actual marker-write fault before retry: %v", err)
 	}
-	arrival := q2ConsumerEnqueuePlain(t, fixture.al, fixture.childID, "q2-marker-arrival", "Later arrival stays behind the restored suffix.")
+	arrival := q2ReceiptEnqueuePlain(t, fixture.al, fixture.childID, "q2-marker-arrival", "Later arrival stays behind the restored suffix.")
 	retryItems := []steeringQueueItem{failed, suffixWake, tail, arrival}
 	retryBatch := q2ConsumerDequeue(t, fixture.al, fixture.childID, retryItems)
 	retry := q2ConsumerConsume(fixture.al, fixture.childID, retryBatch)
