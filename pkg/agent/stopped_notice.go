@@ -26,7 +26,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -321,6 +323,55 @@ func (r *SteerBootRecovery) recoverStoppedChildNotice(ctx context.Context, rec *
 	// through to the caller's own boot consequence — the interrupted run's
 	// stop — whatever the replay above found.
 	return false
+}
+
+// landedStopNoticeOwnsReplay authenticates a stored notice before excluding
+// it from generic boot error replay. The landed ledger event, its original
+// parent edge and the existing canonical message builder are the authority;
+// a text prefix or caller-supplied id alone never grants notice handling.
+// The dedicated landed-history publisher already ran for this boot record.
+func (r *SteerBootRecovery) landedStopNoticeOwnsReplay(rec *session.LifecycleRecord, message generated.SessionMessage) (bool, error) {
+	stored, err := message.AsSessionMessageError()
+	if err != nil {
+		return false, fmt.Errorf("steer: stopped notice: decode stored notice: %w", err)
+	}
+	if !strings.HasPrefix(stored.MessageId, "stopped-notice:") &&
+		!strings.HasPrefix(stored.Text, session.LifecycleNoticePrefixStoppedChild) {
+		return false, nil
+	}
+	transitions, err := r.Lifecycle.ListStoppedTransitions(rec.SessionID)
+	if err != nil {
+		return false, fmt.Errorf("steer: stopped notice: read landed history of %s: %w", rec.SessionID, err)
+	}
+	for _, tr := range transitions {
+		parentID := strings.TrimSpace(tr.ParentSessionID)
+		id := stoppedChildNoticeID(parentID, tr.SessionID, tr.Generation, tr.StopSeq)
+		if stored.MessageId != id {
+			continue
+		}
+		if parentID == "" || parentID != strings.TrimSpace(rec.SteeringSessionID()) {
+			return false, fmt.Errorf("steer: stopped notice: %s does not match the current steering edge", id)
+		}
+		canonical, buildErr := stoppedChildNoticeMessage(rec, parentID, id, tr)
+		if buildErr != nil {
+			return false, buildErr
+		}
+		// Normalize the generated variant's JSON field order before comparing
+		// every field, including origin, generation and the original instant.
+		storedBytes, marshalErr := json.Marshal(stored)
+		if marshalErr != nil {
+			return false, fmt.Errorf("steer: stopped notice: encode stored notice %s: %w", id, marshalErr)
+		}
+		canonicalBytes, marshalErr := canonical.MarshalJSON()
+		if marshalErr != nil {
+			return false, fmt.Errorf("steer: stopped notice: encode canonical notice %s: %w", id, marshalErr)
+		}
+		if !bytes.Equal(storedBytes, canonicalBytes) {
+			return false, fmt.Errorf("steer: stopped notice: %s does not match its landed transition's canonical message", id)
+		}
+		return true, nil
+	}
+	return false, fmt.Errorf("steer: stopped notice: %s has no matching landed transition", stored.MessageId)
 }
 
 // replayLandedStopNotices runs the loop's landed-history publisher for one
