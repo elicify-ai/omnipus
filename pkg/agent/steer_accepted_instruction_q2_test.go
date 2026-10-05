@@ -131,14 +131,14 @@ func TestAcceptedSteeredInstructionQ2_AgentInputCannotMintOrAlterHumanProvenance
 		t.Fatalf("reopen provenance store: %v", err)
 	}
 	defer func() {
-		if err := reopened.Close(); err != nil {
-			t.Errorf("close reopened provenance store: %v", err)
+		if cerr := reopened.Close(); cerr != nil {
+			t.Errorf("close reopened provenance store: %v", cerr)
 		}
 	}()
 	for _, derivedID := range []string{"instruction-" + messageID, "consumed-" + messageID} {
-		provenance, found, err := reopened.LookupMessageProvenance(fixture.childID, derivedID)
-		if err != nil || found || provenance != (session.MessageProvenance{}) {
-			t.Errorf("agent/runtime entry %q minted trusted human provenance: %+v found=%v err=%v", derivedID, provenance, found, err)
+		provenance, derivedFound, lerr := reopened.LookupMessageProvenance(fixture.childID, derivedID)
+		if lerr != nil || derivedFound || provenance != (session.MessageProvenance{}) {
+			t.Errorf("agent/runtime entry %q minted trusted human provenance: %+v found=%v err=%v", derivedID, provenance, derivedFound, lerr)
 		}
 	}
 	after, found, err := reopened.LookupMessageProvenance(fixture.childID, humanID)
