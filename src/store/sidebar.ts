@@ -21,8 +21,11 @@ export const useSidebarStore = create<SidebarStore>()(
   persist(
     (set) => ({
       isOpen: false,
-      // A wide window starts with the sidebar docked. Hide persists as unpinned.
-      isPinned: true,
+      // A fresh visit is not pinned: the sidebar stays closed until it is
+      // shown or pinned (founder decision, sidebar hotfix). Returning
+      // visitors who saved a pin keep it — persist rehydrates isPinned over
+      // this default.
+      isPinned: false,
 
       open: () => set({ isOpen: true }),
       // Drop the overlay only. A saved dock stays saved: on a narrow window

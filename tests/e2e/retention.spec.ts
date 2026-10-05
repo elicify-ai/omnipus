@@ -178,10 +178,10 @@ test('seven_day_old_session_replays_cleanly', async ({ page }) => {
     //
     // The old "Open sessions panel" button and "Open session: <title>" rows
     // no longer exist — the session panel was redesigned into a two-mode
-    // SearchModal (src/components/search/SearchModal.tsx). A wide window
-    // starts with the sidebar docked (isOpen false, isPinned true), so
-    // Search sessions is already on screen. If a saved choice left the
-    // sidebar hidden, Show sidebar brings it back. Session rows render
+    // SearchModal (src/components/search/SearchModal.tsx). A fresh visit is
+    // not pinned, so the sidebar starts closed and Show sidebar (the header
+    // hamburger) opens it; a saved pin leaves the sidebar on screen with
+    // Search sessions already visible. Session rows render
     // `{session.title || 'Untitled session'}` inside plain buttons (no
     // per-row aria-label), so the accessible name is just the title text.
     // NOTE on isVisible(): Playwright ^1.49 IGNORES the `timeout` option on

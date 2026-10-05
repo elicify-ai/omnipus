@@ -3,16 +3,18 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 
-// Mock the sidebar store so we can verify toggle is called and control isOpen
-// (aria-expanded reflects it — see the aria-expanded describe block below).
+// Mock the sidebar store so we can verify open is called (and pin is NOT —
+// showing never pins) and control isOpen (aria-expanded reflects it — see
+// the aria-expanded describe block below).
 // The God Mode dot that used to mark this hamburger is deleted (founder
 // decision 2026-09-25 revision 2 — one app-wide corner dot from AppShell
 // replaces the per-button dots); its matchMedia/api mocks went with it.
 const mockOpen = vi.fn()
+const mockPin = vi.fn()
 let mockIsOpen = false
 vi.mock('@/store/sidebar', () => ({
   useSidebarStore: vi.fn((selector: (s: { open: () => void; pin: () => void; isOpen: boolean; isPinned: boolean }) => unknown) =>
-    selector({ open: mockOpen, pin: vi.fn(), isOpen: mockIsOpen, isPinned: false })
+    selector({ open: mockOpen, pin: mockPin, isOpen: mockIsOpen, isPinned: false })
   ),
   SIDEBAR_PIN_BREAKPOINT: 1024,
 }))
@@ -53,10 +55,12 @@ describe('ScreenHeader', () => {
     expect(screen.queryByRole('button', { name: 'Show sidebar' })).toBeNull()
   })
 
-  it('opens the sidebar when Show sidebar is clicked', () => {
+  it('opens the sidebar when Show sidebar is clicked, and never pins', () => {
     renderHeader({ title: 'Skills & Tools' })
     fireEvent.click(screen.getByRole('button', { name: 'Show sidebar' }))
     expect(mockOpen).toHaveBeenCalledTimes(1)
+    // Showing does not pin — pinning is the separate in-sidebar control.
+    expect(mockPin).not.toHaveBeenCalled()
   })
 
   it('renders optional actions slot when provided', () => {
@@ -97,8 +101,9 @@ describe('ScreenHeader', () => {
 })
 
 // BDD: While the sidebar is hidden, Show sidebar reports aria-expanded="false".
-// While the sidebar is on screen, that button is not in the header — Hide
-// sidebar lives inside the sidebar. Traces to: SidebarShowButton.
+// While the sidebar is on screen (docked by a pin, or open), that button is
+// not in the header — the hamburger is hidden while the sidebar is visible.
+// Traces to: SidebarShowButton.
 describe('ScreenHeader — hamburger aria-expanded', () => {
   it('is "false" when the sidebar is closed', () => {
     mockIsOpen = false
@@ -107,7 +112,7 @@ describe('ScreenHeader — hamburger aria-expanded', () => {
     expect(btn.getAttribute('aria-expanded')).toBe('false')
   })
 
-  it('is absent from the header when the sidebar is open — the Hide control lives in the sidebar', () => {
+  it('is absent from the header while the sidebar is on screen', () => {
     mockIsOpen = true
     renderHeader({ title: 'Agents' })
     expect(screen.queryByRole('button', { name: 'Show sidebar' })).toBeNull()
