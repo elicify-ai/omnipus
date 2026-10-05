@@ -69,8 +69,8 @@ func TestDelegateCancel_KillsThatChildsShells(t *testing.T) {
 	// test's focus is the SHELL-KILL side effect FR-028 adds, not the
 	// turn-cancel/steering mechanism itself (covered elsewhere).
 	delegateTool.SetCancelHooks(
-		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-			return []string{sessionID}, nil
+		func(sessionID string, _ steer.Principal, hint string) ([]string, func() error, error) {
+			return []string{sessionID}, nil, nil
 		},
 		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
 			return []string{sessionID}, nil
