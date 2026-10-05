@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -190,7 +191,7 @@ func bootLedgerBytes(t *testing.T, f *bootNoticeControlFixture) []byte {
 	t.Helper()
 	path := filepath.Join(f.al.GetConfig().Agents.Defaults.Home, "session_lifecycle", "controls", f.resumed.SessionID+".jsonl")
 	raw, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
