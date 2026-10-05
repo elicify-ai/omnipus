@@ -118,6 +118,8 @@ What this looks like in practice:
 - **No person-only wait.** When a helper needs a person, it asks its parent with an ordinary message and keeps working; the parent reaches you through ordinary chat text. There is no special pause and no 24-hour expiry — a helper never fails because a person was unavailable.
 - When too many workers are already running, the next one is **queued** — the parent's tool result tells it its place in line, and queued workers start in order as slots free. There is no blocking wait, and `delegate stop_all` stops a queued worker.
 
+If a queued worker cannot start and its failure outcome cannot be saved, Omnipus sends its direct parent a nonfatal storage-error notice when the worker's saved record is still readable and the parent's inbox can be written. The notice is not a saved final outcome and does not restart the original instruction. It waits in the parent's inbox; it does not by itself wake or resume that parent. A failed notice save is not reported as successful delivery or recovery.
+
 The exact caps on all of this — how deep a chain may go, how many may run at once, and how long a child may run — live on the Performance tab; see [settings](settings.md#delegation-limits) for the values and their defaults.
 
 A worker has its own settings — its model, its tools, its limits. The delegating agent hands over the task; the worker supplies everything else. Delegation itself is a per-workspace decision: which agent may delegate to which is set on that [workspace](workspaces.md) **Team** tab, and that rule applies only there.
