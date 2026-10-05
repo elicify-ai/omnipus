@@ -85,6 +85,12 @@ type SteerBootRecovery struct {
 	Classifier     steer.RecordClassifier
 	Deliverer      steer.UpwardDeliverer
 	OperatorNotice func(message string)
+	// BootEpoch carries this process's already-minted boot epoch store: the
+	// same instance the gateway minted at startup (steer.Deps.BootEpoch).
+	// Recovery must read the writing boot from it, never mint, reopen or
+	// substitute another counter. The gateway's boot hook wires it; the
+	// restart-note writer consumes it in a follow-up change.
+	BootEpoch *session.BootEpochStore
 }
 
 type bootSessionMessageEnvelope struct {
