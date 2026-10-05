@@ -118,7 +118,8 @@ func TestComplete_ReviveLandingDuringDeliveryIsNotRolledBack(t *testing.T) {
 	if got.State != session.LifecycleRunning {
 		t.Errorf("persisted State = %q, want running (Revive's own write) — a stale completion must not overwrite a live revival", got.State)
 	}
-	old, _, _, _, readErr := al.GetSessionLifecycleStore().CommittedFinalDelivery(rec.SessionID, originalGen, rec.ExecutionID.RunID)
+	old, progress, _, retired, readErr := al.GetSessionLifecycleStore().CommittedFinalDelivery(rec.SessionID, originalGen, rec.ExecutionID.RunID)
+	_, _ = progress, retired
 	if readErr != nil || !reflect.DeepEqual(old, *committed.FinalDelivery) {
 		t.Errorf("revival lost/changed the older committed final: old=%+v error=%v", old, readErr)
 	}

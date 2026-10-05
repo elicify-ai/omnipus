@@ -150,22 +150,6 @@ func adr093WaitForEntered(t *testing.T, pp *parkedProvider, timeout time.Duratio
 	}
 }
 
-// adr093AssertNotTerminalWithin polls the record and fails the test the
-// MOMENT it turns terminal — the assertion is that it never terminalises in
-// the window (MIN-001: a resume starts exactly one run and leaves the chat
-// root's record alive).
-func adr093AssertNotTerminalWithin(t *testing.T, al *AgentLoop, id string, window time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(window)
-	for time.Now().Before(deadline) {
-		rec := adr093Load(t, al, id)
-		if rec.Terminal() {
-			t.Fatalf("record %s turned terminal (state %q, reason %q) — ADR-093 D4: the revival's one run must not end the root; the ordinary path keeps the chat resumable", id, rec.State, rec.FailedReason)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
 // TestAdr093BootSweep_StandingRootsExempt retains ADR-093 D3 / F890-2's
 // standing-root exemption and ordinary task-root sweep. Frozen
 // ADR-20260928 D8.3 supersedes the old steered-child failed(interrupted)

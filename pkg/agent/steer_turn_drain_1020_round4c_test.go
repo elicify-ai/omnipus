@@ -124,9 +124,10 @@ func TestSteeredTurnDrain1020Round4_OuterExhaustionDefersQueuedSteersToFutureRev
 		if err != nil {
 			t.Fatalf("read real control ledger: %v", err)
 		}
-		var lines []map[string]any
+		ledgerLines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+		lines := make([]map[string]any, 0, len(ledgerLines))
 		sawStop := false
-		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		for _, line := range ledgerLines {
 			var fields map[string]any
 			if err := json.Unmarshal([]byte(line), &fields); err != nil {
 				t.Fatalf("decode control ledger: %v", err)
