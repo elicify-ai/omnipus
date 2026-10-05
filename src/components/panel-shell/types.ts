@@ -129,15 +129,6 @@ export interface PanelDefinition {
   fullScreen: {
     toSearch: (context: PanelContext) => Record<string, string>
     fromSearch: (search: Record<string, unknown>) => PanelContext | null
-    /**
-     * How the docked shell's Expand affordance presents this panel's full
-     * screen. `'popout'` (default — Library/Browser, FR-008/US-6) opens the
-     * shared route in a new browser tab with the full popup/presence/re-dock
-     * lifecycle. `'route'` (SP-38, Tasks/Team/Calendar) navigates the SAME
-     * tab to the shared chrome-less "Back to chat" route — never a new
-     * browser tab.
-     */
-    expand?: 'popout' | 'route'
   }
   /**
    * CRIT-001: the leave gate for panels with unsaved-edit risk. The shell
