@@ -221,6 +221,24 @@ func (s *LifecycleStore) readControlLedgerLocked(sessionID string) ([]controlLed
 	return parseControlLedger(sessionID, raw)
 }
 
+// StopSelection is the detached acceptance-time execution/control pair.
+// An unadmitted target has a real control and generation, but no run or epoch.
+// not-wire-format: internal runtime targeting only.
+type StopSelection struct {
+	SessionID string
+	Effect    StopEffect
+}
+
+// StopAcceptance carries the acceptance result and, only for a stamped fence,
+// its immutable effect selection. No-effect outcomes leave Selection nil.
+// not-wire-format: internal runtime targeting only.
+type StopAcceptance struct {
+	Outcome    StopAcceptOutcome
+	Grant      ControlGrant
+	Generation int
+	Selection  *StopSelection
+}
+
 // AcceptStopControl is the stop verb's D4 acceptance: ONE non-reentrant
 // store operation that allocates the control's seq and control_id under the
 // session's lifecycle lock, appends the acceptance line to the per-session
@@ -250,89 +268,125 @@ func (s *LifecycleStore) AcceptStopControl(
 	intent StopControlIntent,
 	stamp func(rec *LifecycleRecord, grant ControlGrant, target StopEffectTarget) error,
 ) (StopAcceptOutcome, ControlGrant, int, error) {
+	accepted, err := s.acceptStopControl(sessionID, intent, stamp)
+	return accepted.Outcome, accepted.Grant, accepted.Generation, err
+}
+
+// AcceptStopControlSelection returns the stamped pair before the acceptance
+// lock is released, including the pair of an already-stamped current fence.
+// It shares the single ledger-first writer with AcceptStopControl.
+func (s *LifecycleStore) AcceptStopControlSelection(
+	sessionID string,
+	intent StopControlIntent,
+	stamp func(rec *LifecycleRecord, grant ControlGrant, target StopEffectTarget) error,
+) (StopAcceptance, error) {
+	return s.acceptStopControl(sessionID, intent, stamp)
+}
+
+func (s *LifecycleStore) acceptStopControl(
+	sessionID string,
+	intent StopControlIntent,
+	stamp func(rec *LifecycleRecord, grant ControlGrant, target StopEffectTarget) error,
+) (StopAcceptance, error) {
+	var accepted StopAcceptance
 	if err := validateLifecycleSessionID(sessionID); err != nil {
-		return 0, ControlGrant{}, 0, err
+		return accepted, err
 	}
 	if !IsValidStopCause(intent.Cause) {
-		return 0, ControlGrant{}, 0, fmt.Errorf("session: control ledger: invalid stop cause %q", intent.Cause)
+		return accepted, fmt.Errorf("session: control ledger: invalid stop cause %q", intent.Cause)
 	}
 	if intent.Actor == "" {
-		return 0, ControlGrant{}, 0, fmt.Errorf("session: control ledger: stop control requires an actor")
+		return accepted, fmt.Errorf("session: control ledger: stop control requires an actor")
 	}
 	acceptedAt := intent.AcceptedAt
 	if acceptedAt.IsZero() {
 		acceptedAt = time.Now().UTC()
 	}
-
 	mu := s.Lock(sessionID)
 	mu.Lock()
 	defer mu.Unlock()
-
 	cur, found, err := s.tail(sessionID)
 	if err != nil {
-		return 0, ControlGrant{}, 0, err
+		return accepted, err
 	}
 	if !found {
-		return StopAcceptMissing, ControlGrant{}, 0, nil
+		accepted.Outcome = StopAcceptMissing
+		return accepted, nil
 	}
-	generation := cur.Generation
+	accepted.Generation = cur.Generation
 	if cur.Terminal() {
-		return StopAcceptTerminal, ControlGrant{}, generation, nil
+		accepted.Outcome = StopAcceptTerminal
+		return accepted, nil
 	}
 	if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
-		return StopAcceptAlreadyStamped, ControlGrant{}, generation, nil
+		accepted.Outcome = StopAcceptAlreadyStamped
+		accepted.Selection, err = selectionFromStampedStop(cur)
+		return accepted, err
 	}
 	if cur.State == LifecycleStopped {
-		return StopAcceptAlreadyLanded, ControlGrant{}, generation, nil
+		accepted.Outcome = StopAcceptAlreadyLanded
+		return accepted, nil
 	}
-
 	highWater, err := s.controlSeqHighWaterLocked(sessionID)
 	if err != nil {
-		return 0, ControlGrant{}, generation, err
+		return accepted, err
 	}
 	controlID, err := newControlID()
 	if err != nil {
-		return 0, ControlGrant{}, generation, err
+		return accepted, err
 	}
 	grant := ControlGrant{Seq: highWater + 1, ControlID: controlID}
-	// The execution the stop selected, copied under this same lock from the
-	// admission already stamped on the record. Exec stays unset: nothing here
-	// mints a second id. An unadmitted record keeps an empty run and a zero
-	// boot sequence — those are not filled from the generation.
-	target := StopEffectTarget{Generation: generation}
+	target := StopEffectTarget{Generation: cur.Generation}
 	if cur.ExecutionID != nil && cur.ExecutionID.RunID != "" && cur.ExecutionID.BootSeq != 0 {
 		target.RunID = cur.ExecutionID.RunID
 		target.BootSeq = cur.ExecutionID.BootSeq
 	}
 	line := controlLedgerLine{
-		Seq:        grant.Seq,
-		ControlID:  grant.ControlID,
-		Verb:       controlVerbStop,
-		State:      controlStateQueued,
-		AcceptedAt: acceptedAt,
-		Generation: generation,
-		Cause:      intent.Cause,
-		Actor:      intent.Actor,
+		Seq: grant.Seq, ControlID: grant.ControlID, Verb: controlVerbStop,
+		State: controlStateQueued, AcceptedAt: acceptedAt,
+		Generation: cur.Generation, Cause: intent.Cause, Actor: intent.Actor,
 		StopEffect: &StopEffect{ControlID: grant.ControlID, Target: target},
 	}
 	if err := appendControlLineLocked(s, sessionID, line); err != nil {
-		return 0, ControlGrant{}, generation, fmt.Errorf("session: control ledger: append acceptance for %q: %w", sessionID, err)
+		return accepted, fmt.Errorf("session: control ledger: append acceptance for %q: %w", sessionID, err)
 	}
-
+	accepted.Outcome, accepted.Grant = StopAcceptGranted, grant
 	if stamp != nil {
 		next := *cur
 		if err := stamp(&next, grant, target); err != nil {
-			return StopAcceptGranted, grant, generation, fmt.Errorf(
-				"session: control ledger: stop stamp refused for %q seq %d (durable intent kept for boot reconciliation): %w",
-				sessionID, grant.Seq, err)
+			return accepted, fmt.Errorf("session: control ledger: stop stamp refused for %q seq %d (durable intent kept for boot reconciliation): %w", sessionID, grant.Seq, err)
+		}
+		selected, err := selectionFromStampedStop(&next)
+		if err != nil {
+			return accepted, err
+		}
+		if selected.SessionID != sessionID || selected.Effect != *line.StopEffect {
+			return accepted, fmt.Errorf("session: control ledger: stop stamp for %q differs from its accepted execution/control pair", sessionID)
 		}
 		if err := s.persistLocked(&next); err != nil {
-			return StopAcceptGranted, grant, generation, fmt.Errorf(
-				"session: control ledger: stop persist refused for %q seq %d (durable intent kept for boot reconciliation): %w",
-				sessionID, grant.Seq, err)
+			return accepted, fmt.Errorf("session: control ledger: stop persist refused for %q seq %d (durable intent kept for boot reconciliation): %w", sessionID, grant.Seq, err)
 		}
+		accepted.Selection = selected
 	}
-	return StopAcceptGranted, grant, generation, nil
+	return accepted, nil
+}
+
+// selectionFromStampedStop is called only while the lifecycle lock owns rec.
+// Copy the value, never return the record's mutable StopEffect pointer.
+func selectionFromStampedStop(rec *LifecycleRecord) (*StopSelection, error) {
+	if rec.Stop == nil || rec.Stop.Generation != rec.Generation || rec.StopNote == nil ||
+		rec.StopEffect == nil || rec.StopEffect.ControlID == "" || rec.StopEffect.Target.Generation != rec.Generation {
+		return nil, fmt.Errorf("session: control ledger: stamped stop for %q has no consistent execution/control pair", rec.SessionID)
+	}
+	target := rec.StopEffect.Target
+	if rec.ExecutionID == nil {
+		if target.Selected() || target.BootSeq != 0 {
+			return nil, fmt.Errorf("session: control ledger: unadmitted stop for %q claims an execution", rec.SessionID)
+		}
+	} else if target.RunID != rec.ExecutionID.RunID || target.BootSeq != rec.ExecutionID.BootSeq {
+		return nil, fmt.Errorf("session: control ledger: stamped stop for %q does not name its selected execution", rec.SessionID)
+	}
+	return &StopSelection{SessionID: rec.SessionID, Effect: *rec.StopEffect}, nil
 }
 
 // RecordLandedStop appends the landed-stop history line for one accepted

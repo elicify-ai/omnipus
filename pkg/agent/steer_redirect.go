@@ -86,46 +86,35 @@ func (al *AgentLoop) RedirectSteeredSession(ctx context.Context, sessionID strin
 	// means exactly this session: cause stop, no descendants walked, no
 	// administrative cancellation, no goal touched (locked decision 1's stop
 	// shape, which a redirect's stop half shares).
-	report, serr := canceller.StopTurns(bg, sessionID, by, false, nil)
+	var selected session.StopSelection
+	selectedSet := false
+	report, serr := canceller.StopTurns(bg, sessionID, by, false,
+		func(effectCtx context.Context, id string, generation int) (GenerationCancelResult, error) {
+			pair, carried := stopSelectionFromContext(effectCtx)
+			if !carried {
+				return GenerationCancelResult{}, fmt.Errorf("steer: redirect %q: accepted stop selection is missing", id)
+			}
+			selected, selectedSet = pair, true
+			return al.steerSoftStop(effectCtx, id, generation, "delegate redirect")
+		})
 	if serr != nil {
 		return fmt.Errorf("steer: redirect %q: stop: %w", sessionID, serr)
 	}
-	if len(report.Reached) == 0 {
-		if len(report.Unreachable) > 0 {
-			return fmt.Errorf("steer: redirect %q: %s", sessionID, report.Unreachable[0].Reason)
-		}
+	if len(report.Unreachable) > 0 {
+		return fmt.Errorf("steer: redirect %q: %s", sessionID, report.Unreachable[0].Reason)
+	}
+	if len(report.SkippedNewerGeneration) > 0 {
+		return fmt.Errorf("steer: redirect %q: the selected stop was superseded", sessionID)
+	}
+	if len(report.Reached) == 0 || !selectedSet {
 		return fmt.Errorf("steer: redirect %q: the stop stamped nothing (already stopped or terminal)", sessionID)
 	}
-	// The same queue-removal + cooperative interrupt pair
-	// cancelDelegatedSubtree's soft branch runs for each reached id — here
-	// that id is exactly sessionID.
-	for _, id := range report.Reached {
-		stampedRec, loadErr := lifecycle.Load(id)
-		if loadErr != nil {
-			return fmt.Errorf("steer: redirect %q: selected stop effect: %w", id, loadErr)
-		}
-		effects, effectErr := al.stopEffectsForCallback(id, stampedRec.Generation)
-		if effectErr != nil {
-			return fmt.Errorf("steer: redirect %q: selected stop effect: %w", id, effectErr)
-		}
-		al.removeQueuedStopEffects(id, effects)
-		if _, interruptErr := al.Interrupt(id, ScopeSelfOnly, "delegate redirect"); interruptErr != nil {
-			logger.WarnCF("agent", "steer: redirect: cooperative interrupt failed (the Stop marker is durable)",
-				map[string]any{"session_id": id, "error": interruptErr.Error()})
-		}
-	}
-
-	// Escalation backstop: if the cooperative stop has not landed within
-	// redirectEscalationDelay, fire the generation-aware hard abort for this
-	// ONE session — the same adapter the human Stop's fallback uses, which
-	// also lands the never-ran stop for a queued-only target.
-	generation := rec.Generation
+	// The timer retains the acceptance-time value. The adapter validates it at
+	// the effect boundary; it never selects a replacement from a later fence.
+	effectCtx := withStopSelection(bg, selected)
+	generation := selected.Effect.Target.Generation
 	time.AfterFunc(redirectEscalationDelay, func() {
-		cur, err := lifecycle.Load(sessionID)
-		if err != nil || cur.Terminal() || cur.Stopped() {
-			return
-		}
-		if _, err := al.SteerGenerationCancel(bg, sessionID, generation); err != nil {
+		if _, err := al.SteerGenerationCancel(effectCtx, sessionID, generation); err != nil {
 			logger.ErrorCF("agent", "steer: redirect: hard-stop escalation failed",
 				map[string]any{"session_id": sessionID, "generation": generation, "error": err.Error()})
 		}

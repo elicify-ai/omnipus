@@ -43,9 +43,9 @@ type GenerationCancelResult struct {
 	SkippedNewerGeneration bool
 }
 
-// GenerationCancelFunc cancels a live turn only when its registered
-// generation equals generation. WP-A wires the turn registry implementation;
-// the indirection keeps the durable cascade independently testable.
+// GenerationCancelFunc carries the cascade's acceptance-time StopSelection
+// in ctx. Adapters must retain that pair through retries/timers and compare the
+// selected execution at their effect boundaries, not reselect by generation.
 type GenerationCancelFunc func(ctx context.Context, sessionID string, generation int) (GenerationCancelResult, error)
 
 // RevivalStateWriter persists the parent's subagent_state(running) lifecycle
@@ -53,22 +53,23 @@ type GenerationCancelFunc func(ctx context.Context, sessionID string, generation
 // the transcript/frame implementation at the composition root.
 type RevivalStateWriter func(ctx context.Context, sessionID string, generation int) error
 
-// SteerGenerationCancel adapts the active-turn registry to the durable
-// generation-aware cancellation contract used by SteerCanceller.
+// SteerGenerationCancel applies only the accepted execution/control selection
+// carried in ctx. Missing targeting is a visible error, never a current-fence
+// lookup that could select a same-generation replacement.
 func (al *AgentLoop) SteerGenerationCancel(ctx context.Context, sessionID string, generation int) (GenerationCancelResult, error) {
-	// The callback receives the generation the cascade stamped. The selected
-	// execution is the stop effect captured at acceptance, not whatever
-	// admission now occupies this session. Removal and the live abort run
-	// after this lookup, and neither holds the lifecycle lock across the abort.
-	effects, err := al.stopEffectsForCallback(sessionID, generation)
+	selected, current, err := al.stopSelectionForCallback(ctx, sessionID, generation)
 	if err != nil {
 		return GenerationCancelResult{}, err
 	}
-	al.removeQueuedStopEffects(sessionID, effects)
+	if !current {
+		return GenerationCancelResult{SkippedNewerGeneration: true}, nil
+	}
+	ctx = withStopSelection(ctx, selected)
+	al.removeQueuedStopEffects(sessionID, []session.StopEffect{selected.Effect})
 
 	ts := al.getActiveTurnState(sessionID)
 	if ts != nil {
-		if !liveTurnMatchesStop(ts, effects) {
+		if !liveTurnMatchesStop(ts, selected) {
 			return GenerationCancelResult{Found: true, SkippedNewerGeneration: true}, nil
 		}
 		ts.requestHardAbort()
@@ -227,9 +228,14 @@ func (al *AgentLoop) landSteeredStopReport(ctx context.Context, sessionID string
 	}
 	// The fence this landing carries out must still be current: an explicit
 	// same-generation RESUME that cleared it (D2) supersedes the stop, and
-	// this landing must not clobber the resumed record. (Full execution-
-	// identity targeting is the D2 round-4 R4-MAJ-001 seam — a later unit.)
+	// this landing must not clobber the resumed record. The carried execution
+	// and control identity are checked again inside the owning mutation.
 	fencedAtEntry := rec.Stop != nil && rec.Stop.Generation == generation
+	selected, carried := stopSelectionFromContext(ctx)
+	if fencedAtEntry && !carried {
+		return fmt.Errorf("steer: stop landing %q: accepted execution/control selection is missing", sessionID)
+	}
+	claim := al.executionClaimFor(rec)
 	var landed *session.LandedStop
 	mutateErr := lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
@@ -243,6 +249,14 @@ func (al *AgentLoop) landSteeredStopReport(ctx context.Context, sessionID string
 		}
 		if cur.State == session.LifecycleStopped {
 			return errTerminalReportAlreadyStopped
+		}
+		// Finalization owns only the original accepted pair, checked under
+		// this mutation's lock even after a same-generation resume/new Stop.
+		if carried && !stopSelectionMatchesRecord(selected, cur) {
+			return errTerminalReportFenceSuperseded
+		}
+		if !carried && ((cur.ExecutionID != nil || claim.RunID != "") && !claim.matches(cur)) {
+			return errTerminalReportFenceSuperseded
 		}
 		if fencedAtEntry && (cur.Stop == nil || cur.Stop.Generation != cur.Generation) {
 			return errTerminalReportFenceSuperseded
@@ -397,6 +411,9 @@ func (al *AgentLoop) terminaliseNeverRanStop(ctx context.Context, sessionID stri
 	if rec.Generation != generation || rec.Terminal() || rec.Stop == nil || rec.Stop.Generation != generation {
 		return nil
 	}
+	if selected, carried := stopSelectionFromContext(ctx); carried && !stopSelectionMatchesRecord(selected, rec) {
+		return nil
+	}
 	// ADR-093 MAJ-001 (test-plan row "Web Stop on a chat root that has
 	// delegated"): a session with NO steering edge — a standing chat root —
 	// is never terminalised by its own Stop cascade. Finding 5's reason for
@@ -496,7 +513,7 @@ func (c *SteerCanceller) cascade(
 	}
 	defer unlock()
 
-	stamped := make(map[string]int)
+	stamped := make(map[string]session.StopSelection)
 	seen := make(map[string]struct{})
 	at := time.Now().UTC()
 	// process stamps each id with ONE cause (D2/D6's closed vocabulary):
@@ -513,14 +530,18 @@ func (c *SteerCanceller) cascade(
 				continue
 			}
 			seen[id] = struct{}{}
-			generation, outcome, err := c.stampStop(id, at, by, cause)
+			accepted, outcome, err := c.stampStop(id, at, by, cause)
 			switch {
 			case errors.Is(err, errCascadeTerminal):
 				report.SkippedTerminal = append(report.SkippedTerminal, id)
 			case err != nil:
 				report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: id, Reason: err.Error()})
 			case outcome == stopStamped || outcome == stopAlreadyStamped:
-				stamped[id] = generation
+				if accepted.Selection == nil {
+					report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: id, Reason: "stamped Stop has no accepted execution/control selection"})
+					continue
+				}
+				stamped[id] = *accepted.Selection
 				report.Reached = append(report.Reached, id)
 			case outcome == stopAlreadyLanded:
 				// D2 stop table / MIN-007: the child is already landed
@@ -786,8 +807,8 @@ func (c *SteerCanceller) cascadeLock(sessionID string) *sync.Mutex {
 // still fires, as before), an already-LANDED stopped record is
 // stopAlreadyLanded ("already stopped" — nothing written, nothing fired),
 // and a terminal record is errCascadeTerminal as before.
-func (c *SteerCanceller) stampStop(sessionID string, at time.Time, by steer.Principal, cause session.StopCause) (int, stopStampOutcome, error) {
-	outcome, _, generation, err := c.Lifecycle.AcceptStopControl(sessionID, session.StopControlIntent{
+func (c *SteerCanceller) stampStop(sessionID string, at time.Time, by steer.Principal, cause session.StopCause) (session.StopAcceptance, stopStampOutcome, error) {
+	accepted, err := c.Lifecycle.AcceptStopControlSelection(sessionID, session.StopControlIntent{
 		Cause:      cause,
 		Actor:      session.StopActorFromPrincipal(by),
 		AcceptedAt: at,
@@ -806,40 +827,38 @@ func (c *SteerCanceller) stampStop(sessionID string, at time.Time, by steer.Prin
 		rec.StopEffect = &session.StopEffect{ControlID: grant.ControlID, Target: target}
 		return nil
 	})
-	switch outcome {
+	if err != nil {
+		// Durable acceptance may exist without a persisted fence; do not fire
+		// an effect, and retain the store error for the caller/boot repair.
+		return accepted, 0, err
+	}
+	switch accepted.Outcome {
 	case session.StopAcceptMissing:
-		return 0, 0, session.ErrLifecycleNotFound
+		return accepted, 0, session.ErrLifecycleNotFound
 	case session.StopAcceptTerminal:
-		return generation, 0, errCascadeTerminal
+		return accepted, 0, errCascadeTerminal
 	case session.StopAcceptAlreadyStamped:
-		return generation, stopAlreadyStamped, nil
+		return accepted, stopAlreadyStamped, nil
 	case session.StopAcceptAlreadyLanded:
-		return generation, stopAlreadyLanded, nil
+		return accepted, stopAlreadyLanded, nil
 	case session.StopAcceptGranted:
-		if err != nil {
-			// The acceptance intent is durable but the fence is not (D4's
-			// queued-intent crash state, returned visibly). The cascade
-			// reports the node unreachable; boot reconciliation finishes
-			// the intent.
-			return generation, 0, err
-		}
-		return generation, stopStamped, nil
+		return accepted, stopStamped, nil
 	default:
-		return generation, 0, err
+		return accepted, 0, fmt.Errorf("steer: stop %q: unknown acceptance outcome %d", sessionID, accepted.Outcome)
 	}
 }
 
-func (c *SteerCanceller) cancelStamped(ctx context.Context, stamped map[string]int, report *steer.CancelReport, cancelTurn GenerationCancelFunc) {
+func (c *SteerCanceller) cancelStamped(ctx context.Context, stamped map[string]session.StopSelection, report *steer.CancelReport, cancelTurn GenerationCancelFunc) {
 	if cancelTurn == nil {
 		return
 	}
 	for _, id := range report.Reached {
-		generation, ok := stamped[id]
+		selected, ok := stamped[id]
 		if !ok {
 			continue
 		}
 		delete(stamped, id)
-		result, err := cancelTurn(ctx, id, generation)
+		result, err := cancelTurn(withStopSelection(ctx, selected), id, selected.Effect.Target.Generation)
 		if err != nil {
 			report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: id, Reason: err.Error()})
 			continue

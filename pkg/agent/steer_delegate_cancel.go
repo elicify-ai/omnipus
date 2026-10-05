@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
@@ -68,38 +67,17 @@ func (al *AgentLoop) cancelDelegatedSubtree(sessionID string, by steer.Principal
 	if hard {
 		report, err = canceller.CancelSubtree(ctx, sessionID, by)
 	} else {
-		report, err = canceller.StopSubtree(ctx, sessionID, by)
+		report, err = canceller.StopTurns(ctx, sessionID, by, true,
+			func(effectCtx context.Context, id string, generation int) (GenerationCancelResult, error) {
+				return al.steerSoftStop(effectCtx, id, generation, hint)
+			})
 	}
 	if err != nil {
 		return nil, fmt.Errorf("steer: delegate cancel %q: %w", sessionID, err)
 	}
-
-	for _, id := range report.Reached {
-		// The cascade already stamped this id. Remove only the admission that
-		// stamp selected. A later same-generation replacement stays queued.
-		// Soft Stop does not run the live callback, so this loop is its only
-		// removal; a hard Stop's callback removes the same claim first.
-		rec, loadErr := al.GetSessionLifecycleStore().Load(id)
-		if loadErr != nil {
-			return nil, fmt.Errorf("steer: delegate cancel %q: selected stop effect: %w", id, loadErr)
-		}
-		effects, effectErr := al.stopEffectsForCallback(id, rec.Generation)
-		if effectErr != nil {
-			return nil, fmt.Errorf("steer: delegate cancel %q: selected stop effect: %w", id, effectErr)
-		}
-		al.removeQueuedStopEffects(id, effects)
-		if hard {
-			continue
-		}
-		// ScopeSelfOnly, deliberately: the subtree was already enumerated
-		// through the durable edge above, so each reached session needs only
-		// its OWN live turn asked to stop. ScopeSubtree here would re-walk
-		// the parentTurnID links that no longer exist and add nothing.
-		if _, interruptErr := al.Interrupt(id, ScopeSelfOnly, hint); interruptErr != nil {
-			logger.WarnCF("agent", "steer: delegate cancel: cooperative interrupt failed (the Stop marker is durable)",
-				map[string]any{"session_id": id, "root_session_id": sessionID, "error": interruptErr.Error()})
-		}
-	}
+	// Both hard and cooperative effects removed their own selected queue entry
+	// in the callback. A post-return lookup by report ID could borrow a newer
+	// Stop's pair, so no second session-based removal or interrupt runs here.
 
 	if len(report.Reached) == 0 && len(report.Unreachable) > 0 {
 		return nil, fmt.Errorf("steer: delegate cancel %q: %s",
