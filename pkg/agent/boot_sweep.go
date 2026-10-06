@@ -1631,14 +1631,27 @@ func (pe *PlanEngine) completeAbandonAtBoot(rec plan.IntentRecord) error {
 }
 
 // acceptedStopPending reports whether rec's session has an accepted,
-// unlanded Stop control selecting its current generation.
+// unlanded Stop control selecting its CURRENT execution: the same
+// generation and the same selected run (A4). An intent for an earlier run
+// of the same generation does not exempt the run that replaced it from the
+// restart Stop; the finisher supersedes that old intent.
 func (r *SteerBootRecovery) acceptedStopPending(rec *session.LifecycleRecord) (bool, error) {
 	intents, err := r.Lifecycle.UnfinishedStopIntents(rec.SessionID)
 	if err != nil {
 		return false, err
 	}
 	for _, intent := range intents {
-		if intent.Selection.Effect.Target.Generation == rec.Generation {
+		target := intent.Selection.Effect.Target
+		if target.Generation != rec.Generation {
+			continue
+		}
+		if !target.Selected() {
+			if rec.ExecutionID == nil {
+				return true, nil
+			}
+			continue
+		}
+		if rec.ExecutionID != nil && rec.ExecutionID.RunID == target.RunID && rec.ExecutionID.BootSeq == target.BootSeq {
 			return true, nil
 		}
 	}
