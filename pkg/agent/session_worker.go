@@ -448,7 +448,11 @@ func (w *sessionWorker) runLoop() {
 func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage) {
 	al := w.parent
 	ctx, executionEntry := ordinaryExecutionContext(ctx)
-	defer func() { _ = al.finishExecutionDisposition(executionEntry.disposition) }()
+	defer func() {
+		if err := al.finishExecutionDisposition(executionEntry.disposition); err != nil {
+			al.reportOrdinarySettlementFailure(msg, err)
+		}
+	}()
 
 	// Mark the worker as inside a turn so concurrent enqueue() calls for the
 	// same scope route to the in-turn steering queue rather than the inbox.

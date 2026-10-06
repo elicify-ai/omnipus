@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -254,3 +256,18 @@ func (al *AgentLoop) settleOrdinaryRoot(d *executionDisposition) error {
 // errOrdinaryRootNotSettled aborts the settlement write without error: the
 // record is not this execution's to settle.
 var errOrdinaryRootNotSettled = errors.New("ordinary root: record not settled by this execution")
+
+// reportOrdinarySettlementFailure makes a failed outer settlement of an
+// ordinary turn visible: an error-level log and a typed error event on the
+// conversation. The turn's answer was already delivered; only saving its
+// final state (or landing its Stop) failed.
+func (al *AgentLoop) reportOrdinarySettlementFailure(msg bus.InboundMessage, err error) {
+	logger.ErrorCF("agent.worker", "the turn finished, but saving its final state failed",
+		map[string]any{"session_id": msg.SessionID, "error": err.Error()})
+	al.emitEvent(EventKindError, EventMeta{SessionKey: msg.SessionKey, TracePath: "turn.settlement"}, ErrorPayload{
+		Stage: "settlement", Code: "settlement_failed",
+		Message:   "This turn finished, but saving the conversation's final state failed. Repair the gateway storage, then continue: " + err.Error(),
+		ChatID:    msg.ChatID,
+		SessionID: msg.SessionID,
+	})
+}
