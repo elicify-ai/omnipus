@@ -6,6 +6,8 @@ The Calendar panel of a workspace is where everything that runs on a schedule li
 
 Every workspace has a Calendar panel, between Tasks and Library in the top bar. It opens beside Chat on **Week** by default. Choose **Day**, **Week**, or **Month** in its toolbar; Month stays inside the same panel, including the phone full-screen view. There is no Agenda view. Week and Day show scheduled runs as labelled chips at their fire times. Month is a compact day grid with up to three status-coloured dots per date. Dots do not open run details; switch to Week or Day to inspect a recorded run or edit its series. Clicking a Month date creates a new event.
 
+In a narrow panel or on a phone, the toolbar controls wrap onto extra rows so the view choices, agent filter and **New task** button remain visible and easy to tap.
+
 The Board and List hide scheduled tasks; use Calendar to manage scheduled and repeating work. The split is deliberate: a card that comes back every week never reaches done, so it does not belong on a board. Old web addresses still resolve: `/tasks` redirects to the Tasks panel and `/automations` redirects to the Calendar.
 
 The calendar also records outcomes. In Week and Day, individual recurring-occurrence chips use the recorded run's status icon when a run exists, or the scheduled or no-record state when it does not. One-time scheduled-task chips use a clock icon, with colour taken from the task's status. Clicking a recorded occurrence lets you inspect its status and, when available, its result and a link to the chat it ran in.
