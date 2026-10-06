@@ -336,7 +336,10 @@ func containsSubstring(s, sub string) bool {
 // all-surface: 10→13 canonical, 6→9 web), and ADR-049 D6's /goal + /loop
 // commands (both all-surface [Web, CLI, Channel], non-hidden, DeliveryAgent:
 // 13→15 canonical, 9→11 web, 13→15 CLI — review r1 comment/golden-count fix;
-// this test was left stale when /goal and /loop were registered).
+// this test was left stale when /goal and /loop were registered), and
+// ADR-20260928 sub-agent control plane D9 ("/stop and /stop-redirect added
+// as their own commands ... the exact-set assertion updated in the same
+// change"; both all-surface, non-hidden): 15→17 canonical, 11→13 web, 15→17 CLI.
 func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 	defs := BuiltinDefinitions()
 
@@ -350,10 +353,10 @@ func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 		}
 	}
 
-	// 15 canonical (skill removed D1; remember/recall/retrospective + goal/loop
-	// added) + 5 hidden/deprecated = 20 total.
-	if canonical != 15 {
-		t.Errorf("expected 15 canonical commands (skill removed D1, memory + goal/loop commands added), got %d",
+	// 17 canonical (skill removed D1; remember/recall/retrospective + goal/loop
+	// added; stop + stop-redirect added by D9) + 5 hidden/deprecated = 22 total.
+	if canonical != 17 {
+		t.Errorf("expected 17 canonical commands (skill removed D1, memory + goal/loop commands added, stop + stop-redirect added by ADR-20260928 D9), got %d",
 			canonical)
 	}
 	if hidden != 5 {
@@ -364,29 +367,30 @@ func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 	}
 
 	// Web surface: new, help, model, cancel, agents, skills, remember, recall,
-	// retrospective, goal, loop = 11 (D7/D9 added agents+skills; memory
-	// commands and goal/loop are all-surface).
+	// retrospective, goal, loop, stop, stop-redirect = 13 (D7/D9 added
+	// agents+skills; memory commands and goal/loop are all-surface; ADR-20260928
+	// D9 adds stop + stop-redirect on every surface).
 	webCount := 0
 	for _, d := range defs {
 		if !d.Hidden && d.AllowsSurface(SurfaceWeb) {
 			webCount++
 		}
 	}
-	if webCount != 11 {
-		t.Errorf("expected 11 web-surface canonical commands (D7/D9 + memory + goal/loop commands added), got %d",
+	if webCount != 13 {
+		t.Errorf("expected 13 web-surface canonical commands (D7/D9 + memory + goal/loop + stop/stop-redirect added), got %d",
 			webCount)
 	}
 
-	// CLI/Channel surface: all 15 canonical
+	// CLI/Channel surface: all 17 canonical
 	cliCount := 0
 	for _, d := range defs {
 		if !d.Hidden && d.AllowsSurface(SurfaceCLI) {
 			cliCount++
 		}
 	}
-	if cliCount != 15 {
+	if cliCount != 17 {
 		t.Errorf(
-			"expected 15 CLI-surface canonical commands (skill removed D1, memory + goal/loop commands added), got %d",
+			"expected 17 CLI-surface canonical commands (skill removed D1, memory + goal/loop + stop/stop-redirect commands added), got %d",
 			cliCount,
 		)
 	}
@@ -400,7 +404,7 @@ func TestDeliveryFields(t *testing.T) {
 	reg := NewRegistry(defs)
 
 	// Client-delivered commands (web SPA handles them locally).
-	clientCmds := []string{"new", "help", "model", "cancel", "agents", "skills"}
+	clientCmds := []string{"new", "help", "model", "cancel", "stop", "stop-redirect", "agents", "skills"}
 	for _, name := range clientCmds {
 		def, ok := reg.Lookup(name)
 		if !ok {

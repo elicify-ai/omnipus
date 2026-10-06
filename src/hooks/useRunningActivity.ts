@@ -83,9 +83,9 @@ export interface AgentActivityItem {
   /**
    * ADR-091 D7/FR-E-004: the last `subagent_state.state` reduced onto this
    * span — see `SubagentSpanBase.lifecycleState`'s doc comment. The side
-   * panel row reads `'queued'` here to show "queued" even while this
-   * item's own `status` is still `'running'` (a queued launch emits
-   * `subagent_start` before the child actually starts — I-4).
+   * panel row reads the precise lifecycle here. A queued launch emits
+   * `subagent_start` before the child actually starts — I-4; that open
+   * bracket must not count as running activity.
    */
   lifecycleState?: SubagentSpan['lifecycleState']
   /**
@@ -195,10 +195,11 @@ export interface RunningActivity {
    * The actual `AgentActivityItem`s backing `runningChildren` above — same
    * `lifecycleState === 'running'` filter, exposed as a list (not just a
    * count) so the Activity Bar's avatar stack shows the SAME agents the
-   * pill's number describes, rather than the broader `running` list (which
-   * mixes in queued/lifecycle-terminal spans and shell jobs).
+   * pill's number describes, rather than the broader open-work list (which
+   * also retains queued/waiting spans and shell jobs).
    */
   runningChildItems: AgentActivityItem[]
+  /** Open work, including queued/waiting rows retained in separate panel sections. Only status 'running' contributes to runningCount. */
   running: ActivityItem[]
   recentlyFinished: ActivityItem[]
 }
@@ -545,6 +546,20 @@ function groupBashSessions(orderedCalls: ToolCall[]): Map<string, BashSessionSta
   return sessions
 }
 
+// A delegation bracket can stay open across Stop/Resume (ADR-20260928 D2).
+// Prefer the current lifecycle; span.status is only a legacy fallback.
+function activityStatusForSpan(span: SubagentSpan): ActivityStatus {
+  switch (span.lifecycleState) {
+    case 'running': return 'running'
+    case 'queued':
+    case 'needs_input':
+    case 'stopped': return 'parked'
+    case 'completed': return 'success'
+    case 'failed': return 'error'
+    default: return span.status
+  }
+}
+
 export function useRunningActivity(): RunningActivity {
   const messages = useChatStore((s) => s.messages)
   const toolCalls = useChatStore((s) => s.toolCalls)
@@ -605,12 +620,11 @@ export function useRunningActivity(): RunningActivity {
   for (const span of agentSpans) {
     const effectiveAgentId = resolveSpanAgentId(span, toolCallsById)
     const resolved = resolveAgent(effectiveAgentId, agents)
-    // Narrow via the literal comparison (not an aliased boolean) so
-    // `span.durationMs`/`finalResult`/`reason` — only present on the
-    // terminal member of the SubagentSpan union — type-check in the `false`
-    // branch.
-    const isSpanRunning = span.status === 'running'
-    const terminal = isSpanRunning ? null : (span as SubagentSpanTerminal)
+    const status = activityStatusForSpan(span)
+    const isSpanRunning = status === 'running'
+    // End-frame details exist only on a terminal bracket. Lifecycle Stop
+    // has no end or honest final duration, so omit them rather than ticking.
+    const terminal = span.status === 'running' || isSpanRunning ? null : (span as SubagentSpanTerminal)
     const finishedDurationMs = terminal?.durationMs
     const durationMs = trackDurationMs(span.spanId, isSpanRunning, finishedDurationMs, firstSeenAtMap)
     const item: AgentActivityItem = {
@@ -619,7 +633,7 @@ export function useRunningActivity(): RunningActivity {
       agentId: effectiveAgentId,
       ...resolved,
       taskLabel: span.taskLabel,
-      status: span.status,
+      status,
       durationMs,
       finalResult: terminal?.finalResult,
       interruptReason: terminal?.reason,
@@ -628,7 +642,9 @@ export function useRunningActivity(): RunningActivity {
       childSessionId: span.childSessionId,
       lastUpdateAt: span.lastUpdateAt,
     }
-    if (isSpanRunning) {
+    // Keep pending work in the panel's open-work list, in its own section,
+    // without treating it as executing or starting its elapsed timer.
+    if (isSpanRunning || span.lifecycleState === 'queued' || span.lifecycleState === 'needs_input') {
       clearFinishedAt(span.spanId)
       running.push(item)
     } else {
@@ -694,7 +710,7 @@ export function useRunningActivity(): RunningActivity {
   const runningChildItems = running.filter(isRunningAgentChild)
 
   return {
-    runningCount: running.length,
+    runningCount: running.filter((item) => item.status === 'running').length,
     runningChildren: runningChildItems.length,
     runningChildItems,
     running,

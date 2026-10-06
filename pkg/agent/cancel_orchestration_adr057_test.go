@@ -20,14 +20,18 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // ---------------------------------------------------------------------------
@@ -450,55 +454,119 @@ func TestU15Cancel_AuditNamesEveryDescendantAtDepth3(t *testing.T) {
 // Durable descendant lifecycle-record walk (FR-025/FR-026) — BDD-30 / #45
 // ---------------------------------------------------------------------------
 
-// TestU15Cancel_TransitionsEveryDescendantLifecycleRecord_Depth3 covers
-// BDD-30: a chat with children at DURABLE depths 1, 2 and 3 (persisted
-// LifecycleRecords chained via SteeringSessionID, independent of any
-// in-memory turnState) must have EVERY descendant's persisted record
-// transitioned to cancelled by RequestCancel's own-goroutine durable walk
-// (cancelDurableDescendantLifecycleRecords), not just the root's.
-func TestU15Cancel_TransitionsEveryDescendantLifecycleRecord_Depth3(t *testing.T) {
-	t.Parallel()
-	al := newCancelTestAgentLoop(t)
-	lifecycleStore := session.NewLifecycleStore(t.TempDir())
-	al.SetSessionMessagingStores(nil, lifecycleStore)
+// u15OwnerTailProvider assigns one uncooperative external request to each
+// real admitted execution. Only provider I/O is held; no lifecycle writer or
+// execution identity is mocked. Launches await entry serially, fixing call order.
+type u15OwnerTailProvider struct {
+	mu    sync.Mutex
+	gates []*originalGraceProvider
+	next  int
+}
 
-	nonce := time.Now().UnixNano()
-	rootID := fmt.Sprintf("u15-lc-root-%d", nonce)
-	d1 := fmt.Sprintf("u15-lc-d1-%d", nonce)
-	d2 := fmt.Sprintf("u15-lc-d2-%d", nonce)
-	d3 := fmt.Sprintf("u15-lc-d3-%d", nonce)
+func (p *u15OwnerTailProvider) Chat(ctx context.Context, messages []providers.Message, definitions []providers.ToolDefinition, model string, options map[string]any) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	if p.next >= len(p.gates) {
+		p.mu.Unlock()
+		return nil, fmt.Errorf("owner-tail fixture received an unexpected extra provider call")
+	}
+	gate := p.gates[p.next]
+	p.next++
+	p.mu.Unlock()
+	return gate.Chat(ctx, messages, definitions, model, options)
+}
 
-	u15PersistLifecycleRecord(t, lifecycleStore, d1, rootID, rootID, session.LifecycleRunning)
-	u15PersistLifecycleRecord(t, lifecycleStore, d2, d1, rootID, session.LifecycleRunning)
-	u15PersistLifecycleRecord(t, lifecycleStore, d3, d2, rootID, session.LifecycleRunning)
+func (*u15OwnerTailProvider) GetDefaultModel() string { return "u15-real-owner-tails" }
 
-	// Positive lower bound (Rule 4's spirit): prove the fixture's own walk is
-	// live before asserting the post-cancel state — all three records must
-	// exist and read "running" before RequestCancel runs.
-	for _, id := range []string{d1, d2, d3} {
-		rec, err := lifecycleStore.Load(id)
-		require.NoError(t, err)
-		require.Equal(t, session.LifecycleRunning, rec.State, "precondition: %s must start running", id)
+// TestU15StopSession_EveryDescendantOwnerLandsStoppedAfterTail_Depth3 replaces
+// the deleted unowned RequestCancel durable writer. Frozen D2/D7 and the
+// one-stop decision: every selected owner in root -> d1 -> d2 -> d3 lands its
+// own stopped record after its tail, never while its external request is held.
+func TestU15StopSession_EveryDescendantOwnerLandsStoppedAfterTail_Depth3(t *testing.T) {
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
+	al, _ := newSteerAL(t)
+	wireSteerCompletionDeps(t, al)
+	// The required depth-three input has four simultaneously live owners.
+	al.GetConfig().Performance.MaxParallelAgents = 4
+	al.GetConfig().Performance.MaxDelegationDepth = 3
+	provider := &u15OwnerTailProvider{}
+	for i := 0; i < 4; i++ {
+		gate := &originalGraceProvider{
+			entered: make(chan struct{}), softCancelled: make(chan struct{}), release: make(chan struct{}),
+		}
+		provider.gates = append(provider.gates, gate)
+		t.Cleanup(gate.open)
+	}
+	instance, ok := al.GetRegistry().GetAgent(testDefaultAgentID)
+	require.True(t, ok, "fixture's actual agent must be registered")
+	instance.Provider = provider
+	root := rootLaunchWithGoal(t, al)
+	dispatchChild(t, al, root.SessionID, root.Generation, true)
+	records := []*session.LifecycleRecord{root}
+	for i, gate := range provider.gates {
+		if i > 0 {
+			records = append(records, launchGoalBearingChild(t, al, records[i-1].SessionID,
+				fmt.Sprintf("u15-owner-depth-%d", i), goalChildLaunchOptions{live: true}))
+		}
+		select {
+		case <-gate.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("depth %d's real admitted owner never entered its provider", i)
+		}
+		records[i] = rootReopenedRecord(t, al, records[i].SessionID)
+		require.Equal(t, session.LifecycleRunning, records[i].State, "depth %d must start genuinely running", i)
+		handle := al.getActiveTurnState(records[i].SessionID)
+		require.NotNil(t, handle, "depth %d must have a real immutable owner handle", i)
+		require.Equal(t, al.executionClaimFor(records[i]), al.tsExecutionClaim(handle, records[i].SessionID))
+		if i > 0 {
+			require.Equal(t, records[i-1].SessionID, records[i].SteeringSessionID(), "the real edge must form the required depth-three chain")
+		}
 	}
 
-	u15RegisterActiveTurn(t, al, rootID, "turn-u15-lc-root", 0, "")
-
-	outcome, err := al.RequestCancel(
-		context.Background(),
-		CancelScope{SessionID: rootID},
-		CancelCanceller{UserID: "alice", Channel: "web"},
-		CancelHooks{},
-	)
+	res, err := al.StopSession(context.Background(), StopRequest{
+		SessionID: root.SessionID, Tree: true, Channel: "web",
+		By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "alice"},
+	})
 	require.NoError(t, err)
-	require.True(t, outcome.Fired)
-
-	// The durable walk runs on its own goroutine (FR-025) — poll until all
-	// three depths have transitioned.
-	for _, id := range []string{d1, d2, d3} {
-		require.Eventually(t, func() bool {
-			rec, err := lifecycleStore.Load(id)
-			return err == nil && rec.State == session.LifecycleStopped
-		}, 3*time.Second, 20*time.Millisecond,
-			"FR-025/FR-026: depth-3 descendant %s's persisted lifecycle record must transition to cancelled", id)
+	require.NoError(t, res.RootErr)
+	require.True(t, res.Durable)
+	require.True(t, res.Fired)
+	require.Empty(t, res.StillRunning(), "no depth may fail to accept its selected Stop")
+	ids := make([]string, len(records))
+	notes := make([]session.StopNote, len(records))
+	for i, before := range records {
+		ids[i] = before.SessionID
+		select {
+		case <-provider.gates[i].softCancelled:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("Stop did not reach depth %d's own provider cancellation boundary", i)
+		}
+		held := rootReopenedRecord(t, al, before.SessionID)
+		require.Equal(t, session.LifecycleRunning, held.State, "D2: depth %d must not land before its owner tail", i)
+		require.NotNil(t, held.Stop, "depth %d must retain its current in-flight fence", i)
+		require.Equal(t, before.Generation, held.Stop.Generation)
+		require.Equal(t, before.ExecutionID, held.ExecutionID, "Stop must target the real admitted identity, never a replacement")
+		require.NotNil(t, held.StopNote)
+		cause := session.StopCauseCascade
+		if i == 0 {
+			cause = session.StopCauseStop
+		}
+		require.Equal(t, cause, held.StopNote.Cause)
+		require.Equal(t, "human:alice", held.StopNote.By)
+		notes[i] = *held.StopNote
+	}
+	require.ElementsMatch(t, ids, res.Report.Reached, "D7: every selected depth, including the root, must be reached exactly once")
+	for _, gate := range provider.gates {
+		gate.open()
+	}
+	joinGoalFixtureRuns(t, al)
+	for i, before := range records {
+		landed := rootReopenedRecord(t, al, before.SessionID)
+		require.Equal(t, session.LifecycleStopped, landed.State, "depth %d's own joined tail must land stopped", i)
+		require.False(t, landed.Terminal(), "D7: every depth remains resumable")
+		require.Equal(t, before.Generation, landed.Generation)
+		require.Nil(t, landed.Stop, "D2: depth %d's owner clears its own in-flight fence", i)
+		require.NotNil(t, landed.StopNote)
+		assert.Equal(t, notes[i], *landed.StopNote, "D2: depth %d retains the original accepted note", i)
+		assert.Equal(t, generated.GoalStateActive, mustGoalRecord(t, before.GoalRef).State, "D6/D7: Stop never ends depth %d's goal", i)
 	}
 }

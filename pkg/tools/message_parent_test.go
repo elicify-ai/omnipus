@@ -235,7 +235,7 @@ func TestMessageParentTool_Question_LegacyWaitAuthorityArgs_AreDead(t *testing.T
 // correlation id is echoed back so a later respond/inbox_ack can reference
 // the question precisely; an omitted one is server-minted and still returned.
 func TestMessageParentTool_Question_CorrelationID_EchoedOrMinted(t *testing.T) {
-	tool, _, _, _ := newMessageParentTestSetup(t)
+	tool, _, _, _ := newMessageParentTestSetup(t) //nolint:dogsled // Only the tool is relevant from the four test fixtures.
 	ctx := withChildContext("child-1")
 
 	supplied := tool.Execute(ctx, map[string]any{

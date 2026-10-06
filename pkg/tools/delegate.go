@@ -217,7 +217,7 @@ type DelegateTool struct {
 	// delegate(action="stop_all") tool call targeting exactly one child
 	// session (BDD-29's scope is "that child's" shells, not its subtree,
 	// matching ScopeSelfOnly's own single-target semantics — see
-	// SetCancelHooks' doc comment). Reuses the SAME KillAllForSessions
+	// SetStopHook's doc comment). Reuses the SAME KillAllForSessions
 	// primitive U16 exposes rather than re-deriving a second, parallel
 	// descendant walk. A nil sessionManager (SetSessionManager never
 	// called) is a silent no-op, matching every other optional capability
@@ -257,26 +257,20 @@ type DelegateTool struct {
 	// steering-queue scope (generalizes pkg/agent/steering.go's existing
 	// mechanism — see DelegateSteeringSink's doc comment).
 	steering DelegateSteeringSink
-	// cancelSoft/cancelHard hold closures over ADR-091's durable Stop
-	// cascade, AgentLoop.cancelDelegatedSubtree (pkg/agent/
-	// steer_delegate_cancel.go), wired in
-	// pkg/agent/session_messaging_wire.go. Injected to avoid a
-	// tools<->agent import cycle, matching every other AgentLoop capability
-	// this tool consumes via a setter (SetSpawner, etc.).
-	//
-	// They return every session id the stop REACHED — the named session plus
-	// every descendant found through the durable parent-child edge — and an
-	// empty slice when it reached nothing, which is the miss signal
-	// executeStopAll uses to detect its TOCTOU window. They previously
-	// wrapped the live-turn interrupt pair (Interrupt/InterruptSessionHard),
-	// which reached nothing at all for a session whose turn had not started
-	// and missed a running child's own grandchildren; see SetCancelHooks.
-	cancelSoft func(sessionKey string, by steer.Principal, hint string) ([]string, error)
-	cancelHard func(sessionKey string, by steer.Principal, hint string) ([]string, error)
-	// cancelGrace is the cooperative-stop grace window before the hard
-	// RequestCancel backstop fires (session_messaging.cancel_grace,
-	// FR-195). Defaults to defaultCancelGrace.
-	cancelGrace time.Duration
+	// stop is the ONE session Stop (founder decision 2026-10-05), the same
+	// method a person's Stop all uses: AgentLoop.StopDelegatedTree, wired in
+	// pkg/agent/session_messaging_wire.go. Injected to avoid a tools<->agent
+	// import cycle. It returns every session id the stop REACHED; an empty
+	// slice is the miss signal executeStopAll uses for its TOCTOU window.
+	stop func(sessionKey string, by steer.Principal, hint string) ([]string, error)
+	// finalRead marks a helper's final hand-back as received by its direct
+	// parent when a delegate status or inbox poll showed it, so the
+	// hand-back wake does not deliver the same result a second time (D5:
+	// exactly once). Wired to the agent loop's consumed-marker writer in
+	// pkg/agent/session_messaging_wire.go.
+	// It reports whether the final had already been received before (by
+	// its hand-back wake or an earlier poll).
+	finalRead func(parentSessionID, agentID, messageID string) (alreadyReceived bool, err error)
 
 	// sessionMessagingEnabled, when set via SetSessionMessagingEnabled, is the
 	// live-read FR-196 kill switch (session_messaging.enabled) for the SYNC
@@ -345,7 +339,6 @@ var _ JobSessionResolver = (*DelegateTool)(nil)
 // outside this lane's ownership — drop them.
 func NewDelegateTool(_ string, _ int, _ float64) *DelegateTool {
 	return &DelegateTool{
-		cancelGrace:      defaultCancelGrace,
 		now:              time.Now,
 		steerRateWindows: make(map[string][]time.Time),
 		steerRatePerMin:  session.DefaultSteerRatePerMinute,
@@ -438,50 +431,33 @@ func isSessionMessagingAction(action string) bool {
 	return false
 }
 
-// SetCancelHooks installs the soft (cooperative) and hard (immediate) stop
-// functions. Each returns the session ids the stop actually REACHED, which is
-// how executeStopAll tells "I stopped something" from "there was nothing to
-// stop".
+// SetStopHook installs the one Stop (stop_all). It returns the session ids
+// the stop actually REACHED, which is how executeStopAll tells "I stopped
+// something" from "there was nothing to stop". An unwired hook makes stop_all
+// a visible error; the tool never falls back to writing state itself.
 //
-// The canonical wiring (pkg/agent/session_messaging_wire.go) is a pair of
-// closures over `AgentLoop.cancelDelegatedSubtree`, ADR-091's durable Stop
-// cascade — the same one a human's Stop uses. Read that function's doc
-// comment before changing this: the live-turn interrupt pair
-// (Interrupt/InterruptSessionHard with ScopeSubtree) that used to be wired
-// here could not stop a QUEUED worker at all and, after the sub-turn path was
-// deleted, no longer reached a running worker's own grandchildren either.
-// Neither failure was visible to the compiler or to this signature, so do not
-// "simplify" the wiring back to a turn-registry interrupt.
+// The canonical wiring (pkg/agent/session_messaging_wire.go) is
+// AgentLoop.StopDelegatedTree: the durable cascade over the parent-child
+// edge, polite stop at once, forced stop 3 s later, landing only by each
+// selected execution's owner.
 //
 // `by` is the principal the stop is recorded against — it lands on the
-// durable Stop marker (session.Stop.By, I-1) and is what the UI and the audit
-// trail show as who stopped the session. executeStopAll derives it from
+// durable Stop marker and note and is what the UI and the audit trail show
+// as who stopped the session. executeStopAll derives it from
 // verifyCallerPrincipal, never manufactures it.
 //
 // WARNING — the hook MUST be invoked with the delegate's sessionKey
 // (== delegateSessionID, the caller-facing id this tool returns from run and
-// accepts on every subsequent cancel/steer/respond/peek), NEVER the parent
-// chat's transcriptSessionID/routingSessionID. The two id spaces are
-// deliberately distinct for a delegated child (see
-// turnState.routingSessionID's own doc comment, pkg/agent/turn.go — the
-// ROUTING id, not the transcript id, is what a chat-wide Stop cascades via)
-// — sessionKey is the unique per-delegation address, unrelated to either.
-// executeStopAll passes its session_id argument here verbatim — that
-// argument IS the delegateSessionID by contract.
-func (t *DelegateTool) SetCancelHooks(
-	soft func(sessionKey string, by steer.Principal, hint string) ([]string, error),
-	hard func(sessionKey string, by steer.Principal, hint string) ([]string, error),
-) {
-	t.cancelSoft = soft
-	t.cancelHard = hard
+// accepts on every subsequent stop_all/steer/respond/peek), NEVER the parent
+// chat's transcriptSessionID/routingSessionID.
+func (t *DelegateTool) SetStopHook(stop func(sessionKey string, by steer.Principal, hint string) ([]string, error)) {
+	t.stop = stop
 }
 
-// SetCancelGrace overrides the default cooperative-stop grace window
-// (session_messaging.cancel_grace, FR-195).
-func (t *DelegateTool) SetCancelGrace(d time.Duration) {
-	if d > 0 {
-		t.cancelGrace = d
-	}
+// SetFinalReadHook installs the writer that records a polled final hand-back
+// as received (see the finalRead field).
+func (t *DelegateTool) SetFinalReadHook(finalRead func(parentSessionID, agentID, messageID string) (bool, error)) {
+	t.finalRead = finalRead
 }
 
 // SetClock overrides the tool's time source for deterministic tests.
@@ -514,11 +490,6 @@ func (t *DelegateTool) SetSteerCaps(ratePerMinute, bodyBytes int) {
 type DelegateSteeringSink interface {
 	EnqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error)
 }
-
-// defaultCancelGrace is the cooperative-stop grace window before the hard
-// RequestCancel backstop fires when SetCancelGrace is never called
-// (session_messaging.cancel_grace default, FR-195).
-const defaultCancelGrace = 5 * time.Second
 
 // SetAgentRegistry installs the live agent-registry lookup (W2) DelegateTool
 // uses at task-creation time to classify a delegation target as native or
@@ -635,8 +606,8 @@ func (t *DelegateTool) Description() string {
 		"claude-code/codex/opencode — use respond or resume instead); " +
 		"action=\"respond\" replies to one of the child's messages by correlation_id — the text is " +
 		"delivered to the child as an ordinary message, always available for a delegation you started. " +
-		"action=\"stop_all\" stops that child and every helper under it (cooperatively by default; " +
-		"hard=true bypasses the grace window). action=\"redirect\" does not stop a helper; it replaces that helper's current turn. " +
+		"action=\"stop_all\" stops that child and every helper under it. action=\"redirect\" stops the helper's current turn, " +
+		"then resumes it with the new instruction; this does not mark the helper failed or end its goal. " +
 		delegateClearGoalDescription +
 		"action=\"resume\" continues a stopped child on the same conversation, or starts its next " +
 		"round when it is done or failed; optional text adds instructions. " +
@@ -799,11 +770,6 @@ func (t *DelegateTool) Parameters() map[string]any {
 			"correlation_id": map[string]any{
 				"type":        "string",
 				"description": "Required for action=\"respond\" (optional for \"steer\"): the open question this answers.",
-			},
-			"hard": map[string]any{
-				"type": "boolean",
-				"description": "Optional (action=\"stop_all\" only, default false): false is a cooperative soft " +
-					"stop with grace; true bypasses the grace window immediately.",
 			},
 		},
 		// Nothing is unconditionally required at the schema level — requiredness

@@ -1,5 +1,9 @@
 # ADR-082 — UI-independent turns and session-bound webchat streaming
 
+## Amended 2026-10-06 — founder decision
+
+The explicit Stop boundary is now the one `AgentLoop.StopSession` path, not a separate per-surface mechanism: polite now, force after 3 s, detach 3 s after force, for people and agents. **Plain Stop ends only this session's current turn, never helpers. Stop all / `/cancel` stops its whole helper tree.** Viewer disconnect still stops nothing. A final root answer lands completed/done without archiving or hiding the chat; a new human message continues it, and a scheduled/heartbeat new run may revive completed as system principal but never stopped. Helper keeper reminders are steered system wakes; a refused goal-tail save reaches its parent visibly and its tail claims only the producing execution. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D-A/B/D-C/D-F.
+
 - **Status:** Proposed (awaiting operator ratification) — 2026-09-08
 - **Supersedes:** ADR-045 (orphaned-foreground-turn timeout) in full
 - **Amends:** ADR-057 (only where it describes the ADR-045 watchdog as a cancel surface)
@@ -36,7 +40,7 @@ Withdrawn hypotheses (for the record): "streaming is never used" (log-level arti
 
 ### D1 — Delete the ADR-045 orphaned-foreground-turn watchdog in full (greenfield, no back-compat)
 
-Not disabled, not defaulted to 0: **removed**, with a mechanical guard so a merge cannot resurrect it. Full inventory in §5. The ADR-057 cancel state machine (`RequestCancel`, `InterruptSessionHard`) is untouched — it remains the only way a turn ends early, and only on an explicit Stop/cancel surface. Two *different* mechanisms share the word "orphan" and are **kept**: the subagent-span forwarder watchdog (`startOrphanWatchdog`/`orphanWatchdogTimeout`, synthesizes a closing span frame) and `SubTurnOrphan`.
+Not disabled, not defaulted to 0: **removed**, with a mechanical guard so a merge cannot resurrect it. Full inventory in §5. The canonical `AgentLoop.StopSession` path is the only explicit session Stop for people and agents (**amended 2026-10-06**); its internal force/detach stages are not separate public controls. Plain Stop is self-only; Stop all / `/cancel` is the downward helper cascade. Two *different* mechanisms share the word "orphan" and are **kept**: the subagent-span forwarder watchdog (`startOrphanWatchdog`/`orphanWatchdogTimeout`, synthesizes a closing span frame) and `SubTurnOrphan`.
 
 ### D2 — The webchat streamer is bound to the session, resolved per frame
 

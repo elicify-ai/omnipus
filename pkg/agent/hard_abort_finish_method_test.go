@@ -5,8 +5,8 @@
 // Regression test for FIX 2 (sendfile-fix review): runTurn's own deferred
 // Finish call (loop.go) used to always pass a hardcoded `false`. For a turn
 // hard-aborted via the session-wide web-cancel escalation path
-// (RequestCancel -> [3s timer] -> InterruptSessionHard -> ts.requestHardAbort()),
-// NOTHING ever calls Finish(true) directly — InterruptSessionHard only sets
+// (RequestCancel -> [3s timer] -> the forced stage -> ts.requestHardAbort()),
+// NOTHING ever calls Finish(true) directly — the forced stage only sets
 // the hardAbort flag and fires providerCancel/turnCancel; only the legacy
 // single-session HardAbort()/InterruptHard call Finish(true) explicitly. So
 // runTurn's own deferred call was the ONLY Finish call for such a turn, and a
@@ -148,22 +148,25 @@ func TestRunTurn_HardAbortViaInterruptSessionHard_RecordsCancelMethodHard(t *tes
 	require.NoError(t, cancelErr)
 	require.True(t, cancelOutcome.Fired, "RequestCancel must claim the in-flight turn")
 
-	// Simulate RequestCancel's own PHASE B (3s timer -> InterruptSessionHard)
-	// firing immediately, rather than waiting out the real 3 seconds — this
-	// calls the exact same production method the real timer calls. Graceful
-	// Phase A above does NOT reach a tool already executing (only
-	// requestHardAbort's turnCancel() cascades into the tool's execCtx), so
-	// the tool is still blocked until this call.
-	_, hardErr := al.InterruptSessionHard(sessionID, ScopeSubtree, "test hard escalation")
-	require.NoError(t, hardErr)
-
+	// Wait out the REAL forced stage (founder one-stop decision, 2026-10-05:
+	// polite stop immediately, forced stop at 3 s). Graceful Phase A above does
+	// NOT reach a tool already executing (only the forced stage's turnCancel()
+	// cascades into the tool's execCtx), so the tool stays blocked until the
+	// forced stage fires -- the turn must therefore still be running shortly
+	// after the cancel and finish at ~3 s, not immediately and not at 5 s.
+	cancelledAt := time.Now()
 	select {
 	case r := <-resultCh:
+		elapsed := time.Since(cancelledAt)
+		assert.GreaterOrEqual(t, elapsed, 2500*time.Millisecond,
+			"the turn ended after %v: a polite stop must not reach a running tool; only the 3s forced stage does", elapsed)
+		assert.LessOrEqual(t, elapsed, 4500*time.Millisecond,
+			"the turn ended after %v: the forced stage must fire at 3s (never the retired 5s)", elapsed)
 		// A turn ended via the hardInterruptAbortReason path returns a nil
 		// error — see abortTurn's Case 1 doc comment (loop.go).
 		assert.NoError(t, r.err, "a clean hard-abort must not surface a synthesized error")
-	case <-time.After(5 * time.Second):
-		t.Fatal("timeout waiting for the turn to finish after hard abort")
+	case <-time.After(7 * time.Second):
+		t.Fatal("timeout waiting for the turn to finish after the forced stage")
 	}
 
 	// Allow the onCancelFinish callback's AppendTranscript call (fired from

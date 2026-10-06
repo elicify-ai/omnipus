@@ -81,6 +81,10 @@ type steeringQueueItem struct {
 	// pendingMessages->injection unchanged so the receipt stamped at
 	// injection (loop_run_turn.go) can name the steer it belongs to.
 	correlationID string
+	// steerControlID names the delegate steer's durable control-ledger
+	// receipt (D4). Empty for items with no ledger receipt (human chat
+	// input, wakes, runtime notices).
+	steerControlID string
 }
 
 type steeringWake struct {
@@ -154,11 +158,9 @@ func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueIt
 		// deleted: it stranded items pushed by hooks running inside
 		// commitSteeredTerminal itself, the exact regression S1 covers.
 		if item.wake != nil {
-			for _, queued := range transition.finishingItems {
-				if queued.wake != nil && queued.wake.messageID == item.wake.messageID {
-					sq.mu.Unlock()
-					return true, nil
-				}
+			if queuedSteeringWake(transition.finishingItems, item.wake.messageID) != nil {
+				sq.mu.Unlock()
+				return true, nil
 			}
 		} else if len(transition.finishingItems) >= MaxQueueSize {
 			sq.mu.Unlock()
@@ -182,11 +184,9 @@ func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueIt
 	if item.wake != nil {
 		// Retries of one durable entry keep one pending wake; dequeueing
 		// removes the identity so a later retry may enqueue it again.
-		for _, queued := range queue {
-			if queued.wake != nil && queued.wake.messageID == item.wake.messageID {
-				sq.mu.Unlock()
-				return false, nil
-			}
+		if queuedSteeringWake(queue, item.wake.messageID) != nil {
+			sq.mu.Unlock()
+			return false, nil
 		}
 	} else if len(queue) >= MaxQueueSize {
 		sq.mu.Unlock()
@@ -276,6 +276,44 @@ func (sq *steeringQueue) runTerminalTransitionWithFinishing(
 		}
 		return true, terminal, err
 	}
+}
+
+// takeSteerReceiptItemsScope removes and returns scope's queued items that
+// carry a delegate steer receipt (from the main queue and an open finishing
+// buffer), leaving every other item in place and in order.
+func (sq *steeringQueue) takeSteerReceiptItemsScope(scope string) []steeringQueueItem {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	scope = normalizeSteeringScope(scope)
+	var taken []steeringQueueItem
+	split := func(items []steeringQueueItem) []steeringQueueItem {
+		kept := items[:0]
+		for _, item := range items {
+			if item.steerControlID != "" {
+				taken = append(taken, item)
+				continue
+			}
+			kept = append(kept, item)
+		}
+		return kept
+	}
+	if queue, ok := sq.queues[scope]; ok {
+		sq.queues[scope] = split(queue)
+	}
+	if transition := sq.terminalizing[scope]; transition != nil {
+		transition.finishingItems = split(transition.finishingItems)
+	}
+	return taken
+}
+
+// finishingPending reports whether input was accepted into scope's open
+// terminal transition. The completion commit reads it under the record lock:
+// accepted before the commit means the current generation continues.
+func (sq *steeringQueue) finishingPending(scope string) bool {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	transition := sq.terminalizing[normalizeSteeringScope(scope)]
+	return transition != nil && len(transition.finishingItems) > 0
 }
 
 func (sq *steeringQueue) finishTerminalTransition(scope string, transition *steeringTerminalTransition) {
@@ -759,7 +797,7 @@ func (al *AgentLoop) appendSteeredInstruction(sessionID, agentID, instruction st
 // drop it durably (wake on a now-terminal record). A normal status means
 // the item joined the main queue as before.
 func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error) {
-	resolved, _, err := al.enqueueSteeringMessage(scope, agentID, msg, correlationID)
+	resolved, _, err := al.enqueueDelegateSteer(scope, agentID, msg, correlationID)
 	return resolved, err
 }
 
@@ -779,7 +817,45 @@ func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, msg providers
 // assertion (see delegate_followup.go's enqueueSteeringWithStatus), mirroring
 // steerReviver's parallel-capability pattern.
 func (al *AgentLoop) EnqueueSteeringMessageWithStatus(scope, agentID string, msg providers.Message, correlationID string) (string, EnqueueStatus, error) {
-	return al.enqueueSteeringMessage(scope, agentID, msg, correlationID)
+	return al.enqueueDelegateSteer(scope, agentID, msg, correlationID)
+}
+
+// enqueueDelegateSteer is the delegate steer/respond enqueue (the exported
+// EnqueueSteeringMessage* sink methods). For a steered session it records the
+// D4 steer receipt (ledger line first, then the queue push); a push that is
+// then refused leaves the receipt superseded with the refusal as its reason,
+// never a dangling queued line. Other sessions have no control ledger and
+// keep the plain enqueue.
+func (al *AgentLoop) enqueueDelegateSteer(scope, agentID string, msg providers.Message, correlationID string) (string, EnqueueStatus, error) {
+	lifecycle := al.GetSessionLifecycleStore()
+	sessionID := normalizeSteeringScope(scope)
+	if lifecycle == nil {
+		return al.enqueueSteeringMessage(scope, agentID, msg, correlationID)
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if errors.Is(err, session.ErrLifecycleNotFound) || (err == nil && rec.SteeredBy == nil) {
+		return al.enqueueSteeringMessage(scope, agentID, msg, correlationID)
+	}
+	if err != nil {
+		return "", EnqueueStatusNormal, fmt.Errorf("check steering session lifecycle: %w", err)
+	}
+	correlationID = strings.TrimSpace(correlationID)
+	if correlationID == "" {
+		correlationID = "corr_" + uuid.NewString()
+	}
+	grant, err := lifecycle.AcceptSteerControl(sessionID, msg.Content, session.StopActorAgent(agentID), correlationID)
+	if err != nil {
+		return "", EnqueueStatusNormal, err
+	}
+	item := steeringQueueItem{message: msg, correlationID: correlationID, steerControlID: grant.ControlID}
+	status, pushErr := al.enqueueSteeringItemWithStatus(scope, agentID, item, func() EnqueueStatus {
+		return EnqueueStatusPostFinish
+	})
+	if pushErr != nil {
+		recordErr := lifecycle.RecordSteerControlState(sessionID, grant.ControlID, session.SteerStateSuperseded, "refused: "+pushErr.Error())
+		return "", status, errors.Join(pushErr, recordErr)
+	}
+	return correlationID, status, nil
 }
 
 // EnqueueSteeringMessageStatus is the rich return shape of the internal
@@ -1044,13 +1120,56 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 	correlationIDs := make([]string, 0, len(items))
 	consumedItems := make([]steeringQueueItem, 0, len(items))
 	for i, item := range items {
+		if item.steerControlID != "" {
+			// D4: a delegate steer is delivered once its exact text is durable
+			// in the session transcript; only then is it handed to the turn
+			// and its queue slot released. A failure keeps it queued.
+			if err := al.recordDeliveredDelegateSteer(scope, item); err != nil {
+				al.steering.prependItemsScope(scope, items[i:])
+				// F4: the live tool-boundary polls drop this error, so the
+				// refusal is made visible here, to the steering parent.
+				al.reportUndeliveredDelegateSteer(scope, item, err)
+				return msgs, correlationIDs, consumedItems, err
+			}
+		}
 		if item.wake != nil {
-			if err := al.writeSteeringConsumedMarker(*item.wake); err != nil {
+			if err := al.recordAcceptedSteeredInstruction(*item.wake, item.message); err != nil {
+				al.steering.prependItemsScope(scope, items[i:])
+				slog.Error("agent: accepted steered instruction not recorded; restored unmarked suffix to queue",
+					"scope", scope, "message_id", item.wake.messageID, "error", err)
+				return msgs, correlationIDs, consumedItems,
+					fmt.Errorf("record accepted steered instruction %q: %w", item.wake.messageID, err)
+			}
+			claimed, err := al.writeSteeringConsumedMarker(*item.wake)
+			if err != nil {
 				al.steering.prependItemsScope(scope, items[i:])
 				slog.Error("agent: steering wake not consumed; restored unmarked suffix to queue",
 					"scope", scope, "message_id", item.wake.messageID, "error", err)
 				return msgs, correlationIDs, consumedItems,
 					fmt.Errorf("write steering consumed marker %q: %w", item.wake.messageID, err)
+			}
+			// The durable inbox entry behind this wake is acknowledged once its
+			// consumed marker exists, by whichever consumer gets here (the
+			// acknowledgement is idempotent), exactly as the system-wake path
+			// does. A failed acknowledgement is returned, never only logged.
+			ackErr := al.ackConsumedSteeringWake(*item.wake)
+			if !claimed {
+				// Another consumer already consumed this accepted identity:
+				// a retry is not a second delivery (ADR-20261004 C1).
+				if ackErr != nil {
+					al.steering.prependItemsScope(scope, items[i+1:])
+					return msgs, correlationIDs, consumedItems, ackErr
+				}
+				continue
+			}
+			if ackErr != nil {
+				// This consumer owns the input (its marker is written): deliver
+				// it, restore the rest, and surface the acknowledgement failure.
+				msgs = append(msgs, item.message)
+				correlationIDs = append(correlationIDs, item.correlationID)
+				consumedItems = append(consumedItems, item)
+				al.steering.prependItemsScope(scope, items[i+1:])
+				return msgs, correlationIDs, consumedItems, ackErr
 			}
 		}
 		msgs = append(msgs, item.message)
@@ -1060,18 +1179,138 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 	return msgs, correlationIDs, consumedItems, nil
 }
 
-func (al *AgentLoop) writeSteeringConsumedMarker(wake steeringWake) error {
+// writeSteeringConsumedMarker writes the wake's consumed marker once. claimed
+// is true only for the consumer that wrote it: that consumer alone delivers
+// the input; a concurrent or retried consumer of the same identity skips it.
+func (al *AgentLoop) writeSteeringConsumedMarker(wake steeringWake) (claimed bool, err error) {
 	store := al.ResolveSessionStore(wake.transcriptSessionID)
 	if store == nil {
-		return fmt.Errorf("no transcript store for session %q", wake.transcriptSessionID)
+		return false, fmt.Errorf("no transcript store for session %q", wake.transcriptSessionID)
 	}
-	return store.AppendTranscriptStrict(wake.transcriptSessionID, session.TranscriptEntry{
+	return store.AppendTranscriptOnce(wake.transcriptSessionID, session.TranscriptEntry{
 		ID:      "consumed-" + wake.messageID,
 		Type:    session.EntryTypeSystem,
 		Role:    "system",
 		Content: "consumed " + wake.messageID,
 		AgentID: wake.agentID,
 	})
+}
+
+// recordPolledFinalConsumed records that parentID already received a
+// helper's final hand-back (messageID) through a delegate status or inbox
+// poll: the same consumed marker and inbox acknowledgement the hand-back
+// wake writes, so that wake finds it consumed and starts no second parent
+// turn with the same result (D5, exactly once).
+func (al *AgentLoop) recordPolledFinalConsumed(parentID, agentID, messageID string) (alreadyReceived bool, err error) {
+	wake := steeringWake{messageID: messageID, transcriptSessionID: parentID, agentID: agentID}
+	claimed, err := al.writeSteeringConsumedMarker(wake)
+	if err != nil {
+		return false, fmt.Errorf("record final %q as received: %w", messageID, err)
+	}
+	return !claimed, al.ackConsumedSteeringWake(wake)
+}
+
+// ackConsumedSteeringWake acknowledges the wake's durable inbox entry in its
+// recipient's inbox once its consumed marker exists.
+func (al *AgentLoop) ackConsumedSteeringWake(wake steeringWake) error {
+	inbox := al.GetMessageInboxStore()
+	if inbox == nil {
+		return nil
+	}
+	if err := inbox.Ack(wake.transcriptSessionID, []string{wake.messageID}); err != nil {
+		return fmt.Errorf("acknowledge consumed steering wake %q: %w", wake.messageID, err)
+	}
+	return nil
+}
+
+// recordDeliveredDelegateSteer makes an accepted delegate steer durable in
+// its session's transcript (once per control id, so a retried consumption
+// never writes it twice) and then marks its D4 receipt delivered. Every
+// failure is returned; the receipt stays queued.
+func (al *AgentLoop) recordDeliveredDelegateSteer(scope string, item steeringQueueItem) error {
+	sessionID := normalizeSteeringScope(scope)
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return fmt.Errorf("deliver steer %q: no lifecycle store for session %q", item.steerControlID, sessionID)
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		return fmt.Errorf("deliver steer %q: load lifecycle of %q: %w", item.steerControlID, sessionID, err)
+	}
+	store := al.ResolveSessionStore(sessionID)
+	if store == nil {
+		return fmt.Errorf("deliver steer %q: no transcript store for session %q", item.steerControlID, sessionID)
+	}
+	if _, err := store.AppendTranscriptOnce(sessionID, session.TranscriptEntry{
+		ID:      steeredInstructionEntryID(item.steerControlID),
+		Role:    "user",
+		Content: item.message.Content,
+		AgentID: rec.AgentID,
+	}); err != nil {
+		return fmt.Errorf("deliver steer %q: record it in the transcript of %q: %w", item.steerControlID, sessionID, err)
+	}
+	if err := lifecycle.RecordSteerControlState(sessionID, item.steerControlID, session.SteerStateDelivered, ""); err != nil {
+		return fmt.Errorf("deliver steer %q: record its receipt: %w", item.steerControlID, err)
+	}
+	return nil
+}
+
+// reportUndeliveredDelegateSteer logs a delegate steer whose durable
+// injection was refused and tells the steering parent, which accepted it,
+// that it is still waiting. The steer itself stays queued.
+func (al *AgentLoop) reportUndeliveredDelegateSteer(scope string, item steeringQueueItem, cause error) {
+	sessionID := normalizeSteeringScope(scope)
+	logger.ErrorCF("agent", "steer: an accepted steering instruction could not be saved into the helper's conversation; it stays queued",
+		map[string]any{"session_id": sessionID, "control_id": item.steerControlID, "error": cause.Error()})
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		logger.ErrorCF("agent", "steer: the parent of a helper could not be told about a refused steering instruction",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return
+	}
+	parentID := steerParentSessionID(rec)
+	if parentID == "" {
+		return
+	}
+	al.deliverSubagentMessage(parentID, rec, "error",
+		fmt.Sprintf("Your steering instruction for helper %s could not be saved into its conversation and has not reached it yet; it stays queued and will be retried: %v", sessionID, cause), nil)
+}
+
+// supersedePendingSteers is D5's precedence for a newer Stop: the session's
+// pending delegate steers accepted BEFORE that Stop are taken off the queue
+// and their receipts marked superseded by it (reason "stop",
+// superseded_by_seq the Stop's sequence; D4S-01). A steer accepted after the
+// Stop (a later run's input, F1) stays queued. A receipt that cannot be
+// written puts its item back and is returned.
+func (al *AgentLoop) supersedePendingSteers(sessionID, stopControlID string) error {
+	lifecycle := al.GetSessionLifecycleStore()
+	if al.steering == nil || lifecycle == nil {
+		return nil
+	}
+	taken := al.steering.takeSteerReceiptItemsScope(sessionID)
+	var restore []steeringQueueItem
+	var errs []error
+	for _, item := range taken {
+		superseded, err := lifecycle.SupersedeSteersByStop(normalizeSteeringScope(sessionID), stopControlID, []string{item.steerControlID})
+		if err != nil {
+			restore = append(restore, item)
+			errs = append(errs, fmt.Errorf("supersede steer %q: %w", item.steerControlID, err))
+			continue
+		}
+		if len(superseded) == 0 {
+			// Accepted after this Stop (F1): it belongs to a newer run and
+			// stays queued for it.
+			restore = append(restore, item)
+		}
+	}
+	if len(restore) > 0 {
+		al.steering.prependItemsScope(sessionID, restore)
+	}
+	return errors.Join(errs...)
 }
 
 func (al *AgentLoop) pendingSteeringCountForScope(scope string) int {
@@ -1088,7 +1327,7 @@ func (al *AgentLoop) continueWithSteeringMessages(
 	steeringMsgs []providers.Message,
 	steeringCorrelationIDs []string,
 ) (string, error) {
-	return al.runAgentLoop(ctx, agent, processOptions{
+	resp, err := al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey:                    sessionKey,
 		Channel:                       channel,
 		ChatID:                        chatID,
@@ -1097,12 +1336,17 @@ func (al *AgentLoop) continueWithSteeringMessages(
 		InitialSteeringMessages:       steeringMsgs,
 		InitialSteeringCorrelationIDs: steeringCorrelationIDs,
 		SkipInitialSteeringPoll:       true,
+		executionDisposition:          ordinaryDispositionFromContext(ctx),
 		// FIX 1 (re-review): see AgentLoop.resolveWorkspaceIDForContinuation
 		// (loop.go) for the resolution this value is sourced from — this
 		// function previously left WorkspaceID unset entirely, degrading a
 		// steering-continued turn's tool media to the private/global room.
 		WorkspaceID: workspaceID,
 	})
+	// F9: the ordinary root is settled from its LAST executed turn, so a
+	// continuation's outcome replaces the first turn's.
+	ordinaryDispositionFromContext(ctx).recordTurnOutcome(err)
+	return resp, err
 }
 
 // errContinuePostDequeueFailure marks a Continue failure that happened AFTER

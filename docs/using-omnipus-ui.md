@@ -45,6 +45,8 @@ What the sidebar holds:
 
 The magnifier at the top of the sidebar searches all your conversations.
 
+Conversation rows show **Working**, **Waiting for answer**, **Done**, **Failed**, or **Stopped** when the server has a lifecycle record. A stopped row also shows its stop cause. Visible rows and expanded helper lists refresh automatically: activity events prompt a refresh, and a 15-second refresh catches a state saved after the last event. You do not need to reload the page after a reply or Stop. The number beside a parent conversation is its **total direct helpers**, including finished ones; it is not a running-helper count. A parent's label is its own server state, not a guess from its children's labels.
+
 If the sidebar shows **Could not load workspaces**, select **Retry** to reload the workspace list and **Archive** when it is expanded. If loading fails again, the message stays so you can retry again. If loading the list pauses because you are offline, the sidebar says **Offline — workspaces will load when you reconnect.** and loads the list once you are back online.
 
 ## A workspace and its tabs
@@ -66,6 +68,8 @@ Workspace settings are not an entry: select the workspace's name at the left of 
 
 The chat is a conversation with the workspace's agents. Replies stream in; each tool an agent uses appears as a card you can expand or collapse ([tools](tools.md) explains what agents can do). When an agent wants to do something sensitive, an approval dialog asks you to approve it once, deny it, or always allow it — [security](security.md) covers the rules behind it. Each active [goal](goals.md) shows as its own small pill under the message box.
 
+A failure or refusal routed to an existing chat appears in that conversation, including when no reply has started. It does not turn into an app-wide connection banner when you open another conversation or start a new chat. Connection and routing-protocol failures remain separate app-wide problems.
+
 **Open browser** at the top of the chat shows the agent's [live browser](browser.md). Library is in the sidebar, and opens every workspace's files. When an agent builds something reviewable, like a small site, the chat links to it ([previews](previews.md)).
 
 While a turn is running, the message box stays yours:
@@ -74,7 +78,7 @@ While a turn is running, the message box stays yours:
 |---|---|
 | **Enter** (with text typed) | Sends your message into the running turn — the agent takes it into account without stopping. A send button with the same effect appears next to Stop. |
 | **Stop** or **Escape** | Asks the agent to halt. The button shows a stopping state, then the turn ends as cancelled. |
-| Activity pill | Below the message box: shows running background work. Select it to open the Activity panel with running and finished items, including any that failed. |
+| Activity pill | Below the message box: the Agents number counts helpers whose current state is running. Select it to open the Activity panel. **Running now** excludes stopped and finished helpers; queued helpers and helpers waiting for an answer have their own sections. Stopped helpers remain inspectable with **Open**, without a growing elapsed timer or a failed-work label. A resumed helper returns to Running now when its state is running again. |
 
 ### Stop and redirect commands
 
@@ -136,7 +140,7 @@ App-wide settings live behind **Settings** in the account menu, on tabs from pro
 - The activity pill disappears when everything has ended successfully. A failed background item keeps it visible, so failures do not vanish silently.
 - The **Library** and **Mail** entries open panels beside Chat on wider screens, rather than separate workspace pages; on narrower screens a panel takes over the chat area.
 - For readability, some routine tool activity is hidden from the conversation by default. **Settings**, then **Chat**, then **Verbose chat** reveals every call.
-- If a turn ends in an error after text has started streaming, the failure message replaces that text in the same reply. The message is visible even with **Verbose chat** off; **Verbose chat** shows technical details when available. A turn you stop still keeps its partial reply.
+- If a turn ends in an error after text has started streaming, the failure message replaces that text in the same reply. The message is visible even with **Verbose chat** off; **Verbose chat** shows technical details when available. A turn you stop still keeps its partial reply. **(interrupted)** belongs to that reply's message, not to the whole conversation; a later successful answer does not inherit it. Likewise, **(cut off at the output limit)** appears only on the affected reply.
 - An agent saying what it plans to do is not a finished answer. If it reaches its tool-call limit before a final answer, chat keeps the narration and adds a separate limit notice. The notice remains in the saved conversation when you reopen it. An admin can raise **Max tool calls per turn** under **Settings → Performance**; an agent's own lower limit is on its profile's **Advanced** tab.
 - If conflicting tool names stop a turn, chat shows the standard failure notice instead of ending without an explanation: “This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.” Any earlier narration and tool activity remain in the saved conversation, followed by the failure notice.
 

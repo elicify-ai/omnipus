@@ -242,18 +242,18 @@ func TestFinalDelivery_ForgedEnvelopeIsVisibleConsistencyError(t *testing.T) {
 			PayloadHash:     "forged-payload-hash",
 		},
 	}
-	if err := s.appendJournalEnvelope(sid, forged); err != nil {
-		t.Fatalf("append forged envelope to the real journal: %v", err)
+	if appendErr := s.appendJournalEnvelope(sid, forged); appendErr != nil {
+		t.Fatalf("append forged envelope to the real journal: %v", appendErr)
 	}
 
-	if _, _, _, err := s.FinalDeliveryState(sid, 1, commit.CommitID); !errors.Is(err, ErrFinalDeliveryOrphanEnvelope) {
-		t.Fatalf("FinalDeliveryState accepted a mismatching envelope: err %v, want ErrFinalDeliveryOrphanEnvelope", err)
+	if _, _, _, stateErr := s.FinalDeliveryState(sid, 1, commit.CommitID); !errors.Is(stateErr, ErrFinalDeliveryOrphanEnvelope) {
+		t.Fatalf("FinalDeliveryState accepted a mismatching envelope: err %v, want ErrFinalDeliveryOrphanEnvelope", stateErr)
 	}
 	items, err := s.ListPendingFinalDeliveries()
 	if !errors.Is(err, ErrFinalDeliveryOrphanEnvelope) {
 		t.Fatalf("ListPendingFinalDeliveries accepted a mismatching envelope: err %v (items %+v), want ErrFinalDeliveryOrphanEnvelope", err, items)
 	}
-	if err := s.UpdateFinalDelivery(sid, 1, commit.CommitID, 1, FinalDeliveryCommand{Retire: true}); err == nil {
+	if updateErr := s.UpdateFinalDelivery(sid, 1, commit.CommitID, 1, FinalDeliveryCommand{Retire: true}); updateErr == nil {
 		t.Fatalf("retire_payload succeeded through a forged envelope; want a visible refusal")
 	}
 

@@ -492,21 +492,17 @@ func resolveDelegateTimeoutSeconds(args map[string]any) (time.Duration, error) {
 // ErrLifecycleTerminalImmutable (logged here, harmless — the record is already
 // terminally correct). Callers MUST NOT already hold Lock(sessionID):
 // sync.Mutex is not reentrant, and Mutate takes the lock ONCE internally.
-// transitionLifecycle transitions sessionID's durable record to state. note
-// is the StopNote to land when state == LifecycleStopped (D2/D6) — pass nil
-// when a prior write in the SAME stop event (typically a SteerCanceller
-// cascade stamp, via cancelHard/cancelSoft) already landed one; every
-// current call site does exactly that (see each call site's own comment),
-// so TransitionSession's own "retain the existing note" behavior applies.
-// Ignored for any other target state.
-func (t *DelegateTool) transitionLifecycle(sessionID string, state session.LifecycleState, failedReason string, note *session.StopNote) {
+//
+// Used only by the failed-launch paths. It never lands a stop: only the owning execution lands
+// `stopped` (ADR-20260928 D2), so no StopNote is passed here.
+func (t *DelegateTool) transitionLifecycle(sessionID string, state session.LifecycleState, failedReason string) {
 	if t.lifecycle == nil || sessionID == "" {
 		return
 	}
 	// t.lifecycle (MessageParentLifecycleStore) satisfies
 	// session.LifecycleMutator, so no type assertion is needed.
 	// t.unified may be nil; TransitionSession then skips the mirror.
-	if err := session.TransitionSession(t.lifecycle, t.unified, sessionID, state, failedReason, note); err != nil {
+	if err := session.TransitionSession(t.lifecycle, t.unified, sessionID, state, failedReason, nil); err != nil {
 		slog.Warn("delegate: transitionLifecycle: dual-store transition failed", "session_id", sessionID, "state", state, "error", err)
 	}
 }
@@ -642,69 +638,22 @@ func cancelBackgroundShellWarnings(killFailed int, walkIncomplete bool) string {
 	return warnings
 }
 
-// droppedQueuedResult answers for a session the cancel reached while it was
-// still QUEUED — launched, admitted to the start queue, but never given a
-// turn. It returns nil for any other state, leaving the caller's own wording
-// in place.
-//
-// Such a session has no live turn: nothing to interrupt, nothing to flush to
-// a checkpoint, and no cooperative grace window worth waiting out. So both
-// hard and soft resolve identically here — the cascade's durable Stop marker
-// is what actually drops it (ADR-091 I-6: admission never promotes a stamped
-// session), and the record is landed terminal at once so the side panel, the
-// parent's own completion check (hasRunningOrQueuedDescendant) and the queue
-// positions this tool reports all agree that it is gone.
-//
-// The wording matters as much as the act. Before ADR-091's cascade was wired
-// here this call reported "terminated between the terminal check and the
-// cancel hook — no action needed" — a success shape claiming the session had
-// already ended, while it sat in the queue waiting to start. Saying plainly
-// that a session which never started has been dropped is the whole point of
-// the fix.
-func (t *DelegateTool) droppedQueuedResult(sessionID, warnings string) *ToolResult {
-	if t.lifecycle == nil {
-		return nil
-	}
-	rec, err := t.lifecycle.Load(sessionID)
-	if err != nil || rec == nil || rec.State != session.LifecycleQueued {
-		return nil
-	}
-	// note=nil: this call is reached only after the caller's own cancelHard/
-	// cancelSoft hook already ran (executeStopAll, below) — that hook is
-	// al.cancelDelegatedSubtree, which stamps the durable Stop marker AND
-	// (steer_cancel.go::stampStop) the stop_note for sessionID itself with
-	// cause "stop" before this lands the terminal write. Retain it.
-	t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user", nil)
-	return NewToolResult(fmt.Sprintf(
-		"Session %s was still queued behind the concurrency limit and had not started; it has been dropped and will never run.",
-		sessionID,
-	) + warnings)
-}
-
 // executeStopAll implements action="stop_all" (ADR-20261004, locked decision
 // 2; renamed from cancel with no alias path). Stops that helper and every
-// helper under it — the confirmed downward cascade — through the SAME
-// durable Stop machinery a human's Stop all uses. The behavior is the
-// former cancel action's, unchanged.
+// helper under it through the ONE session Stop people use too (founder
+// one-stop decision, 2026-10-05): polite at once, forced 3 s later, landed
+// only by each selected execution's owner.
 func (t *DelegateTool) executeStopAll(ctx context.Context, args map[string]any) *ToolResult {
 	sessionID, err := requiredStringArg(args, "session_id")
 	if err != nil {
 		return ErrorResult(err.Error())
-	}
-	hard := false
-	if raw, present := args["hard"]; present && raw != nil {
-		b, ok := raw.(bool)
-		if !ok {
-			return ErrorResult("hard must be a boolean")
-		}
-		hard = b
 	}
 	// FAIL-CLOSED (MAJOR-1): caller-ownership verification is MANDATORY —
 	// a Load error (not-found, corrupt tail, I/O) MUST NOT let the cancel
 	// fall through against whatever session_id the caller named (a cross-
 	// tenant DoS gated on an induced read error). Previously the ownership
 	// check only ran when Load SUCCEEDED, so any Load error skipped it and
-	// cancelHard/cancelSoft proceeded regardless. Now deny the cancel when
+	// the stop proceeded regardless. Now deny the cancel when
 	// the lifecycle store is unconfigured OR when Load errors, mirroring
 	// executeSteer/executeRespond/executeResume's posture (the rest of
 	// ADR-053's fail-closed contract).
@@ -725,134 +674,43 @@ func (t *DelegateTool) executeStopAll(ctx context.Context, args map[string]any) 
 		return ErrorResult(fmt.Sprintf("delegate: stop_all: %v", verr))
 	}
 
-	// Cancelling an already-terminal session doesn't corrupt any state
-	// (cancelSoft/cancelHard against a session with no live turn are
-	// harmless no-ops). #588 (N9) required this to NOT reuse the
-	// success-shaped "cooperatively cancelled" / "hard-cancelled
-	// immediately" message — that wording would misleadingly claim an
-	// action was taken when nothing happened. The rec.Terminal() check
-	// below is a plain check-then-return, not a check-then-act race: a
-	// terminal session never leaves that state (L-3 immutable-terminal
-	// invariant), so there's nothing for a concurrent writer to race here.
-	//
-	// RC-3 (UAT amplification-loop fix, 2026-08): #588's OWN requirement
-	// was narrower than the original implementation of it — it bars reusing
-	// the success-cancel WORDING, it does not require this to be a tool-call
-	// FAILURE. Reporting IsError:true here made an orchestrating agent read
-	// routine cleanup (a worker session finishing before the parent's
-	// cancel call landed) as breakage: in one real UAT session 20 of 28
-	// cancel calls hit this branch, and the caller re-issued cancels and
-	// re-spawned workers in a loop instead of treating "already done" as
-	// success. SessionManager.KillAll (pkg/tools/session.go:635-637)
-	// already treats an already-terminal candidate as a silent no-op —
-	// this brings cancel in line with that precedent. The response is
-	// still a SUCCESS with wording distinct from "cooperatively
-	// cancelled"/"hard-cancelled" so it can never be mistaken for "I just
-	// cancelled something" — do not re-fix this back to ErrorResult; that
-	// would resurrect the RC-3 amplification loop while only restoring a
-	// stricter reading of #588 than #588 itself required.
-	//
-	// There is, however, a TOCTOU window BETWEEN this check and the
-	// cancelSoft/cancelHard call below: a non-terminal session can terminate
-	// in that gap, in which case Interrupt/InterruptSessionHard (ScopeSelfOnly)
-	// finds no live turnState and returns (nil descendants, nil error) — a documented
-	// no-op. The pre-fix code discarded the descendants return and STILL
-	// reported the success-shaped message, so a cancel that landed nothing
-	// looked identical to one that actually interrupted. The cancelSoft/
-	// cancelHard calls below now capture descendants and, when
-	// len(descendants)==0 and cerr==nil, return the same idempotent-no-op
-	// shape as this pre-dispatch check UNLESS a real background-shell kill
-	// failure or an incomplete descendant walk was also detected — that
-	// failure signal is a genuine partial failure, not a clean no-op, and
-	// signoff14's MEDIUM-3 fix (delegate_signoff14_test.go) requires it to
-	// still reach the caller as an actionable error rather than being
-	// silently downgraded to success by this fix. See the len(descendants)==0
-	// branches below for that split.
+	// An already-terminal session answers a SUCCESS with wording distinct
+	// from a stop request, so it can never be mistaken for "I just stopped
+	// something" (#588 N9). It is deliberately not an error (RC-3, UAT
+	// amplification loop: orchestrators re-issued stops and re-spawned
+	// workers when routine "already done" read as breakage) — do not turn
+	// it back into ErrorResult. A session can still terminate between this
+	// check and the stop hook; that TOCTOU miss (reached nothing) answers the
+	// same idempotent no-op shape below, unless a background-shell kill
+	// failure or an incomplete descendant walk was detected (signoff14
+	// MEDIUM-3: that partial failure stays an actionable error).
 	if rec.Terminal() {
 		return NewToolResult(fmt.Sprintf(
 			"Session %s is already terminal (%s) — no action needed.", sessionID, rec.State,
 		))
 	}
 
-	// ADR-057 FR-028/BDD-29/D8/R-13: delegate action="stop_all" now also kills
-	// that child's OWN background shells AND every durable descendant's
-	// (D8-CASCADE) — before this fix, it reached only the single named
-	// session, silently leaking a grandchild's background work (see
-	// killChildBackgroundShells's own doc comment). Fired unconditionally of
-	// hard/soft and BEFORE the turn-level escalation below, mirroring
-	// RequestCancel's own "decoupled from the active-turn gate" design
-	// (pkg/agent/cancel.go): a background shell is an OS process, not a
-	// steerable LLM turn, so there is no reason to make it wait through the
-	// cooperative grace window that exists for the turn.
-	//
-	// killFailed and walkIncomplete are carried into both success messages
-	// below: this call previously reported the same unconditional
-	// "cancelled"/"hard-cancelled" success text regardless of whether a
-	// background shell for this session (or a descendant) actually died, or
-	// whether the descendant walk itself broke down partway through — a real
-	// kill failure or an incomplete walk was visible only in a log line,
-	// never to the caller. A partial cascade must not read as a clean
-	// success (binding requirement): walkIncomplete forces that WARNING into
-	// the response even when killFailed is 0, since a walk that broke down
-	// may have left descendants entirely unvisited (0 attempted, not 0
-	// failed). The turn-level cancel outcome (hard/soft, checked separately
-	// just below) and the shell-kill outcome are distinct facts; a caller
-	// needs both to know what actually happened.
+	if t.stop == nil {
+		return ErrorResult("delegate: stop_all: no stop capability is configured; nothing was stopped")
+	}
+	// ADR-057 FR-028/BDD-29/D8/R-13: stop_all also kills that child's OWN
+	// background shells AND every durable descendant's (D8-CASCADE), before
+	// the turn-level stop: a background shell is an OS process, not a turn,
+	// so it does not wait for the polite stop. killFailed and walkIncomplete
+	// are carried into the reply — a partial cascade must not read as a clean
+	// success; walkIncomplete forces the WARNING even when killFailed is 0.
 	_, killFailed, walkIncomplete := t.killChildBackgroundShells(sessionID)
 
-	if hard {
-		if t.cancelHard == nil {
-			return ErrorResult("delegate: no hard-cancel hook configured")
-		}
-		descendants, cerr := t.cancelHard(sessionID, by, "delegate stop_all(hard=true)")
-		if cerr != nil {
-			return ErrorResult(fmt.Sprintf("delegate: stop_all: %v", cerr)).WithError(cerr)
-		}
-		if len(descendants) == 0 {
-			// RC-3: a clean TOCTOU miss (no real kill failure, no incomplete
-			// walk) is an idempotent no-op, same as the pre-dispatch
-			// rec.Terminal() branch above — see that branch's comment for
-			// the full rationale. A real background-shell kill failure or
-			// an incomplete descendant walk is NOT a clean no-op though:
-			// signoff14's MEDIUM-3 fix requires that failure signal to
-			// still surface as an actionable error, so this branch keeps
-			// the original error shape whenever killFailed>0 or
-			// walkIncomplete (see delegate_signoff14_test.go's
-			// TestDelegateTool_Cancel_NothingToCancel_StillSurfacesShellKillWarnings).
-			if killFailed > 0 || walkIncomplete {
-				return ErrorResult(fmt.Sprintf(
-					"delegate: stop_all: session %s terminated between the terminal check and the stop hook — nothing to stop",
-					sessionID,
-				) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
-			}
-			return NewToolResult(fmt.Sprintf(
-				"Session %s terminated between the terminal check and the stop hook — no action needed.",
-				sessionID,
-			) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
-		}
-		if dropped := t.droppedQueuedResult(sessionID, cancelBackgroundShellWarnings(killFailed, walkIncomplete)); dropped != nil {
-			return dropped
-		}
-		// note=nil: t.cancelHard (just above) is al.cancelDelegatedSubtree,
-		// which already stamped the stop_note for sessionID (cause "stop",
-		// it is the direct cancel target) via stampStop. Retain it.
-		t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user", nil)
-		msg := fmt.Sprintf("Session %s stopped immediately (hard).", sessionID)
-		msg += cancelBackgroundShellWarnings(killFailed, walkIncomplete)
-		return NewToolResult(msg)
-	}
-
-	if t.cancelSoft == nil {
-		return ErrorResult("delegate: no soft-cancel hook configured")
-	}
-	softDescendants, cerr := t.cancelSoft(sessionID, by, "delegate stop_all(hard=false)")
+	reached, cerr := t.stop(sessionID, by, "delegate stop_all")
 	if cerr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: stop_all: %v", cerr)).WithError(cerr)
+		return ErrorResult(fmt.Sprintf("delegate: stop_all: %v", cerr) + cancelBackgroundShellWarnings(killFailed, walkIncomplete)).WithError(cerr)
 	}
-	if len(softDescendants) == 0 {
-		// RC-3: mirrors the hard-path branch above — a clean TOCTOU miss is
-		// an idempotent no-op; a real kill failure or incomplete walk keeps
-		// the original error shape (signoff14's MEDIUM-3 requirement).
+	if len(reached) == 0 {
+		// RC-3: a clean TOCTOU miss (no real kill failure, no incomplete
+		// walk) is an idempotent no-op, same as the pre-dispatch
+		// rec.Terminal() branch above. A real background-shell kill failure
+		// or an incomplete descendant walk is NOT a clean no-op (signoff14
+		// MEDIUM-3), so it keeps the error shape.
 		if killFailed > 0 || walkIncomplete {
 			return ErrorResult(fmt.Sprintf(
 				"delegate: stop_all: session %s terminated between the terminal check and the stop hook — nothing to stop",
@@ -864,52 +722,12 @@ func (t *DelegateTool) executeStopAll(ctx context.Context, args map[string]any) 
 			sessionID,
 		) + cancelBackgroundShellWarnings(killFailed, walkIncomplete))
 	}
-
-	if dropped := t.droppedQueuedResult(sessionID, cancelBackgroundShellWarnings(killFailed, walkIncomplete)); dropped != nil {
-		return dropped
-	}
-
-	// cancel(soft) = soft cooperative stop + a hard RequestCancel backstop
-	// after the grace window, mirroring Interrupt/InterruptSessionHard's
-	// existing two-phase escalation (steering.go, ScopeSelfOnly). The backstop only fires
-	// if the session has NOT already stopped or reached a terminal state within grace.
-	// (Comments-MINOR-3: the prior `// FR-...` prefix was a placeholder —
-	// cancel is not a numbered FR; see ADR-053 R§Cancel/restart for the
-	// two-phase prose this implements.)
-	if t.cancelHard != nil {
-		grace := t.cancelGrace
-		go func() {
-			time.Sleep(grace)
-			if t.lifecycle != nil {
-				if rec, lerr := t.lifecycle.Load(sessionID); lerr == nil && (rec.Terminal() || rec.State == session.LifecycleStopped) {
-					return // cooperative stop already landed — no backstop needed
-				}
-			}
-			// The descendants return closes the same TOCTOU window the
-			// synchronous path above guards: if the session terminated
-			// between the terminal check and this hard-cancel call,
-			// cancelHard returns (nil, nil) and there is nothing left to
-			// transition — skip transitionLifecycle rather than stamping a
-			// redundant LifecycleStopped onto an already-stopped/terminal record.
-			backstopDescendants, cerr := t.cancelHard(sessionID, by, "delegate stop_all(hard=false): grace elapsed")
-			if cerr != nil {
-				slog.Warn("delegate: stop_all: hard-stop backstop failed", "session_id", sessionID, "error", cerr)
-				return
-			}
-			if len(backstopDescendants) == 0 {
-				return
-			}
-			// note=nil: t.cancelHard (just above) already stamped the
-			// stop_note for sessionID (cause "stop") via stampStop. Retain it.
-			t.transitionLifecycle(sessionID, session.LifecycleStopped, "stopped_by_user", nil)
-		}()
-	}
-
-	msg := fmt.Sprintf(
-		"Session %s and its helpers are stopping cooperatively; a checkpoint flush is expected within %s, "+
-			"after which a hard stop backstop fires if they have not stopped on their own.",
-		sessionID, t.cancelGrace,
-	)
+	// One Stop, one reply (founder one-stop decision, 2026-10-05). Nothing is
+	// landed here: each selected execution's owner lands `stopped` after its
+	// running work has shut down (ADR-20260928 D2/D4); the one Stop forces a
+	// turn that ignores the polite request 3 s later.
+	msg := fmt.Sprintf("Stop requested for session %s and its helpers; "+
+		"they will show as stopped once their running work has shut down.", sessionID)
 	msg += cancelBackgroundShellWarnings(killFailed, walkIncomplete)
 	return NewToolResult(msg)
 }

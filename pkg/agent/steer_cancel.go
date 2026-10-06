@@ -1,5 +1,5 @@
 // steer_cancel.go implements ADR-091 I-6: SteerCanceller.CancelSubtree/
-// StopSubtree walk the durable steering edge, stamp a Stop marker on every
+// StopTurns walk the durable steering edge, stamp a Stop marker on every
 // reachable non-terminal descendant under the stopped node's own cascade
 // lock, and cancel each live turn with the stamped generation;
 // SteerCanceller.Revive increments a stopped or terminal session's
@@ -27,10 +27,11 @@ import (
 
 // SteerCanceller implements ADR-091's durable Stop cascade and revival.
 type SteerCanceller struct {
-	Lifecycle          *session.LifecycleStore
-	cancelTurn         GenerationCancelFunc
-	revivalStateWriter RevivalStateWriter
-	locks              sync.Map
+	Lifecycle           *session.LifecycleStore
+	cancelTurn          GenerationCancelFunc
+	revivalStateWriter  RevivalStateWriter
+	retainStopSelection func(session.StopSelection) error
+	locks               sync.Map
 }
 
 var _ steer.Canceller = (*SteerCanceller)(nil)
@@ -41,11 +42,17 @@ type GenerationCancelResult struct {
 	Found                  bool
 	Cancelled              bool
 	SkippedNewerGeneration bool
+	// Superseded refines SkippedNewerGeneration: the carried selection no
+	// longer matches the durable fence (it landed, or a Resume/completion
+	// replaced it first), so the effect did nothing (D2/D5). Callers that
+	// only need "may something still be running" keep reading
+	// SkippedNewerGeneration.
+	Superseded bool
 }
 
-// GenerationCancelFunc cancels a live turn only when its registered
-// generation equals generation. WP-A wires the turn registry implementation;
-// the indirection keeps the durable cascade independently testable.
+// GenerationCancelFunc carries the cascade's acceptance-time StopSelection
+// in ctx. Adapters must retain that pair through retries/timers and compare the
+// selected execution at their effect boundaries, not reselect by generation.
 type GenerationCancelFunc func(ctx context.Context, sessionID string, generation int) (GenerationCancelResult, error)
 
 // RevivalStateWriter persists the parent's subagent_state(running) lifecycle
@@ -53,42 +60,43 @@ type GenerationCancelFunc func(ctx context.Context, sessionID string, generation
 // the transcript/frame implementation at the composition root.
 type RevivalStateWriter func(ctx context.Context, sessionID string, generation int) error
 
-// SteerGenerationCancel adapts the active-turn registry to the durable
-// generation-aware cancellation contract used by SteerCanceller.
+// SteerGenerationCancel applies only the accepted execution/control selection
+// carried in ctx. Missing targeting is a visible error, never a current-fence
+// lookup that could select a same-generation replacement.
 func (al *AgentLoop) SteerGenerationCancel(ctx context.Context, sessionID string, generation int) (GenerationCancelResult, error) {
-	// The callback receives the generation the cascade stamped. The selected
-	// execution is the stop effect captured at acceptance, not whatever
-	// admission now occupies this session. Removal and the live abort run
-	// after this lookup, and neither holds the lifecycle lock across the abort.
-	effects, err := al.stopEffectsForCallback(sessionID, generation)
+	selected, current, err := al.stopSelectionForCallback(ctx, sessionID, generation)
 	if err != nil {
 		return GenerationCancelResult{}, err
 	}
-	al.removeQueuedStopEffects(sessionID, effects)
-
-	ts := al.getActiveTurnState(sessionID)
+	if !current {
+		al.removeQueuedStopEffects(sessionID, []session.StopEffect{selected.Effect})
+		return GenerationCancelResult{SkippedNewerGeneration: true, Superseded: true}, nil
+	}
+	ctx = withStopSelection(ctx, selected)
+	d, current, retainErr := al.retainSelectedStop(ctx, sessionID, generation, nil)
+	if retainErr != nil {
+		return GenerationCancelResult{}, retainErr
+	}
+	if !current {
+		al.removeQueuedStopEffects(sessionID, []session.StopEffect{selected.Effect})
+		return GenerationCancelResult{SkippedNewerGeneration: true, Superseded: true}, nil
+	}
+	if d == nil {
+		return GenerationCancelResult{}, nil
+	}
+	ts, _ := al.activeTurnForCancel(sessionID, CancelScope{SessionID: sessionID, TurnOnly: true}).(*turnState)
 	if ts != nil {
-		if !liveTurnMatchesStop(ts, effects) {
+		if !liveTurnMatchesStop(ts, selected) {
 			return GenerationCancelResult{Found: true, SkippedNewerGeneration: true}, nil
 		}
+		ts.claimCancel(true)
 		ts.requestHardAbort()
 		return GenerationCancelResult{Found: true, Cancelled: true}, nil
 	}
-	// [Finding 5, ADR-091 fix lane 2] No live turn was found for this
-	// stamped session — it was only ever queued or parked and never ran a
-	// turn, so nothing else will ever terminalise it or report it upward.
-	// The landing itself is durable (stopped state, note, effect), but a
-	// failed landed-stop history append is RETURNED here so the cascade's
-	// cancelStamped puts the session in report.Unreachable — the visible
-	// channel the stop caller reads — instead of the stop reporting success
-	// with zero history (D2 round-3 MAJ-001). The original note+effect stay
-	// on the record either way: an explicit RESUME (refused while the ledger
-	// stays unwritable) or boot reconciliation retries the append from
-	// exactly that pair.
-	if err := al.terminaliseNeverRanStop(ctx, sessionID, generation); err != nil {
-		return GenerationCancelResult{}, err
-	}
-	return GenerationCancelResult{}, nil
+	// runTurn may have cleared its handle while the selected owner's actual
+	// disposal/output tail is still pending. That owner, not this callback,
+	// performs the landing after retiring its own execution resources.
+	return GenerationCancelResult{Found: true, Cancelled: true}, nil
 }
 
 // WriteSteerRevivalState publishes the state Revive durably landed —
@@ -139,13 +147,16 @@ func (al *AgentLoop) WriteSteerRevivalState(_ context.Context, sessionID string,
 //     outbox entry pending and retryable — the record no longer has to stay
 //     non-terminal to stay recoverable, which was Defect 1's compromise.
 //
-// Refuses (logged, never fatal to the caller) when the record has moved
+// Refuses (nil, never fatal to the caller) when the record has moved
 // past generation, is already terminal, or is already stopped — a Stop, a
-// Revive or another completion racing this write is a legitimate outcome.
-// The STOPPED arm is the one error-bearing exit: a landed-stop history
-// append failure is returned so the stop cascade can surface it
-// (report.Unreachable) — the refusal arms and the terminal-failure arm
-// still return nil, exactly as before.
+// Revive or another completion racing this write is a legitimate outcome —
+// and when the record itself is gone (ErrLifecycleNotFound). The
+// error-bearing exits, each returned so the stop cascade surfaces it in
+// report.Unreachable (the visible channel the stop caller reads): the
+// STOPPED arm's landed-stop history append, a lifecycle read failure other
+// than not-found, and the terminal-failure arm's outcome/outbox commit — a
+// failed commit leaves no durable outbox entry to retry from, so nil here
+// would strand the terminal failure with no writer and no receipt.
 func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	ctx context.Context, sessionID string, generation int,
 	nextState session.LifecycleState, outcome steer.Outcome, failureReason string,
@@ -159,7 +170,10 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	}
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil {
-		return nil
+		if errors.Is(err, session.ErrLifecycleNotFound) {
+			return nil // record gone: raced away, not ours to act (refusal arm)
+		}
+		return fmt.Errorf("steer: terminal report: load session %q: %w", sessionID, err)
 	}
 	if rec.Generation != generation || rec.Terminal() {
 		return nil
@@ -169,11 +183,15 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 	}
 	// Synthetic terminal failure carries the selected admission's stamp.
 	// It must never borrow a replacement's live handle.
-	res, commitErr := al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, "", failureReason, al.executionClaimFor(rec))
+	res, commitErr := al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, "", failureReason, al.executionClaimFor(rec), nil)
 	if commitErr != nil {
 		logger.WarnCF("agent", "steer: terminal report: outcome/outbox commit failed",
 			map[string]any{"session_id": sessionID, "generation": generation, "error": commitErr.Error()})
-		return nil
+		// A failed commit leaves NO durable outbox entry to retry from, so
+		// this must surface: the stop cascade reports it via
+		// report.Unreachable instead of a success with no receipt.
+		return fmt.Errorf("steer: terminal report: outcome/outbox commit for session %q generation %d: %w",
+			sessionID, generation, commitErr)
 	}
 	if res.kind == steeredCommitTerminal {
 		if _, pubErr := al.publishCommittedFinal(ctx, rec, res); pubErr != nil {
@@ -204,20 +222,33 @@ func (al *AgentLoop) reportSteeredSessionTerminalUpward(
 // landed history pending and retryable, visibly logged, and never gates the
 // landing that already committed.
 func (al *AgentLoop) landSteeredStopReport(ctx context.Context, sessionID string, generation int, outcome steer.Outcome) error {
+	return al.landSteeredStopReportAtCut(ctx, sessionID, generation, outcome, nil)
+}
+
+func (al *AgentLoop) landSteeredStopReportAtCut(ctx context.Context, sessionID string, generation int, outcome steer.Outcome, afterLanding func()) error {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
 		return nil
 	}
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil {
-		return nil
+		if errors.Is(err, session.ErrLifecycleNotFound) {
+			return nil // record gone: raced away, not ours to act
+		}
+		return fmt.Errorf("steer: landed stop report: load session %q: %w", sessionID, err)
 	}
 	// The fence this landing carries out must still be current: an explicit
 	// same-generation RESUME that cleared it (D2) supersedes the stop, and
-	// this landing must not clobber the resumed record. (Full execution-
-	// identity targeting is the D2 round-4 R4-MAJ-001 seam — a later unit.)
+	// this landing must not clobber the resumed record. The carried execution
+	// and control identity are checked again inside the owning mutation.
 	fencedAtEntry := rec.Stop != nil && rec.Stop.Generation == generation
+	selected, carried := stopSelectionFromContext(ctx)
+	if fencedAtEntry && !carried {
+		return fmt.Errorf("steer: stop landing %q: accepted execution/control selection is missing", sessionID)
+	}
+	claim := al.executionClaimFor(rec)
 	var landed *session.LandedStop
+	var landedRecord *session.LifecycleRecord
 	mutateErr := lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return errTerminalReportVanished
@@ -231,6 +262,14 @@ func (al *AgentLoop) landSteeredStopReport(ctx context.Context, sessionID string
 		if cur.State == session.LifecycleStopped {
 			return errTerminalReportAlreadyStopped
 		}
+		// Finalization owns only the original accepted pair, checked under
+		// this mutation's lock even after a same-generation resume/new Stop.
+		if carried && !stopSelectionMatchesRecord(selected, cur) {
+			return errTerminalReportFenceSuperseded
+		}
+		if !carried && ((cur.ExecutionID != nil || claim.RunID != "") && !claim.matches(cur)) {
+			return errTerminalReportFenceSuperseded
+		}
 		if fencedAtEntry && (cur.Stop == nil || cur.Stop.Generation != cur.Generation) {
 			return errTerminalReportFenceSuperseded
 		}
@@ -243,10 +282,17 @@ func (al *AgentLoop) landSteeredStopReport(ctx context.Context, sessionID string
 		// its own ledger history inside landSteeredStopLocked — Correction
 		// C3 — so there is nothing left for the post-mutation write below.
 		landed = landedStopFromRecord(cur)
+		landedRecord = cur
 		return nil
 	})
+	if afterLanding != nil {
+		afterLanding()
+	}
 	switch {
 	case mutateErr == nil:
+		if stateErr := al.publishCurrentStoppedState(landedRecord); stateErr != nil {
+			return stateErr
+		}
 		// The stop landed. MAJ-003: this write ends the TURN, never the
 		// child's session-owned goal — no goal step belongs in a stop path.
 		// A failed history append keeps the landed state, note and effect
@@ -275,9 +321,11 @@ func (al *AgentLoop) landSteeredStopReport(ctx context.Context, sessionID string
 		if fresh, loadErr := lifecycle.Load(sessionID); loadErr != nil || fresh == nil {
 			logger.ErrorCF("agent", "steer: stop landing: landed-stop notice not published (record reload failed; boot replay retries)",
 				map[string]any{"session_id": sessionID, "generation": generation, "error": errString(loadErr)})
+			return fmt.Errorf("Stop: landed history remains pending because the saved session could not be read")
 		} else if _, pubErr := al.deliverLandedStopNotices(ctx, fresh); pubErr != nil {
 			logger.ErrorCF("agent", "steer: stop landing: direct-parent notice not delivered — the landed history stays pending for boot retry",
 				map[string]any{"session_id": sessionID, "generation": generation, "error": pubErr.Error()})
+			return fmt.Errorf("Stop: landed history remains pending because its direct-parent notice could not be published")
 		}
 	case errors.Is(mutateErr, errTerminalReportAlreadyStopped),
 		errors.Is(mutateErr, errTerminalReportFenceSuperseded),
@@ -290,6 +338,7 @@ func (al *AgentLoop) landSteeredStopReport(ctx context.Context, sessionID string
 	default:
 		logger.WarnCF("agent", "steer: terminal report: persist stopped state failed",
 			map[string]any{"session_id": sessionID, "generation": generation, "error": mutateErr.Error()})
+		return fmt.Errorf("Stop: selected stopped state could not be saved; retry after storage is repaired")
 	}
 	return nil
 }
@@ -353,48 +402,6 @@ var (
 // errors.Is; the durable note+effect tuple is the retry anchor either way.
 var errLandedStopHistoryNotRecorded = errors.New("steer: stop landing: the stop landed, but its landed-stop history could not be recorded; retry after storage is repaired")
 
-// terminaliseNeverRanStop closes Finding 5's gap: SteerGenerationCancel found
-// no live turn to cancel for a session this cascade just stamped Stop for —
-// it was only ever queued or parked and never ran a turn, so nothing will
-// ever produce the upward "interrupted:" event a RUNNING child's own
-// cancelled turn delivers via completeSteeredTurn. Without this, the
-// session's own parent (hasRunningOrQueuedDescendant, steer_completion.go)
-// keeps seeing a queued/needs_input descendant forever and never completes.
-// The only error-bearing exit is the stopped landing's history append
-// (landSteeredStopReport); every not-ours-to-act arm returns nil.
-func (al *AgentLoop) terminaliseNeverRanStop(ctx context.Context, sessionID string, generation int) error {
-	lifecycle := al.GetSessionLifecycleStore()
-	if lifecycle == nil {
-		return nil
-	}
-	rec, err := lifecycle.Load(sessionID)
-	if err != nil {
-		return nil
-	}
-	// Only a session THIS Stop actually stamped, still sitting at the
-	// generation it was stamped for — a concurrent Revive landing in the
-	// meantime must not be clobbered.
-	if rec.Generation != generation || rec.Terminal() || rec.Stop == nil || rec.Stop.Generation != generation {
-		return nil
-	}
-	// ADR-093 MAJ-001 (test-plan row "Web Stop on a chat root that has
-	// delegated"): a session with NO steering edge — a standing chat root —
-	// is never terminalised by its own Stop cascade. Finding 5's reason for
-	// terminalising a never-ran session is that its own PARENT would
-	// otherwise wait forever on it (hasRunningOrQueuedDescendant,
-	// steer_completion.go); a chat root has no parent to strand, and the
-	// MAJ-001 contract is that the record stays `running` carrying the
-	// current-generation Stop marker the cascade has just stamped — the
-	// exact state ADR-093 D4's revival continues from. Writing `cancelled`
-	// here would also CLEAR that marker (reportSteeredSessionTerminalUpward
-	// spends it in its Mutate), un-delivering the Stop the user pressed.
-	if rec.SteeredBy == nil {
-		return nil
-	}
-	return al.reportSteeredSessionTerminalUpward(ctx, sessionID, generation,
-		session.LifecycleStopped, steer.OutcomeInterrupted, "interrupted: the session was cancelled")
-}
-
 // NewSteerCanceller builds the I-6 Canceller. cancelTurn is optional only so
 // CP-0 wiring continues to compile until WP-A's generation-aware turn registry
 // lands; production wiring must supply it before ADR-091 is reachable.
@@ -424,23 +431,7 @@ func (c *SteerCanceller) CancelSubtree(ctx context.Context, sessionID string, by
 	if c != nil {
 		cancelTurn = c.cancelTurn
 	}
-	return c.cascade(ctx, sessionID, by, true, cancelTurn)
-}
-
-// StopSubtree is CancelSubtree's DURABLE half on its own: the same cascade
-// lock, the same two enumeration passes, the same Stop markers — but the live
-// turns are left to stop themselves.
-//
-// It exists for delegate(action="cancel", hard=false), whose contract
-// (ADR-053 R§Cancel/restart) promises the child a checkpoint-flush window
-// before anything is torn out from under it. The marker still has to land
-// immediately, because it is what stops admission ever promoting a queued
-// session that has been cancelled (reserveDispatch, below) — and a marker is
-// durable where a request to a live turn is not. The caller asks the reached
-// turns to stop cooperatively and escalates after its own grace window;
-// see steer_delegate_cancel.go::cancelDelegatedSubtree.
-func (c *SteerCanceller) StopSubtree(ctx context.Context, sessionID string, by steer.Principal) (steer.CancelReport, error) {
-	return c.cascade(ctx, sessionID, by, true, nil)
+	return c.cascade(ctx, sessionID, by, true, session.StopCauseStop, cancelTurn)
 }
 
 // StopTurns stamps the requested session (and, for stop-all, its durable
@@ -448,11 +439,52 @@ func (c *SteerCanceller) StopSubtree(ctx context.Context, sessionID string, by s
 // generation. It shares the existing cascade lock and late-child pass, but
 // never invokes the administrative cancellation/goal-ending adapter.
 func (c *SteerCanceller) StopTurns(ctx context.Context, sessionID string, by steer.Principal, subtree bool, stopTurn GenerationCancelFunc) (steer.CancelReport, error) {
-	return c.cascade(ctx, sessionID, by, subtree, stopTurn)
+	return c.cascade(ctx, sessionID, by, subtree, session.StopCauseStop, stopTurn)
 }
 
+// StopTurnsWithCause is StopTurns with the requested session's own stop cause
+// named by the caller: StopCauseStop for a session stopped directly, or
+// StopCauseCascade when a larger stop swept it (a plan Stop reaching its
+// members). Every descendant is still stamped StopCauseCascade.
+func (c *SteerCanceller) StopTurnsWithCause(ctx context.Context, sessionID string, by steer.Principal, subtree bool, cause session.StopCause, stopTurn GenerationCancelFunc) (steer.CancelReport, error) {
+	return c.cascade(ctx, sessionID, by, subtree, cause, stopTurn)
+}
+
+// ContinueAcceptedStop carries out an ALREADY-ACCEPTED stop control for one
+// session (D4 "complete unfinished stop fences"): under that session's cascade
+// lock it re-applies the control's own fence (same control_id and seq; no new
+// acceptance) and then fires the live effect through stopTurn exactly as a
+// fresh Stop does. A session that moved past the selection returns
+// session.ErrStopIntentSuperseded.
+func (c *SteerCanceller) ContinueAcceptedStop(ctx context.Context, intent session.UnfinishedStopIntent, stopTurn GenerationCancelFunc) (steer.CancelReport, error) {
+	var report steer.CancelReport
+	if c == nil || c.Lifecycle == nil {
+		return report, fmt.Errorf("steer: continue stop: lifecycle store is not configured")
+	}
+	sessionID := intent.Selection.SessionID
+	lock := c.cascadeLock(sessionID)
+	lock.Lock()
+	accepted, err := c.Lifecycle.ResumeAcceptedStop(intent)
+	if err == nil && accepted.Selection != nil && c.retainStopSelection != nil {
+		err = c.retainStopSelection(*accepted.Selection)
+	}
+	lock.Unlock()
+	if err != nil {
+		return report, err
+	}
+	switch accepted.Outcome {
+	case session.StopAcceptGranted:
+		report.Reached = append(report.Reached, sessionID)
+		c.cancelStamped(ctx, map[string]session.StopSelection{sessionID: *accepted.Selection}, &report, stopTurn)
+	case session.StopAcceptTerminal:
+		report.SkippedTerminal = append(report.SkippedTerminal, sessionID)
+	}
+	return report, nil
+}
+
+// cascade runs one Stop cascade under sessionID's cascade lock.
 func (c *SteerCanceller) cascade(
-	ctx context.Context, sessionID string, by steer.Principal, subtree bool, cancelTurn GenerationCancelFunc,
+	ctx context.Context, sessionID string, by steer.Principal, subtree bool, rootCause session.StopCause, cancelTurn GenerationCancelFunc,
 ) (steer.CancelReport, error) {
 	var report steer.CancelReport
 	if c == nil || c.Lifecycle == nil {
@@ -476,12 +508,12 @@ func (c *SteerCanceller) cascade(
 	}
 	defer unlock()
 
-	stamped := make(map[string]int)
+	stamped := make(map[string]session.StopSelection)
 	seen := make(map[string]struct{})
 	at := time.Now().UTC()
 	// process stamps each id with ONE cause (D2/D6's closed vocabulary):
 	// StopCauseStop for the cascade's own direct target (sessionID — the
-	// session named in the CancelSubtree/StopSubtree call), StopCauseCascade
+	// session named in the CancelSubtree/StopTurns call), StopCauseCascade
 	// for every OTHER id, which is reachable only because it is sessionID's
 	// descendant. Callers below split the combined root+first-pass-
 	// descendants slice the pre-stop_note code processed as one list into
@@ -493,14 +525,18 @@ func (c *SteerCanceller) cascade(
 				continue
 			}
 			seen[id] = struct{}{}
-			generation, outcome, err := c.stampStop(id, at, by, cause)
+			accepted, outcome, err := c.stampStop(id, at, by, cause)
 			switch {
 			case errors.Is(err, errCascadeTerminal):
 				report.SkippedTerminal = append(report.SkippedTerminal, id)
 			case err != nil:
 				report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: id, Reason: err.Error()})
 			case outcome == stopStamped || outcome == stopAlreadyStamped:
-				stamped[id] = generation
+				if accepted.Selection == nil {
+					report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: id, Reason: "stamped Stop has no accepted execution/control selection"})
+					continue
+				}
+				stamped[id] = *accepted.Selection
 				report.Reached = append(report.Reached, id)
 			case outcome == stopAlreadyLanded:
 				// D2 stop table / MIN-007: the child is already landed
@@ -524,7 +560,7 @@ func (c *SteerCanceller) cascade(
 			report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: walkErr.Error()})
 		}
 	}
-	process([]string{sessionID}, session.StopCauseStop)
+	process([]string{sessionID}, rootCause)
 	process(first, session.StopCauseCascade)
 	unlock()
 	fireLiveCancels()
@@ -569,6 +605,7 @@ func (al *AgentLoop) SetSteerCanceller(canceller *SteerCanceller) {
 	if al == nil || canceller == nil {
 		return
 	}
+	canceller.retainStopSelection = al.retainAcceptedStop
 	steerCancellerRegistryMu.Lock()
 	defer steerCancellerRegistryMu.Unlock()
 	steerCancellerRegistry[al] = canceller
@@ -585,6 +622,7 @@ func (al *AgentLoop) steerCanceller() *SteerCanceller {
 		return c
 	}
 	c := NewSteerCanceller(al.GetSessionLifecycleStore(), al.SteerGenerationCancel)
+	c.retainStopSelection = al.retainAcceptedStop
 	steerCancellerRegistry[al] = c
 	return c
 }
@@ -766,8 +804,8 @@ func (c *SteerCanceller) cascadeLock(sessionID string) *sync.Mutex {
 // still fires, as before), an already-LANDED stopped record is
 // stopAlreadyLanded ("already stopped" — nothing written, nothing fired),
 // and a terminal record is errCascadeTerminal as before.
-func (c *SteerCanceller) stampStop(sessionID string, at time.Time, by steer.Principal, cause session.StopCause) (int, stopStampOutcome, error) {
-	outcome, _, generation, err := c.Lifecycle.AcceptStopControl(sessionID, session.StopControlIntent{
+func (c *SteerCanceller) stampStop(sessionID string, at time.Time, by steer.Principal, cause session.StopCause) (session.StopAcceptance, stopStampOutcome, error) {
+	accepted, err := c.Lifecycle.AcceptStopControlSelection(sessionID, session.StopControlIntent{
 		Cause:      cause,
 		Actor:      session.StopActorFromPrincipal(by),
 		AcceptedAt: at,
@@ -786,43 +824,51 @@ func (c *SteerCanceller) stampStop(sessionID string, at time.Time, by steer.Prin
 		rec.StopEffect = &session.StopEffect{ControlID: grant.ControlID, Target: target}
 		return nil
 	})
-	switch outcome {
-	case session.StopAcceptMissing:
-		return 0, 0, session.ErrLifecycleNotFound
-	case session.StopAcceptTerminal:
-		return generation, 0, errCascadeTerminal
-	case session.StopAcceptAlreadyStamped:
-		return generation, stopAlreadyStamped, nil
-	case session.StopAcceptAlreadyLanded:
-		return generation, stopAlreadyLanded, nil
-	case session.StopAcceptGranted:
-		if err != nil {
-			// The acceptance intent is durable but the fence is not (D4's
-			// queued-intent crash state, returned visibly). The cascade
-			// reports the node unreachable; boot reconciliation finishes
-			// the intent.
-			return generation, 0, err
+	if err != nil {
+		// Durable acceptance may exist without a persisted fence; do not fire
+		// an effect, and retain the store error for the caller/boot repair.
+		return accepted, 0, err
+	}
+	// Retain the exact accepted pair before an effect adapter can block. This
+	// is only short owner-map bookkeeping: no interrupt, model call or join.
+	if accepted.Selection != nil && c.retainStopSelection != nil {
+		if err := c.retainStopSelection(*accepted.Selection); err != nil {
+			return accepted, 0, err
 		}
-		return generation, stopStamped, nil
+	}
+	switch accepted.Outcome {
+	case session.StopAcceptMissing:
+		return accepted, 0, session.ErrLifecycleNotFound
+	case session.StopAcceptTerminal:
+		return accepted, 0, errCascadeTerminal
+	case session.StopAcceptAlreadyStamped:
+		return accepted, stopAlreadyStamped, nil
+	case session.StopAcceptAlreadyLanded:
+		return accepted, stopAlreadyLanded, nil
+	case session.StopAcceptGranted:
+		return accepted, stopStamped, nil
 	default:
-		return generation, 0, err
+		return accepted, 0, fmt.Errorf("steer: stop %q: unknown acceptance outcome %d", sessionID, accepted.Outcome)
 	}
 }
 
-func (c *SteerCanceller) cancelStamped(ctx context.Context, stamped map[string]int, report *steer.CancelReport, cancelTurn GenerationCancelFunc) {
+func (c *SteerCanceller) cancelStamped(ctx context.Context, stamped map[string]session.StopSelection, report *steer.CancelReport, cancelTurn GenerationCancelFunc) {
 	if cancelTurn == nil {
 		return
 	}
 	for _, id := range report.Reached {
-		generation, ok := stamped[id]
+		selected, ok := stamped[id]
 		if !ok {
 			continue
 		}
 		delete(stamped, id)
-		result, err := cancelTurn(ctx, id, generation)
+		result, err := cancelTurn(withStopSelection(ctx, selected), id, selected.Effect.Target.Generation)
 		if err != nil {
 			report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: id, Reason: err.Error()})
 			continue
+		}
+		if result.Superseded {
+			report.Superseded = append(report.Superseded, id)
 		}
 		if result.SkippedNewerGeneration {
 			report.SkippedNewerGeneration = append(report.SkippedNewerGeneration, id)

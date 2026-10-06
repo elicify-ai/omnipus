@@ -100,8 +100,9 @@ func c3LedgerRawLines(t *testing.T, al *AgentLoop, childID string) []c3LandedLin
 	if err != nil {
 		t.Fatalf("read control ledger %s: %v", path, err)
 	}
-	var lines []c3LandedLine
-	for _, line := range jsonLines(raw) {
+	ledgerLines := jsonLines(raw)
+	lines := make([]c3LandedLine, 0, len(ledgerLines))
+	for _, line := range ledgerLines {
 		var l c3LandedLine
 		if err := json.Unmarshal(line, &l); err != nil {
 			t.Fatalf("parse control ledger line of %s: %v", childID, err)
@@ -172,10 +173,26 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 	rec := w1hLaunchLiveChild(t, al, provider.entered, parentID, "call-c3-two-stops")
 	childID, generation := rec.SessionID, rec.Generation
 
-	// Fence-less stop #1 through the production completion boundary.
-	if err := al.completeSteeredTurn(context.Background(), rec, turnResult{}, context.Canceled); err != nil {
-		t.Fatalf("completeSteeredTurn (fence-less stop 1): %v", err)
+	// D2: only the producing execution lands its result. Interrupt the real
+	// owner's provider without accepting a Stop control, then join the entire
+	// completion/disposal tail before Revive; hand-completing its record while
+	// the live execution is registered would leave the old owner in place.
+	stopOwner := func(selected *session.LifecycleRecord) {
+		t.Helper()
+		handle := al.getActiveTurnState(childID)
+		if handle == nil || al.tsExecutionClaim(handle, childID) != al.executionClaimFor(selected) {
+			t.Fatal("setup: fence-less stop has no matching real admitted owner (D2)")
+		}
+		turnIDs, stopErr := al.InterruptSessionHard(childID, ScopeSelfOnly, "fence-less owner cancellation")
+		if stopErr != nil || len(turnIDs) != 1 || turnIDs[0] != handle.turnID {
+			t.Fatalf("InterruptSessionHard reached %v, err=%v; want only owning turn %q", turnIDs, stopErr, handle.turnID)
+		}
+		joinGoalFixtureRuns(t, al)
+		if al.steerAdmission().hasExecutionReservation(al.executionClaimFor(selected)) {
+			t.Fatal("setup: stopped owner's reservation survived its joined disposal (D2)")
+		}
 	}
+	stopOwner(rec)
 	trs, err := lifecycle.ListStoppedTransitions(childID)
 	if err != nil {
 		t.Fatalf("ListStoppedTransitions(after stop 1): %v", err)
@@ -203,8 +220,8 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 	}
 
 	// Resume (Revive), then dispatch — a live run again, SAME generation.
-	if _, err := lifecycle.Load(childID); err != nil {
-		t.Fatalf("Load(before resume): %v", err)
+	if _, loadErr := lifecycle.Load(childID); loadErr != nil {
+		t.Fatalf("Load(before resume): %v", loadErr)
 	}
 	c3ResumeLiveDispatch(t, al, lifecycle, childID, generation, provider.entered)
 	resumed, err := lifecycle.Load(childID)
@@ -218,10 +235,8 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 		t.Fatalf("after the resume the record still carries StopNote=%v — the note was not cleared, the C3 discovery case is not exercised", resumed.StopNote)
 	}
 
-	// Fence-less stop #2, same generation.
-	if err := al.completeSteeredTurn(context.Background(), resumed, turnResult{}, context.Canceled); err != nil {
-		t.Fatalf("completeSteeredTurn (fence-less stop 2): %v", err)
-	}
+	// Fence-less stop #2, same generation, carried out by its new real owner.
+	stopOwner(resumed)
 	trs2, err := lifecycle.ListStoppedTransitions(childID)
 	if err != nil {
 		t.Fatalf("ListStoppedTransitions(after stop 2): %v", err)
@@ -245,11 +260,17 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 	if c := wakes.count(notice2); c != 1 {
 		t.Fatalf("stop 2's landing rang the parent %d time(s) for %s, want exactly 1", c, notice2)
 	}
+	// Decision 1/C3: the first id is still untaken during stop 2's landing
+	// delivery pass, so it re-rings once too. Only taking it below silences
+	// later passes; entry dedup is not once-ever wake suppression.
+	if c := wakes.count(notice1); c != 2 {
+		t.Fatalf("stop 2's landing left the untaken first notice at %d ring(s), want exactly 2 — one initial ring and one landing-pass re-ring (decision 1/C3)", c)
+	}
 
 	// The parent TAKES the FIRST notice — the production ack the wake
 	// consumer makes.
-	if err := al.GetMessageInboxStore().Ack(parentID, []string{notice1}); err != nil {
-		t.Fatalf("parent ack of %s: %v", notice1, err)
+	if ackErr := al.GetMessageInboxStore().Ack(parentID, []string{notice1}); ackErr != nil {
+		t.Fatalf("parent ack of %s: %v", notice1, ackErr)
 	}
 	if !rerNoteAcked(t, al, parentID, notice1) {
 		t.Fatalf("the ack of %s did not persist — the taken-first scenario is unobservable", notice1)
@@ -261,8 +282,8 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 	if c := wakes.count(notice2); c != 2 {
 		t.Errorf("after taking the first notice, a delivery pass left the second at %d ring(s), want 2 — taking the first must not acknowledge the second stop's distinct notice", c)
 	}
-	if c := wakes.count(notice1); c != 1 {
-		t.Errorf("the taken first notice rang %d time(s) total, want still 1 — a taken note rings nobody", c)
+	if c := wakes.count(notice1); c != 2 {
+		t.Errorf("the taken first notice rang %d time(s) total, want still 2 — taking it adds zero rings on the later pass (decision 1/C3)", c)
 	}
 	// The ring is a doorbell: one durable line per notice, no new history,
 	// the child untouched by it.
@@ -272,8 +293,8 @@ func TestFencelessLedger_TwoStopsOneGeneration_TakenFirst_SecondStillRings(t *te
 	if got := len(w1hNoticesWithID(t, al, parentID, notice1)); got != 1 {
 		t.Errorf("parent inbox holds %d line(s) of %s after the pass, want exactly 1", got, notice1)
 	}
-	if trs3, err := lifecycle.ListStoppedTransitions(childID); err != nil || len(trs3) != 2 {
-		t.Errorf("landed history after the pass = %s (err %v), want still 2 — a ring never fabricates history", w1hFormatTransitions(trs3), err)
+	if trs3, trs3Err := lifecycle.ListStoppedTransitions(childID); trs3Err != nil || len(trs3) != 2 {
+		t.Errorf("landed history after the pass = %s (err %v), want still 2 — a ring never fabricates history", w1hFormatTransitions(trs3), trs3Err)
 	}
 	cur, err := lifecycle.Load(childID)
 	if err != nil {
@@ -321,8 +342,8 @@ func TestFencelessLedger_UntakenNoticeStillRingsAfterResumeClearsTheNote(t *test
 	// exactly the mutation that lost an untaken notice under the retired
 	// note-derived fallback.
 	owner := w1hOwner("c3-resume-ring-owner")
-	if _, err := NewSteerCanceller(lifecycle).Revive(context.Background(), childID, owner); err != nil {
-		t.Fatalf("Revive(%s): %v", childID, err)
+	if _, reviveErr := NewSteerCanceller(lifecycle).Revive(context.Background(), childID, owner); reviveErr != nil {
+		t.Fatalf("Revive(%s): %v", childID, reviveErr)
 	}
 	resumed, err := lifecycle.Load(childID)
 	if err != nil {
@@ -331,8 +352,8 @@ func TestFencelessLedger_UntakenNoticeStillRingsAfterResumeClearsTheNote(t *test
 	if resumed.StopNote != nil || resumed.StopEffect != nil {
 		t.Fatalf("after Revive the record still carries StopNote=%v StopEffect=%v — the note was not cleared, the case is not exercised", resumed.StopNote, resumed.StopEffect)
 	}
-	if trsAfter, err := lifecycle.ListStoppedTransitions(childID); err != nil || len(trsAfter) != 1 {
-		t.Fatalf("landed history after the resume = %s (err %v), want still exactly 1 — clearing the note must not delete the ledgered transition (C3)", w1hFormatTransitions(trsAfter), err)
+	if trsAfter, trsAfterErr := lifecycle.ListStoppedTransitions(childID); trsAfterErr != nil || len(trsAfter) != 1 {
+		t.Fatalf("landed history after the resume = %s (err %v), want still exactly 1 — clearing the note must not delete the ledgered transition (C3)", w1hFormatTransitions(trsAfter), trsAfterErr)
 	}
 
 	// The next delivery pass discovers the transition from the LEDGER and
@@ -417,6 +438,15 @@ func TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed(t *testin
 	if c := rings.count(oldNoticeID); c != 0 {
 		t.Fatalf("setup: the fresh process's doorbell already rang %d time(s) for %s — it must start silent", c, oldNoticeID)
 	}
+	// The restarted process mints ONE genuine epoch over the SAME real boot
+	// epoch directory the interrupted process minted from; that persisted
+	// Current is the WRITING boot, strictly after the interrupted admitting boot.
+	writingBoot := session.NewBootEpochStore(filepath.Join(home, "boot_epoch"))
+	writingEpoch, mintErr := writingBoot.Mint()
+	if mintErr != nil || writingEpoch <= resumed.ExecutionID.BootSeq {
+		t.Fatalf("setup: restart Mint=%d err=%v, interrupted admitting boot=%d", writingEpoch, mintErr, resumed.ExecutionID.BootSeq)
+	}
+	restart.SetBootEpochStore(writingBoot)
 
 	// The BOOT pass — recoverSteered, the full entry a restarted process
 	// runs. C5 pass one (the current-run stop) must land even though the old
@@ -426,6 +456,7 @@ func TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed(t *testin
 		Lifecycle:  restart.GetSessionLifecycleStore(),
 		Sessions:   restart.GetSessionStore(),
 		Inbox:      restart.GetMessageInboxStore(),
+		BootEpoch:  writingBoot,
 		Classifier: NewSteerRecordClassifier(restart.GetSessionLifecycleStore(), restart.GetSessionStore()),
 		Deliverer:  restart.getUpwardDeliverer(),
 	}
@@ -444,6 +475,10 @@ func TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed(t *testin
 		t.Fatalf("after the boot pass the child is at generation %d, want %d — boot stops, it never revives (D8.5)", after.Generation, generation)
 	}
 
+	if after.StopNote == nil || after.StopNote.By != session.StopActorRestart || after.StopNote.BootSeq != writingEpoch {
+		t.Fatalf("restart stop note = %+v, want by=%q boot_seq=%d (the freshly minted WRITING boot, D8.3)", after.StopNote, session.StopActorRestart, writingEpoch)
+	}
+
 	// ORACLE (C3 + C5 pass one): the restart stop is its OWN ledgered
 	// transition — cause restart, same generation, seq advancing the old
 	// stop's — and its notice is discovered from that ledger history.
@@ -455,8 +490,8 @@ func TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed(t *testin
 		t.Fatalf("landed history after boot = %s, want exactly 2 transitions — the old stop and the boot's restart stop", w1hFormatTransitions(trs))
 	}
 	restartTr := trs[1]
-	if restartTr.Cause != session.StopCauseRestart || restartTr.Actor != session.StopActorSystem || restartTr.Generation != generation {
-		t.Fatalf("boot transition = %s, want {cause:restart actor:system gen:%d}", w1hFormatTransitions([]session.StoppedTransition{restartTr}), generation)
+	if restartTr.Cause != session.StopCauseRestart || restartTr.Actor != session.StopActorRestart || restartTr.Generation != generation {
+		t.Fatalf("boot transition = %s, want {cause:restart actor:restart gen:%d}", w1hFormatTransitions([]session.StoppedTransition{restartTr}), generation)
 	}
 	if restartTr.StopSeq <= trs[0].StopSeq {
 		t.Fatalf("restart stop_seq %d does not advance the old stop's %d — the fence-less restart stop takes the next monotonic sequence (C3)", restartTr.StopSeq, trs[0].StopSeq)

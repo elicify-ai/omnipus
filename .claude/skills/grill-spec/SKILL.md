@@ -23,7 +23,7 @@ allowed-tools: Read, Glob, Grep, Bash
 
 # Spec / ADR Grill Skill
 
-Last reviewed: 2026-09-30
+Last reviewed: 2026-10-06
 
 You are an adversarial reviewer of Omnipus feature specs and ADRs. Your sole
 purpose is to find flaws, gaps and risks before a spec reaches implementation
@@ -42,6 +42,7 @@ any other file. You produce a structured findings report.
 
 This skill is one step in the feature-size flow (`docs/internal/design/dev-team-setup-design-2026-09-25.md`
 section 7.1; founder decisions in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/spec-process/DECISIONS.md`):
+The founder decision of 2026-09-29 supersedes that dated design's gate size (root `CLAUDE.md`, "Change sizes and the review gate").
 
 ```
 founder interview (interview-me)

@@ -98,7 +98,7 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 				map[string]any{"session_id": work.sessionID, "attempt": attempt})
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), goalJudgeRoundTimeout)
+		ctx, cancel := context.WithTimeout(withGoalProducer(context.Background(), work.producer), goalJudgeRoundTimeout)
 		met, unavailable := al.runGoalAdjudication(ctx, work.agentInst, work.workspaceID, work.sessionID, store, rec, work.claimText,
 			al.idleSteerDeliverer(work.sessionID, rec.GoalID, goalClaimDeferredSourceKind))
 		cancel()
@@ -112,7 +112,7 @@ func (al *AgentLoop) redriveGoalAdjudication(work *goalDeferredAdjudicationWork)
 	reason := fmt.Sprintf("judge unavailable after %d attempts: the completion claim could not be adjudicated", goalJudgeRedriveAttempts)
 	logger.ErrorCF("agent", "goal: "+reason+" — failing the goal-bearing child visibly",
 		map[string]any{"session_id": work.sessionID})
-	al.completeSteeredTurnAfterGoal(context.Background(), work.sessionID, "", errors.New(reason))
+	al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), work.producer), work.sessionID, "", errors.New(reason))
 }
 
 // waitGoalRedriveBackoff spaces two re-drive attempts through judgeSleepFn.

@@ -79,8 +79,9 @@ type steeredCommitResult struct {
 	// own ledger line inside the landing's Mutate
 	// (landSteeredStopLocked), and the notice publisher discovers every
 	// transition from the ledger's landed history.
-	landed *session.LandedStop
-	commit *session.FinalDeliveryCommit
+	landed        *session.LandedStop
+	stoppedRecord *session.LifecycleRecord
+	commit        *session.FinalDeliveryCommit
 	// message and messageID carry the committed final's publication payload.
 	message   generated.SessionMessage
 	messageID string
@@ -115,6 +116,7 @@ func (al *AgentLoop) commitSteeredCompletion(
 	outcome steer.Outcome,
 	answer, failureReason string,
 	claim executionClaim,
+	inputPending func() bool,
 ) (steeredCommitResult, error) {
 	if lifecycle == nil || rec == nil {
 		return steeredCommitResult{}, errors.New("steer: complete: lifecycle store and selected record are required")
@@ -191,6 +193,12 @@ func (al *AgentLoop) commitSteeredCompletion(
 		// owns this record. The final is refused outright: no outbox entry,
 		// no parent inbox message, no frame, no wake.
 		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
+			if al.executionDispositionFor(claim) != nil {
+				// Compute completion is not disposal. The selected outer owner
+				// retains its fence until output tails and its slot have retired.
+				res.kind = steeredCommitRefused
+				return errCompleteStoppedDuringDelivery
+			}
 			if nextState == session.LifecycleStopped {
 				// The fence is the REASON this completion runs: the cancelled
 				// turn is carrying the stop out, so this completion lands it
@@ -211,6 +219,7 @@ func (al *AgentLoop) commitSteeredCompletion(
 					return err
 				}
 				res.landed = landedStopFromRecord(cur)
+				res.stoppedRecord = cur
 				return nil
 			}
 			// A terminal/notice disposition racing a fresh fence: refuse. The
@@ -240,6 +249,7 @@ func (al *AgentLoop) commitSteeredCompletion(
 				return err
 			}
 			res.landed = landedStopFromRecord(cur)
+			res.stoppedRecord = cur
 			return nil
 		}
 		if nextState == session.LifecycleRunning {
@@ -252,6 +262,16 @@ func (al *AgentLoop) commitSteeredCompletion(
 		if !publishable {
 			res.kind = steeredCommitRefused
 			return errCompleteNoPublishableOutcome
+		}
+		// R1 ruling (ADR-20260928 D2 commit boundary + ADR-20261004 C1): a
+		// provider's final answer is not a completed turn until this commit.
+		// Input accepted for this session before it (decided here, under the
+		// record lock) belongs to the CURRENT generation: refuse the commit so
+		// the caller drains it as a same-generation continuation. Input
+		// accepted after this point starts the next round.
+		if inputPending != nil && inputPending() {
+			res.kind = steeredCommitRefused
+			return errCompleteSteeringPending
 		}
 		// The winning terminal/outbox commit uses the producing run's ID,
 		// already checked against the locked tail. It never borrows a

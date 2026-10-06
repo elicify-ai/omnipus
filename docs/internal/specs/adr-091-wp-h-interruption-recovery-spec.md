@@ -1,5 +1,11 @@
 # ADR-091 WP-H — Interruption recovery
 
+## Amended 2026-10-06 — founder decision
+
+FR-H-006's parent-cancel wording means **Stop all / `/cancel`**, not plain Stop. **Plain Stop ends only this session's current turn; helpers keep working.** Genuine parent failure initiates descendant stops and reports landed/pending/incomplete results, but live retry is **deferred to #1198 (founder 2026-10-06)**. All people/agent session stops share StopSession with 3 s to force and a further 3 s to detach; no public hard/cancel_grace. Boot never dispatches an interrupted helper from old messages; it stops it with its goal/history kept. Saved final reaches its parent once, poll OR wake; stopped parent holds it unconsumed. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D-A/B/E/G. Current feature gate: five reviewers — code-reviewer, silent-failure-hunter, pr-test-analyzer, architect, security-lead; the dated seven-reviewer outcome below remains history.
+
+Status: Draft
+
 **Decision:** ADR-091 §3 D12 · **Criterion:** AC-14 · **Defect:** issue #857 ·
 **UAT:** `docs/internal/testing/adr-091-uat-plan.md` lane I (issue #856)
 
@@ -85,7 +91,7 @@ path terminates a steered session on transport close.
 | FR-H-003 | A transient provider failure (`ClassifyError` → `FailoverRateLimit`) inside a steered turn MUST be retried, bounded by the existing max-retry constant, with the existing backoff. |
 | FR-H-004 | A permanent provider failure MUST terminalise the record and report upward through D3's single operation. The record MUST NOT be left `running`. |
 | FR-H-005 | Exhausting the retry budget is a permanent failure and MUST follow FR-H-004. |
-| FR-H-006 | `IsParentEnded`, its call site and the `parentTurnState` field MUST be deleted. A steered session's life is bounded by its own record, its `Stop` marker and D9's timeout — D8's cascade already handles a cancelled parent. |
+| FR-H-006 | `IsParentEnded`, its call site and the `parentTurnState` field MUST be deleted. A steered session's life is bounded by its own record, its `Stop` marker and D9's timeout — Stop all / `/cancel` handles the downward cascade; plain Stop is self-only (**amended 2026-10-06**). |
 | FR-H-007 | No code path may terminate, cancel or fail a steered session because a client transport closed. |
 | FR-H-008 | A test MUST assert that a production path **assigns** `SteeredBy` on a launched steered session, so that deleting the writer fails the suite rather than silently disabling FR-H-001. |
 

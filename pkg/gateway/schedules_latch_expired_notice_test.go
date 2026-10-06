@@ -33,33 +33,27 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
-// latchExpiredFakeCanceller is a scheduledCanceller whose RequestCancel
-// simulates a force-abort that found no active turn (Fired:false, Armed:true
-// — the real outcome shape logged just above the OnLatchExpired wiring in
-// watchDeadline) and whose armed latch later expired with nothing ever
-// consuming it. It invokes hooks.OnLatchExpired synchronously with the SAME
-// scope/canceller RequestCancel received, exactly as pkg/agent's real
-// notifyLatchExpired does asynchronously in production (cancel_prearm.go) —
-// watchDeadline's own code does not (and must not) care which goroutine the
-// callback runs on, only that its hooks wire it.
+// latchExpiredFakeCanceller simulates the one Stop arming a latch that later
+// expires. Only the agent-loop edge is faked; watchDeadline's request, hook
+// selection and operator-visible logger are real. The expiry callback receives
+// the SAME session/channel/principal carried by the Stop request.
 type latchExpiredFakeCanceller struct {
 	mu       sync.Mutex
-	sessions []string
+	requests []agent.StopRequest
 }
 
-func (c *latchExpiredFakeCanceller) RequestCancel(
-	_ context.Context,
-	scope agent.CancelScope,
-	canceller agent.CancelCanceller,
-	hooks agent.CancelHooks,
-) (agent.CancelOutcome, error) {
+func (c *latchExpiredFakeCanceller) StopSession(_ context.Context, req agent.StopRequest) (agent.StopResult, error) {
 	c.mu.Lock()
-	c.sessions = append(c.sessions, scope.SessionID)
+	c.requests = append(c.requests, req)
 	c.mu.Unlock()
-	if hooks.OnLatchExpired != nil {
-		hooks.OnLatchExpired(scope, canceller)
+	if req.HooksFor != nil {
+		hooks := req.HooksFor(req.SessionID)
+		if hooks.OnLatchExpired != nil {
+			hooks.OnLatchExpired(agent.CancelScope{SessionID: req.SessionID, TurnOnly: true},
+				agent.CancelCanceller{UserID: req.By.ID, Channel: req.Channel})
+		}
 	}
-	return agent.CancelOutcome{Fired: false, Armed: true}, nil
+	return agent.StopResult{Armed: true, Root: agent.CancelOutcome{Armed: true}}, nil
 }
 
 // TestScheduledRunner_WatchDeadline_OnLatchExpired_LogsHonestWarn is this
@@ -120,16 +114,14 @@ func TestScheduledRunner_WatchDeadline_OnLatchExpired_LogsHonestWarn(t *testing.
 	assert.Contains(t, logged, sid, "the log must identify which run's session this was")
 	assert.Contains(t, logged, "mia", "the log must identify the run's owner")
 
-	// Sanity: the fake canceller really was invoked for this run's session.
+	// Exactly one complete one-Stop request, not just an observed method call.
 	calls := canceller.calls()
-	require.NotEmpty(t, calls, "RequestCancel must be called on deadline")
-	assert.Equal(t, sid, calls[0])
+	require.Len(t, calls, 1, "StopSession must be called exactly once on deadline")
+	assertSchedulerStopRequest(t, sid, calls[0])
 }
 
-func (c *latchExpiredFakeCanceller) calls() []string {
+func (c *latchExpiredFakeCanceller) calls() []agent.StopRequest {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]string, len(c.sessions))
-	copy(out, c.sessions)
-	return out
+	return append([]agent.StopRequest(nil), c.requests...)
 }

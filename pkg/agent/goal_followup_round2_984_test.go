@@ -50,6 +50,7 @@ func TestGoalDelegation984_MetWithRunningDescendantWakesVerdict(t *testing.T) {
 	if persistErr := lifecycle.Persist(child); persistErr != nil {
 		t.Fatalf("Persist(goal child running): %v", persistErr)
 	}
+	child = stampG5ExitedExecution(t, al, child)
 
 	grandchild := &session.LifecycleRecord{
 		SessionID:      "session_f1_running_grandchild",
@@ -157,15 +158,18 @@ func TestGoalDelegation984_MetWithRunningDescendantWakesVerdict(t *testing.T) {
 }
 
 // TestGoal984_CompletionTailSingleShotDuringFinishedTurnRace pins architect
-// re-review F4. Both competing paths pass their preconditions before either
-// may deliver: the normal just-finished turn disposition and the goal-ender's
-// deferred tail. One deterministic final entry means exactly one parent wake.
+// re-review F4. Both competing paths pass preflight before either commits.
+// The fixture selects D2's final-first winner deterministically: "If completion/
+// outbox commits first, Stop observes done/failed, is superseded, and cannot
+// create a stop note." Releasing both callers together let the cancelled goal
+// tail win instead, which correctly produces a stop notice, not a final.
+// The stopped-first winner is covered separately by the T11 stop-fence tests.
 func TestGoal984_CompletionTailSingleShotDuringFinishedTurnRace(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	parentID := newTestSteeringSession(t, al, "ws-1")
-	child := launchRunningChild(t, al, parentID, "call-f4-single-shot")
+	child := stampG5ExitedExecution(t, al, launchRunningChild(t, al, parentID, "call-f4-single-shot"))
 
 	ts, err := al.reconstructSteeredTurn(child, nil)
 	if err != nil {
@@ -175,16 +179,29 @@ func TestGoal984_CompletionTailSingleShotDuringFinishedTurnRace(t *testing.T) {
 	al.activeTurnStates.Store(child.SessionID, ts)
 	t.Cleanup(func() { al.activeTurnStates.Delete(child.SessionID) })
 
-	arrived := make(chan struct{}, 2)
-	release := make(chan struct{})
+	arrived := make(chan int, 2)
+	releaseDirect, releaseDeferred := make(chan struct{}), make(chan struct{})
+	var directOnce, deferredOnce sync.Once
+	openDirect := func() { directOnce.Do(func() { close(releaseDirect) }) }
+	openDeferred := func() { deferredOnce.Do(func() { close(releaseDeferred) }) }
+	var seamMu sync.Mutex
+	seamCalls := 0
 	completeBeforeDeliveryTestHook = func(sessionID string) {
 		if sessionID != child.SessionID {
 			return
 		}
-		arrived <- struct{}{}
-		<-release
+		seamMu.Lock()
+		seamCalls++
+		call := seamCalls
+		seamMu.Unlock()
+		arrived <- call
+		if call == 1 {
+			<-releaseDirect
+		} else {
+			<-releaseDeferred
+		}
 	}
-	t.Cleanup(func() { completeBeforeDeliveryTestHook = nil })
+	t.Cleanup(func() { openDirect(); openDeferred(); completeBeforeDeliveryTestHook = nil })
 
 	var wakeMu sync.Mutex
 	var wakeIDs []string
@@ -193,27 +210,34 @@ func TestGoal984_CompletionTailSingleShotDuringFinishedTurnRace(t *testing.T) {
 		defer wakeMu.Unlock()
 		wakeIDs = append(wakeIDs, fmt.Sprint(event.Metadata["steer_message_id"]))
 	})
+	awaitPreflight := func(want int) {
+		t.Helper()
+		select {
+		case got := <-arrived:
+			if got != want {
+				t.Fatalf("completion preflight = %d, want %d", got, want)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("completion path %d did not reach the deterministic pre-delivery seam", want)
+		}
+	}
 
 	directDone := make(chan error, 1)
 	go func() {
 		directDone <- al.completeSteeredTurn(context.Background(), child, turnResult{finalContent: "child result"}, nil)
 	}()
+	awaitPreflight(1)
 	deferredDone := make(chan struct{})
 	go func() {
 		al.completeSteeredTurnIfDeferredAtGate(child.SessionID)
 		close(deferredDone)
 	}()
-	for i := 0; i < 2; i++ {
-		select {
-		case <-arrived:
-		case <-time.After(10 * time.Second):
-			t.Fatalf("completion path %d did not reach the deterministic pre-delivery seam", i+1)
-		}
+	awaitPreflight(2)
+	openDirect()
+	if completionErr := <-directDone; completionErr != nil {
+		t.Fatalf("normal completion path: %v", completionErr)
 	}
-	close(release)
-	if err := <-directDone; err != nil {
-		t.Fatalf("normal completion path: %v", err)
-	}
+	openDeferred()
 	select {
 	case <-deferredDone:
 	case <-time.After(10 * time.Second):
@@ -226,5 +250,9 @@ func TestGoal984_CompletionTailSingleShotDuringFinishedTurnRace(t *testing.T) {
 	wantID := fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation)
 	if len(gotWakeIDs) != 1 || gotWakeIDs[0] != wantID {
 		t.Fatalf("parent wakes = %v, want exactly one deterministic final wake %q", gotWakeIDs, wantID)
+	}
+	committed, err := al.GetSessionLifecycleStore().Load(child.SessionID)
+	if err != nil || committed.State != session.LifecycleCompleted || committed.StopNote != nil {
+		t.Fatalf("final-first winner state/note = %+v, error = %v, want completed without a stop note", committed, err)
 	}
 }

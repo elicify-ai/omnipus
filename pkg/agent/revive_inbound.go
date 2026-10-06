@@ -67,12 +67,13 @@ func lifecycleInFlightStopFence(rec *session.LifecycleRecord) bool {
 // lifecycle record carries an in-flight stop fence
 // (lifecycleInFlightStopFence) — the one shape the ordinary inbound-turn
 // admission must neither revive nor run a second turn on
-// (runInboundTurnWithRevival). Everything else — a blank id, a missing
-// store, a missing record, an unreadable record, and every non-fence shape —
-// is nil: the revivable check and the plain turn keep their existing
-// behavior. Not-found and read failures stay inboundRevivable's business
-// (it logs read failures at error level, gate SFH#2); this gate only
-// refuses the fence shape.
+// (runInboundTurnWithRevival). A blank id, a missing store, a gone record
+// (ErrLifecycleNotFound) and every non-fence shape are nil: the revivable
+// check and the plain turn keep their existing behavior. An unreadable
+// record — a read failure other than not-found — is returned wrapped:
+// runInboundTurnWithRevival refuses the message with it, a visible failure
+// the sender can retry, instead of proceeding on a fence check that never
+// ran.
 func (al *AgentLoop) inboundStopFenceInFlight(sessionID string) error {
 	sessionID = strings.TrimSpace(sessionID)
 	store := al.GetSessionLifecycleStore()
@@ -81,7 +82,10 @@ func (al *AgentLoop) inboundStopFenceInFlight(sessionID string) error {
 	}
 	rec, err := store.Load(sessionID)
 	if err != nil {
-		return nil
+		if errors.Is(err, session.ErrLifecycleNotFound) {
+			return nil // no record: no fence can be in flight
+		}
+		return fmt.Errorf("steer: inbound stop-fence check: load session %q: %w", sessionID, err)
 	}
 	if !lifecycleInFlightStopFence(rec) {
 		return nil
@@ -171,47 +175,34 @@ func (al *AgentLoop) resetUnifiedMetaStatusActive(sessionID string) {
 		map[string]any{"session_id": sessionID})
 }
 
-// runInboundTurnWithRevival is processMessage's turn admission (ADR-093 D4):
-// a human message whose chat's record is terminal or durably stopped revives
-// the record first — before any tool runs — and the turn then runs on the
-// new generation. Revival failure never fails the message: it is logged and
-// the turn runs unrevived, where a delegate call in it hits D2's launch
-// backstop with the D5 sentence rather than a raw store error.
-//
-// The one exception is an in-flight stop fence (a Stop stamped for the
-// record's CURRENT generation while the state is still live): the dying turn
-// is still registered, so reviving would strand a queued helper admission
-// refuses, and running the turn here would start a SECOND turn on the dying
-// session. The message is refused with a visible error instead — the
-// "revive failed, run the turn anyway" path below is for a landed stop or a
-// terminal record whose revive failed, never for this shape.
+// runInboundTurnWithRevival prepares a genuine lifecycle-backed human
+// admission before constructing its ordinary turn. Stopped resumes retain the
+// generation; terminal follow-ups use Revive's next generation. Preparation
+// errors are visible and never fall through to an unstamped execution.
+// A session worker retains ownership through its full drain/output tail;
+// a direct caller completes its own disposition after runAgentLoop returns.
 func (al *AgentLoop) runInboundTurnWithRevival(
 	ctx context.Context,
 	agent *AgentInstance,
 	msg bus.InboundMessage,
 	opts processOptions,
-) (string, *AgentInstance, error) {
-	if reviveInboundIsHumanTurn(msg) {
-		if ferr := al.inboundStopFenceInFlight(msg.SessionID); ferr != nil {
-			return "", agent, ferr
-		}
-		if al.inboundRevivable(msg.SessionID) {
-			if err := al.reviveRecordForHumanTurn(ctx, msg.SessionID,
-				steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}); err != nil {
-				// Gate SFH#6: this is an error, not a warning. The human message
-				// that was supposed to resume the chat could not revive it, and
-				// everything a delegate refusal says afterwards depends on this
-				// fact being recorded (reviveRecordForHumanTurn already recorded
-				// it in the revival-failure memory, which the D2 launch backstop
-				// consults). The turn still runs unrevived — kept deliberately,
-				// the message itself must not be lost — but a delegate call in it
-				// now refuses with the truthful revival-failed sentence instead
-				// of send-a-new-message, which just failed to work.
-				logger.ErrorCF("agent", "adr093: inbound revival failed; the turn runs unrevived and delegation will refuse truthfully",
-					map[string]any{"session_id": msg.SessionID, "error": err.Error()})
-			}
-		}
+) (resp string, usedAgent *AgentInstance, runErr error) {
+	entry := ordinaryExecutionFromContext(ctx)
+	directOwner := entry == nil
+	if directOwner {
+		ctx, entry = ordinaryExecutionContext(ctx)
 	}
-	resp, err := al.runAgentLoop(ctx, agent, opts)
-	return resp, agent, err
+	preparation, prepErr := al.prepareOrdinaryExecution(ctx, msg, opts)
+	if prepErr != nil {
+		return "", agent, prepErr
+	}
+	d := preparation.execution
+	entry.disposition = d
+	opts.executionDisposition = d
+	if directOwner {
+		defer func() { runErr = errors.Join(runErr, al.finishExecutionDisposition(d)) }()
+	}
+	resp, runErr = al.runAgentLoop(ctx, agent, opts)
+	d.recordTurnOutcome(runErr)
+	return resp, agent, runErr
 }

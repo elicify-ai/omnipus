@@ -117,8 +117,8 @@ func TestStopSeq_SecondAcceptedStopAfterSameGenerationResumeHasStrictlyGreaterSe
 		t.Fatalf("setup: record after RESUME = state %q note %v, want queued with the note cleared", resumedRec.State, resumedRec.StopNote)
 	}
 
-	if _, err := canceller.StopTurns(context.Background(), childID, owner, false, stopTurn); err != nil {
-		t.Fatalf("second StopTurns: %v", err)
+	if _, secondStopErr := canceller.StopTurns(context.Background(), childID, owner, false, stopTurn); secondStopErr != nil {
+		t.Fatalf("second StopTurns: %v", secondStopErr)
 	}
 	second, err := lifecycle.Load(childID)
 	if err != nil {
@@ -185,8 +185,8 @@ func TestStopSeq_StopWhileAlreadyStoppedIsIdempotent(t *testing.T) {
 
 	// D2 stop table: "stopped -> 'already stopped'; no ledger line (MIN-007)".
 	// The call must be accepted and change nothing durable.
-	if _, err := canceller.StopTurns(context.Background(), childID, owner, false, stopTurn); err != nil {
-		t.Fatalf("repeat StopTurns on an already stopped child: %v", err)
+	if _, repeatStopErr := canceller.StopTurns(context.Background(), childID, owner, false, stopTurn); repeatStopErr != nil {
+		t.Fatalf("repeat StopTurns on an already stopped child: %v", repeatStopErr)
 	}
 	after, err := lifecycle.Load(childID)
 	if err != nil {

@@ -85,6 +85,12 @@ type SteerBootRecovery struct {
 	Classifier     steer.RecordClassifier
 	Deliverer      steer.UpwardDeliverer
 	OperatorNotice func(message string)
+	// BootEpoch carries this process's already-minted boot epoch store: the
+	// same instance the gateway minted at startup (steer.Deps.BootEpoch).
+	// Recovery must read the writing boot from it, never mint, reopen or
+	// substitute another counter. The gateway's boot hook wires it; the
+	// restart-note writer reads its current epoch once before taking the record lock.
+	BootEpoch *session.BootEpochStore
 }
 
 type bootSessionMessageEnvelope struct {
@@ -129,6 +135,7 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var refusals []error
 	for _, id := range ids {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -152,7 +159,9 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 		case steer.ClassOrdinaryRoot:
 			// Existing root boot recovery remains authoritative.
 		case steer.ClassSteered:
-			r.recoverSteered(ctx, id, notice)
+			if err := r.recoverSteered(ctx, id, notice); err != nil {
+				refusals = append(refusals, err)
+			}
 		case steer.ClassLegacyDelegate:
 			r.failLegacy(id, notice)
 		case steer.ClassDamagedChild, steer.ClassInvalidEdge, steer.ClassUnreadable:
@@ -175,7 +184,7 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 	if err := r.runFinalDeliveryPass(ctx); err != nil {
 		notice("final-delivery-scan", fmt.Sprintf("committed-final delivery pass failed: %v", err))
 	}
-	return nil
+	return errors.Join(refusals...)
 }
 
 func (r *SteerBootRecovery) sessionIDs() ([]string, error) {
@@ -225,11 +234,11 @@ func (r *SteerBootRecovery) failLegacy(id string, notice func(string, string)) {
 	notice("legacy:"+id, fmt.Sprintf("legacy delegate %s failed at boot: %s", id, failedReasonPreADR091NotResumable))
 }
 
-func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notice func(string, string)) {
+func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notice func(string, string)) error {
 	rec, err := r.Lifecycle.Load(id)
 	if err != nil || rec == nil {
 		notice("load:"+id, fmt.Sprintf("steered session %s refused at boot: %v", id, err))
-		return
+		return nil
 	}
 	// C5 (ADR-20260928 Correction, 2026-10-04) pass one — the CURRENT RUN's
 	// recovery, before any parent wake: a steered record mid-flight at boot
@@ -242,12 +251,24 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 	// history by the replay below. A record carrying a CURRENT-GENERATION
 	// fence is NOT stopped here: the accepted stop's own landing is W3b's
 	// boot reconciliation, reported pending below — never fabricated twice.
+	//
+	// An accepted Stop of the current generation whose fence never reached
+	// the record is likewise not replaced by a restart stop: the boot
+	// finisher (FinishUnfinishedStopIntents, run after this recovery) lands
+	// that ORIGINAL control — its cause, actor and sequence (D6 QA1).
+	pendingStop, pendingErr := r.acceptedStopPending(rec)
+	if pendingErr != nil {
+		notice("stop-intents:"+id, fmt.Sprintf("session %s accepted Stop controls unreadable at boot: %v", id, pendingErr))
+		return pendingErr
+	}
 	stopLandedByBoot := false
-	if !rec.Terminal() && rec.State != session.LifecycleNeedsInput &&
+	var interruptedErr error
+	if !pendingStop && !rec.Terminal() && rec.State != session.LifecycleNeedsInput &&
 		(rec.State == session.LifecycleRunning || rec.State == session.LifecycleQueued) &&
-		!(rec.Stop != nil && rec.Stop.Generation == rec.Generation) {
+		(rec.Stop == nil || rec.Stop.Generation != rec.Generation) {
 		if err := r.failInterrupted(rec); err != nil {
-			notice("interrupted-write:"+id, fmt.Sprintf("session %s interrupted transition failed: %v", id, err))
+			interruptedErr = err
+			notice("interrupted-write:"+id, fmt.Sprintf("session %s restart stop refused at boot: %v", id, err))
 		} else if fresh, loadErr := r.Lifecycle.Load(id); loadErr != nil || fresh == nil {
 			// The stop write itself succeeded, but its landing cannot be
 			// confirmed on the record. Say so visibly and keep
@@ -275,14 +296,21 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 	// older untaken one ring here); its true must not short-circuit the
 	// interrupted arm below, which finishes D8.3's parent notification for
 	// the run this restart interrupted.
-	if r.recoverStoppedChildNotice(ctx, rec, notice) && !stopLandedByBoot {
-		return
+	stopNoticeRecovered := r.recoverStoppedChildNotice(ctx, rec, notice)
+	if interruptedErr != nil {
+		// Historical replay is independent, but cannot erase a refused current
+		// stop or authorize the legacy fatal final and a second write attempt.
+		return interruptedErr
 	}
-	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
-		// A current-generation Stop is durable. Do not deliver or re-wake any
-		// pending entry; it waits for Revive to mint a newer generation.
+	if stopNoticeRecovered && !stopLandedByBoot {
+		return nil
+	}
+	if pendingStop || (rec.Stop != nil && rec.Stop.Generation == rec.Generation) {
+		// A current-generation Stop is durable (fenced, or accepted and left
+		// to the finisher). Do not deliver or re-wake any pending entry; it
+		// waits for Revive to mint a newer generation.
 		r.ackConsumed(ctx, rec, notice)
-		return
+		return nil
 	}
 
 	messages := r.unacknowledged(rec, notice)
@@ -303,7 +331,7 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		// interrupted landing; D8.3's stopped(restart) is W3b's) proceeds.
 		if err := r.finishFromFinal(rec, final); err != nil {
 			notice("repair-record:"+id, fmt.Sprintf("session %s terminal-record repair failed: %v", id, err))
-			return
+			return nil
 		}
 		notice("phantom-final:"+id, fmt.Sprintf("session %s has inbox final %s without a matching committed lifecycle/outbox outcome — not promoted, not re-woken (D8.5)", id, finalID))
 		finalHandled = true
@@ -318,7 +346,7 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 			message, outcome, buildErr := r.terminalMessage(rec)
 			if buildErr != nil {
 				notice("repair-message:"+id, fmt.Sprintf("session %s terminal-inbox repair failed: %v", id, buildErr))
-				return
+				return nil
 			}
 			r.deliver(ctx, rec, outcome, message, notice)
 			finalHandled = true
@@ -339,7 +367,7 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 			// stopLandedByBoot return below skips the interrupted fatal —
 			// its parent notice already went out through
 			// recoverStoppedChildNotice above.
-			return
+			return nil
 		}
 		for _, message := range messages {
 			if envelope, envErr := decodeBootMessage(message); finalHandled && envErr == nil && envelope.MessageID == finalID {
@@ -359,7 +387,7 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 			// failInterrupted call below could only write nothing (the record
 			// already sits in the stopped state that same function landed).
 			// Leave the record stopped and return; the parent has been told.
-			return
+			return nil
 		}
 		message, buildErr := interruptedBootMessage(rec)
 		outcome := steer.OutcomeInterrupted
@@ -379,9 +407,10 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 			r.deliver(ctx, rec, outcome, message, notice)
 		}
 		if err := r.failInterrupted(rec); err != nil {
-			notice("interrupted-write:"+id, fmt.Sprintf("session %s interrupted transition failed: %v", id, err))
+			notice("interrupted-write:"+id, fmt.Sprintf("session %s restart stop refused at boot: %v", id, err))
+			return err
 		}
-		return
+		return nil
 	}
 
 	for _, message := range messages {
@@ -398,6 +427,7 @@ func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notic
 		}
 		r.deliverIfUnconsumed(ctx, rec, message, notice)
 	}
+	return nil
 }
 
 func (r *SteerBootRecovery) unacknowledged(rec *session.LifecycleRecord, notice func(string, string)) []generated.SessionMessage {
@@ -502,6 +532,20 @@ func (r *SteerBootRecovery) deliverIfUnconsumed(ctx context.Context, rec *sessio
 	if err != nil {
 		notice("message:"+rec.SessionID, fmt.Sprintf("session %s has unreadable inbox message: %v", rec.SessionID, err))
 		return
+	}
+	if envelope.Kind == "error" && !envelope.Fatal && rec.State != session.LifecycleNeedsInput {
+		owned, noticeErr := r.landedStopNoticeOwnsReplay(rec, message)
+		if noticeErr != nil {
+			notice("message:"+rec.SessionID, fmt.Sprintf("session %s stopped-notice replay refused: %v", rec.SessionID, noticeErr))
+			return
+		}
+		if owned {
+			// recoverStoppedChildNotice already attempted the ledger-backed
+			// replay. Its publisher owns routing, rings and the taken check;
+			// a generic error replay would ring twice or invent a terminal
+			// verdict. Its failures were surfaced and remain retryable.
+			return
+		}
 	}
 	consumed, err := r.consumedIDs(rec.SteeredBy.SteeringSessionID)
 	if err != nil {
@@ -610,6 +654,10 @@ func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, messag
 // recorded must not land note-only, because the note-derived notice fallback
 // is retired. The next boot retries the stop.
 func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error {
+	var writingBootSeq uint64
+	if r.BootEpoch != nil {
+		writingBootSeq = r.BootEpoch.Current()
+	}
 	err := r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
 		if current.Terminal() || (current.Stop != nil && current.Stop.Generation == current.Generation) {
 			return nil
@@ -628,6 +676,9 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 			// restated at the writer, for any future caller.
 			return nil
 		}
+		if writingBootSeq == 0 {
+			return fmt.Errorf("steer: boot: restart stop for %q refused: missing current writing boot epoch", current.SessionID)
+		}
 		// Mid-flight arm (D8.3/F0929-3): the restart interrupted a LIVE
 		// run, so the child lands an ordinary, non-terminal stop — never
 		// failed(interrupted) — carrying the restart stop note; no
@@ -636,15 +687,15 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 		// first, fence-less (Correction C3): no accepted Stop control is
 		// fabricated, the interrupted run's own execution identity rides the
 		// landed projection, and the note's Seq is the allocated ledger
-		// sequence. By=system cause=restart needs no boot_seq under the
-		// lifecycle save rule (only by=restart does), so no boot epoch is
-		// stamped here.
+		// sequence. The restart actor identifies this physical boot writer;
+		// the note carries its writing boot, while the landed projection keeps
+		// the interrupted run's admitting boot.
 		at := time.Now().UTC()
 		landed := session.LandedStop{
 			ParentSessionID: current.SteeringSessionID(),
 			Generation:      current.Generation,
 			Cause:           session.StopCauseRestart,
-			Actor:           session.StopActorSystem,
+			Actor:           session.StopActorRestart,
 			At:              at,
 		}
 		if current.ExecutionID != nil {
@@ -658,10 +709,11 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 		}
 		current.State = session.LifecycleStopped
 		current.StopNote = &session.StopNote{
-			At:    at,
-			By:    session.StopActorSystem,
-			Seq:   uint64(seq),
-			Cause: session.StopCauseRestart,
+			At:      at,
+			By:      session.StopActorRestart,
+			Seq:     uint64(seq),
+			Cause:   session.StopCauseRestart,
+			BootSeq: writingBootSeq,
 		}
 		current.FailedReason = ""
 		current.NeedsInput = nil
@@ -1020,6 +1072,15 @@ func (pe *PlanEngine) bootSweep(ctx context.Context, ls *session.LifecycleStore,
 		// TestBoot_ParkedRecoverableWithoutCheckpoint and
 		// TestBootSweep_AwaitingCorrectionOwnerExempt all failed this way.
 		if standingRootExemptFromSweep(rec) {
+			continue
+		}
+
+		// ADR-20260928 D8.3: steered records (a durable SteeredBy edge) belong
+		// to SteerBootRecovery, which stops an interrupted steered run with a
+		// restart note and tells its parent. This sweep never writes them, so
+		// no second writer races the same record and no steered helper is
+		// marked failed(interrupted).
+		if rec.SteeredBy != nil {
 			continue
 		}
 
@@ -1567,4 +1628,32 @@ func (pe *PlanEngine) completeAbandonAtBoot(rec plan.IntentRecord) error {
 			rec.IntentID, rec.PlanID, after.State, after.EffectivePlanPhase())
 	}
 	return nil
+}
+
+// acceptedStopPending reports whether rec's session has an accepted,
+// unlanded Stop control selecting its CURRENT execution: the same
+// generation and the same selected run (A4). An intent for an earlier run
+// of the same generation does not exempt the run that replaced it from the
+// restart Stop; the finisher supersedes that old intent.
+func (r *SteerBootRecovery) acceptedStopPending(rec *session.LifecycleRecord) (bool, error) {
+	intents, err := r.Lifecycle.UnfinishedStopIntents(rec.SessionID)
+	if err != nil {
+		return false, err
+	}
+	for _, intent := range intents {
+		target := intent.Selection.Effect.Target
+		if target.Generation != rec.Generation {
+			continue
+		}
+		if !target.Selected() {
+			if rec.ExecutionID == nil {
+				return true, nil
+			}
+			continue
+		}
+		if rec.ExecutionID != nil && rec.ExecutionID.RunID == target.RunID && rec.ExecutionID.BootSeq == target.BootSeq {
+			return true, nil
+		}
+	}
+	return false, nil
 }

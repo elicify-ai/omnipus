@@ -1,5 +1,11 @@
 # Spec — UI-independent turns and session-bound webchat streaming (ADR-082)
 
+## Amended 2026-10-06 — founder decision
+
+FR-015 now names the one StopSession mechanism and explicit scope: **plain Stop ends only this session's current turn, never helpers; Stop all / `/cancel` stops its whole helper tree**. People/agents use polite now, force at 3 s, detach 3 s after force; `cancel_grace` and public `hard` are removed. Disconnect is not Stop. Root final -> completed/done but chat remains visible; scheduled/heartbeat new run may revive completed as system principal, never stopped. Helper keeper reminders use steered system wakes, refused tail saves are visible to the parent, and the tail claims only its producing execution. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D-A/B/C/F.
+
+Status: Draft
+
 - **ADR:** `docs/internal/architecture/ADR-082-ui-independent-turns-and-session-bound-streaming.md`
 - **Status:** Draft for ratification — 2026-09-08
 - **Greenfield:** no back-compat for the deleted watchdog or its config key.
@@ -30,7 +36,7 @@ Today a lost connection (a) silently degrades the rest of the turn to non-stream
 | FR-012 | A webchat `Send` with zero bound connections MUST succeed (no `ErrSendFailed`, no drop notice); the content is durable in the transcript. | D6 |
 | FR-013 | Keeper follow-up turns (idle steer, zero-output push, nudge, fallback compile) MUST stream to whichever connections are bound to the session at that time, and MUST log no `Send failed` when none is. | D2, D6 |
 | FR-014 | Per-connection drop counters remain per connection; `DoneStats.TokensDropped` MUST reflect the receiving connection only. | D2 |
-| FR-015 | Explicit Stop (`RequestCancel`) behaviour is unchanged and MUST continue to pass every existing cancel test. | D1 |
+| FR-015 | **Amended 2026-10-06:** explicit Stop uses AgentLoop.StopSession with session scope only; helpers keep working. Stop all / `/cancel` uses tree scope through the same path. Force at 3 s, detach 3 s later; no Stop on disconnect. Old cascade assertions must target Stop all, not plain Stop. | D1; control-plane D-A/B |
 | FR-016 | `set_goal`'s success result MUST carry `goal_id` and the full registered record (`definition`, `criteria`, `dod`, `assessment`). | D9 |
 | FR-017 | The goal card MUST render at the chronological position of its `set_goal` call, on both the live and the replay/reload path, from the call's result; no tail-mounted goal card component exists. | D9 |
 | FR-018 | Live `goal_status` frames MUST overlay progress onto the card by `goal_id` without moving it. | D9 |
@@ -58,7 +64,7 @@ Today a lost connection (a) silently degrades the rest of the turn to non-stream
 
 **S-10 Network blip** — Given a turn streaming, When the browser goes offline for 10 s and back online, Then the SPA re-attaches automatically and the bubble continues without user action. *(FR-010)*
 
-**S-11 Stop still works from the new tab** — Given S-09, When tab 2 clicks Stop, Then the turn cancels via `RequestCancel` and both tabs see the interrupted state. *(FR-015)*
+**S-11 Stop still works from the new tab** — Given S-09, When tab 2 clicks Stop, Then only that session's current turn stops via `AgentLoop.StopSession`, both tabs see the stopped state, and its helpers keep working. **Amended 2026-10-06.** *(FR-015)*
 
 **S-12 Guard** — Given any guarded symbol planted in a non-comment position, When the guard script runs, Then it exits non-zero and names the symbol; on a clean tree it exits 0. *(FR-002)*
 
@@ -113,7 +119,7 @@ Determinism rules: integration tests use a fake provider that streams a fixed to
 | W5 | Tests T-01..T-17, T-19, T-20 | qa-lead | W1, W3, W4 |
 | W6 | E2E T-18 + Playwright UAT on the test instance | qa-lead | W3, W4 |
 | W7 | D9: `set_goal` result payload (Go) + `set_goal` tool UI, replay branch, delete `GoalThreadTailCards` (SPA) + T-21..T-23 | backend-lead + frontend-lead, then qa-lead | — (independent of W1–W6) |
-| Gate | `/code-review large` on the whole diff, 7-reviewer gate, CI green, then manual UAT prompt | lead | all |
+| Gate | **Amended 2026-10-06:** five reviewers — code-reviewer, silent-failure-hunter, pr-test-analyzer, architect, security-lead; CI and reachability evidence, then founder landing approval | lead | all |
 
 ## 6. Holdout (manual, post-implementation — not referenced by the matrix)
 

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -394,23 +395,40 @@ func TestSteerGenerationCancel_DrainsQueuedSessionFromAdmission(t *testing.T) {
 	defer cleanup()
 	al.GetConfig().Performance.MaxParallelAgents = 1
 	gate := al.steerAdmission()
-
-	if admitted, _, _ := gate.tryAdmit("busy", 1); !admitted {
-		t.Fatal("expected the first admission to succeed")
+	provider, _ := installParkedProvider(t, al)
+	parentID := newTestSteeringSession(t, al, "ws-queued-stop-admission")
+	busyID, busyGen := launchSteeredChild(t, al, parentID, "busy", "hold the first admission")
+	busy, err := NewSteerLauncher(al).Dispatch(context.Background(), busyID, busyGen)
+	if err != nil || busy.State != steer.DispatchRunning {
+		t.Fatalf("expected the first real admission to succeed: result=%+v error=%v", busy, err)
 	}
-	if admitted, pos, _ := gate.tryAdmit("queued-child", 1); admitted || pos != 1 {
-		t.Fatalf("expected the second admission to queue at position 1, got admitted=%v pos=%d", admitted, pos)
+	adr093WaitForEntered(t, provider, 30*time.Second)
+	childID, childGen := launchSteeredChild(t, al, parentID, "queued-child", "stop this queued admission")
+	queued, err := NewSteerLauncher(al).Dispatch(context.Background(), childID, childGen)
+	if err != nil || queued.State != steer.DispatchQueued || queued.QueuePosition != 1 {
+		t.Fatalf("expected the second real admission to queue at position 1: result=%+v error=%v", queued, err)
 	}
 	if got := gate.queueLen(); got != 1 {
 		t.Fatalf("queue length before Stop = %d, want 1", got)
 	}
-
-	if _, err := al.SteerGenerationCancel(context.Background(), "queued-child", 1); err != nil {
-		t.Fatalf("SteerGenerationCancel: %v", err)
+	before := adr093Load(t, al, childID)
+	if before.ExecutionID == nil {
+		t.Fatal("SETUP: queued admission did not retain its genuine execution identity")
 	}
-
+	// D2 execution checks: "Cascade callbacks carry each reached node's
+	// stamped pair, not a later session lookup." Let the real canceller
+	// stamp and carry that accepted execution/control pair to the adapter.
+	report, err := NewSteerCanceller(al.GetSessionLifecycleStore()).StopTurns(context.Background(), childID,
+		steer.Principal{Kind: steer.PrincipalKindHuman, ID: "queued-stop-owner"}, false, al.SteerGenerationCancel)
+	if err != nil || len(report.Unreachable) != 0 || len(report.Reached) != 1 || report.Reached[0] != childID {
+		t.Fatalf("accepted queued SteerGenerationCancel = %+v, %v", report, err)
+	}
 	if got := gate.queueLen(); got != 0 {
 		t.Fatalf("queue length after Stop = %d, want 0 — a cancelled worker is still counted toward queue positions", got)
+	}
+	awaitSteeringRepairStopped(t, al, childID, childGen)
+	if !gate.hasReservation(busyID, busyGen) || gate.activeCount() != 1 {
+		t.Fatal("queued child's accepted Stop removed the unrelated busy admission")
 	}
 }
 
@@ -455,9 +473,13 @@ func TestReportSteeredSessionTerminalUpward_LandsRecordFailedAndDeliversUpward(t
 	)
 	parentID := newTestSteeringSession(t, al, "ws-1")
 	strandedID, strandedGen := launchSteeredChild(t, al, parentID, "call-stranded", "promotion fails with a non-cancellation error")
+	// Frozen D2: the genuine failure must claim an actual admitted run.
+	admitSteeringRepairExecution(t, al, strandedID, strandedGen)
 
-	al.reportSteeredSessionTerminalUpward(context.Background(), strandedID, strandedGen,
-		session.LifecycleFailed, steer.OutcomeFailed, "dispatch_failed: disk I/O error")
+	if err := al.reportSteeredSessionTerminalUpward(context.Background(), strandedID, strandedGen,
+		session.LifecycleFailed, steer.OutcomeFailed, "dispatch_failed: disk I/O error"); err != nil {
+		t.Fatalf("report genuine failure: %v", err)
+	}
 
 	rec, err := lifecycle.Load(strandedID)
 	if err != nil {
@@ -468,6 +490,18 @@ func TestReportSteeredSessionTerminalUpward_LandsRecordFailedAndDeliversUpward(t
 	}
 	if rec.FailedReason != "dispatch_failed: disk I/O error" {
 		t.Fatalf("FailedReason = %q, want the dispatch failure reason", rec.FailedReason)
+	}
+	// D2/T11: the committed genuine failure must actually reach the parent.
+	msgs, _, _, drainErr := al.GetMessageInboxStore().Drain(parentID, strandedID, "", 10)
+	if drainErr != nil {
+		t.Fatalf("Drain(parent failure): %v", drainErr)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("parent failure message count = %d, want exactly 1", len(msgs))
+	}
+	failed, decodeErr := msgs[0].AsSessionMessageError()
+	if decodeErr != nil || !failed.Fatal || failed.Text != "dispatch_failed: disk I/O error" || failed.MessageId != strandedID+":1:final" {
+		t.Fatalf("parent failure = %+v, decode error %v, want exact fatal dispatch reason under the committed final id", failed, decodeErr)
 	}
 
 	blocked, err := al.hasRunningOrQueuedDescendant(parentID)

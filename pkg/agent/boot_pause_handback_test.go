@@ -33,7 +33,7 @@ import (
 // (C5 pass one: the ledgered restart stop), and
 //
 //   - the record lands LifecycleStopped — a non-terminal stop carrying the
-//     restart stop note (cause restart, actor system), NEVER
+//     restart stop note (cause restart, actor restart), NEVER
 //     failed(interrupted): the restart stop + its stop notice already told
 //     the parent what happened;
 //   - the parent receives the D6 stop NOTICE (fatal=false,
@@ -60,10 +60,14 @@ func TestBoot_PauseHandbackRedeliveredAsBlockerNotFinal(t *testing.T) {
 	}
 
 	var notices []string
+	// One genuine boot epoch minted for this simulated writing boot over a
+	// real directory; the restart note's boot_seq is read from it.
+	writingBoot := mintWritingBootForTest(t, t.TempDir())
 	recovery := &SteerBootRecovery{
 		Lifecycle:      lifecycle,
 		Sessions:       al.GetSessionStore(),
 		Inbox:          inbox,
+		BootEpoch:      writingBoot,
 		Classifier:     NewSteerRecordClassifier(lifecycle, al.GetSessionStore()),
 		Deliverer:      deliverer,
 		OperatorNotice: func(message string) { notices = append(notices, message) },
@@ -84,9 +88,13 @@ func TestBoot_PauseHandbackRedeliveredAsBlockerNotFinal(t *testing.T) {
 	if rec.StopNote == nil {
 		t.Fatal("child carries no stop note — the boot stop must land the restart stop note")
 	}
-	if rec.StopNote.Cause != session.StopCauseRestart || rec.StopNote.By != session.StopActorSystem {
-		t.Errorf("child stop note = (cause %q, by %q), want (%q, %q) — the ledgered restart stop, actor system",
-			rec.StopNote.Cause, rec.StopNote.By, session.StopCauseRestart, session.StopActorSystem)
+	if rec.StopNote.Cause != session.StopCauseRestart || rec.StopNote.By != session.StopActorRestart {
+		t.Errorf("child stop note = (cause %q, by %q), want (%q, %q) — the ledgered restart stop, actor restart (D8.3: the physical boot writer)",
+			rec.StopNote.Cause, rec.StopNote.By, session.StopCauseRestart, session.StopActorRestart)
+	}
+
+	if rec.StopNote.BootSeq != writingBoot.Current() {
+		t.Errorf("restart stop note boot_seq = %d, want %d — the note carries the WRITING boot's minted epoch (D8.3)", rec.StopNote.BootSeq, writingBoot.Current())
 	}
 
 	// --- The parent's inbox: stop notice, not an interrupted fatal ---
@@ -133,8 +141,8 @@ func TestBoot_PauseHandbackRedeliveredAsBlockerNotFinal(t *testing.T) {
 				if !strings.Contains(e.Text, "cause: "+string(session.StopCauseRestart)) {
 					t.Errorf("stopped-child notice text = %q, want it to name the restart cause", e.Text)
 				}
-				if !strings.Contains(e.Text, "actor: "+session.StopActorSystem) {
-					t.Errorf("stopped-child notice text = %q, want it to name the system actor", e.Text)
+				if !strings.Contains(e.Text, "actor: "+session.StopActorRestart) {
+					t.Errorf("stopped-child notice text = %q, want it to name the restart actor", e.Text)
 				}
 			}
 		}

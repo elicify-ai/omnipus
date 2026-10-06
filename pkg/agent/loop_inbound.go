@@ -913,6 +913,17 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		}
 	}
 
+	// D6/D7: a stopped session (landed, or with its current-generation Stop
+	// in flight) does no compute until it is explicitly resumed. The wake
+	// is neither consumed nor acknowledged: its inbox entry stays pending
+	// for that resume. Steered records are also refused by the admission
+	// reservation below; this covers the ordinary root a Stop all landed on.
+	if rec.SteeredBy == nil && (rec.State == session.LifecycleStopped || lifecycleInFlightStopFence(rec)) {
+		logger.InfoCF("agent", "steer: wake held — the session is stopped until it is resumed",
+			map[string]any{"session_id": sessionID, "message_id": messageID})
+		return "", nil
+	}
+
 	ts, err := al.reconstructSteeredTurn(rec, &steer.WakeInput{MessageID: messageID, Generation: generation})
 	if err != nil {
 		return "", err
@@ -949,6 +960,20 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	if rec.SteeredBy != nil {
 		gate.entryMu.Lock()
 		entryLocked = true
+		// Another distinct wake for this queued admission is input, not a new
+		// owner. Keep the queue locked through the claim-bound append so a
+		// promotion cannot consume the pending list before this input lands.
+		gate.mu.Lock()
+		for i := range gate.queue {
+			entry := &gate.queue[i]
+			queuedClaim := entry.executionClaim()
+			if entry.generation == generation && queuedClaim.matches(rec) {
+				appendErr := al.commitQueuedSystemWakeLocked(lifecycle, entry, generation, messageID, msg.Content, rec.AgentID)
+				gate.mu.Unlock()
+				return "", appendErr
+			}
+		}
+		gate.mu.Unlock()
 		if duplicateErr := al.checkNewAdmission(rec); duplicateErr != nil {
 			return "", duplicateErr
 		}
@@ -975,7 +1000,7 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 			// the session. The promotion consumes the whole ordered list before
 			// starting; otherwise it would replay the launch instruction or
 			// lose an earlier wake when a second one arrives.
-			if _, commitErr := commitSteeredExecutionState(lifecycle, claim, session.LifecycleQueued, msg.Content); commitErr != nil {
+			if commitErr := al.commitQueuedSystemWake(lifecycle, claim, generation, messageID, msg.Content, rec.AgentID); commitErr != nil {
 				gate.removeQueuedExecution(claim)
 				return "", commitErr
 			}
@@ -984,11 +1009,40 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		release = func() { al.drainSteerQueue(claim) }
 	}
 
+	// F2: an ordinary root woken by a hand-back runs as an admitted
+	// ordinary execution (fresh identity, running state, its own
+	// disposition), like any other entry, so a Stop selects and lands it. A
+	// finished root starts its next round; a stopped one was held above.
+	var rootExecution *executionDisposition
+	if rec.SteeredBy == nil {
+		d, admitted, admitErr := al.admitOrdinaryRootWake(ctx, msg, ts)
+		if admitErr != nil {
+			return "", admitErr
+		}
+		if admitted {
+			rootExecution = d
+			release = func() { al.finishOrdinaryWakeExecution(msg, d) }
+		}
+	}
+
 	ts.opts.UserMessage = msg.Content
 	ts.userMessage = msg.Content
+	// The goal loop's own follow-up (keeper reminder, deferred steer) keeps
+	// its origin, so the woken turn's claim reaches the goal loop (D1).
+	if msg.Sender.CanonicalID == goalLoopFollowUpSenderID {
+		ts.opts.SenderID = goalLoopFollowUpSenderID
+	}
 	if !al.registerTurnIfAbsent(ts) {
 		release()
 		return "", steer.ErrStaleGeneration
+	}
+	if rec.SteeredBy != nil {
+		if attachErr := al.attachSteeredDisposition(ts, claim); attachErr != nil {
+			al.activeTurnStates.CompareAndDelete(sessionID, ts)
+			release()
+			return "", attachErr
+		}
+		release = func() { _ = al.finishExecutionDisposition(ts.opts.executionDisposition) }
 	}
 	if entryLocked {
 		gate.entryMu.Unlock()
@@ -1049,8 +1103,43 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	result, err := al.runTurn(runCtx, ts)
 	ts, result, err = al.drainSteeredTurn(runCtx, rec, ts, result, err)
 	al.disposeSteeredTurnResult(ts, rec, generation, result, err)
+	rootExecution.recordTurnOutcome(err)
 	return result.finalContent, err
 }
+
+// admitOrdinaryRootWake admits the wake of an ordinary root as an ordinary
+// execution and binds ts to it (F2). It returns nil when no lifecycle store
+// is wired (admitted false: nothing to admit).
+func (al *AgentLoop) admitOrdinaryRootWake(ctx context.Context, msg bus.InboundMessage, ts *turnState) (d *executionDisposition, admitted bool, err error) {
+	preparation, err := al.prepareOrdinarySessionExecution(ctx, msg.AsyncTranscriptSessionID, ts.opts, &handbackRevivalPrincipal)
+	if err != nil {
+		return nil, false, fmt.Errorf("steer: wake: %w", err)
+	}
+	d = preparation.execution
+	if d == nil {
+		return nil, false, nil
+	}
+	ts.opts.executionDisposition = d
+	ts.generation = d.claim.Generation
+	if idErr := ts.setExecutionIdentity(d.claim.RunID, d.claim.BootSeq); idErr != nil {
+		al.finishOrdinaryWakeExecution(msg, d)
+		return nil, false, fmt.Errorf("steer: wake: %w", idErr)
+	}
+	return d, true, nil
+}
+
+// finishOrdinaryWakeExecution settles an ordinary root's wake execution and
+// makes a settlement failure visible.
+func (al *AgentLoop) finishOrdinaryWakeExecution(msg bus.InboundMessage, d *executionDisposition) {
+	if err := al.finishExecutionDisposition(d); err != nil {
+		al.reportOrdinarySettlementFailure(msg, err)
+	}
+}
+
+// handbackRevivalPrincipal starts the next round of a finished ordinary
+// root that a helper's hand-back wakes. It never resumes a stopped root:
+// only a person does that.
+var handbackRevivalPrincipal = steer.Principal{Kind: steer.PrincipalKindAgent, ID: "handback"}
 
 // extractPeer extracts the routing peer from the inbound message's structured Peer field.
 func extractPeer(msg bus.InboundMessage) *routing.RoutePeer {

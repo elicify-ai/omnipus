@@ -180,6 +180,55 @@ func TestU1PlanStopKeepsMemberGoalsActive(t *testing.T) {
 	}
 }
 
+// TestU1PlanStopStopsMembersOwnHelperTree pins the team-lead's 2026-10-06
+// ruling: plan Stop selects TREE scope for each member, including that
+// member's own helpers. Both live owners land through the one Stop, retain
+// goals (D6/D8.10), and notify only their direct parents (D6).
+func TestU1PlanStopStopsMembersOwnHelperTree(t *testing.T) {
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
+	al, _ := newSteerAL(t)
+	wireSteerCompletionDeps(t, al)
+	h := u1PlanStopHarness(t, al)
+	memberGate := newGoalRunGate("member partial work", nil)
+	helperGate := newGoalRunGate("helper partial work", nil)
+	installGoalRunProvider(t, al, memberGate, helperGate)
+	origin := newTestSteeringSession(t, al, "ws-u1-plan-member-tree")
+	member := launchGoalBearingChild(t, al, origin, "u1-plan-tree-member", goalChildLaunchOptions{live: true})
+	awaitGoalProvider(t, memberGate)
+	helper := launchGoalBearingChild(t, al, member.SessionID, "u1-plan-tree-helper", goalChildLaunchOptions{live: true})
+	awaitGoalProvider(t, helperGate)
+	mustCreateRunningPlan(t, h.plans, "p-tree", "owner")
+	mustCreateTask(t, h.tasks, &task.Task{
+		Title: "live member with own helper", WorkspaceID: "ws", PlanID: "p-tree",
+		Status: task.StatusInProgress, SessionID: member.SessionID,
+	})
+
+	if _, err := h.pe.StopPlan(context.Background(), "p-tree", "tester", "web"); err != nil {
+		t.Fatalf("StopPlan(member tree): %v", err)
+	}
+	joinGoalFixtureRuns(t, al)
+	for _, selected := range []*session.LifecycleRecord{member, helper} {
+		landed := rootReopenedRecord(t, al, selected.SessionID)
+		if landed.State != session.LifecycleStopped || landed.Terminal() || landed.Generation != selected.Generation {
+			t.Errorf("plan Stop left selected member/helper %s at state=%q terminal=%v generation=%d; want same-generation nonterminal stopped (TREE ruling, D2/D8.10)",
+				selected.SessionID, landed.State, landed.Terminal(), landed.Generation)
+		}
+		if landed.Stop != nil || landed.StopNote == nil || landed.StopNote.Cause != session.StopCauseCascade || landed.StopNote.By != "human:tester" {
+			t.Errorf("selected member/helper %s landing has fence=%+v note=%+v; want no fence and retained cascade/human:tester note (D2/D8.10)", selected.SessionID, landed.Stop, landed.StopNote)
+		}
+		if g := mustGoalRecord(t, selected.GoalRef); g.State != generated.GoalStateActive {
+			t.Errorf("plan Stop ended selected member/helper %s's goal: %q, want active (D6/D8.10)", selected.SessionID, g.State)
+		}
+	}
+	assertU1StoppedChildNotice(t, al, origin, member, string(session.StopCauseCascade), "tester")
+	assertU1StoppedChildNotice(t, al, member.SessionID, helper, string(session.StopCauseCascade), "tester")
+	assertU1NoStoppedNoticeFor(t, al, origin, helper.SessionID)
+	originRec := rootReopenedRecord(t, al, origin)
+	if originRec.State != session.LifecycleRunning || originRec.Stop != nil || originRec.StopNote != nil {
+		t.Errorf("plan member TREE stop reached upward to its origin: %+v — D7 is downward only", originRec)
+	}
+}
+
 // TestU1PlanStopNilEdgeOrdinaryRootMemberGetsNoNotice pins ADR-093 D6's
 // consequence (architect §3.3): a member whose steering edge was dropped at
 // task start runs as an ordinary root (`SteeredBy == nil`) and has NO D6

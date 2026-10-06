@@ -32,45 +32,13 @@
  *      (openSessionByDeepLink) reconstructs the ActivityPanel row from
  *      those persisted frames.
  *
- * ADR-091 fix lane RX-FRONTEND, Defect 2 — two bugs fixed here, both found
- * by re-deriving what the system actually emits/renders instead of trusting
- * this file's own prior assertions:
+ * Current Stop oracle (2026-10-06): ADR-20260928 D2 says Stop is
+ * "non-terminal" and requires "same-generation RESUME". No final hand-back
+ * or end frame is needed for a landed stopped state. Assert the row's
+ * subagent_state lifecycle and visible stopped label before/after reload.
+ * This replaces the old interrupted subagent_end oracle, not the Stop scope.
  *
- * 1. WRONG STATUS VALUE. `ActivityPanel.tsx::ActivityRow` stamps
- *    `data-status` from `item.status` — the SPAN axis (span.status, cleared
- *    only by `subagent_end`) — never from `lifecycleState` (the
- *    `subagent_state` axis). On a Stop, the Go side emits DIFFERENT values on
- *    each axis (verified against source, not assumed):
- *      - `pkg/agent/steer_frames.go::deliverSubagentEnd` maps
- *        `steer.OutcomeInterrupted` -> `SubTurnStatusInterrupted`, i.e.
- *        `subagent_end.status = "interrupted"` — this is `item.status`, i.e.
- *        `data-status`.
- *      - `pkg/agent/steer_audience.go::subagentStateForOutcome` (lines
- *        232-245) separately maps that SAME `steer.OutcomeInterrupted` ->
- *        `session.LifecycleStopped` ("stopped") for the `subagent_state`
- *        frame — this is `lifecycleState`, rendered as the row's visible
- *        status TEXT via `getLifecycleStatusDot`
- *        (`src/lib/subagentStatus.tsx`), never as `data-status`.
- *    The old assertion (`data-status: 'cancelled'`) read the second value off
- *    the first attribute — a value the system never emits there. Fixed below
- *    to assert `data-status: 'interrupted'` and the visible label "stopped".
- *
- *    UPDATE (2026-09-29/30, founder rulings on session states, F0929-2):
- *    `cancelled`/`timed_out`/`paused` were consolidated into one single
- *    non-terminal, resumable state, `stopped`. `session.LifecycleCancelled`
- *    no longer exists as a Go symbol — `subagentStateForOutcome` now returns
- *    `session.LifecycleStopped` ("stopped") for both `steer.OutcomeInterrupted`
- *    and `steer.OutcomeTimedOut`. The visible label this row shows for a
- *    stopped steered child is therefore "stopped", not "cancelled" — the two
- *    `getByText` assertions below were updated to match. Source of truth:
- *    `docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md`
- *    (F0929-2) and `coordination/PLAN-2026-09-28.md`, "2026-09-29 Founder
- *    rulings — session states, stop model". This test will only actually go
- *    green once the wire-contract and rendering fixes for `stopped` have
- *    landed alongside it — the oracle text here is corrected ahead of that,
- *    not proof it currently passes.
- *
- * 2. UNREACHABLE STOP BUTTON. `ChatScreen.tsx`'s `stop-btn` only renders
+ * Fixture boundary — UNREACHABLE STOP BUTTON. `ChatScreen.tsx`'s `stop-btn` only renders
  *    while `isStreaming` is true for the currently attached session, and
  *    `cancelStream()` (src/store/chat/slices/outbound-lifecycle.ts) ADDITIONALLY
  *    gates its own network send on that same flag — both are populated only
@@ -391,24 +359,12 @@ test(
     await openActivityPanel(page)
     const rowAfterStop = page.locator('[data-testid="activity-row"]', { hasText: taskLabel })
 
-    // `data-status` is `ActivityRow`'s SPAN axis (`item.status`, from
-    // `subagent_end.status`) — a Stop maps to `steer.OutcomeInterrupted`,
-    // which `deliverSubagentEnd` (pkg/agent/steer_frames.go) stamps as
-    // "interrupted", never "stopped". "stopped" is the SEPARATE
-    // `lifecycleState` axis (`subagent_state.state`,
-    // pkg/agent/steer_audience.go::subagentStateForOutcome, lines 232-245)
-    // that never reaches `data-status` — it only drives the row's visible
-    // label (getLifecycleStatusDot, src/lib/subagentStatus.tsx). Assert
-    // both, on their correct axes, and explicitly rule out the states an
-    // interrupted-but-mishandled Stop most often gets confused with.
-    await expect(rowAfterStop).toHaveAttribute('data-status', 'interrupted', { timeout: 15_000 })
-    // 'cancelled' (not 'failed') is the confusion this rules out on the
-    // `data-status` axis: it remains a REAL `ActivityStatus` member
-    // (src/hooks/useRunningActivity.ts) — unaffected by the F0929-2 session-
-    // state consolidation, which only touched `lifecycleState` — so stamping
-    // it on `data-status` is still the plausible mistake. ('failed' is not
-    // in the `ActivityStatus` union at all, so asserting its absence was
-    // vacuous.)
+    // ADR-20260928 D2: Stop is "non-terminal" and requires
+    // "same-generation RESUME". A resumable Stop sends subagent_state
+    // stopped, not a successful subagent_end. Assert the current lifecycle,
+    // not the delegation bracket's superseded interrupted-end oracle.
+    await expect(rowAfterStop).toHaveAttribute('data-lifecycle-state', 'stopped', { timeout: 15_000 })
+    await expect(rowAfterStop).not.toHaveAttribute('data-lifecycle-state', 'failed')
     await expect(rowAfterStop).not.toHaveAttribute('data-status', 'cancelled')
     await expect(rowAfterStop).not.toHaveAttribute('data-status', 'running')
     await expect(rowAfterStop.getByText('stopped', { exact: true })).toBeVisible()
@@ -420,11 +376,11 @@ test(
     await waitForConnected(page, { timeout: 15_000 })
     // A full reload DOES reset ActivityBar's `panelOpen`, so this is the one
     // place the click genuinely has to happen — and the bar only mounts at
-    // all if the stopped child's span came back from replay (ActivityBar's
-    // `hasFailedRecent` gate), which is precisely this assertion's point.
+    // all if the stopped child's lifecycle came back from replay, which
+    // is precisely this assertion's point.
     await openActivityPanel(page)
     const rowAfterReload = page.locator('[data-testid="activity-row"]', { hasText: taskLabel })
-    await expect(rowAfterReload).toHaveAttribute('data-status', 'interrupted', { timeout: 15_000 })
+    await expect(rowAfterReload).toHaveAttribute('data-lifecycle-state', 'stopped', { timeout: 15_000 })
     await expect(rowAfterReload.getByText('stopped', { exact: true })).toBeVisible()
   },
 )

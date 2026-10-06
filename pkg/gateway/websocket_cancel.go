@@ -5,11 +5,8 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -205,45 +202,6 @@ func (h *WSHandler) sendExternalCancelPartialNotice(ctx context.Context, session
 	}
 }
 
-// cancelSteeredSubtree applies ADR-091 Stop only when a durable lifecycle
-// record exists. Ordinary chats with no steering record keep using the legacy
-// live-turn cancel path and must not be falsely reported as partial.
-func cancelSteeredSubtree(ctx context.Context, al *agent.AgentLoop, sessionID string, by steer.Principal) (steer.CancelReport, bool) {
-	return applySteeredCancel(al, sessionID, func(canceller steer.Canceller) (steer.CancelReport, error) {
-		return canceller.CancelSubtree(ctx, sessionID, by)
-	})
-}
-
-func applySteeredCancel(al *agent.AgentLoop, sessionID string, apply func(steer.Canceller) (steer.CancelReport, error)) (steer.CancelReport, bool) {
-	var report steer.CancelReport
-	if al == nil {
-		return report, false
-	}
-	store := al.GetSessionLifecycleStore()
-	if store == nil {
-		return report, false
-	}
-	if _, err := store.Load(sessionID); err != nil {
-		if errors.Is(err, session.ErrLifecycleNotFound) {
-			if _, statErr := os.Stat(filepath.Join(store.Dir(), sessionID+".jsonl")); errors.Is(statErr, os.ErrNotExist) {
-				return report, false
-			}
-		}
-		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: err.Error()})
-		return report, true
-	}
-	canceller := gatewaySteerCanceller(al)
-	if canceller == nil {
-		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: "steer canceller is not configured"})
-		return report, true
-	}
-	result, err := apply(canceller)
-	if err != nil {
-		result.Unreachable = append(result.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: err.Error()})
-	}
-	return result, true
-}
-
 // u11CollectDescendantSessionIDs walks the durable lifecycle store's
 // SteeringSessionID edges (pkg/session/lifecycle.go, FR-019/FR-020;
 // LifecycleStore.List(LifecycleFilter{SteeringSessionID: id}) returns X's
@@ -403,6 +361,14 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 		// error... does NOT terminate the WebSocket connection" — precisely
 		// "something the user asked for did not happen", with no enum to
 		// extend and no contract change required.
+		OnStopSettled: func(sid string, err error) {
+			if err != nil && wc != nil {
+				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+					Type: string(generated.WsFrameTypeError), SessionId: &sid,
+					Message: fmt.Sprintf("Stop for session %s could not finish; required storage or notice publication failed. Retry after storage is repaired.", sid),
+				})
+			}
+		},
 		OnLatchExpired: func(scope agent.CancelScope, canceller agent.CancelCanceller) {
 			if wc == nil {
 				// No live connection to notify — buildCancelHooks(nil) is used
@@ -484,7 +450,7 @@ func (h *WSHandler) handleCancelWithScope(wc *wsConn, sessionID string, stopAll 
 		return
 	}
 
-	report, cascaded, outcome, err := h.requestScopedStop(wc, sessionID, stopAll)
+	report, cascaded, outcome, staged, err := h.requestScopedStop(wc, sessionID, stopAll)
 	if cascaded {
 		h.sendCancelPartialNotice(wc, sessionID, report)
 		h.sendExternalCancelPartialNotice(context.Background(), sessionID, report)
@@ -559,5 +525,12 @@ func (h *WSHandler) handleCancelWithScope(wc *wsConn, sessionID string, stopAll 
 		} else if outcome.BackgroundSessionsKilled > 0 || outcome.Armed {
 			h.sendCancelStageFrame(wc, sessionID, "graceful")
 		}
+		return
+	}
+	if cascaded && !staged {
+		// The Stop fired without a running turn of its own (a queued or
+		// never-ran session settled at once), so no stop timeline will send
+		// the requester a stage: acknowledge it with the cascade's report.
+		h.sendCancelReportFrame(wc, sessionID, "detached", report)
 	}
 }

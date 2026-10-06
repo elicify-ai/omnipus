@@ -1,5 +1,11 @@
 # Feature Specification: Async Wake Mechanism (`AsyncNotifier`)
 
+## Amended 2026-10-06 — founder decision
+
+A wake is not unconditional permission to run. **A helper final reaches the parent exactly once by poll OR hand-back wake, never both.** A stopped parent holds its hand-back unconsumed until legitimate resume; Stop all supersedes queued hand-back wakes for the stopped tree, not saved result/history. A keeper reminder for a steered helper enters as a **steered system wake**, preserving its edge and producing-execution ownership. A new scheduled/heartbeat run may revive a completed root as system principal, **never a stopped root**; boot replay is not such a run.
+
+Plain Stop ends only this session's current turn, never helpers. Stop all / `/cancel` stops its full downward helper tree through the same StopSession mechanism (3 s force + subsequent 3 s detach, no public hard/cancel_grace). One sender route/record (transcript as record), waiting-message reboot reconstruction, 256 KiB aggregate cap, ledger compaction and live descendant-stop retry are **deferred to #1198 (founder 2026-10-06)**. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D-A/B/C/E/F/G. Current feature gate: five reviewers — code-reviewer, silent-failure-hunter, pr-test-analyzer, architect, security-lead; old review receipts stay dated history.
+
 **Created**: 2026-07-04
 **Status**: Draft
 **Input**: Session design review (`tool-consolidation-design.html`, approved) + [ADR-036](../architecture/ADR-036-consolidate-shell-and-subagent-tools.md) §3.3, extended per operator direction: must support a future Goals/loop feature (Claude Code-style persistent condition + auto-continuation) without requiring a later refactor.

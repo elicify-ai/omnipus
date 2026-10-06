@@ -8,13 +8,13 @@ import (
 func cancelCommand() Definition {
 	return Definition{
 		Name:                    "cancel",
-		Description:             "Cancel the current turn",
+		Description:             "Stop this session and every helper under it",
 		Usage:                   "/cancel",
 		Surfaces:                []Surface{SurfaceWeb, SurfaceCLI, SurfaceChannel},
 		Delivery:                DeliveryClient,
 		AvailableWhileStreaming: true,
-		// No Aliases per FR-5 — /stop, /abort, /kill and any other alias are
-		// explicitly forbidden.
+		// No aliases. D9 adds /stop and /stop-redirect as separate commands;
+		// /cancel remains the explicit tree-scoped Stop-all confirmation.
 		Handler: func(ctx context.Context, req Request, rt *Runtime) error {
 			if rt == nil {
 				return req.Reply(unavailableMsg)
@@ -43,7 +43,7 @@ func cancelCommand() Definition {
 				return req.Reply("⏸ Cancel acknowledged — nothing is running yet, but it will stop the instant it starts.")
 			case errors.Is(err, ErrNoActiveTurn):
 				// Informational — nothing was running; not a failure.
-				return req.Reply("Nothing to cancel")
+				return req.Reply("Nothing to stop.")
 			default:
 				// Real failure (e.g., fsync error, lock contention).
 				return req.Reply("Cancel request failed: " + err.Error())

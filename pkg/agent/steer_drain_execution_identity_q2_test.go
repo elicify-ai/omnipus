@@ -38,6 +38,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -575,7 +576,7 @@ func TestSteerDrainExecutionIdentityQ2_MalformedProducerClaimCannotRewriteRealAd
 			// Supply malformed caller input to a real existing effect boundary.
 			// Never stamp fake identities into a record/registry/queue entry.
 			_, err := commitSteeredExecutionState(al.GetSessionLifecycleStore(), malformed, session.LifecycleQueued, "Q2 invalid producer must not inject this text")
-			if err != test.want || err.Error() != test.want.Error() {
+			if !errors.Is(err, test.want) || err.Error() != test.want.Error() {
 				t.Fatalf("malformed producer claim %+v refusal = %v, want exact %v", malformed, err, test.want)
 			}
 			after := q2DrainOwnership(al, child.SessionID)

@@ -199,6 +199,9 @@ export function Sidebar() {
     queryKey: ['sessions'],
     queryFn: () => fetchSessions(),
     staleTime: 15_000,
+    // done can precede the server's lifecycle commit; frames alone cannot
+    // keep a mounted row fresh after that last signal.
+    refetchInterval: isVisible ? 15_000 : false,
   })
   const { data: agents = [] } = useQuery({
     queryKey: ['agents'],

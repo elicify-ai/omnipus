@@ -154,7 +154,7 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 	}
 
 	// --- delegate tool: inject the S2/S3 stores + the steering sink + cancel
-	// hooks. SetSteeringSink/SetCancelHooks/SetMessageInbox/SetLifecycleStore
+	// hooks. SetSteeringSink/SetStopHook/SetMessageInbox/SetLifecycleStore
 	// are idempotent in-place setters (delegate was registered by
 	// registerSharedTools just above this call with nil stores; this call
 	// re-wires the real stores in place once they exist). ---
@@ -213,36 +213,18 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			// and revival. Both paths still use the same queue as a chat steer,
 			// so delivery at the child's next tool boundary is unchanged (INV-3).
 			dt.SetSteeringSink(delegateSteeringSink{AgentLoop: al})
-			// Cancel hooks. Both closures go through ADR-091's DURABLE Stop
-			// cascade (steer_delegate_cancel.go::cancelDelegatedSubtree), the
-			// same one a human's Stop uses over the socket and REST
-			// (pkg/gateway/websocket_cancel.go::cancelSteeredSubtree) — soft
-			// stamps and asks each reached turn to stop cooperatively, hard
-			// stamps and fires each turn's generation-aware abort.
-			//
-			// They used to be closures over the live-turn interrupt pair
-			// (al.Interrupt / al.InterruptSessionHard with ScopeSubtree). That
-			// wiring was correct for ADR-057's sub-turns and became wrong twice
-			// over when ADR-091 made a worker a SESSION:
-			//
-			//   - a queued worker has no live turn, so the interrupt reached
-			//     nothing and the tool reported a success-shaped no-op while the
-			//     worker went on to start;
-			//   - ScopeSubtree walks parentTurnID links between live turns, and
-			//     no steered turn has one, so a cancel on a running child left
-			//     its own grandchildren running — reopening exactly the D8/R-13
-			//     leak that scope was chosen to close.
-			//
-			// The durable parent-child edge closes both. See
-			// cancelDelegatedSubtree's own doc comment before changing this.
-			dt.SetCancelHooks(
-				func(sessionKey string, by steer.Principal, hint string) ([]string, error) {
-					return al.cancelDelegatedSubtree(sessionKey, by, false, hint)
-				},
-				func(sessionKey string, by steer.Principal, hint string) ([]string, error) {
-					return al.cancelDelegatedSubtree(sessionKey, by, true, hint)
-				},
-			)
+			// The one session Stop (stop_session.go::StopSession), tree scope,
+			// recorded as the calling agent: the same method a person's Stop all
+			// uses over the socket, REST and commands. It walks the durable
+			// parent-child edge, so a queued worker and a running worker's own
+			// grandchildren are both reached (a live-turn interrupt reached
+			// neither).
+			dt.SetStopHook(func(sessionKey string, by steer.Principal, _ string) ([]string, error) {
+				return al.StopDelegatedTree(sessionKey, by)
+			})
+			// D5: a final the parent already read through a delegate poll
+			// is consumed exactly as its hand-back wake would consume it.
+			dt.SetFinalReadHook(al.recordPolledFinalConsumed)
 			// FR-196 kill switch on the SYNC session-messaging-plane actions
 			// (arch-M2): the live closure re-reads config per call, mirroring
 			// the async consumer's per-event read.

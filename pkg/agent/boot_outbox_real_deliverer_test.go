@@ -479,8 +479,8 @@ func realDelivererCorruptCommittedPayload(t *testing.T, h *bootRecoveryHarness, 
 			t.Fatalf("commit payload is not base64: %v", err)
 		}
 		var message map[string]any
-		if err := json.Unmarshal(original, &message); err != nil {
-			t.Fatalf("committed payload does not parse: %v", err)
+		if unmarshalErr := json.Unmarshal(original, &message); unmarshalErr != nil {
+			t.Fatalf("committed payload does not parse: %v", unmarshalErr)
 		}
 		message["result_so_far"] = corruptedResult
 		corrupted, err = json.Marshal(message)
