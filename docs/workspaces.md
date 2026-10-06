@@ -68,7 +68,7 @@ If Team is already visible and refreshing the workspace fails, the editor stays 
 | Task | The trusted agent can be assigned tasks |
 | Depth | How many times the handoff may be passed on. Zero means it stops with that agent |
 
-The editor requires at least one delegation mode on a line. Delete the line to prevent handoffs between those two agents. An untouched depth follows the workspace/global default.
+The editor requires at least one delegation mode on a line. Delete the line to prevent handoffs in that direction. An untouched depth follows the workspace/global default.
 
 ```mermaid
 flowchart LR
