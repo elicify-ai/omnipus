@@ -939,6 +939,7 @@ describe('ClientFrameTypes — contract test', () => {
       // contracts/asyncapi.yaml SessionModeUpdateFrame, `action: send` on the
       // `chat` channel).
       'session_mode_update',
+      'mail_panel_observer',
     ])
     expect(new Set(ClientFrameTypes)).toEqual(expectedTypes)
   })
