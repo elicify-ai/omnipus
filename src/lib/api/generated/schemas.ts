@@ -103,7 +103,7 @@ type Session = {
   protected?: boolean | undefined;
   agent_id: string;
   title: string;
-  status: "active" | "archived" | "failed";
+  status: "active" | "archived" | "failed" | "interrupted";
   lifecycle_state?:
     | ("working" | "waiting_for_answer" | "done" | "failed" | "stopped")
     | undefined;
@@ -3358,7 +3358,7 @@ export const Session: z.ZodType<Session> = z.object({
   protected: z.boolean().optional(),
   agent_id: z.string(),
   title: z.string(),
-  status: z.enum(["active", "archived", "failed"]),
+  status: z.enum(["active", "archived", "failed", "interrupted"]),
   lifecycle_state: z
     .enum(["working", "waiting_for_answer", "done", "failed", "stopped"])
     .optional(),

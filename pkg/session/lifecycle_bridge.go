@@ -57,8 +57,8 @@ func lifecycleMutatorIsNil(ls LifecycleMutator) bool {
 // `stopped` (and waiting/working) stay coarse-active, so it joins
 // queued/running/needs_input in the no-mirror bucket below — exact helper
 // display now lives on Session.lifecycle_state (SessionLifecycleState), not
-// on this coarse status. StatusInterrupted is retired from the wire enum and
-// is never returned here.
+// on this coarse status. StatusInterrupted is never returned here: only the
+// boot sweep writes it (pkg/agent/boot_sweep.go::reconcileUnifiedMetaStatus).
 //
 //   - LifecycleCompleted → StatusArchived
 //   - LifecycleFailed    → StatusFailed

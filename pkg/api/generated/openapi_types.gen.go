@@ -9385,9 +9385,10 @@ func (e SessionLifecycleState) Valid() bool {
 
 // Defines values for SessionStatus.
 const (
-	SessionStatusActive   SessionStatus = "active"
-	SessionStatusArchived SessionStatus = "archived"
-	SessionStatusFailed   SessionStatus = "failed"
+	SessionStatusActive      SessionStatus = "active"
+	SessionStatusArchived    SessionStatus = "archived"
+	SessionStatusFailed      SessionStatus = "failed"
+	SessionStatusInterrupted SessionStatus = "interrupted"
 )
 
 // Valid indicates whether the value is a known member of the SessionStatus enum.
@@ -9398,6 +9399,8 @@ func (e SessionStatus) Valid() bool {
 	case SessionStatusArchived:
 		return true
 	case SessionStatusFailed:
+		return true
+	case SessionStatusInterrupted:
 		return true
 	default:
 		return false
@@ -10102,9 +10105,10 @@ func (e SessionDetailSessionLifecycleState) Valid() bool {
 
 // Defines values for SessionDetailSessionStatus.
 const (
-	SessionDetailSessionStatusActive   SessionDetailSessionStatus = "active"
-	SessionDetailSessionStatusArchived SessionDetailSessionStatus = "archived"
-	SessionDetailSessionStatusFailed   SessionDetailSessionStatus = "failed"
+	SessionDetailSessionStatusActive      SessionDetailSessionStatus = "active"
+	SessionDetailSessionStatusArchived    SessionDetailSessionStatus = "archived"
+	SessionDetailSessionStatusFailed      SessionDetailSessionStatus = "failed"
+	SessionDetailSessionStatusInterrupted SessionDetailSessionStatus = "interrupted"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailSessionStatus enum.
@@ -10115,6 +10119,8 @@ func (e SessionDetailSessionStatus) Valid() bool {
 	case SessionDetailSessionStatusArchived:
 		return true
 	case SessionDetailSessionStatusFailed:
+		return true
+	case SessionDetailSessionStatusInterrupted:
 		return true
 	default:
 		return false
@@ -23826,7 +23832,7 @@ type Session struct {
 		ToolCalls int `json:"tool_calls"`
 	} `json:"stats"`
 
-	// Status Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
+	// Status Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 	Status SessionStatus `json:"status"`
 
 	// StopNote The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
@@ -23866,7 +23872,7 @@ type Session struct {
 // SessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
 type SessionLifecycleState string
 
-// SessionStatus Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
+// SessionStatus Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 type SessionStatus string
 
 // SessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
@@ -24362,7 +24368,7 @@ type SessionDetail struct {
 			ToolCalls int `json:"tool_calls"`
 		} `json:"stats"`
 
-		// Status Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
+		// Status Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 		Status SessionDetailSessionStatus `json:"status"`
 
 		// StopNote The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
@@ -24475,7 +24481,7 @@ type SessionDetailMessagesVerdictScope string
 // SessionDetailSessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
 type SessionDetailSessionLifecycleState string
 
-// SessionDetailSessionStatus Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
+// SessionDetailSessionStatus Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 type SessionDetailSessionStatus string
 
 // SessionDetailSessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
