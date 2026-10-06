@@ -27,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
+	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -134,7 +135,15 @@ func e2eAnyMessageContains(msgs []providers.Message, substr string) bool {
 // contract: build the resume as an ordinary continuation turn on the same
 // session. Counts invocations so the S-32 stale-card subtest can assert
 // DispatchResume was NEVER called for a superseded card.
+//
+// turnMu models the per-session serialization production gets from the session
+// worker: a resume is an inbox message that runs only after the parked turn
+// that raised the card has returned. Every runTurn on this session goes
+// through runSerialized, so a default-safe auto-submit that fires while the
+// parked turn is still recording its tool result waits instead of appending
+// to the archive underneath that turn's compare-and-commit.
 type e2eResumeDispatcher struct {
+	turnMu  sync.Mutex
 	mu      sync.Mutex
 	calls   int
 	lastErr error
@@ -146,6 +155,55 @@ type e2eResumeDispatcher struct {
 	channel    string
 	chatID     string
 	sessionKey string
+}
+
+// slowFirstCommitSessions stretches the FIRST checkpoint commit of a turn so the
+// window between a turn's metadata snapshot and its compare-and-commit is
+// wider than any default-safe timer. It makes the interleaving that a loaded CI
+// runner produces by luck happen on every run, without touching production.
+type slowFirstCommitSessions struct {
+	session.SessionStore
+	inner session.ContextWindowStore
+	once  sync.Once
+	delay time.Duration
+}
+
+func newSlowFirstCommitSessions(t *testing.T, base session.SessionStore, delay time.Duration) *slowFirstCommitSessions {
+	t.Helper()
+	inner, ok := base.(session.ContextWindowStore)
+	if !ok {
+		t.Fatalf("session store %T does not support context-window checkpoints", base)
+	}
+	return &slowFirstCommitSessions{SessionStore: base, inner: inner, delay: delay}
+}
+
+func (s *slowFirstCommitSessions) AppendWindowMessage(ctx context.Context, key string, msg providers.Message) (memory.WindowSnapshot, error) {
+	return s.inner.AppendWindowMessage(ctx, key, msg)
+}
+
+func (s *slowFirstCommitSessions) SnapshotWindow(ctx context.Context, key string) (memory.WindowSnapshot, error) {
+	return s.inner.SnapshotWindow(ctx, key)
+}
+
+func (s *slowFirstCommitSessions) CommitWindow(ctx context.Context, key string, before, after memory.WindowState) error {
+	s.once.Do(func() { time.Sleep(s.delay) })
+	return s.inner.CommitWindow(ctx, key, before, after)
+}
+
+func (s *slowFirstCommitSessions) RestoreWindow(ctx context.Context, key string, before, after memory.WindowState) error {
+	return s.inner.RestoreWindow(ctx, key, before, after)
+}
+
+func (s *slowFirstCommitSessions) RollbackWindow(ctx context.Context, key string, start memory.WindowState) error {
+	return s.inner.RollbackWindow(ctx, key, start)
+}
+
+// runSerialized runs one turn on the session, never overlapping another.
+func (d *e2eResumeDispatcher) runSerialized(opts processOptions) (turnResult, error) {
+	d.turnMu.Lock()
+	defer d.turnMu.Unlock()
+	ts := newTurnState(d.agentInst, opts, d.al.newTurnEventScope(d.agentInst.ID, opts.SessionKey))
+	return d.al.runTurn(context.Background(), ts)
 }
 
 func (d *e2eResumeDispatcher) DispatchResume(set *askuser.PendingSet, resumeText string) error {
@@ -172,8 +230,7 @@ func (d *e2eResumeDispatcher) DispatchResume(set *askuser.PendingSet, resumeText
 		UserMessage: resumeText, UserInitiated: userInitiated,
 		DefaultResponse: "done",
 	}
-	ts := newTurnState(d.agentInst, opts, d.al.newTurnEventScope(d.agentInst.ID, opts.SessionKey))
-	_, err := d.al.runTurn(context.Background(), ts)
+	_, err := d.runSerialized(opts)
 	d.mu.Lock()
 	d.lastErr = err
 	d.mu.Unlock()
@@ -363,6 +420,7 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 			t.Fatal("native-agent not registered")
 		}
 		allowGoalToolsPolicy(agentInst)
+		agentInst.Sessions = newSlowFirstCommitSessions(t, agentInst.Sessions, 200*time.Millisecond)
 		store, sid := newGoalTestSession(t, al, agentInst.ID)
 
 		dispatcher := &e2eResumeDispatcher{
@@ -383,8 +441,7 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 			t.Fatalf("activation: matched=%v handled=%v reply=%q, want matched=true handled=false reply=\"\"", matched, handled, reply)
 		}
 
-		ts := newTurnState(agentInst, opts, al.newTurnEventScope(agentInst.ID, opts.SessionKey))
-		result, err := al.runTurn(context.Background(), ts)
+		result, err := dispatcher.runSerialized(opts)
 		if err != nil {
 			t.Fatalf("runTurn: %v", err)
 		}
