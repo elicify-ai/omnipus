@@ -61,7 +61,7 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 	// settle it before admitting the next one, instead of refusing a
 	// message that arrived a moment early. Never waits on this caller's
 	// own execution, and never under the admission locks.
-	al.awaitPreviousOrdinaryExecution(ctx, opts.SessionKey)
+	al.awaitPreviousOrdinaryExecution(ctx, sessionID)
 	gate := al.steerAdmission()
 	gate.entryMu.Lock()
 	defer gate.entryMu.Unlock()
@@ -69,7 +69,7 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: %w: an execution is already registered", steer.ErrStaleGeneration)
 	}
 	al.admission.mu.Lock()
-	owner := al.admission.activeScopes[opts.SessionKey]
+	owner := al.admission.activeScopes[sessionID]
 	pending := owner != nil && owner.execution != nil
 	al.admission.mu.Unlock()
 	if pending {
@@ -108,7 +108,7 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: %w", err)
 	}
 	d := newExecutionDisposition(claim)
-	if err := al.admission.attachExecution(opts.SessionKey, d); err != nil {
+	if err := al.admission.attachExecution(sessionID, d); err != nil {
 		return ordinaryExecutionPreparation{}, err
 	}
 	return ordinaryExecutionPreparation{execution: d}, nil
