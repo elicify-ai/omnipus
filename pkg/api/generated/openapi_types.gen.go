@@ -9360,6 +9360,7 @@ func (e SearchProviderCheckResponseStatus) Valid() bool {
 const (
 	SessionLifecycleStateDone             SessionLifecycleState = "done"
 	SessionLifecycleStateFailed           SessionLifecycleState = "failed"
+	SessionLifecycleStateInterrupted      SessionLifecycleState = "interrupted"
 	SessionLifecycleStateStopped          SessionLifecycleState = "stopped"
 	SessionLifecycleStateWaitingForAnswer SessionLifecycleState = "waiting_for_answer"
 	SessionLifecycleStateWorking          SessionLifecycleState = "working"
@@ -9371,6 +9372,8 @@ func (e SessionLifecycleState) Valid() bool {
 	case SessionLifecycleStateDone:
 		return true
 	case SessionLifecycleStateFailed:
+		return true
+	case SessionLifecycleStateInterrupted:
 		return true
 	case SessionLifecycleStateStopped:
 		return true
@@ -9385,9 +9388,10 @@ func (e SessionLifecycleState) Valid() bool {
 
 // Defines values for SessionStatus.
 const (
-	SessionStatusActive   SessionStatus = "active"
-	SessionStatusArchived SessionStatus = "archived"
-	SessionStatusFailed   SessionStatus = "failed"
+	SessionStatusActive      SessionStatus = "active"
+	SessionStatusArchived    SessionStatus = "archived"
+	SessionStatusFailed      SessionStatus = "failed"
+	SessionStatusInterrupted SessionStatus = "interrupted"
 )
 
 // Valid indicates whether the value is a known member of the SessionStatus enum.
@@ -9398,6 +9402,8 @@ func (e SessionStatus) Valid() bool {
 	case SessionStatusArchived:
 		return true
 	case SessionStatusFailed:
+		return true
+	case SessionStatusInterrupted:
 		return true
 	default:
 		return false
@@ -10077,6 +10083,7 @@ func (e SessionDetailMessagesVerdictScope) Valid() bool {
 const (
 	SessionDetailSessionLifecycleStateDone             SessionDetailSessionLifecycleState = "done"
 	SessionDetailSessionLifecycleStateFailed           SessionDetailSessionLifecycleState = "failed"
+	SessionDetailSessionLifecycleStateInterrupted      SessionDetailSessionLifecycleState = "interrupted"
 	SessionDetailSessionLifecycleStateStopped          SessionDetailSessionLifecycleState = "stopped"
 	SessionDetailSessionLifecycleStateWaitingForAnswer SessionDetailSessionLifecycleState = "waiting_for_answer"
 	SessionDetailSessionLifecycleStateWorking          SessionDetailSessionLifecycleState = "working"
@@ -10088,6 +10095,8 @@ func (e SessionDetailSessionLifecycleState) Valid() bool {
 	case SessionDetailSessionLifecycleStateDone:
 		return true
 	case SessionDetailSessionLifecycleStateFailed:
+		return true
+	case SessionDetailSessionLifecycleStateInterrupted:
 		return true
 	case SessionDetailSessionLifecycleStateStopped:
 		return true
@@ -10102,9 +10111,10 @@ func (e SessionDetailSessionLifecycleState) Valid() bool {
 
 // Defines values for SessionDetailSessionStatus.
 const (
-	SessionDetailSessionStatusActive   SessionDetailSessionStatus = "active"
-	SessionDetailSessionStatusArchived SessionDetailSessionStatus = "archived"
-	SessionDetailSessionStatusFailed   SessionDetailSessionStatus = "failed"
+	SessionDetailSessionStatusActive      SessionDetailSessionStatus = "active"
+	SessionDetailSessionStatusArchived    SessionDetailSessionStatus = "archived"
+	SessionDetailSessionStatusFailed      SessionDetailSessionStatus = "failed"
+	SessionDetailSessionStatusInterrupted SessionDetailSessionStatus = "interrupted"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailSessionStatus enum.
@@ -10115,6 +10125,8 @@ func (e SessionDetailSessionStatus) Valid() bool {
 	case SessionDetailSessionStatusArchived:
 		return true
 	case SessionDetailSessionStatusFailed:
+		return true
+	case SessionDetailSessionStatusInterrupted:
 		return true
 	default:
 		return false
@@ -23763,7 +23775,7 @@ type Session struct {
 	// LastCompactionSummary Summary of the last context compaction pass (present only when compaction has occurred).
 	LastCompactionSummary *string `json:"last_compaction_summary,omitempty"`
 
-	// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+	// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
 	LifecycleState *SessionLifecycleState `json:"lifecycle_state,omitempty"`
 
 	// Model LLM model name used in this session (may be empty for legacy sessions).
@@ -23826,7 +23838,7 @@ type Session struct {
 		ToolCalls int `json:"tool_calls"`
 	} `json:"stats"`
 
-	// Status Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
+	// Status Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 	Status SessionStatus `json:"status"`
 
 	// StopNote The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
@@ -23863,10 +23875,10 @@ type Session struct {
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
-// SessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+// SessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
 type SessionLifecycleState string
 
-// SessionStatus Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
+// SessionStatus Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 type SessionStatus string
 
 // SessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
@@ -24299,7 +24311,7 @@ type SessionDetail struct {
 		// LastCompactionSummary Summary of the last context compaction pass (present only when compaction has occurred).
 		LastCompactionSummary *string `json:"last_compaction_summary,omitempty"`
 
-		// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+		// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
 		LifecycleState *SessionDetailSessionLifecycleState `json:"lifecycle_state,omitempty"`
 
 		// Model LLM model name used in this session (may be empty for legacy sessions).
@@ -24362,7 +24374,7 @@ type SessionDetail struct {
 			ToolCalls int `json:"tool_calls"`
 		} `json:"stats"`
 
-		// Status Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
+		// Status Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 		Status SessionDetailSessionStatus `json:"status"`
 
 		// StopNote The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
@@ -24472,10 +24484,10 @@ type SessionDetailMessagesVerdictPerCriterionProvenance string
 // SessionDetailMessagesVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type SessionDetailMessagesVerdictScope string
 
-// SessionDetailSessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+// SessionDetailSessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
 type SessionDetailSessionLifecycleState string
 
-// SessionDetailSessionStatus Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
+// SessionDetailSessionStatus Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 type SessionDetailSessionStatus string
 
 // SessionDetailSessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).

@@ -4421,17 +4421,17 @@ export interface components {
              */
             title: string;
             /**
-             * @description Coarse chat-transcript-metadata status (sub-agent control plane ADR D4/MAJ-009; retires `interrupted`). `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed` session resets this metadata back to `active`.
+             * @description Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
              * @example active
              * @enum {string}
              */
-            status: "active" | "archived" | "failed";
+            status: "active" | "archived" | "failed" | "interrupted";
             /**
-             * @description Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+             * @description Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
              * @example working
              * @enum {string}
              */
-            lifecycle_state?: "working" | "waiting_for_answer" | "done" | "failed" | "stopped";
+            lifecycle_state?: "working" | "waiting_for_answer" | "done" | "failed" | "stopped" | "interrupted";
             /** @description Present only when `lifecycle_state == stopped` (or the session's current generation last landed `stopped`) — the durable, lasting reason for the stop (who/when/why). Absent for every other `lifecycle_state`, and for a session with no lifecycle record. */
             stop_note?: components["schemas"]["StopNote"];
             /**

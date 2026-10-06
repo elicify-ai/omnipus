@@ -1001,14 +1001,16 @@ function WorkspaceSessionTree({
 }
 
 // ADR-20260928 MAJ-009/T26 — the row's lifecycle label, straight from the
-// wire Session.lifecycle_state (already the 5-value display projection; the
+// wire Session.lifecycle_state (already the 6-value display projection; the
 // server collapses queued/running→working, needs_input→waiting_for_answer,
-// completed→done). F0929-2 vocabulary, rendered verbatim. A session with NO
+// completed→done; a restart-cut-off session arrives as interrupted — founder
+// decision 2026-10-06, a session does not fail). F0929-2 vocabulary plus
+// interrupted, rendered verbatim. A session with NO
 // lifecycle_state (no lifecycle record) gets no label at all — never a
 // guess from coarse `status` (a stopped helper has status 'active',
 // lifecycle_state 'stopped'). Colors are state semantics, not decoration:
 // error for stopped/failed, warning for waiting, accent for working,
-// muted for done — held as static literal classes at the use site below
+// muted for done and interrupted — held as static literal classes at the use site below
 // (the design-system scanners verify tokenized class literals and refuse a
 // dynamic class lookup they cannot see through).
 const LIFECYCLE_LABELS: Record<NonNullable<Session['lifecycle_state']>, string> = {
@@ -1017,6 +1019,7 @@ const LIFECYCLE_LABELS: Record<NonNullable<Session['lifecycle_state']>, string> 
   done: 'Done',
   failed: 'Failed',
   stopped: 'Stopped',
+  interrupted: 'Interrupted',
 }
 
 function SidebarSessionRow({
@@ -1093,7 +1096,7 @@ function SidebarSessionRow({
               )}
             >
               {/* Leading real space: the label is its own word in the row's
-                  text ("…Row 1 Done", never "…Row 1Done") — the five-state
+                  text ("…Row 1 Done", never "…Row 1Done") — the six-state
                   vocabulary is the contract, word-separated. */}
               {' '}
               {LIFECYCLE_LABELS[session.lifecycle_state]}
