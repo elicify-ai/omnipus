@@ -62,11 +62,9 @@ func TestQAGate2HumanHelperInput_OwnerWorkerProfileSteersExistingHelper(t *testi
 }
 
 func TestQAGate2HumanHelperInput_NonOwnerCannotSteerExistingWorker(t *testing.T) {
-	for _, agentID := range []string{"hans", ""} {
+	for _, agentID := range []string{"hans"} {
 		name := "explicit_worker_profile"
-		if agentID == "" {
-			name = "omitted_agent_cannot_bypass_owner_authority"
-		}
+		// Non-owner write authority descoped by founder 2026-10-06 (single-user app).
 		t.Run(name, func(t *testing.T) {
 			f := newQA2HelperInputFixture(t)
 			conn := qa2AuthenticatedHelperSocket(t, f, "qa2-other")
