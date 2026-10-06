@@ -663,6 +663,25 @@ func (rr *agentLoopRunRecap) persistResponse() {
 		return
 	}
 
+	// A JSON object that parses but carries no recap text ({"recap":""}, {}) must
+	// not overwrite last-session.md with nothing: treat it as a degraded recap.
+	if strings.TrimSpace(parsed.Recap) == "" {
+		slog.Warn("session_end: recap is empty",
+			"session_id", rr.sessionID,
+			"agent_id", rr.agentInst.ID,
+		)
+		rr.al.writeHeuristicFallbackRetroWithCount(
+			rr.sessionID,
+			rr.trigger,
+			"empty_recap",
+			rr.agentInst,
+			len(rr.entries),
+			rr.toolCallCount,
+			rr.carryForward,
+		)
+		return
+	}
+
 	// Persist last-session summary.
 	memory := rr.agentInst.ContextBuilder.Memory()
 	if memory == nil {
