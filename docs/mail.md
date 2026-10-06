@@ -12,6 +12,8 @@ If none is available, Mail says **No mailbox is configured for this workspace ye
 
 While docked, the message list sits above the reading area. Select **Expand Mail panel** in the panel heading to open or focus Mail in a separate full-screen browser tab; there the list and reading area appear side by side. Use **Back to chat** to return. The [shared panel guide](using-omnipus-ui.md#panels-beside-chat) also explains closing and resizing.
 
+When you return with **Back to chat** or close the expanded Mail tab, the original Chat tab restores the last mailbox, folder and selected message you viewed—not the selection from when you expanded Mail. This applies while the original tab still owns that expanded Mail tab and has no different panel open. If a separate Mail tab is still open for the same workspace, Omnipus offers **Switch** instead of docking another copy.
+
 ## Read messages
 
 Choose **INBOX**, the sent-mail folder (usually **Sent**), or the drafts folder (usually **Drafts**) from the folder list, then select a message. Sent and drafts labels can differ when the mailbox uses other folder names. The reading area initially says **Select a message to read**; an empty folder says **No messages**. In INBOX, an unread count appears beside the folder and unread messages have a colored dot and stronger subject text. Opening an unread, non-draft message marks it read and updates the count. **Read by agent** is a separate label indicating that the agent read that message; it is not the unread indicator. On very narrow screens the folder list is hidden and there is no replacement folder selector; widen the window to switch folders.
