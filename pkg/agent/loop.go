@@ -1730,9 +1730,14 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			Content:   pm.msg.Content,
 			Timestamp: time.Now().UTC(),
 		}
+		// The id is carried only when the write landed: a failed write leaves
+		// no entry to recognise, so the rebuild must not drop anything.
+		pm.msg.TranscriptEntryID = ""
 		if err := pm.transcriptStore.AppendTranscript(pm.transcriptSessionID, entry); err != nil {
 			logger.WarnCF("agent", "could not record channel user message to transcript",
 				map[string]any{"session_id": pm.transcriptSessionID, "channel": pm.msg.Channel, "error": err.Error()})
+		} else {
+			pm.msg.TranscriptEntryID = entry.ID
 		}
 	}
 
@@ -1787,7 +1792,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			// already has lines, so a window that is empty only because Skip
 			// reached the end of a non-empty archive is never rebuilt.
 			if needsHydrate {
-				if err := pm.al.hydrateAgentHistory(pm.transcriptSessionID, pm.msg.Content); err != nil {
+				if err := pm.al.hydrateAgentHistory(pm.transcriptSessionID, pm.msg.TranscriptEntryID); err != nil {
 					logger.WarnCF("agent", "self-heal hydrate failed", map[string]any{
 						"agent_id":   agent.ID,
 						"session_id": pm.transcriptSessionID,
