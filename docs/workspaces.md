@@ -56,6 +56,8 @@ If Team is already visible and refreshing the workspace fails, the editor stays 
 1. Open the workspace's **Team** panel. Each agent on the team appears as a node in a picture.
 2. To grow the team, click **Add agent** and pick from your agents. Membership saves on its own; the indicator in the header shows when it has saved.
    If you added an agent in another tab or window, opening the agent picker in this chat refreshes both the agent list and this workspace's team so a newly added ready-to-chat member can appear. Returning to this chat's tab also refreshes the lists used by the picker and the `@` menu; you do not need to reload the page. Once a nonempty team has loaded, both lists offer its ready-to-chat agents, not ordinary agents from outside this workspace's team. Workers and draft agents are not offered, while a ready Admin can appear without team membership. If the workspace/team refresh fails, Chat can be replaced by **Failed to load workspace. Check your connection and try again.** Select **Retry** there.
+
+   If refreshing the agent list fails, the picker shows "Could not refresh the agent list — showing the last known agents." and keeps the cached choices available. Choose Retry in the picker, using the mouse or keyboard, to refresh the agent list without closing the menu. The notice remains visible while Retry is pending and clears only when agent discovery succeeds.
 3. To trust one agent to delegate to another, drag from the small gold dot on the first agent's node onto the second node. A line appears between them. That line is the trust.
 4. Click the line to tune it with the settings in the table below.
 5. To take trust away, delete the line. Removing an agent from the team removes every line touching it.
