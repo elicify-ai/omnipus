@@ -6,7 +6,7 @@ This page takes you from an empty machine to your first conversation with an age
 
 Omnipus is a self-hosted app: you run it on your own machine or server, and everything it stores stays in one directory there. A single binary — or a single container — serves the web interface and the API on one port, `5000`. Nothing else is exposed.
 
-The first run asks you for two things: the admin account that will own this install, and one AI provider whose models power the agents. You bring the provider. A key from OpenAI or OpenRouter works, and a provider that runs models on your own machine, such as Ollama, needs no key at all. Omnipus creates everything else: a workspace named **My Workspace**, and a first agent, **Mia**, ready to talk.
+The first run asks you to create the admin account that will own this install, enter your name and preferences for tone and detail, and connect one AI provider whose models power the agents. You bring the provider. A key from OpenAI or OpenRouter works, and a provider that runs models on your own machine, such as Ollama, needs no key at all. Omnipus creates everything else: a workspace named **My Workspace**, and a first agent, **Mia**, ready to talk.
 
 ## When you would use it
 
@@ -18,7 +18,7 @@ Use this page once, on a fresh install or a new machine. If Omnipus is already r
 2. **Install Omnipus.** Pick one of the three methods in the table below and run its command.
 3. **Start it.** With a native install, run `omnipus start` in a terminal. With Docker, the container from step 2 is already running.
 4. **Open `http://localhost:5000`.** On a fresh install the app takes you straight to the setup wizard. On a Mac, the first start may ask you to approve the binary under System Settings, then Privacy & Security.
-5. **Work through the wizard's three screens.** The wizard table below describes each one. **Finish** creates your account and saves the provider in one step, then logs you in.
+5. **Work through the wizard's four screens.** The wizard table below describes each one. **Finish** creates your account and saves the provider in one step, then logs you in.
 6. **Select Start chatting** on the "Mia — Assistant" screen. The app opens **My Workspace** on **Chat**, its base page.
 7. **Type a message and send it.** Mia answers. Use the agent picker next to the message box to talk to a different agent. The workspace bar at the top offers **Tasks**, **Calendar**, **Library**, **Mail**, and **Team** as panel toggles; on a narrow bar, use the panels menu.
 
@@ -49,16 +49,17 @@ docker run -d \
 
 `OMNIPUS_GATEWAY_HOST=0.0.0.0` is required in Docker. By default Omnipus listens on the loopback address of its own machine, and inside a container that is the container itself, not yours. Every Docker option, including a larger image with browser support, is in [docker.md](docker.md).
 
-The wizard is three numbered screens plus a closing screen:
+The local setup wizard has four numbered screens plus a closing screen: admin username; password; your name, preferred tone and level of detail; then **Select your model provider and default model**.
 
 | Screen | What you do | What Omnipus does |
 |---|---|---|
 | 1 — What should I call you? | Type the admin username | Accepts any name that is not empty |
 | 2 — Set your password | Choose a password of at least 8 characters, twice | Shows how strong it is |
-| 3 — Add a model key | Pick a provider, paste the key, pick "Model for your first agent" | Checks the connection for the model you picked |
+| 3 — What should I call you? (personal preferences) | Enter your name, choose Tone and How much detail | Includes these preferences when you finish setup |
+| 4 — Select your model provider and default model | Pick a provider, connect it, choose **Default model** | Checks the connection for the model you picked |
 | Last — Mia, Assistant | Select Start chatting | Logs you in and opens Chat |
 
-The check on screen 3 runs when you pick a model, or when you press its Check connection button. **Finish** stays locked until that check passes for the model you selected, so a working key with a broken model cannot get through setup.
+The check on screen 4 runs when you pick a model, or when you press its Check connection button. **Finish** stays locked until that check passes for the model you selected, so a working key with a broken model cannot get through setup.
 
 ## Limits and things to watch
 
@@ -72,7 +73,7 @@ The check on screen 3 runs when you pick a model, or when you press its Check co
 ## Related pages
 
 - [workspaces](workspaces.md) — what the container you just landed in holds, and how to run more than one
-- [agents](agents.md) — the four agents that ship with Omnipus, and how to add your own
+- [agents](agents.md) — the built-in chat colleagues and workers, and how to add your own
 - [concepts](concepts.md) — the mental model behind agents, workspaces, and connectors
 - [settings](settings.md) — changing providers, models, and limits after the install
 - [connectors](connectors.md) — reaching your agents from Telegram, Discord, and other apps

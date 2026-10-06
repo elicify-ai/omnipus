@@ -8,7 +8,7 @@ Every workspace has a Calendar panel, between Tasks and Library in the top bar. 
 
 In a narrow panel or on a phone, the toolbar controls wrap onto extra rows so the view choices, agent filter and **New task** button remain visible and easy to tap.
 
-The Board and List hide scheduled tasks; use Calendar to manage scheduled and repeating work. The split is deliberate: a card that comes back every week never reaches done, so it does not belong on a board. Old web addresses still resolve: `/tasks` redirects to the Tasks panel and `/automations` redirects to the Calendar.
+The Board and List hide scheduled tasks; use Calendar to manage scheduled and repeating work. The split keeps a repeating series separate from the task's last-run status: a run can be **Done** while future occurrences remain scheduled. Old web addresses still resolve: `/tasks` redirects to the Tasks panel and `/automations` redirects to the Calendar.
 
 The calendar also records outcomes. In Week and Day, individual recurring-occurrence chips use the recorded run's status icon when a run exists, or the scheduled or no-record state when it does not. One-time scheduled-task chips use a clock icon, with colour taken from the task's status. Clicking a recorded occurrence lets you inspect its status and, when available, its result and a link to the chat it ran in.
 
@@ -44,7 +44,7 @@ Leaving Repeat on Does not repeat, with a time set, creates a one-time task that
 
 1. In Week or Day, click a chip of the series to open its editor. For a rule-based repeating series, **Upcoming** appears only when future occurrences have loaded. In Month, switch to Week or Day first; clicking a date creates a new event.
 2. Change the title or the agent and save. The schedule stays untouched.
-3. Change the repeat rule or the time and save. The series restarts its count from now, and the panel says so before you save.
+3. Change the repeat rule or date/time and save. This starts a fresh occurrence count. A rule-only change to an existing series anchors it at now; a date/time change uses the date/time you selected. The editor warns about restarting the count before you save.
 4. To end a series, edit it and set the end to On date or After N occurrences.
 
 You edit a series as a whole: you cannot change one occurrence alone or drag its chip to another day.

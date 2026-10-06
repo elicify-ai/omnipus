@@ -22,13 +22,13 @@ You need an artificial intelligence provider account or a local provider. Keep i
 
    **If it does not look like that:** Check that the Omnipus process or container is running. If the page does not open, or another app is using port `5000`, follow [troubleshooting](troubleshooting.md).
 
-2. **Create the admin account.** On **What should I call you?**, enter your admin username. Continue to **Set your password**, enter at least eight characters, and enter the same password again.
+2. **Create the admin account and set your preferences.** On **What should I call you?**, enter your admin username. Continue to **Set your password**, enter at least eight characters, and enter the same password again. Continue through the personal-preferences screen: enter your name and choose the tone and level of detail you prefer. Then open **Select your model provider and default model**.
 
-   **What you see:** The wizard advances to **Add a model key**. Password guidance appears while you type.
+   **What you see:** Password guidance appears while you type. After the password, another **What should I call you?** screen asks for your name, **Tone** and **How much detail**. Continuing opens **Select your model provider and default model**.
 
    **If it does not look like that:** Remove any blank username. If you cannot continue from the password screen, check its length and make sure both entries match.
 
-3. **Connect a provider.** Choose a provider on **Add a model key**. Use its sign-in option when offered, or enter its key. Choose a model for your first agent and run **Check connection**.
+3. **Connect a provider.** Choose a provider on **Select your model provider and default model**. Use its sign-in option when offered, or enter its key. Choose **Default model** and run **Check connection** (or **Check sign-in** for a sign-in provider).
 
    **What you see:** A successful check unlocks **Finish**. Select it to create the account, save the provider, and sign you in. The last screen introduces **Mia — Assistant**.
 
