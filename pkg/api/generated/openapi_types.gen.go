@@ -2092,12 +2092,13 @@ func (e DelegatePeekActionAction) Valid() bool {
 
 // Defines values for DelegatePeekResponseState.
 const (
-	DelegatePeekResponseStateCompleted  DelegatePeekResponseState = "completed"
-	DelegatePeekResponseStateFailed     DelegatePeekResponseState = "failed"
-	DelegatePeekResponseStateNeedsInput DelegatePeekResponseState = "needs_input"
-	DelegatePeekResponseStateQueued     DelegatePeekResponseState = "queued"
-	DelegatePeekResponseStateRunning    DelegatePeekResponseState = "running"
-	DelegatePeekResponseStateStopped    DelegatePeekResponseState = "stopped"
+	DelegatePeekResponseStateCompleted   DelegatePeekResponseState = "completed"
+	DelegatePeekResponseStateFailed      DelegatePeekResponseState = "failed"
+	DelegatePeekResponseStateInterrupted DelegatePeekResponseState = "interrupted"
+	DelegatePeekResponseStateNeedsInput  DelegatePeekResponseState = "needs_input"
+	DelegatePeekResponseStateQueued      DelegatePeekResponseState = "queued"
+	DelegatePeekResponseStateRunning     DelegatePeekResponseState = "running"
+	DelegatePeekResponseStateStopped     DelegatePeekResponseState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the DelegatePeekResponseState enum.
@@ -2106,6 +2107,8 @@ func (e DelegatePeekResponseState) Valid() bool {
 	case DelegatePeekResponseStateCompleted:
 		return true
 	case DelegatePeekResponseStateFailed:
+		return true
+	case DelegatePeekResponseStateInterrupted:
 		return true
 	case DelegatePeekResponseStateNeedsInput:
 		return true
@@ -15901,12 +15904,14 @@ type DelegatePeekResponse struct {
 	LatestProgressPct *int `json:"latest_progress_pct,omitempty"`
 
 	// LatestProgressText The most recent progress narration text, if any.
-	LatestProgressText *string                   `json:"latest_progress_text,omitempty"`
-	SessionId          string                    `json:"session_id"`
-	State              DelegatePeekResponseState `json:"state"`
+	LatestProgressText *string `json:"latest_progress_text,omitempty"`
+	SessionId          string  `json:"session_id"`
+
+	// State `interrupted` is a helper session a gateway restart cut off (a lifecycle `failed` record whose failed_reason is `interrupted`; founder rule 2026-10-06: a session does not fail because of a restart). `failed` is a genuine failure only.
+	State DelegatePeekResponseState `json:"state"`
 }
 
-// DelegatePeekResponseState defines model for DelegatePeekResponse.State.
+// DelegatePeekResponseState `interrupted` is a helper session a gateway restart cut off (a lifecycle `failed` record whose failed_reason is `interrupted`; founder rule 2026-10-06: a session does not fail because of a restart). `failed` is a genuine failure only.
 type DelegatePeekResponseState string
 
 // DelegateRedirectAction `delegate` tool call, `action: redirect` (ADR-20260928 D2, retained by ADR-20260929 ruling 8; ADR-20261004 locked decision 3). Replaces the helper's current turn with the new instruction: the running turn is stopped (single session — never a cascade; descendants keep going) and the replacement turn runs with `text`. On an already-stopped helper it resumes it with the instruction; on a done/failed helper it starts nothing — use `resume`.

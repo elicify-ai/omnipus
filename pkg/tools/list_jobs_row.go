@@ -533,6 +533,20 @@ func normalizeSubagent(rec *session.LifecycleRecord) normalizedSubagent {
 			attention:    attentionNone,
 		}
 	case session.LifecycleFailed:
+		if session.LifecycleRecordIsRestartInterrupted(rec) {
+			// Founder rule (2026-10-06): a session does not fail because of a
+			// restart. The FR-006 vocabulary is closed (no `interrupted`
+			// value), so a restart-cut session reports the closest non-failed
+			// status: `blocked`, attention `caller` — the same shape as a
+			// parked redirect_pause generation. It is resumable (follow_up /
+			// resume revive it), so it stays non-terminal and actionable;
+			// native_status keeps the exact word.
+			return normalizedSubagent{
+				status:       jobStatusBlocked,
+				nativeStatus: session.FailedReasonInterrupted,
+				attention:    attentionCaller,
+			}
+		}
 		return normalizedSubagent{
 			status:       jobStatusFailed,
 			nativeStatus: withFailedReason(string(session.LifecycleFailed), rec.FailedReason),

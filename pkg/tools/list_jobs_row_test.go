@@ -251,8 +251,13 @@ func TestIntentionallyStopped_DerivedFromClosedEnums(t *testing.T) {
 	if !cancelled.stopped {
 		t.Error("a cancelled session must report intentionally_stopped=true")
 	}
+	// Oracle change (founder rule 2026-10-06, a session does not fail because
+	// of a restart): failed_reason "interrupted" no longer normalises to
+	// failed (see TestNormalizeSubagent_RestartInterruptedIsNotFailed). The
+	// "crashed" example is a genuine failure instead; the cancelled-vs-crashed
+	// distinction this test pins is unchanged.
 	crashed := normalizeSubagent(&session.LifecycleRecord{
-		State: session.LifecycleFailed, FailedReason: "interrupted",
+		State: session.LifecycleFailed, FailedReason: "judge_rounds_exhausted",
 	})
 	if crashed.stopped {
 		t.Error("a crashed session must report intentionally_stopped=false")

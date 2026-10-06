@@ -7477,6 +7477,7 @@ export const DelegatePeekResponse = z.object({
     "stopped",
     "completed",
     "failed",
+    "interrupted",
   ]),
   latest_checkpoint_summary: z.string().optional(),
   latest_progress_text: z.string().optional(),

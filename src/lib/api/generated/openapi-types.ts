@@ -17427,10 +17427,11 @@ export interface components {
             /** @example 550e8400-e29b-41d4-a716-446655440000 */
             session_id: string;
             /**
+             * @description `interrupted` is a helper session a gateway restart cut off (a lifecycle `failed` record whose failed_reason is `interrupted`; founder rule 2026-10-06: a session does not fail because of a restart). `failed` is a genuine failure only.
              * @example running
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed" | "interrupted";
             /**
              * @description The most recent checkpoint summary, if any.
              * @example Wrote the write-set-scoped diff extractor; tests pending.
