@@ -26,10 +26,15 @@
 
 import { useEffect } from 'react'
 import { queryClient } from '@/lib/queryClient'
+import { useConnectionStore } from '@/store/connection'
 
 /**
  * Invalidate the `['agents']` query whenever this tab regains the user's
- * attention (window focus, or visibilitychange → visible).
+ * attention (window focus, or visibilitychange → visible), and whenever its
+ * websocket connects or reconnects (the connection store's `isConnected`
+ * going false → true — the app's existing "connected" signal). The latter
+ * covers an agent created while the socket was not yet open or was down, so
+ * the agent_created frame never reached this tab.
  */
 export function useAgentsCrossTabRefresh() {
   useEffect(() => {
@@ -45,7 +50,11 @@ export function useAgentsCrossTabRefresh() {
 
     window.addEventListener('focus', invalidate)
     document.addEventListener('visibilitychange', onVisibilityChange)
+    const unsubscribeConnection = useConnectionStore.subscribe((state, prev) => {
+      if (state.isConnected && !prev.isConnected) invalidate()
+    })
     return () => {
+      unsubscribeConnection()
       window.removeEventListener('focus', invalidate)
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
