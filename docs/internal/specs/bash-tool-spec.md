@@ -2,7 +2,7 @@
 
 ## Amended 2026-10-06 — founder decision
 
-The canonical **session** Stop entry is now `AgentLoop.StopSession` for people and agents, not separate per-surface stop machinery. Polite now, force at 3 s, detach 3 s after force; no public hard/cancel_grace. **Plain Stop ends only this session's current turn, never helper sessions; Stop all / `/cancel` stops the entire downward helper tree.** This clarifies session/helper scope only: the background-process policy in FR-B10/B11 is not re-decided here. Passive inactivity/disconnection still is not Stop. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D-A/B and **Consolidate Shell and Subagent Tools; Generalize the Async Wake Mechanism**::Amended 2026-10-06. Current feature gate is five reviewers — code-reviewer, silent-failure-hunter, pr-test-analyzer, architect, security-lead; older dated review receipts remain historical.
+The canonical **session** Stop entry is now `AgentLoop.StopSession` for people and agents, not separate per-surface stop machinery. Polite now, force at 3 s, detach 3 s after force; no public hard/cancel_grace. **Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. Stop click 2 / Esc 2 within it stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate Stop-all button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells; Stop all / cancel kills them (FR-B10/B11). Agent delegate `stop` / `stop_all` is unchanged. Authority: [Stop controls — founder decision 2026-10-06](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/STOP-CONTROLS-DECISION-20261006.md)::Action / Behaviour. Passive inactivity/disconnection still is not Stop. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D-A/B and **Consolidate Shell and Subagent Tools; Generalize the Async Wake Mechanism**::Amended 2026-10-06. Current feature gate is five reviewers — code-reviewer, silent-failure-hunter, pr-test-analyzer, architect, security-lead; older dated review receipts remain historical.
 
 **Created**: 2026-07-04
 **Status**: Draft
@@ -133,19 +133,17 @@ The single most important non-functional requirement in this spec: no operator's
 
 ---
 
-### User Story 5 — Canceling a session also stops any background bash work it started (Priority: P0)
+### User Story 5 — Stop all kills background shell work (Priority: P0)
 
-Today, background `bash` sessions outlive the chat they were started in by default (User Story 2/3's design) — but a real, existing cancel action (`RequestCancel`, the canonical entry point for the web SPA, Tier A `/cancel`, Tier B channels, and the CLI) already cascades to every descendant *turn* when a session is canceled. It does **not** reach detached background processes, which is a genuine gap: an operator who explicitly cancels a session has no way today to also stop a background build or long-running command it kicked off.
+**Amended 2026-10-06 (founder):** plain Stop leaves background shells running. Stop all / `/cancel` kills shells belonging to this chat and its whole helper tree; unrelated chats are untouched. Passive inactivity/disconnection is not Stop.
 
-**Why this priority**: Leaving a background process orphaned after an explicit cancel is a real resource leak and a confusing operator experience ("I canceled it, why is it still running"), not a cosmetic gap.
+**Independent check:** launch background shells in this chat, a helper and an unrelated chat. Plain Stop leaves them running; Stop all kills only this chat's and its helpers' shells. The first Stop may already have ended the chat turn when the second Stop/Esc within 3 s requests the tree stop.
 
-**Independent Test**: Start a background `bash` session inside a chat session, then call `RequestCancel` for that same session; confirm the background process is killed and a subsequent `poll` reports `killed`, without needing any other feature in this spec to be exercised.
-
-**Acceptance Scenarios**:
-
-1. **Given** a chat session has one or more background `bash` sessions running, **When** `RequestCancel` fires for that session (via any of its four surfaces), **Then** every background `bash` session owned by that session is killed as part of the cascade, alongside the existing descendant-turn cancellation.
-2. **Given** a chat session has no background `bash` sessions running, **When** `RequestCancel` fires, **Then** behavior is unchanged from today — the new cascade step is a no-op when there is nothing to kill.
-3. **Given** a background `bash` session belongs to a *different* chat session than the one being canceled, **When** `RequestCancel` fires for the first session, **Then** the other session's background work is left untouched.
+**Acceptance scenarios:**
+1. Plain Stop or `/stop` ends this chat's turn but leaves every background shell running.
+2. Stop all (second Stop/Esc within 3 s) or `/cancel` kills background shells in this chat and the whole helper tree, including a chat with no turn left to stop.
+3. A selected chat with no background work adds no shell-cleanup error.
+4. An unrelated chat's background shells keep running.
 
 ---
 
@@ -164,7 +162,7 @@ Error flows:
 Boundary conditions:
 - When `timeout_seconds` elapses, the system kills the process and reports a timeout, for both foreground and background modes identically.
 - When `persistent: true` is set without `run_in_background: true`, the system rejects the call as invalid.
-- When a session is explicitly canceled (`RequestCancel`, any of its four surfaces), the system kills every background `bash` session owned by that session, in addition to its existing descendant-turn cancellation.
+- Plain Stop leaves background shells running. Stop all / cancel kills background shells owned by the selected chat and its whole helper tree, not unrelated chats.
 
 ---
 
@@ -462,7 +460,7 @@ Boundary conditions:
 
 ---
 
-### Feature: Session cancel cascades to background bash sessions
+### Feature: Stop all kills background bash sessions; plain Stop leaves them running
 
 #### Scenario: Canceling a session kills its background bash sessions
 
@@ -470,7 +468,7 @@ Boundary conditions:
 **Category**: Happy Path
 
 - **Given** a chat session has a running background `bash` session (`command: "sleep 300"`, `run_in_background: true`)
-- **When** `RequestCancel` fires for that session
+- **When** Stop all / `/cancel` is requested for that chat
 - **Then** the background session's process group is killed
 - **And** a subsequent `poll` on that `session_id` reports status `killed`
 - **And** `SessionManager.KillAllForSession` logs one INFO line naming the session ID, PID, and elapsed runtime, and increments its kill counter (FR-B14, 7-reviewer gate MAJ-003) — so the cascade's effect is observable without relying solely on a subsequent `poll`
@@ -483,7 +481,7 @@ Boundary conditions:
 **Category**: Edge Case
 
 - **Given** a chat session has no background `bash` sessions running
-- **When** `RequestCancel` fires for that session
+- **When** Stop all / `/cancel` is requested for that chat
 - **Then** the existing cancel behavior (turn cascade, audit, transcript entry) completes exactly as it does today
 - **And** no error or delay is introduced by the new background-kill step
 
@@ -495,7 +493,7 @@ Boundary conditions:
 **Category**: Edge Case
 
 - **Given** session `A` has a running background `bash` session, and unrelated session `B` also has one
-- **When** `RequestCancel` fires for session `A`
+- **When** Stop all / `/cancel` is requested for chat `A`
 - **Then** session `A`'s background session is killed
 - **And** session `B`'s background session is left running, untouched
 
@@ -670,7 +668,7 @@ Boundary conditions:
 - **FR-M4** (added 2026-07-04, 7-reviewer gate CRIT-002 + MAJ-005): Before deleting any legacy key (FR-M3), the migration MUST write a timestamped backup of the pre-migration policy maps (e.g., `config.json.pre-bash-migration.<unix-ts>.bak`) and name that backup file in the boot log line FR-M1 already requires — giving an operator a recovery path if a migration bug is later discovered, since post-deletion the legacy keys are otherwise unrecoverable from the running system. Additionally, a legacy policy value that is not one of `deny`/`ask`/`allow` (malformed, wrong casing, empty, or a non-string type from a hand-edited config) MUST be treated as `deny` (fail-safe, not silently coerced to `allow`) with a WARN log line naming the offending agent, key, and value.
 - **FR-B9**: `bash`'s background-completion path MUST call `AsyncNotifier.Notify` (per `async-notifier-spec.md`) with `SourceKind: "bash"` on completion, failure, timeout, or kill.
 - **FR-B10**: The system MUST track, for every background `bash` session, the owning chat/transcript session ID (`ProcessSession.OwnerSessionID`) at creation time, so background work can be enumerated and killed by owning session.
-- **FR-B11**: `RequestCancel` MUST, as part of its existing graceful-cascade phase, kill every background `bash` session owned by the session being canceled, via a new `CancelHooks.KillBackgroundSessions` hook backed by `SessionManager.KillAllForSession`. A session with no background work sees no behavior change from today.
+- **FR-B11 — Amended 2026-10-06 (founder):** plain Stop MUST leave background shells running. Stop all / cancel MUST kill background shells belonging to the selected chat and its whole helper tree, including already-stopped or idle chats, leaving unrelated chats alone. Use the existing background-shell cleanup through the shared StopSession tree path; no new process-control mechanism.
 - **FR-B12** (added 2026-07-04, 7-reviewer gate CRIT-001): The system MUST seed `bash: deny` into every newly created custom agent's `AgentBuiltinToolsCfg.Policies` in `pkg/sysagent/tools/agent.go`, mirroring the existing `system.*: deny` seed exactly (same file, same code path, added as a new seeded entry, not merely documented as an assumed convention). This is new, security-relevant scope with its own test — not folded silently into FR-B8.
 - **FR-B13** (added 2026-07-04, MAJ-001 symlink escape): The `cwd` guard MUST resolve the final path with symlinks followed (`filepath.EvalSymlinks` or equivalent) before the inside/outside-workspace containment check — `filepath.Clean` alone (lexical only) is insufficient, since it does not resolve a symlink that a prior `bash` call could have created pointing outside the workspace.
 - **FR-B14** (added 2026-07-04, MAJ-003 observability): `SessionManager.KillAllForSession` MUST log one INFO line per background session killed (session ID, PID, elapsed runtime) and increment a counter, so an operator (or `TestBash_CancelCascade_KillsOwnedBackgroundSessions`) can confirm the cascade actually fired without relying solely on a subsequent `poll` call.
@@ -790,7 +788,7 @@ All four ambiguities identified during drafting were resolved by the operator on
 - Q: Should PTY support be preserved? -> A: No — dropped, matching Claude Code's own scope (ADR-036 §3.1).
 - Q: Does a `cwd` that traverses outside the workspace and back (e.g., `"subdir/../subdir"`) count as an escape attempt? -> A: No — the guard checks only the final, fully-resolved (`filepath.Clean`ed) path; if that final path is inside the workspace, the call is accepted.
 - Q: When a persisted config already has a `bash` policy key alongside a stale legacy key (`exec`/`workspace_shell`/`workspace_shell_bg`), which wins, and does the legacy key stick around? -> A: The `bash` key wins on value, and **the legacy key is deleted, not merely ignored** — the operator explicitly rejected permanent dual-key backward compatibility ("no backward compatibility... needs to be cleaned up"). Migration is a one-shot convert-and-delete, not an ongoing resolution rule (FR-M3).
-- Q: Should a background `bash` session be force-killed when its parent agent session closes? -> A: Nuanced answer, corrected 2026-07-04: passive inactivity (idle chat, dropped connection) does NOT kill it — same as originally assumed, matching `DevServerRegistry`. But an **explicit cancel command in that session MUST cascade down** and kill it — this is new scope (User Story 5, FR-B10/FR-B11), reusing the existing `RequestCancel`/`CancelHooks` mechanism that already cascades to descendant turns but not, until now, to detached background processes.
+- Q: Should a background `bash` session be force-killed when its chat stops? -> A: **Amended 2026-10-06 (founder):** plain Stop, idle and disconnect leave it running; Stop all / cancel kills background shells for this chat and its whole helper tree (US-5, FR-B10/FR-B11).
 - Q: Is `bash` the final, locked tool name? -> A: Yes — confirmed, used literally throughout contracts, frontend labels, and the migration target key.
 
 ### 2026-07-04 — 7-reviewer gate fixes (post-grill, verdict BLOCK → addressed)

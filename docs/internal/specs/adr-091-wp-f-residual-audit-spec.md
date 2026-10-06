@@ -1,5 +1,9 @@
 # ADR-091 WP-F — Residual audit, deletions, closure
 
+**Amended 2026-10-06 (founder):** audit the documented chat controls against [Stop controls — founder decision 2026-10-06](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/STOP-CONTROLS-DECISION-20261006.md)::Action / Behaviour. Stop click 1 / Esc 1 / `/stop` stops this chat's turn only and opens a 3 s window; Stop click 2 / Esc 2 within it stops this chat and its whole helper tree. `/cancel` does that immediately. No separate Stop-all button or offer. `/stop-redirect <instruction>` stops and continues **this chat**, in any root or helper chat. Same on web, CLI and channels. Plain Stop leaves background shells; Stop all / cancel kills them. Agent delegate `stop` / `stop_all` is unchanged. The docs audit must reject a separate Stop-all control or helper-only redirect instruction.
+
+Status: Draft
+
 - **Decision record:** [ADR-091](../architecture/ADR-091-steered-sessions-replace-subagents.md) D10, AC-13
 - **Landing order:** [adr-091-landing-order.md](adr-091-landing-order.md) — after A–E; CP-6 and CP-7
 - **Owner files:** landing order §3, row F

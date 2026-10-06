@@ -2,7 +2,7 @@
 
 ## Amended 2026-10-06 — founder decision
 
-§3.7's session-cancel cascade is now **Stop all / `/cancel` only**, not plain Stop. **Plain Stop ends only this session's current turn, never helper sessions.** Both people and agents call `AgentLoop.StopSession`, polite now / force at 3 s / detach 3 s after force; no public hard option or cancel_grace. A helper final is consumed once by poll OR wake; a stopped parent holds it unconsumed. This clarifies helper scope and the current public entry, not an unrelated background-process policy change. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D-A/B/E. The current feature gate is five reviewers (code-reviewer, silent-failure-hunter, pr-test-analyzer, architect, security-lead); older dated seven-review receipts remain historical.
+**Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. Stop click 2 / Esc 2 within it stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate Stop-all button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells; Stop all / cancel kills them (§3.7). Agent delegate `stop` / `stop_all` is unchanged. Authority: [Stop controls — founder decision 2026-10-06](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/STOP-CONTROLS-DECISION-20261006.md)::Action / Behaviour. Both people and agents call `AgentLoop.StopSession`, polite now / force at 3 s / detach 3 s after force; no public hard option or cancel_grace. A helper final is consumed once by poll OR wake; a stopped parent holds it unconsumed. This clarifies helper scope and the current public entry, not an unrelated background-process policy change. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D-A/B/E. The current feature gate is five reviewers (code-reviewer, silent-failure-hunter, pr-test-analyzer, architect, security-lead); older dated seven-review receipts remain historical.
 
 **Status:** Accepted
 **Date:** 2026-07-04
@@ -106,17 +106,9 @@ The compositor resolves tool policy by **exact string match** on the registered 
 
 **No permanent dual-key backward compatibility (operator decision, 2026-07-04):** once a legacy key is converted, it is **deleted** from the persisted config on that same boot, not merely superseded and left in place. Migration is a one-shot convert-and-clean operation; there is no ongoing code path that resolves `bash` and a legacy key against each other on every boot indefinitely. If an already-migrated config is ever found with a `bash` key sitting alongside a lingering legacy key (e.g., a hand-edited or partially-migrated file), the `bash` key's value is authoritative and the legacy key is deleted on that boot, not re-merged. See `bash-tool-spec.md` FR-M3.
 
-### 3.7 Session cancel cascades to background bash sessions (new scope, operator decision 2026-07-04)
+### 3.7 Stop scope for background bash sessions
 
-`bash`'s background mode (§3.1) is left running by default when its owning chat session goes idle or disconnects — matching `DevServerRegistry`'s existing independent lifecycle. But `pkg/agent/cancel.go`'s `RequestCancel` — the single canonical cancel entry point for all four surfaces (web SPA, Tier A `/cancel`, Tier B channels, CLI) — already cascades to every descendant **turn** via `collectDescendantTurnIDs`. It has no equivalent reach into detached background **processes** today, which is a real gap: an operator who explicitly cancels a session has no way to also stop a background build or long-running command it started.
-
-This ADR adds that cascade:
-
-- `pkg/tools/session.go`'s `ProcessSession` gains an `OwnerSessionID` field, set at creation time to the spawning turn's `transcriptSessionID`.
-- `SessionManager` gains a `KillAllForSession(sessionID string) int` method.
-- `CancelHooks` (`pkg/agent/cancel.go`) gains a new optional `KillBackgroundSessions func(sessionID string)` field, following the exact nil-skipped convention every other `CancelHooks` field already uses, invoked during `RequestCancel`'s existing "PHASE A: graceful cascade" step alongside `CancelPendingApprovals`.
-
-A session with no background `bash` work sees no behavior change. See `bash-tool-spec.md` User Story 5, FR-B10/FR-B11.
+**Amended 2026-10-06 (founder):** plain Stop leaves background shells running. **Stop all / `/cancel` kills background shells belonging to the selected chat and its whole helper tree**, not unrelated chats. Passive inactivity or disconnect kills nothing. This retains the background-shell decision; it does not add a new process-control mechanism. `bash` session ownership and cleanup remain the responsibilities specified in **Unified Shell Execution Tool**::US-5 / FR-B10 / FR-B11.
 
 ## 4. Consequences
 

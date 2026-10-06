@@ -1,8 +1,10 @@
 # Steering — Implementation Specification
 
+**Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. Stop click 2 / Esc 2 within that window stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate Stop-all button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells; Stop all / cancel kills them. Agent delegate `stop` / `stop_all` is unchanged (one helper's turn / its tree). Authority: [Stop controls — founder decision 2026-10-06](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/STOP-CONTROLS-DECISION-20261006.md)::Action / Behaviour.
+
 ## Amended 2026-10-06 — founder decision
 
-Steering text is input, **not a Stop**: a mid-turn message continues the current turn. **Plain Stop ends only this session's current turn, never its helpers; Stop all / `/cancel` stops the full downward helper tree.** Both people and agents use `AgentLoop.StopSession`, polite now / force at 3 s / detach 3 s after force; no agent `cancel_grace` or public `hard` option.
+Steering text is input, **not a Stop**: a mid-turn message continues the current turn. Both people and agents use `AgentLoop.StopSession`, polite now / force at 3 s / detach 3 s after force; no agent `cancel_grace` or public `hard` option.
 
 Delegated input becomes delivered only after exact text/identity is durably in the transcript; a failed write stays queued with a visible error. At the finishing boundary, input before the actual terminal/outbox commit continues the same generation; input after it starts the next round, even if old-final publication failed. Provider text alone is not completion. A helper final reaches its parent once, poll OR wake; stopped parent holds it unconsumed, Stop all supersedes queued wakes.
 

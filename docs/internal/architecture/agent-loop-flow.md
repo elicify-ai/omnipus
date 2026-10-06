@@ -1,5 +1,7 @@
 # Agent Loop & Turn Engine
 
+**Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops this chat's current turn only and opens 3 s; Stop click 2 / Esc 2 within it stops this chat and its whole helper tree. `/cancel` does that immediately. No separate Stop-all button or offer. `/stop-redirect <instruction>` stops and continues **this chat**, in any root or helper chat. Same on web, CLI and channels. Plain Stop leaves background shells; Stop all / cancel kills them. Agent delegate `stop` / `stop_all` is unchanged. Authority: [Stop controls — founder decision 2026-10-06](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/STOP-CONTROLS-DECISION-20261006.md)::Action / Behaviour. The source walkthrough below remains dated; this amendment is not implementation certification.
+
 How a message becomes a response in Omnipus: from the inbound WebSocket frame,
 through per-session workers and the turn loop, to streamed tokens and tool
 execution — and how a running turn is cancelled.
@@ -431,31 +433,18 @@ once when the turn finally exits, tagging the method as `"graceful"` or
 `"hard"`. The cascade always covers sub-turns, so a cancel on a parent stops its
 spawned children too.
 
-### Cancel surfaces
+### Chat control surfaces
 
-| Surface | Path to `RequestCancel` | Transport hooks |
-|---|---|---|
-| **Web SPA** | `cancel` WS frame → `WSHandler.handleCancel` (`websocket.go:~933`) → `RequestCancel` | sends `cancel_stage` frames, auto-denies pending approvals, sets session `interrupted` |
-| **`/cancel` command** | `cmd_cancel.go` → `Runtime.CancelActiveTurn` → `RequestCancelForSession` (`cancel.go:320`) | none |
-| **Text channels** | `/cancel` text → `DispatchCancelIfRecognized` (`channels/cancelparse.go`) → `RequestCancelByChannelChat` (`cancel.go:342`) | none; resolves session by channel+chat |
-| **CLI (double-ESC)** | two ESC presses within 500 ms → `escapeDetector.feed` → `cancelFn` → `agentLoop.RequestCancel` (`cmd/omnipus/internal/agent/helpers.go:163`) | none (in-process) |
+**Amended 2026-10-06 (founder):** this is the current interaction requirement, not a claim about the older source paths in this walkthrough.
 
-`IsCancelCommand` matches only the exact message `/cancel` (case-insensitive,
-trimmed) — never a substring — so it won't fire on a sentence that merely
-mentions `/cancel`. The text-channel path is wired across the text-parsing
-channels (Matrix, WhatsApp, WhatsApp-native, Line, IRC, QQ, OneBot, WeCom,
-Weixin) via the shared `DispatchCancelIfRecognized` helper in `pkg/channels`.
+| Input on web, CLI or channels | Selected scope |
+|---|---|
+| Stop click 1 / eligible Esc 1 / `/stop` | This chat's current turn only; open 3 s. |
+| Stop click 2 / eligible Esc 2 within it | This chat plus its whole helper tree; the second press is the confirmation. |
+| `/cancel` | Tree scope immediately. |
+| `/stop-redirect <instruction>` | Stop this chat's turn, then continue this chat with the instruction, root or helper. |
 
-The **CLI** surface (`cmd/omnipus/internal/agent/`) runs the agent loop
-in-process, so it calls `RequestCancel` directly rather than over REST. A
-raw-stdin watcher (`startRawStdinWatcher` → `runEscapeReadLoop`) feeds each byte
-to an `escapeDetector` (`escape_detector.go`): the first ESC arms a 500 ms
-window (a `[`/`O` introducer within 50 ms is treated as an arrow/F-key sequence
-and passed through, not a cancel); a second ESC inside the window fires the
-cancel callback, which calls `agentLoop.RequestCancel` with
-`CancelScope{SessionID}` and `Channel:"cli"`. Requires a TTY in raw mode; when
-stdin is not a TTY the shortcut is unavailable and the user falls back to
-Ctrl+C.
+No separate Stop-all control or offer. Esc consumed by a menu/dialog/editor dismisses only that surface; terminal arrow/function-key sequences are not standalone Esc presses. All selected executions use the existing StopSession path. The obsolete 500 ms double-Escape mechanism is removed from this description; no replacement byte decoder is designed here.
 
 ### Cancel-related audit events
 

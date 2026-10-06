@@ -1,12 +1,14 @@
 # ADR-091 WP-D — Cancel cascade, dispatch reservation, revival, boot recovery
 
+**Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. Stop click 2 / Esc 2 within that window stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate Stop-all button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells; Stop all / cancel kills them. Agent delegate `stop` / `stop_all` is unchanged (one helper's turn / its tree). Authority: [Stop controls — founder decision 2026-10-06](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/STOP-CONTROLS-DECISION-20261006.md)::Action / Behaviour.
+
 ## Amended 2026-10-06 — founder decision
 
-[The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md) and [Steering commands: no person question](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20261004-steering-commands-no-person-question.md) supersede conflicting session-control requirements and old acceptance expectations in this spec. **Plain Stop ends only the current turn of that one session, never helpers. Stop all / `/cancel` stops that session and its entire downward helper tree.** Human and agent triggers use `AgentLoop.StopSession`: polite immediately, forced after 3 s, detach 3 s after force. `cancel_grace`, the agent 5-second grace and public `hard` option are removed.
+[The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md) and [Steering commands: no person question](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20261004-steering-commands-no-person-question.md) supersede conflicting session-control requirements and old acceptance expectations in this spec. Human and agent triggers use `AgentLoop.StopSession`: polite immediately, forced after 3 s, detach 3 s after force. `cancel_grace`, the agent 5-second grace and public `hard` option are removed.
 
 Landed stopped resumes the same generation with a fresh execution identity; committed done/failed starts the next round. Boot never dispatches from old messages. A finished root is lifecycle completed/done, **not archived/hidden**; human input continues it, and a new scheduled/heartbeat run may revive completed as the system principal, **never stopped**. A helper final is consumed once by poll OR wake; a stopped parent holds it unconsumed until resumed, and Stop all supersedes queued hand-back wakes without deleting saved results.
 
-Delegated input is delivered only after exact text/identity is durably in the transcript; a failed write stays queued with a visible error. One route/record for all senders (transcript as record), waiting-message restart reconstruction, 256 KiB aggregate cap, ledger compaction and live failed-descendant-stop retry are **deferred to #1198 (founder 2026-10-06)**. F6 is the later post-landing simplification review, not authorization to remove safeguards now. The historical holdout below stays verbatim; conflicting old Stop, generation, person-question and automatic-boot-run oracles are not current acceptance.
+Delegated input is delivered only after exact text/identity is durably in the transcript; a failed write stays queued with a visible error. One route/record for all senders (transcript as record), waiting-message restart reconstruction, 256 KiB aggregate cap, ledger compaction and live failed-descendant-stop retry are **deferred to #1198 (founder 2026-10-06)**. F6 is the later post-landing simplification review, not authorization to remove safeguards now. Stop-control wording below is corrected in place; unrelated historical generation, person-question and automatic-boot-run oracles remain superseded, not current acceptance.
 
 Status: Draft
 
@@ -17,7 +19,7 @@ Status: Draft
 
 ## Summary
 
-Stop all must reach everything under the session it is pressed on — including a sub-agent that was woken after its own child finished, and one whose wake is queued but has not started — and it must still hold after a restart. Today Stop follows an in-memory link that a woken session loses. This package makes Stop stamp a durable marker on every session it reaches, makes every dispatch check its own session's marker and generation first, defines how a stopped session is revived by a newer instruction, reports partial results honestly when part of the tree cannot be read, and makes boot recovery classify every record, deliver failures to the parent, and re-wake entries whose wake was lost.
+Stop all must reach this chat and everything under it — including a sub-agent that was woken after its own child finished, and one whose wake is queued but has not started — and it must still hold after a restart. Today Stop follows an in-memory link that a woken session loses. This package makes Stop stamp a durable marker on every session it reaches, makes every dispatch check its own session's marker and generation first, defines how a stopped session is revived by a newer instruction, reports partial results honestly when part of the tree cannot be read, and makes boot recovery classify every record, deliver failures to the parent, and re-wake entries whose wake was lost.
 
 ## Existing codebase context
 
@@ -48,13 +50,13 @@ Stop all must reach everything under the session it is pressed on — including 
 
 ### US-1 — Stop all reaches the whole tree, durably (P0)
 
-1. **Given** R → A → B → C where B was re-entered after C completed, **When** Stop all is pressed on R, **Then** R's, A's, B's and C's records carry a Stop marker for their current generation, and A, B and C's live turns are cancelled.
-2. **Given** C's completion has queued a wake for B that has not started, **When** Stop all is pressed on R before it starts, **Then** the wake is refused at reservation and B does not run.
-3. **Given** the same, **When** Stop all is pressed on R after B's re-entry registered, **Then** B is cancelled.
-4. **Given** B's record is unreadable, **When** Stop all is pressed on R, **Then** A and C (if reachable) are stamped and cancelled, the report names B as unreachable, the Stop response carries `partial: true`, and one line reaches the channel the Stop came from (founder decision, round 6).
-5. **Given** Stop all is pressed on middle node B, **When** the cascade runs, **Then** B's and C's records are stamped; A's and R's are not; A's next re-entry runs.
-6. **Given** Stop on R stamped B in generation g, **When** B is revived by a newer instruction as generation g+1, **Then** the old marker does not cancel it; an unrelated session on the same agent was never stamped and is unaffected.
-7. **Given** a Stop cascade in flight, **When** a launch under A lands after A was stamped, **Then** the child is stamped at launch (WP-A, FR-A-015) and never starts.
+1. **Given** R → A → B → C where B was re-entered after C completed, **When** Stop all is requested on R, **Then** R's, A's, B's and C's records carry a Stop marker for their current generation, and A, B and C's live turns are cancelled.
+2. **Given** C's completion has queued a wake for B that has not started, **When** Stop all is requested on R before it starts, **Then** the wake is refused at reservation and B does not run.
+3. **Given** the same, **When** Stop all is requested on R after B's re-entry registered, **Then** B is cancelled.
+4. **Given** B's record is unreadable, **When** Stop all is requested on R, **Then** A and C (if reachable) are stamped and cancelled, the report names B as unreachable, the Stop response carries `partial: true`, and one line reaches the channel the Stop came from (founder decision, round 6).
+5. **Given** Stop all is requested on middle node B, **When** the cascade runs, **Then** B's and C's records are stamped; A's and R's are not; A's next re-entry runs.
+6. **Given** Stop all on R stamped B in generation g, **When** B is revived by a newer instruction as generation g+1, **Then** the old marker does not cancel it; an unrelated session on the same agent was never stamped and is unaffected.
+7. **Given** a Stop-all cascade in flight, **When** a launch under A lands after A was stamped, **Then** the child is stamped at launch (WP-A, FR-A-015) and never starts.
 8. **Given** a Stop all on R, **When** the process restarts, **Then** every stamped session stays stopped.
 9. **Given** the cascade stamped B in generation 1 and, before it reached the cancel step, B was revived and registered in generation 2, **When** the cascade cancels B with generation 1, **Then** the registry refuses it, B's generation-2 turn keeps running, and the report lists B under `SkippedNewerGeneration`.
 10. **Given** a descendant that is already terminal, **When** the cascade reaches it, **Then** nothing is written (terminal records are immutable) and it is listed under `SkippedTerminal`.
@@ -82,14 +84,16 @@ Stop all must reach everything under the session it is pressed on — including 
 |---|---|
 | Stop on a leaf | only the leaf |
 | Ancestor pruned by retention while a descendant lives | prevented by WP-A's invariant; if encountered, reported as unreachable |
-| Stop issued twice | idempotent; one report |
+| Stop all issued twice | idempotent; one report |
+| First Stop/Esc or `/stop` on root or helper | this chat's turn only; helpers and background shells keep running; open 3 s |
+| Second Stop/Esc within 3 s, or `/cancel` | tree scope even if the first turn ended; kill the tree's background shells; no extra button |
 | Root record itself unreadable | Stop still cancels live turns found in memory; reported partial |
 | Revive then Stop within the same second | both applied in arrival order under the record lock; the later one wins |
-| Stop on a root whose only descendant is `queued` | the descendant is stamped and never starts; `subagent_state(cancelled)` written |
+| Stop all on a root whose only descendant is `queued` | the descendant is stamped and never starts; `subagent_state(cancelled)` written |
 
 ## Behavioral contract
 
-- When Stop all is pressed on a session, the system stamps that session and every descendant it can reach by the durable edge, cancels their live turns, refuses their queued wakes, and reports what it could not reach.
+- When Stop all is requested on a session, the system stamps that session and every descendant it can reach by the durable edge, cancels their live turns, refuses their queued wakes, and reports what it could not reach.
 - When a steered session is dispatched, the system first checks its own record — marker, generation, registration.
 - When a newer instruction arrives for a stopped session, the system revives it as a new generation.
 - When the process boots, the system classifies every record, fails interrupted steered sessions and tells their parents, recovers parked sessions from their record, keeps stopped sessions stopped, re-wakes lost wakes, and surfaces unreadable records.
@@ -110,12 +114,12 @@ Conventions: landing order §5 item 6.
 
 | Constraint | Exact check |
 |---|---|
-| Full cascade (Stop all only) | in the 3-level fixture with B re-entered, Stop on R → every record of R, A, B, C has `Stop.Generation == Generation`; `activeTurnStates` contains none of A, B, C within 2 s |
+| Full cascade (Stop all only) | in the 3-level fixture with B re-entered, Stop all on R → every record of R, A, B, C has `Stop.Generation == Generation`; `activeTurnStates` contains none of A, B, C within 2 s |
 | Queued re-entry refused | `ReserveDispatch(B, gen)` returns false after Stop stamped B's record for its current generation; `Dispatch` registers nothing |
 | Stale wake refused | `ReserveDispatch(B, 1)` false when `B.Generation == 2`; the wake is acknowledged |
-| Siblings independent | Stop on B; `ReserveDispatch(C', gen)` for sibling C' returns true |
-| Middle node | Stop on B; A's and R's records carry no marker for their generation; A's next re-entry runs |
-| Durable | Stop on R; `Reboot()`; `ReserveDispatch` false for every stamped session |
+| Siblings independent | Stop all on B; `ReserveDispatch(C', gen)` for sibling C' returns true |
+| Middle node | Stop all on B; A's and R's records carry no marker for their generation; A's next re-entry runs |
+| Durable | Stop all on R; `Reboot()`; `ReserveDispatch` false for every stamped session |
 | Revival | newer instruction → `Generation` incremented; `ReserveDispatch(B, 2)` true; `subagent_state(running)` written |
 | Order under lock | 100 randomized Stop/Revive interleavings → the record reflects the last write, never a torn state |
 | Cancel carries generation | stamp B (gen 1); revive + register B (gen 2); cancel with gen 1 → refused; B's gen-2 turn alive; `SkippedNewerGeneration == [B]` |
@@ -149,35 +153,35 @@ Feature: Cancel cascade, reservation, revival and boot recovery
   # Happy Path — Traces to: US-1 / AS-1
   Scenario: Stop all stamps and stops the whole tree
     Given a chain R -> A -> B -> C and B has been re-entered after C completed
-    When the operator presses Stop all on R
+    When the operator requests Stop all on R
     Then R, A, B and C carry a Stop marker for their current generation
     And A, B and C are cancelled
 
   # Error Path — Traces to: US-1 / AS-2
   Scenario: Stop beats a queued wake
     Given C has completed and B's wake is queued but not started
-    When the operator presses Stop all on R
+    When the operator requests Stop all on R
     Then B's dispatch is refused at reservation
     And B never runs
 
   # Error Path — Traces to: US-1 / AS-4
   Scenario: Partial cascade is reported everywhere it should be
     Given B's lifecycle record is unreadable
-    When the operator presses Stop all on R from Telegram
+    When the operator requests Stop all on R from Telegram
     Then A and C are cancelled
     And the Stop report lists B as unreachable and is marked partial
     And Telegram receives one line: "stopped 2 of 3; 1 unreachable"
 
   # Alternate Path — Traces to: US-1 / AS-5
   Scenario: Stop on a middle node leaves its ancestors alone
-    When the operator presses Stop all on B
+    When the operator requests Stop all on B
     Then B and C are stamped and cancelled
     And A and R carry no marker
     And A's next re-entry runs
 
   # Alternate Path — Traces to: US-1 / AS-6
   Scenario: A newer instruction revives a stopped session
-    Given Stop on R stamped B's record in generation 2
+    Given Stop all on R stamped B's record in generation 2
     When the operator writes into B
     Then B is revived as generation 3 and its turn runs
 
@@ -189,7 +193,7 @@ Feature: Cancel cascade, reservation, revival and boot recovery
 
   # Error Path — Traces to: US-1 / AS-8
   Scenario: Stop survives a restart
-    Given Stop on R stamped A, B and C
+    Given Stop all on R stamped A, B and C
     When the process restarts
     Then A, B and C stay stopped
 
@@ -351,7 +355,7 @@ Preserved: existing cancellation tests for live descendants (`subturn_*cancel*_t
 
 | ID | Criterion |
 |---|---|
-| SC-D-1 | 100% of fixture Stops stamp and reach every readable descendant within 2 s, and hold after `Reboot()`. |
+| SC-D-1 | 100% of fixture Stop-all requests stamp and reach every readable descendant within 2 s, and hold after `Reboot()`. |
 | SC-D-2 | 0 queued or stale re-entries run after a Stop in 1,000 randomized timings. |
 | SC-D-3 | 100% of simulated crash states produce exactly one parent notification. |
 
@@ -384,14 +388,14 @@ ADR ACs covered: AC-8, AC-11 (the walked-root containment becomes reconstruction
 
 ## Holdout evaluation scenarios (not for development)
 
-1. Delegate three levels deep, let the bottom finish, press Stop at the top: everything stops, no orphan keeps running.
-2. Press Stop at the exact moment a middle worker is about to be woken: it never wakes.
-3. Corrupt one middle record; press Stop: the others stop and the UI says the Stop was partial and why.
+1. Delegate three levels deep, let the bottom finish, request Stop all at the top: everything stops, no orphan keeps running.
+2. Request Stop all at the exact moment a middle worker is about to be woken: it never wakes.
+3. Corrupt one middle record; request Stop all: the others stop and the UI says the Stop was partial and why.
 4. Kill the process mid-delegation; restart: the parent is told the child failed.
 5. Kill the process while a worker is waiting for an answer; restart; answer it: the worker continues.
 6. Upgrade an instance with an old running delegation: it is failed and reported, not resumed.
 7. Press Stop, then write into the stopped worker: it continues as a new generation.
-8. Press Stop, restart the process: nothing under that session runs.
+8. Request Stop all, restart the process: nothing under that session runs.
 
 ## Definition of done
 
