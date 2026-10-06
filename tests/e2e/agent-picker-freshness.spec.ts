@@ -68,12 +68,16 @@ import { expect } from "@playwright/test";
 import { test } from "./fixtures/console-errors";
 import { agentPicker } from "./fixtures/selectors";
 import { createBrowserProbeAgent } from "./fixtures/browser-input-probe";
+import { waitForWsConnected } from "./fixtures/session-setup";
 
 test.describe("agent picker freshness after a raw-REST agent creation (row 55 bug A / issue #1009)", () => {
   test("a newly created agent becomes visible in the picker without a reload — the #1009 acceptance test", async ({
     page,
   }) => {
     await page.goto("/");
+    // The agent_created frame is fire-and-forget (nothing replays it on
+    // connect), so the SPA socket must be open BEFORE the REST creation.
+    await waitForWsConnected(page);
 
     const probeAgentName = await createBrowserProbeAgent(
       page,
@@ -105,6 +109,9 @@ test.describe("agent picker freshness after a raw-REST agent creation (row 55 bu
     page,
   }) => {
     await page.goto("/");
+    // The agent_created frame is fire-and-forget (nothing replays it on
+    // connect), so the SPA socket must be open BEFORE the REST creation.
+    await waitForWsConnected(page);
 
     const probeAgentName = await createBrowserProbeAgent(
       page,
