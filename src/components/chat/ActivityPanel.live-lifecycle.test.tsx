@@ -80,7 +80,7 @@ describe('U2 — Activity uses current child lifecycle, not an open delegation b
         if (mode === 'replay') { start(child); state(child, 'running') }
         state(child, 'stopped')
       }
-      if (mode === 'replay') useChatStore.getState().handleFrame({ type: 'catch_up_complete', session_id: PARENT, seq: 0, boot_id: 'uat-replay-boot', mode: 'snapshot' })
+      if (mode === 'replay') useChatStore.getState().handleFrame({ type: 'catch_up_complete', session_id: PARENT, seq: 1, boot_id: 'uat-replay-boot', mode: 'snapshot' })
     })
     expect(activity.runningChildren).toBe(0)
     expect(activity.runningCount).toBe(0)

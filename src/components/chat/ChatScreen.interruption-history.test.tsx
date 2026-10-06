@@ -79,7 +79,7 @@ describe('U6 — interrupted history never leaves a loose legend under a fresh r
       else {
         useChatStore.getState().handleFrame({ type: 'replay_message', session_id: SID, id: 'old-reply', role: 'assistant', content: 'Original partial reply', turn_id: 'old-turn', truncated: true, truncation_reason: 'cancelled' })
         useChatStore.getState().handleFrame({ type: 'replay_message', session_id: SID, id: 'fresh-reply', role: 'assistant', content: 'ALIVE', turn_id: 'fresh-turn' })
-        useChatStore.getState().handleFrame({ type: 'catch_up_complete', session_id: SID, seq: 0, boot_id: 'uat-history-boot', mode: 'snapshot' })
+        useChatStore.getState().handleFrame({ type: 'catch_up_complete', session_id: SID, seq: 1, boot_id: 'uat-history-boot', mode: 'snapshot' })
       }
     })
     await act(async () => { render(<QueryClientProvider client={queryClient}><ChatScreen /></QueryClientProvider>) })
