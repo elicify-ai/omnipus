@@ -50,6 +50,19 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
 
 import { OmnipusComposer } from './ChatScreen'
 
+// Presentation/runtime adapter only: stop/cancel interception and frame
+// construction stay real through OmnipusComposer, both hooks and the stores.
+const composerRuntime = vi.hoisted(() => {
+  let text = ''
+  return {
+    getState: () => ({ text }),
+    setText: vi.fn((value: string) => { text = value }),
+    send: vi.fn(),
+    addAttachment: vi.fn(),
+    subscribe: vi.fn(() => vi.fn()),
+  }
+})
+
 import { MockButton } from '@/test/assistantUiMock'
 vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
   ThreadPrimitive: {
@@ -80,12 +93,7 @@ vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock
     Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
               React.createElement('div', { className }, children),
   },
-  useComposerRuntime: vi.fn(() => ({
-          getState: () => ({ text: '' }),
-          setText: vi.fn(),
-          addAttachment: vi.fn(),
-          subscribe: vi.fn(() => vi.fn()),
-        })),
+  useComposerRuntime: vi.fn(() => composerRuntime),
   useMessage: () => ({
           id: 'msg_1',
           role: 'assistant',
@@ -102,6 +110,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
     { name: 'model',   label: '/model',   description: 'Change the chat model',       delivery: 'client', available_while_streaming: false },
     { name: 'agents',  label: '/agents',  description: 'Open agent selector',         delivery: 'client', available_while_streaming: false },
     { name: 'cancel',  label: '/cancel',  description: 'Cancel the current turn',     delivery: 'client', available_while_streaming: true  },
+    { name: 'stop',    label: '/stop',    description: 'Stop only this conversation', delivery: 'client', available_while_streaming: true  },
   ]
   const mockSkills = [
     { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
@@ -181,11 +190,22 @@ function pressEscape() {
   act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
 }
 
+function submitCommand(text: string) {
+  const input = screen.getByTestId('composer-input')
+  act(() => {
+    composerRuntime.setText(text)
+    fireEvent.change(input, { target: { value: text } })
+    fireEvent.submit(screen.getByTestId('composer-form'))
+  })
+}
+
 describe('Stop/Esc surface scoping (ADR-20260928 D9)', () => {
   let send: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     send = vi.fn().mockReturnValue(true)
+    composerRuntime.setText('')
+    composerRuntime.send.mockClear()
     act(() => {
       useConnectionStore.setState({
         connection: { send } as unknown as ReturnType<typeof useConnectionStore.getState>['connection'],
@@ -196,6 +216,7 @@ describe('Stop/Esc surface scoping (ADR-20260928 D9)', () => {
         activeSessionId: 'sess_test',
         activeAgentId: 'general-assistant',
         activeAgentType: null,
+        attachedSessionType: null,
       })
       useChatStore.setState({
         messages: [],
@@ -232,6 +253,79 @@ describe('Stop/Esc surface scoping (ADR-20260928 D9)', () => {
     expect(frames).toHaveLength(1)
     expect(frames[0].session_id).toBe('sess_test')
     assertNoTreeScope(frames, 'single stop press')
+  })
+
+  // Founder-reconfirmed D9 row 1: /stop is always self-only; the Stop
+  // button's first-press state/offer must not widen that command's scope.
+  it.each([
+    { chat: 'root', sessionType: null },
+    { chat: 'helper', sessionType: 'delegate' },
+  ] as const)('submitted /stop in a $chat chat sends only a session cancel and offers Stop all', ({ sessionType }) => {
+    act(() => { useSessionStore.setState({ attachedSessionType: sessionType }) })
+    render(<OmnipusComposer />)
+
+    submitCommand('/stop')
+
+    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test' }]])
+    assertNoTreeScope(sentCancelFrames(send), `submitted /stop in ${sessionType ?? 'root'}`)
+    expect(screen.getByRole('button', { name: 'Stopping...' })).toBeInTheDocument()
+    expect(screen.getByText('Stop all')).toBeInTheDocument()
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+  })
+
+  it('palette /stop sends only a session cancel and uses the first-press state and offer', () => {
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+    act(() => { fireEvent.change(input, { target: { value: '/stop' } }) })
+    const stopItem = screen.getByText('/stop').closest('button')
+    expect(stopItem).not.toBeNull()
+    act(() => { fireEvent.mouseDown(stopItem!) })
+
+    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test' }]])
+    assertNoTreeScope(sentCancelFrames(send), 'palette /stop')
+    expect(screen.getByRole('button', { name: 'Stopping...' })).toBeInTheDocument()
+    expect(screen.getByText('Stop all')).toBeInTheDocument()
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+  })
+
+  it('/stop with an already armed offer never confirms a tree stop', () => {
+    render(<OmnipusComposer />)
+    pressStop()
+    expect(screen.getByText('Stop all')).toBeInTheDocument()
+
+    submitCommand('/stop')
+
+    // The first Stop ended streaming locally; there is no new turn for the
+    // second self-only command to cancel, and it must not escalate to tree.
+    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test' }]])
+    assertNoTreeScope(sentCancelFrames(send), '/stop with an armed offer')
+    expect(screen.getByRole('button', { name: 'Stopping...' })).toBeInTheDocument()
+    expect(screen.getByText('Stop all')).toBeInTheDocument()
+  })
+
+  it('submitted /cancel still sends exactly one tree cancel frame', () => {
+    render(<OmnipusComposer />)
+
+    submitCommand('/cancel')
+
+    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test', scope: 'tree' }]])
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+    expect(screen.queryByText('Stop all')).not.toBeInTheDocument()
+  })
+
+  it('/cancel explicitly confirms Stop all after /stop without an extra session cancel', () => {
+    render(<OmnipusComposer />)
+    submitCommand('/stop')
+    expect(screen.getByText('Stop all')).toBeInTheDocument()
+
+    submitCommand('/cancel')
+
+    expect(send.mock.calls).toEqual([
+      [{ type: 'cancel', session_id: 'sess_test' }],
+      [{ type: 'cancel', session_id: 'sess_test', scope: 'tree' }],
+    ])
+    expect(screen.queryByText('Stop all')).not.toBeInTheDocument()
+    expect(composerRuntime.send).not.toHaveBeenCalled()
   })
 
   it('RED confirming the stop-all offer within 3s sends scope tree', () => {
