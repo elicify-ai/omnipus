@@ -26,7 +26,7 @@ const sender = { send: vi.fn<WsConnection['send']>().mockReturnValue(true) }
 vi.mock('@tanstack/react-router', () => ({
   useLocation: () => ({ pathname: '/' }),
   useNavigate: () => vi.fn(),
-  Link: ({ children, to, search: _search, ...props }: { children: ReactNode; to: string; search?: unknown }) => <a href={to} {...props}>{children}</a>,
+  Link: ({ children, to, search, ...props }: { children: ReactNode; to: string; search?: Record<string, string> }) => <a href={search ? `${to}?${new URLSearchParams(search).toString()}` : to} {...props}>{children}</a>,
 }))
 vi.mock('@/lib/api', async (original) => ({
   ...await original<typeof import('@/lib/api')>(),
