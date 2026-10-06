@@ -69,7 +69,7 @@ func stopCommand() Definition {
 func stopRedirectCommand() Definition {
 	return Definition{
 		Name: "stop-redirect", Description: "Stop this chat's current turn and continue it with a new instruction",
-		Usage: "/stop-redirect <instruction>", Surfaces: []Surface{SurfaceWeb, SurfaceCLI, SurfaceChannel},
+		Usage: "/stop-redirect <instruction>", ArgumentHint: "<instruction>", Surfaces: []Surface{SurfaceWeb, SurfaceCLI, SurfaceChannel},
 		Delivery: DeliveryClient, AvailableWhileStreaming: true,
 		Handler: func(ctx context.Context, req Request, rt *Runtime) error {
 			instruction := StopRedirectInstruction(req.Text)
