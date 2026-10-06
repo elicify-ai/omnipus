@@ -93,20 +93,22 @@ func (s *LifecycleStore) RecordSteerControlState(sessionID, controlID, state, re
 }
 
 // SupersedeSteersByStop marks each listed still-queued steer of sessionID
-// superseded by the Stop control stopControlID (D4S-01, D5): reason "stop"
-// and superseded_by_seq that Stop's own sequence. A steer receipt already
-// final is left unchanged; an unknown steer or Stop control is a visible
-// error and nothing is written.
-func (s *LifecycleStore) SupersedeSteersByStop(sessionID, stopControlID string, steerControlIDs []string) error {
+// that the Stop control stopControlID is newer than (steer seq < Stop seq)
+// superseded by it (D4S-01, D5): reason "stop" and superseded_by_seq that
+// Stop's own sequence. It returns the ids it superseded; a steer accepted
+// after the Stop, or a receipt already final, is not superseded and not
+// returned. An unknown steer or Stop control is a visible error and nothing
+// is written.
+func (s *LifecycleStore) SupersedeSteersByStop(sessionID, stopControlID string, steerControlIDs []string) ([]string, error) {
 	if err := validateLifecycleSessionID(sessionID); err != nil {
-		return err
+		return nil, err
 	}
 	mu := s.Lock(sessionID)
 	mu.Lock()
 	defer mu.Unlock()
 	lines, err := s.readControlLedgerLocked(sessionID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	stopSeq := int64(0)
 	latest := make(map[string]controlLedgerLine)
@@ -119,25 +121,27 @@ func (s *LifecycleStore) SupersedeSteersByStop(sessionID, stopControlID string, 
 		}
 	}
 	if stopSeq == 0 {
-		return fmt.Errorf("session: control ledger: Stop %q of %q has no accepted control", stopControlID, sessionID)
+		return nil, fmt.Errorf("session: control ledger: Stop %q of %q has no accepted control", stopControlID, sessionID)
 	}
 	var refined []controlLedgerLine
 	for _, id := range steerControlIDs {
 		line, ok := latest[id]
 		if !ok {
-			return fmt.Errorf("session: control ledger: steer %q of %q has no accepted receipt", id, sessionID)
+			return nil, fmt.Errorf("session: control ledger: steer %q of %q has no accepted receipt", id, sessionID)
 		}
-		if line.State != controlStateQueued {
-			continue
+		if line.State != controlStateQueued || line.Seq >= stopSeq {
+			continue // already final, or accepted after this Stop
 		}
 		bySeq := stopSeq
 		line.State, line.Reason, line.SupersededBySeq = SteerStateSuperseded, "stop", &bySeq
 		refined = append(refined, line)
 	}
+	superseded := make([]string, 0, len(refined))
 	for _, line := range refined {
 		if err := appendControlLineLocked(s, sessionID, line); err != nil {
-			return fmt.Errorf("session: control ledger: supersede steer %q of %q: %w", line.ControlID, sessionID, err)
+			return superseded, fmt.Errorf("session: control ledger: supersede steer %q of %q: %w", line.ControlID, sessionID, err)
 		}
+		superseded = append(superseded, line.ControlID)
 	}
-	return nil
+	return superseded, nil
 }

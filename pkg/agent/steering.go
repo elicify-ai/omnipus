@@ -1252,10 +1252,11 @@ func (al *AgentLoop) recordDeliveredDelegateSteer(scope string, item steeringQue
 }
 
 // supersedePendingSteers is D5's precedence for a newer Stop: the session's
-// still-pending delegate steers are taken off the queue and their receipts
-// marked superseded by that Stop (reason "stop", superseded_by_seq the
-// Stop's sequence; D4S-01) — never silently dropped, never left queued for
-// ever. A receipt that cannot be written puts its item back and is returned.
+// pending delegate steers accepted BEFORE that Stop are taken off the queue
+// and their receipts marked superseded by it (reason "stop",
+// superseded_by_seq the Stop's sequence; D4S-01). A steer accepted after the
+// Stop (a later run's input, F1) stays queued. A receipt that cannot be
+// written puts its item back and is returned.
 func (al *AgentLoop) supersedePendingSteers(sessionID, stopControlID string) error {
 	lifecycle := al.GetSessionLifecycleStore()
 	if al.steering == nil || lifecycle == nil {
@@ -1265,9 +1266,16 @@ func (al *AgentLoop) supersedePendingSteers(sessionID, stopControlID string) err
 	var restore []steeringQueueItem
 	var errs []error
 	for _, item := range taken {
-		if err := lifecycle.SupersedeSteersByStop(normalizeSteeringScope(sessionID), stopControlID, []string{item.steerControlID}); err != nil {
+		superseded, err := lifecycle.SupersedeSteersByStop(normalizeSteeringScope(sessionID), stopControlID, []string{item.steerControlID})
+		if err != nil {
 			restore = append(restore, item)
 			errs = append(errs, fmt.Errorf("supersede steer %q: %w", item.steerControlID, err))
+			continue
+		}
+		if len(superseded) == 0 {
+			// Accepted after this Stop (F1): it belongs to a newer run and
+			// stays queued for it.
+			restore = append(restore, item)
 		}
 	}
 	if len(restore) > 0 {
