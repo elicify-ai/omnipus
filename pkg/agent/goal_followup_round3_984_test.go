@@ -22,7 +22,7 @@ func TestGoal984_StoredNotWokenHandbackFallsBackToOneVerdictWake(t *testing.T) {
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	parentID := newTestSteeringSession(t, al, "ws-1")
-	child := launchRunningChild(t, al, parentID, "call-f1-stored-not-woken")
+	child := g1AdmitCompletionChild(t, al, parentID, "call-f1-stored-not-woken")
 	inbox := al.GetMessageInboxStore()
 	const goalID = "goal-f1-stored-not-woken"
 	verdictID := appendTestMetVerdict(t, inbox, parentID, child.SessionID, goalID, 1)
@@ -92,7 +92,7 @@ func TestGoal984_PausedPreflightCallerDoesNotRedeliverAfterCompletion(t *testing
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	parentID := newTestSteeringSession(t, al, "ws-1")
-	child := launchRunningChild(t, al, parentID, "call-f4-paused-preflight")
+	child := g1AdmitCompletionChild(t, al, parentID, "call-f4-paused-preflight")
 
 	firstArrived := make(chan struct{})
 	secondArrived := make(chan struct{})
@@ -159,7 +159,7 @@ func TestGoal984_StaleGenerationCompletionCannotOccupyRevivedFinal(t *testing.T)
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	parentID := newTestSteeringSession(t, al, "ws-1")
-	childGen1 := launchRunningChild(t, al, parentID, "call-f4-stale-generation")
+	childGen1 := g1AdmitCompletionChild(t, al, parentID, "call-f4-stale-generation")
 
 	staleArrived := make(chan struct{})
 	releaseStale := make(chan struct{})
@@ -177,19 +177,27 @@ func TestGoal984_StaleGenerationCompletionCannotOccupyRevivedFinal(t *testing.T)
 	}()
 	<-staleArrived
 	lifecycle := al.GetSessionLifecycleStore()
-	if err := lifecycle.Mutate(childGen1.SessionID, func(rec *session.LifecycleRecord) error {
-		rec.Stop = &session.Stop{
-			At: time.Now().UTC(), Generation: rec.Generation,
-			By: session.Principal{Kind: session.PrincipalKindHuman, ID: "operator"},
-		}
-		return nil
-	}); err != nil {
-		t.Fatalf("stop generation one: %v", err)
-	}
+	// Frozen D2 CRIT-001: an explicit RESUME "changes the same-generation
+	// state to queued, and installs a new execution identity". The superseded
+	// fixture revived a forged in-flight fence as generation two. Land the
+	// stop through its real owner first; the old snapshot remains the stale
+	// producer even though the resumed final uses the SAME generation/id.
+	stopped := g1StopThroughOwner(t, al, childGen1)
 	gen2, err := NewSteerCanceller(lifecycle).Revive(context.Background(), childGen1.SessionID,
 		steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"})
 	if err != nil {
 		t.Fatalf("Revive: %v", err)
+	}
+	if gen2 != childGen1.Generation || stopped.Generation != childGen1.Generation {
+		t.Fatalf("stopped RESUME generation=%d, want original generation %d", gen2, childGen1.Generation)
+	}
+	queued, err := lifecycle.Load(childGen1.SessionID)
+	if err != nil || queued.State != session.LifecycleQueued || queued.Stop != nil || queued.StopNote != nil {
+		t.Fatalf("same-generation resume did not atomically clear note/fence into queued: %+v error=%v", queued, err)
+	}
+	replacement := g1AdmitResumedChild(t, al, queued)
+	if replacement.ExecutionID.RunID == childGen1.ExecutionID.RunID || replacement.ExecutionID.BootSeq != childGen1.ExecutionID.BootSeq {
+		t.Fatalf("resumed execution=%+v, want fresh run in the same genuine boot (old=%+v)", replacement.ExecutionID, childGen1.ExecutionID)
 	}
 	close(releaseStale)
 	if staleErr := <-staleDone; staleErr != nil {
@@ -210,14 +218,14 @@ func TestGoal984_StaleGenerationCompletionCannotOccupyRevivedFinal(t *testing.T)
 	completeBeforeDeliveryTestHook = nil
 	childGen2, err := lifecycle.Load(childGen1.SessionID)
 	if err != nil {
-		t.Fatalf("Load generation two: %v", err)
+		t.Fatalf("Load resumed execution: %v", err)
 	}
 	if completeErr := al.completeSteeredTurn(context.Background(), childGen2, turnResult{finalContent: "legitimate generation two"}, nil); completeErr != nil {
-		t.Fatalf("generation-two completion: %v", completeErr)
+		t.Fatalf("resumed-execution completion: %v", completeErr)
 	}
 	entries, err = al.GetMessageInboxStore().Entries(parentID)
 	if err != nil {
-		t.Fatalf("Entries(parent after generation two): %v", err)
+		t.Fatalf("Entries(parent after resumed execution): %v", err)
 	}
 	var gen2Handbacks int
 	for _, entry := range entries {
@@ -230,11 +238,11 @@ func TestGoal984_StaleGenerationCompletionCannotOccupyRevivedFinal(t *testing.T)
 		}
 		gen2Handbacks++
 		if handback.ResultSoFar != "legitimate generation two" {
-			t.Fatalf("generation-two hand-back result = %q, want legitimate result", handback.ResultSoFar)
+			t.Fatalf("resumed-execution hand-back result = %q, want legitimate result", handback.ResultSoFar)
 		}
 	}
 	if gen2Handbacks != 1 {
-		t.Fatalf("generation-two hand-backs = %d, want 1", gen2Handbacks)
+		t.Fatalf("resumed-execution hand-backs = %d, want 1", gen2Handbacks)
 	}
 }
 
@@ -363,7 +371,7 @@ func TestGoal984_DeliveredFinalRetriesTerminalWriteWithoutSecondWake(t *testing.
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	parentID := newTestSteeringSession(t, al, "ws-1")
-	child := launchRunningChild(t, al, parentID, "call-f4-terminal-write-retry")
+	child := g1AdmitCompletionChild(t, al, parentID, "call-f4-terminal-write-retry")
 	lifecycle := al.GetSessionLifecycleStore()
 
 	var wakeMu sync.Mutex
@@ -406,14 +414,33 @@ func TestGoal984_DeliveredFinalRetriesTerminalWriteWithoutSecondWake(t *testing.
 		t.Fatalf("restore lifecycle record: %v", err)
 	}
 	wantID := fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation)
-	if ackErr := al.GetMessageInboxStore().Ack(parentID, []string{wantID}); ackErr != nil {
-		t.Fatalf("ack consumed final before retry: %v", ackErr)
+	// Frozen D2: "A producer must not call the upward deliverer before
+	// this commit." The old fixture acknowledged a final before a failed
+	// terminal write; that publication-before-commit premise is superseded.
+	entries, entriesErr := al.GetMessageInboxStore().Entries(parentID)
+	if entriesErr != nil || len(entries) != 0 {
+		t.Fatalf("parent inbox before successful terminal commit = %d, error=%v, want 0", len(entries), entriesErr)
+	}
+	wakeMu.Lock()
+	preCommitWakes := len(wakeIDs)
+	wakeMu.Unlock()
+	if preCommitWakes != 0 {
+		t.Fatalf("parent wakes before successful terminal commit = %d, want 0", preCommitWakes)
 	}
 
 	if secondErr := al.completeSteeredTurn(context.Background(), child, turnResult{finalContent: "finished"}, nil); secondErr != nil {
 		t.Fatalf("retry completion: %v", secondErr)
 	}
 
+	if ackErr := al.GetMessageInboxStore().Ack(parentID, []string{wantID}); ackErr != nil {
+		t.Fatalf("ack genuinely committed and delivered final before publication retry: %v", ackErr)
+	}
+	// D2: "A genuinely acknowledged matching id means this committed result
+	// was already consumed; do not send a second final." Preserve the original
+	// no-second-wake oracle with an actual post-consumption publisher retry.
+	if woke, retryErr := g1RetryCommittedFinal(t, al, child); retryErr != nil || woke {
+		t.Fatalf("acknowledged committed-final retry = woke %v, error=%v, want no wake and no error", woke, retryErr)
+	}
 	wakeMu.Lock()
 	gotWakeIDs := append([]string(nil), wakeIDs...)
 	wakeMu.Unlock()
@@ -434,21 +461,21 @@ func TestGoal1000_UnackedStoredFinalWithoutWakeRedeliversIntoFullLiveQueue(t *te
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	parentID := newTestSteeringSession(t, al, "ws-1")
-	child := launchRunningChild(t, al, parentID, "call-n1-unacked-redelivery")
+	child := g1AdmitCompletionChild(t, al, parentID, "call-n1-unacked-redelivery")
 	inbox := al.GetMessageInboxStore()
 
 	// Reproduce the durable state left by the round-5 failure: Deliver stored
 	// the deterministic final, but the old ten-item cap refused its live-turn
 	// wake. The retry must not mistake entry existence for successful waking.
-	message, messageErr := al.completionMessage(child, steer.OutcomeFinalAnswer, "finished", "")
-	if messageErr != nil {
-		t.Fatalf("completionMessage: %v", messageErr)
+	// D2: "Publish only a committed outbox." A stray inbox final without
+	// its matching outcome/outbox commit is not a valid redelivery fixture.
+	committed, commitErr := al.commitSteeredCompletion(al.GetSessionLifecycleStore(), child,
+		session.LifecycleCompleted, steer.OutcomeFinalAnswer, "finished", "", al.executionClaimFor(child), nil)
+	if commitErr != nil || committed.kind != steeredCommitTerminal || committed.commit == nil {
+		t.Fatalf("SETUP real unpublished terminal/outbox commit = %+v, error=%v", committed, commitErr)
 	}
+	message := committed.message
 	wantID := fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation)
-	message, messageErr = withDeterministicMessageID(message, wantID)
-	if messageErr != nil {
-		t.Fatalf("stamp deterministic final id: %v", messageErr)
-	}
 	if _, appendErr := inbox.Append(parentID, message); appendErr != nil {
 		t.Fatalf("append stored final: %v", appendErr)
 	}
@@ -463,8 +490,8 @@ func TestGoal1000_UnackedStoredFinalWithoutWakeRedeliversIntoFullLiveQueue(t *te
 	al.activeTurnStates.Store(parentID, &turnState{sessionKey: parentID})
 	t.Cleanup(func() { al.activeTurnStates.Delete(parentID) })
 
-	if completeErr := al.completeSteeredTurn(context.Background(), child, turnResult{finalContent: "finished"}, nil); completeErr != nil {
-		t.Fatalf("retry completion: %v", completeErr)
+	if _, completeErr := g1RetryCommittedFinal(t, al, child); completeErr != nil {
+		t.Fatalf("retry exact committed final: %v", completeErr)
 	}
 
 	al.steering.mu.Lock()

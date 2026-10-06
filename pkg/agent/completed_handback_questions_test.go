@@ -10,63 +10,29 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
-// Regression pack for ADR-20260928 D6b's completed-path sentence (authority:
-// git object cd20cf8b365e7bc8a010c731a8f6830e14397c23,
-// docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md, D6b):
-//
-//	"On this completed path open_questions is empty; parkedQuestions stays
-//	only for a non-completion hand-back (e.g. a stopped-child report),
-//	excluding open-relay questions (MIN-006)."
-//
-// The completion frontier cuts at a stopped node, so a parent whose only
-// outstanding question came from a STOPPED child still completes — and per
-// D6b its final hand-back must carry no open questions. The question's
-// legitimate home on every non-completion path is the parent's inbox (the D1
-// relay: message_parent(kind="question") → steer.OutcomeParkedQuestion →
-// SteerUpwardDeliverer → parent inbox); the completed hand-back must not
-// re-carry it.
-//
-// Absent seams, reported rather than faked as behavioral RED (dispatch
-// ruling): the D6 stopped-child notice delivery is unimplemented — this test
-// deliberately depends on it NOT at all, because the frontier must cut on
-// record state alone; and the non-completion hand-back producer that would
-// call parkedQuestions with the MIN-006 relay exclusion does not exist yet —
-// completionMessage's final-answer branch is parkedQuestions' only caller
-// today. The needs_input-blocks contrast is pinned by
-// TestCompletion_LastChildWakesParent_NeedsInputSiblingHoldsBackCompletion
-// and is not duplicated here.
-
-// TestCompletion_CompletedHandbackWithStoppedChildQuestion_CarriesNoOpenQuestions
-// drives the REAL completion path (completeSteeredTurn → completionMessage →
-// SteerUpwardDeliverer) for a parent whose only descendant is a stopped child
-// whose question is still relayed in the parent's inbox, and asserts from ADR
-// D6b — never from observed behavior — that the hand-back persisted in the
-// root's inbox carries zero open questions, exactly the parent's genuine
-// final answer, and none of the stale content seeded into the parent's
-// transcript. It further asserts, from the same authorities: the empty
-// open_questions is NON-NIL — the contract makes open_questions a required,
-// non-nullable array (SessionMessageHandback.yaml), and the decode ran
-// through the real persisted round-trip where nil and empty stay
-// distinguishable; and the relayed question SURVIVES completion — after the
-// turn lands, the parent's inbox still holds exactly the seeded question,
-// unacked and unchanged (id, sender, source session, text), because Drain
-// returns only unacked entries and nothing on the completed path may
-// consume the question's D1 home.
+// Frozen ADR-20260928 D6/D6b: a stopped child cuts the completion frontier;
+// "On this completed path open_questions is empty." ADR-20261004 decision 6
+// / C2 deletes the special question pause: "A helper question to its parent
+// is an ordinary message and does not park the helper." This fixture therefore
+// uses a real admitted parent/child and owner-landed Stop, never a park/relay
+// ledger or expiry. Every original behavioural assertion is retained: the
+// persisted final has a non-nil empty open_questions array, the exact genuine
+// answer and no stale answer; the ordinary question remains in the parent's
+// inbox unacknowledged with its exact id, sender, source session and text.
+// The separate verified D6 stop notice is explicitly taken during setup.
 func TestCompletion_CompletedHandbackWithStoppedChildQuestion_CarriesNoOpenQuestions(t *testing.T) {
 	al, cleanup := newSteerALWithProvider(t, &depthEchoProvider{})
-	defer cleanup()
+	t.Cleanup(cleanup)
 	wireSteerCompletionDeps(t, al)
 	rootID := newTestSteeringSession(t, al, "ws-d6b-completed")
-	parent := launchRunningChild(t, al, rootID, "call-d6b-parent")
-	stoppedChild := launchRunningChild(t, al, parent.SessionID, "call-d6b-worker")
+	parent := g1LaunchQueuedChild(t, al, rootID, "call-d6b-parent")
+	stoppedChild := g1AdmitCompletionChild(t, al, parent.SessionID, "call-d6b-worker")
+	parent = g1AdmitWaitingParent(t, al, parent)
 
-	// The stopped child's outstanding question, relayed into the parent's
-	// inbox through the persisted store with the generated wire encoding —
-	// the same seeding shape the audited D6b pack uses for its parked
-	// sibling. In production this message arrives via
-	// message_parent(kind="question") → I-5 Deliver; the question outlives
-	// the child's stop (D1.8: the park TTL is independent and continues
-	// during a stop).
+	// ADR-20261004 locked decision 6 / C2: "A helper question to its parent
+	// is an ordinary message and does not park the helper." Seed that exact
+	// ordinary message after the parent's initial real turn has retired;
+	// there is no pending owner question, relay record, pause or expiry.
 	const questionText = "D6B-COMPLETED-PATH: which region should the report cover?"
 	var question generated.SessionMessage
 	if err := question.FromSessionMessageQuestion(generated.SessionMessageQuestion{
@@ -98,17 +64,16 @@ func TestCompletion_CompletedHandbackWithStoppedChildQuestion_CarriesNoOpenQuest
 		t.Fatalf("parent inbox message kind = %q (err %v), want \"question\" — instrument check", seedKind, seedKindErr)
 	}
 
-	// The child's genuine stop: state + stop note, the landed stopped-record
-	// shape. The D6 stopped-child NOTICE is a separate, still-unimplemented
-	// deliverable; this path must cut on record state alone, so the test
-	// never depends on the notice.
-	stoppedChild.State = session.LifecycleStopped
-	stoppedChild.StopNote = &session.StopNote{
-		At: time.Now().UTC(), By: "human:dan",
-		Seq: uint64(stoppedChild.Generation), Cause: session.StopCauseStop,
-	}
-	if persistErr := al.GetSessionLifecycleStore().Persist(stoppedChild); persistErr != nil {
-		t.Fatalf("Persist(stopped): %v", persistErr)
+	// Land the child's real stop through the execution owner. The frontier
+	// still cuts on the resulting stopped state, not a fabricated snapshot.
+	stoppedChild = g1StopThroughOwner(t, al, stoppedChild)
+	// D6's notice is now implemented: prove the owner's real landing produced
+	// it, and model the parent taking ONLY that notice. The ordinary question
+	// remains untouched, so every original unacked-question assertion below
+	// remains exactly as strong. No fabricated stop or silent notice loss.
+	noticeID, _ := assertU1StoppedChildNotice(t, al, parent.SessionID, stoppedChild, string(session.StopCauseStop), "operator")
+	if ackErr := al.GetMessageInboxStore().Ack(parent.SessionID, []string{noticeID}); ackErr != nil {
+		t.Fatalf("SETUP parent takes the verified stop notice only: %v", ackErr)
 	}
 
 	// Stale content seeded into the parent's own transcript only; the
@@ -191,8 +156,8 @@ func TestCompletion_CompletedHandbackWithStoppedChildQuestion_CarriesNoOpenQuest
 		t.Fatalf("handback result_so_far contains stale seeded text %q — stale content must never travel", staleText)
 	}
 
-	// Retention (D6b + the D1 relay): the completed path must leave the
-	// parked question exactly where it was. Drain returns only UNACKED
+	// Retention of an ordinary upward question: the completed path must
+	// leave that message exactly where it was. Drain returns only UNACKED
 	// entries and writes no acks (pkg/session contract), so a hit here is
 	// itself the unacked proof. Re-drain AFTER completeSteeredTurn and the
 	// decoded hand-back, and assert the EXACT seeded question — same
