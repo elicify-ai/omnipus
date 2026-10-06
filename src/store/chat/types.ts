@@ -1128,8 +1128,13 @@ export interface ChatStore {
    * the session and every reachable descendant (ADR D7), never up or
    * sideways. Only the confirmed second activation, the Stop-all control
    * and `/cancel` pass `'tree'`.
+   *
+   * Returns `false` only when the cancel could not be handed to the socket
+   * (no connection, or the send was rejected — a visible error toast has
+   * already been shown); `true` otherwise, including a completed turn with
+   * nothing to send. The Stop window is armed only on a non-`false` result.
    */
-  cancelStream: (sessionId?: string, scope?: CancelFrame['scope']) => void
+  cancelStream: (sessionId?: string, scope?: CancelFrame['scope']) => boolean
   respondToPairing: (deviceId: string, decision: 'approve' | 'reject') => void
   /**
    * askuserquestion-tool-spec v3 §3: submit (or cancel) the pending

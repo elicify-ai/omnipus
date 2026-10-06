@@ -179,7 +179,11 @@ export function useCancelState(
   // The store action's full signature — the D9 tree paths call
   // `cancelStream(undefined, 'tree')` (ADR-20260928 MAJ-002); every other
   // path keeps the bare single-session call.
-  cancelStream: (sessionId?: string, scope?: CancelFrame['scope']) => void,
+  //
+  // It returns `false` only when the cancel could not be handed to the socket
+  // (a visible error toast was already shown). Such a press sent nothing, so
+  // it neither shows "Stopping..." nor arms the confirmation window (W2).
+  cancelStream: (sessionId?: string, scope?: CancelFrame['scope']) => boolean,
 ): UseCancelStateResult {
   const [stopLabel, setStopLabel] = useState<StopLabel>('stop')
 
@@ -212,9 +216,20 @@ export function useCancelState(
   const cancelAllTreeScoped = useCallback(() => {
     disarmStopAll()
     stoppingStartedAt.current = Date.now()
+    if (cancelStream(undefined, 'tree') === false) return
     setStopLabel('stopping')
-    cancelStream(undefined, 'tree')
   }, [cancelStream, disarmStopAll])
+
+  // The single first-activation path (button, `/stop`, local and global
+  // Escape): session-scoped cancel, then "Stopping..." (when asked for) and
+  // the 3 s window — but only if the cancel was actually handed to the
+  // socket; an undelivered press leaves the next press a first press (W2).
+  const activateFirstPress = useCallback((showStopping: boolean) => {
+    stoppingStartedAt.current = Date.now()
+    if (cancelStream() === false) return
+    if (showStopping) setStopLabel('stopping')
+    armStopAll()
+  }, [cancelStream, armStopAll])
 
   useEffect(() => {
     if (isStreaming) {
@@ -225,6 +240,10 @@ export function useCancelState(
   // EC-15: reset the stop label back to 'stop' whenever streaming ends so
   // the button is fresh for the next turn.
   // T25: enforce a minimum 1000ms display of "Stopping..." before resetting.
+  // W1: also re-evaluate when the label itself changes — a second activation
+  // or `/stop` after the stream already ended sets 'stopping' with
+  // isStreaming already false, so [isStreaming] alone never ran again and
+  // the button stuck on "Stopping...".
   useEffect(() => {
     if (!isStreaming) {
       const elapsed = Date.now() - stoppingStartedAt.current
@@ -239,7 +258,7 @@ export function useCancelState(
     // window already elapsed) — explicit return so every path is typed
     // consistently as `void | (() => void)` under noImplicitReturns.
     return undefined
-  }, [isStreaming])
+  }, [isStreaming, stopLabel])
 
   const cancelIfStreaming = useCallback(() => {
     // D9: an activation while the window is open is the CONFIRMED tree
@@ -249,13 +268,8 @@ export function useCancelState(
       cancelAllTreeScoped()
       return
     }
-    if (isStreaming) {
-      stoppingStartedAt.current = Date.now()
-      setStopLabel('stopping')
-    }
-    cancelStream()
-    armStopAll()
-  }, [isStreaming, cancelStream, cancelAllTreeScoped, armStopAll])
+    activateFirstPress(isStreaming)
+  }, [isStreaming, cancelAllTreeScoped, activateFirstPress])
 
   const cancelUnconditional = useCallback(() => {
     // D9: same contract as cancelIfStreaming, minus the streaming guard —
@@ -266,11 +280,8 @@ export function useCancelState(
       cancelAllTreeScoped()
       return
     }
-    stoppingStartedAt.current = Date.now()
-    setStopLabel('stopping')
-    cancelStream()
-    armStopAll()
-  }, [cancelStream, cancelAllTreeScoped, armStopAll])
+    activateFirstPress(true)
+  }, [cancelAllTreeScoped, activateFirstPress])
 
   // US-1.4 / FR-23: Global Escape key handler — cancels a turn even when
   // the input does not have focus (e.g. user clicked somewhere else on the
@@ -369,19 +380,14 @@ export function useCancelState(
         cancelAllTreeScoped()
         return
       }
-      if (liveState.isStreaming) {
-        stoppingStartedAt.current = Date.now()
-        setStopLabel('stopping')
-      }
-      cancelStream()
-      armStopAll()
+      activateFirstPress(liveState.isStreaming)
     }
     document.addEventListener('keydown', handleGlobalEscape)
     return () => document.removeEventListener('keydown', handleGlobalEscape)
     // stopLabel is included so the effect re-registers when the label
     // changes, ensuring the closure capture of stopLabel is fresh for the
     // 'stopping' guard.
-  }, [stopLabel, cancelStream, cancelAllTreeScoped, armStopAll])
+  }, [stopLabel, cancelAllTreeScoped, activateFirstPress])
 
   return { stopLabel, stopAllArmed, cancelIfStreaming, cancelUnconditional, cancelAllTreeScoped }
 }

@@ -816,7 +816,16 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // isStreaming flips to false between render and click.
       get().markLastMessageInterrupted(sessionId)
 
-      if (!connection) return
+      // W2: a cancel that cannot even reach a transport is reported — to the
+      // caller (return false, so the Stop window is never armed for a click
+      // that sent nothing) and to the user (visible error toast).
+      if (!connection) {
+        useUiStore.getState().addToast({
+          message: 'Could not send cancel — the gateway connection is down. The response may keep running; reconnect and press Stop again.',
+          variant: 'error',
+        })
+        return false
+      }
       if (!targetSid) {
         // No server-side session established yet — just clear local streaming
         // state. S7: activeTurn* travels with isStreaming everywhere else in
@@ -828,8 +837,13 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           activeTurnAgentId: null,
         }))
         maybeDrainNext()
-        return
+        return true
       }
+
+      // `delivered` is false only when the cancel could not be handed to the
+      // socket (the send-failed toast below is already shown). A completed
+      // turn with nothing to send is not a failure.
+      let delivered = true
 
       // ADR-20260928 D9: a CONFIRMED tree stop sends even when this
       // session's own turn already ended locally (the first activation
@@ -851,6 +865,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           : { type: 'cancel', session_id: targetSid }
         const sent = connection.send(cancelFrame)
         if (!sent) {
+          delivered = false
           console.warn('[chat] cancelStream: send failed — connection may be closed')
           logDiagnostic('chatCancelStreamSendFailed', { sessionId: targetSid })
           useUiStore.getState().addToast({
@@ -884,6 +899,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         // own isStreaming:false so AssistantUI renders it as incomplete/cancelled.
         return { toolCalls: updated }
       })
+      return delivered
     },
 
     clearStreamingState: () => {
