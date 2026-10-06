@@ -23,7 +23,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
-	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // LLMErrorCode is the canonical, machine-readable code for a translated
@@ -859,12 +858,16 @@ func TranslateTurnError(err error) LLMError {
 		}
 		return typedExitError(code, err)
 	}
-	// An ordinary admission refused because the same chat's previous reply is
+	// An ORDINARY admission refused because the same chat's previous reply is
 	// still finishing (ErrPreviousExecutionPending), or because a concurrent
-	// admission claimed the session first (steer.ErrStaleGeneration): neither is
-	// a provider fault, and the person's fix is to send the message again.
-	// CodeUnknown carries the curated text; no new wire code is minted for it.
-	if errors.Is(err, ErrPreviousExecutionPending) || errors.Is(err, steer.ErrStaleGeneration) {
+	// ordinary admission claimed the session first (ordinaryAdmissionRefusalError):
+	// neither is a provider fault, and the person's fix is to send the message
+	// again. A bare steer.ErrStaleGeneration is deliberately NOT mapped: its other
+	// producers (steered dispatch, reconstruction, cancel, queued wake) are not
+	// "send it again" cases and keep their own wording. CodeUnknown carries the
+	// curated text; no new wire code is minted for it.
+	var admissionRefusal *ordinaryAdmissionRefusalError
+	if errors.Is(err, ErrPreviousExecutionPending) || errors.As(err, &admissionRefusal) {
 		return LLMError{
 			Code:      CodeUnknown,
 			Message:   previousReplyStillFinishingMessage,

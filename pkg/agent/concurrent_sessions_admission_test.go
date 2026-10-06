@@ -372,22 +372,60 @@ func TestResolveMessageRoute_BindingBranch_SessionKeyIsPerSession(t *testing.T) 
 	require.Contains(t, routeB.SessionKey, sidB)
 }
 
-// The admission refusal and its stale-generation sibling reach the person as
-// the "still finishing" sentence, never the generic "can't tell why" copy.
+// An ORDINARY admission refusal reaches the person as the "still finishing"
+// sentence, never the generic "can't tell why" copy. A bare
+// steer.ErrStaleGeneration — what steered dispatch, reconstruction, cancel and
+// the queued wake return — is NOT an admission refusal and keeps its own text.
 func TestTranslateTurnError_PreviousExecutionPending_UserMessage(t *testing.T) {
 	const want = "Your previous reply is still finishing — send your message again in a moment."
 	generic := TranslateLLMError(nil, "something unrecognisable happened").Message
 	require.NotEqual(t, want, generic)
+
 	for name, err := range map[string]error{
 		"pending sentinel":          ErrPreviousExecutionPending,
 		"pending sentinel, wrapped": fmt.Errorf("turn: %w", ErrPreviousExecutionPending),
-		"stale generation":          fmt.Errorf("ordinary admission: %w: registration was already claimed", steer.ErrStaleGeneration),
-		"stale generation, bare":    steer.ErrStaleGeneration,
+		"ordinary admission refusal": refuseOrdinaryAdmission(
+			fmt.Errorf("ordinary admission: %w: registration was already claimed", steer.ErrStaleGeneration)),
+		"ordinary admission refusal, wrapped": fmt.Errorf("turn: %w", refuseOrdinaryAdmission(steer.ErrStaleGeneration)),
 	} {
 		t.Run(name, func(t *testing.T) {
 			require.Equal(t, want, TranslateTurnError(err).Message)
 			require.Equal(t, want, userVisibleTurnError(err), "the session worker publishes this text")
 		})
 	}
-	require.NotEqual(t, want, TranslateTurnError(errors.New("unrelated failure")).Message)
+
+	// Existing callers still see the stale-generation cause through the refusal.
+	require.ErrorIs(t, refuseOrdinaryAdmission(steer.ErrStaleGeneration), steer.ErrStaleGeneration)
+
+	for name, err := range map[string]error{
+		"bare stale generation":    steer.ErrStaleGeneration,
+		"wrapped stale generation": fmt.Errorf("steer: dispatch: %w: promoted reservation is stale", steer.ErrStaleGeneration),
+		"unrelated":                errors.New("unrelated failure"),
+	} {
+		t.Run("not mapped: "+name, func(t *testing.T) {
+			require.NotEqual(t, want, TranslateTurnError(err).Message)
+			require.NotEqual(t, want, userVisibleTurnError(err))
+		})
+	}
+}
+
+// Through the real admission: a session that already has a registered turn is
+// refused with the ordinary-admission refusal — still a stale-generation error
+// for the callers that rely on that, and the "still finishing" sentence for the
+// person.
+func TestOrdinaryAdmission_RegisteredTurn_RefusalIsUserVisibleAndStillStale(t *testing.T) {
+	al, _, sidA, _ := newAdmissionSessionsLoop(t, newGatedProvider())
+	ts := newTurnState(&AgentInstance{ID: "mia"},
+		processOptions{SessionKey: "agent:mia:session:" + sidA, TranscriptSessionID: sidA},
+		turnEventScope{agentID: "mia", sessionKey: "agent:mia:session:" + sidA, turnID: "mia-turn-1"})
+	al.registerActiveTurn(ts)
+	t.Cleanup(func() { al.clearActiveTurn(ts) })
+
+	_, err := al.prepareOrdinaryExecution(context.Background(), bus.InboundMessage{
+		Channel: "webchat", ChatID: "chat-" + sidA, SessionID: sidA,
+		Sender: bus.SenderInfo{CanonicalID: "webchat_user"}, GatewayUserID: "daniel", UserInitiated: true,
+	}, processOptions{SessionKey: "agent:mia:session:" + sidA, TranscriptStore: al.GetSessionStore()})
+	require.Error(t, err)
+	require.ErrorIs(t, err, steer.ErrStaleGeneration)
+	require.Equal(t, previousReplyStillFinishingMessage, userVisibleTurnError(err))
 }

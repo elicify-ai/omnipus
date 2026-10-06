@@ -17,6 +17,19 @@ import (
 // text for it lives in TranslateTurnError.
 var ErrPreviousExecutionPending = errors.New("ordinary admission: previous execution disposition is still pending")
 
+// ordinaryAdmissionRefusalError marks a refusal produced by the ORDINARY (human,
+// scheduled, hand-back) admission, as opposed to a steered dispatch or a
+// cancel. It unwraps to its cause, so a refusal caused by
+// steer.ErrStaleGeneration still satisfies errors.Is(err, steer.ErrStaleGeneration)
+// for the callers that rely on it; TranslateTurnError maps only this type (and
+// ErrPreviousExecutionPending) to the "still finishing" sentence.
+type ordinaryAdmissionRefusalError struct{ cause error }
+
+func (e *ordinaryAdmissionRefusalError) Error() string { return e.cause.Error() }
+func (e *ordinaryAdmissionRefusalError) Unwrap() error { return e.cause }
+
+func refuseOrdinaryAdmission(cause error) error { return &ordinaryAdmissionRefusalError{cause: cause} }
+
 // The worker's outer processTurn owns this carrier through its continuation,
 // response and typing-stop tails. A direct processMessage owns its own carrier.
 type ordinaryExecutionEntry struct{ disposition *executionDisposition }
@@ -72,7 +85,7 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 	gate.entryMu.Lock()
 	defer gate.entryMu.Unlock()
 	if al.activeTurnForCancel(sessionID, CancelScope{SessionID: sessionID, TurnOnly: true}) != nil {
-		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: %w: an execution is already registered", steer.ErrStaleGeneration)
+		return ordinaryExecutionPreparation{}, refuseOrdinaryAdmission(fmt.Errorf("ordinary admission: %w: an execution is already registered", steer.ErrStaleGeneration))
 	}
 	al.admission.mu.Lock()
 	owner := al.admission.activeScopes[sessionID]
@@ -107,6 +120,9 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 		}
 	}
 	if err := al.checkNewAdmission(rec); err != nil {
+		if errors.Is(err, steer.ErrStaleGeneration) {
+			err = refuseOrdinaryAdmission(err)
+		}
 		return ordinaryExecutionPreparation{}, err
 	}
 	claim := executionClaim{SessionID: rec.SessionID, Generation: rec.Generation, RunID: freshRunID(), BootSeq: bootSeq}
@@ -136,7 +152,7 @@ func (al *AgentLoop) newTurnStateForAdmission(agent *AgentInstance, opts process
 		return nil, fmt.Errorf("ordinary admission: validate producing identity: %w", err)
 	}
 	if !d.claim.matches(rec) || al.executionDispositionFor(d.claim) != d {
-		return nil, fmt.Errorf("ordinary admission: %w: selected owner changed", steer.ErrStaleGeneration)
+		return nil, refuseOrdinaryAdmission(fmt.Errorf("ordinary admission: %w: selected owner changed", steer.ErrStaleGeneration))
 	}
 	if ok, reason := reserveDispatch(rec, d.claim.Generation); !ok {
 		return nil, dispatchRefusalError(reason)
@@ -146,7 +162,7 @@ func (al *AgentLoop) newTurnStateForAdmission(agent *AgentInstance, opts process
 		return nil, err
 	}
 	if !al.registerTurnIfAbsent(ts) {
-		return nil, fmt.Errorf("ordinary admission: %w: registration was already claimed", steer.ErrStaleGeneration)
+		return nil, refuseOrdinaryAdmission(fmt.Errorf("ordinary admission: %w: registration was already claimed", steer.ErrStaleGeneration))
 	}
 	if _, err := commitSteeredExecutionState(al.GetSessionLifecycleStore(), d.claim, session.LifecycleRunning, ""); err != nil {
 		al.activeTurnStates.CompareAndDelete(ts.sessionKey, ts)

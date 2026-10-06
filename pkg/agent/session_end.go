@@ -344,20 +344,20 @@ func (rr *agentLoopRunRecap) loadTranscript() bool {
 	rr.agentInst, err = rr.al.AgentForSession(rr.sessionID)
 	if err != nil {
 		// Heuristic fallback: agent deleted or session meta unavailable.
-		rr.al.writeHeuristicFallbackRetro(rr.sessionID, rr.trigger, "agent_deleted", nil)
+		_ = rr.al.writeHeuristicFallbackRetro(rr.sessionID, rr.trigger, "agent_deleted", nil)
 		return true
 	}
 
 	// Read the session transcript from the shared store.
 	store := rr.al.sharedSessionStore
 	if store == nil {
-		rr.al.writeHeuristicFallbackRetro(rr.sessionID, rr.trigger, "no_session_store", rr.agentInst)
+		_ = rr.al.writeHeuristicFallbackRetro(rr.sessionID, rr.trigger, "no_session_store", rr.agentInst)
 		return true
 	}
 
 	rr.entries, err = store.ReadTranscript(rr.sessionID)
 	if err != nil {
-		rr.al.writeHeuristicFallbackRetro(rr.sessionID, rr.trigger, fmt.Sprintf("transcript_read_error: %v", err), rr.agentInst)
+		_ = rr.al.writeHeuristicFallbackRetro(rr.sessionID, rr.trigger, fmt.Sprintf("transcript_read_error: %v", err), rr.agentInst)
 		return true
 	}
 
@@ -595,7 +595,7 @@ func (rr *agentLoopRunRecap) callCandidates() bool {
 		// SF1: emit two distinct audit entries so operators can see both outcomes:
 		// (1) the LLM call failed, (2) the heuristic fallback was written.
 		rr.al.auditRecap(rr.sessionID, rr.agentInst.ID, rr.trigger, "llm_failed:"+classifyLLMError(llmErr))
-		rr.al.writeHeuristicFallbackRetroWithCount(
+		_ = rr.al.writeHeuristicFallbackRetroWithCount(
 			rr.sessionID,
 			rr.trigger,
 			classifyLLMError(llmErr),
@@ -651,7 +651,7 @@ func (rr *agentLoopRunRecap) persistResponse() {
 			"parse_error", parseErr.Error(),
 			"response_preview", utils.Truncate(responseText, 500),
 		)
-		rr.al.writeHeuristicFallbackRetroWithCount(
+		_ = rr.al.writeHeuristicFallbackRetroWithCount(
 			rr.sessionID,
 			rr.trigger,
 			"json_parse_error",
@@ -670,7 +670,7 @@ func (rr *agentLoopRunRecap) persistResponse() {
 			"session_id", rr.sessionID,
 			"agent_id", rr.agentInst.ID,
 		)
-		rr.al.writeHeuristicFallbackRetroWithCount(
+		_ = rr.al.writeHeuristicFallbackRetroWithCount(
 			rr.sessionID,
 			rr.trigger,
 			"empty_recap",
@@ -685,7 +685,7 @@ func (rr *agentLoopRunRecap) persistResponse() {
 	// Persist last-session summary.
 	memory := rr.agentInst.ContextBuilder.Memory()
 	if memory == nil {
-		rr.al.writeHeuristicFallbackRetroWithCount(
+		_ = rr.al.writeHeuristicFallbackRetroWithCount(
 			rr.sessionID,
 			rr.trigger,
 			"no_memory_store",
@@ -742,7 +742,7 @@ func (rr *agentLoopRunRecap) persistResponse() {
 // writeHeuristicFallbackRetro writes a fallback retro entry when recap fails
 // without the transcript pre-read available. Prefer the _WithCount variant
 // when the caller has already computed turn + tool-call counts.
-func (al *AgentLoop) writeHeuristicFallbackRetro(sessionID, trigger, fallbackReason string, agentInst *AgentInstance) {
+func (al *AgentLoop) writeHeuristicFallbackRetro(sessionID, trigger, fallbackReason string, agentInst *AgentInstance) error {
 	turnCount, toolCallCount := 0, 0
 	var userTurns []string
 	if agentInst != nil {
@@ -753,7 +753,7 @@ func (al *AgentLoop) writeHeuristicFallbackRetro(sessionID, trigger, fallbackRea
 			}
 		}
 	}
-	al.writeHeuristicFallbackRetroWithCount(
+	return al.writeHeuristicFallbackRetroWithCount(
 		sessionID,
 		trigger,
 		fallbackReason,
@@ -773,12 +773,17 @@ func (al *AgentLoop) writeHeuristicFallbackRetro(sessionID, trigger, fallbackRea
 // When carryForward is non-empty it is appended as a verbatim "Recent context"
 // block so cross-session continuity survives a degraded recap (the status line
 // alone carries no facts — see buildCarryForward).
+//
+// It returns the write failure, if any, and in that case records the audit
+// outcome "fallback_write_failed:<reason>: <error>" instead of "fallback:<reason>".
+// The recap goroutine's callers have no one to hand the error to, so they
+// discard it knowing it is already logged and audited here.
 func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 	sessionID, trigger, fallbackReason string,
 	agentInst *AgentInstance,
 	turnCount, toolCallCount int,
 	carryForward string,
-) {
+) error {
 	slog.Warn("session_end: recap fallback",
 		"session_id", sessionID,
 		"trigger", trigger,
@@ -788,13 +793,13 @@ func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 	if agentInst == nil {
 		// No agent — can't write the retro anywhere.
 		al.auditRecap(sessionID, "", trigger, "fallback:"+fallbackReason)
-		return
+		return nil
 	}
 
 	memory := agentInst.ContextBuilder.Memory()
 	if memory == nil {
 		al.auditRecap(sessionID, agentInst.ID, trigger, "fallback:"+fallbackReason)
-		return
+		return nil
 	}
 
 	recap := fmt.Sprintf("Session %s ended. Turns: %d. Tool calls: %d. Fallback reason: %s.",
@@ -809,11 +814,13 @@ func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 		"workspace", agentInst.Home,
 		"fallback_reason", fallbackReason,
 	)
+	var writeErrs []error
 	if err := memory.WriteLastSession(recap); err != nil {
 		slog.Warn("session_end: fallback: failed to write LAST_SESSION.md",
 			"session_id", sessionID,
 			"error", err,
 		)
+		writeErrs = append(writeErrs, fmt.Errorf("write last-session: %w", err))
 	}
 
 	retro := Retro{
@@ -828,11 +835,21 @@ func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 			"session_id", sessionID,
 			"error", err,
 		)
+		writeErrs = append(writeErrs, fmt.Errorf("append retro: %w", err))
+	}
+
+	if len(writeErrs) > 0 {
+		// The fallback did not land: the audit trail must not read as a
+		// recorded fallback.
+		writeErr := errors.Join(writeErrs...)
+		al.auditRecap(sessionID, agentInst.ID, trigger, "fallback_write_failed:"+fallbackReason+": "+writeErr.Error())
+		return writeErr
 	}
 
 	al.auditRecap(sessionID, agentInst.ID, trigger, "fallback:"+fallbackReason)
 	// Claim stays for the process lifetime: file-level idempotency via
 	// agentSessionHasRetro prevents duplicate fallback writes.
+	return nil
 }
 
 // auditRecap logs a memory.auto_recap audit event if audit logging is enabled.
