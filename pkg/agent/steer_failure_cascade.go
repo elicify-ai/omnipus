@@ -30,7 +30,16 @@ func (al *AgentLoop) stopDescendantsOfFailedSession(ctx context.Context, rec *se
 	if err != nil {
 		return fmt.Sprintf(" Its helpers could not be listed, so none were stopped: %v.", err)
 	}
-	var stopped, incomplete []string
+	var stopped, stopping, incomplete []string
+	// A7: "stopped" only for a helper whose Stop has LANDED; a reached
+	// helper whose running work is still shutting down is "stopping".
+	classify := func(id string) {
+		if cur, loadErr := lifecycle.Load(id); loadErr == nil && cur.State == session.LifecycleStopped {
+			stopped = append(stopped, id)
+			return
+		}
+		stopping = append(stopping, id)
+	}
 	for _, child := range children {
 		if child.State == session.LifecycleStopped {
 			continue
@@ -53,8 +62,8 @@ func (al *AgentLoop) stopDescendantsOfFailedSession(ctx context.Context, rec *se
 			// An intent accepted durably but never fenced is retried at once
 			// and again at boot (D6's durable retry item, D4's finisher).
 			if retryErr := al.finishUnfinishedStopIntents(ctx, item.ID); retryErr == nil {
-				if cur, loadErr := al.GetSessionLifecycleStore().Load(item.ID); loadErr == nil && cur.Stopped() {
-					stopped = append(stopped, item.ID)
+				if cur, loadErr := lifecycle.Load(item.ID); loadErr == nil && cur.Stopped() {
+					classify(item.ID)
 					continue
 				}
 			}
@@ -64,12 +73,15 @@ func (al *AgentLoop) stopDescendantsOfFailedSession(ctx context.Context, rec *se
 			if res.RootErr != nil && id == child.SessionID {
 				continue
 			}
-			stopped = append(stopped, id)
+			classify(id)
 		}
 	}
 	var b strings.Builder
 	if len(stopped) > 0 {
 		fmt.Fprintf(&b, " Its helpers were stopped: %s.", strings.Join(stopped, ", "))
+	}
+	if len(stopping) > 0 {
+		fmt.Fprintf(&b, " Stop was requested for these helpers; they are still shutting down: %s.", strings.Join(stopping, ", "))
 	}
 	if len(incomplete) > 0 {
 		fmt.Fprintf(&b, " These helpers could not be stopped and may still be running: %s.", strings.Join(incomplete, "; "))
