@@ -2,6 +2,7 @@
 
 Detail behind SKILL.md §1. Design source: sections 5.6, 7.1 and 7.6 of
 `docs/internal/design/dev-team-setup-design-2026-09-25.md`.
+The founder decision of 2026-09-29 supersedes that dated design's gate size (root `CLAUDE.md`, "Change sizes and the review gate").
 
 ## The planning loop, step by step
 
@@ -57,6 +58,9 @@ units (no path between them in either direction) can share a wave.
   the dispatch queue.
 - The standard-size reviewers are fixed — never a rotating pick; security-lead sits in
   the feature gate only, plus on demand for changes touching its focus areas.
+- The `qa-lead` CHECK test-integrity audit is separate, not a gate reviewer.
+- Every reviewer dispatch names its model explicitly; model selection stays outside
+  repo assets (root `CLAUDE.md`, "Change sizes and the review gate").
 - Sizing is team-lead's judgement, checked by the same evidence review as everything
   else. A standard change that turns out security-relevant is re-sized to feature.
 

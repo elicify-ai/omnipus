@@ -1,11 +1,11 @@
 ---
 name: omnipus-shared-rules
-description: Baseline procedure for every Omnipus dev-team role — the fifteen rules that apply to all of them, plus the cross-cutting how-to for build/test gates, contracts, git, definition of done, false greens, retired surfaces, and reporting. Preloaded via the `skills:` frontmatter field on every dev-team agent file (team-lead, squad-lead, backend-lead, frontend-lead, security-lead, qa-lead, architect, uat-tester, uat-validator, docs-verifier, prometheus-prompt-engineer); the six pr-review-toolkit plugin reviewers (code-reviewer, code-simplifier, comment-analyzer, pr-test-analyzer, silent-failure-hunter, type-design-analyzer) load it explicitly with the Skill tool per their dispatch template. Load this before any repo action if it was not preloaded.
+description: Baseline procedure for every Omnipus dev-team role — the fifteen rules that apply to all of them, plus the cross-cutting how-to for build/test gates, contracts, git, definition of done, false greens, retired surfaces, and reporting. Preloaded via the `skills:` frontmatter field on every dev-team agent file (team-lead, squad-lead, backend-lead, frontend-lead, security-lead, qa-lead, architect, uat-tester, uat-validator, docs-verifier, prometheus-prompt-engineer); the three gate plugin reviewers (code-reviewer, silent-failure-hunter, pr-test-analyzer) and any explicitly requested optional plugin reviewer load it with the Skill tool per their dispatch template. Optional reviewers are not part of the gate. Load this before any repo action if it was not preloaded.
 ---
 
 # Omnipus Shared Rules
 
-Last reviewed: 2026-09-26
+Last reviewed: 2026-10-06
 
 Root `CLAUDE.md` is the authority on project facts and hard constraints — the *what*.
 This skill is the *how*: the working procedure every dev-team role shares. It never

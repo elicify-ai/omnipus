@@ -176,7 +176,10 @@ not held across CI or across the wait for the founder's reply. Finish your check
    touched) plus a review of the conflict resolution (the merge's conflict hunks,
    escalating to architect only where a resolution changes a design decision). The full
    size gate is NOT re-run. This is where a parallel-merge-later overlap's conflict is
-   resolved and re-checked.
+   resolved and re-checked. For agent-engine changes covered by root `CLAUDE.md`
+   ("Definition of Done"), require hands-on UAT by `uat-tester` and an independent
+   `uat-validator`, using the agreed provider/model, on the **exact post-merge commit
+   being landed** before step 4. Green CI and unit tests are not enough.
 4. **Push** the merge to the integration branch, setting both required variables in the
    same command so neither is ever forgotten in an unrelated shell:
    ```sh
