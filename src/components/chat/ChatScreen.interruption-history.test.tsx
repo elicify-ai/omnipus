@@ -8,6 +8,7 @@ import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { ChatScreen } from './ChatScreen'
+import { codeToDisplay } from '@/lib/llm-error'
 
 // U6-R1: historical interruption belongs only to that message, never a
 // conversation footer. Real stores, sends/cancel/frame routing and message
@@ -59,7 +60,7 @@ function oldReply() {
   useChatStore.getState().handleFrame({ type: 'token', session_id: SID, turn_id: 'old-turn', message_id: 'old-reply', content: 'Original partial reply' })
   const id = useChatStore.getState().messages.find((message) => message.role === 'assistant' && message.content === 'Original partial reply')!.id
   useChatStore.getState().cancelStream()
-  useChatStore.getState().handleFrame({ type: 'error', session_id: SID, message: 'This turn was stopped before it finished.', payload: { llm_error: { code: 'turn_canceled', message: 'This turn was stopped before it finished.', retryable: true } } })
+  useChatStore.getState().handleFrame({ type: 'error', session_id: SID, message: codeToDisplay.turn_canceled, payload: { llm_error: { code: 'turn_canceled', message: codeToDisplay.turn_canceled, retryable: true } } })
   useChatStore.getState().handleFrame({ type: 'done', session_id: SID, turn_id: 'old-turn', stats: { tokens: 1, cost: 0 } })
   return id
 }

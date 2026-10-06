@@ -13,6 +13,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useSidebarStore } from '@/store/sidebar'
 import { Sidebar } from './Sidebar'
+import { codeToDisplay } from '@/lib/llm-error'
 
 // U1-R1/R2 oracle: supplied UAT triage. A done frame precedes lifecycle
 // settlement; never infer the REST row's state from it or from its children.
@@ -131,7 +132,7 @@ describe('U1 — visible session lists follow real terminal/lifecycle frames and
     act(() => {
       if (settled === 'stopped') {
         useChatStore.getState().cancelStream()
-        useChatStore.getState().handleFrame({ type: 'error', session_id: PARENT, message: 'This turn was stopped before it finished.', payload: { llm_error: { code: 'turn_canceled', message: 'This turn was stopped before it finished.', retryable: true } } })
+        useChatStore.getState().handleFrame({ type: 'error', session_id: PARENT, message: codeToDisplay.turn_canceled, payload: { llm_error: { code: 'turn_canceled', message: codeToDisplay.turn_canceled, retryable: true } } })
       }
       useChatStore.getState().handleFrame({ type: 'done', session_id: PARENT, turn_id: 'turn-1', stats: { tokens: 1, cost: 0 } })
     })
