@@ -5,13 +5,14 @@
  *   FR-006: Month/Week/Day via custom toolbar driving the FC API (SP-39 —
  *           Agenda dropped; the three views are equal in-panel choices, and
  *           Month renders the compact in-panel grid, never routing away).
- *   FR-007: phone-width → two rows (nav+title / views+New task); ≥44px targets (I-4, I-9).
+ *   FR-007: phone-width → nav+title / wrapping actions; ≥44px targets (I-4, I-9).
  *   US-2/AS-2: prev() / next() / today() preserve calendarApi.getDate().
  *
  * Layout (container-query breakpoint relative to the `@container` wrapper the
  * host CalendarScreen provides):
  *   Wide (≥42rem, @2xl): ONE ROW — [prev today next] [title] ·· [Month Week Day] [New task]
- *   Narrow (<42rem):     TWO ROWS — row-1: [prev today next] [title]; row-2: [views] [New task]
+ *   Narrow (<42rem):     nav+title row; actions below: [views] [agent filter] [New task]
+ *                       The action group wraps when its controls cannot fit one row.
  *   42rem is 588px at the default 14px root; its pixel equivalent changes
  *   with the user's 12–20px font-size preference.
  *
@@ -245,13 +246,13 @@ export function CalendarToolbar({
         </h2>
       </div>
 
-      {/* ── Row 2: view switcher + New task ────────────────────────────────
-          `order-3` keeps this group after both row-1 groups in document order.
-          On narrow: `w-full` → own row. On wide (@2xl+): `w-auto` → same row
-          as the nav group (which has flex-1, so this group sits at the end). */}
+      {/* ── Row 2: view switcher + agent filter + New task ──────────────────
+          `order-3` keeps this group after row 1 in document order.
+          On narrow: `w-full` → own row; wrap controls rather than clip them.
+          On wide (@2xl+): `w-auto` → same row as the nav group. */}
       <div
         className={cn(
-          'flex items-center gap-[var(--space-1)] order-3',
+          'flex flex-wrap items-center gap-[var(--space-1)] order-3',
           'w-full @2xl:w-auto',
           'justify-between @2xl:justify-end',
         )}
