@@ -30,8 +30,6 @@ interface ConnectionStore {
   reconnectedAt: number | null
   lastDisconnectDurationMs: number | null
   lastDisconnectWasTerminal: boolean
-  /** An ordinary retry phase was shown; false for the quiet 4008 catch-up reconnect. */
-  lastDisconnectHadRetry: boolean
   /** Assistant bubble that was running when this socket dropped. */
   disconnectedAssistantMessageId: string | null
   /**
@@ -59,7 +57,6 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   reconnectedAt: null,
   lastDisconnectDurationMs: null,
   lastDisconnectWasTerminal: false,
-  lastDisconnectHadRetry: false,
   disconnectedAssistantMessageId: null,
   liteMode: false,
   setConnection: (conn) => set({ connection: conn }),
@@ -103,18 +100,11 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
       isConnected: false,
       disconnectedAt: current.disconnectedAt ?? Date.now(),
       reconnectedAt: null,
-      lastDisconnectHadRetry: false,
       disconnectedAssistantMessageId: assistantMessageId ?? current.disconnectedAssistantMessageId,
     })
   },
   setConnectionError: (error) => set({ connectionError: error }),
-  // WsConnection clears the phase before onConnected. Remember an actual
-  // retry phase until the next disconnect, including throughout catch-up.
-  setReconnectState: (phase, attempt) => set({
-    reconnectPhase: phase,
-    reconnectAttempt: attempt,
-    ...(phase !== null ? { lastDisconnectHadRetry: true } : {}),
-  }),
+  setReconnectState: (phase, attempt) => set({ reconnectPhase: phase, reconnectAttempt: attempt }),
   setLiteMode: (liteMode) => set({ liteMode }),
 
   reconnect: () => {
