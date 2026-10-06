@@ -177,6 +177,9 @@ export function useSessionForest(roots: Session[]): SessionForest {
       queryKey: ['sessions', 'children', parentId, offset] as const,
       queryFn: () => fetchSessionPage(undefined, undefined, { parentSessionId: parentId, offset }),
       staleTime: 15_000,
+      // Only expanded pages have observers. Catch lifecycle commits that
+      // settle after the final frame, just like the visible root list.
+      refetchInterval: 15_000,
     })),
   })
 

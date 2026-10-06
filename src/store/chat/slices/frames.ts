@@ -38,6 +38,13 @@ import { findFirstSendMessage } from '../first-send'
 
 
 
+// Refresh the whole prefix: roots and every observed expanded child page.
+// This is a prompt refresh, not a lifecycle projection: polling in the list
+// observers also covers an ordinary-root commit made after done was sent.
+const SESSION_LIST_REFRESH_FRAMES = new Set([
+  'done', 'error', 'subagent_start', 'subagent_state', 'subagent_end', 'catch_up_complete',
+])
+
 type FrameSlice = Pick<ChatStore, 'handleFrame'>
 type ToolCallResultFrame = Extract<Parameters<ChatStore['handleFrame']>[0], { type: 'tool_call_result' }>
 type MessageStatusFrame = Extract<Parameters<ChatStore['handleFrame']>[0], { type: 'message_status' }>
@@ -811,15 +818,15 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       // handleFrame past its grandfathered line budget).
       advanceReceivedEventTime(frame, targetSid, withBucket)
 
-      // #823 catch-up redesign (BE-DESIGN.md §6.2): the apply rule, gating
-      // every SEQUENCED session-scoped frame ahead of the switch below — see
-      // applySeqGate's own doc comment for why this belongs here rather than
-      // per-case.
+      // Gate sequence gaps before reducing frames or refreshing lists.
       if (applySeqGate(frame, targetSid, get, withBucket) === 'drop-or-gap') {
         syncForeground()
         return
       }
 
+      if (SESSION_LIST_REFRESH_FRAMES.has(frame.type)) {
+        void queryClient.invalidateQueries({ queryKey: ['sessions'] })
+      }
       if (handleFirstSendFrame({ frame, set, get, withBucket, runtime })) {
         syncForeground()
         return
