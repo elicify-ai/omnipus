@@ -1,5 +1,11 @@
 # Feature Specification: Scheduled Agent Autonomy & Schedules (#264)
 
+## Amended 2026-10-06 — founder decision
+
+A recurring scheduled/heartbeat run is a **new system-principal admission**, not boot replay. It may revive a **completed** root into a new round; it **never revives a stopped root** or clears an in-flight Stop. A root final lands completed/done while the chat stays visible and usable, not archived/hidden. A human message continues that conversation.
+
+All explicit session stops, including scheduled/heartbeat turns, use `AgentLoop.StopSession`: polite now, force after 3 s, detach 3 s after force. **Plain Stop ends only this session's current turn, never helpers; Stop all / `/cancel` stops its entire helper tree.** A keeper reminder to a steered helper is a steered system wake; tail saves refused by storage are visible to the parent, and the tail claims only its producing execution. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D-A/B/C/F and **An open conversation must keep the ability to delegate**::D3/D4. This does not alter the scheduler's entity, recurrence or shutdown budgets; unrelated old UI/migration claims remain for team-lead, not silent repair.
+
 **Created**: 2026-06-02
 **Status**: Draft
 **Input**: GitHub issue #264 (P0) — "cron → full agent autonomy + Schedules". Branch `feat/264-autonomous-schedules` off `hotfix/v0.1.0`. Design locked via interview + research into OpenClaw / Hermes / Claude Cowork autonomy models. This is the last v0.1.0 feature.

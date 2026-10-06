@@ -1,5 +1,15 @@
 # ADR-091 WP-A — Launcher, steered-by edge, turn reconstruction, admission
 
+## Amended 2026-10-06 — founder decision
+
+[The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md) and [Steering commands: no person question](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20261004-steering-commands-no-person-question.md) supersede conflicting session-control requirements and old acceptance expectations in this spec. **Plain Stop ends only the current turn of that one session, never helpers. Stop all / `/cancel` stops that session and its entire downward helper tree.** Human and agent triggers use `AgentLoop.StopSession`: polite immediately, forced after 3 s, detach 3 s after force. `cancel_grace`, the agent 5-second grace and public `hard` option are removed.
+
+Landed stopped resumes the same generation with a fresh execution identity; committed done/failed starts the next round. Boot never dispatches from old messages. A finished root is lifecycle completed/done, **not archived/hidden**; human input continues it, and a new scheduled/heartbeat run may revive completed as the system principal, **never stopped**. A helper final is consumed once by poll OR wake; a stopped parent holds it unconsumed until resumed, and Stop all supersedes queued hand-back wakes without deleting saved results.
+
+Delegated input is delivered only after exact text/identity is durably in the transcript; a failed write stays queued with a visible error. One route/record for all senders (transcript as record), waiting-message restart reconstruction, 256 KiB aggregate cap, ledger compaction and live failed-descendant-stop retry are **deferred to #1198 (founder 2026-10-06)**. F6 is the later post-landing simplification review, not authorization to remove safeguards now. The historical holdout below stays verbatim; conflicting old Stop, generation, person-question and automatic-boot-run oracles are not current acceptance.
+
+Status: Draft
+
 - **Decision record:** [ADR-091](../architecture/ADR-091-steered-sessions-replace-subagents.md) D1, D2, D6 (prerequisites), D9
 - **Landing order:** [adr-091-landing-order.md](adr-091-landing-order.md) — publishes I-1, I-2, I-3, I-8, I-9; consumes I-6, I-7
 - **Owner files:** landing order §3, row A
@@ -58,6 +68,8 @@ Today a delegated session is built two different ways — one on first run, anot
 Delegate run → launch → dispatch; task start → launch → dispatch; async completion → wake → reconstruction → turn; boot recovery → classification → reconstruction; turn end → admission loop → next queued dispatch.
 
 ## User stories and acceptance criteria
+
+**Amended 2026-10-06:** any earlier boot-reconstruction case now verifies no boot dispatch. Completion and admission must distinguish completed-root scheduled/heartbeat system-principal new rounds from stopped roots, where Stop holds. Stopped resumes use a fresh execution identity in the same generation. Only Stop all is a helper cascade; plain Stop cannot select helper admissions.
 
 ### US-1 — A steered session is created whole (P0)
 

@@ -1,9 +1,25 @@
 # ADR-20261004 — Steering commands: no person question
 
-- **Status:** Draft (amendment to [ADR-20260928 — The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/a-u1-runtime-contracts-20261002/assets/ADR-20260928-sub-agent-control-plane@cd20cf8b.md); founder decisions of 2026-10-04)
+## Amended 2026-10-06 — founder decision
+
+Later founder decisions narrow the preserved control-plane requirements. Use [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::Amended 2026-10-06 as the current decision record. This is a founder-requested synchronization, not a second grill/correction round.
+
+| Boundary | Current rule / correction |
+|---|---|
+| Stop versus Stop all | **Stop ends only this session's current turn, never its helpers. Stop all / `/cancel` stops this session and its whole helper tree.** Human and agent callers share `AgentLoop.StopSession`: polite now, forced at 3 s, detached 3 s after force. Remove the old agent grace, `cancel_grace`, and public `hard` option. |
+| Finishing input (R1) | A provider answer is not completion. Input accepted **before the terminal lifecycle/outbox commit** continues the same generation. Input accepted **after that commit** starts the next round; failed publication does not undo the committed outcome or discard its owed final. |
+| Delivery (D4) | `delivered` requires exact text/identity durably in the recipient transcript. A denied write leaves it queued and returns a visible error. No model-obedience claim. |
+| Upward result | Final consumed **once: poll OR hand-back wake, never both**. A stopped parent holds it unconsumed until resumed. Stop all supersedes queued hand-back wakes for the stopped tree, not saved result/history. |
+| Root completion | Finished root chat -> `completed` (done), **not archive/hide**. Human continuation works. A scheduled/heartbeat run may revive completed as the system principal, into a new round, **never stopped**. Old-message boot replay is not such a run. |
+| Goal continuation | `/goal <intent>` activates; `set_goal` refuses beforehand (Work-First FR-005). Keeper reminders to helpers use a steered system wake. Refused goal-tail saves are visible to the parent; the tail claims only its producing execution. |
+| Deferred scope | One route/record for every sender (transcript as record), rebuild of waiting messages after restart, 256 KiB aggregate cap, ledger compaction, and live failed-descendant-stop retry are **deferred to #1198 (founder 2026-10-06)**. The earlier D4/D6 rulings required these; the later founder decision defers them. C6 must not be read as keeping their release gate. |
+
+F6 is the planned post-landing simplification review in [FOUNDER-OPEN-ITEMS.md](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/FOUNDER-OPEN-ITEMS.md)::F6; it is not another correction round or an already-approved removal. The original locked decisions and historical code pins below keep their dates.
+
+- **Status:** Draft (amendment to [ADR-20260928 — The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md); founder decisions of 2026-10-04)
 - **Date:** 2026-10-04
 - **Deciders:** Daniel Piatkowski (founder) — the seven locked decisions below are the founder's, as decided on 2026-10-04
-- **Amends:** [ADR-20260928 — The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/a-u1-runtime-contracts-20261002/assets/ADR-20260928-sub-agent-control-plane@cd20cf8b.md) — source read at the read-only snapshot `omnipus-investigations/a-u1-runtime-contracts-20261002/assets/ADR-20260928-sub-agent-control-plane@cd20cf8b.md`. Where a locked decision below contradicts that ADR, **the founder's later (2026-10-04) decision wins** and this amendment says so explicitly.
+- **Amends:** [ADR-20260928 — The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md) — source read at the read-only snapshot `omnipus-investigations/a-u1-runtime-contracts-20261002/assets/ADR-20260928-sub-agent-control-plane@cd20cf8b.md`. Where a locked decision below contradicts that ADR, **the founder's later (2026-10-04) decision wins** and this amendment says so explicitly.
 - **Correction (2026-10-04):** this is the **one correction** after this ADR's single grill round ([review](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-steering-design-20261004/docs/internal/architecture/ADR-20261004-steering-commands-no-person-question-review.md), verdict REVISE, no founder questions). The answers to that review's C1–C6 are the "Correction (2026-10-04)" section below. **No second grill runs on this revision**; any blocking finding still open after this correction escalates to the founder. The seven locked decisions are not reopened.
 
 ## Context
@@ -57,8 +73,8 @@ This section is the ADR's **one correction** after its single grill round ([revi
 |---|---|---|---|
 | `working`, mid-turn | Delivered into the current turn as ordinary steering input; **the turn is not stopped** (locked decision 5) | Delivered/stored under the ordinary upward rules (source D5, preserved) | Never stops or resumes anything |
 | `stopped` | **Resumes the helper** on the same conversation, same generation — the same way the Resume command does: ledger intent first, then the atomic note-clear/queued mutation installing a **fresh execution identity** (source D2, preserved); the message is injected as the newest instruction, never a transcript replay (F1011-Q8, preserved) | **Stored** in the helper's durable inbox; **no resume**; read when the helper next runs (source D6, preserved) | Never resumes; a ring is the delivery of a notice, not a steering act |
-| `done` | Starts the helper's **next round** on the same conversation (locked decision 4's next-round shape) with the message as its input; source D2's next-generation admission rules apply | n/a — a done helper's descendants are finished or stopped | Never resumes |
-| `failed` | Same as `done`: next round with the message as input | n/a — a failed parent's descendants were stopped (source D6/#1053, preserved) | Never resumes |
+| `done` / `completed` | Starts the helper's **next round** on the same conversation with the message as input; terminal commit, not provider text, is the boundary | Deliver once under the ordinary upward rules; never duplicate a final through poll and wake | Never resumes |
+| `failed` | Same as `done`: next round with the message as input | Preserve upward delivery. Initial descendant Stop results must distinguish landed/pending/incomplete; live retry is deferred to #1198 (founder 2026-10-06) | Never resumes |
 | any | A **retry or replay of an already-delivered message is not a new resume** — message-identity dedup applies and changes nothing | — | — |
 | boot | **Boot never starts a run from an old message** (source D8.5, kept verbatim). A message arriving after boot is a fresh explicit post-boot action | — | — |
 
@@ -130,12 +146,12 @@ Source acceptance tests (ADR-20260928, "Required acceptance tests"):
 | T14 | **Superseded** — no open owner question survives Stop/Stop all; no owner-answer path |
 | T25 | **Superseded** — there is no `owner_required` question to withdraw; redirect simply replaces the turn (locked decision 3) |
 | T19 | **Stays** for its lifetime-timeout half (`stopped(timeout)`, fresh budget on resume); **superseded** for its 24-hour-expiry comparison clause |
-| T22 | **Stays** for steer caps, delivery receipts and redirect-pending; **superseded** for its open-owner-question compaction clause |
+| T22 | **Current:** existing body/rate/item caps and durable injection receipts. **deferred to #1198 (founder 2026-10-06):** aggregate 256 KiB cap, waiting-message restart reconstruction and ledger compaction. **Superseded:** open-owner-question clauses. |
 | T11 | **Stays** — final-versus-stop race, committed outbox, delivery-once (stop model and receipts preserved) |
 | T27 | **Stays** — same-generation stale-effect protection |
 | T20, and the goal clauses of T6/T19/T23 | **Stays** — goal preserved: no stop of any kind ends a goal (locked decision 1) |
 | T21 | **Stays** — single Stop does not cascade; Stop all goes downward only (locked decisions 1–2) |
-| T4, T18, T6 | **Stays** — boot does not auto-resume; a restart leaves an already-stopped helper stopped (locked decision 1, D8 kept) |
+| T4, T18, T6 | **Current:** no boot dispatch; an already-stopped helper stays stopped. **T18 waiting-message reconstruction/release: deferred to #1198 (founder 2026-10-06).** Accepted Stop finishing and saved notice/final recovery are not waived. |
 | T15, T16 | **Stays** — stop notices and the stopped-node completion frontier (locked decision 1 refines delivery, not the frontier) |
 | T17, T23, T26 | **Stays** — plan/task session-goal reuse, failed-parent descendant stops, state display (minus any person-question row) |
 
