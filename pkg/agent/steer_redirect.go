@@ -97,7 +97,8 @@ func (al *AgentLoop) RedirectSteeredSession(ctx context.Context, sessionID strin
 	if len(report.SkippedNewerGeneration) > 0 {
 		return fmt.Errorf("steer: redirect %q: the selected stop was superseded", sessionID)
 	}
-	if _, selected := res.Selected[sessionID]; len(report.Reached) == 0 || !selected {
+	selection, selected := res.Selected[sessionID]
+	if len(report.Reached) == 0 || !selected {
 		return fmt.Errorf("steer: redirect %q: the stop stamped nothing (already stopped or terminal)", sessionID)
 	}
 
@@ -121,7 +122,7 @@ func (al *AgentLoop) RedirectSteeredSession(ctx context.Context, sessionID strin
 	waitCtx := al.inboundRunContext()
 	go func() {
 		defer al.endActiveRequest()
-		al.awaitStoppedAndRevive(waitCtx, rec, by, instruction)
+		al.awaitStoppedAndRevive(withStopSelection(waitCtx, selection), rec, by, instruction)
 	}()
 	return nil
 }
@@ -151,7 +152,12 @@ func (al *AgentLoop) RedirectSteeredSession(ctx context.Context, sessionID strin
 // where the record itself can no longer be read or no longer exists. The
 // launch-time edge is the only parent ever reported to — when it is
 // unknown there is nobody to tell, and none is invented.
+//
+// ctx carries this redirect's own accepted Stop selection
+// (withStopSelection): a session that landed stopped under a different,
+// newer Stop is not revived with the old instruction (A2).
 func (al *AgentLoop) awaitStoppedAndRevive(ctx context.Context, initial *session.LifecycleRecord, by steer.Principal, instruction string) {
+	selection, ownStop := stopSelectionFromContext(ctx)
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
 		return
@@ -188,6 +194,17 @@ func (al *AgentLoop) awaitStoppedAndRevive(ctx context.Context, initial *session
 		// Landed-or-terminal only — an in-flight fence (Stopped() true, state
 		// still running/queued) is not enough; see this function's doc
 		// comment for the stranded-queued shape an early revive produces.
+		if ownStop && rec.State == session.LifecycleStopped && (rec.StopEffect == nil || *rec.StopEffect != selection.Effect) {
+			// A2: the session landed stopped by a NEWER Stop (a newer resume
+			// and Stop happened meanwhile); this redirect's own stop is not
+			// the one that holds it, so its old instruction must not undo
+			// the newer Stop.
+			logger.ErrorCF("agent", "steer: redirect: a newer Stop holds the session — the replacement instruction was NOT delivered",
+				map[string]any{"session_id": sessionID, "control_id": selection.Effect.ControlID})
+			al.reportUndeliveredRedirect(sessionID, rec,
+				errors.New("a newer Stop stopped the session before this redirect's instruction could be applied"))
+			return
+		}
 		if rec.State == session.LifecycleStopped || rec.Terminal() {
 			revived, rerr := al.ReviveStoppedSession(ctx, sessionID, by, instruction)
 			if rerr != nil {
