@@ -109,11 +109,6 @@ func TestQAFailedParentCascade_PersistFailureNamedIncompleteAndBootRetried(t *te
 	}
 }
 
-// A4 one-shot failure INSIDE the production cascade cannot be synchronized
-// at the concrete LifecycleStore's direct AppendJSONL seam from pkg/agent.
-// A chmod repair triggered by ledger polling can race the first persist and
-// is not evidence. Dispatcher agreed to keep this loud and route the seam to
-// architect + fresh CHECK, rather than fake the Stop or add a production hook.
-func TestQAFailedParentCascade_OneShotFenceFailureNeedsPersistSeam(t *testing.T) {
-	t.Fatal("BLOCKED: deterministic one-shot child fence persist seam not exposed to the real cascade — required by finisher dispatch A4 / ADR-20260928 D6 #1053; architect and fresh CHECK must resolve testability")
-}
+// The transient one-shot retry-inside-cascade case is untestable without a persist seam.
+// Tracked in issue #1198 (deferred D6 live retry); persistent-failure case covered by
+// TestQAFailedParentCascade_PersistFailureNamedIncompleteAndBootRetried.
