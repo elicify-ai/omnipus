@@ -26,8 +26,8 @@ func TestQAStopIntentFinisher_PersistFailureLandsThroughOneStop(t *testing.T) {
 		t.Fatalf("reopened failed acceptance = %+v/%v, want exact queued original intent", pending, err)
 	}
 	restore()
-	if err := qaReceiptRunBootFinisher(t, f.al); err != nil {
-		t.Fatalf("public boot finisher failed after storage repair: %v", err)
+	if finishErr := qaReceiptRunBootFinisher(t, f.al); finishErr != nil {
+		t.Fatalf("public boot finisher failed after storage repair: %v", finishErr)
 	}
 	qaReceiptRequireOriginalStop(t, f, grant, session.StopCauseStop, qaReceiptStopActor)
 	pending, err = fresh.UnfinishedStopIntents(f.child.SessionID)
@@ -38,8 +38,8 @@ func TestQAStopIntentFinisher_PersistFailureLandsThroughOneStop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := qaReceiptRunBootFinisher(t, f.al); err != nil {
-		t.Fatalf("idempotent boot finisher replay: %v", err)
+	if replayErr := qaReceiptRunBootFinisher(t, f.al); replayErr != nil {
+		t.Fatalf("idempotent boot finisher replay: %v", replayErr)
 	}
 	after, err := os.ReadFile(qaReceiptJournalPath(f.al, f.child.SessionID))
 	if err != nil || !bytes.Equal(before, after) {
@@ -100,8 +100,8 @@ func TestQAStopIntentFinisher_ObsoleteIntentSupersededWithoutStateChange(t *test
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := qaReceiptRunBootFinisher(t, f.al); err != nil {
-				t.Fatalf("obsolete intent reconciliation: %v", err)
+			if finishErr := qaReceiptRunBootFinisher(t, f.al); finishErr != nil {
+				t.Fatalf("obsolete intent reconciliation: %v", finishErr)
 			}
 			after, err := os.ReadFile(path)
 			if err != nil || !bytes.Equal(before, after) {

@@ -38,8 +38,8 @@ func TestQADelegateFinal_PollAndWakeDeliverExactlyOnce(t *testing.T) {
 			}
 			if action == "inbox" {
 				var inbox generated.DelegateInboxResponse
-				if err := json.Unmarshal([]byte(pollResult.Content), &inbox); err != nil {
-					t.Fatalf("real delegate inbox response cannot be decoded as the generated inbox response: %q: %v", pollResult.Content, err)
+				if decodeErr := json.Unmarshal([]byte(pollResult.Content), &inbox); decodeErr != nil {
+					t.Fatalf("real delegate inbox response cannot be decoded as the generated inbox response: %q: %v", pollResult.Content, decodeErr)
 				}
 			}
 			pollReceipts := strings.Count(pollResult.Content, qaUATHelperFinal)

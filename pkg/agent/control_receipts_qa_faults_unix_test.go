@@ -89,7 +89,9 @@ func qaReceiptAcceptFailedFence(t *testing.T, f qaReceiptFixture) (session.Contr
 // or mocking a finisher. Missing implementation remains loud.
 func qaReceiptRunBootFinisher(t *testing.T, al *AgentLoop) error {
 	t.Helper()
-	finisher, ok := any(al).(interface{ FinishUnfinishedStopIntents(context.Context) error })
+	finisher, ok := any(al).(interface {
+		FinishUnfinishedStopIntents(ctx context.Context) error
+	})
 	if !ok {
 		t.Fatal("BLOCKED: boot stop-intent finisher not implemented — required by ADR-20260928 D4")
 	}

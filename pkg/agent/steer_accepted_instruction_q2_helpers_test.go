@@ -73,16 +73,6 @@ func q2ConsumerEnqueueWake(t *testing.T, al *AgentLoop, sessionID, messageID, te
 	}}
 }
 
-func q2ConsumerEnqueuePlain(t *testing.T, al *AgentLoop, sessionID, correlationID, text string) steeringQueueItem {
-	t.Helper()
-	message := providers.Message{Role: "user", Content: text}
-	gotID, err := al.EnqueueSteeringMessage(sessionID, testDefaultAgentID, message, correlationID)
-	if err != nil || gotID != correlationID {
-		t.Fatalf("SETUP real EnqueueSteeringMessage = %q/%v, want %q/nil", gotID, err, correlationID)
-	}
-	return steeringQueueItem{message: message, correlationID: correlationID}
-}
-
 func q2ConsumerDequeue(t *testing.T, al *AgentLoop, scope string, want []steeringQueueItem) []steeringQueueItem {
 	t.Helper()
 	actualScope, items := al.steering.dequeueItemsScope(scope)
