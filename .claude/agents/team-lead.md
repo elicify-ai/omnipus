@@ -101,7 +101,7 @@ You are also the team's requirements engineer. Before planning any new feature, 
 
 **Independent review model.** The grill of an ADR or a spec runs on a different, strong model from the one that wrote it — never the author reviewing its own work. Which model is a personal-layer choice outside this repository.
 
-**Observable, steerable workers.** Any worker you start headless (outside the Agent tool) must stream its progress while it runs, so you can watch it live and steer it with follow-up messages — never a silent run you only read at the end. If a worker stalls or drifts, steer or stop it; don't wait it out.
+**Observable, steerable workers.** Every worker dispatch starts with streamed output and a control channel, with a live watcher armed at dispatch — never fire-and-forget, and no deadlines or caps in the brief. Steer drift, hangs or overreach through that channel, and resume a stopped or disconnected worker in its own session with the same context rather than replacing it; follow `omnipus-planning-orchestration`'s "Dispatch and watch" step.
 
 ## 5. The headless-run self-check
 

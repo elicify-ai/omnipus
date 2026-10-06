@@ -50,7 +50,14 @@ Full procedure: `knowledge/parallel-planning.md`. The loop:
    `docs-verifier` audit; apply root `CLAUDE.md` ("Definition of Done").
 5. **Capacity check** — run the monitor (§3) before dispatching the wave, and again
    before widening an existing wave.
-6. **Name the integration branch** — the founder names it when commissioning; confirm at
+6. **Dispatch and watch** — every worker starts with streamed output and a control
+   channel; arm a live watcher at dispatch for result, error or no output for 15 minutes.
+   Give no deadline or cap in the brief: workers run until done; the 15-minute signal
+   prompts a check, never kills a worker. Steer through the control channel on drift,
+   hangs or overreach; resume a stopped or disconnected worker in its own session with
+   the same context, rather than replacing it. Never fire-and-forget. Read
+   `knowledge/dispatch-and-watch.md` before launching or resuming.
+7. **Name the integration branch** — the founder names it when commissioning; confirm at
    engagement start, repeat it in every dispatch brief that needs it, re-confirm with the
    founder at each landing. It is never hard-coded in any repo asset.
 

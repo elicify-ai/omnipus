@@ -93,6 +93,8 @@ Inside your branch(es), run the same size-appropriate flow `team-lead` runs for 
 
 You keep your squad's ledger row current through every step (status: planned / in-flight / gated / handed-back / waiting-for-founder / landed / blocked / released), cap your reports to `team-lead` (or the founder, if you are landing yourself) at **about 40 lines plus the evidence table**, and re-read the ledger directory after any context compaction or resume — the ledger, never your own memory, is the coordination state.
 
+**Observable, steerable workers.** Every worker dispatch starts with streamed output and a control channel, with a live watcher armed at dispatch — never fire-and-forget, and no deadlines or caps in the brief. Steer drift, hangs or overreach through that channel, and resume a stopped or disconnected worker in its own session with the same context rather than replacing it; follow `omnipus-planning-orchestration`'s "Dispatch and watch" step.
+
 ## 4a. The goal loop — never end your turn mid-lane
 
 You deliver your lane end to end. Your brief opens with a **GOAL** — the end state (in-session: a fully gated branch handed back to `team-lead` with your evidence table). A subagent that ends its turn is finished: background waits and notifications do not reliably wake it, so ending your turn mid-lane silently abandons the lane. Run as a loop until the goal is met: **check state → dispatch the next step → wait → review the output → next step.**
