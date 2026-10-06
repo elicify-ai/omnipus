@@ -334,8 +334,11 @@ test.describe('native docking regression', () => {
       await expect(alreadyOpen, 'no stale already-open state').toHaveCount(0)
       await toggleWorkspacePanel(page, panel)
       await expect(page.getByTestId('side-panel'), 'presence cleared: entry toggle closes the restored dock').toHaveCount(0)
+      // Dock visibility does not acknowledge usePanelDeepLink's asynchronous URL publication.
+      await expect.poll(() => new URLSearchParams(new URL(page.url()).hash.split('?')[1]).get('panel')).toBe(null)
       await toggleWorkspacePanel(page, panel)
       await expect(page.getByTestId('side-panel'), 'presence cleared: same entry opens normally').toBeVisible()
+      await expect.poll(() => new URLSearchParams(new URL(page.url()).hash.split('?')[1]).get('panel')).toBe(panel)
       await assertSameNativeChat(page, baseline, panel)
     })
   }
