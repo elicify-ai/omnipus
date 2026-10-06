@@ -18,9 +18,9 @@
 //
 // Fix: the pill (and the Activity Bar's avatar stack) is derived from
 // direct agent spans whose `lifecycleState` is exactly 'running' — the
-// broader `running` list (used by ActivityPanel's row list, which must
-// still SHOW a queued child, just labelled "queued" — US-1 AS-5) is
-// unaffected.
+// ActivityPanel must still SHOW queued/waiting children, but U2 and
+// ADR-20260928 D2 (Stop is "non-terminal") supersede the old assertion
+// that lifecycle-stopped/completed spans belong to Running now.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
@@ -125,13 +125,13 @@ describe('useRunningActivity — runningChildren is exactly-lifecycleState-runni
 
     const { result } = renderHook(() => useRunningActivity(), { wrapper: makeWrapper(client) })
 
-    // Sanity: the broader `running` list (ActivityPanel's row source) still
-    // carries all four — queued/lifecycle-terminal spans and the shell job
-    // are NOT hidden from the panel, only excluded from the pill count.
+    // U2: terminal lifecycle is retained as history, not Running now.
+    // Queued work remains visible, without contributing to runningCount.
     await waitFor(() => {
-      expect(result.current.running).toHaveLength(4)
+      expect(result.current.running.map((item) => item.key)).toStrictEqual(['span-running', 'span-queued', 'bash-running-1'])
     })
-
+    expect(result.current.recentlyFinished.map((item) => ({ key: item.key, status: item.status }))).toStrictEqual([{ key: 'span-done-early', status: 'success' }])
+    expect(result.current.runningCount).toBe(2)
     expect(result.current.runningChildren).toBe(1)
     client.clear()
   })
@@ -177,8 +177,10 @@ describe('useRunningActivity — runningChildren is exactly-lifecycleState-runni
     const { result } = renderHook(() => useRunningActivity(), { wrapper: makeWrapper(client) })
 
     await waitFor(() => {
-      expect(result.current.running).toHaveLength(4)
+      expect(result.current.running.map((item) => item.key)).toStrictEqual(['span-r1', 'span-r2', 'span-needs-input'])
     })
+    expect(result.current.recentlyFinished.map((item) => ({ key: item.key, lifecycle: item.kind === 'agent' ? item.lifecycleState : undefined }))).toStrictEqual([{ key: 'span-stopped', lifecycle: 'stopped' }])
+    expect(result.current.runningCount).toBe(2)
     expect(result.current.runningChildren).toBe(2)
     client.clear()
   })
