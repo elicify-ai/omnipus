@@ -79,8 +79,8 @@ func TestQAGate2Redirect_OldWaiterCannotReviveNewerStoppedRun(t *testing.T) {
 	al.SetSteerCanceller(NewSteerCanceller(reader, al.SteerGenerationCancel))
 	const oldInstruction = "obsolete redirect R must never override the newer Stop"
 	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: "qa2-a2-owner"}
-	if err := al.RedirectSteeredSession(context.Background(), a.SessionID, by, oldInstruction); err != nil {
-		t.Fatalf("SETUP real Redirect R acceptance: %v", err)
+	if redirectErr := al.RedirectSteeredSession(context.Background(), a.SessionID, by, oldInstruction); redirectErr != nil {
+		t.Fatalf("SETUP real Redirect R acceptance: %v", redirectErr)
 	}
 	readLock := reader.Lock(a.SessionID)
 	readLock.Lock()

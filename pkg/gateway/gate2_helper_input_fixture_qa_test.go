@@ -107,8 +107,8 @@ func newQA2HelperInputFixture(t *testing.T) *qa2HelperInputFixture {
 		t.Fatal(err)
 	}
 	owner := "qa2-owner"
-	if err := al.GetSessionStore().SetMeta(parent.ID, session.MetaPatch{Owner: &owner}); err != nil {
-		t.Fatal(err)
+	if metaErr := al.GetSessionStore().SetMeta(parent.ID, session.MetaPatch{Owner: &owner}); metaErr != nil {
+		t.Fatal(metaErr)
 	}
 	launched, err := agent.NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
 		SteeringSessionID: parent.ID, TargetAgentID: "hans", Task: "Original helper instruction.",
@@ -127,9 +127,9 @@ func newQA2HelperInputFixture(t *testing.T) *qa2HelperInputFixture {
 		p.open(1)
 		cancel()
 		select {
-		case err := <-runDone:
-			if err != nil {
-				t.Errorf("real loop shutdown: %v", err)
+		case runErr := <-runDone:
+			if runErr != nil {
+				t.Errorf("real loop shutdown: %v", runErr)
 			}
 		case <-time.After(10 * time.Second):
 			t.Error("real helper-input loop did not finish shutdown")

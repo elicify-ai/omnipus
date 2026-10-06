@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -74,6 +73,6 @@ func gate1AwaitLiveProvider(t *testing.T, p *gate1LiveSteerProvider, index int) 
 			t.Fatalf("SETUP: provider boundary=%d, want exactly %d", got, index)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal(fmt.Sprintf("SETUP: provider did not reach real boundary %d", index))
+		t.Fatalf("SETUP: provider did not reach real boundary %d", index)
 	}
 }

@@ -90,8 +90,8 @@ func qa2ReopenHelperTranscript(t *testing.T, store *session.UnifiedStore, id str
 		t.Fatalf("reopen real helper conversation store: %v", err)
 	}
 	defer func() {
-		if err := fresh.Close(); err != nil {
-			t.Errorf("close reopened helper conversation store: %v", err)
+		if closeErr := fresh.Close(); closeErr != nil {
+			t.Errorf("close reopened helper conversation store: %v", closeErr)
 		}
 	}()
 	entries, err := fresh.ReadTranscript(id)

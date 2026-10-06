@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -188,7 +189,7 @@ func qa3PendingRootVerdicts(t *testing.T, al *AgentLoop, rootID string) []string
 	var pending []string
 	inboxDir := filepath.Join(al.GetConfig().Agents.Defaults.Home, "session_messages")
 	files, err := os.ReadDir(inboxDir)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil // No inbox files means no stored recovery verdict anywhere.
 	}
 	if err != nil {
