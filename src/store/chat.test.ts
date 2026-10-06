@@ -284,19 +284,17 @@ describe('chat store — streaming via handleFrame', () => {
     expect(useConnectionStore.getState().connectionError).toBeNull()
   })
 
-  it('handleFrame(error) with no assistant message sets connectionError banner', () => {
-    // When no assistant message exists, the error is connection-level (e.g. the WS frame
-    // arrived before the server could even start a reply). Both the error message AND
-    // connectionError are set so the banner shows.
+  it('handleFrame(error) with no assistant message still stays local to the selected chat', () => {
+    // U5 supersedes the old banner oracle: absence of a reply is not proof
+    // of a broken connection. Keep the exact error in the chat instead.
     act(() => {
       useChatStore.setState({ isStreaming: true })
       useChatStore.getState().handleFrame({ type: 'error', message: 'Connection lost' })
     })
     const chatState = useChatStore.getState()
     expect(chatState.isStreaming).toBe(false)
-    expect(useConnectionStore.getState().connectionError).toBe('Connection lost')
-    const errMsg = chatState.messages.find((m) => m.status === 'error')
-    expect(errMsg).toBeDefined()
+    expect(useConnectionStore.getState().connectionError).toBeNull()
+    expect(chatState.messages.filter((m) => m.status === 'error').map((m) => m.content)).toStrictEqual(['Connection lost'])
   })
 })
 
