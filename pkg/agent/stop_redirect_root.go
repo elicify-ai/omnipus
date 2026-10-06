@@ -65,7 +65,7 @@ func (al *AgentLoop) redirectOrdinarySession(ctx context.Context, sessionID, ins
 	waitCtx := al.inboundRunContext()
 	go func() {
 		defer al.endActiveRequest()
-		al.continueOrdinaryAfterStop(waitCtx, msg)
+		al.continueOrdinaryAfterStop(waitCtx, msg, redirectWaitDeadline)
 	}()
 	return nil
 }
@@ -82,16 +82,9 @@ func (al *AgentLoop) ordinaryRedirectMessage(sessionID, instruction, userID, rep
 	if err != nil || meta == nil {
 		return bus.InboundMessage{}, fmt.Errorf("redirect: read session %q: %w", sessionID, errors.Join(err, errNilMeta(meta)))
 	}
-	channel := strings.TrimSpace(replyChannel)
-	if channel == "" || channel == "web" {
-		channel = strings.TrimSpace(meta.Channel)
-	}
-	if channel == "" {
-		channel = "webchat"
-	}
-	chatID := strings.TrimSpace(replyChatID)
-	if chatID == "" {
-		chatID = sessionID
+	channel, chatID, instanceID, err := ordinaryRedirectRoute(sessionID, meta, replyChannel, replyChatID)
+	if err != nil {
+		return bus.InboundMessage{}, err
 	}
 	agentID := strings.TrimSpace(meta.ActiveAgentID)
 	if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
@@ -100,13 +93,38 @@ func (al *AgentLoop) ordinaryRedirectMessage(sessionID, instruction, userID, rep
 		}
 	}
 	msg := bus.InboundMessage{
-		Channel: channel, ChatID: chatID, SessionID: sessionID, Content: instruction,
+		Channel: channel, ChatID: chatID, InstanceID: instanceID, SessionID: sessionID, Content: instruction,
 		Sender: bus.SenderInfo{CanonicalID: userID}, GatewayUserID: userID, UserInitiated: true,
 	}
 	if agentID != "" {
 		msg.Metadata = map[string]string{"agent_id": agentID}
 	}
 	return msg, nil
+}
+
+// ordinaryRedirectRoute names where the chat's replies go. A channel the
+// caller states (a channel control typed in that chat) is used with the chat id
+// it states. Otherwise (the web frame states no chat) the channel AND the chat
+// id both come from the session's own metadata, never one from each: a channel
+// chat redirected from the web frame continues on its real channel and peer.
+func ordinaryRedirectRoute(sessionID string, meta *session.UnifiedMeta, replyChannel, replyChatID string) (channel, chatID, instanceID string, err error) {
+	channel = strings.TrimSpace(replyChannel)
+	chatID = strings.TrimSpace(replyChatID)
+	if channel != "" && channel != "web" {
+		if chatID == "" {
+			chatID = sessionID
+		}
+		return channel, chatID, "", nil
+	}
+	channel = strings.TrimSpace(meta.Channel)
+	if channel == "" || channel == "webchat" {
+		return "webchat", sessionID, "", nil
+	}
+	chatID = strings.TrimSpace(meta.PeerID)
+	if chatID == "" {
+		return "", "", "", fmt.Errorf("redirect: session %q is a %s chat with no recorded chat id to continue in", sessionID, channel)
+	}
+	return channel, chatID, strings.TrimSpace(meta.InstanceID), nil
 }
 
 func errNilMeta(meta *session.UnifiedMeta) error {
@@ -120,13 +138,13 @@ func errNilMeta(meta *session.UnifiedMeta) error {
 // then records the instruction as the chat's next user message and runs one
 // turn with it. A wait that ends without the turn stopping (deadline,
 // shutdown) or a refused recording is reported to the chat.
-func (al *AgentLoop) continueOrdinaryAfterStop(ctx context.Context, msg bus.InboundMessage) {
-	deadline := time.Now().Add(redirectWaitDeadline)
+func (al *AgentLoop) continueOrdinaryAfterStop(ctx context.Context, msg bus.InboundMessage, wait time.Duration) {
+	deadline := time.Now().Add(wait)
 	poll := time.NewTicker(redirectPollInterval)
 	defer poll.Stop()
 	for !al.ordinaryTurnStopped(msg.SessionID) {
 		if time.Now().After(deadline) {
-			al.reportUndeliveredOrdinaryRedirect(msg, fmt.Errorf("the current turn did not stop within %s", redirectWaitDeadline))
+			al.reportUndeliveredOrdinaryRedirect(msg, fmt.Errorf("the current turn did not stop within %s", wait))
 			return
 		}
 		select {
@@ -158,7 +176,9 @@ func (al *AgentLoop) continueOrdinaryAfterStop(ctx context.Context, msg bus.Inbo
 		al.reportUndeliveredOrdinaryRedirect(msg, fmt.Errorf("route the instruction: %w", err))
 		return
 	}
-	al.runRevivedOrdinaryTurn(msg, resolveScopeKey(route, msg.SessionKey))
+	if !al.runRevivedOrdinaryTurn(msg, resolveScopeKey(route, msg.SessionKey)) {
+		al.reportUndeliveredOrdinaryRedirect(msg, errors.New("the agent is shutting down"))
+	}
 }
 
 // ordinaryTurnStopped reports whether the chat has no live turn and no Stop
@@ -179,7 +199,8 @@ func (al *AgentLoop) ordinaryTurnStopped(sessionID string) bool {
 }
 
 // reportUndeliveredOrdinaryRedirect tells the chat that its redirect
-// instruction was not applied, and logs it.
+// instruction was not applied, quoting the instruction the person sent so it
+// can be sent again, and logs it.
 func (al *AgentLoop) reportUndeliveredOrdinaryRedirect(msg bus.InboundMessage, cause error) {
 	logger.ErrorCF("agent", "redirect: the new instruction was NOT applied to the chat",
 		map[string]any{"session_id": msg.SessionID, "error": cause.Error()})
@@ -187,7 +208,7 @@ func (al *AgentLoop) reportUndeliveredOrdinaryRedirect(msg bus.InboundMessage, c
 	defer cancel()
 	if err := al.bus.PublishOutbound(replyCtx, bus.OutboundMessage{
 		Channel: msg.Channel, ChatID: msg.ChatID, SessionID: msg.SessionID,
-		Content: fmt.Sprintf("Redirect was not applied: %v. Send the instruction again.", cause),
+		Content: fmt.Sprintf("Redirect was not applied: %v. Your instruction was:\n%s\nSend it again.", cause, msg.Content),
 	}); err != nil {
 		logger.ErrorCF("agent", "redirect: the not-applied notice could not be sent",
 			map[string]any{"session_id": msg.SessionID, "error": err.Error()})
