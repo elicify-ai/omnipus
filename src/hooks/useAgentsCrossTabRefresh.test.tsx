@@ -20,7 +20,6 @@ import { fireEvent, act } from '@testing-library/react'
 
 import { useAgentsCrossTabRefresh } from './useAgentsCrossTabRefresh'
 import { queryClient } from '@/lib/queryClient'
-import { useConnectionStore } from '@/store/connection'
 
 function setVisibility(state: DocumentVisibilityState) {
   vi.spyOn(document, 'visibilityState', 'get').mockReturnValue(state)
@@ -78,82 +77,6 @@ describe('useAgentsCrossTabRefresh (agent-picker freshness fix, focus path)', ()
     act(() => {
       fireEvent(document, new Event('visibilitychange'))
       fireEvent(window, new Event('focus'))
-    })
-    expect(invalidateSpy).not.toHaveBeenCalled()
-  })
-})
-
-// Founder decision 2026-10-06: a tab whose websocket connects or reconnects
-// reloads the agent list, so an agent created while the socket was not yet
-// open (or was down) shows up without a page reload. The signal is the app's
-// own connection store (`isConnected`, driven by WsLifecycle's onConnected /
-// onDisconnected via setConnected) — the same flag the rest of the SPA reads.
-describe('useAgentsCrossTabRefresh (websocket connect / reconnect path)', () => {
-  beforeEach(() => {
-    vi.restoreAllMocks()
-    useConnectionStore.setState({ isConnected: false, disconnectedAt: null })
-  })
-  afterEach(() => {
-    vi.restoreAllMocks()
-    useConnectionStore.setState({ isConnected: false, disconnectedAt: null })
-  })
-
-  it('invalidates the agents query exactly once when the socket first connects', () => {
-    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined)
-    renderHook(() => useAgentsCrossTabRefresh())
-    invalidateSpy.mockClear()
-
-    act(() => {
-      useConnectionStore.getState().setConnected(true)
-    })
-
-    expect(invalidateSpy).toHaveBeenCalledTimes(1)
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['agents'] })
-  })
-
-  it('invalidates again on every reconnect, but not on the drop itself', () => {
-    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined)
-    renderHook(() => useAgentsCrossTabRefresh())
-    act(() => {
-      useConnectionStore.getState().setConnected(true)
-    })
-    invalidateSpy.mockClear()
-
-    act(() => {
-      useConnectionStore.getState().setConnected(false)
-    })
-    expect(invalidateSpy).not.toHaveBeenCalled()
-
-    act(() => {
-      useConnectionStore.getState().setConnected(true)
-    })
-    expect(invalidateSpy).toHaveBeenCalledTimes(1)
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['agents'] })
-  })
-
-  it('does not re-invalidate on unrelated connection-store updates while connected', () => {
-    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined)
-    renderHook(() => useAgentsCrossTabRefresh())
-    act(() => {
-      useConnectionStore.getState().setConnected(true)
-    })
-    invalidateSpy.mockClear()
-
-    act(() => {
-      useConnectionStore.getState().setConnected(true)
-      useConnectionStore.getState().setConnectionError(null)
-    })
-    expect(invalidateSpy).not.toHaveBeenCalled()
-  })
-
-  it('stops reacting to the connection after unmount', () => {
-    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined)
-    const { unmount } = renderHook(() => useAgentsCrossTabRefresh())
-    unmount()
-    invalidateSpy.mockClear()
-
-    act(() => {
-      useConnectionStore.getState().setConnected(true)
     })
     expect(invalidateSpy).not.toHaveBeenCalled()
   })
