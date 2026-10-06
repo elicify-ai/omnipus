@@ -344,31 +344,46 @@ func (al *AgentLoop) processFinishingItems(
 		// completion read; cleared on revive failure so a stale
 		// stamp never leaks across generations.
 		al.markPostFinishRevival(rec.SessionID, rec.Generation+1)
-		// Pass the FIRST steer through ReviveStoppedSession's normal
-		// path so its appendSteeredInstruction + generation mint runs
-		// (the latter is the only place the new generation is created).
-		if _, err := al.ReviveStoppedSession(ctx, rec.SessionID, by, steers[0]); err != nil {
-			al.clearPostFinishRevival(rec.SessionID)
-			return errors.Join(transitionErr, fmt.Errorf("steer: post-finish revive %q: %w", rec.SessionID, err),
-				al.schedulePostFinishWakes(rec, wakes))
-		}
-		// The first steer's text is now durably in the revived transcript:
-		// its D4 receipt (if any) is delivered.
-		if id := steerItems[0].steerControlID; id != "" {
-			if err := al.GetSessionLifecycleStore().RecordSteerControlState(rec.SessionID, id, session.SteerStateDelivered, ""); err != nil {
-				return errors.Join(transitionErr, fmt.Errorf("steer: post-finish revive %q: record steer %q delivered: %w", rec.SessionID, id, err),
+		// The FIRST steer starts the revived generation. A delegate steer
+		// (with a D4 receipt) is made durable under its accepted control
+		// identity first, exactly as a normal dequeue does (F8), and then
+		// revives without a second copy of its text; a plain item passes
+		// its text through ReviveStoppedSession, whose append runs before
+		// the generation mint (the only place it is created).
+		first, reviveText := steerItems[0], steers[0]
+		if first.steerControlID != "" {
+			if err := al.recordDeliveredDelegateSteer(rec.SessionID, first); err != nil {
+				// F3: the receipt stays queued and every accepted item
+				// keeps a live queue copy; the failure is returned.
+				al.clearPostFinishRevival(rec.SessionID)
+				al.steering.prependItemsScope(rec.SessionID, steerItems)
+				return errors.Join(transitionErr, fmt.Errorf("steer: post-finish revive %q: %w", rec.SessionID, err),
 					al.schedulePostFinishWakes(rec, wakes))
 			}
+			reviveText = ""
+		}
+		if _, err := al.ReviveStoppedSession(ctx, rec.SessionID, by, reviveText); err != nil {
+			al.clearPostFinishRevival(rec.SessionID)
+			retained := steerItems
+			if first.steerControlID != "" {
+				// The first is already durable in the transcript; the next
+				// revival carries it. The rest keep their queue copies.
+				retained = steerItems[1:]
+			}
+			al.steering.prependItemsScope(rec.SessionID, retained)
+			return errors.Join(transitionErr, fmt.Errorf("steer: post-finish revive %q: %w", rec.SessionID, err),
+				al.schedulePostFinishWakes(rec, wakes))
 		}
 		// Every remaining post-finish steer rides on the revived
 		// generation. They go onto the same sessionID scope, which the
 		// new turn dequeues on its next tool boundary; that is the
 		// round-4 "append to the revived generation's scope" path.
-		for _, item := range steerItems[1:] {
+		for i, item := range steerItems[1:] {
 			// Re-queue the accepted item itself (its correlation and D4
 			// receipt identity ride along); it is not a new steer.
 			item.message = providers.Message{Role: "user", Content: strings.TrimSpace(item.message.Content)}
 			if _, err := al.enqueueSteeringItemWithStatus(rec.SessionID, "", item, nil); err != nil {
+				al.steering.prependItemsScope(rec.SessionID, steerItems[1+i:])
 				return errors.Join(transitionErr, fmt.Errorf("steer: post-finish enqueue onto revived scope %q: %w", rec.SessionID, err),
 					al.schedulePostFinishWakes(rec, wakes))
 			}
