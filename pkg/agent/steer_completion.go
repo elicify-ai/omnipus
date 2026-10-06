@@ -118,7 +118,11 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 		// #1053 (D6): a genuine failure stops the session's active helpers
 		// first and names them in the fatal hand-back. A current Stop fence
 		// owns the record instead (it lands stopped, not failed).
-		if nextState == session.LifecycleFailed && (rec.Stop == nil || rec.Stop.Generation != rec.Generation) {
+		// F7: only the execution that still owns the record may stop its
+		// helpers; an obsolete producer's failure (its commit is refused as
+		// stale below) must have no effect on a replacement's subtree.
+		if nextState == session.LifecycleFailed && (rec.Stop == nil || rec.Stop.Generation != rec.Generation) &&
+			al.claimOwnsCurrentRecord(rec.SessionID, claim) {
 			failureReason += al.stopDescendantsOfFailedSession(ctx, rec)
 		}
 		return al.deliverSteeredCompletionForExecution(ctx, rec, outcome, nextState, answer, failureReason, claim)
@@ -1167,4 +1171,19 @@ func (al *AgentLoop) completeSteeredTurnIfDeferredAtGate(sessionID string) {
 	}
 	tailErr := fmt.Errorf("%w: the goal was ended while this session was deferred at the completion gate", context.Canceled)
 	al.completeSteeredTurnAfterGoal(context.Background(), sessionID, "", tailErr)
+}
+
+// claimOwnsCurrentRecord reports whether claim is the current admission of
+// sessionID's record (fresh read). An unreadable record owns nothing here;
+// the commit that follows reports the read failure.
+func (al *AgentLoop) claimOwnsCurrentRecord(sessionID string, claim executionClaim) bool {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return false
+	}
+	cur, err := lifecycle.Load(sessionID)
+	if err != nil {
+		return false
+	}
+	return claim.matches(cur)
 }
