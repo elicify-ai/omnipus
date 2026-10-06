@@ -23,6 +23,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // LLMErrorCode is the canonical, machine-readable code for a translated
@@ -858,6 +859,19 @@ func TranslateTurnError(err error) LLMError {
 		}
 		return typedExitError(code, err)
 	}
+	// An ordinary admission refused because the same chat's previous reply is
+	// still finishing (ErrPreviousExecutionPending), or because a concurrent
+	// admission claimed the session first (steer.ErrStaleGeneration): neither is
+	// a provider fault, and the person's fix is to send the message again.
+	// CodeUnknown carries the curated text; no new wire code is minted for it.
+	if errors.Is(err, ErrPreviousExecutionPending) || errors.Is(err, steer.ErrStaleGeneration) {
+		return LLMError{
+			Code:      CodeUnknown,
+			Message:   previousReplyStillFinishingMessage,
+			Retryable: true,
+			Detail:    buildDetail(nil, err.Error()),
+		}
+	}
 	if errors.Is(err, ErrAgentNotWorkspaceMember) {
 		return LLMError{
 			Code:      CodeAgentNotConfigured,
@@ -949,6 +963,10 @@ func TranslateTurnError(err error) LLMError {
 	}
 	return TranslateLLMError(pe, err.Error())
 }
+
+// previousReplyStillFinishingMessage is the user text for an admission refused
+// while the same chat's previous execution is still settling.
+const previousReplyStillFinishingMessage = "Your previous reply is still finishing — send your message again in a moment."
 
 // curatedTurnError is a turn error whose text Omnipus wrote and which carries
 // no provider response: a turn a hook or the tool-denial budget aborted

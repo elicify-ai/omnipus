@@ -7,9 +7,15 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
+
+// ErrPreviousExecutionPending refuses an ordinary admission while the previous
+// execution of the same chat session has not settled its disposition. The user
+// text for it lives in TranslateTurnError.
+var ErrPreviousExecutionPending = errors.New("ordinary admission: previous execution disposition is still pending")
 
 // The worker's outer processTurn owns this carrier through its continuation,
 // response and typing-stop tails. A direct processMessage owns its own carrier.
@@ -73,7 +79,7 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 	pending := owner != nil && owner.execution != nil
 	al.admission.mu.Unlock()
 	if pending {
-		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: previous execution disposition is still pending")
+		return ordinaryExecutionPreparation{}, ErrPreviousExecutionPending
 	}
 	bootSeq := al.bootEpochFor()
 	if bootSeq == 0 {
@@ -174,6 +180,8 @@ func (al *AgentLoop) awaitPreviousOrdinaryExecution(ctx context.Context, scope s
 	select {
 	case <-previous.done:
 	case <-timer.C:
+		logger.WarnCF("agent", "ordinary admission: previous execution did not settle within the wait budget; admission proceeds and may be refused",
+			map[string]any{"session_id": scope, "blocking_run_id": previous.claim.RunID, "budget": previousExecutionSettleBudget.String()})
 	case <-ctx.Done():
 	}
 }

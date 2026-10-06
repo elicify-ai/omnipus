@@ -13,7 +13,10 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // gatedProvider blocks every Chat call whose last user message contains a
@@ -80,17 +84,30 @@ func (p *gatedProvider) waitEntered(marker string, d time.Duration) bool {
 	}
 }
 
+// enteredCount is how many provider calls for marker are entered and not yet consumed by waitEntered.
+func (p *gatedProvider) enteredCount(marker string) int { return len(p.entered[marker]) }
+
 func (p *gatedProvider) releaseMarker(marker string) { close(p.release[marker]) }
 
 // newAdmissionSessionsLoop builds a loop with one chat-target agent, starts
 // Run, and returns the loop, the bus and two fresh chat sessions of that agent.
 func newAdmissionSessionsLoop(t *testing.T, provider providers.LLMProvider) (*AgentLoop, *bus.MessageBus, string, string) {
 	t.Helper()
+	return newAdmissionSessionsLoopCfg(t, provider, nil)
+}
+
+// newAdmissionSessionsLoopCfg is newAdmissionSessionsLoop with a hook to adjust
+// the config (for example routing bindings) before the loop is built.
+func newAdmissionSessionsLoopCfg(t *testing.T, provider providers.LLMProvider, mutate func(*config.Config)) (*AgentLoop, *bus.MessageBus, string, string) {
+	t.Helper()
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{Home: t.TempDir(), DefaultModel: config.DefaultModel{Model: "test-model"}},
 			List:     []config.AgentConfig{{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Home: t.TempDir()}},
 		},
+	}
+	if mutate != nil {
+		mutate(cfg)
 	}
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
@@ -171,20 +188,51 @@ func TestOrdinaryAdmission_TwoSessionsSameAgent_ExplicitAgent_RunInParallel(t *t
 }
 
 // Regression guard: two messages to the SAME session still serialise — the
-// second one's provider call is not entered while the first is blocked.
+// second one's provider call is not entered while the first is blocked, and it
+// IS entered once the first is released. No wall-clock window: the second
+// message is first observed queued behind the running turn (an event), then the
+// provider's entered-state is read.
 func TestOrdinaryAdmission_SameSession_StillSerialises(t *testing.T) {
 	p := newGatedProvider("MARK-A1", "MARK-A2")
-	_, msgBus, sidA, _ := newAdmissionSessionsLoop(t, p)
+	al, msgBus, sidA, _ := newAdmissionSessionsLoop(t, p)
 
 	publishChat(t, msgBus, sidA, "MARK-A1", nil)
 	require.True(t, p.waitEntered("MARK-A1", admissionEnterBudget), "first turn's provider call was never entered")
 
 	publishChat(t, msgBus, sidA, "MARK-A2", nil)
-	// The second message must not start its own provider call while the first is blocked.
-	enteredEarly := p.waitEntered("MARK-A2", 1500*time.Millisecond)
+	waitMessageQueuedBehindTurn(t, al, sidA)
+	require.Zero(t, p.enteredCount("MARK-A2"), "a second message to the same session reached the provider while the first turn was still blocked")
+
 	p.releaseMarker("MARK-A1")
+	enteredAfter := p.waitEntered("MARK-A2", admissionEnterBudget)
 	p.releaseMarker("MARK-A2")
-	require.False(t, enteredEarly, "a second message to the same session ran in parallel with the first turn")
+	require.True(t, enteredAfter, "the queued second message never ran after the first turn was released")
+}
+
+// waitMessageQueuedBehindTurn waits (by polling state, not by sleeping a fixed
+// window) until a message for the session sits behind its running turn: either
+// in the in-turn steering queue or in the session worker's inbox.
+func waitMessageQueuedBehindTurn(t *testing.T, al *AgentLoop, sessionID string) {
+	t.Helper()
+	key := agentSessionKey("mia", bus.InboundMessage{SessionID: sessionID})
+	deadline := time.Now().Add(admissionEnterBudget)
+	for time.Now().Before(deadline) {
+		if al.pendingSteeringCountForScope(key) > 0 {
+			return
+		}
+		queued := false
+		al.sessionWorkers.Range(func(_, v any) bool {
+			if w, ok := v.(*sessionWorker); ok && len(w.inbox) > 0 {
+				queued = true
+			}
+			return !queued
+		})
+		if queued {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("the second message for session %s was never queued behind the running turn", sessionID)
 }
 
 // The admission itself is keyed by the chat session id, not by the routing
@@ -215,7 +263,9 @@ func TestOrdinaryAdmission_KeyedBySessionID_NotRoutingKey(t *testing.T) {
 	waitCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
 	_, err = al.prepareOrdinaryExecution(waitCtx, human(sidA), opts)
-	require.Error(t, err, "a second admission for the same session must be refused while its first execution is pending")
+	require.ErrorIs(t, err, ErrPreviousExecutionPending,
+		"a second admission for the same session must be refused as 'previous execution still pending' — not by a context deadline or any other error")
+	require.NotErrorIs(t, err, context.DeadlineExceeded)
 }
 
 // Every turn-scoped key derived from the route (turn registry, history,
@@ -268,16 +318,28 @@ func TestOrdinaryAdmission_HandbackWakeDuringHumanTail_WaitsThenRuns(t *testing.
 		err  error
 	}
 	done := make(chan result, 1)
+	started := make(chan struct{})
 	go func() {
+		close(started)
 		prep, werr := al.prepareOrdinarySessionExecution(ctx, sidA, wakeOpts, &handbackRevivalPrincipal)
 		done <- result{prep, werr}
 	}()
-
-	select {
-	case r := <-done:
-		t.Fatalf("the hand-back wake did not wait for the human turn's tail: prep=%v err=%v", r.prep.execution != nil, r.err)
-	case <-time.After(500 * time.Millisecond):
+	<-started
+	// Give the wake goroutine scheduler turns (no timer) and require that it
+	// has neither returned nor taken over the session's execution owner.
+	for i := 0; i < 200; i++ {
+		runtime.Gosched()
+		select {
+		case r := <-done:
+			t.Fatalf("the hand-back wake did not wait for the human turn's tail: prep=%v err=%v", r.prep.execution != nil, r.err)
+		default:
+		}
 	}
+	al.admission.mu.Lock()
+	owner := al.admission.activeScopes[sidA]
+	stillHuman := owner != nil && owner.execution == human.execution
+	al.admission.mu.Unlock()
+	require.True(t, stillHuman, "the session's execution owner moved to the wake while the human tail was still pending")
 
 	require.NoError(t, al.finishExecutionDisposition(human.execution))
 	select {
@@ -288,4 +350,44 @@ func TestOrdinaryAdmission_HandbackWakeDuringHumanTail_WaitsThenRuns(t *testing.
 	case <-time.After(admissionEnterBudget):
 		t.Fatal("the hand-back wake never proceeded after the human tail settled")
 	}
+}
+
+// The channel-binding branch of the routing cascade, with a session id set,
+// also yields a per-session route key.
+func TestResolveMessageRoute_BindingBranch_SessionKeyIsPerSession(t *testing.T) {
+	al, _, sidA, sidB := newAdmissionSessionsLoopCfg(t, newGatedProvider(), func(cfg *config.Config) {
+		cfg.Bindings = []config.AgentBinding{{AgentID: "mia", Match: config.BindingMatch{Channel: "webchat"}}}
+	})
+	msgFor := func(sid string) bus.InboundMessage {
+		return bus.InboundMessage{Channel: "webchat", ChatID: "chat-" + sid, SessionID: sid,
+			Sender: bus.SenderInfo{CanonicalID: "webchat_user"}}
+	}
+	routeA, _, err := al.resolveMessageRoute(msgFor(sidA))
+	require.NoError(t, err)
+	routeB, _, err := al.resolveMessageRoute(msgFor(sidB))
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(routeA.MatchedBy, "binding."), "the test must go through a binding branch, got %q", routeA.MatchedBy)
+	require.NotEqual(t, routeA.SessionKey, routeB.SessionKey)
+	require.Contains(t, routeA.SessionKey, sidA)
+	require.Contains(t, routeB.SessionKey, sidB)
+}
+
+// The admission refusal and its stale-generation sibling reach the person as
+// the "still finishing" sentence, never the generic "can't tell why" copy.
+func TestTranslateTurnError_PreviousExecutionPending_UserMessage(t *testing.T) {
+	const want = "Your previous reply is still finishing — send your message again in a moment."
+	generic := TranslateLLMError(nil, "something unrecognisable happened").Message
+	require.NotEqual(t, want, generic)
+	for name, err := range map[string]error{
+		"pending sentinel":          ErrPreviousExecutionPending,
+		"pending sentinel, wrapped": fmt.Errorf("turn: %w", ErrPreviousExecutionPending),
+		"stale generation":          fmt.Errorf("ordinary admission: %w: registration was already claimed", steer.ErrStaleGeneration),
+		"stale generation, bare":    steer.ErrStaleGeneration,
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Equal(t, want, TranslateTurnError(err).Message)
+			require.Equal(t, want, userVisibleTurnError(err), "the session worker publishes this text")
+		})
+	}
+	require.NotEqual(t, want, TranslateTurnError(errors.New("unrelated failure")).Message)
 }
