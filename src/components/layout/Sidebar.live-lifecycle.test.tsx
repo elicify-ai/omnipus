@@ -162,8 +162,12 @@ describe('U1 — visible session lists follow real terminal/lifecycle frames and
       useChatStore.getState().sendMessage('Keep this chat unchanged', { clientMessageId: 'unrelated-user' })
       useChatStore.getState().handleFrame({ type: 'token', session_id: 'unrelated-session', content: 'Unrelated reply' })
     })
-    // Drain any start-triggered fetch before changing the server response.
-    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
+    // Join the actual fetch promises. A clock-driven waitFor cannot observe
+    // an unchanged response while its polling clock is deliberately frozen.
+    await act(async () => {
+      await Promise.all(queryClient.getQueryCache().findAll({ queryKey: ['sessions'] }).map((query) => query.promise))
+    })
+    expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0)
     const foreground = structuredClone(useChatStore.getState().messages)
     const before = { roots: rootFetches, children: childFetches }
     root = { ...root, lifecycle_state: 'waiting_for_answer' }
