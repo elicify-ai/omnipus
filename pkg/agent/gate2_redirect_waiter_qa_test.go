@@ -151,10 +151,14 @@ func TestQAGate2Redirect_OldWaiterCannotReviveNewerStoppedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The ADR requires a visible refusal of THIS child's Redirect, not one
+	// fixed prose sentence. With both healthy Stops joined above and the
+	// no-revival/no-instruction assertions, count the child-specific typed
+	// error notice without copying reportUndeliveredRedirect's wording.
 	undelivered := 0
 	for _, entry := range parentEntries {
 		frame := entry.SubagentMessage
-		if frame != nil && frame.Kind == "error" && frame.ChildSessionId != nil && *frame.ChildSessionId == b.SessionID && frame.Text != nil && strings.Contains(*frame.Text, "was not applied") {
+		if frame != nil && frame.Kind == "error" && frame.ChildSessionId != nil && *frame.ChildSessionId == b.SessionID && frame.Text != nil && strings.TrimSpace(*frame.Text) != "" {
 			undelivered++
 		}
 	}
