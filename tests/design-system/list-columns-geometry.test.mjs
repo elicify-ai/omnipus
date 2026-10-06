@@ -4,6 +4,12 @@
 // behind the real overflow control, and no loss of the other columns' function.
 // The dispatch fixes the delivered 648px boundary: "below" means <648, not <=.
 // 720px is the normal dock maximum; 320px is the supported dock floor (SP-17).
+// Selective acceptance reconciliation, 2026-10-06: foreground omnipus-7a,
+// uds:/tmp/cc-socks/10996.sock, reports the question-tool founder answer exactly:
+// "B. Table scrolls sideways". Only deliberate narrow reveal may use horizontal
+// scrolling INSIDE the panel; every header must remain reachable/tappable and
+// Title must never collapse to zero. Default auto-hidden/wide fit stays intact.
+// This recorded scope direction is not a landing yes or an implementation oracle.
 // Actual ListView/TaskRow, React state, Date, Radix menus and compiled app Tailwind
 // CSS stay real. Only synthetic input props and process edges are controlled.
 // No live app, account, API/provider, persistent browser or E2E setup.
@@ -413,13 +419,61 @@ async function realClick(page, locator, label, observations) {
   await settle(page)
 }
 
-async function proveCoreUsable(page, session, label, observations) {
+async function scrollControlWithinPanel(page, locator, label, observations) {
+  const measure = () => locator.evaluate((element) => {
+    const panel = globalThis.document.getElementById('fixture-panel')
+    const document = globalThis.document.scrollingElement
+    const rect = element.getBoundingClientRect(), panelRect = panel.getBoundingClientRect()
+    let owner = element.parentElement
+    while (owner && panel.contains(owner)) {
+      if (['auto', 'scroll'].includes(globalThis.getComputedStyle(owner).overflowX)) break
+      owner = owner.parentElement
+    }
+    const contained = !!owner && panel.contains(owner)
+    const bounds = contained ? owner.getBoundingClientRect() : null
+    return {
+      page: { x: globalThis.scrollX, y: globalThis.scrollY,
+        left: document.scrollLeft, top: document.scrollTop,
+        width: document.scrollWidth, clientWidth: document.clientWidth },
+      owner: contained ? { insidePanel: true, overflowX: globalThis.getComputedStyle(owner).overflowX,
+        left: owner.scrollLeft, width: owner.scrollWidth, clientWidth: owner.clientWidth,
+        boundedByPanel: bounds.left >= panelRect.left && bounds.right <= panelRect.right } : null,
+      horizontalScrollNeeded: contained && (rect.left < bounds.left || rect.right > bounds.right),
+    }
+  })
+  const before = await measure()
+  observations.push({ label: `${label}: before panel-local scroll`, scroll: before })
+  assert.ok(before.owner, `${label}: a real horizontal scroll owner must exist INSIDE the List panel`)
+  assert.equal(before.owner.boundedByPanel, true, `${label}: the scroll owner's bounds must remain inside the panel`)
+  assert.ok(before.page.width <= before.page.clientWidth, `${label}: revealed columns must not make the whole page scroll sideways`)
+  // Native scrolling only: never alter layout, product state, or CSS to fit.
+  await locator.scrollIntoViewIfNeeded()
+  await settle(page)
+  const after = await measure()
+  observations.push({ label: `${label}: after panel-local scroll`, scroll: after })
+  assert.deepEqual(after.page, before.page, `${label}: scrolling a control must not scroll or widen the whole page`)
+  assert.ok(after.owner, `${label}: the horizontal scroll owner must stay inside the panel`)
+  assert.equal(after.owner.boundedByPanel, true, `${label}: the scrolled owner must still fit inside the panel`)
+  if (before.horizontalScrollNeeded) {
+    assert.notEqual(after.owner.left, before.owner.left, `${label}: an offscreen control must move the PANEL's horizontal scroll position`)
+  }
+}
+
+async function proveCoreUsable(page, session, label, observations, revealedNarrow = false) {
+  if (revealedNarrow) {
+    const title = page.getByRole('button', { name: `${PRIMARY_TITLE}, status Inbox`, exact: true })
+    const control = await measureControl(title)
+    observations.push({ label: `${label}: revealed Title nonzero control`, control })
+    assert.ok(control.rect.width > 0 && control.rect.height > 0,
+      `${label}: revealed Title task control must have nonzero usable geometry, got ${control.rect.width}px by ${control.rect.height}px`)
+  }
   for (const column of CORE) {
     const selector = `${PRIMARY_ROW} td:nth-child(${column.column})`
     await expect(page.locator(selector)).toHaveCSS('display', 'table-cell')
     await expect(page.locator(selector)).toHaveText(column.value)
     assert.equal((await accessibleNode(session, selector)).ignored, false, `${label}: ${column.name} data remains accessible`)
     const trigger = page.getByRole('button', { name: column.headerName, exact: true })
+    if (revealedNarrow) await scrollControlWithinPanel(page, trigger, `${label}: ${column.name} header`, observations)
     await realClick(page, trigger, `${label}: ${column.name} header`, observations)
     const menuItem = page.getByRole('menuitem', { name: `Sort ${column.sort}`, exact: true })
     await expect(menuItem).toBeVisible()
@@ -430,10 +484,34 @@ async function proveCoreUsable(page, session, label, observations) {
   }
   const title = page.getByRole('button', { name: `${PRIMARY_TITLE}, status Inbox`, exact: true })
   const beforeCount = await page.evaluate(() => globalThis.__listGeometryTaskClicks.length)
+  if (revealedNarrow) await scrollControlWithinPanel(page, title, `${label}: Title task activation`, observations)
   await realClick(page, title, `${label}: Title task activation`, observations)
   assert.deepEqual(await page.evaluate((start) => globalThis.__listGeometryTaskClicks.slice(start), beforeCount),
     [{ id: TASKS[0].id, title: PRIMARY_TITLE, tags: TASKS[0].tags, updated_at: TASKS[0].updated_at }],
     `${label}: actual Title click delivers the intact task exactly once to the parent callback`)
+}
+
+async function proveRevealedHeadersUsable(page, label, observations) {
+  const tags = page.getByRole('button', { name: GOVERNED[0].headerName, exact: true })
+  await scrollControlWithinPanel(page, tags, `${label}: Tags header`, observations)
+  await realClick(page, tags, `${label}: Tags header`, observations)
+  const tag = page.getByRole('menuitemcheckbox', { name: TASKS[0].tags[0], exact: true })
+  await tag.click()
+  await expect(tag).toHaveAttribute('aria-checked', 'true')
+  assert.deepEqual(await page.locator('tbody tr button[title]').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('title'))),
+    [PRIMARY_TITLE], `${label}: revealed Tags filter must select the actual matching task, not merely open a menu`)
+  await page.getByRole('menuitem', { name: 'Clear filter', exact: true }).click()
+  await expect(page.locator('tbody tr')).toHaveCount(2)
+  assert.deepEqual(await page.locator('tbody tr button[title]').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('title'))),
+    [PRIMARY_TITLE, 'Zulu synthetic task'], `${label}: clearing the Tags filter restores both actual tasks in the existing Agent order`)
+
+  const updated = page.getByRole('button', { name: GOVERNED[1].headerName, exact: true })
+  await scrollControlWithinPanel(page, updated, `${label}: Updated header`, observations)
+  await realClick(page, updated, `${label}: Updated header`, observations)
+  await page.getByRole('menuitem', { name: 'Sort ascending', exact: true }).click()
+  await expect(page.locator('thead th:nth-child(6)')).toHaveAttribute('aria-sort', 'ascending')
+  assert.deepEqual(await page.locator('tbody tr button[title]').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('title'))),
+    ['Zulu synthetic task', PRIMARY_TITLE], `${label}: revealed Updated sorting orders the actual June 19/June 20 fixture dates`)
 }
 
 async function toggleRoundTrip(page, session, width, visibleAuto, observations) {
@@ -445,7 +523,12 @@ async function toggleRoundTrip(page, session, width, visibleAuto, observations) 
   await realClick(page, toggle, `${width}px first three-dot click`, observations)
   await expect(toggle).toHaveAttribute('aria-label', visibleAuto ? HIDDEN_LABEL : SHOWN_LABEL)
   await assertColumns(page, session, !visibleAuto, `${width}px first click`, observations)
-  await proveCoreUsable(page, session, `${width}px first click`, observations)
+  const revealedNarrow = !visibleAuto
+  await proveCoreUsable(page, session, `${width}px first click`, observations, revealedNarrow)
+  if (revealedNarrow) {
+    await proveRevealedHeadersUsable(page, `${width}px first click`, observations)
+    await scrollControlWithinPanel(page, toggle, `${width}px second three-dot click`, observations)
+  }
   await realClick(page, toggle, `${width}px second three-dot click`, observations)
   await expect(toggle).toHaveAttribute('aria-label', AUTO_LABEL)
   await assertColumns(page, session, visibleAuto, `${width}px restored auto`, observations)
