@@ -1,60 +1,18 @@
-// useSlashMenu.stop.test.tsx — RED wave, corrected transport (qa-lead,
-// test/a-redirect-transport-red): the D9 chat commands /stop and
-// /stop-redirect in the composer's slash menu, re-based on the landed
-// generated RedirectFrame.
+// Slash Stop and current-chat redirect: preserve client interception,
+// exact generated frame shape, streaming availability and no side effects.
 //
-// This pack CORRECTS the superseded QA2 pack (feat/stopall-qa2 @ 75aa893a5),
-// which pinned the guessed delivery-'agent' passthrough transport. Per the
-// architect's corrected ruling (stream-a-seams-assessment.md §3.1/§4):
-//   - /stop-redirect is delivery 'client' and available_while_streaming TRUE —
-//     redirect stops first, then gives the new instruction (the command name
-//     encodes stop-first); mid-stream is the primary case, not an edge.
-//   - In a HELPER chat the SPA INTERCEPTS the typed command WITHOUT submitting
-//     it as chat text (the same interception /cancel uses) and sends the
-//     dedicated generated RedirectFrame {type:'redirect', session_id,
-//     instruction} — which never touches message intake, so it executes
-//     mid-stream. The superseded "passes through as a message" test pinned the
-//     unworkable transport and is REPLACED (the only replaced assertion).
-//   - NO scope property exists on the frame (D9 row 2 fixes scope: that helper
-//     only, subtree keeps working) — pinned at exact-shape level.
-//   - In the ROOT chat the command is refused CLIENT-SIDE with the helper
-//     guidance and sends nothing (§3.2: fail-closed on helper identity).
+// Founder 2026-10-06 (permission to replace helper-only refusal assertions):
+// "/stop in chat needs to work like one escape or one stop click,
+// /stop-redirect in the chat does not redirect a helper it redirects the
+// chat itself not their helper". The follow-up explicitly requires a root
+// chat's existing RedirectFrame to be sent; backend acceptance is tested by
+// a separate backend owner, not mocked into a frontend pass here.
 //
-// SPEC SOURCES (expected values derive from these, never from the
-// implementation):
-//   - ADR D9: /stop (root or helper) = single-session stop, same server
-//     behaviour as one Stop-button press; /stop-redirect in a HELPER's chat =
-//     D2 redirect on that helper; /stop-redirect in the ROOT's chat = refuse
-//     with guidance to target a helper (nothing is sent); no /steer alias
-//     (founder O4); /cancel is unaffected (scope tree, FR-5 intact).
-//   - cancel-cross-channel-spec FR-3a (as amended by D9): entries tagged
-//     available_while_streaming stay visible mid-stream — /cancel, /stop and
-//     /stop-redirect all carry the tag.
-//   - Generated contract: src/lib/api/generated/asyncapi-types.ts
-//     RedirectFrame {type:'redirect', session_id, instruction};
-//     contracts/components/schemas/RedirectFrame.yaml additionalProperties:
-//     false.
-//
-// REPORTED INTERFACE SHAPE for frontend-lead: UseSlashMenuParams gains
-//   isHelperSession: boolean                          // false ⇒ root chat
-//   sendRedirectFrame: (frame: RedirectFrame) => void // client interception
-// Both pass through the cast (STOP_PARAM_CAST below) so this RED pack
-// typecheck-clean under `npm run typecheck` before GREEN adds the params; the
-// behaviour assertions still fail today.
-//
-// ROOT-REFUSAL CORRECTION (qa-lead, test/a-redirect-root-refusal; F1 of the
-// recovery CHECK omnipus-investigations/a-redirect-check-recovery-20261002T0423):
-// the shipped root case ran SESSIONLESS, so removing the production root guard
-// still shipped green — refusal kept happening via the no-attached-session
-// branch, whose text also contains the word "helper" the old substring oracle
-// matched (mut-M4-rootbypass survived 12/12; only a held-out probe killed the
-// mutant, and that probe was never part of this pack). This correction adds
-// the dangerous case — a root chat WITH an attached session, streaming, the
-// realistic input — and strengthens both root oracles to the exact refusal
-// text. The literal is pinned as a UI regression baseline (see
-// ROOT_REFUSAL_TEXT below): ADR D9 (frozen cd20cf8b) fixes the interaction
-// ("refuse with guidance to target a helper; the root's own /stop still
-// works"), not the wording.
+// Oracle: founder ruling for /stop activation and any-chat redirect;
+// existing D9 client-delivery/available-while-streaming/argument rules;
+// generated RedirectFrame {type:'redirect', session_id, instruction} with
+// no scope or other extra properties. /cancel remains immediate tree and
+// /steer remains absent. Expected values never come from observing output.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
@@ -104,15 +62,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-// ROOT_REFUSAL_TEXT — UI regression baseline (characterization pin): the
-// exact developer-chosen SPA wording of the D9 root refusal, bound verbatim.
-// ADR D9 (cd20cf8b) fixes the interaction, not this text; the pin makes any
-// future wording change a visible, owned test failure instead of silent
-// drift. Deliberately NOT imported from the implementation
-// (useSlashMenu.ts::STOP_REDIRECT_ROOT_REFUSAL) — an oracle must not read the
-// constant it judges, or wording regressions ship green.
-const ROOT_REFUSAL_TEXT =
-  '`/stop-redirect` only works in a helper\'s chat — it stops that helper\'s current turn and continues it with a new instruction. Open the helper session you want to redirect and run the command there. To stop this conversation\'s current turn, use `/stop`.'
+// Expected guidance is specified here before production changes, not imported
+// from the implementation. The founder removed helper-only redirect wording.
+const MISSING_SESSION_TEXT =
+  '`/stop-redirect` could not resolve the current chat — no active session is attached. Re-open the chat and try again.'
+const USAGE_TEXT =
+  'Usage: `/stop-redirect <instruction>` — stops this chat\'s current turn and continues it with your new instruction. The instruction text is required; whitespace alone is not an instruction.'
 
 function makeComposerRuntime(text = '') {
   return {
@@ -132,6 +87,7 @@ function makeComposerRuntime(text = '') {
 // The cast keeps the RED pack typecheck-clean before the params exist; once
 // GREEN adds them, the cast is dead weight a CHECK pass may drop.
 type StopPackParams = Parameters<typeof useSlashMenu>[0] & {
+  activateStop: () => void
   isHelperSession: boolean
   sendRedirectFrame: (frame: RedirectFrame) => void
 }
@@ -144,6 +100,7 @@ function baseParams(overrides: Partial<StopPackParams> = {}) {
     composerRuntime: makeComposerRuntime(),
     appendMessage: vi.fn(),
     startNewSession: vi.fn(),
+    activateStop: vi.fn(),
     cancelIfStreaming: vi.fn(),
     sendRedirectFrame: vi.fn(),
     isHelperSession: false,
@@ -233,19 +190,19 @@ describe('useSlashMenu — D9 /stop and /stop-redirect palette', () => {
 // ─── /stop — single-session stop path ───────────────────────────────────────
 
 describe('useSlashMenu — /stop execution', () => {
-  // RED today: /stop resolves as a client command but runClientCommand has no
-  // 'stop' branch, so the submit clears the composer and silently does
-  // nothing — cancelIfStreaming (the Stop button's single-press path) is
-  // never called.
-  it('routes a submitted /stop to the single-session stop path (cancelIfStreaming), same as one Stop-button press', () => {
+  // Founder 2026-10-06: "/stop in chat needs to work like one escape or
+  // one stop click". It must not call /cancel's immediate-tree callback.
+  it('routes a submitted /stop to exactly one existing Stop activation', () => {
     const composerRuntime = makeComposerRuntime('/stop')
+    const activateStop = vi.fn()
     const cancelIfStreaming = vi.fn()
-    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, cancelIfStreaming })))
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, activateStop, cancelIfStreaming })))
     let intercepted: boolean | undefined
     act(() => {
       intercepted = result.current.interceptClientCommand()
     })
-    expect(cancelIfStreaming).toHaveBeenCalledTimes(1)
+    expect(activateStop).toHaveBeenCalledTimes(1)
+    expect(cancelIfStreaming).not.toHaveBeenCalled()
     expect(intercepted).toBe(true)
     // Nothing is dispatched as a chat message for /stop.
     expect(composerRuntime.send).not.toHaveBeenCalled()
@@ -348,9 +305,7 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     expect(frame.instruction).toBe('先 export the CSV — 报告')
   })
 
-  // RED today: "/stop-redirect do X" in the ROOT chat is dispatched as an
-  // ordinary chat message — no guidance is shown and nothing holds the send.
-  it('in the ROOT chat refuses with guidance to target a helper and sends nothing', () => {
+  it('without an attached current chat gives exact missing-session guidance and sends nothing', () => {
     const composerRuntime = makeComposerRuntime('/stop-redirect do the other thing')
     const appendMessage = vi.fn()
     const cancelIfStreaming = vi.fn()
@@ -361,33 +316,19 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     act(() => {
       intercepted = result.current.interceptClientCommand()
     })
-    // Handled client-side: the caller must NOT dispatch anything.
     expect(intercepted).toBe(true)
-    // Exact refusal text (UI regression baseline — see ROOT_REFUSAL_TEXT):
-    // the old 'helper' substring was satisfied by three different messages,
-    // including the no-attached-session text, which is how the removed-guard
-    // mutant shipped 12/12 green in the recovery CHECK (F1).
     expect(appendMessage).toHaveBeenCalledTimes(1)
     const guidance = appendMessage.mock.calls[0][0] as { role: string; content: string }
     expect(guidance.role).toBe('system')
-    expect(guidance.content).toBe(ROOT_REFUSAL_TEXT)
-    // And nothing leaves the composer: no message send, no stop, no frame.
+    expect(guidance.content).toBe(MISSING_SESSION_TEXT)
     expect(composerRuntime.send).not.toHaveBeenCalled()
     expect(cancelIfStreaming).not.toHaveBeenCalled()
     expect(sendRedirectFrame).not.toHaveBeenCalled()
   })
 
-  // F1 regression (recovery CHECK a-redirect-check-recovery-20261002T0423):
-  // the SESSIONLESS root case above cannot see the root guard being removed —
-  // refusal keeps happening via the no-attached-session branch. The dangerous
-  // case is a root chat WITH an attached session: the root conversation is
-  // itself a session, and under a removed guard this input falls through to
-  // the frame send (exactly the mutant the held-out probe had to catch
-  // because the shipped pack could not). Streaming is the realistic state —
-  // the command is visible mid-stream (available_while_streaming), so a root
-  // user can type it while their own turn runs. Identity is the server-minted
-  // helper flag alone; store non-emptiness must never enable the redirect.
-  it('in the ROOT chat with an attached session refuses with the exact guidance and sends nothing (helper identity, not store emptiness, gates the redirect)', () => {
+  // Founder: "/stop-redirect ... redirects the chat itself not their
+  // helper". Replace the former root refusal with an exact root-frame oracle.
+  it('in a ROOT chat with an attached session sends exactly one current-chat RedirectFrame', () => {
     attachedRootSessionStore('root-session-1')
     const composerRuntime = makeComposerRuntime('/stop-redirect do the other thing')
     const appendMessage = vi.fn()
@@ -399,29 +340,29 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     act(() => {
       intercepted = result.current.interceptClientCommand()
     })
-    // Handled client-side: the caller must NOT dispatch anything.
     expect(intercepted).toBe(true)
-    // Exactly one system guidance message, exactly the pinned refusal text.
-    expect(appendMessage).toHaveBeenCalledTimes(1)
-    const guidance = appendMessage.mock.calls[0][0] as { role: string; content: string }
-    expect(guidance.role).toBe('system')
-    expect(guidance.content).toBe(ROOT_REFUSAL_TEXT)
-    // Nothing leaves the composer: no message send, no stop (the root's own
-    // /stop keeps working separately — the redirect refusal is not a stop),
-    // no redirect frame.
+    expect(sendRedirectFrame).toHaveBeenCalledTimes(1)
+    expect(sendRedirectFrame.mock.calls[0][0]).toEqual({
+      type: 'redirect',
+      session_id: 'root-session-1',
+      instruction: 'do the other thing',
+    })
+    expect(Object.keys(sendRedirectFrame.mock.calls[0][0]).sort()).toEqual(['instruction', 'session_id', 'type'])
+    expect(appendMessage).not.toHaveBeenCalled()
     expect(composerRuntime.send).not.toHaveBeenCalled()
     expect(cancelIfStreaming).not.toHaveBeenCalled()
-    expect(sendRedirectFrame).not.toHaveBeenCalled()
   })
 
-  // RED today: a bare /stop-redirect in a helper chat is dispatched to the
-  // server as a chat message instead of getting local usage guidance.
-  it('in a HELPER chat shows usage for a bare /stop-redirect and sends nothing', () => {
+  it.each([
+    { chat: 'root', sessionType: null },
+    { chat: 'helper', sessionType: 'delegate' },
+  ] as const)('in a $chat chat gives exact usage for bare /stop-redirect and sends nothing', ({ sessionType }) => {
+    act(() => { useSessionStore.setState({ attachedSessionType: sessionType }) })
     const composerRuntime = makeComposerRuntime('/stop-redirect')
     const appendMessage = vi.fn()
     const sendRedirectFrame = vi.fn()
     const { result } = renderHook(() =>
-      useSlashMenu(baseParams({ composerRuntime, appendMessage, sendRedirectFrame, isHelperSession: true })))
+      useSlashMenu(baseParams({ composerRuntime, appendMessage, sendRedirectFrame, isHelperSession: sessionType === 'delegate' })))
     let intercepted: boolean | undefined
     act(() => {
       intercepted = result.current.interceptClientCommand()
@@ -430,7 +371,7 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     expect(appendMessage).toHaveBeenCalledTimes(1)
     const usage = appendMessage.mock.calls[0][0] as { role: string; content: string }
     expect(usage.role).toBe('system')
-    expect(usage.content).toContain('/stop-redirect')
+    expect(usage.content).toBe(USAGE_TEXT)
     expect(composerRuntime.send).not.toHaveBeenCalled()
     expect(sendRedirectFrame).not.toHaveBeenCalled()
   })
@@ -454,7 +395,7 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     expect(appendMessage).toHaveBeenCalledTimes(1)
     const usage = appendMessage.mock.calls[0][0] as { role: string; content: string }
     expect(usage.role).toBe('system')
-    expect(usage.content).toContain('/stop-redirect')
+    expect(usage.content).toBe(USAGE_TEXT)
     expect(composerRuntime.send).not.toHaveBeenCalled()
     expect(sendRedirectFrame).not.toHaveBeenCalled()
   })
