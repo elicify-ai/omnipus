@@ -15,7 +15,6 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -31,7 +30,6 @@ import (
 // registered marker until the test releases that marker. It records the order
 // in which provider calls were entered.
 type gatedProvider struct {
-	mu      sync.Mutex
 	entered map[string]chan struct{}
 	release map[string]chan struct{}
 }
@@ -244,4 +242,50 @@ func TestResolveMessageRoute_DefaultRoute_SessionKeyIsPerSession(t *testing.T) {
 	targetB, err := al.buildContinuationTarget(msgFor(sidB))
 	require.NoError(t, err)
 	require.NotEqual(t, targetA.SessionKey, targetB.SessionKey, "steering-queue key is shared between two chats of one agent")
+}
+
+// A hand-back wake of the same conversation arrives while the human turn's
+// tail still owns the session's execution. The wake enters admission with
+// opts.SessionKey = the session id while the human turn used the routing key;
+// both must land in the same (session id) bucket, so the wake WAITS for the
+// human execution to settle and then runs — it is neither admitted in parallel
+// nor refused.
+func TestOrdinaryAdmission_HandbackWakeDuringHumanTail_WaitsThenRuns(t *testing.T) {
+	al, _, sidA, _ := newAdmissionSessionsLoop(t, newGatedProvider())
+	ctx := context.Background()
+	humanOpts := processOptions{SessionKey: "agent:mia:session:" + sidA, TranscriptStore: al.GetSessionStore()}
+	wakeOpts := processOptions{SessionKey: sidA, TranscriptStore: al.GetSessionStore(), TranscriptSessionID: sidA}
+
+	human, err := al.prepareOrdinaryExecution(ctx, bus.InboundMessage{
+		Channel: "webchat", ChatID: "chat-" + sidA, SessionID: sidA,
+		Sender: bus.SenderInfo{CanonicalID: "webchat_user"}, GatewayUserID: "daniel", UserInitiated: true,
+	}, humanOpts)
+	require.NoError(t, err)
+	require.NotNil(t, human.execution)
+
+	type result struct {
+		prep ordinaryExecutionPreparation
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		prep, werr := al.prepareOrdinarySessionExecution(ctx, sidA, wakeOpts, &handbackRevivalPrincipal)
+		done <- result{prep, werr}
+	}()
+
+	select {
+	case r := <-done:
+		t.Fatalf("the hand-back wake did not wait for the human turn's tail: prep=%v err=%v", r.prep.execution != nil, r.err)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	require.NoError(t, al.finishExecutionDisposition(human.execution))
+	select {
+	case r := <-done:
+		require.NoError(t, r.err, "the hand-back wake must run after the human tail settles, not be refused")
+		require.NotNil(t, r.prep.execution)
+		require.NoError(t, al.finishExecutionDisposition(r.prep.execution))
+	case <-time.After(admissionEnterBudget):
+		t.Fatal("the hand-back wake never proceeded after the human tail settled")
+	}
 }
