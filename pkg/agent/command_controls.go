@@ -64,11 +64,15 @@ func (al *AgentLoop) RequestScopedCancelForSession(ctx context.Context, sessionI
 	return res.Fired, res.Armed, nil
 }
 
-// helperSessionRecord resolves only a real durable edge. Genuine absence gets
-// helper guidance; corruption and other read failures are visible errors.
+// errNotHelperSession marks a session with no helper edge (an ordinary chat
+// or a chat with no lifecycle record): /stop-redirect redirects it as a chat.
+var errNotHelperSession = errors.New("not a helper session")
+
+// helperSessionRecord resolves only a real durable edge. Genuine absence is
+// errNotHelperSession; corruption and other read failures are visible errors.
 func (al *AgentLoop) helperSessionRecord(sessionID string) (*session.LifecycleRecord, error) {
 	if al == nil || strings.TrimSpace(sessionID) == "" {
-		return nil, commands.ErrNotHelperSession
+		return nil, errNotHelperSession
 	}
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
@@ -76,29 +80,27 @@ func (al *AgentLoop) helperSessionRecord(sessionID string) (*session.LifecycleRe
 	}
 	rec, err := lifecycle.Load(sessionID)
 	if errors.Is(err, session.ErrLifecycleNotFound) {
-		return nil, commands.ErrNotHelperSession
+		return nil, errNotHelperSession
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read redirect identity: %w", err)
 	}
 	if rec == nil || rec.SteeredBy == nil || strings.TrimSpace(rec.SteeredBy.SteeringSessionID) == "" {
-		return nil, commands.ErrNotHelperSession
+		return nil, errNotHelperSession
 	}
 	return rec, nil
 }
 
-func (al *AgentLoop) resolveHelperSession(sessionID string) (bool, error) {
-	_, err := al.helperSessionRecord(sessionID)
-	if errors.Is(err, commands.ErrNotHelperSession) {
-		return false, nil
-	}
-	return err == nil, err
-}
-
-// RedirectSessionTurn is D9's helper-only primitive. It preserves the existing
-// refusal of in-flight fences and the existing same-generation stopped resume.
+// RedirectSessionTurn is /stop-redirect on any session the caller is in
+// (founder decision 2026-10-06). A helper keeps D9's redirect: the existing
+// refusal of in-flight fences and the same-generation stopped resume. An
+// ordinary chat is stopped and continued with the instruction as its next
+// user message (redirectOrdinarySession).
 func (al *AgentLoop) RedirectSessionTurn(ctx context.Context, sessionID, instruction, userID, channel string) error {
 	rec, err := al.helperSessionRecord(sessionID)
+	if errors.Is(err, errNotHelperSession) {
+		return al.redirectOrdinarySession(ctx, sessionID, instruction, userID, channel, "")
+	}
 	if err != nil {
 		return err
 	}

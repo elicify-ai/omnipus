@@ -7,11 +7,8 @@ import (
 	"unicode"
 )
 
-// StopRedirectRootRefusal matches the existing web command's helper guidance.
-const StopRedirectRootRefusal = "`/stop-redirect` only works in a helper's chat — it stops that helper's current turn and continues it with a new instruction. Open the helper session you want to redirect and run the command there. To stop this conversation's current turn, use `/stop`."
-
-// StopRedirectUsage matches the existing web command's instruction requirement.
-const StopRedirectUsage = "Usage: `/stop-redirect <instruction>` — stops this helper's current turn and continues it with your new instruction. The instruction text is required; whitespace alone is not an instruction."
+// StopRedirectUsage explains the command's required instruction.
+const StopRedirectUsage = "Usage: `/stop-redirect <instruction>` — stops this chat's current turn and continues this chat with your new instruction. The instruction text is required; whitespace alone is not an instruction."
 
 // StopCommandReply keeps fired, armed, no-op and failure outcomes distinct.
 func StopCommandReply(err error) string {
@@ -31,11 +28,9 @@ func StopCommandReply(err error) string {
 func StopRedirectReply(err error) string {
 	switch {
 	case err == nil:
-		return "Redirect accepted: this helper's current turn is being stopped and replaced with the new instruction."
-	case errors.Is(err, ErrNotHelperSession):
-		return StopRedirectRootRefusal
+		return "Redirect accepted: this chat's current turn is being stopped and the chat continues with your new instruction."
 	case errors.Is(err, ErrNothingToRedirect):
-		return "This helper has already finished — use RESUME to start its next round."
+		return "This chat has already finished — use RESUME to start its next round."
 	default:
 		return "Redirect request failed: " + err.Error()
 	}
@@ -73,7 +68,7 @@ func stopCommand() Definition {
 
 func stopRedirectCommand() Definition {
 	return Definition{
-		Name: "stop-redirect", Description: "Stop this helper's turn and replace it with a new instruction",
+		Name: "stop-redirect", Description: "Stop this chat's current turn and continue it with a new instruction",
 		Usage: "/stop-redirect <instruction>", Surfaces: []Surface{SurfaceWeb, SurfaceCLI, SurfaceChannel},
 		Delivery: DeliveryClient, AvailableWhileStreaming: true,
 		Handler: func(ctx context.Context, req Request, rt *Runtime) error {
@@ -82,20 +77,7 @@ func stopRedirectCommand() Definition {
 				return req.Reply(StopRedirectUsage)
 			}
 			if rt == nil {
-				return req.Reply(StopRedirectRootRefusal)
-			}
-			helper := false
-			if rt.ResolveHelperSession != nil {
-				var err error
-				helper, err = rt.ResolveHelperSession()
-				if err != nil {
-					return req.Reply(StopRedirectReply(err))
-				}
-			} else if rt.IsHelperSession != nil {
-				helper = rt.IsHelperSession()
-			}
-			if !helper {
-				return req.Reply(StopRedirectRootRefusal)
+				return req.Reply(unavailableMsg)
 			}
 			var sessionID string
 			if rt.SessionID != nil {

@@ -16,10 +16,9 @@ package commands
 //     executes mid-stream. A delivery-agent path cannot (mid-turn text enters
 //     the steering queue unparsed — pkg/agent/session_worker.go →
 //     enqueueSteeringFromMessage).
-//   - Root-chat refusal is fail-closed on helper identity (§3.2): unresolvable
-//     identity ⇒ IsHelperSession false ⇒ root-style refusal, nothing sent.
-//   - Sentinel outcomes: ErrNotHelperSession (root-style refusal w/ guidance)
-//     and ErrNothingToRedirect (done/failed: "already finished — use
+//   - Founder decision 2026-10-06: /stop-redirect redirects the chat the
+//     caller is in, root chat or helper; there is no root-chat refusal.
+//   - Sentinel outcome: ErrNothingToRedirect (done/failed: "already finished — use
 //     RESUME"). NO busy sentinel exists — mid-stream is the normal case. The
 //     sentinel vars do not exist yet, so tests referencing them would not
 //     compile; the unknown-error truthfulness leg is tested here with a proxy
@@ -93,21 +92,12 @@ import (
 //	// RedirectSessionTurn performs the D2 redirect on the named session:
 //	// fence + stop_note cause redirect_pause under lock, interrupt the live
 //	// turn (skipped when already stopped), same-generation resume with
-//	// instruction as the newest message; subtree keeps working. Returns named
-//	// sentinel errors for guidance outcomes — ErrNotHelperSession,
-//	// ErrNothingToRedirect (already finished → "use RESUME") — so handlers
+//	// instruction as the newest message; subtree keeps working. Returns the
+//	// named sentinel ErrNothingToRedirect (already finished → "use RESUME")
+//	// for guidance — so handlers
 //	// reply truthfully instead of one opaque error (mirrors
 //	// ErrNoActiveTurn/ErrCancelArmed).
 //	RedirectSessionTurn(ctx context.Context, sessionID, instruction, userID, channel string) error
-//
-// And add to Runtime in pkg/commands/runtime.go (located reflectively by
-// setHelperSession below until it exists):
-//
-//	// IsHelperSession reports whether the current chat targets a helper
-//	// session. Fail-closed (seam ruling §3.2): unresolvable identity — no
-//	// lifecycle record, unreadable store, blank session id — is FALSE (⇒
-//	// /stop-redirect gets the root-style refusal). false ⇒ workspace root.
-//	IsHelperSession func() bool
 type stopPackFakeLoop struct {
 	// configuration
 	fired bool
@@ -163,22 +153,6 @@ func findStopPackDef(t *testing.T, name string) *Definition {
 	}
 	t.Fatalf("BLOCKED: /%s command not registered in BuiltinDefinitions() — required by ADR D9 (subagent control plane), which adds it as its OWN command", name)
 	return nil
-}
-
-// setHelperSession reflectively wires Runtime.IsHelperSession (the reported
-// root-vs-helper seam) so this pack compiles — and fails BLOCKED, not with a
-// build error — before backend-lead adds the field. Fail-closed rule (§3.2):
-// the field MUST be func() bool and MUST return false on unresolvable identity.
-func setHelperSession(t *testing.T, rt *Runtime, isHelper bool) {
-	t.Helper()
-	field := reflect.ValueOf(rt).Elem().FieldByName("IsHelperSession")
-	if !field.IsValid() {
-		t.Fatalf("BLOCKED: commands.Runtime.IsHelperSession func field not implemented — required by ADR D9 (root chat must refuse /stop-redirect with guidance to target a helper) and seam ruling §3.2 (fail-closed on unresolvable identity)")
-	}
-	if field.Kind() != reflect.Func {
-		t.Fatalf("BLOCKED: commands.Runtime.IsHelperSession exists but is %v, want func() bool", field.Kind())
-	}
-	field.Set(reflect.ValueOf(func() bool { return isHelper }))
 }
 
 // invokeStopPack runs a definition's handler with a standard web-origin
@@ -347,7 +321,7 @@ func TestRedirectTransport_AgentLoopInterfaceMethodSet(t *testing.T) {
 	}
 	var wantRedirect func(context.Context, string, string, string, string) error
 	if redirect.Type != reflect.TypeOf(wantRedirect) {
-		t.Errorf("RedirectSessionTurn signature = %v, want %v (architect-endorsed §1.3; must return named sentinels ErrNotHelperSession / ErrNothingToRedirect for truthful guidance replies)", redirect.Type, reflect.TypeOf(wantRedirect))
+		t.Errorf("RedirectSessionTurn signature = %v, want %v (architect-endorsed §1.3; must return the named sentinel ErrNothingToRedirect for truthful guidance replies)", redirect.Type, reflect.TypeOf(wantRedirect))
 	}
 }
 
@@ -360,7 +334,6 @@ func TestStopHandler_HelperChat_StopsOnlyThatSession(t *testing.T) {
 	fake := &stopPackFakeLoop{fired: true}
 	rt := &Runtime{SessionID: func() string { return "helper-1" }}
 	rt = rt.WithAgentLoop(fake)
-	setHelperSession(t, rt, true)
 
 	def := findStopPackDef(t, "stop")
 	reply, err := invokeStopPack(t, def, rt, "/stop")
@@ -395,7 +368,6 @@ func TestStopHandler_RootChat_ConversationScopedStillWorks(t *testing.T) {
 	fake := &stopPackFakeLoop{fired: true}
 	rt := &Runtime{SessionID: func() string { return "root-1" }}
 	rt = rt.WithAgentLoop(fake)
-	setHelperSession(t, rt, false)
 
 	def := findStopPackDef(t, "stop")
 	reply, err := invokeStopPack(t, def, rt, "/stop")
@@ -421,7 +393,6 @@ func TestStopHandler_CLISurface_SameReceipt(t *testing.T) {
 	fake := &stopPackFakeLoop{fired: true}
 	rt := &Runtime{SessionID: func() string { return "cli-session-1" }}
 	rt = rt.WithAgentLoop(fake)
-	setHelperSession(t, rt, true)
 
 	def := findStopPackDef(t, "stop")
 	reply, err := invokeStopPackOn(t, def, rt, "/stop", "cli")
@@ -452,7 +423,6 @@ func TestStopHandler_NothingRunning_TruthfulReply(t *testing.T) {
 	firedFake := &stopPackFakeLoop{fired: true}
 	rtFired := &Runtime{SessionID: func() string { return "s" }}
 	rtFired = rtFired.WithAgentLoop(firedFake)
-	setHelperSession(t, rtFired, true)
 	firedReply, err := invokeStopPack(t, findStopPackDef(t, "stop"), rtFired, "/stop")
 	if err != nil {
 		t.Fatalf("fired case returned error: %v", err)
@@ -462,7 +432,6 @@ func TestStopHandler_NothingRunning_TruthfulReply(t *testing.T) {
 	noneFake := &stopPackFakeLoop{} // fired=false, armed=false
 	rtNone := &Runtime{SessionID: func() string { return "s" }}
 	rtNone = rtNone.WithAgentLoop(noneFake)
-	setHelperSession(t, rtNone, true)
 	noneReply, err := invokeStopPack(t, findStopPackDef(t, "stop"), rtNone, "/stop")
 	if err != nil {
 		t.Fatalf("nothing-running case returned error: %v (a no-op stop is informational, not a failure)", err)
@@ -484,7 +453,6 @@ func TestStopHandler_ArmedLatch_DistinctTruthfulReply(t *testing.T) {
 	firedFake := &stopPackFakeLoop{fired: true}
 	rtFired := &Runtime{SessionID: func() string { return "s" }}
 	rtFired = rtFired.WithAgentLoop(firedFake)
-	setHelperSession(t, rtFired, true)
 	firedReply, err := invokeStopPack(t, findStopPackDef(t, "stop"), rtFired, "/stop")
 	if err != nil {
 		t.Fatalf("fired case returned error: %v", err)
@@ -493,7 +461,6 @@ func TestStopHandler_ArmedLatch_DistinctTruthfulReply(t *testing.T) {
 	noneFake := &stopPackFakeLoop{}
 	rtNone := &Runtime{SessionID: func() string { return "s" }}
 	rtNone = rtNone.WithAgentLoop(noneFake)
-	setHelperSession(t, rtNone, true)
 	noneReply, err := invokeStopPack(t, findStopPackDef(t, "stop"), rtNone, "/stop")
 	if err != nil {
 		t.Fatalf("nothing-running case returned error: %v", err)
@@ -502,7 +469,6 @@ func TestStopHandler_ArmedLatch_DistinctTruthfulReply(t *testing.T) {
 	armedFake := &stopPackFakeLoop{armed: true}
 	rtArmed := &Runtime{SessionID: func() string { return "s" }}
 	rtArmed = rtArmed.WithAgentLoop(armedFake)
-	setHelperSession(t, rtArmed, true)
 	armedReply, err := invokeStopPack(t, findStopPackDef(t, "stop"), rtArmed, "/stop")
 	if err != nil {
 		t.Fatalf("armed case returned error: %v (an armed latch is acknowledged-and-pending, not a failure)", err)
@@ -525,7 +491,6 @@ func TestStopHandler_RealFailure_SurfacesError(t *testing.T) {
 	fake := &stopPackFakeLoop{err: errors.New("lifecycle fsync failed")}
 	rt := &Runtime{SessionID: func() string { return "s" }}
 	rt = rt.WithAgentLoop(fake)
-	setHelperSession(t, rt, true)
 
 	reply, err := invokeStopPack(t, findStopPackDef(t, "stop"), rt, "/stop")
 	if err != nil {
@@ -547,7 +512,6 @@ func TestStopRedirectHandler_HelperChat_RedirectReceipt(t *testing.T) {
 	fake := &stopPackFakeLoop{}
 	rt := &Runtime{SessionID: func() string { return "helper-7" }}
 	rt = rt.WithAgentLoop(fake)
-	setHelperSession(t, rt, true)
 
 	def := findStopPackDef(t, "stop-redirect")
 	reply, err := invokeStopPack(t, def, rt, "/stop-redirect focus on the failing tests")
@@ -578,29 +542,38 @@ func TestStopRedirectHandler_HelperChat_RedirectReceipt(t *testing.T) {
 	}
 }
 
-// TestStopRedirectHandler_RootChat_RefusesWithHelperGuidance: in the ROOT's
-// chat the command is refused with guidance to target a helper, and NOTHING
-// is issued — no redirect, no stop (D9 row 3; fail-closed on helper identity
-// per §3.2).
-func TestStopRedirectHandler_RootChat_RefusesWithHelperGuidance(t *testing.T) {
+// TestStopRedirectHandler_RootChat_RedirectsThisChat: founder decision
+// 2026-10-06 — "/stop-redirect in the chat ... redirects the chat itself";
+// it works on any session the caller is in. A root chat is redirected through
+// the same redirect seam (stop this session's turn, continue it with the
+// instruction), never refused. Written by backend-lead (no QA lane available).
+func TestStopRedirectHandler_RootChat_RedirectsThisChat(t *testing.T) {
 	fake := &stopPackFakeLoop{}
 	rt := &Runtime{SessionID: func() string { return "root-1" }}
 	rt = rt.WithAgentLoop(fake)
-	setHelperSession(t, rt, false)
 
 	def := findStopPackDef(t, "stop-redirect")
 	reply, err := invokeStopPack(t, def, rt, "/stop-redirect do the other thing")
 	if err != nil {
-		t.Fatalf("refusal must be a normal reply, not an error: %v", err)
+		t.Fatalf("root-chat redirect must reply, not error: %v", err)
 	}
-	if !strings.Contains(strings.ToLower(reply), "helper") {
-		t.Errorf("root-chat refusal reply %q must guide the user to target a helper session (D9)", reply)
+	if reply != StopRedirectReply(nil) {
+		t.Errorf("root-chat reply = %q, want the redirect acknowledgement %q", reply, StopRedirectReply(nil))
 	}
-	if len(fake.redirectCalls) != 0 {
-		t.Errorf("root chat refusal must issue no redirect, got %+v", fake.redirectCalls)
+	if strings.Contains(strings.ToLower(reply), "helper") {
+		t.Errorf("root-chat reply %q must speak of this chat, not a helper", reply)
 	}
-	if len(fake.stopCalls) != 0 {
-		t.Errorf("root chat refusal must stop nothing, got %+v", fake.stopCalls)
+	if len(fake.redirectCalls) != 1 || fake.redirectCalls[0].sessionID != "root-1" || fake.redirectCalls[0].instruction != "do the other thing" {
+		t.Errorf("root chat must be redirected exactly once with its own session and instruction, got %+v", fake.redirectCalls)
+	}
+	if len(fake.stopCalls) != 0 || fake.requestCancelCalls != 0 {
+		t.Errorf("redirect must use only the redirect seam, got stop=%+v cancel=%d", fake.stopCalls, fake.requestCancelCalls)
+	}
+	if def.Description != "Stop this chat's current turn and continue it with a new instruction" {
+		t.Errorf("/stop-redirect description = %q, want it to name this chat", def.Description)
+	}
+	if !strings.Contains(StopRedirectUsage, "this chat") || strings.Contains(strings.ToLower(StopRedirectUsage), "helper") {
+		t.Errorf("usage text %q must name this chat, not a helper", StopRedirectUsage)
 	}
 }
 
@@ -611,7 +584,6 @@ func TestStopRedirectHandler_BareInstruction_RepliesUsageChangesNothing(t *testi
 	fake := &stopPackFakeLoop{}
 	rt := &Runtime{SessionID: func() string { return "helper-3" }}
 	rt = rt.WithAgentLoop(fake)
-	setHelperSession(t, rt, true)
 
 	def := findStopPackDef(t, "stop-redirect")
 	reply, err := invokeStopPack(t, def, rt, "/stop-redirect")
@@ -632,7 +604,6 @@ func TestStopRedirectHandler_WhitespaceInstruction_RepliesUsageChangesNothing(t 
 	fake := &stopPackFakeLoop{}
 	rt := &Runtime{SessionID: func() string { return "helper-3" }}
 	rt = rt.WithAgentLoop(fake)
-	setHelperSession(t, rt, true)
 
 	def := findStopPackDef(t, "stop-redirect")
 	reply, err := invokeStopPack(t, def, rt, "/stop-redirect \u00a0\u2003 ")
@@ -657,7 +628,6 @@ func TestStopRedirectHandler_UnicodeWhitespaceInstruction_RepliesUsageChangesNot
 	fake := &stopPackFakeLoop{}
 	rt := &Runtime{SessionID: func() string { return "helper-3" }}
 	rt = rt.WithAgentLoop(fake)
-	setHelperSession(t, rt, true)
 
 	def := findStopPackDef(t, "stop-redirect")
 	reply, err := invokeStopPack(t, def, rt, "/stop-redirect    ")
@@ -675,17 +645,13 @@ func TestStopRedirectHandler_UnicodeWhitespaceInstruction_RepliesUsageChangesNot
 // TestStopRedirectHandler_LoopError_SurfacesErrorTruthfully: a real (unknown)
 // failure from the redirect primitive must not be swallowed — the reply names
 // it (truthfulness; mirrors the /stop failure mapping). NOTE: this pins the
-// UNKNOWN-error leg with a proxy error. The two NAMED sentinel mappings —
-// ErrNotHelperSession → root-style refusal guidance, ErrNothingToRedirect →
-// "already finished — use RESUME" — need errors.Is identity against the
-// sentinel vars, which do not exist yet; they are specified to backend-lead as
-// GREEN-scope assertions in REPORT.md (a test referencing nonexistent vars
-// would not compile, and a compile error is not behavioural RED).
+// UNKNOWN-error leg with a proxy error. The one NAMED sentinel mapping —
+// ErrNothingToRedirect → "already finished — use RESUME" — is pinned by its
+// own errors.Is test.
 func TestStopRedirectHandler_LoopError_SurfacesErrorTruthfully(t *testing.T) {
 	fake := &stopPackFakeLoop{err: errors.New("redirect ledger write failed")}
 	rt := &Runtime{SessionID: func() string { return "helper-11" }}
 	rt = rt.WithAgentLoop(fake)
-	setHelperSession(t, rt, true)
 
 	reply, err := invokeStopPack(t, findStopPackDef(t, "stop-redirect"), rt, "/stop-redirect export the report")
 	if err != nil {
@@ -721,6 +687,17 @@ func TestGoalClearAliases_UnchangedPerD9(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("GoalClearAliases() lost verb %q — D9 pins the set unchanged: %v", w, want)
+		}
+	}
+}
+
+// TestStopRedirectReply_NothingToRedirect_MatchesWrappedSentinel pins the one
+// named sentinel mapping by errors.Is identity, including a wrapped sentinel.
+func TestStopRedirectReply_NothingToRedirect_MatchesWrappedSentinel(t *testing.T) {
+	want := "This chat has already finished — use RESUME to start its next round."
+	for _, err := range []error{ErrNothingToRedirect, errors.Join(errors.New("redirect"), ErrNothingToRedirect)} {
+		if got := StopRedirectReply(err); got != want {
+			t.Errorf("StopRedirectReply(%v) = %q, want %q", err, got, want)
 		}
 	}
 }
