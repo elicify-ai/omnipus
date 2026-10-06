@@ -33,6 +33,7 @@ import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, Sess
 import { handleReplayAndStatusFrame } from './replay-and-status-frames'
 import { handleCatchUpFrame } from './catchup-frames'
 import { handleProviderFrame } from './provider-frames'
+import { handleMailPanelObserverFrame } from './mail-panel-observer-frames'
 import { handleFirstSendFrame } from './first-send-frames'
 import { findFirstSendMessage } from '../first-send'
 
@@ -847,6 +848,12 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       // below is a grandfathered budget entry. Returns false for every
       // other frame type.
       if (handleProviderFrame({ frame, targetSid, get, withBucket })) {
+        syncForeground()
+        return
+      }
+
+      // Mail panel presence ack/error: own handler, main switch is grandfathered.
+      if (handleMailPanelObserverFrame(frame)) {
         syncForeground()
         return
       }

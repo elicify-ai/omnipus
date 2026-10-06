@@ -25,8 +25,8 @@ Files arrive three ways:
 ## How to open the Library
 
 1. Click **Library** in the sidebar. The panel opens with every workspace listed as a top-level folder.
-2. From a workspace, click that workspace's **Library** tab. The panel opens already inside that workspace's files. The sidebar **Library** button is different: it lists every workspace. There is no Library button in the chat header.
-3. Click **Open in new tab** at the top of the panel for a fullscreen Library. The side panel closes, the tab starts where you were, and its address names the selected file, so you can bookmark it. Closing the tab re-opens the panel.
+2. From a workspace, select its **Library** panel toggle in the workspace bar (or the panels menu on a narrow bar). The panel opens already inside that workspace's files. The sidebar **Library** entry is different: it lists every workspace. There is no Library button in the chat header.
+3. Select **Expand Library panel** in the panel heading for a full-screen Library in a new browser tab, or to switch to a tab Omnipus recognises as already showing it. A newly opened tab carries the current workspace and the selected file, if any, in its address. With no file selected, the browsed subfolder is not carried over. The docked panel closes after the handoff. Use **Back to chat** to leave the full-screen view; [panels beside chat](using-omnipus-ui.md#panels-beside-chat) explains how the panel is restored and the same-tab fallback.
 
 ## How to add files
 
@@ -102,6 +102,6 @@ Opening an attachment from [Mail](mail.md#attachments) previews it here **tempor
 ## Related pages
 
 - [knowledge base](knowledge.md) — notes, records, and views: the text side of the Library.
-- [workspaces](workspaces.md) — what a workspace is, and the tabs around the Library tab.
+- [workspaces](workspaces.md) — what a workspace is, and the panels around the Library panel.
 - [previews](previews.md) — agent-built sites for review; unrelated to this preview pane.
 - [agents](agents.md) — the agents who read and write these files.

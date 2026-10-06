@@ -104,6 +104,9 @@ export function useChatAgents(): UseChatAgentsResult {
 
   useEffect(() => {
     if (!activeWorkspaceId || !pickerOpen) return
+    // Creation can finish after the initial agents fetch. Re-read discovery
+    // as well as membership instead of relying on a delivered WS frame.
+    void queryClient.invalidateQueries({ queryKey: ['agents'] })
     void queryClient.invalidateQueries({
       queryKey: workspacesQueryKeys.list({ status: 'active' }),
     })
