@@ -16,7 +16,7 @@ On the Board, the **Agent** and **Tags** filters narrow further. The List filter
 
 The toolbar follows the panel's own width, not the browser window. At narrow widths its groups stack, and the heading/view group and filters can wrap. The selector continues to offer Board, List and Graph.
 
-The Board stacks its status groups vertically in a narrow panel. In List, Tags and Updated are hidden by default in a narrow panel; use the three-dot control in the Actions header to show or hide Tags and Updated.
+The Board stacks its status groups vertically in a narrow panel. In List, Tags and Updated are hidden by default in a narrow panel. Use the three-dot control in the Actions header to reveal them. When the revealed table needs more room, scroll sideways inside the List panel to reach its columns and controls; the whole page does not scroll sideways, and Title keeps its own space. Scroll to the three-dot control and press it again to return to automatic column visibility for the panel's current width.
 
 ## When you would use it
 
