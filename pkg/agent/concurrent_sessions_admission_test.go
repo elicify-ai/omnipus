@@ -219,3 +219,29 @@ func TestOrdinaryAdmission_KeyedBySessionID_NotRoutingKey(t *testing.T) {
 	_, err = al.prepareOrdinaryExecution(waitCtx, human(sidA), opts)
 	require.Error(t, err, "a second admission for the same session must be refused while its first execution is pending")
 }
+
+// Every turn-scoped key derived from the route (turn registry, history,
+// steering queue, continuation target) must be per chat session when the
+// message carries a session id — on the default route too. If two chats of the
+// same agent shared "agent:<id>:main", a follow-up typed into one chat could be
+// drained by the other chat's running turn.
+func TestResolveMessageRoute_DefaultRoute_SessionKeyIsPerSession(t *testing.T) {
+	al, _, sidA, sidB := newAdmissionSessionsLoop(t, newGatedProvider())
+	msgFor := func(sid string) bus.InboundMessage {
+		return bus.InboundMessage{Channel: "webchat", ChatID: "chat-" + sid, SessionID: sid,
+			Sender: bus.SenderInfo{CanonicalID: "webchat_user"}}
+	}
+	routeA, _, err := al.resolveMessageRoute(msgFor(sidA))
+	require.NoError(t, err)
+	routeB, _, err := al.resolveMessageRoute(msgFor(sidB))
+	require.NoError(t, err)
+	require.NotEqual(t, routeA.SessionKey, routeB.SessionKey, "two chats of one agent resolved to the same routing session key")
+	require.Contains(t, routeA.SessionKey, sidA)
+	require.Contains(t, routeB.SessionKey, sidB)
+
+	targetA, err := al.buildContinuationTarget(msgFor(sidA))
+	require.NoError(t, err)
+	targetB, err := al.buildContinuationTarget(msgFor(sidB))
+	require.NoError(t, err)
+	require.NotEqual(t, targetA.SessionKey, targetB.SessionKey, "steering-queue key is shared between two chats of one agent")
+}
