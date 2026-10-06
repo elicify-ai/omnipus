@@ -11,8 +11,9 @@ import { useSessionStore } from '@/store/session'
 import { OmnipusRuntimeProvider } from './OmnipusRuntimeProvider'
 import { ChatConnectionNotice } from './ConnectionStatus'
 
-// U4-R1: ordinary short outages must be visible immediately; 4008 stays
-// deliberately quiet. REAL WsConnection, runtime callback wiring, stores,
+// Founder decision 2026-10-06 (keeps issue #823): connection drops shorter
+// than 15 s stay quiet - no status line; the earlier U4 requirement of an
+// immediate "Reconnecting…" hint is withdrawn. 4008 stays quiet too. REAL WsConnection, runtime callback wiring, stores,
 // frame validation/routing and notice. Fake only WebSocket/clock and the
 // external AssistantUI context (not the runtime adapter or callbacks).
 vi.mock('@assistant-ui/react', async () => ({
@@ -81,18 +82,19 @@ async function connect(streaming = false) {
   expect(screen.queryByTestId('connection-status-line')).not.toBeInTheDocument()
 }
 
-describe('U4 — neutral reconnect visibility through real runtime/socket callbacks', () => {
-  it.each([false, true])('shows a short ordinary outage immediately (streaming=%s), without a connection-error banner', async (streaming) => {
+describe('U4 — reconnect behaviour through real runtime/socket callbacks', () => {
+  it.each([false, true])('keeps a short ordinary outage quiet (streaming=%s), without a connection-error banner', async (streaming) => {
     await connect(streaming)
     act(() => latest().drop(1006))
     expect(useConnectionStore.getState().isConnected).toBe(false)
     expect(useConnectionStore.getState().reconnectPhase).toBe('reconnecting')
     expect(useConnectionStore.getState().connectionError).toBeNull()
-    expect(screen.getByTestId('connection-status-line').textContent).toBe('Reconnecting…')
+    // Founder decision 2026-10-06: drops under 15 s show no status line (#823).
+    expect(screen.queryByTestId('connection-status-line')).not.toBeInTheDocument()
     expect(screen.queryByText(/agents keep working/i)).not.toBeInTheDocument()
   })
 
-  it('keeps reconnecting until real catch-up completes, preserves an active turn and never auto-resends', async () => {
+  it('stays quiet through a short reconnect, completes real catch-up, preserves an active turn and never auto-resends', async () => {
     await connect(true)
     const sentMessages = () => sockets.flatMap((socket) => socket.send.mock.calls.map(([raw]) => JSON.parse(raw) as ClientFrame)).filter((frame) => frame.type === 'message')
     expect(sentMessages()).toHaveLength(1)
@@ -100,8 +102,7 @@ describe('U4 — neutral reconnect visibility through real runtime/socket callba
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
     expect(sockets).toHaveLength(2)
     act(() => latest().open())
-    expect(screen.getByTestId('connection-status-line').textContent).toBe('Reconnecting…')
-    expect(screen.queryByText('Up to date')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('connection-status-line')).not.toBeInTheDocument()
     act(() => {
       latest().frame({ type: 'session_snapshot', session_id: SID, seq: 1, boot_id: 'uat-after', reason: 'boot_mismatch' })
       latest().frame({ type: 'session_state', session_id: SID, user_id: 'uat-user', pending_approvals: [], emitted_at: '2026-10-06T00:00:01Z', boot_id: 'uat-after', active_turn: { turn_id: 'uat-active-turn', agent_id: 'jim', started_at: '2026-10-06T00:00:00Z' } })
@@ -110,8 +111,7 @@ describe('U4 — neutral reconnect visibility through real runtime/socket callba
     await flushFrames()
     expect(useConnectionStore.getState().isConnected).toBe(true)
     expect(useChatStore.getState().sessionsById[SID].awaitingCatchUp).toBe(true)
-    expect(screen.getByTestId('connection-status-line').textContent).toBe('Reconnecting…')
-    expect(screen.queryByText('Up to date')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('connection-status-line')).not.toBeInTheDocument()
     act(() => latest().frame({ type: 'catch_up_complete', session_id: SID, seq: 1, boot_id: 'uat-after', mode: 'snapshot' }))
     await flushFrames()
     const bucket = useChatStore.getState().sessionsById[SID]
@@ -119,7 +119,7 @@ describe('U4 — neutral reconnect visibility through real runtime/socket callba
     expect(bucket.cursor).toStrictEqual({ bootId: 'uat-after', seq: 1 })
     expect(bucket.activeTurnId).toBe('uat-active-turn')
     expect(bucket.messagesById['replayed-active-reply'].confirmedUnfinished).not.toBe(true)
-    expect(screen.getByTestId('connection-status-line').textContent).toBe('Up to date')
+    expect(screen.queryByTestId('connection-status-line')).not.toBeInTheDocument()
     expect(useConnectionStore.getState().connectionError).toBeNull()
     expect(sentMessages()).toHaveLength(1)
   })

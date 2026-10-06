@@ -155,14 +155,12 @@ describe('deriveConnectionDisplay', () => {
     awaitingCatchUp: false,
   }
 
-  // U4 replaces the old short-outage silence rule with a neutral hint;
-  // the message-specific continuation threshold remains unchanged.
-  it('shows neutral reconnecting for a drop shorter than 15 seconds', () => {
-    expect(deriveConnectionDisplay({ ...base, now: 15_999 })).toEqual({ answer: 'hidden', chat: 'reconnecting' })
+  it('shows nothing for a drop shorter than 15 seconds', () => {
+    expect(deriveConnectionDisplay({ ...base, now: 15_999 })).toEqual({ answer: 'hidden', chat: 'hidden' })
   })
 
-  it('keeps reconnecting and adds the answer continuation state at 15 seconds', () => {
-    expect(deriveConnectionDisplay({ ...base, now: 16_000 })).toEqual({ answer: 'paused', chat: 'reconnecting' })
+  it('shows only the answer continuation state at 15 seconds', () => {
+    expect(deriveConnectionDisplay({ ...base, now: 16_000 })).toEqual({ answer: 'paused', chat: 'hidden' })
   })
 
   it('distinguishes device offline from an unreachable gateway at two minutes', () => {
@@ -259,7 +257,7 @@ describe('deriveConnectionDisplay', () => {
 })
 
 describe('ChatConnectionNotice timing', () => {
-  it('shows reconnecting immediately, escalates at two minutes, then shows a two-second recovery confirmation', () => {
+  it('waits two minutes, then shows the calm line and a two-second recovery confirmation', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-22T00:00:00Z'))
     const disconnectedAt = Date.now()
@@ -271,7 +269,7 @@ describe('ChatConnectionNotice timing', () => {
     })
 
     render(<ChatConnectionNotice />)
-    expect(screen.getByTestId('connection-status-line').textContent).toBe('Reconnecting…')
+    expect(screen.queryByTestId('connection-status-line')).not.toBeInTheDocument()
 
     act(() => vi.advanceTimersByTime(120_000))
     expect(screen.getByTestId('connection-status-line')).toHaveTextContent(
