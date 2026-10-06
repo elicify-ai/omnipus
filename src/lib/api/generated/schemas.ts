@@ -105,7 +105,14 @@ type Session = {
   title: string;
   status: "active" | "archived" | "failed" | "interrupted";
   lifecycle_state?:
-    | ("working" | "waiting_for_answer" | "done" | "failed" | "stopped")
+    | (
+        | "working"
+        | "waiting_for_answer"
+        | "done"
+        | "failed"
+        | "stopped"
+        | "interrupted"
+      )
     | undefined;
   stop_note?:
     | {
@@ -3360,7 +3367,14 @@ export const Session: z.ZodType<Session> = z.object({
   title: z.string(),
   status: z.enum(["active", "archived", "failed", "interrupted"]),
   lifecycle_state: z
-    .enum(["working", "waiting_for_answer", "done", "failed", "stopped"])
+    .enum([
+      "working",
+      "waiting_for_answer",
+      "done",
+      "failed",
+      "stopped",
+      "interrupted",
+    ])
     .optional(),
   stop_note: z
     .object({
