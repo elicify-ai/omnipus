@@ -205,6 +205,11 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 	// FR-011: best-effort clean up any child/browser processes the run spawned.
 	r.cleanupRunProcesses(job, sessionID)
 
+	if runErr == nil && stopErr != nil {
+		// The run returned on its own while its deadline Stop failed: the
+		// failed Stop is still the run's error, never dropped (F6).
+		runErr = fmt.Errorf("scheduled run exceeded its deadline and the deadline stop failed: %w", stopErr)
+	}
 	if runErr != nil {
 		// Always log the raw error before any wrapping so the real cause lands in
 		// gateway.log regardless of what the channel-alert path surfaces.
@@ -283,9 +288,13 @@ func (r *scheduledRunner) watchDeadline(ctx2 context.Context, runDone <-chan str
 				}
 			},
 		})
-		if cancelErr == nil {
-			cancelErr = res.RootErr
+		// F6: a session the deadline Stop could not reach (its fence or
+		// acceptance was refused) is a failed Stop, never "no active turn".
+		failures := []error{cancelErr, res.RootErr}
+		for _, item := range res.Report.Unreachable {
+			failures = append(failures, fmt.Errorf("deadline Stop for %s: %s", item.ID, item.Reason))
 		}
+		cancelErr = errors.Join(failures...)
 		outcome := res.Root
 		outcome.Fired, outcome.Armed = res.Fired, res.Armed
 		outcome.BackgroundSessionsKilled = res.BackgroundKilled
