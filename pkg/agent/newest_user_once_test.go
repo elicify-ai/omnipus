@@ -6,6 +6,9 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -98,7 +101,7 @@ func TestProcessMessage_NewestUserMessageReachesModelOnce(t *testing.T) {
 			// The inbound path records the newest message before the turn runs.
 			if tc.preWritten {
 				entries = append(entries, session.TranscriptEntry{
-					Role: "user", Content: newest, AgentID: h.agentID, Timestamp: now.Add(2 * time.Second),
+					ID: "entry-newest", Role: "user", Content: newest, AgentID: h.agentID, Timestamp: now.Add(2 * time.Second),
 				})
 			}
 			h.append(t, entries...)
@@ -107,13 +110,18 @@ func TestProcessMessage_NewestUserMessageReachesModelOnce(t *testing.T) {
 				t.Fatalf("precondition: in-memory window must be empty, got %+v", got)
 			}
 
+			entryID := ""
+			if tc.preWritten {
+				entryID = "entry-newest"
+			}
 			_, _, err := h.al.processMessage(context.Background(), bus.InboundMessage{
-				Channel:   tc.channel,
-				ChatID:    "chat-once",
-				SessionID: h.transcriptID,
-				Content:   newest,
-				Sender:    bus.SenderInfo{CanonicalID: tc.channel + ":u1"},
-				Metadata:  map[string]string{"agent_id": h.agentID},
+				Channel:           tc.channel,
+				ChatID:            "chat-once",
+				SessionID:         h.transcriptID,
+				Content:           newest,
+				TranscriptEntryID: entryID,
+				Sender:            bus.SenderInfo{CanonicalID: tc.channel + ":u1"},
+				Metadata:          map[string]string{"agent_id": h.agentID},
 			})
 			if err != nil {
 				t.Fatalf("processMessage: %v", err)
@@ -147,19 +155,170 @@ func newestOnceHarness(t *testing.T) (*hydrateTestHarness, *userRecordingProvide
 // the turn through processMessage.
 func sendWebchat(t *testing.T, h *hydrateTestHarness, content string) {
 	t.Helper()
+	id := "entry-" + strings.ReplaceAll(content, " ", "-") + "-" + time.Now().UTC().Format("150405.000000000")
 	h.append(t, session.TranscriptEntry{
-		Role: "user", Content: content, AgentID: h.agentID, Timestamp: time.Now().UTC(),
+		ID: id, Role: "user", Content: content, AgentID: h.agentID, Timestamp: time.Now().UTC(),
 	})
+	runTurnFor(t, h, "webchat", content, id)
+}
+
+// runTurnFor runs one turn through processMessage; entryID is the transcript
+// entry the inbound path wrote for this message ("" when none was written).
+func runTurnFor(t *testing.T, h *hydrateTestHarness, channel, content, entryID string) {
+	t.Helper()
 	if _, _, err := h.al.processMessage(context.Background(), bus.InboundMessage{
-		Channel:   "webchat",
-		ChatID:    "chat-once",
-		SessionID: h.transcriptID,
-		Content:   content,
-		Sender:    bus.SenderInfo{CanonicalID: "webchat:u1"},
-		Metadata:  map[string]string{"agent_id": h.agentID},
+		Channel:           channel,
+		ChatID:            "chat-once",
+		SessionID:         h.transcriptID,
+		Content:           content,
+		TranscriptEntryID: entryID,
+		Sender:            bus.SenderInfo{CanonicalID: channel + ":u1"},
+		Metadata:          map[string]string{"agent_id": h.agentID},
 	}); err != nil {
 		t.Fatalf("processMessage(%q): %v", content, err)
 	}
+}
+
+func lastRequest(t *testing.T, rec *userRecordingProvider) []providers.Message {
+	t.Helper()
+	reqs := rec.snapshot()
+	if len(reqs) == 0 {
+		t.Fatal("provider received no request")
+	}
+	return reqs[len(reqs)-1]
+}
+
+// (a) The same words sent twice on purpose, the earlier one answered: the
+// rebuild must keep the earlier message and the model must also see the
+// current one — two "yes" in total, in order.
+func TestProcessMessage_SameTextTwice_PreviousAnswered_BothKept(t *testing.T) {
+	h, rec := newestOnceHarness(t)
+	now := time.Now().UTC()
+	h.append(t,
+		session.TranscriptEntry{ID: "e1", Role: "user", Content: "yes", AgentID: h.agentID, Timestamp: now},
+		session.TranscriptEntry{ID: "e2", Role: "assistant", Content: "answered-first", AgentID: h.agentID, Timestamp: now.Add(time.Second)},
+		session.TranscriptEntry{ID: "e3", Role: "user", Content: "yes", AgentID: h.agentID, Timestamp: now.Add(2 * time.Second)},
+	)
+	runTurnFor(t, h, "webchat", "yes", "e3")
+	req := lastRequest(t, rec)
+	if n := countUserContent(req, "yes"); n != 2 {
+		t.Fatalf("want the earlier and the current \"yes\" (2), got %d; request=%+v", n, req)
+	}
+	if !strings.Contains(joinContents(req), "answered-first") {
+		t.Fatalf("the earlier answer was dropped; request=%+v", req)
+	}
+}
+
+// (b) The previous identical message is still unanswered and the current one
+// arrives on a channel (which records its own entry): both are kept.
+func TestProcessMessage_SameTextTwice_PreviousUnanswered_ChannelTurn_BothKept(t *testing.T) {
+	h, rec := newestOnceHarness(t)
+	h.append(t, session.TranscriptEntry{
+		ID: "prev", Role: "user", Content: "ping", AgentID: h.agentID, Timestamp: time.Now().UTC().Add(-time.Minute),
+	})
+	runTurnFor(t, h, "telegram", "ping", "")
+	req := lastRequest(t, rec)
+	if n := countUserContent(req, "ping"); n != 2 {
+		t.Fatalf("want the unanswered earlier \"ping\" and the current one (2), got %d; request=%+v", n, req)
+	}
+}
+
+// (c) The current message's transcript write failed (channel path; the write
+// is warn-only): no identity exists, so nothing is dropped — the earlier
+// identical message stays — and the model still sees the current message once.
+func TestProcessMessage_CurrentWriteFailed_NothingDroppedModelSeesCurrentOnce(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs POSIX directory permissions enforced for a non-root user")
+	}
+	h, rec := newestOnceHarness(t)
+	h.append(t, session.TranscriptEntry{
+		ID: "prev", Role: "user", Content: "ok", AgentID: h.agentID, Timestamp: time.Now().UTC().Add(-time.Minute),
+	})
+	dir := filepath.Join(os.Getenv("OMNIPUS_HOME"), "sessions", h.transcriptID)
+	// Make the session's transcript files read-only so the next append fails.
+	var locked []string
+	if err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && strings.HasSuffix(path, ".jsonl") {
+			locked = append(locked, path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("walk %s: %v", dir, err)
+	}
+	if len(locked) == 0 {
+		t.Fatalf("no transcript file found under %s", dir)
+	}
+	for _, f := range locked {
+		if err := os.Chmod(f, 0o400); err != nil {
+			t.Fatalf("chmod %s: %v", f, err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(f, 0o600) })
+	}
+	// Instrument check: the write really fails.
+	if err := h.store.AppendTranscript(h.transcriptID, session.TranscriptEntry{
+		ID: "probe", Role: "user", Content: "probe", AgentID: h.agentID, Timestamp: time.Now().UTC(),
+	}); err == nil {
+		t.Skip("directory permissions did not make the transcript write fail on this filesystem")
+	}
+	runTurnFor(t, h, "telegram", "ok", "")
+	req := lastRequest(t, rec)
+	if n := countUserContent(req, "ok"); n != 2 {
+		t.Fatalf("want the earlier \"ok\" kept plus the current one (2), got %d; request=%+v", n, req)
+	}
+}
+
+// (d) Two queued messages A then B, both already written: at A's turn the
+// model sees A once and B not at all; at B's turn it sees both, each once.
+func TestProcessMessage_QueuedMessages_NotSentBeforeTheirTurn(t *testing.T) {
+	h, rec := newestOnceHarness(t)
+	now := time.Now().UTC()
+	h.append(t,
+		session.TranscriptEntry{ID: "qa", Role: "user", Content: "QUEUED-A-1177", AgentID: h.agentID, Timestamp: now},
+		session.TranscriptEntry{ID: "qb", Role: "user", Content: "QUEUED-B-2288", AgentID: h.agentID, Timestamp: now.Add(time.Second)},
+	)
+	runTurnFor(t, h, "webchat", "QUEUED-A-1177", "qa")
+	reqA := lastRequest(t, rec)
+	if a, b := countUserContent(reqA, "QUEUED-A-1177"), countUserContent(reqA, "QUEUED-B-2288"); a != 1 || b != 0 {
+		t.Fatalf("A's turn: A=%d (want 1), B=%d (want 0); request=%+v", a, b, reqA)
+	}
+	runTurnFor(t, h, "webchat", "QUEUED-B-2288", "qb")
+	reqB := lastRequest(t, rec)
+	if a, b := countUserContent(reqB, "QUEUED-A-1177"), countUserContent(reqB, "QUEUED-B-2288"); a != 1 || b != 1 {
+		t.Fatalf("B's turn: A=%d (want 1), B=%d (want 1); request=%+v", a, b, reqB)
+	}
+}
+
+// (e) The persisted entry's text differs from the turn's content (surrounding
+// whitespace, an attachment): identity still finds it, so the model sees the
+// message once.
+func TestProcessMessage_WhitespaceAndAttachmentVariant_SeenOnce(t *testing.T) {
+	h, rec := newestOnceHarness(t)
+	now := time.Now().UTC()
+	h.append(t,
+		session.TranscriptEntry{ID: "w0", Role: "user", Content: "earlier", AgentID: h.agentID, Timestamp: now},
+		session.TranscriptEntry{ID: "w1", Role: "assistant", Content: "earlier-reply", AgentID: h.agentID, Timestamp: now.Add(time.Second)},
+		session.TranscriptEntry{
+			ID: "w2", Role: "user", Content: "  PADDED-MARK-6402 \n", AgentID: h.agentID, Timestamp: now.Add(2 * time.Second),
+			Attachments: []session.Attachment{{Type: "file", Path: "work/a.txt", Size: 3, MIMEType: "text/plain"}},
+		},
+	)
+	runTurnFor(t, h, "webchat", "PADDED-MARK-6402", "w2")
+	req := lastRequest(t, rec)
+	if n := countUserContent(req, "PADDED-MARK-6402"); n != 1 {
+		t.Fatalf("want the padded message once, got %d; request=%+v", n, req)
+	}
+}
+
+func joinContents(msgs []providers.Message) string {
+	var b strings.Builder
+	for i := range msgs {
+		b.WriteString(msgs[i].Content)
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // A turn on a live (non-empty) window and a turn after /clear must also send

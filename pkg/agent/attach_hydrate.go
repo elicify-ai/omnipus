@@ -142,13 +142,16 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 }
 
 // hydrateAgentHistory is HydrateAgentHistoryFromTranscript with one addition:
-// currentUser, when non-empty, is the user message of the turn that is about
-// to run. The inbound path writes that message to the transcript BEFORE the
-// turn starts, and the turn itself appends it to the model request, so a
-// rebuild that kept it would send the model the same message twice. The
-// turn's own append stays the single source for the newest message; the
-// rebuild drops the transcript's final entry when it is that message.
-func (al *AgentLoop) hydrateAgentHistory(sessionID, currentUser string) error {
+// currentEntryID, when non-empty, is the id of the transcript entry the
+// inbound path durably wrote for the turn that is about to run. The turn
+// appends its own user message to the model request, so a rebuild that kept
+// that entry would send the model the same message twice. The entry is found
+// by identity — never by text, so a repeated "yes" or an unanswered earlier
+// message with the same words is kept — and the rebuild stops there: entries
+// after it were written for later queued messages whose turns have not
+// started and must not reach the model early. An empty id (write failed, the
+// message was never transcribed) drops nothing.
+func (al *AgentLoop) hydrateAgentHistory(sessionID, currentEntryID string) error {
 	if sessionID == "" {
 		return fmt.Errorf("agent: HydrateAgentHistoryFromTranscript: sessionID required")
 	}
@@ -160,7 +163,7 @@ func (al *AgentLoop) hydrateAgentHistory(sessionID, currentUser string) error {
 	if err != nil {
 		return fmt.Errorf("agent: HydrateAgentHistoryFromTranscript: read transcript: %w", err)
 	}
-	entries = dropCurrentUserEntry(entries, currentUser)
+	entries = cutAtCurrentEntry(entries, currentEntryID, sessionID)
 	if len(entries) == 0 {
 		return nil
 	}
@@ -338,18 +341,23 @@ func (al *AgentLoop) hydrateAgentHistory(sessionID, currentUser string) error {
 	return nil
 }
 
-// dropCurrentUserEntry removes the transcript's final entry when it is the
-// user message of the turn being started (see hydrateAgentHistory). Anything
-// else — an empty currentUser, a different final entry, a non-user role —
-// leaves entries untouched.
-func dropCurrentUserEntry(entries []session.TranscriptEntry, currentUser string) []session.TranscriptEntry {
-	if currentUser == "" || len(entries) == 0 {
+// cutAtCurrentEntry returns the entries written before the entry whose id is
+// currentEntryID: that entry is the current turn's own user message, and
+// everything after it was written for later queued messages (see
+// hydrateAgentHistory). An empty id returns entries untouched. An id the
+// transcript does not hold also returns entries untouched, with a WARN — the
+// inbound path claimed a durable write the transcript cannot show.
+func cutAtCurrentEntry(entries []session.TranscriptEntry, currentEntryID, sessionID string) []session.TranscriptEntry {
+	if currentEntryID == "" {
 		return entries
 	}
-	last := &entries[len(entries)-1]
-	if transcriptModelHistoryRole(last) == "user" && last.Content == currentUser {
-		return entries[:len(entries)-1]
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].ID == currentEntryID {
+			return entries[:i]
+		}
 	}
+	logger.WarnCF("agent.attach", "current user entry not found in transcript; rebuilding without dropping it",
+		map[string]any{"session_id": sessionID, "entry_id": currentEntryID})
 	return entries
 }
 
