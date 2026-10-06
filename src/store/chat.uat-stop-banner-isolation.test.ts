@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ErrorFrame } from '@/lib/api/generated/asyncapi-types'
+import { codeToDisplay } from '@/lib/llm-error'
 import type { WsConnection } from '@/lib/ws'
 import { getMessages, useChatStore } from './chat'
 import { useConnectionStore } from './connection'
@@ -8,8 +9,8 @@ import { useSessionStore } from './session'
 import { useWorkspacesStore } from './workspacesStore'
 
 // Oracle: release-UAT dispatch D3, and validator/report-v.md V4b / D4:
-// "This turn was stopped before it finished." belongs only to the stopped
-// chat and must never be shown in a brand-new chat, including a late ack.
+// The turn_canceled message belongs only to the stopped chat and must never
+// be shown in a brand-new chat, including a late ack.
 // Evidence source: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/evidence/2026-10-06-release.
 // REAL: all stores/actions, send/cancel, frame routing and foreground sync.
 // FAKE: socket transport only. connectionError is the production AppShell
@@ -22,8 +23,8 @@ const WORKSPACE = 'uat-d3-banner-workspace'
 const INITIAL_ID = 'uat-d3-banner-first-user'
 const INITIAL_TEXT = 'Delegate one helper and report progress.'
 const PARTIAL_TEXT = 'Checking helper progress.'
-// Literal copied from the independent UAT screenshot, never from codeToDisplay.
-const STOP_COPY = 'This turn was stopped before it finished.'
+// Wording comes from the catalogue; the UAT oracle pins chat isolation.
+const STOP_COPY = codeToDisplay.turn_canceled
 
 const sender = { send: vi.fn<WsConnection['send']>() }
 
@@ -94,7 +95,7 @@ function expectEmptyNewChatWithoutStopBanner() {
   expect(useChatStore.getState().isStreaming, 'D3: old stop ack must not start work in the new chat').toBe(false)
   expect(useConnectionStore.getState().isConnected, 'instrument: this is not a disconnect/reconnect clearing the error').toBe(true)
   expect(useConnectionStore.getState().connectionError,
-    'D3: a brand-new chat must not display "This turn was stopped before it finished." in the AppShell banner').toBeNull()
+    `D3: a brand-new chat must not display "${STOP_COPY}" in the AppShell banner`).toBeNull()
 }
 
 describe('release UAT D3 — stopped-turn banner is isolated from a new chat', () => {

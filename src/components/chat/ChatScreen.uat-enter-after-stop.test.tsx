@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event'
 import { act } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ErrorFrame } from '@/lib/api/generated/asyncapi-types'
+import { codeToDisplay } from '@/lib/llm-error'
 import { useOmnipusRuntime } from '@/lib/omnipus-runtime'
 import type { WsConnection } from '@/lib/ws'
 import { getMessages, useChatStore } from '@/store/chat'
@@ -38,7 +39,7 @@ const INITIAL_ID = 'uat-d3-enter-first-user'
 const PARTIAL_TEXT = 'Checking helper progress.'
 const CHILD_TEXT = 'Helper transcript: drafting the long document.'
 const CONTINUATION = 'continue and say what you did'
-const STOP_COPY = 'This turn was stopped before it finished.'
+const STOP_COPY = codeToDisplay.turn_canceled
 // Let the existing useCancelState minimum display duration finish. This is
 // scenario setup, not an elapsed-time assertion or an expanded test deadline.
 const STOP_LABEL_DISPLAY_MS = 1000
