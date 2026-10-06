@@ -7,7 +7,7 @@ The Tasks panel inside a workspace is where you turn work into cards you can ass
 Every workspace has a **Tasks** control in its top bar, alongside Calendar, Library, Mail, and Team. Click it to open the Tasks panel beside Chat; click it again to close it. Chat is the page underneath, not a separate top-bar entry. The panel holds the workspace's one shared task list — yours and your agents' together — behind three views:
 
 - **Board** — a kanban of eligible top-level workspace tasks, grouped by status in six columns. Scheduled tasks are hidden, and subtasks are not separate Board cards.
-- **List** — the same tasks as a table, with per-column sorting and filtering.
+- **List** — unscheduled user tasks as a table, with per-column sorting and filtering. Unlike the Board, it can include subtasks as rows.
 - **Graph** — top-level plan members and tasks with dependency relationships, drawn as a dependency map. That view belongs to planning; see [plans](plans.md).
 
 Above the views, the Plans band scopes the screen: click a plan tile to see that plan's tasks (the view also jumps to its graph), or **All tasks** to clear the filter.

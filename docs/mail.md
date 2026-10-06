@@ -14,7 +14,7 @@ If none is available, Mail says **No mailbox is configured for this workspace ye
 
 While docked, the message list sits above the reading area. Select **Expand Mail panel** in the panel heading to open or focus Mail in a separate full-screen browser tab; there the list and reading area appear side by side. Use **Back to chat** to return. The [shared panel guide](using-omnipus-ui.md#panels-beside-chat) also explains closing and resizing.
 
-When you return with **Back to chat** or close the expanded Mail tab, the original Chat tab restores the last mailbox, folder and selected message you viewed—not the selection from when you expanded Mail. This applies while the original tab still owns that expanded Mail tab and has no different panel open. If a separate Mail tab is still open for the same workspace, Omnipus offers **Switch** instead of docking another copy.
+When you return with **Back to chat** or close an app-opened expanded Mail tab, the original Chat tab can restore Mail while it still owns that tab and has no different panel open. Restoration uses the last mailbox, folder and selected-message context that the original tab received from the expanded tab. With working cross-tab communication, that follows your changes in the expanded tab. If those updates could not reach the original tab, it may restore an older selection; check the mailbox and folder after returning. If a separate Mail tab is still recognised for the same workspace, Omnipus offers **Switch** instead of docking another copy.
 
 ## Read messages
 
@@ -35,14 +35,14 @@ The list shows 25 messages at a time. **Load more** adds the next 25. A folder v
 A paperclip on a list row marks a message with attachments. In the reading area each attachment shows its filename and size (or **Size unknown** when the server does not say) with three actions: **Open \<name\> attachment**, **Save \<name\> to Library**, and **Download \<name\>**.
 
 - **Open** previews the attachment in the Library viewer without saving anything — a bar reading **From mail: \<subject\>** stays above the preview with **Back to mail** and **Save to Library**. Nothing is written to disk; leaving the preview disposes of it.
-- **Save to Library** keeps a real copy in the workspace Library under mail → mailbox → month, with a numbered name if one already exists. Only a confirmed save enables **Open in Library**. If the save's result was lost in transit, Mail shows **Save result unknown — checking whether it saved.** with **Retry save**; the retry resolves against the original attempt and never creates a second file.
+- **Save to Library** keeps a real copy in the workspace Library under mail → mailbox → month, with a numbered name if one already exists. Only a confirmed save enables **Open in Library**. If the save's response was lost, Mail shows **Save result unknown — checking whether it saved.** with **Retry save**. The retry uses the original attempt token. While the same gateway process still has the committed save receipt, it returns that receipt instead of creating another file. A gateway restart loses those receipts, so a retry after restart may create another numbered copy. Check the Library before retrying if the gateway restarted.
 - **Download** is the browser download, and the only action for attachments over the 25 MB preview limit: Open and Save are unavailable with **This attachment is larger than the 25 MB preview limit. Use Download.**
 
 If opening fails — the file turned out larger than the limit, the message changed on the server, or mail is busy — the attachment's row names the cause and offers **Retry** or **Download**; no half-opened preview is left behind.
 
 ## Folders
 
-INBOX, Sent, and Drafts are roles: Omnipus finds the real folders on your mail server automatically, so a server that names them unusually still works. You can pin exact names per mailbox in [Connectors](connectors.md#email-mailbox-settings) — an empty setting means automatic. A folder your server truly does not have shows **No messages** with an explanation and a link to the mailbox settings; a folder Omnipus could not confirm shows **Couldn't confirm the … folder on this server.** with the settings link — it never claims the folder does not exist, and an unknown count never shows as a zero.
+INBOX, Sent, and Drafts are roles: Omnipus finds the real folders on your mail server automatically, so a server that names them unusually still works. You can pin exact names per mailbox in [Connectors](connectors.md#how-to-add-an-email-mailbox) — an empty setting means automatic. A folder your server truly does not have shows **No messages** with an explanation and a link to the mailbox settings; a folder Omnipus could not confirm shows **Couldn't confirm the … folder on this server.** with the settings link — it never claims the folder does not exist, and an unknown count never shows as a zero.
 
 ## Compose and send
 

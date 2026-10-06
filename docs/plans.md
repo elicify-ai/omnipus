@@ -80,18 +80,18 @@ The supervisor can apply four corrections.
 | Targeted retry | Re-runs one failed task |
 | Abandon | Ends the plan, recording that the Definition of Done cannot be reached |
 
-After a correction the plan returns to running; three wakes without a valid correction fail it. The tile shows a warning chip — "Re-planning — awaiting supervision" or "Stalled — needs a correction" — with an explanation underneath. There are no correction buttons for you: the supervisor is the only actor, and **Stop** halts the tasks, the checks, and the supervisor's review alike.
+After a correction the plan returns to running. The plan fails when its configured supervision-attempt limit is exhausted; the shipped default is three attempts without a valid correction. The tile shows a warning chip — "Re-planning — awaiting supervision" or "Stalled — needs a correction" — with an explanation underneath. There are no correction buttons for you: the supervisor is the only actor, and **Stop** halts the tasks, the checks, and the supervisor's review alike.
 
 ## Limits and things to watch
 
 - **Restart exists only for plans you stopped.** A plan that failed on its own — rounds exhausted, idle too long, DoD unreachable, supervisor unavailable — is closed for good. Write a new plan.
 - **Restart re-runs only unfinished tasks**, each from scratch. Finished tasks and their evidence are kept.
 - **Stop is a hard cancel** — in-flight tasks, checks, and shell commands. A stopped plan never resumes on its own.
-- **Run slots are capped at 16** active loops across the install — plans, conversation goals, and recurring loops together. A plan can wait at Approved and stays stoppable there.
+- **Run slots follow the install-wide active-loop cap**—16 by default—shared by plans, conversation goals and recurring loops. A plan can wait at Approved and stays stoppable there.
 - **Bounds are per plan** — the judge-round ceiling and idle-expiry days, defaulting to 20 rounds and 7 days. A plan idle that long ends failed.
 - **A running plan can pause.** If its owner agent is disabled, the plan pauses and the tile shows the reason.
 - **A running plan cannot be deleted.** The Clear action in a tile's menu works only on plans that are not running.
-- **Agent-driven execution is permission-gated.** By default, Jim starts and stops plans without a prompt; Mia, Ava, and Ray ask first. [Tools](tools.md) explains the per-agent settings.
+- **Agent-driven plan execution is permission-gated.** On a fresh install, Jim is allowed to execute and stop plans. Mia, Ava and Admin are denied those tools by their shipped role policies. Operators can configure supported per-agent permissions. [Tools](tools.md) explains the per-agent settings.
 
 ## Related pages
 

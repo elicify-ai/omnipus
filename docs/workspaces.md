@@ -12,7 +12,7 @@ Everything you do in Omnipus happens inside a workspace:
 - **Team.** Each workspace picks its own agents, and sets its own rules for who may hand work to whom.
 - **Memory and instructions.** What the team remembers, and the written instructions every agent on the workspace follows, belong to the workspace.
 
-On a fresh install, Omnipus creates one workspace for you, named **My Workspace**, with the built-in agents already on the team. It is the default workspace: it is where Omnipus sends you when no other workspace is chosen, and it cannot be archived or deleted.
+On a fresh install, Omnipus creates one workspace for you, named **My Workspace**, with Mia, Jim, Ava, Planner, Researcher and General Purpose on the team. Admin remains available as the standalone operator without team membership. It is the default workspace: it is where Omnipus sends you when no other workspace is chosen, and it cannot be archived or deleted.
 
 ## When you would use it
 
@@ -34,7 +34,7 @@ The top bar offers these panels, in order:
 
 Click an entry to open its panel beside Chat. Click it again to close the panel and reveal Chat, or choose another entry to replace the open panel. On a narrow top bar, an icon-only panels menu offers the same five entries and Settings. Mail remains between Library and Team in both layouts; opening it without a selected mailbox lets you choose one.
 
-For panel resizing and full-screen view, see [panels beside chat](using-omnipus-ui.md#panels-beside-chat). All six panels—Tasks, Calendar, Library, Mail, Team and Browser—open their full-screen view in a new browser tab. When Omnipus recognises an existing tab for the same panel and workspace (or Browser session), it focuses that tab or offers to switch instead of opening another; this depends on Omnipus still recognising that tab. If a pop-up is blocked, the docked panel stays open. **Back to chat** tries to close the full-screen tab; a tab Omnipus opened can restore the panel only in its original tab while that tab still owns the expanded panel, when that tab is still available and no different panel is open there. Reloading the original Chat tab releases that ownership, so automatic re-docking there is lost and you may need to reopen the panel. If the full-screen tab cannot close itself, the button opens workspace Chat with the panel open in that same tab. Settings stays a page, not a panel. Click the workspace's name in the top bar, or **Settings** in the compact menu, to rename the workspace, edit its description, write its instructions, and archive or delete it.
+For panel resizing and full-screen view, see [panels beside chat](using-omnipus-ui.md#panels-beside-chat). All six panels—Tasks, Calendar, Library, Mail, Team and Browser—open their full-screen view in a new browser tab. When Omnipus recognises an existing tab for the same panel and workspace (or Browser session), it focuses that tab or offers to switch instead of opening another; this depends on Omnipus still recognising that tab. If a pop-up is blocked, the docked panel stays open. **Back to chat** tries to close the full-screen tab; a tab Omnipus opened can restore the panel only in its original tab while that tab still owns the expanded panel, when that tab is still available and no different panel is open there. Reloading the original Chat tab releases that ownership, so automatic re-docking there is lost and you may need to reopen the panel. Restoration uses the last context the original tab received, so unavailable cross-tab updates can leave it at an older selection. If the full-screen tab cannot close itself, the button opens workspace Chat with the panel open in that same tab. Settings stays a page, not a panel. Click the workspace's name in the top bar, or **Settings** in the compact menu, to rename the workspace, edit its description, write its instructions, and archive or delete it.
 
 The Tasks panel shows three views of workspace work, switched with the selector at the top of the screen. Board lays tasks out as cards by status. List is a table. Graph shows top-level plan members and tasks with dependency relationships, with dependencies drawn as lines between nodes. Unplanned tasks without dependency relationships and nested tasks are not graph nodes. This is where a [plan](plans.md) is easiest to see whole.
 
@@ -68,7 +68,7 @@ If Team is already visible and refreshing the workspace fails, the editor stays 
 | Task | The trusted agent can be assigned tasks |
 | Depth | How many times the handoff may be passed on. Zero means it stops with that agent |
 
-Leave both modes off and the line allows neither; leave depth unset and the overall limit applies.
+The editor requires at least one delegation mode on a line. Delete the line to prevent handoffs in that direction. An untouched depth follows the workspace/global default.
 
 ```mermaid
 flowchart LR
@@ -77,14 +77,14 @@ flowchart LR
   Q -->|no| R[The handoff is refused]
 ```
 
-A handoff is allowed only when a trust line for that pair exists in the workspace where the work is running; with no line, it is refused. A workspace you create starts with Ava alone and no trust lines; the auto-created first workspace is the exception — it ships with the built-in roster and their standard trust lines.
+A handoff is allowed only when a trust line for that pair exists in the workspace where the work is running; with no line, it is refused. A workspace you create starts with Ava alone and no trust lines; the auto-created first workspace is the exception — it ships with the default team listed above and their standard trust lines.
 
 The same two agents can be trusted together in one workspace and not in another, because each workspace keeps its own lines. That is deliberate: trust describes a working relationship inside a team, not a property of an agent.
 
 ## Limits and things to watch
 
 - **No line, no delegation.** Adding an agent to the team does not trust them for handoffs. Draw the line.
-- **Team edits save in two steps.** Membership saves before trust lines. If the trust-line save fails, the message tells you membership landed; only the lines need a retry.
+- **Team saves depend on the edit.** When membership changes, membership and trust lines are sent together in one workspace update. An edit to trust lines alone uses the delegation update. If saving fails, read the save indicator's error; do not assume membership has already landed.
 - **Clicking a node edits the agent everywhere.** The profile that opens from a Team panel node is the agent's global definition, used by every workspace it belongs to.
 - **The default agent cannot be removed from a team.**
 - **Deleting a workspace is permanent.** Archive instead: archived workspaces move to the sidebar's Archive section and can be restored from there. The default workspace can be neither archived nor deleted.
