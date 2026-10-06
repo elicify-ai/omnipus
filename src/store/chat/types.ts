@@ -1126,8 +1126,8 @@ export interface ChatStore {
    * cascades (the frame goes out WITHOUT the key, byte-identical to the
    * pre-stop-all path). `'tree'` is the confirmed Stop all: the server stops
    * the session and every reachable descendant (ADR D7), never up or
-   * sideways. Only the confirmed second activation, the Stop-all control
-   * and `/cancel` pass `'tree'`.
+   * sideways. Only the confirmed second activation (a second Stop, Esc or
+   * `/stop` inside the 3 s window) and `/cancel` pass `'tree'`.
    *
    * Returns `false` only when the cancel could not be handed to the socket
    * (no connection, or the send was rejected — a visible error toast has
