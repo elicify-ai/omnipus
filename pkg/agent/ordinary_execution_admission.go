@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -55,6 +56,12 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 	if sessionID == "" || store == nil {
 		return ordinaryExecutionPreparation{}, nil
 	}
+	// The previous execution of this conversation may still be finishing
+	// its tail (its answer is already out). Wait, bounded, for its owner to
+	// settle it before admitting the next one, instead of refusing a
+	// message that arrived a moment early. Never waits on this caller's
+	// own execution, and never under the admission locks.
+	al.awaitPreviousOrdinaryExecution(ctx, opts.SessionKey)
 	gate := al.steerAdmission()
 	gate.entryMu.Lock()
 	defer gate.entryMu.Unlock()
@@ -140,4 +147,33 @@ func (al *AgentLoop) newTurnStateForAdmission(agent *AgentInstance, opts process
 		return nil, err
 	}
 	return ts, nil
+}
+
+// previousExecutionSettleBudget bounds how long a new ordinary admission
+// waits for the previous execution of the same conversation to settle.
+const previousExecutionSettleBudget = 5 * time.Second
+
+// awaitPreviousOrdinaryExecution waits until the execution currently
+// attached to scope (if any, and not the caller's own) has settled, the
+// budget runs out, or ctx ends. Admission then decides as before.
+func (al *AgentLoop) awaitPreviousOrdinaryExecution(ctx context.Context, scope string) {
+	if al.admission == nil || scope == "" {
+		return
+	}
+	al.admission.mu.Lock()
+	var previous *executionDisposition
+	if owner := al.admission.activeScopes[scope]; owner != nil {
+		previous = owner.execution
+	}
+	al.admission.mu.Unlock()
+	if previous == nil || previous == ordinaryDispositionFromContext(ctx) {
+		return
+	}
+	timer := time.NewTimer(previousExecutionSettleBudget)
+	defer timer.Stop()
+	select {
+	case <-previous.done:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
 }
