@@ -739,6 +739,10 @@ func (rr *agentLoopRunRecap) persistResponse() {
 	)
 }
 
+// ErrFallbackRecapSkipped is returned by the heuristic fallback when there is
+// no agent or memory store to write to: nothing was recorded.
+var ErrFallbackRecapSkipped = errors.New("session_end: fallback recap skipped")
+
 // writeHeuristicFallbackRetro writes a fallback retro entry when recap fails
 // without the transcript pre-read available. Prefer the _WithCount variant
 // when the caller has already computed turn + tool-call counts.
@@ -775,7 +779,9 @@ func (al *AgentLoop) writeHeuristicFallbackRetro(sessionID, trigger, fallbackRea
 // alone carries no facts — see buildCarryForward).
 //
 // It returns the write failure, if any, and in that case records the audit
-// outcome "fallback_write_failed:<reason>: <error>" instead of "fallback:<reason>".
+// outcome "fallback_write_failed:<reason>:<failed steps>" instead of "fallback:<reason>".
+// With no agent or no memory store nothing is written: it audits
+// "fallback_skipped:<reason>" and returns ErrFallbackRecapSkipped.
 // The recap goroutine's callers have no one to hand the error to, so they
 // discard it knowing it is already logged and audited here.
 func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
@@ -791,15 +797,16 @@ func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 	)
 
 	if agentInst == nil {
-		// No agent — can't write the retro anywhere.
-		al.auditRecap(sessionID, "", trigger, "fallback:"+fallbackReason)
-		return nil
+		// No agent — can't write the retro anywhere. Nothing was written, so the
+		// audit trail must not read as a recorded fallback.
+		al.auditRecap(sessionID, "", trigger, "fallback_skipped:"+fallbackReason)
+		return fmt.Errorf("%w: no agent", ErrFallbackRecapSkipped)
 	}
 
 	memory := agentInst.ContextBuilder.Memory()
 	if memory == nil {
-		al.auditRecap(sessionID, agentInst.ID, trigger, "fallback:"+fallbackReason)
-		return nil
+		al.auditRecap(sessionID, agentInst.ID, trigger, "fallback_skipped:"+fallbackReason)
+		return fmt.Errorf("%w: no memory store", ErrFallbackRecapSkipped)
 	}
 
 	recap := fmt.Sprintf("Session %s ended. Turns: %d. Tool calls: %d. Fallback reason: %s.",
@@ -815,12 +822,14 @@ func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 		"fallback_reason", fallbackReason,
 	)
 	var writeErrs []error
+	var failedSteps []string
 	if err := memory.WriteLastSession(recap); err != nil {
 		slog.Warn("session_end: fallback: failed to write LAST_SESSION.md",
 			"session_id", sessionID,
 			"error", err,
 		)
 		writeErrs = append(writeErrs, fmt.Errorf("write last-session: %w", err))
+		failedSteps = append(failedSteps, "last_session")
 	}
 
 	retro := Retro{
@@ -836,13 +845,16 @@ func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 			"error", err,
 		)
 		writeErrs = append(writeErrs, fmt.Errorf("append retro: %w", err))
+		failedSteps = append(failedSteps, "retro")
 	}
 
 	if len(writeErrs) > 0 {
 		// The fallback did not land: the audit trail must not read as a
 		// recorded fallback.
 		writeErr := errors.Join(writeErrs...)
-		al.auditRecap(sessionID, agentInst.ID, trigger, "fallback_write_failed:"+fallbackReason+": "+writeErr.Error())
+		// The audit string names the failed steps only: the full error text
+		// carries filesystem paths and stays in the WARN logs above.
+		al.auditRecap(sessionID, agentInst.ID, trigger, "fallback_write_failed:"+fallbackReason+":"+strings.Join(failedSteps, ","))
 		return writeErr
 	}
 

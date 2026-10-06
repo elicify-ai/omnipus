@@ -7,7 +7,6 @@ package agent
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -41,8 +40,9 @@ func TestWriteHeuristicFallbackRetro_WriteFailure_ReturnedAndAudited(t *testing.
 	entry := readLastAuditEntry(t, auditDir)
 	details, _ := entry["details"].(map[string]any)
 	outcome, _ := details["outcome"].(string)
-	require.True(t, strings.HasPrefix(outcome, "fallback_write_failed:llm_error"),
-		"audit outcome must record the failed write, got %q", outcome)
+	require.Equal(t, "fallback_write_failed:llm_error:last_session,retro", outcome,
+		"audit outcome must name the failed steps")
+	require.NotContains(t, outcome, blocker, "no filesystem path may reach the audit string")
 }
 
 // Control: with a working store the fallback returns nil and records "fallback:<reason>".
@@ -61,4 +61,30 @@ func TestWriteHeuristicFallbackRetro_WriteOK_RecordsFallback(t *testing.T) {
 	entry := readLastAuditEntry(t, auditDir)
 	details, _ := entry["details"].(map[string]any)
 	require.Equal(t, "fallback:llm_error", details["outcome"])
+}
+
+// With no agent, or an agent without a memory store, nothing is written: the
+// fallback says so (sentinel error, "fallback_skipped" audit) instead of
+// recording a fallback that does not exist.
+func TestWriteHeuristicFallbackRetro_NothingToWriteTo_SkippedNotRecorded(t *testing.T) {
+	cases := map[string]*AgentInstance{
+		"no agent":        nil,
+		"no memory store": {ID: "no-memory-agent", ContextBuilder: &ContextBuilder{}},
+	}
+	for name, ag := range cases {
+		t.Run(name, func(t *testing.T) {
+			auditDir := t.TempDir()
+			logger, err := audit.NewLogger(audit.LoggerConfig{Dir: auditDir, RetentionDays: 90})
+			require.NoError(t, err)
+			defer func() { _ = logger.Close() }()
+			al := &AgentLoop{auditLogger: logger}
+
+			writeErr := al.writeHeuristicFallbackRetroWithCount("sess_skip", "explicit", "llm_error", ag, 3, 1, "")
+			require.ErrorIs(t, writeErr, ErrFallbackRecapSkipped)
+
+			entry := readLastAuditEntry(t, auditDir)
+			details, _ := entry["details"].(map[string]any)
+			require.Equal(t, "fallback_skipped:llm_error", details["outcome"])
+		})
+	}
 }

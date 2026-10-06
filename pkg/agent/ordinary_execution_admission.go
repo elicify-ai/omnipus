@@ -30,6 +30,15 @@ func (e *ordinaryAdmissionRefusalError) Unwrap() error { return e.cause }
 
 func refuseOrdinaryAdmission(cause error) error { return &ordinaryAdmissionRefusalError{cause: cause} }
 
+// refuseOrdinaryIfStale marks err as an ordinary-admission refusal when it is a
+// stale-generation refusal, and returns every other error unchanged.
+func refuseOrdinaryIfStale(err error) error {
+	if errors.Is(err, steer.ErrStaleGeneration) {
+		return refuseOrdinaryAdmission(err)
+	}
+	return err
+}
+
 // The worker's outer processTurn owns this carrier through its continuation,
 // response and typing-stop tails. A direct processMessage owns its own carrier.
 type ordinaryExecutionEntry struct{ disposition *executionDisposition }
@@ -120,14 +129,11 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 		}
 	}
 	if err := al.checkNewAdmission(rec); err != nil {
-		if errors.Is(err, steer.ErrStaleGeneration) {
-			err = refuseOrdinaryAdmission(err)
-		}
-		return ordinaryExecutionPreparation{}, err
+		return ordinaryExecutionPreparation{}, refuseOrdinaryIfStale(err)
 	}
 	claim := executionClaim{SessionID: rec.SessionID, Generation: rec.Generation, RunID: freshRunID(), BootSeq: bootSeq}
 	if err := stampAdmissionExecution(store, rec.SessionID, rec.Generation, claim.RunID, claim.BootSeq, rec.ExecutionID); err != nil {
-		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: %w", err)
+		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: %w", refuseOrdinaryIfStale(err))
 	}
 	d := newExecutionDisposition(claim)
 	if err := al.admission.attachExecution(sessionID, d); err != nil {
@@ -155,7 +161,7 @@ func (al *AgentLoop) newTurnStateForAdmission(agent *AgentInstance, opts process
 		return nil, refuseOrdinaryAdmission(fmt.Errorf("ordinary admission: %w: selected owner changed", steer.ErrStaleGeneration))
 	}
 	if ok, reason := reserveDispatch(rec, d.claim.Generation); !ok {
-		return nil, dispatchRefusalError(reason)
+		return nil, refuseOrdinaryIfStale(dispatchRefusalError(reason))
 	}
 	ts.generation = d.claim.Generation
 	if err := ts.setExecutionIdentity(d.claim.RunID, d.claim.BootSeq); err != nil {
@@ -166,7 +172,7 @@ func (al *AgentLoop) newTurnStateForAdmission(agent *AgentInstance, opts process
 	}
 	if _, err := commitSteeredExecutionState(al.GetSessionLifecycleStore(), d.claim, session.LifecycleRunning, ""); err != nil {
 		al.activeTurnStates.CompareAndDelete(ts.sessionKey, ts)
-		return nil, err
+		return nil, refuseOrdinaryIfStale(err)
 	}
 	return ts, nil
 }

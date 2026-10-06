@@ -429,3 +429,40 @@ func TestOrdinaryAdmission_RegisteredTurn_RefusalIsUserVisibleAndStillStale(t *t
 	require.ErrorIs(t, err, steer.ErrStaleGeneration)
 	require.Equal(t, previousReplyStillFinishingMessage, userVisibleTurnError(err))
 }
+
+// The two ordinary-admission refusals that are not reachable deterministically
+// through the full path (a lifecycle record changing between the admission's
+// Load and its identity stamp / dispatch reservation is a race) are tested at
+// the wrapping site, fed with the real producers' errors: both must reach the
+// person as the "still finishing" sentence and still be stale-generation errors.
+func TestOrdinaryAdmission_StampAndReservationRefusals_AreUserVisible(t *testing.T) {
+	al, _, sidA, _ := newAdmissionSessionsLoop(t, newGatedProvider())
+	store := al.GetSessionLifecycleStore()
+	_, err := al.prepareOrdinaryExecution(context.Background(), bus.InboundMessage{
+		Channel: "webchat", ChatID: "chat-" + sidA, SessionID: sidA,
+		Sender: bus.SenderInfo{CanonicalID: "webchat_user"}, GatewayUserID: "daniel", UserInitiated: true,
+	}, processOptions{SessionKey: "k", TranscriptStore: al.GetSessionStore()})
+	require.NoError(t, err)
+	rec, err := store.Load(sidA)
+	require.NoError(t, err)
+
+	// (a) stampAdmissionExecution: the record's execution identity is not the one the admission read.
+	wrongPrevious := &session.ExecutionIdentity{RunID: "some-other-run", BootSeq: 99}
+	stampErr := stampAdmissionExecution(store, sidA, rec.Generation, "new-run", al.bootEpochFor(), wrongPrevious)
+	require.ErrorIs(t, stampErr, steer.ErrStaleGeneration, "precondition: the real stamp refuses with stale generation")
+	wrappedStamp := fmt.Errorf("ordinary admission: %w", refuseOrdinaryIfStale(stampErr))
+	require.ErrorIs(t, wrappedStamp, steer.ErrStaleGeneration)
+	require.Equal(t, previousReplyStillFinishingMessage, userVisibleTurnError(wrappedStamp))
+
+	// (b) reserveDispatch -> dispatchRefusalError: the claim's generation is behind the record's.
+	ok, reason := reserveDispatch(rec, rec.Generation+1)
+	require.False(t, ok)
+	reserveErr := refuseOrdinaryIfStale(dispatchRefusalError(reason))
+	require.ErrorIs(t, reserveErr, steer.ErrStaleGeneration)
+	require.Equal(t, previousReplyStillFinishingMessage, userVisibleTurnError(reserveErr))
+
+	// Non-stale refusals are not relabelled.
+	ok, reason = reserveDispatch(&session.LifecycleRecord{Generation: rec.Generation, State: session.LifecycleStopped}, rec.Generation)
+	require.False(t, ok)
+	require.NotEqual(t, previousReplyStillFinishingMessage, userVisibleTurnError(refuseOrdinaryIfStale(dispatchRefusalError(reason))))
+}
