@@ -383,15 +383,10 @@ test(
     await expect(stopBtn).not.toBeVisible({ timeout: 5_000 })
     await expect(chatInput(page)).toBeEnabled({ timeout: 5_000 })
 
-    // The interrupted marker (data-testid="interrupted-marker") is rendered per
-    // message INSIDE the virtualized list, so for an off-screen/just-cancelled row
-    // it is present in the DOM but visibility:hidden until the virtualizer scrolls
-    // to it — asserting toBeVisible races that and flakes ("unexpected value
-    // 'hidden'"). The functional cancel is already proven above (stop-btn gone +
-    // input re-enabled); here we assert the message reached the interrupted STATE
-    // by checking the marker is attached to the DOM (it only renders for messages
-    // with status === 'interrupted').
-    const interruptedMarker = page.locator('[data-testid="interrupted-marker"]')
+    // U6: assert the interruption suffix inside an actual message row, not
+    // the old conversation-level duplicate. Preserve the attached-state
+    // oracle for the virtualized thread; Stop/input behavior is pinned above.
+    const interruptedMarker = page.locator('[data-testid="assistant-message"]').getByText('(interrupted)', { exact: true })
     await expect(interruptedMarker.first()).toBeAttached({ timeout: 5_000 })
   },
 )
