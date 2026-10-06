@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config'
+import { dedupeIdenticalKatex } from './scripts/design-system/dedupe-identical-katex.mjs'
 import { designSystemProductionProvenance } from './scripts/design-system/bundle-provenance.mjs'
 import type { Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -207,6 +208,7 @@ const isVitest = process.env.VITEST === 'true'
 // SPA build — embedded into Go binary via go:embed (hash routing required)
 export default defineConfig({
   plugins: [
+    dedupeIdenticalKatex(),
     tailwindcss(),
     // MUST precede @vitejs/plugin-react when autoCodeSplitting is on: the
     // router's code-split transform has to run before the React JSX transform
