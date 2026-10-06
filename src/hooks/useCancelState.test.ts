@@ -195,3 +195,68 @@ describe('useCancelState — T23 global Escape handler', () => {
     expect(cancelStream).toHaveBeenCalledTimes(1)
   })
 })
+
+// Reviewer round 2 (founder stop rules 2026-10-06): W1 stuck "Stopping...",
+// W2 a Stop that sent nothing must not arm the 3 s window.
+describe('useCancelState — W1 label never sticks when no stream is running', () => {
+  it('second activation after the stream ended (inside the window) returns the label to stop', () => {
+    vi.useFakeTimers()
+    const cancelStream = vi.fn(() => true)
+    const { result, rerender } = renderHook(
+      ({ isStreaming }) => useCancelState(isStreaming, cancelStream),
+      { initialProps: { isStreaming: true } },
+    )
+
+    act(() => result.current.cancelUnconditional()) // click 1: session cancel + window
+    rerender({ isStreaming: false }) // the turn ended
+    act(() => { vi.advanceTimersByTime(1500) })
+    expect(result.current.stopLabel).toBe('stop')
+    expect(result.current.stopAllArmed).toBe(true)
+
+    act(() => result.current.cancelUnconditional()) // click 2 inside the window: tree
+    expect(cancelStream.mock.calls).toEqual([[], [undefined, 'tree']])
+    expect(result.current.stopLabel).toBe('stopping')
+
+    act(() => { vi.advanceTimersByTime(1001) })
+    expect(result.current.stopLabel).toBe('stop')
+    expect(result.current.stopAllArmed).toBe(false)
+  })
+
+  it('a first activation on an idle chat (not streaming) does not leave the label stuck', () => {
+    vi.useFakeTimers()
+    const cancelStream = vi.fn(() => true)
+    const { result } = renderHook(() => useCancelState(false, cancelStream))
+
+    act(() => result.current.cancelUnconditional())
+    expect(result.current.stopLabel).toBe('stopping')
+
+    act(() => { vi.advanceTimersByTime(1001) })
+    expect(result.current.stopLabel).toBe('stop')
+    act(() => { vi.advanceTimersByTime(2000) })
+    expect(result.current.stopAllArmed).toBe(false)
+  })
+})
+
+describe('useCancelState — W2 an undelivered cancel does not arm the window', () => {
+  it('no label change, no armed window, and the next press is again a first press', () => {
+    const cancelStream = vi.fn(() => false)
+    const { result } = renderHook(() => useCancelState(true, cancelStream))
+
+    act(() => result.current.cancelUnconditional())
+    expect(result.current.stopLabel).toBe('stop')
+    expect(result.current.stopAllArmed).toBe(false)
+
+    act(() => result.current.cancelUnconditional())
+    expect(cancelStream.mock.calls).toEqual([[], []])
+  })
+
+  it('an undelivered tree stop shows no Stopping label and leaves nothing armed', () => {
+    const cancelStream = vi.fn(() => false)
+    const { result } = renderHook(() => useCancelState(true, cancelStream))
+
+    act(() => result.current.cancelAllTreeScoped())
+    expect(cancelStream.mock.calls).toEqual([[undefined, 'tree']])
+    expect(result.current.stopLabel).toBe('stop')
+    expect(result.current.stopAllArmed).toBe(false)
+  })
+})

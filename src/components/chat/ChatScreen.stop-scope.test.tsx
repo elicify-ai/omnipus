@@ -21,6 +21,7 @@ import { act } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
 
 class ResizeObserverStub {
   observe() {}
@@ -505,5 +506,199 @@ describe('Double Stop/Esc confirmation and dismissal (founder 2026-10-06)', () =
     expect(screen.queryByText('/cancel')).not.toBeInTheDocument()
 
     expect(sentCancelFrames(send)).toHaveLength(0)
+  })
+})
+
+// ── Reviewer round 2 (founder stop rules 2026-10-06) ─────────────────────
+// W1 stuck label · W2 undelivered Stop · W3 a closed window really is a
+// fresh first press · W4 /stop-redirect is neither arming nor a second Stop.
+// Oracle: the founder table (click 1 / Esc 1 / /stop = this chat only +
+// 3 s window; second activation in the window = tree; /cancel = tree;
+// /stop-redirect = this chat's own redirect frame) and the generated wire
+// types — not read off the implementation.
+
+const SESSION_FRAME = { type: 'cancel', session_id: 'sess_test' }
+const TREE_FRAME = { type: 'cancel', session_id: 'sess_test', scope: 'tree' }
+
+describe('W1 no stuck "Stopping..." after the stream ended', () => {
+  it('click 1, stream ended, click 2 inside the window sends one tree frame and Send returns after the window', () => {
+    vi.useFakeTimers()
+    render(<OmnipusComposer />)
+
+    pressStop()
+    // Premise: the first activation already ended the turn locally.
+    expect(useChatStore.getState().isStreaming).toBe(false)
+    act(() => { vi.advanceTimersByTime(1500) })
+    pressStop()
+
+    expect(send.mock.calls).toEqual([[SESSION_FRAME], [TREE_FRAME]])
+    expect(screen.getByRole('button', { name: 'Stopping...' })).toBeInTheDocument()
+
+    act(() => { vi.advanceTimersByTime(3100) })
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stopping...' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-send')).toBeInTheDocument()
+  })
+
+  it('/stop on an idle chat leaves no stuck label and the composer returns to Send', () => {
+    vi.useFakeTimers()
+    act(() => { useChatStore.setState({ isStreaming: false }) })
+    render(<OmnipusComposer />)
+
+    submitCommand('/stop')
+    act(() => { vi.advanceTimersByTime(3100) })
+
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stopping...' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-send')).toBeInTheDocument()
+  })
+
+  it('/stop twice on an idle chat inside the window sends one tree frame and then returns to Send', () => {
+    vi.useFakeTimers()
+    act(() => { useChatStore.setState({ isStreaming: false }) })
+    render(<OmnipusComposer />)
+
+    submitCommand('/stop')
+    act(() => { vi.advanceTimersByTime(1500) })
+    submitCommand('/stop')
+    expect(sentCancelFrames(send)).toEqual([TREE_FRAME])
+
+    act(() => { vi.advanceTimersByTime(3100) })
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-send')).toBeInTheDocument()
+  })
+})
+
+describe('Q16 the Stop button holds the Send position for the whole window (founder 2026-10-06)', () => {
+  it('stream ended: Stop is still present at 2999ms and Send only returns at 3000ms (Enter: see ChatScreen.uat-enter-after-stop)', () => {
+    vi.useFakeTimers()
+    render(<OmnipusComposer />)
+
+    pressStop()
+    expect(useChatStore.getState().isStreaming).toBe(false) // the turn ended
+    act(() => { vi.advanceTimersByTime(2999) })
+    expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
+
+    expect(sentCancelFrames(send)).toEqual([SESSION_FRAME])
+
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-send')).toBeInTheDocument()
+  })
+})
+
+describe('W2 a Stop that sent nothing does not arm the window', () => {
+  it('no connection: visible error toast, no Stopping label, next press is a first press', () => {
+    act(() => {
+      useUiStore.setState({ toasts: [] })
+      useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null })
+    })
+    render(<OmnipusComposer />)
+
+    pressStop()
+
+    const toasts = useUiStore.getState().toasts
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0].variant).toBe('error')
+    expect(toasts[0].message).toMatch(/could not send/i)
+    expect(screen.queryByRole('button', { name: 'Stopping...' })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+
+    // The gateway comes back while the turn is still running: the next press
+    // is again a FIRST press (session scope), never a tree stop.
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send } as unknown as ReturnType<typeof useConnectionStore.getState>['connection'],
+        isConnected: true,
+      })
+      useChatStore.setState({ isStreaming: true })
+    })
+    pressStop()
+    expect(send.mock.calls).toEqual([[SESSION_FRAME]])
+  })
+
+  it('no connection on Escape: same visible error and no armed window', () => {
+    act(() => {
+      useUiStore.setState({ toasts: [] })
+      useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null })
+    })
+    render(<OmnipusComposer />)
+
+    pressEscape()
+
+    expect(useUiStore.getState().toasts).toHaveLength(1)
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send } as unknown as ReturnType<typeof useConnectionStore.getState>['connection'],
+        isConnected: true,
+      })
+      useChatStore.setState({ isStreaming: true })
+    })
+    pressEscape()
+    expect(send.mock.calls).toEqual([[SESSION_FRAME]])
+  })
+})
+
+type Activation = 'Stop' | 'Escape' | '/stop'
+function activate(kind: Activation) {
+  if (kind === 'Stop') pressStop()
+  else if (kind === 'Escape') pressEscape()
+  else submitCommand('/stop')
+}
+// Closes the 3 s window by the three founder routes.
+type Closer = 'expiry' | 'blur' | 'session switch'
+function closeWindow(how: Closer) {
+  if (how === 'expiry') act(() => { vi.advanceTimersByTime(3100) })
+  else if (how === 'blur') act(() => { fireEvent(window, new Event('blur')) })
+  else act(() => { useSessionStore.setState({ activeSessionId: 'sess_other' }) })
+}
+
+describe('W3 after the window closes, the next activation is a true fresh first press', () => {
+  const kinds: Activation[] = ['Stop', 'Escape', '/stop']
+  const closers: Closer[] = ['expiry', 'blur', 'session switch']
+  const cases = closers.flatMap((closer) => kinds.map((kind) => ({ closer, kind })))
+
+  it.each(cases)('$kind after $closer sends a session-scoped frame, not tree', ({ closer, kind }) => {
+    vi.useFakeTimers()
+    render(<OmnipusComposer />)
+
+    pressStop() // arms the window
+    closeWindow(closer)
+    // A turn is running again so the same surfaces are available.
+    act(() => { useChatStore.setState({ isStreaming: true }) })
+    activate(kind)
+
+    const frames = sentCancelFrames(send)
+    expect(frames).toHaveLength(2)
+    expect(frames[0]).toEqual(SESSION_FRAME)
+    expect(frames[1].scope, `${kind} after ${closer} must be a fresh first press, got ${JSON.stringify(frames[1])}`).toBeUndefined()
+    expect(frames[1].session_id).toBe(closer === 'session switch' ? 'sess_other' : 'sess_test')
+  })
+})
+
+describe('W4 /stop-redirect neither arms the window nor counts as the second Stop', () => {
+  it('outside a window: exactly the redirect frame, and the next Stop is still a first press', () => {
+    render(<OmnipusComposer />)
+
+    submitCommand('/stop-redirect do the other thing')
+    expect(send.mock.calls).toEqual([[{ type: 'redirect', session_id: 'sess_test', instruction: 'do the other thing' }]])
+
+    pressStop()
+    expect(sentCancelFrames(send)).toEqual([SESSION_FRAME])
+  })
+
+  it('inside an armed window: exactly the redirect frame and no tree frame', () => {
+    vi.useFakeTimers()
+    render(<OmnipusComposer />)
+
+    pressStop()
+    act(() => { vi.advanceTimersByTime(500) })
+    submitCommand('/stop-redirect do the other thing')
+
+    expect(send.mock.calls).toEqual([
+      [SESSION_FRAME],
+      [{ type: 'redirect', session_id: 'sess_test', instruction: 'do the other thing' }],
+    ])
+    expect(sentCancelFrames(send).some((f) => f.scope === 'tree')).toBe(false)
   })
 })

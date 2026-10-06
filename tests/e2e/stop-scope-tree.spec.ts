@@ -26,9 +26,10 @@
  *
  * The contract under test (D9 surface table):
  *   - single Stop press            → cancel frame WITHOUT scope "tree"
- *   - first press visibly offers the Stop-all confirmation
+ *   - first press keeps the SAME Stop button in place for the 3 s window
+ *     (no separate Stop-all button — founder 2026-10-06, Q16 = A)
  *   - second Esc within 3 s        → cancel frame with scope "tree"
- *   - offer gone after the window expires
+ *   - after the window expires the next press is session-scoped again
  *   - /cancel command              → cancel frame with scope "tree"
  *
  * Traces to: ADR-20260928 D9, MAJ-002, T21/T26; common.md decided behaviour.
@@ -119,7 +120,7 @@ test.describe('Stop/Esc//cancel surface scoping (ADR-20260928 D9)', () => {
     await page.goto('/')
   })
 
-  test('single Stop press sends one cancel frame without tree scope and shows the Stop-all offer', async ({ page }) => {
+  test('single Stop press sends one session-scoped cancel frame and the same Stop button stays for the window', async ({ page }) => {
     test.setTimeout(90_000)
     const sentToServer: CapturedFrame[] = []
     await mockChatWebSocket(page, sentToServer)
@@ -128,8 +129,10 @@ test.describe('Stop/Esc//cancel surface scoping (ADR-20260928 D9)', () => {
 
     await page.getByTestId('stop-btn').click()
 
-    // D9: the first press VISIBLY offers the Stop-all confirmation.
-    await expect(page.getByText(/stop all/i)).toBeVisible({ timeout: 3_000 })
+    // Founder 2026-10-06: no separate Stop-all button. The SAME Stop button
+    // stays in place so a second click inside the 3 s window is possible.
+    await expect(page.getByTestId('stop-btn')).toBeVisible()
+    await expect(page.getByText(/stop all/i)).toHaveCount(0)
 
     // And the wire saw exactly one cancel frame, session-scoped (no tree).
     const cancels = cancelFrames(sentToServer)
@@ -155,7 +158,7 @@ test.describe('Stop/Esc//cancel surface scoping (ADR-20260928 D9)', () => {
       .toBe(true)
   })
 
-  test('Stop-all offer disappears once the confirmation window expires', async ({ page }) => {
+  test('after the confirmation window expires the next Stop press is session-scoped again', async ({ page }) => {
     test.setTimeout(90_000)
     const sentToServer: CapturedFrame[] = []
     await mockChatWebSocket(page, sentToServer)
@@ -163,12 +166,21 @@ test.describe('Stop/Esc//cancel surface scoping (ADR-20260928 D9)', () => {
     await startStreamingTurn(page)
 
     await page.getByTestId('stop-btn').click()
-    await expect(page.getByText(/stop all/i)).toBeVisible({ timeout: 3_000 })
+    await expect(page.getByTestId('stop-btn')).toBeVisible()
+    expect(cancelFrames(sentToServer)).toHaveLength(1)
 
-    // Past the 3-second window the offer is gone; a fresh activation would be
-    // a new FIRST press (session-scoped), never a silent stop-all.
-    await expect(page.getByText(/stop all/i)).toBeHidden({ timeout: 6_000 })
-    expect(cancelFrames(sentToServer).some((f) => f.scope === 'tree')).toBe(false)
+    // Past the 3-second window (real time) a fresh activation is a new FIRST
+    // press: session-scoped, never a silent tree stop.
+    await page.waitForTimeout(3_500)
+    await chatInput(page).press('Escape')
+
+    await expect
+      .poll(() => cancelFrames(sentToServer).length, { timeout: 5_000 })
+      .toBe(2)
+    const cancels = cancelFrames(sentToServer)
+    expect(cancels[0].scope).not.toBe('tree')
+    expect(cancels[1].scope, 'a press after the window closed must not be a tree stop').not.toBe('tree')
+    expect(cancels[1].session_id).toBe(E2E_SESSION_ID)
   })
 
   test('/cancel sends one cancel frame with scope tree', async ({ page }) => {
