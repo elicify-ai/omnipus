@@ -1290,7 +1290,7 @@ func (al *AgentLoop) continueWithSteeringMessages(
 	steeringMsgs []providers.Message,
 	steeringCorrelationIDs []string,
 ) (string, error) {
-	return al.runAgentLoop(ctx, agent, processOptions{
+	resp, err := al.runAgentLoop(ctx, agent, processOptions{
 		SessionKey:                    sessionKey,
 		Channel:                       channel,
 		ChatID:                        chatID,
@@ -1306,6 +1306,10 @@ func (al *AgentLoop) continueWithSteeringMessages(
 		// steering-continued turn's tool media to the private/global room.
 		WorkspaceID: workspaceID,
 	})
+	// F9: the ordinary root is settled from its LAST executed turn, so a
+	// continuation's outcome replaces the first turn's.
+	ordinaryDispositionFromContext(ctx).recordTurnOutcome(err)
+	return resp, err
 }
 
 // errContinuePostDequeueFailure marks a Continue failure that happened AFTER
