@@ -1009,6 +1009,34 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		release = func() { al.drainSteerQueue(claim) }
 	}
 
+	// F2: an ordinary root woken by a hand-back runs as an admitted
+	// ordinary execution (fresh identity, running state, its own
+	// disposition), like any other entry, so a Stop selects and lands it. A
+	// finished root starts its next round; a stopped one was held above.
+	var rootExecution *executionDisposition
+	if rec.SteeredBy == nil {
+		preparation, prepErr := al.prepareOrdinarySessionExecution(ctx, sessionID, ts.opts, &handbackRevivalPrincipal)
+		if prepErr != nil {
+			return "", fmt.Errorf("steer: wake: %w", prepErr)
+		}
+		if d := preparation.execution; d != nil {
+			rootExecution = d
+			ts.opts.executionDisposition = d
+			ts.generation = d.claim.Generation
+			if identityErr := ts.setExecutionIdentity(d.claim.RunID, d.claim.BootSeq); identityErr != nil {
+				if settleErr := al.finishExecutionDisposition(d); settleErr != nil {
+					al.reportOrdinarySettlementFailure(msg, settleErr)
+				}
+				return "", fmt.Errorf("steer: wake: %w", identityErr)
+			}
+			release = func() {
+				if settleErr := al.finishExecutionDisposition(d); settleErr != nil {
+					al.reportOrdinarySettlementFailure(msg, settleErr)
+				}
+			}
+		}
+	}
+
 	ts.opts.UserMessage = msg.Content
 	ts.userMessage = msg.Content
 	// The goal loop's own follow-up (keeper reminder, deferred steer) keeps
@@ -1087,8 +1115,14 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	result, err := al.runTurn(runCtx, ts)
 	ts, result, err = al.drainSteeredTurn(runCtx, rec, ts, result, err)
 	al.disposeSteeredTurnResult(ts, rec, generation, result, err)
+	rootExecution.recordTurnOutcome(err)
 	return result.finalContent, err
 }
+
+// handbackRevivalPrincipal starts the next round of a finished ordinary
+// root that a helper's hand-back wakes. It never resumes a stopped root:
+// only a person does that.
+var handbackRevivalPrincipal = steer.Principal{Kind: steer.PrincipalKindAgent, ID: "handback"}
 
 // extractPeer extracts the routing peer from the inbound message's structured Peer field.
 func extractPeer(msg bus.InboundMessage) *routing.RoutePeer {
