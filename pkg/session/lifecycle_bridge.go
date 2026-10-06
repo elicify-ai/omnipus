@@ -102,13 +102,21 @@ const (
 // writes for a session a restart cut off (failed(interrupted), FR-118).
 const FailedReasonInterrupted = "interrupted"
 
+// LifecycleRecordIsRestartInterrupted reports whether rec is a session a
+// gateway restart cut off: a failed record whose FailedReason is
+// FailedReasonInterrupted. The one predicate every reader that must not call
+// such a session "failed" uses.
+func LifecycleRecordIsRestartInterrupted(rec *LifecycleRecord) bool {
+	return rec.State == LifecycleFailed && rec.FailedReason == FailedReasonInterrupted
+}
+
 // LifecycleRecordToDisplay is the display for a whole record: a failed record
 // whose FailedReason is FailedReasonInterrupted shows as interrupted; every
 // other record shows as LifecycleStateToDisplay(rec.State), so a genuinely
 // failed record still shows as failed. Callers that hold the record must use
 // this, not LifecycleStateToDisplay alone.
 func LifecycleRecordToDisplay(rec *LifecycleRecord) LifecycleDisplayState {
-	if rec.State == LifecycleFailed && rec.FailedReason == FailedReasonInterrupted {
+	if LifecycleRecordIsRestartInterrupted(rec) {
 		return LifecycleDisplayInterrupted
 	}
 	return LifecycleStateToDisplay(rec.State)
