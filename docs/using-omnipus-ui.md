@@ -45,6 +45,8 @@ What the sidebar holds:
 
 The magnifier at the top of the sidebar searches all your conversations.
 
+Conversation rows show **Working**, **Waiting for answer**, **Done**, **Failed**, or **Stopped** when the server has a lifecycle record. A stopped row also shows its stop cause. Visible rows and expanded helper lists refresh automatically: activity events prompt a refresh, and a 15-second refresh catches a state saved after the last event. You do not need to reload the page after a reply or Stop. The number beside a parent conversation is its **total direct helpers**, including finished ones; it is not a running-helper count. A parent's label is its own server state, not a guess from its children's labels.
+
 If the sidebar shows **Could not load workspaces**, select **Retry** to reload the workspace list and **Archive** when it is expanded. If loading fails again, the message stays so you can retry again. If loading the list pauses because you are offline, the sidebar says **Offline — workspaces will load when you reconnect.** and loads the list once you are back online.
 
 ## A workspace and its tabs
