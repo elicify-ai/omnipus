@@ -82,18 +82,8 @@ function makeComposerRuntime(text = '') {
   }
 }
 
-// STOP_PARAM_CAST: `isHelperSession` and `sendRedirectFrame` are the reported
-// D9 seams frontend-lead must add to UseSlashMenuParams (see the file header).
-// The cast keeps the RED pack typecheck-clean before the params exist; once
-// GREEN adds them, the cast is dead weight a CHECK pass may drop.
-type StopPackParams = Parameters<typeof useSlashMenu>[0] & {
-  activateStop: () => void
-  isHelperSession: boolean
-  sendRedirectFrame: (frame: RedirectFrame) => void
-}
-
-function baseParams(overrides: Partial<StopPackParams> = {}) {
-  const params = {
+function baseParams(overrides: Partial<Parameters<typeof useSlashMenu>[0]> = {}): Parameters<typeof useSlashMenu>[0] {
+  return {
     isStreaming: false,
     isReplaying: false,
     inputEnabled: true,
@@ -103,10 +93,8 @@ function baseParams(overrides: Partial<StopPackParams> = {}) {
     activateStop: vi.fn(),
     cancelIfStreaming: vi.fn(),
     sendRedirectFrame: vi.fn(),
-    isHelperSession: false,
     ...overrides,
   }
-  return params as unknown as Parameters<typeof useSlashMenu>[0]
 }
 
 beforeEach(() => {
@@ -136,16 +124,12 @@ beforeEach(() => {
 // helper's own chat redirects that helper).
 function helperSessionStore(sessionId: string) {
   act(() => {
-    useSessionStore.setState({ activeSessionId: sessionId })
+    useSessionStore.setState({ activeSessionId: sessionId, attachedSessionType: 'delegate' })
   })
 }
 
-// attachedRootSessionStore gives the ROOT chat a live session of its own —
-// deliberately a separate, differently-named setup from helperSessionStore:
-// the root conversation is itself a session with a nonempty activeSessionId,
-// and root identity is the server-minted helper flag (isHelperSession: false)
-// alone, never store emptiness. A guard keyed on "no session in the store"
-// instead of "not a helper" is exactly the F1 regression this pack closes.
+// The root conversation has its own active session, not a child target.
+// Redirect uses that same identity without a helper-only parameter.
 function attachedRootSessionStore(sessionId: string) {
   act(() => {
     useSessionStore.setState({ activeSessionId: sessionId })
@@ -220,7 +204,7 @@ describe('useSlashMenu — /stop execution', () => {
   })
 })
 
-// ─── /stop-redirect — RedirectFrame interception, root refusal, usage ───────
+// ─── /stop-redirect — current-chat RedirectFrame interception and usage ────
 
 describe('useSlashMenu — /stop-redirect execution', () => {
   // THE corrected transport test (replaces the superseded "passes through as
@@ -240,7 +224,7 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     const cancelIfStreaming = vi.fn()
     const sendRedirectFrame = vi.fn()
     const { result } = renderHook(() =>
-      useSlashMenu(baseParams({ composerRuntime, appendMessage, cancelIfStreaming, sendRedirectFrame, isHelperSession: true, isStreaming: true })))
+      useSlashMenu(baseParams({ composerRuntime, appendMessage, cancelIfStreaming, sendRedirectFrame, isStreaming: true })))
     let intercepted: boolean | undefined
     act(() => {
       intercepted = result.current.interceptClientCommand()
@@ -273,7 +257,7 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     const composerRuntime = makeComposerRuntime('/stop-redirect focus on the failing tests')
     const sendRedirectFrame = vi.fn()
     const { result } = renderHook(() =>
-      useSlashMenu(baseParams({ composerRuntime, sendRedirectFrame, isHelperSession: true, isStreaming: false })))
+      useSlashMenu(baseParams({ composerRuntime, sendRedirectFrame, isStreaming: false })))
     let intercepted: boolean | undefined
     act(() => {
       intercepted = result.current.interceptClientCommand()
@@ -296,7 +280,7 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     const composerRuntime = makeComposerRuntime('/stop-redirect \u00A0 先 export the CSV — 报告  ')
     const sendRedirectFrame = vi.fn()
     const { result } = renderHook(() =>
-      useSlashMenu(baseParams({ composerRuntime, sendRedirectFrame, isHelperSession: true })))
+      useSlashMenu(baseParams({ composerRuntime, sendRedirectFrame })))
     act(() => {
       result.current.interceptClientCommand()
     })
@@ -311,7 +295,7 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     const cancelIfStreaming = vi.fn()
     const sendRedirectFrame = vi.fn()
     const { result } = renderHook(() =>
-      useSlashMenu(baseParams({ composerRuntime, appendMessage, cancelIfStreaming, sendRedirectFrame, isHelperSession: false })))
+      useSlashMenu(baseParams({ composerRuntime, appendMessage, cancelIfStreaming, sendRedirectFrame })))
     let intercepted: boolean | undefined
     act(() => {
       intercepted = result.current.interceptClientCommand()
@@ -335,7 +319,7 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     const cancelIfStreaming = vi.fn()
     const sendRedirectFrame = vi.fn()
     const { result } = renderHook(() =>
-      useSlashMenu(baseParams({ composerRuntime, appendMessage, cancelIfStreaming, sendRedirectFrame, isHelperSession: false, isStreaming: true })))
+      useSlashMenu(baseParams({ composerRuntime, appendMessage, cancelIfStreaming, sendRedirectFrame, isStreaming: true })))
     let intercepted: boolean | undefined
     act(() => {
       intercepted = result.current.interceptClientCommand()
@@ -362,7 +346,7 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     const appendMessage = vi.fn()
     const sendRedirectFrame = vi.fn()
     const { result } = renderHook(() =>
-      useSlashMenu(baseParams({ composerRuntime, appendMessage, sendRedirectFrame, isHelperSession: sessionType === 'delegate' })))
+      useSlashMenu(baseParams({ composerRuntime, appendMessage, sendRedirectFrame })))
     let intercepted: boolean | undefined
     act(() => {
       intercepted = result.current.interceptClientCommand()
@@ -386,7 +370,7 @@ describe('useSlashMenu — /stop-redirect execution', () => {
     const appendMessage = vi.fn()
     const sendRedirectFrame = vi.fn()
     const { result } = renderHook(() =>
-      useSlashMenu(baseParams({ composerRuntime, appendMessage, sendRedirectFrame, isHelperSession: true })))
+      useSlashMenu(baseParams({ composerRuntime, appendMessage, sendRedirectFrame })))
     let intercepted: boolean | undefined
     act(() => {
       intercepted = result.current.interceptClientCommand()

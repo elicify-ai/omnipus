@@ -102,7 +102,7 @@ describe('useSlashMenu — commands cache recovers after invalidateQueries (no r
           startNewSession: vi.fn(),
           cancelIfStreaming: vi.fn(),
           sendRedirectFrame: vi.fn(),
-          isHelperSession: false,
+          activateStop: vi.fn(),
         }),
       { wrapper },
     )
@@ -162,7 +162,7 @@ describe('useSlashMenu — commands cache recovers after invalidateQueries (no r
           startNewSession: vi.fn(),
           cancelIfStreaming: vi.fn(),
           sendRedirectFrame: vi.fn(),
-          isHelperSession: false,
+          activateStop: vi.fn(),
         }),
       { wrapper },
     )

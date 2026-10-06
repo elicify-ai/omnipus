@@ -174,13 +174,27 @@ function acknowledgeStop(tree: boolean) {
 describe('release UAT D3 — Enter after Stop sends in the selected parent chat', () => {
   it.each([
     { id: 'D3-E1', stopName: 'Stop generation', tree: false },
-    { id: 'D3-E2', stopName: 'Stop all', tree: true },
+    { id: 'D3-E2', stopName: '/cancel (Stop all)', tree: true },
   ])('$id: Enter after $stopName sends the continuation in this chat instead of opening a helper', async ({ stopName, tree }) => {
     seedParentAndHelper()
     const router = await renderRealScreen()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: stopName }))
+    // Founder 2026-10-06: "the button needs to go". Use the remaining
+    // immediate-tree /cancel command; every frame and continuation oracle
+    // below is unchanged from the removed-button scenario.
+    if (tree) {
+      act(() => {
+        client.setQueryData(['commands', 'web'], [{
+          name: 'cancel', label: '/cancel', description: 'Stop this chat and its helpers',
+          delivery: 'client', available_while_streaming: true,
+        }])
+      })
+      await user.type(screen.getByRole('combobox', { name: 'Message input' }), '/cancel')
+      await user.keyboard('{Enter}')
+    } else {
+      await user.click(screen.getByRole('button', { name: stopName }))
+    }
     expect(sender.send.mock.calls.map(([frame]) => frame), 'instrument: the actual Stop control emitted the intended parent cancel').toStrictEqual([
       tree ? { type: 'cancel', session_id: PARENT, scope: 'tree' } : { type: 'cancel', session_id: PARENT },
     ])

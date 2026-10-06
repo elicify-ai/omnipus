@@ -142,7 +142,7 @@ function baseParams(overrides: Partial<Parameters<typeof useSlashMenu>[0]> = {})
     startNewSession: vi.fn(),
     cancelIfStreaming: vi.fn(),
     sendRedirectFrame: vi.fn(),
-    isHelperSession: false,
+    activateStop: vi.fn(),
     ...overrides,
   }
 }
