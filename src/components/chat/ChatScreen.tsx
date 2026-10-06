@@ -74,7 +74,7 @@ import { DelegationEventLineList, DelegationInlineProvider, DelegationLiveTail, 
 import { useChatDelegationEvents } from './useChatDelegationEvents'
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
-import { getMessageStatusSuffix, INTERRUPTED_SUFFIX_TEXT, CUT_OFF_SUFFIX_TEXT } from '@/lib/truncation'
+import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { GoalOutcomeRow } from './GoalOutcomeRow'
@@ -911,67 +911,6 @@ function AssistantMessageAvatar({ agent }: { agent?: Agent }) {
   )
 }
 
-
-// FR-21: Renders (interrupted) status markers for assistant messages that have
-// status:'interrupted' in the Zustand store.
-//
-// This component is rendered OUTSIDE ThreadPrimitive.Root and outside the
-// scrollable Viewport. This guarantees two properties:
-//   1. It subscribes directly to Zustand (bypasses AssistantUI rendering).
-//   2. It is not inside any overflow-clipped container (Playwright can see it).
-//
-// Each marker is rendered as a visually small but non-zero text span so that
-// E2E tests can locate it with page.locator('text=(interrupted)') combined
-// with toBeVisible(). The span has non-zero height because it contains text.
-//
-// The visible (interrupted) label rendered inside AssistantMessage handles
-// the correct visual positioning within the message bubble for human users.
-// This component is the reliable E2E-detectable fallback.
-//
-// ADR-087 D1 — extended to also render the "(cut off at the output limit)"
-// notice for a truncated (max_output_tokens) assistant message, in a second
-// pass over the same message list, still outside the scroll viewport for the
-// same Playwright-visibility reason. `getMessageStatusSuffix`
-// (src/lib/truncation.ts) is the single source of the precedence rule
-// (interrupted/cancelled always wins over a cutoff) — this component derives
-// which list a message lands in from its return value rather than
-// re-implementing the precedence check, so it can never disagree with the
-// in-bubble renderers below.
-function InterruptedMessageMarkers() {
-  const messages = useChatStore((s) => s.messages)
-  const interrupted: ChatMessage[] = []
-  const cutOff: ChatMessage[] = []
-  for (const m of messages) {
-    const suffix = getMessageStatusSuffix(m)
-    if (suffix === INTERRUPTED_SUFFIX_TEXT) interrupted.push(m)
-    else if (suffix === CUT_OFF_SUFFIX_TEXT) cutOff.push(m)
-  }
-  if (interrupted.length === 0 && cutOff.length === 0) return null
-  return (
-    <>
-      {interrupted.map((m) => (
-        <div
-          key={m.id}
-          data-testid="interrupted-marker"
-          data-message-id={m.id}
-          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic text-center pb-[var(--space-1)]"
-        >
-          (interrupted)
-        </div>
-      ))}
-      {cutOff.map((m) => (
-        <div
-          key={m.id}
-          data-testid="truncated-marker"
-          data-message-id={m.id}
-          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic text-center pb-[var(--space-1)]"
-        >
-          (cut off at the output limit)
-        </div>
-      ))}
-    </>
-  )
-}
 
 // ── Standalone message row components (virtualizer) ──────────────────────────
 // Render ChatMessage from props (no AssistantUI context) for use by the virtualizer.
@@ -3485,13 +3424,6 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           ) : (
             <VirtualizedMessageList messages={displayMessages} liteMode={liteMode} agentName={activeAgentName} />
           )}
-
-          {/* FR-21: Interrupted-message status markers — rendered inside
-              ThreadPrimitive.Root but OUTSIDE the scrollable Viewport. This
-              position has guaranteed non-zero height because it's in the
-              non-scrolling flex layout between the Viewport and the composer.
-              Playwright locates these elements via text=(interrupted). */}
-          <InterruptedMessageMarkers />
 
           <ChatConnectionNotice />
 
