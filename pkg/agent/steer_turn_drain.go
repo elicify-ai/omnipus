@@ -125,7 +125,8 @@ func (al *AgentLoop) continueSteeredTurn(
 		func(_ *AgentInstance, steeringMsgs []providers.Message, steeringCorrelationIDs []string) (string, error) {
 			gate := al.steerAdmission()
 			gate.entryMu.Lock()
-			if rec.SteeredBy != nil {
+			ts.opts.executionDisposition = al.executionDispositionFor(claim)
+			if rec.SteeredBy != nil || ts.opts.executionDisposition != nil {
 				if identityErr := ts.setExecutionIdentity(claim.RunID, claim.BootSeq); identityErr != nil {
 					gate.entryMu.Unlock()
 					return "", identityErr
@@ -177,7 +178,7 @@ func (al *AgentLoop) steeredDrainRecord(sessionID string, generation int, claim 
 	if rec.Generation != generation || rec.Terminal() {
 		return rec, errSteeredDrainInactive
 	}
-	if rec.SteeredBy != nil && !claim.matches(rec) {
+	if claim.RunID != "" && !claim.matches(rec) {
 		return rec, errSteeredDrainInactive
 	}
 	if rec.Stopped() {
@@ -239,6 +240,30 @@ func (al *AgentLoop) abandonSteeredQueuedSteering(
 		}
 	}
 	parentID := steerParentSessionID(childRec)
+	if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
+		// D4 no orphan: a delegate steer leaves the queue only once its
+		// receipt says superseded. One whose receipt cannot be written stays
+		// queued (receipt and item both), is not reported as dropped, and is
+		// resolved by the next drain or abandonment.
+		kept := abandonedItems[:0]
+		var retained []steeringQueueItem
+		for _, item := range abandonedItems {
+			if item.steerControlID != "" {
+				if err := lifecycle.RecordSteerControlState(normalizeSteeringScope(sessionID), item.steerControlID,
+					session.SteerStateSuperseded, "abandoned after repeated continuation failures"); err != nil {
+					logger.ErrorCF("agent", "steer: abandoned steer receipt not recorded; the steer stays queued",
+						map[string]any{"session_id": sessionID, "control_id": item.steerControlID, "error": err.Error()})
+					retained = append(retained, item)
+					continue
+				}
+			}
+			kept = append(kept, item)
+		}
+		if len(retained) > 0 {
+			al.steering.prependItemsScope(abandonedScope, retained)
+		}
+		abandonedItems = kept
+	}
 	for i, item := range abandonedItems {
 		if ts != nil {
 			ts.appendClassifiedError(EventKindError.String(), "steering_continue", LLMError{

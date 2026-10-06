@@ -443,9 +443,9 @@ func (s *LifecycleStore) Lock(sessionID string) *sync.Mutex {
 }
 
 // tail reads every line of sessionID's JSONL file and returns the last
-// successfully-parsed record (the current state). Returns found=false when
-// the file does not exist (no record yet — a fresh session_id) or every line
-// was unparsable. A malformed trailing line (a torn write from a crash
+// successfully-parsed record (the current state). Returns found=false only
+// when the file does not exist. An existing journal with no readable record
+// is a corruption error. A malformed trailing line (a torn write from a crash
 // mid-append) is skipped with a fall-back to the last GOOD line rather than
 // failing the read outright — crash-safety mirrors fileutil.WriteFileAtomic's
 // own "never worse than the last durable write" guarantee.
@@ -496,7 +496,10 @@ func (s *LifecycleStore) tail(sessionID string) (rec *LifecycleRecord, found boo
 	if err := scanner.Err(); err != nil {
 		return nil, false, fmt.Errorf("session: lifecycle: scan %q: %w", sessionID, err)
 	}
-	return last, last != nil, nil
+	if last == nil {
+		return nil, false, fmt.Errorf("session: lifecycle: existing journal %q contains no readable lifecycle record", sessionID)
+	}
+	return last, true, nil
 }
 
 // HasNeedsInputRecord reports whether the session's lifecycle JSONL history
@@ -565,7 +568,20 @@ func (s *LifecycleStore) Load(sessionID string) (*LifecycleRecord, error) {
 	mu := s.Lock(sessionID)
 	mu.Lock()
 	defer mu.Unlock()
+	return s.loadLocked(sessionID)
+}
 
+// LoadLocked reads the authoritative tail while the caller holds Lock(sessionID).
+// It performs no mutation, so a current-state publisher can validate ownership
+// and persist its projection in the same lock hold without appending a record.
+func (s *LifecycleStore) LoadLocked(sessionID string) (*LifecycleRecord, error) {
+	if err := validateLifecycleSessionID(sessionID); err != nil {
+		return nil, err
+	}
+	return s.loadLocked(sessionID)
+}
+
+func (s *LifecycleStore) loadLocked(sessionID string) (*LifecycleRecord, error) {
 	rec, found, err := s.tail(sessionID)
 	if err != nil {
 		return nil, err

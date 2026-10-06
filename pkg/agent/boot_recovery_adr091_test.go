@@ -50,7 +50,31 @@ type bootRecoveryHarness struct {
 	sessions  *session.UnifiedStore
 	inbox     *session.MessageInboxStore
 	deliverer *bootRecordingDeliverer
-	notices   []string
+	// writingBoot is the actual BootEpochStore minted once for this simulated
+	// writing boot over a real directory (never a hard-coded epoch). Recovery
+	// built by recovery() reads the restart note's boot_seq from it.
+	writingBoot *session.BootEpochStore
+	notices     []string
+}
+
+// mintWritingBootForTest mints ONE genuine boot epoch over a fresh real
+// directory under root and returns the minted store, as the gateway does at
+// startup before recovery runs. The value is whatever Mint persisted.
+func mintWritingBootForTest(t *testing.T, root string) *session.BootEpochStore {
+	t.Helper()
+	dir := filepath.Join(root, "boot_epoch")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("SETUP create boot epoch dir: %v", err)
+	}
+	store := session.NewBootEpochStore(dir)
+	epoch, err := store.Mint()
+	if err != nil {
+		t.Fatalf("SETUP Mint writing boot epoch: %v", err)
+	}
+	if epoch == 0 || store.Current() != epoch {
+		t.Fatalf("SETUP: minted epoch=%d but Current()=%d", epoch, store.Current())
+	}
+	return store
 }
 
 func newBootRecoveryHarness(t *testing.T) *bootRecoveryHarness {
@@ -70,6 +94,7 @@ func newBootRecoveryHarness(t *testing.T) *bootRecoveryHarness {
 		sessions:  sessions,
 		inbox:     session.NewMessageInboxStore(filepath.Join(root, "inbox")),
 	}
+	h.writingBoot = mintWritingBootForTest(t, root)
 	h.deliverer = &bootRecordingDeliverer{inbox: h.inbox, lifecycle: h.lifecycle}
 	return h
 }
@@ -125,6 +150,7 @@ func (h *bootRecoveryHarness) recovery() *SteerBootRecovery {
 		Lifecycle:      h.lifecycle,
 		Sessions:       h.sessions,
 		Inbox:          h.inbox,
+		BootEpoch:      h.writingBoot,
 		Classifier:     NewSteerRecordClassifier(h.lifecycle, h.sessions),
 		Deliverer:      h.deliverer,
 		OperatorNotice: func(message string) { h.notices = append(h.notices, message) },
@@ -198,6 +224,32 @@ func bootQuestion(t *testing.T, child, parent, id string) generated.SessionMessa
 	return message
 }
 
+// TestBoot_FailureDeliveredUpward — ADR-20260928 sub-agent control plane
+// (frozen asset cd20cf8b) D8.3 supersedes the retired failed(interrupted)
+// oracle this test used to pin ("record = failed/interrupted" plus a fatal
+// "interrupted:" error delivered upward). D8.3: a restart-interrupted
+// `running`/`queued` steered session becomes `stopped` — an ordinary,
+// non-terminal stop — with a stop note {at, by: "restart", seq, cause:
+// "restart", boot_seq}; no more failed(interrupted) record. D8.4: the parent
+// is told through the persisted D6 stop notice of that ledgered transition,
+// never through the retired second verdict, a fatal "interrupted: ..." final
+// under <child>:<generation>:final.
+//
+// Scope: this fixture's recording deliverer is not a *SteerUpwardDeliverer, so
+// the production notice publisher (SteerBootRecovery.noticeLoop) is not wired
+// here and the notice's inbox bytes are NOT asserted — they are pinned against a
+// real AgentLoop by TestBoot_PauseHandbackRedeliveredAsBlockerNotFinal and
+// TestFencelessLedger_BootStopsResumedRun_OldUntakenNoticeStillOwed. What this
+// test pins is the D8.3 landing itself and that nothing of the retired verdict
+// is delivered upward.
+//
+// Epoch: by=restart requires the WRITING boot's minted epoch (architect
+// BOOT-EPOCH-RULING D1/D2). The fixture's recovery() carries one genuinely
+// minted BootEpochStore for the simulated boot (harness commits 73c8f8b38 /
+// 709fd4dfa on work/a-boot-qa-harness-20261005); this test never supplies an
+// epoch of its own and asserts only that the note carries a nonzero boot_seq (a
+// minted epoch starts at 1) — the exact boot_seq-equals-Current pins live in
+// the harness's own assertions, which need h.writingBoot.
 func TestBoot_FailureDeliveredUpward(t *testing.T) {
 	h := newBootRecoveryHarness(t)
 	parent := h.rootSession(t)
@@ -211,16 +263,56 @@ func TestBoot_FailureDeliveredUpward(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if rec.State != session.LifecycleFailed || rec.FailedReason != failedReasonInterrupted {
-		t.Fatalf("record = state %q reason %q", rec.State, rec.FailedReason)
+	if rec.State != session.LifecycleStopped || rec.Terminal() || rec.FailedReason != "" {
+		t.Fatalf("record = state %q (terminal=%v) failed_reason %q, want stopped non-terminal with no failed reason — D8.3: a restart-interrupted session becomes an ordinary stop, never failed(interrupted)",
+			rec.State, rec.Terminal(), rec.FailedReason)
 	}
-	events := h.deliverer.snapshot()
-	if len(events) != 1 {
-		t.Fatalf("deliveries = %d, want 1", len(events))
+	if rec.StopNote == nil {
+		t.Fatal("stopped record carries no stop note — D8.3: the restart stop note {by restart, cause restart, boot_seq}")
 	}
-	envelope := bootEnvelope(t, events[0].Message)
-	if envelope.Kind != "error" || !envelope.Fatal || !strings.HasPrefix(envelope.Text, "interrupted:") {
-		t.Fatalf("upward message = %+v", envelope)
+	if rec.StopNote.Cause != session.StopCauseRestart || rec.StopNote.By != session.StopActorRestart {
+		t.Fatalf("stop note = (cause %q, by %q), want (%q, %q) — D8.3: by \"restart\", cause \"restart\"",
+			rec.StopNote.Cause, rec.StopNote.By, session.StopCauseRestart, session.StopActorRestart)
+	}
+	if rec.StopNote.BootSeq == 0 {
+		t.Fatalf("stop note boot_seq = 0 — D8.3: the restart note carries the writing boot's persisted (nonzero) epoch; note %+v", rec.StopNote)
+	}
+
+	// D6/D8.4: the ledgered transition is the stop notice's authority — one
+	// landed restart stop, the child's first accepted stop (D4: per-child seq
+	// from 1), naming its direct parent.
+	transitions, err := h.lifecycle.ListStoppedTransitions(child)
+	if err != nil {
+		t.Fatalf("ListStoppedTransitions: %v", err)
+	}
+	if len(transitions) != 1 {
+		t.Fatalf("landed history = %+v, want exactly one restart transition", transitions)
+	}
+	tr := transitions[0]
+	if tr.Cause != session.StopCauseRestart || tr.Actor != session.StopActorRestart || tr.Generation != 1 ||
+		tr.ParentSessionID != parent || tr.StopSeq != 1 {
+		t.Fatalf("landed transition = %+v, want {cause restart, actor restart, generation 1, parent %q, stop_seq 1}", tr, parent)
+	}
+
+	// The retired second verdict (a fatal "interrupted: ..." final) is
+	// delivered neither through the upward deliverer nor into the parent's inbox.
+	finalID := child + ":1:final"
+	for _, event := range h.deliverer.snapshot() {
+		envelope := bootEnvelope(t, event.Message)
+		t.Errorf("recovery delivered upward %+v — D8.3/D8.4: a restart stop is told by its D6 stop notice, never by an upward fatal verdict", envelope)
+	}
+	entries, err := h.inbox.Entries(parent)
+	if err != nil {
+		t.Fatalf("Entries(parent): %v", err)
+	}
+	for _, entry := range entries {
+		if entry.Kind != session.InboxEntryMessage || entry.Message == nil {
+			continue
+		}
+		envelope := bootEnvelope(t, *entry.Message)
+		if envelope.MessageID == finalID || envelope.Fatal || strings.HasPrefix(envelope.Text, "interrupted:") {
+			t.Errorf("parent inbox holds the retired interrupted verdict %+v — D8.3/D8.4", envelope)
+		}
 	}
 }
 
@@ -301,8 +393,8 @@ func TestBoot_RenudgesUnconsumedEntriesOnce_EligibleOnly(t *testing.T) {
 		t.Fatalf("archived handback instruction %q is not readable back from session %q's durable context archive", deliverySummary(consumedHandback), child)
 	}
 
-	if err := h.recovery().Run(context.Background()); err != nil {
-		t.Fatalf("Run: %v", err)
+	if runErr := h.recovery().Run(context.Background()); runErr != nil {
+		t.Fatalf("Run: %v", runErr)
 	}
 	snapshot := h.deliverer.snapshot()
 	got := make([]string, 0, len(snapshot))

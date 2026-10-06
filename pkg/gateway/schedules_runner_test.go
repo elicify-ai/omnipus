@@ -25,6 +25,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -73,30 +74,37 @@ type fakeChecker struct{ registered map[string]bool }
 
 func (c fakeChecker) IsRegistered(id string) bool { return c.registered[id] }
 
-// fakeCanceller records RequestCancel calls (for the timeout/force-abort test).
+// fakeCanceller records the complete one-Stop request at the agent-loop edge.
 type fakeCanceller struct {
 	mu       sync.Mutex
-	sessions []string
+	requests []agent.StopRequest
 }
 
-func (c *fakeCanceller) RequestCancel(
-	_ context.Context,
-	scope agent.CancelScope,
-	_ agent.CancelCanceller,
-	_ agent.CancelHooks,
-) (agent.CancelOutcome, error) {
+func (c *fakeCanceller) StopSession(_ context.Context, req agent.StopRequest) (agent.StopResult, error) {
 	c.mu.Lock()
-	c.sessions = append(c.sessions, scope.SessionID)
+	c.requests = append(c.requests, req)
 	c.mu.Unlock()
-	return agent.CancelOutcome{Fired: true}, nil
+	return agent.StopResult{Fired: true, Root: agent.CancelOutcome{Fired: true}}, nil
 }
 
-func (c *fakeCanceller) calls() []string {
+func (c *fakeCanceller) calls() []agent.StopRequest {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	out := make([]string, len(c.sessions))
-	copy(out, c.sessions)
-	return out
+	return append([]agent.StopRequest(nil), c.requests...)
+}
+
+// assertSchedulerStopRequest pins the dispatch's exact scheduler contract,
+// rather than merely checking that some cancel method was called.
+func assertSchedulerStopRequest(t *testing.T, sessionID string, req agent.StopRequest) {
+	t.Helper()
+	assert.Equal(t, sessionID, req.SessionID, "StopSession must target this scheduled run")
+	assert.Equal(t, "cron", req.Channel, "the one Stop must retain the scheduler channel")
+	assert.Equal(t, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "scheduler"}, req.By,
+		"the scheduler's authenticated stop principal must be preserved")
+	require.NotNil(t, req.HooksFor, "StopSession must receive per-session transport hooks")
+	hooks := req.HooksFor(sessionID)
+	require.NotNil(t, hooks.KillBackgroundSessions, "the deadline Stop must retain background-session cleanup")
+	require.NotNil(t, hooks.OnLatchExpired, "a scheduled Stop whose latch expires must remain operator-visible")
 }
 
 func newRunnerHarness(
@@ -450,7 +458,7 @@ func TestRunner_Failure_PushesEvenWhenCreateFails(t *testing.T) {
 }
 
 // TestRunner_Timeout_ForceCancels asserts that a run exceeding its deadline is
-// force-aborted via RequestCancel(CancelScope{SessionID}) and that the returned
+// stopped via the one StopSession request and that the returned
 // error is a context.DeadlineExceeded (so the cron lane records it as "timeout").
 func TestRunner_Timeout_ForceCancels(t *testing.T) {
 	cfg := baseConfig()
@@ -475,10 +483,10 @@ func TestRunner_Timeout_ForceCancels(t *testing.T) {
 	assert.True(t, errors.Is(err, context.DeadlineExceeded), "timeout error must be DeadlineExceeded, got %v", err)
 	require.NotEmpty(t, sid)
 
-	// RequestCancel was called for the run's session.
+	// The scheduler reaches the one Stop, with its exact authenticated request.
 	calls := canceller.calls()
-	require.NotEmpty(t, calls, "RequestCancel must be called on deadline")
-	assert.Equal(t, sid, calls[0], "RequestCancel must target the run's session id")
+	require.Len(t, calls, 1, "StopSession must be called exactly once on deadline")
+	assertSchedulerStopRequest(t, sid, calls[0])
 
 	// A deadline must NOT be classified as a transient (retryable) error.
 	assert.False(t, cron.IsTransient(err), "deadline must not be classified transient")

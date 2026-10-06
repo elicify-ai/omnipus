@@ -22,12 +22,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestWSStop_NeverRanSteeredChildEmitsInterruptedSubagentEndOnWire extends
-// websocket_stop_scope_test.go's never-ran regression to the REAL socket.
-// Oracle: that file's case-1 header, CancelFrame/SubagentEndFrame contracts,
-// and steer_frames.go's documented generation-1 span identity and
-// OutcomeInterrupted -> "interrupted" mapping. Expectations are fixed before
-// execution, not copied from the current gateway's output.
+// TestWSStop_NeverRanSteeredChildEmitsInterruptedSubagentEndOnWire retains
+// its inherited name and real-socket Stop acknowledgment/routing/order checks.
+// Its terminal-end oracle is superseded by frozen D2: a Stop winner "writes
+// no final outbox entry, appends no parent inbox message/frame" as a terminal
+// final. Vocabulary says stopped is "alive and resumable"; D4/D6 instead
+// require subagent_state(stopped) and the direct parent's nonfatal notice.
+// The genuine boot epoch and Launch-only queued child are real runtime setup.
 //
 // Plan: reuse the durable parent + Launch-only child setup, establish a real
 // parent hub subscription with attach_session, receive a live subagent_start
@@ -54,6 +55,12 @@ func TestWSStop_NeverRanSteeredChildEmitsInterruptedSubagentEndOnWire(t *testing
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
 	al := mustAgentLoop(t, cfg, msgBus, adr093IdleProvider{})
+	boot := session.NewBootEpochStore(home)
+	epoch, err := boot.Mint()
+	require.NoError(t, err, "SETUP: mint a genuine boot epoch before any Stop/admission")
+	require.NotZero(t, epoch)
+	require.Equal(t, epoch, boot.Current())
+	al.SetBootEpochStore(boot)
 	lifecycle := session.NewLifecycleStore(t.TempDir())
 	al.SetSessionMessagingStores(session.NewMessageInboxStore(t.TempDir()), lifecycle)
 	setGatewaySteerCanceller(al, agent.NewSteerCanceller(lifecycle, al.SteerGenerationCancel))
@@ -63,15 +70,14 @@ func TestWSStop_NeverRanSteeredChildEmitsInterruptedSubagentEndOnWire(t *testing
 
 	// Same seeding operations as the existing never-ran RED test, not a
 	// hand-written child record or an internally injected end event.
-	parent, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "mia")
-	require.NoError(t, err)
 	const workspaceID = "ws-stop-scope-never-ran-wire"
-	require.NoError(t, al.GetSessionStore().SetMeta(parent.ID, session.MetaPatch{WorkspaceID: strPtr(workspaceID)}))
-	require.NoError(t, lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: parent.ID, Generation: 1, State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, WorkspaceID: workspaceID,
-		AgentID: "mia", Origin: &session.Origin{Kind: session.OriginKindChat},
-	}))
+	root, err := agent.NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+		TargetAgentID: "mia", Task: "Keep this parent conversation open for its queued helper",
+		WorkspaceID: workspaceID, Origin: steer.Origin{Kind: steer.OriginKindChat},
+	})
+	require.NoError(t, err, "SETUP: real ordinary-root launch, not a fabricated running record")
+	parent, err := al.GetSessionStore().GetMeta(root.SessionID)
+	require.NoError(t, err)
 
 	// newWSHandler installs the production hub sync tap itself. There is no
 	// test hook, fake wsConn, manual hub binding or direct Stop-handler call.
@@ -144,29 +150,48 @@ func TestWSStop_NeverRanSteeredChildEmitsInterruptedSubagentEndOnWire(t *testing
 	require.NoError(t, err)
 	entries, err := al.GetSessionStore().ReadTranscript(parent.ID)
 	require.NoError(t, err)
-	durableEndCount := 0
+	durableEndCount, durableStoppedCount := 0, 0
 	for _, entry := range entries {
 		if entry.SubagentEnd != nil && entry.SubagentEnd.SpanId == wantSpanID {
 			durableEndCount++
 		}
+		if entry.SubagentState != nil && entry.SubagentState.SpanId == wantSpanID && entry.SubagentState.State == "stopped" {
+			durableStoppedCount++
+		}
 	}
-	wireGap := fmt.Sprintf("BACKEND WIRE-EMISSION GAP: Stop acknowledged for child=%s generation=1; durable_state=%s parent_transcript_end_count=%d; expected parent_session=%s span=%s status=interrupted",
-		childID, after.State, durableEndCount, parent.ID, wantSpanID)
-	endRaw := awaitStopScopeWireFrame(t, parentConn, "subagent_end", wireGap)
-	var end generated.SubagentEndFrame
-	require.NoError(t, json.Unmarshal(endRaw, &end), "BACKEND WIRE-FORMAT GAP: subagent_end must decode under the generated contract")
-	require.Equal(t, "subagent_end", end.Type, "BACKEND WIRE-FORMAT GAP: wrong frame type")
-	require.Equal(t, parent.ID, end.SessionId, "BACKEND WIRE-ROUTING GAP: subagent_end belongs to the parent's session, not the child")
-	require.Equal(t, wantSpanID, end.SpanId, "BACKEND WIRE-IDENTITY GAP: end must close the original child's generation-1 span")
-	require.Equal(t, "interrupted", end.Status, "BACKEND WIRE-STATUS GAP: never-ran Stop must emit interrupted, not running/cancelled/success")
-	require.Equal(t, strPtr(callID), end.ParentCallId, "BACKEND WIRE-IDENTITY GAP: wrong originating call")
-	require.Equal(t, strPtr("mia"), end.AgentId, "BACKEND WIRE-IDENTITY GAP: wrong child agent")
-	require.NotNil(t, end.Seq, "BACKEND HUB GAP: the bound parent must receive the sequenced live end")
-	require.Greater(t, *end.Seq, *start.Seq, "BACKEND HUB GAP: end must follow start in the parent's ordered stream")
+	wireGap := fmt.Sprintf("BACKEND WIRE-EMISSION GAP: Stop acknowledged for child=%s generation=1; durable_state=%s stopped_frames=%d terminal_ends=%d; expected parent_session=%s span=%s state=stopped",
+		childID, after.State, durableStoppedCount, durableEndCount, parent.ID, wantSpanID)
+	stateRaw := awaitStopScopeWireFrame(t, parentConn, "subagent_state", wireGap, "stopped")
+	var state generated.SubagentStateFrame
+	require.NoError(t, json.Unmarshal(stateRaw, &state), "BACKEND WIRE-FORMAT GAP: stopped state must decode under the generated contract")
+	require.Equal(t, "subagent_state", state.Type, "BACKEND WIRE-FORMAT GAP: wrong frame type")
+	require.Equal(t, parent.ID, state.SessionId, "BACKEND WIRE-ROUTING GAP: the state belongs to the parent's session, not the child")
+	require.Equal(t, wantSpanID, state.SpanId, "BACKEND WIRE-IDENTITY GAP: state must identify the original child's generation-1 span")
+	require.Equal(t, "stopped", state.State, "D2/Vocabulary: never-ran Stop is resumable, not interrupted/failed/completed")
+	require.Equal(t, strPtr(childID), state.ChildSessionId, "BACKEND WIRE-IDENTITY GAP: wrong stopped child")
+	require.NotNil(t, after.Origin)
+	require.Equal(t, callID, after.Origin.CallID, "BACKEND WIRE-IDENTITY GAP: wrong originating call")
+	require.Equal(t, "mia", after.AgentID, "BACKEND WIRE-IDENTITY GAP: wrong child agent")
+	require.NotNil(t, state.Seq, "BACKEND HUB GAP: the bound parent must receive the sequenced live state")
+	require.Greater(t, *state.Seq, *start.Seq, "BACKEND HUB GAP: stopped state must follow start in the parent's ordered stream")
 	require.Equal(t, session.LifecycleStopped, after.State, "BACKEND LANDING GAP: acknowledged Stop must durably land the never-ran child stopped")
 	require.Equal(t, 1, after.Generation, "BACKEND LANDING GAP: Stop must not revive the child into a new generation")
-	require.Equal(t, 1, durableEndCount, "BACKEND PERSISTENCE GAP: exactly one end must survive in the parent transcript")
-	t.Logf("BACKEND WIRE CONFIRMED: actual live subagent_end received on parent socket: %s", endRaw)
+	require.Equal(t, 1, durableStoppedCount, "D4: exactly one stopped transition must survive in the parent transcript")
+	require.Zero(t, durableEndCount, "D2: a resumable Stop must publish no terminal subagent_end")
+	require.Nil(t, after.FinalDelivery, "D2: a Stop winner must create no terminal final outbox")
+	require.Nil(t, after.Stop, "D2: the landed Stop must clear its in-flight fence")
+	require.NotNil(t, after.StopNote)
+	require.Equal(t, session.StopCauseStop, after.StopNote.Cause)
+	messages, _, _, err := al.GetMessageInboxStore().Drain(parent.ID, childID, "", 10)
+	require.NoError(t, err)
+	require.Len(t, messages, 1, "D6: one nonfatal notice to this direct parent and no terminal final")
+	notice, err := messages[0].AsSessionMessageError()
+	require.NoError(t, err)
+	require.False(t, notice.Fatal)
+	require.Equal(t, fmt.Sprintf("stopped-notice:%s:%s:%d:%d", parent.ID, childID, after.Generation, after.StopNote.Seq), notice.MessageId)
+	require.Equal(t, childID, notice.SessionId)
+	require.Equal(t, strPtr(parent.ID), notice.ParentSessionId)
+	t.Logf("BACKEND WIRE CONFIRMED: actual live subagent_state(stopped) received on parent socket: %s", stateRaw)
 }
 
 // awaitStopScopeWireFrame uses the existing package delivery failsafe, not
@@ -174,7 +199,7 @@ func TestWSStop_NeverRanSteeredChildEmitsInterruptedSubagentEndOnWire(t *testing
 // transcript entry cannot satisfy it. Every raw frame is retained in -v logs.
 // It filters ONLY by type, so a wrong session/span/status is asserted by the
 // caller instead of silently discarded until a timeout.
-func awaitStopScopeWireFrame(t *testing.T, conn *websocket.Conn, wantType, phase string) []byte {
+func awaitStopScopeWireFrame(t *testing.T, conn *websocket.Conn, wantType, phase string, wantState ...string) []byte {
 	t.Helper()
 	deadline := time.Now().Add(busDeliveryTimeout)
 	require.NoError(t, conn.SetReadDeadline(deadline), "SETUP: arm the bounded wire read")
@@ -195,7 +220,18 @@ func awaitStopScopeWireFrame(t *testing.T, conn *websocket.Conn, wantType, phase
 		if frameType == "error" {
 			t.Fatalf("%s: gateway returned an error frame instead of type=%s: %s", phase, wantType, raw)
 		}
+		if len(wantState) != 0 && frameType == "subagent_end" {
+			t.Fatalf("%s: resumable Stop emitted a forbidden terminal end frame: %s", phase, raw)
+		}
 		if frameType == wantType {
+			if len(wantState) != 0 {
+				var state string
+				require.NoError(t, json.Unmarshal(envelope["state"], &state), "%s: state frame must carry its lifecycle state", phase)
+				if state != wantState[0] {
+					require.Contains(t, []string{"queued", "running"}, state, "%s: only a pending live receipt may precede stopped", phase)
+					continue
+				}
+			}
 			return raw
 		}
 	}

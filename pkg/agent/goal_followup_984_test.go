@@ -71,6 +71,7 @@ func TestGoalDelegation984_MetPathOneWakeVerdictAcked(t *testing.T) {
 	if persistErr := lifecycle.Persist(rec); persistErr != nil {
 		t.Fatalf("Persist(running): %v", persistErr)
 	}
+	rec = stampG5ExitedExecution(t, al, rec)
 
 	g, err := resolveGoalRecordStore().Get(rec.GoalRef)
 	if err != nil {
@@ -361,6 +362,7 @@ func testGoal984ClearDeferredChild(t *testing.T) {
 	if persistErr := lifecycle.Persist(rec); persistErr != nil {
 		t.Fatalf("Persist(running): %v", persistErr)
 	}
+	rec = stampG5ExitedExecution(t, al, rec)
 	if ts := al.getActiveTurnState(rec.SessionID); ts != nil && ts.IsAlive() {
 		t.Fatal("fixture must have no live turn: D6 says goal clear does not itself stop a live turn")
 	}
@@ -384,15 +386,24 @@ func testGoal984ClearDeferredChild(t *testing.T) {
 	}
 	assertCleared()
 	noticeID, stopNote := assertU1StoppedChildNotice(t, al, parentMeta.ID, rec, "", "")
-	assertU1NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount)
+	assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 1)
 
 	// A repeated clear is not another stopped transition. The direct-parent
 	// notice must also survive store reopening and repeated boot replay.
 	al.clearGoalByUser(rec.SessionID, al.GetSessionStore(), "native-agent")
-	assertU1NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount)
-	for range 2 { // D6/T6: repeated boot must not duplicate the notice/wake.
+	assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 1)
+	// ADR-20261004 decision 1 supersedes the old one-ring-across-boot
+	// oracle: "A stop notice rings until the parent takes it". Replays
+	// ring this one immutable notice; after the durable take they stop.
+	for pass := 0; pass < 2; pass++ {
 		replayU1StoppedNotices(t, al, lifecycleDir, inboxDir)
-		assertU1NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount)
+		assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, pass+2)
+		assertCleared()
+	}
+	takeG5StoppedNotice(t, al, parentMeta.ID, noticeID)
+	for range 2 {
+		replayU1StoppedNotices(t, al, lifecycleDir, inboxDir)
+		assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 3)
 		assertCleared()
 	}
 }
@@ -432,6 +443,7 @@ func testGoal984IdleExpiryDeferredChild(t *testing.T) {
 	if persistErr := lifecycle.Persist(rec); persistErr != nil {
 		t.Fatalf("Persist(running): %v", persistErr)
 	}
+	rec = stampG5ExitedExecution(t, al, rec)
 	if ts := al.getActiveTurnState(rec.SessionID); ts != nil && ts.IsAlive() {
 		t.Fatal("idle-expiry fixture must be deferred with no live turn")
 	}
@@ -466,13 +478,22 @@ func testGoal984IdleExpiryDeferredChild(t *testing.T) {
 	}
 	assertExpired()
 	noticeID, stopNote := assertU1StoppedChildNotice(t, al, parentMeta.ID, rec, "", "")
-	assertU1NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount)
+	assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 1)
 
 	al.goalIdleExpirySweep(config.PlanningConfig{}, now)
-	assertU1NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount)
-	for range 2 { // D6/T6: repeated boot must not duplicate the notice/wake.
+	assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 1)
+	// ADR-20261004 decision 1 supersedes the old one-ring-across-boot
+	// oracle: "A stop notice rings until the parent takes it". Replays
+	// ring this one immutable notice; after the durable take they stop.
+	for pass := 0; pass < 2; pass++ {
 		replayU1StoppedNotices(t, al, lifecycleDir, inboxDir)
-		assertU1NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount)
+		assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, pass+2)
+		assertExpired()
+	}
+	takeG5StoppedNotice(t, al, parentMeta.ID, noticeID)
+	for range 2 {
+		replayU1StoppedNotices(t, al, lifecycleDir, inboxDir)
+		assertG5NoticeStable(t, al, parentMeta.ID, rec, "", "", noticeID, stopNote, wakeCount, 3)
 		assertExpired()
 	}
 }
@@ -517,6 +538,7 @@ func TestGoal984_RoundBoundArmRoutesChildThroughTail(t *testing.T) {
 	if persistErr := lifecycle.Persist(rec); persistErr != nil {
 		t.Fatalf("Persist(running): %v", persistErr)
 	}
+	rec = stampG5ExitedExecution(t, al, rec)
 
 	// Push the record to one round before its bound so this single unmet
 	// verdict exhausts the budget.
@@ -816,6 +838,9 @@ func TestBoot984_FailInterruptedLandsStoppedRestartKeepsGoal(t *testing.T) {
 	}
 	if loaded.StopNote == nil || loaded.StopNote.Cause != session.StopCauseRestart {
 		t.Fatalf("stop note after failInterrupted = %+v, want cause %q (D8.3: cause restart, not a restart_interrupt note)", loaded.StopNote, session.StopCauseRestart)
+	}
+	if loaded.StopNote.By != session.StopActorRestart || loaded.StopNote.BootSeq != h.writingBoot.Current() {
+		t.Fatalf("stop note after failInterrupted = %+v, want by=%q boot_seq=%d (D8.3: the boot writer's actor and the WRITING boot's minted epoch)", loaded.StopNote, session.StopActorRestart, h.writingBoot.Current())
 	}
 	cg, err := resolveGoalRecordStore().Get(childGoal)
 	if err != nil {

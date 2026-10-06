@@ -29,14 +29,10 @@ import (
 )
 
 const (
-	// redirectEscalationDelay bounds how long the cooperative (soft) stop
-	// may take before the generation-aware hard abort fires — the same
-	// two-phase escalation executeStopAll's grace backstop uses, agent-side.
-	redirectEscalationDelay = 5 * time.Second
 	// redirectWaitDeadline bounds how long the replacement waits for the
 	// stop to land before reporting the undelivered instruction visibly
-	// (never a silent drop). Generous beyond the escalation: a hard abort
-	// plus its own 3s/5s internal timers must fit inside it.
+	// (never a silent drop). Generous beyond the one Stop's 3 s forced stop
+	// and its 3 s detach safety net.
 	redirectWaitDeadline = 30 * time.Second
 	// redirectPollInterval is the waiter's record-poll cadence.
 	redirectPollInterval = 200 * time.Millisecond
@@ -77,59 +73,34 @@ func (al *AgentLoop) RedirectSteeredSession(ctx context.Context, sessionID strin
 		return fmt.Errorf("steer: redirect %q: not callable for a %s session (the caller routes those)", sessionID, rec.State)
 	}
 
-	canceller := al.steerCanceller()
 	bg := context.Background()
 
-	// Stop half — single session, cooperative first: stamp the Stop fence
-	// (durable; nothing queued can start and the stop survives a restart),
-	// then ask the live turn to stop at its next tool boundary. subtree=false
-	// means exactly this session: cause stop, no descendants walked, no
-	// administrative cancellation, no goal touched (locked decision 1's stop
-	// shape, which a redirect's stop half shares).
-	report, serr := canceller.StopTurns(bg, sessionID, by, false, nil)
+	// Stop half — the one Stop (stop_session.go::StopSession), this session
+	// only: the fence and note are stamped durably first, the live turn is
+	// asked to stop at once and forced 3 s later on the selected execution.
+	// No descendants are walked, no goal is touched (locked decision 1's
+	// stop shape, which a redirect's stop half shares).
+	res, serr := al.StopSession(bg, StopRequest{
+		SessionID: sessionID, By: by, Channel: "agent",
+		HooksFor: func(string) CancelHooks { return CancelHooks{} },
+	})
 	if serr != nil {
 		return fmt.Errorf("steer: redirect %q: stop: %w", sessionID, serr)
 	}
-	if len(report.Reached) == 0 {
-		if len(report.Unreachable) > 0 {
-			return fmt.Errorf("steer: redirect %q: %s", sessionID, report.Unreachable[0].Reason)
-		}
+	if res.RootErr != nil {
+		return fmt.Errorf("steer: redirect %q: stop: %w", sessionID, res.RootErr)
+	}
+	report := res.Report
+	if len(report.Unreachable) > 0 {
+		return fmt.Errorf("steer: redirect %q: %s", sessionID, report.Unreachable[0].Reason)
+	}
+	if len(report.SkippedNewerGeneration) > 0 {
+		return fmt.Errorf("steer: redirect %q: the selected stop was superseded", sessionID)
+	}
+	selection, selected := res.Selected[sessionID]
+	if len(report.Reached) == 0 || !selected {
 		return fmt.Errorf("steer: redirect %q: the stop stamped nothing (already stopped or terminal)", sessionID)
 	}
-	// The same queue-removal + cooperative interrupt pair
-	// cancelDelegatedSubtree's soft branch runs for each reached id — here
-	// that id is exactly sessionID.
-	for _, id := range report.Reached {
-		stampedRec, loadErr := lifecycle.Load(id)
-		if loadErr != nil {
-			return fmt.Errorf("steer: redirect %q: selected stop effect: %w", id, loadErr)
-		}
-		effects, effectErr := al.stopEffectsForCallback(id, stampedRec.Generation)
-		if effectErr != nil {
-			return fmt.Errorf("steer: redirect %q: selected stop effect: %w", id, effectErr)
-		}
-		al.removeQueuedStopEffects(id, effects)
-		if _, interruptErr := al.Interrupt(id, ScopeSelfOnly, "delegate redirect"); interruptErr != nil {
-			logger.WarnCF("agent", "steer: redirect: cooperative interrupt failed (the Stop marker is durable)",
-				map[string]any{"session_id": id, "error": interruptErr.Error()})
-		}
-	}
-
-	// Escalation backstop: if the cooperative stop has not landed within
-	// redirectEscalationDelay, fire the generation-aware hard abort for this
-	// ONE session — the same adapter the human Stop's fallback uses, which
-	// also lands the never-ran stop for a queued-only target.
-	generation := rec.Generation
-	time.AfterFunc(redirectEscalationDelay, func() {
-		cur, err := lifecycle.Load(sessionID)
-		if err != nil || cur.Terminal() || cur.Stopped() {
-			return
-		}
-		if _, err := al.SteerGenerationCancel(bg, sessionID, generation); err != nil {
-			logger.ErrorCF("agent", "steer: redirect: hard-stop escalation failed",
-				map[string]any{"session_id": sessionID, "generation": generation, "error": err.Error()})
-		}
-	})
 
 	// Resume half — deliver the replacement once the stop has landed. The
 	// instruction is appended only AFTER the stop is durable (never raced
@@ -140,7 +111,19 @@ func (al *AgentLoop) RedirectSteeredSession(ctx context.Context, sessionID strin
 	// is the record this call successfully loaded before the stop was
 	// stamped, so when the record can no longer be read mid-wait the parent
 	// is still known from it — never invented.
-	go al.awaitStoppedAndRevive(bg, rec, by, instruction)
+	//
+	// The waiter is owned by the loop: it counts as an active request (the
+	// shutdown drains join it) and runs on the loop-lifetime context, so a
+	// shutdown ends the wait and reports the undelivered instruction
+	// instead of leaving a detached goroutine behind.
+	if !al.beginActiveRequest() {
+		return fmt.Errorf("steer: redirect %q: the agent is shutting down; the session was stopped but the replacement instruction was not delivered", sessionID)
+	}
+	waitCtx := al.inboundRunContext()
+	go func() {
+		defer al.endActiveRequest()
+		al.awaitStoppedAndRevive(withStopSelection(waitCtx, selection), rec, by, instruction)
+	}()
 	return nil
 }
 
@@ -169,15 +152,30 @@ func (al *AgentLoop) RedirectSteeredSession(ctx context.Context, sessionID strin
 // where the record itself can no longer be read or no longer exists. The
 // launch-time edge is the only parent ever reported to — when it is
 // unknown there is nobody to tell, and none is invented.
+//
+// ctx carries this redirect's own accepted Stop selection
+// (withStopSelection): a session that landed stopped under a different,
+// newer Stop is not revived with the old instruction (A2).
 func (al *AgentLoop) awaitStoppedAndRevive(ctx context.Context, initial *session.LifecycleRecord, by steer.Principal, instruction string) {
+	selection, ownStop := stopSelectionFromContext(ctx)
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
 		return
 	}
 	sessionID := initial.SessionID
 	deadline := time.Now().Add(redirectWaitDeadline)
+	poll := time.NewTicker(redirectPollInterval)
+	defer poll.Stop()
 	for {
-		time.Sleep(redirectPollInterval)
+		select {
+		case <-ctx.Done():
+			logger.ErrorCF("agent", "steer: redirect: the agent shut down while waiting for the stop to land — the replacement instruction was NOT delivered",
+				map[string]any{"session_id": sessionID})
+			al.reportUndeliveredRedirect(sessionID, initial,
+				fmt.Errorf("the agent shut down before the stop landed: %w", ctx.Err()))
+			return
+		case <-poll.C:
+		}
 		rec, err := lifecycle.Load(sessionID)
 		if err != nil {
 			if errors.Is(err, session.ErrLifecycleNotFound) {
@@ -196,6 +194,17 @@ func (al *AgentLoop) awaitStoppedAndRevive(ctx context.Context, initial *session
 		// Landed-or-terminal only — an in-flight fence (Stopped() true, state
 		// still running/queued) is not enough; see this function's doc
 		// comment for the stranded-queued shape an early revive produces.
+		if ownStop && rec.State == session.LifecycleStopped && (rec.StopEffect == nil || *rec.StopEffect != selection.Effect) {
+			// A2: the session landed stopped by a NEWER Stop (a newer resume
+			// and Stop happened meanwhile); this redirect's own stop is not
+			// the one that holds it, so its old instruction must not undo
+			// the newer Stop.
+			logger.ErrorCF("agent", "steer: redirect: a newer Stop holds the session — the replacement instruction was NOT delivered",
+				map[string]any{"session_id": sessionID, "control_id": selection.Effect.ControlID})
+			al.reportUndeliveredRedirect(sessionID, rec,
+				errors.New("a newer Stop stopped the session before this redirect's instruction could be applied"))
+			return
+		}
 		if rec.State == session.LifecycleStopped || rec.Terminal() {
 			revived, rerr := al.ReviveStoppedSession(ctx, sessionID, by, instruction)
 			if rerr != nil {

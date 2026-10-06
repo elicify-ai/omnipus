@@ -22,6 +22,8 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -148,27 +150,10 @@ func adr093WaitForEntered(t *testing.T, pp *parkedProvider, timeout time.Duratio
 	}
 }
 
-// adr093AssertNotTerminalWithin polls the record and fails the test the
-// MOMENT it turns terminal — the assertion is that it never terminalises in
-// the window (MIN-001: a resume starts exactly one run and leaves the chat
-// root's record alive).
-func adr093AssertNotTerminalWithin(t *testing.T, al *AgentLoop, id string, window time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(window)
-	for time.Now().Before(deadline) {
-		rec := adr093Load(t, al, id)
-		if rec.Terminal() {
-			t.Fatalf("record %s turned terminal (state %q, reason %q) — ADR-093 D4: the revival's one run must not end the root; the ordinary path keeps the chat resumable", id, rec.State, rec.FailedReason)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-}
-
-// TestAdr093BootSweep_StandingRootsExempt is ADR-093 D3 / F890-2: after a
-// restart, a standing conversation root — chat, channel, heartbeat,
-// scheduled, or a record with no origin kind — stays usable: the boot sweep
-// must exempt it (stays running), while a steered child and a task root are
-// still swept to failed(interrupted).
+// TestAdr093BootSweep_StandingRootsExempt retains ADR-093 D3 / F890-2's
+// standing-root exemption and ordinary task-root sweep. Frozen
+// ADR-20260928 D8.3 supersedes the old steered-child failed(interrupted)
+// oracle: PlanEngine.bootSweep leaves that record wholly to SteerBootRecovery.
 func TestAdr093BootSweep_StandingRootsExempt(t *testing.T) {
 	h := newBootSweepHarness(t)
 
@@ -195,23 +180,28 @@ func TestAdr093BootSweep_StandingRootsExempt(t *testing.T) {
 		persistLifecycle(t, h.ls, rec)
 	}
 
-	// Two sweepable shapes that MUST stay sweepable (ADR-093 D3).
-	swept := adr093Record("adr093-child-steered", 1, session.LifecycleRunning)
-	swept.Origin = &session.Origin{Kind: session.OriginKindChat}
-	swept.SteeredBy = &session.SteeredBy{SteeringSessionID: "adr093-root-chat", RootSessionID: "adr093-root-chat"}
-	persistLifecycle(t, h.ls, swept)
+	// D8.3: the steered child is scanned but never rewritten by this sweep.
+	child := adr093Record("adr093-child-steered", 1, session.LifecycleRunning)
+	child.Origin = &session.Origin{Kind: session.OriginKindChat}
+	child.SteeredBy = &session.SteeredBy{SteeringSessionID: "adr093-root-chat", RootSessionID: "adr093-root-chat"}
+	persistLifecycle(t, h.ls, child)
+	childBefore := snapshotBootSweepRecord(t, h.ls, child.SessionID)
 
 	taskRoot := adr093Record("adr093-root-task", 1, session.LifecycleRunning)
 	taskRoot.Origin = &session.Origin{Kind: session.OriginKindTask, TaskID: "task-adr093"}
 	persistLifecycle(t, h.ls, taskRoot)
 
 	res := h.pe.runBootSweep(context.Background())
+	assertBootSweepRecordUntouched(t, h.ls, child.SessionID, childBefore)
+	if res.Scanned != len(standingIDs)+2 {
+		t.Errorf("Scanned = %d, want %d (five roots, steered child and ordinary task root)", res.Scanned, len(standingIDs)+2)
+	}
 
 	gotSwept := append([]string{}, res.SweptToFailed...)
 	sort.Strings(gotSwept)
-	wantSwept := []string{"adr093-child-steered", "adr093-root-task"}
+	wantSwept := []string{"adr093-root-task"}
 	if len(gotSwept) != len(wantSwept) {
-		t.Fatalf("swept set = %v, want exactly %v (ADR-093 D3: only the delegation-provable records are swept)", gotSwept, wantSwept)
+		t.Fatalf("swept set = %v, want exactly %v — D8.3 leaves the steered child to SteerBootRecovery; ADR-093 D3 still sweeps the ordinary task root", gotSwept, wantSwept)
 	}
 	for i := range wantSwept {
 		if gotSwept[i] != wantSwept[i] {
@@ -377,67 +367,87 @@ func TestAdr093FollowUpToTerminalChild_RevivesAndRedispatches(t *testing.T) {
 	adr093WaitForEntered(t, pp, 30*time.Second)
 }
 
-// TestAdr093RootRevival_ClassifyFirstOneTurnOneGeneration is ADR-093 D4 +
-// MIN-001: a human message into a "running but stopped" chat root is
-// classified BEFORE any steering machinery runs: ClassOrdinaryRoot → the
-// record is revived (next generation via resumed_from, running) and the
-// message is processed on the ordinary inbound-turn path — exactly one run
-// starts (one provider entry), and the root's record never turns terminal
-// (today's defect: the steered-completion path terminalises the revived
-// root, MAJ-003).
+// Frozen D2 CRIT-001 supersedes the old forged running+fence/G+1 fixture:
+// only a LANDED stopped root resumes, on the same generation with a fresh run.
+// ADR-093's classify-first ordinary-root and exactly-one-run safeguards remain.
 func TestAdr093RootRevival_ClassifyFirstOneTurnOneGeneration(t *testing.T) {
-	al, cleanup := newSteerAL(t)
-	t.Cleanup(cleanup)
-	parentID := newTestSteeringSession(t, al, adr093Workspace)
-
-	rec := adr093Record(parentID, 1, session.LifecycleRunning)
-	rec.Stop = &session.Stop{At: time.Now(), Generation: 1, By: session.Principal{Kind: session.PrincipalKindHuman}}
-	adr093Persist(t, al, rec)
-
-	// Park the provider so the revived turn waits, and let the admission
-	// path run in the background (it dispatches the turn).
-	pp, release := installParkedProvider(t, al)
-	defer release()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- al.enqueueSteeringFromMessage(adr093HumanMessage("Right, carry on with the plan.", parentID))
-	}()
-
-	adr093WaitForEntered(t, pp, 30*time.Second)
-
-	// The revival happened on the ordinary path: one generation bump.
-	rec = adr093Load(t, al, parentID)
-	if rec.Generation != 2 {
-		t.Fatalf("record generation after the human message = %d, want 2 (ADR-093 D4: revival mints the next generation via resumed_from)", rec.Generation)
+	al, original, provider := r5AdmitRoot(t)
+	r5StopRoot(t, al, original)
+	provider.open(0)
+	joinGoalFixtureRuns(t, al) // The actual outer owner, not the test, lands Stop.
+	stopped := rootReopenedRecord(t, al, original.SessionID)
+	if stopped.State != session.LifecycleStopped || stopped.Terminal() || stopped.Stop != nil || stopped.StopNote == nil || stopped.Generation != original.Generation {
+		t.Fatalf("owner did not land a same-generation nonterminal stop: %+v", stopped)
 	}
-	if rec.ResumedFrom != parentID {
-		t.Fatalf("record resumed_from after the human message = %q, want %q (ADR-093 D4)", rec.ResumedFrom, parentID)
+	msg := rootHumanMessage(original.SessionID)
+	msg.GatewayUserID = "r5-owner"
+	msg.Content = "Right, carry on with the plan."
+	if err := al.enqueueSteeringFromMessage(msg); err != nil {
+		t.Fatalf("human message into landed stopped root: %v", err)
 	}
-	if rec.State != session.LifecycleRunning || rec.FailedReason != "" {
-		t.Fatalf("record state after the human message = %q/%q, want running, reason cleared (ADR-093 D4)", rec.State, rec.FailedReason)
+	r1AwaitProvider(t, provider, 1)
+	resumed := rootReopenedRecord(t, al, original.SessionID)
+	if resumed.Generation != original.Generation || resumed.State != session.LifecycleRunning || resumed.Terminal() || resumed.FailedReason != "" {
+		t.Fatalf("resumed root generation=%d state=%q/%q terminal=%v, want same G=%d ordinary running", resumed.Generation, resumed.State, resumed.FailedReason, resumed.Terminal(), original.Generation)
 	}
-	// The revival must be Revive-only on the ordinary path — the steered
-	// machinery's instruction write is the forbidden fingerprint (MAJ-003).
-	adr093AssertNoSteeredInstructionEntry(t, al, parentID)
+	if resumed.Stop != nil || resumed.StopNote != nil || resumed.ExecutionID == nil || resumed.ExecutionID.RunID == original.ExecutionID.RunID || resumed.ExecutionID.BootSeq != original.ExecutionID.BootSeq {
+		t.Fatalf("same-generation root resume lacks fresh persisted execution and cleared fence/note: %+v", resumed)
+	}
+	classifier := NewSteerRecordClassifier(al.GetSessionLifecycleStore(), al.ResolveSessionStore(original.SessionID))
+	class, err := classifier.Classify(context.Background(), original.SessionID)
+	if err != nil || class != steer.ClassOrdinaryRoot {
+		t.Fatalf("root classified=%q err=%v, want ordinary_root", class, err)
+	}
+	adr093AssertNoSteeredInstructionEntry(t, al, original.SessionID)
+	assertSteerRevivalInput1020(t, provider.Requests()[1:], []string{msg.Content})
+	provider.open(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if !al.WaitForActiveRequestsContext(ctx) {
+		t.Fatal("resumed ordinary execution and publication tail did not join")
+	}
+	after := rootReopenedRecord(t, al, original.SessionID)
+	// ADR-20260928 — The sub-agent control plane, Vocabulary: "done" means
+	// "the turn ended with a final answer", recorded as "terminal completed".
+	// D2b applies this to the root: the turn is done, not the chat archived.
+	if !after.Terminal() || after.Generation != original.Generation || after.State != session.LifecycleCompleted {
+		t.Fatalf("ordinary root after one resumed run = %+v, want terminal completed on the same generation (ADR-20260928: completed -> done; the chat remains resumable)", after)
+	}
+	if count := len(provider.Requests()); count != 2 {
+		t.Fatalf("provider calls=%d, want original plus exactly one resumed ordinary run", count)
+	}
+	adr093AssertNoSteeredInstructionEntry(t, al, original.SessionID)
+}
 
-	// Exactly one run: release the parked turn and let it finish; the record
-	// must never turn terminal (today's MAJ-003 defect), and no second run
-	// may enter the provider.
-	release()
-	adr093AssertNotTerminalWithin(t, al, parentID, 3*time.Second)
-	if extra := len(pp.entered); extra != 0 {
-		t.Fatalf("%d additional run(s) entered the provider after the resume — ADR-093 MIN-001: a resume starts exactly one run", extra)
+func TestAdr093RootRevival_InFlightFenceGetsVisibleRetryError(t *testing.T) {
+	al, original, provider := r5AdmitRoot(t)
+	before := r5StopRoot(t, al, original)
+	msg := rootHumanMessage(original.SessionID)
+	msg.GatewayUserID = "r5-owner"
+	err := al.enqueueSteeringFromMessage(msg)
+	var refusal *curatedTurnError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("in-flight human message error=%T %v, want curated visible retry error", err, err)
 	}
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("enqueueSteeringFromMessage returned an error for a human message into a stopped chat: %v", err)
-		}
-	default:
-		// The admission call may still be draining the dispatched turn; its
-		// outcome is observable through the record assertions above.
+	want := fmt.Sprintf("enqueueSteeringFromMessage: session %q is stopping (a stop is in flight for its current generation); retry once the stop has landed", original.SessionID)
+	if err.Error() != want {
+		t.Fatalf("visible stop retry error=%q, want exact %q", err.Error(), want)
+	}
+	after := rootReopenedRecord(t, al, original.SessionID)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("refused message mutated the in-flight owner: before=%+v after=%+v", before, after)
+	}
+	if count := len(provider.Requests()); count != 1 {
+		t.Fatalf("in-flight message started another provider run: calls=%d want one original", count)
+	}
+	if al.pendingSteeringCountForScope(original.SessionID) != 0 {
+		t.Fatal("refused human instruction was stranded in the dying root queue")
+	}
+	provider.open(0)
+	joinGoalFixtureRuns(t, al)
+	landed := rootReopenedRecord(t, al, original.SessionID)
+	if landed.State != session.LifecycleStopped || landed.Stop != nil || landed.Generation != original.Generation || len(provider.Requests()) != 1 {
+		t.Fatalf("refusal resumed the dying run instead of letting its owner land Stop: %+v calls=%d", landed, len(provider.Requests()))
 	}
 }
 

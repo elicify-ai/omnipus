@@ -263,6 +263,12 @@ func (w *sessionWorker) closeSteeringWhenDrained(sessionKey string) bool {
 // dispatch (dispatchSystemMessageToSessionWorker) uses the exact same
 // load-or-spawn mechanics as every other inbound message.
 func (al *AgentLoop) dispatchSessionWorker(scope string, msg bus.InboundMessage) bool {
+	// A person typing into a helper's own pane steers that existing helper
+	// (Steering commands C1): the helper's own execution consumes it, never
+	// a second ordinary turn on the helper's session.
+	if msg.Channel != "system" && al.deliverHumanHelperInput(msg) {
+		return true
+	}
 	// If a worker already exists for this scope AND is not in the
 	// middle of exiting, enqueue into it. The exiting check closes the
 	// silent-drop race (pass-2 silent-failure-hunter N1) where
@@ -447,6 +453,12 @@ func (w *sessionWorker) runLoop() {
 // so each session worker has its own independent execution path.
 func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage) {
 	al := w.parent
+	ctx, executionEntry := ordinaryExecutionContext(ctx)
+	defer func() {
+		if err := al.finishExecutionDisposition(executionEntry.disposition); err != nil {
+			al.reportOrdinarySettlementFailure(msg, err)
+		}
+	}()
 
 	// Mark the worker as inside a turn so concurrent enqueue() calls for the
 	// same scope route to the in-turn steering queue rather than the inbox.

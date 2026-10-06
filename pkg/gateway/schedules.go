@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -40,16 +41,12 @@ type agentChecker interface {
 	IsRegistered(agentID string) bool
 }
 
-// scheduledCanceller is the subset of *agent.AgentLoop used to force-abort a
-// scheduled run that overran its deadline (FR-003/FR-006). Defined as an
-// interface so the runner can be tested without a full agent loop.
+// scheduledCanceller is the subset of *agent.AgentLoop used to stop a
+// scheduled run that overran its deadline (FR-003/FR-006): the one session
+// Stop (polite at once, forced 3 s later). Defined as an interface so the
+// runner can be tested without a full agent loop.
 type scheduledCanceller interface {
-	RequestCancel(
-		ctx context.Context,
-		scope agent.CancelScope,
-		canceller agent.CancelCanceller,
-		hooks agent.CancelHooks,
-	) (agent.CancelOutcome, error)
+	StopSession(ctx context.Context, req agent.StopRequest) (agent.StopResult, error)
 }
 
 // scheduledRunner implements cron.ScheduledRunner (#264). It wakes a fired
@@ -183,15 +180,22 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 	ctx2 = agent.WithScheduledJobContext(ctx2, job.ID, job.Name)
 
 	// Run the owning agent's turn. If the deadline fires while the turn is
-	// still going, force-abort it via RequestCancel(CancelScope{SessionID}) and
+	// still going, stop it via the one session Stop (StopSession) and
 	// allow a short cleanup window, then return a deadline error so the lane
 	// records a "timeout" run (FR-003/FR-006). A watcher goroutine triggers the
 	// cancel exactly once on ctx2.Done() while ProcessScheduled is in flight.
 	runDone := make(chan struct{})
-	go r.watchDeadline(ctx2, runDone, sessionID, owner)
+	stopErrCh := make(chan error, 1)
+	go func() {
+		stopErrCh <- r.watchDeadline(ctx2, runDone, sessionID, owner)
+	}()
 
 	reply, runErr := r.exec.ProcessScheduled(ctx2, owner, sessionID, job.Payload.Message, "", "")
 	close(runDone)
+	// The watcher returns at once when the run finished first; when the
+	// deadline fired it returns after its stop and cleanup window. A failed
+	// deadline stop has no other caller, so it rides the run's own error.
+	stopErr := <-stopErrCh
 	// M6: ProcessScheduled runs the turn with SendResponse:false,
 	// so the agent's final text reply is NOT auto-published to any channel. If the
 	// agent wants to message a user, it does so via the message tool during its
@@ -201,6 +205,11 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 	// FR-011: best-effort clean up any child/browser processes the run spawned.
 	r.cleanupRunProcesses(job, sessionID)
 
+	if runErr == nil && stopErr != nil {
+		// The run returned on its own while its deadline Stop failed: the
+		// failed Stop is still the run's error, never dropped (F6).
+		runErr = fmt.Errorf("scheduled run exceeded its deadline and the deadline stop failed: %w", stopErr)
+	}
 	if runErr != nil {
 		// Always log the raw error before any wrapping so the real cause lands in
 		// gateway.log regardless of what the channel-alert path surfaces.
@@ -215,7 +224,11 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 		// lane classifies the run record Status as "timeout" (errors.Is). The
 		// underlying agent error is wrapped so it stays inspectable.
 		if ctx2.Err() == context.DeadlineExceeded {
-			runErr = fmt.Errorf("scheduled run timed out after %ds: %w", timeout, context.DeadlineExceeded)
+			if stopErr != nil {
+				runErr = fmt.Errorf("scheduled run timed out after %ds: %w; the deadline stop failed: %w", timeout, context.DeadlineExceeded, stopErr)
+			} else {
+				runErr = fmt.Errorf("scheduled run timed out after %ds: %w", timeout, context.DeadlineExceeded)
+			}
 		} else {
 			// Classify transient provider errors so the lane schedules a backoff
 			// retry (FR-010). Wrapping in *cron.TransientError lets cron.IsTransient
@@ -232,15 +245,15 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 
 // watchDeadline force-aborts the in-flight scheduled run when ctx2's deadline
 // fires (FR-003/FR-006). It returns immediately if the run completes first
-// (runDone closed). On deadline it issues RequestCancel against the run's
+// (runDone closed). On deadline it issues the one session Stop against the run's
 // session and allows a short cleanup window for the turn to tear down.
-func (r *scheduledRunner) watchDeadline(ctx2 context.Context, runDone <-chan struct{}, sessionID, owner string) {
+func (r *scheduledRunner) watchDeadline(ctx2 context.Context, runDone <-chan struct{}, sessionID, owner string) error {
 	select {
 	case <-runDone:
-		return
+		return nil
 	case <-ctx2.Done():
 		if ctx2.Err() != context.DeadlineExceeded || r.canceller == nil || sessionID == "" {
-			return
+			return nil
 		}
 		logger.WarnCF("gateway", "scheduled run exceeded deadline — force-aborting",
 			map[string]any{"session_id": sessionID, "owner": owner})
@@ -248,50 +261,55 @@ func (r *scheduledRunner) watchDeadline(ctx2 context.Context, runDone <-chan str
 		// context so the cancel itself is not aborted by the just-expired ctx2.
 		cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		outcome, cancelErr := r.canceller.RequestCancel(cancelCtx,
-			agent.CancelScope{SessionID: sessionID},
-			agent.CancelCanceller{UserID: "scheduler", Channel: "cron"},
-			agent.CancelHooks{
-				// Cascade the scheduled-run force-abort to any detached
-				// background bash/exec sessions this run's session started
-				// (FR-B10/FR-B11). The returned counts flow back through
-				// RequestCancel into the turn_canceled audit event's
-				// background_sessions_killed/background_sessions_failed
-				// fields.
-				KillBackgroundSessions: func(sid string) (killed, failed int) {
-					return tools.GetSharedSessionManager().KillAllForSession(sid)
-				},
-				// OnLatchExpired: this force-abort found no active turn and
-				// (per outcome.Armed, logged just below) may have armed a
-				// pre-registration cancel latch (pkg/agent/cancel_prearm.go)
-				// in its place — deadline enforcement DEFERRED to the next
-				// turn to register under this session, not skipped. If that
-				// latch itself ages out (cancelPreArmTTL) with no turn ever
-				// registering, deferred became NEVER: the scheduled run's
-				// deadline was silently never enforced at all. There is no
-				// browser watching a cron run (unlike handleCancel's WS
-				// path), so an operator-visible log is this surface's only
-				// possible signal — notifyLatchExpired already logs a
-				// generic Warn unconditionally; this adds the cron-specific
-				// context (which run, which owner) so it is findable against
-				// "scheduled run exceeded deadline" above rather than an
-				// unattributed line.
-				OnLatchExpired: func(scope agent.CancelScope, canceller agent.CancelCanceller) {
-					logger.WarnCF("gateway", "scheduled run deadline force-abort's pre-registration cancel latch expired unconsumed — the run was never actually force-aborted",
-						map[string]any{
-							"session_id":        scope.SessionID,
-							"owner":             owner,
-							"canceller_channel": canceller.Channel,
-						})
-				},
-			})
+		res, cancelErr := r.canceller.StopSession(cancelCtx, agent.StopRequest{
+			SessionID: sessionID,
+			By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: "scheduler"},
+			Channel:   "cron",
+			HooksFor: func(string) agent.CancelHooks {
+				return agent.CancelHooks{
+					// Cascade the scheduled-run stop to any detached background
+					// bash/exec sessions this run's session started
+					// (FR-B10/FR-B11).
+					KillBackgroundSessions: func(sid string) (killed, failed int) {
+						return tools.GetSharedSessionManager().KillAllForSession(sid)
+					},
+					// No turn had registered yet: a pre-registration latch stands
+					// in. If it ages out unconsumed the deadline was never
+					// enforced; there is no browser watching a cron run, so this
+					// log is the operator's signal.
+					OnLatchExpired: func(scope agent.CancelScope, canceller agent.CancelCanceller) {
+						logger.WarnCF("gateway", "scheduled run deadline force-abort's pre-registration cancel latch expired unconsumed — the run was never actually force-aborted",
+							map[string]any{
+								"session_id":        scope.SessionID,
+								"owner":             owner,
+								"canceller_channel": canceller.Channel,
+							})
+					},
+				}
+			},
+		})
+		// F6: a session the deadline Stop could not reach (its fence or
+		// acceptance was refused) is a failed Stop, never "no active turn".
+		failures := []error{cancelErr, res.RootErr}
+		for _, item := range res.Report.Unreachable {
+			failures = append(failures, fmt.Errorf("deadline Stop for %s: %s", item.ID, item.Reason))
+		}
+		cancelErr = errors.Join(failures...)
+		outcome := res.Root
+		outcome.Fired, outcome.Armed = res.Fired, res.Armed
+		outcome.BackgroundSessionsKilled = res.BackgroundKilled
+		outcome.BackgroundSessionsFailed = res.BackgroundFailed
+		if cancelErr != nil {
+			logger.ErrorCF("gateway", "scheduled run deadline stop failed",
+				map[string]any{"session_id": sessionID, "owner": owner, "error": cancelErr.Error()})
+		}
 		if cancelErr == nil {
 			if !outcome.Fired {
 				// A force-abort that targeted no active turn is worth observing: the
 				// run may have already completed between the deadline check and the
 				// cancel, or the turn was never registered under this session id.
 				// outcome.Armed distinguishes the two (CancelOutcome.Armed doc
-				// comment, pkg/agent/cancel.go): true means RequestCancel latched a
+				// comment, pkg/agent/cancel.go): true means the stop latched a
 				// pre-registration cancel (pkg/agent/cancel_prearm.go) that fires
 				// the instant a turn registers under this session, bounded by the
 				// latch's TTL — deadline enforcement is DEFERRED, not skipped;
@@ -328,6 +346,7 @@ func (r *scheduledRunner) watchDeadline(ctx2 context.Context, runDone <-chan str
 		case <-runDone:
 		case <-time.After(2 * time.Second):
 		}
+		return cancelErr
 	}
 }
 

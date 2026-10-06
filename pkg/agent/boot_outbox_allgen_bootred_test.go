@@ -187,8 +187,8 @@ func TestBootAllGen_CommittedFinalPublishedAtBootDespiteNewerGeneration(t *testi
 		t.Fatalf("fixture control before boot: pending finals = %+v, want exactly G's unpublished commit", pending)
 	}
 
-	if err := h.recovery().Run(context.Background()); err != nil {
-		t.Fatalf("SteerBootRecovery.Run: %v", err)
+	if runErr := h.recovery().Run(context.Background()); runErr != nil {
+		t.Fatalf("SteerBootRecovery.Run: %v", runErr)
 	}
 
 	// D8.1/D8.9: the committed G final reaches the direct parent's durable
@@ -369,12 +369,12 @@ func TestBootAllGen_RepeatedBootNoDuplicateFinalOrWakeAfterAck(t *testing.T) {
 	if !found {
 		t.Fatalf("boot 1 published no %s entry — the committed final must be published before its acknowledgement can mean anything (D8.1)", finalID)
 	}
-	if err := h.inbox.Ack(parent, []string{finalID}); err != nil {
-		t.Fatalf("Ack(%s): %v", finalID, err)
+	if ackErr := h.inbox.Ack(parent, []string{finalID}); ackErr != nil {
+		t.Fatalf("Ack(%s): %v", finalID, ackErr)
 	}
 
-	if err := h.recovery().Run(context.Background()); err != nil {
-		t.Fatalf("boot 2 Run: %v", err)
+	if runErr := h.recovery().Run(context.Background()); runErr != nil {
+		t.Fatalf("boot 2 Run: %v", runErr)
 	}
 	if wakes := wakeCountForID(t, h, finalID); wakes != 1 {
 		t.Fatalf("across two boots the committed final was woken %d times, want exactly 1 — a genuinely acknowledged id is consumed; no second final, no repeated wake (D2)", wakes)

@@ -115,6 +115,16 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 		completeBeforeDeliveryTestHook(rec.SessionID)
 	}
 	return al.runSteeredCompletionOnce(rec, claim, func() (bool, error) {
+		// #1053 (D6): a genuine failure stops the session's active helpers
+		// first and names them in the fatal hand-back. A current Stop fence
+		// owns the record instead (it lands stopped, not failed).
+		// F7: only the execution that still owns the record may stop its
+		// helpers; an obsolete producer's failure (its commit is refused as
+		// stale below) must have no effect on a replacement's subtree.
+		if nextState == session.LifecycleFailed && (rec.Stop == nil || rec.Stop.Generation != rec.Generation) &&
+			al.claimOwnsCurrentRecord(rec.SessionID, claim) {
+			failureReason += al.stopDescendantsOfFailedSession(ctx, rec)
+		}
 		return al.deliverSteeredCompletionForExecution(ctx, rec, outcome, nextState, answer, failureReason, claim)
 	})
 }
@@ -155,7 +165,8 @@ func (al *AgentLoop) deliverSteeredCompletionForExecution(ctx context.Context, r
 		// notice publisher runs only in the transition half, from the landed
 		// history, after it.
 		var err error
-		commitRes, err = al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, answer, failureReason, claim)
+		commitRes, err = al.commitSteeredCompletion(lifecycle, rec, nextState, outcome, answer, failureReason, claim,
+			func() bool { return al.steering != nil && al.steering.finishingPending(rec.SessionID) })
 		return err
 	}
 	transition := func() (bool, error) {
@@ -177,6 +188,9 @@ func (al *AgentLoop) deliverSteeredCompletionForExecution(ctx context.Context, r
 			// publishes nothing at all. A notice append failure is returned
 			// visibly — the landing is already durable and stays.
 			if commitRes.landedStop {
+				if stateErr := al.publishCurrentStoppedState(commitRes.stoppedRecord); stateErr != nil {
+					return false, stateErr
+				}
 				// The publisher discovers every landed transition's notice
 				// from the control ledger's landed history — fenced and
 				// fence-less alike since Correction C3, which has the landing
@@ -258,7 +272,8 @@ func (al *AgentLoop) deliverSteeredNotice(ctx context.Context, rec *session.Life
 // terminal-transition finishing window (issue #1020 round-3 / round-4
 // correction).
 //
-// Successful terminal commit: revive the child into a new generation
+// Committed terminal (even when publishing the committed final then failed;
+// the final stays owed in the outbox): revive the child into a new generation
 // carrying every post-finish STEER. A post-finish WAKE is replayed from
 // its real durable inbox entry: revive the terminal recipient without
 // repeating its old instruction, then run the existing wake consumer,
@@ -289,8 +304,13 @@ func (al *AgentLoop) processFinishingItems(
 	// bounded-drain sentinel capped revival at one per session, which
 	// dropped later-arriving items with no consumer; "all accepted steers
 	// of one hand-off go into ONE revival carrying all of them in order").
-	if terminalCommitted && transitionErr == nil {
+	// R1 ruling: once the terminal/outbox commit landed, a later publication
+	// failure does not undo it — the committed final stays owed (retried from
+	// the outbox) and post-commit input still starts the next round. The
+	// publication error is returned alongside.
+	if terminalCommitted {
 		steers := make([]string, 0, len(finishingItems))
+		steerItems := make([]steeringQueueItem, 0, len(finishingItems))
 		wakes := make([]steeringQueueItem, 0, len(finishingItems))
 		for _, item := range finishingItems {
 			if item.wake != nil {
@@ -302,6 +322,7 @@ func (al *AgentLoop) processFinishingItems(
 				continue
 			}
 			steers = append(steers, text)
+			steerItems = append(steerItems, item)
 		}
 		// Carry every accepted post-finish steer in the FIRST revived
 		// generation, exactly in arrival order, so the child's next turn
@@ -315,7 +336,7 @@ func (al *AgentLoop) processFinishingItems(
 		// because the steering scope is keyed by sessionID, not
 		// generation.
 		if len(steers) == 0 {
-			return al.schedulePostFinishWakes(rec, wakes)
+			return errors.Join(transitionErr, al.schedulePostFinishWakes(rec, wakes))
 		}
 		by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: "system:post-finish-steer"}
 		// Round-4 correction: mark the post-finish revival at the
@@ -327,28 +348,51 @@ func (al *AgentLoop) processFinishingItems(
 		// completion read; cleared on revive failure so a stale
 		// stamp never leaks across generations.
 		al.markPostFinishRevival(rec.SessionID, rec.Generation+1)
-		// Pass the FIRST steer through ReviveStoppedSession's normal
-		// path so its appendSteeredInstruction + generation mint runs
-		// (the latter is the only place the new generation is created).
-		if _, err := al.ReviveStoppedSession(ctx, rec.SessionID, by, steers[0]); err != nil {
+		// The FIRST steer starts the revived generation. A delegate steer
+		// (with a D4 receipt) is made durable under its accepted control
+		// identity first, exactly as a normal dequeue does (F8), and then
+		// revives without a second copy of its text; a plain item passes
+		// its text through ReviveStoppedSession, whose append runs before
+		// the generation mint (the only place it is created).
+		first, reviveText := steerItems[0], steers[0]
+		if first.steerControlID != "" {
+			if err := al.recordDeliveredDelegateSteer(rec.SessionID, first); err != nil {
+				// F3: the receipt stays queued and every accepted item
+				// keeps a live queue copy; the failure is returned.
+				al.clearPostFinishRevival(rec.SessionID)
+				al.steering.prependItemsScope(rec.SessionID, steerItems)
+				return errors.Join(transitionErr, fmt.Errorf("steer: post-finish revive %q: %w", rec.SessionID, err),
+					al.schedulePostFinishWakes(rec, wakes))
+			}
+			reviveText = ""
+		}
+		if _, err := al.ReviveStoppedSession(ctx, rec.SessionID, by, reviveText); err != nil {
 			al.clearPostFinishRevival(rec.SessionID)
-			return errors.Join(fmt.Errorf("steer: post-finish revive %q: %w", rec.SessionID, err),
+			retained := steerItems
+			if first.steerControlID != "" {
+				// The first is already durable in the transcript; the next
+				// revival carries it. The rest keep their queue copies.
+				retained = steerItems[1:]
+			}
+			al.steering.prependItemsScope(rec.SessionID, retained)
+			return errors.Join(transitionErr, fmt.Errorf("steer: post-finish revive %q: %w", rec.SessionID, err),
 				al.schedulePostFinishWakes(rec, wakes))
 		}
 		// Every remaining post-finish steer rides on the revived
 		// generation. They go onto the same sessionID scope, which the
 		// new turn dequeues on its next tool boundary; that is the
 		// round-4 "append to the revived generation's scope" path.
-		for _, text := range steers[1:] {
-			if _, err := al.EnqueueSteeringMessage(rec.SessionID, "", providers.Message{
-				Role:    "user",
-				Content: text,
-			}, ""); err != nil {
-				return errors.Join(fmt.Errorf("steer: post-finish enqueue onto revived scope %q: %w", rec.SessionID, err),
+		for i, item := range steerItems[1:] {
+			// Re-queue the accepted item itself (its correlation and D4
+			// receipt identity ride along); it is not a new steer.
+			item.message = providers.Message{Role: "user", Content: strings.TrimSpace(item.message.Content)}
+			if _, err := al.enqueueSteeringItemWithStatus(rec.SessionID, "", item, nil); err != nil {
+				al.steering.prependItemsScope(rec.SessionID, steerItems[1+i:])
+				return errors.Join(transitionErr, fmt.Errorf("steer: post-finish enqueue onto revived scope %q: %w", rec.SessionID, err),
 					al.schedulePostFinishWakes(rec, wakes))
 			}
 		}
-		return al.schedulePostFinishWakes(rec, wakes)
+		return errors.Join(transitionErr, al.schedulePostFinishWakes(rec, wakes))
 	}
 	// Commit refused (Stop landed, terminal-write conflict, etc.) OR
 	// prepare failed: drain waiting items as a same-generation
@@ -809,6 +853,7 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 			CreatedAt:      now,
 			Depth:          1,
 			SenderIdentity: rec.AgentID,
+			Direction:      generated.SessionMessageHandbackDirectionChildToParent,
 			Mode:           generated.SessionMessageHandbackModeFinal,
 			ResultSoFar:    answer,
 			Artifacts:      []string{},
@@ -844,6 +889,7 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 		CreatedAt:      now,
 		Depth:          1,
 		SenderIdentity: rec.AgentID,
+		Direction:      generated.SessionMessageErrorDirectionChildToParent,
 		Fatal:          fatal,
 		Text:           failureReason,
 	})
@@ -1045,12 +1091,48 @@ func (al *AgentLoop) completeSteeredTurnAfterGoal(ctx context.Context, sessionID
 			map[string]any{"session_id": sessionID, "error": errString(err)})
 		return false
 	}
-	finalWoke, err := al.completeSteeredTurnDurably(ctx, snapshot, turnResult{finalContent: answer}, runErr, al.executionClaimFor(snapshot))
+	// N2: the tail commits as the execution that made the claim. Only a
+	// caller with no claiming execution (the deferred-at-gate repair, whose
+	// turn has exited) falls back to the record's own current admission.
+	claim, carried := goalProducerFromContextOK(ctx)
+	if !carried {
+		claim = al.executionClaimFor(snapshot)
+	}
+	finalWoke, err := al.completeSteeredTurnDurably(ctx, snapshot, turnResult{finalContent: answer}, runErr, claim)
 	if err != nil {
-		logger.WarnCF("agent", "goal: completion tail failed — boot recovery repairs a delivered-but-not-terminal gap",
+		// N1: a refused commit leaves the child non-terminal with its turn
+		// already over. Tell the direct parent (and log it), never only log.
+		logger.ErrorCF("agent", "goal: completion tail failed — the helper's result was not committed",
 			map[string]any{"session_id": sessionID, "error": err.Error()})
+		text := fmt.Sprintf("Helper %s finished its goal work, but its result could not be saved: %v", sessionID, err)
+		if noticeErr := al.deliverSteeredNotice(ctx, snapshot, steer.OutcomeLifecycleNotice, "", text); noticeErr != nil {
+			logger.ErrorCF("agent", "goal: completion tail failure could not be reported to the parent",
+				map[string]any{"session_id": sessionID, "error": noticeErr.Error()})
+		}
 	}
 	return finalWoke
+}
+
+type goalProducerKey struct{}
+
+// withGoalProducer carries the claiming execution of a goal adjudication.
+// A turn that ran without an admission has no claiming execution; nothing is
+// carried and the tail uses the record's own admission, as before.
+func withGoalProducer(ctx context.Context, claim executionClaim) context.Context {
+	if claim.RunID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, goalProducerKey{}, claim)
+}
+
+func goalProducerFromContextOK(ctx context.Context) (executionClaim, bool) {
+	claim, ok := ctx.Value(goalProducerKey{}).(executionClaim)
+	return claim, ok
+}
+
+func goalProducerFromContext(ctx context.Context) executionClaim {
+	claim, _ := goalProducerFromContextOK(ctx)
+	return claim
 }
 
 // completeSteeredTurnIfDeferredAtGate routes a steered child through the
@@ -1089,4 +1171,19 @@ func (al *AgentLoop) completeSteeredTurnIfDeferredAtGate(sessionID string) {
 	}
 	tailErr := fmt.Errorf("%w: the goal was ended while this session was deferred at the completion gate", context.Canceled)
 	al.completeSteeredTurnAfterGoal(context.Background(), sessionID, "", tailErr)
+}
+
+// claimOwnsCurrentRecord reports whether claim is the current admission of
+// sessionID's record (fresh read). An unreadable record owns nothing here;
+// the commit that follows reports the read failure.
+func (al *AgentLoop) claimOwnsCurrentRecord(sessionID string, claim executionClaim) bool {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return false
+	}
+	cur, err := lifecycle.Load(sessionID)
+	if err != nil {
+		return false
+	}
+	return claim.matches(cur)
 }

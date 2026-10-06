@@ -140,8 +140,12 @@ func (al *AgentLoop) tsExecutionClaim(ts *turnState, _ string) executionClaim {
 	}
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
+	sessionID := ts.sessionKey
+	if ts.opts.executionDisposition != nil {
+		sessionID = ts.opts.executionDisposition.claim.SessionID
+	}
 	return executionClaim{
-		SessionID: ts.sessionKey, Generation: ts.generation,
+		SessionID: sessionID, Generation: ts.generation,
 		RunID: ts.executionRunID, BootSeq: ts.executionBootSeq,
 	}
 }

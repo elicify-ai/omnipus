@@ -5,7 +5,6 @@ import (
 
 	agenttestutil "github.com/elicify-ai/omnipus/pkg/agent/testutil"
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -57,17 +56,6 @@ func (h *goalAncestorGuardHarness) requireGoalActive(t *testing.T, node agenttes
 	}
 }
 
-func (h *goalAncestorGuardHarness) requireGoalTerminal(t *testing.T, node agenttestutil.TreeNode) {
-	t.Helper()
-	rec, err := resolveGoalRecordStore().Get(h.goalIDs[node.SessionID])
-	if err != nil {
-		t.Fatalf("load %s goal: %v", node.Name, err)
-	}
-	if !goal.IsTerminalState(rec.State) {
-		t.Fatalf("%s goal state = %q, want terminal after its session was cancelled", node.Name, rec.State)
-	}
-}
-
 func requireCancelReachedExactly(t *testing.T, report steer.CancelReport, nodes ...agenttestutil.TreeNode) {
 	t.Helper()
 	want := make(map[string]struct{}, len(nodes))
@@ -87,9 +75,14 @@ func requireCancelReachedExactly(t *testing.T, report steer.CancelReport, nodes 
 	}
 }
 
-// TestGoalAncestorGuard984_CancelNeverEndsAncestorGoal pins the founder rule:
-// cancelling a session ends goals inside that session's subtree only. A
-// standing chat root is paused by Stop; only /goal clear ends its goal.
+// TestGoalAncestorGuard984_CancelNeverEndsAncestorGoal preserves the ancestor
+// guard and also pins the superseding own/subtree-goal rule. Frozen
+// ADR-20260928 D7 (F0929-6): "Stop all does **not** end any goal — not the
+// cascaded sessions' own, and (unchanged from the draft) never an ancestor's
+// either." D6: "Every session-owned active goal stays active across stop,
+// timeout, question expiry, restart, `done` and `failed`." These exact ACTIVE
+// assertions replace only the withdrawn terminal-goal oracle; reached-set and
+// goal ownership checks remain unchanged.
 func TestGoalAncestorGuard984_CancelNeverEndsAncestorGoal(t *testing.T) {
 	t.Run("grandchild cancel preserves parent and root goals", func(t *testing.T) {
 		h := newGoalAncestorGuardHarness(t)
@@ -98,24 +91,24 @@ func TestGoalAncestorGuard984_CancelNeverEndsAncestorGoal(t *testing.T) {
 			t.Fatalf("cancel grandchild: %v", err)
 		}
 		requireCancelReachedExactly(t, report, h.tree.B)
-		h.requireGoalTerminal(t, h.tree.B)
+		h.requireGoalActive(t, h.tree.B)
 		h.requireGoalActive(t, h.tree.A)
 		h.requireGoalActive(t, h.tree.Root)
 	})
 
-	t.Run("child cancel ends subtree goals but preserves root goal", func(t *testing.T) {
+	t.Run("child cancel preserves subtree and root goals", func(t *testing.T) {
 		h := newGoalAncestorGuardHarness(t)
 		report, err := h.tree.Stop(h.tree.A.SessionID)
 		if err != nil {
 			t.Fatalf("cancel child: %v", err)
 		}
 		requireCancelReachedExactly(t, report, h.tree.A, h.tree.B)
-		h.requireGoalTerminal(t, h.tree.A)
-		h.requireGoalTerminal(t, h.tree.B)
+		h.requireGoalActive(t, h.tree.A)
+		h.requireGoalActive(t, h.tree.B)
 		h.requireGoalActive(t, h.tree.Root)
 	})
 
-	t.Run("root chat Stop preserves root goal", func(t *testing.T) {
+	t.Run("root chat stop all preserves every goal", func(t *testing.T) {
 		h := newGoalAncestorGuardHarness(t)
 		report, err := h.tree.Stop(h.tree.Root.SessionID)
 		if err != nil {
@@ -131,7 +124,7 @@ func TestGoalAncestorGuard984_CancelNeverEndsAncestorGoal(t *testing.T) {
 			t.Fatalf("root lifecycle after Stop = state %q, stopped=%v; want non-terminal with current Stop marker", root.State, root.Stopped())
 		}
 		h.requireGoalActive(t, h.tree.Root)
-		h.requireGoalTerminal(t, h.tree.A)
-		h.requireGoalTerminal(t, h.tree.B)
+		h.requireGoalActive(t, h.tree.A)
+		h.requireGoalActive(t, h.tree.B)
 	})
 }

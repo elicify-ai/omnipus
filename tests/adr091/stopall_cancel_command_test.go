@@ -10,19 +10,22 @@ package adr091_test
 // session `stopped` (cause "cascade" on descendants; the named session is the
 // cascade's own direct target), on the SAME generation, never terminal
 // (done/failed are final — stopped is not), never ends any goal (own,
-// descendants', or ancestors'), keeps owner questions open (MAJ-006 — a
-// waiting needs_input helper lands stopped WITH its open question retained on
-// the record), and is idempotent on already-stopped descendants (D5/D8.2 —
-// their existing note is NOT rewritten). MAJ-002: omitted/session scope must
+// descendants', or ancestors'), and is idempotent on already-stopped
+// descendants (D5/D8.2 — their existing note is NOT rewritten).
+// ADR-20261004, locked decision 6: "The 24-hour person-question expiry is
+// removed with the pause. Do not design a replacement expiry."
+// Correction C2: "A helper question to its parent is an ordinary message and
+// does not park the helper." The cascade still reaches that ordinary helper.
+// MAJ-002: omitted/session scope must
 // NEVER cascade — the contrast test pins the existing single-session stop.
 //
 // Case table (oracle: the ADR sections above + common.md decided behaviour —
 // no expected value was derived from running the implementation):
 //
 //	1  /cancel@root    → Root,A,B,C,S all `stopped`, same generations,
-//	                     descendants cause "cascade", non-terminal; W
-//	                     (needs_input) reached → stopped, NeedsInput retained
-//	                     (same correlation + TTL); pre-stopped child keeps its
+//	                     descendants cause "cascade", non-terminal; ordinary
+//	                     working helper W reached → stopped, no question park;
+//	                     pre-stopped child keeps its
 //	                     original "stop" note; goals of Root/A/B/C stay active.
 //	2  /cancel@B       → B,C stopped (cascade, same generations); parent A,
 //	                     sibling S and root UNAFFECTED (running); goals of
@@ -64,11 +67,11 @@ type stopAllHarness struct {
 	release chan struct{}
 }
 
-func newStopAllHarness(t *testing.T) *stopAllHarness {
+func newStopAllHarness(t *testing.T, configure ...func(*config.Config)) *stopAllHarness {
 	t.Helper()
 	h := &stopAllHarness{release: make(chan struct{})}
 	t.Cleanup(func() { close(h.release) })
-	h.e2eHarness = newE2EHarnessWithProvider(t, &e2eBlockingProvider{release: h.release}, testutil.RecordingOutbound(t), false)
+	h.e2eHarness = newE2EHarnessCustom(t, &e2eBlockingProvider{release: h.release}, testutil.RecordingOutbound(t), false, nil, configure...)
 	return h
 }
 
@@ -274,7 +277,12 @@ func assertGoalStillActive(t *testing.T, gid, label string) {
 
 // TestE2E_CancelCommand_TreeScope_CascadesDownFromRoot — case 1.
 func TestE2E_CancelCommand_TreeScope_CascadesDownFromRoot(t *testing.T) {
-	h := newStopAllHarness(t)
+	// W is a real fourth-level child under C. Set this fixture's depth to
+	// four before the chain launches; every other test keeps its default.
+	// This replaces the old record-only park without bypassing admission.
+	h := newStopAllHarness(t, func(cfg *config.Config) {
+		cfg.Performance.MaxDelegationDepth = 4
+	})
 
 	rootBefore := loadRecord(t, h, h.tree.Root)
 	aBefore := loadRecord(t, h, h.tree.A)
@@ -286,17 +294,12 @@ func TestE2E_CancelCommand_TreeScope_CascadesDownFromRoot(t *testing.T) {
 	sNode := launchWorkingChild(t, h, h.tree.A, "S")
 	sBefore := loadRecord(t, h, sNode)
 
-	// W: a waiting (needs_input) helper under C holding an open owner
-	// question — MAJ-006's stopped-with-open-question shape.
-	questionDeadline := time.Now().UTC().Add(24 * time.Hour)
-	wNode := persistRecordOnlyChild(t, h, h.tree.C, "W", "mia", func(rec *session.LifecycleRecord) {
-		rec.State = session.LifecycleNeedsInput
-		rec.NeedsInput = &session.NeedsInput{
-			CorrelationID:   "q-fixture-w",
-			Reconstructable: false,
-			TTLDeadline:     questionDeadline,
-		}
-	})
+	// W keeps the deepest cascade leg, but no longer fabricates a question
+	// park. ADR-20261004 locked decision 6: "There is no special person-only
+	// question, no special pause, and no special message type for it."
+	// C2: "A helper question to its parent is an ordinary message and does
+	// not park the helper." W is now a real admitted, live ordinary helper.
+	wNode := launchWorkingChild(t, h, h.tree.C, "W")
 
 	// P: an already-stopped descendant under C — the cascade must reach it
 	// idempotently WITHOUT rewriting its original note (D5/D8.2).
@@ -331,17 +334,13 @@ func TestE2E_CancelCommand_TreeScope_CascadesDownFromRoot(t *testing.T) {
 	assertLandedStopped(t, h, h.tree.C, cBefore, session.StopCauseCascade)
 	assertLandedStopped(t, h, sNode, sBefore, session.StopCauseCascade)
 
-	// The waiting helper: reached, landed stopped, question retained
-	// (MAJ-006 — same correlation id and original TTL deadline).
+	// Preserve W's reached/state/generation/cause/nonterminal cascade oracle.
+	// Only the retired question/correlation/TTL expectations are superseded.
+	// ADR-20261004 C2: "`needs_input` (`LifecycleNeedsInput`)" is "Deleted
+	// outright — its only writer was the pause".
 	wRec := assertLandedStopped(t, h, wNode, wBefore, session.StopCauseCascade)
-	if wRec.NeedsInput == nil {
-		t.Fatalf("waiting helper %s landed stopped WITHOUT its open question — MAJ-006 requires the needs_input record (correlation, TTL) to be retained", wNode.Name)
-	}
-	if wRec.NeedsInput.CorrelationID != "q-fixture-w" {
-		t.Errorf("waiting helper correlation id = %q, want %q (question must stay open, not be replaced)", wRec.NeedsInput.CorrelationID, "q-fixture-w")
-	}
-	if !wRec.NeedsInput.TTLDeadline.Equal(questionDeadline) {
-		t.Errorf("waiting helper TTL deadline = %v, want the original %v (MAJ-006: original 24-hour deadline)", wRec.NeedsInput.TTLDeadline, questionDeadline)
+	if wRec.NeedsInput != nil {
+		t.Fatalf("ordinary helper %s retained a person-question park after Stop all: %+v — ADR-20261004 C2 deletes that park outright", wNode.Name, wRec.NeedsInput)
 	}
 
 	// The already-stopped descendant: still stopped, SAME generation, and its

@@ -431,8 +431,8 @@ func (s *LifecycleStore) UpdateFinalDelivery(sessionID string, generation int, c
 // the publisher's CAS input (current progress + revision) and its
 // retired guard. Unknown identities return ErrFinalDeliveryUnknownCommit.
 func (s *LifecycleStore) FinalDeliveryState(sessionID string, generation int, commitID string) (progress FinalDeliveryProgress, revision int64, retired bool, err error) {
-	if err := validateLifecycleSessionID(sessionID); err != nil {
-		return FinalDeliveryProgress{}, 0, false, err
+	if valErr := validateLifecycleSessionID(sessionID); valErr != nil {
+		return FinalDeliveryProgress{}, 0, false, valErr
 	}
 	mu := s.Lock(sessionID)
 	mu.Lock()
@@ -463,8 +463,8 @@ func (s *LifecycleStore) FinalDeliveryState(sessionID string, generation int, co
 // ErrFinalDeliveryUnknownCommit; a retired final's payload bytes read nil
 // (the durable retirement marker replaced them).
 func (s *LifecycleStore) CommittedFinalDelivery(sessionID string, generation int, commitID string) (commit FinalDeliveryCommit, progress FinalDeliveryProgress, revision int64, retired bool, err error) {
-	if err := validateLifecycleSessionID(sessionID); err != nil {
-		return FinalDeliveryCommit{}, FinalDeliveryProgress{}, 0, false, err
+	if valErr := validateLifecycleSessionID(sessionID); valErr != nil {
+		return FinalDeliveryCommit{}, FinalDeliveryProgress{}, 0, false, valErr
 	}
 	mu := s.Lock(sessionID)
 	mu.Lock()

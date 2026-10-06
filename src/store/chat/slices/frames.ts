@@ -39,6 +39,13 @@ import { findFirstSendMessage } from '../first-send'
 
 
 
+// Refresh the whole prefix: roots and every observed expanded child page.
+// This is a prompt refresh, not a lifecycle projection: polling in the list
+// observers also covers an ordinary-root commit made after done was sent.
+const SESSION_LIST_REFRESH_FRAMES = new Set([
+  'done', 'error', 'subagent_start', 'subagent_state', 'subagent_end', 'catch_up_complete',
+])
+
 type FrameSlice = Pick<ChatStore, 'handleFrame'>
 type ToolCallResultFrame = Extract<Parameters<ChatStore['handleFrame']>[0], { type: 'tool_call_result' }>
 type MessageStatusFrame = Extract<Parameters<ChatStore['handleFrame']>[0], { type: 'message_status' }>
@@ -812,15 +819,15 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       // handleFrame past its grandfathered line budget).
       advanceReceivedEventTime(frame, targetSid, withBucket)
 
-      // #823 catch-up redesign (BE-DESIGN.md §6.2): the apply rule, gating
-      // every SEQUENCED session-scoped frame ahead of the switch below — see
-      // applySeqGate's own doc comment for why this belongs here rather than
-      // per-case.
+      // Gate sequence gaps before reducing frames or refreshing lists.
       if (applySeqGate(frame, targetSid, get, withBucket) === 'drop-or-gap') {
         syncForeground()
         return
       }
 
+      if (SESSION_LIST_REFRESH_FRAMES.has(frame.type)) {
+        void queryClient.invalidateQueries({ queryKey: ['sessions'] })
+      }
       if (handleFirstSendFrame({ frame, set, get, withBucket, runtime })) {
         syncForeground()
         return
@@ -1596,7 +1603,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             // D5 fix (UAT Site 3): a legacy/synthesized ErrorFrame (no typed
             // llm_error payload) falls back to the raw wire `message` for
             // display in several branches below (translatedMessage here, the
-            // kickoff-reject toast, setConnectionError x2, and the
+            // kickoff-reject toast, unroutable global error, and the
             // coalesced/fresh bubble content). Sanitize ONCE up front so
             // every one of those reads the same safe value — see
             // sanitizeLegacyErrorMessage's doc comment (lib/llm-error.ts) for
@@ -1910,10 +1917,8 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               // No this-turn assistant to coalesce into — last is a prior
               // healthy reply, or the bucket is empty. Push one new bubble
               // so the error is not silently dropped or written onto history.
-              if (!isCancelAck) {
-                // D5 fix (Site 3): safeMessage, not the raw frame.message.
-                useConnectionStore.getState().setConnectionError(safeMessage)
-              }
+              // A routed chat failure belongs only to this bubble, not the
+              // app-wide connection banner — even before any reply exists.
               // ADR-051 — fresh error bubble: use the translated copy when
               // the typed payload is present (matches the streaming-coalesce
               // branch above), else the sanitized legacy `frame.message`

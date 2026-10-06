@@ -1,5 +1,15 @@
 # ADR-091 WP-B — Audience and upward delivery
 
+## Amended 2026-10-06 — founder decision
+
+[The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md) and [Steering commands: no person question](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20261004-steering-commands-no-person-question.md) supersede conflicting session-control requirements and old acceptance expectations in this spec. **Plain Stop ends only the current turn of that one session, never helpers. Stop all / `/cancel` stops that session and its entire downward helper tree.** Human and agent triggers use `AgentLoop.StopSession`: polite immediately, forced after 3 s, detach 3 s after force. `cancel_grace`, the agent 5-second grace and public `hard` option are removed.
+
+Landed stopped resumes the same generation with a fresh execution identity; committed done/failed starts the next round. Boot never dispatches from old messages. A finished root is lifecycle completed/done, **not archived/hidden**; human input continues it, and a new scheduled/heartbeat run may revive completed as the system principal, **never stopped**. A helper final is consumed once by poll OR wake; a stopped parent holds it unconsumed until resumed, and Stop all supersedes queued hand-back wakes without deleting saved results.
+
+Delegated input is delivered only after exact text/identity is durably in the transcript; a failed write stays queued with a visible error. One route/record for all senders (transcript as record), waiting-message restart reconstruction, 256 KiB aggregate cap, ledger compaction and live failed-descendant-stop retry are **deferred to #1198 (founder 2026-10-06)**. F6 is the later post-landing simplification review, not authorization to remove safeguards now. The historical holdout below stays verbatim; conflicting old Stop, generation, person-question and automatic-boot-run oracles are not current acceptance.
+
+Status: Draft
+
 - **Decision record:** [ADR-091](../architecture/ADR-091-steered-sessions-replace-subagents.md) D3, D7 (server side), §7
 - **Landing order:** [adr-091-landing-order.md](adr-091-landing-order.md) — consumes I-1, I-2, I-8; publishes I-4, I-5; boundary inventory §6
 - **Owner files:** landing order §3, row B
@@ -41,7 +51,7 @@ A steered session must never speak to a human directly. Today that rule is a swi
 | `pkg/agent/async_notifier.go::WakeParent`, `wakeableSessionMessageKinds` (`question`, `blocker`, `error`, `handback`) | wakes with the **child's** `AgentID` as sender identity | wakes with the **parent's** identity resolved from the edge; the one wake-eligibility table (I-5) = today's set plus `goal_status`, minus non-fatal `error`; used by initial delivery and by boot alike (R09) |
 | `pkg/agent/async_notifier.go::allowWake` | 15-second debounce and hourly cap on every wake; suppression returns success | wake-eligible kinds bypass it entirely (`WakeParentAlways` never consults `allowWake`), so a completion can never be throttled away; the rest never reach a wake at all and are reported `stored_not_woken` |
 | `pkg/session/message_inbox.go::Append` | unacknowledged cap and per-minute rate on every kind; ids assigned by the inbox | wake-eligible kinds always admitted; cap and rate apply to `progress` / `checkpoint` / non-fatal `error`; terminal entries carry deterministic ids (`<child>:<gen>:final`), so a recreated entry is the same entry (R10) |
-| write order of a terminal outcome | — | inbox entry first, terminal lifecycle write second; boot repairs either half (WP-D) |
+| write order of a terminal outcome | historical inbox-first design | **Amended 2026-10-06:** atomic lifecycle/outbox commit first; publish only committed final, then recover delivery independently (control-plane D2; R1). |
 | `pkg/agent/task_executor_judge.go::notifyParentIfAllSiblingsDone` | wakes at `"task:" + parent.ID`; fires only when all siblings are terminal | **deleted**; completion goes through `Deliver`, per child |
 | `pkg/bus/session_message.go::SessionMessageEvent` | carries no trusted publisher principal | gains `Principal`, set by the publisher after it verified authority (tools: `verifyCallerOwnsSession`; human: the gateway's authenticated identity) (R17) |
 | `pkg/agent/session_messaging_wire.go::deliverParentToChild` | checks the target exists and has a non-empty parent key — does not establish who is sending | re-verifies the event's `Principal` against the target's edge: an ancestor of the target, or the human — a valid child naming another valid child is refused |
@@ -197,6 +207,8 @@ Conventions: landing order §5 item 6.
 | Boot hook (WP-D) | re-wakes unacknowledged entries | I-5 | surfaced |
 
 ## BDD scenarios
+
+**Amended 2026-10-06:** any older scenario promoting an inbox final without a lifecycle/outbox commit, running from boot replay, acknowledging at revival without consumption, or treating a Stop as fatal failure is historical and superseded by FR-B-002/011/013 and the current amendment. Removed person-question parks stay removed.
 
 ```gherkin
 Feature: Audience and upward delivery
@@ -363,7 +375,7 @@ Feature: Audience and upward delivery
     When C's interruption is delivered
     Then the entry is stored and B is not woken
     When B is revived
-    Then the entry is acknowledged
+    Then the entry is delivered and consumed once through poll OR hand-back wake, not merely acknowledged at revival
 
   # Happy Path — Traces to: US-3 / AS-1, AS-2
   Scenario: A child streams in its own session; the parent's transcript records its lifecycle
@@ -457,7 +469,7 @@ Preserved: the assertions and controls of `pkg/agent/system_turn_tool_output_tes
 | ID | Requirement |
 |---|---|
 | FR-B-001 | Every boundary in the inventory MUST resolve audience through the injected `steer.AudienceResolver` from the I-8 class and MUST NOT publish to a user address for a steered session. |
-| FR-B-002 | The system MUST deliver one durable upward entry — an existing `SessionMessage` kind per the I-5 table, with the deterministic id `<child>:<gen>:final` for terminal outcomes — per child completion, parking, failure and goal verdict, on the steering session's own address, with producer and recipient identities distinct; the inbox entry MUST be appended before the terminal lifecycle write; the `message_id` MUST travel in the wake; a wake for an id the recipient's transcript already records as consumed MUST be acknowledged without a second consumption. |
+| FR-B-002 | The system MUST deliver one durable upward entry — an existing `SessionMessage` kind per the I-5 table, with the deterministic id `<child>:<gen>:final` for terminal outcomes — per child completion, parking, failure and goal verdict, on the steering session's own address, with producer and recipient identities distinct; the terminal lifecycle/outbox MUST commit before inbox/frame/wake publication (**amended 2026-10-06**, control-plane D2/R1); the `message_id` MUST travel in the wake; a wake for an id the recipient's transcript already records as consumed MUST be acknowledged without a second consumption. |
 | FR-B-003 | The system MUST wake per child; `task_executor_judge.go::notifyParentIfAllSiblingsDone` is deleted. |
 | FR-B-004 | The system MUST surface undeliverable entries to the operator. |
 | FR-B-005 | Every session-scoped frame MUST carry the producing session as `session_id`; `ProducingSessionID` MUST be deleted from `pkg/agent/events.go` and its readers in `websocket_forward.go`; no frame is ever re-labelled with an ancestor's id. |
@@ -466,9 +478,9 @@ Preserved: the assertions and controls of `pkg/agent/system_turn_tool_output_tes
 | FR-B-008 | Tool errors from a steered session MUST be visible in its own view and, as an `error` inbox entry, as a line in the parent's side panel. |
 | FR-B-009 | A steered session's `message` tool MUST accept only its own session's conversation as target and MUST refuse every other target with `steered_session_own_chat_only`; proven with real channel ownership, never a nil ownership stub. |
 | FR-B-010 | One wake-eligibility table MUST govern initial delivery and boot alike: `handback`, `question`, `blocker`, fatal `error` and `goal_status` wake, are always admitted and bypass `allowWake`; `progress`, `checkpoint` and non-fatal `error` never wake (not at boot either) and remain subject to the cap and the rate and MUST be reported `stored_not_woken`, never as woken. Because a wake-eligible kind bypasses `allowWake` outright, a wake the debounce or the hourly cap threw away is not a reachable outcome for it and there is no separate `suppressed` result: `DeliveryOutcome` has exactly three values — `woke`, `queued_into_live_turn`, `stored_not_woken`. |
-| FR-B-011 | When the recipient has a live turn, the wake MUST be enqueued into it as a steering message and MUST NOT start a second turn; the drain MUST write the consumed marker when it dequeues it. |
+| FR-B-011 | **Amended 2026-10-06:** a live recipient may consume through one injection, never a second turn or a duplicate poll result. Persist injected text/identity before recording consumption; a denied write keeps it queued with a visible error. A queue pop alone is not consumption or delivery. |
 | FR-B-012 | A steered session's question MUST be relayed as a `question` entry to its steering session and MUST NOT be broadcast as the parent's own card. |
-| FR-B-013 | When the recipient carries a Stop marker for its current generation, a terminal entry MUST be stored and MUST NOT wake it; it is acknowledged at revival. |
+| FR-B-013 | **Amended 2026-10-06:** an in-flight or landed stopped parent holds its child final **unconsumed** until legitimate resume. Poll OR hand-back wake may consume it once; never both. Resume itself is not acknowledgement. Stop all supersedes queued wakes in the stopped tree, not saved result/history. |
 | FR-B-014 | Every boundary MUST obtain its audience from the injected `steer.AudienceResolver` and MUST call `steer.BoundaryObserver.Observe` before acting; a resolver error MUST yield `AudienceNone`. |
 | FR-B-015 | `SessionMessageEvent` MUST carry a `Principal` set by the verified publisher, and `deliverParentToChild` MUST re-verify it against the target's edge (ancestor or human); an event without a principal, or from a non-ancestor, MUST be refused. |
 | FR-B-016 | An empty final answer MUST be persisted `failed` and delivered as an `error` (`fatal: true`, `empty_answer:`); it MUST NOT produce a `handback`. |

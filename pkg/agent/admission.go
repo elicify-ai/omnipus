@@ -121,7 +121,7 @@ type AdmissionController struct {
 	// changes, with no restart or explicit resize required.
 	resolveCap   func() int
 	mu           sync.Mutex
-	activeScopes map[string]struct{}
+	activeScopes map[string]*ordinaryAdmissionOwner
 }
 
 // newAdmissionController returns a controller with a FIXED cap: softCap if
@@ -136,7 +136,7 @@ func newAdmissionController(softCap int) *AdmissionController {
 	}
 	return &AdmissionController{
 		softCap:      softCap,
-		activeScopes: make(map[string]struct{}),
+		activeScopes: make(map[string]*ordinaryAdmissionOwner),
 	}
 }
 
@@ -150,7 +150,7 @@ func newAdmissionControllerWithResolver(resolveCap func() int) *AdmissionControl
 	return &AdmissionController{
 		resolveCap:   resolveCap,
 		softCap:      1, // defensive floor, only reachable if resolveCap ever returns <= 0
-		activeScopes: make(map[string]struct{}),
+		activeScopes: make(map[string]*ordinaryAdmissionOwner),
 	}
 }
 
@@ -209,13 +209,14 @@ func (a *AdmissionController) TryAdmitWithReason(scope string) (bool, string, fu
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if _, alreadyActive := a.activeScopes[scope]; alreadyActive {
-		// Existing scope — follow-up turn, always admitted, no new slot consumed.
+	owner := a.activeScopes[scope]
+	if owner != nil && owner.lease != nil {
+		// Only an actual worker lease admits a follow-up without a new slot.
 		return true, "", func() {}
 	}
 
 	limit, memoryBinding := a.admissionCapWithReason()
-	if len(a.activeScopes) >= limit {
+	if a.workerCountLocked() >= limit {
 		if memoryBinding {
 			logMemoryAdmissionRefusalOnce(limit)
 			return false, config.ReasonMemoryPressure, nil
@@ -223,10 +224,20 @@ func (a *AdmissionController) TryAdmitWithReason(scope string) (bool, string, fu
 		return false, "", nil
 	}
 
-	a.activeScopes[scope] = struct{}{}
+	if owner == nil {
+		owner = &ordinaryAdmissionOwner{}
+		a.activeScopes[scope] = owner
+	}
+	lease := &ordinaryWorkerLease{held: true}
+	owner.lease = lease
 	release := func() {
 		a.mu.Lock()
-		delete(a.activeScopes, scope)
+		if current := a.activeScopes[scope]; current != nil && current.lease == lease {
+			current.lease = nil
+			if current.execution == nil {
+				delete(a.activeScopes, scope)
+			}
+		}
 		a.mu.Unlock()
 	}
 	return true, "", release
@@ -237,7 +248,7 @@ func (a *AdmissionController) TryAdmitWithReason(scope string) (bool, string, fu
 func (a *AdmissionController) ActiveScopes() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return len(a.activeScopes)
+	return a.workerCountLocked()
 }
 
 // SoftCap returns the cap currently being enforced — the live-resolved value
@@ -281,10 +292,13 @@ func resetMemoryAdmissionRefusalLogForTest() {
 // Entries without a genuine identity can be inspected by the queue primitive,
 // but production promotion refuses them; it never synthesizes an identity.
 type steerQueueEntry struct {
-	sessionID  string
-	generation int
-	runID      string
-	bootSeq    uint64
+	sessionID   string
+	generation  int
+	runID       string
+	bootSeq     uint64
+	disposition *executionDisposition
+	// Native pending wake identities belong to this full admission owner.
+	wakeInputs []steeringQueueItem
 }
 
 func (entry steerQueueEntry) executionClaim() executionClaim {
@@ -422,25 +436,11 @@ func (g *steerAdmission) removeQueuedExecution(claim executionClaim) {
 	}
 }
 
-// removeQueued rolls back one exact queue entry after its queued-state write
-// fails. It never changes active reservations and therefore cannot release a
-// different turn's slot.
-func (g *steerAdmission) removeQueued(sessionID string, generation int) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	for i, entry := range g.queue {
-		if entry.sessionID == sessionID && entry.generation == generation {
-			g.queue = append(g.queue[:i], g.queue[i+1:]...)
-			return
-		}
-	}
-}
-
 // removeQueuedSession drops EVERY queued entry for sessionID, whatever
-// generation each carries, and reports how many it removed. Unlike
-// removeQueued it is not a rollback of one failed write: it is what the Stop
-// cascade uses (steer_delegate_cancel.go::cancelDelegatedSubtree) to take a
-// cancelled session out of the start queue.
+// generation each carries, and reports how many it removed. It is not a
+// rollback of one failed write. The Stop path never uses it: a stop effect
+// removes only its own selected admission (removeQueuedExecution, D2), so a
+// session-wide removal could take a same-generation replacement with it.
 //
 // reserveDispatch would refuse the promotion anyway, so this is not what
 // makes a stopped session safe. It is what makes the queue HONEST: a
@@ -527,9 +527,12 @@ func (al *AgentLoop) steerAdmission() *steerAdmission {
 // queued session runs in a goroutine so the caller never blocks on it.
 func (al *AgentLoop) drainSteerQueue(claim executionClaim) {
 	next, hasNext := al.steerAdmission().releaseExecution(claim)
-	if !hasNext {
-		return
+	if hasNext {
+		al.promoteSteeredExecution(next)
 	}
+}
+
+func (al *AgentLoop) promoteSteeredExecution(next steerQueueEntry) {
 	al.goSteeredTurn(func() {
 		if _, err := al.dispatchSteeredSessionReserved(context.Background(), next.sessionID, next.generation, next.runID, next.bootSeq); err != nil {
 			if classifyDrainDispatchError(err) {
@@ -548,10 +551,11 @@ func (al *AgentLoop) drainSteerQueue(claim executionClaim) {
 			// Failed promotion is an admission-identity failure, not a stop
 			// landing. The claim-bound writer keeps the queued run's identity;
 			// a generation-only terminal report could land the failure on a
-			// later same-generation owner. The promotion goroutine has no
-			// caller, so the returned error is logged rather than dropped.
+			// later same-generation owner. A failed owning commit reports a
+			// nonfatal persistence error through the existing parent inbox; its
+			// returned error still records that the outcome is not committed.
 			if reportErr := al.reportSteeredExecutionFailure(context.Background(), next.executionClaim(), fmt.Sprintf("dispatch_failed: %v", err)); reportErr != nil {
-				logger.ErrorCF("agent", "steer: promoted admission failure remains pending",
+				logger.ErrorCF("agent", "steer: promoted admission failure could not be fully reported",
 					map[string]any{"session_id": next.sessionID, "run_id": next.runID, "error": reportErr.Error()})
 			}
 		}

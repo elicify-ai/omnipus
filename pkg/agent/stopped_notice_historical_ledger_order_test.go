@@ -148,8 +148,8 @@ func TestW1HistoricalLedgerNotice_NoNoticeOrWakeWithoutLandedStoppedEvent(t *tes
 	if stamped.State != session.LifecycleRunning || stamped.Stop == nil || stamped.Stop.Generation != stamped.Generation || stamped.StopNote == nil {
 		t.Fatalf("barrier record = state %q fence %v note %v, want running with a current fence and stamped note — the acceptance stamp is the precondition this test faults after", stamped.State, stamped.Stop, stamped.StopNote)
 	}
-	if transitions, err := lifecycle.ListStoppedTransitions(childID); err != nil {
-		t.Fatalf("ListStoppedTransitions(at barrier): %v", err)
+	if transitions, transitionsErr := lifecycle.ListStoppedTransitions(childID); transitionsErr != nil {
+		t.Fatalf("ListStoppedTransitions(at barrier): %v", transitionsErr)
 	} else if len(transitions) != 0 {
 		t.Fatalf("barrier ledger already holds landed events (%s) — a bare accepted stop intent must not be an event (W2a brief)", w1hFormatTransitions(transitions))
 	}
@@ -162,8 +162,8 @@ func TestW1HistoricalLedgerNotice_NoNoticeOrWakeWithoutLandedStoppedEvent(t *tes
 	w1hFaultWrites(t, w1hChildLifecyclePath(t, al, childID))
 
 	close(releaseGate)
-	if err := <-stopped; err != nil {
-		t.Fatalf("StopTurns returned an error: %v", err)
+	if stopErr := <-stopped; stopErr != nil {
+		t.Fatalf("StopTurns returned an error: %v", stopErr)
 	}
 	// Give the released turn's completion every chance to publish wrongly.
 	w1hWaitFor(t, 10*time.Second, "parent notice appearing", func() bool {

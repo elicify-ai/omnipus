@@ -108,7 +108,7 @@ func TestUserMessageAppendFailure_NonFirstStopsTurnAndReportsVisibleError(t *tes
 		"the failed append must not admit a turn — the previous warn-and-continue is gone")
 
 	_, statErr := os.Stat(filepath.Join(store.BaseDir(), sessionID, "provenance.jsonl"))
-	require.True(t, os.IsNotExist(statErr),
+	require.ErrorIs(t, statErr, os.ErrNotExist,
 		"a failed transcript append must not write provenance")
 	_, found, lookupErr := store.LookupMessageProvenance(sessionID, "no-such-server-message-id")
 	require.NoError(t, lookupErr)

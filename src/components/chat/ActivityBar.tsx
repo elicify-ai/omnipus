@@ -141,7 +141,8 @@ export function ActivityBar() {
   const [heldByPanel, setHeldByPanel] = useState<PillKind | null>(null)
   const [scrollRequest, setScrollRequest] = useState<{ section: 'commands'; nonce: number } | null>(null)
 
-  const agentOpen = running.some((item) => item.kind === 'agent')
+  const agentOpen = running.some((item) => item.kind === 'agent') ||
+    recentlyFinished.some((item) => item.kind === 'agent' && item.lifecycleState === 'stopped')
   const queuedAgents = running.filter((item) => item.kind === 'agent' && item.lifecycleState === 'queued').length
   const bashRunning = running.filter((item) => item.kind === 'bash').length
   // kind === 'agent' on purpose. An unmet judge verdict is also status 'error',

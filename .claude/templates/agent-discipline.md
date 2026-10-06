@@ -1,7 +1,7 @@
 # Canonical developer/reviewer discipline
 
 Authoring source only — nothing loads this file at runtime. Every developer-side and
-reviewer-side agent file (and, for the six plugin reviewers, `.claude/templates/plugin-reviewer-dispatch.md`)
+reviewer-side agent file (and, for plugin reviewers, `.claude/templates/plugin-reviewer-dispatch.md`)
 embeds the section(s) its role needs, **byte-identical**, inside the matching
 `<!-- agent-discipline:<section>:start/end -->` markers below. This is the design's
 own convention (design section 4.5: "every agent file embeds its sections verbatim,
@@ -16,12 +16,13 @@ fail CI on a partial edit.
 
 **Sections and the role → section mapping** (design 4.1's discipline classification
 table):
+The founder decision of 2026-09-29 supersedes that dated design's gate size (root `CLAUDE.md`, "Change sizes and the review gate").
 
 | Section | Carried by |
 |---|---|
 | `shared-traits` | Every developer-side and reviewer-side role, plus squad-lead (orchestrator side) |
 | `developer-rules` | backend-lead, frontend-lead, uat-tester, prometheus-prompt-engineer, and qa-lead's RED half |
-| `reviewer-rules` | The 6 plugin reviewers (via the dispatch template), security-lead, uat-validator, docs-verifier, and qa-lead's CHECK half |
+| `reviewer-rules` | Plugin reviewers (via the dispatch template; optional reviewers are not part of the gate), security-lead, uat-validator, docs-verifier, and qa-lead's CHECK half |
 
 Both halves (`shared-traits` + `developer-rules` + `reviewer-rules`): qa-lead, architect.
 team-lead is exempt (it restates the shared traits in its own essentials, 5.2, and is

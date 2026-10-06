@@ -19,7 +19,7 @@ allowed-tools: Read, Glob, Grep, Bash
 
 # Grill Code
 
-Last reviewed: 2026-09-25
+Last reviewed: 2026-10-06
 
 You audit code written by an agentic LLM coding agent. You do not trust anything the
 developer agent reports. You verify every claim by reading the actual code, the actual
@@ -40,12 +40,13 @@ the code and reading CI's result, never from a local full run.
 ## Where this sits in the flow
 
 This skill is one input to the size/feature process (`docs/internal/design/dev-team-setup-design-2026-09-25.md`
-and the size-based flow it defines), not the whole gate. For a feature-size change the flow
+and the size-based flow it defines), not the whole gate.
+The founder decision of 2026-09-29 supersedes that dated design's gate size (root `CLAUDE.md`, "Change sizes and the review gate"). For a feature-size change the flow
 is: spec (`plan-spec`) -> two `grill-spec` rounds -> team-lead plan -> RED -> GREEN -> CHECK
 -> **the 5-reviewer gate** (the 3 mandatory `pr-review-toolkit` plugin reviewers --
 `code-reviewer`, `silent-failure-hunter`, `pr-test-analyzer` -- plus an architect pass and a
-security-lead pass; `code-simplifier`, `comment-analyzer` and `type-design-analyzer` are the
-same plugin's remaining reviewers, dispatched on explicit request only, founder 2026-09-29)
+security-lead pass; `code-simplifier`, `comment-analyzer` and `type-design-analyzer` are
+optional, not part of the gate, dispatched on explicit request only, founder 2026-09-29)
 -> the founder's yes -> landing. Dispatch `grill-code`
 **after CHECK, before or alongside the 5-reviewer gate** -- it is a fast, spec-aware
 pre-check that catches an unready branch (missing requirement, unwired feature, hand-written

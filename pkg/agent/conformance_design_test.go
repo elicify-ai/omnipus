@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1479,7 +1480,7 @@ func TestConformance_g4_ParallelStreamsLint_Design(t *testing.T) {
 // failed, needs_input reconstructability, awaiting-correction exemption, N-15
 // re-baseline); this bootsweep scenario walks the FULL drawn sequence as one
 // observed path: kill -9 mid-plan (persisted non-terminal sessions) → every
-// non-terminal session with no live turn → failed(interrupted) within budget,
+// eligible non-steered task root with no live turn → failed(interrupted),
 // carrying last checkpoint + undelivered messages → session.failed hook fires
 // → plan re-judges/re-dispatches (the awaiting-correction owner is PRESERVED,
 // not swept → no wedge, CRIT-1) → an in-flight goal predating the upgrade is
@@ -1503,36 +1504,50 @@ func TestConformance_g4_ParallelStreamsLint_Design(t *testing.T) {
 // over persisted records) is the real-process gate; this proves the boot-sweep
 // control plane walks the drawn path faithfully.
 //
-// Traces to: ADR-053 §9.1, design diagram §5 (boot sweep)
+// Traces to: ADR-053 §9.1, design diagram §5 (boot sweep), amended by the
+// frozen sub-agent control-plane ADR D8.3: steered records are untouched here
+// and left to SteerBootRecovery; only eligible non-steered records are swept.
 func TestConformance_bootsweep_Design(t *testing.T) {
 	h := newBootSweepHarness(t)
 
-	// (1) kill -9 mid-plan: persist the cross-section of stranded sessions.
-	//     A running session with a checkpoint + undelivered messages.
-	//     ADR-093 D3: a standing root (no SteeredBy edge) is now exempt from
-	//     this sweep, so bs-running/bs-queued are stamped as steered workers
-	//     — the shape D3's own text still calls honest to sweep — to keep
-	//     testing the sweep mechanism itself; bs-owner/bs-stale-goal below
-	//     stay plain roots because their own exemptions ((b) and N-15) must
-	//     still fire for a standing root exactly as for any other record.
+	// (1) The legacy sweep still owns non-steered task roots. Standing chats
+	// are exempt (ADR-093 D3); steered helpers belong to SteerBootRecovery
+	// alone (frozen control-plane ADR D8.3), never this second writer.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-running", Generation: 1, State: session.LifecycleRunning,
 		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind:        session.OwnerScopeHuman,
-		Origin:                &session.Origin{Kind: session.OriginKindDelegate},
-		SteeredBy:             &session.SteeredBy{SteeringSessionID: "bs-parent", RootSessionID: "bs-parent"},
+		Origin:                &session.Origin{Kind: session.OriginKindTask, TaskID: "bs-task-running"},
 		LastCheckpointRef:     "ckpt-bs",
 		UndeliveredMessageIDs: []string{"bs-msg-1", "bs-msg-2"},
 		CreatedAt:             time.Now().Add(-1 * time.Hour),
 	})
-	// A queued session — also non-terminal, also swept. Same D3 note above.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-queued", Generation: 1, State: session.LifecycleQueued,
 		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind: session.OwnerScopeHuman,
-		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: "bs-parent", RootSessionID: "bs-parent"},
+		Origin:         &session.Origin{Kind: session.OriginKindTask, TaskID: "bs-task-queued"},
 	})
+	steeredBefore := make(map[string]*session.LifecycleRecord)
+	for _, state := range []session.LifecycleState{session.LifecycleRunning, session.LifecycleQueued} {
+		id := "bs-steered-" + string(state)
+		persistLifecycle(t, h.ls, &session.LifecycleRecord{
+			SessionID: id, Generation: 1, State: state,
+			WorkspaceID: "ws", AgentID: "agent-1",
+			OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: "bs-parent",
+			Origin: &session.Origin{Kind: session.OriginKindDelegate},
+			SteeredBy: &session.SteeredBy{
+				SteeringSessionID: "bs-parent", RootSessionID: "bs-parent",
+				ReportingTarget: session.ReportingTarget{SessionID: "bs-parent", Channel: "webchat", ChatID: "bs-parent"},
+			},
+			LastCheckpointRef: "ckpt-steered", UndeliveredMessageIDs: []string{"steered-msg"},
+		})
+		before, err := h.ls.Load(id)
+		if err != nil {
+			t.Fatalf("Load(steered fixture %s): %v", id, err)
+		}
+		steeredBefore[id] = before
+	}
 	// A terminal session — MUST be left alone.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-done", Generation: 1, State: session.LifecycleCompleted,
@@ -1579,13 +1594,32 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 	})
 	res := h.pe.runBootSweep(context.Background())
 
-	if len(res.SweptToFailed) != 2 {
-		t.Fatalf("(2) SweptToFailed = %v, want exactly 2 (running+queued; terminal excluded)", res.SweptToFailed)
+	if len(res.SweptToFailed) != 2 || !containsTaskID(res.SweptToFailed, "bs-running") || !containsTaskID(res.SweptToFailed, "bs-queued") {
+		t.Fatalf("(2) SweptToFailed = %v, want exactly [bs-running bs-queued] (non-steered task roots only; D8.3)", res.SweptToFailed)
 	}
-	if len(failedHooked) != 2 {
-		t.Fatalf("(3) session.failed hook fired %d times, want 2 (→ plan re-judges/re-dispatches)", len(failedHooked))
+	if len(failedHooked) != 2 || !containsTaskID(failedHooked, "bs-running") || !containsTaskID(failedHooked, "bs-queued") {
+		t.Fatalf("(3) session.failed hook targets = %v, want exactly [bs-running bs-queued] (no steered hook; D8.3)", failedHooked)
 	}
-	swept, _ := h.ls.Load("bs-running")
+	for id, before := range steeredBefore {
+		after, err := h.ls.Load(id)
+		if err != nil {
+			t.Fatalf("Load(steered after sweep %s): %v", id, err)
+		}
+		if !reflect.DeepEqual(before, after) {
+			t.Errorf("(2) PlanEngine changed steered %s: before=%+v after=%+v — D8.3 leaves the entire record to SteerBootRecovery", id, before, after)
+		}
+	}
+	swept, loadErr := h.ls.Load("bs-running")
+	if loadErr != nil {
+		t.Fatalf("Load(swept running): %v", loadErr)
+	}
+	queued, queuedErr := h.ls.Load("bs-queued")
+	if queuedErr != nil {
+		t.Fatalf("Load(swept queued): %v", queuedErr)
+	}
+	if queued.State != session.LifecycleFailed || queued.FailedReason != failedReasonInterrupted {
+		t.Errorf("(2) bs-queued state=%q reason=%q, want failed/interrupted", queued.State, queued.FailedReason)
+	}
 	if swept.State != session.LifecycleFailed || swept.FailedReason != failedReasonInterrupted {
 		t.Fatalf("(2) bs-running state=%q reason=%q, want failed/interrupted", swept.State, swept.FailedReason)
 	}

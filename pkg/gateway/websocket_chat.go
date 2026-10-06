@@ -569,7 +569,7 @@ func (hcm *wsHandlerHandleChatMessage) resolveTargetAgent() bool {
 			// already skips workers, so this fallback never lands on one.
 			hcm.targetAgentID = firstChatTargetAgentID(hcm.h.agentLoop.GetConfig())
 		}
-	} else if isWorkerAgentID(hcm.h.agentLoop.GetConfig(), hcm.targetAgentID) {
+	} else if isWorkerAgentID(hcm.h.agentLoop.GetConfig(), hcm.targetAgentID) && !hcm.addressesExistingHelperOf(hcm.targetAgentID) {
 		// An explicit agent_id that resolves to a worker is illegitimate: a worker
 		// is a delegation-only labor tier, never a chat target. Refuse to mint a
 		// live chat session for it. Mirror the error-frame pattern used for an
@@ -1449,4 +1449,23 @@ func (h *WSHandler) restoreWorkspaceSetupPending(workspaceID string) {
 		logsafeWarn("ws: workspace setup kickoff: could not restore setup_pending after downstream failure",
 			"workspace_id", workspaceID, "error", err)
 	}
+}
+
+// addressesExistingHelperOf reports whether the frame names an existing
+// helper (steered) session run by workerID. A person typing into that
+// helper's own pane steers that existing session (Steering commands C1);
+// the worker guard keeps refusing a new or unrelated chat with a worker.
+func (hcm *wsHandlerHandleChatMessage) addressesExistingHelperOf(workerID string) bool {
+	if hcm.frameSessionID == "" {
+		return false
+	}
+	lifecycle := hcm.h.agentLoop.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return false
+	}
+	rec, err := lifecycle.Load(hcm.frameSessionID)
+	if err != nil || rec == nil {
+		return false
+	}
+	return rec.SteeredBy != nil && rec.AgentID == workerID
 }

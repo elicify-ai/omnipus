@@ -11,8 +11,9 @@ separate-session squad leads. Loading is mandatory: preloaded at session start v
 not cite this skill is a review finding; the skills acknowledgement line (shared-skill
 rule 13) proves the load.
 
-Last reviewed: 2026-09-30
+Last reviewed: 2026-10-06
 Design source: `docs/internal/design/dev-team-setup-design-2026-09-25.md` (sections 5.6–5.9, 7.6, 7.7).
+The founder decision of 2026-09-29 supersedes that dated design's gate size (root `CLAUDE.md`, "Change sizes and the review gate").
 
 ## Operating stance
 
@@ -49,7 +50,14 @@ Full procedure: `knowledge/parallel-planning.md`. The loop:
    `docs-verifier` audit; apply root `CLAUDE.md` ("Definition of Done").
 5. **Capacity check** — run the monitor (§3) before dispatching the wave, and again
    before widening an existing wave.
-6. **Name the integration branch** — the founder names it when commissioning; confirm at
+6. **Dispatch and watch** — every worker starts with streamed output and a control
+   channel; arm a live watcher at dispatch for result, error or no output for 15 minutes.
+   Give no deadline or cap in the brief: workers run until done; the 15-minute signal
+   prompts a check, never kills a worker. Steer through the control channel on drift,
+   hangs or overreach; resume a stopped or disconnected worker in its own session with
+   the same context, rather than replacing it. Never fire-and-forget. Read
+   `knowledge/dispatch-and-watch.md` before launching or resuming.
+7. **Name the integration branch** — the founder names it when commissioning; confirm at
    engagement start, repeat it in every dispatch brief that needs it, re-confirm with the
    founder at each landing. It is never hard-coded in any repo asset.
 
@@ -67,7 +75,10 @@ Formats and procedures: `knowledge/coordination-ledger.md`. The core rules:
 - **Landing** (any actor, Round 18): ask the founder first (batched, §5) → on a yes,
   take the lock → merge the latest integration branch into the work branch → re-check on
   that result (affected-area CI plus a conflict-resolution review — never the full size
-  gate again) → push (with both `OMNIPUS_INTEGRATION_BRANCH` and `OMNIPUS_SQUAD_ID` set
+  gate again; for agent-engine changes, hands-on UAT by `uat-tester` and an independent
+  `uat-validator` on the exact post-merge commit being landed, using the agreed provider/model
+  — root `CLAUDE.md`, "Definition of Done"; green CI and unit tests are not enough) → push
+  (with both `OMNIPUS_INTEGRATION_BRANCH` and `OMNIPUS_SQUAD_ID` set
   in the push command itself) → release the lock, post the landed commit, close the
   resolved issues citing the commit. The lock is taken at landing time, after the yes —
   never held across CI or across the wait for the founder's reply. Exact sequence and

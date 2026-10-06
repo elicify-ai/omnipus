@@ -21,6 +21,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,7 +39,14 @@ func u1PersistSteered(t *testing.T, al *AgentLoop, id, parentID string, state se
 		WorkspaceID: "ws-u1-frontier", AgentID: "agent-1",
 		OwnerScopeKind: session.OwnerScopeHuman,
 		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentID, RootSessionID: parentID},
+		// Launch always writes the direct parent's reporting destination.
+		// A bare edge without it cannot publish the D6 notice (D8.10).
+		SteeredBy: &session.SteeredBy{
+			SteeringSessionID: parentID, RootSessionID: parentID,
+			ReportingTarget: session.ReportingTarget{
+				SessionID: parentID, Channel: "webchat", ChatID: parentID,
+			},
+		},
 	}
 	switch state {
 	case session.LifecycleNeedsInput:
@@ -146,7 +154,7 @@ func TestIssue1053_GenuineFailedParentCascadeStopsDescendants(t *testing.T) {
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	root := newTestSteeringSession(t, al, "ws-u1-1053")
-	mid := u1LaunchChild(t, al, root, "u1-1053-mid")
+	mid, _ := r1AdmitChild(t, al, root, "u1-1053-mid", "held real admission before synthetic genuine failure")
 	leaf := u1LaunchChild(t, al, mid.SessionID, "u1-1053-leaf")
 	leafGoal := activateTestGoalRecord(t, leaf.SessionID, "1053 leaf goal stays open")
 	wakes := observeU1ParentNoticeWakes(t, al, mid.SessionID)
@@ -220,7 +228,10 @@ func TestIssue1053_GenuineFailedParentCascadeStopsDescendants(t *testing.T) {
 			continue
 		}
 		sawFatalForMid = true
-		if !u1ContainsAll(u1NoticeBody(fields), leaf.SessionID) {
+		// IDs are exact wire strings. u1NoticeBody lowercases and replaces
+		// underscores for prose matching, so it cannot test a raw session ID.
+		body, textOK := fields["text"].(string)
+		if !textOK || !strings.Contains(body, leaf.SessionID) {
 			t.Errorf("mid's fatal hand-back to the grandparent does not name the cascade-stopped descendant %s: %s — "+
 				"#1053: the fatal hand-back names descendants and their stop results", leaf.SessionID, raw)
 		}

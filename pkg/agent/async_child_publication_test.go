@@ -133,6 +133,7 @@ func newAsyncChildPublicationTestLoop(
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	t.Cleanup(al.Close)
+	mintGenuineBootEpochForLoop(t, al)
 	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
 	inbox := session.NewMessageInboxStore(filepath.Join(home, "session_messages"))
 	al.SetSessionMessagingStores(inbox, lifecycle)

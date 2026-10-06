@@ -5,87 +5,91 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
-// stopEffectsForCallback is the immutable target set a delayed stop effect
-// may act on. A current fence's StopEffect is that stop's own selection: a
-// newer stop of the replacement uses it and does not inherit an older one.
-// After resume has cleared the fence, only accepted effects whose run is not
-// the current admission remain — the old stop cannot select the replacement.
-func (al *AgentLoop) stopEffectsForCallback(sessionID string, generation int) ([]session.StopEffect, error) {
+type stopSelectionContextKey struct{}
+
+func withStopSelection(ctx context.Context, selected session.StopSelection) context.Context {
+	return context.WithValue(ctx, stopSelectionContextKey{}, selected)
+}
+
+func stopSelectionFromContext(ctx context.Context) (session.StopSelection, bool) {
+	selected, ok := ctx.Value(stopSelectionContextKey{}).(session.StopSelection)
+	return selected, ok
+}
+
+// stopSelectionForCallback requires the carried acceptance-time pair. Current
+// record reads validate ownership only, never select a replacement target.
+// Queue, handle and mutation cuts recheck their own immutable identities.
+func (al *AgentLoop) stopSelectionForCallback(ctx context.Context, sessionID string, generation int) (session.StopSelection, bool, error) {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
-		return nil, fmt.Errorf("steer: stop effect %q: lifecycle store is not wired", sessionID)
+		return session.StopSelection{}, false, fmt.Errorf("steer: stop effect %q: lifecycle store is not wired", sessionID)
+	}
+	selected, carried := stopSelectionFromContext(ctx)
+	if !carried || selected.SessionID != sessionID || selected.Effect.Target.Generation != generation || selected.Effect.ControlID == "" {
+		return session.StopSelection{}, false, fmt.Errorf("steer: stop effect %q: callback does not carry its accepted execution/control pair", sessionID)
 	}
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil {
-		return nil, err
+		return session.StopSelection{}, false, err
 	}
-	if rec != nil && rec.Stop != nil && rec.Stop.Generation == generation && rec.StopEffect != nil &&
-		rec.StopEffect.ControlID != "" && stopEffectMatchesGeneration(*rec.StopEffect, generation) {
-		return []session.StopEffect{*rec.StopEffect}, nil
+	if !stopSelectionMatchesRecord(selected, rec) {
+		return selected, false, nil
 	}
-	effects, err := lifecycle.AcceptedStopEffects(sessionID)
-	if err != nil {
-		return nil, err
-	}
-	var currentRun string
-	var currentBoot uint64
-	if rec != nil && rec.ExecutionID != nil {
-		currentRun = rec.ExecutionID.RunID
-		currentBoot = rec.ExecutionID.BootSeq
-	}
-	var stale []session.StopEffect
-	for _, effect := range effects {
-		if !stopEffectMatchesGeneration(effect, generation) {
-			continue
-		}
-		if currentRun != "" && effect.Target.RunID == currentRun && effect.Target.BootSeq == currentBoot {
-			continue
-		}
-		stale = append(stale, effect)
-	}
-	return stale, nil
+	return selected, true, nil
 }
 
-func stopEffectMatchesGeneration(effect session.StopEffect, generation int) bool {
-	return effect.ControlID != "" && effect.Target.Selected() && effect.Target.Generation == generation && effect.Target.RunID != "" && effect.Target.BootSeq != 0
+func stopSelectionMatchesRecord(selected session.StopSelection, rec *session.LifecycleRecord) bool {
+	if rec == nil || selected.SessionID != rec.SessionID || selected.Effect.ControlID == "" ||
+		selected.Effect.Target.Generation != rec.Generation || rec.Stop == nil || rec.Stop.Generation != rec.Generation ||
+		rec.StopEffect == nil || *rec.StopEffect != selected.Effect {
+		return false
+	}
+	target := selected.Effect.Target
+	if !target.Selected() {
+		return target.BootSeq == 0 && rec.ExecutionID == nil
+	}
+	return claimForStopEffect(selected.SessionID, selected.Effect).matches(rec)
 }
 
 func claimForStopEffect(sessionID string, effect session.StopEffect) executionClaim {
 	return executionClaim{
-		SessionID:  sessionID,
-		Generation: effect.Target.Generation,
-		RunID:      effect.Target.RunID,
-		BootSeq:    effect.Target.BootSeq,
+		SessionID: sessionID, Generation: effect.Target.Generation,
+		RunID: effect.Target.RunID, BootSeq: effect.Target.BootSeq,
 	}
 }
 
-// removeQueuedStopEffects drops only the queued admissions the selected
-// effects name. It does not remove another run of the same session.
+// removeQueuedStopEffects compares the full selected admission under the gate
+// lock. A never-admitted selection cannot remove any queued run. A stale
+// effect (its fence already landed or was cleared by a Resume) still removes
+// its OWN exact admission: that run can never be admitted again, and the
+// full-identity match cannot reach a replacement's admission (D2/T27).
 func (al *AgentLoop) removeQueuedStopEffects(sessionID string, effects []session.StopEffect) {
 	gate := al.steerAdmission()
 	for _, effect := range effects {
-		gate.removeQueuedExecution(claimForStopEffect(sessionID, effect))
+		if effect.ControlID != "" && effect.Target.RunID != "" && effect.Target.BootSeq != 0 {
+			gate.removeQueuedExecution(claimForStopEffect(sessionID, effect))
+		}
 	}
 }
 
-// liveTurnMatchesStop reports whether the registered turn is one of the
-// selected executions. The turn lock is not held after this returns.
-func liveTurnMatchesStop(ts *turnState, effects []session.StopEffect) bool {
-	if ts == nil {
+// liveTurnMatchesStop checks the immutable handle itself, including session.
+// No registry or turn lock remains held when the caller invokes that handle.
+func liveTurnMatchesStop(ts *turnState, selected session.StopSelection) bool {
+	if ts == nil || selected.Effect.ControlID == "" || selected.Effect.Target.RunID == "" || selected.Effect.Target.BootSeq == 0 {
 		return false
 	}
 	ts.mu.RLock()
-	runID, boot, generation := ts.executionRunID, ts.executionBootSeq, ts.generation
-	ts.mu.RUnlock()
-	for _, effect := range effects {
-		if effect.Target.RunID == runID && effect.Target.BootSeq == boot && effect.Target.Generation == generation {
-			return true
-		}
+	sessionID := ts.sessionKey
+	if ts.opts.executionDisposition != nil {
+		sessionID = ts.opts.executionDisposition.claim.SessionID
 	}
-	return false
+	claim := executionClaim{SessionID: sessionID, Generation: ts.generation, RunID: ts.executionRunID, BootSeq: ts.executionBootSeq}
+	ts.mu.RUnlock()
+	return claim == claimForStopEffect(selected.SessionID, selected.Effect)
 }

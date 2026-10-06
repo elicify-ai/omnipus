@@ -154,9 +154,9 @@ func TestCancelCommand_TreeScope_ReplyMatchesOutcome(t *testing.T) {
 			wantReply:   "⏸ Cancel acknowledged — nothing is running yet, but it will stop the instant it starts.",
 		},
 		{
-			name:        "nothing_to_cancel",
+			name:        "nothing_to_stop",
 			scopedFired: &fired,
-			wantReply:   "Nothing to cancel",
+			wantReply:   "Nothing to stop.",
 		},
 		{
 			name:      "real_failure_reported",

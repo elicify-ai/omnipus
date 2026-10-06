@@ -1547,7 +1547,7 @@ func (al *AgentLoop) ProcessScheduled(
 		workspaceID = meta.WorkspaceID
 	}
 
-	resp, err := al.runAgentLoop(ctx, agent, processOptions{
+	resp, err := al.runScheduledTurnWithAdmission(ctx, agent, processOptions{
 		SessionKey:          sessionKey,
 		Channel:             channel,
 		ChatID:              chatID,
@@ -1832,12 +1832,11 @@ func (al *AgentLoop) runAgentLoop(
 		}
 	}
 
-	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, opts.SessionKey))
-	// Seed the delegation-chain depth for a task run started from within another
-	// task (opts.InitialDelegationDepth > 0). A task run otherwise begins a fresh
-	// root turn at depth 0, which would make currentDelegationDepth read 0 inside
-	// the run and never trip the per-agent await/background depth gate; seeding the
-	// stored generation here restores the bound. Root chat/board turns pass 0.
+	ts, admissionErr := al.newTurnStateForAdmission(agent, opts)
+	if admissionErr != nil {
+		return "", admissionErr
+	}
+	// Seed nested task depth; ordinary root turns keep depth zero.
 	if opts.InitialDelegationDepth > 0 {
 		ts.depth = opts.InitialDelegationDepth
 	}

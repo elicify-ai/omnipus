@@ -16,8 +16,10 @@ package agent
 
 import (
 	"context"
+	"reflect"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -33,7 +35,7 @@ func TestComplete_StopLandingDuringDeliverySurvivesAndIsNotOverwritten(t *testin
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	parentID := newTestSteeringSession(t, al, "ws-1")
-	rec := launchRunningChild(t, al, parentID, "call-complete-stop-race")
+	rec, _ := r1AdmitChild(t, al, parentID, "call-complete-stop-race", "finished before the Stop landed")
 	// A bare test parent's PeerID is empty; give the child's reporting
 	// target a routable address so Deliver's wake attempt actually runs
 	// (matching the shape of the real race window, not skip it early).
@@ -79,49 +81,33 @@ func TestComplete_StopLandingDuringDeliverySurvivesAndIsNotOverwritten(t *testin
 	}
 }
 
-// TestComplete_ReviveLandingDuringDeliveryIsNotRolledBack proves the second
-// outcome of the same read-modify-write: a Revive that mints a newer
-// generation while Deliver is still running must not be undone by the stale
-// write-back. A record's generation moving DOWN makes every later
-// generation-carrying cancel miss.
+// D2/R1 and team-lead ruling A: a genuine revival DURING publication follows
+// the outcome/outbox commit. Keep G+1/running/no-rollback, but never forge a
+// same-generation running fence as permission to revive a dying execution.
 func TestComplete_ReviveLandingDuringDeliveryIsNotRolledBack(t *testing.T) {
-	al, cleanup := newSteerAL(t)
-	defer cleanup()
+	al, _ := newSteerAL(t)
 	wireSteerCompletionDeps(t, al)
 	parentID := newTestSteeringSession(t, al, "ws-1")
-	rec := launchRunningChild(t, al, parentID, "call-complete-revive-race")
-	if err := al.GetSessionLifecycleStore().Mutate(rec.SessionID, func(r *session.LifecycleRecord) error {
-		r.SteeredBy.ReportingTarget = session.ReportingTarget{Channel: "webchat", ChatID: parentID}
-		return nil
-	}); err != nil {
-		t.Fatalf("Mutate(reporting target): %v", err)
-	}
+	rec, provider := r1AdmitChild(t, al, parentID, "call-complete-revive-race", "finished before the revival landed")
 	originalGen := rec.Generation
-
+	publication := installGoalCommitGate(t, al)
+	provider.open(0)
+	select {
+	case <-publication.event:
+	case <-time.After(5 * time.Second):
+		t.Fatal("real completion did not reach post-commit publication")
+	}
+	committed := rootReopenedRecord(t, al, rec.SessionID)
+	if committed.State != session.LifecycleCompleted || committed.FinalDelivery == nil {
+		t.Fatalf("revival fixture reached publication without a real terminal/outbox commit: %+v", committed)
+	}
 	canceller := NewSteerCanceller(al.GetSessionLifecycleStore())
-	var once sync.Once
-	completeStateWriteTestHook = func(hookSessionID string) {
-		if hookSessionID != rec.SessionID {
-			return
-		}
-		once.Do(func() {
-			if _, err := canceller.CancelSubtree(context.Background(), rec.SessionID,
-				steer.Principal{Kind: steer.PrincipalKindHuman, ID: "dan"}); err != nil {
-				t.Errorf("CancelSubtree inside the delivery window: %v", err)
-				return
-			}
-			if _, err := canceller.Revive(context.Background(), rec.SessionID,
-				steer.Principal{Kind: steer.PrincipalKindHuman, ID: "dan"}); err != nil {
-				t.Errorf("Revive inside the delivery window: %v", err)
-			}
-		})
+	if _, err := canceller.Revive(context.Background(), rec.SessionID,
+		steer.Principal{Kind: steer.PrincipalKindHuman, ID: "dan"}); err != nil {
+		t.Fatalf("Revive inside the real post-commit publication window: %v", err)
 	}
-	t.Cleanup(func() { completeStateWriteTestHook = nil })
-
-	if err := al.completeSteeredTurn(context.Background(), rec, turnResult{finalContent: "finished before the revival landed"}, nil); err != nil {
-		t.Fatalf("completeSteeredTurn(revived mid-window): %v", err)
-	}
-
+	publication.open()
+	joinGoalFixtureRuns(t, al)
 	got, err := al.GetSessionLifecycleStore().Load(rec.SessionID)
 	if err != nil {
 		t.Fatalf("Load(child): %v", err)
@@ -131,6 +117,11 @@ func TestComplete_ReviveLandingDuringDeliveryIsNotRolledBack(t *testing.T) {
 	}
 	if got.State != session.LifecycleRunning {
 		t.Errorf("persisted State = %q, want running (Revive's own write) — a stale completion must not overwrite a live revival", got.State)
+	}
+	old, progress, _, retired, readErr := al.GetSessionLifecycleStore().CommittedFinalDelivery(rec.SessionID, originalGen, rec.ExecutionID.RunID)
+	_, _ = progress, retired
+	if readErr != nil || !reflect.DeepEqual(old, *committed.FinalDelivery) {
+		t.Errorf("revival lost/changed the older committed final: old=%+v error=%v", old, readErr)
 	}
 }
 

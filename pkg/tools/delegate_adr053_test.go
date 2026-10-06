@@ -23,6 +23,8 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -392,7 +394,52 @@ func TestDelegateTool_Respond_RejectsCrossOwnerAccess(t *testing.T) {
 	}
 }
 
-func TestDelegateTool_StopAll_SoftThenHardBackstop(t *testing.T) {
+// stopAllReplyFor is the one reply text stop_all gives (founder one-stop
+// decision, 2026-10-05; team-lead ruling). The old cooperative / hard / dropped
+// -queued wordings are superseded: there is one stop, so there is one reply.
+func stopAllReplyFor(sessionID string) string {
+	return "Stop requested for session " + sessionID + " and its helpers; " +
+		"they will show as stopped once their running work has shut down."
+}
+
+// stopHookRecorder is the single stop hook the tool calls. It records every
+// call and, like the real owner, lands nothing synchronously.
+type stopHookRecorder struct {
+	mu    sync.Mutex
+	calls []stopHookCall
+}
+
+type stopHookCall struct {
+	sessionID string
+	by        steer.Principal
+	hint      string
+}
+
+func (r *stopHookRecorder) hook(reached ...string) func(string, steer.Principal, string) ([]string, error) {
+	return func(sessionID string, by steer.Principal, hint string) ([]string, error) {
+		r.mu.Lock()
+		r.calls = append(r.calls, stopHookCall{sessionID: sessionID, by: by, hint: hint})
+		r.mu.Unlock()
+		if len(reached) == 0 {
+			return []string{sessionID}, nil
+		}
+		return reached, nil
+	}
+}
+
+func (r *stopHookRecorder) snapshot() []stopHookCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]stopHookCall(nil), r.calls...)
+}
+
+// TestDelegateTool_StopAll_CallsTheOneStopHookOnce_NoToolSideBackstop pins the
+// agent entry of the unified stop: stop_all asks the ONE stop hook exactly
+// once, with the verified caller as the recorded principal, answers with the
+// single reply text, and the tool itself never lands a state or fires a second
+// (grace/backstop) call afterwards -- the 3 s forced stop belongs to the one
+// stop method, not to a tool-side timer.
+func TestDelegateTool_StopAll_CallsTheOneStopHookOnce_NoToolSideBackstop(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
@@ -402,146 +449,158 @@ func TestDelegateTool_StopAll_SoftThenHardBackstop(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
+	before, err := lc.Load("child-cancel")
+	if err != nil {
+		t.Fatalf("load before: %v", err)
+	}
 
-	var softCalled, hardCalled bool
-	var mu sync.Mutex
-	tool.SetCancelHooks(
-		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-			mu.Lock()
-			softCalled = true
-			mu.Unlock()
-			return []string{"child-cancel"}, nil
-		},
-		func(sessionID string, by steer.Principal, hint string) ([]string, error) {
-			mu.Lock()
-			hardCalled = true
-			mu.Unlock()
-			// D2/CRIT-001: this stub stands in for al.cancelDelegatedSubtree,
-			// whose real steer_cancel.go::stampStop lands StopNote (cause
-			// "stop" — the delegate cancel names sessionID directly) in the
-			// SAME mutation the Stop fence is set, BEFORE the caller's
-			// transitionLifecycle(note=nil) below retains it. Without this
-			// stamp the stub is unrealistic: transitionLifecycle correctly
-			// refuses to land LifecycleStopped with no note at all.
-			if merr := lc.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
-				if rec == nil {
-					return session.ErrLifecycleNotFound
-				}
-				rec.StopNote = &session.StopNote{
-					At: time.Now().UTC(), By: session.StopActorFromPrincipal(by),
-					Seq: uint64(rec.Generation), Cause: session.StopCauseStop,
-				}
-				return nil
-			}); merr != nil {
-				return nil, merr
-			}
-			return []string{"child-cancel"}, nil
-		},
-	)
-	tool.SetCancelGrace(20 * time.Millisecond)
+	rec := &stopHookRecorder{}
+	// TARGET API (the implementer provides it): the delegate tool has exactly
+	// ONE stop hook; SetCancelHooks(soft, hard) and SetCancelGrace are gone.
+	tool.SetStopHook(rec.hook())
 
 	result := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": "child-cancel"})
 	if result.IsError {
 		t.Fatalf("stop_all failed: %s", result.ForLLM)
 	}
-	mu.Lock()
-	sc := softCalled
-	mu.Unlock()
-	if !sc {
-		t.Fatal("expected the soft-cancel hook to be called immediately")
+	if want := stopAllReplyFor("child-cancel"); result.ForLLM != want {
+		t.Errorf("stop_all reply = %q, want exactly %q", result.ForLLM, want)
+	}
+	calls := rec.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("stop hook called %d times immediately, want exactly 1", len(calls))
+	}
+	if calls[0].sessionID != "child-cancel" {
+		t.Errorf("stop hook asked to stop %q, want %q", calls[0].sessionID, "child-cancel")
+	}
+	// Principal recorded as today: the verified calling agent session.
+	if want := (steer.Principal{Kind: steer.PrincipalKindAgent, ID: "parent-1"}); calls[0].by != want {
+		t.Errorf("stop hook principal = %+v, want %+v", calls[0].by, want)
 	}
 
-	// The session never stops on its own in this test, so the
-	// hard backstop MUST fire after the grace window.
-	//
-	// Wait for the PERSISTED stopped state, not for the hook flag. The flag
-	// flips inside cancelHard, but that is not the backstop goroutine's last
-	// act -- pkg/tools/delegate_run.go's backstop calls transitionLifecycle
-	// AFTER cancelHard returns, and that WRITES to the lifecycle store rooted
-	// at t.TempDir(). Returning on the flag let the test body finish with that
-	// write still in flight, and Go's TempDir cleanup then raced it:
-	//
-	//	TempDir RemoveAll cleanup: unlinkat /tmp/TestDelegateTool_StopAll_SoftThenHardBackstop.../001: directory not empty
-	//
-	// Observed on CI run 36137133540, job "Tests", release/v0.1.1 @ d81bcb1ec.
-	// Waiting on the persisted state is race-free because it IS the goroutine's
-	// final act, and it is a strictly stronger oracle: it asserts the backstop's
-	// EFFECT on the record rather than merely that a hook was entered.
-	deadline := time.Now().Add(2 * time.Second)
-	var sawHook bool
-	for time.Now().Before(deadline) {
-		mu.Lock()
-		sawHook = hardCalled
-		mu.Unlock()
-		if sawHook {
-			// ADR D7 line 397: a completed cancellation cascade lands non-terminal stopped, not terminal cancelled.
-			if rec, err := lc.Load("child-cancel"); err == nil && rec.State == session.LifecycleStopped {
-				return
-			}
-		}
-		time.Sleep(5 * time.Millisecond)
+	// The unified timeline's forced stop is 3 s; outlive it. A tool-side
+	// backstop timer (the retired 5 s grace goroutine, or any replacement)
+	// would show up as a second hook call or a tool-written state.
+	time.Sleep(3500 * time.Millisecond)
+	if n := len(rec.snapshot()); n != 1 {
+		t.Errorf("stop hook called %d times after 3.5s, want still 1 -- the tool must not run its own backstop", n)
 	}
-	// ADR D7 line 397: the backstop must persist stopped even though that state is non-terminal.
-	if sawHook {
-		t.Fatal("the hard-cancel backstop hook fired but the session was never persisted as stopped")
+	after, err := lc.Load("child-cancel")
+	if err != nil {
+		t.Fatalf("load after: %v", err)
 	}
-	t.Fatal("expected the hard-cancel backstop to fire after the grace window elapsed")
+	if after.State != before.State || after.Stop != nil || after.StopNote != nil {
+		t.Errorf("the tool changed the lifecycle record itself: before=%+v after=%+v -- only the owning execution lands a stop", before, after)
+	}
 }
 
-func TestDelegateTool_StopAll_Hard_SkipsGrace(t *testing.T) {
+// TestDelegateTool_StopAll_QueuedSessionToolWritesNothing: a stop reaching a
+// still-queued session gets the same single reply and the tool lands nothing
+// itself (the retired tool-side queued-drop writer). The owner lands it; the
+// real queued behaviour is pinned in pkg/agent
+// (TestDelegateCancel_QueuedSubagentIsDroppedAndNeverStarts).
+func TestDelegateTool_StopAll_QueuedSessionToolWritesNothing(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-hard", Generation: 1, State: session.LifecycleRunning,
+		SessionID: "child-queued", Generation: 1, State: session.LifecycleQueued,
 		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
+	rec := &stopHookRecorder{}
+	tool.SetStopHook(rec.hook())
 
-	var hardCalled bool
-	tool.SetCancelHooks(
-		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-			t.Fatal("soft hook must not be called for hard=true")
-			return nil, nil
-		},
-		func(sessionID string, by steer.Principal, hint string) ([]string, error) {
-			hardCalled = true
-			// D2/CRIT-001: see TestDelegateTool_Cancel_SoftThenHardBackstop's
-			// hard-cancel stub for the full rationale — this mirrors
-			// steer_cancel.go::stampStop's real StopNote stamp (cause "stop")
-			// so the stub matches the precondition
-			// transitionLifecycle(note=nil) actually relies on.
-			if merr := lc.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
-				if rec == nil {
-					return session.ErrLifecycleNotFound
-				}
-				rec.StopNote = &session.StopNote{
-					At: time.Now().UTC(), By: session.StopActorFromPrincipal(by),
-					Seq: uint64(rec.Generation), Cause: session.StopCauseStop,
-				}
-				return nil
-			}); merr != nil {
-				return nil, merr
-			}
-			return []string{"child-hard"}, nil
-		},
-	)
-
-	result := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": "child-hard", "hard": true})
+	result := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": "child-queued"})
 	if result.IsError {
-		t.Fatalf("stop_all(hard) failed: %s", result.ForLLM)
+		t.Fatalf("stop_all on a queued session failed: %s", result.ForLLM)
 	}
-	if !hardCalled {
-		t.Fatal("expected the hard-stop hook to be called immediately for hard=true")
+	if want := stopAllReplyFor("child-queued"); result.ForLLM != want {
+		t.Errorf("stop_all reply = %q, want exactly %q", result.ForLLM, want)
 	}
-	rec, err := lc.Load("child-hard")
+	got, err := lc.Load("child-queued")
 	if err != nil {
-		t.Fatalf("Load failed: %v", err)
+		t.Fatalf("load: %v", err)
 	}
-	// ADR D7 line 397: hard cancellation lands non-terminal stopped, so no terminal-state assertion applies.
-	if rec.State != session.LifecycleStopped {
-		t.Errorf("state = %q, want %q", rec.State, session.LifecycleStopped)
+	if got.State != session.LifecycleQueued || got.StopNote != nil || got.Stop != nil {
+		t.Errorf("the tool wrote the queued record itself: %+v -- the owning stop lands it, never the tool", got)
+	}
+}
+
+// TestDelegateTool_StopAll_HookErrorIsVisible: a failing stop is a visible
+// error to the calling agent, never a quiet success.
+func TestDelegateTool_StopAll_HookErrorIsVisible(t *testing.T) {
+	tool, lc, _, _ := newADR053TestTool(t)
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-fail", Generation: 1, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
+		WorkspaceID: "ws-1", AgentID: "worker",
+	}); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+	tool.SetStopHook(func(string, steer.Principal, string) ([]string, error) {
+		return nil, errors.New("partial cascade: unreachable 1 (grand-1: unreadable record)")
+	})
+	result := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": "child-fail"})
+	if !result.IsError {
+		t.Fatalf("a failed stop was reported as success: %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "unreachable 1 (grand-1: unreadable record)") {
+		t.Errorf("the error must carry the cascade failure detail, got %q", result.ForLLM)
+	}
+}
+
+// TestDelegateTool_StopAll_RejectsHardArgument: the agent-only `hard` option is
+// removed (one stop mechanism). A call carrying it fails the tool's existing
+// schema validation as an unexpected property, before any hook runs, and the
+// published schema no longer declares the property. The positive control
+// proves the same call without `hard` reaches the hook, so the rejection is
+// about the argument, not about the fixture.
+func TestDelegateTool_StopAll_RejectsHardArgument(t *testing.T) {
+	for _, hard := range []bool{true, false} {
+		tool, lc, _, _ := newADR053TestTool(t)
+		ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+		if err := lc.Persist(&session.LifecycleRecord{
+			SessionID: "child-hard", Generation: 1, State: session.LifecycleRunning,
+			OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
+			WorkspaceID: "ws-1", AgentID: "worker",
+		}); err != nil {
+			t.Fatalf("seed failed: %v", err)
+		}
+		rec := &stopHookRecorder{}
+		tool.SetStopHook(rec.hook())
+		reg := NewToolRegistry()
+		reg.Register(tool)
+
+		props, _ := tool.Parameters()["properties"].(map[string]any)
+		if _, declared := props["hard"]; declared {
+			t.Errorf("hard=%v: the delegate schema still declares a `hard` property", hard)
+		}
+
+		result := reg.ExecuteWithContext(ctx, "delegate",
+			map[string]any{"action": "stop_all", "session_id": "child-hard", "hard": hard}, "", "", nil)
+		if result == nil || !result.IsError {
+			t.Fatalf("hard=%v: stop_all carrying `hard` was accepted: %+v", hard, result)
+		}
+		if !strings.Contains(result.ForLLM, `invalid arguments for tool "delegate"`) ||
+			!strings.Contains(result.ForLLM, `unexpected property "hard"`) {
+			t.Errorf("hard=%v: want the schema-validation rejection naming the unexpected property, got %q", hard, result.ForLLM)
+		}
+		if n := len(rec.snapshot()); n != 0 {
+			t.Errorf("hard=%v: the stop hook ran %d time(s) for a rejected call", hard, n)
+		}
+
+		// Positive control: same call minus `hard` is accepted and stops once.
+		ok := reg.ExecuteWithContext(ctx, "delegate",
+			map[string]any{"action": "stop_all", "session_id": "child-hard"}, "", "", nil)
+		if ok == nil || ok.IsError {
+			t.Fatalf("hard=%v control: stop_all without `hard` failed: %+v", hard, ok)
+		}
+		if n := len(rec.snapshot()); n != 1 {
+			t.Errorf("hard=%v control: the stop hook ran %d times, want 1", hard, n)
+		}
 	}
 }
 
@@ -796,12 +855,9 @@ func TestDelegateTool_StopAll_DeniedOnLifecycleLoadError(t *testing.T) {
 	}
 
 	cancelCalled := false
-	tool.SetCancelHooks(
-		func(string, steer.Principal, string) ([]string, error) { cancelCalled = true; return nil, nil },
-		func(string, steer.Principal, string) ([]string, error) { cancelCalled = true; return nil, nil },
-	)
+	tool.SetStopHook(func(string, steer.Principal, string) ([]string, error) { cancelCalled = true; return nil, nil })
 
-	result := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": "child-corrupt", "hard": true})
+	result := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": "child-corrupt"})
 	if !result.IsError {
 		t.Fatal("expected stop_all to be DENIED on a lifecycle Load error, got success (fail-open regression)")
 	}
@@ -815,17 +871,11 @@ func TestDelegateTool_StopAll_DeniedOnLifecycleLoadError(t *testing.T) {
 func TestDelegateTool_StopAll_DeniedWhenLifecycleUnconfigured(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	tool.SetDelegationDenyCheckerBackground(func(ctx context.Context, targetAgentID string) *DelegationDenial { return nil })
-	tool.SetCancelHooks(
-		func(string, steer.Principal, string) ([]string, error) {
-			t.Fatal("soft hook must not fire")
-			return nil, nil
-		},
-		func(string, steer.Principal, string) ([]string, error) {
-			t.Fatal("hard hook must not fire")
-			return nil, nil
-		},
-	)
-	result := tool.Execute(context.Background(), map[string]any{"action": "stop_all", "session_id": "any", "hard": true})
+	tool.SetStopHook(func(string, steer.Principal, string) ([]string, error) {
+		t.Fatal("stop hook must not fire")
+		return nil, nil
+	})
+	result := tool.Execute(context.Background(), map[string]any{"action": "stop_all", "session_id": "any"})
 	if !result.IsError {
 		t.Fatal("expected stop_all to be DENIED when no lifecycle store is configured, got success (fail-open)")
 	}
@@ -1042,5 +1092,36 @@ func TestDelegateTool_Peek_DeniedOnLifecycleLoadError(t *testing.T) {
 	}
 	if strings.Contains(result.ForLLM, "peek-leak") {
 		t.Errorf("peek leaked inbox content despite the Load error: %s", result.ForLLM)
+	}
+}
+
+// TestDelegateStopAllContract_HasNoHardProperty: contract-first (Hard
+// Constraint 8). The wire contract for the delegate stop_all action must stop
+// advertising the removed agent-only `hard` option (founder one-stop decision,
+// 2026-10-05) -- it declares additionalProperties:false, so a client generated
+// from a contract that still lists `hard` would keep sending a field the tool
+// now rejects. Oracle: the decision file, read through the contract YAML.
+func TestDelegateStopAllContract_HasNoHardProperty(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "contracts", "components", "schemas", "DelegateStopAllAction.yaml"))
+	if err != nil {
+		t.Fatalf("read the stop_all contract: %v", err)
+	}
+	var doc struct {
+		Properties map[string]any `yaml:"properties"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse the stop_all contract: %v", err)
+	}
+	if len(doc.Properties) == 0 {
+		t.Fatalf("instrument: the contract parsed with no properties (action/session_id expected)")
+	}
+	if _, ok := doc.Properties["session_id"]; !ok {
+		t.Fatalf("instrument: the contract parsed without session_id; the parse is not reading the schema")
+	}
+	if _, stillThere := doc.Properties["hard"]; stillThere {
+		t.Errorf("DelegateStopAllAction still declares a `hard` property; the agent-only hard option is removed")
+	}
+	if strings.Contains(string(raw), "cancel_grace") {
+		t.Errorf("DelegateStopAllAction still documents session_messaging.cancel_grace; the setting is removed")
 	}
 }

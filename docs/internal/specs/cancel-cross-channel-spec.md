@@ -1,5 +1,13 @@
 # Cross-Channel `/cancel` Command Spec — v2 (Revised)
 
+## Amended 2026-10-06 — founder decision
+
+The old v2 cascade label and detach timing are superseded. **Stop** (one button press, first eligible Esc, `/stop`, `scope: session`) ends **only this session's current turn**, never its helpers. **Stop all / `/cancel`** ends the current session and its whole helper tree, including queued helpers; never a parent or sibling. `/stop` and `/stop-redirect` are separate commands, not aliases of `/cancel`.
+
+Every person/agent trigger uses **`AgentLoop.StopSession`**. Polite immediately; forced **3 s** later; detach any selected execution still running **3 s after force** (6 s from the initial request if both stages run). No caller-selectable `hard`, no agent 5-second grace, no `session_messaging.cancel_grace`. Internal hard-abort stage labels are not a public hard option. Only the producing execution settles stopped after its work/tail shuts down; visible errors distinguish accepted/pending from landed. Goals remain active.
+
+**Reply expectations:** a plain Stop reply must describe **this turn/session only**, never say helpers stopped. A Stop-all reply names the downward tree scope and any pending/incomplete/unreachable sessions; accepted or reached is not proof of stopped. The old shared-transcript cascade basis is historical: helpers own transcripts; the durable edge defines Stop all. The original §15 holdout is retained verbatim as historical evaluation material; use these amended scope/timing requirements as the current oracle. Source: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D2/D7/D9 and [LANE-A-ONE-STOP-DECISION-20261005.md](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/LANE-A-ONE-STOP-DECISION-20261005.md).
+
 Status: Draft
 
 **Status:** Draft — revised after `/grill-spec` review on 2026-05-14
@@ -51,7 +59,7 @@ notes at the two affected points below (§3 and §11) point back here.
 
 - **Tier A channel** — Platform supports first-class command registration (Telegram BotCommands, Slack Slash Commands, Discord Application Commands, Adaptive Cards). Channel implements `CommandRegistrarCapable`. Native autocomplete UI in the platform.
 - **Tier B channel** — Platform requires text-message parsing. No native command UI. Channel handler text-matches `/cancel` on inbound messages.
-- **Cascade** — When `/cancel` fires, all turns sharing the cancelled session's `transcriptSessionID` are interrupted in parallel (parent + sub-turns).
+- **Cascade** — Stop all / `/cancel` reaches the selected session and its entire helper tree through durable parent edges. Plain Stop reaches only the current turn of the one session, never helpers. **Amended 2026-10-06.**
 - **Graceful cancel** — `requestGracefulInterrupt` flag set on `turnState`; loop exits at the next safe checkpoint (after current LLM iteration completes).
 - **Hard cancel** — `context.Cancel()` + `hardAbort` flag + LLM provider's HTTP request explicitly cancelled. Aborts mid-stream.
 - **Detached/neutered turn** — Sub-state where `turnState.abandoned = true`; all writes/frames/cost-accumulations from that turn become no-ops. Used when the goroutine refuses to exit after hard cancel.
@@ -84,18 +92,18 @@ These surfaced during v0.1 release verification: orphan agent loops accumulated 
 
 A `/cancel` command available across every surface:
 
-- **Web SPA** — Stop button + `/cancel` slash menu (allowed during streaming for this command only) + Escape key
+- **Web SPA** — plain Stop / first eligible Escape is session-only; Stop-all confirmation/menu and `/cancel` are tree-scoped. **Amended 2026-10-06.**
 - **CLI** (`omnipus agent` interactive mode) — Double-Escape during inference cancels (see Decision Q12 + AMB-14 update)
 - **Chat channels** (16 channels) — `/cancel` (native command on Tier A platforms; text parsing on Tier B)
 
 When invoked, `/cancel`:
-- **Cascades** to the parent turn + all sub-turns sharing the session's `transcriptSessionID` (which sub-turns will newly inherit per FR-6a)
+- **Cascades**, for `/cancel` / Stop all only, through the selected session's durable helper tree; plain Stop never cascades. Helpers keep their own transcript identities. **Amended 2026-10-06.**
 - **Auto-denies** any pending tool approvals on the cancelled turn whose tools have not yet started execution
-- **Escalates** from graceful → hard at 3s, then to detach-and-neuter at 8s (3s + 5s) if the goroutine still hasn't exited
+- **Escalates** from graceful → hard at 3s, then to detach-and-neuter at 6s (3s + 3s) if the goroutine still hasn't exited
 - **Aborts the LLM provider's in-flight HTTP request** at graceful (not just at hard) — calls `turnState.providerCancel()` immediately so the 3s window doesn't wait for OpenRouter's stream to drain naturally
 - **Marks** the partial assistant entry in `transcript.jsonl` with `{truncated: true}`; writes a separate `{type: "turn_cancelled"}` JSONL entry to `transcript.jsonl`; leaves `context.jsonl` unchanged
 - **Emits** an audit event (`turn_cancelled` for fired cancels; `turn_cancel_attempt` for every request including no-ops; `turn_cancel_stuck` if detach fires)
-- **Detaches** any goroutine still alive 5s after hard cancel — `turnState.abandoned = true`; subsequent writes/frames/cost-accumulations from that turn become no-ops without affecting any other session
+- **Detaches** any goroutine still alive 3s after hard cancel — `turnState.abandoned = true`; subsequent writes/frames/cost-accumulations from that turn become no-ops without affecting any other session
 
 Out of scope: cancelling tools that have already started execution (their goroutines may persist), retrying the cancelled prompt automatically, ending the session itself (turn-level only), rate limiting on `/cancel`, and the HMAC chain (shipped with #155; wired via the audit emit path).
 
@@ -121,8 +129,8 @@ The 14 decisions captured during Phase 1 discovery. Decisions stand unchanged; r
 | 8 | Partial assistant with `truncated:true` (in `transcript.jsonl`) + separate `turn_cancelled` JSONL entry (in `transcript.jsonl`) filtered from chat UI; audit log entry | Clean audit trail; `context.jsonl` unchanged so LLM next-turn sees natural truncation |
 | 9 | Fresh start after cancel (no retry button, no continue affordance) | Today's behavior already supports next-message |
 | 10 | Ship in v0.1 — it's a bug fix found during release testing | Release-responsibility rule (CLAUDE.md #7) |
-| 11 | Stuck goroutine: detach and neuter (5s post-hard-cancel) | Go cannot force-kill goroutines; session-isolated zombie is honest middle ground |
-| 12 | Web=stop+/cancel+Esc, CLI=double-Esc, Chat=/cancel only (no `/stop` alias) | Double-Escape per F-12 (was 50ms timer); avoids arrow-key false positives |
+| 11 | Stuck goroutine: detach and neuter (3s post-hard-cancel) | Go cannot force-kill goroutines; session-isolated zombie is honest middle ground |
+| 12 | **Amended 2026-10-06:** Web plain Stop/first eligible Esc and `/stop` are self-only; confirmed Stop all and `/cancel` cascade. `/stop-redirect` is a separate self-only redirect command, not an alias. | Replaces the `/stop` ban and the shared Stop/Cancel scope; control-plane D9. |
 | 13 | Turn-level only (no session-end via `/cancel`) | Different blast radii deserve different commands |
 | 14 | No rate limiting on `/cancel` | Q6 + Q11 already make cancel structurally idempotent and resource-cheap; abuse-detection observability added per F-08 |
 
@@ -133,7 +141,7 @@ The 14 decisions captured during Phase 1 discovery. Decisions stand unchanged; r
 ### US-1: Web user cancels in-flight turn via stop button — P0
 
 **As a** web user with a streaming response or running subagents
-**I want** to press the Stop button (or `/cancel`, or Escape) to halt everything immediately
+**I want** plain Stop or first eligible Escape to end only this session's current turn, and Stop all / `/cancel` to stop its helper tree when requested
 **so that** I can recover from a runaway turn without waiting for it to complete naturally.
 
 **Why P0:** Without this, orphan loops accumulate and break test reliability. Headline use case.
@@ -142,8 +150,8 @@ The 14 decisions captured during Phase 1 discovery. Decisions stand unchanged; r
 
 **Acceptance scenarios:**
 1. **Given** a turn is actively streaming, **When** the user clicks the Stop button, **Then** the turn ends within 5 seconds (P95) and the partial assistant message displays with the `(interrupted)` suffix.
-2. **Given** a turn has spawned 2 sub-turns currently executing, **When** the user clicks Stop, **Then** the parent turn and both sub-turns stop within 5 seconds.
-3. **Given** the user has typed `/` mid-stream and the slash menu is showing (FR-3a allows this exception for `/cancel`), **When** they select `/cancel`, **Then** the same code path executes as Stop button.
+2. **Given** a turn has two helpers executing, **When** the user clicks plain Stop, **Then** only this turn stops and both helpers keep working. **When** the user requests Stop all / `/cancel`, **Then** the session and both helpers use the same 3 s force / subsequent 3 s detach path. **Amended 2026-10-06.**
+3. **Given** the slash menu is showing mid-stream, **When** the user selects `/cancel`, **Then** the same StopSession mechanism runs with **tree** scope, not plain Stop's session scope. **Amended 2026-10-06.**
 4. **Given** a turn is streaming, **When** the user presses Escape with focus in the chat input, **Then** the same code path executes as Stop button. *(Amended 2026-07-16/bugfixes3 — see "Amendment" section above: this AC assumed no menu could be open; when the "/" or "@" menu is visible, the FIRST Escape closes the menu instead, and only a second Escape reaches this cancel path.)*
 
 ### US-2: Chat-channel user cancels via `/cancel` — P0
@@ -185,7 +193,7 @@ The 14 decisions captured during Phase 1 discovery. Decisions stand unchanged; r
 
 **As any** user (web, chat, or CLI)
 **I want** `/cancel` to stop not just the visible parent agent but every sub-turn it spawned and any pending tool approval
-**so that** "stop" actually means "stop everything related to this request."
+**so that** **Stop all / `/cancel`**, not plain Stop, means “stop this session and every helper below it.”
 
 **Why P0:** Core correctness — partial cascade is the failure mode we're fixing.
 
@@ -194,7 +202,7 @@ The 14 decisions captured during Phase 1 discovery. Decisions stand unchanged; r
 **Independent test:** Construct a turn where Mia spawns Jim, Jim spawns Max; cancel; verify all three agent loops exit within 5 seconds and no further tokens are consumed.
 
 **Acceptance scenarios:**
-1. **Given** session S has a parent turn and 3 active sub-turns (all sharing `transcriptSessionID == S`), **When** `/cancel` fires, **Then** all 4 turns receive cancel signal within 100ms.
+1. **Given** session S has three active helpers, each with its own transcript, **When** Stop all / `/cancel` fires, **Then** the durable helper-tree walk selects all four sessions; plain Stop selects S only. **Amended 2026-10-06.**
 2. **Given** a tool approval is pending (policy = `ask`, user has not clicked Allow/Deny, tool has not yet started execution), **When** `/cancel` fires, **Then** the approval is auto-denied with reason "session cancelled" and the approval modal/prompt closes.
 3. **Given** a sub-turn has its own pending approval, **When** `/cancel` cascades, **Then** that approval is also auto-denied.
 4. **Given** a tool has already started execution (its own goroutine running, holding its own context), **When** `/cancel` fires, **Then** that tool's context is cancelled (per its caller's context wiring) but the cancel feature does NOT terminate its goroutine forcefully — tool authors are responsible for honoring their context.
@@ -224,10 +232,10 @@ The 14 decisions captured during Phase 1 discovery. Decisions stand unchanged; r
 
 **Why P1:** Session isolation is a stability invariant; this story enforces it explicitly.
 
-**Independent test:** Spawn a tool that blocks indefinitely, cancel, verify the cancelled session shows "Cancelled" within 8s (3s graceful + 5s detach) and a sibling session continues working normally throughout.
+**Independent test:** Spawn a tool that blocks indefinitely, cancel, verify the cancelled session shows "Cancelled" within 6s (3s graceful + 3s detach) and a sibling session continues working normally throughout.
 
 **Acceptance scenarios:**
-1. **Given** session A has a goroutine that ignores context cancel, **When** hard-cancel fires and 5s elapse, **Then** `turnState.abandoned = true` on A; subsequent transcript writes, frames, and cost ticks from A are no-ops.
+1. **Given** session A has a goroutine that ignores context cancel, **When** hard-cancel fires and 3s elapse, **Then** `turnState.abandoned = true` on A; subsequent transcript writes, frames, and cost ticks from A are no-ops.
 2. **Given** session A is detached, **When** the user sends a new message to session A, **Then** a new turn starts normally and writes succeed (only the abandoned turn's writes are suppressed, not the session's).
 3. **Given** session A is detached, **When** session B sends a message, **Then** B is unaffected — runs at full speed, writes its transcript, emits frames, accumulates cost normally.
 4. **Given** a session was detached, **When** the audit log is read, **Then** a `turn_cancel_stuck` event records the case for forensic investigation; additionally, `omnipus_abandoned_writes_suppressed_total` metric counts every suppressed write for observability.
@@ -268,17 +276,17 @@ The 14 decisions captured during Phase 1 discovery. Decisions stand unchanged; r
 | EC-12 | CLI: arrow-key sequence (`0x1B 0x5B 0x41`) — first byte is Escape | Double-Escape disambiguation (FR-31): the raw-stdin handler buffers the first 0x1B; if the next byte is `[` (0x5B) or `O` (0x4F) within 50ms, it's a CSI/SS3 sequence — buffered Escape is discarded, sequence is passed through. Cancel fires only when a second 0x1B arrives within 500ms of the first AND no CSI/SS3 byte was seen in between. |
 | EC-13 | In-flight LLM stream when cancel fires | At graceful: `turnState.providerCancel()` is called immediately (FR-12a) — aborts the OpenRouter HTTP request mid-stream. The loop detects ctx.Err on its next iteration check. Without this, OpenRouter's stream could take 5-20s to drain naturally, blowing the 3s graceful window. |
 | EC-14 | Sub-turn is in middle of its own LLM stream when parent cancel fires | Each sub-turn has its own `providerCancel`. Cascade calls `providerCancel()` on every matching turnState. All in-flight LLM streams abort in parallel. |
-| EC-15 | Cancel during stuck cancel — the SPA UI shows "Stopping..." but 3s passed | At 3s graceful expiry, the Stop button label morphs to "Force-stopping..." If 8s passes (hard + 5s detach), it morphs to "Cancelled" (the detach path treats the user-visible cancel as complete). |
+| EC-15 | Cancel during stuck cancel — the SPA UI shows "Stopping..." but 3s passed | At 3s graceful expiry, the Stop button label morphs to "Force-stopping..." If 6s passes (hard + 3s detach), it morphs to "Cancelled" (the detach path treats the user-visible cancel as complete). |
 | EC-16 | MCP server in-flight RPC when cancel fires | Context cancellation propagates to the MCP RPC client (via the standard `context.Context` wiring in the MCP package). The MCP server may continue computing on its side, but the client stops reading. Operators of expensive MCP servers should be aware. |
 
 ---
 
 ## 5. Behavioral Contract
 
-- **When** an authenticated user invokes `/cancel` (any surface) for a session with an active turn, **the system** acknowledges within 500ms (P95) on chat surfaces or within 100ms on web/CLI and begins graceful cancellation of the parent turn, all sub-turns sharing `transcriptSessionID`, and all pending tool approvals.
+- **When** an authenticated person or authorized agent invokes Stop, **the system** uses `AgentLoop.StopSession` for only this session's current turn; its helpers keep working. **When** Stop all / `/cancel` is requested, the same mechanism selects this session and its full durable helper tree. Pending approvals are handled only for selected sessions. **Amended 2026-10-06.**
 - **When** the graceful cancel is initiated, **the system** also calls `turnState.providerCancel()` on every cascaded turnState to abort in-flight LLM HTTP streams.
 - **When** the graceful cancel has not completed within 3 seconds, **the system** escalates to hard cancel (`InterruptSessionHard(sessionID)` — new API) on all matching turn states.
-- **When** the hard cancel has not caused goroutine exit within an additional 5 seconds, **the system** marks the turnState as abandoned; all subsequent writes/frames/cost-accumulations from that turn become no-ops; an audit event records the abandonment.
+- **When** the hard cancel has not caused goroutine exit within an additional 3 seconds, **the system** marks the turnState as abandoned; all subsequent writes/frames/cost-accumulations from that turn become no-ops; an audit event records the abandonment.
 - **When** the cancel completes (any stage) AND `cancelFired==true` was set, **the system** writes a single `{type: "turn_cancelled"}` JSONL entry to `transcript.jsonl` and a corresponding audit event; the SPA renders the partial assistant content from `transcript.jsonl` with the existing `(interrupted)` label suffix derived from the entry's `{truncated: true}` flag; chat channels emit a "✓ Cancelled by @user" notification.
 - **When** `/cancel` is invoked twice within the 3s graceful window, **the system** ignores the second invocation at the cancel-handler level (no duplicate `turn_cancelled` entry; the second attempt still records a `turn_cancel_attempt{was_fired: false}` audit entry).
 - **When** `/cancel` is invoked for a session with no active turn, **the system** records `turn_cancel_attempt{was_fired: false}` audit entry; no transcript entry, no chat message, button disabled in web.
@@ -291,7 +299,7 @@ The 14 decisions captured during Phase 1 discovery. Decisions stand unchanged; r
 - **The system must not** cancel long-running tools whose execution has *already started* (web_serve listeners, browser sessions opened by `browser.navigate`, MCP server processes). Pending tool *approvals* that have not yet executed are in scope and auto-denied.
 - **The system must not** force-terminate goroutines via `runtime.Goexit`, `unsafe.Pointer` tricks, or process panic. The only honest mechanism in Go is cooperative `context.Cancel` + neutered output paths.
 - **The system must not** restart the gateway process automatically in response to a stuck cancellation. Concurrent sessions must remain unaffected.
-- **The system must not** offer a `--force` flag, second-press-escalates-to-hard semantics, `/stop` or `/abort` aliases, or a retry button after cancel.
+- **The system must not** offer a public `hard`/`--force` option or second-press-forces-immediately behavior. **Amended 2026-10-06:** a confirmed second Stop/Esc selects Stop all, with the same timing; `/stop` and `/stop-redirect` are separate commands, never aliases of `/cancel`.
 - **The system must not** persist or replay the `{type: "turn_cancelled"}` JSONL entry as a chat-bubble message in the SPA. The entry is metadata for audit/replay tooling; the visible chat UI signal is the existing `(interrupted)` label derived from `{truncated: true}` on the partial assistant message.
 - **The system must not** mutate `context.jsonl` (LLM history) on cancel — the partial assistant content stays as-is so the next turn's LLM sees natural truncation. Only `transcript.jsonl` receives the truncation flag and `turn_cancelled` entry.
 - **The system must not** rate-limit `/cancel`. Q6 + Q11 already make cancel structurally idempotent and resource-cheap. Abuse-detection observability (FR-25a) replaces the missing rate-limit.
@@ -315,7 +323,9 @@ The 14 decisions captured during Phase 1 discovery. Decisions stand unchanged; r
 
 ---
 
-## 8. Existing Codebase Context
+## 8. Existing Codebase Context (historical v2 implementation sketch)
+
+**Amended 2026-10-06:** build against the one `AgentLoop.StopSession` path and durable-edge tree scope above, not the shared-transcript flow sketches below. Timer ownership is in the canonical Stop path, never a second gateway/agent timer family.
 
 ### Symbols involved
 
@@ -331,7 +341,7 @@ The 14 decisions captured during Phase 1 discovery. Decisions stand unchanged; r
 | `transcriptSessionID` field | `pkg/agent/turn.go:125` | **READ** | Cascade key. Per FR-6a, sub-turns will newly inherit this from parent. |
 | `processOptions.TranscriptSessionID` | `pkg/agent/loop.go` (existing field) | **WRITE-NEW** | Per FR-6a, `pkg/agent/subturn.go:435-451` MUST set this from parent's `transcriptSessionID` when building child processOptions. Currently not set → empty string for all sub-turns. |
 | `activeTurnStates` | `pkg/agent/loop.go:75` | **READ** | `sync.Map` walked by cascade. Each `turnState` registered here at `runAgentLoop` start. |
-| `handleCancel` | `pkg/gateway/websocket.go:734` | **MODIFIED** | Adds two-stage timer (3s graceful → hard via `InterruptSessionHard`, 5s post-hard → detach), records `turn_cancel_attempt` audit entry, calls cancel mutex protection. |
+| `handleCancel` | `pkg/gateway/websocket.go:734` | **MODIFIED** | Adds two-stage timer (3s graceful → hard via `InterruptSessionHard`, 3s post-hard → detach), records `turn_cancel_attempt` audit entry, calls cancel mutex protection. |
 | `AppendTranscript` | `pkg/session/unified.go:294` | **CALLED** | Writes the `{type: "turn_cancelled"}` entry to `transcript.jsonl`. |
 | `MarkLastEntryTruncated(sessionID)` | `pkg/session/unified.go` (NEW) | **NEW** | Reads the last `{role: "assistant"}` entry from `transcript.jsonl`; if its turn matches the cancelled turn, rewrites the entry with `truncated: true`. Acquires file lock per existing `fileutil.Flock` pattern. Does NOT touch `context.jsonl`. |
 | `AddFullMessage` (context store) | `pkg/agent/loop.go:4418` | **UNCHANGED** | Continues to write partial content to `context.jsonl` (agent LLM history). Not mutated by cancel. |
@@ -365,7 +375,7 @@ The 14 decisions captured during Phase 1 discovery. Decisions stand unchanged; r
 ### Relevant execution flows
 
 **Flow A — Web Stop button → InterruptSession**
-`MessageInput.tsx` → `cancelStream()` (chat.ts:178) → WebSocket `{type:"cancel", session_id}` → `websocket.go:551` dispatch → `handleCancel(wc, sessionID)` (websocket.go:734) → audit emit `turn_cancel_attempt` → acquire `turnState.cancelMu` on matching turnState → set `cancelFired=true` → `al.InterruptSession(sessionID, hint, canceller)` (steering.go:382, modified to cascade) → walks `activeTurnStates` for matching `transcriptSessionID` → for each match: `requestGracefulInterrupt` + `providerCancel()` → 3s timer → if still alive, `InterruptSessionHard(sessionID)` cascade → 5s timer → detach (set `abandoned=true`).
+`MessageInput.tsx` → `cancelStream()` (chat.ts:178) → WebSocket `{type:"cancel", session_id}` → `websocket.go:551` dispatch → `handleCancel(wc, sessionID)` (websocket.go:734) → audit emit `turn_cancel_attempt` → acquire `turnState.cancelMu` on matching turnState → set `cancelFired=true` → `al.InterruptSession(sessionID, hint, canceller)` (steering.go:382, modified to cascade) → walks `activeTurnStates` for matching `transcriptSessionID` → for each match: `requestGracefulInterrupt` + `providerCancel()` → 3s timer → if still alive, `InterruptSessionHard(sessionID)` cascade → 3s timer → detach (set `abandoned=true`).
 
 **Flow B — Chat-channel `/cancel` → InterruptSession**
 Channel inbound message → Tier A: platform parses native command, dispatches `commands.Definition.Handler`; Tier B: text-parse `strings.TrimSpace(strings.ToLower(msg)) == "/cancel"` → handler invokes `commands.Runtime.CancelActiveTurn(ctx, sessionID, canceller)` (NEW) → calls `al.InterruptSession(...)` → same cascade as Flow A.
@@ -385,7 +395,7 @@ Orphan watchdog (60s, `websocket.go:1241`) is for synthesizing UI frames when a 
 `interactiveMode` (helpers.go:86) calls `agentLoop.ProcessDirect(ctx, input, sessionKey)`. NEW: before calling, set stdin to raw mode and spawn a goroutine reading byte-by-byte. The goroutine buffers each 0x1B (Escape). If the next byte within 50ms is `0x5B` (CSI `[`) or `0x4F` (SS3 `O`), it's an arrow/F-key — buffered Escape is discarded, sequence passes through. Two 0x1B bytes within 500ms (with no CSI/SS3 in between) = cancel: call `agentLoop.InterruptSession(sessionKey, "user-double-escape", "cli-user")`. On context cancellation or `ProcessDirect` return, the goroutine exits cleanly, raw mode is restored. Coordination via `stdinOwner atomic.Pointer[string]` flag to ensure readline regains stdin only after the inference goroutine exits.
 
 **Flow G — UI during 3s graceful window for stuck cancel (new, answers unasked Q3)**
-At t=0 user clicks Stop. Web button morphs to "Stopping..." with spinner (immediate, <100ms local React state). At t=3s if cancel hasn't completed, button label morphs to "Force-stopping..." (server pushed event `cancel_stage: hard`). At t=8s if detach fires, button morphs to "Cancelled" (server pushed event `cancel_stage: detached`); chat input re-enabled for new message; partial assistant message shows `(interrupted)` suffix.
+At t=0 user clicks Stop. Web button morphs to "Stopping..." with spinner (immediate, <100ms local React state). At t=3s if cancel hasn't completed, button label morphs to "Force-stopping..." (server pushed event `cancel_stage: hard`). At t=6s if detach fires, button morphs to "Cancelled" (server pushed event `cancel_stage: detached`); chat input re-enabled for new message; partial assistant message shows `(interrupted)` suffix.
 
 ### Channel command-registration template (from Telegram)
 
@@ -394,6 +404,8 @@ At t=0 user clicks Stop. Web button morphs to "Stopping..." with spinner (immedi
 ---
 
 ## 9. BDD Scenarios
+
+**Amended 2026-10-06:** old scenarios saying a plain Stop stops helpers are superseded: use Stop all / `/cancel` for the cascade oracle, and add the self-only control where helpers keep working. Every timing assertion uses polite -> force at 3 s -> detach 3 s after force. Existing test names are historical/proposed coverage, not proof that those tests ran.
 
 ### Happy paths
 
@@ -480,14 +492,14 @@ At t=0 user clicks Stop. Web button morphs to "Stopping..." with spinner (immedi
 **And** at t=3s `InterruptSessionHard(sessionID)` is invoked — walks `activeTurnStates` and calls `requestHardAbort()` on every matching turnState
 **And** the audit entry's `cancel_method` is `"hard"`.
 
-#### Scenario: Hard cancel does not cause goroutine exit; detach after 5s
+#### Scenario: Hard cancel does not cause goroutine exit; detach after 3s (amended 2026-10-06)
 **Traces to:** US-6.1, US-6.4
-**Given** the tool ignores both graceful and hard cancel for >8 seconds total
-**When** 5 seconds elapse after hard cancel
-**Then** `turnState.abandoned = true` is set atomically using `time.AfterFunc(5*time.Second, ...)` started after hard cancel (monotonic clock)
+**Given** the tool ignores both graceful and hard cancel for >6 seconds total
+**When** 3 seconds elapse after hard cancel
+**Then** `turnState.abandoned = true` is set atomically using `time.AfterFunc(3*time.Second, ...)` started after hard cancel (monotonic clock)
 **And** any subsequent transcript-write attempt from that turn is suppressed
 **And** the metric `omnipus_abandoned_writes_suppressed_total` increments on each suppressed write
-**And** an audit entry `event_type: turn_cancel_stuck` is written with `goroutine_age_after_hard_cancel: ~5s`.
+**And** an audit entry `event_type: turn_cancel_stuck` is written with `goroutine_age_after_hard_cancel: ~3s`.
 
 #### Scenario: Other sessions unaffected by stuck cancel
 **Traces to:** US-6.2, US-6.3
@@ -574,9 +586,9 @@ Examples: Tier B text-parse acceptance
 #### Scenario: Stuck cancel UI progression
 **Traces to:** EC-15
 **Given** a cancel is fired and the loop is stuck
-**When** t=0 → 3s → 8s elapse
-**Then** the Stop button label morphs: t=0 "Stopping..." → t=3s "Force-stopping..." → t=8s "Cancelled"
-**And** chat input is re-enabled at t=8s.
+**When** t=0 → 3s → 6s elapse
+**Then** the Stop button label morphs: t=0 "Stopping..." → t=3s "Force-stopping..." → t=6s "Cancelled"
+**And** chat input is re-enabled at t=6s.
 
 #### Scenario: Sub-turn provider cancel during cascade
 **Traces to:** EC-14
@@ -587,7 +599,9 @@ Examples: Tier B text-parse acceptance
 
 ---
 
-## 10. Test-Driven Development Plan
+## 10. Test-Driven Development Plan (historical names, current scope/timing below)
+
+**Amended 2026-10-06:** T0 shared-transcript inheritance is superseded by own helper transcripts and durable-edge Stop-all scope. T1/T3/T4 cascade tests target Stop all, with plain Stop as a helper-preserving control. Timer tests exercise the one StopSession path for both people and agents; no independent gateway or delegate timer is authorized.
 
 ### Test implementation order
 
@@ -600,7 +614,7 @@ Examples: Tier B text-parse acceptance
 | T4 | `TestInterruptSessionHard_CascadesAcrossSession` | Unit (Go) | FR-11, F-03 | Register parent + 2 sub-turns with same `transcriptSessionID`; call new `InterruptSessionHard(sid)`; assert all 3 received `requestHardAbort()` AND `providerCancel()`. Existing `InterruptHard()` test is separately preserved. |
 | T5 | `TestTurnState_AbandonedSuppressesWrites` | Unit (Go) | US-6.1 | Set `turnState.abandoned = true`; call write helper; assert no file change; assert metric `omnipus_abandoned_writes_suppressed_total` incremented. |
 | T6 | `TestCancelTimer_EscalatesGracefulToHardAt3s` | Unit (Go) | FR-11 | Mock-clock-driven test: start cancel; advance 3s; assert `InterruptSessionHard` was called with the correct sessionID; assert `cancel_method` in final audit is `"hard"`. |
-| T7 | `TestCancelTimer_DetachesAt5sAfterHard` | Unit (Go) | FR-12, US-6.1 | Mock-clock-driven: advance 3s (hard) + 5s (detach); assert `abandoned=true` on every matching turnState; assert `turn_cancel_stuck` audit entry written; assert metric incremented. |
+| T7 | `TestCancelTimer_DetachesAt3sAfterHard` | Unit (Go) | FR-12, US-6.1 | Mock-clock-driven: advance 3s (hard) + 3s (detach); assert `abandoned=true` on every matching turnState; assert `turn_cancel_stuck` audit entry written; assert metric incremented. |
 | T8 | `TestAuditLog_ThreeEventTypes` | Unit (Go) | US-5.1, US-5.2 | Trigger three scenarios (no active turn / cancel fired / cancel + detach); assert audit log has correct event types per case (`turn_cancel_attempt`, `turn_cancelled`, `turn_cancel_stuck`). |
 | T9 | `TestTranscript_TruncatedFlagOnPartialAssistant_TranscriptOnly` | Unit (Go) | FR-14, F-04 | Stream partial content (writes to both transcript and context stores); fire cancel; assert `transcript.jsonl` last assistant entry has `truncated: true`; assert `context.jsonl` entry is **unchanged** (no truncated flag). |
 | T10 | `TestReplayFilter_TurnCancelledEntryNotInChatBubble` | Unit (TS, vitest) | FR-16 | Replay path consumes JSONL with `{type: "turn_cancelled"}` entry; assert no chat bubble rendered for it; assert preceding `{role: "assistant", truncated: true}` entry IS rendered with `(interrupted)` suffix. |
@@ -668,6 +682,17 @@ New regression assertion (per F-20):
 
 ## 11. Functional Requirements
 
+**Amended 2026-10-06 — founder decision:** the effective replacements below govern every old scenario/test row that cites these FRs. Unrelated channel/audit behavior is not re-decided here.
+
+| Requirement | Effective requirement replacing older scope/mechanism |
+|---|---|
+| FR-1 / FR-3 / FR-3a / FR-4 / FR-5 | Stop button/first eligible Esc and `/stop`: one session's current turn only. Stop all / `/cancel`: that session's entire downward helper tree. `/stop-redirect` is a separate self-only redirect command. |
+| FR-6 / FR-6a | Stop all walks durable helper edges; own transcript identities are not inherited to create a cascade. Plain Stop must never reach helpers. |
+| FR-10 / FR-11 / FR-12 / FR-12a | All people/agent triggers enter `AgentLoop.StopSession`; polite at once, force at 3 s, detach 3 s after force. No public hard option, agent grace or cancel_grace. |
+| FR-13 | Repeating the same scoped request is idempotent; confirming Stop all after a session-only Stop expands scope, not timing. |
+| FR-21 | Report current stop stage truthfully using 3 s / subsequent 3 s timing; “Stopped” only after the owning execution's shutdown/settlement, never just because a request was accepted. |
+
+
 ### Cancel signal delivery
 
 - **FR-1**: System MUST accept `/cancel` as a slash command on every Tier A channel (Telegram, Slack, Discord, Teams, Feishu, DingTalk, Google Chat).
@@ -677,21 +702,21 @@ New regression assertion (per F-20):
 - **FR-4**: System MUST acknowledge a cancel request with a visible UI signal. Latency budget:
   - Web/CLI: ≤100ms (local React state morph / terminal redraw)
   - Chat channels: ≤500ms P95 (platform API round-trip)
-- **FR-5**: System MUST NOT register `/stop`, `/abort`, `/kill`, or any other alias for cancel.
+- **FR-5 — Amended 2026-10-06:** `/cancel` has no aliases. `/stop` and `/stop-redirect` are separate commands: plain Stop is session-only, `/cancel` is the confirmed downward Stop all. Do not restore the old `/stop` ban.
 
 ### Cascade semantics
 
-- **FR-6**: System MUST cancel the parent turn AND every turn in `activeTurnStates` matching the parent's `transcriptSessionID`. `InterruptSession` returns `nil` (not an error) when zero turns match; the `was_fired: true/false` audit-emit determination is the cancel handler's responsibility (pkg/gateway/websocket.go), not `InterruptSession`'s.
-- **FR-6a**: `pkg/agent/subturn.go` MUST set BOTH `processOptions.TranscriptSessionID = parentTS.transcriptSessionID` AND `processOptions.TranscriptStore = parentTS.transcriptStore` when building child processOptions. Without `TranscriptSessionID` the cascade key is empty (cascade matches zero sub-turns). Without `TranscriptStore` sub-turns cannot write transcript entries. **Both are prerequisites for the cascade to function.**
+- **FR-6 — Amended 2026-10-06:** StopSession with session scope MUST stop only that current turn and MUST NOT reach helpers. Tree scope (Stop all / `/cancel`) MUST walk the selected session's whole durable helper tree, including queued helpers; never ancestors/siblings. Report acceptance/pending/landed/incomplete honestly.
+- **FR-6a — Amended 2026-10-06:** helpers MUST retain their own transcript identity/store. Stop all follows durable edges; shared transcript identity MUST NOT be restored as a cascade prerequisite. This replaces the old inherited-transcript requirement.
 - **FR-7**: System MUST auto-deny pending tool approvals (tools that have NOT yet started execution) on the cancelled session and any sub-turn, with reason "session cancelled".
 - **FR-8**: System MUST NOT cancel long-running tools whose execution has already started (their goroutines hold their own contexts; cancel-feature does not forcibly terminate them).
-- **FR-9**: System MUST NOT cancel turns in other sessions.
+- **FR-9 — Amended 2026-10-06:** plain Stop MUST NOT stop any other session, including helpers. Stop all / `/cancel` may stop exactly the selected session's descendants, never ancestors, siblings or unrelated sessions.
 
 ### Two-stage timing
 
-- **FR-10**: System MUST start a graceful cancel (`InterruptGraceful` on every matching turnState via cascade) within 100ms of receiving the cancel request.
-- **FR-11**: System MUST escalate to hard cancel via NEW `InterruptSessionHard(sessionID, hint)` at exactly 3 seconds after the graceful phase began. The 3s deadline is hard-coded. `InterruptSessionHard` walks `activeTurnStates`, calls `requestHardAbort()` + `providerCancel()` on every matching turnState.
-- **FR-12**: System MUST mark `turnState.abandoned = true` on any matching turnState still alive 5 seconds after hard cancel was fired, using `time.AfterFunc(5*time.Second, …)` based on monotonic clock (`time.Since`).
+- **FR-10 — Amended 2026-10-06:** every person/agent trigger MUST enter the one StopSession path, with polite stop immediately for each execution selected by session/tree scope; no separate delegate or gateway timer family.
+- **FR-11 — Amended 2026-10-06:** the shared Stop path MUST force any still-running selected execution 3 s after polite stop. Its delayed effects MUST NOT target a replacement. Internal hard-abort is a stage, never a caller-selectable `hard` option.
+- **FR-12**: System MUST mark `turnState.abandoned = true` on any matching turnState still alive 3 seconds after hard cancel was fired, using `time.AfterFunc(3*time.Second, …)` based on monotonic clock (`time.Since`).
 - **FR-12a**: System MUST call `turnState.providerCancel()` immediately on graceful cancel (not waiting for hard), so the in-flight LLM HTTP request is aborted within the 3s window rather than waiting for natural drain.
 - **FR-13**: System MUST treat a second `/cancel` issued during the graceful window (0–3s) as a no-op at the cancel handler level (no duplicate `turn_cancelled` write).
 - **FR-13a**: System MUST protect the cancel-vs-Finish race with `turnState.cancelMu sync.Mutex` and `turnState.cancelFired atomic.Bool`. Both the cancel handler and `Finish` MUST acquire the mutex before writing terminal state. Cancel handler MUST check `cancelFired` after acquiring; if already set, exit (no-op).
@@ -712,7 +737,7 @@ New regression assertion (per F-20):
 
 ### UI feedback
 
-- **FR-21**: Web SPA MUST show progressive button-label state: t=0 "Stopping..." with spinner → t=3s "Force-stopping..." (server-pushed `cancel_stage: hard` event) → t=8s "Cancelled" (server-pushed `cancel_stage: detached`).
+- **FR-21 — Amended 2026-10-06:** report the selected turn's stop stage truthfully: polite immediately, force at 3 s, detach 3 s after force if still running. Display stopped only after its owning execution has shut down and settled; a denied save or pending control is a visible error/pending state, not successful Stop. A plain Stop reply must never claim helpers stopped.
 - **FR-22**: Tier A channels with `MessageEditor` capability MUST send a "⏸ Cancelling..." message immediately on cancel-receipt, then edit to "✓ Cancelled by @user" on completion.
 - **FR-23**: Tier B channels without `MessageEditor` capability MUST send two messages: "⏸ Cancelling..." then "✓ Cancelled by @user".
 - **FR-24**: CLI MUST display `(interrupted)` after partial output and present the next `You: ` prompt within 5 seconds of double-Escape.

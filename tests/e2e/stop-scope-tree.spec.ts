@@ -9,6 +9,9 @@
  * local machine has no live gateway/OpenRouter, and common.md forbids bare
  * Playwright runs. First CI run may need frame-shape adjustments if the
  * streaming handshake below drifts from the real gateway.
+ * Fixture repair (2026-10-06): exact-session HTTP history and a correlated
+ * saved-message acknowledgement added after CI setup failures. All original
+ * Stop-scope assertions remain. Browser execution is still delegated to CI.
  *
  * Approach — fully deterministic, no live model:
  *   - page.routeWebSocket() fully mocks the chat WS transport (established
@@ -37,13 +40,14 @@ import type { WebSocketRoute } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 import { chatInput, waitForConnected } from './fixtures/selectors'
 
-interface CapturedFrame {
-  type?: string
-  session_id?: string
-  scope?: 'session' | 'tree'
-}
+import type { ClientFrame, CancelFrame, SessionStartedFrame, TokenFrame } from '../../src/lib/api/generated/asyncapi-types'
+import type { Message as WireMessage } from '../../src/lib/api/generated/openapi-types'
+
+type CapturedFrame = ClientFrame
 
 const E2E_SESSION_ID = 'sess-e2e-stop-scope'
+const E2E_TRIGGER_TEXT = 'Trigger a turn for the stop-scope test'
+const E2E_STREAMED_TEXT = 'Stop-scope e2e turn running.'
 
 /**
  * Installs the WS mock and starts collecting client→server frames.
@@ -56,22 +60,35 @@ async function mockChatWebSocket(
   page: import('@playwright/test').Page,
   sentToServer: CapturedFrame[],
 ): Promise<void> {
+  // session_started promises a durably saved first message. Its synthetic
+  // session therefore needs matching HTTP history, not a real-gateway 404.
+  const savedHistory: WireMessage[] = []
+  await page.route(`**/api/v1/sessions/${E2E_SESSION_ID}/messages`, (route) => route.fulfill({ status: 200, json: savedHistory }))
   await page.routeWebSocket(/api\/v1\/chat\/ws/, (ws: WebSocketRoute) => {
     let turnStarted = false
     ws.onMessage((raw: string | Buffer) => {
-      let frame: CapturedFrame & { content?: string }
+      let frame: CapturedFrame
       try {
         frame = JSON.parse(typeof raw === 'string' ? raw : raw.toString())
-      } catch {
-        return
+      } catch (error) {
+        throw new Error('Stop-scope fixture received malformed client JSON', { cause: error })
       }
       sentToServer.push(frame)
 
       if (frame.type === 'message' && !turnStarted) {
+        expect(frame.content).toBe(E2E_TRIGGER_TEXT)
+        if (!frame.client_message_id) throw new Error('Stop-scope first message is missing its delivery ID')
         turnStarted = true
-        ws.send(JSON.stringify({ type: 'session_started', session_id: E2E_SESSION_ID }))
+        savedHistory.push({
+          id: frame.client_message_id, client_message_id: frame.client_message_id,
+          role: 'user', content: E2E_TRIGGER_TEXT, status: 'ok',
+          agent_id: frame.agent_id ?? 'jim', timestamp: new Date().toISOString(),
+        })
+        const ack: SessionStartedFrame = { type: 'session_started', session_id: E2E_SESSION_ID, client_message_id: frame.client_message_id }
+        ws.send(JSON.stringify(ack))
         for (const chunk of ['Stop', '-scope ', 'e2e ', 'turn ', 'running.']) {
-          ws.send(JSON.stringify({ type: 'token', session_id: E2E_SESSION_ID, content: chunk }))
+          const token: TokenFrame = { type: 'token', session_id: E2E_SESSION_ID, content: chunk }
+          ws.send(JSON.stringify(token))
         }
         // Deliberately NO done frame — the turn stays mid-stream.
       }
@@ -79,7 +96,7 @@ async function mockChatWebSocket(
   })
 }
 
-function cancelFrames(sentToServer: CapturedFrame[]): CapturedFrame[] {
+function cancelFrames(sentToServer: CapturedFrame[]): CancelFrame[] {
   return sentToServer.filter((f) => f.type === 'cancel')
 }
 
@@ -87,11 +104,14 @@ async function startStreamingTurn(page: import('@playwright/test').Page): Promis
   const input = chatInput(page)
   await expect(input).toBeVisible({ timeout: 15_000 })
   await waitForConnected(page)
-  await input.fill('Trigger a turn for the stop-scope test')
+  await input.fill(E2E_TRIGGER_TEXT)
   await input.press('Enter')
   // Mid-stream confirmation: the Stop button replaced Send.
   await expect(page.getByTestId('stop-btn')).toBeVisible({ timeout: 15_000 })
   await expect(page.locator('[data-message-id]').first()).toBeVisible({ timeout: 15_000 })
+  // A visible optimistic Stop alone is insufficient: the real stream must
+  // have arrived, and the matching history route must not replace the thread.
+  await expect(page.getByText(E2E_STREAMED_TEXT, { exact: true })).toBeVisible({ timeout: 15_000 })
 }
 
 test.describe('Stop/Esc//cancel surface scoping (ADR-20260928 D9)', () => {

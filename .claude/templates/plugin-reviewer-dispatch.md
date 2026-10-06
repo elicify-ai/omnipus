@@ -1,6 +1,6 @@
 # Plugin-reviewer dispatch template
 
-Team-lead: paste the block between the two markers at the **head** of every dispatch to a `pr-review-toolkit` reviewer — `code-reviewer`, `code-simplifier`, `comment-analyzer`, `pr-test-analyzer`, `silent-failure-hunter`, `type-design-analyzer`. Fill the two placeholders with a tool that cannot misparse the text (e.g. Python `str.replace`), never `sed` with a delimiter that can occur in the text — a `#` in an issue reference has broken a `sed` fill and a reviewer ran without its rules — then append the task brief below the block, and verify the filled prompt contains the discipline block (the `agent-discipline:shared-traits:start` marker) before dispatching. Two errors this template exists to prevent: dispatching a plugin reviewer without it, and pasting the `omnipus-shared-rules` skill body into the dispatch — the reviewer loads the skill itself; only the discipline block and the load instruction travel with the dispatch.
+Team-lead or squad-lead: paste the block between the two markers at the **head** of every dispatch to a gate plugin reviewer — `code-reviewer`, `silent-failure-hunter`, `pr-test-analyzer`. Use it for explicitly requested optional plugin reviewers too — `type-design-analyzer`, `comment-analyzer`, `code-simplifier` are optional, not part of the gate. Name the model explicitly in every reviewer dispatch; model selection stays outside repo assets. Fill the two placeholders with a tool that cannot misparse the text (e.g. Python `str.replace`), never `sed` with a delimiter that can occur in the text — a `#` in an issue reference has broken a `sed` fill and a reviewer ran without its rules — then append the task brief below the block, and verify the filled prompt contains the discipline block (the `agent-discipline:shared-traits:start` marker) before dispatching. Two errors this template exists to prevent: dispatching a plugin reviewer without it, and pasting the `omnipus-shared-rules` skill body into the dispatch — the reviewer loads the skill itself; only the discipline block and the load instruction travel with the dispatch.
 
 --- paste from here ---
 
@@ -60,13 +60,9 @@ End the report with the evidence table — one row per claim: Claim | Evidence (
 
 Apply root `CLAUDE.md` ("Definition of Done"): for a UI or behaviour change, compare the changed surface with the matching update to user-facing docs under `docs/` outside `docs/internal/`. Check the whole change before calling an update missing; if your scope cannot establish that, mark the claim UNVERIFIED rather than guessing. If the update is missing, report an **Important** finding with the changed behaviour, the missing or stale user instruction, and a concrete failure scenario. `docs-verifier` audits the accuracy of the implementing lead's draft; an internal design note alone is not a user-facing update. If the change has no user-visible effect, state why this check does not apply.
 
-## Every reviewer except code-simplifier: read-only
+## Every reviewer: read-only
 
-You review a still tree. Do not edit any file under review — a finding is reported, never fixed on the side. Only `code-simplifier` (below) is the exception.
-
-## code-simplifier only
-
-You are the one plugin reviewer allowed to edit the branch under review — every other reviewer in this gate is read-only. Commit your edits as **one separate commit** and report its SHA in your evidence table; do not fold them into an existing commit or leave them uncommitted. Your edits become part of the change under review: they are covered by the remaining reviewers, or — when you run after them — by a follow-up `code-reviewer` pass on that SHA alone, dispatched by team-lead. Keep every edit behaviour-preserving, and report each edit in the evidence table like any other claim.
+You review a still tree. Report findings rather than editing any file under review; fixes go to the implementing lead.
 
 ## Scope of this dispatch
 

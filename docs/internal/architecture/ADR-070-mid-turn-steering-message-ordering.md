@@ -1,5 +1,9 @@
 # ADR-070: Mid-turn steering — assistant reply must not render above the message that triggered it
 
+## Amended 2026-10-06 — founder decision
+
+The cancellation references in §2.3/2.7 concern the selected session's reply segments, not helper scope. **Plain Stop/first eligible Esc ends only this session's current turn, never helpers; Stop all / `/cancel` cascades down the entire helper tree.** Both share StopSession with 3 s force / subsequent 3 s detach. Closing a reply segment because steering arrived is not lifecycle completion: pre-terminal-commit input continues the same generation; committed root completion is done, not archive/hide. Durable delegated injection and exactly-one poll-or-wake final are the current control-plane rules. This amendment changes no visual-design decision or historical UAT result. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D-A/B/C/D/E and R1.
+
 - Status: Accepted (2026-08-24, HEAD `eaa7b131`; ratified by operator — see §5 resolutions)
 - Deciders: operator (Daniel Piatkowski)
 - Related: mid-turn steering feature ("bugfixes3" — `src/store/chat.mid-turn-send.test.ts`,

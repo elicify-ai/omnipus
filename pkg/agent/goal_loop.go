@@ -296,7 +296,7 @@ func terminateGoalRecordAt(goalID string, state generated.GoalState, reason stri
 // verifier session (verifierUnitForGoal(sessionID)) — set BEFORE dispatch by
 // the SAME runVerifierAdjudication (verifier_adjudication.go) plan-Stop's
 // fan-out reads — and, if adjudication is currently in flight for this
-// session, cancels it via the SAME RequestCancelForSession chat-cancel
+// session, stops it via the one session Stop (session scope only)
 // primitive every other Stop surface uses (A2, precedent: plan_engine.go's
 // StopPlan/StopTask) — no new cancel machinery — then unregisters the entry.
 // A no-op when no verifier is currently registered for this goal (the common
@@ -309,7 +309,8 @@ func (al *AgentLoop) cancelGoalVerifierIfAny(pe *PlanEngine, sessionID string) {
 	}
 	cancelCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, armed, err := al.RequestCancelForSession(cancelCtx, verifierSessionID, "", "")
+	// The verifier session only (no helper cascade), through the one Stop.
+	_, armed, err := al.requestSweptStop(cancelCtx, verifierSessionID, "", "", false)
 	switch {
 	case err != nil:
 		logger.WarnCF("agent", "goal: could not cancel in-flight goal verifier session",
@@ -320,7 +321,7 @@ func (al *AgentLoop) cancelGoalVerifierIfAny(pe *PlanEngine, sessionID string) {
 		// (cancel_prearm.go) now stands in for this cancel and will fire the
 		// instant that turn registers (within cancelPreArmTTL). Not a
 		// failure, just deferred; Debug (not Warn) because
-		// RequestCancelForSession's own OnLatchExpired hook (cancel.go)
+		// requestSweptStop's own OnLatchExpired hook (cancel.go)
 		// already gives an operator-visible Warn if the latch itself later
 		// expires unconsumed.
 		logger.DebugCF("agent", "goal: clear armed a pre-registration cancel latch for the in-flight goal verifier session",
@@ -459,6 +460,10 @@ type goalDeferredAdjudicationWork struct {
 	workspaceID string
 	sessionID   string
 	claimText   string
+	// producer is the admitted execution whose turn made the claim; the
+	// completion tail commits as that execution only (never a same-
+	// generation replacement). Empty for a turn with no admission.
+	producer executionClaim
 }
 
 // goalDeferredAdjudicationDoneFn is a TEST SEAM ONLY — production leaves it
@@ -921,10 +926,14 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 			logger.WarnCF("agent", "goal: could not persist the met claim onto the goal record",
 				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID, "error": cerr.Error()})
 		}
-		gl.result.goalDeferredAdjudication = &goalDeferredAdjudicationWork{
+		work := &goalDeferredAdjudicationWork{
 			agentInst: gl.agentInst, workspaceID: gl.opts.WorkspaceID,
 			sessionID: gl.sessionID, claimText: claimText,
 		}
+		if d := gl.opts.executionDisposition; d != nil {
+			work.producer = d.claim
+		}
+		gl.result.goalDeferredAdjudication = work
 		return
 
 	case gl.marker.Present && gl.marker.Status == goalStatusMet:

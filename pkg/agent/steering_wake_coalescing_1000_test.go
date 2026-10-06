@@ -15,7 +15,7 @@ func TestGoal1000_TerminalWriteRetryBeforeConsumptionQueuesOneWakeAndOneParentTu
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	parentID := newTestSteeringSession(t, al, "ws-1")
-	child := launchRunningChild(t, al, parentID, "call-f4-terminal-write-retry-before-consumption")
+	child := g1AdmitCompletionChild(t, al, parentID, "call-f4-terminal-write-retry-before-consumption")
 	lifecycle := al.GetSessionLifecycleStore()
 
 	al.activeTurnStates.Store(parentID, &turnState{sessionKey: parentID})
@@ -53,13 +53,23 @@ func TestGoal1000_TerminalWriteRetryBeforeConsumptionQueuesOneWakeAndOneParentTu
 		t.Fatalf("restore lifecycle record: %v", err)
 	}
 
-	// Retry before the live parent consumes the first queued wake. The inbox
-	// entry is still unacknowledged, so Deliver legitimately reaches the wake
-	// path again; queue admission must coalesce the repeated message id.
+	// Frozen D2: "A producer must not call the upward deliverer before
+	// this commit." A failed terminal write published no first wake.
+	al.steering.mu.Lock()
+	beforeRetry := len(al.steering.queues[parentID])
+	al.steering.mu.Unlock()
+	if beforeRetry != 0 {
+		t.Fatalf("queued wakes before the failed commit was repaired = %d, want 0", beforeRetry)
+	}
+	// Commit successfully, then force an exact committed-payload retry while
+	// its first wake is still unconsumed. The coalescing oracle stays real.
 	if secondErr := al.completeSteeredTurn(context.Background(), child, turnResult{finalContent: "finished"}, nil); secondErr != nil {
 		t.Fatalf("retry completion: %v", secondErr)
 	}
 
+	if _, retryErr := g1RetryCommittedFinal(t, al, child); retryErr != nil {
+		t.Fatalf("retry committed final before parent consumption: %v", retryErr)
+	}
 	wantID := fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation)
 	al.steering.mu.Lock()
 	queued := append([]steeringQueueItem(nil), al.steering.queues[parentID]...)

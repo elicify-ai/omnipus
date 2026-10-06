@@ -47,5 +47,59 @@ jobs:
           rm -rf pkg/gateway/spa
           cp -r dist/spa pkg/gateway/spa
 
+      - name: Test candidate artifact validation
+        run: python3 scripts/ci-candidate-artifacts.test.py
+
+      - name: Prepare candidate outputs
+        # Fresh, isolated outputs make an old build impossible to publish.
+        # HEAD is the tree actually built; github.sha can name a PR merge ref.
+        shell: bash
+        run: |
+          candidate_root="$(mktemp -d "$RUNNER_TEMP/omnipus-candidates.XXXXXX")"
+          mkdir "$candidate_root/binaries"
+          built_sha="$(git rev-parse HEAD)"
+          touch "$candidate_root/build-started"
+          {
+            printf 'CANDIDATE_DIR=%s\n' "$candidate_root/binaries"
+            printf 'CANDIDATE_BUILD_MARKER=%s\n' "$candidate_root/build-started"
+            printf 'CANDIDATE_BUILT_SHA=%s\n' "$built_sha"
+          } >> "$GITHUB_ENV"
+
       - name: Build
-        run: make build-all
+        run: make build-all BUILD_DIR="$CANDIDATE_DIR" GO_BUILD_TAGS=goolm,stdjson
+
+      - name: Build Windows candidate (test-only)
+        # Candidate-only cross-build, not a release matrix or installer change.
+        # Match the Makefile's metadata and pure-Go build settings.
+        shell: bash
+        run: |
+          config_pkg=github.com/elicify-ai/omnipus/pkg/config
+          version="$(git describe --tags --always --dirty)"
+          build_time="$(date +%FT%T%z)"
+          go_version="$(go env GOVERSION)"
+          ldflags="-s -w -X $config_pkg.Version=$version -X $config_pkg.GitCommit=${CANDIDATE_BUILT_SHA:0:8} -X $config_pkg.BuildTime=$build_time -X $config_pkg.GoVersion=$go_version -X $config_pkg.Edition=core"
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags goolm,stdjson -ldflags "$ldflags" -o "$CANDIDATE_DIR/omnipus-windows-amd64.exe" ./cmd/omnipus
+
+      - name: Validate candidate binaries and manifest
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash scripts/ci-candidate-artifacts.sh "$CANDIDATE_DIR" "$CANDIDATE_BUILD_MARKER" "$CANDIDATE_BUILT_SHA"
+
+      - name: Publish test-only candidate binaries
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: candidate-binaries-${{ env.CANDIDATE_BUILT_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
+          # Never upload a workspace/directory glob: exactly five binaries + JSON.
+          # In particular, Intel macOS and Windows are test-only, not releases.
+          path: |
+            ${{ env.CANDIDATE_DIR }}/omnipus-linux-amd64
+            ${{ env.CANDIDATE_DIR }}/omnipus-linux-arm64
+            ${{ env.CANDIDATE_DIR }}/omnipus-darwin-arm64
+            ${{ env.CANDIDATE_DIR }}/omnipus-darwin-amd64
+            ${{ env.CANDIDATE_DIR }}/omnipus-windows-amd64.exe
+            ${{ env.CANDIDATE_DIR }}/manifest.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+          include-hidden-files: false

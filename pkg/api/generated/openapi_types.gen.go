@@ -16785,12 +16785,9 @@ type DelegateSteerAction struct {
 // DelegateSteerActionAction defines model for DelegateSteerAction.Action.
 type DelegateSteerActionAction string
 
-// DelegateStopAllAction `delegate` tool call, `action: stop_all` (ADR-20261004, locked decision 2 — renamed from `cancel` with no alias path). Stops that helper and every helper under it: each reached session lands `stopped`, never failed, and its parent sees a stop notice. `hard: false` (default) is the SOFT cooperative stop — a tool-boundary checkpoint flush inside `session_messaging.cancel_grace`. `hard: true` is the backstop `RequestCancel` fired after grace elapses (or immediately, at the parent's discretion).
+// DelegateStopAllAction `delegate` tool call, `action: stop_all` (ADR-20261004, locked decision 2 — renamed from `cancel` with no alias path). Stops that helper and every helper under it through the same session Stop a person uses: each running turn is asked to stop, then stopped forcibly after 3 seconds. Each reached session lands `stopped`, never failed, once its running work has shut down, and its parent sees a stop notice.
 type DelegateStopAllAction struct {
 	Action DelegateStopAllActionAction `json:"action"`
-
-	// Hard False (default) — cooperative soft stop with grace. True — immediate hard stop, bypassing the grace window.
-	Hard *bool `json:"hard,omitempty"`
 
 	// SessionId The child session whose whole subtree stops.
 	SessionId string `json:"session_id"`

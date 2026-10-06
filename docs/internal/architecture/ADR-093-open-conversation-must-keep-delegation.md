@@ -1,5 +1,13 @@
 # ADR-093 — An open conversation must keep the ability to delegate
 
+## Amended 2026-10-06 — founder decision
+
+[The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D2/D8 and [Steering commands: no person question](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20261004-steering-commands-no-person-question.md)::C1 supersede conflicting generation, boot and message rules below. **Stop ends only this session's current turn, never helpers; Stop all / `/cancel` cascades down the whole helper tree.** Both call `AgentLoop.StopSession` with polite stop, force at 3 s and detach 3 s later; no public `hard` option or agent `cancel_grace`.
+
+**A finished root chat becomes lifecycle `completed` (done); it is NOT archived or hidden.** A human message continues it. A new scheduled/heartbeat run may revive a completed root as the **system principal**, into a new round; it **never revives a STOPPED root** or an in-flight Stop. This replaces the old blanket “system wakes never revive” and indefinitely-running standing-root wording; it does not turn boot replay, a tool call or an old helper-result wake into permission to undo Stop. Stopped resumes keep the generation and get a fresh execution identity; committed done/failed resumes mint the next generation.
+
+A helper final reaches the parent once (poll OR hand-back wake). A stopped parent holds it unconsumed; resume alone is not consumption. Stop all supersedes queued hand-back wakes, not saved history. The message-route/record unification, waiting-message restart reconstruction, 256 KiB aggregate cap, ledger compaction and live descendant-stop retry are **deferred to #1198 (founder 2026-10-06)**. See F6 for the later simplification review, not an authorization to simplify now.
+
 - **Status:** Proposed. Founder decisions F890-1 … F890-4 (2026-09-25, recorded in [ADR-093 founder decisions](./ADR-093-founder-decisions.md)) are incorporated in this correction; the ADR now waits for the spec → RED → GREEN lane, not for answers. Nothing in it is open; the one deferred item — group-chat resume authorisation — is tracked as issue #892 (F890-3).
 - **Date:** 2026-09-25 (round 1); corrected 2026-09-26 (the single correction round of the ADR-mode grill — review verdict REVISE, founder interviewed, this correction is the one fix).
 - **Deciders:** Daniel Piatkowski (founder — F890-1 … F890-4); architect (draft and this correction).
@@ -105,7 +113,9 @@ Two callers set a steering session, and both go through that one function (`stee
 
 `inheritDelegatePermissions` runs after a successful publish and does not write the parent lifecycle record.
 
-### Invariants this ADR will not break
+### Invariants this ADR will not break (historical 2026-09-26 formulations)
+
+**Amended 2026-10-06:** outcome history remains immutable. The stopped-generation increment and blanket automatic-wake prohibition below are superseded by D3/D4 above. The control-plane D2 permits narrow delivery-metadata-only updates for committed finals, never rewriting their outcome.
 
 From ADR-091, read against the code:
 
@@ -150,25 +160,23 @@ With the refusal inside the locked callback, the stamp-at-launch branch (`pkg/ag
 
 A refusal is returned as the D5 tool result, never as `ErrLifecycleTerminalImmutable`'s text.
 
-### D3 — The boot sweep never terminalises a standing session
+### D3 — A completed root is still an open conversation; boot does not dispatch
 
-`PlanEngine.bootSweep` exempts **standing roots**: records with no steered-by edge whose origin kind is `chat`, `channel`, `heartbeat`, `scheduled`, or **absent** (legacy records with no origin at all — round 1's "ten older roots"). A task root can never ride the exemption by accident: the exemption's shape is "no `SteeredBy` edge, and origin in {chat, channel, heartbeat, scheduled, nil}", a steered record always carries its `SteeredBy` edge, and a task root always carries origin `task` with its task id — `pkg/session/lifecycle.go::persistLocked` rejects origin kind `task` without `origin.task_id` — so neither can match.
+**Amended 2026-10-06 — founder decision:** a root chat's final answer settles its producing execution as lifecycle `completed` (done). Its coarse chat status remains visible/usable, not archived or hidden. “Session exists” and “a turn is working” are different facts; leaving a finished chat `running` is not the current contract.
 
-Sweeping a steered worker to `failed(interrupted)` is honest: a worker left `running` at boot has no turn behind it. Sweeping a **standing session** is not: the founder's rule makes the record mean "this session exists and is usable", not "a turn is executing", and the rule's per-kind wording (F890-2: "a restart never makes a chat, heartbeat or recurring session unusable") names exactly these kinds. Sweeping a heartbeat root is worse than sweeping a chat root: **nobody ever types into a heartbeat**, D4's human-message revival can never fire for it, and system wakes do not revive — so a swept heartbeat's delegations fail the #890 way **permanently** (MAJ-004). The exemption is therefore functionally required, not cosmetic.
+An already-completed root stays completed across boot until a legitimate new message/run. An already-stopped root stays stopped with its reason. Boot never dispatches from an old message. Interrupted steered work uses the ordinary `stopped(restart)` model of **The sub-agent control plane**::D8; the former `failed(interrupted)` prescription is historical. This does not add a deletion, archive or housekeeping policy.
 
-Scheduled sessions are exempt as a kind, **not** split by continue/isolated mode: both are origin `scheduled` on the record, and the record cannot distinguish the two modes (`pkg/session/unified.go` mints continue-mode from a stable per-schedule id and isolated from `NewScheduledSession`, both origin `scheduled`). The cost of over-exempting an isolated run that actually crashed is only a non-terminal record until housekeeping deletes it — accepted under F890-4's deletion default, and listed under Negative consequences.
-
-Without D3, D4 repairs the chat on the next message and the following restart breaks delegation again. This is the frequency fix.
+Human messages continue a completed conversation under D4. New scheduled/heartbeat runs use the system principal for a new round from completed, but cannot revive a stopped root. The earlier blanket standing-root exemption and indefinite-running interpretation are replaced by these explicit state rules.
 
 ### D4 — The next message continues the session
 
-The revival is `SteerCanceller.Revive`'s existing shape, unchanged: generation + 1, `ResumedFrom` = this session id, state `running`, failed reason cleared, an older Stop marker kept as inert history. What changes is **who may trigger it, and which entry point runs it**.
+The revival preserves the conversation and immutable completed/failed history. **Amended 2026-10-06:** done/failed -> next generation; landed stopped -> same generation with a fresh execution identity and atomic stop-note clear. An in-flight Stop rejects new admission until its owning execution settles. What changes is **who may trigger it, and which entry point runs it**.
 
-**Roots: Revive-only, no dispatch.** When a human message starts a turn in a root whose record is terminal or currently stopped, the turn **revives the record before any tool runs**. The entry point is the ordinary inbound-turn admission path — **not** `ReviveStoppedSession`, which appends the instruction and then `dispatchSteeredSession` (a steered turn): for a root chat that would run a steered-turn reconstruction of the human message next to the ordinary turn (MAJ-003). `pkg/agent/steering.go::enqueueSteeringFromMessage`'s revive branch — the path a message into a chat takes while the Stop's grace window is still unwinding — must **classify first** (`SteerRecordClassifier.Classify`): a record classified `ClassOrdinaryRoot` is revived **Revive-only**, and the message is routed to the ordinary inbound-turn path (a fresh root turn on the new generation); it is never enqueued into the stopped generation's steering queue and never dispatched as a steered turn. A record classified `ClassSteered` keeps today's revive-and-redispatch. One message, one turn, one generation — a test pins it.
+**Roots: ordinary admission, one message -> one turn. Amended 2026-10-06.** A new human message into completed/failed or landed stopped revives the record before any tool runs. Completed/failed starts the next generation; landed stopped continues the same generation with a fresh execution identity. An in-flight Stop is refused visibly until its owning execution settles; do not clear its fence during the grace window. Roots use ordinary admission, not a parallel steered redispatch. New scheduled/heartbeat admissions may revive completed as the system principal, never stopped.
 
 **Children: a follow-up to a terminal child continues it.** F890-1's month-later case: a parent's `follow_up`/`steer` to a child whose record is terminal (the boot sweep's `failed(interrupted)`, no Stop marker) must **revive and continue** it — generation + 1, `resumed_from`, redispatch as a steered turn. Today `pkg/tools/delegate_followup.go::executeSteer` refuses exactly that case (`session %s is terminal (%s) and cannot be steered`); that refusal becomes revive-and-redispatch. The child path already revives the Stop case through `ReviveStoppedSession`; the predicate widens to terminal-without-Stop **for the child path only**. `SteerCanceller.Revive` itself already handles terminal records — the two predicates are the only blockers, and both change.
 
-**What never revives.** A boot wake, a queued re-entry, `delegate`, `create_task`/`run_task`, a task start, `Dispatch`, and system wakes (`processSystemMessage`) — a tool call or an automatic wake is not the human's newer instruction (ADR-091 D8), so none of them mint a generation. A system wake into a still-terminal root starts its turn without revival; if the agent then delegates, D2 refuses and D5's text is the model's answer. This is intended.
+**What may and may not revive — amended 2026-10-06.** A human message continues a completed or landed-stopped root through ordinary admission, once, before tools run. A new scheduled/heartbeat run may revive a **completed** root as the system principal, into a new round. It **never** revives a stopped root or clears an in-flight Stop. Boot replay, old queued re-entry, a tool call (`delegate`, `create_task`, `run_task`), and a hand-back to a stopped parent are not fresh resume actions. A hand-back stays unconsumed until the parent legitimately resumes; poll OR wake then delivers it once. The former blanket rule that every system wake runs without revival is superseded only by the explicitly authorized completed-root scheduled/heartbeat case.
 
 **Who counts as human (MIN-004).** The revival predicate is: an inbound message whose channel is not `system` and that does not carry steer-wake metadata. In a `channel` root any participant's message counts for now — the per-participant authorisation the review wanted ("only people authorised to act for that conversation") is real but **out of scope by F890-3: tracked as #892**. This ADR ships the rule for the sessions the founder's rule names (chat, heartbeat, recurring, child) and #892 owns the group-chat authorisation.
 
@@ -194,7 +202,9 @@ OBS-001 is accepted: the round-1 clause "unless that launch is inside a turn whi
 
 F890-4 settles both defaults. No new "interrupted" chrome: the composer staying open **is** the revival; chats simply resume. The session-status value `interrupted` may still be written by today's Stop path (`websocket_cancel.go`); no renderer is added. And the lifecycle record is **deleted with the chat** (review Q6 A): when the chat is deleted, its root lifecycle file goes with it; housekeeping removes the rest. That bounds D3's exemption (MIN-003): a standing root's record is removed with the chat instead of living forever. Today there is no lifecycle delete path (no delete function exists in `pkg/session` or `pkg/gateway` — verified by grep sweep), so this default is a named work item for the spec: tie root-file removal to chat deletion.
 
-## Comparison
+## Comparison (historical options, 2026-09-26)
+
+**Amended 2026-10-06:** the old standing-root “keeps running” and stopped-resume “new generation” entries in this comparison are no longer current instructions; D3/D4 now govern.
 
 | | Defect 1 — chat looks alive | Defect 2 — raw store text | Defect 3 — no recovery | ADR-091 | After a restart | After Stop, then another message |
 |---|---|---|---|---|---|---|
@@ -229,7 +239,9 @@ F890-4 settles both defaults. No new "interrupted" chrome: the composer staying 
 | Permissions | No change to tool policy, grants, or who may call `delegate`. `inheritDelegatePermissions` still runs only after a committed steered launch. |
 | Cross-user | No new read of another account's session. Revival is of the session the human just wrote to. |
 
-### Test plan (for qa-lead to pin)
+### Test plan (historical expectations; amended 2026-10-06)
+
+Current oracle: root final -> completed but still visible; stopped resumes same generation/fresh execution; completed resumes next generation; scheduled/heartbeat system-principal admission revives completed but never stopped; in-flight Stop refuses replacement until settlement; no boot dispatch. The older stopped-generation and sweep rows below are superseded where they conflict.
 
 Suggested homes unchanged from round 1: `pkg/session` for the store, `pkg/agent` for sweep and revival, `pkg/tools` for the tool text.
 
@@ -254,7 +266,7 @@ Suggested homes unchanged from round 1: `pkg/session` for the store, `pkg/agent`
 | Task with `OriginSessionID` of a non-terminal, non-stopped chat. | Steered child, unchanged. |
 | `launchOrdinaryRoot` (no steering id). | Unchanged. |
 | Concurrent Stop during launch. | Existing cascade guarantee holds: refusal, or the child is stamped — never an unstamped runnable child on a dead generation. |
-| System wake into a terminal root; no revival anywhere in the turn. | Turn runs; a delegate inside it is refused with D5's text (negative revival test, MIN-004). |
+| New scheduled/heartbeat run into a completed root. | System-principal revival into the next round; delegation is reachable. Separate stopped-root negative case: no revival, no turn, Stop holds. **Amended 2026-10-06.** |
 
 UI: no new component (F890-4). Reachability check is a person (or the UAT lane) in the **same** chat after a restart, asking for a delegation, and a lifecycle file appearing for the target — plus the same from a heartbeat session across a restart. A unit test that only asserts an error string is not that check.
 
@@ -264,12 +276,12 @@ UI: no new component (F890-4). Reachability check is a person (or the UAT lane) 
 
 - A restart no longer retires any standing session — chat, channel, heartbeat, recurring — and the store rule stops reaching the user through either error path.
 - F890-1's exact case works: a parent can follow up to a month-old child; housekeeping, not a defect, is what eventually removes it.
-- Stop still ends the generation. Continuing to type, or a parent's follow-up, is an explicit new generation — what ADR-091 D8 already says a newer instruction does.
+- **Amended 2026-10-06:** Stop ends only this session's current turn, never its helpers or its generation. Resuming landed stopped retains its generation with a fresh execution; only committed done/failed starts the next generation.
 - One less no-op append on every successful delegation: the parent JSONL does not grow by a duplicate snapshot.
 
 ### Negative
 
-- A conversation root left `running` across a restart has no turn behind it, and the operator signal "this chat died at last boot" is gone for standing sessions (steered workers still carry it). A crashed isolated scheduled run also keeps a non-terminal record under D3's kind-level exemption. The founder accepted this trade with F890-2.
+- **Amended 2026-10-06:** the old indefinitely-running standing-root trade is superseded. A finished root lands completed and stays visible; scheduled/heartbeat new-round revival requires completed, never stopped. Historical sweep behavior is not a delivery guarantee.
 - Records already swept (two chat roots on the founder's machine today) stay terminal until a human message or a parent's follow-up revives them. D3 does not rewrite history.
 - A task started later from a stopped or swept chat runs as an ordinary root: its result does not arrive as a handback into the old conversation — the same shape as a task whose creator session was deleted.
 
@@ -294,7 +306,9 @@ UI: no new component (F890-4). Reachability check is a person (or the UAT lane) 
 | Force a new chat and block the composer | Makes defect 1 honest and leaves defect 3 as a manual workaround — the founder rejected the workaround itself (F890-1). |
 | Map the error text only | Fixes defect 2. Defects 1 and 3 remain; every restart still bricks the chat. |
 
-## Affected components
+## Affected components (historical plan, 2026-09-26)
+
+**Amended 2026-10-06:** apply the current D3/D4 state rules to root completion/admission, scheduled/heartbeat system-principal revival, and stopped-parent result consumption. The old sweep-exemption and generation-bumping descriptions below are history, not work to reintroduce.
 
 | Component | Change |
 |---|---|
@@ -324,7 +338,7 @@ The founder answered round 1's four questions and the review's stopped-root addi
 | F890-3 | Only people authorised to act for that conversation may resume one the operator stopped; automatic wake-ups never do — **not part of this work** | MIN-004 is scoped: this ADR ships the channel-agnostic predicate (any participant, no system wakes); per-participant authorisation is **#892**. |
 | F890-4 | No new "interrupted" screen element; a chat's lifecycle record is deleted with the chat, housekeeping removes the rest | Q3 **A** → D7. Review Q6 A → D7's record-deletion default, bounding D3's exemption (MIN-003). |
 
-**No new founder questions.** The rule settles everything the review raised: the review's five unasked questions resolve from it — (1) a delegation in the Stop grace window is covered by the classify-first rule (the message revives the root Revive-only and re-routes to the ordinary path; the dying generation's queue is never fed); (2) stored child results are acknowledged by Revive's existing revival-state write (`pkg/agent/steer_cancel.go::WriteSteerRevivalState`, the "acknowledged at revival" mechanism of `pkg/agent/steer_audience.go`) — delivery stays with the existing terminal-report and boot-recovery paths, no new drain; (3) a system wake into a terminal root starts its turn without revival and a delegate in it meets the D2 backstop — intended; (4) nil-origin legacy roots are exempt by D3's shape rule — a task root cannot be nil-origin (`persistLocked` requires `origin.task_id` for kind `task`); (5) round 1's "parent file does not gain a line" row *is* the parent-line-count assertion, now stated as D1's own rule, and the existing `pkg/session` publication tests (rollback, mint) stay valid — qa-lead adds the explicit no-growth assertion.
+**Historical 2026-09-26 disposition (not current revival instructions; amended 2026-10-06).** The earlier rule settled the review as follows: the review's five unasked questions resolve from it — (1) a delegation in the Stop grace window is covered by the classify-first rule (the message revives the root Revive-only and re-routes to the ordinary path; the dying generation's queue is never fed); (2) stored child results are acknowledged by Revive's existing revival-state write (`pkg/agent/steer_cancel.go::WriteSteerRevivalState`, the "acknowledged at revival" mechanism of `pkg/agent/steer_audience.go`) — delivery stays with the existing terminal-report and boot-recovery paths, no new drain; (3) a system wake into a terminal root starts its turn without revival and a delegate in it meets the D2 backstop — intended; (4) nil-origin legacy roots are exempt by D3's shape rule — a task root cannot be nil-origin (`persistLocked` requires `origin.task_id` for kind `task`); (5) round 1's "parent file does not gain a line" row *is* the parent-line-count assertion, now stated as D1's own rule, and the existing `pkg/session` publication tests (rollback, mint) stay valid — qa-lead adds the explicit no-growth assertion.
 
 ## Review disposition
 

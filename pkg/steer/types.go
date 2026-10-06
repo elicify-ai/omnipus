@@ -239,6 +239,11 @@ type CancelReport struct {
 	// SkippedNewerGeneration lists sessions whose cancel targeted a
 	// generation a concurrent revival had already moved past.
 	SkippedNewerGeneration []string
+	// Superseded is the subset of SkippedNewerGeneration whose accepted
+	// selection was no longer current when its effect ran: it already
+	// landed, or a newer explicit action (Resume, completion) replaced it
+	// (ADR-20260928 D2/D5). The Stop's effect was a no-op for them.
+	Superseded []string
 	// SkippedTerminal lists terminal descendants a Stop wrote nothing for
 	// (terminal records are immutable).
 	SkippedTerminal []string

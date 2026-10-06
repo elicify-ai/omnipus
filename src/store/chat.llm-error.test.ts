@@ -273,16 +273,9 @@ describe("ADR-051 live 'error' — legacy frame (no typed payload) fallback", ()
     expect(m.errorEntryId).toBeUndefined()
   })
 
-  // D5 fix (UAT "Site 3"): a legacy ErrorFrame whose message LOOKS like
-  // Go-internal/protocol jargon (the `<component>: <verb>` convention) must
-  // NOT be shown verbatim — both the fresh error bubble's content AND the
-  // global connection-error banner (AppShell, "visible on every screen" per
-  // its own doc comment) are the two sinks this exact frame shape reaches
-  // when there's no prior assistant message in the bucket (seedEmptyBucket
-  // — streamingIds ends up empty, so the "push a fresh bubble" branch runs,
-  // which is also the ONLY branch that calls setConnectionError for a
-  // tagged frame).
-  it('D5: sanitizes a Go-internal-jargon-shaped frame.message on both the fresh bubble content and the connection-error banner', () => {
+  // D5 sanitization remains pinned exactly. U5 supersedes only the old
+  // banner sink: a tagged failure is local, even before a reply exists.
+  it('D5/U5: sanitizes internal jargon in a fresh bubble without a global connection banner', () => {
     seedEmptyBucket()
     act(() => {
       useChatStore.getState().handleFrame({
@@ -295,14 +288,14 @@ describe("ADR-051 live 'error' — legacy frame (no typed payload) fallback", ()
     const m = bucketMessages()[0]
     expect(m.content).toBe('Something went wrong — please try again.')
     expect(m.content).not.toContain('browser_control')
-    expect(useConnectionStore.getState().connectionError).toBe('Something went wrong — please try again.')
+    expect(useConnectionStore.getState().connectionError).toBeNull()
+    expect(bucketMessages().filter((message) => message.status === 'error').map((message) => message.content)).toStrictEqual(['Something went wrong — please try again.'])
   })
 
   // Negative control: a legacy message that is NOT jargon-shaped (no
-  // "<component>: " prefix) must still pass through unchanged on both sinks
-  // — this is what proves the D5 fix is a targeted filter, not a blanket
-  // "always show a generic message" regression.
-  it('D5: still passes a non-jargon legacy frame.message through unchanged on both sinks', () => {
+  // "<component>: " prefix) must still pass through unchanged in the chat.
+  // This proves the D5 filter is targeted, not a blanket generic error.
+  it('D5/U5: passes a non-jargon legacy error unchanged in its chat, never globally', () => {
     seedEmptyBucket()
     act(() => {
       useChatStore.getState().handleFrame({
@@ -314,7 +307,8 @@ describe("ADR-051 live 'error' — legacy frame (no typed payload) fallback", ()
 
     const m = bucketMessages()[0]
     expect(m.content).toBe('session not found')
-    expect(useConnectionStore.getState().connectionError).toBe('session not found')
+    expect(useConnectionStore.getState().connectionError).toBeNull()
+    expect(bucketMessages().filter((message) => message.status === 'error').map((message) => message.content)).toStrictEqual(['session not found'])
   })
 })
 

@@ -1033,8 +1033,11 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 				OperatorNotice: func(message string) {
 					slog.Warn("gateway: ADR-091 boot recovery notice", "message", message)
 				},
+				BootEpoch: deps.BootEpoch,
 			}
-			return recovery.Run(ctx)
+			// D4: interrupted runs are stopped first, then accepted stop
+			// intents whose fence never took hold are finished or superseded.
+			return errors.Join(recovery.Run(ctx), stg.agentLoop.FinishUnfinishedStopIntents(ctx))
 		},
 	}
 

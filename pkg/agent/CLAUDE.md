@@ -72,9 +72,10 @@ The ten implementation files:
   goal-less completion disposition after a real turn exits (deliver first,
   then mark terminal, so boot recovery can repair the gap rather than lose
   the child's only result).
-- `pkg/agent/steer_delegate_cancel.go` — `cancelDelegatedSubtree`, the stop
-  an AGENT performs on a worker it started (`delegate(action="cancel")`),
-  routed through the same durable cascade a human's Stop uses.
+- `pkg/agent/stop_session.go` — `StopSession`, the ONE session Stop for
+  people and agents (web, `/stop`, `/cancel`, channels, REST delete,
+  `delegate(action="stop_all")` via `StopDelegatedTree`, the redirect stop
+  half): durable fence first, polite stop at once, forced 3 s later.
 - `pkg/agent/steer_frames.go` — the four sub-agent lifecycle frames
   (`subagent_start`/`state`/`message`/`end`) persisted into the PARENT's
   transcript. Read its header before chasing a missing frame: start and end

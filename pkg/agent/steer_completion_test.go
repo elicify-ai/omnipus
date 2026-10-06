@@ -188,7 +188,7 @@ func TestCompletion_Disposition_PersistedAndValidated(t *testing.T) {
 			defer cleanup()
 			wireSteerCompletionDeps(t, al)
 			parentID := newTestSteeringSession(t, al, "ws-1")
-			rec := launchRunningChild(t, al, parentID, "call-complete")
+			rec := g1AdmitCompletionChild(t, al, parentID, "call-complete")
 			if tc.withQueued {
 				if _, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
 					SteeringSessionID: rec.SessionID,
@@ -290,7 +290,7 @@ func TestCompletion_IterationLimit_NonFatal_WakesParent(t *testing.T) {
 			defer cleanup()
 			wireSteerCompletionDeps(t, al)
 			parentID := newTestSteeringSession(t, al, "ws-1")
-			rec := launchRunningChild(t, al, parentID, "call-"+tc.name)
+			rec := g1AdmitCompletionChild(t, al, parentID, "call-"+tc.name)
 
 			// The plain webchat parent carries an empty PeerID, so the wake
 			// destination would be empty and WakeParentAlways would refuse.
@@ -351,63 +351,33 @@ func TestCompletion_IterationLimit_NonFatal_WakesParent(t *testing.T) {
 	}
 }
 
-// TestCompletion_LastChildWakesParent_NeedsInputSiblingHoldsBackCompletion
-// is ADR-091 fix lane 1's finding-A exit proof, re-aimed at the sub-agent
-// control-plane completion frontier (D6 Q2=B / D6b, F1011-Q4): a REAL
-// two-hop delegation (root -> waitingParent -> {lastChild, parked}) where
-// the grandchild's completion genuinely wakes and re-enters the middle
-// parent — but the parent's DONE is held back by its parked needs_input
-// child.
-//
-// Formerly TestCompletion_LastChildCompletesWaitingParent: that name and its
-// post-wake completion/handback assertions pinned the SUPERSEDED ADR-091 D6
-// exemption (a parent completing while a parked sibling held an open
-// question, the question attached to the handback). F1011-Q4/D6b reversed
-// that rule. The successful two-hop completion and the genuine-content /
-// stale-content handback coverage the old assertions also carried now live
-// in TestCompletion_LastChildCompletesWaitingParent_NoParkedSibling below.
-//
-// Finding A (CRITICAL, the original release blocker): lastChild's own
-// SteeredBy.ReportingTarget used to be EMPTY whenever its steering session
-// (waitingParent) had no real external Channel/PeerID of its own — true for
-// every steered session, since a steered session's own identity is minted
-// with no channel and is never given a PeerID at all
-// (steer_launcher.go::reportingTargetFor's doc comment). async_notifier.go's
-// WakeParentAlways refused that empty destination outright, so
-// waitingParent was never re-entered, and the now-DELETED
-// completeWaitingAncestors shortcut silently substituted waitingParent's
-// OWN stale last answer instead of the real one. This test seeds exactly
-// that stale text (staleText, below) and still proves the wake actually
-// arrives: the select below times out on unfixed code.
-//
-// D6b (F1011-Q4; supersedes ADR-091 D6's parked exemption): waitingParent's
-// re-entered turn finishes with a real answer, but its criteria-free
-// quiet-subtree completion must WAIT while any descendant reachable without
-// crossing a stopped node is queued, live running, or needs_input. parked
-// holds an open question (q-1), so waitingParent's record stays running and
-// NOTHING is handed back to the root while the question is open — the
-// produced answer is durable in waitingParent's own transcript, and the
-// wait is bounded by the question's 24-hour limit (D1.8), not by this
-// completion check.
+// The original CI test name is retained for RED-receipt traceability.
+// ADR-20261004 locked decision 6 / C2 supersedes its needs_input premise:
+// "A helper question to its parent is an ordinary message and does not park
+// the helper." The real two-hop fixture now has an ordinary question and a
+// genuinely working sibling. Frozen D6's working-descendant frontier remains:
+// the last child's exact result must genuinely wake/re-enter its parent,
+// the parent's old stale answer must never reach the root, and no handback
+// may be published while the other sibling is actually still working.
 func TestCompletion_LastChildWakesParent_NeedsInputSiblingHoldsBackCompletion(t *testing.T) {
 	al, cleanup := newSteerALWithProvider(t, &depthEchoProvider{})
-	defer cleanup()
+	t.Cleanup(cleanup)
 	wireSteerCompletionDeps(t, al)
 	rootID := newTestSteeringSession(t, al, "ws-1")
-	waitingParent := launchRunningChild(t, al, rootID, "call-parent")
+	waitingParent := g1LaunchQueuedChild(t, al, rootID, "call-parent")
 	const staleText = "STALE PARENT TEXT MUST NOT REACH ROOT"
 	if err := al.GetSessionStore().AppendTranscriptStrict(waitingParent.SessionID, session.TranscriptEntry{
 		ID: "parent-answer", Role: "assistant", Content: staleText, Timestamp: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("AppendTranscriptStrict(parent answer): %v", err)
 	}
-	lastChild := launchRunningChild(t, al, waitingParent.SessionID, "call-child")
-	parked := launchRunningChild(t, al, waitingParent.SessionID, "call-parked")
-	parked.State = session.LifecycleNeedsInput
-	parked.NeedsInput = &session.NeedsInput{CorrelationID: "q-1", Reconstructable: true}
-	if err := al.GetSessionLifecycleStore().Persist(parked); err != nil {
-		t.Fatalf("Persist(parked): %v", err)
-	}
+	lastChild := g1AdmitCompletionChild(t, al, waitingParent.SessionID, "call-child")
+	// ADR-20261004 locked decision 6 / C2: "A helper question to its parent
+	// is an ordinary message and does not park the helper"; "needs_input"
+	// is "Deleted outright". Preserve the no-premature-handback oracle with
+	// a genuinely working sibling, not the deleted person-question pause.
+	parked := g1AdmitCompletionChild(t, al, waitingParent.SessionID, "call-ordinary-question-sibling")
+	waitingParent = g1AdmitWaitingParent(t, al, waitingParent)
 	var question generated.SessionMessage
 	if err := question.FromSessionMessageQuestion(generated.SessionMessageQuestion{
 		Kind: generated.SessionMessageQuestionKindQuestion, MessageId: "q-1", SessionId: parked.SessionID,
@@ -461,24 +431,20 @@ func TestCompletion_LastChildWakesParent_NeedsInputSiblingHoldsBackCompletion(t 
 		t.Fatalf("processSystemMessage(wake waitingParent): %v", wakeErr)
 	}
 
-	// D6b (F1011-Q4): the parked needs_input descendant holds back
-	// waitingParent's done — its re-entered turn's answer is durable in its
-	// transcript and completion waits until the question is answered (the
-	// 24-hour limit, D1.8, bounds the wait). This supersedes ADR-091 D6's
-	// exemption, which let a parent complete while a parked sibling held an
-	// open question.
+	// The ordinary question is not a pause; the real working sibling still
+	// holds back completion under D6.
 	got, err := al.GetSessionLifecycleStore().Load(waitingParent.SessionID)
 	if err != nil {
 		t.Fatalf("Load(waiting parent): %v", err)
 	}
 	if got.State != session.LifecycleRunning {
 		t.Fatalf("waiting parent state after its wake ran = %q, want running — "+
-			"D6b: its parked needs_input descendant holds back its done until "+
-			"the question is answered", got.State)
+			"D6: its genuinely working descendant holds back its done until "+
+			"that descendant finishes", got.State)
 	}
 
-	// Nothing may be handed back to the root while a needs_input descendant
-	// holds its question: no premature handback of any kind. (The stale
+	// Nothing may be handed back to the root while a working sibling
+	// still has a real executing turn: no premature handback of any kind. (The stale
 	// no-leak guarantee is asserted through a REAL handback at this same
 	// seam by TestCompletion_LastChildCompletesWaitingParent_NoParkedSibling
 	// below — here no handback may exist at all.)
@@ -488,15 +454,12 @@ func TestCompletion_LastChildWakesParent_NeedsInputSiblingHoldsBackCompletion(t 
 	}
 	if len(msgs) != 0 {
 		t.Fatalf("root messages = %d, want 0 — D6b: no handback may reach the root "+
-			"while a needs_input descendant holds its question (stale seed %q must never travel)",
+			"while a genuinely working sibling remains (stale seed %q must never travel)",
 			len(msgs), staleText)
 	}
 
-	// End state: lastChild landed terminal (asserted above; its own
-	// completion is unaffected by its sibling's hold), and parked KEEPS its
-	// question — needs_input is non-terminal by design under D6b; the wait
-	// is bounded by D1.8's 24-hour expiry, not by this completion check.
-	// waitingParent's `running` is the assertion above.
+	// The completed child is terminal; its question-asking sibling keeps
+	// running. The ordinary question causes neither pause nor termination.
 	gotLast, err := al.GetSessionLifecycleStore().Load(lastChild.SessionID)
 	if err != nil {
 		t.Fatalf("Load(lastChild) at end: %v", err)
@@ -508,12 +471,11 @@ func TestCompletion_LastChildWakesParent_NeedsInputSiblingHoldsBackCompletion(t 
 	if err != nil {
 		t.Fatalf("Load(parked): %v", err)
 	}
-	if gotParked.State != session.LifecycleNeedsInput {
-		t.Fatalf("parked state = %q, want needs_input — D6b holds the parent's done "+
-			"without disturbing the parked child", gotParked.State)
+	if gotParked.State != session.LifecycleRunning {
+		t.Fatalf("question-asking sibling state = %q, want running — ADR-20261004 decision 6: an ordinary question does not park it", gotParked.State)
 	}
 	if gotParked.Terminal() {
-		t.Errorf("parked is terminal (%q), want non-terminal needs_input — D6b bounds the wait by D1.8, not by the parent's completion", gotParked.State)
+		t.Errorf("parked is terminal (%q), want non-terminal working sibling — an ordinary question does not finish it", gotParked.State)
 	}
 }
 
@@ -530,17 +492,18 @@ func TestCompletion_LastChildWakesParent_NeedsInputSiblingHoldsBackCompletion(t 
 // running.
 func TestCompletion_LastChildCompletesWaitingParent_NoParkedSibling(t *testing.T) {
 	al, cleanup := newSteerALWithProvider(t, &depthEchoProvider{})
-	defer cleanup()
+	t.Cleanup(cleanup)
 	wireSteerCompletionDeps(t, al)
 	rootID := newTestSteeringSession(t, al, "ws-1")
-	waitingParent := launchRunningChild(t, al, rootID, "call-parent")
+	waitingParent := g1LaunchQueuedChild(t, al, rootID, "call-parent")
 	const staleText = "STALE PARENT TEXT MUST NOT REACH ROOT"
 	if err := al.GetSessionStore().AppendTranscriptStrict(waitingParent.SessionID, session.TranscriptEntry{
 		ID: "parent-answer", Role: "assistant", Content: staleText, Timestamp: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("AppendTranscriptStrict(parent answer): %v", err)
 	}
-	lastChild := launchRunningChild(t, al, waitingParent.SessionID, "call-child")
+	lastChild := g1AdmitCompletionChild(t, al, waitingParent.SessionID, "call-child")
+	waitingParent = g1AdmitWaitingParent(t, al, waitingParent)
 
 	// The grandchild completes for real — its wake must reach waitingParent
 	// (finding A's ReportingTarget fix) exactly as in the parked variant.
@@ -655,19 +618,22 @@ func TestCompletion_LastChildCompletesWaitingParent_NoParkedSibling(t *testing.T
 // resumable" intent survived the fix, not just "not blocking" in isolation.
 func TestCompletion_ToolIterationLimit_WakesAndUnblocksParent(t *testing.T) {
 	al, cleanup := newSteerALWithProvider(t, &depthEchoProvider{})
-	defer cleanup()
+	t.Cleanup(cleanup)
 	wireSteerCompletionDeps(t, al)
 	rootID := newTestSteeringSession(t, al, "ws-1")
-	waitingParent := launchRunningChild(t, al, rootID, "call-parent")
-	lastChild := launchRunningChild(t, al, waitingParent.SessionID, "call-child")
+	waitingParent := g1LaunchQueuedChild(t, al, rootID, "call-parent")
+	mintGenuineBootEpochForLoop(t, al)
+	lastChild, childProvider := r1AdmitChild(t, al, waitingParent.SessionID, "call-child", toolLimitResponse)
+	waitingParent = g1AdmitWaitingParent(t, al, waitingParent)
 
-	// lastChild's turn ends at the tool-iteration ceiling — the exact
-	// shape loop_run_turn.go::finalizeTurn produces (finalContent set to
-	// the toolLimitResponse sentinel, turnFailed true) — never a normal
-	// final answer.
-	if err := al.completeSteeredTurn(context.Background(), lastChild, turnResult{finalContent: toolLimitResponse, turnFailed: true}, nil); err != nil {
-		t.Fatalf("completeSteeredTurn(lastChild): %v", err)
-	}
+	// The external provider returns the same toolLimitResponse sentinel
+	// this disposition test previously supplied directly. Production runs
+	// the real turn/completion tail; this is not a normal final answer.
+	// Release the real producing turn with the same tool-limit result.
+	// Join the completion tail: the child must truly be idle before checking
+	// whether its old running record still blocks its parent.
+	childProvider.open(0)
+	joinGoalFixtureRuns(t, al)
 
 	gotChild, err := al.GetSessionLifecycleStore().Load(lastChild.SessionID)
 	if err != nil {
@@ -875,7 +841,7 @@ func TestCompletion_TaskOriginIdleChild_ParentCompletes(t *testing.T) {
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	parentID := newTestSteeringSession(t, al, "ws-1")
-	rec := launchRunningChild(t, al, parentID, "call-parent-of-task-child")
+	rec := g1AdmitCompletionChild(t, al, parentID, "call-parent-of-task-child")
 	taskChild := launchRunningTaskOriginChild(t, al, rec.SessionID, "call-task-child", "task-1")
 
 	if err := al.completeSteeredTurn(context.Background(), rec, turnResult{finalContent: "parent answer"}, nil); err != nil {
@@ -917,7 +883,7 @@ func TestCompletion_StoredNotWoken_LoggedAtError(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	parentID := newTestSteeringSession(t, al, "ws-1")
-	rec := launchRunningChild(t, al, parentID, "call-stored-not-woken")
+	rec := g1AdmitCompletionChild(t, al, parentID, "call-stored-not-woken")
 	messageID := rec.SessionID + ":1:final"
 	wireTerminalReportDeliverer(al, &recordingUpwardDeliverer{
 		delivery: steer.Delivery{MessageID: messageID, Outcome: steer.DeliveryStoredNotWoken},
@@ -950,7 +916,7 @@ func TestCompletion_WokenDeliveryStaysQuiet(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	parentID := newTestSteeringSession(t, al, "ws-1")
-	rec := launchRunningChild(t, al, parentID, "call-woken")
+	rec := g1AdmitCompletionChild(t, al, parentID, "call-woken")
 	wireTerminalReportDeliverer(al, &recordingUpwardDeliverer{
 		delivery: steer.Delivery{MessageID: rec.SessionID + ":1:final", Outcome: steer.DeliveryWoke},
 	})
@@ -1004,8 +970,8 @@ func TestSubagentLifecycleFrames_StartQueuedRunningTerminalEndOrder(t *testing.T
 	defer cleanup()
 	wireSteerCompletionDeps(t, al)
 	parentID := newTestSteeringSession(t, al, "ws-1")
-	rec := launchRunningChild(t, al, parentID, "call-frame-order")
-	al.deliverSubagentState(parentID, rec, string(session.LifecycleRunning), nil)
+	rec := g1AdmitCompletionChild(t, al, parentID, "call-frame-order")
+	// Real Dispatch already emitted the running frame.
 	if err := al.completeSteeredTurn(context.Background(), rec, turnResult{finalContent: "done"}, nil); err != nil {
 		t.Fatalf("completeSteeredTurn: %v", err)
 	}
@@ -1078,6 +1044,7 @@ func TestGoalDelegation_Judged(t *testing.T) {
 	if persistErr := lifecycle.Persist(rec); persistErr != nil {
 		t.Fatalf("Persist(running): %v", persistErr)
 	}
+	rec = stampG5ExitedExecution(t, al, rec)
 
 	g, err := resolveGoalRecordStore().Get(rec.GoalRef)
 	if err != nil {
@@ -1329,6 +1296,8 @@ func TestFinishSteeredGoalTurn_BareClaimFollowUpRoutesThroughAsyncNotifier(t *te
 func TestGoalDelegation_ParentGoalAbsentFromChildInput(t *testing.T) {
 	provider := &steeredInputCaptureProvider{done: make(chan struct{})}
 	al, _ := newGoalLoopTestLoop(t, provider, nil)
+	// D2 admission requires the genuine current boot epoch before Dispatch.
+	mintGenuineBootEpochForLoop(t, al)
 	lifecycle := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
 	al.SetSessionMessagingStores(inbox, lifecycle)

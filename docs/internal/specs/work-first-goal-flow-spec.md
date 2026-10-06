@@ -1,5 +1,13 @@
 # Work-First Goal Flow — Specification
 
+## Amended 2026-10-06 — founder decision
+
+This is a founder-authorised in-place amendment, not code-driven status certification or another grill round. **Start a tracked goal by sending `/goal <intent>` in this same chat.** The engine activates first; the agent then calls `set_goal`. FR-005's refusal on a goalless session is required, not a missing goal-creation feature. Source: **Work-first goal flow**::D1/D2 and the [goal-entry ruling](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/a-uat-d6-architect-20261006/D6-RULING.md).
+
+FR-015's keeper path now explicitly requires a **steered system wake** for a steered helper. Failed goal-tail persistence must be visible to its parent, and tail ownership is limited to the producing execution. Plain Stop is only this session's current turn, never helpers; Stop all / `/cancel` cascades through all helpers. Both use the one `AgentLoop.StopSession` path (3 s force + subsequent 3 s detach). No Stop clears a goal. These boundaries override an older ordinary-root reminder reconstruction. The existing holdout section is retained byte-for-byte; this amendment and amended requirements are current. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D-A/B/D-F.
+
+Status: Draft
+
 - **Source brief:** `docs/internal/architecture/ADR-088-work-first-goal-flow.md` (Accepted, operator-ratified 2026-09-07, grilled once + corrected).
 - **Supersedes (flow parts of):** `planning-goals-spec.md` and the `/goal` compile/confirm flow described in `judgment-first-criteria-spec.md` v4 — the RECORD shape (definition / judgment-typed criteria / DoD with provenance) from those specs is unchanged and remains authoritative.
 - **Discovery status:** Phase-1 requirements were gathered and confirmed point-by-point with the operator in the 2026-09-07 design session (recorded verbatim in ADR-088 §"The ratified design conversation"); the operator ordered this spec's production and its two grill rounds. Gate satisfied.
@@ -363,6 +371,16 @@ Given a question card is parked on the goal session / When `/goal clear` runs / 
 
 ---
 
+### Added acceptance scenarios — founder amendment 2026-10-06
+
+| Scenario | Given / When / Then | Traces to |
+|---|---|---|
+| S-42 — helper reminder | A live steered helper owns an active goal; a keeper reminder arrives; it runs as a steered system wake with the same parent edge, not as a root. A separately stopped helper does not run. | US-6; FR-015 |
+| S-43 — stale tail | An old producing execution's goal tail is delayed; Stop/Resume or Redirect installs replacement work; the old tail cannot claim that replacement. | US-6; FR-032 |
+| S-44 — refused tail save | The real goal-tail writer refuses a helper's save; its direct parent receives a visible persistence error and no successful claim is fabricated. | US-6; FR-033 |
+
+These are document acceptance expectations only; no tests were written or executed by this amendment.
+
 ## 6. TDD Plan (Phase 4)
 
 Implementation detail permitted from here on.
@@ -426,7 +444,7 @@ Modifies existing functionality — preserved behaviors and their guardians:
 - **FR-002** The marker-only path MUST remain byte-identical in behavior (activation, criteria derivation, zero LLM calls).
 - **FR-003** Admit MUST run exactly once per activation, before state is written.
 - **FR-004** A new `set_goal` builtin MUST write the existing goal record (statement/criteria/DoD) via the existing meta-patch surface, applying NormalizeCriteria, validateCriterion, IsValidJudgment, the DoD floor, and feasibility vetting before any write. The `assessment` arg (clarity + assumptions) is validated and **logged via FR-025's register event — NOT persisted** (round-2 B-2: persisting would change the `CompiledGoal` shape that §1 and the ADR declare unchanged).
-- **FR-005** `set_goal` MUST refuse at delegation depth > 0 and on sessions without an active goal.
+- **FR-005** `set_goal` MUST refuse at delegation depth > 0 and on sessions without an active goal, with no write. **Amended 2026-10-06:** `/goal <intent>` is the user activation path in this same chat; record authorship is not activation. Do not remove this guard to make an ordinary-prose request succeed.
 - **FR-006** `set_goal(mode:update)` MUST re-validate fully and return a diff computed by `diffGoalAmendment` against the current record.
 - **FR-007** On web-origin goal turns where the predicate (active goal ∧ empty record) holds and the provider supports it, the first request MUST offer exactly {`set_goal`, `AskUserQuestion`} ∩ policy-allowed with tool-choice required; the full surface MUST be restored on the next request. **The predicate MUST NOT consult `opts.UserInitiated` or sender identity** — a card resume (human or auto-submitted) and a keeper nudge turn are goal turns; the surrounding code's `UserInitiated` fail-closed gates are the WRONG pattern to copy here (grill M1).
 - **FR-008** A typed ToolChoice MUST be added to the provider request path and honored by all six native builders; the openai_compat extraBody merge MUST NOT silently override it (win or WARN).
@@ -438,7 +456,7 @@ Modifies existing functionality — preserved behaviors and their guardians:
 - **FR-014** (recordLESS quiet goal) Idle with the D3 predicate true (active goal ∧ empty record) and no parked card MUST consume no round and produce no verdict, routing to the D6c nudge ladder (N=2 → engine fallback, FR-017).
 - **FR-014b** (RECORDED goal, zero adjudicable output — grill B1/B2; refined round-2 B-1/B-4) "Zero adjudicable output" is the named triple: zero evidence records ∧ zero **goal-scoped** workspace diff ∧ zero transcript output. Transcript output is counted **across the goal session and its delegated descendant sessions** (a goal whose agent delegated all its work MUST NOT match). The diff term is scoped to **this session's write set since the goal's start / last push boundary** (`AttemptDiff`'s scope argument — the current unscoped `AttemptDiff(nil)` would let a co-tenant session's diff on a shared `WorkspaceID` mask this goal's emptiness); on an unbound chat goal (`WorkspaceID==""`) the diff term degenerates away and the triple is deliberately a pair. When the triple holds at idle: no verdict, no round consumed, a continue-push dispatches (same stamped-sender mechanism as FR-015) — **at most 2 consecutive times, counted in a PERSISTED field** `GoalZeroOutputPushes` on the goal record (an in-memory streak resets on gateway restart and re-opens the unbounded loop). **Reset rule:** the counter resets to 0 whenever the triple evaluates false at an idle, and on any successful `set_goal` write. If the triple still holds at the next idle after the second push, idle settlement MUST adjudicate normally (fail-closed verdict permitted, round consumed) so the rounds bound terminates the loop.
 - **FR-014c** (round-2 m-6, promoted from A-1) Keeper nudges and continue-pushes pace on the EXISTING idle quiet-window constant — no new cadence knob.
-- **FR-015** Keeper-originated turns (idle steer, nudges) MUST be stamped with the goal-loop sender id and MUST pass the after-turn gate, bumping activity and clearing the settling flag (two-cycle capable). Mechanism (round-2 m-4): a per-event `SenderCanonicalID` override field on the async-notify event, set ONLY by the goal-loop deliverers — the shared notifier's default `async:<kind>` stamping for every other source is untouched (negative-asserted in tests).
+- **FR-015** **Amended 2026-10-06:** a reminder to a steered helper MUST enter as a **steered system wake**, preserving the helper edge and its own execution identity; it MUST NOT revive a stopped helper. Keeper-originated turns (idle steer, nudges) MUST be stamped with the goal-loop sender id and MUST pass the after-turn gate, bumping activity and clearing the settling flag (two-cycle capable). Mechanism (round-2 m-4): a per-event `SenderCanonicalID` override field on the async-notify event, set ONLY by the goal-loop deliverers — the shared notifier's default `async:<kind>` stamping for every other source is untouched (negative-asserted in tests).
 - **FR-016** A parked question card on the goal session MUST suppress both idle settlement and nudges; the expiry sweep MUST remain in force.
 - **FR-016b** `goalIdleExpirySweep`'s skip predicate MUST become `s.GoalCondition == "" && s.GoalCriteriaJSON == ""` — the `GoalPendingJSON`/`GoalClarificationJSON` terms are DELETED with their fields (leaving them is a compile error or dormant code), and the `"(pending — never confirmed)"` label fallback in the same function is deleted with them, added to FR-023a's sweep list (round-2 M-4).
 - **FR-017** After exactly 2 recordless nudges, the engine MUST run one fallback compile and register its output marked engine-authored.
@@ -457,6 +475,9 @@ Modifies existing functionality — preserved behaviors and their guardians:
 - **FR-029** `/goal status` MUST be rewritten: `goalStatusReply`'s pending-draft branches (its `loadGoalClarification` branch and its `loadCompiledGoal(meta.GoalPendingJSON)` + `ConfirmGoalWord` branch — cited by symbol per the churn rule, round-2 m-1) are deleted; the reply gains the record summary via the re-scoped `formatGoalEcho` (a NEW call site — today `goalStatusReply` never calls it) alongside condition/elapsed/rounds/spend/reason (grill M8).
 - **FR-030** A pre-upgrade ACTIVE goal (populated record written by the old compile path) MUST continue operating: predicate false → no forcing, no nudge; claim/idle adjudication proceeds on the existing record; rounds accounting continues (grill M10).
 - **FR-031** The goal's routing (channel/chat-id/session-key/agent) MUST be persisted with the goal record and rehydrated on demand — the reader is `goalTriggers().routeFor(sessionID)`, which falls back to the persisted route when the in-memory map is empty (round-2 M-9: today a restart silently disables BOTH the keeper push — `idleSteerDeliverer`'s "no routing to re-inject steer" — and the channel record echo). A genuinely missing route MUST WARN and surface in `latest_reason`, never degrade silently.
+
+- **FR-032 — Amended 2026-10-06:** a goal tail MUST claim only the execution that produced it. A Stop, Redirect or Resume that replaced that execution MUST NOT be claimed or completed by the old tail.
+- **FR-033 — Amended 2026-10-06:** a refused goal-tail save MUST produce a visible error to the helper's direct parent; it MUST NOT become a log-only failure or a false successful claim.
 
 ### Success Criteria
 
@@ -485,7 +506,7 @@ Modifies existing functionality — preserved behaviors and their guardians:
 | FR-012 | US-4 | S-15 | 14 (+ absence assert in 9) |
 | FR-013 | US-6 | S-20 | 10 |
 | FR-014 | US-6 | S-21 | 11 |
-| FR-015 | US-6 | S-22 | 12 |
+| FR-015 | US-6 | S-22,S-42 | 12; helper system-wake acceptance |
 | FR-016 | US-6 | S-23 | 13 |
 | FR-017 | US-4 | S-15,S-35 | 14 |
 | FR-018 | US-7 | S-25,S-26 | 15 |
@@ -501,6 +522,8 @@ Modifies existing functionality — preserved behaviors and their guardians:
 | FR-014c | US-6 | S-21 | 11 |
 | FR-016b | US-6 | S-23 | 13 |
 | FR-031 | US-6,US-10 | S-22,S-31 | 12, 17 |
+| FR-032 | US-6 | S-43 | Producing-execution tail ownership acceptance |
+| FR-033 | US-6 | S-44 | Real writer refusal and visible-parent-error acceptance |
 | FR-023a | US-9 | S-28 | wave-4 human sweep + 26 |
 | FR-023b | US-9 | S-28 | 26 |
 | FR-028 | US-3,US-9 | S-32,S-41 | 14, 13, 21 |

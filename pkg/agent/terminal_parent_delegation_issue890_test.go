@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -148,11 +149,31 @@ func (h *issue890TerminalParent) delegateRunArgs() map[string]any {
 func TestAdr093RootRevival_HumanMessageRevivesTerminalChatAndDelegationSucceeds(t *testing.T) {
 	h := newIssue890TerminalParent(t)
 	h.stampFailedUnifiedStatus(t)
+	wireSteerCompletionDeps(t, h.al)
 
-	// The ordinary inbound-turn admission path — the path a human message
-	// into the chat takes (ADR-093 D4: "the turn revives the record before
-	// any tool runs"). The mock provider answers immediately; the turn runs
-	// to completion inside the call.
+	// Hold only the external provider so the D4 running/delegation assertions
+	// describe the active turn, not a turn that already answered. Amended
+	// ADR-093 D3 (2026-10-06): "a root chat's final answer settles its producing
+	// execution as lifecycle `completed` (done)." Assert that second boundary
+	// separately after releasing the root's answer.
+	held := &r1CompletionProvider{
+		answers: []string{"The delegation is accepted.", "The spreadsheet is prepared."},
+		entered: make(chan int, 2), release: []chan struct{}{make(chan struct{}), make(chan struct{})},
+	}
+	inst, ok := h.al.GetRegistry().GetAgent(testDefaultAgentID)
+	if !ok {
+		t.Fatal("SETUP: registered root agent missing")
+	}
+	inst.Provider = held
+	messageDone, messageErr := make(chan struct{}), make(chan error, 1)
+	t.Cleanup(func() {
+		held.openAll()
+		select {
+		case <-messageDone:
+		case <-time.After(10 * time.Second):
+			t.Error("human message did not finish after provider release")
+		}
+	})
 	msg := bus.InboundMessage{
 		Channel:    "webchat",
 		ChatID:     "adr093-revival-chat",
@@ -160,9 +181,12 @@ func TestAdr093RootRevival_HumanMessageRevivesTerminalChatAndDelegationSucceeds(
 		SessionID:  h.parentID,
 		SessionKey: "agent:" + testDefaultAgentID + ":session:" + h.parentID,
 	}
-	if _, _, perr := h.al.processMessage(context.Background(), msg); perr != nil {
-		t.Fatalf("processMessage (the human message that must revive the terminal chat): %v", perr)
-	}
+	go func() {
+		_, _, perr := h.al.processMessage(context.Background(), msg)
+		messageErr <- perr
+		close(messageDone)
+	}()
+	r1AwaitProvider(t, held, 0)
 
 	// ADR-093 D4: the record is revived before any tool runs — generation 2,
 	// resumed_from = this session id, state running (terminal history stays
@@ -219,6 +243,24 @@ func TestAdr093RootRevival_HumanMessageRevivesTerminalChatAndDelegationSucceeds(
 	}
 	if parent.Generation != 2 {
 		t.Fatalf("parent generation after delegation = %d, want 2 (ADR-093 D4: a tool call never mints a generation)", parent.Generation)
+	}
+
+	held.open(0)
+	select {
+	case <-messageDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("human turn did not settle after its provider returned")
+	}
+	if perr := <-messageErr; perr != nil {
+		t.Fatalf("processMessage (the human message that revives the terminal chat): %v", perr)
+	}
+	settled := rootReopenedRecord(t, h.al, h.parentID)
+	if settled.State != session.LifecycleCompleted || !settled.Terminal() || settled.Generation != 2 || settled.ResumedFrom != h.parentID || settled.FailedReason != "" {
+		t.Fatalf("finished root = %+v, want completed/done on revival generation 2 (amended ADR-093 D3, 2026-10-06)", settled)
+	}
+	visible, err := h.al.GetSessionStore().GetMeta(h.parentID)
+	if err != nil || visible.Status != session.StatusActive {
+		t.Fatalf("finished conversation visibility = %+v/%v, want active, not archived (amended ADR-093 D3)", visible, err)
 	}
 }
 

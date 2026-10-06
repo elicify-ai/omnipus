@@ -68,18 +68,13 @@ func TestDelegateCancel_KillsThatChildsShells(t *testing.T) {
 	// Cancel hooks stubbed to simulate a successful turn-level cancel — this
 	// test's focus is the SHELL-KILL side effect FR-028 adds, not the
 	// turn-cancel/steering mechanism itself (covered elsewhere).
-	delegateTool.SetCancelHooks(
-		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-			return []string{sessionID}, nil
-		},
-		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-			return []string{sessionID}, nil
-		},
-	)
+	delegateTool.SetStopHook(func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+		return []string{sessionID}, nil
+	})
 
 	callerCtx := WithTranscriptSessionID(context.Background(), "u14-w9a-parent")
 	result := delegateTool.Execute(callerCtx, map[string]any{
-		"action": "stop_all", "session_id": childID, "hard": true,
+		"action": "stop_all", "session_id": childID,
 	})
 	if result.IsError {
 		t.Fatalf("delegate stop_all failed: %s", result.ForLLM)

@@ -109,7 +109,7 @@ func TestGoalChildCompletion947_MetArmCompletesChildAndDeliversHandback(t *testi
 	if err != nil {
 		t.Fatalf("NewSession(parent): %v", err)
 	}
-	rec := launchGoalBearingChild947(t, al, parentMeta.ID, "call-947-met")
+	rec := stampG5ExitedExecution(t, al, launchGoalBearingChild947(t, al, parentMeta.ID, "call-947-met"))
 
 	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
 		return &providers.LLMResponse{Content: metGoalVerdict947(t, rec)}, nil
@@ -277,7 +277,7 @@ func TestGoalChildCompletion947_JudgeUnavailableFailsChildAfterThreeAttempts(t *
 	if err != nil {
 		t.Fatalf("NewSession(parent): %v", err)
 	}
-	rec := launchGoalBearingChild947(t, al, parentMeta.ID, "call-947-judge-unavailable")
+	rec := stampG5ExitedExecution(t, al, launchGoalBearingChild947(t, al, parentMeta.ID, "call-947-judge-unavailable"))
 
 	judge := &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
 		return nil, errors.New("simulated judge outage: provider unreachable")
@@ -445,17 +445,31 @@ func TestGoalChildCompletion947_CancelPreservesSessionOwnedGoal(t *testing.T) {
 		t.Fatalf("NewSession(parent): %v", err)
 	}
 	wakeCount := observeU1ParentNoticeWakes(t, al, parentMeta.ID)
-	rec := launchGoalBearingChild947(t, al, parentMeta.ID, "call-947-cancel")
+	rec := stampG5ExitedExecution(t, al, launchGoalBearingChild947(t, al, parentMeta.ID, "call-947-cancel"))
 	if g := goalRecordForSession(t, rec.SessionID); g.State != generated.GoalStateActive || g.GoalID != rec.GoalRef {
 		t.Fatalf("fixture goal id/state = %s/%q, want %s/active", g.GoalID, g.State, rec.GoalRef)
 	}
 	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: "qa-red-947"}
-	report, err := al.steerCanceller().CancelSubtree(context.Background(), rec.SessionID, by)
+	// ADR-20261004 decision 2: "Cancel, also called Stop all, pauses that
+	// helper and every helper under it." The cascade cause names a DESCENDANT,
+	// "never the cascade's own direct target" (session.StopCauseCascade).
+	// Stop the parent through the owner path; keep the child-cascade oracle.
+	stopped, err := al.StopSession(context.Background(), StopRequest{SessionID: parentMeta.ID, By: by, Tree: true})
 	if err != nil {
-		t.Fatalf("CancelSubtree: %v", err)
+		t.Fatalf("StopSession(parent tree): %v", err)
 	}
-	if len(report.Reached) != 1 || report.Reached[0] != rec.SessionID {
-		t.Fatalf("cancel report reached = %v, want only child %q (D7 cascades downward, not to its parent)", report.Reached, rec.SessionID)
+	if stopped.RootErr != nil || len(stopped.Report.Unreachable) != 0 {
+		t.Fatalf("parent stop failed: root=%v unreachable=%v", stopped.RootErr, stopped.Report.Unreachable)
+	}
+	report := stopped.Report
+	// Decision 2 explicitly includes the named target AND its descendants;
+	// changing the target to the parent does not exclude the parent itself.
+	if len(report.Reached) != 2 || report.Reached[0] != parentMeta.ID || report.Reached[1] != rec.SessionID {
+		t.Fatalf("cancel report reached = %v, want exactly parent %q then child %q (D7/decision 2)", report.Reached, parentMeta.ID, rec.SessionID)
+	}
+	parent, err := lifecycle.Load(parentMeta.ID)
+	if err != nil || parent.State != session.LifecycleStopped {
+		t.Fatalf("cascade target parent = %+v, error = %v, want stopped", parent, err)
 	}
 
 	assertGoalPreserved := func() {
@@ -481,16 +495,19 @@ func TestGoalChildCompletion947_CancelPreservesSessionOwnedGoal(t *testing.T) {
 	}
 	assertGoalPreserved()
 	noticeID, stopNote := assertU1StoppedChildNotice(t, al, parentMeta.ID, rec, "cascade", by.ID)
-	assertU1NoticeStable(t, al, parentMeta.ID, rec, "cascade", by.ID, noticeID, stopNote, wakeCount)
+	assertG5NoticeStable(t, al, parentMeta.ID, rec, "cascade", by.ID, noticeID, stopNote, wakeCount, 0)
 
-	if _, err := al.steerCanceller().CancelSubtree(context.Background(), rec.SessionID, by); err != nil {
-		t.Fatalf("CancelSubtree(already stopped): %v", err)
+	if _, err := al.StopSession(context.Background(), StopRequest{SessionID: parentMeta.ID, By: by, Tree: true}); err != nil {
+		t.Fatalf("StopSession(already stopped parent tree): %v", err)
 	}
 	assertGoalPreserved()
-	assertU1NoticeStable(t, al, parentMeta.ID, rec, "cascade", by.ID, noticeID, stopNote, wakeCount)
-	for range 2 { // D6/T6: repeated boot must not duplicate the notice/wake.
+	assertG5NoticeStable(t, al, parentMeta.ID, rec, "cascade", by.ID, noticeID, stopNote, wakeCount, 0)
+	// D6 notice routing: "a stopped ... parent retains it without a wake".
+	// Stopping the parent changes this oracle from one working-parent wake
+	// to exactly zero wakes; the untaken notice must remain stored on disk.
+	for range 2 { // D6/T6: stopped-parent replay duplicates neither note nor wake.
 		replayU1StoppedNotices(t, al, lifecycleDir, inboxDir)
-		assertU1NoticeStable(t, al, parentMeta.ID, rec, "cascade", by.ID, noticeID, stopNote, wakeCount)
+		assertG5NoticeStable(t, al, parentMeta.ID, rec, "cascade", by.ID, noticeID, stopNote, wakeCount, 0)
 		assertGoalPreserved()
 	}
 }

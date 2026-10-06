@@ -12,7 +12,7 @@ import (
 // duration is a time.Duration that JSON-unmarshals from either a human-friendly
 // string ("24h", "5s", "500ms") or a bare number interpreted as SECONDS — so
 // config.json stays readable for the hour/minute/second TTLs FR-195 exposes
-// (needs_input_ttl, cancel_grace, wake_debounce, idle_quiet_window). Marshals
+// (needs_input_ttl, wake_debounce, idle_quiet_window). Marshals
 // back as the canonical string form. A zero value means "unset" (the Effective*
 // resolvers substitute the ADR default).
 type duration time.Duration
@@ -96,7 +96,6 @@ const (
 	DefaultSMSteerBodyBytes     = 16 * 1024
 
 	// Timing.
-	DefaultSMCancelGrace   = 5 * time.Second
 	DefaultSMNeedsInputTTL = 24 * time.Hour
 
 	// Wake debounce/rate (async_notifier.go constants).
@@ -161,8 +160,7 @@ type SessionMessagingConfig struct {
 	SteerRatePerMinute int `json:"steer_rate,omitempty"`
 	SteerBody          int `json:"steer_body,omitempty"`
 
-	// --- Timing (2) ---
-	CancelGrace   duration `json:"cancel_grace,omitempty"`
+	// --- Timing (1) ---
 	NeedsInputTTL duration `json:"needs_input_ttl,omitempty"`
 
 	// --- Wake debounce/rate (2) ---
@@ -279,14 +277,6 @@ func (c SessionMessagingConfig) EffectiveSteerBodyBytes() int {
 		return c.SteerBody
 	}
 	return DefaultSMSteerBodyBytes
-}
-
-// EffectiveCancelGrace resolves the cooperative-stop grace window.
-func (c SessionMessagingConfig) EffectiveCancelGrace() time.Duration {
-	if c.CancelGrace > 0 {
-		return time.Duration(c.CancelGrace)
-	}
-	return DefaultSMCancelGrace
 }
 
 // EffectiveNeedsInputTTL resolves the needs_input park TTL (G-6).
