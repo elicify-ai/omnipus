@@ -71,7 +71,7 @@ function isOwned(entry: OwnedPanelPopout): boolean {
 function removeOwned(entry: OwnedPanelPopout): void {
   if (ownedPopouts.get(entry.ownershipKey) === entry) ownedPopouts.delete(entry.ownershipKey)
   entry.stopWatching()
-  forgetPanelTabHandle(entry.identity, entry.handle)
+  forgetPanelTabHandle(entry.identity, entry.handle, entry.popoutId)
 }
 
 function finishOwned(entry: OwnedPanelPopout, finalContext = entry.context): void {
@@ -87,9 +87,9 @@ function moveOwned(entry: OwnedPanelPopout, context: PanelContext): void {
   if (!nextIdentity) return
   entry.context = context
   if (panelIdentityKey(entry.identity) === panelIdentityKey(nextIdentity)) return
-  forgetPanelTabHandle(entry.identity, entry.handle)
+  forgetPanelTabHandle(entry.identity, entry.handle, entry.popoutId)
   entry.identity = nextIdentity
-  registerPanelTabHandle(nextIdentity, entry.handle)
+  registerPanelTabHandle(nextIdentity, entry.handle, entry.popoutId)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -194,6 +194,7 @@ function releaseAllOwned(): void {
   ownedPopouts.clear()
   for (const entry of entries) {
     entry.stopWatching()
+    // The source is leaving, not the child. Its live presence still supports Switch.
     forgetPanelTabHandle(entry.identity, entry.handle)
   }
 }
@@ -235,7 +236,6 @@ export function startPanelPopoutLifecycleOwner(): () => void {
 /** Transfer a newly opened child from the side-panel shell to the stable app owner. */
 export function registerPanelPopout(registration: PanelPopoutRegistration): void {
   ensureInfrastructure()
-  registerPanelTabHandle(registration.identity, registration.handle)
   const key = ownershipKey(registration)
   const previous = ownedPopouts.get(key)
   if (previous) {
@@ -248,6 +248,7 @@ export function registerPanelPopout(registration: PanelPopoutRegistration): void
       }
     }
   }
+  registerPanelTabHandle(registration.identity, registration.handle, registration.popoutId)
   const entry: OwnedPanelPopout = {
     ...registration,
     ownershipKey: key,

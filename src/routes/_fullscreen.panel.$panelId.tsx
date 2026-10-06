@@ -55,6 +55,7 @@ function FullScreenPanelRoute() {
   )
   const popoutId = typeof search.popout === 'string' && search.popout.length > 0 ? search.popout : null
   const contextRef = useRef<PanelContext | null>(initialContext)
+  const expandContextRef = useRef<(() => PanelContext) | null>(null)
   const announcementRef = useRef<ReturnType<typeof announcePanelTabPresence> | null>(null)
   const closedRef = useRef(false)
 
@@ -76,6 +77,7 @@ function FullScreenPanelRoute() {
   }, [definition, navigate, popoutId])
 
   const registerExpandContext = useCallback((getter: (() => PanelContext) | null) => {
+    expandContextRef.current = getter
     if (getter) reportContext(getter())
   }, [reportContext])
 
@@ -137,8 +139,10 @@ function FullScreenPanelRoute() {
           return
         }
       }
-      const context = contextRef.current
+      // Resolve the live selection after the leave guard accepts.
+      const context = expandContextRef.current?.() ?? contextRef.current
       if (context === null) return
+      contextRef.current = context
       announceClosed()
       try {
         window.close()
@@ -155,10 +159,10 @@ function FullScreenPanelRoute() {
     if (!definition || initialContext === null) return undefined
     const identity = panelIdentityFromContext(definition.id, initialContext)
     if (!identity) return undefined
-    const announcement = announcePanelTabPresence(identity)
+    const announcement = announcePanelTabPresence(identity, popoutId ?? undefined)
     announcementRef.current = announcement
     const onPageHide = () => {
-      const context = contextRef.current
+      const context = expandContextRef.current?.() ?? contextRef.current
       if (popoutId && context !== null) announcePanelPopoutDeparture(definition.id, popoutId, context)
     }
     window.addEventListener('pagehide', onPageHide)
