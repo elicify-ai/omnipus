@@ -1,6 +1,6 @@
 # ADR-091 — UAT plan: steered sessions (delegation) and visibility
 
-**Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. Stop click 2 / Esc 2 within it stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate Stop-all button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells; Stop all / cancel kills them. Agent delegate `stop` / `stop_all` is unchanged. Authority: [Stop controls — founder decision 2026-10-06](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/STOP-CONTROLS-DECISION-20261006.md)::Action / Behaviour and **The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume**::D2 / D7 / D9. C1/C2 and D1's Stop setup below use this rule; these are amended expectations, not executed UAT or release certification. Unrelated dated expectations are not re-decided here.
+**Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. A second Stop / Esc / `/stop` within it stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. Agent delegate `stop` / `stop_all` is unchanged. Authority: founder decision, 2026-10-06 and **The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume**::D2 / D7 / D9. C1/C2 and D1's Stop setup below use this rule; these are amended expectations, not executed UAT or release certification. Unrelated dated expectations are not re-decided here.
 
 **What this covers.** ADR-091 removed the old "sub-agent" special case. A delegated
 worker is now an ordinary session that another session steers. This plan checks the
@@ -31,7 +31,7 @@ plan, **that is a finding** — report it rather than adjusting the plan.
 | At the concurrency cap a delegation is **queued with its place in line**, never refused | `docs/settings.md` — "How many agents run at once" |
 | Concurrency floor is **2** when memory cannot be measured | same |
 | A delegated session's lifetime cap is **30 minutes**, and a follow-up does **not** restart it | `docs/settings.md` — "How long a child may run" |
-| **Amended 2026-10-06 (founder):** a selected turn that stops shows **Stopped**, remains resumable, and is not a failure. The first Stop does not change helper states; Stop all reaches the whole tree. | **The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume**::D2 / D7 / D9; founder Stop-controls table |
+| **Amended 2026-10-06 (founder):** a selected turn that stops shows **Stopped**, remains resumable, and is not a failure. The first Stop does not change helper states; the tree-scope stop reaches the whole tree. | **The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume**::D2 / D7 / D9; founder Stop-controls table |
 | Side panel holds at most **50** pending updates | `docs/settings.md` — "Safety stops that are not settings" |
 
 ---
@@ -187,11 +187,11 @@ worker visibly starts and is then killed.
 
 ---
 
-## Lane C — First Stop is this turn; second Stop is the tree (~20 min)
+## Lane C — First Stop is this turn; second Stop selects the helper tree (~20 min)
 
-**Amended 2026-10-06 (founder):** the first Stop must leave helpers running. The second Stop/Esc within 3 s is the tree-stop confirmation; `/cancel` requests that tree stop immediately. No separate Stop-all control is used.
+**Amended 2026-10-06 (founder):** the first Stop must leave helpers running. The second Stop/Esc within 3 s is the tree-stop confirmation; `/cancel` requests that tree stop immediately. No separate button is used.
 
-### C1 — First Stop leaves running helpers; second Stop stops the tree
+### C1 — First Stop leaves running helpers; second Stop stops the chat and its helper tree
 
 **Setup.** Agents `uat-c-boss`, `uat-c-worker`, `uat-c-sub`; boss→worker→sub.
 
@@ -212,24 +212,24 @@ worker visibly starts and is then killed.
 **Screenshots.** (a) both helpers running before Stop; (b) the first-Stop scope before confirming, without delaying the second press past 3 s; (c) both rows after the tree stop.
 
 **PASS** if the first Stop leaves helpers unaffected and the second press or `/cancel` stops the tree.
-**FAIL** if the first Stop stops a helper, if a helper keeps running after the confirmed tree stop settles, or if a separate Stop-all button is required.
+**FAIL** if the first Stop stops a helper, if a helper keeps running after the confirmed tree stop settles, or if a separate button is required.
 
-### C2 — Stop all reaches a queued helper; plain Stop does not cancel it
+### C2 — A second Stop / Esc or `/cancel` reaches a queued helper; first Stop leaves it eligible
 
 **Setup.** Same agents. Start enough workers to leave one helper queued (see Lane E).
 
 **Steps.**
-1. With a helper still queued, request **Stop all** from its parent chat: two Stop/Esc presses within 3 s, or `/cancel` immediately.
+1. With a helper still queued, use **a second Stop / Esc within 3 s, or `/cancel` immediately**, in its parent chat to stop the chat and its helper tree.
 2. Watch that queued helper for 60 seconds.
 3. In a separate queued setup, use only one Stop or `/stop`; check that the helper is not stopped by that request. It may remain queued or start normally as a slot becomes free.
 
 **Expected.**
-- Stop all selects the queued helper as part of the tree; it settles as **Stopped** and is not admitted after that tree stop.
+- A tree-scope stop selects the queued helper as part of the tree; it settles as **Stopped** and is not admitted after that tree stop.
 - Plain Stop selects only the parent's current turn. It does not cancel or discard the queued helper.
 
 **Screenshots.** (a) the queued row before the tree request; (b) the same row after; (c) the plain-Stop case with the helper still eligible to work.
 
-**PASS** if Stop all prevents the selected queued helper from running and plain Stop leaves it eligible.
+**PASS** if the second Stop / Esc or `/cancel` prevents the selected queued helper from running and the first Stop leaves it eligible.
 **FAIL** if the first Stop cancels it, or if it remains eligible after the tree stop. Report a setup that started before the tree request as such, not as proof of queued-stop coverage.
 
 ---
@@ -243,7 +243,7 @@ worker visibly starts and is then killed.
 **Steps.**
 1. Open a chat with `uat-d-boss`.
 2. Send: `Ask uat-d-worker to write a long essay about the history of the bicycle.`
-3. Once the worker row shows `running`, send **`/cancel` in the boss chat** (immediate Stop all), and confirm the worker is Stopped. One Stop in that parent chat would stop only the parent, not this worker.
+3. Once the worker row shows `running`, send **`/cancel` in the boss chat** (an immediate stop of the chat and its helper tree), and confirm the worker is Stopped. One Stop in that parent chat would stop only the parent, not this worker.
 4. Now send: `Never mind the bicycle. Ask uat-d-worker instead for a single word: the capital of France.`
 5. Wait for the reply.
 

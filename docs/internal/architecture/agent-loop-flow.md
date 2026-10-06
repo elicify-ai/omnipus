@@ -1,6 +1,6 @@
 # Agent Loop & Turn Engine
 
-**Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops this chat's current turn only and opens 3 s; Stop click 2 / Esc 2 within it stops this chat and its whole helper tree. `/cancel` does that immediately. No separate Stop-all button or offer. `/stop-redirect <instruction>` stops and continues **this chat**, in any root or helper chat. Same on web, CLI and channels. Plain Stop leaves background shells; Stop all / cancel kills them. Agent delegate `stop` / `stop_all` is unchanged. Authority: [Stop controls — founder decision 2026-10-06](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/STOP-CONTROLS-DECISION-20261006.md)::Action / Behaviour. The source walkthrough below remains dated; this amendment is not implementation certification.
+**Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops this chat's current turn only and opens 3 s; A second Stop / Esc / `/stop` within it stops this chat and its whole helper tree. `/cancel` does that immediately. No separate button or offer. `/stop-redirect <instruction>` stops and continues **this chat**, in any root or helper chat. Same on web, CLI and channels. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. Agent delegate `stop` / `stop_all` is unchanged. Authority: founder decision, 2026-10-06. The source walkthrough below remains dated; this amendment is not implementation certification.
 
 How a message becomes a response in Omnipus: from the inbound WebSocket frame,
 through per-session workers and the turn loop, to streamed tokens and tool
@@ -440,11 +440,11 @@ spawned children too.
 | Input on web, CLI or channels | Selected scope |
 |---|---|
 | Stop click 1 / eligible Esc 1 / `/stop` | This chat's current turn only; open 3 s. |
-| Stop click 2 / eligible Esc 2 within it | This chat plus its whole helper tree; the second press is the confirmation. |
+| Second Stop / eligible Esc / `/stop` within it | This chat plus its whole helper tree; the second press is the confirmation. |
 | `/cancel` | Tree scope immediately. |
 | `/stop-redirect <instruction>` | Stop this chat's turn, then continue this chat with the instruction, root or helper. |
 
-No separate Stop-all control or offer. Esc consumed by a menu/dialog/editor dismisses only that surface; terminal arrow/function-key sequences are not standalone Esc presses. All selected executions use the existing StopSession path. The obsolete 500 ms double-Escape mechanism is removed from this description; no replacement byte decoder is designed here.
+No separate button or offer. Esc consumed by a menu/dialog/editor dismisses only that surface; terminal arrow/function-key sequences are not standalone Esc presses. All selected executions use the existing StopSession path. The obsolete 500 ms double-Escape mechanism is removed from this description; no replacement byte decoder is designed here.
 
 ### Cancel-related audit events
 

@@ -2,11 +2,11 @@
 
 ## Amended 2026-10-06 — founder decision
 
-**Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. Stop click 2 / Esc 2 within it stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate Stop-all button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells; Stop all / cancel kills them. Agent delegate `stop` / `stop_all` is unchanged (one helper's turn / its tree). These are distinct commands, not aliases. Authority: [Stop controls — founder decision 2026-10-06](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/STOP-CONTROLS-DECISION-20261006.md)::Action / Behaviour.
+**Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. A second Stop / Esc / `/stop` within it stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. Agent delegate `stop` / `stop_all` is unchanged (one helper's turn / its tree). These are distinct commands, not aliases. Authority: founder decision, 2026-10-06.
 
 Every person/agent trigger uses **`AgentLoop.StopSession`**. Polite immediately; forced **3 s** later; detach any selected execution still running **3 s after force** (6 s from the initial request if both stages run). No caller-selectable `hard`, no agent 5-second grace, no `session_messaging.cancel_grace`. Internal hard-abort stage labels are not a public hard option. Only the producing execution settles stopped after its work/tail shuts down; visible errors distinguish accepted/pending from landed. Goals remain active.
 
-**Reply expectations:** a plain Stop reply must describe **this turn/session only**, never say helpers stopped. A Stop-all reply names the downward tree scope and any pending/incomplete/unreachable sessions; accepted or reached is not proof of stopped. The old shared-transcript cascade basis is historical: helpers own transcripts; the durable edge defines Stop all. The original §15 holdout is retained verbatim as historical evaluation material; use these amended scope/timing requirements as the current oracle. Source: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D2/D7/D9 and [LANE-A-ONE-STOP-DECISION-20261005.md](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/LANE-A-ONE-STOP-DECISION-20261005.md).
+**Reply expectations:** a plain Stop reply must describe **this turn/session only**, never say helpers stopped. A reply to a request to stop the chat and its helper tree names the downward tree scope and any pending/incomplete/unreachable sessions; accepted or reached is not proof of stopped. The old shared-transcript cascade basis is historical: helpers own transcripts; the durable edge defines the tree-scope stop. The original §15 holdout is retained verbatim as historical evaluation material; use these amended scope/timing requirements as the current oracle. Source: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](../architecture/ADR-20260928-sub-agent-control-plane.md)::D2/D7/D9 and LANE-A-ONE-STOP-DECISION-20261005.md (private record).
 
 Status: Draft
 
@@ -37,7 +37,7 @@ The v1 spec was BLOCKED by adversarial review with 4 CRITICAL findings, all veri
 
 ## Escape dismissal and Stop counting
 
-**Amended 2026-10-06 (founder):** Esc handled by a slash/mention menu, dialog or editor dismisses that surface only; it does not count as a Stop press. The first **eligible** Esc then stops this chat's current turn and opens the 3 s window; the next eligible Esc within it is Stop all. This keeps layered dismissal without a separate Stop-all control.
+**Amended 2026-10-06 (founder):** Esc handled by a slash/mention menu, dialog or editor dismisses that surface only; it does not count as a Stop press. The first **eligible** Esc then stops this chat's current turn and opens the 3 s window; the next eligible Esc within it stops this chat and its helper tree. This keeps layered dismissal without a separate button.
 
 ---
 
@@ -47,7 +47,7 @@ The v1 spec was BLOCKED by adversarial review with 4 CRITICAL findings, all veri
 
 - **Tier A channel** — Platform supports first-class command registration (Telegram BotCommands, Slack Slash Commands, Discord Application Commands, Adaptive Cards). Channel implements `CommandRegistrarCapable`. Native autocomplete UI in the platform.
 - **Tier B channel** — Platform requires text-message parsing. No native command UI. Channel handler text-matches `/cancel` on inbound messages.
-- **Cascade** — Stop all / `/cancel` reaches the selected session and its entire helper tree through durable parent edges. Plain Stop reaches only the current turn of the one session, never helpers. **Amended 2026-10-06.**
+- **Cascade** — `/cancel` or a second Stop / Esc within 3 s reaches the selected session and its entire helper tree through durable parent edges. Plain Stop reaches only the current turn of the one session, never helpers. **Amended 2026-10-06.**
 - **Graceful cancel** — `requestGracefulInterrupt` flag set on `turnState`; loop exits at the next safe checkpoint (after current LLM iteration completes).
 - **Hard cancel** — `context.Cancel()` + `hardAbort` flag + LLM provider's HTTP request explicitly cancelled. Aborts mid-stream.
 - **Detached/neutered turn** — Sub-state where `turnState.abandoned = true`; all writes/frames/cost-accumulations from that turn become no-ops. Used when the goroutine refuses to exit after hard cancel.
@@ -80,12 +80,12 @@ These surfaced during v0.1 release verification: orphan agent loops accumulated 
 
 A `/cancel` command available across every surface:
 
-- **Web SPA / CLI** — first eligible Stop/Esc or `/stop` stops this chat's turn only and opens 3 s; second Stop/Esc within it is Stop all. `/cancel` is immediate Stop all. No separate Stop-all control. **Amended 2026-10-06 (founder).**
+- **Web SPA / CLI** — first eligible Stop/Esc or `/stop` stops this chat's turn only and opens 3 s; second Stop/Esc within it stops this chat and its helper tree. `/cancel` is an immediate stop of the chat and its helper tree. No separate button. **Amended 2026-10-06 (founder).**
 - **Redirect on every surface** — `/stop-redirect <instruction>` stops and continues the current chat, root or helper; it never redirects a helper selected from the root chat.
 - **Chat channels** — `/stop`, `/cancel` and `/stop-redirect <instruction>` keep those same chat-scoped meanings (native commands on Tier A platforms; text parsing on Tier B).
 
 When invoked, `/cancel`:
-- **Cascades**, for `/cancel` / Stop all only, through the selected session's durable helper tree; plain Stop never cascades. Helpers keep their own transcript identities. **Amended 2026-10-06.**
+- **Cascades**, for `/cancel` / a tree-scope stop only, through the selected session's durable helper tree; plain Stop never cascades. Helpers keep their own transcript identities. **Amended 2026-10-06.**
 - **Auto-denies** any pending tool approvals on the cancelled turn whose tools have not yet started execution
 - **Escalates** from graceful → hard at 3s, then to detach-and-neuter at 6s (3s + 3s) if the goroutine still hasn't exited
 - **Aborts the LLM provider's in-flight HTTP request** at graceful (not just at hard) — calls `turnState.providerCancel()` immediately so the 3s window doesn't wait for OpenRouter's stream to drain naturally
@@ -93,7 +93,7 @@ When invoked, `/cancel`:
 - **Emits** an audit event (`turn_cancelled` for fired cancels; `turn_cancel_attempt` for every request including no-ops; `turn_cancel_stuck` if detach fires)
 - **Detaches** any goroutine still alive 3s after hard cancel — `turnState.abandoned = true`; subsequent writes/frames/cost-accumulations from that turn become no-ops without affecting any other session
 
-Background shells are left running by plain Stop and killed by Stop all / cancel. This does not introduce force-killing of Go tool goroutines. Out of scope: automatic prompt retries, ending/deleting the chat, rate limiting on `/cancel`, and the HMAC chain (shipped with #155).
+Background shells are left running by plain Stop and killed by a second Stop / Esc within 3 s, or `/cancel`. This does not introduce force-killing of Go tool goroutines. Out of scope: automatic prompt retries, ending/deleting the chat, rate limiting on `/cancel`, and the HMAC chain (shipped with #155).
 
 ### Pre-condition: MaixCam channel removal
 
@@ -112,13 +112,13 @@ The original discovery decisions are retained except where the dated founder ame
 | 3 | Two-stage: graceful first, hard after 3s (hard-coded) | Matches Unix `kill` → `kill -9`; uses existing `InterruptGraceful` + new `InterruptSessionHard` (per F-03) |
 | 4 | In-scope: sub-turns, pending approvals (tool not yet executed). Out: long-running tools (already executing) | Approvals are pre-execution gates; running tools' contexts already plumbed |
 | 5 | Channel-scoped + canceller identity in message ("[cancelled by @bob]") | Avoids RBAC scope creep; abuse detection observability added per F-08 |
-| 6 | **Amended 2026-10-06 (founder):** repeating `/cancel` is idempotent. A second Stop/Esc within the 3 s window after a plain Stop instead expands scope to Stop all. | Confirmation selects the tree; it does not request an immediate force stage. |
+| 6 | **Amended 2026-10-06 (founder):** repeating `/cancel` is idempotent. A second Stop/Esc within the 3 s window after a plain Stop instead expands scope to the tree-scope stop. | Confirmation selects the tree; it does not request an immediate force stage. |
 | 7 | Immediate ack + progress indicator (in-place edit where supported) | Prevents "stop button is broken" perception during the graceful window |
 | 8 | Partial assistant with `truncated:true` (in `transcript.jsonl`) + separate `turn_cancelled` JSONL entry (in `transcript.jsonl`) filtered from chat UI; audit log entry | Clean audit trail; `context.jsonl` unchanged so LLM next-turn sees natural truncation |
 | 9 | Fresh start after cancel (no retry button, no continue affordance) | Today's behavior already supports next-message |
 | 10 | Ship in v0.1 — it's a bug fix found during release testing | Release-responsibility rule (CLAUDE.md #7) |
 | 11 | Stuck goroutine: detach and neuter (3s post-hard-cancel) | Go cannot force-kill goroutines; session-isolated zombie is honest middle ground |
-| 12 | **Amended 2026-10-06 (founder):** first Stop/Esc or `/stop` stops this chat's turn and opens 3 s; second Stop/Esc within it is Stop all; `/cancel` is immediate Stop all. `/stop-redirect` stops and continues this chat, root or helper, on every surface. No separate Stop-all control. | Current authority: control-plane D9 and the founder's Stop-controls decision. |
+| 12 | **Amended 2026-10-06 (founder):** first Stop/Esc or `/stop` stops this chat's turn and opens 3 s; second Stop/Esc within it stops this chat and its helper tree; `/cancel` is an immediate stop of the chat and its helper tree. `/stop-redirect` stops and continues this chat, root or helper, on every surface. No separate button. | Current authority: control-plane D9 and the founder's Stop-controls decision. |
 | 13 | Turn-level only (no session-end via `/cancel`) | Different blast radii deserve different commands |
 | 14 | No rate limiting on `/cancel` | Q6 + Q11 already make cancel structurally idempotent and resource-cheap; abuse-detection observability added per F-08 |
 
@@ -138,9 +138,9 @@ The original discovery decisions are retained except where the dated founder ame
 
 **Acceptance scenarios:**
 1. **Given** a turn is actively streaming, **When** the user clicks the Stop button, **Then** the turn ends within 5 seconds (P95) and the partial assistant message displays with the `(interrupted)` suffix.
-2. **Given** a turn has two helpers executing and background shells, **When** the user clicks Stop once, **Then** only this chat's turn stops, the helpers and background shells keep working, and a 3 s window opens. **When** Stop/Esc is pressed again within it (even if the first turn has already ended), **Then** Stop all reaches the chat and its whole helper tree and kills their background shells. There is no separate Stop-all button or offer. **Amended 2026-10-06 (founder).**
+2. **Given** a turn has two helpers executing and background shells, **When** the user clicks Stop once, **Then** only this chat's turn stops, the helpers and background shells keep working, and a 3 s window opens. **When** Stop/Esc is pressed again within it (even if the first turn has already ended), **Then** the tree-scope stop reaches the chat and its whole helper tree and kills their background shells. There is no separate button or offer. **Amended 2026-10-06 (founder).**
 3. **Given** the slash menu is showing mid-stream, **When** the user selects `/cancel`, **Then** the same StopSession mechanism runs with **tree** scope, not plain Stop's session scope. **Amended 2026-10-06.**
-4. **Given** a turn is streaming, **When** the user presses an eligible Esc, **Then** it has the same effect as the first Stop click and opens 3 s. Esc consumed by a menu/dialog/editor only dismisses that surface; the next eligible Esc is the first Stop, not Stop all.
+4. **Given** a turn is streaming, **When** the user presses an eligible Esc, **Then** it has the same effect as the first Stop click and opens 3 s. Esc consumed by a menu/dialog/editor only dismisses that surface; the next eligible Esc is the first Stop, not the tree-scope stop.
 
 ### US-2: Chat-channel user cancels via `/cancel` — P0
 
@@ -161,7 +161,7 @@ The original discovery decisions are retained except where the dated founder ame
 
 ### US-3: CLI user uses the same Stop sequence — P1
 
-**Amended 2026-10-06 (founder):** one eligible Esc or `/stop` stops this chat's current turn only and opens a 3 s window. A second eligible Esc within it is Stop all; `/cancel` is Stop all immediately. `/stop-redirect <instruction>` stops and continues this chat, root or helper. The old 500 ms double-Escape mechanism is removed, not kept as another mode.
+**Amended 2026-10-06 (founder):** one eligible Esc or `/stop` stops this chat's current turn only and opens a 3 s window. A second eligible Esc within it stops this chat and its helper tree; `/cancel` stops this chat and its helper tree immediately. `/stop-redirect <instruction>` stops and continues this chat, root or helper. The old 500 ms double-Escape mechanism is removed, not kept as another mode.
 
 **Independent check:** start a chat with a helper and a background shell. One Esc stops only the current turn; the helper and shell remain. A second Esc within 3 s stops the whole helper tree and kills its background shells. After expiry, an Esc is a first press again.
 
@@ -175,7 +175,7 @@ The original discovery decisions are retained except where the dated founder ame
 
 **As any** user (web, chat, or CLI)
 **I want** `/cancel` to stop not just the visible parent agent but every sub-turn it spawned and any pending tool approval
-**so that** **Stop all / `/cancel`**, not plain Stop, means “stop this session and every helper below it.”
+**so that** **`/cancel` or a second Stop / Esc within 3 s**, not plain Stop, means “stop this session and every helper below it.”
 
 **Why P0:** Core correctness — partial cascade is the failure mode we're fixing.
 
@@ -184,7 +184,7 @@ The original discovery decisions are retained except where the dated founder ame
 **Independent test:** Construct a turn where Mia spawns Jim, Jim spawns Max; cancel; verify all three agent loops exit within 5 seconds and no further tokens are consumed.
 
 **Acceptance scenarios:**
-1. **Given** session S has three active helpers, each with its own transcript, **When** Stop all / `/cancel` fires, **Then** the durable helper-tree walk selects all four sessions; plain Stop selects S only. **Amended 2026-10-06.**
+1. **Given** session S has three active helpers, each with its own transcript, **When** `/cancel` or a second Stop / Esc within 3 s fires, **Then** the durable helper-tree walk selects all four sessions; plain Stop selects S only. **Amended 2026-10-06.**
 2. **Given** a tool approval is pending (policy = `ask`, user has not clicked Allow/Deny, tool has not yet started execution), **When** `/cancel` fires, **Then** the approval is auto-denied with reason "session cancelled" and the approval modal/prompt closes.
 3. **Given** a sub-turn has its own pending approval, **When** `/cancel` cascades, **Then** that approval is also auto-denied.
 4. **Given** a tool has already started execution (its own goroutine running, holding its own context), **When** `/cancel` fires, **Then** that tool's context is cancelled (per its caller's context wiring) but the cancel feature does NOT terminate its goroutine forcefully — tool authors are responsible for honoring their context.
@@ -255,7 +255,7 @@ The original discovery decisions are retained except where the dated founder ame
 | EC-9 | Stuck-goroutine detach but the goroutine eventually completes naturally | The completion's transcript-write attempt is suppressed by `turnState.abandoned`. Metric `omnipus_abandoned_writes_suppressed_total` increments. The goroutine returns; Go reclaims memory; no user-visible artifact. |
 | EC-10 | Channel-side message edit fails (rate-limited by platform) after "Cancelling..." was sent | Two-message fallback: "Cancelling..." stays as-is; new "✓ Cancelled by @user" message follows. Audit log records `channel_edit_failure: true` field. |
 | EC-11 | Cancel arrives with an authenticated token whose user ID is unknown (token revoked between issue and handle) | Cancel still fires (channel-scoped per Q5). Audit log records `cancelled_by_user: "<unknown-user>"`. |
-| EC-12 | CLI arrow/function-key sequence contains an Escape byte | The sequence is not a standalone Esc press and MUST NOT count as Stop. A standalone eligible Esc 1 stops this turn and opens 3 s; Esc 2 within it is Stop all. No 500 ms double-Escape mode (FR-31a). |
+| EC-12 | CLI arrow/function-key sequence contains an Escape byte | The sequence is not a standalone Esc press and MUST NOT count as Stop. A standalone eligible Esc 1 stops this turn and opens 3 s; Esc 2 within it stops this chat and its helper tree. No 500 ms double-Escape mode (FR-31a). |
 | EC-13 | In-flight LLM stream when cancel fires | At graceful: `turnState.providerCancel()` is called immediately (FR-12a) — aborts the OpenRouter HTTP request mid-stream. The loop detects ctx.Err on its next iteration check. Without this, OpenRouter's stream could take 5-20s to drain naturally, blowing the 3s graceful window. |
 | EC-14 | Sub-turn is in middle of its own LLM stream when parent cancel fires | Each sub-turn has its own `providerCancel`. Cascade calls `providerCancel()` on every matching turnState. All in-flight LLM streams abort in parallel. |
 | EC-15 | Cancel during stuck cancel — the SPA UI shows "Stopping..." but 3s passed | At 3s graceful expiry, the Stop button label morphs to "Force-stopping..." If 6s passes (hard + 3s detach), it morphs to "Cancelled" (the detach path treats the user-visible cancel as complete). |
@@ -265,7 +265,7 @@ The original discovery decisions are retained except where the dated founder ame
 
 ## 5. Behavioral Contract
 
-- **When** Stop click 1 / Esc 1 / `/stop` is invoked, **the system** stops only this chat's current turn and opens 3 s. Stop click 2 / Esc 2 within it stops this chat and its whole helper tree; `/cancel` selects that tree immediately. Plain Stop leaves background shells; Stop all / cancel kills them. No separate Stop-all control. Agent delegate `stop` / `stop_all` remains unchanged. **Amended 2026-10-06 (founder).**
+- **When** Stop click 1 / Esc 1 / `/stop` is invoked, **the system** stops only this chat's current turn and opens 3 s. A second Stop / Esc / `/stop` within it stops this chat and its whole helper tree; `/cancel` selects that tree immediately. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. No separate button. Agent delegate `stop` / `stop_all` remains unchanged. **Amended 2026-10-06 (founder).**
 - **When** the graceful cancel is initiated, **the system** also calls `turnState.providerCancel()` on every cascaded turnState to abort in-flight LLM HTTP streams.
 - **When** the graceful cancel has not completed within 3 seconds, **the system** escalates to hard cancel (`InterruptSessionHard(sessionID)` — new API) on all matching turn states.
 - **When** the hard cancel has not caused goroutine exit within an additional 3 seconds, **the system** marks the turnState as abandoned; all subsequent writes/frames/cost-accumulations from that turn become no-ops; an audit event records the abandonment.
@@ -278,10 +278,10 @@ The original discovery decisions are retained except where the dated founder ame
 
 ## 6. Explicit Non-Behaviors
 
-- **The system must not** kill background shells on plain Stop or passive disconnection. Stop all / cancel MUST kill background shells in the selected chat and helper tree. Other resources such as browser sessions and MCP servers retain their own lifecycles; this does not add a force-kill mechanism for Go tool goroutines.
+- **The system must not** kill background shells on plain Stop or passive disconnection. a second Stop / Esc within 3 s, or `/cancel` MUST kill background shells in the selected chat and helper tree. Other resources such as browser sessions and MCP servers retain their own lifecycles; this does not add a force-kill mechanism for Go tool goroutines.
 - **The system must not** force-terminate goroutines via `runtime.Goexit`, `unsafe.Pointer` tricks, or process panic. The only honest mechanism in Go is cooperative `context.Cancel` + neutered output paths.
 - **The system must not** restart the gateway process automatically in response to a stuck cancellation. Concurrent sessions must remain unaffected.
-- **The system must not** offer a public `hard`/`--force` option or second-press-forces-immediately behavior. **Amended 2026-10-06:** a confirmed second Stop/Esc selects Stop all, with the same timing; `/stop` and `/stop-redirect` are separate commands, never aliases of `/cancel`.
+- **The system must not** offer a public `hard`/`--force` option or second-press-forces-immediately behavior. **Amended 2026-10-06:** a confirmed second Stop/Esc selects the tree-scope stop, with the same timing; `/stop` and `/stop-redirect` are separate commands, never aliases of `/cancel`.
 - **The system must not** persist or replay the `{type: "turn_cancelled"}` JSONL entry as a chat-bubble message in the SPA. The entry is metadata for audit/replay tooling; the visible chat UI signal is the existing `(interrupted)` label derived from `{truncated: true}` on the partial assistant message.
 - **The system must not** mutate `context.jsonl` (LLM history) on cancel — the partial assistant content stays as-is so the next turn's LLM sees natural truncation. Only `transcript.jsonl` receives the truncation flag and `turn_cancelled` entry.
 - **The system must not** rate-limit `/cancel`. Q6 + Q11 already make cancel structurally idempotent and resource-cheap. Abuse-detection observability (FR-25a) replaces the missing rate-limit.
@@ -357,13 +357,13 @@ The original discovery decisions are retained except where the dated founder ame
 ### Relevant execution flows
 
 **Flow A — Web Stop controls**
-First Stop/Esc or `/stop` → this chat's current turn, session scope, and 3 s window. Second Stop/Esc within it → Stop all, tree scope. `/cancel` → tree scope immediately. All selected executions use the shared StopSession stages; no separate Stop-all button or offer.
+First Stop/Esc or `/stop` → this chat's current turn, session scope, and 3 s window. Second Stop/Esc within it → this chat and its helper tree, tree scope. `/cancel` → tree scope immediately. All selected executions use the shared StopSession stages; no separate button or offer.
 
 **Flow B — CLI and channel commands**
 The same registered `/stop`, `/cancel` and `/stop-redirect <instruction>` meanings apply. Redirect stops and continues the chat where it was entered, root or helper; it does not choose a helper on the root's behalf.
 
-**Flow C — Stop-all helper and background-shell scope**
-Stop all follows durable helper edges, including queued helpers. Helpers keep their own transcripts. Plain Stop leaves helpers and background shells running; Stop all / cancel stops the tree and kills its background shells.
+**Flow C — tree-scope stop helper and background-shell scope**
+A tree-scope stop follows durable helper edges, including queued helpers. Helpers keep their own transcripts. Plain Stop leaves helpers and background shells running; a second Stop / Esc within 3 s, or `/cancel` stops the tree and kills its background shells.
 
 **Flow D — Partial assistant persistence (CORRECTED per F-04)**
 Agent loop is streaming when cancel fires. Two stores receive different treatment:
@@ -374,7 +374,7 @@ Agent loop is streaming when cancel fires. Two stores receive different treatmen
 Orphan watchdog (60s, `websocket.go:1241`) is for synthesizing UI frames when a sub-turn span doesn't close after parent ends. With cascade in place (post-F-01 fix), parent and sub-turns end together — watchdog rarely fires. When it does (stuck detach case), it emits `subagent_end{status:"interrupted"}` as today; the cancel feature's `turnState.abandoned` independently suppresses any later frames from the actually-stuck goroutine.
 
 **Flow F — CLI Stop sequence**
-Eligible Esc 1 stops this chat's current turn and opens 3 s; Esc 2 within it is Stop all. A terminal arrow/function-key sequence is not a standalone Esc. `/stop`, `/cancel` and `/stop-redirect` have the same scope as on web and channels. No separate byte-timing or confirmation mechanism is specified here.
+Eligible Esc 1 stops this chat's current turn and opens 3 s; Esc 2 within it stops this chat and its helper tree. A terminal arrow/function-key sequence is not a standalone Esc. `/stop`, `/cancel` and `/stop-redirect` have the same scope as on web and channels. No separate byte-timing or confirmation mechanism is specified here.
 
 **Flow G — UI during 3s graceful window for stuck cancel (new, answers unasked Q3)**
 At t=0 user clicks Stop. Web button morphs to "Stopping..." with spinner (immediate, <100ms local React state). At t=3s if cancel hasn't completed, button label morphs to "Force-stopping..." (server pushed event `cancel_stage: hard`). At t=6s if detach fires, button morphs to "Cancelled" (server pushed event `cancel_stage: detached`); chat input re-enabled for new message; partial assistant message shows `(interrupted)` suffix.
@@ -387,7 +387,7 @@ At t=0 user clicks Stop. Web button morphs to "Stopping..." with spinner (immedi
 
 ## 9. BDD Scenarios
 
-**Amended 2026-10-06:** old scenarios saying a plain Stop stops helpers are superseded: use Stop all / `/cancel` for the cascade oracle, and add the self-only control where helpers keep working. Every timing assertion uses polite -> force at 3 s -> detach 3 s after force. Existing test names are historical/proposed coverage, not proof that those tests ran.
+**Amended 2026-10-06:** old scenarios saying a plain Stop stops helpers are superseded: use `/cancel` or a second Stop / Esc within 3 s for the cascade oracle, and add the self-only control where helpers keep working. Every timing assertion uses polite -> force at 3 s -> detach 3 s after force. Existing test names are historical/proposed coverage, not proof that those tests ran.
 
 ### Happy paths
 
@@ -429,8 +429,8 @@ At t=0 user clicks Stop. Web button morphs to "Stopping..." with spinner (immedi
 **When** the user presses eligible Esc once
 **Then** only this chat's current turn stops, its helper and background shell keep running, and a 3 s window opens
 **When** the user presses eligible Esc again within that window
-**Then** Stop all reaches this chat and its whole helper tree and kills their background shells
-**And** no separate Stop-all control is needed.
+**Then** A tree-scope stop reaches this chat and its whole helper tree and kills their background shells
+**And** no separate button is needed.
 
 ### Alternate paths
 
@@ -583,7 +583,7 @@ Examples: Tier B text-parse acceptance
 
 ## 10. Test-Driven Development Plan (historical names, current scope/timing below)
 
-**Amended 2026-10-06:** T0 shared-transcript inheritance is superseded by own helper transcripts and durable-edge Stop-all scope. T1/T3/T4 cascade tests target Stop all, with plain Stop as a helper-preserving control. Timer tests exercise the one StopSession path for both people and agents; no independent gateway or delegate timer is authorized.
+**Amended 2026-10-06:** T0 shared-transcript inheritance is superseded by own helper transcripts and durable-edge tree-scope stop scope. T1/T3/T4 cascade tests target the tree-scope stop, with plain Stop as a helper-preserving control. Timer tests exercise the one StopSession path for both people and agents; no independent gateway or delegate timer is authorized.
 
 ### Test implementation order
 
@@ -603,7 +603,7 @@ Examples: Tier B text-parse acceptance
 | T11 | `TestTierBParse_TableDriven` | Unit (Go) | EC-7, FR-2 | 9-row table from §9 scenario outline; assert correct trigger behavior per row. |
 | T12a | `TestRegisterCommands_Telegram_ExactCommandSet` | Integration (Go) | US-2.1, F-20 | Existing Telegram test extended: register `/stop`, `/cancel` and `/stop-redirect`; assert the exact registered set includes all three plus the existing commands, with no aliases. |
 | T12b–g | `TestRegisterCommands_{Slack,Discord,Teams,Feishu,DingTalk,GoogleChat}` | Integration (Go) | US-2.1 | NEW scaffold per channel: register `/cancel` against mocked platform client; assert platform's command-set API received `/cancel`. |
-| T13 | Stop and slash-command scope | Unit (TS, vitest) | US-1.3 | First Stop or `/stop` selects session scope and opens 3 s; second Stop/Esc inside it and `/cancel` select tree. No separate Stop-all button or offer. |
+| T13 | Stop and slash-command scope | Unit (TS, vitest) | US-1.3 | First Stop or `/stop` selects session scope and opens 3 s; second Stop/Esc inside it and `/cancel` select tree. No separate button or offer. |
 | T14 | Eligible Escape scope | Unit (TS, vitest) | US-1.4 | Esc consumed by a menu/dialog/editor is dismissal only. First eligible Esc stops this turn and opens 3 s; second within it selects tree, including after the first turn ended. After expiry it is a first press again. |
 | T15 | Commands available during streaming | Unit (TS, vitest) | FR-3a | `/stop`, `/cancel` and `/stop-redirect` are reachable during streaming and retain their distinct meanings. |
 | T16 | CLI Stop sequence | Integration | US-3 | Exercise one eligible Esc, a second within 3 s, a second after expiry, `/cancel`, and `/stop-redirect` in root and helper chats. Assert chat/tree scope and background-shell behavior, not only an interrupted label. |
@@ -616,7 +616,7 @@ Examples: Tier B text-parse acceptance
 | T21 | `cancel-cross-channel.spec.ts :: web stop button` | E2E (Playwright) | US-1.1, SC-1 | Open SPA; send prompt → long output; click Stop; assert within 5s message shows `(interrupted)` and input enabled. |
 | T22 | `cancel-cross-channel.spec.ts :: web slash menu during streaming` | E2E (Playwright) | US-1.3, FR-3a | Same setup; mid-stream, type `/c`; assert `/cancel` shows in menu; select it; assert cancel behavior. |
 | T23 | `cancel-cross-channel.spec.ts :: web Escape key` | E2E (Playwright) | US-1.4 | Same setup; press Escape; assert cancel. |
-| T24 | Stop-all cascade | E2E | US-4.1 | First Stop leaves the helper and background shell running; second Stop/Esc within 3 s or `/cancel` stops the tree and kills its background shells. |
+| T24 | cascade stopping the chat and its helper tree | E2E | US-4.1 | First Stop leaves the helper and background shell running; second Stop/Esc within 3 s or `/cancel` stops the tree and kills its background shells. |
 | T25 | `cancel-cross-channel.spec.ts :: stuck cancel UI progression` | E2E (Playwright) | EC-15 | Trigger cancel of a stuck operation; observe button text morph through "Stopping..." → "Force-stopping..." → "Cancelled". |
 | T26 | `cancel-cross-channel.spec.ts :: audit entries exist` | E2E (Playwright + fs check) | US-5.1, US-5.2 | Trigger cancel; read audit JSONL via Node fs; assert `turn_cancel_attempt{was_fired: true}` and `turn_cancelled` entries exist. |
 | T27 | `TestMaixCamRemoval_GrepClean` | Integration (shell-via-Go) | US-7.1 | After prep commit: `grep -r "maixcam" --include="*.go" --include="*.ts" .`; assert exit code 1 (no matches). |
@@ -668,10 +668,10 @@ New regression assertion (per F-20):
 
 | Requirement | Effective requirement replacing older scope/mechanism |
 |---|---|
-| FR-1 / FR-3 / FR-3a / FR-4 / FR-5 | First Stop/Esc or `/stop`: this chat's turn only plus 3 s window. Second Stop/Esc within it: chat plus whole helper tree. `/cancel`: immediate tree. No separate Stop-all control. `/stop-redirect`: stop and continue this chat, root or helper, on web, CLI and channels. |
-| FR-6 / FR-6a | Stop all walks durable helper edges; own transcript identities are not inherited to create a cascade. Plain Stop must never reach helpers. |
+| FR-1 / FR-3 / FR-3a / FR-4 / FR-5 | First Stop/Esc or `/stop`: this chat's turn only plus 3 s window. Second Stop/Esc within it: chat plus whole helper tree. `/cancel`: immediate tree. No separate button. `/stop-redirect`: stop and continue this chat, root or helper, on web, CLI and channels. |
+| FR-6 / FR-6a | the tree-scope stop walks durable helper edges; own transcript identities are not inherited to create a cascade. Plain Stop must never reach helpers. |
 | FR-10 / FR-11 / FR-12 / FR-12a | All people/agent triggers enter `AgentLoop.StopSession`; polite at once, force at 3 s, detach 3 s after force. No public hard option, agent grace or cancel_grace. |
-| FR-13 | Repeating the same scoped request is idempotent; confirming Stop all after a session-only Stop expands scope, not timing. |
+| FR-13 | Repeating the same scoped request is idempotent; confirming the tree-scope stop after a session-only Stop expands scope, not timing. |
 | FR-21 | Report current stop stage truthfully using 3 s / subsequent 3 s timing; “Stopped” only after the owning execution's shutdown/settlement, never just because a request was accepted. |
 
 
@@ -679,7 +679,7 @@ New regression assertion (per F-20):
 
 - **FR-1 — Amended 2026-10-06 (founder):** Tier A channels MUST register `/stop`, `/cancel` and `/stop-redirect <instruction>` with the same semantics as web and CLI, in root and helper chats.
 - **FR-2 — Amended 2026-10-06 (founder):** Tier B channels MUST dispatch the same three commands from text messages. `/stop` and `/cancel` match whole commands, not fragments of prose; `/stop-redirect` takes the instruction in this chat. This changes no command into an alias.
-- **FR-3 — Amended 2026-10-06 (founder):** Stop click 1 / eligible Esc 1 / `/stop` MUST stop this chat's current turn only and open a 3 s window. Stop click 2 / eligible Esc 2 within it MUST stop this chat and its whole helper tree. `/cancel` MUST select that tree immediately. The second press IS the confirmation; there MUST NOT be a separate Stop-all button or armed offer. Esc consumed by a menu/dialog/editor MUST dismiss only that surface.
+- **FR-3 — Amended 2026-10-06 (founder):** Stop click 1 / eligible Esc 1 / `/stop` MUST stop this chat's current turn only and open a 3 s window. A second Stop / eligible Esc / `/stop` within it MUST stop this chat and its whole helper tree. `/cancel` MUST select that tree immediately. The second press IS the confirmation; there MUST NOT be a separate button or armed offer. Esc consumed by a menu/dialog/editor MUST dismiss only that surface.
 - **FR-3a — Amended 2026-10-06 (founder):** the SPA MUST keep `/stop`, `/cancel` and `/stop-redirect` reachable during streaming, with the same distinct scopes as on CLI and channels.
 - **FR-4**: System MUST acknowledge a cancel request with a visible UI signal. Latency budget:
   - Web/CLI: ≤100ms (local React state morph / terminal redraw)
@@ -688,11 +688,11 @@ New regression assertion (per F-20):
 
 ### Cascade semantics
 
-- **FR-6 — Amended 2026-10-06:** StopSession with session scope MUST stop only that current turn and MUST NOT reach helpers. Tree scope (Stop all / `/cancel`) MUST walk the selected session's whole durable helper tree, including queued helpers; never ancestors/siblings. Report acceptance/pending/landed/incomplete honestly.
-- **FR-6a — Amended 2026-10-06:** helpers MUST retain their own transcript identity/store. Stop all follows durable edges; shared transcript identity MUST NOT be restored as a cascade prerequisite. This replaces the old inherited-transcript requirement.
+- **FR-6 — Amended 2026-10-06:** StopSession with session scope MUST stop only that current turn and MUST NOT reach helpers. Tree scope (`/cancel` or a second Stop / Esc within 3 s) MUST walk the selected session's whole durable helper tree, including queued helpers; never ancestors/siblings. Report acceptance/pending/landed/incomplete honestly.
+- **FR-6a — Amended 2026-10-06:** helpers MUST retain their own transcript identity/store. A tree-scope stop follows durable edges; shared transcript identity MUST NOT be restored as a cascade prerequisite. This replaces the old inherited-transcript requirement.
 - **FR-7**: System MUST auto-deny pending tool approvals (tools that have NOT yet started execution) on the cancelled session and any sub-turn, with reason "session cancelled".
-- **FR-8 — Amended 2026-10-06 (founder):** plain Stop MUST leave background shells running. Stop all / cancel MUST kill background shells belonging to the selected chat and its helper tree, leaving unrelated chats alone. Other already-executing Go tool goroutines retain their context-handling obligations; no force-kill of goroutines is introduced.
-- **FR-9 — Amended 2026-10-06:** plain Stop MUST NOT stop any other session, including helpers. Stop all / `/cancel` may stop exactly the selected session's descendants, never ancestors, siblings or unrelated sessions.
+- **FR-8 — Amended 2026-10-06 (founder):** plain Stop MUST leave background shells running. a second Stop / Esc within 3 s, or `/cancel` MUST kill background shells belonging to the selected chat and its helper tree, leaving unrelated chats alone. Other already-executing Go tool goroutines retain their context-handling obligations; no force-kill of goroutines is introduced.
+- **FR-9 — Amended 2026-10-06:** plain Stop MUST NOT stop any other session, including helpers. `/cancel` or a second Stop / Esc within 3 s may stop exactly the selected session's descendants, never ancestors, siblings or unrelated sessions.
 
 ### Two-stage timing
 
@@ -725,7 +725,7 @@ New regression assertion (per F-20):
 - **FR-24 — Amended 2026-10-06 (founder):** after a stopped CLI turn settles, show its partial output as interrupted and return to the input prompt. One eligible Esc already stops this turn; do not wait for a second Esc to do so.
 - **FR-25**: The cancellation message in chat channels MUST include the canceller's channel-side identity (display name preferred; fall back to unique ID).
 - **FR-25a**: System MUST emit a WARNING audit entry `event_type: cancel_abuse_pattern` when a single canceller exceeds N=10 cancel attempts within M=60s for the same or different sessions on the same channel. This is observability, not rate limiting — the cancels still fire. Operators consume this signal to investigate. Threshold and window are hard-coded for v0.1; tunable later (no release scheduled).
-- **FR-26 — Amended 2026-10-06 (founder):** the existing Stop MUST remain usable for the second press throughout the 3 s window, even if the first press has already ended the turn. Outside that window, ordinary no-active-turn behavior applies. No extra Stop-all control is added.
+- **FR-26 — Amended 2026-10-06 (founder):** the existing Stop MUST remain usable for the second press throughout the 3 s window, even if the first press has already ended the turn. Outside that window, ordinary no-active-turn behavior applies. No extra button is added.
 
 ### Channels & registration
 
@@ -883,7 +883,7 @@ Per F-09 review re-baseline: separated "core cancel mechanics" (deliverable at v
 9. **Frontend feedback:** Stop button progression; replay filter; `/cancel` slash menu entry with `availableWhileStreaming: true`. FR-3a, FR-21, FR-16, FR-26. Tests T13, T14, T15.
 10. **Frontend E2E (web only):** stop button + slash menu + Escape + cascade + audit + UI progression. Tests T21–T26.
 11. **Tier B channel commands:** dispatch `/stop`, `/cancel` and `/stop-redirect <instruction>` with the same chat-scoped semantics. FR-2, FR-5, FR-29; T11.
-12. **CLI Stop parity — Amended 2026-10-06 (founder):** first eligible Esc / `/stop` stops this turn and opens 3 s; second Esc within it is Stop all; `/cancel` is immediate Stop all; redirect continues this chat, root or helper. Delete the old 500 ms mechanism. FR-3, FR-5, FR-31a; T16, T17, T17b.
+12. **CLI Stop parity — Amended 2026-10-06 (founder):** first eligible Esc / `/stop` stops this turn and opens 3 s; second Esc within it stops this chat and its helper tree; `/cancel` is an immediate stop of the chat and its helper tree; redirect continues this chat, root or helper. Delete the old 500 ms mechanism. FR-3, FR-5, FR-31a; T16, T17, T17b.
 
 ### Phase 2 — Tier A native registration polish (incremental, ~1 day per channel)
 
