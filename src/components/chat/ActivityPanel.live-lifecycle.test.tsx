@@ -86,7 +86,7 @@ describe('U2 — Activity uses current child lifecycle, not an open delegation b
     expect(activity.runningCount).toBe(0)
     expect(activity.running).toStrictEqual([])
     const stoppedRows = childRows()
-    expect(stoppedRows.sort((a, b) => a.child!.localeCompare(b.child!))).toStrictEqual(children.map((child) => ({ child, lifecycle: 'stopped', duration: undefined })))
+    expect([...stoppedRows].sort((a, b) => a.child!.localeCompare(b.child!))).toStrictEqual(children.map((child) => ({ child, lifecycle: 'stopped', duration: undefined })))
     expect(screen.getByText('0 running')).toBeInTheDocument()
     expect(screen.queryByTestId('activity-section-running')).not.toBeInTheDocument()
     expect(screen.getAllByText('stopped', { exact: true })).toHaveLength(3)
