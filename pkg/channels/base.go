@@ -291,6 +291,16 @@ func (c *BaseChannel) HandleMessage(
 		sender.CanonicalID = senderID
 	}
 	if handled, err := c.interceptSessionControl(ctx, content, chatID, sender.CanonicalID); handled {
+		if err != nil {
+			// F5: most adapters call HandleMessage without checking its
+			// error, so a failed control acknowledgement is logged here,
+			// in the one place every adapter passes through.
+			logger.ErrorCF("channels", "Session control was handled, but its reply could not be sent", map[string]any{
+				"channel": c.name,
+				"chat_id": chatID,
+				"error":   err.Error(),
+			})
+		}
 		return err
 	}
 
