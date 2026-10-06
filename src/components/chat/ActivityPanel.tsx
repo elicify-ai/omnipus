@@ -71,21 +71,24 @@ export interface ActivityPanelProps {
   scrollRequest?: { section: 'commands'; nonce: number } | null
 }
 
-/** Split `running` in arrival order. Queued agents leave "Running now" so the position list is the queue, not a second copy. */
+/** Split open work in arrival order; queued/waiting children are not executing. */
 function partitionRunning(running: ActivityItem[]): {
   queued: AgentActivityItem[]
+  waiting: AgentActivityItem[]
   active: ActivityItem[]
   commands: ActivityItem[]
 } {
   const queued: AgentActivityItem[] = []
+  const waiting: AgentActivityItem[] = []
   const active: ActivityItem[] = []
   const commands: ActivityItem[] = []
   for (const item of running) {
     if (item.kind === 'bash') commands.push(item)
     else if (item.kind === 'agent' && item.lifecycleState === 'queued') queued.push(item)
+    else if (item.kind === 'agent' && item.lifecycleState === 'needs_input') waiting.push(item)
     else active.push(item)
   }
-  return { queued, active, commands }
+  return { queued, waiting, active, commands }
 }
 
 function ActivitySection({
@@ -173,6 +176,7 @@ function ActivityRow({
     <div
       data-testid="activity-row"
       data-status={item.status}
+      data-lifecycle-state={lifecycleState}
       className="text-[length:var(--type-utility-xs-size)]"
     >
       {/* Mirrors GenericToolCall.tsx's `disabled={!hasDetail}` gate: a
@@ -319,7 +323,8 @@ export function ActivityPanel({
   // which click already scrolled so a later mount still scrolls once, and a
   // 1-second activity refresh does not yank the panel back to the top.
   const scrolledNonce = useRef<number | null>(null)
-  const { queued, active, commands } = partitionRunning(running)
+  const { queued, waiting, active, commands } = partitionRunning(running)
+  const runningCount = active.length + commands.length
   const isEmpty = running.length === 0 && recentlyFinished.length === 0
   // A retained failure keeps the Commands pill up after the command has left
   // "running", so it is not in the commands section. The first such row is
@@ -356,7 +361,7 @@ export function ActivityPanel({
       <SheetContent side="right" className="w-[90vw] sm:w-[22.5rem] p-0 flex flex-col" overlay={false}>
         <SheetHeader>
           <SheetTitle>Activity</SheetTitle>
-          <Badge variant={running.length > 0 ? 'default' : 'muted'}>{running.length} running</Badge>
+          <Badge variant={runningCount > 0 ? 'default' : 'muted'}>{runningCount} running</Badge>
         </SheetHeader>
 
         <div className="flex-1 overflow-y-auto px-[var(--space-2-5)] py-[var(--space-2-5)] space-y-[var(--space-3)]">
@@ -379,6 +384,12 @@ export function ActivityPanel({
                   </div>
                 </div>
               ))}
+            </ActivitySection>
+          )}
+
+          {waiting.length > 0 && (
+            <ActivitySection title="Waiting for answer" testId="activity-section-waiting">
+              {waiting.map((item) => <ActivityRow key={item.key} item={item} />)}
             </ActivitySection>
           )}
 
