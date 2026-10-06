@@ -61,29 +61,7 @@ func TestQAGate2HumanHelperInput_OwnerWorkerProfileSteersExistingHelper(t *testi
 	}
 }
 
-func TestQAGate2HumanHelperInput_NonOwnerCannotSteerExistingWorker(t *testing.T) {
-	for _, agentID := range []string{"hans"} {
-		name := "explicit_worker_profile"
-		// Non-owner write authority descoped by founder 2026-10-06 (single-user app).
-		t.Run(name, func(t *testing.T) {
-			f := newQA2HelperInputFixture(t)
-			conn := qa2AuthenticatedHelperSocket(t, f, "qa2-other")
-			const instruction = "An unrelated account must not steer this helper."
-			accepted, refusal := qa2SendHelperInput(t, conn, f.child.SessionID, agentID, instruction, "qa2-a8-other-input")
-			if accepted || refusal == "" {
-				t.Errorf("A8 authority: authenticated NON-owner disposition = accepted:%v refusal:%q, want explicit refusal", accepted, refusal)
-			}
-			for _, entry := range qa2ReopenHelperTranscript(t, f.loop.GetSessionStore(), f.child.SessionID) {
-				if entry.ClientMessageID == "qa2-a8-other-input" || (entry.Role == "user" && entry.Content == instruction) {
-					t.Errorf("A8 authority: non-owner input was saved in another account's helper: %+v; want no write/admission", entry)
-				}
-			}
-			if calls := len(f.p.snapshot()); calls != 1 {
-				t.Errorf("A8 authority: non-owner caused %d provider admissions, want only the original helper", calls)
-			}
-		})
-	}
-}
+// Non-owner write authority descoped by founder 2026-10-06 (single-user app).
 
 func TestQAGate2HumanHelperInput_EmptySessionStillCannotMintStandaloneWorkerChat(t *testing.T) {
 	f := newQA2HelperInputFixture(t)
