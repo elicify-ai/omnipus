@@ -167,9 +167,10 @@ func (t *DelegateTool) executeDurableStatus(ctx context.Context, sessionID strin
 	return NewToolResult(text + note)
 }
 
-// recordFinalsRead marks each helper final among msgs as received when the
-// caller is the helper's direct parent (the hand-back wake's recipient), so
-// the wake does not hand the same result over again (D5). already reports
+// recordFinalsRead marks each helper final (and stopped-child notice, V7)
+// among msgs as received when the caller is the helper's direct parent (the
+// wake's recipient), so the wake does not hand the same message over again
+// (D5). already reports
 // that a final among msgs had been received before this read (A5). The note
 // is set when that record could not be written: the result may then reach
 // the parent a second time, and the parent is told so.
@@ -179,6 +180,9 @@ func (t *DelegateTool) recordFinalsRead(ctx context.Context, rec *session.Lifecy
 		return false, ""
 	}
 	finalPrefix := rec.SessionID + ":"
+	// V7: a stopped-child notice the parent read through this poll is
+	// consumed the same way, so its own wake starts no second parent turn.
+	noticePrefix := "stopped-notice:" + parentID + ":" + rec.SessionID + ":"
 	var failures []string
 	for _, msg := range msgs {
 		raw, err := json.Marshal(msg)
@@ -193,7 +197,8 @@ func (t *DelegateTool) recordFinalsRead(ctx context.Context, rec *session.Lifecy
 			failures = append(failures, err.Error())
 			continue
 		}
-		if !strings.HasPrefix(id.MessageID, finalPrefix) || !strings.HasSuffix(id.MessageID, ":final") {
+		isFinal := strings.HasPrefix(id.MessageID, finalPrefix) && strings.HasSuffix(id.MessageID, ":final")
+		if !isFinal && !strings.HasPrefix(id.MessageID, noticePrefix) {
 			continue
 		}
 		received, err := t.finalRead(parentID, ToolAgentID(ctx), id.MessageID)
@@ -201,7 +206,7 @@ func (t *DelegateTool) recordFinalsRead(ctx context.Context, rec *session.Lifecy
 			failures = append(failures, fmt.Sprintf("%s: %v", id.MessageID, err))
 			continue
 		}
-		already = already || received
+		already = already || (isFinal && received)
 	}
 	if len(failures) == 0 {
 		return already, ""
