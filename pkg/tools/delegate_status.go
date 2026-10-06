@@ -157,19 +157,26 @@ func (t *DelegateTool) executeDurableStatus(ctx context.Context, sessionID strin
 		return ErrorResult(fmt.Sprintf("delegate: status: decode latest inbox entry: %v", err))
 	}
 	line := firstNonBlank(envelope.Text, envelope.Summary, envelope.ResultSoFar, envelope.Condition, envelope.Note, strings.Join(envelope.Paths, ", "), envelope.Kind)
+	already, note := t.recordFinalsRead(ctx, rec, []generated.SessionMessage{*latest})
+	if already {
+		// A5: the final already reached this parent (its hand-back wake or
+		// an earlier poll); status does not hand the same result over again.
+		line = "final already delivered"
+	}
 	text := fmt.Sprintf("%s, %s, %s ago", state, line, formatDelegateStatusAge(t.now().Sub(envelope.CreatedAt))) + extra
-	return NewToolResult(text + t.recordFinalsRead(ctx, rec, []generated.SessionMessage{*latest}))
+	return NewToolResult(text + note)
 }
 
 // recordFinalsRead marks each helper final among msgs as received when the
 // caller is the helper's direct parent (the hand-back wake's recipient), so
-// the wake does not hand the same result over again (D5). It returns a note
-// for the tool result when that record could not be written: the result may
-// then reach the parent a second time, and the parent is told so.
-func (t *DelegateTool) recordFinalsRead(ctx context.Context, rec *session.LifecycleRecord, msgs []generated.SessionMessage) string {
+// the wake does not hand the same result over again (D5). already reports
+// that a final among msgs had been received before this read (A5). The note
+// is set when that record could not be written: the result may then reach
+// the parent a second time, and the parent is told so.
+func (t *DelegateTool) recordFinalsRead(ctx context.Context, rec *session.LifecycleRecord, msgs []generated.SessionMessage) (already bool, note string) {
 	parentID := rec.SteeringSessionID()
 	if t.finalRead == nil || parentID == "" || callerOwnerKey(ctx) != parentID {
-		return ""
+		return false, ""
 	}
 	finalPrefix := rec.SessionID + ":"
 	var failures []string
@@ -189,14 +196,17 @@ func (t *DelegateTool) recordFinalsRead(ctx context.Context, rec *session.Lifecy
 		if !strings.HasPrefix(id.MessageID, finalPrefix) || !strings.HasSuffix(id.MessageID, ":final") {
 			continue
 		}
-		if err := t.finalRead(parentID, ToolAgentID(ctx), id.MessageID); err != nil {
+		received, err := t.finalRead(parentID, ToolAgentID(ctx), id.MessageID)
+		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", id.MessageID, err))
+			continue
 		}
+		already = already || received
 	}
 	if len(failures) == 0 {
-		return ""
+		return already, ""
 	}
-	return fmt.Sprintf(" (could not record that this result was received, so it may be handed over again: %s)", strings.Join(failures, "; "))
+	return already, fmt.Sprintf(" (could not record that this result was received, so it may be handed over again: %s)", strings.Join(failures, "; "))
 }
 
 func firstNonBlank(values ...string) string {
@@ -484,7 +494,8 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 	if merr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: inbox: encode response: %v", merr))
 	}
-	return NewToolResult(string(payload) + t.recordFinalsRead(ctx, rec, msgs))
+	_, note := t.recordFinalsRead(ctx, rec, msgs)
+	return NewToolResult(string(payload) + note)
 }
 
 func (t *DelegateTool) executeInboxAck(ctx context.Context, args map[string]any) *ToolResult {

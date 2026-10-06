@@ -1201,12 +1201,13 @@ func (al *AgentLoop) writeSteeringConsumedMarker(wake steeringWake) (claimed boo
 // poll: the same consumed marker and inbox acknowledgement the hand-back
 // wake writes, so that wake finds it consumed and starts no second parent
 // turn with the same result (D5, exactly once).
-func (al *AgentLoop) recordPolledFinalConsumed(parentID, agentID, messageID string) error {
+func (al *AgentLoop) recordPolledFinalConsumed(parentID, agentID, messageID string) (alreadyReceived bool, err error) {
 	wake := steeringWake{messageID: messageID, transcriptSessionID: parentID, agentID: agentID}
-	if _, err := al.writeSteeringConsumedMarker(wake); err != nil {
-		return fmt.Errorf("record final %q as received: %w", messageID, err)
+	claimed, err := al.writeSteeringConsumedMarker(wake)
+	if err != nil {
+		return false, fmt.Errorf("record final %q as received: %w", messageID, err)
 	}
-	return al.ackConsumedSteeringWake(wake)
+	return !claimed, al.ackConsumedSteeringWake(wake)
 }
 
 // ackConsumedSteeringWake acknowledges the wake's durable inbox entry in its

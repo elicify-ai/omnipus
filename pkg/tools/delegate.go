@@ -268,7 +268,9 @@ type DelegateTool struct {
 	// hand-back wake does not deliver the same result a second time (D5:
 	// exactly once). Wired to the agent loop's consumed-marker writer in
 	// pkg/agent/session_messaging_wire.go.
-	finalRead func(parentSessionID, agentID, messageID string) error
+	// It reports whether the final had already been received before (by
+	// its hand-back wake or an earlier poll).
+	finalRead func(parentSessionID, agentID, messageID string) (alreadyReceived bool, err error)
 
 	// sessionMessagingEnabled, when set via SetSessionMessagingEnabled, is the
 	// live-read FR-196 kill switch (session_messaging.enabled) for the SYNC
@@ -454,7 +456,7 @@ func (t *DelegateTool) SetStopHook(stop func(sessionKey string, by steer.Princip
 
 // SetFinalReadHook installs the writer that records a polled final hand-back
 // as received (see the finalRead field).
-func (t *DelegateTool) SetFinalReadHook(finalRead func(parentSessionID, agentID, messageID string) error) {
+func (t *DelegateTool) SetFinalReadHook(finalRead func(parentSessionID, agentID, messageID string) (bool, error)) {
 	t.finalRead = finalRead
 }
 
