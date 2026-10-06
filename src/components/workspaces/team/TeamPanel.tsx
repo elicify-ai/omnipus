@@ -9,7 +9,8 @@
 //
 // This file adds only workspace-loading and recovery states: the docked shell
 // owns the panel header (title / expand / close) and the full-screen route owns
-// the chrome-less "← Back to chat" bar. Once loaded, the content is exactly the tab.
+// the chrome-less "← Back to chat" bar. Once loaded, the tab stays usable below
+// a persistent recovery notice if refreshing that workspace fails.
 // Registration into src/components/panel-shell/registry.tsx is the panel
 // registration lane's change (same shape as LibraryPanelContent there).
 
@@ -74,6 +75,12 @@ export function TeamPanel({ shellProps }: TeamPanelProps = {}) {
   const failureMessage = isError
     ? isApiError(error) ? error.userMessage : 'Failed to load team. Please try again.'
     : retryFailure?.workspaceId === workspaceId ? retryFailure.message : null
+  const retryTeam = failureMessage ? () => {
+    setRetryFailure({ workspaceId, message: failureMessage })
+    void refetch().then(() => {
+      setRetryFailure((current) => current?.workspaceId === workspaceId ? null : current)
+    })
+  } : undefined
 
   return (
     <div
@@ -81,18 +88,13 @@ export function TeamPanel({ shellProps }: TeamPanelProps = {}) {
         shellProps?.presentation === 'fullscreen' ? 'team-panel-fullscreen' : 'team-panel-docked'
       }
       aria-label="Team panel"
-      className="relative h-full min-h-0 w-full min-w-0 overflow-hidden bg-[var(--color-surface-0)]"
+      className="relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-[var(--color-surface-0)]"
     >
       {!workspace && failureMessage ? (
         <QueryErrorState
           layout="fill"
           message={failureMessage}
-          onRetry={() => {
-            setRetryFailure({ workspaceId, message: failureMessage })
-            void refetch().then(() => {
-              setRetryFailure((current) => current?.workspaceId === workspaceId ? null : current)
-            })
-          }}
+          onRetry={retryTeam}
         />
       ) : !workspace && isPending ? (
         <div
@@ -103,9 +105,22 @@ export function TeamPanel({ shellProps }: TeamPanelProps = {}) {
           <span>Loading team…</span>
         </div>
       ) : workspace ? (
-        <WorkspaceContextProvider workspace={workspace}>
-          <WorkspaceTeamTab workspaceId={workspaceId} />
-        </WorkspaceContextProvider>
+        <>
+          {failureMessage ? (
+            <QueryErrorState
+              layout="fill"
+              message={`Could not refresh Team. ${failureMessage} Showing the last known Team data.`}
+              onRetry={retryTeam}
+              className="h-auto flex-none shrink-0 flex-row justify-start gap-[var(--space-2)] border-b border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2-5)] text-left [&>p]:min-w-0 [&>p]:flex-1 [&>svg]:shrink-0 [&>button]:shrink-0"
+            />
+          ) : null}
+          {/* The tab fills this remaining area, never the recovery notice. */}
+          <div className="relative min-h-0 flex-1">
+            <WorkspaceContextProvider workspace={workspace}>
+              <WorkspaceTeamTab workspaceId={workspaceId} />
+            </WorkspaceContextProvider>
+          </div>
+        </>
       ) : null}
     </div>
   )
