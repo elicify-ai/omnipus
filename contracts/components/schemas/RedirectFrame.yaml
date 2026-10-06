@@ -1,19 +1,20 @@
 title: RedirectFrame
 description: >
-  Client → server. Redirect one session — the wire transport of the
-  `/stop-redirect` chat command (ADR-20260928 sub-agent control plane, D2
-  redirect sequence, D9 row 2): stop the named session's in-progress turn,
-  then resume it on the same generation with `instruction` as the newest
-  instruction. The SPA sends this frame from its client-side interception of
-  the typed command — never as chat text, which mid-stream would only enter
-  the steering queue. Scope is fixed by D9: the named session only, its
-  subtree keeps working; there is deliberately no scope field. The server's
-  redirect handler (a later unit) owns the runtime checks a JSON Schema
-  cannot express: the 16384-byte instruction ceiling (maxLength counts
-  characters, not UTF-8 bytes), the authoritative Unicode-aware trim behind
-  the nonblank rule, helper-identity resolution (root chats are refused with
-  guidance), and D4's existing redirect rate/body-cap semantics — this frame
-  adds no cap or rate behavior of its own.
+  Client → server. `/stop-redirect <text>` for one chat — the wire transport
+  of the command (founder rule 2026-10-06; ADR-20260928 sub-agent control
+  plane, D2 redirect sequence, D9): stop THIS session's own current turn, then
+  continue THIS session with `instruction` as its next user message. It works
+  on any session the caller is in, root chat or helper, and never touches any
+  other session. A helper session is resumed on the same generation; an
+  ordinary chat is continued as its next turn on the chat's own channel and
+  chat. The SPA sends this frame from its client-side interception of the
+  typed command — never as chat text, which mid-stream would only enter the
+  steering queue. There is deliberately no scope field. The server's redirect
+  handler owns the runtime checks a JSON Schema cannot express: the
+  16384-byte instruction ceiling (maxLength counts characters, not UTF-8
+  bytes), the authoritative Unicode-aware trim behind the nonblank rule, and
+  D4's existing redirect rate/body-cap semantics — this frame adds no cap or
+  rate behavior of its own.
 type: object
 required:
   - type
@@ -29,16 +30,17 @@ properties:
     minLength: 1
     maxLength: 128
     description: >
-      The helper session to redirect. A root chat is refused with guidance
-      server-side (D9 row 3); the frame cannot express a root redirect.
+      The session to redirect: the chat the command was typed in, root chat or
+      helper. Its own current turn is stopped and the chat continues with the
+      instruction; no other session is affected.
   instruction:
     type: string
     minLength: 1
     maxLength: 16384
     pattern: '\S'
     description: >
-      The redirect instruction; becomes the newest instruction of the resumed
-      turn. Must be nonblank after whitespace trimming — a blank or
+      The redirect instruction; becomes the next user message of the continued
+      chat. Must be nonblank after whitespace trimming — a blank or
       whitespace-only instruction gets a usage reply and changes nothing
       (D9 row 2). `pattern: '\S'` is only a client-side approximation (any
       non-whitespace character anywhere); the authoritative check is the
