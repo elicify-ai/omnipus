@@ -1077,8 +1077,8 @@ function SidebarSessionRow({
         >
           {isActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />}
           <span className="flex-1 truncate">{title}</span>
-          {/* ADR-20260928 MAJ-009/T26: exact lifecycle_state label (five
-              states, F0929-2) — absent lifecycle_state renders nothing. A
+          {/* ADR-20260928 MAJ-009/T26: exact lifecycle_state label (six
+              states: F0929-2 plus interrupted, founder 2026-10-06) — absent lifecycle_state renders nothing. A
               stopped row also shows its stop_note.cause, the lasting
               who/when/why (closed vocabulary: stop/redirect_pause/
               cascade/restart/timeout), rendered verbatim. */}

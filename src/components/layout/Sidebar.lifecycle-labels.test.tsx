@@ -2,9 +2,10 @@
 // lifecycle_state (RED pack).
 //
 // The sidebar's session rows (Sidebar.tsx::SidebarSessionRow) must render the
-// session's `lifecycle_state` as one of exactly five labels — working,
-// waiting for answer, done, failed, stopped (F0929-2 vocabulary; wire enum
-// `working|waiting_for_answer|done|failed|stopped`, generated Session schema)
+// session's `lifecycle_state` as one of exactly six labels — working,
+// waiting for answer, done, failed, stopped, interrupted (F0929-2 vocabulary
+// plus interrupted, founder 2026-10-06; wire enum
+// `working|waiting_for_answer|done|failed|stopped|interrupted`, generated Session schema)
 // — and a stopped row must additionally show its `stop_note.cause` (the
 // lasting who/when/why, MAJ-009). `Session.status` (active/archived/failed)
 // is COARSE transcript metadata and must never drive the label: the ADR's own
