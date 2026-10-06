@@ -335,6 +335,8 @@ func delegateUnderAutoChat(t *testing.T, workerAutoApproveDisabled bool) (*autoR
 	cfg.Sandbox.AutoApprove = false
 
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
+	// D2 admission requires the genuine current boot epoch before Dispatch.
+	mintGenuineBootEpochForLoop(t, al)
 	t.Cleanup(func() { al.Close() })
 	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
 	inbox := session.NewMessageInboxStore(filepath.Join(home, "session_messages"))
