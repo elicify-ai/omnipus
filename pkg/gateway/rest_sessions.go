@@ -369,15 +369,13 @@ func computeSessionLifecycle(ls *session.LifecycleStore, id string) (*gen.Sessio
 	}
 	state := gen.SessionLifecycleState(session.LifecycleStateToDisplay(rec.State))
 	var note *stopNoteEntry
-	// Session.yaml::stop_note: present only when lifecycle_state == stopped,
-	// OR the session's current generation last landed stopped — rec.StopNote
-	// is RETAINED on the record after a same-generation resume (e.g. a
-	// redirect_pause park that later continues without a fresh generation),
-	// so gate on the Seq-stamped generation still matching the record's
-	// CURRENT generation; a generation bump (revive) leaves the old note's
-	// Seq behind, correctly hiding it. Same Seq == Generation check as
-	// pkg/agent/boot_sweep.go::currentGenerationTimeoutStop.
-	if rec.StopNote != nil && rec.StopNote.Seq == uint64(rec.Generation) {
+	// Session.yaml::stop_note: the note of the session's CURRENT stop — the
+	// record is stopped, or carries its current-generation Stop in flight.
+	// StopNote.Seq is the Stop's control-ledger sequence, not a generation
+	// (F13): a resume clears the note (ADR-20260928 D2), and a revived next
+	// generation is no longer stopped, so the state alone decides.
+	if rec.StopNote != nil && (rec.State == session.LifecycleStopped ||
+		(rec.Stop != nil && rec.Stop.Generation == rec.Generation)) {
 		note = &stopNoteEntry{
 			At:    rec.StopNote.At,
 			By:    rec.StopNote.By,
