@@ -1903,8 +1903,8 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               // No this-turn assistant to coalesce into — last is a prior
               // healthy reply, or the bucket is empty. Push one new bubble
               // so the error is not silently dropped or written onto history.
-              if (!isCancelAck) {
-                // D5 fix (Site 3): safeMessage, not the raw frame.message.
+              if (!isCancelAck && llmError?.code !== 'turn_canceled') {
+                // Typed Stop notices stay in this chat's bubble, never in the global connection banner.
                 useConnectionStore.getState().setConnectionError(safeMessage)
               }
               // ADR-051 — fresh error bubble: use the translated copy when
