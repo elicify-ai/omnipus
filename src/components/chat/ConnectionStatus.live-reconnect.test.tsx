@@ -3,6 +3,7 @@ import { act, cleanup, render, screen } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseFrameSafe, type WsReceiveFrame } from '@/lib/ws'
+import type { ClientFrame } from '@/lib/api/generated/asyncapi-types'
 import { queryClient } from '@/lib/queryClient'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
@@ -93,7 +94,7 @@ describe('U4 — neutral reconnect visibility through real runtime/socket callba
 
   it('keeps reconnecting until real catch-up completes, preserves an active turn and never auto-resends', async () => {
     await connect(true)
-    const sentMessages = () => sockets.flatMap((socket) => socket.send.mock.calls.map(([raw]) => JSON.parse(raw) as { type: string })).filter((frame) => frame.type === 'message')
+    const sentMessages = () => sockets.flatMap((socket) => socket.send.mock.calls.map(([raw]) => JSON.parse(raw) as ClientFrame)).filter((frame) => frame.type === 'message')
     expect(sentMessages()).toHaveLength(1)
     act(() => latest().drop(1006))
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
