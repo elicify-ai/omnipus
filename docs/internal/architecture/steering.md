@@ -1,5 +1,13 @@
 # Steering
 
+## Amended 2026-10-06 — founder decision
+
+Steering text is input, **not a Stop**: a mid-turn message continues the current turn. **Plain Stop ends only this session's current turn, never its helpers; Stop all / `/cancel` stops the full downward helper tree.** Both people and agents use `AgentLoop.StopSession`, polite now / force at 3 s / detach 3 s after force; no agent `cancel_grace` or public `hard` option.
+
+Delegated input becomes delivered only after exact text/identity is durably in the transcript; a failed write stays queued with a visible error. At the finishing boundary, input before the actual terminal/outbox commit continues the same generation; input after it starts the next round, even if old-final publication failed. Provider text alone is not completion. A helper final reaches its parent once, poll OR wake; stopped parent holds it unconsumed, Stop all supersedes queued wakes.
+
+One message route/record for every sender (planned transcript-as-record direction), waiting-message reboot reconstruction, aggregate 256 KiB cap, ledger compaction and live failed-descendant-stop retry are **deferred to #1198 (founder 2026-10-06)**. These guides' old queue/drop/API descriptions are historical source sketches, not a claim of current release conformance. Unrelated implementation disagreements are for team-lead. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D2/D4/D5 and [Steering commands: no person question](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20261004-steering-commands-no-person-question.md)::C1; R1 commit-boundary ruling.
+
 Steering allows injecting messages into an already-running agent loop, interrupting it between tool calls without waiting for the entire cycle to complete.
 
 ## How it works

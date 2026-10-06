@@ -1,5 +1,13 @@
 # ADR-091 WP-C — Steering surface, the `delegate` front, wait-inline removal, completion
 
+## Amended 2026-10-06 — founder decision
+
+[The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md) and [Steering commands: no person question](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20261004-steering-commands-no-person-question.md) supersede conflicting session-control requirements and old acceptance expectations in this spec. **Plain Stop ends only the current turn of that one session, never helpers. Stop all / `/cancel` stops that session and its entire downward helper tree.** Human and agent triggers use `AgentLoop.StopSession`: polite immediately, forced after 3 s, detach 3 s after force. `cancel_grace`, the agent 5-second grace and public `hard` option are removed.
+
+Landed stopped resumes the same generation with a fresh execution identity; committed done/failed starts the next round. Boot never dispatches from old messages. A finished root is lifecycle completed/done, **not archived/hidden**; human input continues it, and a new scheduled/heartbeat run may revive completed as the system principal, **never stopped**. A helper final is consumed once by poll OR wake; a stopped parent holds it unconsumed until resumed, and Stop all supersedes queued hand-back wakes without deleting saved results.
+
+Delegated input is delivered only after exact text/identity is durably in the transcript; a failed write stays queued with a visible error. One route/record for all senders (transcript as record), waiting-message restart reconstruction, 256 KiB aggregate cap, ledger compaction and live failed-descendant-stop retry are **deferred to #1198 (founder 2026-10-06)**. F6 is the later post-landing simplification review, not authorization to remove safeguards now. The historical holdout below stays verbatim; conflicting old Stop, generation, person-question and automatic-boot-run oracles are not current acceptance.
+
 - **Decision record:** [ADR-091](../architecture/ADR-091-steered-sessions-replace-subagents.md) D4, D5, D6, D10 (list_jobs, seeds, prompts)
 - **Landing order:** [adr-091-landing-order.md](adr-091-landing-order.md) — consumes I-1, I-2, I-3, I-5
 - **Owner files:** landing order §3, row C
@@ -18,7 +26,7 @@
 
 | Symbol | Role today | Change |
 |---|---|---|
-| `pkg/tools/delegate.go` (actions `run`, `status`, `inbox`, `inbox_ack`, `steer`, `respond`, `cancel`, `follow_up`, `peek`) | the tool; holds `SubTurnSpawner` | holds the injected `steer.SessionLauncher` (I-2), `steer.UpwardDeliverer` (I-5) and `steer.Canceller` (I-6); `run` → `Launch` + `Dispatch` and reports **`DispatchResult`** (the authoritative `running` / `queued`); `steer` / `respond` publish bus events with `Principal` set after `verifyCallerOwnsSession`; `status` answers from the record and inbox, never from streaming (#614) |
+| `pkg/tools/delegate.go` (actions `run`, `status`, `inbox`, `inbox_ack`, `steer`, `respond`, `stop_all`, `resume`, `peek`) | the tool; holds `SubTurnSpawner` | holds the injected `steer.SessionLauncher` (I-2), `steer.UpwardDeliverer` (I-5) and `steer.Canceller` (I-6); `run` → `Launch` + `Dispatch` and reports **`DispatchResult`** (the authoritative `running` / `queued`); `steer` / `respond` publish bus events with `Principal` set after `verifyCallerOwnsSession`; `status` answers from the record and inbox, never from streaming (#614) |
 | `pkg/tools/delegate.go` `Parameters` — `async`, `allow_blocking_question` ("with wait/async=false only") | wait-inline surface | **both removed** (the contract's field for `async` is `wait`; WP-E removes it from `DelegateRunAction.yaml`) |
 | `pkg/tools/delegate_run.go::executeSync` / `executeAsync` / `persistLifecycle` | the two modes; `persistLifecycle` writes `ParentDurableKey` | `executeSync` **deleted**; `executeAsync` becomes the one run path calling I-2; `persistLifecycle` deleted (the launcher writes the record) |
 | `pkg/tools/delegate_status.go`, `delegate_park.go`, `delegate_followup.go`, `delegate_run.go` | read `ParentDurableKey` directly (`Drain`, `AckDetailed`, `Peek`, the children `List`) | read the edge's steering session; same calls; the field is deleted (D2) |
@@ -57,7 +65,7 @@
 2. **Given** an agent passes `async` or `allow_blocking_question`, **When** the call is validated, **Then** it is rejected with a named argument error.
 3. **Given** the generated system prompt for an agent with delegation edges, **When** it is rendered, **Then** it contains no advertisement of synchronous delegation.
 4. **Given** persisted config or seeds containing the await mode, **When** the process loads, **Then** the value is rejected with a named error (config) or absent (seeds).
-5. **Given** the effective concurrency cap is reached, **When** `delegate(run)` is called, **Then** it returns at once with the session id and the **`DispatchResult`** — `state: queued`, the queue position — and a notice that `delegate(cancel)` drops it; the session starts when a slot frees (founder decision, round 8). The state comes from `Dispatch`, never from `Launch`.
+5. **Given** the effective concurrency cap is reached, **When** `delegate(run)` is called, **Then** it returns at once with the session id and the **`DispatchResult`** — `state: queued`, the queue position — and a notice that `delegate(stop_all)` drops it; the session starts when a slot frees (founder decision, round 8). The state comes from `Dispatch`, never from `Launch`.
 
 ### US-2 — Steer any session you are entitled to (P0)
 
@@ -106,10 +114,10 @@
 |---|---|
 | Two steering sources send at once | both delivered, arrival order |
 | `respond` to a session that is not parked | named error, no state change |
-| `follow_up` on an external session | new external run under the same edge; parentage, limits and cancel scope preserved |
+| `resume` on an external session | new external run under the same edge; parentage, limits and cancel scope preserved |
 | Goal with criteria the Judge cannot evaluate for this agent | same readiness rejection as `create_task` |
 | `delegate` when the caller's own record is not runnable (I-8) | refused; nothing launched |
-| `delegate(cancel)` on a `queued` session | record `cancelled`; it never starts; `subagent_state(cancelled)` written |
+| `delegate(stop_all)` on a queued helper | **Amended 2026-10-06:** same StopSession path, downward scope, state stopped (not failed/cancelled), history/goals kept; it never starts without new explicit resume. |
 
 ## Behavioral contract
 
@@ -146,7 +154,7 @@ Conventions: landing order §5 item 6 (production code only; exact counts; no-ma
 | External limit | `steer`/question on an external session returns `not_steerable` |
 | Jobs | after restart, `list_jobs` with limit 2 lists a delegate-backed session once (sub-agent row) and a task-backed session once (task row); with limit 1, exactly one correctly classified row; `grep -c 'liveIndex' pkg/tools/list_jobs_sources.go` → 0 after landing (or whichever symbol names the live resolver at implementation time — the implementer records the exact name) |
 | Status | `status` on a child with no inbox entries returns state, "no message yet" and started-ago; with entries, the last text and its age |
-| Cap | at the cap, `delegate(run)` returns within 50 ms with `state: queued` and a notice naming the limit, the position and `delegate(cancel)` |
+| Cap | at the cap, `delegate(run)` returns within 50 ms with `state: queued` and a notice naming the limit, the position and `delegate(stop_all)` |
 | No agent import | the output of `go list -deps ./pkg/tools` contains no line ending in `omnipus/pkg/agent` (count 0) |
 
 ## Integration boundaries
@@ -186,7 +194,7 @@ Feature: Delegate front and steering surface
     Given max_parallel_agents turns are executing
     When Jim calls delegate(run) for a worker
     Then the call returns at once with Dispatch's result: state "queued" and the queue position
-    And the result tells Jim the limit is reached and that delegate(cancel) drops it
+    And the result tells Jim the limit is reached and that delegate(stop_all) drops it
     When an executing turn ends
     Then the queued worker starts
 
@@ -332,6 +340,8 @@ Preserved: `verifyCallerOwnsSession` ancestor semantics; parked/respond lifecycl
 
 ## Functional requirements
 
+**Amended 2026-10-06:** FR-C-004 additionally requires exact-text durable transcript injection before delivered; a failed write remains queued with a visible error. FR-C-008 uses committed final/outbox completion, not a provider response or a parked person-question: Stop/timeout/restart -> stopped, genuine error -> failed. A final reaches its parent exactly once by poll OR wake; stopped parent holds it unconsumed. `respond` is an ordinary reply, no special person-question park. The old eight-action count and `cancel`/`follow_up` names are historical; current names include Stop, Stop all, Redirect and Resume as described by the governing amendment.
+
 | ID | Requirement |
 |---|---|
 | FR-C-001 | `delegate(run)` MUST launch and dispatch through the injected `steer.SessionLauncher`, MUST report `Dispatch`'s result as the session's state, and MUST return as soon as both calls return; it MUST NOT block and MUST NOT wait for the child to start or finish. |
@@ -345,7 +355,7 @@ Preserved: `verifyCallerOwnsSession` ancestor semantics; parked/respond lifecycl
 | FR-C-009 | A goal-bearing steered session MUST be adjudicated by the Judge exactly as a task and its verdict delivered upward as the extended `goal_status` kind (direction `session_to_parent`, `met` / `not_met`, `evidence`). |
 | FR-C-010 | `collectSubagentRows` MUST exclude records whose `Origin.Kind` is `task` before any result limit, MUST take actionability from the record's state and the label from its title, and MUST NOT read the live delegate index; every session appears exactly once. |
 | FR-C-011 | `delegate(status)` MUST answer from the lifecycle record and the inbox (state, last status line, age of the last entry, or "no message yet" with started-ago) and MUST NOT depend on streaming progress. |
-| FR-C-012 | At the concurrency cap `delegate(run)` MUST return `Dispatch`'s `queued` result with a notice naming the limit, the queue position and that `delegate(cancel)` drops it. |
+| FR-C-012 | At the concurrency cap `delegate(run)` MUST return `Dispatch`'s `queued` result with a notice naming the limit, the queue position and that `delegate(stop_all)` drops it. |
 | FR-C-013 | A steered session's model input MUST NOT contain the parent's goal or goal context; proven on the actual assembled model input. |
 | FR-C-014 | The delegation prompt MUST contain exactly one sentence of guidance on when to set a goal on a delegate — multi-step work or work the parent must verify: set one; a quick lookup or a single action: leave it off — and MUST state that no goal is the default. |
 | FR-C-015 | `pkg/tools` MUST NOT import `pkg/agent`; it consumes `pkg/steer` only. |

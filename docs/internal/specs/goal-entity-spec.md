@@ -1,5 +1,11 @@
 # Goal as a First-Class Entity — Specification
 
+## Amended 2026-10-06 — founder decision
+
+FR-011's chat creation/activation is **`/goal <intent>` in this same chat**. `set_goal` refuses beforehand (Work-First FR-005), with no orphan record. Keeper reminders to steered helpers are steered system wakes; failed goal-tail saves are visible to the parent; tail claims belong only to their producing execution. Plain Stop ends only this session's current turn, never helpers or goals; Stop all / `/cancel` cascades through its full helper tree without goal clear. Session completion is done, not archive/hide, and scheduled/heartbeat new rounds may revive a completed root as system principal but never stopped. Authority: **Work-first goal flow** and [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D-B/C/F; underlying entity-shape requirements and holdout remain unchanged.
+
+Status: Draft
+
 > **Update 2026-09-14:** the app-level token budget referenced here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
 
 - **Implements:** [ADR-086 revision 2](../architecture/ADR-086-goal-as-a-first-class-entity.md)

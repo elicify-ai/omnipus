@@ -1,5 +1,15 @@
 # ADR-091 WP-E — Contracts and SPA: wire what exists, add an open button
 
+## Amended 2026-10-06 — founder decision
+
+[The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md) and [Steering commands: no person question](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20261004-steering-commands-no-person-question.md) supersede conflicting session-control requirements and old acceptance expectations in this spec. **Plain Stop ends only the current turn of that one session, never helpers. Stop all / `/cancel` stops that session and its entire downward helper tree.** Human and agent triggers use `AgentLoop.StopSession`: polite immediately, forced after 3 s, detach 3 s after force. `cancel_grace`, the agent 5-second grace and public `hard` option are removed.
+
+Landed stopped resumes the same generation with a fresh execution identity; committed done/failed starts the next round. Boot never dispatches from old messages. A finished root is lifecycle completed/done, **not archived/hidden**; human input continues it, and a new scheduled/heartbeat run may revive completed as the system principal, **never stopped**. A helper final is consumed once by poll OR wake; a stopped parent holds it unconsumed until resumed, and Stop all supersedes queued hand-back wakes without deleting saved results.
+
+Delegated input is delivered only after exact text/identity is durably in the transcript; a failed write stays queued with a visible error. One route/record for all senders (transcript as record), waiting-message restart reconstruction, 256 KiB aggregate cap, ledger compaction and live failed-descendant-stop retry are **deferred to #1198 (founder 2026-10-06)**. F6 is the later post-landing simplification review, not authorization to remove safeguards now. The historical holdout below stays verbatim; conflicting old Stop, generation, person-question and automatic-boot-run oracles are not current acceptance.
+
+Status: Draft
+
 - **Decision record:** [ADR-091](../architecture/ADR-091-steered-sessions-replace-subagents.md) D7 (client), D4 (contract), I-4
 - **Landing order:** [adr-091-landing-order.md](adr-091-landing-order.md) — consumes I-1, I-4; owns every wire-format change
 - **Owner files:** landing order §3, row E
@@ -39,7 +49,7 @@ Nothing about how a steered session looks on screen is new. The side panel, the 
 | `SubagentMessageFrame.yaml` | the `kind` enum gains `goal_status` (it excludes it today) — an enum value on an existing frame, not a new frame type | I-4 |
 | Stop response (`websocket_cancel.go` frame; REST cancel body) | add `reached`, `unreachable[]{id, reason}`, `skipped_newer_generation`, `skipped_terminal`, `partial` | I-6 |
 | `WsFrameType.yaml`, `asyncapi.yaml` inline copies | kept in sync by hand (ADR-084's copies rule); **no new frame type** | — |
-| `SubagentStateFrame.yaml`, `AttachSessionFrame.yaml`, `Session.yaml`, the `Task` wire shape | **unchanged** — the task's new `OriginCallID` is disk-only like `OriginSessionID` and MUST NOT be added to any schema | — |
+| `SubagentStateFrame.yaml`, `Session.yaml`, `CancelFrame` | **Amended 2026-10-06:** use current generated lifecycle/control-receipt/stop-note and `scope: session/tree` shapes decided by the control-plane ADR. Completed is not archived; stopped remains visible. Backend-lead owns schema edits/regeneration; no handwritten wire type. | Supersedes the old “unchanged” assertion. `OriginCallID` remains disk-only. |
 
 ### SPA changes (all small)
 
@@ -271,6 +281,8 @@ Implementers load the `test-driven-development` skill first. Vitest groups per `
 Preserved unchanged: `toolVisibility.ts` tool-call filter; `RECENTLY_FINISHED_CAP` and elapsed-time behaviour in `useRunningActivity.ts`; verbose-chat behaviour for the parent's own tool calls; `GoalPillTray` / `GoalIndicator` rendering; the pill's tray grammar; `SessionTree` nesting; approval and question-card identity handling. Updated: tests keyed on `parentCallId` spans; `ActivityPanel` tests; the pill test (new selector). Deleted: `SubagentBlock` nested-step tests, the test-mode active-session fallback and its tests, the FR-047 guard.
 
 ## Functional requirements
+
+**Amended 2026-10-06:** FR-E-012 must include server-defined `CancelFrame.scope`: omitted/session = plain Stop of only that current turn; tree = Stop all / `/cancel` through the whole helper tree. The UI must never silently cascade a session-scope request. Finished root chat stays visible with completed/done lifecycle; no archive/hide action accompanies a final. Show accepted/pending and storage errors truthfully, not as landed stopped/delivered. User-document TODO: Workers and delegation in the user Agents guide and generated General tool reference, audited by docs-verifier.
 
 | ID | Requirement |
 |---|---|

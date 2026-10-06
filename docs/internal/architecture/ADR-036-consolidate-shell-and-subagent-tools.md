@@ -1,5 +1,9 @@
 # ADR-036 — Consolidate Shell and Subagent Tools; Generalize the Async Wake Mechanism
 
+## Amended 2026-10-06 — founder decision
+
+§3.7's session-cancel cascade is now **Stop all / `/cancel` only**, not plain Stop. **Plain Stop ends only this session's current turn, never helper sessions.** Both people and agents call `AgentLoop.StopSession`, polite now / force at 3 s / detach 3 s after force; no public hard option or cancel_grace. A helper final is consumed once by poll OR wake; a stopped parent holds it unconsumed. This clarifies helper scope and the current public entry, not an unrelated background-process policy change. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D-A/B/E. The current feature gate is five reviewers (code-reviewer, silent-failure-hunter, pr-test-analyzer, architect, security-lead); older dated seven-review receipts remain historical.
+
 **Status:** Accepted
 **Date:** 2026-07-04
 **Deciders:** Daniel Piatkowski (product owner)

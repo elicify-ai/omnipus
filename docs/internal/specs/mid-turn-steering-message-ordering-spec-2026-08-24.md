@@ -1,5 +1,9 @@
 # Feature Specification: Mid-turn steering — correct message ordering
 
+## Amended 2026-10-06 — founder decision
+
+References below to Stop / Escape / `/cancel` share reply-segment protection, **not scope**: plain Stop/first eligible Esc ends only this session's current turn, never helpers; Stop all / `/cancel` stops the full downward helper tree. Both enter StopSession (3 s force + subsequent 3 s detach). A reply segment marked finished is not an archived/hidden chat or the terminal lifecycle commit. Provider answer before that commit is still working; accepted late input continues the same generation. Exact delegated text must be durable before delivered; failed write stays queued with a visible error. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D-A/B/C/D and R1; presentation decisions/holdout remain unchanged.
+
 **Created**: 2026-08-24
 **Status**: Draft
 **Input**: `docs/internal/architecture/ADR-070-mid-turn-steering-message-ordering.md`

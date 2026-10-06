@@ -1,5 +1,15 @@
 # ADR-091 WP-G — Shared fixtures, test classification, cross-package suites
 
+## Amended 2026-10-06 — founder decision
+
+[The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md) and [Steering commands: no person question](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20261004-steering-commands-no-person-question.md) supersede conflicting session-control requirements and old acceptance expectations in this spec. **Plain Stop ends only the current turn of that one session, never helpers. Stop all / `/cancel` stops that session and its entire downward helper tree.** Human and agent triggers use `AgentLoop.StopSession`: polite immediately, forced after 3 s, detach 3 s after force. `cancel_grace`, the agent 5-second grace and public `hard` option are removed.
+
+Landed stopped resumes the same generation with a fresh execution identity; committed done/failed starts the next round. Boot never dispatches from old messages. A finished root is lifecycle completed/done, **not archived/hidden**; human input continues it, and a new scheduled/heartbeat run may revive completed as the system principal, **never stopped**. A helper final is consumed once by poll OR wake; a stopped parent holds it unconsumed until resumed, and Stop all supersedes queued hand-back wakes without deleting saved results.
+
+Delegated input is delivered only after exact text/identity is durably in the transcript; a failed write stays queued with a visible error. One route/record for all senders (transcript as record), waiting-message restart reconstruction, 256 KiB aggregate cap, ledger compaction and live failed-descendant-stop retry are **deferred to #1198 (founder 2026-10-06)**. F6 is the later post-landing simplification review, not authorization to remove safeguards now. The historical holdout below stays verbatim; conflicting old Stop, generation, person-question and automatic-boot-run oracles are not current acceptance.
+
+Status: Draft
+
 - **Decision record:** [ADR-091](../architecture/ADR-091-steered-sessions-replace-subagents.md) §10, §2.4
 - **Landing order:** [adr-091-landing-order.md](adr-091-landing-order.md) — publishes I-7 first; runs alongside all packages
 - **Owner files:** landing order §3, row G
@@ -28,7 +38,7 @@ Every package needs the same two things to prove its acceptance criteria: a real
 
 ### G-1 — `DelegationTree(t, deps steer.Deps, depth int) Tree` (I-7)
 
-Builds R → A → B (→ C) with real sessions **through the injected I-2 launcher** (until WP-A publishes I-2 at CP-0, through the store directly with the same record shape), real lifecycle records with edges — including R's own `ordinary_root` record (round 9) — each session under a distinct agent profile, distinct workspaces available on request. The fixture holds only `pkg/steer` interfaces (`steer.Deps{Launcher, Canceller, Deliverer, Classifier, LifecycleStore, SessionStore, BootHook}`); every hook maps to a published operation: `Reenter(B)` → `Deliverer.Deliver` of a `handback` from B's child; `QueueWake(B, gen)` → `Deliver` with B's turn held; `Stop(node)` → `Canceller.CancelSubtree`; `Revive(node)` → `Canceller.Revive`; `CorruptRecord(node, invariant)` / `DeleteRecord(node)` / `DeleteEdge(node)` → the lifecycle store; `Crash()` → close every store without flushing; `Reboot()` → reopen and run `BootHook` (the same function `gateway_boot.go` runs).
+Builds R → A → B (→ C) with real sessions **through the injected I-2 launcher** (until WP-A publishes I-2 at CP-0, through the store directly with the same record shape), real lifecycle records with edges — including R's own `ordinary_root` record (round 9) — each session under a distinct agent profile, distinct workspaces available on request. The fixture holds only `pkg/steer` interfaces (`steer.Deps{Launcher, Canceller, Deliverer, Classifier, LifecycleStore, SessionStore, BootHook}`); every hook maps to a published operation: `Reenter(B)` → `Deliverer.Deliver` of a `handback` from B's child; `QueueWake(B, gen)` → `Deliver` with B's turn held; `Stop(node)` → the canonical StopSession with session scope; `StopAll(node)` → the same path with tree scope (**amended 2026-10-06**); `Revive(node)` → `Canceller.Revive`; `CorruptRecord(node, invariant)` / `DeleteRecord(node)` / `DeleteEdge(node)` → the lifecycle store; `Crash()` → close every store without flushing; `Reboot()` → reopen and run `BootHook` (the same function `gateway_boot.go` runs).
 
 ### G-2 — `RecordingOutbound(t)` (I-7)
 
@@ -89,11 +99,11 @@ Feature: Shared fixtures and cross-package suites
 
   # Happy Path — Traces to: AC 3
   Scenario: Stop survives a restart end to end
-    Given a three-level tree and Stop pressed on R
+    Given a three-level tree and Stop all pressed on R
     When Reboot() runs
     Then no session under R starts
     When a newer instruction is written into B
-    Then B runs as a new generation
+    Then B runs on the same stopped generation with a fresh execution identity
 
   # Error Path — Traces to: FR-G-004
   Scenario: A new SPA test outside every CI group is caught
