@@ -41,7 +41,7 @@ import type { WebSocketRoute } from '@playwright/test'
 import { expect, test } from '@playwright/test'
 import { chatInput, waitForConnected } from './fixtures/selectors'
 
-import type { ClientFrame, CancelFrame, SessionStartedFrame, TokenFrame } from '../../src/lib/api/generated/asyncapi-types'
+import type { ClientFrame, CancelFrame, DoneFrame, SessionStartedFrame, TokenFrame } from '../../src/lib/api/generated/asyncapi-types'
 import type { Message as WireMessage } from '../../src/lib/api/generated/openapi-types'
 
 type CapturedFrame = ClientFrame
@@ -49,6 +49,7 @@ type CapturedFrame = ClientFrame
 const E2E_SESSION_ID = 'sess-e2e-stop-scope'
 const E2E_TRIGGER_TEXT = 'Trigger a turn for the stop-scope test'
 const E2E_STREAMED_TEXT = 'Stop-scope e2e turn running.'
+const E2E_SECOND_TURN_TEXT = 'Second turn running.'
 
 /**
  * Installs the WS mock and starts collecting client→server frames.
@@ -60,6 +61,11 @@ const E2E_STREAMED_TEXT = 'Stop-scope e2e turn running.'
 async function mockChatWebSocket(
   page: import('@playwright/test').Page,
   sentToServer: CapturedFrame[],
+  // When true the server acknowledges a cancel frame with `done`, as the real
+  // gateway does once the turn has stopped. Default false: no ack is sent. The
+  // client does not wait for one — the first cancel ends the turn locally
+  // (store::markLastMessageInterrupted clears isStreaming at once).
+  opts: { ackCancelWithDone?: boolean } = {},
 ): Promise<void> {
   // session_started promises a durably saved first message. Its synthetic
   // session therefore needs matching HTTP history, not a real-gateway 404.
@@ -75,6 +81,26 @@ async function mockChatWebSocket(
         throw new Error('Stop-scope fixture received malformed client JSON', { cause: error })
       }
       sentToServer.push(frame)
+
+      if (frame.type === 'cancel' && opts.ackCancelWithDone) {
+        const done: DoneFrame = { type: 'done', session_id: E2E_SESSION_ID }
+        ws.send(JSON.stringify(done))
+      }
+
+      if (frame.type === 'message' && turnStarted) {
+        // A follow-up turn in the same session: stream and never finish.
+        if (frame.client_message_id) {
+          savedHistory.push({
+            id: frame.client_message_id, client_message_id: frame.client_message_id,
+            role: 'user', content: frame.content, status: 'ok',
+            agent_id: frame.agent_id ?? 'jim', timestamp: new Date().toISOString(),
+          })
+        }
+        for (const chunk of ['Second ', 'turn ', 'running.']) {
+          const token: TokenFrame = { type: 'token', session_id: E2E_SESSION_ID, content: chunk }
+          ws.send(JSON.stringify(token))
+        }
+      }
 
       if (frame.type === 'message' && !turnStarted) {
         expect(frame.content).toBe(E2E_TRIGGER_TEXT)
@@ -169,10 +195,20 @@ test.describe('Stop/Esc//cancel surface scoping (ADR-20260928 D9)', () => {
     await expect(page.getByTestId('stop-btn')).toBeVisible()
     expect(cancelFrames(sentToServer)).toHaveLength(1)
 
-    // Past the 3-second window (real time) a fresh activation is a new FIRST
-    // press: session-scoped, never a silent tree stop.
+    // The first cancel ended the turn locally (no server done needed), so
+    // the chat is idle: past the 3-second window the composer shows Send, and
+    // an Escape on the idle chat sends nothing (cancelStream's completed-turn
+    // gate; unit pin: chat.cancel-delivery.test.ts). The fresh FIRST press is
+    // therefore taken on a new running turn: session-scoped, never a silent
+    // tree stop.
     await page.waitForTimeout(3_500)
-    await chatInput(page).press('Escape')
+    await expect(page.getByTestId('stop-btn')).toHaveCount(0)
+    await expect(page.getByTestId('chat-send')).toBeVisible()
+    const input = chatInput(page)
+    await input.fill('Second turn for the stop-scope test')
+    await input.press('Enter')
+    await expect(page.getByText(E2E_SECOND_TURN_TEXT, { exact: true })).toBeVisible({ timeout: 15_000 })
+    await page.getByTestId('stop-btn').click()
 
     await expect
       .poll(() => cancelFrames(sentToServer).length, { timeout: 5_000 })
@@ -181,6 +217,31 @@ test.describe('Stop/Esc//cancel surface scoping (ADR-20260928 D9)', () => {
     expect(cancels[0].scope).not.toBe('tree')
     expect(cancels[1].scope, 'a press after the window closed must not be a tree stop').not.toBe('tree')
     expect(cancels[1].session_id).toBe(E2E_SESSION_ID)
+  })
+
+  test('after the window closes on an acknowledged stop the composer shows Send again and Escape sends nothing', async ({ page }) => {
+    test.setTimeout(90_000)
+    const sentToServer: CapturedFrame[] = []
+    await mockChatWebSocket(page, sentToServer, { ackCancelWithDone: true })
+    await page.goto('/')
+    await startStreamingTurn(page)
+
+    await page.getByTestId('stop-btn').click()
+    // Inside the window the same Stop button still holds the Send position,
+    // even though the server's done has ended the turn (founder Q16 = A).
+    await expect(page.getByTestId('stop-btn')).toBeVisible()
+    expect(cancelFrames(sentToServer)).toHaveLength(1)
+
+    // Window closed (real time): Stop is gone, Send is back.
+    await page.waitForTimeout(3_500)
+    await expect(page.getByTestId('stop-btn')).toHaveCount(0)
+    await expect(page.getByTestId('chat-send')).toBeVisible()
+
+    // Idle chat: Escape has no turn to cancel, so no second cancel frame.
+    await chatInput(page).press('Escape')
+    await page.waitForTimeout(500)
+    expect(cancelFrames(sentToServer)).toHaveLength(1)
+    expect(cancelFrames(sentToServer)[0].scope).not.toBe('tree')
   })
 
   test('/cancel sends one cancel frame with scope tree', async ({ page }) => {

@@ -701,4 +701,46 @@ describe('W4 /stop-redirect neither arms the window nor counts as the second Sto
     ])
     expect(sentCancelFrames(send).some((f) => f.scope === 'tree')).toBe(false)
   })
+
+  // Window state after a redirect, read from useSlashMenu (the redirect branch
+  // only calls sendRedirectFrame) and useCancelState (arming happens only in
+  // activateFirstPress): the redirect neither disarms nor re-arms. The window
+  // armed at t=0 keeps its ORIGINAL 3 s timer: Stop is still there at t=2999
+  // and a press then is the confirmed tree stop; with no press, Send returns
+  // exactly at t=3000 (a re-arm would have pushed that to t=3500).
+  it('inside an armed window: the redirect leaves the window open, un-extended, and a following Stop is the tree stop', () => {
+    vi.useFakeTimers()
+    render(<OmnipusComposer />)
+
+    pressStop()
+    act(() => { vi.advanceTimersByTime(500) })
+    submitCommand('/stop-redirect do the other thing')
+
+    // Not disarmed: Stop still holds the Send position right after the redirect.
+    expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
+    expect(screen.queryByTestId('chat-send')).not.toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(2499) }) // t = 2999
+    expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
+
+    // Not re-armed: the original window closes at t = 3000.
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-send')).toBeInTheDocument()
+  })
+
+  it('inside an armed window: a Stop after the redirect is the second activation (tree)', () => {
+    vi.useFakeTimers()
+    render(<OmnipusComposer />)
+
+    pressStop()
+    act(() => { vi.advanceTimersByTime(500) })
+    submitCommand('/stop-redirect do the other thing')
+    pressStop()
+
+    expect(send.mock.calls).toEqual([
+      [SESSION_FRAME],
+      [{ type: 'redirect', session_id: 'sess_test', instruction: 'do the other thing' }],
+      [TREE_FRAME],
+    ])
+  })
 })
