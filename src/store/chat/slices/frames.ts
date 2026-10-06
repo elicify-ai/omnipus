@@ -1596,7 +1596,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             // D5 fix (UAT Site 3): a legacy/synthesized ErrorFrame (no typed
             // llm_error payload) falls back to the raw wire `message` for
             // display in several branches below (translatedMessage here, the
-            // kickoff-reject toast, setConnectionError x2, and the
+            // kickoff-reject toast, unroutable global error, and the
             // coalesced/fresh bubble content). Sanitize ONCE up front so
             // every one of those reads the same safe value — see
             // sanitizeLegacyErrorMessage's doc comment (lib/llm-error.ts) for
@@ -1910,10 +1910,8 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               // No this-turn assistant to coalesce into — last is a prior
               // healthy reply, or the bucket is empty. Push one new bubble
               // so the error is not silently dropped or written onto history.
-              if (!isCancelAck && llmError?.code !== 'turn_canceled') {
-                // Typed Stop notices stay in this chat's bubble, never in the global connection banner.
-                useConnectionStore.getState().setConnectionError(safeMessage)
-              }
+              // A routed chat failure belongs only to this bubble, not the
+              // app-wide connection banner — even before any reply exists.
               // ADR-051 — fresh error bubble: use the translated copy when
               // the typed payload is present (matches the streaming-coalesce
               // branch above), else the sanitized legacy `frame.message`
