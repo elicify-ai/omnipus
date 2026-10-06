@@ -211,6 +211,15 @@ Implementing: `backend-lead` (`pkg/`, `cmd/`, `internal/`, plus the `contracts/`
 
 **Per-session opt-outs from the team-lead default.** The project-wide `"agent"` setting also applies to headless runs (`claude -p …`) started in this repo. A session that must not orchestrate opts out per session: `--agent ""` on the command line, or `"agent": ""` in `.claude/settings.local.json`; an explicit `--agent <worker-role>` names a role directly. Absent positive evidence that a human is present, team-lead behaves as a worker, not an orchestrator (dev-team design, section 5.3).
 
+## Running CLI agents
+
+Start every headless worker with its role agent (`--agent <role>`), streamed input/output and a control channel.
+Arm a live watcher at dispatch; put no deadlines or caps in briefs.
+Steer through the control channel when a worker drifts, hangs or overreaches.
+Resume a stopped or disconnected worker in its own session instead of replacing it.
+Verify every result like any specialist's; follow `omnipus-planning-orchestration` for the procedure.
+Model and tool choice for delegated workers is set in the operator's personal delegation rules, not in this repository.
+
 ## Contract regeneration
 
 Wire types are generated from `contracts/openapi.yaml` (REST), `contracts/asyncapi.yaml` (WS), `contracts/components/schemas/` (shared schemas). Artifacts — committed, never hand-edit: `pkg/api/generated/` (Go, oapi-codegen) and `src/lib/api/generated/` (TS types + Zod, openapi-typescript / openapi-zod-client). `make gen-contracts` regenerates all; idempotent on a clean tree.
