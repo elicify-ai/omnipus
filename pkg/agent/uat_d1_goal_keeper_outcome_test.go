@@ -32,7 +32,7 @@ func (f *uatD1Fixture) assertMetHandback(t *testing.T, child *session.LifecycleR
 		t.Fatalf("D1 retained projected criterion/DoD must be the submitted items, both met: %+v/%+v", g.Criteria, g.DoD)
 	}
 	msgs := f.inboxMessages(t)
-	var kinds []string
+	kinds := make([]string, 0, len(msgs))
 	for _, message := range msgs {
 		class, err := session.ClassifySessionMessage(message)
 		if err != nil {

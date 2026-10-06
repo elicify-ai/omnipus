@@ -6,20 +6,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
-// Ledgered delegate fixtures keep Task C's durable control identity check.
-// Derive that identity from the REAL durable queued acceptance, not from
-// queue output. These are not wake-marker tests' plain correlated fillers.
-func q2ReceiptEnqueuePlain(t *testing.T, al *AgentLoop, sessionID, correlationID, text string) steeringQueueItem {
-	t.Helper()
-	want := q2ConsumerEnqueuePlain(t, al, sessionID, correlationID, text)
-	line := qaReceiptAcceptedSteer(t, al, sessionID, text)
-	if line.ControlID == "" {
-		t.Fatal("D4 accepted delegate steer has no durable control identity")
-	}
-	want.steerControlID = line.ControlID
-	return want
-}
-
 // q2ConsumerEnqueueFiller restores the original Q2 plain queue-item fixture:
 // correlated input around a wake, not a delegate-steer delivery subject.
 // Use the real queue, but deliberately not EnqueueSteeringMessage: since

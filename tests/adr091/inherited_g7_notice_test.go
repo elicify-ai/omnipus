@@ -42,12 +42,12 @@ func g7AssertDirectStopNotice(t *testing.T, inbox *session.MessageInboxStore, pa
 				t.Fatalf("MarshalJSON(parent inbox message): %v", err)
 			}
 			var envelope map[string]json.RawMessage
-			if err := json.Unmarshal(raw, &envelope); err != nil {
-				t.Fatalf("decode parent inbox envelope: %v", err)
+			if decodeErr := json.Unmarshal(raw, &envelope); decodeErr != nil {
+				t.Fatalf("decode parent inbox envelope: %v", decodeErr)
 			}
 			var messageID string
-			if err := json.Unmarshal(envelope["message_id"], &messageID); err != nil {
-				t.Fatalf("decode parent inbox message identity: %v", err)
+			if identityErr := json.Unmarshal(envelope["message_id"], &messageID); identityErr != nil {
+				t.Fatalf("decode parent inbox message identity: %v", identityErr)
 			}
 			if messageID == finalID {
 				t.Fatalf("Stop consumed its generation's terminal final identity %q", finalID)

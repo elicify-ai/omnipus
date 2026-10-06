@@ -234,8 +234,8 @@ func TestGoal984_CompletionTailSingleShotDuringFinishedTurnRace(t *testing.T) {
 	}()
 	awaitPreflight(2)
 	openDirect()
-	if err := <-directDone; err != nil {
-		t.Fatalf("normal completion path: %v", err)
+	if completionErr := <-directDone; completionErr != nil {
+		t.Fatalf("normal completion path: %v", completionErr)
 	}
 	openDeferred()
 	select {

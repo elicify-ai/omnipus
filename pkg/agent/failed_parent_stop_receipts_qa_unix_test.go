@@ -44,8 +44,8 @@ func TestQAFailedParentCascade_PersistFailureNamedIncompleteAndBootRetried(t *te
 		t.Fatal(err)
 	}
 	restore := qaReceiptDenyAppend(t, qaReceiptJournalPath(f.al, leaf.SessionID))
-	if err := f.al.completeSteeredTurn(context.Background(), f.child, turnResult{}, errors.New("qa genuine parent failure")); err != nil {
-		t.Fatalf("parent's genuine failure must land despite incomplete child Stop: %v", err)
+	if completionErr := f.al.completeSteeredTurn(context.Background(), f.child, turnResult{}, errors.New("qa genuine parent failure")); completionErr != nil {
+		t.Fatalf("parent's genuine failure must land despite incomplete child Stop: %v", completionErr)
 	}
 	fresh := session.NewLifecycleStore(f.al.GetSessionLifecycleStore().Dir())
 	parent, err := fresh.Load(f.child.SessionID)
@@ -65,9 +65,9 @@ func TestQAFailedParentCascade_PersistFailureNamedIncompleteAndBootRetried(t *te
 		if entry.Message == nil {
 			continue
 		}
-		raw, err := entry.Message.MarshalJSON()
-		if err != nil {
-			t.Fatal(err)
+		raw, marshalErr := entry.Message.MarshalJSON()
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
 		}
 		fields := u1DecodeMessageFields(t, raw)
 		if fields["session_id"] != f.child.SessionID || fields["fatal"] != true {
@@ -98,8 +98,8 @@ func TestQAFailedParentCascade_PersistFailureNamedIncompleteAndBootRetried(t *te
 		t.Fatal(err)
 	}
 	restore()
-	if err := qaReceiptRunBootFinisher(t, f.al); err != nil {
-		t.Fatalf("boot retry after real append repair: %v", err)
+	if finishErr := qaReceiptRunBootFinisher(t, f.al); finishErr != nil {
+		t.Fatalf("boot retry after real append repair: %v", finishErr)
 	}
 	leafFixture := qaReceiptFixture{al: f.al, store: f.al.ResolveSessionStore(leaf.SessionID), parentID: f.child.SessionID, child: leaf}
 	qaReceiptRequireOriginalStop(t, leafFixture, original, session.StopCauseCascade, "agent:"+f.child.SessionID)

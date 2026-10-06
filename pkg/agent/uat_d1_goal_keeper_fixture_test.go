@@ -209,11 +209,11 @@ func uatD1WriteWorkspace(t *testing.T, home string) {
 	if err != nil {
 		t.Fatalf("SETUP workspace JSON: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(home, "workspaces", ws.ID, "work"), 0o700); err != nil {
-		t.Fatalf("SETUP workspace directory: %v", err)
+	if mkdirErr := os.MkdirAll(filepath.Join(home, "workspaces", ws.ID, "work"), 0o700); mkdirErr != nil {
+		t.Fatalf("SETUP workspace directory: %v", mkdirErr)
 	}
-	if err := os.WriteFile(filepath.Join(home, "workspaces", ws.ID+".json"), data, 0o600); err != nil {
-		t.Fatalf("SETUP workspace record: %v", err)
+	if writeErr := os.WriteFile(filepath.Join(home, "workspaces", ws.ID+".json"), data, 0o600); writeErr != nil {
+		t.Fatalf("SETUP workspace record: %v", writeErr)
 	}
 	unlock := workspace.LockID(ws.ID)
 	err = workspace.SaveDelegation(home, ws.ID, []workspace.DelegationEdge{{FromAgent: "native-agent", ToAgent: "worker", Modes: []workspace.DelegationMode{workspace.ModeDirect}}})

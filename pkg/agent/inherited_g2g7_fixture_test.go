@@ -62,11 +62,11 @@ func g2HeldMessagingChild(t *testing.T, al *AgentLoop, provider *parkedProvider,
 	if err != nil {
 		t.Fatalf("SETUP: Launch(%s): %v", callID, err)
 	}
-	if err := al.GetSessionLifecycleStore().Mutate(res.SessionID, func(rec *session.LifecycleRecord) error {
+	if reportingErr := al.GetSessionLifecycleStore().Mutate(res.SessionID, func(rec *session.LifecycleRecord) error {
 		rec.SteeredBy.ReportingTarget = session.ReportingTarget{Channel: "webchat", ChatID: parentID}
 		return nil
-	}); err != nil {
-		t.Fatalf("SETUP: reporting target: %v", err)
+	}); reportingErr != nil {
+		t.Fatalf("SETUP: reporting target: %v", reportingErr)
 	}
 	dispatched, err := NewSteerLauncher(al).Dispatch(context.Background(), res.SessionID, res.Generation)
 	if err != nil || dispatched.State != steer.DispatchRunning || dispatched.Generation != res.Generation {

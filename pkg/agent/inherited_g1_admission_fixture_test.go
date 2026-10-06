@@ -114,8 +114,9 @@ func g1StopThroughOwner(t *testing.T, al *AgentLoop, child *session.LifecycleRec
 // unacknowledged." The payload is read from the real store, never rebuilt.
 func g1RetryCommittedFinal(t *testing.T, al *AgentLoop, child *session.LifecycleRecord) (bool, error) {
 	t.Helper()
-	commit, _, _, _, err := al.GetSessionLifecycleStore().CommittedFinalDelivery(
+	commit, _, _, retired, err := al.GetSessionLifecycleStore().CommittedFinalDelivery(
 		child.SessionID, child.Generation, child.ExecutionID.RunID)
+	_ = retired
 	if err != nil {
 		return false, fmt.Errorf("read real committed final: %w", err)
 	}
