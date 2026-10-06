@@ -116,6 +116,19 @@ import {
   type FileSearchResponse,
 } from './useFileSearch'
 
+// Shared literal class strings keep the rendered classes unchanged without repeating their bundle payload.
+const searchMutedCaptionClass = "text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+const searchPreviewHitClass = "h-auto w-full flex-col items-start gap-[var(--space-0-5)] whitespace-normal rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
+const searchHitTitleClass = "flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
+const searchMutedNoticeClass = "text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-muted)]"
+const searchHitBadgeClass = "px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4"
+const searchHitMetadataClass = "font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+const searchSummaryClass = "px-[var(--space-2)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]"
+const searchWarningBannerClass = "flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
+const searchWarningIconClass = "mt-[var(--space-0-5)] shrink-0 text-[var(--color-warning)]"
+const searchWarningMessageClass = "flex-1 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]"
+const searchSectionTitleClass = "px-[var(--space-2)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]"
+
 /** Test seam for the view-result fetch; production uses the module default. */
 export type LoadViewResultFn = (
   workspaceId: string,
@@ -273,7 +286,7 @@ function CoverageChips({ coverage }: { coverage: { term: string; found: boolean 
           {c.term}
         </span>
       ))}
-      <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+      <span className={searchMutedCaptionClass}>
         {foundCount} of {coverage.length}
       </span>
     </span>
@@ -288,13 +301,13 @@ function NoteRow({ hit, query, onOpen }: { hit: VaultSearchNoteHit; query: strin
         variant="ghost"
         onClick={onOpen}
         data-testid="vault-search-note-hit"
-        className="h-auto w-full flex-col items-start gap-[var(--space-0-5)] whitespace-normal rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
+        className={searchPreviewHitClass}
       >
-        <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+        <span className={searchHitTitleClass}>
           <FileText size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
           {highlightQuery(hit.title || hit.path, query)}
         </span>
-        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{hit.path}</span>
+        <span className={searchMutedCaptionClass}>{hit.path}</span>
         <CoverageChips coverage={coverage} />
         {/* US-1 AS-4 (honesty port): a hit whose excerpt cannot be produced is
             still rendered — title and path, plus an explicit marker — never
@@ -303,7 +316,7 @@ function NoteRow({ hit, query, onOpen }: { hit: VaultSearchNoteHit; query: strin
             (MV-9, recorded R2-MIN-010): the find path cannot attribute the old
             re-read reasons, so this says only what it knows. */}
         {hit.snippet !== undefined ? (
-          <span className="text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-muted)]">
+          <span className={searchMutedNoticeClass}>
             {highlightQuery(stripWikilinkNotation(hit.snippet), query)}
           </span>
         ) : hit.excerpt_unavailable === true ? (
@@ -326,13 +339,13 @@ function AttachmentRow({ hit, onOpen }: { hit: VaultSearchAttachmentHit; onOpen:
         variant="ghost"
         onClick={onOpen}
         data-testid="vault-search-attachment-hit"
-        className="h-auto w-full flex-col items-start gap-[var(--space-0-5)] whitespace-normal rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
+        className={searchPreviewHitClass}
       >
-        <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+        <span className={searchHitTitleClass}>
           <Paperclip size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
           {hit.name}
         </span>
-        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{hit.path}</span>
+        <span className={searchMutedCaptionClass}>{hit.path}</span>
         {/* FR-039a: an attachment's contents are never read, by design — the
             match is on its filename alone, so there is never an excerpt to
             show and never a "could not be read" implication either. */}
@@ -387,19 +400,19 @@ function RecordRow({ hit, query, onOpen }: { hit: VaultSearchRecordHit; query: s
         data-testid="vault-search-record-hit"
         className="h-auto w-full flex-col items-start gap-[var(--space-1)] whitespace-normal rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
       >
-        <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+        <span className={searchHitTitleClass}>
           <IdentificationCard size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
           {hit.title || hit.path}
           {hit.record_type !== undefined && (
-            <Badge variant="outline" className="px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4">
+            <Badge variant="outline" className={searchHitBadgeClass}>
               {hit.record_type}
             </Badge>
           )}
           {hit.id !== undefined && (
-            <span className="font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{hit.id}</span>
+            <span className={searchHitMetadataClass}>{hit.id}</span>
           )}
         </span>
-        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{hit.path}</span>
+        <span className={searchMutedCaptionClass}>{hit.path}</span>
         {hit.cells.length > 0 && (
           <span className="flex flex-wrap items-center gap-x-[var(--space-2-5)] gap-y-[var(--space-0-5)] text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-muted)]">
             {shownCells.map((cell) => (
@@ -438,12 +451,12 @@ function ViewRow({ hit, onOpen }: { hit: VaultSearchViewHit; onOpen: () => void 
         <SquaresFour size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
         <span className="flex-1 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{hit.label}</span>
         {hit.type !== undefined && (
-          <Badge variant="outline" className="px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4">
+          <Badge variant="outline" className={searchHitBadgeClass}>
             {hit.type}
           </Badge>
         )}
         {hit.kind !== undefined && (
-          <Badge variant="muted" className="px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4">
+          <Badge variant="muted" className={searchHitBadgeClass}>
             {hit.kind}
           </Badge>
         )}
@@ -528,7 +541,7 @@ function FileHitRow({
           interactive ? 'hover:bg-[var(--color-surface-2)]' : 'cursor-default hover:bg-transparent',
         )}
       >
-        <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+        <span className={searchHitTitleClass}>
           {isDir ? (
             <FolderSimple size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
           ) : isContent ? (
@@ -538,13 +551,13 @@ function FileHitRow({
           )}
           {highlightQuery(hit.path, query)}
           {isContent && hit.line !== undefined && (
-            <span className="font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">:{hit.line}</span>
+            <span className={searchHitMetadataClass}>:{hit.line}</span>
           )}
           {matchCount !== undefined && matchCount > 1 && (
             <Badge
               variant="secondary"
               data-testid="file-search-match-count"
-              className="px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4"
+              className={searchHitBadgeClass}
             >
               {matchCount} matches
             </Badge>
@@ -606,7 +619,7 @@ function FileSearchStatsFooter({ stats }: { stats: FileSearchResponse['stats'] }
   }
   if (parts.length === 0) return null
   return (
-    <p data-testid="library-search-files-stats" className="px-[var(--space-2)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]">
+    <p data-testid="library-search-files-stats" className={searchSummaryClass}>
       {parts.join(' · ')}.
     </p>
   )
@@ -898,7 +911,7 @@ export function LibrarySearchBar({
               outside one it matches file and folder names, not note
               contents, and says which folder. */}
           {!error && (isVaultMode || isFilesMode) && (
-            <p data-testid="library-search-mode" className="px-[var(--space-2)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]">
+            <p data-testid="library-search-mode" className={searchSummaryClass}>
               {isVaultMode
                 ? isInsideCollection
                   ? `Searching the whole knowledge base${collectionDisplayName ? ` “${collectionDisplayName}”` : ''} — this folder is inside it.`
@@ -916,7 +929,7 @@ export function LibrarySearchBar({
               stated beside the counts so the note count is never read as
               covering them. */}
           {!error && isVaultMode && response && counts.all > 0 && (
-            <p data-testid="library-search-results-summary" className="px-[var(--space-2)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]">
+            <p data-testid="library-search-results-summary" className={searchSummaryClass}>
               {(() => {
                 const kinds = (['notes', 'records', 'views', 'attachments'] as const).filter((k) => counts[k] > 0)
                 const phrases = kinds.map((k) =>
@@ -967,10 +980,10 @@ export function LibrarySearchBar({
             <div
               role="status"
               data-testid="library-search-not-ready"
-              className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
+              className={searchWarningBannerClass}
             >
-              <Warning size={14} weight="fill" aria-hidden="true" className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-warning)]" />
-              <div className="flex-1 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]">
+              <Warning size={14} weight="fill" aria-hidden="true" className={searchWarningIconClass} />
+              <div className={searchWarningMessageClass}>
                 <p data-testid="library-search-statement">{bannerStatement}</p>
                 {/* US-1 AS-2 honesty port (FR-036): a ratio is stated only
                     when BOTH a searched count and a known total are in hand;
@@ -1003,7 +1016,7 @@ export function LibrarySearchBar({
               partial). Mirrors the retired KnowledgeSearch's
               knowledge-search-complete-statement (US-1, honesty port). */}
           {!error && isVaultMode && hasCompleteStatement && response && (
-            <p data-testid="library-search-complete-statement" className="text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-muted)]">
+            <p data-testid="library-search-complete-statement" className={searchMutedNoticeClass}>
               {response.statement}
             </p>
           )}
@@ -1028,7 +1041,7 @@ export function LibrarySearchBar({
               library-search-complete-statement while complete — so this line
               never needs to repeat it. */}
           {!error && isVaultMode && response && counts.all === 0 && (
-            <p role="status" data-testid="library-search-empty" className="text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-muted)]">
+            <p role="status" data-testid="library-search-empty" className={searchMutedNoticeClass}>
               No results for “{text.trim()}”.
             </p>
           )}
@@ -1038,7 +1051,7 @@ export function LibrarySearchBar({
               {(filter === 'all' || filter === 'notes') && response.notes.length > 0 && (
                 <div>
                   {filter === 'all' && (
-                    <p className="px-[var(--space-2)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+                    <p className={searchSectionTitleClass}>
                       Notes
                     </p>
                   )}
@@ -1053,7 +1066,7 @@ export function LibrarySearchBar({
               {(filter === 'all' || filter === 'records') && response.records.length > 0 && (
                 <div>
                   {filter === 'all' && (
-                    <p className="px-[var(--space-2)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+                    <p className={searchSectionTitleClass}>
                       Records
                     </p>
                   )}
@@ -1068,7 +1081,7 @@ export function LibrarySearchBar({
               {(filter === 'all' || filter === 'views') && response.views.length > 0 && (
                 <div>
                   {filter === 'all' && (
-                    <p className="px-[var(--space-2)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+                    <p className={searchSectionTitleClass}>
                       Views
                     </p>
                   )}
@@ -1087,7 +1100,7 @@ export function LibrarySearchBar({
               {(filter === 'all' || filter === 'attachments') && (response.attachments?.length ?? 0) > 0 && (
                 <div>
                   {filter === 'all' && (
-                    <p className="px-[var(--space-2)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+                    <p className={searchSectionTitleClass}>
                       Attachments
                     </p>
                   )}
@@ -1122,15 +1135,15 @@ export function LibrarySearchBar({
                 <div
                   role="status"
                   data-testid="library-search-truncated"
-                  className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
+                  className={searchWarningBannerClass}
                 >
                   <Warning
                     size={14}
                     weight="fill"
                     aria-hidden="true"
-                    className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-warning)]"
+                    className={searchWarningIconClass}
                   />
-                  <p className="flex-1 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]">
+                  <p className={searchWarningMessageClass}>
                     {/* Finding F-J: the schema states truncated_reason
                         "present exactly when truncated is true" but does
                         not enforce it on the wire (no `required`, no
@@ -1184,7 +1197,7 @@ export function LibrarySearchBar({
                       itself is load-bearing for the 429 grace path
                       (useFileSearch.ts) and must stay; only the label
                       changes. */}
-                  <p role="status" data-testid="library-search-empty" className="text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-muted)]">
+                  <p role="status" data-testid="library-search-empty" className={searchMutedNoticeClass}>
                     No results for “{filesDebouncedQuery}”.
                   </p>
                   {/* Finding F-K, sharpest case: a file can be visible in
