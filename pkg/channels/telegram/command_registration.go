@@ -36,6 +36,15 @@ func (c *TelegramChannel) RegisterCommands(ctx context.Context, defs []commands.
 		if def.Name == "" || def.Description == "" {
 			continue
 		}
+		// Telegram's native menu accepts only 1-32 lowercase letters, digits
+		// and underscores (BotCommand). A command named otherwise (e.g.
+		// stop-redirect) still works when typed; it is left out of the menu
+		// instead of making the whole registration request invalid.
+		if !telegramMenuCommandName(def.Name) {
+			logger.InfoCF("telegram", "Command left out of the native menu (Telegram allows only a-z, 0-9 and _); it still works when typed",
+				map[string]any{"command": def.Name})
+			continue
+		}
 		botCommands = append(botCommands, telego.BotCommand{
 			Command:     def.Name,
 			Description: def.Description,
@@ -123,4 +132,19 @@ func (c *TelegramChannel) startCommandRegistration(ctx context.Context, defs []c
 // subsequent assertions.
 func (c *TelegramChannel) WaitCommandRegistrationDone() {
 	c.commandRegWG.Wait()
+}
+
+// telegramMenuCommandName reports whether name is a valid native Telegram
+// menu command: 1-32 characters of lowercase English letters, digits and
+// underscores.
+func telegramMenuCommandName(name string) bool {
+	if len(name) == 0 || len(name) > 32 {
+		return false
+	}
+	for _, r := range name {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+			return false
+		}
+	}
+	return true
 }
