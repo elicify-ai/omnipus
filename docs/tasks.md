@@ -1,18 +1,22 @@
 # Tasks
 
-The Tasks tab inside a workspace is where you turn work into cards you can assign, start, and follow to completion. This page covers the Board and List views and the task detail panel.
+The Tasks panel inside a workspace is where you turn work into cards you can assign, start, and follow to completion. This page covers the Board and List views and the task detail panel.
 
 ## What it is
 
-Every workspace has a Tasks tab, next to Chat, Calendar, Library, and Team. It holds the workspace's one shared task list — yours and your agents' together — behind three views:
+Every workspace has a **Tasks** control in its top bar, alongside Calendar, Library, Mail, and Team. Click it to open the Tasks panel beside Chat; click it again to close it. Chat is the page underneath, not a separate top-bar entry. The panel holds the workspace's one shared task list — yours and your agents' together — behind three views:
 
-- **Board** — a kanban: one card per task, in one of six status columns.
-- **List** — the same tasks as a table. Each header dropdown sorts or filters by value.
-- **Graph** — the tasks drawn as a dependency map. That view belongs to planning; see [plans](plans.md).
+- **Board** — a kanban of eligible top-level workspace tasks, grouped by status in six columns. Scheduled tasks are hidden, and subtasks are not separate Board cards.
+- **List** — unscheduled user tasks as a table, with per-column sorting and filtering. Unlike the Board, it can include subtasks as rows.
+- **Graph** — top-level plan members and tasks with dependency relationships, drawn as a dependency map. That view belongs to planning; see [plans](plans.md).
 
 Above the views, the Plans band scopes the screen: click a plan tile to see that plan's tasks (the view also jumps to its graph), or **All tasks** to clear the filter.
 
-On the Board, the **Agent** and **Tags** filters narrow further. The List filters per column instead, like a spreadsheet: each header offers sorting and value checkboxes. The list refreshes itself about every 15 seconds, so an agent's changes appear without a reload.
+On the Board, the **Agent** and **Tags** filters narrow further. The List filters per column instead, like a spreadsheet: Priority, Status and Agent sort and filter; Tags filters only; Title and Updated sort only. The list refreshes itself about every 15 seconds, so an agent's changes appear without a reload.
+
+The toolbar follows the panel's own width, not the browser window. At narrow widths its groups stack, and the heading/view group and filters can wrap. The selector continues to offer Board, List and Graph.
+
+The Board stacks its status groups vertically in a narrow panel. In List, Tags and Updated are hidden by default in a narrow panel. Use the three-dot control in the Actions header to reveal them. When the revealed table needs more room, scroll sideways inside the List panel to reach its columns and controls; the whole page does not scroll sideways, and Title keeps its own space. Scroll to the three-dot control and press it again to return to automatic column visibility for the panel's current width.
 
 ## When you would use it
 
@@ -22,7 +26,7 @@ On the Board, the **Agent** and **Tags** filters narrow further. The List filter
 
 ## How to create and start a task
 
-1. Open the workspace, then its **Tasks** tab.
+1. Open the workspace, then its **Tasks** panel.
 2. Click **New Task** at the top right. A form slides in from the right.
 3. Fill in the required fields: **Title**, **Goal**, at least one **Acceptance criterion**, and at least one **Definition of Done** item.
 4. Pick an **Agent** to own the work, or leave it **Unassigned**. A task with no agent cannot run — it stays on the board as a human to-do.
@@ -76,6 +80,8 @@ The Board has one column per status; the List has a Status column.
 
 A task you stop shows as orange **Cancelled** rather than red **Failed**, inside the same Failed column.
 
+An **In Progress** task shows a spinning-arrow indicator on its Board card, List row, and Graph node, including task nodes in a plan's graph. A running plan's tile in the Plans band uses the same indicator. These task and plan indicators show no token counts; Chat keeps its existing token counter. The arrow follows the item's reported status, not a separate measure of model activity. With reduced motion enabled, it stays visible but does not spin.
+
 ```mermaid
 flowchart LR
   Inbox -->|triage| Next
@@ -109,7 +115,7 @@ Click any card or List row and the detail panel slides in. Every field saves as 
 - **A task in a plan is driven by its plan.** It has no Run or Stop control of its own; start, stop, and restart happen at the plan level. See [plans](plans.md).
 - **Dependency circles are rejected.** A chain may not loop back on itself, and dependencies stay inside one plan.
 - **Runs stop after the attempt limit** — three by default. When attempts are spent, the task lands in Failed.
-- **Scheduled and repeating tasks never appear here.** They live in the workspace [calendar](calendar.md).
+- **Board and List hide scheduled tasks.** Use the workspace [Calendar](calendar.md) to manage scheduled and repeating work.
 - **An assignee warning means the agent cannot finish this task as configured.** The warning names the fix, usually a tool permission; starting anyway fails at once.
 - **Deleting a task cannot be undone.** The confirmation is your last chance.
 

@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "component": "RunningIndicator",
+  "exports": ["RunningIndicator", "RunningIndicatorProps"],
+  "category": "composite",
+  "source": "src/components/ui/RunningIndicator.tsx",
+  "documentation": "docs/internal/design/components/running-indicator.md",
+  "owner": "design-system",
+  "themes": ["dark"],
+  "variants": ["spinner-only", "with-count"],
+  "sizes": ["default"],
+  "states": ["streaming", "still", "zero"],
+  "stories": [{
+    "file": "src/components/ui/RunningIndicator.stories.tsx",
+    "exports": ["SpinnerOnly", "WithCount", "Zero", "Still"]
+  }],
+  "checks": [
+    {
+      "id": "running-indicator-unit",
+      "kind": "unit",
+      "file": "src/components/ui/RunningIndicator.test.tsx",
+      "test": "RunningIndicator renders the short \"{n} tok\" label for values under 1000",
+      "applicable": true
+    },
+    {
+      "id": "running-indicator-spinner-only",
+      "kind": "interaction",
+      "file": "src/components/ui/RunningIndicator.stories.tsx",
+      "test": "Spinner Only",
+      "story": "SpinnerOnly",
+      "applicable": true
+    },
+    {
+      "id": "running-indicator-with-count",
+      "kind": "interaction",
+      "file": "src/components/ui/RunningIndicator.stories.tsx",
+      "test": "With Count",
+      "story": "WithCount",
+      "applicable": true
+    },
+    {
+      "id": "running-indicator-zero",
+      "kind": "interaction",
+      "file": "src/components/ui/RunningIndicator.stories.tsx",
+      "test": "Zero",
+      "story": "Zero",
+      "applicable": true
+    },
+    {
+      "id": "running-indicator-still",
+      "kind": "interaction",
+      "file": "src/components/ui/RunningIndicator.stories.tsx",
+      "test": "Still",
+      "story": "Still",
+      "applicable": true
+    },
+    {
+      "id": "running-indicator-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "RunningIndicator [check:running-indicator-axe] axe",
+      "story": "SpinnerOnly",
+      "applicable": true
+    },
+    {
+      "id": "running-indicator-keyboard",
+      "kind": "keyboard",
+      "applicable": false,
+      "reason": "Read-only status has no focusable element or keyboard operation."
+    },
+    {
+      "id": "running-indicator-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "RunningIndicator [check:running-indicator-browser] browser",
+      "story": "SpinnerOnly",
+      "applicable": true
+    },
+    {
+      "id": "running-indicator-pointer",
+      "kind": "pointer",
+      "applicable": false,
+      "reason": "Read-only status has no pointer action or hit target."
+    },
+    {
+      "id": "running-indicator-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "RunningIndicator [check:running-indicator-reduced-motion] reduced-motion",
+      "story": "SpinnerOnly",
+      "applicable": true
+    },
+    {
+      "id": "running-indicator-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "RunningIndicator [check:running-indicator-forced-colors] forced-colors",
+      "story": "SpinnerOnly",
+      "applicable": true
+    },
+    {
+      "id": "running-indicator-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "RunningIndicator [check:running-indicator-root-size] root-size",
+      "story": "WithCount",
+      "applicable": true
+    },
+    {
+      "id": "running-indicator-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "RunningIndicator [check:running-indicator-zoom] zoom",
+      "story": "WithCount",
+      "applicable": true
+    },
+    {
+      "id": "running-indicator-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "RunningIndicator [check:running-indicator-reflow] reflow",
+      "story": "WithCount",
+      "applicable": true
+    }
+  ]
+}

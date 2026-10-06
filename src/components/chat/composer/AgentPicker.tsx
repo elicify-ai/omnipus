@@ -5,6 +5,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
@@ -349,6 +350,30 @@ export function AgentPicker({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-96">
+        {agentsError && (
+          <>
+            <DropdownMenuLabel
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              className="font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
+            >
+              Could not refresh the agent list — showing the last known agents.
+            </DropdownMenuLabel>
+            <DropdownMenuItem
+              asChild
+              onSelect={(event) => {
+                // Keep cached choices and the query's error visible until Retry succeeds.
+                event.preventDefault()
+                refetch()
+              }}
+            >
+              <Button variant="ghost" size="sm" className="w-full justify-start">
+                Retry
+              </Button>
+            </DropdownMenuItem>
+          </>
+        )}
         {/* The open-on-refresh contract (docs/workspaces.md, "How to set who
             may delegate to whom"): opening re-reads the active workspace's
             core_team. If THAT read fails, the list below is the last

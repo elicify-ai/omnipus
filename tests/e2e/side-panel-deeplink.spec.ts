@@ -61,7 +61,10 @@ test('W1 — ?panel=library restores the Library panel', async ({ page }) => {
 })
 
 test('W2 — unknown and unregistered panel ids are dropped', async ({ page }) => {
-  for (const panel of ['bogus', 'tasks']) {
+  // Wave 3 registers tasks/team/calendar (spec §10 Wave 3, §12 dataset row 2),
+  // so those ids are valid now. `settings` is genuinely unregistered in every
+  // wave (it stays a page, never a panel — SP-6): MAJ-012 drops it like `bogus`.
+  for (const panel of ['bogus', 'settings']) {
     await page.goto(`/#/workspaces/${workspaceId}/chat?panel=${panel}`)
     await expect(page.getByTestId('side-panel')).toHaveCount(0)
     await expect(page).not.toHaveURL(new RegExp(`panel=${panel}`))

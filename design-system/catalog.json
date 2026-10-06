@@ -37,6 +37,20 @@
       "publicTypes": []
     },
     {
+      "source": "src/components/ui/RunningIndicator.tsx",
+      "classification": "composite",
+      "exports": [
+        "RunningIndicatorProps",
+        "RunningIndicator"
+      ],
+      "publicExports": [
+        "RunningIndicator"
+      ],
+      "publicTypes": [
+        "RunningIndicatorProps"
+      ]
+    },
+    {
       "source": "src/components/ui/accordion.tsx",
       "classification": "primitive",
       "exports": [
@@ -877,6 +891,15 @@
       "publicExports": [
         "useLoadingVisibility"
       ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/lib/formatTokens.ts",
+      "classification": "foundations",
+      "exports": [
+        "formatTokens"
+      ],
+      "publicExports": [],
       "publicTypes": []
     },
     {

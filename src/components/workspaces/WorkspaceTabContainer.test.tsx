@@ -2,7 +2,7 @@
 //
 // Verifies:
 //   - Container renders the hamburger button in row 1
-//   - WorkspaceTabBar tabs are rendered inside row 1
+//   - WorkspaceTabBar panel-toggle entries are rendered inside row 1 (no Chat entry, SP-40)
 //   - ChatControls renders ONLY when the active tab is 'chat'
 //   - Breadcrumb (row 2) is BELOW the top bar (row 1)
 //   - enterWorkspaceChat is called with the workspace id on mount
@@ -165,13 +165,18 @@ describe('WorkspaceTabContainer — layout', () => {
     expect(topBar.contains(hamburger)).toBe(true)
   })
 
-  it('renders all four workspace tabs inside the top bar row (settings via the name button)', async () => {
+  it('renders the five panel-toggle entries inside the top bar row and NO Chat entry (SP-40, FR-007; settings via the name button)', async () => {
     await act(async () => {
       render(<WorkspaceTabContainer workspaceId="ws-1" />)
     })
 
     const topBar = screen.getByTestId('workspace-top-bar')
-    const segments = ['chat', 'board', 'calendar', 'team']
+    // Oracle: side-panel-shell-spec.md SP-40 / FR-007 — Chat is NEVER rendered
+    // as a strip entry; the entries are the registered panel toggles Tasks
+    // ('board' segment), Calendar, Library ('media'), Mail and Team (§1
+    // panel inventory + wave 3; Browser has no strip entry).
+    const segments = ['board', 'calendar', 'media', 'mail', 'team']
+    expect(screen.queryAllByTestId('workspace-tab-chat')).toHaveLength(0)
     for (const seg of segments) {
       // WorkspaceTabBar renders each segment twice (full strip + sr-only strip).
       const tabs = screen.getAllByTestId(`workspace-tab-${seg}`)

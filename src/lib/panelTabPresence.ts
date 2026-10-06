@@ -44,8 +44,9 @@ type PanelPresenceMessage = // not-wire-format: same-origin browser-tab lifecycl
 
 type PresenceEntry = { // not-wire-format: in-memory same-origin presence cache entry, never serialized or sent to the gateway
   identityKey: string
-  focusNonce: FocusNonce
+  focusNonce: FocusNonce | null
   seenAt: number
+  ownedPopout?: { handle: PanelWindowHandle; released: boolean }
 }
 
 export type PanelPresenceAnnouncement = { // not-wire-format: SPA-local lifecycle controller returned within one tab, never serialized or sent to the gateway
@@ -206,13 +207,22 @@ function notifyPresenceSubscribers(): void {
   flushPanelFocusFallbacks()
 }
 
+function popoutPresenceTabId(popoutId: string): string {
+  return sha256Hex(`popout:${popoutId}`)
+}
+
+function isLivePresence(entry: PresenceEntry): boolean {
+  return entry.focusNonce !== null && (!entry.ownedPopout ||
+    (!entry.ownedPopout.released && !entry.ownedPopout.handle.closed))
+}
+
 function hasLivePanelTarget(identity: PanelIdentity): boolean {
   const key = panelIdentityKey(identity)
   const handle = panelTabHandles.get(key)
   if (handle?.closed) panelTabHandles.delete(key)
   if (handle && !handle.closed) return true
   const opaqueKey = panelPresenceKey(identity)
-  return [...presenceByTab.values()].some((entry) => entry.identityKey === opaqueKey)
+  return [...presenceByTab.values()].some((entry) => entry.identityKey === opaqueKey && isLivePresence(entry))
 }
 
 function flushPanelFocusFallbacks(): void {
@@ -243,7 +253,14 @@ function removeStalePresence(now = Date.now()): void {
   let changed = false
   for (const [tabId, entry] of presenceByTab) {
     if (now - entry.seenAt <= PRESENCE_STALE_MS) continue
-    presenceByTab.delete(tabId)
+    if (entry.ownedPopout && !entry.ownedPopout.released && !entry.ownedPopout.handle.closed) {
+      // Retain local ownership while an open child is loading or its heartbeat
+      // is delayed, without treating an expired announcement as live presence.
+      if (entry.focusNonce === null) continue
+      entry.focusNonce = null
+    } else {
+      presenceByTab.delete(tabId)
+    }
     changed = true
   }
   if (changed) notifyPresenceSubscribers()
@@ -257,12 +274,21 @@ function handleMonitorMessage(event: MessageEvent<unknown>): void {
       identityKey: message.identityKey,
       focusNonce: message.focusNonce,
       seenAt: Date.now(),
+      ownedPopout: presenceByTab.get(message.tabId)?.ownedPopout,
     })
     notifyPresenceSubscribers()
     return
   }
   if (message.type === 'leave') {
-    if (presenceByTab.delete(message.tabId)) notifyPresenceSubscribers()
+    const entry = presenceByTab.get(message.tabId)
+    if (!entry) return
+    // A document departure can be a reload in the same owned Window.
+    if (entry.ownedPopout && !entry.ownedPopout.released && !entry.ownedPopout.handle.closed) {
+      entry.focusNonce = null
+    } else {
+      presenceByTab.delete(message.tabId)
+    }
+    notifyPresenceSubscribers()
     return
   }
   if (message.type === 'focus-failed') {
@@ -314,7 +340,7 @@ export function startPanelTabPresenceMonitor(onChange?: () => void): () => void 
 }
 
 /** Announce one full-page panel until its route unmounts or the page leaves. */
-export function announcePanelTabPresence(initialIdentity: PanelIdentity): PanelPresenceAnnouncement {
+export function announcePanelTabPresence(initialIdentity: PanelIdentity, popoutId?: string): PanelPresenceAnnouncement {
   if (!acceptPresence(initialIdentity)) {
     warnInvalidIdentity()
     return { update: () => {}, stop: () => {} }
@@ -322,7 +348,7 @@ export function announcePanelTabPresence(initialIdentity: PanelIdentity): PanelP
   const channel = openPresenceChannel()
   if (!channel) return { update: () => {}, stop: () => {} }
 
-  const tabId = createTabId()
+  const tabId = popoutId ? popoutPresenceTabId(popoutId) : createTabId()
   const focusNonce = createTabId()
   let identity = initialIdentity
   let identityKey = panelPresenceKey(initialIdentity)
@@ -392,25 +418,49 @@ export function announcePanelTabPresence(initialIdentity: PanelIdentity): PanelP
 export function getPanelTabPresence(): PanelIdentity[] {
   removeStalePresence()
   return [...presenceByTab.values()]
+    .filter((entry) => entry.focusNonce !== null)
     .map((entry) => localIdentityByOpaqueKey.get(entry.identityKey))
     .filter((identity): identity is PanelIdentity => identity !== undefined)
 }
 
+/** Received announcements, including a closed child's not-yet-delivered leave. */
 export function getPanelTabPresenceKeys(): readonly string[] {
   removeStalePresence()
-  return [...presenceByTab.values()].map((entry) => entry.identityKey)
+  return [...presenceByTab.values()]
+    .filter((entry) => entry.focusNonce !== null)
+    .map((entry) => entry.identityKey)
+}
+
+function getLivePanelTabPresenceKeys(): readonly string[] {
+  removeStalePresence()
+  return [...presenceByTab.values()].filter(isLivePresence).map((entry) => entry.identityKey)
 }
 
 export function getPanelTabHandleRegistry(): ReadonlyMap<string, Window> {
   return new Map(panelTabHandles)
 }
 
-export function registerPanelTabHandle(identity: PanelIdentity, handle: Window): void {
+export function registerPanelTabHandle(identity: PanelIdentity, handle: Window, popoutId?: string): void {
   if (!acceptPresence(identity)) throw new TypeError('Invalid panel identity')
   panelTabHandles.set(panelIdentityKey(identity), handle)
+  if (popoutId) {
+    const tabId = popoutPresenceTabId(popoutId)
+    const entry = presenceByTab.get(tabId)
+    presenceByTab.set(tabId, {
+      identityKey: entry?.identityKey ?? panelPresenceKey(identity),
+      focusNonce: entry?.focusNonce ?? null,
+      seenAt: entry?.seenAt ?? Date.now(),
+      ownedPopout: { handle, released: false },
+    })
+  }
 }
 
-export function forgetPanelTabHandle(identity: PanelIdentity, handle?: Window): void {
+export function forgetPanelTabHandle(identity: PanelIdentity, handle?: Window, popoutId?: string): void {
+  if (popoutId) {
+    const owned = presenceByTab.get(popoutPresenceTabId(popoutId))?.ownedPopout
+    // Release only this child, never every tab with the same panel identity.
+    if (owned && owned.handle === handle) owned.released = true
+  }
   const key = panelIdentityKey(identity)
   if (handle && panelTabHandles.get(key) !== handle) return
   panelTabHandles.delete(key)
@@ -436,9 +486,9 @@ export function switchToPanelTab(identity: PanelIdentity): PanelTabFocusResult {
   removeStalePresence()
   const opaqueKey = panelPresenceKey(identity)
   const match = [...presenceByTab.entries()]
-    .filter(([, entry]) => entry.identityKey === opaqueKey)
+    .filter(([, entry]) => entry.identityKey === opaqueKey && isLivePresence(entry))
     .sort((a, b) => b[1].seenAt - a[1].seenAt)[0]
-  if (!match || !monitorChannel) return 'absent'
+  if (!match || !match[1].focusNonce || !monitorChannel) return 'absent'
   monitorChannel.postMessage({
     type: 'focus',
     tabId: match[0],
@@ -466,7 +516,7 @@ export function resolveExistingPanelTab(
       return result === 'focused' ? 'focused' : 'focus-failed'
     }
   }
-  return getPanelTabPresenceKeys().includes(panelPresenceKey(identity)) ? 'affordance' : null
+  return getLivePanelTabPresenceKeys().includes(panelPresenceKey(identity)) ? 'affordance' : null
 }
 
 export function panelIdentityKey(identity: PanelIdentity): string {
@@ -552,7 +602,7 @@ export function resolveRegisteredPanelOpen(input: {
   open: () => Window | null
 }): PanelOpenOutcome {
   const presenceKey = panelPresenceKey(input.identity)
-  const present = getPanelTabPresenceKeys().includes(presenceKey)
+  const present = getLivePanelTabPresenceKeys().includes(presenceKey)
   return resolvePanelOpen({
     identity: input.identity,
     handles: panelTabHandles,

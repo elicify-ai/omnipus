@@ -299,8 +299,8 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
     const stored = readMailPanelIntent(workspaceId)
     return { ...stored, folder: initialFolder ?? stored.folder }
   })
-  // A bare link ignores saved intent until a picker gesture in this context.
-  // Scope that acknowledgement so re-adopting Mail cannot dial before reset.
+  // A picker gesture overrides the initial mailbox directive in this context.
+  // Scope that choice so a new directive applies and bare links cannot dial before choice.
   const [mailboxChoice, setMailboxChoice] = useState<{
     workspaceId: string; directive: MailPanelProps['mailboxId']
   } | null>(null)
@@ -311,7 +311,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
     // SP-23's explicit choose directive: the deep link named panel=mail with
     // no agent — the picker faces the user, nothing costly starts.
     if (mailboxId === null && !hasMailboxChoice) return null
-    if (typeof mailboxId === 'string') {
+    if (!hasMailboxChoice && typeof mailboxId === 'string') {
       if (mailboxesQuery.isPending && mailboxId !== '') return mailboxId
       const named = workspaceMailboxes.find((mb) => mb.agent_id === mailboxId)
       if (named !== undefined) return mailboxId
@@ -361,22 +361,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
   // close, workspace change while mounted = close old + open new. Every
   // send is best-effort; reads never depend on presence (US-5 AS-7).
   const presence = useMemo<MailPanelPresence>(() => createMailPanelPresence({
-    // CONTRACT GAP (see mailPanelPresence.ts): until W0's regeneration adds
-    // the send operation, ClientFrame does not carry the observer frame, so
-    // the live connection is wrapped at this ONE documented site — the
-    // runtime send is a JSON.stringify of the frame. This wrapper (and the
-    // seam's generated-frame typing) collapses back to a plain `conn` when
-    // the union carries the frame.
-    getSender: () => {
-      const conn = useConnectionStore.getState().connection
-      if (conn === null) return null
-      return {
-        // The double cast is the contract gap made explicit: the generated
-        // union does not yet carry the frame, so no typed overlap exists.
-        // Single site; removed when W0's regeneration lands.
-        send: (frame) => conn.send(frame as unknown as Parameters<typeof conn.send>[0]),
-      }
-    },
+    getSender: () => useConnectionStore.getState().connection,
     isConnected: () => useConnectionStore.getState().isConnected,
     subscribeConnection: (listener) => useConnectionStore.subscribe(listener),
   }), [])

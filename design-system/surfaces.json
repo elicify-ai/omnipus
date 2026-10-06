@@ -6518,6 +6518,10 @@
       "lane": 2
     },
     {
+      "source": "src/components/calendar/CalendarMonthGrid.tsx",
+      "lane": 2
+    },
+    {
       "source": "src/components/calendar/CalendarToolbar.tsx",
       "lane": 2
     },
@@ -7827,6 +7831,10 @@
     },
     {
       "source": "src/components/workspaces/team/EdgeModeEditor.tsx",
+      "lane": 2
+    },
+    {
+      "source": "src/components/workspaces/team/TeamPanel.tsx",
       "lane": 2
     },
     {

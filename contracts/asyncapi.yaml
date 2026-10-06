@@ -323,6 +323,12 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/WhatsAppPairingSubscribeFrame'
+  sendMailPanelObserver:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    messages:
+    - $ref: '#/channels/chat/messages/MailPanelObserverFrame'
   receiveSessionStarted:
     action: receive
     channel:
@@ -7496,8 +7502,6 @@ components:
       type: object
       required:
       - type
-      - observer_id
-      - workspace_id
       - code
       - error
       additionalProperties: false

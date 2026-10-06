@@ -28,8 +28,9 @@ import { useCallback, useEffect, useRef } from 'react'
 import { useBlocker, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useUiStore } from '@/store/ui'
 import { leaveGateThen } from './leaveGate'
-import { isWorkspaceScopedPanel, WAVE_2_PANEL_IDS } from './types'
+import { isWorkspaceScopedPanel } from './types'
 import type { ActivePanel, WorkspacePanelContext, WorkspacePanelId } from './types'
+import { getPanelDefinition } from './registry'
 import {
   confirmDiscardLibraryEdits,
   isLibraryEditorDirty,
@@ -39,8 +40,12 @@ type SearchRecord = Record<string, unknown>
 
 function rawPanel(search: SearchRecord): WorkspacePanelId | undefined {
   if (typeof search.panel !== 'string') return undefined
-  if (!(WAVE_2_PANEL_IDS as readonly string[]).includes(search.panel)) return undefined
   const id = search.panel as WorkspacePanelId
+  // §8.2: the valid `?panel=` values are the REGISTERED ids — the same
+  // single-source registry the shell and the full-screen route read. An
+  // unregistered id (`mail` until wave 2, `bogus` always) is dropped exactly
+  // like an unknown one (US-7 AS-4).
+  if (!getPanelDefinition(id)) return undefined
   return isWorkspaceScopedPanel(id) ? id : undefined
 }
 
@@ -68,7 +73,7 @@ function gatedCloseIfOpen(): void {
 
 function projectedPanel(activePanel: ActivePanel | null): WorkspacePanelId | undefined {
   if (activePanel === null) return undefined
-  if (!(WAVE_2_PANEL_IDS as readonly string[]).includes(activePanel.id)) return undefined
+  if (!getPanelDefinition(activePanel.id)) return undefined
   return isWorkspaceScopedPanel(activePanel.id) ? activePanel.id : undefined
 }
 

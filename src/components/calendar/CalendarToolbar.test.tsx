@@ -64,7 +64,7 @@ function makeFakeCalendarRef(viewType: string = 'dayGridMonth') {
 
 function renderToolbar(
   overrides: Partial<{
-    currentView: 'dayGridMonth' | 'timeGridWeek' | 'timeGridDay' | 'listWeek'
+    currentView: 'dayGridMonth' | 'timeGridWeek' | 'timeGridDay'
     title: string
     onViewChange: (view: string) => void
     onNewTask: () => void
@@ -128,15 +128,20 @@ describe('CalendarToolbar — view switching (spec §9 #19, FR-006, US-2/AS-1)',
     expect(props.onViewChange).toHaveBeenCalledWith('timeGridDay')
   })
 
-  it('clicking calendar-view-listWeek calls changeView("listWeek") AND onViewChange("listWeek")', () => {
-    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #19 / FR-006
-    const { spies, props } = renderToolbar({ currentView: 'dayGridMonth' })
+  it('offers NO Agenda (listWeek) entry — exactly the three spec views (superseded by side-panel-shell-spec.md SP-39: "Agenda is dropped — the spec names only Day/Week/Month")', () => {
+    // SUPERSEDED by approved spec, wave 3: the old test clicked the Agenda
+    // entry and expected changeView("listWeek"). SP-39 drops Agenda from the
+    // view set entirely (side-panel-shell-spec.md §10 Wave 3 / §13 SP-39;
+    // wireframe §4). The superseding oracle: the switcher renders exactly
+    // Month/Week/Day — no listWeek test id, no Agenda label — so the click
+    // this test used to make is impossible.
+    renderToolbar({ currentView: 'dayGridMonth' })
 
-    const agendaBtn = screen.getByTestId('calendar-view-listWeek')
-    fireEvent.click(agendaBtn)
-
-    expect(spies.changeView).toHaveBeenCalledWith('listWeek')
-    expect(props.onViewChange).toHaveBeenCalledWith('listWeek')
+    const switcher = screen.getByRole('group', { name: 'Calendar view' })
+    const viewButtons = Array.from(switcher.querySelectorAll('button'))
+    expect(viewButtons.map((b) => b.textContent)).toEqual(['Month', 'Week', 'Day'])
+    expect(screen.queryByTestId('calendar-view-listWeek')).not.toBeInTheDocument()
+    expect(switcher.textContent).not.toContain('Agenda')
   })
 
   it('clicking calendar-view-dayGridMonth calls changeView("dayGridMonth") AND onViewChange("dayGridMonth")', () => {
@@ -154,21 +159,23 @@ describe('CalendarToolbar — view switching (spec §9 #19, FR-006, US-2/AS-1)',
   it('differentiation: clicking different view tabs calls changeView with different arguments', () => {
     // Anti-hardcode: two different view tabs must call changeView with two different view names.
     // Traces to: workspace-calendar-fullcalendar-spec.md §9 #19
+    // (Second tab was listWeek before SP-39 dropped Agenda — timeGridDay is
+    // the surviving differentiator.)
 
     const { spies, props } = renderToolbar({ currentView: 'dayGridMonth' })
 
     fireEvent.click(screen.getByTestId('calendar-view-timeGridWeek'))
-    fireEvent.click(screen.getByTestId('calendar-view-listWeek'))
+    fireEvent.click(screen.getByTestId('calendar-view-timeGridDay'))
 
     expect(spies.changeView).toHaveBeenCalledTimes(2)
     expect(spies.changeView.mock.calls[0][0]).toBe('timeGridWeek')
-    expect(spies.changeView.mock.calls[1][0]).toBe('listWeek')
+    expect(spies.changeView.mock.calls[1][0]).toBe('timeGridDay')
     // The two calls must differ (anti-hardcode)
     expect(spies.changeView.mock.calls[0][0]).not.toBe(spies.changeView.mock.calls[1][0])
 
     expect(props.onViewChange).toHaveBeenCalledTimes(2)
     expect(vi.mocked(props.onViewChange).mock.calls[0][0]).toBe('timeGridWeek')
-    expect(vi.mocked(props.onViewChange).mock.calls[1][0]).toBe('listWeek')
+    expect(vi.mocked(props.onViewChange).mock.calls[1][0]).toBe('timeGridDay')
   })
 })
 
@@ -268,58 +275,59 @@ describe('CalendarToolbar — "Today" also scrolls to the current TIME, not just
     expect(spies.scrollToTime).not.toHaveBeenCalled()
   })
 
-  it('listWeek: scrolls the rendered now-marker row into view when one is present', () => {
-    renderToolbar({ currentView: 'listWeek' })
-
-    const markerRow = document.createElement('tr')
-    markerRow.className = 'fc-sovereign-now-marker-row'
-    const scrollIntoView = vi.fn()
-    markerRow.scrollIntoView = scrollIntoView
-    const wrapper = document.createElement('div')
-    wrapper.className = 'fc-sovereign-wrapper'
-    wrapper.appendChild(markerRow)
-    document.body.appendChild(wrapper)
-
-    fireEvent.click(screen.getByTestId('calendar-today'))
-    // The scroll happens inside a requestAnimationFrame callback.
-    return new Promise<void>((resolve) => {
-      requestAnimationFrame(() => {
-        expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' })
-        wrapper.remove()
-        resolve()
-      })
-    })
-  })
-
-  it('listWeek: falls back to today\'s day-group header when no marker row is rendered (e.g. zero real events that day)', () => {
-    // Scoped to Date only — faking requestAnimationFrame too would freeze
-    // the very rAF this test's assertion waits on (handleToday's own
-    // scheduling), hanging until the real 15s test timeout.
+  it('SP-39 supersession of marker-row scrolling: Today uses the surviving Week time axis, never a retired Agenda row', async () => {
+    // Preserves the old marker-PRESENT case separately. Agenda is gone;
+    // a leftover marker DOM row must not hijack the surviving Today action.
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-08-15T10:00:00'))
-
-    renderToolbar({ currentView: 'listWeek' })
-
-    const dayHeader = document.createElement('tr')
-    dayHeader.className = 'fc-list-day'
-    dayHeader.setAttribute('data-date', '2026-08-15')
-    const scrollIntoView = vi.fn()
-    dayHeader.scrollIntoView = scrollIntoView
+    const { spies } = renderToolbar({ currentView: 'timeGridWeek' })
+    const marker = document.createElement('tr')
+    marker.className = 'fc-sovereign-now-marker-row'
+    const scroll = vi.fn()
+    marker.scrollIntoView = scroll
     const wrapper = document.createElement('div')
     wrapper.className = 'fc-sovereign-wrapper'
-    wrapper.appendChild(dayHeader)
+    wrapper.appendChild(marker)
     document.body.appendChild(wrapper)
+    try {
+      expect(screen.queryByTestId('calendar-view-listWeek')).not.toBeInTheDocument()
+      fireEvent.click(screen.getByTestId('calendar-today'))
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      expect(spies.today).toHaveBeenCalledOnce()
+      expect(spies.scrollToTime).toHaveBeenCalledWith('10:00:00')
+      expect(scroll).not.toHaveBeenCalled()
+    } finally {
+      wrapper.remove()
+      vi.useRealTimers()
+    }
+  })
 
-    fireEvent.click(screen.getByTestId('calendar-today'))
-
-    return new Promise<void>((resolve) => {
-      requestAnimationFrame(() => {
-        expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' })
-        wrapper.remove()
-        vi.useRealTimers()
-        resolve()
-      })
-    })
+  it('SP-39 supersession of day-header fallback: date-only Month never scrolls a retired Agenda day group', async () => {
+    // Preserves the old marker-ABSENT/day-header-PRESENT fallback case;
+    // SP-39 removes listWeek, not the surviving Month Today action.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-08-15T10:00:00'))
+    const { spies } = renderToolbar({ currentView: 'dayGridMonth' })
+    const header = document.createElement('tr')
+    header.className = 'fc-list-day'
+    header.setAttribute('data-date', '2026-08-15')
+    const scroll = vi.fn()
+    header.scrollIntoView = scroll
+    const wrapper = document.createElement('div')
+    wrapper.className = 'fc-sovereign-wrapper'
+    wrapper.appendChild(header)
+    document.body.appendChild(wrapper)
+    try {
+      expect(screen.queryByTestId('calendar-view-listWeek')).not.toBeInTheDocument()
+      fireEvent.click(screen.getByTestId('calendar-today'))
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      expect(spies.today).toHaveBeenCalledOnce()
+      expect(spies.scrollToTime).not.toHaveBeenCalled()
+      expect(scroll).not.toHaveBeenCalled()
+    } finally {
+      wrapper.remove()
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -453,15 +461,16 @@ describe('CalendarToolbar — title and view rendering', () => {
     expect(screen.queryByRole('tablist', { name: 'Calendar view' })).toBeNull()
   })
 
-  it('all four view tab testids are present in the toolbar', () => {
-    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #19 / FR-006
-    // BDD: All four views (Month/Week/Day/Agenda) must be reachable from the toolbar.
+  it('exactly the three spec view tab testids are present in the toolbar (SP-39: Month/Week/Day — Agenda dropped)', () => {
+    // Traces to: side-panel-shell-spec.md §13 SP-39 (supersedes the old
+    // workspace-calendar §9 #19 four-view BDD line: "All four views
+    // (Month/Week/Day/Agenda) must be reachable" — Agenda is dropped).
 
     renderToolbar()
 
     expect(screen.getByTestId('calendar-view-dayGridMonth')).toBeInTheDocument()
     expect(screen.getByTestId('calendar-view-timeGridWeek')).toBeInTheDocument()
     expect(screen.getByTestId('calendar-view-timeGridDay')).toBeInTheDocument()
-    expect(screen.getByTestId('calendar-view-listWeek')).toBeInTheDocument()
+    expect(screen.queryByTestId('calendar-view-listWeek')).not.toBeInTheDocument()
   })
 })
