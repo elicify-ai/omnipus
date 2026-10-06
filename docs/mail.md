@@ -6,6 +6,8 @@ Mail lets you read and send messages through an agent's mailbox in a workspace. 
 
 First, [add an email mailbox in Connectors](connectors.md#how-to-add-an-email-mailbox). In your workspace, select **Mail** in the top bar. On a narrow top bar, use **Open panels menu** and select **Mail** from the panels menu. Use the **Mailbox** selector to choose an agent's address when needed. Mail offers only enabled, configured mailboxes for that workspace.
 
+If a Mail link opens a particular mailbox, you can still choose another eligible address using **Mailbox**. Your choice replaces the mailbox named by the link: Mail loads the chosen mailbox's folders and message list, clears the previously open message, and asks you to select a message to read. In the full-screen tab, the address updates to the mailbox you are now viewing.
+
 When a workspace Chat link opens Mail for the first time or in a different workspace, `?panel=mail` without an `agent` value starts at **Choose a mailbox**, even if you previously used one in that workspace. Select a mailbox to load its folders and enable **Compose**; Mail does not connect to a mailbox before you choose.
 
 If none is available, Mail says **No mailbox is configured for this workspace yet.** **Compose** is unavailable. Select **Connect mailbox** to go to the Connectors screen and add one. A mailbox saved for a different workspace will not appear here.
