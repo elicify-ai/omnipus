@@ -471,7 +471,9 @@ describe('chat store — kickoff rejection via ErrorFrame', () => {
 
     // Generic C8 error handling ran instead — no kickoff-specific side effects.
     expect(useChatStore.getState().pendingKickoff).toBeNull()
-    expect(useConnectionStore.getState().connectionError).toBe('boom')
+    // U5: a tagged chat failure stays visible in that chat, not AppShell.
+    expect(useConnectionStore.getState().connectionError).toBeNull()
+    expect(getMessages(useChatStore.getState().sessionsById[SID]).filter((message) => message.status === 'error').map((message) => message.content)).toStrictEqual(['boom'])
   })
 })
 
@@ -697,7 +699,9 @@ describe('chat store — a session-TAGGED error is never a kickoff reject', () =
     expect(useChatStore.getState().pendingKickoff).toEqual({ workspaceId: WORKSPACE_ID })
     expect(useChatStore.getState().kickoffAttemptStatus[WORKSPACE_ID]).toBeUndefined()
     // Generic C8 error handling ran instead, scoped to SID.
-    expect(useConnectionStore.getState().connectionError).toBe('boom')
+    // U5: a tagged chat failure stays visible in that chat, not AppShell.
+    expect(useConnectionStore.getState().connectionError).toBeNull()
+    expect(getMessages(useChatStore.getState().sessionsById[SID]).filter((message) => message.status === 'error').map((message) => message.content)).toStrictEqual(['boom'])
     // No kickoff toast was raised for this unrelated, tagged error.
     expect(useUiStore.getState().toasts.some((t) => /workspace setup/i.test(t.message))).toBe(false)
   })
