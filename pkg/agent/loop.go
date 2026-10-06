@@ -1787,7 +1787,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			// already has lines, so a window that is empty only because Skip
 			// reached the end of a non-empty archive is never rebuilt.
 			if needsHydrate {
-				if err := pm.al.HydrateAgentHistoryFromTranscript(pm.transcriptSessionID); err != nil {
+				if err := pm.al.hydrateAgentHistory(pm.transcriptSessionID, pm.msg.Content); err != nil {
 					logger.WarnCF("agent", "self-heal hydrate failed", map[string]any{
 						"agent_id":   agent.ID,
 						"session_id": pm.transcriptSessionID,
