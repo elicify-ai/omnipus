@@ -45,19 +45,17 @@ const UNASSIGNED = '\u0000unassigned'
 const PRIORITY_ORDER: string[] = ['1', '2', '3', '4', '5']
 
 /**
- * SP-34 narrow-list breakpoint, measured from the table's own fixed column
- * geometry, not a round guess: with `table-fixed`, the header row's width
- * classes are the table's real column budget — Pri `w-12` (48px) + Status
- * `w-24` (96px) + Tags `w-28` (112px) + Agent `w-24` (96px) + Updated `w-28`
- * (112px) + Actions `w-10` (40px) = 504px of fixed columns, plus a 144px
- * floor for the unwidthed Title column (the smallest width at which a
- * truncated title still reads) = 648px. Below that the seven-column table
- * cannot give Title usable room, so Tags and Updated collapse behind the
- * "⋯" overflow control (user-toggleable, see `columnOverflow` below). The
- * literal appears in the `@max-[648px]:…` container variants below — measured
- * against this component's own `@container` root, never the window. If a
- * column's width class changes, re-derive this number and update every
- * `@max-[648px]` occurrence in this file.
+ * SP-35 narrow-list visibility, using SP-33's container queries: keep the
+ * existing 648px boundary for automatically hiding Tags/Updated behind "⋯".
+ * The earlier 504px fixed-column budget assumed a 16px root. The actual
+ * widths — Pri `w-12`, Status/Agent `w-24`, Tags/Updated `w-28`, Actions
+ * `w-10` — total 31.5rem: 441px at the app's default 14px root, not 504px.
+ * The 648px boundary is unchanged; it is not the current fixed-column sum
+ * plus the intended 144px Title floor. On deliberate reveal, the table's
+ * minimum width reserves that floor (two `--space-8` plus `--space-3`) in
+ * addition to the rem-based column budget, so Title cannot collapse while
+ * the table scrolls sideways inside the panel (founder decision B).
+ * `@max-[648px]` measures this component's own container, never the window.
  */
 
 interface ListViewProps {
@@ -288,7 +286,8 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
           "toggle" means without JS re-deriving the breakpoint. Never visible;
           carries no semantics. */}
       <span ref={narrowProbeRef} aria-hidden="true" className="hidden @max-[648px]:block" />
-      <div className="flex-1 overflow-y-auto">
+      {/* Native scrolling leaves room for the shared focus outline at either edge. */}
+      <div className="flex-1 overflow-auto scroll-px-[var(--space-1)]">
         {/* UAT Finding 2 fix: `table-layout: auto` (the default) sizes
             columns from CONTENT's min-content width, ignoring the Title
             cell's own `truncate`/overflow-hidden entirely — a 200-char
@@ -298,9 +297,16 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
             reach them. `table-fixed` sizes every column from the header
             row's own explicit widths (w-12/w-24/w-28/w-10 on the other
             columns) instead — content can no longer drive column width, so
-            the unwidthed Title column always gets exactly "whatever's left"
-            and its own `truncate` (see TaskRow below) finally has effect. */}
-        <table className="w-full table-fixed text-[length:var(--type-body-compact-size)]">
+            Title takes the remaining width and its own `truncate` (see
+            TaskRow below) has effect. Deliberate reveal reserves the Title
+            floor and scrolls only this content area; auto/hidden keep their
+            existing fit and visibility. */}
+        <table
+          className={cn(
+            'w-full table-fixed text-[length:var(--type-body-compact-size)]',
+            columnOverflow === 'shown' && 'min-w-[calc(31.5rem+var(--space-8)*2+var(--space-3))]',
+          )}
+        >
           <thead className="sticky top-0 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)]">
             <tr>
               <th className="w-12 px-[var(--space-3)] py-[var(--space-2)] text-left" aria-sort={ariaSort('priority')}>
