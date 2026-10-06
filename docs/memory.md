@@ -46,7 +46,7 @@ Every agent has all four. The agent calls them on its own judgment; you trigger 
 
 ## What happens when a session ends
 
-With Auto recap on (Settings → Memory; it is on by default on a new install):
+With Auto recap on (Settings → Memory; it is on by default, and an explicit off in your config stays off):
 
 1. A session closes after it has been idle for the timeout you set — 30 minutes by default. After a gateway restart, any session that never got a recap gets one then, spread out a few per minute.
 2. A background model call summarizes the conversation: a recap of at most 150 words, up to five wins, and up to five items to improve.

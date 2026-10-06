@@ -82,7 +82,6 @@ type RecapTrigger string
 
 const (
 	TriggerExplicit  RecapTrigger = "explicit"
-	TriggerLazy      RecapTrigger = "lazy"
 	TriggerIdle      RecapTrigger = "idle"
 	TriggerBootstrap RecapTrigger = "bootstrap"
 	TriggerJoined    RecapTrigger = "joined"

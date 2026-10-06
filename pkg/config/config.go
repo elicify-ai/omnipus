@@ -995,7 +995,11 @@ type AgentDefaults struct {
 
 	// AutoRecapEnabled gates the session-end recap pipeline (FR-033).
 	// When false, CloseSession is a no-op and no background LLM calls are made.
-	// Opt-in by design: recaps cost money.
+	// ON by default (founder decision 2026-10-06): DefaultConfig seeds true and
+	// the loader starts from DefaultConfig, so an absent key stays on while an
+	// explicit "auto_recap_enabled": false in config.json is honoured. Each
+	// recap is a background LLM call, so an operator who wants no recap spend
+	// sets it to false.
 	AutoRecapEnabled bool `json:"auto_recap_enabled" env:"OMNIPUS_AGENTS_DEFAULTS_AUTO_RECAP_ENABLED"`
 
 	// IdleTimeoutMinutes drives the per-session idle ticker that triggers a

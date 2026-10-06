@@ -1142,6 +1142,10 @@ func defaultAgentsConfig(workspacePath string) AgentsConfig {
 			},
 			SplitOnMarker:  false,
 			TimeoutSeconds: 0, // disabled; OpenRouter queue delays make fixed timeouts unreliable
+			// Session-end recap is ON by default (founder decision 2026-10-06).
+			// A plain bool is safe here: loadConfig unmarshals the file over
+			// DefaultConfig, so an explicit false in config.json still wins.
+			AutoRecapEnabled: true,
 		},
 	}
 }

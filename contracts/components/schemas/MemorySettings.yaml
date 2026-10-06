@@ -10,8 +10,8 @@ properties:
     type: boolean
     description: >
       Whether automatic session recap (context compaction summary) is enabled
-      globally. Maps to agents.defaults.auto_recap_enabled. Seeded ON on a
-      fresh install; existing configs keep their stored value.
+      globally. Maps to agents.defaults.auto_recap_enabled. ON by default; an
+      explicit false in config.json stays false.
     example: true
   idle_timeout_minutes:
     type: integer

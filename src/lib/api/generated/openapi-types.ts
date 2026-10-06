@@ -14876,7 +14876,7 @@ export interface components {
         /** @description Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields. */
         MemorySettings: {
             /**
-             * @description Whether automatic session recap (context compaction summary) is enabled globally. Maps to agents.defaults.auto_recap_enabled. Seeded ON on a fresh install; existing configs keep their stored value.
+             * @description Whether automatic session recap (context compaction summary) is enabled globally. Maps to agents.defaults.auto_recap_enabled. ON by default; an explicit false in config.json stays false.
              * @example true
              */
             auto_recap_enabled?: boolean;

@@ -20310,7 +20310,7 @@ type MediaLibraryEntryStatus string
 
 // MemorySettings Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields.
 type MemorySettings struct {
-	// AutoRecapEnabled Whether automatic session recap (context compaction summary) is enabled globally. Maps to agents.defaults.auto_recap_enabled. Seeded ON on a fresh install; existing configs keep their stored value.
+	// AutoRecapEnabled Whether automatic session recap (context compaction summary) is enabled globally. Maps to agents.defaults.auto_recap_enabled. ON by default; an explicit false in config.json stays false.
 	AutoRecapEnabled *bool `json:"auto_recap_enabled,omitempty"`
 
 	// BootstrapRecapEnabled Whether boot-time recap (summarise orphaned sessions on gateway start) is enabled. Maps to agents.defaults.bootstrap_recap_enabled. Seeded ON on a fresh install; existing configs keep their stored value.
