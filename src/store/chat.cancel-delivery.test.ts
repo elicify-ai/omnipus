@@ -65,3 +65,36 @@ describe('cancelStream delivery report (W2)', () => {
     expect(toasts[0].variant).toBe('error')
   })
 })
+
+// Mechanism behind the CI failure of tests/e2e/stop-scope-tree.spec.ts "after
+// the confirmation window expires ..." (run on 61983a7df, 4 of 4: Expected 2
+// frames, Received 1). The first cancel locally ENDS the turn
+// (markLastMessageInterrupted clears isStreaming at once; the server's `done`
+// is not awaited), and cancelStream's send gate reads isStreaming BEFORE that
+// clear. So a later session-scoped cancel on the same, still-unacknowledged
+// turn is the documented completed-turn no-op; only a tree stop still sends.
+describe('second cancel after the first one ended the turn locally', () => {
+  beforeEach(() => {
+    act(() => { useConnectionStore.getState().setConnection(sender as unknown as WsConnection) })
+  })
+
+  it('the first cancel clears isStreaming immediately, with no server done', () => {
+    act(() => { useChatStore.getState().cancelStream() })
+    expect(useChatStore.getState().isStreaming).toBe(false)
+  })
+
+  it('a second session-scoped cancel sends no frame (completed-turn no-op)', () => {
+    act(() => { useChatStore.getState().cancelStream() })
+    act(() => { useChatStore.getState().cancelStream() })
+    expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID }]])
+  })
+
+  it('a confirmed tree cancel still sends after the turn ended locally', () => {
+    act(() => { useChatStore.getState().cancelStream() })
+    act(() => { useChatStore.getState().cancelStream(undefined, 'tree') })
+    expect(sender.send.mock.calls).toEqual([
+      [{ type: 'cancel', session_id: SID }],
+      [{ type: 'cancel', session_id: SID, scope: 'tree' }],
+    ])
+  })
+})
