@@ -99,6 +99,8 @@ describe('U4 — neutral reconnect visibility through real runtime/socket callba
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
     expect(sockets).toHaveLength(2)
     act(() => latest().open())
+    expect(screen.getByTestId('connection-status-line').textContent).toBe('Reconnecting…')
+    expect(screen.queryByText('Up to date')).not.toBeInTheDocument()
     act(() => {
       latest().frame({ type: 'session_snapshot', session_id: SID, seq: 1, boot_id: 'uat-after', reason: 'boot_mismatch' })
       latest().frame({ type: 'session_state', session_id: SID, user_id: 'uat-user', pending_approvals: [], emitted_at: '2026-10-06T00:00:01Z', boot_id: 'uat-after', active_turn: { turn_id: 'uat-active-turn', agent_id: 'jim', started_at: '2026-10-06T00:00:00Z' } })
