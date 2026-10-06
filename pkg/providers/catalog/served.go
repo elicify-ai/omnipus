@@ -212,7 +212,7 @@ func buildServed(doc *Document, from ServedFrom, now time.Time) (servedPair, err
 	}
 	body, err := json.Marshal(env)
 	if err != nil {
-		return servedPair{}, fmt.Errorf("catalog: serialise served envelope: %w", err)
+		return servedPair{}, fmt.Errorf("%w: serialise served envelope: %w", ErrInvalid, err)
 	}
 	sum := sha256.Sum256(body)
 	return servedPair{
