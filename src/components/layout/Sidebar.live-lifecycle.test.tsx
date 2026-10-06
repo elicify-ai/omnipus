@@ -120,7 +120,7 @@ async function tickRefresh() {
 const start: SubagentStartFrame = { type: 'subagent_start', session_id: PARENT, span_id: 'span-child', parent_call_id: 'delegate-child', child_session_id: CHILD, task_label: 'Child work' }
 const state: SubagentStateFrame = { type: 'subagent_state', session_id: PARENT, span_id: start.span_id, child_session_id: CHILD, state: 'completed', created_at: '2026-10-06T00:00:01Z' }
 const end: SubagentEndFrame = { type: 'subagent_end', session_id: PARENT, span_id: start.span_id, status: 'success' }
-const catchUp: CatchUpCompleteFrame = { type: 'catch_up_complete', session_id: PARENT, seq: 0, boot_id: 'uat-boot', mode: 'snapshot' }
+const catchUp: CatchUpCompleteFrame = { type: 'catch_up_complete', session_id: PARENT, seq: 1, boot_id: 'uat-boot', mode: 'snapshot' }
 
 describe('U1 — visible session lists follow real terminal/lifecycle frames and late settlement', () => {
   it.each(['done', 'stopped'] as const)('sees REST %s committed after the final frame, without another frame or remount', async (settled) => {
