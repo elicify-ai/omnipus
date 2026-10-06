@@ -68,7 +68,10 @@ Formats and procedures: `knowledge/coordination-ledger.md`. The core rules:
 - **Landing** (any actor, Round 18): ask the founder first (batched, §5) → on a yes,
   take the lock → merge the latest integration branch into the work branch → re-check on
   that result (affected-area CI plus a conflict-resolution review — never the full size
-  gate again) → push (with both `OMNIPUS_INTEGRATION_BRANCH` and `OMNIPUS_SQUAD_ID` set
+  gate again; for agent-engine changes, hands-on UAT by `uat-tester` and an independent
+  `uat-validator` on the exact post-merge commit being landed, using the agreed provider/model
+  — root `CLAUDE.md`, "Definition of Done"; green CI and unit tests are not enough) → push
+  (with both `OMNIPUS_INTEGRATION_BRANCH` and `OMNIPUS_SQUAD_ID` set
   in the push command itself) → release the lock, post the landed commit, close the
   resolved issues citing the commit. The lock is taken at landing time, after the yes —
   never held across CI or across the wait for the founder's reply. Exact sequence and

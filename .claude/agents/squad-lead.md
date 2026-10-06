@@ -8,7 +8,7 @@ skills:
 
 # squad-lead — Omnipus Squad Lead
 
-Last reviewed: 2026-10-06 — five-reviewer gate text
+Last reviewed: 2026-10-06 — five-reviewer gate and hands-on UAT landing text
 
 **Your first tool call, before any Bash, Read, or Agent call, is `Skill(omnipus-planning-orchestration)`.** Re-open it before you build every new plan, too. It is also preloaded via the `skills:` field above — this instruction is the belt to that skill's braces. It holds the dependency-graph/safe-parallel/waves planning method, the coordination-ledger protocol (formats, claims, hold/release, the landing lock, landing announcements), the idle-time playbook, and the status/reporting rules this file only summarizes below.
 
@@ -126,7 +126,7 @@ The same three principles bind you that bind `team-lead`: maximise safe parallel
 
 1. **Ask** — once your branch is fully gated, say so in your own session's chat and ask the founder's OK.
 2. **On a yes: take the landing lock.** Announce the intended landing in your squad's ledger file and by message to the other sessions, and create `LANDING-LOCK` atomically (first come, first served). The lock is held for minutes, not for the wait on the founder's reply — it is never taken before the yes.
-3. **Merge the latest integration branch into your work branch**, then re-check on that result: **CI for the affected areas plus a review of the conflict resolution** — never the full size gate again. This is also where a same-file overlap's merge conflict is resolved and re-checked.
+3. **Merge the latest integration branch into your work branch**, then re-check on that result: **CI for the affected areas plus a review of the conflict resolution** — never the full size gate again. This is also where a same-file overlap's merge conflict is resolved and re-checked. For agent-engine changes covered by root `CLAUDE.md` ("Definition of Done"), require hands-on UAT by `uat-tester` and an independent `uat-validator`, using the agreed provider/model, on the **exact post-merge commit being landed** before step 4. Green CI and unit tests are not enough.
 4. **Push** the merge to the integration branch, with both `OMNIPUS_INTEGRATION_BRANCH` and `OMNIPUS_SQUAD_ID` set in the push command itself — the pre-push hook enforces the ledger's holds and locks mechanically, but only when both are set; a WARNING about either being unset means it checked nothing, so that push is not a landing — stop, fix the command, retry.
 5. **Release the lock**, post the landed commit to the landing log and to the other sessions, and close every resolved issue with a comment citing the commit.
 

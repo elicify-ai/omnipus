@@ -60,6 +60,8 @@ releases; v0.1.1 carries near the full scope once labelled v0.3).
 - Is there a screen or component that renders it? A backend with no UI and no tool registration is a library, not a feature.
 - Was the test plan **executed**, or only written? "Written, not executed" is not testing.
 
+**Hands-on check before any agent-engine landing (founder, 2026-10-06).** Any change touching `pkg/agent`, `pkg/session`, steering/delegate tools in `pkg/tools`, or gateway steering/stop/WebSocket handlers requires hands-on UAT (user acceptance testing) by a `uat-tester` and an independent `uat-validator` on the **exact commit being landed** before it can land on the integration branch. Use the agreed UAT provider/model below. Green CI and unit tests are not enough.
+
 **User-facing documentation (MANDATORY).** Any UI or behaviour change must include a matching update to user-facing documentation under `docs/` (outside `docs/internal/`) in the same change. At design time, name the affected pages and specific documentation TODOs; for small and standard work, include them in the work plan. The implementing lead drafts the update and `docs-verifier` audits it against the actual behaviour before landing. Reviewers check the changed UI/behaviour against the updated pages; a missing matching update is an **Important** finding with a concrete user-impact scenario. If a change has no user-visible effect, record why no user-facing documentation update is needed.
 
 State delivery in two lines that are never merged: *code correct and tested*, and *reachable by a user/agent*. **Why:** the vault-records work was reported six-of-six complete with CI 34/34 green while all six `vault_*` tools were registered in zero config files, the superseded `knowledge_*` tools were still the only ones wired, and no record UI existed.
@@ -167,7 +169,7 @@ component over a new local one — skill rule 14.
 
 **Size budgets (founder ruling, 2026-09-15; file fail limit set to 3,000 on 2026-09-22):** one file, one job; one function, one job. A file warns over 2,000 lines and fails over 3,000; a function warns over 120 lines and fails over 240 — same numbers for production and test code, but a React component only warns, never fails. Grandfathered entries (`scripts/budgets/*.txt`) may only shrink — do not add to one, extract first. `make lint-budgets` runs both gates with their self-checks.
 
-**UAT provider/model (founder-set, 2026-09-11):** any agent-driven onboarding uses `openrouter` + `z-ai/glm-5.3-flash` — not whatever an onboarding wizard defaults to. Omnipus sends tools every request, so a non-tool model (e.g. `google/gemma-2-9b-it`) returns 404.
+**UAT provider/model (founder-set, 2026-10-06):** any agent-driven onboarding or UAT uses `openrouter` + `deepseek/deepseek-v4.1-flash` — not whatever an onboarding wizard defaults to. Omnipus sends tools every request, so a non-tool model (e.g. `google/gemma-2-9b-it`) returns 404.
 
 ## Retired surfaces — do NOT reintroduce (operator directive, 2026-07-19)
 
