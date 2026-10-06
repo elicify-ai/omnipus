@@ -407,8 +407,11 @@ func TestAdr093RootRevival_ClassifyFirstOneTurnOneGeneration(t *testing.T) {
 		t.Fatal("resumed ordinary execution and publication tail did not join")
 	}
 	after := rootReopenedRecord(t, al, original.SessionID)
-	if after.Terminal() || after.Generation != original.Generation || after.State != session.LifecycleRunning {
-		t.Fatalf("ordinary root became terminal or changed generation after one resumed run: %+v", after)
+	// ADR-20260928 — The sub-agent control plane, Vocabulary: "done" means
+	// "the turn ended with a final answer", recorded as "terminal completed".
+	// D2b applies this to the root: the turn is done, not the chat archived.
+	if !after.Terminal() || after.Generation != original.Generation || after.State != session.LifecycleCompleted {
+		t.Fatalf("ordinary root after one resumed run = %+v, want terminal completed on the same generation (ADR-20260928: completed -> done; the chat remains resumable)", after)
 	}
 	if count := len(provider.Requests()); count != 2 {
 		t.Fatalf("provider calls=%d, want original plus exactly one resumed ordinary run", count)

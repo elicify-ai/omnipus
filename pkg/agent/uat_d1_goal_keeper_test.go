@@ -51,9 +51,11 @@ func TestUATD1_GoalHelperKeeperProviderFailureReportsOnce(t *testing.T) {
 	}
 	failure, err := msgs[0].AsSessionMessageError()
 	wantID := fmt.Sprintf("%s:%d:final", child.SessionID, child.Generation)
-	wantText := "failed: " + uatD1ProviderFailure
-	if err != nil || !failure.Fatal || failure.MessageId != wantID || failure.Text != wantText || failure.SessionId != child.SessionID || string(failure.Direction) != "child_to_parent" || (failure.ParentSessionId != nil && *failure.ParentSessionId != f.parentID) {
-		t.Fatalf("D1 visible failure=%+v error=%v, want exact fatal %q id=%q from child to its direct parent", failure, err, wantText, wantID)
+	// D1 RED plan: "exactly one fatal failed: error containing the provider's
+	// exact failure". Diagnostic wrapping is not part of that text oracle.
+	wantText := uatD1ProviderFailure
+	if err != nil || !failure.Fatal || failure.MessageId != wantID || !strings.HasPrefix(failure.Text, "failed:") || !strings.Contains(failure.Text, wantText) || failure.SessionId != child.SessionID || string(failure.Direction) != "child_to_parent" || (failure.ParentSessionId != nil && *failure.ParentSessionId != f.parentID) {
+		t.Fatalf("D1 visible failure=%+v error=%v, want fatal text starting with failed: and containing exact %q id=%q from child to its direct parent", failure, err, wantText, wantID)
 	}
 	if len(f.worker.Requests()) != 2 || f.judge.callCount() != 0 {
 		t.Fatalf("D1 failure provider calls=%d Judge calls=%d, want answer+one failed continuation, zero Judge calls", len(f.worker.Requests()), f.judge.callCount())
