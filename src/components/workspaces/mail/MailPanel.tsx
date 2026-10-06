@@ -299,8 +299,8 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
     const stored = readMailPanelIntent(workspaceId)
     return { ...stored, folder: initialFolder ?? stored.folder }
   })
-  // A bare link ignores saved intent until a picker gesture in this context.
-  // Scope that acknowledgement so re-adopting Mail cannot dial before reset.
+  // A picker gesture overrides the initial mailbox directive in this context.
+  // Scope that choice so a new directive applies and bare links cannot dial before choice.
   const [mailboxChoice, setMailboxChoice] = useState<{
     workspaceId: string; directive: MailPanelProps['mailboxId']
   } | null>(null)
@@ -311,7 +311,7 @@ export function MailPanel({ workspaceId, mailboxId, layout = 'stacked', initialF
     // SP-23's explicit choose directive: the deep link named panel=mail with
     // no agent — the picker faces the user, nothing costly starts.
     if (mailboxId === null && !hasMailboxChoice) return null
-    if (typeof mailboxId === 'string') {
+    if (!hasMailboxChoice && typeof mailboxId === 'string') {
       if (mailboxesQuery.isPending && mailboxId !== '') return mailboxId
       const named = workspaceMailboxes.find((mb) => mb.agent_id === mailboxId)
       if (named !== undefined) return mailboxId
