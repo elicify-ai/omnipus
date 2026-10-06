@@ -193,8 +193,8 @@ func (t *DelegateTool) recordFinalsRead(ctx context.Context, rec *session.Lifecy
 		var id struct {
 			MessageID string `json:"message_id"`
 		}
-		if err := json.Unmarshal(raw, &id); err != nil {
-			failures = append(failures, err.Error())
+		if decodeErr := json.Unmarshal(raw, &id); decodeErr != nil {
+			failures = append(failures, decodeErr.Error())
 			continue
 		}
 		isFinal := strings.HasPrefix(id.MessageID, finalPrefix) && strings.HasSuffix(id.MessageID, ":final")

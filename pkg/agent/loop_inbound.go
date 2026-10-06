@@ -1015,25 +1015,13 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	// finished root starts its next round; a stopped one was held above.
 	var rootExecution *executionDisposition
 	if rec.SteeredBy == nil {
-		preparation, prepErr := al.prepareOrdinarySessionExecution(ctx, sessionID, ts.opts, &handbackRevivalPrincipal)
-		if prepErr != nil {
-			return "", fmt.Errorf("steer: wake: %w", prepErr)
+		d, admitted, admitErr := al.admitOrdinaryRootWake(ctx, msg, ts)
+		if admitErr != nil {
+			return "", admitErr
 		}
-		if d := preparation.execution; d != nil {
+		if admitted {
 			rootExecution = d
-			ts.opts.executionDisposition = d
-			ts.generation = d.claim.Generation
-			if identityErr := ts.setExecutionIdentity(d.claim.RunID, d.claim.BootSeq); identityErr != nil {
-				if settleErr := al.finishExecutionDisposition(d); settleErr != nil {
-					al.reportOrdinarySettlementFailure(msg, settleErr)
-				}
-				return "", fmt.Errorf("steer: wake: %w", identityErr)
-			}
-			release = func() {
-				if settleErr := al.finishExecutionDisposition(d); settleErr != nil {
-					al.reportOrdinarySettlementFailure(msg, settleErr)
-				}
-			}
+			release = func() { al.finishOrdinaryWakeExecution(msg, d) }
 		}
 	}
 
@@ -1117,6 +1105,35 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	al.disposeSteeredTurnResult(ts, rec, generation, result, err)
 	rootExecution.recordTurnOutcome(err)
 	return result.finalContent, err
+}
+
+// admitOrdinaryRootWake admits the wake of an ordinary root as an ordinary
+// execution and binds ts to it (F2). It returns nil when no lifecycle store
+// is wired (admitted false: nothing to admit).
+func (al *AgentLoop) admitOrdinaryRootWake(ctx context.Context, msg bus.InboundMessage, ts *turnState) (d *executionDisposition, admitted bool, err error) {
+	preparation, err := al.prepareOrdinarySessionExecution(ctx, msg.AsyncTranscriptSessionID, ts.opts, &handbackRevivalPrincipal)
+	if err != nil {
+		return nil, false, fmt.Errorf("steer: wake: %w", err)
+	}
+	d = preparation.execution
+	if d == nil {
+		return nil, false, nil
+	}
+	ts.opts.executionDisposition = d
+	ts.generation = d.claim.Generation
+	if idErr := ts.setExecutionIdentity(d.claim.RunID, d.claim.BootSeq); idErr != nil {
+		al.finishOrdinaryWakeExecution(msg, d)
+		return nil, false, fmt.Errorf("steer: wake: %w", idErr)
+	}
+	return d, true, nil
+}
+
+// finishOrdinaryWakeExecution settles an ordinary root's wake execution and
+// makes a settlement failure visible.
+func (al *AgentLoop) finishOrdinaryWakeExecution(msg bus.InboundMessage, d *executionDisposition) {
+	if err := al.finishExecutionDisposition(d); err != nil {
+		al.reportOrdinarySettlementFailure(msg, err)
+	}
 }
 
 // handbackRevivalPrincipal starts the next round of a finished ordinary

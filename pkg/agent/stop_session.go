@@ -312,13 +312,14 @@ func (al *AgentLoop) AwaitStoppedTurns(ctx context.Context, ids []string) []stri
 // already handle, adding the totals to res. A descendant walk that fails
 // is reported as unreachable, never hidden.
 func (al *AgentLoop) killTreeBackgroundShells(sessionID string, hooksFor func(string) CancelHooks, swept map[string]bool, res *StopResult) {
-	ids := []string{sessionID}
 	descendants, err := CollectDescendantSessionIDs(al.GetSessionLifecycleStore(), sessionID)
 	if err != nil {
 		res.Report.Unreachable = append(res.Report.Unreachable, steer.UnreachableSession{
 			ID: sessionID, Reason: "background shells of the helper tree could not be listed: " + err.Error(),
 		})
 	}
+	ids := make([]string, 0, 1+len(descendants))
+	ids = append(ids, sessionID)
 	ids = append(ids, descendants...)
 	for _, id := range ids {
 		if swept[id] {
