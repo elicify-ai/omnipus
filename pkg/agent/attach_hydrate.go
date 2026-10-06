@@ -138,6 +138,17 @@ type openAssistant struct {
 // hand-offs) are ignored at this layer — they are reconstructed by the agent
 // loop's own subturn machinery on demand.
 func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
+	return al.hydrateAgentHistory(sessionID, "")
+}
+
+// hydrateAgentHistory is HydrateAgentHistoryFromTranscript with one addition:
+// currentUser, when non-empty, is the user message of the turn that is about
+// to run. The inbound path writes that message to the transcript BEFORE the
+// turn starts, and the turn itself appends it to the model request, so a
+// rebuild that kept it would send the model the same message twice. The
+// turn's own append stays the single source for the newest message; the
+// rebuild drops the transcript's final entry when it is that message.
+func (al *AgentLoop) hydrateAgentHistory(sessionID, currentUser string) error {
 	if sessionID == "" {
 		return fmt.Errorf("agent: HydrateAgentHistoryFromTranscript: sessionID required")
 	}
@@ -149,6 +160,7 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 	if err != nil {
 		return fmt.Errorf("agent: HydrateAgentHistoryFromTranscript: read transcript: %w", err)
 	}
+	entries = dropCurrentUserEntry(entries, currentUser)
 	if len(entries) == 0 {
 		return nil
 	}
@@ -324,6 +336,21 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 		al.hydrateOneAgent(ag, agentID, sessionID, key, msgs)
 	}
 	return nil
+}
+
+// dropCurrentUserEntry removes the transcript's final entry when it is the
+// user message of the turn being started (see hydrateAgentHistory). Anything
+// else — an empty currentUser, a different final entry, a non-user role —
+// leaves entries untouched.
+func dropCurrentUserEntry(entries []session.TranscriptEntry, currentUser string) []session.TranscriptEntry {
+	if currentUser == "" || len(entries) == 0 {
+		return entries
+	}
+	last := &entries[len(entries)-1]
+	if transcriptModelHistoryRole(last) == "user" && last.Content == currentUser {
+		return entries[:len(entries)-1]
+	}
+	return entries
 }
 
 // hydrateOneAgent runs the FR-045/FR-048 check-write-verify-mark sequence for
