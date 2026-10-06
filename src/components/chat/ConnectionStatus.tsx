@@ -31,7 +31,7 @@ const FIRST_SEND_COPY: Record<FirstSendStatus, { label: string; action?: 'Retry'
   unfinished: { label: "Couldn't finish", action: 'Generate again' },
 }
 export type AssistantConnectionState = 'paused' | 'unfinished'
-export type ChatConnectionState = 'offline' | 'unreachable' | 'back'
+export type ChatConnectionState = 'reconnecting' | 'offline' | 'unreachable' | 'back'
 
 const QUIET_DROP_MS = 15_000
 const CHAT_NOTICE_MS = 120_000
@@ -305,6 +305,8 @@ interface ConnectionDisplayInput {
   reconnectedAt: number | null
   lastDisconnectDurationMs: number | null
   lastDisconnectWasTerminal: boolean
+  /** Distinguishes a visible ordinary retry from the deliberately quiet 4008 path. */
+  lastDisconnectHadRetry?: boolean
   hasInterruptedAnswer: boolean
   deviceOnline: boolean
   now: number
@@ -342,8 +344,8 @@ export function deriveConnectionDisplay(input: ConnectionDisplayInput): {
   chat: 'hidden' | ChatConnectionState
 } {
   if (input.isConnected) {
-    const showedProblem = (input.lastDisconnectDurationMs ?? 0) >= QUIET_DROP_MS || input.lastDisconnectWasTerminal
-    const showRecovery = showedProblem && input.reconnectedAt !== null && input.now - input.reconnectedAt < RECOVERY_NOTICE_MS
+    const showedProblem = input.lastDisconnectHadRetry || (input.lastDisconnectDurationMs ?? 0) >= QUIET_DROP_MS || input.lastDisconnectWasTerminal
+    const showRecovery = showedProblem && !input.awaitingCatchUp && input.reconnectedAt !== null && input.now - input.reconnectedAt < RECOVERY_NOTICE_MS
     // Review finding 14: reconnected AND the server confirms no turn is
     // in flight for this session is the only honest "couldn't be
     // finished" signal — see sessionHasActiveTurn's doc comment.
@@ -353,7 +355,7 @@ export function deriveConnectionDisplay(input: ConnectionDisplayInput): {
       input.hasInterruptedAnswer && !input.sessionHasActiveTurn && !input.awaitingCatchUp
         ? 'unfinished'
         : 'hidden'
-    return { answer, chat: showRecovery ? 'back' : 'hidden' }
+    return { answer, chat: showedProblem && input.awaitingCatchUp ? 'reconnecting' : showRecovery ? 'back' : 'hidden' }
   }
 
   const elapsed = input.disconnectedAt === null ? 0 : Math.max(0, input.now - input.disconnectedAt)
@@ -366,7 +368,7 @@ export function deriveConnectionDisplay(input: ConnectionDisplayInput): {
   const answer = input.hasInterruptedAnswer && (terminal || elapsed >= QUIET_DROP_MS) ? 'paused' : 'hidden'
   const chat = terminal || elapsed >= CHAT_NOTICE_MS
     ? (input.deviceOnline ? 'unreachable' : 'offline')
-    : 'hidden'
+    : input.reconnectPhase !== null ? 'reconnecting' : 'hidden'
   return { answer, chat }
 }
 
@@ -381,6 +383,14 @@ function useConnectionNow(active: boolean): number {
 }
 
 export function ChatConnectionStatusLine({ state, onRetry }: { state: ChatConnectionState; onRetry?: () => void }) {
+  if (state === 'reconnecting') {
+    return (
+      <div role="status" aria-live="polite" data-testid="connection-status-line" className="flex min-h-8 items-center justify-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">
+        <ArrowClockwise size={15} aria-hidden="true" />
+        <span>Reconnecting…</span>
+      </div>
+    )
+  }
   if (state === 'back') {
     return (
       <div role="status" aria-live="polite" data-testid="connection-status-line" className="flex min-h-8 items-center justify-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">
@@ -427,12 +437,10 @@ export function ChatConnectionNotice() {
   const sessionHasActiveTurn = useChatStore((state) =>
     activeSessionId != null && state.sessionsById[activeSessionId]?.activeTurnId != null,
   )
-  // #823 catch-up redesign (§6.5) — only affects `display.answer`, never
-  // `display.chat` (the only field this line renders), same as
-  // sessionHasActiveTurn above; read here purely so this call site stays a
-  // valid, honest ConnectionDisplayInput.
+  // The ordinary reconnect hint stays up through attach/replay, before
+  // session_snapshot arrives as well as until catch_up_complete lands.
   const awaitingCatchUp = useChatStore((state) =>
-    activeSessionId != null && !!state.sessionsById[activeSessionId]?.awaitingCatchUp,
+    activeSessionId != null && (state.isReplaying || !!state.sessionsById[activeSessionId]?.awaitingCatchUp),
   )
   const display = deriveConnectionDisplay({
     ...connection,
