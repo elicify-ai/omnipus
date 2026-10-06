@@ -76,7 +76,7 @@ While a turn is running, the message box stays yours:
 |---|---|
 | **Enter** (with text typed) | Sends your message into the running turn — the agent takes it into account without stopping. A send button with the same effect appears next to Stop. |
 | **Stop** or **Escape** | Asks the agent to halt. The button shows a stopping state, then the turn ends as cancelled. |
-| Activity pill | Below the message box: shows running background work. Select it to open the Activity panel with running and finished items, including any that failed. |
+| Activity pill | Below the message box: the Agents number counts helpers whose current state is running. Select it to open the Activity panel. **Running now** excludes stopped and finished helpers; queued helpers and helpers waiting for an answer have their own sections. Stopped helpers remain inspectable with **Open**, without a growing elapsed timer or a failed-work label. A resumed helper returns to Running now when its state is running again. |
 
 ### Stop and redirect commands
 
