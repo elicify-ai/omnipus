@@ -46,7 +46,8 @@ func (al *AgentLoop) requestCommandStopByChannelChat(ctx context.Context, channe
 	outcome, err := al.RequestCancel(ctx,
 		CancelScope{Channel: channelName, ChatID: chatID, TurnOnly: true},
 		CancelCanceller{UserID: userID, Channel: channelName},
-		CancelHooks{KillBackgroundSessions: killBackgroundSessionsForCancelSurface})
+		// Q13: a session-only Stop leaves background shells running.
+		CancelHooks{})
 	return outcome.Fired, outcome.Armed, err
 }
 

@@ -87,7 +87,14 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	}
 	hooksFor := req.HooksFor
 	if hooksFor == nil {
+		// Founder decision Q13: a plain Stop ends the session's current turn
+		// and leaves its background shell processes running; only Stop all
+		// (cancel, the whole tree) kills them. A caller passing its own hooks
+		// (the scheduled-run deadline) decides for itself.
 		hooksFor = func(string) CancelHooks {
+			if !req.Tree {
+				return CancelHooks{}
+			}
 			return CancelHooks{KillBackgroundSessions: killBackgroundSessionsForCancelSurface}
 		}
 	}
@@ -101,6 +108,7 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	}
 	var mu sync.Mutex
 	res.Selected = make(map[string]session.StopSelection)
+	swept := make(map[string]bool) // sessions whose stop already ran the shell hook
 	stopTurn := func(effectCtx context.Context, id string, generation int) (GenerationCancelResult, error) {
 		// D5: this Stop supersedes the session's older pending steers.
 		if selected, carried := stopSelectionFromContext(effectCtx); carried {
@@ -111,6 +119,7 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 		outcome, err := al.RequestCancel(effectCtx,
 			CancelScope{SessionID: id, TurnOnly: true, Generation: generation}, canceller, hooksFor(id))
 		mu.Lock()
+		swept[id] = true
 		if selected, carried := stopSelectionFromContext(effectCtx); carried {
 			res.Selected[id] = selected
 		}
@@ -189,6 +198,12 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 		return res, err
 	}
 	res.Report, res.Durable = report, true
+	if req.Tree && req.Continue == nil {
+		// Q13: Stop all kills the background shells of the whole tree, also
+		// of sessions that have no turn left to stop (already stopped by an
+		// earlier plain Stop, or idle), which the cascade does not reach.
+		al.killTreeBackgroundShells(req.SessionID, hooksFor, swept, &res)
+	}
 	// A queued-only stop still did work: its durable stop landed without an
 	// active turn. A repeated stop has no Reached entries and is a no-op.
 	if !res.Armed {
@@ -289,5 +304,32 @@ func (al *AgentLoop) AwaitStoppedTurns(ctx context.Context, ids []string) []stri
 			return live
 		case <-time.After(25 * time.Millisecond):
 		}
+	}
+}
+
+// killTreeBackgroundShells runs the background-shell kill hook for
+// sessionID and every durable descendant the Stop's cascade did not
+// already handle, adding the totals to res. A descendant walk that fails
+// is reported as unreachable, never hidden.
+func (al *AgentLoop) killTreeBackgroundShells(sessionID string, hooksFor func(string) CancelHooks, swept map[string]bool, res *StopResult) {
+	ids := []string{sessionID}
+	descendants, err := CollectDescendantSessionIDs(al.GetSessionLifecycleStore(), sessionID)
+	if err != nil {
+		res.Report.Unreachable = append(res.Report.Unreachable, steer.UnreachableSession{
+			ID: sessionID, Reason: "background shells of the helper tree could not be listed: " + err.Error(),
+		})
+	}
+	ids = append(ids, descendants...)
+	for _, id := range ids {
+		if swept[id] {
+			continue
+		}
+		kill := hooksFor(id).KillBackgroundSessions
+		if kill == nil {
+			continue
+		}
+		killed, failed := kill(id)
+		res.BackgroundKilled += killed
+		res.BackgroundFailed += failed
 	}
 }

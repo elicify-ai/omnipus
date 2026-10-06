@@ -32,9 +32,9 @@ func (h *WSHandler) requestScopedStop(wc *wsConn, sessionID string, stopAll bool
 		Canceller: stopper,
 		HooksFor: func(id string) agent.CancelHooks {
 			if id != sessionID {
-				return h.stopHooks(wc, nil)
+				return h.webStopHooks(wc, nil, stopAll)
 			}
-			hooks := h.stopHooks(wc, &stageReport)
+			hooks := h.webStopHooks(wc, &stageReport, stopAll)
 			send := hooks.SendStageFrame
 			hooks.SendStageFrame = func(id, stage string) {
 				stageSent.Store(true)
@@ -76,6 +76,17 @@ func (h *WSHandler) stopHooks(wc *wsConn, report *atomic.Pointer[steer.CancelRep
 			}
 			h.sendCancelStageFrame(wc, id, stage)
 		}
+	}
+	return hooks
+}
+
+// webStopHooks are stopHooks for one web Stop scope. Founder decision Q13:
+// a plain Stop leaves the session's background shell processes running;
+// only Stop all kills them.
+func (h *WSHandler) webStopHooks(wc *wsConn, report *atomic.Pointer[steer.CancelReport], stopAll bool) agent.CancelHooks {
+	hooks := h.stopHooks(wc, report)
+	if !stopAll {
+		hooks.KillBackgroundSessions = nil
 	}
 	return hooks
 }
