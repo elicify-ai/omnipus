@@ -336,6 +336,22 @@ describe('Sidebar session rows — lifecycle_state labels (ADR-20260928 MAJ-009,
     expect(rowText).toMatch(/\bstopped\b/i)
   })
 
+  it('RED row with lifecycle_state interrupted shows Interrupted, not Failed, in the neutral muted colour', async () => {
+    // Founder decision 2026-10-06: a session cut off by a server restart is
+    // "interrupted" (sixth status) — it does not fail. Not the error red.
+    const row = await renderRowFor(lcSession({ lifecycle_state: 'interrupted' }))
+    const rowButton = row.closest('button')
+    const rowText = rowButton?.textContent ?? ''
+    expect(rowText).toMatch(/\bInterrupted\b/)
+    expect(rowText).not.toMatch(/\bfailed\b/i)
+    const label = Array.from(rowButton?.querySelectorAll('span') ?? []).find(
+      (el) => el.textContent?.trim() === 'Interrupted',
+    )
+    expect(label).toBeTruthy()
+    expect(label?.className).toContain('text-[var(--color-muted)]')
+    expect(label?.className).not.toContain('text-[var(--color-error)]')
+  })
+
   it('PIN session without lifecycle_state renders its row with no lifecycle label and no crash', async () => {
     // Absent lifecycle_state (no lifecycle record) → no five-state label.
     // Passes trivially today (no labels exist yet); it is the GREEN guard:
