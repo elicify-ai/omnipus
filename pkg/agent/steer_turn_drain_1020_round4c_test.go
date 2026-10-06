@@ -82,6 +82,9 @@ func TestSteeredTurnDrain1020Round4_OuterExhaustionDefersQueuedSteersToFutureRev
 				t.Errorf("accepted earlier item[%d]=%+v, want unchanged text/identity %q in order", i, queued[i], text)
 			}
 		}
+		// Capture the real accepted control IDs and complete acceptance records
+		// BEFORE Stop; matching only text after Stop could accept forged receipts.
+		acceptances := qaSnapshotQueuedControlAcceptances(t, al, child.SessionID, queued)
 		result, err := al.StopSession(context.Background(), StopRequest{
 			SessionID: child.SessionID, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "newer-stop"},
 			HooksFor: func(string) CancelHooks { return CancelHooks{} },
@@ -151,6 +154,14 @@ func TestSteeredTurnDrain1020Round4_OuterExhaustionDefersQueuedSteersToFutureRev
 				t.Fatalf("BLOCKED: accepted steer %q has %d explicit superseded ledger receipts; durable steer intent/newer-Stop supersession not implemented — required by frozen D4/D5 and R1 outer-exhaustion disposition (remaining queue=%d)", text, superseded, al.pendingSteeringCountForScope(child.SessionID))
 			}
 		}
+		qaAssertAcceptedControlsSuperseded(t, acceptances, lines, rec.StopNote.Seq)
+		if pending := al.pendingSteeringCountForScope(child.SessionID); pending != 0 {
+			t.Errorf("D5: Stop left %d accepted earlier steers in the final queue, want zero", pending)
+		}
+		unfinished, err := al.GetSessionLifecycleStore().UnfinishedStopIntents(child.SessionID)
+		if err != nil || len(unfinished) != 0 {
+			t.Errorf("landed winning Stop still has unfinished intents: %+v error=%v, want none", unfinished, err)
+		}
 	})
 	t.Run("new_input_after_landed_Stop_resumes_same_generation", func(t *testing.T) {
 		al, _ := newSteerAL(t)
@@ -213,4 +224,80 @@ func TestSteeredTurnDrain1020Round4_OuterExhaustionDefersQueuedSteersToFutureRev
 			t.Errorf("post-Stop messages duplicated/lost: finals=%d notices=%d, want one each", finals, notices)
 		}
 	})
+}
+
+// Internal ledger snapshots, not gateway wire types. Derive IDs from real
+// acceptance, never invent them or infer them from a post-Stop receipt.
+func qaSnapshotQueuedControlAcceptances(t *testing.T, al *AgentLoop, childID string, queued []steeringQueueItem) map[string]map[string]any {
+	t.Helper()
+	path := filepath.Join(al.GetConfig().Agents.Defaults.Home, "session_lifecycle", "controls", childID+".jsonl")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read control ledger BEFORE Stop: %v", err)
+	}
+	var before []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var fields map[string]any
+		if err := json.Unmarshal([]byte(line), &fields); err != nil {
+			t.Fatalf("decode acceptance before Stop: %v", err)
+		}
+		before = append(before, fields)
+	}
+	out := make(map[string]map[string]any, len(queued))
+	for _, item := range queued {
+		id := item.steerControlID
+		if id == "" || out[id] != nil {
+			t.Fatalf("SETUP: real queued steers must carry distinct nonempty accepted IDs: %q", id)
+		}
+		matches := 0
+		for _, line := range before {
+			if line["control_id"] == id {
+				matches++
+				if line["verb"] != "steer" || line["state"] != "queued" || line["text"] != item.message.Content || line["correlation_id"] != item.correlationID {
+					t.Fatalf("SETUP: queue and original durable acceptance differ for %q: %+v", id, line)
+				}
+				out[id] = line
+			}
+		}
+		if matches != 1 {
+			t.Fatalf("SETUP: accepted control %q has %d original ledger records before Stop, want exactly one", id, matches)
+		}
+	}
+	return out
+}
+
+func qaAssertAcceptedControlsSuperseded(t *testing.T, accepted map[string]map[string]any, lines []map[string]any, stopSeq uint64) {
+	t.Helper()
+	if stopSeq == 0 {
+		t.Fatal("instrument failure: winning landed Stop has no sequence")
+	}
+	latest := make(map[string]map[string]any)
+	counts := make(map[string]int)
+	for _, line := range lines {
+		if line["verb"] != "steer" {
+			continue
+		}
+		id, ok := line["control_id"].(string)
+		if !ok || accepted[id] == nil {
+			t.Errorf("supersession fabricated an unaccepted steer identity: %+v", line)
+			continue
+		}
+		latest[id] = line
+		if line["state"] == "superseded" {
+			counts[id]++
+		}
+	}
+	for id, original := range accepted {
+		if counts[id] != 1 {
+			t.Errorf("D4/D5: originally accepted control %q has %d superseded receipts, want exactly one", id, counts[id])
+		}
+		want := make(map[string]any, len(original)+2)
+		for key, value := range original {
+			want[key] = value
+		}
+		want["state"], want["reason"], want["superseded_by_seq"] = "superseded", "stop", float64(stopSeq)
+		if !reflect.DeepEqual(latest[id], want) {
+			t.Errorf("D4/D5: original control %q final disposition=%+v, want its exact acceptance plus winning Stop supersession=%+v", id, latest[id], want)
+		}
+	}
 }

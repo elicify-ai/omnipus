@@ -1954,7 +1954,7 @@ func TestRequestCancelByChannelChat_CascadesToSubTurns(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	al.GetConfig().Performance.MaxParallelAgents = 4
-	provider, _ := installParkedProvider(t, al)
+	provider, observer, _ := qaObserveCancelProvider(t, al)
 
 	rootID := newTestSteeringSession(t, al, "ws-channel-tree")
 	if err := al.GetSessionLifecycleStore().Persist(&session.LifecycleRecord{
@@ -1969,10 +1969,12 @@ func TestRequestCancelByChannelChat_CascadesToSubTurns(t *testing.T) {
 	if _, err := launcher.Dispatch(context.Background(), childID, childGen); err != nil {
 		t.Fatalf("Dispatch(child): %v", err)
 	}
+	childProviderCtx := qaAwaitCancelProviderContext(t, observer, "the channel's child")
 	grandID, grandGen := launchSteeredChild(t, al, childID, "call-chan-grand", "the helper of the helper")
 	if _, err := launcher.Dispatch(context.Background(), grandID, grandGen); err != nil {
 		t.Fatalf("Dispatch(grandchild): %v", err)
 	}
+	grandProviderCtx := qaAwaitCancelProviderContext(t, observer, "the channel's grandchild")
 	for i := 0; i < 2; i++ {
 		select {
 		case <-provider.entered:
@@ -1996,7 +1998,22 @@ func TestRequestCancelByChannelChat_CascadesToSubTurns(t *testing.T) {
 		t.Errorf("RequestCancelByChannelChat = fired %v armed %v, want fired true armed false", fired, armed)
 	}
 
+	// D-A/FR-12a: the polite stage cancels the ACTUAL provider contexts before
+	// this channel entry returns. No sleep/30-second finish can substitute for
+	// this edge; a deferred-to-force cancellation leaves these contexts live.
+	for name, providerCtx := range map[string]context.Context{"child": childProviderCtx, "grandchild": grandProviderCtx} {
+		if got := providerCtx.Err(); got != context.Canceled {
+			t.Errorf("%s: actual provider context error after the polite channel Stop = %v, want context.Canceled before the forced stage", name, got)
+		}
+	}
+
 	for name, ts := range map[string]*turnState{"child": childTS, "grandchild": grandTS} {
+		ts.mu.RLock()
+		forced := ts.hardAbort
+		ts.mu.RUnlock()
+		if forced {
+			t.Errorf("%s: provider-cancellation observation happened only after forced abort, not at the polite stage", name)
+		}
 		if polite, _ := ts.gracefulInterruptRequested(); !polite {
 			t.Errorf("%s: no polite stop requested after the Tier B cascade", name)
 		}

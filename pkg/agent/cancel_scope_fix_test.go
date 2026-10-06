@@ -54,8 +54,45 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
+
+// Observe the actual context at the paid-provider boundary. The admitted turns,
+// registered delegate tool, cancellation handles and lifecycle stores stay real.
+type qaCancelContextProvider struct {
+	inner   providers.LLMProvider
+	entered chan context.Context
+}
+
+func (p *qaCancelContextProvider) Chat(ctx context.Context, messages []providers.Message, definitions []providers.ToolDefinition, model string, opts map[string]any) (*providers.LLMResponse, error) {
+	p.entered <- ctx
+	return p.inner.Chat(ctx, messages, definitions, model, opts)
+}
+
+func (p *qaCancelContextProvider) GetDefaultModel() string { return p.inner.GetDefaultModel() }
+
+func qaObserveCancelProvider(t *testing.T, al *AgentLoop) (*parkedProvider, *qaCancelContextProvider, func()) {
+	t.Helper()
+	parked, release := installParkedProvider(t, al)
+	observer := &qaCancelContextProvider{inner: parked, entered: make(chan context.Context, 8)}
+	agentInst, ok := al.GetRegistry().GetAgent(testDefaultAgentID)
+	require.True(t, ok, "SETUP: the real harness agent must be registered")
+	agentInst.Provider = observer
+	return parked, observer, release
+}
+
+func qaAwaitCancelProviderContext(t *testing.T, observer *qaCancelContextProvider, what string) context.Context {
+	t.Helper()
+	select {
+	case ctx := <-observer.entered:
+		require.NoError(t, ctx.Err(), "SETUP: %s must reach the provider with a live context", what)
+		return ctx
+	case <-time.After(30 * time.Second): // Existing fixture's deadlock bound, not a timing oracle.
+		t.Fatalf("SETUP: %s never reached the actual provider boundary", what)
+		return nil
+	}
+}
 
 // TestDelegateCancel_WiredThroughRealAgentLoop_ReachesGrandchild is the
 // end-to-end proof for Defect 1: a delegate(action="stop_all") issued against
@@ -73,22 +110,42 @@ func TestDelegateCancel_WiredThroughRealAgentLoop_ReachesGrandchild(t *testing.T
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	al.GetConfig().Performance.MaxParallelAgents = 4
-	provider, _ := installParkedProvider(t, al)
+	provider, observer, _ := qaObserveCancelProvider(t, al)
 
 	launcher := NewSteerLauncher(al)
-	parentID := newTestSteeringSession(t, al, "ws-cancel-scope")
+	ancestorID := newTestSteeringSession(t, al, "ws-cancel-scope")
+	parentID, parentGen := launchSteeredChild(t, al, ancestorID, "call-scope-parent", "the calling parent must keep working")
+	if _, err := launcher.Dispatch(context.Background(), parentID, parentGen); err != nil {
+		t.Fatalf("Dispatch(calling parent): %v", err)
+	}
+	parentProviderCtx := qaAwaitCancelProviderContext(t, observer, "the calling parent")
+	select {
+	case <-provider.entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("SETUP: calling parent did not enter its parked provider")
+	}
+	parentTS := al.getActiveTurnState(parentID)
+	require.NotNil(t, parentTS, "SETUP: the actual calling parent must have a live admitted turn")
+	parentBefore := rootReopenedRecord(t, al, parentID)
+	require.Equal(t, session.LifecycleRunning, parentBefore.State)
+	require.NotNil(t, parentBefore.ExecutionID, "SETUP: parent admission must have a durable execution identity")
+	require.Equal(t, al.executionClaimFor(parentBefore), al.tsExecutionClaim(parentTS, parentID))
+
 	childID, childGen := launchSteeredChild(t, al, parentID, "call-scope-child", "the helper being stopped")
 	siblingID, siblingGen := launchSteeredChild(t, al, parentID, "call-scope-sibling", "an unrelated helper that must keep working")
 	if _, err := launcher.Dispatch(context.Background(), childID, childGen); err != nil {
 		t.Fatalf("Dispatch(child): %v", err)
 	}
+	qaAwaitCancelProviderContext(t, observer, "the named child")
 	grandID, grandGen := launchSteeredChild(t, al, childID, "call-scope-grandchild", "the helper the helper started")
 	if _, err := launcher.Dispatch(context.Background(), grandID, grandGen); err != nil {
 		t.Fatalf("Dispatch(grandchild): %v", err)
 	}
+	qaAwaitCancelProviderContext(t, observer, "the grandchild")
 	if _, err := launcher.Dispatch(context.Background(), siblingID, siblingGen); err != nil {
 		t.Fatalf("Dispatch(sibling): %v", err)
 	}
+	siblingProviderCtx := qaAwaitCancelProviderContext(t, observer, "the unrelated sibling")
 	for i := 0; i < 3; i++ {
 		select {
 		case <-provider.entered:
@@ -112,6 +169,9 @@ func TestDelegateCancel_WiredThroughRealAgentLoop_ReachesGrandchild(t *testing.T
 			"the ADR-057 D8/R-13 fix: the grandchild (and any background shells it owns) must not be left running")
 	siblingInterrupted, _ := siblingTS.gracefulInterruptRequested()
 	assert.False(t, siblingInterrupted, "stopping one helper must never reach its sibling")
+	parentInterrupted, _ := parentTS.gracefulInterruptRequested()
+	assert.False(t, parentInterrupted, "D-B: stopping a helper subtree must never request Stop on its live calling parent/ancestor")
+	assert.NoError(t, parentProviderCtx.Err(), "D-B: the calling parent's actual provider context must not be cancelled")
 
 	for name, ts := range map[string]*turnState{"child": childTS, "grandchild": grandTS} {
 		select {
@@ -130,6 +190,20 @@ func TestDelegateCancel_WiredThroughRealAgentLoop_ReachesGrandchild(t *testing.T
 	assert.Nil(t, sibling.Stop, "the sibling must carry no stop fence")
 	assert.Nil(t, sibling.StopNote, "the sibling must carry no stop note")
 	assert.True(t, siblingTS.IsAlive(), "the sibling's live turn must be untouched")
+	assert.NoError(t, siblingProviderCtx.Err(), "the sibling's actual provider call must remain live")
+
+	// Retain the live-ancestor negative even after every selected descendant has
+	// landed. Compare the original real admission, not a fabricated replacement.
+	parentAfter := rootReopenedRecord(t, al, parentID)
+	assert.Equal(t, session.LifecycleRunning, parentAfter.State, "D-B: the caller must keep working")
+	assert.Equal(t, parentBefore.Generation, parentAfter.Generation)
+	assert.Equal(t, parentBefore.ExecutionID, parentAfter.ExecutionID, "the caller must keep its exact original admission")
+	assert.Equal(t, al.executionClaimFor(parentBefore), al.tsExecutionClaim(parentTS, parentID))
+	assert.Nil(t, parentAfter.Stop, "the caller must carry no Stop fence")
+	assert.Nil(t, parentAfter.StopNote, "the caller must carry no Stop note")
+	assert.Same(t, parentTS, al.getActiveTurnState(parentID), "the original caller execution must still be active")
+	assert.True(t, parentTS.IsAlive(), "the caller must not have finished or been forcibly detached")
+	assert.NoError(t, parentProviderCtx.Err(), "the caller's provider must remain live after the subtree Stop lands")
 }
 
 // TestCollectDescendantSessionIDs_PartialFailureReturnsErrorAndPartialSet is
