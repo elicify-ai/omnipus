@@ -1281,6 +1281,12 @@ func (ag *agentLoopRunGoalAdjudication) finishMetGoal() agentLoopRunGoalAdjudica
 	// completion tail the child's own claim as its final answer, so the parent
 	// receives the completion handback IN ADDITION to the goal_status verdict
 	// and the child's record leaves `running` (the #947 hang).
+	if !ag.al.hasSteeringEdge(ag.sessionID) {
+		// V6: a goal on a person's own chat has no parent: no completion
+		// hand-back and no upward verdict to acknowledge or wake.
+		ag.ret0 = true
+		return agentLoopRunGoalAdjudicationReturn
+	}
 	finalWoke := ag.al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), ag.producer), ag.sessionID, ag.claimText, nil)
 	// Q1=A (founder, #984 follow-up): the met verdict's inbox entry was
 	// delivered without a wake (deliverGoalVerdictUpward's SuppressWake);

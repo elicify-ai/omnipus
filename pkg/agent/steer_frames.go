@@ -527,6 +527,11 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 	if deliverer == nil {
 		return
 	}
+	// V6: a goal on a session with no steering edge (a person's own chat)
+	// has nobody above it; its verdict is shown in its own chat only.
+	if !al.hasSteeringEdge(sessionID) {
+		return
+	}
 	rec, readErr := activeGoalForSession(sessionID)
 	if readErr != nil {
 		al.reportGoalReadError(sessionID, "upward goal-verdict delivery", readErr)
@@ -597,4 +602,15 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 	// an un-adjudicated child indefinitely — reported, never discarded.
 	parentSessionID, generation := steerDeliveryEdge(al.GetSessionLifecycleStore(), sessionID)
 	reportUndeliveredWake("steer: goal verdict", event, parentSessionID, generation, delivery)
+}
+
+// hasSteeringEdge reports whether sessionID is a steered helper with a
+// parent to report to. A missing or unreadable record has no edge.
+func (al *AgentLoop) hasSteeringEdge(sessionID string) bool {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return false
+	}
+	rec, err := lifecycle.Load(sessionID)
+	return err == nil && rec != nil && rec.SteeredBy != nil
 }
