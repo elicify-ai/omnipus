@@ -1126,6 +1126,9 @@ func (al *AgentLoop) consumeDequeuedSteeringResult(scope string, items []steerin
 			// and its queue slot released. A failure keeps it queued.
 			if err := al.recordDeliveredDelegateSteer(scope, item); err != nil {
 				al.steering.prependItemsScope(scope, items[i:])
+				// F4: the live tool-boundary polls drop this error, so the
+				// refusal is made visible here, to the steering parent.
+				al.reportUndeliveredDelegateSteer(scope, item, err)
 				return msgs, correlationIDs, consumedItems, err
 			}
 		}
@@ -1249,6 +1252,31 @@ func (al *AgentLoop) recordDeliveredDelegateSteer(scope string, item steeringQue
 		return fmt.Errorf("deliver steer %q: record its receipt: %w", item.steerControlID, err)
 	}
 	return nil
+}
+
+// reportUndeliveredDelegateSteer logs a delegate steer whose durable
+// injection was refused and tells the steering parent, which accepted it,
+// that it is still waiting. The steer itself stays queued.
+func (al *AgentLoop) reportUndeliveredDelegateSteer(scope string, item steeringQueueItem, cause error) {
+	sessionID := normalizeSteeringScope(scope)
+	logger.ErrorCF("agent", "steer: an accepted steering instruction could not be saved into the helper's conversation; it stays queued",
+		map[string]any{"session_id": sessionID, "control_id": item.steerControlID, "error": cause.Error()})
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		logger.ErrorCF("agent", "steer: the parent of a helper could not be told about a refused steering instruction",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return
+	}
+	parentID := steerParentSessionID(rec)
+	if parentID == "" {
+		return
+	}
+	al.deliverSubagentMessage(parentID, rec, "error",
+		fmt.Sprintf("Your steering instruction for helper %s could not be saved into its conversation and has not reached it yet; it stays queued and will be retried: %v", sessionID, cause), nil)
 }
 
 // supersedePendingSteers is D5's precedence for a newer Stop: the session's
