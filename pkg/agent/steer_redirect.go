@@ -110,7 +110,19 @@ func (al *AgentLoop) RedirectSteeredSession(ctx context.Context, sessionID strin
 	// is the record this call successfully loaded before the stop was
 	// stamped, so when the record can no longer be read mid-wait the parent
 	// is still known from it — never invented.
-	go al.awaitStoppedAndRevive(bg, rec, by, instruction)
+	//
+	// The waiter is owned by the loop: it counts as an active request (the
+	// shutdown drains join it) and runs on the loop-lifetime context, so a
+	// shutdown ends the wait and reports the undelivered instruction
+	// instead of leaving a detached goroutine behind.
+	if !al.beginActiveRequest() {
+		return fmt.Errorf("steer: redirect %q: the agent is shutting down; the session was stopped but the replacement instruction was not delivered", sessionID)
+	}
+	waitCtx := al.inboundRunContext()
+	go func() {
+		defer al.endActiveRequest()
+		al.awaitStoppedAndRevive(waitCtx, rec, by, instruction)
+	}()
 	return nil
 }
 
@@ -146,8 +158,18 @@ func (al *AgentLoop) awaitStoppedAndRevive(ctx context.Context, initial *session
 	}
 	sessionID := initial.SessionID
 	deadline := time.Now().Add(redirectWaitDeadline)
+	poll := time.NewTicker(redirectPollInterval)
+	defer poll.Stop()
 	for {
-		time.Sleep(redirectPollInterval)
+		select {
+		case <-ctx.Done():
+			logger.ErrorCF("agent", "steer: redirect: the agent shut down while waiting for the stop to land — the replacement instruction was NOT delivered",
+				map[string]any{"session_id": sessionID})
+			al.reportUndeliveredRedirect(sessionID, initial,
+				fmt.Errorf("the agent shut down before the stop landed: %w", ctx.Err()))
+			return
+		case <-poll.C:
+		}
 		rec, err := lifecycle.Load(sessionID)
 		if err != nil {
 			if errors.Is(err, session.ErrLifecycleNotFound) {

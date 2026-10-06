@@ -12,11 +12,14 @@ import (
 
 // requestScopedStop is the web Stop surface's entry to the one session Stop
 // (agent.StopSession): this session (stopAll false) or its whole helper tree.
-// The returned bool reports whether a durable lifecycle cascade ran.
-func (h *WSHandler) requestScopedStop(wc *wsConn, sessionID string, stopAll bool) (steer.CancelReport, bool, agent.CancelOutcome, error) {
+// The returned bool reports whether a durable lifecycle cascade ran; staged
+// reports whether the requested session's own stop timeline already sent
+// the requester a cancel_stage frame.
+func (h *WSHandler) requestScopedStop(wc *wsConn, sessionID string, stopAll bool) (report steer.CancelReport, cascaded bool, outcome agent.CancelOutcome, staged bool, err error) {
 	// Timers can fire while a large durable cascade is still being collected.
 	// Publish an immutable report atomically; never race a timer with appends.
 	var stageReport atomic.Pointer[steer.CancelReport]
+	var stageSent atomic.Bool
 	var stopper agent.StopTurnsCanceller
 	if c, ok := gatewaySteerCanceller(h.agentLoop).(agent.StopTurnsCanceller); ok {
 		stopper = c
@@ -28,24 +31,29 @@ func (h *WSHandler) requestScopedStop(wc *wsConn, sessionID string, stopAll bool
 		Tree:      stopAll,
 		Canceller: stopper,
 		HooksFor: func(id string) agent.CancelHooks {
-			var report *atomic.Pointer[steer.CancelReport]
-			if id == sessionID {
-				report = &stageReport
+			if id != sessionID {
+				return h.stopHooks(wc, nil)
 			}
-			return h.stopHooks(wc, report)
+			hooks := h.stopHooks(wc, &stageReport)
+			send := hooks.SendStageFrame
+			hooks.SendStageFrame = func(id, stage string) {
+				stageSent.Store(true)
+				send(id, stage)
+			}
+			return hooks
 		},
 	})
 	if err != nil {
-		return steer.CancelReport{}, false, agent.CancelOutcome{}, err
+		return steer.CancelReport{}, false, agent.CancelOutcome{}, false, err
 	}
 	if !res.Durable {
-		return res.Report, false, res.Root, res.RootErr
+		return res.Report, false, res.Root, stageSent.Load(), res.RootErr
 	}
 	stageReport.Store(&res.Report)
 	root := res.Root
 	root.BackgroundSessionsKilled = res.BackgroundKilled
 	root.BackgroundSessionsFailed = res.BackgroundFailed
-	return res.Report, true, root, res.RootErr
+	return res.Report, true, root, stageSent.Load(), res.RootErr
 }
 
 // stopHooks are the web transport hooks for one reached session.

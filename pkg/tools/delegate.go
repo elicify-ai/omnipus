@@ -263,6 +263,12 @@ type DelegateTool struct {
 	// import cycle. It returns every session id the stop REACHED; an empty
 	// slice is the miss signal executeStopAll uses for its TOCTOU window.
 	stop func(sessionKey string, by steer.Principal, hint string) ([]string, error)
+	// finalRead marks a helper's final hand-back as received by its direct
+	// parent when a delegate status or inbox poll showed it, so the
+	// hand-back wake does not deliver the same result a second time (D5:
+	// exactly once). Wired to the agent loop's consumed-marker writer in
+	// pkg/agent/session_messaging_wire.go.
+	finalRead func(parentSessionID, agentID, messageID string) error
 
 	// sessionMessagingEnabled, when set via SetSessionMessagingEnabled, is the
 	// live-read FR-196 kill switch (session_messaging.enabled) for the SYNC
@@ -444,6 +450,12 @@ func isSessionMessagingAction(action string) bool {
 // chat's transcriptSessionID/routingSessionID.
 func (t *DelegateTool) SetStopHook(stop func(sessionKey string, by steer.Principal, hint string) ([]string, error)) {
 	t.stop = stop
+}
+
+// SetFinalReadHook installs the writer that records a polled final hand-back
+// as received (see the finalRead field).
+func (t *DelegateTool) SetFinalReadHook(finalRead func(parentSessionID, agentID, messageID string) error) {
+	t.finalRead = finalRead
 }
 
 // SetClock overrides the tool's time source for deterministic tests.

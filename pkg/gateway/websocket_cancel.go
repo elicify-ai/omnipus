@@ -450,7 +450,7 @@ func (h *WSHandler) handleCancelWithScope(wc *wsConn, sessionID string, stopAll 
 		return
 	}
 
-	report, cascaded, outcome, err := h.requestScopedStop(wc, sessionID, stopAll)
+	report, cascaded, outcome, staged, err := h.requestScopedStop(wc, sessionID, stopAll)
 	if cascaded {
 		h.sendCancelPartialNotice(wc, sessionID, report)
 		h.sendExternalCancelPartialNotice(context.Background(), sessionID, report)
@@ -525,5 +525,12 @@ func (h *WSHandler) handleCancelWithScope(wc *wsConn, sessionID string, stopAll 
 		} else if outcome.BackgroundSessionsKilled > 0 || outcome.Armed {
 			h.sendCancelStageFrame(wc, sessionID, "graceful")
 		}
+		return
+	}
+	if cascaded && !staged {
+		// The Stop fired without a running turn of its own (a queued or
+		// never-ran session settled at once), so no stop timeline will send
+		// the requester a stage: acknowledge it with the cascade's report.
+		h.sendCancelReportFrame(wc, sessionID, "detached", report)
 	}
 }

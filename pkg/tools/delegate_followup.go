@@ -427,7 +427,8 @@ func (t *DelegateTool) executeResume(ctx context.Context, args map[string]any, c
 
 	rec, lerr := t.lifecycle.Load(sessionID)
 	if lerr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: resume: %v", lerr))
+		// Name the id that was looked up, so a mistyped id is visible.
+		return ErrorResult(fmt.Sprintf("delegate: resume: session %s: %v", sessionID, lerr)).WithError(lerr)
 	}
 	by, verr := t.verifyCallerPrincipal(ctx, rec)
 	if verr != nil {

@@ -222,6 +222,9 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			dt.SetStopHook(func(sessionKey string, by steer.Principal, _ string) ([]string, error) {
 				return al.StopDelegatedTree(sessionKey, by)
 			})
+			// D5: a final the parent already read through a delegate poll
+			// is consumed exactly as its hand-back wake would consume it.
+			dt.SetFinalReadHook(al.recordPolledFinalConsumed)
 			// FR-196 kill switch on the SYNC session-messaging-plane actions
 			// (arch-M2): the live closure re-reads config per call, mirroring
 			// the async consumer's per-event read.

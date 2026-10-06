@@ -42,6 +42,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/google/uuid"
 )
 
 // --- Pill state constants (D14 crosswalk, FR / Pill-state enum) -----------
@@ -752,7 +753,10 @@ func (al *AgentLoop) goalAdjudicationInFlight(sessionID string) bool {
 
 // agentLoopRunGoalAdjudication carries the shared state of runGoalAdjudication across its stages.
 type agentLoopRunGoalAdjudication struct {
-	al                *AgentLoop
+	al *AgentLoop
+	// producer is the claiming execution (withGoalProducer on the
+	// adjudication's context); the completion tail commits as it only.
+	producer          executionClaim
 	agentInst         *AgentInstance
 	sessionID         string
 	store             *session.UnifiedStore
@@ -853,7 +857,8 @@ func (al *AgentLoop) runGoalAdjudication(
 ) (met, unavailable bool) {
 	aa := &agentLoopRunGoalAdjudicationAdvance{deliverSteer: deliverSteer}
 
-	aa.ag = &agentLoopRunGoalAdjudication{al: al, agentInst: agentInst, sessionID: sessionID, store: store, rec: rec, claimText: claimText}
+	aa.ag = &agentLoopRunGoalAdjudication{al: al, agentInst: agentInst, sessionID: sessionID, store: store, rec: rec, claimText: claimText,
+		producer: goalProducerFromContext(ctx)}
 
 	if aa.ag.agentInst == nil || aa.ag.rec == nil || aa.ag.store == nil || aa.ag.sessionID == "" {
 		return false, false
@@ -1061,7 +1066,7 @@ func (al *AgentLoop) runGoalAdjudication(
 		// second terminal arm hands the completion tail the child's final
 		// answer, exactly as its met arm does, so an exhausted goal no longer
 		// leaves the child `running` with a settled goal above it.
-		aa.ag.al.completeSteeredTurnAfterGoal(context.Background(), aa.ag.sessionID, aa.ag.claimText, nil)
+		aa.ag.al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), aa.ag.producer), aa.ag.sessionID, aa.ag.claimText, nil)
 		return false, false
 	}
 
@@ -1276,7 +1281,7 @@ func (ag *agentLoopRunGoalAdjudication) finishMetGoal() agentLoopRunGoalAdjudica
 	// completion tail the child's own claim as its final answer, so the parent
 	// receives the completion handback IN ADDITION to the goal_status verdict
 	// and the child's record leaves `running` (the #947 hang).
-	finalWoke := ag.al.completeSteeredTurnAfterGoal(context.Background(), ag.sessionID, ag.claimText, nil)
+	finalWoke := ag.al.completeSteeredTurnAfterGoal(withGoalProducer(context.Background(), ag.producer), ag.sessionID, ag.claimText, nil)
 	// Q1=A (founder, #984 follow-up): the met verdict's inbox entry was
 	// delivered without a wake (deliverGoalVerdictUpward's SuppressWake);
 	// acknowledge it only after the deterministic final hand-back is known
@@ -2110,6 +2115,13 @@ func (al *AgentLoop) dispatchGoalAsyncFollowUp(sessionID, goalID, sourceKind, co
 		al.goalMarkIdleSettling(goalID, false)
 		return
 	}
+	// D1: a steered (delegated) session has no channel binding, so it is
+	// reached the way every other input reaches it — a steered system wake
+	// for its current generation (the same shape finishSteeredGoalTurn's
+	// goal follow-up uses) — never through a channel route it cannot have.
+	if handled := al.dispatchSteeredGoalFollowUp(sessionID, goalID, sourceKind, content); handled {
+		return
+	}
 	route, readErr := goalTriggers().routeFor(sessionID)
 	if readErr != nil {
 		al.reportGoalReadError(sessionID, "goal follow-up dispatch", readErr)
@@ -2391,4 +2403,39 @@ func (al *AgentLoop) bumpGoalActivityOnTurn(goalID string) time.Time {
 	bumpGoalRecordActivity(goalID, now)
 	al.goalMarkIdleSettling(goalID, false)
 	return now
+}
+
+// dispatchSteeredGoalFollowUp delivers a goal follow-up to a steered
+// session as a steered system wake. It reports whether sessionID is a
+// steered session (handled), whatever the delivery outcome; a failed
+// delivery is logged and un-wedges the keeper for its next cycle.
+func (al *AgentLoop) dispatchSteeredGoalFollowUp(sessionID, goalID, sourceKind, content string) bool {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return false
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil || rec.SteeredBy == nil {
+		return false
+	}
+	notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := al.asyncNotifier.Notify(notifyCtx, AsyncNotifyEvent{
+		Channel:             "system",
+		ChatID:              "steer:" + sessionID,
+		AgentID:             rec.AgentID,
+		TranscriptSessionID: sessionID,
+		SourceKind:          sourceKind,
+		SenderCanonicalID:   goalLoopFollowUpSenderID,
+		Content:             content,
+		Metadata: map[string]any{
+			"steer_message_id": uuid.NewString(),
+			"steer_generation": rec.Generation,
+		},
+	}); err != nil {
+		logger.WarnCF("agent", "goal: follow-up wake to the steered session failed",
+			map[string]any{"session_id": sessionID, "goal_id": goalID, "error": err.Error()})
+		al.goalMarkIdleSettling(goalID, false)
+	}
+	return true
 }

@@ -460,6 +460,10 @@ type goalDeferredAdjudicationWork struct {
 	workspaceID string
 	sessionID   string
 	claimText   string
+	// producer is the admitted execution whose turn made the claim; the
+	// completion tail commits as that execution only (never a same-
+	// generation replacement). Empty for a turn with no admission.
+	producer executionClaim
 }
 
 // goalDeferredAdjudicationDoneFn is a TEST SEAM ONLY — production leaves it
@@ -922,10 +926,14 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 			logger.WarnCF("agent", "goal: could not persist the met claim onto the goal record",
 				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID, "error": cerr.Error()})
 		}
-		gl.result.goalDeferredAdjudication = &goalDeferredAdjudicationWork{
+		work := &goalDeferredAdjudicationWork{
 			agentInst: gl.agentInst, workspaceID: gl.opts.WorkspaceID,
 			sessionID: gl.sessionID, claimText: claimText,
 		}
+		if d := gl.opts.executionDisposition; d != nil {
+			work.producer = d.claim
+		}
+		gl.result.goalDeferredAdjudication = work
 		return
 
 	case gl.marker.Present && gl.marker.Status == goalStatusMet:

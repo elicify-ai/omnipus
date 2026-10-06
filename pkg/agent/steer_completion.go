@@ -834,6 +834,7 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 			CreatedAt:      now,
 			Depth:          1,
 			SenderIdentity: rec.AgentID,
+			Direction:      generated.SessionMessageHandbackDirectionChildToParent,
 			Mode:           generated.SessionMessageHandbackModeFinal,
 			ResultSoFar:    answer,
 			Artifacts:      []string{},
@@ -869,6 +870,7 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 		CreatedAt:      now,
 		Depth:          1,
 		SenderIdentity: rec.AgentID,
+		Direction:      generated.SessionMessageErrorDirectionChildToParent,
 		Fatal:          fatal,
 		Text:           failureReason,
 	})
@@ -1070,12 +1072,48 @@ func (al *AgentLoop) completeSteeredTurnAfterGoal(ctx context.Context, sessionID
 			map[string]any{"session_id": sessionID, "error": errString(err)})
 		return false
 	}
-	finalWoke, err := al.completeSteeredTurnDurably(ctx, snapshot, turnResult{finalContent: answer}, runErr, al.executionClaimFor(snapshot))
+	// N2: the tail commits as the execution that made the claim. Only a
+	// caller with no claiming execution (the deferred-at-gate repair, whose
+	// turn has exited) falls back to the record's own current admission.
+	claim, carried := goalProducerFromContextOK(ctx)
+	if !carried {
+		claim = al.executionClaimFor(snapshot)
+	}
+	finalWoke, err := al.completeSteeredTurnDurably(ctx, snapshot, turnResult{finalContent: answer}, runErr, claim)
 	if err != nil {
-		logger.WarnCF("agent", "goal: completion tail failed — boot recovery repairs a delivered-but-not-terminal gap",
+		// N1: a refused commit leaves the child non-terminal with its turn
+		// already over. Tell the direct parent (and log it), never only log.
+		logger.ErrorCF("agent", "goal: completion tail failed — the helper's result was not committed",
 			map[string]any{"session_id": sessionID, "error": err.Error()})
+		text := fmt.Sprintf("Helper %s finished its goal work, but its result could not be saved: %v", sessionID, err)
+		if noticeErr := al.deliverSteeredNotice(ctx, snapshot, steer.OutcomeLifecycleNotice, "", text); noticeErr != nil {
+			logger.ErrorCF("agent", "goal: completion tail failure could not be reported to the parent",
+				map[string]any{"session_id": sessionID, "error": noticeErr.Error()})
+		}
 	}
 	return finalWoke
+}
+
+type goalProducerKey struct{}
+
+// withGoalProducer carries the claiming execution of a goal adjudication.
+// A turn that ran without an admission has no claiming execution; nothing is
+// carried and the tail uses the record's own admission, as before.
+func withGoalProducer(ctx context.Context, claim executionClaim) context.Context {
+	if claim.RunID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, goalProducerKey{}, claim)
+}
+
+func goalProducerFromContextOK(ctx context.Context) (executionClaim, bool) {
+	claim, ok := ctx.Value(goalProducerKey{}).(executionClaim)
+	return claim, ok
+}
+
+func goalProducerFromContext(ctx context.Context) executionClaim {
+	claim, _ := goalProducerFromContextOK(ctx)
+	return claim
 }
 
 // completeSteeredTurnIfDeferredAtGate routes a steered child through the

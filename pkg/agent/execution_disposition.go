@@ -21,6 +21,22 @@ type executionDisposition struct {
 	stop          *executionStopBinding
 	done          chan struct{}
 	result        error
+	// turnRan/turnErr record the outcome of the ordinary turn this
+	// disposition admitted (recordTurnOutcome); the owner settles an
+	// ordinary root's lifecycle from it (settleOrdinaryRoot).
+	turnRan bool
+	turnErr error
+}
+
+// recordTurnOutcome notes how the admitted ordinary turn ended. The last
+// outcome recorded before finishExecutionDisposition wins.
+func (d *executionDisposition) recordTurnOutcome(err error) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.turnRan, d.turnErr = true, err
+	d.mu.Unlock()
 }
 
 type executionStopBinding struct {
@@ -94,6 +110,8 @@ func (al *AgentLoop) finishExecutionDisposition(d *executionDisposition) error {
 	}
 	if binding != nil {
 		err = al.settleSelectedStop(binding.selected, unlock)
+	} else if err == nil && !d.steered {
+		err = al.settleOrdinaryRoot(d)
 	}
 	unlock()
 	if promote {
@@ -191,3 +209,48 @@ func (al *AgentLoop) settleSelectedStop(selected session.StopSelection, afterLan
 	receiptErr := al.GetSessionLifecycleStore().RecordStopControlResult(selected, err == nil, reason)
 	return errors.Join(err, receiptErr)
 }
+
+// settleOrdinaryRoot ends an ordinary root chat's turn on its lifecycle
+// record (ADR-20260928 Vocabulary, F0929-1/2: only a turn ends; a final
+// answer is stored completed and shown done; a turn that failed is stored
+// failed). It writes the lifecycle record only — the chat is never archived
+// or hidden — and only while the record still belongs to this execution
+// and carries no Stop. A turn cut short by cancellation is left to Stop or
+// boot recovery. A later message or scheduled run starts the next round.
+func (al *AgentLoop) settleOrdinaryRoot(d *executionDisposition) error {
+	d.mu.Lock()
+	ran, turnErr := d.turnRan, d.turnErr
+	d.mu.Unlock()
+	lifecycle := al.GetSessionLifecycleStore()
+	if !ran || lifecycle == nil || d.claim.SessionID == "" || errors.Is(turnErr, context.Canceled) {
+		return nil
+	}
+	next, failedReason := session.LifecycleCompleted, ""
+	if turnErr != nil {
+		next, failedReason = session.LifecycleFailed, turnErr.Error()
+	}
+	err := lifecycle.Mutate(d.claim.SessionID, func(cur *session.LifecycleRecord) error {
+		if cur == nil {
+			return session.ErrLifecycleNotFound
+		}
+		// The record moved on, is steered, or carries a Stop that its own
+		// landing settles: this execution writes nothing.
+		if cur.SteeredBy != nil || cur.State != session.LifecycleRunning || !d.claim.matches(cur) ||
+			(cur.Stop != nil && cur.Stop.Generation == cur.Generation) {
+			return errOrdinaryRootNotSettled
+		}
+		cur.State, cur.FailedReason = next, failedReason
+		return nil
+	})
+	if errors.Is(err, errOrdinaryRootNotSettled) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("settle root %q after its turn: %w", d.claim.SessionID, err)
+	}
+	return nil
+}
+
+// errOrdinaryRootNotSettled aborts the settlement write without error: the
+// record is not this execution's to settle.
+var errOrdinaryRootNotSettled = errors.New("ordinary root: record not settled by this execution")

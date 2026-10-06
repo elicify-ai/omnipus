@@ -203,5 +203,6 @@ func (al *AgentLoop) runInboundTurnWithRevival(
 		defer func() { runErr = errors.Join(runErr, al.finishExecutionDisposition(d)) }()
 	}
 	resp, runErr = al.runAgentLoop(ctx, agent, opts)
+	d.recordTurnOutcome(runErr)
 	return resp, agent, runErr
 }

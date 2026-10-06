@@ -913,6 +913,17 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		}
 	}
 
+	// D6/D7: a stopped session (landed, or with its current-generation Stop
+	// in flight) does no compute until it is explicitly resumed. The wake
+	// is neither consumed nor acknowledged: its inbox entry stays pending
+	// for that resume. Steered records are also refused by the admission
+	// reservation below; this covers the ordinary root a Stop all landed on.
+	if rec.SteeredBy == nil && (rec.State == session.LifecycleStopped || lifecycleInFlightStopFence(rec)) {
+		logger.InfoCF("agent", "steer: wake held — the session is stopped until it is resumed",
+			map[string]any{"session_id": sessionID, "message_id": messageID})
+		return "", nil
+	}
+
 	ts, err := al.reconstructSteeredTurn(rec, &steer.WakeInput{MessageID: messageID, Generation: generation})
 	if err != nil {
 		return "", err
@@ -1000,6 +1011,11 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 
 	ts.opts.UserMessage = msg.Content
 	ts.userMessage = msg.Content
+	// The goal loop's own follow-up (keeper reminder, deferred steer) keeps
+	// its origin, so the woken turn's claim reaches the goal loop (D1).
+	if msg.Sender.CanonicalID == goalLoopFollowUpSenderID {
+		ts.opts.SenderID = goalLoopFollowUpSenderID
+	}
 	if !al.registerTurnIfAbsent(ts) {
 		release()
 		return "", steer.ErrStaleGeneration
