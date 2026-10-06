@@ -28,14 +28,6 @@ var ErrNoActiveTurn = errors.New("no active turn")
 // "canceled" and not "nothing to cancel".
 var ErrCancelArmed = errors.New("cancel acknowledged, pending turn registration")
 
-// ErrNotHelperSession is returned by RedirectSessionTurn when the named
-// session is not a helper (a delegated agent's own conversation): an ordinary
-// root chat or a chat with no durable lifecycle record. Real store read
-// failures are returned separately. Callers reply with the D9 root-style refusal —
-// guidance to open the helper session to redirect, pointing at /stop for the
-// current conversation — instead of an opaque error.
-var ErrNotHelperSession = errors.New("not a helper session")
-
 // ErrNothingToRedirect is returned by RedirectSessionTurn when the named
 // session's turn has already ended on its own (done/failed): there is no live
 // turn to replace. Callers reply "already finished — use RESUME" instead of
@@ -91,13 +83,12 @@ type AgentLoopInterface interface {
 	//   err non-nil                     — real failure, must surface.
 	StopSessionTurn(ctx context.Context, sessionID, userID, channel string) (fired bool, armed bool, err error)
 
-	// RedirectSessionTurn performs the D2 redirect on the named session:
-	// the live turn is stopped (this session only — the subtree keeps
-	// working) and once the stop has landed the session is resumed with the
-	// instruction as its newest message. Returns the named sentinel errors
-	// for guidance outcomes — ErrNotHelperSession (root-style refusal with
-	// guidance), ErrNothingToRedirect (already finished — use RESUME) — so
-	// handlers reply truthfully instead of one opaque error (mirrors
+	// RedirectSessionTurn redirects the named session, root chat or helper:
+	// its current turn is stopped (this session only — the subtree keeps
+	// working) and once the stop has landed the session continues with the
+	// instruction as its newest message. Returns the named sentinel
+	// ErrNothingToRedirect (a finished helper — use RESUME) so handlers reply
+	// truthfully instead of one opaque error (mirrors
 	// ErrNoActiveTurn/ErrCancelArmed above).
 	RedirectSessionTurn(ctx context.Context, sessionID, instruction, userID, channel string) error
 }
@@ -152,13 +143,6 @@ type Runtime struct {
 	// SessionID returns the session key for the current request context. Used by
 	// handlers that need to address a specific session (e.g., /cancel).
 	SessionID func() string
-	// IsHelperSession reports helper identity for a resolved context.
-	// Durable contexts set ResolveHelperSession to retain read failures.
-	IsHelperSession func() bool
-	// ResolveHelperSession carries durable identity read failures to the
-	// handler. Production uses this error-bearing resolver, not a false value
-	// that would turn a broken store into root-chat guidance.
-	ResolveHelperSession func() (bool, error)
 	// Keep injection narrow; each control requires its own capability and
 	// reports a missing capability instead of substituting a different scope.
 	agentLoop cancelLoop
@@ -223,7 +207,7 @@ func (rt *Runtime) StopSessionTurn(ctx context.Context, sessionID string, cancel
 	return ErrNoActiveTurn
 }
 
-// RedirectSessionTurn replaces only the named helper's turn.
+// RedirectSessionTurn redirects only the named session's current turn.
 func (rt *Runtime) RedirectSessionTurn(ctx context.Context, sessionID, instruction string, canceller Canceller) error {
 	if rt == nil || rt.agentLoop == nil {
 		return fmt.Errorf("redirect is unavailable; no instruction was applied")
