@@ -54,8 +54,8 @@ export const WORKSPACE_TABS = [
   // Renamed Media -> Library (library-spec.md supersedes the old workspace
   // Media tab / UUID-blob manifest surface entirely). This strip entry is a
   // REGISTERED panel toggle (see PANEL_TOGGLE_SEGMENTS) — clicking it
-  // opens/closes the Library side panel scoped to this workspace, the same
-  // store call ChatControls' "Open library" button makes. The route itself
+  // opens/closes the Library side panel scoped to this workspace through
+  // the shared panel-store/leave-gate path. The route itself
   // (routes/_app/workspaces.$workspaceId.media.tsx) remains a redirect stub
   // for BOOKMARKED /workspaces/{id}/media URLs: it opens the Library panel
   // and replaces the URL with chat?panel=library (§8.2), so an old link

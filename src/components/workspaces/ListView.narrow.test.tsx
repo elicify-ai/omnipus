@@ -20,9 +20,10 @@
 //      narrow-probe span (`hidden @max-[648px]:block`) so the "⋯" control
 //      knows which way "toggle" means WITHOUT re-deriving the breakpoint in
 //      JS (the probe is the container query's own read-out). The measured
-//      breakpoint is 648px — the table's documented fixed-column budget
-//      (504px of widthed columns + a 144px Title floor), per SP-33/SP-35's
-//      "measured from the real table's own content".
+//      breakpoint is the delivered 648px. The declared fixed utilities total
+//      31.5rem: nominally 504px at a 16px root, 441px at the product's 14px
+//      default, and 630px at a 20px preference. The documented 144px Title
+//      allowance is separate; that arithmetic is not a rendered-geometry proof.
 //   2. The governed columns STAY IN THE DOM and sort/filter state persists.
 //      Hiding uses display:none: the columns leave the accessibility tree
 //      while hidden and return when the ⋯ control reveals them. Hiding is the

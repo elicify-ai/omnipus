@@ -128,9 +128,8 @@ describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
   it('tab order matches the canonical WORKSPACE_TABS order — Chat removed (SP-40), Mail kept (FR-007: only Chat was ever removed)', () => {
     // SUPERSEDED by approved spec, wave 3: SP-40 removes the chat entry and
     // nothing else — Mail sits between media and team in the canonical strip
-    // (email spec §16 route row, commit 5524ef853). RED today: the joined
-    // production array dropped mail (FR-007 regression, frontend-lead
-    // restores) — the same oracle WorkspaceTabBar.wave3.test.tsx pins.
+    // (email spec §16 route row, commit 5524ef853). The assertion retains
+    // that release-line inventory, as WorkspaceTabBar.wave3.test.tsx also pins.
     expect(WORKSPACE_TABS.map((t) => t.segment)).toEqual([
       'board',
       'calendar',
