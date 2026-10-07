@@ -504,6 +504,10 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 		r.Header.Set("Content-Type", "application/json")
 		api.HandleAgents(w, r)
 		assert.Equal(t, http.StatusOK, w.Code, "valid worker patch must be accepted; body: %s", w.Body.String())
+		saved, err := agentstore.New(api.homePath).Get(id)
+		require.NoError(t, err)
+		assert.Equal(t, "#FB923C", saved.Color, "a palette hex is stored as given")
+		assert.Equal(t, "robot", saved.Icon, "icon stays the legacy phosphor name")
 	})
 
 	t.Run("subagent_3p", func(t *testing.T) {
@@ -519,6 +523,10 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 		r.Header.Set("Content-Type", "application/json")
 		api.HandleAgents(w, r)
 		assert.Equal(t, http.StatusOK, w.Code, "valid subagent_3p patch must be accepted; body: %s", w.Body.String())
+		saved, err := agentstore.New(api.homePath).Get(id)
+		require.NoError(t, err)
+		assert.Equal(t, "#FB923C", saved.Color, "a palette hex is stored as given")
+		assert.Equal(t, "robot", saved.Icon, "icon stays the legacy phosphor name")
 	})
 }
 
@@ -654,9 +662,9 @@ func TestUpdateAgent_UpdatedAtRejected(t *testing.T) {
 		name string
 		body string
 	}{
-		{name: "stale timestamp", body: fmt.Sprintf(`{"color":"#00FF00","updated_at":%q}`, "2000-01-01T00:00:00Z")},
-		{name: "current timestamp", body: fmt.Sprintf(`{"color":"#0000FF","updated_at":%q}`, currentUpdatedAt)},
-		{name: "null", body: `{"color":"#00FFFF","updated_at":null}`},
+		{name: "stale timestamp", body: fmt.Sprintf(`{"color":"#38BDF8","updated_at":%q}`, "2000-01-01T00:00:00Z")},
+		{name: "current timestamp", body: fmt.Sprintf(`{"color":"#22D3EE","updated_at":%q}`, currentUpdatedAt)},
+		{name: "null", body: `{"color":"#818CF8","updated_at":null}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
@@ -673,6 +681,9 @@ func TestUpdateAgent_UpdatedAtRejected(t *testing.T) {
 			require.NoError(t, readErr)
 			assert.Equal(t, beforeRejectedWrites.Revision, after.Revision, "rejection must be zero-write")
 			assert.Equal(t, currentUpdatedAt, agentUpdatedAtFromConfig(t, api, "test-agent"))
+			saved, colorErr := agentstore.New(api.homePath).Get("test-agent")
+			require.NoError(t, colorErr)
+			assert.Equal(t, "#3B82F6", saved.Color, "rejected updated_at must not apply the colour")
 		})
 	}
 }

@@ -230,7 +230,7 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
   })
 
   // F3 (test hardening, gate 6): the fixture has 5 commands (the two
-  // synthetic client-only entries /resume + /workspace, then clear/help/
+  // synthetic client-only entries /sessions + /workspace, then clear/help/
   // cancel) then 2 skills sorted alphabetically (Code Review, Web Research)
   // — 7 rows total, indices 0-6, with the commands→skills SECTION boundary
   // falling between index 4 and index 5. Cycling ArrowDown across that
@@ -238,7 +238,7 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
   // highlight bug would miss.
   // Session-search enhancement: "/workspace" is a second synthetic
   // client-only command (useSlashMenu.ts's allCommands), inserted
-  // immediately after "/resume" — shifts every subsequent index by one from
+  // immediately after "/sessions" — shifts every subsequent index by one from
   // this test's prior fixture.
   it('aria-activedescendant always identifies the DOM element carrying aria-selected="true", stepping ArrowDown across the commands→skills section boundary, and every option id is unique', () => {
     render(<OmnipusComposer />)
@@ -267,7 +267,8 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
     }
 
     // Index 0 (initial highlight) — a command row.
-    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/resume')
+    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/sessions')
+    expect(assertActivedescendantMatchesSelectedRow().textContent).not.toContain('/resume')
 
     // Step through indices 1-4 — still inside the Commands section.
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 1: /workspace
@@ -289,7 +290,8 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
 
     // Wraps back to index 0 (Commands) — the boundary is crossed in both directions.
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
-    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/resume')
+    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/sessions')
+    expect(assertActivedescendantMatchesSelectedRow().textContent).not.toContain('/resume')
   })
 })
 
