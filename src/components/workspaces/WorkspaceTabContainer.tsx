@@ -236,8 +236,9 @@ function WorkspaceTabContainerView({
         {/* Top bar — semantic <header> (banner landmark) for accessible
             landmark navigation, reachable via both getByRole('banner') and a
             `header` CSS selector. @container enables container-query variants
-            on children (used by ChatControls' "Open browser" label and by
-            WorkspaceTabBar's own full-strip/dropdown breakpoint).
+            on children (used by ChatControls' "Open browser" label).
+            WorkspaceTabBar measures the remaining flex slot instead of
+            using a fixed container breakpoint.
             No secondary breadcrumb row: the tab strip already names the
             workspace + active view, so a second chrome line was redundant and
             broke the flat 44px shell alignment.
@@ -255,12 +256,12 @@ function WorkspaceTabContainerView({
             className="h-chrome-header min-h-chrome-header w-11 rounded-none text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
           />
 
-          {/* The workspace name renders INSIDE WorkspaceTabBar as the first
-              tablist item (→ settings) — one menu component, no stray button. */}
+          {/* The measured strip owns the flexible space. The sidebar launcher
+              and browser controls keep their natural width at every mode. */}
           <WorkspaceTabBar workspaceId={workspace.id} workspaceName={workspace.name} />
 
           {activeSegment === 'chat' && (
-            <div className="flex-1 min-w-0 flex @6xl:justify-end px-[var(--space-2-5)]" data-testid="workspace-chat-controls">
+            <div className="flex shrink-0 items-center justify-end px-[var(--space-2-5)]" data-testid="workspace-chat-controls">
               <ChatControls />
             </div>
           )}

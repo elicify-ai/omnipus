@@ -1,6 +1,7 @@
 import React from 'react'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { mockWorkspaceHeaderMeasurements } from '@/test/workspaceHeaderMeasurement'
 
 // Mock TanStack Router primitives the tab bar uses (Link, useLocation, useNavigate).
 // mockNavigate is shared (not a fresh vi.fn() per call) so tests can assert on it —
@@ -69,11 +70,18 @@ vi.mock('@/components/ui/dropdown-menu', () => ({
 
 import { WorkspaceTabBar, WORKSPACE_TABS, resolveActiveSegment } from './WorkspaceTabBar'
 
+let headerGeometry: ReturnType<typeof mockWorkspaceHeaderMeasurements>
 beforeEach(() => {
   mockNavigate.mockClear()
+  headerGeometry = mockWorkspaceHeaderMeasurements()
+})
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
-describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
+describe('WorkspaceTabBar — full strip when measured space fits (R44)', () => {
   it('renders the strip entries — EVERY entry is a registered panel toggle button (SP-6/SP-11 amended MAJ-007: mixed mode ended; superseded the wave-1 link/toggle branch mix)', () => {
     // SUPERSEDED by approved spec, wave 3 (§10: "Their tab entries become
     // toggles (ending mixed mode)"; SP-6/PANEL_TOGGLE_SEGMENTS maps every
@@ -115,14 +123,12 @@ describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
     expect(screen.queryByTestId('workspace-tab-chat')).not.toBeInTheDocument()
   })
 
-  it('full strip has the expected container-query classes (hidden @6xl:flex)', () => {
+  it('shows the full strip when 792px is available and the natural full strip needs 537px (R44 replaces the fixed breakpoint)', () => {
     mockPathname = '/workspaces/ws-1/chat'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
-    // The strip div should have the responsive classes. MAJ-007: it is not a
-    // role="tablist" any more — a mixed set of links and toggles.
-    const strip = screen.getByTestId('workspace-tab-strip')
-    expect(strip.className).toContain('hidden')
-    expect(strip.className).toContain('@6xl:flex')
+    expect(screen.getByTestId('workspace-header-entries')).toHaveAttribute('data-mode', 'full')
+    expect(screen.getByTestId('workspace-tab-strip')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Tasks' })).toHaveTextContent('Tasks')
   })
 
   it('tab order matches the canonical WORKSPACE_TABS order — Chat removed (SP-40), Mail kept (FR-007: only Chat was ever removed)', () => {
@@ -145,49 +151,37 @@ describe('WorkspaceTabBar — full strip (hidden @6xl:flex)', () => {
   })
 })
 
-describe('WorkspaceTabBar — view-switcher (flex @6xl:hidden)', () => {
-  it('renders the view-switcher trigger button', () => {
+describe('WorkspaceTabBar — narrow name menu (R44 supersedes the SP-40 icon trigger)', () => {
+  beforeEach(() => headerGeometry.setAvailableWidth(220))
+
+  it('renders the workspace name as the only menu trigger', () => {
     mockPathname = '/workspaces/ws-1/chat'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
-    const switcher = screen.getByTestId('workspace-view-switcher')
-    expect(switcher).toBeInTheDocument()
+    expect(screen.getByTestId('workspace-name-button')).toBeVisible()
+    expect(screen.queryByTestId('workspace-view-switcher')).toBeNull()
   })
 
-  it('the trigger is ICON-ONLY — no active-view text label (superseded by SP-40: no page name is left to show)', () => {
-    // SUPERSEDED by approved spec, wave 3: the old test expected the trigger
-    // to show the active view's text label ("Tasks"). FR-007 as amended
-    // (SP-40): the compact trigger is a menu ICON, not a text label. The
-    // icon-only trigger must still expose an accessible name (next test).
+  it('the trigger names the workspace, never the active panel (R44.1c)', () => {
     mockPathname = '/workspaces/ws-1/board'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
-    const switcher = screen.getByTestId('workspace-view-switcher')
-    expect(switcher.textContent?.trim()).toBe('')
+    expect(screen.getByTestId('workspace-name-button').textContent?.trim()).toBe('My Workspace')
   })
 
-  it('the icon-only trigger still exposes an accessible name (a11y guard across the SP-40 change)', () => {
+  it('the name trigger preserves the panels-menu accessible name (R44.4)', () => {
     mockPathname = '/workspaces/ws-1/calendar'
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
-    const switcher = screen.getByTestId('workspace-view-switcher')
-    const name = switcher.getAttribute('aria-label') ?? ''
-    expect(name.length).toBeGreaterThan(0)
+    expect(screen.getByTestId('workspace-name-button')).toHaveAttribute('aria-label', 'Open panels menu')
   })
 
-  it('view-switcher is wrapped in a div with the container-query responsive classes (flex @6xl:hidden)', () => {
+  it('uses the narrow menu only when neither measured strip fits, and returns to icons when space grows', () => {
     mockPathname = '/workspaces/ws-1/chat'
-    const { container } = render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
-    // Walk up from the trigger to find any ancestor div with @6xl:hidden
-    // (the Radix mock inserts an extra wrapper div between the trigger and our wrapper)
-    const switcher = screen.getByTestId('workspace-view-switcher')
-    let el: Element | null = switcher.parentElement
-    let found = false
-    while (el) {
-      if (el.className.includes('@6xl:hidden') && el.className.includes('flex')) {
-        found = true
-        break
-      }
-      el = el.parentElement
-    }
-    expect(found, `No ancestor div with 'flex @6xl:hidden' found. Container HTML:\n${container.innerHTML}`).toBe(true)
+    render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
+    expect(screen.getByTestId('workspace-header-entries')).toHaveAttribute('data-mode', 'narrow')
+    expect(screen.getByTestId('workspace-tab-strip')).not.toBeVisible()
+    headerGeometry.setAvailableWidth(400)
+    expect(screen.getByTestId('workspace-header-entries')).toHaveAttribute('data-mode', 'icons')
+    expect(screen.getByTestId('workspace-tab-strip')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Tasks' }).textContent).toBe('')
   })
 
   it('view-switcher menu renders every strip tab option', () => {
@@ -231,12 +225,10 @@ describe('WorkspaceTabBar — view-switcher (flex @6xl:hidden)', () => {
     // WCAG 1.3.1 — activeness must be conveyed programmatically (aria-current),
     // not only via accent colour + the aria-hidden "●" dot.
     expect(settingsEntry).toHaveAttribute('aria-current', 'page')
-    // The switcher trigger itself stays ICON-ONLY even while settings is
-    // active (superseded by SP-40: the old test expected the trigger text to
-    // read "Settings" — no trigger carries a text label any more; the
-    // activeness above is the programmatic signal).
-    const switcher = screen.getByTestId('workspace-view-switcher')
-    expect(switcher.textContent?.trim()).toBe('')
+    // R44: the trigger keeps the workspace name even on Settings; the
+    // menu entry above retains its programmatic active-page signal.
+    const switcher = screen.getByTestId('workspace-name-button')
+    expect(switcher.textContent?.trim()).toBe('My Workspace')
   })
 
   it('compact dropdown tab items carry the toggle state (aria-pressed), never aria-current (superseded: page-activeness on menu tabs)', () => {

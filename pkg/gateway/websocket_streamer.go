@@ -962,6 +962,9 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 				// session.TranscriptEntry.ParentSpawnCallID's doc comment.
 				// Empty (the common case) for a root turn.
 				ParentSpawnCallID: wsf.parentSpawnCallID,
+				// A distinct terminal sentence after already-persisted
+				// narration: marked so replay keeps it a separate message.
+				TerminalOutcome: wsf.pendingFinalContent != "",
 			}
 			// ADR-087 D2/D4a/D4b, WP C: stamp Truncated/TruncationReason in
 			// THIS SAME WRITE — whether content is empty (D4a) or non-empty
