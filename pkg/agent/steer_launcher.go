@@ -185,19 +185,19 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 	// report through other surfaces. External-CLI targets deliver through the
 	// drained CLI stream, not the message_parent tool, so they are exempt.
 	if req.Origin.Kind == steer.OriginKindDelegate && !l.al.GetRegistry().IsExternalCLI(req.TargetAgentID) {
-		// Only an EXPLICIT entry can refuse. A target with no policy snapshot,
-		// or none naming message_parent on either layer, has nothing to
-		// resolve: coverage is the boot-time Reconcile's job (Hard
-		// Constraint #6) and the runtime tool filter stays the authority, so
-		// this pre-flight must not invent a deny from missing data.
-		if pol := targetAgent.LoadToolPolicy(); pol != nil {
-			_, agentSet := pol.Policies["message_parent"]
-			_, globalSet := pol.GlobalPolicies["message_parent"]
-			if (agentSet || globalSet) &&
-				tools.ResolveEffectivePolicy(pol, "message_parent") == string(config.ToolPolicyDeny) {
-				return steer.LaunchResult{}, fmt.Errorf(
-					"steer: launch: %w: agent %q", tools.ErrDelegateTargetCannotReport, req.TargetAgentID)
-			}
+		// Resolve through the same global x agent resolution the runtime tool
+		// filter uses (exact and wildcard entries, strictest wins). Only a
+		// RESOLVED deny refuses: a nil snapshot, or one with no coverage for
+		// message_parent on either layer, has nothing to resolve — coverage is
+		// the boot-time Reconcile's job (Hard Constraint #6) and the runtime
+		// filter stays the authority — so this pre-flight never invents a deny
+		// from missing data (ResolveEffectivePolicy itself would fail closed to
+		// deny and log an Error for an uncovered tool).
+		if verdict, covered := tools.ResolveEffectivePolicyIfCovered(
+			targetAgent.LoadToolPolicy(), "message_parent"); covered &&
+			verdict == string(config.ToolPolicyDeny) {
+			return steer.LaunchResult{}, fmt.Errorf(
+				"steer: launch: %w: agent %q", tools.ErrDelegateTargetCannotReport, req.TargetAgentID)
 		}
 	}
 	lifecycle := l.al.GetSessionLifecycleStore()

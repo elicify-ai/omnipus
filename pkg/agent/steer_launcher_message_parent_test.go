@@ -101,3 +101,75 @@ func TestLaunch_MessageParentCheckControls(t *testing.T) {
 		})
 	}
 }
+
+func storePolicy(t *testing.T, al *AgentLoop, pol *tools.ToolPolicyCfg) {
+	t.Helper()
+	inst, ok := al.GetRegistry().GetAgent(testDefaultAgentID)
+	if !ok {
+		t.Fatalf("agent %q not registered", testDefaultAgentID)
+	}
+	inst.StoreToolPolicy(pol)
+}
+
+// #948 review F1: a WILDCARD deny ("message_*") resolves to deny for
+// message_parent through the shared resolver, so it must refuse exactly like
+// an exact entry — on either layer.
+func TestLaunch_DelegateTargetWildcardMessageParentDenied_Refuses(t *testing.T) {
+	for name, pol := range map[string]*tools.ToolPolicyCfg{
+		"global wildcard deny": {GlobalPolicies: map[string]config.ToolPolicy{"message_*": config.ToolPolicyDeny}},
+		"agent wildcard deny": {
+			GlobalPolicies: map[string]config.ToolPolicy{"message_parent": config.ToolPolicyAllow},
+			Policies:       map[string]config.ToolPolicy{"message_*": config.ToolPolicyDeny},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			al, cleanup := newSteerAL(t)
+			defer cleanup()
+			storePolicy(t, al, pol)
+			if _, err := launchAs(t, al, steer.OriginKindDelegate); !errors.Is(err, tools.ErrDelegateTargetCannotReport) {
+				t.Fatalf("Launch error = %v, want ErrDelegateTargetCannotReport", err)
+			}
+		})
+	}
+}
+
+// Missing data never refuses. ResolveEffectivePolicy itself fails closed to
+// "deny" (and logs an Error) when neither layer covers a tool; this pre-flight
+// refuses ONLY on a resolved verdict, leaving uncovered tools to the runtime
+// filter. Pinned: nil snapshot, empty snapshot, unrelated entries, and a bare
+// "*" (which the resolver does not treat as a wildcard) all launch.
+func TestLaunch_DelegateTargetNoMessageParentCoverage_Launches(t *testing.T) {
+	for name, pol := range map[string]*tools.ToolPolicyCfg{
+		"nil snapshot":     nil,
+		"empty snapshot":   {},
+		"unrelated entry":  {GlobalPolicies: map[string]config.ToolPolicy{"read_file": config.ToolPolicyDeny}},
+		"bare star denies": {GlobalPolicies: map[string]config.ToolPolicy{"*": config.ToolPolicyDeny}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			al, cleanup := newSteerAL(t)
+			defer cleanup()
+			storePolicy(t, al, pol)
+			if _, err := launchAs(t, al, steer.OriginKindDelegate); err != nil {
+				t.Fatalf("Launch must proceed without message_parent coverage, got %v", err)
+			}
+		})
+	}
+}
+
+// External-CLI targets deliver through the drained CLI stream, not the
+// message_parent tool: the exemption is pinned even with message_parent denied.
+func TestLaunch_ExternalCLITargetMessageParentDenied_StillLaunches(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	setMessageParentPolicy(t, al, testDefaultAgentID, config.ToolPolicyDeny, config.ToolPolicyDeny)
+	inst, _ := al.GetRegistry().GetAgent(testDefaultAgentID)
+	inst.Subagents = &config.SubagentsConfig{
+		Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "codex"},
+	}
+	if !al.GetRegistry().IsExternalCLI(testDefaultAgentID) {
+		t.Fatal("setup: target must classify as external-CLI")
+	}
+	if _, err := launchAs(t, al, steer.OriginKindDelegate); err != nil {
+		t.Fatalf("external-CLI target must be exempt, got %v", err)
+	}
+}
