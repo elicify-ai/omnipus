@@ -596,270 +596,109 @@ Modified functionality: keep preserved assertions strong; fixture/generated-owne
 | R08 | Empty workspace mode → close → Sessions | Empty workspace reachable/new entry, clean mode/pair-filter reset | BDD-02.1/03.2 |
 | R09 | Cached identity/failed agent query | Unknown not removed/invented saved | BDD-05.4 |
 
-## Functional Requirements
+## Functional Requirements & Traceability
 
-All MUST statements below are non-negotiable within the commissioned scope. Held choices specify a decision boundary, not an unapproved option. Wire publication and founder/wireframe holds remain; no named requirement authorizes bypassing them.
+This is the **one normative requirement/decision/acceptance/scenario/test table**. Every requirement is MUST; shared contract, numeric/vocabulary tables and linked BDD cases supply its detailed oracle. Slash shorthand expands within a prefix (e.g. BDD-02.1/02.2 = both IDs); each listed case executes independently. All 15 modal items appear in source cells.
+| Requirement / normative predicate | Source / decision | Acceptance → BDD | Tests |
+|---|---|---|---|
+| FR-001 Eligible workspace mains only; no workers/hidden engines, validated default Admin exception. | R3/R5/R7/R47; N D2/D5/D10; F Q12 | US-1.2/12.2 → BDD-01.2/12.2/E01 | T-01/T-23 |
+| FR-002 Chat base/no Chat header; existing panels, one workspace/distinct global Library/Agents; preserve order/archive/pin/drawer/keys. | R1/R2/R6/R7/R8; N D1/D2 | US-1.3 → BDD-01.3 | T-23/T-30 |
+| FR-003 Row opens validated pair's main, not recency/name/computed guess; extra selects owner row. | R4/R22; N D3/D5; B D1.1 | US-1.1/3.3 → BDD-01.1/03.3/E01 | T-01/T-13/T-23 |
+| FR-004 Exact valid visible remembered entry else validated Ava only for no pointer/confirmed invalidity; winning tuple/send gating and no losing read. | R47; F Q1; S Q-G1; N D3/D12 | US-2.1/2.2/2.3/2.4 → BDD-02.1/02.2/02.3/02.4/E03 | T-02/T-12/T-23/T-24 |
+| FR-005 Deliberate pair-extra row action after Past sessions, named/selected-hover-focus-touch; main/original delivery guard retained. | R22; N D3/D11; F Q10 | US-3.1/3.3 → BDD-03.1/03.3/E02 | T-03/T-13/T-23 |
+| FR-006 One validated Sessions history, visible removable workspace+agent filters; magnifier/general command. | R21/R22; N D3/D11; F Q-FE-11 | US-3.2/3.4 → BDD-03.2/03.4 | T-12/T-13/T-23/T-30 |
+| FR-007 Remove picker/@ switch, /new,/agents; /resume→/sessions everywhere/no alias; @ unavailable until messaging; Clear no chat/history deletion. | R20/R22/R23/R47; F Q10; N D11/BS | US-7.3 → BDD-07.3 | T-17/T-25/T-30 |
+| FR-008 Persistent above-feed Main/Extra-title; true task/helper kind. | R24; F Q2; N D3/D8 | US-7.1 → BDD-07.1/E07 | T-07/T-17/T-25 |
+| FR-009 Immutable Session.agent_id for grouping/send, actual Message/turn producer separate; no mutable fallback/history copy. | R23/R24; B D1.1; N D5/D8 | US-1.1/7.1/7.2 → BDD-01.1/07.1/07.2/E07 | T-01/T-07/T-12/T-17 |
+| FR-010 One AppShell refresh owner: roster/member focus/visibility inside staleTime, reconnect/entry/expand/separate save. | R4/R47; M A6; N D2/C-SHELL | US-1.4/9.2 → BDD-01.4/09.2 | T-11/T-23 |
+| FR-011 Errors/stale/unknown/Retry, not empty/removed/deleted/false/split success; real supported recovery. | N D2–D5/D10/D14; M A6 | US-1.4/2.3/4.4/5.4/6.3/8.4/9.3/10.4/11.3/12.3 → BDD-01.4/02.3/04.4/05.4/06.3/08.4/09.3/10.4/11.3/12.3 | T-10/T-12/T-14/T-16/T-18/T-19/T-20/T-21/T-22/T-29 |
+| FR-012 Main-only four-source needs_attention; exclude stopped_by_user/extras/helpers/unrelated unread/task/global events. | R29/R47; F Q4/Q4b; N D4/BS | US-4.1 → BDD-04.1 | T-04/T-14/T-24 |
+| FR-013 Shown committed main open acknowledges observed bound for everyone; no decisions/newer outcomes/losing attach/prefetch/reconnect read. | N D4/D5; BS C-ATTENTION; S Q-G1 | US-4.2/4.4/9.3/2.4 → BDD-04.2/04.4/02.4/E03/E04/E09 | T-04/T-12/T-14/T-24/T-26 |
+| FR-014 Exact attention cue/oracles, distinct main count, meaningful static reduced/unknown state. | R15/R29; N D4/D6/D7 | US-4.3/4.4 → BDD-04.3/04.4 | T-14/T-24 |
+| FR-015 Four approved transparent figures/Omnipus default/badge every size; no plain-role/app preference. | R9/R10/R46/R47; F Q5; N D6/D7; M D2 | US-5.1 → BDD-05.1/E06 | T-06/T-15/T-25 |
+| FR-016 Exact 31/grouped roles/assets and one-time obvious/unmatched mappings; valid roles unchanged. | R11; N D6/D9/D10 | US-5.2/5.3 → BDD-05.2/05.3/E05 | T-05/T-06/T-22/T-28 |
+| FR-017 Exact ordered palette/3:1 ink, strict saturation/circular/tie/Grey mapping persisted once. | R16/R47; F Q8; N D6/D9/D10; S Q-G2 | US-5.2/5.3 → BDD-05.2/05.3/E05/E06 | T-05/T-15/T-22/T-25/T-28 |
+| FR-018 Named size/order/normal names, no selection recolor; stable text and accessible non-overlapping targets. | R12/R13/R15; N D6/D7; M D2 | US-5.1/8.3 → BDD-05.1/08.3/E06 | T-06/T-15/T-18/T-25 |
+| FR-019 Publish shared jobs once/four-part executed chain; kit/layout-only screens, K reuse/no duplicates. | R33/R35/R39/R41; M D1/D2/D3/D4/D5/D6; N D7 | US-5.1/8.3 → BDD-05.1/08.3 | T-15/T-18/T-25/T-26 |
+| FR-020 Existing global create/edit preview/save only figure/role/color; draft not saved/activated, no image/interview. | R7/R8/R46; F Q6/Q7; N D9 | US-6.1/6.3 → BDD-06.1/06.3 | T-16/T-25 |
+| FR-021 Canonical/fresh/startup/custom migration agree through backend restarts; locked identity/capabilities unchanged. | R11/R16/R47; N D9/D10; DEP-ID | US-5.3/6.2 → BDD-05.3/06.2 | T-16/T-22/T-25/T-28 |
+| FR-022 Actual names-only bubbles all live/replay/virtual/plain/guest paths, no owner switch. | R24; F Q9 FINAL; N D8 | US-7.1 → BDD-07.1/E07 | T-07/T-17/T-25 |
+| FR-023 Inline producer/state/phrase replaces dots; input/precedence/mount table, corrected opaque ink/glow and reduced motion; no scalar/global/composer duplicate. | R14/R15; F Q9; S Q-G2; N D8; G MAJ-005 | US-7.2 → BDD-07.2/E06 | T-07/T-15/T-17/T-25 |
+| FR-024 Preserve model/Auto/attachments/send/Stop/errors/order/replay/original delivery; navigation no cancellation/grant/#1221 revival. | R20; N D8/D9/D11/D12/P/BS | US-3.1/7.3/7.4 → BDD-03.1/07.3/07.4/E02 | T-03/T-13/T-17/T-29 |
+| FR-025 Authoritative Working/Waiting/Done/Failed/Stopped-cause/Interrupted kit status, else honest unavailable. | M A1; N D14; C-WIRE | US-8.1 → BDD-08.1/E09 | T-18/T-19/T-26 |
+| FR-026 Real kind/title/meta status-active-tokens/dates, honest missing values, no HB. | M A3/D4; N D3/D5/D14; B D1.1/D5 | US-8.1/8.3 → BDD-08.1/08.3/E07 | T-07/T-18/T-26 |
+| FR-027 Main row same attention as sidebar; metadata browsing/no non-main borrowing/read. | M A4; R29; N D4/BS | US-4.1/4.2/8.1 → BDD-04.1/04.2/08.1/E04 | T-14/T-18/T-24/T-26 |
+| FR-028 Modal plan pill/link on actual starting-chat row; no internal-owner/Tasks-only fake origin. | M A5; N D13; F Q-FE-12 | US-10.1 → BDD-10.1/E11 | T-09/T-20/T-27 |
+| FR-029 Live/unopened/focus/reconnect metadata+membership reconcile to consistent cut; stable keyboard identity, no service/row socket. | M A6; N D2/D5/D14; G MAJ-002/004 | US-9.2/9.3/8.3 → BDD-09.2/09.3/08.3/E09 | T-11/T-18/T-19/T-26 |
+| FR-030 Main pinned/extras recency; helper always real-parent nested under every filter/search. Authorized parent chat unavailable placeholder/Open; Unfiled/protection/virtual/plain intact. | M A7; R21/R22; N D3/D5/D10/D14; F grouping; S Q-M5 | US-8.2/9.1/9.4/9.5 → BDD-08.2/09.1/09.4/09.5/E08 | T-08/T-18/T-19/T-26 |
+| FR-031 Shared flat group/identity/Badge/count/row/search/filter, Sessions/subtitle; stable activation/focus/rename/delete/phone. Native titles await R45, no handmade view/tooltip. | M D1/D2/D3/D4/D5/D6/D7; R33/R35/R39/R41/R45; N D7/D11 | US-8.3/8.4 → BDD-08.3/08.4/09.2/09.5 | T-18/T-19/T-26/T-30 |
+| FR-032 Distinct truthful metadata coverage/counts, unstable/missing/stale/unattributed = partial/unknown/error, never false quiet; no transcript fan-out/eight-active cap. | M A6; N D5/D13/D14; DEP-ACT; G MAJ-002 | US-9.3/9.4/11.3 → BDD-09.3/09.4/11.3/E09 | T-10/T-19/T-21/T-26/T-29 |
+| FR-033 Composed All/Running/Needs me; actual executing ≠queued; Needs me **mains only**; helper matches retain parent context. | M A2; F grouping; S Q-M6; N D14/BS | US-9.1 → BDD-09.1/E08 | T-08/T-19/T-26 |
+| FR-034 Identical consecutive helper siblings → expandable N similar helper runs; original IDs/status/attention/Open/counts/all paths, no cross-parent/execution/root merge/completed-only restriction. | M D8; F grouping; N D14 | US-9.4/9.5 → BDD-09.5/E08 | T-08/T-19/T-26 |
+| FR-035 Actual starting-chat plan state/progress/pause; successful/idempotent actual Open plan/run live/replay via existing workflows; error/no prose target/executor. | #1021/M A5; N D13; F Q-FE-12; B D5/DEP-ACT | US-10.1/10.2/10.3/10.4 → BDD-10.1/10.2/10.3/10.4/E11 | T-09/T-20/T-27 |
+| FR-036 Panel open-session-only, task/scheduler/helper/shell dedupe/state/control truthful; overview origin shell count/Open, no synthetic session. | #493; N D13/D14; F Q-FE-11; B D5; S Q-M4 | US-11.1/11.2/11.3 → BDD-11.1/11.2/11.3/E10 | T-09/T-21/T-26/T-27/T-29 |
+| FR-037 Supported ordinary/extra/Unfiled/child/heartbeat upgrade continuable/repeat-safe/visible failure; current-format consumers/no dual-reader guess. Existing upgrade scope only. | R47; F Q11; N D10/D12; BS; S Q-G3 | US-12.1/12.3 → BDD-12.1/12.3/E12 | T-22/T-28 |
+| FR-038 Validated default Admin reachable/send before obsolete entry removal; no fake membership/extra mains/authority; later qualified address deferred. | R25/R47; F Q12; N D5/D10/D11/D12/BS | US-12.2 → BDD-12.2 | T-22/T-23/T-30 |
 
-| ID | Testable requirement | Binding source / ADR decision |
-|---|---|---|
-| FR-001 | Sidebar MUST list authoritative eligible main colleagues per workspace; exclude workers/hidden engine agents even when members, with only the validated default-workspace Admin exception. | R3/R5/R7; N D2/D5/D10; F Q12. |
-| FR-002 | Chat MUST remain the base surface without a Chat header item; existing workspace tools/panel behavior, single workspace Library and distinct global Library/Agents access, workspace ordering/archive/pin/drawer/keyboard behavior MUST be preserved. | R1/R2/R6–R8; N D1/D2/D11. |
-| FR-003 | Agent row click MUST attach that pair's validated main, never a newer extra/name-matched/computed-but-unvalidated destination. Extra inspection still selects its owner's row. | R4/R22; N D3/D5; B D1.1. |
-| FR-004 | Workspace/login/modal-switch entry MUST restore the exact valid visible remembered main/extra, else the validated Ava welcome main only for no real pointer or confirmed invalidity; unavailable destination and late/failed resolution MUST preserve honest intent, consistent selection and send gating. | R47; F Q1; N D3/D12. |
-| FR-005 | + New chat MUST be the deliberate extra-chat action for the selected pair, preserving main and first-send recovery/abandonment protection; its independent named target follows Past sessions and works on selected/hover/focus/touch rows. | R22; F Q10; N D3/D11. |
-| FR-006 | Past sessions MUST open the one existing Sessions modal with visible/removable workspace AND agent filters; the magnifier/session command remains the general opener and results use existing validated inspection. | R21/R22; N D3/D11; F Q-FE-11. |
-| FR-007 | Cutover MUST remove picker/mention switching, old /new and /agents paths, and rename /resume to /sessions across registry/client/help/docs with no old alias. @ suggestions remain unavailable until real addressed messaging; Clear MUST never create a chat or delete saved history. | R20/R22/R23/R47; F Q10; N D11; BS. |
-| FR-008 | A persistent label above the feed MUST show Main chat or Extra chat — title from the real kind; task/helper inspection MUST retain its truthful kind. | R24; F Q2; N D3/D8. |
-| FR-009 | Session selection/grouping/sending MUST use immutable Session.agent_id; actual message/turn producer identity MUST remain separate, including guest/live/replay responses. No mutable-owner fallback or history copy. | N D3/D5/D8; B D1.1; F Q9. |
-| FR-010 | Authenticated AppShell MUST own the existing cross-tab refresh once after picker removal, coordinating roster/member refresh on focus/visibility inside staleTime, existing reconnect, destination entry/expansion and separate membership saves. | N D2; C-SHELL; R4/R47. |
-| FR-011 | Failed/incomplete source data MUST show load/error/last-known/unknown and Retry rather than empty team, removed agent, deleted destination, false attention or successful split selection. | N D2–D5/D10/D14; M A6; P Definition of Done. |
-| FR-012 | Sidebar attention MUST consume main-only server needs_attention from pending structured question/approval or unseen met/rounds_exhausted/other outcomes; exclude stopped_by_user, extras/helpers and unrelated unread/global/task events. | R29/R47; F Q4/Q4b; N D4; BS C-ATTENTION. |
-| FR-013 | Only successful explicit foreground main open MUST request published ack_attention; it acknowledges observed goals for everyone, not pending asks/approvals or newer racing outcomes. Prefetch/reconnect/replay and failed/unauthorized attach MUST not acknowledge. | N D4/D5; BS C-ATTENTION; F Q4. |
-| FR-014 | Attention MUST use the locked 18%/1.6 s icon pulse/halo, no row dot, collapsed right-aligned 8 px warning-yellow dot and distinct-main count; meaningful general text stays under reduced motion with zero loops, unknown remains unknown. | R15/R29; N D4/D6/D7. |
-| FR-015 | Shared agent identity MUST offer Robot/Man/Woman/Omnipus, default Omnipus, with approved transparent figure and role badge at every named size; no plain-role fallback or app-wide figure preference. | R9 as superseded/R10/R46/R47; F Q5; N D6/D7. |
-| FR-016 | Role choices MUST be the exact 31 roles/five groups and approved badge assets; one-time old icon mappings MUST follow the specified obvious mappings, unmatched → General assistant, preserving valid curated roles. | R11; N D6/D9/D10. |
-| FR-017 | Choices MUST be the exact ten named palette colors with graphic contrast ≥3:1 on sidebar/chat; one-time stored color mapping MUST use strict saturation <0.25, circular nearest non-Grey hue and stable first-entry ties, invalid/missing → Grey. | R16/R47; F Q8; N D6/D9/D10. |
-| FR-018 | Shared identities MUST preserve the specified 26/18/40/48 px surface sizes, sidebar 13 px name, icon-before-name and normal text name color; selected styling MUST not recolor identity to brand gold. All-state text and non-overlapping keyboard/coarse targets MUST remain accessible. | R12/R13/R15; N D6/D7; P design system. |
-| FR-019 | AgentIcon and recurring identity/attention/inline-status/activity-pill jobs MUST be published once through catalog/barrel/style/manifest/story/executed evidence, use kit composition and layout-only screen overrides; MUST reuse K FilterMenu/ViewSwitch/HoverCard and avoid duplicates. | R33/R35/R39/R41; N D7; M D1–D6; user overlap instruction. |
-| FR-020 | Existing unified create/edit flow MUST add only figure/role/palette choices and the same live preview/global save semantics; draft != saved/activated, and no upload/GIF/new creation interview is added. | R7/R8/R46; F Q6/Q7; N D9. |
-| FR-021 | Canonical built-ins, fresh seeding, startup enforcement and existing custom migration MUST retain approved palette/role/figure through repeated backend restart, with protected-field/capability boundaries unchanged. | N D9/D10; F Q5/Q8; DEP-ID. |
-| FR-022 | Agent bubbles MUST show actual author name only, zero avatars, across live/replay/virtual/plain paths; guest attribution MUST not switch owner. | R24; F Q9 FINAL; N D8. |
-| FR-023 | Inline shared responding-agent icon/name/phrase MUST replace old thinking dots in the same feed slot with locked working/thinking/waiting motion and reduced-motion static text; reuse appropriate old phrases without stale scalar/global state or duplicate composer line. | R14/R15; F Q9 FINAL; N D8. |
-| FR-024 | Composer model/Auto/attachment/send/Stop and real correlated errors/replay/first-send safeguards MUST remain; navigation/view closure MUST not cancel work, change control authority or restore companion #1221's obsolete per-agent checkbox. | R20; N D8/D9/D11/D12; P/BS Stop and companion boundaries. |
-| FR-025 | Every permitted Sessions row MUST show authoritative Working/Waiting for answer/Done/Failed/Stopped with cause/Interrupted status when available, using a kit status chip; absent state MUST not become an invented running/done claim. | M A1; N D14 narrowed by F Q-FE-11; C-WIRE. |
-| FR-026 | Sessions rows MUST show truthful main/extra/helper/task/scheduled kind and title plus muted status/kind/active/tokens metadata, retaining real available date/token information and removing HB; missing values stay honest. | M A3/D4; N D3/D5/D14; B D1.1/D5. |
-| FR-027 | Main-session modal rows MUST show the same confirmed warning-yellow attention source as sidebar; metadata browsing MUST not acknowledge it and non-main rows MUST not inherit the main boolean. | M A4; R29; N D4; BS C-ATTENTION. |
-| FR-028 | Starting-chat row in Sessions MUST expose its real plan pill/link, associated with the actual starting chat, not internal owner or guessed source; Tasks-only plans MUST retain no fabricated origin. | M A5; N D13; F Q-FE-12. |
-| FR-029 | Sessions metadata MUST reconcile status/attention/plan and roster/membership while open, including missed updates/focus/reconnect and work never opened in the browser; reuse existing queries/live mechanisms, not another activity store/socket per row. | M A6; N D2/D5/D14; F Q-FE-11. |
-| FR-030 | Main MUST be first/pinned, then extras by recency; helpers MUST **always** remain under their parent, never top-level, in All / Running / Needs me and title/workspace/agent/date searches/filters. Nonmatching parents stay as context. Q-M5 handles unavailable real parents; preserve legitimate Unfiled inspection, protection and virtual/plain reachability. | M A7; latest F Session modal A2/D8 + grouping; R21/R22; N D3/D5/D10/D14. |
-| FR-031 | The existing modal MUST use kit flat group/disclosure, AgentIcon, Badge/count, shared row/Item, SearchField and K filter presentation; title Sessions and explanatory subtitle; preserve focus/rename/delete/keyboard/phone actions. Existing native tooltips remain for R45; no new handmade tooltip or view. | M D1–D7; R33/R35/R39/R41/R45; N D7/D11. |
-| FR-032 | Overview and panel MUST display truthful distinct counts and source/coverage; missing pages, unattributed verdicts, malformed snapshots or stale data MUST remain visibly partial/unknown/error, not complete or zero. No full-transcript navigation load or eight-item active cap. | M A6; N D5/D13/D14; F Q-FE-11; DEP-ACT. |
-| FR-033 | Sessions MUST offer the decided **All / Running / Needs me** filter, composed with title/workspace/agent/date. Running uses authoritative executing state, not queued-as-running. Matching helpers always remain inside their real parent context. Confirmed main attention matches Needs me; non-main matching scope is Q-M6, not a guess or a vote on filter presence. | M A2; F Session modal A2/D8 + grouping; N D14/BS C-ATTENTION; DEP-ACT/Q-M6. |
-| FR-034 | Repeated identical consecutive helper siblings under one parent MUST fold into one expandable **N similar helper runs** row, with all original identities/status/attention/Open targets/counts preserved. Never merge executions/cross parents or promote helper summaries to top-level; applies to every filter/search and virtual/plain path. No completed-only restriction. | M D8 as decided by F Session modal A2/D8 + grouping; N D14. |
-| FR-035 | Starting-chat plan pill/parent-panel row MUST use real approved/running/phase/pause/progress state; successful/idempotent start results MUST offer authorized Open plan/actual task-session links live and replay, using existing Tasks/Graph/session hand-off with visible unavailable/error, not prose URLs or a new executor. | N D13; F Q-FE-12; DEP-ACT; B D5. |
-| FR-036 | Activity side panel MUST show **only the open session's** legitimate plans/task-scheduler runs/helpers/shells; deduplicate real task children, distinguish queued/waiting/executing/terminal, preserve independent-run Stop authority. Other sessions remain in Sessions; shell overview layout waits for Q-M4. | F Q-FE-11; N D13/D14 as narrowed; B D5; DEP-ACT. |
-| FR-037 | Backend-owned one-cutover upgrade MUST keep legitimate saved ordinary/extra/Unfiled/child/heartbeat chats reachable and continuable through current contracts, repeat-safe and visibly failed when import fails; frontend MUST not introduce dual readers/type-owner guesses. | F Q11; R47; N D10/D12; BS C-MAIN/E-MIGRATE. |
-| FR-038 | Admin's backend-validated default-workspace main MUST be reachable before removal of the old Assets-only entry, without fake membership/other-workspace mains; later qualified addressing remains deferred and grants no new authority. | R25/R47; F Q12; N D5/D10/D11/D12; BS C-ADDRESS/C-MAIN. |
+### Source dispositions — no second traceability table
+In-scope source keys are in the matrix: R1/R2/R3/R4/R5/R6/R7/R8/R10/R11/R12/R13/R14/R15/R16/R20/R21/R22/R24/R25/R29/R33/R35/R39/R41/R46/R47 and all M A1–A7/D1–D8. R9 is narrowly superseded by F Q5's approved minimal-eye figures; no unrelated character artwork. R23's switching/bubble-icon clauses are superseded by F Q9/Q10; qualified @ remains later.
+Deferred under N D1/D11: R6a roster feed; R6b creation interview/membership shortcut; R6c membership cards; R17 upload safety; R18 GIF placement; R19 image activity. R26 peer/cross-workspace, R27 merged task/read and R28 role/policy are backend/later; latest BS amendments, not old duplicate-tool names/blanket worker rules, control. No cross-workspace plans.
+Later waves: R30 policy, R30a tool/provider moves, R30b external defaults/bulk; R31 discovery/loading (no retired switch_agent); R32 categorization/no skill rewrite; R34 Connectors. R36 main actions and R37 Agents/New agent naming are preserved; broader redesign later. R38 shell behavior companion; R40 title foundation; R42 hardening/R43 rollout; R44 header/R45 Tooltip companion. R33/R35/R39/R41 apply only commissioned kit jobs, no app-wide migration.
 
 ## Success Criteria
-
-These pass/fail criteria apply to the future integrated feature, not to this document's publication. An unresolved choice/contract/wireframe cannot silently pass.
-
-| ID | Measurable outcome / acceptance evidence |
+All are pass/fail on the future real joint candidate, not document publication.
+| ID | Observable proof |
 |---|---|
-| SC-001 | Every J-01/J-02 destination variant opens the exact validated main/remembered chat or honest unavailable/error; zero recency substitutions, extra creations on entry, split selections or unresolved-target sends. |
-| SC-002 | Each of the four main sources signals and each negative source does not; shared observed-goal acknowledgement, unresolved decisions and newer race behavior match J-03 on initial/unopened/reconnect/two-person cases. Missing source/value never passes as false. |
-| SC-003 | All four figures, 31 grouped roles, ten colors and named 18/26/40/48 px surfaces conform to W; icon contrast ≥3:1 on both named backgrounds, zero agent-color names or bubble avatars, zero reduced-motion loops. |
-| SC-004 | J-06 fresh/custom/built-in palette/role/figure and protected-field identities remain identical after reload and at least two backend restarts; one-time mapping fixtures match the frozen oracle. |
-| SC-005 | One Sessions modal offers **All / Running / Needs me**, truthful metadata/main-first ordering and full or explicit partial coverage. Zero top-level helpers in any search/filter. Repeated identical helpers show expandable **N similar helper runs**, exposing all original targets/counts beneath their parent without cross-parent/execution merge. B's panel stays local; A remains reachable in Sessions. |
-| SC-006 | Every successful/idempotent supported plan/task start has a validated live/replayed drill-down to the real plan/run; approved is not reported running; zero invented starting chats, duplicate task-child work or independent tree-Stop grants. |
-| SC-007 | J-04 real shell/sidebar without AgentPicker refreshes both roster and separately saved membership on focus/visibility/expansion inside the stale window, with visible error/Retry. Direct-hook-only green is insufficient. |
-| SC-008 | Every frozen supported saved-install conversation is reopened and continued after migration; former heartbeat history uses main, repeated cutover loses/duplicates zero known content; failed import stays visibly failed. Admin main is exercised before old entry removal. |
-| SC-009 | All removed commands/picker/mention-switch paths are unavailable, no old resume alias, zero Clear-created chats/history deletion. Existing model/Auto/attachments, message-delivery/error/replay and Stop scope checks continue to pass. |
-| SC-010 | New/reused kit jobs have complete four-part publication and executed required accessibility/screenshot/static-Storybook evidence. At phone/coarse input, targets are at least 44 px and do not overlap; keyboard rename/filter/open/close retains focus and intended result. |
-| SC-011 | All 38 FR rows and all BDD scenarios have trace/test coverage, datasets/negative controls are executed on the implementation, applicable remote gates and five reviewers are clean or explicitly deferred by the founder; no zero-discovered-test green. |
-| SC-012 | Six DOC pages' specific changes are in the behavior diff and docs-verifier has audited them against the joint build. uat-tester plus independent uat-validator evidence matches the exact landing SHA; founder approves joint delivery with U1. |
-
-## Traceability Matrix
-
-### First-squad requirement → decision → acceptance scenario → test
-
-N means **Agent-first navigation and agent identity**; B means **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**. Source keys resolve through the absolute-path register. Every FR appears, every BDD scenario is mapped, and each test family is defined in the TDD plan. Held choices have explicit decision-guard tests, not assumed product choices.
-
-| Requirement | Source requirement | ADR decision / latest answer | User Story / acceptance | BDD scenario(s) | Test name(s) |
-|---|---|---|---|---|---|
-| FR-001 | R3/R5/R7/R47 | N D2/D5/D10; F Q12 | US-1.2, US-12.2 | BDD-01.2, BDD-12.2, BDD-E01 | T-01, T-23 |
-| FR-002 | R1/R2/R6/R7/R8 | N D1/D2/D11 | US-1.3 | BDD-01.3 | T-23, T-30 |
-| FR-003 | R4/R22 | N D3/D5; B D1.1 | US-1.1, US-3.3 | BDD-01.1, BDD-03.3, BDD-E01 | T-01, T-13, T-23 |
-| FR-004 | R47/F Q1 | N D3/D12 | US-2.1–4 | BDD-02.1, BDD-02.2, BDD-02.3, BDD-02.4, BDD-E03 | T-02, T-12, T-23 |
-| FR-005 | R22/R47 | N D3/D11; F Q10 | US-3.1/3.3 | BDD-03.1, BDD-03.3, BDD-E02 | T-03, T-13, T-23 |
-| FR-006 | R21/R22 | N D3/D11; F Q-FE-11 | US-3.2/3.4 | BDD-03.2, BDD-03.4 | T-12, T-13, T-23, T-30 |
-| FR-007 | R20/R22/R23/R47 | N D11; F Q10; B D8 | US-7.3 | BDD-07.3 | T-17, T-25, T-30 |
-| FR-008 | R24 | N D3/D8; F Q2 | US-7.1 | BDD-07.1, BDD-E07 | T-07, T-17, T-25 |
-| FR-009 | R23/R24 | N D3/D5/D8; B D1.1 | US-1.1, US-7.1/7.2 | BDD-01.1, BDD-07.1, BDD-07.2, BDD-E07 | T-01, T-07, T-12, T-17 |
-| FR-010 | R4/R47/M A6 | N D2 | US-1.4, US-9.2 | BDD-01.4, BDD-09.2 | T-11, T-23 |
-| FR-011 | R47/M A6 | N D2–D5/D10/D14 | US-1.4/2.3/4.4/5.4/6.3/8.4/9.3/10.4/11.3/12.3 | BDD-01.4, BDD-02.3, BDD-04.4, BDD-05.4, BDD-06.3, BDD-08.4, BDD-09.3, BDD-10.4, BDD-11.3, BDD-12.3 | T-10, T-12, T-14, T-16, T-18–T-22, T-29 |
-| FR-012 | R29/R47 | N D4; BS C-ATTENTION; F Q4 | US-4.1 | BDD-04.1 | T-04, T-14, T-24 |
-| FR-013 | R29 | N D4/D5; BS C-ATTENTION | US-4.2/4.4, US-9.3 | BDD-04.2, BDD-04.4, BDD-E04, BDD-E09 | T-04, T-14, T-24, T-26 |
-| FR-014 | R15/R29 | N D4/D6/D7 | US-4.3/4.4 | BDD-04.3, BDD-04.4 | T-14, T-24 |
-| FR-015 | R9/R10/R46/R47 | N D6/D7; F Q5 | US-5.1 | BDD-05.1, BDD-E06 | T-06, T-15, T-25 |
-| FR-016 | R11 | N D6/D9/D10 | US-5.2/5.3 | BDD-05.2, BDD-05.3, BDD-E05 | T-05, T-06, T-22, T-28 |
-| FR-017 | R16/R47 | N D6/D9/D10; F Q8 | US-5.2/5.3 | BDD-05.2, BDD-05.3, BDD-E05 | T-05, T-15, T-22, T-28 |
-| FR-018 | R12/R13/R15 | N D6/D7 | US-5.1, US-8.3 | BDD-05.1, BDD-08.3, BDD-E06 | T-06, T-15, T-18, T-25 |
-| FR-019 | R33/R35/R39/R41; M D1–D6 | N D7; K overlap | US-5.1, US-8.3 | BDD-05.1, BDD-08.3 | T-15, T-18, T-25, T-26 |
-| FR-020 | R7/R8/R46 | N D9; F Q6/Q7 | US-6.1/6.3 | BDD-06.1, BDD-06.3 | T-16, T-25 |
-| FR-021 | R11/R16/R47 | N D9/D10; F Q5/Q8 | US-5.3, US-6.2 | BDD-05.3, BDD-06.2 | T-16, T-22, T-25, T-28 |
-| FR-022 | R24 | N D8; F Q9 FINAL | US-7.1 | BDD-07.1, BDD-E07 | T-07, T-17, T-25 |
-| FR-023 | R14/R15 | N D8; F Q9 FINAL | US-7.2 | BDD-07.2, BDD-E06 | T-07, T-15, T-17, T-25 |
-| FR-024 | R20 | N D8/D9/D11/D12; BS | US-3.1, US-7.3/7.4 | BDD-03.1, BDD-07.3, BDD-07.4, BDD-E02 | T-03, T-13, T-17, T-29 |
-| FR-025 | M A1 | N D14 + F Q-FE-11 | US-8.1 | BDD-08.1, BDD-E09 | T-18, T-19, T-26 |
-| FR-026 | M A3/D4 | N D3/D5/D14; B D1.1/D5 | US-8.1/8.3 | BDD-08.1, BDD-08.3, BDD-E07 | T-07, T-18, T-26 |
-| FR-027 | M A4/R29 | N D4; BS C-ATTENTION | US-4.1/4.2, US-8.1 | BDD-04.1, BDD-04.2, BDD-08.1, BDD-E04 | T-14, T-18, T-24, T-26 |
-| FR-028 | M A5 | N D13; F Q-FE-12 | US-10.1 | BDD-10.1, BDD-E11 | T-09, T-20, T-27 |
-| FR-029 | M A6 | N D2/D5/D14; F Q-FE-11 | US-9.2/9.3 | BDD-09.2, BDD-09.3, BDD-E09 | T-11, T-19, T-26 |
-| FR-030 | M A7/R21/R22; latest F grouping | N D3/D5/D10/D14 + F always-under-parent | US-8.2, US-9.1/9.4/9.5 | BDD-08.2, BDD-09.1, BDD-09.4, BDD-09.5, BDD-E08 | T-08, T-18, T-19, T-26 |
-| FR-031 | M D1–D7/R33/R35/R39/R41/R45 | N D7/D11 | US-8.3/8.4 | BDD-08.3, BDD-08.4 | T-18, T-26, T-30 |
-| FR-032 | M A6/N activity coverage | N D5/D13/D14 + F Q-FE-11 | US-9.3/9.4, US-11.3 | BDD-09.3, BDD-09.4, BDD-11.3, BDD-E09 | T-10, T-19, T-21, T-26, T-29 |
-| FR-033 | M A2 **decided** | N D14 + F Session modal A2/D8 + grouping; only extra non-main scope Q-M6 | US-9.1 | BDD-09.1, BDD-E08 | T-08, T-19, T-26 |
-| FR-034 | M D8 **decided** | N D14 + F Session modal A2/D8 + grouping | US-9.4/9.5 | BDD-09.5, BDD-E08 | T-08, T-19, T-26 |
-| FR-035 | #1021/M A5 | N D13; F Q-FE-12 | US-10.1–4 | BDD-10.1, BDD-10.2, BDD-10.3, BDD-10.4, BDD-E11 | T-09, T-20, T-27 |
-| FR-036 | #493/BS activity | N D13/D14 + F Q-FE-11; B D5 | US-11.1–3 | BDD-11.1, BDD-11.2, BDD-11.3, BDD-E10 | T-09, T-21, T-26, T-27, T-29 |
-| FR-037 | R47/F Q11 | N D10/D12; BS migration | US-12.1/12.3 | BDD-12.1, BDD-12.3, BDD-E12 | T-22, T-28 |
-| FR-038 | R25/R47/F Q12 | N D5/D10/D11/D12; BS C-MAIN/C-ADDRESS | US-12.2 | BDD-12.2 | T-22, T-23, T-30 |
-
-### Modal-review disposition — every A/D item
-
-| Review item | Requirement / decision | Scenario → test / disposition |
-|---|---|---|
-| M A1 status | FR-025; N D14 narrowed by F Q-FE-11 | BDD-08.1 → T-18/T-26; exact lifecycle/source kept. |
-| M A2 All / Running / Needs me | FR-033; **decided by latest F**, presence/labels no longer open | BDD-09.1/E08 → T-08/T-19/T-26; matching helper always inside parent; Q-M6 only additional non-main source scope. |
-| M A3 kind | FR-026; N D5 | BDD-08.1 → T-18/T-26; main/extra/helper/task/scheduled, no HB. |
-| M A4 waiting main | FR-027; N D4 | BDD-08.1/04.1/04.2 → T-14/T-18/T-24/T-26. |
-| M A5 plan | FR-028; N D13/F Q-FE-12 | BDD-10.1/E11 → T-09/T-20/T-27. |
-| M A6 live updates | FR-029/FR-032; N D2/D14 | BDD-09.2/09.3/E09 → T-11/T-19/T-26. |
-| M A7 main order + F strict helper grouping | FR-030; N D3/D5 with latest F always-under-parent rule | BDD-08.2/09.1/09.5/E08 → T-08/T-18/T-19/T-26; zero top-level helpers in any filter/search. |
-| M D1 group controls | FR-031; R35/N D7 | BDD-08.3 → T-18/T-26; shared flat disclosure/list grouping, real tree kept. |
-| M D2 agent marker | FR-015/FR-018/FR-031; N D6/D7 | BDD-05.1/08.3 → T-15/T-18/T-25. |
-| M D3 count pill | FR-019/FR-031; N D7 | BDD-08.3 → T-18/T-26; kit Badge. |
-| M D4 row metadata | FR-026/FR-031; N D14 | BDD-08.1/08.3 → T-18/T-26; shared row/title/meta, phone checks. |
-| M D5 tooltips | FR-031; N D11/R45 | BDD-08.3 → T-18/T-26; **defer existing native-title migration**, add no handmade tooltip. |
-| M D6 search/date/filter | FR-019/FR-031; R33/R39/K | BDD-08.3/09.1 → T-18/T-19; SearchField + shared filter presentation, no duplicate FilterMenu. |
-| M D7 title | FR-031; N D11 | BDD-08.3 → T-18/T-26/T-30; Sessions + clear subtitle. |
-| M D8 repeated helpers | FR-034; **decided by latest F** | BDD-09.5/E08 → T-08/T-19/T-26; expandable `N similar helper runs` under parent, every original target/count/state preserved; not completed-only or an execution merge. |
-
-### Source R1–R47 disposition, including subrequirements
-
-“In scope” means the traced first-squad part; “Preserve” does not authorize a redesign. Later items carry no fabricated current implementation scenario/test. N D1/D11 record them; qualitative non-behaviors prevent scope creep.
-
-| Source requirement | First-squad trace or explicit later disposition |
-|---|---|
-| R1 | FR-002 → N D2 → BDD-01.3 → T-23/T-30; preserve no Chat entry. |
-| R2 | FR-002 → N D2 → BDD-01.3 → T-23/T-30; preserve existing panels/global versus workspace Library. |
-| R3 | FR-001/FR-003 → N D2/D3 → BDD-01.1/01.2 → T-01/T-23. |
-| R4 | FR-003/FR-004 → N D3/D5 → BDD-01.1/02.1/02.2 → T-01/T-12/T-23. |
-| R5 | FR-001 → N D2 → BDD-01.2 → T-01/T-23. |
-| R6 | FR-002/FR-015 → N D1/D2/D7 → BDD-01.3/05.1 → T-15/T-23; roster access/shared identity only. |
-| R6a | Later Agents-feed redesign; N D1/D11. Shared identity is FR-015/FR-018, not full layout/search regrouping. |
-| R6b | Later creation interview/Kind→Role→membership redesign; N D1/D11. FR-020 extends current flow only. |
-| R6c | Later roster membership card layout; N D1. No first-squad hover-card duplicate. |
-| R7 | FR-001/FR-002/FR-020 → N D2/D9 → BDD-01.2/06.1 → T-01/T-16. |
-| R8 | FR-020/FR-021 → N D9 → BDD-06.1/06.2/06.3 → T-16/T-25. |
-| R9 | Superseded narrowly by F Q5's minimal-eye four figures; FR-015 → N D6 → BDD-05.1 → T-06/T-15. No unrelated character art. |
-| R10 | FR-015/FR-018 → N D6/D7 → BDD-05.1/E06 → T-15/T-25. |
-| R11 | FR-016 → N D6/D9/D10 → BDD-05.2/05.3/E05 → T-05/T-06/T-22. |
-| R12 | FR-018/FR-022 → N D6/D8 with F Q9 bubble exception → BDD-05.1/07.1 → T-15/T-17. |
-| R13 | FR-018/FR-023 → N D6/D8 → BDD-05.1/07.2/E06 → T-15/T-17/T-25. |
-| R14 | FR-023 → N D8/F Q9 FINAL → BDD-07.2 → T-17/T-25. |
-| R15 | FR-014/FR-018/FR-023 → N D4/D8 → BDD-04.3/07.2/E06 → T-14/T-15/T-25. |
-| R16 | FR-017/FR-021 → N D6/D9/D10/F Q8 → BDD-05.2/05.3/E05 → T-05/T-22/T-28. |
-| R17 | Deferred avatar upload unit by F Q6; N D9/D11 retains safety obligations, no current upload scenario or endpoint. |
-| R18 | Deferred with GIF/placement decision F Q7; old playback proposal not silently adopted. N D9/D11. |
-| R19 | Deferred/superseded status-placement assumptions under F Q7/Q9. N D8/D9/D11; no image activity lane now. |
-| R20 | FR-007/FR-024 → N D8/D11 → BDD-07.3/07.4 → T-17/T-29. |
-| R21 | FR-006/FR-030/FR-031 → N D3/F Q-FE-11 → BDD-03.2/08.2/08.3 → T-13/T-18/T-26. |
-| R22 | FR-003/FR-005/FR-006/FR-007 → N D3/D11 → BDD-03.1/03.2/03.3/07.3 → T-13/T-17/T-23. |
-| R23 | Immediate removal is FR-007/FR-009; full qualified @ UI later, N D11. F Q9 overrides reply bubble icon wording with actual name only. |
-| R24 | FR-008/FR-022/FR-023 → N D3/D8/F Q2/Q9 → BDD-07.1/07.2 → T-17/T-25. |
-| R25 | FR-038 → N D5/D10/D11/F Q12 → BDD-12.2 → T-23. Reach replacement before old entry removal. |
-| R26 | Backend/later explicit workspace+agent peer messaging; N D11/BS C-ADDRESS. No cross-workspace plans/new frontend authority. |
-| R27 | Backend canonical task-family/cross-workspace read changes; BS latest amendments supersede old duplicate-tool names. No new permission/editor scope here; N D11. |
-| R28 | Backend eligibility/policy responsibility; latest BS native-worker self/task rules win over broad older wording. Sidebar workers stay absent FR-001; frontend never grants tools. |
-| R29 | FR-012/FR-013/FR-014/FR-027 → N D4/BS → BDD-04.1/04.2/04.3/08.1 → T-14/T-24/T-26. |
-| R30 | Later Skills & Tools/global policies wave; N D1/D11. |
-| R30a | Later tool-specific settings/provider moves; N D1/D11. |
-| R30b | Later external-tool defaults/bulk/preset removal; N D1/D11. No reintroduced Unset or agent policy layer. |
-| R31 | Later tool/skill loading levels and unified discovery; N D1/D11. Retired switch_agent is not preserved by old locked-tool list. |
-| R32 | Later skill categorization/install UI; N D1/D11. No classifier or skill-file rewrite here. |
-| R33 | FR-019/FR-031 → N D7/M D6 → BDD-08.3 → T-18/T-26; Sessions SearchField only, no app-wide swap or undecided clear shortcut. |
-| R34 | Later Connectors wave; N D1/D11. |
-| R35 | FR-019/FR-031 → N D7/M D1 → BDD-08.3/09.4 → T-18/T-19; kit group styling/defaults/search reveal, not loss of real nested tree. |
-| R36 | Preserve existing main actions; broader pages later N D1. No modal/page conversion of the founder-selected Sessions modal. |
-| R37 | Preserve Agents/New agent naming in current roster/flow; N D1/D2/D9. Full roster action redesign later. |
-| R38 | Companion/broader page shell behavior; N D1/D11. Existing drawer/header access preserved FR-002. |
-| R39 | FR-019/FR-031/FR-033 → N D7/M D6/K → BDD-08.3/09.1 → T-18/T-19. Reuse shared filter/view jobs, no redundant view tabs. |
-| R40 | Central page-title foundation/later app-wide adoption; N D1/D11. This modal spec does not invent a page-size override. |
-| R41 | FR-019/FR-031 → N D7 → BDD-05.1/08.3 → T-15/T-18. Only commissioned shared jobs, not full app migration. |
-| R42 | Later low-priority lock/check hardening, N D1/D11. No checks weakened or new ratchet invented. |
-| R43 | Separate rollout waves, N D1/D11. This spec is one first-squad feature, not all phases. |
-| R44 | Separate measured-space header fix, N D11; preserve companion output, do not duplicate it. |
-| R45 | Separate shadcn Tooltip migration, N D11/M D5; FR-031 adds no handmade tooltip/old-props wrapper. |
-| R46 | FR-020/FR-021 → N D9/F Q5/Q6/Q7 → BDD-06.1/06.2/06.3 → T-16/T-25. Upload subset explicitly deferred. |
-| R47 | FR-004/FR-007/FR-015/FR-017/FR-037/FR-038 plus activity FR-028–FR-036 → N D3–D14/F latest answers → corresponding matrix rows above. |
+| SC-001 | J-01/J-02 exact targets/send; zero recency/extra/split/losing-ack/unresolved-send errors. |
+| SC-002 | J-03 four-source/negative/shown-bound/shared/decision/newer-race proofs; unknown never false. |
+| SC-003 | Exact vocabulary/sizes/W, opaque ink ≥3:1 at dimmest frame both backgrounds; no colored names/avatars/reduced loops. |
+| SC-004 | J-06 frozen identities/locks/mapping agree after reload and ≥2 gateway restarts. |
+| SC-005 | One complete-or-explicit-partial Sessions; strict parent/folding/filters/placeholder; stable activation, B local/A discoverable/shell count. |
+| SC-006 | Real supported live/replay/idempotent start links, truthful state; zero fake origin/run duplicates/control grants. |
+| SC-007 | J-04 real no-picker shell refreshes separately saved roster/member inside staleTime; honest Retry, not hook-only proof. |
+| SC-008 | J-05 actual saved-history continuation/heartbeat-main/repeat and visible failure; zero known-content loss/duplication; Admin replacement exercised. |
+| SC-009 | No retired paths/alias/Clear-created chats/history deletion; all preserved controls/correlation/error/replay proofs. |
+| SC-010 | Executed four-part kit/all eleven evidence kinds; ≥44 px non-overlapping coarse actions, identity-stable keyboard/focus/rename. |
+| SC-011 | All FR/AC/BDD/fixture/test cases traced/executed under S Q-G4; mutations/discovery/remote gates/five reviewers or explicit founder deferrals. |
+| SC-012 | Six matching DOC updates audited against exact candidate; independent UAT validation then founder joint-landing approval. |
 
 ## User-facing Documentation TODOs
 
-These existing pages were read. Implementing leads draft matching updates **in the same behavior change**; docs-verifier independently checks factual accuracy against the exact joint build. Team-lead coordinates page overlap with session-core/Tasks/#1221/header/Tooltip owners. This design-only commit changes none of these user pages and makes no delivered-behavior claim.
-
-| ID | Absolute page / affected existing sections | Specific first-squad update and acceptance link |
-|---|---|---|
-| DOC-001 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/using-omnipus-ui.md`::The sidebar, The chat area, If the first message loses its connection, Stop and redirect commands | Replace sidebar conversation-tree/More/picker instructions with agent main click, exact restore/Ava fallback, Past sessions/+ New chat, /sessions and no old aliases/@ switching. Explain above-feed Main/Extra, actual name-only replies/inline responder, main-only question/approval/goal attention and shared observed-goal acknowledgement, reduced motion and stale/Retry. Move /new delivery-loss advice to the row New chat action. Distinguish open-chat panel from overall Sessions; document the **decided All / Running / Needs me** filter, helpers always under their parent even on helper-only matches, and expandable **N similar helper runs** with all original targets. Add actual plan/run links; unavailable parent/non-main attention scope follow the recorded narrow answers. FR-002–FR-014/FR-022–FR-036; T-30. |
-| DOC-002 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/agents.md`::The base agents, How to create your own agent, default/edit/worker sections | Document four figures/Omnipus default, exact grouped roles/palette, one-time migration and shared global preview/save with protected built-ins stable on restart. Replace mutable handover wording; no avatar upload/GIF feature promised. Explain main versus extra/worker inspection and Admin default main. Preserve existing current create/edit flow and global-default meaning, which is not the Ava welcome destination. Companion owner removes obsolete per-agent Auto checkbox guidance, not this identity work. FR-009/FR-015–FR-024/FR-038; T-25/T-30. |
-| DOC-003 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/workspaces.md`::What it is, panels, create/membership/freshness sections | Workspace expansion lists eligible colleagues, pair-specific mains and exact last-chat/default entry; explain extra/history, member hide/unhide and one-cutover continuation/heartbeat→main guarantee. Replace picker-owned refresh instructions with shell/sidebar roster+membership focus/expansion recovery and honest last-known/Retry. Admin lives in default workspace without team membership; later qualified collaboration never implies cross-workspace plans or a frontend permission grant. FR-001–FR-011/FR-037/FR-038; T-23/T-28/T-30. |
-| DOC-004 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/plans.md`::What it is, state table, create/run and limits sections | Explain starting-chat pill/modal-row/parent-panel association, Tasks-only no-origin, accepted Approved versus actual Running, real phase/pause/progress, successful start-result Open plan and existing Tasks/Graph drill-down live/replay. No new plan engine, no guess that internal owner is the starting chat. FR-028/FR-035; T-27/T-30. |
-| DOC-005 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/tasks.md`::How to create and start a task, If the task conversation cannot be created, task detail/run history | Explain actual task-run/session links from successful starts and Activity/Sessions, including scheduler-only work, real source/workspace, task-child dedupe and monitoring versus independent-run Stop authority. Preserve truthful refused-start behavior; coordinate backend's updated task/recipient modes, not a new scheduler/Schedules page. FR-032/FR-035/FR-036; T-27/T-30. |
-| DOC-006 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/getting-started.md`::How to go from nothing to your first conversation, step 7 | This page still tells a new user to choose the composer agent picker. Replace that instruction with eligible sidebar colleague/main selection and row New chat/Past sessions; coordinate first-workspace/onboarding wording with U1 instead of claiming the generic Ava entry rule replaces every onboarding step. FR-003/FR-005/FR-007; T-23/T-30. |
-
-Missing any matching page update in the implementation diff is an Important finding under P, with the concrete impact that a user follows removed picker/command/standalone-Admin instructions or mistakes another chat's activity/control scope. Public docs describe observable behavior, not unpublished wire fields. No unrelated page rewrite is authorized by these TODOs.
-
-## Questions for the founder
-
-**Team-lead interviews the founder using the question tool.** This author does not choose the answers or start an extra ADR grill. Q-FE-11/Q-FE-12, the original Q1–Q12, and the later **Session modal A2/D8 + grouping** answer are closed. **Decided:** helpers always remain under their parent in every search/filter, the exact filter choices are All / Running / Needs me, and repeated identical helpers fold into an expandable `N similar helper runs` row. Former Q-M1/Q-M2 and the alternative filter-name choice Q-M3 are retired, not re-interviewed. Only the narrower unresolved cases below remain; answer form: `Q-M4 A, Q-M5 A, Q-M6 A`. Recommendations are not decisions. Missing backend serialization is handled in the dependency ledger, not turned into guessed wire fields.
-
-### Q-M4 — How does Sessions expose background shells that are not chat sessions? (A / B / C)
-
-N D14 includes shells, but the stored session tree does not make each shell process a real Omnipus chat. F Q-FE-11 selects the existing modal as overall activity. A main can have finished its own turn while a background shell still runs; its own lifecycle chip alone would hide that work. The needed presentation is missing from W and requires authoritative origin-scoped metadata for unopened chats.
-
-| Option | Presentation within the existing modal |
+Implementing leads draft these six matching pages **in the behavior diff**; docs-verifier audits exact-candidate parity, team-lead coordinates overlaps, T-30 exercises instructions. Missing updates are Important: users would follow removed destinations or misunderstand control/attention. No public page edited here; S Q-G3 adds no downgrade documentation.
+| ID | Absolute page / changed topics |
 |---|---|
-| A | Show real shell activity/count on its origin chat's row; an accessible Open action reaches that origin chat's existing Activity panel. No synthetic session row. |
-| B | Expand origin chat into clearly marked **activity entries**, including shells as non-session entries distinct from genuine helper/run children, with existing authorized inspection actions. |
-| C | Keep shell detail only after opening the origin chat; the modal identifies the origin's background-work presence but lists no shell count/detail. This deliberately limits the overview. |
+| DOC-001 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/using-omnipus-ui.md` — sidebar/picker/More→main/Past/New, exact entry/Ava, /sessions/no aliases/@ switch; original-delivery guard on New; Main/Extra/names-only/input-derived inline phases/opaque glow/reduced motion; shown-bound shared goal read vs decision resolution; main-only Needs me/strict helper/folding/parent unavailable/shell count, local panel vs overall modal, real links/Retry. |
+| DOC-002 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/agents.md` — exact figures/default/roles/palette/migration/global preview/locks/restart; no image lane/handover; main/extra/worker/Admin, global default != Ava welcome. Existing creation flow stays; #1221 owner removes obsolete checkbox text. |
+| DOC-003 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/workspaces.md` — agent expansion/pair mains/restore/history/hide-unhide, saved continuation/heartbeat-main; shell-owned roster/member freshness/error/Retry, default Admin/no membership; no cross-workspace plans/authority. Existing upgrade behavior only. |
+| DOC-004 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/plans.md` — actual starting-chat pill/modal/panel and no-origin Tasks plan, Approved vs Running/phase/pause/progress, successful result Open plan→Tasks/Graph live/replay; internal owner is not guessed origin. |
+| DOC-005 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/tasks.md` — actual run/session links, scheduler-only work, source/workspace/dedupe, monitoring vs Stop; truthful refused-start/result history and coordinated backend recipients/modes, no new scheduler page. |
+| DOC-006 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/getting-started.md` — step7 composer picker→sidebar/main/Past/New; coordinate first-workspace onboarding with U1, not replace every onboarding step by generic Ava entry. |
 
-**Recommendation: A.** It keeps the one existing hierarchy and makes ongoing shell work discoverable without faking a saved session or building another view. DEP-ACT and WF-05 remain holds until the answer and real data coverage are published.
+## Founder decisions and remaining holds
 
-### Q-M5 — Where is a helper whose real parent cannot be loaded? (A / B)
-
-The newest answer forbids top-level helper rows **always**, superseding the current modal's orphan-as-root fallback. A retained helper can still have a missing/deleted or inaccessible parent. This question does not reopen nesting: it chooses the honest unavailable-parent treatment without inventing a new parent, leaking metadata or silently losing legitimate retained history.
-
-| Option | Treatment — helper never becomes top-level |
+S resolves every carried/new question; answered options/recommendations are removed, not re-interviewed. This log references the single normative homes rather than duplicating them.
+| Answer | Disposition / contract home |
 |---|---|
-| A | Keep the helper beneath a clearly unavailable **real-parent context**, using only authorized relation data; no fake navigable parent session or exposed hidden title. Its legitimate helper inspection remains reachable. |
-| B | Show a visible parent-resolution/availability notice and defer its modal row until real authorized parent context is available; retain legitimate independent inspection through existing routes. |
+| Q-M4 — origin-row shell count | FR-036/DEP-ACT, BDD-11.1, DS-S S12, WF-05. |
+| Q-M5 — parent chat unavailable | FR-030/DEP-ACT, BDD-08.2/E08; helper remains Openable, no invented/hidden title. |
+| Q-M6 — main-only Needs me | FR-033, BDD-09.1; helpers still reachable All/Running/search under parent. |
+| Q-G1 — when really shown | FR-004/013, foreground commitment/bounded read, BDD-02.4/E03/E04 and T-12/T-14/T-24. |
+| Q-G2 — glow fades, ink does not | FR-017/023, numeric oracle, BDD-07.2/E06, dimmest-frame T-15/T-25. |
+| Q-G3 — Nothing | MAJ-006's added operational promise is **moot by founder answer**; Deployment/FR-037 retain existing upgrade only, no extra downgrade scope. |
+| Q-G4 — scoped category exception | Authority/process exception; positive success plus genuine negative/edge recovery rows. Original strict gate stays a historical failure, not retrospectively green. |
+| Cut plan approved | C01–C14 consolidation; stable FR/AC/BDD/T/DS/J/DOC inventories and one traceability table. |
 
-**Recommendation: A.** It preserves the saved-helper reachability guarantee without breaking the always-nested rule. Backend owner must provide truthful authorized parent context; WF-01 covers this case.
-
-### Q-M6 — Which non-main rows, if any, match the already-approved Needs me filter? (A / B)
-
-The **presence and label of Needs me are decided**. Its broadening beyond mains is not defined by the latest answer: BS publishes needs_attention only on mains, while helpers may be waiting for a parent rather than for the person. This is a matching-source question, not another vote on A2; it cannot be answered by inventing a helper boolean or parsing text.
-
-| Option | Matching rule |
+### Ambiguity / readiness index
+No open product question from this review remains. Required publication/visual proof still holds its consumers; it is not replaced by a guessed field or fallback.
+| Warning | Current status / owner |
 |---|---|
-| A | Match confirmed main needs_attention only; any matching helper context is shown under its parent through other filters/search. |
-| B | Also match non-main sessions with an authoritative unresolved action addressed to the person, not generic waiting. Backend owner publishes/reuses exact question/approval ownership metadata first; sidebar remains main-only. |
-
-**Recommendation: A** for this first squad, because that source is already settled and mains carry person-facing attention. If the founder chooses B, existing authorized pending-question/approval data must establish the additional source; no new guessed wire field is permitted.
-
-### Visual/publication holds, not additional guesses
-
-WF-01–WF-05 require additions to the approved wireframe project and founder approval; DEP-ID/DEP-ACT require the owners' committed generated shapes and canonical identity inventory. Team-lead arranges these with the relevant owners. Existing approved Q9 design, figures/default, main/extra/entry semantics and main-only attention are not reopened here. Prototype color fixtures are presented for Q8's requested review, not a new mapping algorithm choice.
-
-## Ambiguity Warnings
-
-The founder has **not yet reviewed or acknowledged** these warnings in this task. Under plan-spec's ambiguity gate, this artifact remains a reviewable **Draft**, not a finalized implementation-ready spec. Team-lead records each answer/accepted deferral before dependent production work; the two formal spec grill/fix rounds still follow P's founder-interview rules. No second ADR correction/grill is commissioned here.
-
-| ID | What's ambiguous / missing | Likely agent assumption — forbidden until resolved | Question / owner and current state |
-|---|---|---|---|
-| AW-01 | Matching sources beyond the **decided** All / Running / Needs me filter | Treat every waiting helper as a person-action row | Q-M6; Pending narrow source-scope interview, not A2's presence/label. |
-| AW-02 | Missing/inaccessible real parent under the **decided always-nested helper rule** | Keep the old top-level orphan fallback or invent a parent | Q-M5; Pending unavailable-parent treatment; top-level helper is never allowed. |
-| AW-03 | Authoritative executing-versus-queued metadata for the **decided Running label** | Treat every current Working response as executing | DEP-ACT; Backend publication dependency, no open filter-name choice. |
-| AW-04 | Shells in the overall session-based view | Drop shells from overview or mint fake chat rows | Q-M4; Pending founder interview; WF-05/DEP-ACT. |
-| AW-05 | Per-agent figure persistence and canonical built-in role/color/figure inventory | Add a guessed Agent property/local store or choose seed values by name | DEP-ID; Pending backend identity owner publication. UI-only kit fixtures may proceed, persistence consumers may not. |
-| AW-06 | Real plan start origin, result-navigation contract and unopened run/shell metadata coverage | Assume owner/transport source is start chat; parse prose URL; treat loaded buckets as all work | DEP-ACT; Pending generated-contract/snapshot evidence. F Q-FE-12 is settled, field names are not invented. |
-| AW-07 | Redesigned modal/plan-result/editor/error visuals absent from approved reference | Copy another prototype/current screenshots as approved new design | WF-01–WF-05; Pending additions/approval, no wireframe edit in this task. |
-| AW-08 | Shared kit final interfaces/evidence; HoverCard not yet pushed at observed tip | Implement local FilterMenu/ViewSwitch/HoverCard or report file presence as publication | DEP-KIT; Pending Tasks-panel owner hand-off. |
-| AW-09 | Main/attention/ack contract shape is documented but not in checked schema snapshots | Handwrite fields/default to false and land without U1 | DEP-U1/DEP-ATT; Pending atomic schema/generated artifacts and real joint tests. |
-
-**No fabricated assumptions:** no new backend URLs, JSON properties, nominal wire types, budgets, role-policy grants, avatar storage or UI collapse/filter semantics are filled in. Recommendations above are not approvals. The draft can be published for the interview while final approval remains held; settled design rules are not blocked from independent test/kit preparation by unrelated unanswered choices.
+| AW-01 / AW-02 / AW-04 | Resolved by S Q-M6/Q-M5/Q-M4; DEP-ACT/WF proof remains. |
+| AW-03 / AW-06 | DEP-ACT: actual executing/queued, real origin/handles/shell coverage and stable enumeration, not cached completeness. |
+| AW-05 | DEP-ID: figure representation/canonical inventory/one-time persistence before consumers. |
+| AW-07 | WF-01–WF-05: missing-screen and corrected motion approval. |
+| AW-08 | DEP-KIT: final public interfaces/executed evidence, no duplicates. |
+| AW-09 | DEP-U1/DEP-ATT: schema+generated+runtime and shown-bound agreement; boolean-only attach insufficient. |
+| W-01 (former 23 category gaps) | S Q-G4's spec-only exception, preserved error/edge categories plus meaningful recovery; no suppression/relabelling. |
 
 ## Evaluation Scenarios (Holdout)
 
