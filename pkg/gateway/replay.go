@@ -1002,6 +1002,13 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 	// Absent reason on a truncated entry means "cancelled" (legacy —
 	// every entry written before TruncationReason existed was always
 	// a cancel; see TranscriptEntry.TruncationReason's doc comment).
+	// A distinct terminal outcome sentence: the live view shows it as its own
+	// message (done closed the narration bubble first), replay has no such
+	// boundary, so the marker rides the frame for the SPA to split on.
+	if entry.Role == "assistant" && entry.TerminalOutcome {
+		terminalCopy := true
+		sr.msgFrame.TerminalOutcome = &terminalCopy
+	}
 	if entry.Role == "assistant" && entry.Truncated {
 		truncatedCopy := true
 		sr.msgFrame.Truncated = &truncatedCopy

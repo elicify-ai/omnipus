@@ -4,7 +4,7 @@ Mail lets you read and send messages through an agent's mailbox in a workspace. 
 
 ## Set up and open Mail
 
-First, [add an email mailbox in Connectors](connectors.md#how-to-add-an-email-mailbox). In your workspace, select **Mail** in the top bar. On a narrow top bar, use **Open panels menu** and select **Mail** from the panels menu. Use the **Mailbox** selector to choose an agent's address when needed. Mail offers only enabled, configured mailboxes for that workspace.
+First, [add an email mailbox in Connectors](connectors.md#how-to-add-an-email-mailbox). In your workspace, select **Mail** in the top bar; in the icon-only row, hover or focus the Mail icon to see its label. On a narrow top bar, select the workspace name with its downward caret (**Open panels menu**), then select **Mail**. Use the **Mailbox** selector to choose an agent's address when needed. Mail offers only enabled, configured mailboxes for that workspace.
 
 If a Mail link opens a particular mailbox, you can still choose another eligible address using **Mailbox**. Your choice replaces the mailbox named by the link: Mail loads the chosen mailbox's folders and message list, clears the previously open message, and asks you to select a message to read. In the full-screen tab, the address updates to the mailbox you are now viewing.
 
@@ -12,9 +12,9 @@ When a workspace Chat link opens Mail for the first time or in a different works
 
 If none is available, Mail says **No mailbox is configured for this workspace yet.** **Compose** is unavailable. Select **Connect mailbox** to go to the Connectors screen and add one. A mailbox saved for a different workspace will not appear here.
 
-While docked, the message list sits above the reading area. Select **Expand Mail panel** in the panel heading to open or focus Mail in a separate full-screen browser tab; there the list and reading area appear side by side. Use **Back to chat** to return. The [shared panel guide](using-omnipus-ui.md#panels-beside-chat) also explains closing and resizing.
+While docked, the message list sits above the reading area. Select **Expand Mail panel** in the panel heading for the full-screen view, where the list and reading area appear side by side. In a normal browser tab, it opens or focuses a separate full-screen Mail tab. In an installed app or standalone Chrome window, it uses the same window instead. Use **Back to chat** to return; in an installed app, Mail re-docks in that same window with its current mailbox, folder and selected message. The [shared panel guide](using-omnipus-ui.md#panels-beside-chat) also explains closing and resizing.
 
-When you return with **Back to chat** or close an app-opened expanded Mail tab, the original Chat tab can restore Mail while it still owns that tab and has no different panel open. Restoration uses the last mailbox, folder and selected-message context that the original tab received from the expanded tab. With working cross-tab communication, that follows your changes in the expanded tab. If those updates could not reach the original tab, it may restore an older selection; check the mailbox and folder after returning. If a separate Mail tab is still recognised for the same workspace, Omnipus offers **Switch** instead of docking another copy.
+In a normal browser tab, when you return with **Back to chat** or close an app-opened expanded Mail tab, the original Chat tab can restore Mail while it still owns that tab and has no different panel open. Restoration uses the last mailbox, folder and selected-message context that the original tab received from the expanded tab. With working cross-tab communication, that follows your changes in the expanded tab. If those updates could not reach the original tab, it may restore an older selection; check the mailbox and folder after returning. If a separate Mail tab is still recognised for the same workspace, Omnipus offers **Switch** instead of docking another copy.
 
 ## Read messages
 

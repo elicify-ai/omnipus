@@ -1,7 +1,8 @@
 import React from 'react'
-import { act, fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, cleanup } from '@testing-library/react'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { useUiStore } from '@/store/ui'
+import { mockWorkspaceHeaderMeasurements } from '@/test/workspaceHeaderMeasurement'
 
 const navigate = vi.fn()
 vi.mock('@tanstack/react-router', () => ({
@@ -28,8 +29,15 @@ vi.mock('@/components/ui/dropdown-menu', async () => {
 import { WorkspaceTabBar } from './WorkspaceTabBar'
 
 beforeEach(() => {
+  mockWorkspaceHeaderMeasurements(220)
   navigate.mockClear()
   act(() => useUiStore.getState().closePanel())
+})
+
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('WorkspaceTabBar compact dropdown parity', () => {

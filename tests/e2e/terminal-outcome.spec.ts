@@ -55,7 +55,7 @@ test.describe('terminal outcome agrees across real surfaces', () => {
           env: { OMNIPUS_LOG_FILE: logPath, OMNIPUS_LOG_LEVEL: 'info' },
         });
         // All API-fixture calls precede UI login: one token slot per user.
-        const { agent, session } = await createTerminalSession(gw);
+        const { agent, session, otherSession } = await createTerminalSession(gw);
         await page.goto(gw.baseURL);
         await expect(page.locator('#login-username')).toBeVisible();
         await page.locator('#login-username').pressSequentially(gw.adminUsername);
@@ -146,6 +146,9 @@ test.describe('terminal outcome agrees across real surfaces', () => {
             .toEqual(assistants.map(({ id, content }) => ({ id, content })));
         }
         await assertTerminalRendering(page, info, disconnected ? 'reconnected-after-terminal' : 'live', terminalEntries);
+        // Re-opening the already-active session sends no attach by design, so
+        // switch to the other session first: coming back is a genuine fresh attach.
+        await openTerminalSession(page, gw.baseURL, otherSession.id);
         const beforeAttach = traffic.attaches.length;
         await openTerminalSession(page, gw.baseURL, session.id);
         await expect.poll(() => traffic.attaches.slice(beforeAttach).filter((frame) => frame.session_id === session.id).length)

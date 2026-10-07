@@ -5,6 +5,7 @@ import { ArrowLeft, SpinnerGap } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import { focusChatInputWhenReady } from '@/components/panel-shell/panelFocus'
+import { isStandaloneWindow } from '@/lib/browserDisplayMode'
 import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import { shouldClosePanelOnEscape } from '@/components/panel-shell/panelEscape'
 import { getPanelDefinition } from '@/components/panel-shell/registry'
@@ -144,6 +145,12 @@ function FullScreenPanelRoute() {
       if (context === null) return
       contextRef.current = context
       announceClosed()
+      if (isStandaloneWindow()) {
+        // This is the chat's installed-app window, not a disposable tab.
+        // Reuse the same guarded context-preserving re-dock path directly.
+        void returnToChat(context)
+        return
+      }
       try {
         window.close()
       } catch (error) {
