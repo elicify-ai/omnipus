@@ -561,6 +561,9 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 // pre-ADR-093 revive-and-redispatch; a classify ERROR — including unreadable
 // metadata — fails the enqueue and does NOT revive.
 func (al *AgentLoop) reviveInactiveInbound(route routing.ResolvedRoute, msg bus.InboundMessage) (bool, error) {
+	if !reviveInboundIsHumanTurn(msg) {
+		return false, nil
+	}
 	sessionID := strings.TrimSpace(msg.SessionID)
 	if sessionID == "" {
 		return false, nil
