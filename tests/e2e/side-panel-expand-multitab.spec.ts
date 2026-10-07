@@ -238,9 +238,13 @@ test.describe('native docking regression', () => {
         'FR-009: retained child content survives reuse; no blanking/re-navigation').toBe(true)
       await expect(marker).toBeVisible()
 
-      const closed = child.waitForEvent('close')
-      await child.getByRole('button', { name: /back to chat/i }).click()
-      await closed
+      // The click's own effect is window.close() on this page, so Playwright can
+      // reject the click with TargetClosedError. Tolerate that ONLY if the page
+      // really closed; the close event is still awaited and asserted.
+      await Promise.all([
+        child.waitForEvent('close'),
+        child.getByRole('button', { name: /back to chat/i }).click().catch((e: unknown) => { if (!child.isClosed()) throw e }),
+      ])
       await expect(page.getByTestId('side-panel'), 'FR-018: child Back re-docks ONLY in its source').toBeVisible()
       await assertSameNativeChat(page, baseline, panel)
       const restored = panel === 'tasks' ? page.getByTestId('tasks-heading')
@@ -264,9 +268,11 @@ test.describe('native docking regression', () => {
       expect(query.get('popout')).toMatch(/^[A-Za-z0-9-]+$/)
       query.delete('popout') // a MANUAL tab has no opener-owned lifecycle tag
       generated.hash = `${generated.hash.split('?')[0]}?${query.toString()}`
-      const closed = ownedChild.waitForEvent('close')
-      await ownedChild.getByRole('button', { name: /back to chat/i }).click()
-      await closed
+      // Click closes its own page (window.close); tolerate the click error only if the page really closed.
+      await Promise.all([
+        ownedChild.waitForEvent('close'),
+        ownedChild.getByRole('button', { name: /back to chat/i }).click().catch((e: unknown) => { if (!ownedChild.isClosed()) throw e }),
+      ])
       await expect(page.getByTestId('side-panel')).toBeVisible()
       await assertNativeHeaderHit(page, 'panel-close')
       await page.getByTestId('panel-close').click()
