@@ -73,7 +73,7 @@ function renderList(tasks: Task[]) {
 function injectRealTailwindDeclarations() {
   const style = document.createElement('style')
   style.textContent =
-    '.table-fixed{table-layout:fixed}.whitespace-normal{white-space:normal}.wrap-anywhere{overflow-wrap:anywhere}.min-w-0{min-width:0px}'
+    '.table-fixed{table-layout:fixed}.whitespace-normal{white-space:normal}.break-normal{overflow-wrap:normal;word-break:normal}.wrap-break-word{overflow-wrap:break-word}.min-w-0{min-width:0px}'
   document.head.appendChild(style)
   return () => style.remove()
 }
@@ -111,7 +111,7 @@ describe('ListView — long unbroken title containment (UAT Finding 2)', () => {
       // Full text is preserved in the DOM — only CSS (truncate) visually clips it.
       expect(titleButton.textContent).toBe(longTitle)
       expect(titleButton).toHaveAttribute('title', longTitle)
-      expect(titleButton).toHaveClass('whitespace-normal', 'wrap-anywhere', 'min-w-0')
+      expect(titleButton).toHaveClass('whitespace-normal', 'wrap-break-word', 'min-w-0')
       expect(titleButton).not.toHaveClass('truncate', 'line-clamp-1') // T3: no visually clipped title.
 
       // Real cascade resolution (not just a className string match): the
@@ -120,7 +120,8 @@ describe('ListView — long unbroken title containment (UAT Finding 2)', () => {
       // real CSSOM.
       const computed = getComputedStyle(titleButton)
       expect(computed.whiteSpace).toBe('normal')
-      expect(computed.overflowWrap).toBe('anywhere')
+      expect(computed.overflowWrap).toBe('break-word')
+      expect(computed.wordBreak).toBe('normal')
       expect(computed.minWidth).toBe('0px')
 
       const table = screen.getByRole('table')
@@ -135,7 +136,7 @@ describe('ListView — long unbroken title containment (UAT Finding 2)', () => {
     const titleButton = screen.getByRole('button', { name: /^Fix login bug, status/ })
     expect(titleButton.textContent).toBe('Fix login bug')
     expect(titleButton).toHaveAttribute('title', 'Fix login bug')
-    expect(titleButton).toHaveClass('whitespace-normal', 'wrap-anywhere', 'min-w-0')
+    expect(titleButton).toHaveClass('whitespace-normal', 'wrap-break-word', 'min-w-0')
     expect(titleButton).not.toHaveClass('truncate')
   })
 })

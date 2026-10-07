@@ -440,7 +440,7 @@ function PlanFilterTile({
             the wrapping mode the spec requires browsers to factor into
             min-content sizing itself. T3 founder steering removes the clamp
             and bounds the span to the button's content width for full wrapping. */}
-        <span className="w-full min-w-0 max-w-full whitespace-normal wrap-anywhere text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]">
+        <span className="w-full min-w-0 max-w-full whitespace-normal break-normal wrap-break-word hyphens-none text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]">
           {plan.title}
         </span>
 

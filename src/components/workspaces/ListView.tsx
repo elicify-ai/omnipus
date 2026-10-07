@@ -563,7 +563,7 @@ function TaskRow({
           // T3 founder steering: the whole title wraps in the width-stable
           // column. No clipping or tooltip dependency; title is supplementary.
           title={task.title}
-          className="block h-auto w-full min-w-0 whitespace-normal wrap-anywhere p-0 text-left text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent"
+          className="block h-auto w-full min-w-0 whitespace-normal break-normal wrap-break-word hyphens-none p-0 text-left text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent"
         >
           {task.title}
         </Button>

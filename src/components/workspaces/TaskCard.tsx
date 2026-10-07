@@ -252,40 +252,16 @@ export function TaskCard({
         </div>
       )}
 
-      {/* Top row: priority badge + title */}
-      <div className="flex items-start gap-[var(--space-2)]">
-        <PriorityBadge
-          priority={priority}
-          className="flex-shrink-0 rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold leading-tight mt-[var(--space-0-5)]"
-        />
-        {/* UAT Finding 2 fix: a long UNBROKEN title (no spaces — e.g. the
-            200-char maxLength case) used to blow out this flex chain. `<p>`
-            is a flex item (`flex-1`) whose default `min-width: auto`
-            resolves to its CONTENT's min-content size — for an unbroken
-            string that's the string's full rendered width, which cascaded
-            up through every ancestor flex container (this row → the card →
-            StatusColumn, a flex item of the columns ROW) and inflated the
-            column's own width well past its `min-w-[162px]` floor, pushing
-            later columns off-screen with no way to scroll to them.
-            `min-w-0` removes the auto floor on this item; `wrap-anywhere`
-            (overflow-wrap: anywhere) is the one wrapping mode the spec
-            requires browsers to factor into MIN-CONTENT sizing itself (unlike
-            `break-word`, which they're allowed to ignore for min-content) —
-            together they cap this paragraph's contribution at a single
-            glyph's width, so the column can never be forced wider by title
-            content. T3 founder steering removes the clamp: the whole title wraps
-            inside that bounded width. The native title is supplementary,
-            never the only way to read the task's name. */}
-        <p
-          className="min-w-0 flex-1 whitespace-normal wrap-anywhere pr-[var(--space-4)] text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]"
-          title={task.title}
-        >
-          {task.title}
-        </p>
-        {/* FR-022 (SP-41) + PI3: the ONE standard running indicator, spinner
-            only, on every running task's card — never on a finished one. */}
-        {running && <RunningIndicator className="flex-shrink-0 mt-[var(--space-0-5)]" />}
+      {/* Priority/action row does not steal width from normal title words. */}
+      <div className="flex items-center gap-[var(--space-2)]">
+        <PriorityBadge priority={priority} className="shrink-0 rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold leading-tight" />
+        {running && <RunningIndicator className="shrink-0" />}
       </div>
+      {/* Full card width, normal word boundaries; only oversized words/URLs
+          use overflow-wrap: break-word. Explicit bounds defeat min-content inflation. */}
+      <p title={task.title} className="mt-[var(--space-1)] w-full min-w-0 max-w-full whitespace-normal break-normal wrap-break-word hyphens-none text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]">
+        {task.title}
+      </p>
 
       {/* Cancelled/Failed marker (ADR-052 FR-015/US-8) — a `failed` task
           gets an explicit state chip so a user-Stopped (orange "Cancelled")

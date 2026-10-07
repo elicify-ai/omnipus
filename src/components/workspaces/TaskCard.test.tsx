@@ -264,7 +264,7 @@ describe('TaskCard — keyboard event bubbling from nested subtask rows (altitud
 describe('TaskCard — long unbroken title containment (UAT Finding 2)', () => {
   function injectRealTailwindDeclarations() {
     const style = document.createElement('style')
-    style.textContent = '.wrap-anywhere{overflow-wrap:anywhere}.min-w-0{min-width:0px}'
+    style.textContent = '.break-normal{overflow-wrap:normal;word-break:normal}.wrap-break-word{overflow-wrap:break-word}.min-w-0{min-width:0px}'
     document.head.appendChild(style)
     return () => style.remove()
   }
@@ -278,7 +278,7 @@ describe('TaskCard — long unbroken title containment (UAT Finding 2)', () => {
       const titleEl = screen.getByText(longTitle)
       expect(titleEl.textContent).toBe(longTitle) // CSS (line-clamp) truncates the RENDER, not the DOM content
       expect(titleEl).toHaveAttribute('title', longTitle) // native tooltip carries the full string
-      expect(titleEl).toHaveClass('wrap-anywhere')
+      expect(titleEl).toHaveClass('wrap-break-word')
       expect(titleEl).toHaveClass('min-w-0')
 
       // Real cascade resolution, not just a className string match: the
@@ -286,7 +286,8 @@ describe('TaskCard — long unbroken title containment (UAT Finding 2)', () => {
       // these utilities, so this proves the classes take effect through
       // jsdom's real CSSOM rather than merely being present in `className`.
       const computed = getComputedStyle(titleEl)
-      expect(computed.overflowWrap).toBe('anywhere')
+      expect(computed.overflowWrap).toBe('break-word')
+      expect(computed.wordBreak).toBe('normal')
       expect(computed.minWidth).toBe('0px')
     } finally {
       removeStyle()
@@ -297,7 +298,7 @@ describe('TaskCard — long unbroken title containment (UAT Finding 2)', () => {
     render(<TaskCard task={baseTask({ title: 'Fix login bug' })} onClick={vi.fn()} showActions={false} />)
     const titleEl = screen.getByText('Fix login bug')
     expect(titleEl).toHaveAttribute('title', 'Fix login bug')
-    expect(titleEl).toHaveClass('wrap-anywhere', 'min-w-0', 'whitespace-normal')
+    expect(titleEl).toHaveClass('wrap-break-word', 'min-w-0', 'whitespace-normal')
     expect(titleEl).not.toHaveClass('line-clamp-2') // T3 founder steering: show the whole title.
   })
 })

@@ -11,11 +11,11 @@ import { GraphView } from './graph/GraphView'
 import { buildTaskGraph } from './graph/taskGraph'
 import { layoutAgent, layoutPlan, layoutTask, renderLayout } from './tasksLayoutFixtures'
 
-it('T3 fully wraps spaced/unbroken titles on tiles, cards, List and Graph, and reserves measured Graph heights', async () => {
+it('T3 wraps titles at word boundaries, contains long URLs, and reserves measured Graph heights', async () => {
   const compiler = await compile('@import "tailwindcss";', { base: process.cwd(), onDependency: () => {} })
   const style = document.createElement('style')
   const utilities: string[] = []
-  postcss.parse(compiler.build(['whitespace-nowrap', 'whitespace-normal', 'max-w-full', 'w-full', 'min-w-0', 'wrap-anywhere', 'truncate', 'line-clamp-2', 'flex-1', 'block'])).walkRules((rule) => {
+  postcss.parse(compiler.build(['whitespace-nowrap', 'whitespace-normal', 'max-w-full', 'w-full', 'min-w-0', 'wrap-anywhere', 'wrap-break-word', 'break-normal', 'hyphens-none', 'truncate', 'line-clamp-2', 'flex-1', 'block'])).walkRules((rule) => {
     if (rule.selector.startsWith('.') && !rule.selector.includes(':') && !rule.selector.includes(' ')) utilities.push(rule.toString())
   })
   style.textContent = utilities.join('\n')
@@ -28,7 +28,7 @@ it('T3 fully wraps spaced/unbroken titles on tiles, cards, List and Graph, and r
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('DOMMatrixReadOnly', class { m22 = 1 })
   try {
-    for (const title of ['Omnipus marketing + docs website in a new private GitHub repo', 'X'.repeat(200)]) {
+    for (const title of ['Omnipus marketing + docs website in a new private GitHub repo', 'Post-publish build verification: pushed omnipus-site repo builds cleanly', 'Diagnose delegated session interruption: gateway restarted', `https://example.com/${'x'.repeat(180)}`, 'X'.repeat(200)]) {
       const mounted = renderLayout(<>
         <section aria-label="Plan titles"><PlansFilterBand plans={[layoutPlan({ title })]} tasks={[]} agents={[layoutAgent()]} selectedPlanId={null} onSelectPlan={vi.fn()} onNewPlan={vi.fn()} onEditPlan={vi.fn()} onClearPlan={vi.fn()} /></section>
         <section aria-label="Board titles"><TaskCard task={layoutTask({ title })} onClick={vi.fn()} showActions={false} /></section>
@@ -46,10 +46,15 @@ it('T3 fully wraps spaced/unbroken titles on tiles, cards, List and Graph, and r
       for (const element of titles) {
         expect(element.textContent).toBe(title)
         expect(getComputedStyle(element).whiteSpace).toBe('normal')
-        expect(getComputedStyle(element).overflowWrap).toBe('anywhere')
+        expect(getComputedStyle(element).overflowWrap).toBe('break-word')
+        expect(getComputedStyle(element).wordBreak).toBe('normal')
+        expect(element).not.toHaveClass('break-all', 'wrap-anywhere')
         expect(getComputedStyle(element).minWidth).toBe('0px')
         expect(element).not.toHaveClass('line-clamp-2', 'truncate')
       }
+      expect(titles[1].parentElement, 'Board title owns the full card width, not a priority/title flex row').toHaveAttribute('role', 'button')
+      expect(titles[1]).toHaveClass('w-full', 'max-w-full')
+      expect(titles[1]).not.toHaveClass('pr-[var(--space-4)]')
       expect(screen.queryByRole('tooltip'), 'full titles do not depend on a clipped overlay').not.toBeInTheDocument()
       mounted.unmount()
       mounted.client.clear()

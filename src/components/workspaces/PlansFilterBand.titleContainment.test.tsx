@@ -162,7 +162,7 @@ function renderBand(overrides: Partial<React.ComponentProps<typeof PlansFilterBa
  * ListView.titleContainment.test.tsx already use for the identical classes. */
 function injectRealTailwindDeclarations() {
   const style = document.createElement('style')
-  style.textContent = '.wrap-anywhere{overflow-wrap:anywhere}.min-w-0{min-width:0px}'
+  style.textContent = '.break-normal{overflow-wrap:normal;word-break:normal}.wrap-break-word{overflow-wrap:break-word}.min-w-0{min-width:0px}'
   document.head.appendChild(style)
   return () => style.remove()
 }
@@ -179,7 +179,7 @@ describe('PlansFilterBand — long unbroken plan title containment (round-2 UAT 
       expect(titleEl.textContent).toBe(longTitle)
       expect(titleEl).not.toHaveClass('line-clamp-2')
       expect(titleEl).toHaveClass('whitespace-normal') // T3 founder steering: full wrapping, no Tooltip extension.
-      expect(titleEl).toHaveClass('wrap-anywhere')
+      expect(titleEl).toHaveClass('wrap-break-word')
       expect(titleEl).toHaveClass('min-w-0')
       // TaskCard-specific row-layout classes must NOT leak in — this span
       // sits in a column flex container, not a row.
@@ -191,7 +191,8 @@ describe('PlansFilterBand — long unbroken plan title containment (round-2 UAT 
       // (verified above), proving the classes take effect through jsdom's
       // real CSSOM.
       const computed = getComputedStyle(titleEl)
-      expect(computed.overflowWrap).toBe('anywhere')
+      expect(computed.overflowWrap).toBe('break-word')
+      expect(computed.wordBreak).toBe('normal')
       expect(computed.minWidth).toBe('0px')
 
       // The outer tile div (role="group", data-testid) already carries
@@ -209,7 +210,7 @@ describe('PlansFilterBand — long unbroken plan title containment (round-2 UAT 
 
     const titleEl = screen.getByText('Payments revamp')
     expect(titleEl.textContent).toBe('Payments revamp')
-    expect(titleEl).toHaveClass('whitespace-normal', 'wrap-anywhere', 'min-w-0')
+    expect(titleEl).toHaveClass('whitespace-normal', 'wrap-break-word', 'min-w-0')
     expect(titleEl).not.toHaveClass('line-clamp-2')
 
     const tile = screen.getByTestId('plan-filter-tile-plan-short')
