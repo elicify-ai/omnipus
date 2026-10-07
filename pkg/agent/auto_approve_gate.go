@@ -64,7 +64,7 @@ func (al *AgentLoop) autoApproveActiveFor(ts *turnState) bool {
 
 // isDelegated reports whether ts is a sub-turn spawned by another turn.
 func (ts *turnState) isDelegated() bool {
-	return ts != nil && (ts.depth > 0 || ts.parentTurnID != "" || ts.parentTurnState != nil)
+	return ts != nil && (ts.depth > 0 || ts.parentTurnID != "")
 }
 
 // agentAutoApproveDisabledIn reports whether agentID's own config entry in

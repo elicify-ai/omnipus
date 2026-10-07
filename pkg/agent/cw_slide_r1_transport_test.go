@@ -122,7 +122,7 @@ func cwR1Send(t *testing.T, rr *agentLoopRunTurnResponse) {
 	// (checkpointRequest(true)) runs immediately before callProvider —
 	// measure and relieve the assembled request, then send what remains.
 	require.NoError(t, rr.rq.checkpointRequest(true))
-	response, err := rr.rq.ri.rf.rt.callProvider(rr.rq.ri.rf.callMessages, rr.rq.ri.rf.providerToolDefs)
+	response, err := rr.rq.ri.rf.rt.callProviderOnce(rr.rq.ri.rf.callMessages, rr.rq.ri.rf.providerToolDefs)
 	require.NoError(t, err, "structurally valid request must cross the real provider boundary")
 	require.Equal(t, "r1-success", response.Content, "provider progress must be observed")
 }
