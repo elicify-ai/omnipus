@@ -263,8 +263,31 @@ describe('Sessions view — hierarchy, fold, shell count, tokens', () => {
   it('shows a stored token count of zero', async () => {
     vi.mocked(fetchSessions).mockResolvedValue([makeSession({ id: 'z', title: 'Zero tokens', total_tokens: 0 })])
     renderModal()
+    await screen.findByText('Zero tokens')
     const row = document.getElementById('search-result-z')
-    await waitFor(() => expect(row).not.toBeNull())
+    expect(row).not.toBeNull()
     expect(row!.textContent).toMatch(/(^|\D)0(\D|$)/)
+  })
+
+  it('activates the highlighted session after a reorder, not the row that slid into that index', async () => {
+    const stamp = '2026-07-16T11:00:00Z'
+    const alpha = makeSession({ id: 'alpha', title: 'Alpha chat', updated_at: stamp })
+    const beta = makeSession({ id: 'beta', title: 'Beta chat', updated_at: stamp })
+    vi.mocked(fetchSessions).mockResolvedValue([alpha, beta])
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <SearchModal />
+      </QueryClientProvider>,
+    )
+    await screen.findByText('Beta chat')
+    screen.getByRole('textbox', { name: 'Search sessions' }).focus()
+    await userEvent.keyboard('{ArrowDown}')
+    expect(document.getElementById('search-result-beta')?.textContent).toContain('↵')
+    act(() => {
+      client.setQueryData(['sessions', 'flat'], [beta, alpha])
+    })
+    await userEvent.keyboard('{Enter}')
+    expect(mockSelectSession).toHaveBeenCalledWith(expect.objectContaining({ id: 'beta' }))
   })
 })
