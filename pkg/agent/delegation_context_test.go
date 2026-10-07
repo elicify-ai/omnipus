@@ -33,7 +33,7 @@ func makeTarget(id string, modes []config.DelegationMode, depth *int) delegation
 }
 
 func TestBuildDelegationContext_NoTargets(t *testing.T) {
-	got := buildDelegationContext(nil, 0)
+	got := buildDelegationContext(nil, 0, 0)
 	want := "## Delegation\nYou cannot delegate to other agents in this workspace — complete the task yourself. Do not call list_agents or search memory to look for delegation targets; there are none configured for you here."
 	if got != want {
 		t.Errorf("nil targets:\ngot:  %q\nwant: %q", got, want)
@@ -45,7 +45,7 @@ func TestBuildDelegationContext_NoTargets(t *testing.T) {
 }
 
 func TestBuildDelegationContext_EmptyTargets(t *testing.T) {
-	got := buildDelegationContext([]delegationTarget{}, 0)
+	got := buildDelegationContext([]delegationTarget{}, 0, 0)
 	want := "## Delegation\nYou cannot delegate to other agents in this workspace — complete the task yourself. Do not call list_agents or search memory to look for delegation targets; there are none configured for you here."
 	if got != want {
 		t.Errorf("empty targets:\ngot:  %q\nwant: %q", got, want)
@@ -56,7 +56,7 @@ func TestBuildDelegationContext_SingleTargetAllModes(t *testing.T) {
 	targets := []delegationTarget{
 		makeTarget("ava", nil, ptr(3)), // nil Modes = all three
 	}
-	got := buildDelegationContext(targets, 3)
+	got := buildDelegationContext(targets, 3, 0)
 
 	// Must contain the header.
 	if !strings.Contains(got, "## Delegation") {
@@ -134,7 +134,7 @@ func TestBuildDelegationContext_RetiredModeValueRendersNoForms(t *testing.T) {
 	targets := []delegationTarget{
 		makeTarget("ava", []config.DelegationMode{config.DelegationMode("await")}, nil),
 	}
-	got := buildDelegationContext(targets, 0)
+	got := buildDelegationContext(targets, 0, 0)
 
 	// The target section still renders (the target itself is known/labeled) …
 	if !strings.Contains(got, "### → Ava (Builder: implementation & code)") {
@@ -162,7 +162,7 @@ func TestBuildDelegationContext_TwoTargets(t *testing.T) {
 		makeTarget("ava", nil, nil),
 		makeTarget("ray", nil, nil),
 	}
-	got := buildDelegationContext(targets, 0)
+	got := buildDelegationContext(targets, 0, 0)
 
 	// Both subagent sections must be present.
 	if !strings.Contains(got, "### → Ava (Builder: implementation & code)") {
@@ -195,7 +195,7 @@ func TestBuildDelegationContext_UnknownTargetSkipped(t *testing.T) {
 		// Empty label = unknown/unresolvable target.
 		{ID: "nonexistent-agent", Label: "", Modes: nil, Depth: nil},
 	}
-	got := buildDelegationContext(targets, 0)
+	got := buildDelegationContext(targets, 0, 0)
 
 	// All targets skipped → cannot-delegate message.
 	if !strings.Contains(got, "You cannot delegate to other agents in this workspace") {
@@ -223,7 +223,7 @@ func TestBuildDelegationContext_UnknownTargetSkipped(t *testing.T) {
 
 func TestBuildDelegationContext_DepthUncapped(t *testing.T) {
 	targets := []delegationTarget{makeTarget("ava", nil, nil)}
-	got := buildDelegationContext(targets, 0)
+	got := buildDelegationContext(targets, 0, 0)
 	if !strings.Contains(got, "max chain depth: uncapped") {
 		t.Errorf("globalDepthCap=0 must render as uncapped; got:\n%s", got)
 	}
@@ -231,7 +231,7 @@ func TestBuildDelegationContext_DepthUncapped(t *testing.T) {
 
 func TestBuildDelegationContext_GlobalDepthSet(t *testing.T) {
 	targets := []delegationTarget{makeTarget("ava", nil, nil)}
-	got := buildDelegationContext(targets, 3)
+	got := buildDelegationContext(targets, 3, 0)
 	if !strings.Contains(got, "max chain depth: 3") {
 		t.Errorf("globalDepthCap=3 must render as '3'; got:\n%s", got)
 	}
@@ -241,7 +241,7 @@ func TestBuildDelegationContext_BackgroundModeOnly(t *testing.T) {
 	targets := []delegationTarget{
 		makeTarget("ava", []config.DelegationMode{config.DelegationModeBackground}, nil),
 	}
-	got := buildDelegationContext(targets, 0)
+	got := buildDelegationContext(targets, 0, 0)
 
 	// The await (async=false) form and create_task must NOT appear as calls.
 	if strings.Contains(got, `delegate(agent_id="ava", task="…", async=false)`) {
@@ -259,7 +259,7 @@ func TestBuildDelegationContext_TaskModeOnly(t *testing.T) {
 	targets := []delegationTarget{
 		makeTarget("ava", []config.DelegationMode{config.DelegationModeTask}, nil),
 	}
-	got := buildDelegationContext(targets, 0)
+	got := buildDelegationContext(targets, 0, 0)
 
 	// Neither delegate form must appear as an actual call.
 	if strings.Contains(got, `delegate(agent_id="ava", task="…", async=false)`) {
@@ -281,7 +281,7 @@ func TestBuildDelegationContext_TwoModeSubset(t *testing.T) {
 			config.DelegationModeTask,
 		}, nil),
 	}
-	got := buildDelegationContext(targets, 0)
+	got := buildDelegationContext(targets, 0, 0)
 
 	// await must be absent.
 	if strings.Contains(got, `delegate(agent_id="ava", task="…", async=false)`) {
@@ -304,7 +304,7 @@ func TestBuildDelegationContext_MixedTargets(t *testing.T) {
 		{ID: "nonexistent", Label: "", Modes: nil, Depth: nil}, // unknown, must be skipped
 		makeTarget("ray", nil, nil),
 	}
-	got := buildDelegationContext(targets, 0)
+	got := buildDelegationContext(targets, 0, 0)
 
 	if !strings.Contains(got, "### → Ava (Builder: implementation & code)") {
 		t.Errorf("missing ava section; got:\n%s", got)
@@ -331,7 +331,7 @@ func TestBuildDelegationContext_AllSkipped(t *testing.T) {
 		{ID: "ghost1", Label: "", Modes: nil, Depth: nil},
 		{ID: "ghost2", Label: "", Modes: nil, Depth: nil},
 	}
-	got := buildDelegationContext(targets, 0)
+	got := buildDelegationContext(targets, 0, 0)
 
 	if !strings.Contains(got, "You cannot delegate to other agents in this workspace") {
 		t.Errorf("all-skipped must produce cannot-delegate text; got:\n%s", got)
@@ -358,7 +358,7 @@ func TestBuildDelegationContext_PerTargetOnwardForbidden(t *testing.T) {
 		makeTarget("ava", nil, ptr(0)), // Depth=0: cannot delegate onward
 		makeTarget("ray", nil, nil),    // Depth=nil: inherits, no note
 	}
-	got := buildDelegationContext(targets, 0)
+	got := buildDelegationContext(targets, 0, 0)
 
 	// Both sections must appear.
 	if !strings.Contains(got, "### → Ava") {
@@ -389,7 +389,7 @@ func TestBuildDelegationContext_PerTargetModeSubset(t *testing.T) {
 		// ray: all (real) modes
 		makeTarget("ray", nil, nil),
 	}
-	got := buildDelegationContext(targets, 0)
+	got := buildDelegationContext(targets, 0, 0)
 
 	// ava section: no tool-call bullets at all for an unrecognized mode value.
 	if strings.Contains(got, `delegate(agent_id="ava", task="…")`) {
@@ -423,7 +423,7 @@ func TestBuildDelegationContext_PerTargetModeSubset(t *testing.T) {
 func TestBuildDelegationContext_DelegationAuthorityAndExclusivity(t *testing.T) {
 	t.Run("non-empty targets renders authority and exclusivity", func(t *testing.T) {
 		targets := []delegationTarget{makeTarget("ava", nil, nil)}
-		got := buildDelegationContext(targets, 0)
+		got := buildDelegationContext(targets, 0, 0)
 
 		if !strings.Contains(got, "COMPLETE, authoritative delegation roster for THIS workspace") {
 			t.Errorf("authority line missing; got:\n%s", got)
@@ -451,7 +451,7 @@ func TestBuildDelegationContext_DelegationAuthorityAndExclusivity(t *testing.T) 
 	})
 
 	t.Run("cannot-delegate path has no authority or exclusivity lines", func(t *testing.T) {
-		got := buildDelegationContext(nil, 0)
+		got := buildDelegationContext(nil, 0, 0)
 		if strings.Contains(got, "COMPLETE, authoritative") {
 			t.Errorf("cannot-delegate path must not contain authority line; got:\n%s", got)
 		}
@@ -466,7 +466,7 @@ func TestBuildDelegationContext_DelegationAuthorityAndExclusivity(t *testing.T) 
 
 	t.Run("all-skipped path has no authority or exclusivity lines", func(t *testing.T) {
 		targets := []delegationTarget{{ID: "unknown", Label: "", Modes: nil, Depth: nil}}
-		got := buildDelegationContext(targets, 0)
+		got := buildDelegationContext(targets, 0, 0)
 		if strings.Contains(got, "COMPLETE, authoritative") {
 			t.Errorf("all-skipped path must not contain authority line; got:\n%s", got)
 		}

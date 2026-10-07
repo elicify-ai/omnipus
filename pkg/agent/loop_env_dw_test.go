@@ -64,7 +64,7 @@ func TestWireDelegationInjectors_DW001NilRegistryIsErrorLevel(t *testing.T) {
 		al.mu.Unlock()
 	})
 
-	got := cb.delegationInjector("")
+	got := cb.delegationInjector("", 0)
 	if got != "" {
 		t.Fatalf("fail-safe: expected empty delegation block, got %q", got)
 	}
@@ -81,7 +81,7 @@ func TestWireDelegationInjectors_DW002AgentAbsentIsErrorLevel(t *testing.T) {
 		t.Fatal("setup: RemoveAgent(jim) returned false")
 	}
 
-	got := cb.delegationInjector("")
+	got := cb.delegationInjector("", 0)
 	if got != "" {
 		t.Fatalf("fail-safe: expected empty delegation block, got %q", got)
 	}

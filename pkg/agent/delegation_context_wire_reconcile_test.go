@@ -23,7 +23,7 @@ func TestBuildDelegationContext_UsesSessionIDNotDeprecatedTaskID(t *testing.T) {
 	targets := []delegationTarget{
 		makeTarget("ava", nil, ptr(3)),
 	}
-	got := buildDelegationContext(targets, 3)
+	got := buildDelegationContext(targets, 3, 0)
 
 	if !strings.Contains(got, `delegate(action="status", session_id="…")`) {
 		t.Errorf("expected the poll instruction to use session_id; got:\n%s", got)
@@ -44,7 +44,7 @@ func TestBuildDelegationContext_CreateTaskAdvertisesCriteria(t *testing.T) {
 	targets := []delegationTarget{
 		makeTarget("ava", []config.DelegationMode{config.DelegationModeTask}, nil),
 	}
-	got := buildDelegationContext(targets, 3)
+	got := buildDelegationContext(targets, 3, 0)
 
 	if !strings.Contains(got, "criteria") {
 		t.Errorf("rendered create_task call must advertise the required criteria param; got:\n%s", got)

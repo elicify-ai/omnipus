@@ -87,7 +87,7 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 
 		// Capture by value so the closure refers to this specific agentID string.
 		id := agentID
-		agentInst.ContextBuilder.WithDelegationInjector(func(workspaceID string) string {
+		agentInst.ContextBuilder.WithDelegationInjector(func(workspaceID string, currentDepth int) string {
 			// DW-001: read the CURRENT live registry — not the one captured at wire time.
 			// After a hot-reload, al.registry is the new value.
 			liveRegistry := al.GetRegistry()
@@ -190,10 +190,13 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 					Label: label,
 					Modes: modes,
 					Depth: e.Depth,
+					// The gate's cap for this edge, from the RAW configured
+					// ceiling (see delegationTarget.DepthCap).
+					DepthCap: resolveEffectiveDelegationDepth(e.Depth, configuredDepthCap),
 				})
 			}
 
-			return buildDelegationContext(targets, globalDepthCap)
+			return buildDelegationContext(targets, globalDepthCap, currentDepth)
 		})
 	}
 }

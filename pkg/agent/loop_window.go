@@ -98,7 +98,7 @@ func (al *AgentLoop) assembleMessages(
 	recordAssembledRecallSpan(ts, span, history, len(keptSpan))
 	// Build only the pinned instructions and the current user here. The live
 	// window is inserted verbatim; only the recalled span is sanitized.
-	base := ts.agent.ContextBuilder.BuildMessages(nil, userMsg, media,
+	base := ts.agent.ContextBuilder.BuildMessages(ts.depth, nil, userMsg, media,
 		ts.opts.WorkspaceID, ts.channel, ts.chatID, ts.opts.SenderID,
 		ts.opts.SenderDisplayName, breadcrumb, nil, skillNames...)
 	out := make([]providers.Message, 0, len(base)+len(history)+len(keptSpan))
