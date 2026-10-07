@@ -98,7 +98,9 @@ async function bubbleText(row: import('@playwright/test').Locator): Promise<stri
   })
 }
 
-async function startLongTurn(page: Page, prompt: string = LONG_PROMPT): Promise<string> {
+async function startLongTurn(
+  page: Page, prompt: string = LONG_PROMPT, options: { requireRunning?: boolean } = {},
+): Promise<string> {
   const input = chatInput(page)
   await expect(input).toBeVisible({ timeout: 15_000 })
   await waitForConnected(page)
@@ -107,8 +109,17 @@ async function startLongTurn(page: Page, prompt: string = LONG_PROMPT): Promise<
   await input.fill(prompt)
   await input.press('Enter')
   await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
-  const row = assistantMessages(page).first()
+  // A completed-only selector waits for done before returning, so it cannot
+  // establish the mid-turn precondition b/c require. Other cases retain their
+  // existing completed-content baseline until their own coverage is audited.
+  const row = options.requireRunning
+    ? page.locator('[data-message-id]:not(.flex-row-reverse)').first()
+    : assistantMessages(page).first()
   await expect.poll(async () => (await bubbleText(row).catch(() => '')).trim().length, { timeout: 60_000 }).toBeGreaterThan(80)
+  if (options.requireRunning) {
+    await expect(row, 'real content has arrived while the assistant is still streaming').toHaveAttribute('data-status', 'running')
+    await expect(stopButton(page)).toBeVisible()
+  }
   return (await bubbleText(row)).trim()
 }
 
@@ -143,8 +154,9 @@ async function waitTurnDoneAfterReload(page: Page) {
   await waitTurnDone(page)
 }
 
-// A wide window starts with the sidebar docked, so session rows are already
-// in the main navigation. There is no header menu button while it is docked.
+// Fresh browser contexts start with the sidebar closed, even on wide windows.
+// Showing it is a real user action; never seed the sidebar store or press Escape
+// to dismiss it while a turn is running (Escape can cancel the turn).
 
 // A session's sidebar row (Sidebar.tsx's SidebarSessionRow) is a ghost
 // Button whose accessible name is the session's title — there is no
@@ -163,7 +175,15 @@ async function waitTurnDoneAfterReload(page: Page) {
 // Scoped to the drawer panel specifically (`#sidebar-overlay-panel`,
 // Sidebar.tsx) so nothing outside it can ever match.
 const sidebarPanel = (page: Page) => page.getByRole('navigation', { name: 'Main navigation' })
-const sessionRowByTitle = (page: Page, title: string) => sidebarPanel(page).getByRole('button', { name: title, exact: true })
+const sessionRowByTitle = (page: Page, title: string) => sidebarPanel(page).getByRole('button')
+  .filter({ has: page.getByText(title, { exact: true }) })
+
+async function ensureSidebarOpen(page: Page) {
+  if (!(await sidebarPanel(page).isVisible())) {
+    await page.getByRole('button', { name: 'Show sidebar', exact: true }).click()
+  }
+  await expect(sidebarPanel(page)).toBeVisible()
+}
 
 // The currently-active row carries aria-current="page" (SidebarSessionRow).
 // Used to capture chat A's real, server-assigned title (which is a model-
@@ -183,9 +203,16 @@ async function activeSidebarTitle(page: Page): Promise<string> {
   // "not a 150ms fade, the layer stays" too — same root cause). The
   // active SESSION row renders AFTER the workspace header within its
   // expanded accordion section, so `.last()` is the real one.
+  await ensureSidebarOpen(page)
   const row = sidebarPanel(page).locator('button[aria-current="page"]').last()
   await expect(row).toBeVisible({ timeout: 10_000 })
-  return (await row.innerText()).trim()
+  // The sibling lifecycle label changes from Working to Done; it is not part
+  // of the stable session title and cannot be used to locate the row later.
+  const title = (await row.locator('span.truncate').innerText()).trim()
+  await row.focus()
+  await page.keyboard.press('ControlOrMeta+b')
+  await expect(sidebarPanel(page)).toBeHidden()
+  return title
 }
 
 // Real sidebar navigation (orchestrator follow-up — the previous draft left
@@ -207,7 +234,9 @@ async function switchToSessionByTitle(page: Page, title: string) {
   // resulting ambiguity instead of erroring cleanly. `.first()` is the most
   // recently created matching session (the sidebar lists newest-first),
   // which is always the one THIS test just made.
+  await ensureSidebarOpen(page)
   await sessionRowByTitle(page, title).first().click()
+  await expect(sidebarPanel(page)).toBeHidden()
 }
 
 // Round-3/round-4 open item (orchestrator, both rounds): the previous version
@@ -250,6 +279,22 @@ async function assertNoDuplicateOrGapText(page: Page, before: string, after: str
   expect(norm(reloaded)).toBe(norm(after))
 }
 
+/** b/c need a real turn that remains in flight while the UI is moved away.
+ * Pace only their own gateway's real outbound tokens using the existing h
+ * fixture knob. Model output, turn engine, persistence, and reattach stay real.
+ */
+async function openPacedCatchupChat(page: Page): Promise<GatewayProcess> {
+  const gw = await GatewayProcess.start({ env: { OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '100' } })
+  try {
+    await page.context().addCookies((await gw.browserStorageState()).cookies)
+    await page.goto(gw.baseURL)
+    return gw
+  } catch (error) {
+    await gw.stop()
+    throw error
+  }
+}
+
 test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
@@ -274,57 +319,76 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
   test('b: dead connection ~60s, server still thinks attached — new connection catches up, no duplicate', async ({ page }) => {
     test.setTimeout(420_000)
     const freeze = await installFreezeProxy(page)
-    const before = await startLongTurn(page)
-    // Real-browser follow-up (orchestrator): a hard reload lands on the
-    // welcome/empty chat, not the previous session — the tab does not
-    // reopen the last session on its own (checked: this is release
-    // behaviour too, not something to change the product for). Capture
-    // chat A's real, server-assigned sidebar title BEFORE the reload, the
-    // same way scenario c already does, so it can be reopened afterward.
-    const titleA = await activeSidebarTitle(page)
-    await freeze.freeze()
-    await page.waitForTimeout(60_000)
-    // The new connection (opened by a reload) attaches independently while
-    // the frozen one is still nominally bound server-side.
-    await page.reload()
-    await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
-    await waitForConnected(page)
-    // Reopen chat A via the sidebar — the same real navigation scenario c
-    // uses, not page.goto (a second reload would just repeat the same
-    // welcome-screen landing).
-    await switchToSessionByTitle(page, titleA)
-    await waitTurnDoneAfterReload(page)
-    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    const after = (await bubbleText(assistantMessages(page).first())).trim()
-    await assertNoDuplicateOrGapText(page, before, after, titleA)
+    const gw = await openPacedCatchupChat(page)
+    try {
+      const before = await startLongTurn(page, LONG_PROMPT, { requireRunning: true })
+      await expect(stopButton(page), 'the turn must still be running before the outage or switch').toBeVisible()
+      // Real-browser follow-up (orchestrator): a hard reload lands on the
+      // welcome/empty chat, not the previous session — the tab does not
+      // reopen the last session on its own (checked: this is release
+      // behaviour too, not something to change the product for). Capture
+      // chat A's real, server-assigned sidebar title BEFORE the reload, the
+      // same way scenario c already does, so it can be reopened afterward.
+      const titleA = await activeSidebarTitle(page)
+      await expect(stopButton(page), 'freeze begins during the real turn, not after done').toBeVisible()
+      await freeze.freeze()
+      await page.waitForTimeout(60_000)
+      // The new connection (opened by a reload) attaches independently while
+      // the frozen one is still nominally bound server-side.
+      await page.reload()
+      await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
+      await waitForConnected(page)
+      // Reopen chat A via the sidebar — the same real navigation scenario c
+      // uses, not page.goto (a second reload would just repeat the same
+      // welcome-screen landing).
+      await switchToSessionByTitle(page, titleA)
+      await waitTurnDoneAfterReload(page)
+      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
+      const after = (await bubbleText(assistantMessages(page).first())).trim()
+      await assertNoDuplicateOrGapText(page, before, after, titleA)
+    } finally {
+      await gw.stop()
+    }
   })
 
   test('c: tab switched to another chat while the turn finishes — incremental on return', async ({ page }) => {
     test.setTimeout(420_000)
-    const before = await startLongTurn(page)
-    // Capture chat A's real, server-assigned sidebar title BEFORE switching
-    // away — this is what makes finding it again reliable (see
-    // activeSidebarTitle's own comment on why this beats guessing).
-    const titleA = await activeSidebarTitle(page)
-    // Switch to a fresh chat B while chat A's turn is still running
-    // server-side (the turn never depends on a UI connection, ADR-082 P1 —
-    // switching the VIEW away changes nothing about it).
-    await startNewChat(page)
-    await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-    // Switch back to chat A via the sidebar (not page.goto — a reload would
-    // clear the in-memory cursor and defeat the point of this scenario; see
-    // reconnect-mid-turn.spec.ts's own S-11 note on the same trap). Escape
-    // is never pressed — it cancels the running turn.
-    await switchToSessionByTitle(page, titleA)
-    // Only NOW does the DOM reflect chat A again, so only now does
-    // waitTurnDone's stop-button check actually observe chat A's own
-    // state — checking it while chat B was active (the previous draft's
-    // sequencing) would have passed immediately regardless of whether A's
-    // turn had genuinely finished, since chat B never shows a stop button.
-    await waitTurnDone(page)
-    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    const after = (await bubbleText(assistantMessages(page).first())).trim()
-    await assertNoDuplicateOrGapText(page, before, after, titleA)
+    const gw = await openPacedCatchupChat(page)
+    try {
+      const before = await startLongTurn(page, LONG_PROMPT, { requireRunning: true })
+      await expect(stopButton(page), 'the turn must still be running before the outage or switch').toBeVisible()
+      // Capture chat A's real, server-assigned sidebar title BEFORE switching
+      // away — this is what makes finding it again reliable (see
+      // activeSidebarTitle's own comment on why this beats guessing).
+      const titleA = await activeSidebarTitle(page)
+      // Switch to a fresh chat B while chat A's turn is still running
+      // server-side (the turn never depends on a UI connection, ADR-082 P1 —
+      // switching the VIEW away changes nothing about it).
+      // The slash palette filters out /new while streaming. Use the real
+      // sidebar action, which changes the view without stopping chat A.
+      await ensureSidebarOpen(page)
+      await expect(stopButton(page), 'the view switches away while chat A is still running').toBeVisible()
+      await sidebarPanel(page).getByRole('button', { name: 'New chat', exact: true }).click()
+      await expect(sidebarPanel(page)).toBeHidden()
+      await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
+      // Switch back to chat A via the sidebar (not page.goto — a reload would
+      // clear the in-memory cursor and defeat the point of this scenario; see
+      // reconnect-mid-turn.spec.ts's own S-11 note on the same trap). Escape
+      // is never pressed — it cancels the running turn.
+      await switchToSessionByTitle(page, titleA)
+      await expect(stopButton(page), 'reattach reconstructs the still-running turn').toBeVisible()
+      // Only NOW does the DOM reflect chat A again, so only now does
+      // waitTurnDone's stop-button check actually observe chat A's own
+      // state — checking it while chat B was active (the previous draft's
+      // sequencing) would have passed immediately regardless of whether A's
+      // turn had genuinely finished, since chat B never shows a stop button.
+      await waitTurnDone(page)
+      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
+      const after = (await bubbleText(assistantMessages(page).first())).trim()
+      await assertNoDuplicateOrGapText(page, before, after, titleA)
+    } finally {
+      await gw.stop()
+    }
   })
 
   test('d: no tab at all while the turn finishes (laptop sleep) — reopen shows the complete answer', async ({ page, context }) => {
