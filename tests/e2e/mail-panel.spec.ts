@@ -248,10 +248,38 @@ test.describe('Mail panel on the built-in fake server (D36)', () => {
     // Escape in the full-screen tab must close it and re-dock Mail in the
     // ORIGINAL tab — not just close the tab and leave nothing docked, and
     // not navigate the original tab away from workspace chat.
+    // Observe a trusted key in the popup BEFORE the app's bubbling close
+    // handler. Target closure can reject keyboard.down's acknowledgement even
+    // after that key was delivered (push run 37577319518). Closure alone is not
+    // proof: an early close, synthetic key, or unrelated input error must fail.
+    const inputMarker = 'mail-panel-escape-trusted:'
+    await pop.evaluate((marker) => {
+      window.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') console.info(marker + String(event.isTrusted))
+      }, { capture: true, once: true })
+    }, inputMarker)
+    const received = pop.waitForEvent('console', { predicate: (message) => message.text().startsWith(inputMarker) })
     const closed = pop.waitForEvent('close')
-    // Escape closes on keydown; a keyup would target an already closed tab.
-    await pop.keyboard.down('Escape')
-    await closed
+    // No keyup: its target is supposed to close on keydown.
+    const [inputResult, closeResult, keyResult] = await Promise.allSettled([
+      received, closed, pop.keyboard.down('Escape'),
+    ])
+    if (inputResult.status === 'rejected') throw inputResult.reason
+    expect(inputResult.value.text(), 'a real Escape reached the popup before it closed').toBe(inputMarker + 'true')
+    if (closeResult.status === 'rejected') throw closeResult.reason
+    expect(pop.isClosed(), 'Escape closed the expanded tab').toBe(true)
+    if (keyResult.status === 'rejected') {
+      const error: unknown = keyResult.reason
+      expect(error).toBeInstanceOf(Error)
+      if (!(error instanceof Error)) throw error
+      expect(error.message, 'only the measured post-input target-close acknowledgement is acceptable')
+        .toBe('keyboard.down: Target page, context or browser has been closed')
+    }
+    expect(page.isClosed(), 'the original tab must survive').toBe(false)
+    await test.info().attach('escape-input-and-close', {
+      contentType: 'application/json',
+      body: JSON.stringify({ trustedEscape: true, popupClosed: pop.isClosed(), inputAcknowledgement: keyResult.status }),
+    })
 
     await expect(page).toHaveURL(/\/workspaces\/[^/]+\/chat/)
     await expect(page.getByTestId('mail-panel')).toBeVisible()

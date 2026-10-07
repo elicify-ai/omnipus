@@ -1027,7 +1027,9 @@ type ReplayMessageFrame struct {
 	Model     *string `json:"model,omitempty"`
 	Role      string  `json:"role"`
 	SessionId string  `json:"session_id"`
-	Timestamp *string `json:"timestamp,omitempty"`
+	// Present and true only on an assistant entry that is a turn's distinct terminal outcome sentence (for example the tool-iteration-limit notice) written after the turn's earlier narration was already persisted. Live, the gateway closes the narration bubble with done(<narration id>) before this entry arrives, so it is a separate message; the replay stream has no such boundary, so the SPA must start a new message for this frame instead of merging it into the preceding same-turn assistant entry. Absent on every other frame, including entries written before this field existed.
+	TerminalOutcome *bool   `json:"terminal_outcome,omitempty"`
+	Timestamp       *string `json:"timestamp,omitempty"`
 	// ADR-087 D2. Populated from TranscriptEntry.Truncated when replaying an incomplete assistant entry — see truncation_reason for why. Only present when true. Replay emits this even when content is empty (an entry with Truncated && Content == "" still passes through, so the SPA can render a suffix with no body).
 	Truncated *bool `json:"truncated,omitempty"`
 	// ADR-087 D2. Populated from TranscriptEntry.TruncationReason. Narrows why truncated is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a truncated: true frame means "cancelled" — every entry written before this field existed predates it and was always a cancel.

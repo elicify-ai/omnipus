@@ -3716,6 +3716,17 @@ components:
             #823 catch-up redesign §4.7. Present on a replayed user entry persisted with
             a client-supplied id. Keep in sync by hand with
             contracts/components/schemas/ReplayMessageFrame.yaml.
+        terminal_outcome:
+          type: boolean
+          description: >
+            Present and true only on an assistant entry that is a turn's distinct
+            terminal outcome sentence (for example the tool-iteration-limit notice)
+            written after the turn's earlier narration was already persisted. Live,
+            the gateway closes the narration bubble with done(<narration id>) before
+            this entry arrives, so it is a separate message; the replay stream has no
+            such boundary, so the SPA must start a new message for this frame instead
+            of merging it into the preceding same-turn assistant entry. Absent on
+            every other frame, including entries written before this field existed.
     ReplayErrorFrame:
       title: ReplayErrorFrame
       description: 'Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). Emitted by the replay path
