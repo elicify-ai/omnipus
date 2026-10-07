@@ -157,16 +157,16 @@ func adr093WaitForEntered(t *testing.T, pp *parkedProvider, timeout time.Duratio
 func TestAdr093BootSweep_StandingRootsExempt(t *testing.T) {
 	h := newBootSweepHarness(t)
 
-	// Five standing roots across every exempt origin kind (ADR-093 D3).
+	// Four standing roots across every exempt origin kind (ADR-093 D3). A
+	// chat root is not exempt: founder rule 2026-10-06 (UAT row I1) — a chat
+	// whose turn a restart cut off is swept to failed(interrupted).
 	standingIDs := []string{
-		"adr093-root-chat",
 		"adr093-root-channel",
 		"adr093-root-heartbeat",
 		"adr093-root-scheduled",
 		"adr093-root-nokind",
 	}
 	standingOrigins := map[string]*session.Origin{
-		"adr093-root-chat":      {Kind: session.OriginKindChat},
 		"adr093-root-channel":   {Kind: session.OriginKindChannel},
 		"adr093-root-heartbeat": {Kind: session.OriginKindHeartbeat},
 		"adr093-root-scheduled": {Kind: session.OriginKindScheduled},
@@ -187,19 +187,22 @@ func TestAdr093BootSweep_StandingRootsExempt(t *testing.T) {
 	persistLifecycle(t, h.ls, child)
 	childBefore := snapshotBootSweepRecord(t, h.ls, child.SessionID)
 
+	chatRoot := adr093Record("adr093-root-chat", 1, session.LifecycleRunning)
+	persistLifecycle(t, h.ls, chatRoot)
+
 	taskRoot := adr093Record("adr093-root-task", 1, session.LifecycleRunning)
 	taskRoot.Origin = &session.Origin{Kind: session.OriginKindTask, TaskID: "task-adr093"}
 	persistLifecycle(t, h.ls, taskRoot)
 
 	res := h.pe.runBootSweep(context.Background())
 	assertBootSweepRecordUntouched(t, h.ls, child.SessionID, childBefore)
-	if res.Scanned != len(standingIDs)+2 {
-		t.Errorf("Scanned = %d, want %d (five roots, steered child and ordinary task root)", res.Scanned, len(standingIDs)+2)
+	if res.Scanned != len(standingIDs)+3 {
+		t.Errorf("Scanned = %d, want %d (four standing roots, chat root, steered child and ordinary task root)", res.Scanned, len(standingIDs)+3)
 	}
 
 	gotSwept := append([]string{}, res.SweptToFailed...)
 	sort.Strings(gotSwept)
-	wantSwept := []string{"adr093-root-task"}
+	wantSwept := []string{"adr093-root-chat", "adr093-root-task"}
 	if len(gotSwept) != len(wantSwept) {
 		t.Fatalf("swept set = %v, want exactly %v — D8.3 leaves the steered child to SteerBootRecovery; ADR-093 D3 still sweeps the ordinary task root", gotSwept, wantSwept)
 	}

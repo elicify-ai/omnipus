@@ -25,9 +25,9 @@
 //     plan.Plan.PlanPhase), NOT via owner_scope (which is `human` for a
 //     top-level owner and cannot itself identify the plan); and
 //  3. a standing root (standingRootExemptFromSweep, ADR-093 D3): a
-//     top-level conversation that stays usable on its CURRENT generation —
-//     a restart must not mark an open chat unusable (the restart bug this
-//     branch fixes). Revival of a stopped or terminal root happens only
+//     top-level channel, heartbeat or scheduled conversation that stays
+//     usable on its CURRENT generation (a chat root is swept: its in-flight
+//     turn died with the process, and a human message revives it). Revival of a stopped or terminal root happens only
 //     through a later human message or a parent follow-up, never through
 //     this sweep.
 //
@@ -968,13 +968,20 @@ const DefaultLifecycleRetentionDays = 90
 
 // standingRootExemptFromSweep reports whether rec is a root the boot sweep
 // must leave alone (ADR-093 D3). A root has no SteeredBy edge. Its origin is
-// absent, or one of the standing kinds (chat, channel, heartbeat, scheduled):
-// the root stays usable on its CURRENT generation — the sweep must not mark
-// it failed(interrupted), and revival is only ever for a record a later Stop
-// or a terminal transition has ALREADY put into stopped/terminal state
-// (inboundRevivable's predicate), never something this sweep produces. A task
-// root never matches — persistLocked rejects origin kind task without a task
-// id — and is swept exactly as before.
+// absent, or one of the standing kinds (channel, heartbeat, scheduled): the
+// root stays usable on its CURRENT generation — the sweep must not mark it
+// failed(interrupted), and revival is only ever for a record a later Stop or
+// a terminal transition has ALREADY put into stopped/terminal state
+// (inboundRevivable's predicate), never something this sweep produces.
+//
+// A chat root is NOT exempt (founder rule 2026-10-06, UAT row I1): a chat
+// still queued/running at boot had its turn cut off by the restart — no turn
+// of a prior process survives — so it is swept to failed(interrupted), which
+// shows as "interrupted" and which the next human message revives
+// (inboundRevivable: terminal records revive). Leaving it running showed an
+// idle chat as "Working" forever. A task root never matches either —
+// persistLocked rejects origin kind task without a task id — and is swept
+// exactly as before.
 func standingRootExemptFromSweep(rec session.LifecycleRecord) bool {
 	if rec.SteeredBy != nil {
 		return false
@@ -983,7 +990,7 @@ func standingRootExemptFromSweep(rec session.LifecycleRecord) bool {
 		return true
 	}
 	switch rec.Origin.Kind {
-	case session.OriginKindChat, session.OriginKindChannel, session.OriginKindHeartbeat, session.OriginKindScheduled:
+	case session.OriginKindChannel, session.OriginKindHeartbeat, session.OriginKindScheduled:
 		return true
 	default:
 		return false
