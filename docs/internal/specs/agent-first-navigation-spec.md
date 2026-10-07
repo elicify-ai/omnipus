@@ -476,199 +476,125 @@ Each row below is an independent Given/When/Then case, not a compound When or ne
 
 ## Test-Driven Development Plan
 
-These are **proposed tests**, not executed results. QA writes RED before production; independent QA performs CHECK after GREEN. Expected values come from this spec, F/R/M and frozen datasets, not implementation output. Shared wire fixtures must validate through real generated validators; do not mock the navigation/attachment/reducer under test. Unit tests precede integration, then end-to-end tests; within each level, foundations precede consumers.
-
-### Test hierarchy and proposed locations
-
-| Level | Scope and existing conventions |
-|---|---|
-| Unit | Identity/state/ordering/filter/deduplication rules beside their owning source as `.test.ts`/`.test.tsx`; Vitest + Testing Library existing helpers. |
-| Integration | Real AppShell/sidebar without AgentPicker, real query/store/attach/rendering seams and a controlled gateway twin for failures/races; separate real-gateway U1 pack below. Extend existing component/store tests or add adjacent files. |
-| E2E | Real candidate UI/backend and supported saved installation; proposed `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/tests/e2e/agent-first-navigation.spec.ts` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/tests/e2e/sessions-activity.spec.ts`. These files do not exist yet; QA owns them. |
-| Kit evidence | Published stories/manifests with executed static-Storybook interaction, axe, keyboard, browser, pointer, reduced-motion, forced-colors, root-size, zoom/reflow and screenshot evidence. Add only applicable truthful checks, never mark unexecuted behavior inapplicable. |
+**Proposed, not executed.** QA writes RED, implementation GREEN, independent QA CHECK. Derive oracles from F/S/R/M and frozen DS values, not code. Every listed BDD primary/outline/combined/recovery case runs independently. Real generated validators/reducers/selection stay under test, not mocks. Unit → integration → end-to-end order below. J-01–J-08 are **joint real-gateway obligations on one exact candidate SHA**, incorporated into families; changing a dependency repeats affected proofs before joint U1/frontend landing.
 
 ### Test implementation order
-
-Each test name is a proposed family; each listed BDD scenario becomes a concrete named case, with every outline example independently executed. This table is not permission to collapse assertions into a single snapshot or text scan.
-
-| Order | Test name | Level | Traces to BDD scenario(s) | Independent oracle / what must fail when broken |
+| Order | Test family | Level | BDD coverage | Oracle / joint pack |
 |---|---|---|---|---|
-| 1 | T-01 eligibleMainPair | Unit | BDD-01.1, BDD-01.2, BDD-E01 | Membership/eligibility and validated pair dominate name/recency; workers/hidden agents absent, Admin default-only. |
-| 2 | T-02 restoreWinningIntent | Unit | BDD-02.1, BDD-02.2, BDD-02.3, BDD-02.4, BDD-E03 | Exact browser pointer, validated Ava fallback only on confirmed absence; latest intent wins, no unresolved send. |
-| 3 | T-03 extraDeliveryGuard | Unit | BDD-03.1, BDD-03.3, BDD-E02 | Explicit row action and preserved original first-send recovery/abandonment. |
-| 4 | T-04 mainAttentionProjection | Unit | BDD-04.1, BDD-04.2, BDD-04.4, BDD-E04 | Four-source truth, non-main exclusion and unknown-versus-false; observed goals only acknowledged. |
-| 5 | T-05 paletteMigrationOracle | Unit | BDD-05.2, BDD-05.3, BDD-E05 | Frozen palette order/saturation/circular-distance/tie and old-role fixtures; repeat mapping stable. Backend migration test uses same external expected values. |
-| 6 | T-06 identityVocabulary | Unit | BDD-05.1, BDD-05.2, BDD-E06 | Four figures, 31 grouped roles, ten colors and all named sizes; no small badge fallback. |
-| 7 | T-07 immutableAuthorAndKind | Unit | BDD-07.1, BDD-07.2, BDD-E07 | Actual message/turn producer differs from session owner without changing owner/kind. |
-| 8 | T-08 modalHierarchyAndFilters | Unit | BDD-08.2, BDD-09.1, BDD-09.4, BDD-09.5, BDD-E08 | Main first; helpers always under their parent in every filter/search. All / Running / Needs me and repeated-helper grouping/counts/expansion are decided. Unavailable parent treatment stays Q-M5; no synthetic summary-session identity. |
-| 9 | T-09 workIdentityAndOrigin | Unit | BDD-10.1, BDD-10.2, BDD-11.2, BDD-E10, BDD-E11 | Real starting chat, distinct work keys, scheduler-only runs and queued/waiting exclusions; no synthetic control parent. |
-| 10 | T-10 contractCoverageUnknown | Unit | BDD-01.4, BDD-05.4, BDD-08.4, BDD-11.3 | Actual generated validation plus unknown handling; failed/unattributed sources cannot become false/removed/local/zero. |
-| 11 | T-11 shellFreshnessWithoutPicker | Integration | BDD-01.4, BDD-09.2 | Mount real AppShell/sidebar with no AgentPicker. Agent-created update then separate member save; focus/visibility/expand inside staleTime refresh both caches with visible errors. Hook-only green is insufficient. |
-| 12 | T-12 atomicSelectionAndLateAttach | Integration | BDD-02.1, BDD-02.2, BDD-02.3, BDD-02.4, BDD-03.4, BDD-E03 | Route/store/display/send tuple and saved pointers agree; reject attach transport/server failure and old result without partial workspace commit. |
-| 13 | T-13 rowActionsAndPastFilters | Integration | BDD-03.1, BDD-03.2, BDD-03.3, BDD-E02 | Real independent actions, visible/removable workspace+agent filters, keyboard/touch and first-send protection. |
-| 14 | T-14 attentionIntentAndMotion | Integration | BDD-04.1, BDD-04.2, BDD-04.3, BDD-04.4, BDD-E04 | Exact cues/text and generated `ack_attention` foreground-open intent; no ack on metadata search/prefetch/reconnect, failed/unauthorized attach. |
-| 15 | T-15 sharedAgentIconPublication | Integration | BDD-05.1, BDD-05.2, BDD-05.4, BDD-E06 | Actual shared component across surfaces, graphic contrast, central motion, complete publication and executed accessibility checks. |
-| 16 | T-16 globalEditorSaveAndLocks | Integration | BDD-06.1, BDD-06.2, BDD-06.3 | Existing wizard/profile preview, global update, editability and real save/activation error status; uploads absent. |
-| 17 | T-17 feedPathsAndCommandCutover | Integration | BDD-07.1, BDD-07.2, BDD-07.3, BDD-07.4, BDD-E07 | Live/virtual/plain/replay names-only messages and actual inline responder; preserved model/Auto/errors/controls, exact command removal/rename and no Clear-to-new action. |
-| 18 | T-18 modalRowsAndControls | Integration | BDD-08.1, BDD-08.2, BDD-08.3, BDD-08.4 | Status/kind/dot, group/count/shared-row/search controls, protected delete, rename Escape/focus and independent action targets at desktop/phone. |
-| 19 | T-19 modalLiveCoverageAndPages | Integration | BDD-09.1, BDD-09.2, BDD-09.3, BDD-09.4, BDD-09.5, BDD-E08, BDD-E09 | Real metadata/live updates, All / Running / Needs me and matching helpers always inside parent context; expand repeated helpers with truthful filtered counts/targets, keyboard summary action not attach; pagination errors and large/plain paths. |
-| 20 | T-20 validatedStartResultLinks | Integration | BDD-10.1, BDD-10.2, BDD-10.3, BDD-10.4, BDD-E11 | Published result/origin/workspace, real Tasks/Graph hand-off and real run session; live/replay/idempotence, denied/missing target. |
-| 21 | T-21 openSessionActivityOwnership | Integration | BDD-11.1, BDD-11.2, BDD-11.3, BDD-E10 | Panel A/B isolation and Sessions overview, task/helper dedupe and unchanged independent Stop authority; unattributed judge work not localized. |
-| 22 | T-22 upgradeAndCanonicalSeeds | Integration | BDD-05.3, BDD-12.1, BDD-12.2, BDD-12.3, BDD-E12 | Actual backend importer/config/fresh seed plus repeated gateway restarts; UI reload alone cannot prove this. |
-| 23 | T-23 jointU1Navigation | E2E | BDD-01.1, BDD-01.2, BDD-01.3, BDD-02.1, BDD-02.2, BDD-02.3, BDD-02.4, BDD-03.1, BDD-03.2, BDD-03.4, BDD-12.2, BDD-E01, BDD-E02, BDD-E03 | Real U1 destinations/attachment/message outcomes, row/history/Admin reachability and preserved panels; no stand-in main backend. |
-| 24 | T-24 jointMainAttention | E2E | BDD-04.1, BDD-04.2, BDD-04.3, BDD-04.4, BDD-E04 | Real unopened-main four sources, two-person shared ack, append/open race, resolution, initial load/reconnect and reduced motion. |
-| 25 | T-25 identityAndFeedSurfaces | E2E | BDD-05.1, BDD-05.2, BDD-06.1, BDD-06.2, BDD-06.3, BDD-07.1, BDD-07.2, BDD-07.3, BDD-E06, BDD-E07 | Compare actual product surfaces with W, locked choices/preview, actual guest author, all feed paths and motion/zoom/coarse input. |
-| 26 | T-26 sessionsOverallActivity | E2E | BDD-08.1, BDD-08.2, BDD-08.3, BDD-08.4, BDD-09.1, BDD-09.2, BDD-09.3, BDD-09.4, BDD-09.5, BDD-11.1, BDD-E08, BDD-E09 | Real A/B visibility; All / Running / Needs me and helper-only search keep helpers under parent; folded N similar helper runs expands every original target. Verify live/partial coverage, virtual/plain/phone/keyboard/protection, no cross-parent grouping. |
-| 27 | T-27 realPlanTaskDrilldown | E2E | BDD-10.1, BDD-10.2, BDD-10.3, BDD-10.4, BDD-11.2, BDD-11.3, BDD-E10, BDD-E11 | Real plan/task/scheduler starts with actual destination; accepted versus running, replay links, no-origin, duplicate work/control authority. |
-| 28 | T-28 savedInstallContinuation | E2E | BDD-05.3, BDD-12.1, BDD-12.3, BDD-E05, BDD-E12 | Supported saved install then real follow-up messages, identity/restart/repeat upgrade and visible partial failure; fresh fixtures alone fail acceptance. |
-| 29 | T-29 failureAndControlBoundaries | E2E | BDD-01.4, BDD-05.4, BDD-07.4, BDD-11.3 | Force real offline/refusal/error paths; keep committed chat, no unrelated Stop and no fabricated completed/zero state. |
-| 30 | T-30 guideAndReachabilityWalkthrough | E2E | BDD-01.3, BDD-03.1, BDD-03.2, BDD-07.3, BDD-08.3, BDD-12.2 | Walk the updated user guides against actual UI destinations/labels/commands; docs-verifier independently audits factual parity, not only link existence. |
+| 1 | T-01 eligibleMainPair | Unit | BDD-01.1/01.2/E01 | Authoritative pair/eligibility, not name/recency. |
+| 2 | T-02 restoreWinningIntent | Unit | BDD-02.1/02.2/02.3/02.4/E03 | Exact pointer/Ava fallback/current intent, no unresolved send. |
+| 3 | T-03 extraDeliveryGuard | Unit | BDD-03.1/03.3/E02 | Original delivery/abandonment, deliberate row extra. |
+| 4 | T-04 mainAttentionProjection | Unit | BDD-04.1/04.2/04.4/E04 | Four sources/unknown/non-main exclusion, observed bound. |
+| 5 | T-05 paletteMigrationOracle | Unit | BDD-05.2/05.3/E05 | Frozen threshold/tie/wrap/old-role expectations shared with backend migration. |
+| 6 | T-06 identityVocabulary | Unit | BDD-05.1/05.2/E06 | Exact choices/sizes/no badge fallback. |
+| 7 | T-07 immutableAuthorAndKind | Unit | BDD-07.1/07.2/E07 | Producer versus owner; indicator table derives real input phase. |
+| 8 | T-08 modalHierarchyAndFilters | Unit | BDD-08.2/09.1/09.4/09.5/E08 | Main/parents/placeholder, filters/folding counts and identity-safe activation. |
+| 9 | T-09 workIdentityAndOrigin | Unit | BDD-10.1/10.2/11.2/E10/E11 | Actual starter/run identities, no duplicate/control parent. |
+| 10 | T-10 contractCoverageUnknown | Unit | BDD-01.4/05.4/08.4/11.3 | Generated validation, honest failed/unattributed data. |
+| 11 | T-11 shellFreshnessWithoutPicker | Integration | BDD-01.4/09.2 | **J-04:** real shell/no AgentPicker; another tab agent-created then separate member save, focus/visibility/expand inside staleTime, both caches and Retry. |
+| 12 | T-12 atomicSelectionAndLateAttach | Integration | BDD-02.1/02.2/02.3/02.4/03.4/E03 | **J-01/J-02:** main/extra/Ava/hidden/failure, displayed/sending/pointer tuple; delayed A→B/A→B→A cannot ack, later winning A uses new bound. |
+| 13 | T-13 rowActionsAndPastFilters | Integration | BDD-03.1/03.2/03.3/E02 | Real independent touch/keyboard row actions, pair filters and delivery protection. |
+| 14 | T-14 attentionIntentAndMotion | Integration | BDD-04.1/04.2/04.3/04.4/02.4/E03/E04 | **J-03:** published ack correlation/observed bound, shown commit only, initial unopened/two-person/open-append race, no metadata/prefetch/reconnect/failed-attach ack. |
+| 15 | T-15 sharedAgentIconPublication | Integration | BDD-05.1/05.2/05.4/E06 | **J-06:** all surfaces/frames ≥3:1; Thinking fades glow not ink; executed kit/accessibility evidence. |
+| 16 | T-16 globalEditorSaveAndLocks | Integration | BDD-06.1/06.2/06.3 | Existing profile/wizard global preview/save/activation/locks, no uploads. |
+| 17 | T-17 feedPathsAndCommandCutover | Integration | BDD-07.1/07.2/07.3/07.4/E07 | **J-08:** all paths/canonical producer inputs/phrase/error/order/kickoff, command removal, first-send/model/Auto/Stop safety. |
+| 18 | T-18 modalRowsAndControls | Integration | BDD-08.1/08.2/08.3/08.4/09.2/09.5 | Shared controls/protection/rename/focus; real-ID+action highlight through reorder/removal/collapse/expand, virtual/plain. |
+| 19 | T-19 modalLiveCoverageAndPages | Integration | BDD-09.1/09.2/09.3/09.4/09.5/E08/E09 | **J-07:** live/unopened/paged coverage, moving-prefix all-success counterexample, eventual s4/no false zero; stable activation/folds/main-only Needs me. |
+| 20 | T-20 validatedStartResultLinks | Integration | BDD-10.1/10.2/10.3/10.4/E11 | Real published starter/workspace/handle, Graph/run live-replay/idempotence/refusal. |
+| 21 | T-21 openSessionActivityOwnership | Integration | BDD-11.1/11.2/11.3/E10 | Local A/B scope, origin-row shell count/Open, scheduler/child dedupe/independent Stop, no global-verdict leak. |
+| 22 | T-22 upgradeAndCanonicalSeeds | Integration | BDD-05.3/12.1/12.2/12.3/E12 | **J-05/J-06:** actual importer/config/fresh seed and repeated backend restarts, saved binding/locks, not React remount. |
+| 23 | T-23 jointU1Navigation | E2E | BDD-01.1/01.2/01.3/02.1/02.2/02.3/02.4/03.1/03.2/03.4/12.2/E01/E02/E03 | Real J-01/J-02/J-04/J-05/J-08 destinations/send/history/Admin/panels, original intent and controls. |
+| 24 | T-24 jointMainAttention | E2E | BDD-04.1/04.2/04.3/04.4/02.4/E03/E04 | Real J-03 including overtaken attach/read bound, unopened snapshots/resolution/reconnect/reduced motion and recovery. |
+| 25 | T-25 identityAndFeedSurfaces | E2E | BDD-05.1/05.2/06.1/06.2/06.3/07.1/07.2/07.3/E06/E07 | Real J-06/W comparisons, input precedence/visibility, guest, all paths, dimmest frame, zoom/coarse and locks. |
+| 26 | T-26 sessionsOverallActivity | E2E | BDD-08.1/08.2/08.3/08.4/09.1/09.2/09.3/09.4/09.5/11.1/E08/E09 | Real J-07 overview/main-only filter/placeholder/shell metadata, all-success moving pages, stable keyboard identities, original folded targets. |
+| 27 | T-27 realPlanTaskDrilldown | E2E | BDD-10.1/10.2/10.3/10.4/11.2/11.3/E10/E11 | Real J-07 plans/tasks/scheduler-only/no-origin; accepted vs running, replay links/dedupe/control. |
+| 28 | T-28 savedInstallContinuation | E2E | BDD-05.3/12.1/12.3/E05/E12 | Real J-05/J-06 saved ordinary/extra/Unfiled/child/heartbeat source, actual follow-up, restart/repeat/failure; no rollback scope. |
+| 29 | T-29 failureAndControlBoundaries | E2E | BDD-01.4/02.3/05.4/07.4/11.3 | J-02/J-08 offline/refusal/error/recovery with original target/correlation, no unrelated Stop/false completion. |
+| 30 | T-30 guideAndReachabilityWalkthrough | E2E | BDD-01.3/03.1/03.2/07.3/08.3/12.2 | J-08 guide instructions exercised, docs-verifier parity, not link existence. |
 
-### Joint backend U1 integration pack — mandatory landing hold
-
-Team-lead owns the joint candidate and execution receipts; QA coordinates backend/front-end expectations. U1 must be working, not merely an approved ADR or a published spec. Every row runs against **one exact combined SHA**. If a dependency changes, repeat its affected checks and exact-commit acceptance. No frontend-only main-navigation landing or undocumented compatibility fallback.
-
-| Pack | Joint inputs and proof | Test families |
-|---|---|---|
-| J-01 | Two workspaces, same agent, validated main plus newer extra; remembered main/extra, first visit and confirmed missing/hidden/unavailable welcome; assert real attached and subsequent message destination. | T-12, T-23 |
-| J-02 | Load/server/transport failure and controlled late resolution after a newer selection; displayed workspace/session/owner and persisted pointer stay consistent; unresolved sending unavailable. | T-12, T-23, T-29 |
-| J-03 | Question/approval/met/rounds_exhausted/other/stopped_by_user in main and negative extra/helper sources; initial unopened main, shared observed acknowledgement, prefetch/reconnect/failed-open exclusion and newer outcome race. | T-14, T-24 |
-| J-04 | Still-connected second tab creates agent, saves membership separately, first tab refocuses/expands inside staleTime; real shell with no picker updates roster+membership and honest stale/Retry state. | T-11, T-23 |
-| J-05 | Frozen real supported-install ordinary/extra/Unfiled/child/heartbeat histories with known bindings/content; upgrade/repeat/restart and actual follow-up; migration failure visible; Admin main reachable before old entry removal. | T-22, T-23, T-28 |
-| J-06 | Fresh/custom/built-in identity changes and mapping; canonical definitions/fresh seed/startup persistence/repeated restart agree, locks unchanged; all shared visuals and reduced motion verified against W. | T-15, T-16, T-22, T-25, T-28 |
-| J-07 | Real plan start in A, task start, scheduler-only run, MAIN child dedupe, no-origin Tasks plan; actual Open plan/run session live and replay; B panel local, A in Sessions; partial/unopened metadata coverage explicit. | T-19–T-21, T-26, T-27 |
-| J-08 | Immediate command/picker/handover cutover coordinated with canonical producers/generated types; preserve first-send, kickoff/replay/ordering/refusal, model/Auto and Stop/tree boundaries; doc instructions match. | T-17, T-23, T-29, T-30 |
-
-### Execution integrity and gates
-
-| Step | Required evidence — future implementation work |
-|---|---|
-| RED | Named tests fail on pre-change code. Prefer CI on a tests-only commit; any necessary one narrow local run is serialized by team-lead. Save real command/output/exit code and exact SHA. No test-only green without negative controls. |
-| GREEN | Implementing lead changes only commissioned production behavior, using published contracts. Remote CI owns heavy Go/build/node/Storybook/browser gates; local typecheck is the real `npm run typecheck`, never bare TypeScript no-op. |
-| CHECK | Independent QA audits test integrity and mutates recency/pair resolution, no-picker refresh, missing-attention coercion, wrong producer, panel scope, start origin and task-child dedupe in isolation. Every relevant mutation must fail its named assertion; restore before the gate. No skip/deletion/relaxed assertion to manufacture green. |
-| Discovery | Prove new test files are included by existing CI group/shard mechanisms. Read actual configuration and executed named test counts; passing a filter that selects zero tests proves nothing. |
-| Feature review | Required five reviewers: code-reviewer, silent-failure-hunter, pr-test-analyzer, architect cross-cutting and security-lead. QA CHECK and docs-verifier are additional, not replacements. All findings closed or founder-approved tracked deferrals. |
-| Hands-on acceptance | Joint engine-touching work requires uat-tester and independent uat-validator on the exact landing SHA, founder-set provider/model, real screenshots and authorized entry-point proof. Prototype or mock-only tests cannot certify runtime readiness. |
-| Landing | Founder approval after joint packs, applicable remote gates, updated user docs and independent acceptance. Keep separate claims: code correct and tested; reachable by a user/agent. This draft claims neither. |
+### Execution proof
+P owns remote gates, five-reviewer feature gate and exact-SHA uat-tester/independent uat-validator, founder-set provider/model, docs audit and landing approval. RED receipts precede GREEN; prove discovery/named cases and mutation sensitivity in CHECK. Never weaken/skip or trust zero-selected-test green; static Storybook and all eleven manifest kinds are executed, not metadata-only. No full local suite here.
+Tests live beside owning source; QA's proposed end-to-end files: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/tests/e2e/agent-first-navigation.spec.ts` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/tests/e2e/sessions-activity.spec.ts` (not authored by this task). Mutate pair/recency/read-bound/freshness/producer/state/coverage/index-target/scope/origin/dedupe; every violated oracle must fail its named case.
 
 ### Test Datasets
-
-Frozen expected values come from the binding design, not a run of the implementation. Each row links to a BDD oracle. An upper bound not supplied by the sources is **not invented**: `N` below is the committed backend page size, not a product limit. Very large fixtures exercise coverage/rendering, not a new supported-capacity promise.
-
-#### Dataset DS-N — destinations, ordering and failure
-
-| # | Input | Boundary type | Expected output | Traces to | Notes |
-|---|---|---|---|---|---|
-| N01 | One eligible agent with main M and newer extra E | Minimum nonempty/happy | Row opens M, never E | BDD-01.1 | Exact pair fixture |
-| N02 | Same name on different identities in two workspaces | Duplicate/identity | Correct validated pair | BDD-E01 | Names are not keys |
-| N03 | Empty eligible roster/no Ava association | Zero/empty | Honest unavailable + Team/manage + Retry; no send | BDD-02.2 | Not a blank extra |
-| N04 | Null/absent saved pointer plus valid Ava main | Null/first visit | Validated Ava main | BDD-02.2 | No recency lookup |
-| N05 | Remembered valid main/extra; another tab's chat newer | Happy/cold restore | Exact browser pointer | BDD-02.1 | Both chat kinds |
-| N06 | Confirmed deleted/hidden/forbidden remembered target | Invalid/permission denied | Validated welcome destination or unavailable; hidden main never opened | BDD-02.2 | Only confirmed invalidity falls back |
-| N07 | Timeout/offline/server failure checking saved target | Dependency failure | Retain intent; visible Retry; no false deletion/new-chat fallback | BDD-02.3 | Controlled failed response, not elapsed-time guess |
-| N08 | A resolution late after B commit; attach rejection variants | Concurrent access/race | B remains consistent; A cannot overwrite pointers | BDD-E03 | Force order deterministically |
-| N09 | Pending first delivery with unknown real chat ID | Transient/abandonment | Original delivery retained on decline; placeholder not saved as main | BDD-E02 | New-chat guard preserved |
-| N10 | Authoritative worker/hidden-agent member; Admin default/other pair | Eligibility edge | Worker/hidden absent; Admin only validated default main | BDD-01.2 | No invented team membership |
-
-#### Dataset DS-A — attention, acknowledgement and motion
-
-| # | Input | Boundary type | Expected output | Traces to | Notes |
-|---|---|---|---|---|---|
-| A01 | Main pending structured question/approval, separately and together | Happy/OR composition | Attention true; resolution clears only resolved source | BDD-04.1, BDD-04.2 | Not text parsing |
-| A02 | Main unseen met / rounds_exhausted / other | Goal-source matrix | True; finished / failed / failed respectively | BDD-04.1 | Exact BS mapping |
-| A03 | stopped_by_user only; generic unread text/task notice/global verdict | Negative source | False for valid main unless another allowed source exists | BDD-04.1 | No new waiting source |
-| A04 | Extra/helper pending source; non-main response omits attention | Scope/absent | No agent-main signal from that other session | BDD-04.1 | Non-main omission is normal |
-| A05 | Valid main false; valid main true; main value absent | False/true/missing | Off; On; Unknown respectively | BDD-04.4 | General optional field is not a false fallback |
-| A06 | One goal observed; next outcome appended after captured bound | Concurrent open/write | Only observed goal acknowledged | BDD-E04 | Stable saved identity, backend-owned order |
-| A07 | User A successful explicit open; User B same main | Shared-state edge | Observed goal clears for both; questions/approvals persist | BDD-04.2 | Pair-wide, not per-person inbox |
-| A08 | Background prefetch/reconnect/replay/failed or unauthorized attach | Ack-negative matrix | No acknowledgement | BDD-E09, BDD-04.4 | Generated ack false/absent where applicable |
-| A09 | Two sessions for one main agent; two distinct mains needing attention | Count/deduplication | Workspace count by distinct confirmed mains, not sessions | BDD-04.3 | No agent-row dot |
-| A10 | Normal/reduced motion; selected/unselected/collapsed rows | Motion/accessibility | Locked pulse/dot; zero loops under reduced motion, text retained | BDD-04.3 | Measure cue and target geometry |
-
-#### Dataset DS-I — identity, migration and rendering
-
-Arithmetic fixtures were independently calculated and compared with the approved prototype source; receipts are `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/adr-frontend-nav-20261007/spec-evidence/palette-oracles.log` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/adr-frontend-nav-20261007/spec-evidence/palette-source-comparison.log`. These prove the reference calculation only, not the backend migration.
-
-| # | Input | Boundary type | Expected output | Traces to | Notes |
-|---|---|---|---|---|---|
-| I01 | All 4 figures × 31 roles × ten colors | Full valid vocabulary | Same figure/badge/color across named surfaces; Omnipus creation default | BDD-05.1, BDD-05.2 | Parameterized, not copied from component options |
-| I02 | 18/26/40/48 px; 20 px root; zoom/forced colors/reduced motion | Min/max named size/access edge | Badge/figure remain; meaningful text/targets, no loops when reduced | BDD-E06 | Small-size plain-role substitution must fail |
-| I03 | `#D4AF37` | Former brand hue | Orange `#FB923C` | BDD-E05 | Migrate once, persist |
-| I04 | `#7B1FA2` | Former low-contrast color | Fuchsia `#E879F9` | BDD-E05 | Not a guessed Purple mapping |
-| I05 | `#AD1457` | Former low-contrast color | Pink `#F472B6` | BDD-E05 | Circular hue oracle |
-| I06 | `#A0A079` | Threshold minus one RGB step; saturation 0.24375 | Grey `#9CA3AF` | BDD-E05 | Strictly below 0.25 |
-| I07 | `#A0A078` | Exact threshold; saturation 0.25 | Orange `#FB923C` | BDD-E05 | Equality goes to hue matching |
-| I08 | `#A0A077` | Threshold plus one RGB step; saturation 0.25625 | Orange `#FB923C` | BDD-E05 | Just above |
-| I09 | `#000000`, `#FFFFFF`, `#E2E8F0` | Zero/grey/semantic-silver | Grey `#9CA3AF` | BDD-E05 | No brand/semantic picker colors |
-| I10 | Missing/null/empty; `bad`, `#fff`, invalid digits | Empty/null/malformed | Grey `#9CA3AF` | BDD-E05 | Six-digit syntax only |
-| I11 | `#3B82F6` / already-valid curated role | Valid/repeat | Azure unchanged; valid role preserved | BDD-05.3 | No remapping every startup/render |
-| I12 | Normalized hue exactly midway between Azure and Indigo; same saturation ≥0.25 | Exact tie | Azure, earlier published entry | BDD-E05 | Tie stage oracle, no arbitrary persisted test color |
-| I13 | Hue immediately below 360 and above 0 | Circular endpoint | Shorter circular hue distance, not linear distance | BDD-E05 | Compare non-Grey candidates |
-| I14 | Code/Chat/MagnifyingGlass/PencilSimple/Shield/other old icon | Migration matrix | Developer/General assistant/Researcher/Writer/Security/General assistant | BDD-05.3 | Backend role representation published first |
-| I15 | Name `a`; 100-character valid name; 101-character invalid response name | Existing schema min/max/max+1 | Valid response sizes render; invalid response fails actual generated validation, never successful identity | BDD-05.4, BDD-06.3 | C-WIRE Agent schema, not new title policy |
-| I16 | Unicode/combining/RTL name; `<script>`-like title; 10 KiB malformed response string | Unicode/special/large invalid | Valid text is inert/accessible; malformed contract response shows failure, not execution or silently clipped success | BDD-05.4, BDD-08.4 | No new string budget; validate actual schema |
-
-#### Dataset DS-S — Sessions, activity and links
-
-| # | Input | Boundary type | Expected output | Traces to | Notes |
-|---|---|---|---|---|---|
-| S01 | Zero sessions versus failed sessions/workspaces query | Empty versus failure | Honest no matches versus explicit error/Retry, never Unfiled outage | BDD-08.4, BDD-09.3 | Positive valid-empty control |
-| S02 | 1, 19, 20 and 21 visible rows | Minimum/threshold−1/threshold/threshold+1 | Complete keyboard-reachable result set; viewport virtualization beyond current 20-row threshold and valid plain fallback | BDD-09.4, BDD-E08 | Existing C-MODAL threshold, not capacity cap |
-| S03 | N−1/N/N+1 rows across published page size; later-page error; 1,000 metadata rows | Page boundary/very large | Complete authorized matches or visibly partial coverage; no transcript fan-out | BDD-09.3, BDD-09.4 | N from real committed contract |
-| S04 | Main + extras + real helper + unavailable parent + child-only title/agent/status match | Hierarchy/ordering/filter context | Main first; helpers always beneath real parent, nonmatching parent remains context; Q-M5 governs unavailable-parent notice, never root promotion | BDD-08.2, BDD-09.1, BDD-E08 | No fake parent or top-level helper |
-| S05 | Nine consecutive identical helper titles/kinds under P, distinct IDs/status/targets; same title under Q | Repeated content/count/parent boundary | Decided `9 similar helper runs` under P expands to all nine originals; no cross-parent merge. Filtered summary counts only matching originals; no execution merge | BDD-09.5, BDD-E08 | Test 1/2/9 repeated helpers, mixed states, every filter, search and virtual/plain paths |
-| S06 | Every published lifecycle/kind; missing lifecycle; zero/missing tokens; invalid timestamp | State/null/zero | Truthful status/kind or unavailable state; zero versus missing not fabricated; no dangling metadata | BDD-08.1, BDD-E09 | Values through real generated validators |
-| S07 | One task run projected as starter/assignee/helper; scheduler-only independent run; >8 active items | Duplicates/non-tool origin/old finish cap+1 | Distinct actual counts uncapped; correct source/control scope | BDD-11.2, BDD-E10 | Eight-item finish display cap cannot cap active work |
-| S08 | Plan started in A; internal owner elsewhere; Tasks-only plan; idempotent start | Origin/absent/retry | A association only; no Tasks-only origin; no duplicate work | BDD-10.1, BDD-E11 | Requires published real origin |
-| S09 | Approved/running/paused/done/failed-with-stop-reason plan; success/replayed result | State matrix/happy | Canonical state/progress and actual Open plan/run destination | BDD-10.2, BDD-10.3 | Stopped is not invented Plan.state enum |
-| S10 | Missing handle, unauthorized/deleted target, unexpected/truncated payload | Dependency/error | Explicit unavailable/refusal; no fabricated URL or foreground/main substitute | BDD-10.4 | Published error surfaces only |
-| S11 | A unseen in this browser; modal open in B; missed WS update and reconnect | Initial coverage/concurrency | A's metadata reconciles; B panel local; no goal ack on refresh | BDD-09.2, BDD-E09, BDD-11.1 | Cache-only coverage must fail |
-| S12 | Same origin chat with live shell but no real stored shell-chat session | Non-session work | Follow approved Q-M4 metadata/drill-down presentation, never fake a chat row | BDD-11.1, BDD-11.3 | Held until UI/contract choice settled |
-
-Row dates/empty/null constraints preserve existing behavior and generated validation, rather than adding a new date-format API. Error twins include timeout, permission denied, unavailable dependency, truncated/unexpected data and recovery; the real candidate must also demonstrate those failure paths.
+Five domains: DS-N destinations, DS-A attention, DS-I identity, DS-S overview, DS-R regression below. All **57 row IDs** retain independent oracles; each error/edge row includes its linked recovery where applicable. `N` = published page size, not an invented capacity promise; 1,000 rows tests coverage/rendering. Values are frozen from design/arithmetic, not implementation output.
+| Row | Input / boundary | Expected | Traces to: |
+|---|---|---|---|
+| N01 | One eligible main M/newer extra E | M opens | BDD-01.1 |
+| N02 | Same name/different identities/workspaces | Exact pair | BDD-E01 |
+| N03 | Zero eligible/no Ava | Unavailable/Team/Retry/no send | BDD-02.2 |
+| N04 | Null/absent pointer, Ava valid | Ava main | BDD-02.2 |
+| N05 | Remembered main/extra, another tab newer | Exact own pointer | BDD-02.1 |
+| N06 | Deleted/hidden/forbidden pointer | Validated welcome/unavailable, never hidden target | BDD-02.2 |
+| N07 | Timeout/offline/server error | Original intent/Retry, no deletion/fallback | BDD-02.3 |
+| N08 | Late A success/rejection after B; A→B→A | Winning tuple, no losing ack/old-bound reuse | BDD-02.4/E03 |
+| N09 | Unconfirmed first delivery/no real ID | Original request on decline, no saved placeholder | BDD-E02 |
+| N10 | Worker/hidden member, Admin default/other | Only eligible/default Admin row | BDD-01.2 |
+| A01 | Main question/approval separately/together | True until source resolved | BDD-04.1/04.2 |
+| A02 | Unseen met/rounds_exhausted/other | Finished/failed/failed attention | BDD-04.1 |
+| A03 | stopped_by_user, unread text/task/global verdict | Off absent another permitted source | BDD-04.1 |
+| A04 | Extra/helper source, non-main field absent | No borrowed main signal/Needs me | BDD-04.1/09.1 |
+| A05 | Main false/true/missing | Off/On/Unknown | BDD-04.4 |
+| A06 | Bound goal1, later goal2; delayed/retried ack | Goal1 only, no bound expansion | BDD-E04 |
+| A07 | User A shown main, user B same pair | Shared goal clear, decisions retained | BDD-04.2 |
+| A08 | Prefetch/reconnect/replay/failed/forbidden/overtaken attach | No acknowledgement | BDD-04.4/02.4/E09 |
+| A09 | Multiple sessions, two distinct attention mains | Count distinct mains, not sessions | BDD-04.3 |
+| A10 | Selected/unselected/collapsed, normal/reduced | Exact cues/text, zero reduced loops | BDD-04.3 |
+| I01 | 4×31×10 valid identities | Shared grammar/default; choices independently fixed | BDD-05.1/05.2 |
+| I02 | 18/26/40/48 px, 20 px root/zoom/forced colors/reduced/dimmest Thinking | Badge/text/targets intact; ink opaque ≥3:1 both surfaces; zero reduced loops | BDD-E06/07.2 |
+| I03 | `#D4AF37`, old brand hue | Orange `#FB923C` | BDD-E05 |
+| I04 | `#7B1FA2`, low contrast | Fuchsia `#E879F9` | BDD-E05 |
+| I05 | `#AD1457`, low contrast | Pink `#F472B6` | BDD-E05 |
+| I06 | `#A0A079`, s=0.24375, threshold−step | Grey `#9CA3AF` | BDD-E05 |
+| I07 | `#A0A078`, s=0.25, exact threshold | Orange `#FB923C` | BDD-E05 |
+| I08 | `#A0A077`, s=0.25625, threshold+step | Orange `#FB923C` | BDD-E05 |
+| I09 | `#000000`/`#FFFFFF`/`#E2E8F0` zero/greys | Grey `#9CA3AF` | BDD-E05 |
+| I10 | Missing/null/empty/bad/`#fff`/invalid digits | Grey `#9CA3AF` | BDD-E05 |
+| I11 | `#3B82F6`/valid role/repeated migration | Azure/role unchanged | BDD-05.3 |
+| I12 | Normalized Azure–Indigo midpoint, s≥0.25 | Azure first-entry tie; stage fixture, no fabricated stored color | BDD-E05 |
+| I13 | Hue below360/above0 | Shorter circular distance | BDD-E05 |
+| I14 | Code/Chat/MagnifyingGlass/PencilSimple/Shield/unmatched | Developer/General/Researcher/Writer/Security/General assistant | BDD-05.3 |
+| I15 | Name a / 100 / 101 chars | Valid min/max render; max+1 validator failure, not new title rule | BDD-05.4/06.3 |
+| I16 | Unicode/combining/RTL/script-like title; 10 KiB malformed response | Inert accessible valid text; real contract failure, no silent clip/execution | BDD-05.4/08.4 |
+| S01 | Zero rows vs query failure | True empty vs Error/Retry, no Unfiled outage | BDD-08.4/09.3 |
+| S02 | 1/19/20/21 rows, threshold±1 | Full reachable set, virtual >20/plain fallback | BDD-09.4/E08 |
+| S03 | N−1/N/N+1; later-page error/1,000 rows; moving-prefix all-success | Stable/reconciled coverage or explicit partial; s4 eventually, no false complete/zero | BDD-09.2/09.3/09.4 |
+| S04 | Main/extras/child/parent unavailable/child-only title-agent-status | Main first, nested helper/authorized placeholder, never root | BDD-08.2/09.1/E08 |
+| S05 | 1/2/9 identical siblings P, same title Q/mixed states/all filters | Fold/expand originals, match-count/no cross-parent merge, virtual/plain | BDD-09.5/E08 |
+| S06 | All kinds/lifecycle; missing/zero tokens; invalid time | Truthful metadata/unknown, no dangling or fabricated values | BDD-08.1/E09 |
+| S07 | Starter/assignee/child one run, scheduler independent, >8 active | Uncapped distinct work/control scope | BDD-11.2/E10 |
+| S08 | Starter A/internal owner elsewhere; Tasks-only/idempotent | Actual A/no-origin/no duplicate | BDD-10.1/E11 |
+| S09 | Approved/running/paused/done/failed-stop; live/replayed result | Canonical state/real target, no new stopped Plan enum | BDD-10.2/10.3 |
+| S10 | Missing handle, unauthorized/deleted, truncated/unexpected | Explicit unavailable/refusal, no guessed link | BDD-10.4 |
+| S11 | A never opened, B/modal, missed updates/reconnect/reorder/removal | Coverage reconciled/B local/no ack; stable target or cleared+announced | BDD-09.2/E09/11.1/08.3 |
+| S12 | Origin shell running after chat turn ended | N background commands running; Open origin Activity, no fake session | BDD-11.1/11.3 |
 
 ### Regression Test Requirements
+Modified functionality: keep preserved assertions strong; fixture/generated-owner/type changes are explicit, not weakened oracles. Run DS-R baseline and candidate. Intentional replacements: blank/fresh workspace entry → exact/Ava; expanded/manual groups → R35 kit defaults/search reveal; heartbeat/UUID/mutable owner → validated main; picker/avatars/old scalar → canonical feed; global verdict/orphan root → attributable/strict-parent context. These replacements cannot retain retired behavior just to pass tests.
 
-This **modifies existing functionality**. Existing assertions for preserved behavior stay strong and pass unchanged where their fixture/interface remains current. Canonical main/immutable-owner/generated-contract fixture adaptations and explicitly retired behavior are tracked separately; do not demand that an old switching/fresh-entry test stay green by retaining the removed behavior. QA authors those targeted replacements, recording which acceptance decision changes the old oracle.
-
-| Preserved behavior | Existing test source read / tests to keep | New regression family |
-|---|---|---|
-| Confirmation before ordinary delete; active pointer pruning; rename Enter/Escape/focus restore; Escape closes only outside rename | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/search/SearchModal.test.tsx`::SearchModal — delete flow, rename flow, editing-state contract. Keep assertions; protected heartbeat fixture becomes a protected main under the coordinated contract cutover. | T-18; add main protection independent of heartbeat enabled. |
-| Child-inclusive search, child-only match reveals its parent, large fan-out/plain fallback and default verifier exclusion; unavailable helper parents are never promoted to roots under latest F | Same file::session query call shape, nests a child-only match under its parent and virtualizes a large fan-out. `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/sessions/SessionTree.tsx`::flattenSessionTree behavior retained. | T-08, T-19, T-26 with new filters/metadata, paging and pinned main. |
-| Unfiled standalone inspection; no duplicate replay reset/attach; token seed only after actual attachment | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/chat/useSelectSession.test.tsx`::Unfiled session, never calls setActiveSession, attach → seedSessionTokens → setActiveAgentType sequence. Keep outcome assertions; adapt current immutable owner/attach input. | T-12, T-23 with server-validated/failed cross-workspace selection. |
-| Socket rejection is visible; current-chat first Stop versus confirmed tree Stop remains scoped | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/store/chat.cancel-delivery.test.ts`::cancelStream delivery report, second cancel after the first one ended the turn locally. Existing refusal/tree-scope assertions remain. | T-17, T-29 after navigation/command cutover. |
-| Exactly-running helper count excludes queued, lifecycle-terminal/open-span and shells | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useRunningActivity.runningChildren-lifecycle.test.ts`::runningChildren is exactly-lifecycleState-running. | T-09, T-21 task-child/scheduler dedupe and new kind counts. |
-| Shell result liveness survives tool completion/baked messages; active work uncapped; recent-finish cap/recency | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useRunningActivity.test.ts`::bash session tracking survives turn finalization, running is uncapped/recentlyFinished capped, mergeAndCapFinished. Keep same-session liveness/recency oracles. | T-21, T-27; correctly attribute verdicts rather than preserve a global leak. |
-| One modal instance and clean mode reset; workspace mode includes zero-session real workspaces and excludes Unfiled switch | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/store/ui.store.searchModal.test.ts`::searchModal UI store — mode; SearchModal test::workspaces mode and workspace-switch arrow. | T-13, T-18 with pair filters and N D3 exact-entry behavior. |
-| Focus/visibility invalidation and listener cleanup | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useAgentsCrossTabRefresh.test.tsx`::focus path. Existing hook checks remain but cannot alone prove navigation freshness after picker removal. | T-11 real shell/sidebar without picker, roster + separate membership save. |
-| Unified command menu query failure remains visible | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/chat/ChatScreen.slash-commands-error.test.tsx`::commands query error. Preserve commands-unavailable/skills partition oracles; remove mention-switch-specific behavior only per F Q10. | T-17; no old aliases, visible failure and still-supported controls. |
-
-| Intentionally changed old oracle | Required replacement — not silent deletion |
+| Existing suite / preserved intent | Families |
 |---|---|
-| Modal workspace switch starts a fresh session; no-pointer entry shows blank composer | Replace with exact remembered chat/validated Ava main and honest failure. N D3/F Q1; T-02/T-12/T-23. |
-| Sessions-mode groups start expanded; handmade group/row controls | Apply R35/M D1 kit group defaults with search/prefilter match reveal while preserving descendants and keyboard scope. Update interaction setup, not assertions that all intended results stay reachable. T-08/T-18/T-19. |
-| Heartbeat-only ordering/protection; mutable owner precedence; UUID-only/128-character main assumptions | Coordinate BS main contract/owner/bounds, never browser fallbacks. Same preserved protection/continuation outcomes with validated computed IDs. T-01/T-12/T-22. |
-| Picker/mention switching, old commands, bubble avatars, old thinking/goal scalar | Replace only under F Q9/Q10 and BS coordinated deletion map. Keep actual author/correlation/replay/error/context-specific phrase behavior with canonical producers. T-07/T-17/T-25/T-29. |
-| Global unattributed verdict shown as local activity | Keep existing verdict detail reachable through correctly attributed existing plan/task/goal inspection; do not preserve misattribution to satisfy old global-feed fixtures. N D14 as narrowed by F Q-FE-11; T-10/T-21. |
-| Helper orphan promoted to a root, or filtered helper separated from its nonmatching parent | Latest F overrides that baseline. Every helper stays under its parent in All / Running / Needs me and text/pair/date filtering, including repeated-helper summaries. Q-M5 handles unavailable real parents; T-08/T-19/T-26, BDD-08.2/09.1/09.5/E08. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/search/SearchModal.test.tsx`::delete/rename/keyboard/query modes — confirmation, pointer prune, Enter/Escape/focus, flat-child search/verifier default/large/plain; protected fixture becomes main | T-08/T-18/T-19/T-26 |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/chat/useSelectSession.test.tsx`::Unfiled/no-double-reset/attach-token-sequence | T-12/T-23 |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/store/chat.cancel-delivery.test.ts`::refusal/current-vs-tree scope | T-17/T-29 |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useRunningActivity.runningChildren-lifecycle.test.ts`::exact-running-not-queue/shell | T-09/T-21 |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useRunningActivity.test.ts`::baked-shell liveness/uncapped active/finished recency | T-21/T-27 |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/store/ui.store.searchModal.test.ts`::single-modal/mode reset/zero-session workspace | T-13/T-18 |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useAgentsCrossTabRefresh.test.tsx`::focus/visibility/listener cleanup | T-11 adds real no-picker shell/member proof |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/chat/ChatScreen.slash-commands-error.test.tsx`::commands failure/skills partition | T-17 |
 
-#### Regression Dataset DS-R — preserved old behavior
-
-Run these before and after implementation using a frozen baseline fixture; tests of deliberately new main contracts run RED first. Existing rename/protection/mode fixture input adaptations are explicit, not softened expected results.
-
-| # | Input | Previous behavior | Must still produce | Traces to |
-|---|---|---|---|---|
-| R01 | Ordinary session trash click, then cancel | No delete before confirmation | No delete before confirmation; cancellation does not delete | BDD-08.4 |
-| R02 | Inline rename then Escape/Enter; rerender or group collapse while editing | Cancel/commit and restore focus; no wedged modal | Same focus/rename/close semantics | BDD-08.3 |
-| R03 | Child-only title/status/agent match at depth 3; unavailable real parent; repeated identical helpers | Previous nesting/search remains; old orphan-as-root rule is superseded by F | Helpers always under parent in every filter/search; Q-M5 unavailable-parent treatment, expandable repeated-helper summary with original targets | BDD-09.1, BDD-09.5, BDD-E08 |
-| R04 | Unfiled session from non-chat route | One standalone inspection/attach, not attach-and-vanish | Same inspectable real destination, no duplicate replay reset | BDD-03.4, BDD-12.1 |
-| R05 | Background shell dispatch baked after turn ends, then poll completion | Liveness follows result and moves once to finished | Same single actual process/result state, not tool-call status | BDD-11.2 |
-| R06 | One running helper, one queued, one terminal open span and shell | Running helper number exactly 1 | Same helper count; new task/kind counts separate | BDD-E10 |
-| R07 | Rejected socket send for selected-chat Stop; unrelated A work | Visible refusal, truthful scope | Same refusal and no new control of A | BDD-07.4 |
-| R08 | Workspace mode with real empty workspace, then close and open Sessions | Empty workspace reachable; mode resets | Same workspace reachability with new entry destination; no stale mode/pair filter leak | BDD-02.1, BDD-03.2 |
-| R09 | Prior cached identity and failed agent query | Unknown, not removed | Same honest identity failure without local saved-value invention | BDD-05.4 |
-
-No source-text presence assertion, snapshot-only test or direct mocked hook invocation can replace a real destination, live-update, authority or rendered-identity oracle. No existing test is declared passing by this spec task.
+#### Dataset DS-R — preserved behavior / explicitly replaced oracle
+| Row | Input / boundary | Must still produce | Traces to: |
+|---|---|---|---|
+| R01 | Ordinary trash/cancel | No delete before confirmation or on cancellation | BDD-08.4 |
+| R02 | Rename Escape/Enter/rerender/group collapse | Cancel/commit/focus restored, no wedged close | BDD-08.3 |
+| R03 | Depth3 child-only/filter/repeated helpers, unavailable parent | Strict nesting/authorized placeholder/original folded targets; old orphan-root superseded | BDD-09.1/09.5/E08 |
+| R04 | Unfiled from non-chat route | One real inspection/attach, no vanish/double replay reset | BDD-03.4/12.1 |
+| R05 | Baked shell dispatch then poll finish | Actual process liveness/state, not call completion | BDD-11.2 |
+| R06 | Running/queued/terminal-open helper + shell | Running-helper count 1; task/kind counts separate | BDD-E10 |
+| R07 | Selected Stop socket rejection, unrelated A | Visible refusal/current scope, no A control | BDD-07.4 |
+| R08 | Empty workspace mode → close → Sessions | Empty workspace reachable/new entry, clean mode/pair-filter reset | BDD-02.1/03.2 |
+| R09 | Cached identity/failed agent query | Unknown not removed/invented saved | BDD-05.4 |
 
 ## Functional Requirements
 
