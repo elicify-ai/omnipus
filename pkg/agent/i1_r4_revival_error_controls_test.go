@@ -14,28 +14,48 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Gap 1 / already-passing control: wrapping the real ordinary revival refusal
-// preserves its cause and its existing human guidance. No full-entry race hook
-// is needed to prove that the special admission-level return is redundant.
-func TestI1R4StaleRevivalWrappingIsRedundant(t *testing.T) {
+// Round 5 item 1: invoke the actual ordinary admission wrapper. A competing
+// durable generation wins at the existing publication boundary; the real
+// WriteSteerRevivalState rejects its stale generation, not an injected error.
+// This pins the caller's %w, rather than reconstructing that wrap in the test.
+func TestI1R5AdmissionPreservesStaleRevivalCause(t *testing.T) {
 	h := i1R3RestartStopped(t)
 	ls := h.al.GetSessionLifecycleStore()
-	selected := h.load(t)
-	require.NoError(t, ls.Mutate(h.id, func(rec *session.LifecycleRecord) error {
-		rec.ExecutionID = &session.ExecutionIdentity{RunID: "newer-selected-execution", BootSeq: h.al.bootEpochFor()}
-		return nil
-	}))
-	before := h.journal(t)
-	refused := h.al.reviveOrdinaryRecordWithExecution(context.Background(), selected,
-		session.ExecutionIdentity{RunID: "losing-revival", BootSeq: h.al.bootEpochFor()})
-	require.ErrorIs(t, refused, steer.ErrStaleGeneration)
-	wrapped := fmt.Errorf("ordinary admission: explicit revival failed: %w", refused)
-	require.ErrorIs(t, wrapped, steer.ErrStaleGeneration, "wrapping preserves the selection cause")
+	selectedGeneration := h.load(t).Generation
+	publications := 0
+	canceller := NewSteerCanceller(ls).SetRevivalStateWriter(func(ctx context.Context, id string, generation int) error {
+		publications++
+		require.Equal(t, h.id, id)
+		require.Equal(t, selectedGeneration, generation)
+		admitted, err := ls.Load(id)
+		require.NoError(t, err)
+		require.Equal(t, session.LifecycleQueued, admitted.State, "actual atomic revival must precede publication")
+		require.NotNil(t, admitted.ExecutionID)
+		require.NoError(t, ls.Mutate(id, func(rec *session.LifecycleRecord) error {
+			rec.Generation++
+			rec.State = session.LifecycleRunning
+			rec.ExecutionID = &session.ExecutionIdentity{RunID: "i1-r5-newer-run", BootSeq: h.al.bootEpochFor()}
+			return nil
+		}))
+		return h.al.WriteSteerRevivalState(ctx, id, generation)
+	})
+	h.al.SetSteerCanceller(canceller)
+	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: "d2b-owner"}
+	prepared, err := h.al.prepareOrdinarySessionExecution(context.Background(), h.id,
+		processOptions{SessionKey: "agent:" + testDefaultAgentID + ":session:" + h.id,
+			TranscriptSessionID: h.id, TranscriptStore: h.al.GetSessionStore()}, &by)
+	require.ErrorIs(t, err, steer.ErrStaleGeneration, "the actual admission wrap must preserve the selection refusal")
 	var ordinary *ordinaryAdmissionRefusalError
-	require.ErrorAs(t, wrapped, &ordinary, "errors.As in the real translator reaches the ordinary refusal through any wrapper")
+	require.ErrorAs(t, err, &ordinary)
+	assert.ErrorContains(t, err, "ordinary admission: explicit revival failed:", "the production caller must be the wrapping site")
 	const guidance = "Your previous reply is still finishing — send your message again in a moment."
-	assert.Equal(t, guidance, userVisibleTurnError(wrapped))
-	assert.Equal(t, before, h.journal(t))
+	assert.Equal(t, guidance, userVisibleTurnError(err))
+	assert.Equal(t, 1, publications)
+	assert.Nil(t, prepared.execution)
+	current := h.load(t)
+	assert.Equal(t, selectedGeneration+1, current.Generation)
+	assert.Equal(t, "i1-r5-newer-run", current.ExecutionID.RunID)
+	assert.Empty(t, h.provider.calls())
 }
 
 // Silent E / already-passing storage-path control: a real store read error
