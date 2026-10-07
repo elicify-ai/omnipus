@@ -93,4 +93,16 @@ describe('fetchSessionMessages — redirected vs plain-stopped turn', () => {
     const msgs = await load([cancelledAssistant, turnCanceled, userEntry('redirect-7f3a')])
     expect(suffix(msgs[0])).toBeNull()
   })
+
+  // KNOWN LIMIT (helper chats): a /stop-redirect on a helper chat stores its
+  // instruction as "<sid>-instruction-<uuid>" (pkg/agent/steering.go::
+  // appendSteeredInstruction), the SAME id shape a follow-up or resume of a
+  // stopped helper gets (ReviveStoppedSession callers: delegate_followup,
+  // delegate_respond, steer_completion). Treating it as a redirect would hide a
+  // genuine Stop marker, and nothing else in the stored entry tells them apart
+  // without a new wire field — so the marker stays after a reload. Pinned.
+  it('KNOWN LIMIT: a helper-chat redirect (<sid>-instruction-… id) keeps "(interrupted)" on reload', async () => {
+    const msgs = await load([cancelledAssistant, turnCanceled, userEntry('sid-s7-instruction-0a1b')])
+    expect(suffix(msgs[0])).toBe('(interrupted)')
+  })
 })
