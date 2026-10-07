@@ -170,16 +170,18 @@ func (r *SteerBootRecovery) deliverPendingFinal(ctx context.Context, item sessio
 		r.recordFinalDeliveryFacts(item, session.FinalDeliveryProgress{AckObserved: true}, notice)
 		return
 	}
-	if !sighting.appended && item.Progress.InboxAppended {
-		// The durable facts say this final WAS appended to the parent's
-		// inbox (a real receipt, recorded only after a successful append),
-		// yet neither the message nor an ack for it is visible now. The only
-		// way a message leaves the inbox is MessageInboxStore.compactLocked,
-		// which purges ACKED messages (and their acks) beyond the retention
-		// window — so this final was consumed and aged out. Delivering it
-		// again would start a second parent turn for one hand-back (#1027,
-		// ADR-091 "each upward event starts at most one parent turn").
-		// Record the consumption so the item stops being pending.
+	if !sighting.appended && r.compactedAway(item, sighting.ackedMessages) {
+		// POSITIVE evidence this final was consumed and then compacted out of
+		// the parent's inbox (#1027, ADR-091 "each upward event starts at most
+		// one parent turn"): the durable facts say it was appended AND the
+		// parent was woken, and the inbox file still shows compaction's
+		// footprint — as many acked messages as compaction always leaves. A
+		// missing/lost file, a never-woken append, a torn line or a thinned
+		// inbox show none of that and fall through to the normal redelivery
+		// (the replay id dedups it). Say so out loud, never silently.
+		notice("final-delivery-consumed:"+item.SessionID, fmt.Sprintf(
+			"session %s committed final %s is no longer in parent %s inbox (%d entries, %d acked messages retained, retention cap %d) but its durable facts show it appended and the parent woken — treated as consumed and compacted away, not redelivered (#1027)",
+			item.SessionID, replayID, commit.ParentSessionID, sighting.entries, sighting.ackedMessages, r.Inbox.AckedRetention()))
 		r.recordFinalDeliveryFacts(item, session.FinalDeliveryProgress{AckObserved: true}, notice)
 		return
 	}
@@ -275,6 +277,15 @@ func (r *SteerBootRecovery) reportAndRecordDelivery(ctx context.Context, event s
 	r.recordFinalDeliveryFacts(item, facts, notice)
 }
 
+// compactedAway reports whether item's absence from the parent's inbox is
+// explained by compaction: appended and woken per the durable facts, and the
+// inbox still holds at least the retention cap of acked messages (compaction
+// purges only acked messages and always keeps the newest retention-cap many).
+func (r *SteerBootRecovery) compactedAway(item session.PendingFinalDelivery, ackedMessages int) bool {
+	retention := r.Inbox.AckedRetention()
+	return item.Progress.InboxAppended && item.Progress.WakeRecorded && retention > 0 && ackedMessages >= retention
+}
+
 // inboxFinalSighting reports how the committed final's replay id exists in
 // the direct parent's durable inbox: appended (a message entry with that
 // id), bytesDiverge (the stored entry's bytes differ from the committed
@@ -285,6 +296,11 @@ func (r *SteerBootRecovery) inboxFinalSighting(ownerKey, messageID string, paylo
 	appended     bool
 	bytesDiverge bool
 	acked        bool
+	// entries and ackedMessages describe the whole inbox file: its entry
+	// count and how many message entries in it are acked — the compaction
+	// footprint compactedAway reads.
+	entries       int
+	ackedMessages int
 }, err error) {
 	if ownerKey == "" {
 		return sighting, errors.New("agent: steer boot final delivery: empty parent inbox owner key")
@@ -293,6 +309,9 @@ func (r *SteerBootRecovery) inboxFinalSighting(ownerKey, messageID string, paylo
 	if err != nil {
 		return sighting, fmt.Errorf("agent: steer boot final delivery: read parent %s inbox: %w", ownerKey, err)
 	}
+	sighting.entries = len(entries)
+	messageIDs := map[string]bool{}
+	ackedIDs := map[string]bool{}
 	for _, entry := range entries {
 		switch entry.Kind {
 		case session.InboxEntryMessage:
@@ -300,6 +319,9 @@ func (r *SteerBootRecovery) inboxFinalSighting(ownerKey, messageID string, paylo
 				continue
 			}
 			envelope, envErr := decodeBootMessage(*entry.Message)
+			if envErr == nil {
+				messageIDs[envelope.MessageID] = true
+			}
 			if envErr != nil || envelope.MessageID != messageID {
 				continue
 			}
@@ -309,9 +331,17 @@ func (r *SteerBootRecovery) inboxFinalSighting(ownerKey, messageID string, paylo
 				sighting.bytesDiverge = true
 			}
 		case session.InboxEntryAck:
+			for _, id := range entry.AckedIDs {
+				ackedIDs[id] = true
+			}
 			if slices.Contains(entry.AckedIDs, messageID) {
 				sighting.acked = true
 			}
+		}
+	}
+	for id := range messageIDs {
+		if ackedIDs[id] {
+			sighting.ackedMessages++
 		}
 	}
 	return sighting, nil
