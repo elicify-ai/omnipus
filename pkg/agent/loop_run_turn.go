@@ -1456,6 +1456,12 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 	}
 	defer rt.al.endActiveRequest()
 
+	// C-10 counts bytes streamed by THIS provider round only. The deleted
+	// delegated wrapper used to reset the counter per call; a value left over
+	// from an earlier round must never disable the chain's in-place retry
+	// (the multi-candidate closure below never resets it itself).
+	rt.providerCallStreamedBytes.Store(0)
+
 	// §7.4 (D3, gate finding F1): every turn — root or steered child — runs
 	// the fallback chain even with a single candidate: the chain owns the
 	// §7.4 per-candidate in-place retry (C-8: 3 total calls, C-9 ceiling,
