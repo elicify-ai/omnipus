@@ -206,6 +206,27 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
     expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
   })
 
+  it.each(['session_snapshot', 'resetSessionForReplay'] as const)('re-attach (%s) after the user continued, list still interrupted: the notice does not return', async (how) => {
+    feed(freshTabAttach())
+    await mount()
+    await screen.findByTestId('restart-interrupted-notice')
+    act(() => { useChatStore.getState().sendMessage('Please continue', { clientMessageId: 'u-2' }) })
+    await waitFor(() => expect(useChatStore.getState().sessionsById[SID]?.restartNoticeDismissed).toBe(true))
+    feed([
+      { type: 'error', session_id: SID, message: codeToDisplay.provider_rejected, payload: { llm_error: { code: 'provider_rejected', message: codeToDisplay.provider_rejected, retryable: true } } },
+      { type: 'done', session_id: SID, turn_id: 't-2', stats: { tokens: 0, cost: 0 } },
+    ])
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
+    act(() => {
+      if (how === 'resetSessionForReplay') useChatStore.getState().resetSessionForReplay(SID)
+    })
+    if (how === 'session_snapshot') feed(freshTabAttach('boot_mismatch'))
+    else feed(freshTabAttach().slice(1))
+    await act(async () => { await queryClient.invalidateQueries({ queryKey: ['sessions'] }) })
+    expect(useChatStore.getState().sessionsById[SID]?.restartNoticeDismissed).toBe(true)
+    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+  })
+
   it('a later, second restart shows Interrupted again once the saved value was seen at something else', async () => {
     feed(freshTabAttach())
     await mount()
