@@ -44,6 +44,7 @@ type cwRangeHeapMeter struct {
 	samples atomic.Uint64
 	inCall  atomic.Uint64
 	forced  atomic.Uint64
+	holders atomic.Value // string: cwHeapHolders() captured when a peak exceeded one D10 bound
 	request chan chan struct{}
 	stop    chan struct{}
 	stopped chan struct{}
@@ -107,6 +108,10 @@ func (m *cwRangeHeapMeter) sample(forceGC bool) {
 		}
 		for old := m.peak.Load(); retained > old; old = m.peak.Load() {
 			if m.peak.CompareAndSwap(old, retained) {
+				if retained > memory.EncodedLineBound {
+					// Name the holder while it is still live (diagnostic only).
+					m.holders.Store(cwHeapHolders())
+				}
 				break
 			}
 		}
@@ -238,7 +243,11 @@ func cwRangeBoundedMemory(t *testing.T) {
 				// One existing D10 bound of conservative process/GC/buffer
 				// measurement slack, NOT an arbitrary product range limit.
 				// The 64-MiB selected range is much larger than this slack.
-				t.Fatalf("retained working memory scales with range: records=%d peak=%d baseline=%d allowed growth=%d", count, peak, baselinePeak, memory.EncodedLineBound)
+				holders, _ := meter.holders.Load().(string)
+				if holders == "" {
+					holders = cwHeapHolders()
+				}
+				t.Fatalf("retained working memory scales with range: records=%d peak=%d baseline=%d allowed growth=%d\n%s", count, peak, baselinePeak, memory.EncodedLineBound, holders)
 			}
 			t.Logf("MIN-001: records=%d selected bytes=%d fixed record bytes=%d page cap=%d peak retained=%d during samples=%d forced collections=%d context polls=%d", count, count*len(record), len(record), pageCap, peak, meter.inCall.Load(), meter.forced.Load(), ctx.polls.Load())
 		})

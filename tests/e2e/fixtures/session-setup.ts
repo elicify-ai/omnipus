@@ -137,7 +137,7 @@ function seedTranscript(sessionId: string, entries: TranscriptEntry[]): void {
   fs.writeFileSync(transcriptPath, lines, { encoding: 'utf-8' })
 }
 
-async function waitForWsConnected(page: Page): Promise<void> {
+export async function waitForWsConnected(page: Page): Promise<void> {
   await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 })
   // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
   // see waitForConnected's doc comment in ./selectors). Confirm the socket

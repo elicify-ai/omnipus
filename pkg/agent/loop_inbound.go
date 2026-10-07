@@ -525,6 +525,16 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 		return routing.ResolvedRoute{}, nil, fmt.Errorf("no agent available for route (agent_id=%s)", route.AgentID)
 	}
 
+	// A message addressed to a concrete chat session runs under that session's
+	// own key, exactly as the pinned, explicit-agent and handoff branches above
+	// already do. The routing cascade's key can be agent-level ("agent:<id>:main"),
+	// which would make two chats of the same agent share one turn-registry slot
+	// and one history bucket; the per-session admission keys on the session id
+	// and relies on the turn registry being per session too.
+	if msg.SessionID != "" {
+		route.SessionKey = agentSessionKey(agent.ID, msg)
+	}
+
 	return route, agent, nil
 }
 
