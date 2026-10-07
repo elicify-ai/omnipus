@@ -4,10 +4,10 @@
 // mapper in the SPA; boot persists a palette hex.
 import type { AgentFigure, AgentRole } from '@/lib/api/generated/openapi-types'
 
-export const ROLE_GROUPS = ['Create', 'Build', 'Business', 'People', 'Personal'] as const
-export type AgentRoleGroup = (typeof ROLE_GROUPS)[number]
+export const IDENTITY_GROUP_ORDER = ['Create', 'Build', 'Business', 'People', 'Personal'] as const
+export type AgentRoleGroup = (typeof IDENTITY_GROUP_ORDER)[number]
 
-export const AGENT_ROLES = {
+const ROLE_ROWS = {
   writer: { label: 'Writer', group: 'Create' },
   designer: { label: 'Designer', group: 'Create' },
   image: { label: 'Image creator', group: 'Create' },
@@ -41,17 +41,21 @@ export const AGENT_ROLES = {
   office: { label: 'Office assistant', group: 'Personal' },
 } as const satisfies Record<AgentRole, { label: string; group: AgentRoleGroup }>
 
-export const FIGURES = ['Robot', 'Man', 'Woman', 'Omnipus'] as const
+export const ROLE_VOCABULARY = (Object.keys(ROLE_ROWS) as AgentRole[]).map((slug) => ({
+  group: ROLE_ROWS[slug].group,
+  slug,
+  label: ROLE_ROWS[slug].label,
+}))
 
-export const FIGURE_PRESENTATION = {
+export const FIGURE_ART = {
   Robot: { art: 'robotSolid', face: 'eyes' },
   Man: { art: 'man', face: 'eyes' },
   Woman: { art: 'woman', face: 'eyes' },
   Omnipus: { art: 'octopus', face: 'none' },
 } as const satisfies Record<AgentFigure, { art: 'robotSolid' | 'man' | 'woman' | 'octopus'; face: 'eyes' | 'none' }>
 
-type MissingRole = Exclude<AgentRole, keyof typeof AGENT_ROLES>
-type MissingFigure = Exclude<AgentFigure, (typeof FIGURES)[number]>
+type MissingRole = Exclude<AgentRole, keyof typeof ROLE_ROWS>
+type MissingFigure = Exclude<AgentFigure, keyof typeof FIGURE_ART>
 type AssertNever<T extends never> = T
 type _RoleCoverage = AssertNever<MissingRole>
 type _FigureCoverage = AssertNever<MissingFigure>
