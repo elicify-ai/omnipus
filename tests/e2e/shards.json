@@ -68,7 +68,8 @@
         "tests/e2e/agents.spec.ts",
         "tests/e2e/auth.spec.ts",
         "tests/e2e/burst-resilience.spec.ts",
-        "tests/e2e/side-panel-deeplink.spec.ts"
+        "tests/e2e/side-panel-deeplink.spec.ts",
+        "tests/e2e/nav-wave1.spec.ts"
       ]
     },
     {
