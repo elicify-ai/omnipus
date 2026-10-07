@@ -846,10 +846,10 @@ BDD means behavior-driven development: concrete Given/When/Then examples form th
 #### Scenario: BDD-08.2 — Order mains without flattening real children
 **Traces to:** User Story 8, Acceptance Scenario 2
 **Category:** Happy Path
-- **Given** main M, extras E1/E2, child C under E1 and accessible orphan O
+- **Given** main M, extras E1/E2, helper C under E1 and helper O with unavailable real-parent context
 - **When** the agent group is revealed
-- **Then** M is first/pinned, extras keep established recency and C stays under E1
-- **And** O remains inspectable without manufacturing a parent
+- **Then** M is first/pinned, extras keep recency and C stays beneath E1 even when only C matches a filter/search
+- **And** O follows the founder-approved Q-M5 unavailable-parent treatment, never a top-level helper or invented navigable parent
 
 #### Scenario: BDD-08.3 — Use the shared accessible modal presentation
 **Traces to:** User Story 8, Acceptance Scenario 3
@@ -866,13 +866,19 @@ BDD means behavior-driven development: concrete Given/When/Then examples form th
 - **When** its delete/open/list action is attempted
 - **Then** protection or failure is visible, hidden sessions do not open, and a workspace outage never presents as Unfiled/empty success
 
-#### Scenario: BDD-09.1 — Apply only founder-set activity filter choices
+#### Scenario Outline: BDD-09.1 — Apply the decided All / Running / Needs me filter
 **Traces to:** User Story 9, Acceptance Scenario 1
 **Category:** Happy Path
-- **Given** Q-M1/Q-M3 are explicitly resolved and ordinary title/workspace/agent/date filters are set
-- **When** the chosen activity filter is applied
-- **Then** exactly the approved state set matches, with ancestors shown for context and active pair filters removable
-- **And** an unapproved Needs me option or queued-as-running assumption is not silently introduced
+- **Given** matching title/workspace/agent/date filters and authoritative running, queued, inactive and main-attention fixtures, with no non-main person-action case requiring Q-M6
+- **When** `<filter>` is selected
+- **Then** `<matching set>` is shown, with every matching helper beneath its parent even when that parent does not match
+- **And** all three decided choices are available, pair filters removable, and queued is not guessed to be executing
+
+| filter | matching set |
+|---|---|
+| All | All authorized matches, preserving real parent context |
+| Running | Actual executing matches; queued/inactive excluded as matches; nonmatching parent retained as context for its running helper |
+| Needs me | Confirmed main attention in this fixture; no boolean borrowed by helpers; additional non-main matching waits for Q-M6 |
 
 #### Scenario: BDD-09.2 — Refresh unopened-chat activity while modal stays open
 **Traces to:** User Story 9, Acceptance Scenario 2
@@ -896,6 +902,14 @@ BDD means behavior-driven development: concrete Given/When/Then examples form th
 - **When** that title is searched
 - **Then** its real ancestors reveal the child and keyboard selection reaches it with truthful counts
 - **And** viewport-bounded rendering or the supported plain fallback keeps every result reachable
+
+#### Scenario: BDD-09.5 — Expand repeated helpers without flattening or merging jobs
+**Traces to:** User Story 9, Acceptance Scenario 5
+**Category:** Happy Path
+- **Given** nine consecutive identical helper titles/kinds with distinct identities/statuses/targets under P, and the same title under another parent Q
+- **When** the folded **9 similar helper runs** row under P is expanded
+- **Then** all nine original helpers and their status/Open actions are revealed beneath P, never top-level
+- **And** Q's helpers stay in their own parent group; filtered original counts remain truthful and the summary is not a synthetic chat/session or merged execution
 
 ### Feature: Plan links and session-scoped activity
 
@@ -1049,12 +1063,13 @@ BDD means behavior-driven development: concrete Given/When/Then examples form th
 - **When** replay renders the plain path
 - **Then** Jim's name-only reply and truthful inspected kind remain; owner does not change
 
-#### Scenario: BDD-E08 — Keep orphan/large repeated-title search reachable
+#### Scenario: BDD-E08 — Keep filtered repeated helpers inside parent context
 **Traces to:** User Story 9, Acceptance Scenario 4; EC-08
 **Category:** Edge Case
-- **Given** 21 visible rows plus orphan O and nine identically titled helpers with distinct identities
-- **When** a child-only query is applied
-- **Then** matching descendants and their real context stay reachable, O is not lost, and unapproved repeated-helper collapsing is not applied
+- **Given** 21 visible rows, nine consecutive identical helper runs under P and another same-title group under Q, including a helper whose parent does not match the current filter
+- **When** a helper-only title/status filter is applied
+- **Then** matching helpers and any repeated-helper summary remain inside their own parent context, never top-level or merged across parents
+- **And** the summary counts original matching helpers, expands to their individual identities/status/Open targets and follows the same rule in virtualized/plain paths; unavailable real parents follow Q-M5
 
 #### Scenario: BDD-E09 — Recover unopened-workspace metadata without false coverage
 **Traces to:** User Story 9, Acceptance Scenario 3; EC-09
@@ -1110,7 +1125,7 @@ Each test name is a proposed family; each listed BDD scenario becomes a concrete
 | 5 | T-05 paletteMigrationOracle | Unit | BDD-05.2, BDD-05.3, BDD-E05 | Frozen palette order/saturation/circular-distance/tie and old-role fixtures; repeat mapping stable. Backend migration test uses same external expected values. |
 | 6 | T-06 identityVocabulary | Unit | BDD-05.1, BDD-05.2, BDD-E06 | Four figures, 31 grouped roles, ten colors and all named sizes; no small badge fallback. |
 | 7 | T-07 immutableAuthorAndKind | Unit | BDD-07.1, BDD-07.2, BDD-E07 | Actual message/turn producer differs from session owner without changing owner/kind. |
-| 8 | T-08 modalHierarchyAndFilters | Unit | BDD-08.2, BDD-09.1, BDD-09.4, BDD-E08 | Main first, real nesting/orphans/ancestor reveal and founder-resolved filter cases. No unapproved collapsing. |
+| 8 | T-08 modalHierarchyAndFilters | Unit | BDD-08.2, BDD-09.1, BDD-09.4, BDD-09.5, BDD-E08 | Main first; helpers always under their parent in every filter/search. All / Running / Needs me and repeated-helper grouping/counts/expansion are decided. Unavailable parent treatment stays Q-M5; no synthetic summary-session identity. |
 | 9 | T-09 workIdentityAndOrigin | Unit | BDD-10.1, BDD-10.2, BDD-11.2, BDD-E10, BDD-E11 | Real starting chat, distinct work keys, scheduler-only runs and queued/waiting exclusions; no synthetic control parent. |
 | 10 | T-10 contractCoverageUnknown | Unit | BDD-01.4, BDD-05.4, BDD-08.4, BDD-11.3 | Actual generated validation plus unknown handling; failed/unattributed sources cannot become false/removed/local/zero. |
 | 11 | T-11 shellFreshnessWithoutPicker | Integration | BDD-01.4, BDD-09.2 | Mount real AppShell/sidebar with no AgentPicker. Agent-created update then separate member save; focus/visibility/expand inside staleTime refresh both caches with visible errors. Hook-only green is insufficient. |
@@ -1121,14 +1136,14 @@ Each test name is a proposed family; each listed BDD scenario becomes a concrete
 | 16 | T-16 globalEditorSaveAndLocks | Integration | BDD-06.1, BDD-06.2, BDD-06.3 | Existing wizard/profile preview, global update, editability and real save/activation error status; uploads absent. |
 | 17 | T-17 feedPathsAndCommandCutover | Integration | BDD-07.1, BDD-07.2, BDD-07.3, BDD-07.4, BDD-E07 | Live/virtual/plain/replay names-only messages and actual inline responder; preserved model/Auto/errors/controls, exact command removal/rename and no Clear-to-new action. |
 | 18 | T-18 modalRowsAndControls | Integration | BDD-08.1, BDD-08.2, BDD-08.3, BDD-08.4 | Status/kind/dot, group/count/shared-row/search controls, protected delete, rename Escape/focus and independent action targets at desktop/phone. |
-| 19 | T-19 modalLiveCoverageAndPages | Integration | BDD-09.1, BDD-09.2, BDD-09.3, BDD-09.4, BDD-E08, BDD-E09 | Real metadata query/live invalidation while open, approved filter membership, missed-update/pagination error and large child-only search. |
+| 19 | T-19 modalLiveCoverageAndPages | Integration | BDD-09.1, BDD-09.2, BDD-09.3, BDD-09.4, BDD-09.5, BDD-E08, BDD-E09 | Real metadata/live updates, All / Running / Needs me and matching helpers always inside parent context; expand repeated helpers with truthful filtered counts/targets, keyboard summary action not attach; pagination errors and large/plain paths. |
 | 20 | T-20 validatedStartResultLinks | Integration | BDD-10.1, BDD-10.2, BDD-10.3, BDD-10.4, BDD-E11 | Published result/origin/workspace, real Tasks/Graph hand-off and real run session; live/replay/idempotence, denied/missing target. |
 | 21 | T-21 openSessionActivityOwnership | Integration | BDD-11.1, BDD-11.2, BDD-11.3, BDD-E10 | Panel A/B isolation and Sessions overview, task/helper dedupe and unchanged independent Stop authority; unattributed judge work not localized. |
 | 22 | T-22 upgradeAndCanonicalSeeds | Integration | BDD-05.3, BDD-12.1, BDD-12.2, BDD-12.3, BDD-E12 | Actual backend importer/config/fresh seed plus repeated gateway restarts; UI reload alone cannot prove this. |
 | 23 | T-23 jointU1Navigation | E2E | BDD-01.1, BDD-01.2, BDD-01.3, BDD-02.1, BDD-02.2, BDD-02.3, BDD-02.4, BDD-03.1, BDD-03.2, BDD-03.4, BDD-12.2, BDD-E01, BDD-E02, BDD-E03 | Real U1 destinations/attachment/message outcomes, row/history/Admin reachability and preserved panels; no stand-in main backend. |
 | 24 | T-24 jointMainAttention | E2E | BDD-04.1, BDD-04.2, BDD-04.3, BDD-04.4, BDD-E04 | Real unopened-main four sources, two-person shared ack, append/open race, resolution, initial load/reconnect and reduced motion. |
 | 25 | T-25 identityAndFeedSurfaces | E2E | BDD-05.1, BDD-05.2, BDD-06.1, BDD-06.2, BDD-06.3, BDD-07.1, BDD-07.2, BDD-07.3, BDD-E06, BDD-E07 | Compare actual product surfaces with W, locked choices/preview, actual guest author, all feed paths and motion/zoom/coarse input. |
-| 26 | T-26 sessionsOverallActivity | E2E | BDD-08.1, BDD-08.2, BDD-08.3, BDD-08.4, BDD-09.1, BDD-09.2, BDD-09.3, BDD-09.4, BDD-11.1, BDD-E08, BDD-E09 | Work in unopened A remains findable from B while B panel stays local; live status/origin attention/filter/page and keyboard/touch/protection. |
+| 26 | T-26 sessionsOverallActivity | E2E | BDD-08.1, BDD-08.2, BDD-08.3, BDD-08.4, BDD-09.1, BDD-09.2, BDD-09.3, BDD-09.4, BDD-09.5, BDD-11.1, BDD-E08, BDD-E09 | Real A/B visibility; All / Running / Needs me and helper-only search keep helpers under parent; folded N similar helper runs expands every original target. Verify live/partial coverage, virtual/plain/phone/keyboard/protection, no cross-parent grouping. |
 | 27 | T-27 realPlanTaskDrilldown | E2E | BDD-10.1, BDD-10.2, BDD-10.3, BDD-10.4, BDD-11.2, BDD-11.3, BDD-E10, BDD-E11 | Real plan/task/scheduler starts with actual destination; accepted versus running, replay links, no-origin, duplicate work/control authority. |
 | 28 | T-28 savedInstallContinuation | E2E | BDD-05.3, BDD-12.1, BDD-12.3, BDD-E05, BDD-E12 | Supported saved install then real follow-up messages, identity/restart/repeat upgrade and visible partial failure; fresh fixtures alone fail acceptance. |
 | 29 | T-29 failureAndControlBoundaries | E2E | BDD-01.4, BDD-05.4, BDD-07.4, BDD-11.3 | Force real offline/refusal/error paths; keep committed chat, no unrelated Stop and no fabricated completed/zero state. |
@@ -1225,8 +1240,8 @@ Arithmetic fixtures were independently calculated and compared with the approved
 | S01 | Zero sessions versus failed sessions/workspaces query | Empty versus failure | Honest no matches versus explicit error/Retry, never Unfiled outage | BDD-08.4, BDD-09.3 | Positive valid-empty control |
 | S02 | 1, 19, 20 and 21 visible rows | Minimum/threshold−1/threshold/threshold+1 | Complete keyboard-reachable result set; viewport virtualization beyond current 20-row threshold and valid plain fallback | BDD-09.4, BDD-E08 | Existing C-MODAL threshold, not capacity cap |
 | S03 | N−1/N/N+1 rows across published page size; later-page error; 1,000 metadata rows | Page boundary/very large | Complete authorized matches or visibly partial coverage; no transcript fan-out | BDD-09.3, BDD-09.4 | N from real committed contract |
-| S04 | Main + extras + real child + unresolved-parent orphan + child-only title | Hierarchy/ordering | Main first; recency extras, nested real child and accessible orphan | BDD-08.2, BDD-E08 | No synthetic edges |
-| S05 | Nine equal helper titles, distinct IDs/status/attention/targets | Repeated content | Each remains reachable; collapsing only per approved Q-M2, preserving full information | BDD-E08 | No assumed title-only dedupe |
+| S04 | Main + extras + real helper + unavailable parent + child-only title/agent/status match | Hierarchy/ordering/filter context | Main first; helpers always beneath real parent, nonmatching parent remains context; Q-M5 governs unavailable-parent notice, never root promotion | BDD-08.2, BDD-09.1, BDD-E08 | No fake parent or top-level helper |
+| S05 | Nine consecutive identical helper titles/kinds under P, distinct IDs/status/targets; same title under Q | Repeated content/count/parent boundary | Decided `9 similar helper runs` under P expands to all nine originals; no cross-parent merge. Filtered summary counts only matching originals; no execution merge | BDD-09.5, BDD-E08 | Test 1/2/9 repeated helpers, mixed states, every filter, search and virtual/plain paths |
 | S06 | Every published lifecycle/kind; missing lifecycle; zero/missing tokens; invalid timestamp | State/null/zero | Truthful status/kind or unavailable state; zero versus missing not fabricated; no dangling metadata | BDD-08.1, BDD-E09 | Values through real generated validators |
 | S07 | One task run projected as starter/assignee/helper; scheduler-only independent run; >8 active items | Duplicates/non-tool origin/old finish cap+1 | Distinct actual counts uncapped; correct source/control scope | BDD-11.2, BDD-E10 | Eight-item finish display cap cannot cap active work |
 | S08 | Plan started in A; internal owner elsewhere; Tasks-only plan; idempotent start | Origin/absent/retry | A association only; no Tasks-only origin; no duplicate work | BDD-10.1, BDD-E11 | Requires published real origin |
