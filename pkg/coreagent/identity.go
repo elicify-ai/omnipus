@@ -104,8 +104,8 @@ func WireIdentity(figure, role, color string) (generated.AgentFigure, generated.
 
 // RoleFromLegacyIcon maps a stored Phosphor icon name to a role slug.
 // The five spec keys are matched after trim and lower-case, without stripping
-// hyphens. An icon that is already exactly one of the 31 slugs is kept.
-// Anything else is general.
+// hyphens. After that same fold, an icon that is exactly one of the 31 slugs
+// is kept. Anything else is general.
 func RoleFromLegacyIcon(icon string) string {
 	folded := strings.ToLower(strings.TrimSpace(icon))
 	switch folded {
@@ -120,9 +120,9 @@ func RoleFromLegacyIcon(icon string) string {
 	case "shield":
 		return string(generated.AgentRoleSecurity)
 	}
-	trimmed := strings.TrimSpace(icon)
-	if generated.AgentRole(trimmed).Valid() {
-		return trimmed
+	// Same fold as the five keys. "Writer" is the slug writer; "magnifying-glass" is not.
+	if generated.AgentRole(folded).Valid() {
+		return folded
 	}
 	return DefaultRole
 }
