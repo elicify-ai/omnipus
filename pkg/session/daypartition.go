@@ -500,6 +500,17 @@ type TranscriptEntry struct {
 	// its message id. nil, and omitted from JSON, on every other entry.
 	GoalOutcome *generated.GoalOutcome `json:"goal_outcome,omitempty"`
 
+	// TerminalOutcome marks an assistant entry that is a turn's distinct
+	// terminal outcome sentence — the text written AFTER the turn's earlier
+	// narration was already persisted (the iteration-cap notice is the
+	// canonical case). Live, the gateway closes the narration bubble with
+	// done(<narration id>) before this entry arrives, so the SPA shows two
+	// messages; replay carries no such boundary, so this flag is what lets a
+	// reload keep them apart. Set only by wsStreamer.Finalize's
+	// distinct-terminal-notice write; false (and omitted from JSON) on every
+	// other entry, including every entry written before this field existed.
+	TerminalOutcome bool `json:"terminal_outcome,omitempty"`
+
 	// SubagentStart/SubagentState/SubagentMessage/SubagentEnd carry the four
 	// ADR-091 D7/I-4 sub-agent lifecycle frames, persisted as events in the
 	// PARENT's own transcript at the moment they happen — "no new store":

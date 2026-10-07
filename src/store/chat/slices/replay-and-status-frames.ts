@@ -246,11 +246,13 @@ function applyAssistantReplayCoalesce(
     replayAgentId: string | undefined
     replayModel: string
     replayTurnId: string | undefined
+    /** replay_message.terminal_outcome — the entry is a distinct turn-ending outcome. */
+    replayTerminalOutcome: boolean
     replayTruncated: boolean
     replayTruncationReason: ChatMessage['truncationReason']
   },
 ): boolean {
-  const { text, messageId, replayAgentId, replayModel, replayTurnId, replayTruncated, replayTruncationReason } = ctx
+  const { text, messageId, replayAgentId, replayModel, replayTurnId, replayTerminalOutcome, replayTruncated, replayTruncationReason } = ctx
   const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
   // ADR-070 §2.2: a candidate is only eligible to receive more
   // replayed content — coalesce OR the same-turn merge below —
@@ -370,7 +372,11 @@ function applyAssistantReplayCoalesce(
     // something — in practice, a steer's persisted user entry
     // — has been replayed after `candidate` since it was
     // created, even when turnId/agentId still match.
-    if (sameTurn && compatibleProducer && !alreadyMerged && lastMsgIsRawTail) {
+    // A terminal outcome (turn-ending failure/limit notice) is its own
+    // durable entry, and live shows it as a separate bubble (the narration
+    // is closed by `done` first). Replay carries no `done` between entries,
+    // so the gateway marks it (`terminal_outcome`) and it must never merge.
+    if (sameTurn && compatibleProducer && !alreadyMerged && lastMsgIsRawTail && !replayTerminalOutcome) {
       // Bake any tool calls that started on this bubble since
       // the last segment landed, onto the SAME bubble we are
       // about to extend — this is the bubble live's `done`
@@ -674,6 +680,7 @@ function handleReplayMessageFrame({
           replayAgentId,
           replayModel,
           replayTurnId,
+          replayTerminalOutcome: replayFrame.terminal_outcome === true,
           replayTruncated,
           replayTruncationReason,
         })
