@@ -113,6 +113,29 @@ async function openSource(panel: 'tasks' | 'library') {
   return router
 }
 
+describe('W2/N1 accepted Chat pathname owns Library projection', () => {
+  it.each(['/workspaces/ws-1/chat', '/workspaces/ws-1/chat/'])('%s projects Library and restores it from the resulting URL after a fresh mount', async (entry) => {
+    // Founder-confirmed oracle: bare accepted Chat URLs own the same panel
+    // contract, regardless of their optional final slash. No preset query.
+    const router = await mountRoute(entry)
+    expect(router.state.location.pathname).toBe(entry)
+    expect(router.state.location.search).toEqual({})
+    expect(usePanelShellStore.getState().activePanel).toBeNull()
+    act(() => usePanelShellStore.getState().openPanel('library', { workspaceId: 'ws-1' }))
+    await assertRealContent('library', false)
+    await waitFor(() => expect(router.state.location.search).toEqual({ panel: 'library' }))
+    expect(new URLSearchParams(window.location.hash.split('?')[1]).get('panel')).toBe('library')
+    const projectedURL = window.location.hash.slice(1)
+    cleanup()
+    router.history.destroy()
+    act(() => usePanelShellStore.getState().closePanel())
+    const reloaded = await mountRoute(projectedURL)
+    await assertRealContent('library', false)
+    expect(reloaded.state.location.search).toEqual({ panel: 'library' })
+    expect(usePanelShellStore.getState().activePanel).toEqual({ id: 'library', context: { workspaceId: 'ws-1' } })
+  })
+})
+
 describe('LIVE-1 real registered standalone expansion and return', () => {
   it('direct Tasks full-screen entry is a positive control for the production codec and route validation', async () => {
     const router = await mountRoute('/panel/tasks?workspace=ws-1')

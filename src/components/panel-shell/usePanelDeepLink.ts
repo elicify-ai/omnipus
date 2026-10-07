@@ -171,7 +171,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
       // Router location changes before React necessarily unmounts this chat.
       // Never let its pending projection strip another route's context (for
       // example the full-screen panel's workspace/path during Expand).
-      if (router.state.location.pathname !== owningChatPath) return
+      if (router.state.location.pathname.replace(/\/+$/, '') !== owningChatPath.replace(/\/+$/, '')) return
       selfWriteRef.current = true
       navigate({
         search: ((prev: SearchRecord) => cleanedSearch(prev, desired)) as never,
@@ -202,7 +202,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
 
   useEffect(() => {
     const onPopState = () => {
-      if (router.state.location.pathname !== owningChatPath) return
+      if (router.state.location.pathname.replace(/\/+$/, '') !== owningChatPath.replace(/\/+$/, '')) return
       if (freshLinkRef.current?.href === window.location.href) return
       backForwardRef.current = true
       const current = useUiStore.getState().activePanel
@@ -213,7 +213,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
   }, [replaceSearch, owningChatPath, router])
 
   useEffect(() => {
-    if (router.state.location.pathname !== owningChatPath) return
+    if (router.state.location.pathname.replace(/\/+$/, '') !== owningChatPath.replace(/\/+$/, '')) return
     const freshLink = freshLinkRef.current?.href === window.location.href
       && freshLinkRef.current.workspaceId === workspaceId
     if (backForwardRef.current) {
@@ -259,7 +259,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
   // or Browser panel scrubs `panel` (SP-28) without spreading leftover keys.
   const mountedRef = useRef(false)
   useEffect(() => {
-    if (router.state.location.pathname !== owningChatPath) return
+    if (router.state.location.pathname.replace(/\/+$/, '') !== owningChatPath.replace(/\/+$/, '')) return
     if (!mountedRef.current) {
       mountedRef.current = true
       return
