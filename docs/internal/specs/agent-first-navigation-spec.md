@@ -1479,3 +1479,109 @@ These existing pages were read. Implementing leads draft matching updates **in t
 | DOC-006 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/getting-started.md`::How to go from nothing to your first conversation, step 7 | This page still tells a new user to choose the composer agent picker. Replace that instruction with eligible sidebar colleague/main selection and row New chat/Past sessions; coordinate first-workspace/onboarding wording with U1 instead of claiming the generic Ava entry rule replaces every onboarding step. FR-003/FR-005/FR-007; T-23/T-30. |
 
 Missing any matching page update in the implementation diff is an Important finding under P, with the concrete impact that a user follows removed picker/command/standalone-Admin instructions or mistakes another chat's activity/control scope. Public docs describe observable behavior, not unpublished wire fields. No unrelated page rewrite is authorized by these TODOs.
+
+## Questions for the founder
+
+**Team-lead interviews the founder using the question tool.** This author does not choose the answers or start an extra ADR grill. Q-FE-11/Q-FE-12, the original Q1–Q12, and the later **Session modal A2/D8 + grouping** answer are closed. **Decided:** helpers always remain under their parent in every search/filter, the exact filter choices are All / Running / Needs me, and repeated identical helpers fold into an expandable `N similar helper runs` row. Former Q-M1/Q-M2 and the alternative filter-name choice Q-M3 are retired, not re-interviewed. Only the narrower unresolved cases below remain; answer form: `Q-M4 A, Q-M5 A, Q-M6 A`. Recommendations are not decisions. Missing backend serialization is handled in the dependency ledger, not turned into guessed wire fields.
+
+### Q-M4 — How does Sessions expose background shells that are not chat sessions? (A / B / C)
+
+N D14 includes shells, but the stored session tree does not make each shell process a real Omnipus chat. F Q-FE-11 selects the existing modal as overall activity. A main can have finished its own turn while a background shell still runs; its own lifecycle chip alone would hide that work. The needed presentation is missing from W and requires authoritative origin-scoped metadata for unopened chats.
+
+| Option | Presentation within the existing modal |
+|---|---|
+| A | Show real shell activity/count on its origin chat's row; an accessible Open action reaches that origin chat's existing Activity panel. No synthetic session row. |
+| B | Expand origin chat into clearly marked **activity entries**, including shells as non-session entries distinct from genuine helper/run children, with existing authorized inspection actions. |
+| C | Keep shell detail only after opening the origin chat; the modal identifies the origin's background-work presence but lists no shell count/detail. This deliberately limits the overview. |
+
+**Recommendation: A.** It keeps the one existing hierarchy and makes ongoing shell work discoverable without faking a saved session or building another view. DEP-ACT and WF-05 remain holds until the answer and real data coverage are published.
+
+### Q-M5 — Where is a helper whose real parent cannot be loaded? (A / B)
+
+The newest answer forbids top-level helper rows **always**, superseding the current modal's orphan-as-root fallback. A retained helper can still have a missing/deleted or inaccessible parent. This question does not reopen nesting: it chooses the honest unavailable-parent treatment without inventing a new parent, leaking metadata or silently losing legitimate retained history.
+
+| Option | Treatment — helper never becomes top-level |
+|---|---|
+| A | Keep the helper beneath a clearly unavailable **real-parent context**, using only authorized relation data; no fake navigable parent session or exposed hidden title. Its legitimate helper inspection remains reachable. |
+| B | Show a visible parent-resolution/availability notice and defer its modal row until real authorized parent context is available; retain legitimate independent inspection through existing routes. |
+
+**Recommendation: A.** It preserves the saved-helper reachability guarantee without breaking the always-nested rule. Backend owner must provide truthful authorized parent context; WF-01 covers this case.
+
+### Q-M6 — Which non-main rows, if any, match the already-approved Needs me filter? (A / B)
+
+The **presence and label of Needs me are decided**. Its broadening beyond mains is not defined by the latest answer: BS publishes needs_attention only on mains, while helpers may be waiting for a parent rather than for the person. This is a matching-source question, not another vote on A2; it cannot be answered by inventing a helper boolean or parsing text.
+
+| Option | Matching rule |
+|---|---|
+| A | Match confirmed main needs_attention only; any matching helper context is shown under its parent through other filters/search. |
+| B | Also match non-main sessions with an authoritative unresolved action addressed to the person, not generic waiting. Backend owner publishes/reuses exact question/approval ownership metadata first; sidebar remains main-only. |
+
+**Recommendation: A** for this first squad, because that source is already settled and mains carry person-facing attention. If the founder chooses B, existing authorized pending-question/approval data must establish the additional source; no new guessed wire field is permitted.
+
+### Visual/publication holds, not additional guesses
+
+WF-01–WF-05 require additions to the approved wireframe project and founder approval; DEP-ID/DEP-ACT require the owners' committed generated shapes and canonical identity inventory. Team-lead arranges these with the relevant owners. Existing approved Q9 design, figures/default, main/extra/entry semantics and main-only attention are not reopened here. Prototype color fixtures are presented for Q8's requested review, not a new mapping algorithm choice.
+
+## Ambiguity Warnings
+
+The founder has **not yet reviewed or acknowledged** these warnings in this task. Under plan-spec's ambiguity gate, this artifact remains a reviewable **Draft**, not a finalized implementation-ready spec. Team-lead records each answer/accepted deferral before dependent production work; the two formal spec grill/fix rounds still follow P's founder-interview rules. No second ADR correction/grill is commissioned here.
+
+| ID | What's ambiguous / missing | Likely agent assumption — forbidden until resolved | Question / owner and current state |
+|---|---|---|---|
+| AW-01 | Matching sources beyond the **decided** All / Running / Needs me filter | Treat every waiting helper as a person-action row | Q-M6; Pending narrow source-scope interview, not A2's presence/label. |
+| AW-02 | Missing/inaccessible real parent under the **decided always-nested helper rule** | Keep the old top-level orphan fallback or invent a parent | Q-M5; Pending unavailable-parent treatment; top-level helper is never allowed. |
+| AW-03 | Authoritative executing-versus-queued metadata for the **decided Running label** | Treat every current Working response as executing | DEP-ACT; Backend publication dependency, no open filter-name choice. |
+| AW-04 | Shells in the overall session-based view | Drop shells from overview or mint fake chat rows | Q-M4; Pending founder interview; WF-05/DEP-ACT. |
+| AW-05 | Per-agent figure persistence and canonical built-in role/color/figure inventory | Add a guessed Agent property/local store or choose seed values by name | DEP-ID; Pending backend identity owner publication. UI-only kit fixtures may proceed, persistence consumers may not. |
+| AW-06 | Real plan start origin, result-navigation contract and unopened run/shell metadata coverage | Assume owner/transport source is start chat; parse prose URL; treat loaded buckets as all work | DEP-ACT; Pending generated-contract/snapshot evidence. F Q-FE-12 is settled, field names are not invented. |
+| AW-07 | Redesigned modal/plan-result/editor/error visuals absent from approved reference | Copy another prototype/current screenshots as approved new design | WF-01–WF-05; Pending additions/approval, no wireframe edit in this task. |
+| AW-08 | Shared kit final interfaces/evidence; HoverCard not yet pushed at observed tip | Implement local FilterMenu/ViewSwitch/HoverCard or report file presence as publication | DEP-KIT; Pending Tasks-panel owner hand-off. |
+| AW-09 | Main/attention/ack contract shape is documented but not in checked schema snapshots | Handwrite fields/default to false and land without U1 | DEP-U1/DEP-ATT; Pending atomic schema/generated artifacts and real joint tests. |
+
+**No fabricated assumptions:** no new backend URLs, JSON properties, nominal wire types, budgets, role-policy grants, avatar storage or UI collapse/filter semantics are filled in. Recommendations above are not approvals. The draft can be published for the interview while final approval remains held; settled design rules are not blocked from independent test/kit preparation by unrelated unanswered choices.
+
+## Evaluation Scenarios (Holdout)
+
+**Holdout — post-implementation only.** Team-lead excludes this section from implementing-agent briefs/spec extracts and keeps it for the founder/independent evaluator; this task creates only the one canonical spec. These scenarios are not development tests and appear in neither the TDD plan nor traceability matrix. Evaluator supplies previously undisclosed names, message contents, retained data and race ordering, observes the real application externally and records screenshots/results. No source-code inspection as a substitute for outcomes.
+
+### Holdout H-01 — Choose the intended colleague after newer parallel work
+**Category:** Happy Path
+- **Setup**: Two authorized workspaces share a colleague and contain newer extras with evaluator-chosen similar titles.
+- **Action**: Select a colleague row, send a distinct message, leave and return to the workspace.
+- **Expected outcome**: Row selection reached its validated main; workspace return restored the exact last chat, not the globally newest conversation. The message was received only at the intended pair.
+
+### Holdout H-02 — Find other-chat work through Sessions, not the local panel
+**Category:** Happy Path
+- **Setup**: Real plan/task/helper/scheduler work starts in A; B is foreground. Include repeated identical helper titles and a child-only search term chosen by evaluator.
+- **Action**: Inspect B's panel, then find A's work with All / Running / Needs me and search, expand the repeated-helper summary and follow real links.
+- **Expected outcome**: B's panel contains only its legitimate work; A stays findable in the one Sessions modal. Matching helpers always remain under their parent; the folded summary exposes every original identity/target; the plan belongs to its real starting chat and Open reaches the real plan/run.
+
+### Holdout H-03 — Recognize saved identity and actual responder
+**Category:** Happy Path
+- **Setup**: Editable custom identity plus locked built-in, real guest responder distinct from chat owner, normal and reduced-motion browser settings.
+- **Action**: Edit identity through the current flow, reload/restart the candidate and read live then saved replies.
+- **Expected outcome**: Shared figure/badge/color/preview stays consistent and restart-stable; locked identity stays locked. Replies are names-only and inline indicator shows the actual responder; reduced motion stops loops without losing meaning.
+
+### Holdout H-04 — Recover a refused destination without sending into split state
+**Category:** Error
+- **Setup**: A is committed; evaluator makes B's destination/attachment inaccessible or unavailable during selection.
+- **Action**: Attempt B, inspect the error and retry after legitimate recovery.
+- **Expected outcome**: Visible failure/retry, no successful-looking workspace/owner mismatch or unresolved-target message; recovery uses the original intended destination rather than a guessed/new chat.
+
+### Holdout H-05 — Expose incomplete overview or invalid start target
+**Category:** Error
+- **Setup**: Work exists in an unopened session; evaluator denies a later metadata page or removes authorization to a saved plan/run target.
+- **Action**: Open Sessions and use the affected result/link.
+- **Expected outcome**: Partial/unavailable/refusal is explicit, no all-idle/zero/completeness claim or fabricated URL/foreground substitute; still-authorized work remains inspectable and recovery preserves scope.
+
+### Holdout H-06 — Preserve a newer main goal across another person's open
+**Category:** Edge Case
+- **Setup**: Two authorized people view one main with pending question/approval and evaluator-triggered goals bracketing a captured explicit-open boundary.
+- **Action**: One person opens the main while the newer outcome arrives; the other observes navigation/modal.
+- **Expected outcome**: Observed finished/failed goal acknowledgement is shared, pending decisions/newer outcome remain attention-worthy, and searching/reconnecting never acknowledges them by itself.
+
+### Holdout H-07 — Continue retained helper history with strict parent context after upgrade
+**Category:** Edge Case
+- **Setup**: Supported saved ordinary/extra/Unfiled/child/heartbeat histories and legacy identities, including a retained helper with unavailable parent context treated according to the later founder answer.
+- **Action**: Upgrade, reopen/continue histories, search/filter the helper, and repeat restart/upgrade.
+- **Expected outcome**: Known content/binding and actual continuation survive without duplication or empty-success failure. Helpers never become top-level rows; unavailable parent treatment is honest and approved. Main/heartbeat and canonical identities remain stable.
