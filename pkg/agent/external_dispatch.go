@@ -31,6 +31,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -576,21 +577,26 @@ func drainExternalRun(
 				}
 			case runner.EventKindDiff:
 				if ev.Diff != nil {
-					txt := fmt.Sprintf("diff %s:\n%s", ev.Diff.Path, ev.Diff.Diff)
+					txt := filterExternalString(al, "", fmt.Sprintf("diff %s:\n%s", ev.Diff.Path, ev.Diff.Diff))
 					childTS.appendIntermediateAssistantTranscript(txt, transcriptModelFor(childTS.agent))
 				}
 			case runner.EventKindPermissionRequest:
 				// Already routed to consent by ConsentDispatcher; record for the
 				// transcript so the SPA can show the pending/decided approval.
 				if ev.PermissionRequest != nil {
-					recordExternalPermission(childTS, ev.PermissionRequest)
+					recordExternalPermission(al, childTS, ev.PermissionRequest)
 				}
 			case runner.EventKindToolResult:
 				// Tool result completion from the external runner: mirror it into the
 				// transcript so the run shows the tool's outcome.
 				if ev.ToolResult != nil {
-					recordExternalToolResult(childTS, ev.ToolResult)
-					emitExternalToolCallEnd(al, childTS, ev.ToolResult, &unpairedStartID)
+					// Filter ONCE (#1222): the same credential-filtered output
+					// feeds the transcript write and the live event, so neither
+					// sink can carry what the other redacts.
+					filtered := *ev.ToolResult
+					filtered.Output = filterExternalToolOutput(al, filtered.ToolName, filtered.Output)
+					recordExternalToolResult(childTS, &filtered)
+					emitExternalToolCallEnd(al, childTS, &filtered, &unpairedStartID)
 				}
 			case runner.EventKindEnd:
 				ended = true
@@ -761,38 +767,99 @@ func emitExternalToolCallEnd(al *AgentLoop, childTS *turnState, tr *runner.ToolR
 			Tool:              tr.ToolName,
 			ForLLMLen:         len(tr.Output),
 			IsError:           tr.IsError,
-			Result:            externalToolResultForBroadcast(al, tr),
+			Result:            string(tr.Output), // already credential-filtered by the caller (filterExternalToolOutput)
 			ParentSpawnCallID: session.ToolCallID(childTS.parentSpawnCallID),
 			AgentID:           childTS.resolveActiveAgentID(),
 		},
 	)
 }
 
-// externalToolResultForBroadcast gives an external tool result the same
-// treatment the native path applies before its tool_call_result carries
-// content: the prompt-guard sanitizer for untrusted tool names first
-// (sanitizeUntrustedToolResult), then config.FilterSensitiveData (credential
-// redaction, loop_run_turn_tools.go's tool-result choke point) — in that order,
-// reusing both functions rather than inventing a treatment. The native path
-// does not truncate here; the gateway offloads oversized results when it
-// builds the frame.
-func externalToolResultForBroadcast(al *AgentLoop, tr *runner.ToolResultEvent) string {
-	content := string(tr.Output)
-	if al.promptGuard != nil && isUntrustedToolResult(tr.ToolName) {
-		content = al.promptGuard.Sanitize(content, false)
+// filterExternalString gives external-CLI text the treatment the native path
+// applies before it stores or broadcasts tool content: the prompt-guard
+// sanitizer for untrusted tool names first (sanitizeUntrustedToolResult), then
+// credential redaction — in that order, reusing the same guard and the config's
+// own replacer. It honours tools.filter_sensitive_data (IsFilterSensitiveDataEnabled)
+// but deliberately skips FilterSensitiveData's short-content fast path: applied
+// per JSON string leaf that rule would let a short leaf carrying a short secret
+// through where the native whole-content filter would catch it. toolName "" is
+// "not a tool result" (diff, permission text) and skips the prompt guard.
+func filterExternalString(al *AgentLoop, toolName, s string) string {
+	if al == nil || s == "" {
+		return s
 	}
-	if cfg := al.GetConfig(); cfg != nil {
-		content = cfg.FilterSensitiveData(content)
+	if toolName != "" && al.promptGuard != nil && isUntrustedToolResult(toolName) {
+		s = al.promptGuard.Sanitize(s, false)
 	}
-	return content
+	if cfg := al.GetConfig(); cfg != nil && cfg.Tools.IsFilterSensitiveDataEnabled() {
+		s = cfg.SensitiveDataReplacer().Replace(s)
+	}
+	return s
+}
+
+// filterExternalToolOutput returns an external tool result's output with every
+// credential filtered out, for BOTH the transcript write and the live event
+// (#1222). JSON output is decoded FIRST and each string leaf filtered, because
+// a secret containing a quote or newline appears only in escaped form in the
+// raw bytes and a raw-bytes replace would miss it; non-JSON output is filtered
+// as plain text. Output that needs no change is returned byte-for-byte.
+func filterExternalToolOutput(al *AgentLoop, toolName string, out []byte) []byte {
+	if al == nil || len(out) == 0 {
+		return out
+	}
+	if !json.Valid(out) {
+		return []byte(filterExternalString(al, toolName, string(out)))
+	}
+	dec := json.NewDecoder(bytes.NewReader(out))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		// json.Valid said yes, so this is unreachable; fail closed to the
+		// text filter rather than pass the bytes through unfiltered.
+		return []byte(filterExternalString(al, toolName, string(out)))
+	}
+	changed := false
+	var walk func(x any) any
+	walk = func(x any) any {
+		switch t := x.(type) {
+		case string:
+			f := filterExternalString(al, toolName, t)
+			if f != t {
+				changed = true
+			}
+			return f
+		case map[string]any:
+			for k, e := range t {
+				t[k] = walk(e)
+			}
+			return t
+		case []any:
+			for i, e := range t {
+				t[i] = walk(e)
+			}
+			return t
+		default:
+			return x
+		}
+	}
+	v = walk(v)
+	if !changed {
+		return out
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return []byte("[FILTERED]") // cannot re-encode: never fall back to the unfiltered bytes
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n")
 }
 
 // recordExternalPermission records a permission-request as a transcript line so the
 // run's gated actions are visible in replay. The decision itself is routed by the
 // ConsentDispatcher; this is observability only.
-func recordExternalPermission(childTS *turnState, pr *runner.PermissionRequestEvent) {
+func recordExternalPermission(al *AgentLoop, childTS *turnState, pr *runner.PermissionRequestEvent) {
 	childTS.appendIntermediateAssistantTranscript(
-		fmt.Sprintf("[external-cli permission] tool=%q: %s", pr.ToolName, pr.Description),
+		filterExternalString(al, "", fmt.Sprintf("[external-cli permission] tool=%q: %s", pr.ToolName, pr.Description)),
 		transcriptModelFor(childTS.agent))
 }
 
