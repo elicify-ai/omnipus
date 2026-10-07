@@ -4,12 +4,12 @@
 
 | Header | Value |
 |---|---|
-| Status | Decided rules recorded; specification in review after correction round 1. Design only, not implementation, runtime verification or landing approval. |
+| Status | Decided rules recorded; specification in its final cut correction after fixed review round 2. ADR not trimmed; only final-spec contradictions corrected. Design only, not implementation, runtime verification or landing approval. |
 | Date | 2026-10-06; correction completed 2026-10-08 using founder decisions through 2026-10-07 22:10. |
 | Decider | Daniel Piatkowski; later founder answers override earlier answers and review recommendations. |
 | Author | Architect. |
 | Code baseline | `c6837a42dcfb503fb34a0cea86cd3ccc451e7b9b`, true-merged by `250b72caeb5c615ebd37f043a23a12c7befd9e2f`; no production changes in this design task. |
-| Specification | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/specs/session-core-spec.md` — requirement/contract identifiers, acceptance oracles and the **single normative DELETE inventory**. |
+| Specification | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/docs/internal/specs/session-core-spec.md` — requirement/contract identifiers, acceptance oracles and the **single normative DELETE inventory**. Its final ID map resolves earlier merged/retired FR references in this untrimmed ADR. |
 | Founder record | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md`::2026-10-06/07 founder entries; original and R1 answers in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/session-core-adr-20261007/QUESTIONS.md`. |
 | R1 review input | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/session-core-grill-r1-20261007/session-core-spec-review.md`, reviewed `4adad865286223a4bafa3abf771b0f09b6a9c80f`; compare with `0e1fececc5df91c140e21fd27cf03bfd0ee3c8dc`, which already contains foreign Inbox/status-only and #1221 amendments. |
 | Frontend counterpart | **ADR-20261007 — Agent-first navigation and agent identity**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/ADR-20261007-agent-first-navigation-and-agent-identity.md`, `work/adr-frontend-navigation-20261007` at `554d21ffd`, **Proposed**. Read from that Git object; not merged into this worktree. Layout/identity choices remain there. D5/D12 require joint sidebar/main-backend integration and landing. |
@@ -34,7 +34,7 @@ The specification's E-keys expand to exact existing `file::symbol` citations. Th
 | Task executor / cron modes / run store | Modes exist. Main parentage, fixed recipients and CONTINUE identity boundaries need adaptation, not another executor. | E-TASK/E-SCHEDULE |
 | Message tool / connector ownership | Parameters lack a request-bound reply selector. Direct guest egress cannot borrow another owner's connector. Mature the existing source-owner return path. | E-ADDRESS/E-MESSAGE |
 | External worker drivers | Current Input discards text; Resume starts fresh. Real interrupt/native resume is required; `/clear` is not a context-reset workaround. | E-CLI |
-| Agent deletion / entity state | Entity can disappear before cleanup fails; current existence-first retry cannot finish it. Extend the same cascade with durable original-scope evidence. Mail cleanup intents are in-memory and are not sufficient after restart. | E-DELETE |
+| Agent deletion / entity state | Entity currently disappears before cleanup can fail. Final Q1=A reverses the same cascade: owned cleanup first, entity last; retained visible entity permits ordinary Delete retry, also after restart. No durable cleanup-scope record. | E-DELETE |
 | Goal display / streamed turn identity | Canonical keyed goals coexist with a latest-goal scalar. Turn/message identity exists, but a universal run-to-goal carrier does not. Stamp the association at the producer. | E-GOAL |
 | Navigation / commands / Activity / approvals | Reuse existing screens and one approval ID; current mention/clear actions and span-only Activity are insufficient. | E-NAV/E-COMMAND/E-ACTIVITY/E-APPROVAL |
 
@@ -140,7 +140,7 @@ Keep default-on auto recap, default 30-minute activity timeout, including main c
 
 Agent deletion uses one authorized owned-data cascade, preserving default/locked/system/active-plan guards. UI warns accurately and confirms twice; API/tool retain existing single approval. Owned sessions/memory are removed; guest answers elsewhere remain labelled **deleted agent** and never become a runnable identity (original Q6=B; FR-037).
 
-**R1-Q7=A:** before removing the entity, durably capture the deletion's original identity/revision/CreatedAt and exact cleanup targets/reference versions in the same protected mutation/storage boundary. Preserve that original author identity on guest entries so same-ID recreation cannot relabel old guest history as the new agent. The same DELETE/tool operation retries that remaining scope after entity removal/restart. Current authorization is checked; original scope cannot widen to new/recreated data. Retire/isolate old owned roots before recreation can reuse their names, or retain the guard until that isolation succeeds. Never delete “everything currently owned by this ID” on retry. Record step completion and partial errors; retain retry evidence until complete. C-DELETE specifies request, result and existing-screen recovery. No generic cleanup daemon/service (E-DELETE; FR-037/039).
+**Correction, 2026-10-08 — final round Q1=A:** the record-first retry design above was too heavy. Use the same authorized, idempotent cascade to delete owned chats/memory and other required cleanup **first**, then the agent record **last**. Validate the existing identity/revision/guards before destructive work. If any part fails, keep the agent visible with an honest **partly deleted** result; pressing the existing Delete action again retries, including after restart. Already-removed owned data is not an error on retry. No separate pending-cleanup record, isolated data-folder mechanism, Agents-settings list, agents-API filter, cleanup result object or per-entry creation timestamp is commissioned. Guest history preservation and UI-only double confirmation remain. C-DELETE/FR-037 carry this simpler order (E-DELETE; founder final Q1=A).
 
 ### D10 — Goal indicators belong to their own run
 
@@ -150,7 +150,7 @@ Thinking and goal-setup error indicators join the exact producing turn/message/r
 
 **Attention:** computed read-only `Session.needs_attention`, true/false on valid mains including default Admin, omitted on non-main. Sources are only that main's pending structured user question, pending approval, or unseen goal ending `met` (finished), `rounds_exhausted`/`other` (failed). `stopped_by_user`, other chats/helpers, generic unread/task/plan activity do not light it. Use a bounded pair-wide goal-seen mark in existing main metadata. One successful explicit foreground open acknowledges observed goal attention for everyone, never unresolved asks/approvals or newer racing outcomes. Existing attach/snapshots/frames and unopened-main query projection must actually update it; source failure is visible unknown/error, not false. Structured-user-question prompt belongs to prometheus-prompt-engineer (original Q7=A; C-ATTENTION; FR-047; E-ATTENTION/E-PROMPT).
 
-**Merge:** canonical create_task/update_task/list_tasks gain optional explicit `workspace_id`; omitted means own workspace. Consolidate delete callers into existing delete_task. Delete all four duplicate `*_in_workspace` tools and their implementations/registrations/policies/default/prompt/caller aliases. Move Ava/Admin/other callers and reuse validation/store/audit; no new executor or cross-workspace plans. **R1-Q1=C:** canonical tools use shipped defaults; saved settings for deleted names are dropped in both layers, not converted or strict-merged. Canonical-name policies still resolve through the existing global ceiling and tightening agent overrides; canonical operator Deny wins (FR-046; DEL-21/23).
+**Merge:** canonical create_task/update_task/list_tasks gain optional explicit `workspace_id`; omitted means own workspace. Consolidate delete callers into existing delete_task. Delete all four duplicate `*_in_workspace` tools and their implementations/registrations/policies/default/prompt/caller aliases. Move Ava/Admin/other callers and reuse validation/store/audit; no new executor or cross-workspace plans. **R1-Q1=C, clarified in final round D2:** canonical tools use shipped defaults; saved settings for deleted names are **ignored/inert** in both layers, not converted, strict-merged or actively rewritten. Existing unknown-tool warnings remain acceptable; reconciliation is not a cleanup pass. Canonical-name policies still resolve through the existing global ceiling and tightening agent overrides; canonical operator Deny wins (FR-046; DEL-21/23).
 
 **Foreign creation is delivery only:** assigned task in the target workspace's existing team board **Inbox**, `status=inbox`, `workspace_id`, `agent_id`. Return task identity/status/resolved pair and created/not-started guidance, no run/session/claim/activated goal/trigger/dispatch or mode. Foreign run/start/re-run/assign-for-execution refuses before writes. Receiver chooses local pickup inside its workspace under its policy; creator can send an explicit-pair message, not borrow source-workspace execution authority. Creator is not automatically starter, parent or completion recipient (founder 18:40/19:00; FR-048).
 
@@ -177,13 +177,13 @@ This is the **only** justification table; the spec contains shapes/tests, not a 
 
 | Necessary extension | Existing candidate is insufficient because | Existing boundary / requirement |
 |---|---|---|
-| Entry view membership/day-byte mark and original author stamp | Separate model file/line skip cannot express one archive/bounded seek; agent_id alone cannot distinguish a deleted author from same-ID recreation. Reuse existing immutable CreatedAt for the stamp. | E-STORE/E-DELETE; FR-004–007/037 |
+| Entry view membership and day/byte mark | Separate model file/line skip cannot express one archive/bounded seek. The final deletion-order correction removes the proposed per-entry author timestamp machinery. | E-STORE; FR-004–007 |
 | Request-bound `reply_to` and trusted source/guest attribution | Child-only return and content/channel/chat arguments do not bind another owner's connector return to an admitted guest request. | E-INBOX/E-MESSAGE/E-ADDRESS; C-REPLY; FR-027/028 |
 | Aggregate ordinary byte setting and discarded-input receipt | Count alone does not bound bytes; current receipts cannot state Stop-discard. No held/recovery action is added. | E-LIMIT/E-QUEUE; C-INPUT; FR-010/011/024 |
 | Captured recipients, scheduled isolation and CONTINUE segment identity | Completion-time lookup can change recipients; old session reuse ignores changed execution identity. | E-TASK/E-SCHEDULE; C-TASK; FR-017/019 |
 | Main-only attention / bounded shared seen mark | Outcomes have identity but no shared seen writer; pending-only snapshots cannot acknowledge goal attention. | E-ATTENTION; C-ATTENTION; FR-047 |
-| Optional task workspace / retired-key drop | Ordinary parameters omit destination; duplicate tools are not a second canonical family or permission source. | E-TASK-TARGET/E-POLICY; C-TASK-TOOLS; FR-046/048/049 |
-| Durable deletion scope / continuation projection | Existence-first retry and in-memory mail intents cannot finish original owned cleanup after restart. | E-DELETE; C-DELETE; FR-037 |
+| Optional task workspace; retired settings inert | Ordinary parameters omit destination; duplicate tools are not a second canonical family or permission source. No saved-policy rewriting is needed. | E-TASK-TARGET/E-POLICY; C-TASK-TOOLS; FR-046/048/049 |
+| No new deletion-retry mechanism | Final Q1=A reverses the existing cascade order: cleanup first, record last. The visible record and existing Delete action suffice for retry after restart. | E-DELETE; C-DELETE; FR-037 |
 | Run-to-goal association on current carriers | A latest scalar cannot identify the goal of multiple/delayed runs; existing goal status alone does not bind the producing message. | E-GOAL; C-GOAL; FR-039 |
 
 ### Dated decision log — one current architectural record
@@ -214,6 +214,9 @@ This log records authority and supersession. The specification references it ins
 | 2026-10-07 R1-Q5, 21:50 / MAJ-005 | Stop discards undelivered webchat/channel input; helper reports wait for legitimate continuation. Delete held-state/recovery actions entirely. | D6; C-INPUT; FR-024 |
 | 2026-10-07 R1-Q8=A, 21:50 / MAJ-008 | Indicator's own run goal; neutral if unknown. No scalar/latest selection. | D10; C-GOAL; DEL-F39/40 |
 | 2026-10-07 MIN-001/MIN-002/OBS-001 correction | Add scoped unaddressed-turn/streamer/exited removals; correct Admin amendment; compiler/source proof for erased aliases, behavioral proof for live branches. | DEL-24–26; amended role ADR; spec proof classes |
+| 2026-10-08 final cut Q1=A / D1 | Supersedes the R1-Q7 record-first machinery: chats/memory/required cleanup first, agent record last; partly deleted agent remains visible and ordinary Delete retries after restart. No separate scope/list/filter/result object/timestamp machinery. | D9; C-DELETE; FR-037 |
+| 2026-10-08 final cut Q2=A / D4 | Spec uses repository-relative file::symbol references plus one full repository-root line; no temporary worktree citations. ADR trim = NO; only contradictory clauses amended. | Specification header and ID map |
+| 2026-10-08 final D2/D3 | Deleted-tool saved settings are ignored/inert, never rewritten; effective-policy tests only. DEL-22/24 becomes one steering-removal row with both IDs retained. | D11; FR-046; BDD-08.10; DEL-21/22/24 |
 
 ### Earlier decisions amended by title and clause
 
@@ -256,8 +259,8 @@ Preserve session-scoped recall/tool/browser state; actual external runtime/works
 | Second scheduler/task executor or all tasks inside main turn | Existing modes/executor plus real parentage preserve task-owned results; D5. |
 | Fake child edges for peers/independent tasks; general guest connector send permission | Confuses reporting with steering/ownership; source-owner request-bound adapter is enough, D7. |
 | Held-message release/discard controls | Founder replaced the design with automatic Stop discard; D6/R1-Q5. |
-| Saved-chat importer or retired-policy permission conversion | Founder withdrew migration and chose greenfield retired-key drop; D11/D12/R1-Q1/Q6. |
-| New cleanup service or fresh deletion by agent name on retry | Same cascade with original durable scope is sufficient; name reuse would delete new data, D9/R1-Q7. |
+| Saved-chat importer or retired-policy permission conversion | Founder withdrew migration; deleted-tool settings are inert, not converted or rewritten (final D2); D11/D12/R1-Q1/Q6. |
+| Separate pending-cleanup service/record/list | Final Q1=A keeps the agent record until owned cleanup succeeds; the same authorized Delete action retries without a second mechanism, D9. |
 | Latest-goal scalar or arbitrary keyed-map selection | Can describe another run; exact producer association/neutral unknown chosen, D10/R1-Q8. |
 | New CLI server/harness protocol, summary/overflow pipeline or spend controller | Not founder-selected; current driver/report/admission boundaries retained, D3/D4/D8/D12. |
 
