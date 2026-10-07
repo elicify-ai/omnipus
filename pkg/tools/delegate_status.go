@@ -251,13 +251,24 @@ const maxStatusActivityLines = 5
 // own doc comment for why no live snapshot is attempted for these.
 const delegate3PStatusNote = "  note:   external agent — no live progress; results on completion"
 
+// delegateNoActivityStatusNote is the action:"status" annotation for a running
+// native session that has neither a live progress snapshot nor any persisted
+// transcript activity (#614). That silence has two causes the status reader
+// cannot tell apart — the child is genuinely quiet, or this deployment cannot
+// report progress at all (a non-streaming provider such as Azure, Bedrock or
+// anthropic_messages, or an agent routed through fallback candidates) — and
+// reading it as "hung" got healthy workers killed. Saying so explicitly is the
+// minimum fix; it does not give those providers progress reporting.
+const delegateNoActivityStatusNote = "  note:   no live tool-call activity recorded (this does not mean the child is stalled)"
+
 // delegateStatusExtra computes action:"status"'s trailing annotation for the
 // child addressed by sessionID, whose own durable record is rec (W2, G1).
 // Only a running session gets anything:
 //   - a native session gets up to maxStatusActivityLines of its own recent
 //     transcript activity (recentActivityLines), plus live tool-call-argument
-//     progress when a progress reader is wired, or "" if neither has
-//     anything yet;
+//     progress when a progress reader is wired, or delegateNoActivityStatusNote
+//     when neither has anything (quiet and cannot-report look identical, so
+//     the status says so instead of saying nothing — #614);
 //   - an external-CLI (Is3P) session gets the fixed delegate3PStatusNote
 //     instead of any attempted snapshot (batch/report-on-completion by
 //     design).
@@ -306,7 +317,7 @@ func (t *DelegateTool) delegateStatusExtra(rec *session.LifecycleRecord, session
 	lines := t.recentActivityLines(sessionID, spawnCallID, maxStatusActivityLines)
 	if len(lines) == 0 {
 		if sb.Len() == 0 {
-			return ""
+			return "\n" + delegateNoActivityStatusNote
 		}
 		return "\n" + sb.String()
 	}
