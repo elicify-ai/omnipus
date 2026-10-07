@@ -338,7 +338,7 @@ func (al *AgentLoop) processFinishingItems(
 		if len(steers) == 0 {
 			return errors.Join(transitionErr, al.schedulePostFinishWakes(rec, wakes))
 		}
-		by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: "system:post-finish-steer"}
+		by := postFinishRevivalPrincipal(rec, steerItems)
 		// Round-4 correction: mark the post-finish revival at the
 		// NEW generation (rec.Generation+1) so completionMessage for
 		// THIS session at generation N+1 prefixes the hand-back text.
@@ -408,6 +408,29 @@ func (al *AgentLoop) processFinishingItems(
 	}
 	al.steering.prependItemsScope(rec.SessionID, finishingItems)
 	return errCompleteSteeringPending
+}
+
+// postFinishRevivalPrincipal names who is behind a post-finish revival, from
+// the accepted items themselves (#891). A delegate steer from the parent AGENT
+// is recorded with a D4 control receipt (enqueueDelegateSteer ->
+// AcceptSteerControl, actor = the agent), while a person's chat input carries
+// none (steeringQueueItem.steerControlID). The revival is a person's — and so
+// clears the child's unattended posture — only when at least one accepted
+// steer is such a receipt-less chat item; otherwise it is the parent agent's.
+// A person's gateway user id is not carried on the queue item, so the human
+// principal keeps its fixed system id (Revive tests only Kind and a non-empty
+// ID).
+func postFinishRevivalPrincipal(rec *session.LifecycleRecord, steerItems []steeringQueueItem) steer.Principal {
+	for _, item := range steerItems {
+		if item.steerControlID == "" {
+			return steer.Principal{Kind: steer.PrincipalKindHuman, ID: "system:post-finish-steer"}
+		}
+	}
+	id := steerParentSessionID(rec)
+	if id == "" {
+		id = rec.AgentID
+	}
+	return steer.Principal{Kind: steer.PrincipalKindAgent, ID: id}
 }
 
 func (al *AgentLoop) deliverSteeredTerminal(

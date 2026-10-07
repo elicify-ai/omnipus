@@ -234,3 +234,72 @@ func TestSteerLauncher_AutoDenyAskInheritance_AgentReviveKeepsUnattended(t *test
 	require.NoError(t, err)
 	require.True(t, rec.Unattended, "an agent revive must not clear Unattended")
 }
+
+// finishUnattendedChild launches a child under an unattended parent, runs it to
+// its terminal state and returns its (terminal) record — the state in which a
+// post-finish steer revives it.
+func finishUnattendedChild(t *testing.T, al *AgentLoop, launcher *SteerLauncher, parentSessionID, callID string) *session.LifecycleRecord {
+	t.Helper()
+	childID := launchOnly(t, launcher, tools.WithAutoDenyAsk(context.Background(), true), parentSessionID, callID)
+	rec, err := al.GetSessionLifecycleStore().Load(childID)
+	require.NoError(t, err)
+	_, err = launcher.Dispatch(context.Background(), childID, rec.Generation)
+	require.NoError(t, err)
+	waitFor(t, 15*time.Second, func() bool {
+		cur, loadErr := al.GetSessionLifecycleStore().Load(childID)
+		return loadErr == nil && session.IsTerminalLifecycleState(cur.State)
+	})
+	rec, err = al.GetSessionLifecycleStore().Load(childID)
+	require.NoError(t, err)
+	return rec
+}
+
+func waitForGeneration(t *testing.T, al *AgentLoop, childID string, gen int) *session.LifecycleRecord {
+	t.Helper()
+	var out *session.LifecycleRecord
+	waitFor(t, 20*time.Second, func() bool {
+		cur, err := al.GetSessionLifecycleStore().Load(childID)
+		if err != nil || cur.Generation < gen || !session.IsTerminalLifecycleState(cur.State) {
+			return false
+		}
+		out = cur
+		return true
+	})
+	return out
+}
+
+// TestPostFinishSteer_AgentSteerKeepsUnattended: the parent AGENT steers a
+// finished unattended child (a delegate steer carries a D4 control receipt).
+// That adds no audience, so the revived run must still auto-deny.
+func TestPostFinishSteer_AgentSteerKeepsUnattended(t *testing.T) {
+	al, launcher, parentSessionID, approver := reviveFixture(t)
+	rec := finishUnattendedChild(t, al, launcher, parentSessionID, "call-891-postfinish-agent")
+	require.Zero(t, approver.countFor("knowledge_edit"), "control: the first run auto-denies")
+
+	grant, err := al.GetSessionLifecycleStore().AcceptSteerControl(rec.SessionID, "do it again", session.StopActorAgent("parent-agent"), "corr-agent")
+	require.NoError(t, err)
+	items := []steeringQueueItem{{
+		message: providers.Message{Role: "user", Content: "do it again"}, correlationID: "corr-agent", steerControlID: grant.ControlID,
+	}}
+	require.NoError(t, al.processFinishingItems(context.Background(), rec, nil, items, true))
+
+	final := waitForGeneration(t, al, rec.SessionID, rec.Generation+1)
+	require.Zero(t, approver.countFor("knowledge_edit"), "an agent's post-finish steer must keep the child auto-denying")
+	require.True(t, final.Unattended, "an agent's post-finish steer must not clear Unattended")
+}
+
+// TestPostFinishSteer_PersonSteerClearsUnattended: a person steers the finished
+// child (chat input carries no ledger receipt): they are the audience, so the
+// revived run prompts.
+func TestPostFinishSteer_PersonSteerClearsUnattended(t *testing.T) {
+	al, launcher, parentSessionID, approver := reviveFixture(t)
+	rec := finishUnattendedChild(t, al, launcher, parentSessionID, "call-891-postfinish-person")
+	require.Zero(t, approver.countFor("knowledge_edit"), "control: the first run auto-denies")
+
+	items := []steeringQueueItem{{message: providers.Message{Role: "user", Content: "please redo it"}, correlationID: "corr-person"}}
+	require.NoError(t, al.processFinishingItems(context.Background(), rec, nil, items, true))
+
+	final := waitForGeneration(t, al, rec.SessionID, rec.Generation+1)
+	require.Equal(t, 1, approver.countFor("knowledge_edit"), "a person's post-finish steer must prompt normally")
+	require.False(t, final.Unattended, "a person's post-finish steer must clear Unattended")
+}
