@@ -1,3 +1,6 @@
+// R44 supersedes ONLY the historical SP-40 compact trigger: it now shows
+// the workspace name + caret. Panel inventory, no Chat entry, leave/toggle
+// semantics and accessible names remain the wave-3 contract below.
 // WorkspaceTabBar.wave3.test.tsx — wave-3 join pack for
 // side-panel-shell-spec.md Wave 3 (SP-40, amending FR-007/US-5; tasks/calendar/
 // team panel registration per §10 Wave 3, SP-6):
@@ -46,8 +49,9 @@
 // semantics stay pinned by the wave-2 pack (WorkspaceTabBar.toggle.test.tsx).
 
 import React from 'react'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent, within, cleanup } from '@testing-library/react'
+import { mockWorkspaceHeaderMeasurements } from '@/test/workspaceHeaderMeasurement'
 import { act } from 'react'
 import { useUiStore } from '@/store/ui'
 
@@ -113,7 +117,9 @@ function activePanel(): { id: string; context?: { workspaceId?: string } } | nul
   return state.activePanel ?? null
 }
 
+let headerGeometry: ReturnType<typeof mockWorkspaceHeaderMeasurements>
 beforeEach(() => {
+  headerGeometry = mockWorkspaceHeaderMeasurements()
   mockNavigate.mockClear()
   mockPathname = '/workspaces/ws-1/chat'
   act(() => {
@@ -125,6 +131,12 @@ beforeEach(() => {
   })
 })
 
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
+
 describe('WorkspaceTabBar wave 3 — Chat entry removed (SP-40, FR-007 amended)', () => {
   it('the full strip has NO Chat entry', () => {
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
@@ -132,6 +144,7 @@ describe('WorkspaceTabBar wave 3 — Chat entry removed (SP-40, FR-007 amended)'
   })
 
   it('the compact dropdown has NO Chat entry', () => {
+    headerGeometry.setAvailableWidth(220)
     // Queried by the entry's label, not a test id: only REGISTERED toggle
     // entries carry `workspace-view-switcher-<segment>` test ids, so a
     // test-id query would pass vacuously while Chat still renders in the menu.
@@ -172,6 +185,7 @@ describe('WorkspaceTabBar wave 3 — Chat entry removed (SP-40, FR-007 amended)'
   })
 
   it('the compact dropdown carries the exact same inventory: Settings plus the five panel toggles', () => {
+    headerGeometry.setAvailableWidth(220)
     // US-5 AS-5 parity: the dropdown mirrors the strip (MAJ-007's ARIA model
     // carries to compact). Exact deep-equal inventory — settings (narrow
     // viewports' only settings entry here) then the five toggles in strip
@@ -192,23 +206,19 @@ describe('WorkspaceTabBar wave 3 — Chat entry removed (SP-40, FR-007 amended)'
   })
 })
 
-describe('WorkspaceTabBar wave 3 — compact trigger is icon-only (SP-40)', () => {
-  it('the compact trigger renders NO text label — icon only', () => {
-    // Oracle: FR-007 amended — "the compact dropdown's trigger is a menu
-    // ICON, not a text label"; wireframe §6 — "a plain menu icon, no
-    // 'Panels ▾' text". An icon-only button has no text content at all.
+describe('WorkspaceTabBar compact name trigger (R44 replaces SP-40 icon-only)', () => {
+  beforeEach(() => headerGeometry.setAvailableWidth(220))
+
+  it('the compact trigger shows the workspace name and there is no separate menu-icon trigger', () => {
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
-    const trigger = screen.getByTestId('workspace-view-switcher')
-    expect(trigger.textContent?.trim()).toBe('')
+    const trigger = screen.getByTestId('workspace-name-button')
+    expect(trigger.textContent?.trim()).toBe('My Workspace')
+    expect(screen.queryByTestId('workspace-view-switcher')).toBeNull()
   })
 
-  it('the icon-only trigger still exposes an accessible name', () => {
-    // Guard: dropping the text label must not orphan the control's
-    // accessible name; this pins the accessibility invariant across SP-40.
+  it('the name trigger preserves the menu accessible name', () => {
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
-    const trigger = screen.getByTestId('workspace-view-switcher')
-    const name = trigger.getAttribute('aria-label') ?? ''
-    expect(name.length).toBeGreaterThan(0)
+    expect(screen.getByTestId('workspace-name-button')).toHaveAttribute('aria-label', 'Open panels menu')
   })
 })
 
@@ -248,6 +258,7 @@ describe.each([
   })
 
   it(`the compact dropdown's ${label} entry carries the same toggle semantics (US-5 AS-5)`, () => {
+    headerGeometry.setAvailableWidth(220)
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
     const item = screen.getByTestId(`workspace-view-switcher-${segment}`)
     expect(item.getAttribute('data-panel-trigger')).toBe(panelId)

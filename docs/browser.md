@@ -27,7 +27,7 @@ On a fresh install, Mia, Jim and Ava have browser tools. Admin and the shipped w
 2. Alternatively, click **Watch live** on a browser action in the thread.
 3. Wait for the picture. A spinner shows until the first frame arrives.
 4. Read the status chip in the toolbar: "<Agent> is browsing…" while the agent drives, "Click to drive" when idle, "Also viewing" when someone else has the panel open.
-5. Select **Expand Browser panel** in the panel heading to open the full-screen Browser in a new browser tab, or to switch to a recognised existing tab for that Browser session and agent. Use the heading's **Close** control to dismiss the docked panel; closing it does not stop the agent's run. The full-screen view has **Back to chat**; [panels beside chat](using-omnipus-ui.md#panels-beside-chat) explains how it returns.
+5. Select **Expand Browser panel** in the panel heading. In a normal browser tab, it opens the full-screen Browser in a new tab or switches to a recognised existing tab for that Browser session and agent. In an installed app or standalone Chrome window, it opens full screen in that same window; **Back to chat** returns there with Browser re-docked. Use the heading's **Close** control to dismiss the docked panel; closing it does not stop the agent's run. The full-screen view has **Back to chat**; [panels beside chat](using-omnipus-ui.md#panels-beside-chat) explains how it returns.
 
 ## How to take over from the agent
 
@@ -62,7 +62,7 @@ The panel has two rows of controls above the live picture.
 | Status chip | Who is driving, or the connection state |
 | Annotate | Draw a region and send a comment to the chat |
 | Mute | Turn page sound on or off; shown when the page has sound |
-| Expand Browser panel | Open or switch to the full-screen Browser tab for the current session and agent |
+| Expand Browser panel | Show the full-screen Browser for the current session and agent: a new or recognised tab in a normal browser, or the same window in an installed app |
 | Take over | Shown while the agent works; click to hold the browser |
 | Retry | Shown with an error; starts a fresh video connection |
 

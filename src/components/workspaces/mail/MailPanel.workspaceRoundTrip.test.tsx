@@ -27,10 +27,13 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 // ── Router mocks (usePanelDeepLink needs these; same shape as the sibling
 // usePanelDeepLink.mailboxSwitch.test.tsx harness) ─────────────────────────
 let mockSearch: Record<string, unknown> = { panel: 'mail' }
+let mockPathname = '/workspaces/ws-A/chat'
+const mockRouter = { get latestLocation() { return { pathname: mockPathname } } }
 vi.mock('@tanstack/react-router', () => ({
+  useRouter: () => mockRouter,
   useNavigate: () => vi.fn(),
-  useRouterState: <T,>({ select }: { select: (s: { location: { search: Record<string, unknown>; pathname: string } }) => T }) =>
-    select({ location: { search: mockSearch, pathname: '/workspaces/ws-1/chat' } }),
+  useRouterState: <T,>({ select }: { select: (s: { location: { search: Record<string, unknown> } }) => T }) =>
+    select({ location: { search: mockSearch } }),
   useBlocker: () => undefined,
 }))
 
@@ -100,6 +103,7 @@ const MAILBOXES = [
 ]
 
 function Harness({ workspaceId }: { workspaceId: string }) {
+  mockPathname = `/workspaces/${workspaceId}/chat`
   usePanelDeepLink(workspaceId, 'mail')
   const activePanel = useUiStore((s) => s.activePanel)
   const mailboxId =

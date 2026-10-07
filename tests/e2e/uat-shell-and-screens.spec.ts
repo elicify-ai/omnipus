@@ -284,8 +284,10 @@ async function openTeamPanel(page: import('@playwright/test').Page, wsId: string
   if (await teamToggle.isVisible()) {
     await teamToggle.click();
   } else {
-    // FR-007 requires the same toggle through the compact panels menu.
-    await page.getByTestId('workspace-view-switcher').click();
+    // R44: the workspace name itself opens the compact panels menu.
+    const nameMenu = page.getByTestId('workspace-name-button');
+    await expect(nameMenu).toHaveAttribute('aria-label', 'Open panels menu');
+    await nameMenu.click();
     await page.getByTestId('workspace-view-switcher-team').click();
   }
   await expect(teamToggle).toHaveAttribute('aria-pressed', 'true');

@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 
 // not-wire-format: native DOM measurements local to regression tests. No API,
 // component, style, layout or browser/account state is mocked by this helper.
@@ -112,7 +112,11 @@ export async function toggleWorkspacePanel(page: Page, panel: 'tasks' | 'calenda
   if (await stripEntry.isVisible()) {
     await stripEntry.click()
   } else {
-    await page.getByRole('button', { name: 'Open panels menu', exact: true }).click()
+    // R44 keeps the menu accessible name but moves its trigger onto the
+    // visible workspace-name button; there is no second hamburger.
+    const nameMenu = page.getByRole('button', { name: 'Open panels menu', exact: true })
+    await expect(nameMenu).toHaveAttribute('data-testid', 'workspace-name-button')
+    await nameMenu.click()
     await page.getByTestId(`workspace-view-switcher-${segment}`).click()
   }
 }
