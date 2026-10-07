@@ -330,11 +330,17 @@ func TestBrowserWS_WorkQueue_SerializesOrdersAndCoalesces(t *testing.T) {
 
 // TestBrowserWS_WorkQueue_SupersedesAJobNotYetStarted pins the coalescing
 // window explicitly: a job is supersedable from the moment it is queued until
-// the worker actually picks it up, NOT only once something else is running.
-// That is what makes a burst of browser_viewport frames arriving faster than
-// the worker drains them cost one resize rather than one per frame — and it
-// is safe for browser_attach too, because the newest attach is the only one
-// whose commit the attachEpoch would accept anyway.
+// the worker actually picks it up. That is what makes a burst of
+// browser_viewport frames arriving faster than the worker drains them cost one
+// resize rather than one per frame — and it is safe for browser_attach too,
+// because the newest attach is the only one whose commit the attachEpoch would
+// accept anyway.
+//
+// "Not yet started" is made deterministic by keeping the single worker busy
+// inside a gated job: submit spawns its worker goroutine immediately, so
+// without that barrier the worker may legitimately dequeue the first viewport
+// before the second is submitted, and that job is then no longer supersedable
+// (it has started). Racing the worker proves nothing about coalescing.
 func TestBrowserWS_WorkQueue_SupersedesAJobNotYetStarted(t *testing.T) {
 	var (
 		q   browserConnWorkQueue
@@ -342,18 +348,22 @@ func TestBrowserWS_WorkQueue_SupersedesAJobNotYetStarted(t *testing.T) {
 		rec workQueueRecorder
 	)
 
-	// Submitted back to back with no started-signal in between, so the second
-	// submit races (and must win against) a first job the worker may not have
-	// dequeued yet.
+	started := make(chan struct{})
+	gate := make(chan struct{})
+	q.submit(&wg, workKindAttach, rec.job("barrier", started, gate))
+	<-started // the worker is busy; everything submitted next is queued, not started
+
 	q.submit(&wg, workKindViewport, rec.job("viewport-first", nil, nil))
 	q.submit(&wg, workKindViewport, rec.job("viewport-second", nil, nil))
+
+	close(gate)
 	wg.Wait()
 
 	order, _ := rec.snapshot()
 	require.NotContains(t, order, "viewport-first",
 		"a viewport frame the worker had not started yet must be superseded by the newer one, "+
 			"never run in addition to it")
-	require.Equal(t, []string{"viewport-second"}, order)
+	require.Equal(t, []string{"barrier", "viewport-second"}, order)
 }
 
 // TestBrowserWS_WorkQueue_CloseDropsQueuedJobs pins the close() contract
