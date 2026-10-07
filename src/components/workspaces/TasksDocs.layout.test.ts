@@ -11,7 +11,7 @@ it('T10 documents the two-row toolbar, Board widening/fallback/restoration, chec
   expect(tasks).toMatch(/(?:restore|return)[^.\n]*previous width/i)
   expect(tasks).toMatch(/(?:automatically|automatic)[^.\n]*(?:returns?|switches? back)[^.\n]*Board/i)
   expect(tasks).toMatch(/Agent[^.\n]*Tags[^.\n]*New Task[^.\n]*one row/i)
-  expect(tasks).toContain('Pri, Title, Status, Actions, Tags, Agent, Updated')
+  expect(tasks).toContain('Pri, Title, Status, Details, Actions, Tags, Agent, Updated')
   expect(tasks).not.toMatch(/groups stack|stacks its status groups vertically/i)
   expect(plans).toMatch(/Show done[^.\n]*checkbox[^.\n]*Plans header/i)
   expect(plans).toMatch(/New Plan[^.\n]*(?:same|header)/i)

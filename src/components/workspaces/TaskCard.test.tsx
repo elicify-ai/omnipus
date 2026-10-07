@@ -86,7 +86,7 @@ describe('TaskCard — keyboard activation, draggable (drag prop present)', () =
     const onClick = vi.fn()
     render(<TaskCard task={baseTask()} onClick={onClick} drag={makeDrag()} showActions={false} />)
 
-    const card = screen.getByRole('button')
+    const card = screen.getByText('Sample task').closest<HTMLElement>('[role="button"]')!
     fireEvent.keyDown(card, { key: 'Enter' })
 
     expect(onClick).toHaveBeenCalledTimes(1)
@@ -96,7 +96,7 @@ describe('TaskCard — keyboard activation, draggable (drag prop present)', () =
     const onClick = vi.fn()
     render(<TaskCard task={baseTask()} onClick={onClick} drag={makeDrag()} showActions={false} />)
 
-    const card = screen.getByRole('button')
+    const card = screen.getByText('Sample task').closest<HTMLElement>('[role="button"]')!
     fireEvent.keyDown(card, { key: ' ' })
 
     expect(onClick).not.toHaveBeenCalled()
@@ -107,7 +107,7 @@ describe('TaskCard — keyboard activation, draggable (drag prop present)', () =
     const drag = makeDrag()
     render(<TaskCard task={baseTask()} onClick={onClick} drag={drag} showActions={false} />)
 
-    const card = screen.getByRole('button')
+    const card = screen.getByText('Sample task').closest<HTMLElement>('[role="button"]')!
     fireEvent.keyDown(card, { key: ' ' })
 
     expect(drag.listeners.onKeyDown).toHaveBeenCalledTimes(1)
@@ -119,7 +119,7 @@ describe('TaskCard — keyboard activation, non-draggable (no drag prop, e.g. Ex
     const onClick = vi.fn()
     render(<TaskCard task={baseTask()} onClick={onClick} showActions={false} />)
 
-    const card = screen.getByRole('button')
+    const card = screen.getByText('Sample task').closest<HTMLElement>('[role="button"]')!
     fireEvent.keyDown(card, { key: 'Enter' })
 
     expect(onClick).toHaveBeenCalledTimes(1)
@@ -129,7 +129,7 @@ describe('TaskCard — keyboard activation, non-draggable (no drag prop, e.g. Ex
     const onClick = vi.fn()
     render(<TaskCard task={baseTask()} onClick={onClick} showActions={false} />)
 
-    const card = screen.getByRole('button')
+    const card = screen.getByText('Sample task').closest<HTMLElement>('[role="button"]')!
     fireEvent.keyDown(card, { key: ' ' })
 
     expect(onClick).toHaveBeenCalledTimes(1)
@@ -139,7 +139,7 @@ describe('TaskCard — keyboard activation, non-draggable (no drag prop, e.g. Ex
     const onClick = vi.fn()
     render(<TaskCard task={baseTask()} onClick={onClick} showActions={false} />)
 
-    fireEvent.click(screen.getByRole('button'))
+    fireEvent.click(screen.getByText('Sample task').closest('[role="button"]')!)
 
     expect(onClick).toHaveBeenCalledTimes(1)
   })
@@ -277,7 +277,8 @@ describe('TaskCard — long unbroken title containment (UAT Finding 2)', () => {
 
       const titleEl = screen.getByText(longTitle)
       expect(titleEl.textContent).toBe(longTitle) // CSS (line-clamp) truncates the RENDER, not the DOM content
-      expect(titleEl).toHaveAttribute('title', longTitle) // native tooltip carries the full string
+      expect(titleEl).not.toHaveAttribute('title') // T15: no native hover details.
+      expect(screen.getByRole('button', { name: `Task details: ${longTitle}` })).toBeInTheDocument()
       expect(titleEl).toHaveClass('wrap-break-word')
       expect(titleEl).toHaveClass('min-w-0')
 
@@ -297,8 +298,9 @@ describe('TaskCard — long unbroken title containment (UAT Finding 2)', () => {
   it('short titles are unaffected — no visible change for normal-length content', () => {
     render(<TaskCard task={baseTask({ title: 'Fix login bug' })} onClick={vi.fn()} showActions={false} />)
     const titleEl = screen.getByText('Fix login bug')
-    expect(titleEl).toHaveAttribute('title', 'Fix login bug')
+    expect(titleEl).not.toHaveAttribute('title')
+    expect(screen.getByRole('button', { name: 'Task details: Fix login bug' })).toBeInTheDocument()
     expect(titleEl).toHaveClass('wrap-break-word', 'min-w-0', 'whitespace-normal')
-    expect(titleEl).toHaveClass('line-clamp-2') // T13: fixed two-line title, full data in the Hover Card.
+    expect(titleEl).toHaveClass('line-clamp-2') // T13: fixed two-line title; T15: full data in the click Popover.
   })
 })

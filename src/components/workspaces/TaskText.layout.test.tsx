@@ -25,6 +25,8 @@ it('T3 wraps titles at word boundaries, contains long URLs, and reserves measure
   document.body.appendChild(control)
   expect(getComputedStyle(control).whiteSpace, 'the CSS instrument can detect nowrap').toBe('nowrap')
   control.remove()
+  vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(800)
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(600)
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
   vi.stubGlobal('DOMMatrixReadOnly', class { m22 = 1 })
   try {
@@ -58,8 +60,8 @@ it('T3 wraps titles at word boundaries, contains long URLs, and reserves measure
       expect(titles[3]).toHaveClass('line-clamp-2')
       expect(titles[2]).toHaveClass('truncate')
       expect(titles[2].textContent).toBe(title)
-      expect(titles[1].parentElement, 'Board title owns the full card width, not a priority/title flex row').toHaveAttribute('role', 'button')
-      expect(titles[1]).toHaveClass('w-full', 'max-w-full')
+      expect(titles[1].closest('[role="button"]'), 'T15 title and info/actions share the task card without replacing its main action').toHaveAttribute('role', 'button')
+      expect(titles[1]).toHaveClass('flex-1', 'max-w-full', 'min-w-0')
       expect(titles[1]).not.toHaveClass('pr-[var(--space-4)]')
       expect(screen.queryByRole('tooltip'), 'full titles do not depend on a clipped overlay').not.toBeInTheDocument()
       mounted.unmount()
@@ -76,6 +78,7 @@ it('T3 wraps titles at word boundaries, contains long URLs, and reserves measure
     expect(second.position.y - first.position.y).toBe(336)
   } finally {
     style.remove()
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
   }
 })

@@ -48,6 +48,7 @@ function rollupStatusColorVar(status: RollupItem['status']): string {
 interface RollupBadgeProps {
   rollup: RollupItem[]
   agents: Agent[]
+  plain?: boolean
 }
 
 /** Resolve agent data by id from the agents cache */
@@ -104,7 +105,7 @@ function RollupAvatar({ item, agent }: { item: RollupItem; agent: Agent | undefi
   )
 }
 
-export function RollupBadge({ rollup, agents }: RollupBadgeProps) {
+export function RollupBadge({ rollup, agents, plain = false }: RollupBadgeProps) {
   if (!rollup || rollup.length === 0) return null
 
   const activeCount = rollup.filter((r) => r.status === 'in_progress').length
@@ -126,10 +127,12 @@ export function RollupBadge({ rollup, agents }: RollupBadgeProps) {
       </span>
 
       {/* Avatar row — capped at 5 to avoid overflow */}
-      <span className="flex items-center gap-[var(--space-0-5)]" role="list" aria-label="Sub-agent avatars">
+      <span className="flex items-center gap-[var(--space-0-5)]" role="list" aria-label={plain ? 'Sub-agents' : 'Sub-agent avatars'}>
         {rollup.slice(0, 5).map((item) => (
           <span key={item.agent_id} role="listitem">
-            <RollupAvatar item={item} agent={agentById(agents, item.agent_id)} />
+            {plain ? <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]" aria-label={`${agentById(agents, item.agent_id)?.name ?? item.agent_id} — ${item.status}`}>
+              {agentById(agents, item.agent_id)?.name ?? item.agent_id}
+            </span> : <RollupAvatar item={item} agent={agentById(agents, item.agent_id)} />}
           </span>
         ))}
         {rollup.length > 5 && (

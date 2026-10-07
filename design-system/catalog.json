@@ -9,7 +9,6 @@
   ],
   "entries": [
     {"source":"src/components/ui/word-boundary-text.tsx","classification":"primitive","exports":["WordBoundaryTextProps","WordBoundaryText"],"publicExports":["WordBoundaryText"],"publicTypes":["WordBoundaryTextProps"]},
-    {"source":"src/components/ui/hover-card.tsx","classification":"primitive","exports":["HoverCard","HoverCardTrigger","HoverCardContent"],"publicExports":["HoverCard","HoverCardTrigger","HoverCardContent"],"publicTypes":[]},
     {
       "source": "src/components/ui/filter-menu.tsx",
       "classification": "composite",

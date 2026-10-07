@@ -436,7 +436,7 @@ test.describe('native docking controls — SP-33/37/39', () => {
     await separator.press('Home')
     await expect(separator).toHaveAttribute('aria-valuenow', '320')
     // T5 retires the stacked Board. The same selected Board choice must show
-    // the REAL seven-column List and return automatically, not mutate choice.
+    // the REAL eight-column List (T15 adds Details) and return automatically, not mutate choice.
     await expect(groups).toHaveCount(0)
     await expect(page.getByRole('radio', { name: 'Board', exact: true })).toHaveAttribute('aria-checked', 'true')
     await expect(page.getByText('Board needs more room — showing list', { exact: true })).toBeVisible()
@@ -449,8 +449,8 @@ test.describe('native docking controls — SP-33/37/39', () => {
     expect(listWidths.client).toBeGreaterThan(0)
     expect(listWidths.overflowX).toBe('auto')
     expect(listWidths.scroll, 'F: narrow List retains columns through its own horizontal scrolling').toBeGreaterThan(listWidths.client)
-    await expect(table.getByRole('columnheader')).toHaveCount(7)
-    expect(await table.getByRole('columnheader').evaluateAll((headers) => headers.map((header) => header.textContent?.replace(/[↑↓]/g, '').trim()))).toEqual(['Pri', 'Title', 'Status', 'Actions', 'Tags', 'Agent', 'Updated'])
+    await expect(table.getByRole('columnheader')).toHaveCount(8)
+    expect(await table.getByRole('columnheader').evaluateAll((headers) => headers.map((header) => header.textContent?.replace(/[↑↓]/g, '').trim()))).toEqual(['Pri', 'Title', 'Status', 'Details', 'Actions', 'Tags', 'Agent', 'Updated'])
     const snapshot = await recordNativeDock(page, 'tasks', info)
     expect(snapshot.viewport).toEqual({ width: 2400, height: 1000 })
     expect(dockViolations(snapshot)).toEqual([])

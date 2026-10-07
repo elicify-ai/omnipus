@@ -4,10 +4,7 @@ import {
   Plus,
   PencilSimple,
   DotsThreeVertical,
-  Stop,
   Broom,
-  CheckCircle,
-  XCircle,
 } from '@phosphor-icons/react'
 import {
   DropdownMenu,
@@ -17,11 +14,10 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Card } from '@/components/ui/card'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Badge } from '@/components/ui/badge'
+import { PlanDetailsPopover } from './WorkItemDetails'
 import { WordBoundaryText } from '@/components/ui/word-boundary-text'
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/components/ui/accordion'
 import { PlanActionButton } from './PlanActionButton'
@@ -63,34 +59,6 @@ interface PlansFilterBandProps {
 
 /** Shared footprint for the "All tasks" tile and every plan tile — Requirement: "Keep tiles the SAME size as each other." */
 const TILE_SIZE = 'w-56 flex-shrink-0'
-
-/**
- * Per-state glyph — always paired with `planDisplayLabel`'s visible text,
- * never color-alone (a11y). `cancelled` (ADR-052 FR-015/US-8) overrides the
- * `failed`-state glyph with a distinct shape (Stop, not XCircle) so the
- * orange "Cancelled" marker doesn't just repaint the red "Failed" icon.
- */
-function PlanStateGlyph({ state, cancelled = false, size = 9 }: { state: Plan['state']; cancelled?: boolean; size?: number }) {
-  if (cancelled) return <Stop size={size} weight="fill" />
-  switch (state) {
-    case 'draft':
-      return <PencilSimple size={size} />
-    case 'approved':
-      return <CheckCircle size={size} />
-    case 'running':
-      // FR-022 (SP-41) + founder PI1: the running PLAN's tile shows THE
-      // catalogued running indicator — spinner ONLY, no token count. This
-      // replaces the bespoke CircleNotch copy the tile used to render (the
-      // "second, divergent copy" FR-022 forbids).
-      return <RunningIndicator />
-    case 'done':
-      return <CheckCircle size={size} weight="fill" />
-    case 'failed':
-      return <XCircle size={size} weight="fill" />
-    default:
-      return <CheckCircle size={size} />
-  }
-}
 
 /**
  * ADR-051 D2/D3 — Plans-as-Filter band. A horizontal row of plan tiles above
@@ -303,7 +271,6 @@ function PlanFilterTile({
   const [confirmClear, setConfirmClear] = useState(false)
 
   const owner = agents.find((a) => a.id === plan.owner_agent_id)
-  const pct = memberTotal > 0 ? Math.round((memberDone / memberTotal) * 100) : 0
   const cancelled = isPlanCancelled(plan)
   const displayColor = planDisplayColor(plan)
   const displayLabelText = planDisplayLabel(plan)
@@ -329,10 +296,12 @@ function PlanFilterTile({
       role="group"
       aria-label={plan.title}
       data-testid={`plan-filter-tile-${plan.id}`}
-      title={plan.title}
+      onClick={(event) => {
+        if (event.target instanceof Element && event.currentTarget.contains(event.target) && !event.target.closest('button')) onSelect()
+      }}
       className={cn(
         TILE_SIZE,
-        'group relative p-[var(--space-2-5)] transition-colors',
+        'group relative flex flex-row items-start gap-[var(--space-1)] p-[var(--space-2)] transition-colors',
         // Selection is carried by the gold border + ring alone: gold marks the
         // active tile, so no tile carries a decorative accent in its resting state.
         selected
@@ -340,13 +309,14 @@ function PlanFilterTile({
           : 'border-[var(--color-border)] hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
       )}
     >
-      {/* Edit + ▶/■/Play + ⋯ actions — SIBLINGS of the select button below,
-          never nested inside it, so they can never trigger onSelect. Hover-
-          revealed on pointer-fine devices, always visible on touch. */}
+      {/* Details and actions are siblings of the select button, always visible.
+          Two compact control columns preserve room for whole title words. */}
       <div
-        className="absolute right-1.5 top-1.5 z-10 flex items-center gap-[var(--space-0-5)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
+        className="order-last grid shrink-0 grid-cols-2 items-center gap-[var(--space-0-5)]"
         onClick={(e) => e.stopPropagation()}
       >
+        <PlanDetailsPopover plan={plan} owner={owner} done={memberDone} total={memberTotal} />
+        <PlanActionButton plan={plan} />
         <IconButton
           aria-label={`Edit plan ${plan.title}`}
           onClick={onEdit}
@@ -356,12 +326,6 @@ function PlanFilterTile({
         >
           <PencilSimple size={13} />
         </IconButton>
-
-        {/* ADR-052 §6.8 button matrix — draft → Execute, running/cap-queued
-            approved → Stop, cancelled → Play. Renders nothing for done/a
-            genuinely-failed plan. Self-contained: owns its own confirm modal
-            + mutation (executePlan/stopPlan/restartPlan). */}
-        <PlanActionButton plan={plan} />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -393,15 +357,13 @@ function PlanFilterTile({
         variant="ghost"
         aria-pressed={selected}
         aria-label={plan.title}
-        onClick={onSelect}
-        className="h-full w-full min-w-0 flex-col items-start justify-start gap-[var(--space-2)] whitespace-normal rounded-none p-0 pr-[var(--space-6)] text-left hover:bg-transparent"
+        onClick={(event) => { event.stopPropagation(); onSelect() }}
+        className="h-auto min-w-0 flex-1 self-stretch flex-col items-start justify-start gap-[var(--space-1)] whitespace-normal rounded-none p-0 text-left hover:bg-transparent"
       >
+        <WordBoundaryText text={plan.title} className="w-full min-w-0 max-w-full whitespace-normal break-normal wrap-break-word hyphens-none text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]" />
         <span className="flex flex-wrap items-center gap-[var(--space-1)]">
-          <span
-            className="inline-flex flex-shrink-0 items-center gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold leading-tight"
-            style={{ color: displayColor, backgroundColor: `${displayColor}1a` }}
-          >
-            <PlanStateGlyph state={plan.state} cancelled={cancelled} />
+          <span className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] leading-tight" style={{ color: displayColor }}>
+            {plan.state === 'running' ? <RunningIndicator /> : <span aria-hidden="true">●</span>}
             {displayLabelText}
           </span>
 
@@ -413,10 +375,10 @@ function PlanFilterTile({
             <span
               data-testid={`plan-phase-chip-${plan.id}`}
               className={cn(
-                'flex-shrink-0 rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold leading-none',
+                'text-[length:var(--type-caption-size)] leading-snug',
                 phaseChip.tone === 'warning'
-                  ? 'border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
-                  : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)]',
+                  ? 'text-[color:var(--color-warning)]'
+                  : 'text-[var(--color-muted)]',
               )}
             >
               {phaseChip.label}
@@ -439,19 +401,6 @@ function PlanFilterTile({
           </span>
         )}
 
-        {/* Round-2 UAT finding (S3): this span is a direct child of a COLUMN-
-            direction flex container with `items-start` (not `stretch`), so
-            its used width is `fit-content`, floored by `min-width: auto` =
-            min-content = the full unbroken-string width — a 200-char title
-            with no spaces bled ~2183px past the 196px tile into neighbouring
-            tiles (paint bleed, not a layout collapse — tile widths stayed
-            uniform). Same fix as TaskCard.tsx: `min-w-0` removes the
-            min-content floor; `wrap-anywhere` (overflow-wrap: anywhere) is
-            the wrapping mode the spec requires browsers to factor into
-            min-content sizing itself. T3 founder steering removes the clamp
-            and bounds the span to the button's content width for full wrapping. */}
-        <WordBoundaryText text={plan.title} className="w-full min-w-0 max-w-full whitespace-normal break-normal wrap-break-word hyphens-none text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]" />
-
         {/* S3 UAT finding — `failed_reason` (e.g. `judge_rounds_exhausted`)
             was on the wire but never rendered; the tile showed only the word
             "Failed" with no explanation and no next step. */}
@@ -466,19 +415,18 @@ function PlanFilterTile({
 
         <span className="flex flex-wrap items-center gap-[var(--space-1)]">
           <span
-            className="inline-flex items-center gap-[var(--space-1)] rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+            className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
             role="img"
             aria-label={`Progress: ${memberDone} of ${memberTotal} tasks done`}
           >
-            <Progress value={pct} className="h-1 w-8" />
             <span className="tabular-nums">
               {memberDone}/{memberTotal}
             </span>
           </span>
           {owner && (
-            <Badge variant="outline" title={owner.name} className="min-w-0 max-w-full whitespace-normal wrap-anywhere bg-[var(--color-surface-2)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-              {owner.name.split('—')[0].trim()}
-            </Badge>
+            <span className="inline-flex min-w-0 max-w-full items-center gap-[var(--space-1)] whitespace-normal break-normal wrap-break-word text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+              <span aria-hidden="true">·</span><span>{owner.name.split('—')[0].trim()}</span>
+            </span>
           )}
         </span>
       </Button>

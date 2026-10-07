@@ -89,16 +89,17 @@ describe('ListView — long unbroken title containment (UAT Finding 2)', () => {
     renderList([makeTask()])
     const headerRow = screen.getAllByRole('row')[0]
     const headers = headerRow.querySelectorAll('th')
-    // T6: Pri, Title, Status, Actions, Tags, Agent, Updated — 7 columns.
-    expect(headers.length).toBe(7)
+    // T15: the narrow Details column sits immediately before Actions.
+    expect(headers.length).toBe(8)
     const widthClasses = Array.from(headers).map((th) => Array.from(th.classList).find((c) => /^w-\d+$/.test(c)))
     expect(widthClasses[0]).toBe('w-12') // Pri
     expect(widthClasses[1]).toBeUndefined() // Title — absorbs remaining width
     expect(widthClasses[2]).toBe('w-24') // Status
-    expect(widthClasses[3]).toBe('w-20') // Actions — visible label plus the kept overflow control.
-    expect(widthClasses[4]).toBe('w-28') // Tags
-    expect(widthClasses[5]).toBe('w-24') // Agent
-    expect(widthClasses[6]).toBe('w-28') // Updated
+    expect(widthClasses[3]).toBe('w-12') // Details — dedicated info icon.
+    expect(widthClasses[4]).toBe('w-20') // Actions — visible Run/Stop.
+    expect(widthClasses[5]).toBe('w-28') // Tags
+    expect(widthClasses[6]).toBe('w-24') // Agent
+    expect(widthClasses[7]).toBe('w-28') // Updated
   })
 
   it('fully wraps a 200-char unbroken title within its fixed column, retaining the full string', () => {
@@ -110,7 +111,8 @@ describe('ListView — long unbroken title containment (UAT Finding 2)', () => {
       const titleButton = screen.getByRole('button', { name: new RegExp(`^${longTitle}, status`) })
       // Full text is preserved in the DOM — only CSS (truncate) visually clips it.
       expect(titleButton.textContent).toBe(longTitle)
-      expect(titleButton).toHaveAttribute('title', longTitle)
+      expect(titleButton).not.toHaveAttribute('title')
+      expect(screen.getByRole('button', { name: `Task details: ${longTitle}` })).toBeInTheDocument()
       expect(titleButton).toHaveClass('truncate', 'min-w-0')
       expect(titleButton).not.toHaveClass('line-clamp-1') // T13: real single-line ellipsis.
 
@@ -135,7 +137,8 @@ describe('ListView — long unbroken title containment (UAT Finding 2)', () => {
     renderList([makeTask({ title: 'Fix login bug' })])
     const titleButton = screen.getByRole('button', { name: /^Fix login bug, status/ })
     expect(titleButton.textContent).toBe('Fix login bug')
-    expect(titleButton).toHaveAttribute('title', 'Fix login bug')
+    expect(titleButton).not.toHaveAttribute('title')
+    expect(screen.getByRole('button', { name: 'Task details: Fix login bug' })).toBeInTheDocument()
     expect(titleButton).toHaveClass('truncate', 'min-w-0')
     expect(titleButton).not.toHaveClass('line-clamp-2')
   })

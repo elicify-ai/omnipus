@@ -28,11 +28,11 @@ it('T11 keeps every List column present in one table-only horizontal scroller wi
   renderLayout(<ListView tasks={[layoutTask()]} agents={[layoutAgent()]} onTaskClick={() => {}} />)
   const table = screen.getByRole('table')
   const headers = screen.getAllByRole('columnheader')
-  expect(headers.map((h) => h.textContent?.replace(/[↑↓]/g, '').trim())).toEqual(['Pri', 'Title', 'Status', 'Actions', 'Tags', 'Agent', 'Updated'])
+  expect(headers.map((h) => h.textContent?.replace(/[↑↓]/g, '').trim())).toEqual(['Pri', 'Title', 'Status', 'Details', 'Actions', 'Tags', 'Agent', 'Updated'])
   for (const header of headers) {
     expect(header.className).not.toMatch(/hidden|@max/)
   }
-  expect(table).toHaveClass('table-fixed', 'min-w-[calc(34rem+var(--space-8)*2+var(--space-3))]')
+  expect(table).toHaveClass('table-fixed', 'min-w-[calc(37rem+var(--space-8)*2+var(--space-3))]')
   expect(table.className).not.toMatch(/@max/)
   expect(table.parentElement).toHaveClass('overflow-auto')
   expect(table.parentElement?.parentElement).toHaveClass('overflow-hidden')

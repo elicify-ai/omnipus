@@ -8,8 +8,7 @@ import { TaskActionButton } from './TaskActionButton'
 import { TaskActivityChip } from './TaskActivityChip'
 import { PriorityBadge } from './PriorityBadge'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
-import { Badge } from '@/components/ui/badge'
-import { TaskHoverDetails } from './TaskHoverDetails'
+import { TaskDetailsPopover } from './WorkItemDetails'
 import { WordBoundaryText } from '@/components/ui/word-boundary-text'
 import { taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
 import type { BoardAltitude } from '@/store/workspacesStore'
@@ -144,8 +143,10 @@ interface TaskCardProps {
    * anyway (never keyboard/pointer reachable).
    */
   showActions?: boolean
-  /** The drag overlay is visual-only and must never open a preview. */
-  previewEnabled?: boolean
+  /** The drag overlay is visual-only and must not expose details controls. */
+  showDetails?: boolean
+  /** T18 visual comparison; plain text is the default, never a saved preference. */
+  priorityPresentation?: 'plain' | 'badge'
 }
 
 export function TaskCard({
@@ -157,7 +158,8 @@ export function TaskCard({
   onChildClick,
   drag,
   showActions = true,
-  previewEnabled = true,
+  showDetails = true,
+  priorityPresentation = 'plain',
 }: TaskCardProps) {
   const priority = task.priority ?? 3
   // FR-022/SP-41 with founder decisions PI1/PI2/PI3 (2026-10-05):
@@ -204,7 +206,6 @@ export function TaskCard({
     : undefined
 
   return (
-    <TaskHoverDetails task={task} plans={plans} agents={agents} onOpenTask={onClick} enabled={previewEnabled}>
     <div
       ref={drag?.activatorRef}
       role="button"
@@ -236,7 +237,7 @@ export function TaskCard({
         }
       }}
       className={cn(
-        'group relative rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2-5)] cursor-pointer',
+        'group relative min-h-[var(--tasks-board-card-height,auto)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] cursor-pointer',
         'transition-colors hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
         hasRollup ? 'border-[var(--color-accent)]/30' : undefined,
       )}
@@ -247,61 +248,28 @@ export function TaskCard({
         </span>
       )}
 
-      {/* ADR-052 §6.8 ▶/■ action button — hover-revealed on pointer-fine
-          devices, always visible on touch (mirrors PlansFilterBand's tile
-          action row). Renders nothing when the task offers no action
-          (TaskActionButton itself returns null for e.g. an in-plan idle
-          task or a `done` task). */}
-      {showActions && (
-        <div className="absolute right-1.5 top-1.5 z-10 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
-          <TaskActionButton task={task} />
-        </div>
-      )}
-
-      {/* Priority/action row does not steal width from normal title words. */}
-      <div className="flex items-center gap-[var(--space-2)]">
-        <PriorityBadge priority={priority} className="shrink-0 rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold leading-tight" />
-        {running && <RunningIndicator className="shrink-0" />}
+      <div data-task-card-content={showDetails ? 'item' : 'visual'} className="flex min-w-0 flex-col gap-[var(--space-1)] p-[var(--space-2)]">
+      {/* Info and eligible actions are always visible, isolated from open/drag. */}
+      <div className="flex min-w-0 items-start gap-[var(--space-1)]">
+        <PriorityBadge priority={priority} className={cn('shrink-0 text-[length:var(--type-caption-size)] font-bold leading-tight', priorityPresentation === 'plain' ? 'bg-transparent p-0' : 'rounded px-[var(--space-1)] py-[var(--space-0-5)]')} />
+        <WordBoundaryText as="p" text={task.title} className="h-[calc(var(--type-body-compact-size)*var(--type-body-compact-line-height)*2)] min-w-0 max-w-full flex-1 line-clamp-2 whitespace-normal break-normal wrap-break-word hyphens-none text-[length:var(--type-body-compact-size)] font-medium leading-[var(--type-body-compact-line-height)] text-[var(--color-secondary)]" />
+        {showDetails && <TaskDetailsPopover task={task} plans={plans} agents={agents} onOpenTask={onClick} />}
+        {showActions && <TaskActionButton task={task} />}
       </div>
-      {/* Full card width, normal word boundaries; only oversized words/URLs
-          use overflow-wrap: break-word. Explicit bounds defeat min-content inflation. */}
-      <WordBoundaryText as="p" text={task.title} title={task.title} className="mt-[var(--space-1)] h-[calc(var(--type-body-compact-size)*var(--type-body-compact-line-height)*2)] w-full min-w-0 max-w-full line-clamp-2 whitespace-normal break-normal wrap-break-word hyphens-none text-[length:var(--type-body-compact-size)] font-medium leading-[var(--type-body-compact-line-height)] text-[var(--color-secondary)]" />
-
-      {/* Cancelled/Failed marker (ADR-052 FR-015/US-8) — a `failed` task
-          gets an explicit state chip so a user-Stopped (orange "Cancelled")
-          task reads as distinct from a genuine failure (red "Failed") within
-          the same Failed board column. */}
-      {task.status === 'failed' && (
-        <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)]">
-          <span
-            className="rounded-full px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold"
-            style={{ color: taskDisplayColor(task), backgroundColor: `${taskDisplayColor(task)}1a` }}
-          >
-            {taskDisplayLabel(task)}
-          </span>
-        </div>
-      )}
-
-      {/* Todos checklist progress */}
-      {todos.length > 0 && (
-        <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-          <CheckSquare size={11} />
-          <span>{doneTodos}/{todos.length}</span>
-        </div>
-      )}
+      <div className="flex min-w-0 flex-wrap items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+        <span className="inline-flex items-center gap-[var(--space-1)]" style={{ color: taskDisplayColor(task) }}>
+          {running ? <RunningIndicator /> : <span aria-hidden="true">●</span>}
+          <span>{taskDisplayLabel(task)}</span>
+        </span>
+        {(task.agent_name || task.agent_id) && <><span aria-hidden="true">·</span><span className="min-w-0 break-normal wrap-break-word">{task.agent_name ?? task.agent_id}</span></>}
+        {todos.length > 0 && <><span aria-hidden="true">·</span><span className="inline-flex items-center gap-[var(--space-1)]"><CheckSquare size={11} aria-hidden="true" /><span>{doneTodos}/{todos.length}</span></span></>}
+        {visibleTags.map((tag) => <span key={tag} className="inline-flex min-w-0 max-w-full items-center gap-[var(--space-1)]"><span aria-hidden="true">·</span><WordBoundaryText text={tag} className="break-normal wrap-break-word" /></span>)}
+        {overflowTagCount > 0 && <span>· +{overflowTagCount}</span>}
+      </div>
 
       {/* Delegation roll-up badge (only on parent cards with active sub-agent runs) */}
       {hasRollup && (
-        <RollupBadge rollup={rollup} agents={agents} />
-      )}
-
-      {/* Bottom row: agent badge */}
-      {(task.agent_name || task.agent_id) && (
-        <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)] flex-wrap">
-          <Badge variant="outline" className="min-w-0 max-w-full whitespace-normal wrap-anywhere bg-[var(--color-surface-2)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-            {task.agent_name ?? task.agent_id}
-          </Badge>
-        </div>
+        <RollupBadge rollup={rollup} agents={agents} plain />
       )}
 
       {/* Founder decision 2026-09-15: the server's Task.assignee_warning — the
@@ -317,31 +285,16 @@ export function TaskCard({
         </p>
       )}
 
-      {/* Tag chips (ADR-049 — replaces the milestone chip, SD-C14). Migrated
-          `milestone:<name>` tags render as ordinary chips, verbatim. */}
-      {tags.length > 0 && (
-        <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)] flex-wrap">
-          {visibleTags.map((tag) => (
-            <Badge key={tag} variant="outline" title={tag} className="min-w-0 max-w-full whitespace-normal wrap-anywhere border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10 text-[length:var(--type-caption-size)] text-[var(--color-accent)]">
-              {tag}
-            </Badge>
-          ))}
-          {overflowTagCount > 0 && (
-            <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">+{overflowTagCount}</span>
-          )}
-        </div>
-      )}
-
       {/* Goal-loop status affordance (FR-090) — "attempt N of M · try T of L"
           (+"· paused" when the owning plan reports paused_reason while running). */}
       {goalLoopLabel && (
         <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)]">
           <span
             className={cn(
-              'rounded-full px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-medium',
+              'text-[length:var(--type-caption-size)]',
               planPaused
-                ? 'bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
-                : 'bg-[var(--color-surface-2)] text-[var(--color-muted)]',
+                ? 'text-[color:var(--color-warning)]'
+                : 'text-[var(--color-muted)]',
             )}
           >
             {goalLoopLabel}
@@ -351,7 +304,7 @@ export function TaskCard({
 
       {/* "In progress · last activity 5 s ago" (founder decision 2026-09-14) —
           renders only while in progress with server-reported activity. */}
-      <TaskActivityChip task={task} />
+      <TaskActivityChip task={task} plain />
 
       {/* Nested children — only when altitude = 'show-all' */}
       {showChildren && (
@@ -360,7 +313,7 @@ export function TaskCard({
           onChildClick={onChildClick ?? onClick}
         />
       )}
+      </div>
     </div>
-    </TaskHoverDetails>
   )
 }

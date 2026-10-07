@@ -12,7 +12,7 @@
   "states": ["closed", "open", "selected", "disabled", "focus-visible"],
   "stories": [{"file": "src/components/ui/filter-menu.stories.tsx", "exports": ["Default", "Selection"]}],
   "checks": [
-    {"id": "filter-menu-unit", "kind": "unit", "file": "src/components/ui/tasks-controls.test.tsx", "test": "Tasks panel layout T7 uses shared flat FilterMenu/ViewSwitch, kit metadata badges and sentence-case List headers", "applicable": true},
+    {"id": "filter-menu-unit", "kind": "unit", "file": "src/components/ui/tasks-controls.test.tsx", "test": "Tasks panel layout T7 uses shared flat FilterMenu/ViewSwitch and sentence-case List headers; T18 metadata is plain text", "applicable": true},
     {"id": "filter-menu-interaction", "kind": "interaction", "file": "src/components/ui/filter-menu.stories.tsx", "test": "Selection", "story": "Selection", "applicable": true},
     {"id": "filter-menu-axe", "kind": "axe", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-axe] axe", "story": "Default", "applicable": true},
     {"id": "filter-menu-keyboard", "kind": "keyboard", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-keyboard] keyboard", "story": "Default", "applicable": true},

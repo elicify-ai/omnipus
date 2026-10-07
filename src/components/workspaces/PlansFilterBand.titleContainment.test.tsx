@@ -197,11 +197,10 @@ describe('PlansFilterBand — long unbroken plan title containment (round-2 UAT 
       expect(computed.wordBreak).toBe('normal')
       expect(computed.minWidth).toBe('0px')
 
-      // The outer tile div (role="group", data-testid) already carries
-      // title={plan.title} — the native tooltip surface for the full string,
-      // mirroring the tooltip assertions in the other two containment tests.
+      // T15/T16 replace native hover titles with an explicit info control.
       const tile = screen.getByTestId('plan-filter-tile-plan-long')
-      expect(tile).toHaveAttribute('title', longTitle)
+      expect(tile).not.toHaveAttribute('title')
+      expect(screen.getByRole('button', { name: `Plan details: ${longTitle}` })).toBeInTheDocument()
     } finally {
       removeStyle()
     }
@@ -216,6 +215,7 @@ describe('PlansFilterBand — long unbroken plan title containment (round-2 UAT 
     expect(titleEl).not.toHaveClass('line-clamp-2')
 
     const tile = screen.getByTestId('plan-filter-tile-plan-short')
-    expect(tile).toHaveAttribute('title', 'Payments revamp')
+    expect(tile).not.toHaveAttribute('title')
+    expect(screen.getByRole('button', { name: 'Plan details: Payments revamp' })).toBeInTheDocument()
   })
 })

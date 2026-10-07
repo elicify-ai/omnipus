@@ -18,6 +18,7 @@ import {
 } from '@dnd-kit/core'
 import { Info } from '@phosphor-icons/react'
 import { TaskCard } from './TaskCard'
+import { useBoardCardHeights } from './useBoardCardHeights'
 import { isRecurringTrigger, isScheduledTrigger } from './taskFormFields'
 import { STATUS_LABELS, STATUS_ORDER } from '@/lib/statusColors'
 import { taskMoveErrorMessage } from '@/lib/api'
@@ -347,9 +348,11 @@ export function BoardView({
   }, [orphanTasks])
 
   const counts = useMemo(() => countByStatus(rootTasks), [rootTasks])
+  const boardRef = useRef<HTMLDivElement>(null)
+  useBoardCardHeights(boardRef, rootTasks)
 
   return (
-    <div className="@container flex min-w-0 flex-col flex-1 min-h-0 overflow-hidden bg-[var(--color-surface-2)]">
+    <div ref={boardRef} className="@container flex min-w-0 flex-col flex-1 min-h-0 overflow-hidden bg-[var(--color-surface-2)]">
       {orphanTasks.length > 0 && (
         <div
           role="status"
@@ -594,7 +597,7 @@ function StatusColumnsRow({
                 // interactive-looking control following the cursor mid-drag
                 // would just be visual noise.
                 showActions={false}
-                previewEnabled={false}
+                showDetails={false}
               />
             </div>
           ) : null}

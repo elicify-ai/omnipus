@@ -1,13 +1,12 @@
 import { memo, useCallback } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { motion } from 'framer-motion'
-import { GitMerge, FolderSimple } from '@phosphor-icons/react'
-import { getIconComponent } from '@/lib/agentIcons'
+import { GitMerge, FolderSimple, CheckSquare } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { PRIORITY_LABELS, taskNodeVisual, type TaskGraphNode } from './taskGraph'
 import { TaskActionButton } from '../TaskActionButton'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
-import { TaskHoverDetails } from '../TaskHoverDetails'
+import { TaskDetailsPopover } from '../WorkItemDetails'
 import { WordBoundaryText } from '@/components/ui/word-boundary-text'
 
 /**
@@ -41,15 +40,14 @@ function priorityNodeClass(priority: number): string {
  * A coloured left rail keys the node to its lifecycle status at a glance.
  */
 function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
-  const { task, agentName, agentColor, agentIcon, onOpen } = data
+  const { task, agentName, onOpen } = data
   // ADR-052 FR-015/US-8 — a user-cancelled task renders orange "Cancelled",
   // distinct from a genuine red "Failed" (taskNodeVisual overrides
   // statusVisual's plain status→colour/label for that one case).
   const visual = taskNodeVisual(task)
   const priority = task.priority ?? 3
-  const AgentIcon = getIconComponent(agentIcon)
-  const hasAgent = Boolean(agentName)
-  const avatarColor = agentColor ?? 'var(--color-muted)'
+  const todos = task.todos ?? []
+  const doneTodos = todos.filter((todo) => todo.status === 'completed').length
 
   // ADR-053 FE-2 §7 (D7) — plan-member DAG signals on the Graph node.
   // `is_join` marks the authored convergence member that folds one or more
@@ -84,7 +82,6 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
   }, [onOpen, task])
 
   return (
-    <TaskHoverDetails task={task} plans={data.plans} agents={data.agents} onOpenTask={handleOpen}>
     <motion.div
       initial={{ opacity: 0, scale: 0.96 }}
       animate={{ opacity: 1, scale: 1 }}
@@ -128,57 +125,21 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
         style={{ backgroundColor: visual.color }}
       />
 
-      {/* ADR-052 §6.8 ▶/■ action button — hover/selected-revealed (mirrors
-          TaskCard's/PlansFilterBand's tile action overlay for cross-surface
-          consistency), always visible on touch. Sits above the priority
-          pill only while revealed; TaskActionButton stops its own
-          click/pointerdown/keydown from reaching this node's onKeyDown or
-          React Flow's onNodeClick. */}
-      <div
-        className={cn(
-          'absolute right-1.5 top-1.5 z-20 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100',
-          selected ? 'opacity-100' : undefined,
-        )}
-      >
-        <TaskActionButton task={task} className="bg-[var(--color-surface-1)]" />
-      </div>
-
-      <div className="flex flex-col gap-[var(--space-2)] py-[var(--space-2)] pl-[var(--space-2-5)] pr-[var(--space-2-5)]">
-        {/* Top row: status chip + priority. */}
-        <div className="flex items-center justify-between gap-[var(--space-2)]">
-          <span
-            className="inline-flex items-center gap-[var(--space-1)] rounded-full px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold leading-none"
-            style={{
-              color: visual.color,
-              backgroundColor: `${visual.color}1f`, // ~12% alpha tint
-            }}
-          >
-            {/* PI2/PI3: running task nodes use the shared spinning arrow,
-                not a second graph-local pulse treatment or token count. */}
-            {task.status === 'in_progress' ? (
-              <RunningIndicator />
-            ) : (
-              <span
-                aria-hidden
-                className="h-1.5 w-1.5 rounded-full"
-                style={{ backgroundColor: visual.color }}
-              />
-            )}
-            {visual.label}
-          </span>
-
-          <span
-            className={cn(
-              'flex-shrink-0 rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold leading-none',
-              priorityNodeClass(priority),
-            )}
-          >
-            {PRIORITY_LABELS[priority] ?? 'P3'}
-          </span>
+      <div className="flex min-w-0 flex-col gap-[var(--space-1)] p-[var(--space-2)]">
+        <div className="flex min-w-0 items-start gap-[var(--space-1)]">
+          <span className={cn('shrink-0 text-[length:var(--type-caption-size)] font-bold leading-none', priorityNodeClass(priority))}>{PRIORITY_LABELS[priority] ?? 'P3'}</span>
+          <WordBoundaryText as="p" text={task.title} className="h-[calc(var(--type-caption-size)*var(--type-caption-line-height)*2)] min-w-0 max-w-full flex-1 line-clamp-2 whitespace-normal break-normal wrap-break-word hyphens-none font-headline text-[length:var(--type-caption-size)] font-semibold leading-[var(--type-caption-line-height)] text-[var(--color-secondary)]" />
+          <TaskDetailsPopover task={task} plans={data.plans} agents={data.agents} onOpenTask={handleOpen} />
+          <TaskActionButton task={task} />
         </div>
-
-        {/* Full title — wrapping is bounded; GraphView reserves the measured height. */}
-        <WordBoundaryText as="p" text={task.title} title={task.title} className="h-[calc(var(--type-caption-size)*var(--type-caption-line-height)*2)] min-w-0 max-w-full line-clamp-2 whitespace-normal break-normal wrap-break-word hyphens-none font-headline text-[length:var(--type-caption-size)] font-semibold leading-[var(--type-caption-line-height)] text-[var(--color-secondary)]" />
+        <div className="flex min-w-0 flex-wrap items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+          <span className="inline-flex items-center gap-[var(--space-1)]" style={{ color: visual.color }}>
+            {task.status === 'in_progress' ? <RunningIndicator /> : <span aria-hidden="true">●</span>}<span>{visual.label}</span>
+          </span>
+          {agentName && <><span aria-hidden="true">·</span><span className="min-w-0 break-normal wrap-break-word">{agentName}</span></>}
+          {todos.length > 0 && <><span aria-hidden="true">·</span><CheckSquare size={11} aria-hidden="true" /><span>{doneTodos}/{todos.length}</span></>}
+          {(task.tags ?? []).map((tag) => <span key={tag} className="inline-flex min-w-0 max-w-full gap-[var(--space-1)]"><span aria-hidden="true">·</span><WordBoundaryText text={tag} className="break-normal wrap-break-word" /></span>)}
+        </div>
 
         {/* ADR-053 FE-2 §7 (D7) — plan-member DAG signals. The join member
             (gold GitMerge pill) is the authored convergence point that folds
@@ -189,7 +150,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
           <div className="flex flex-col gap-[var(--space-1)]" data-testid={`task-node-planmeta-${task.id}`}>
             {isJoin && (
               <span
-                className="inline-flex w-fit items-center gap-[var(--space-1)] rounded-full border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold leading-none text-[var(--color-accent)]"
+                className="inline-flex w-fit items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] leading-none text-[var(--color-muted)]"
                 title="Join member — converges one or more parallel streams into a single artifact"
               >
                 <GitMerge size={10} weight="bold" />
@@ -208,33 +169,9 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
           </div>
         )}
 
-        {/* Bottom row: assigned agent avatar + name. */}
-        {hasAgent && (
-          <div className="flex items-center gap-[var(--space-1)]">
-            <span
-              className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full"
-              style={{ backgroundColor: `${toTint(avatarColor)}` }}
-            >
-              <AgentIcon size={10} weight="bold" style={{ color: avatarColor }} />
-            </span>
-            <span className="truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-              {agentName}
-            </span>
-          </div>
-        )}
       </div>
     </motion.div>
-    </TaskHoverDetails>
   )
-}
-
-/**
- * A faint tinted disc behind the agent icon. Hex colours get an alpha suffix;
- * CSS-variable colours fall back to a neutral surface so we never emit invalid
- * CSS like `var(--x)2a`.
- */
-function toTint(color: string): string {
-  return color.startsWith('#') ? `${color}2a` : 'var(--color-surface-3)'
 }
 
 export const TaskNode = memo(TaskNodeComponent)

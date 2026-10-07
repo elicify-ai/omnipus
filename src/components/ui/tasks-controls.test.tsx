@@ -25,7 +25,7 @@ beforeEach(() => {
 })
 afterEach(() => { vi.unstubAllGlobals() })
 describe('Tasks panel layout', () => {
-  it('T7 uses shared flat FilterMenu/ViewSwitch, kit metadata badges and sentence-case List headers', async () => {
+  it('T7 uses shared flat FilterMenu/ViewSwitch and sentence-case List headers; T18 metadata is plain text', async () => {
     const user = userEvent.setup()
     renderLayout(<WorkspaceTasksTab workspaceId="ws-layout" />)
     await screen.findByText('Ray report')
@@ -36,9 +36,10 @@ describe('Tasks panel layout', () => {
     const board = screen.getByRole('radio', { name: 'Board' })
     expect(board).toHaveClass('border-0', 'bg-transparent', 'text-[var(--color-accent)]')
     const card = screen.getByText('Ray report').closest('[role="button"]')!
-    expect(within(card as HTMLElement).getByText('Ray').tagName).toBe('DIV')
-    expect(within(card as HTMLElement).getByText('docs').tagName).toBe('DIV')
-    expect(within(screen.getByTestId('plan-filter-tile-plan-layout')).getByText('Ray').tagName).toBe('DIV')
+    expect(within(card as HTMLElement).getByText('Ray').tagName).toBe('SPAN')
+    expect(within(card as HTMLElement).getByText('docs').tagName).toBe('SPAN')
+    expect(within(screen.getByTestId('plan-filter-tile-plan-layout')).getByText('Ray').tagName).toBe('SPAN')
+    expect(card.querySelector('.rounded-full.border')).toBeNull()
     board.focus()
     await user.keyboard('{ArrowRight}')
     expect(screen.getByRole('radio', { name: 'List' })).toHaveFocus()

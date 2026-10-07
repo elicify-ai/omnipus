@@ -20,11 +20,13 @@ The heading and **Board / List / Graph** switch share the first toolbar row. The
 
 Board shows all six equal-width status columns without sideways scrolling. If the panel cannot fit six readable columns, Tasks shows List instead with the quiet note **Board needs more room — showing list**. Board remains your selected view. The view automatically returns to Board when the panel has enough room again; it does not turn into a vertical stack of status groups.
 
-List columns are **Pri, Title, Status, Actions, Tags, Agent, Updated**. The Run/Stop action sits between Status and Tags. All columns stay present. When they need more room, scroll sideways inside the table to reach them; the header and rows stay aligned. No columns are hidden, and the page itself does not scroll sideways.
+List columns are **Pri, Title, Status, Details, Actions, Tags, Agent, Updated**. The narrow Details column contains each task's info icon. The Run/Stop action sits between Status and Tags. All columns stay present. When they need more room, scroll sideways inside the table to reach them; the header and rows stay aligned. No columns are hidden, and the page itself does not scroll sideways.
 
 Task titles use fixed-height slots: **two lines with ellipsis** on Board cards and Graph nodes, **one line with ellipsis** in List. Narrowing the panel does not make a title slot taller. Normal words stay together; a word or URL longer than a whole line breaks only as a last resort. Plan tiles still wrap long titles within their width. The Plans strip and Board status headers use a darker surface than the task area.
 
-Hover over a task, or focus it with the keyboard, to show a detail card with its **full title, status, agent, tags, plan and last updated time**. The preview appears above the scroll areas, never clipped by a column or table. Move away or press **Escape** to close it. On touch, **one tap opens the preview without opening the task**; use **Open task** inside the preview for the main action. Independent Run/Stop buttons keep their own behavior.
+Click a task's **info icon** for its full title, status, agent, tags, plan and last updated time. The details panel appears above the scroll areas, never clipped by a column, table or graph. Hover or keyboard focus alone does not open it. Press **Enter** or **Space** on the focused info icon to open it; **Escape** or a click outside closes it. On touch, tap the info icon to open it and tap outside to close it. The info action never opens or drags the task. Clicking the card or row elsewhere still opens the task; **Open task** inside the details panel does the same.
+
+All Board cards have the same height, set by the tallest card's content within the two-line title limit. That height updates when tasks change or the panel resizes. Metadata uses a coloured status dot and plain text for the status, agent, checklist progress and tags, rather than pills. Tags are separated by a middle dot. Run/Stop and other eligible task actions are always visible in Board, List and Graph, without hovering. A task in a plan still has no individual Run/Stop action.
 
 ## When you would use it
 
@@ -107,7 +109,7 @@ A task flows from Inbox toward Done; Blocked hangs off to the side until its dep
 
 ## The task detail panel
 
-On desktop, click a card or List row and the detail panel slides in. On touch, tap for the preview, then choose **Open task**. Every field in the detail panel saves as you edit; there is no Save button. From here you can:
+Click or tap a card or List row and the task detail panel slides in. The separate info icon opens a read-only details panel first; **Open task** inside it opens the task detail panel. Every field in the detail panel saves as you edit; there is no Save button. From here you can:
 
 - Change the status, assign a different agent, or move the task to another plan.
 - Edit the goal, priority, tags, dependencies, due date, and checklist.

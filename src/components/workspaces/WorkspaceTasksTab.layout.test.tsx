@@ -181,10 +181,11 @@ describe('Tasks panel layout', () => {
   it('T6 orders List columns Pri, Title, Status, Actions, Tags, Agent, Updated and places Run in Actions', () => {
     renderLayout(<ListView tasks={[layoutTask()]} agents={[layoutAgent()]} onTaskClick={() => {}} />)
     const headers = screen.getAllByRole('columnheader')
-    expect(headers.map((header) => header.textContent?.replace(/[↑↓]/g, '').trim())).toEqual(['Pri', 'Title', 'Status', 'Actions', 'Tags', 'Agent', 'Updated'])
+    expect(headers.map((header) => header.textContent?.replace(/[↑↓]/g, '').trim())).toEqual(['Pri', 'Title', 'Status', 'Details', 'Actions', 'Tags', 'Agent', 'Updated'])
     const cells = screen.getAllByRole('row')[1].querySelectorAll('td')
-    expect(within(cells[3]).getByRole('button', { name: 'Run task Ray report' })).toBeVisible()
-    expect(within(cells[6]).queryByRole('button')).not.toBeInTheDocument()
+    expect(within(cells[3]).getByRole('button', { name: 'Task details: Ray report' })).toBeVisible()
+    expect(within(cells[4]).getByRole('button', { name: 'Run task Ray report' })).toBeVisible()
+    expect(within(cells[7]).queryByRole('button')).not.toBeInTheDocument()
   })
 
   it('T9 gives the plan strip and status headers the darker panel surface without filling empty columns', async () => {

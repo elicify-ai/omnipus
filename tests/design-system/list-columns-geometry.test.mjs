@@ -29,7 +29,7 @@ const RECEIPTS = resolve(process.env.LIST_COLUMNS_GEOMETRY_RECEIPTS ?? 'test-res
 const FAULT = process.env.LIST_COLUMNS_GEOMETRY_FAULT ?? ''
 const VIEWPORT = { width: 1280, height: 900 }
 const PRIMARY_TITLE = 'Alpha synthetic task'
-const PRIMARY_ROW = 'tbody tr:has(button[title="Alpha synthetic task"])'
+const PRIMARY_ROW = 'tbody tr:has(button[data-task-open][aria-label="Alpha synthetic task, status Inbox"])'
 const TASKS = [
   { id: 'fixture-alpha', title: PRIMARY_TITLE, priority: 1, status: 'inbox',
     agent_id: 'fixture-mira', tags: ['fixture-tag', 'synthetic-only'],
@@ -48,8 +48,8 @@ const AGENTS = [
 ]
 // Native table positions, identified by the public header labels, not classes.
 const GOVERNED = [
-  { name: 'Tags', column: 5, headerName: 'Tags column — filter' },
-  { name: 'Updated', column: 7, headerName: 'Updated column — sort' },
+  { name: 'Tags', column: 6, headerName: 'Tags column — filter' },
+  { name: 'Updated', column: 8, headerName: 'Updated column — sort' },
 ]
 const CORE = [
   { name: 'Priority', column: 1, headerName: 'Pri column — sort and filter', value: 'P1',
@@ -58,7 +58,7 @@ const CORE = [
     sort: 'ascending', order: [PRIMARY_TITLE, 'Zulu synthetic task'] },
   { name: 'Status', column: 3, headerName: 'Status column — sort and filter', value: 'Inbox',
     sort: 'descending', order: ['Zulu synthetic task', PRIMARY_TITLE] },
-  { name: 'Agent', column: 6, headerName: 'Agent column — sort and filter', value: 'Mira',
+  { name: 'Agent', column: 7, headerName: 'Agent column — sort and filter', value: 'Mira',
     sort: 'ascending', order: [PRIMARY_TITLE, 'Zulu synthetic task'] },
 ]
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
@@ -256,7 +256,7 @@ async function withPanel(name, run) {
     await resizePanel(page, 720)
     await page.evaluate((selector) => {
       globalThis.__listGeometryOriginalRow = globalThis.document.querySelector(selector)
-      globalThis.__listGeometryInitialUpdated = globalThis.__listGeometryOriginalRow.cells[6].textContent.trim()
+      globalThis.__listGeometryInitialUpdated = globalThis.__listGeometryOriginalRow.cells[7].textContent.trim()
     }, PRIMARY_ROW)
     await run({ page, session, observations })
   } catch (error) {
@@ -340,14 +340,14 @@ async function assertColumns(page, session, visible, label, observations) {
   }
   const data = await page.locator(PRIMARY_ROW).evaluate((row) => ({
     sameRow: row === globalThis.__listGeometryOriginalRow,
-    tags: [...row.cells[4].querySelectorAll('div[title]')].map((tag) => tag.textContent),
-    updated: row.cells[6].textContent.trim(),
+    tags: [...row.cells[5].querySelectorAll('[data-task-tag]')].map((tag) => tag.lastElementChild.textContent),
+    updated: row.cells[7].textContent.trim(),
     initialUpdated: globalThis.__listGeometryInitialUpdated,
-    title: row.querySelector('button[title]').getAttribute('title'),
+    title: row.querySelector('button[data-task-open]').textContent,
     cellCount: row.cells.length,
   }))
   assert.deepEqual({ sameRow: data.sameRow, tags: data.tags, title: data.title, cellCount: data.cellCount },
-    { sameRow: true, tags: TASKS[0].tags, title: PRIMARY_TITLE, cellCount: 7 },
+    { sameRow: true, tags: TASKS[0].tags, title: PRIMARY_TITLE, cellCount: 8 },
     `${label}: the SAME synthetic task row retains its accessible DOM data`)
   // Wall-clock-relative wording is intentionally not frozen. The valid
   // synthetic date must render a nonempty relative value, conserved by toggles.
@@ -363,7 +363,7 @@ async function assertColumns(page, session, visible, label, observations) {
       cellWidth: cell.getBoundingClientRect().width,
     }))
   })
-  assert.equal(alignment.length, 7, `${label}: every column has a matching header and cell`)
+  assert.equal(alignment.length, 8, `${label}: every column has a matching header and cell`)
   for (const pair of alignment) {
     assert.ok(Math.abs(pair.headerLeft - pair.cellLeft) <= 1, `${label}: header and body left edges align`)
     assert.ok(Math.abs(pair.headerWidth - pair.cellWidth) <= 1, `${label}: header and body widths align`)
@@ -471,7 +471,8 @@ async function proveCoreUsable(page, session, label, observations, revealedNarro
   for (const column of CORE) {
     const selector = `${PRIMARY_ROW} td:nth-child(${column.column})`
     await expect(page.locator(selector)).toHaveCSS('display', 'table-cell')
-    await expect(page.locator(selector)).toHaveText(column.value)
+    if (column.name === 'Status') await expect(page.locator(selector)).toHaveAccessibleName(column.value) // T18 dot is decorative/aria-hidden.
+    else await expect(page.locator(selector)).toHaveText(column.value)
     assert.equal((await accessibleNode(session, selector)).ignored, false, `${label}: ${column.name} data remains accessible`)
     const trigger = page.getByRole('button', { name: column.headerName, exact: true })
     if (revealedNarrow) await scrollControlWithinPanel(page, trigger, `${label}: ${column.name} header`, observations)
@@ -480,7 +481,7 @@ async function proveCoreUsable(page, session, label, observations, revealedNarro
     await expect(menuItem).toBeVisible()
     await menuItem.click()
     await expect(page.locator(`thead th:nth-child(${column.column})`)).toHaveAttribute('aria-sort', column.sort)
-    assert.deepEqual(await page.locator('tbody tr button[title]').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('title'))),
+    assert.deepEqual(await page.locator('tbody tr button[data-task-open]').evaluateAll((buttons) => buttons.map((button) => button.textContent)),
       column.order, `${label}: ${column.name} sorting must operate on the actual synthetic task rows`)
   }
   const title = page.getByRole('button', { name: `${PRIMARY_TITLE}, status Inbox`, exact: true })
@@ -499,19 +500,19 @@ async function proveRevealedHeadersUsable(page, label, observations) {
   const tag = page.getByRole('menuitemcheckbox', { name: TASKS[0].tags[0], exact: true })
   await tag.click()
   await expect(tag).toHaveAttribute('aria-checked', 'true')
-  assert.deepEqual(await page.locator('tbody tr button[title]').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('title'))),
+  assert.deepEqual(await page.locator('tbody tr button[data-task-open]').evaluateAll((buttons) => buttons.map((button) => button.textContent)),
     [PRIMARY_TITLE], `${label}: revealed Tags filter must select the actual matching task, not merely open a menu`)
   await page.getByRole('menuitem', { name: 'Clear filter', exact: true }).click()
   await expect(page.locator('tbody tr')).toHaveCount(2)
-  assert.deepEqual(await page.locator('tbody tr button[title]').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('title'))),
+  assert.deepEqual(await page.locator('tbody tr button[data-task-open]').evaluateAll((buttons) => buttons.map((button) => button.textContent)),
     [PRIMARY_TITLE, 'Zulu synthetic task'], `${label}: clearing the Tags filter restores both actual tasks in the existing Agent order`)
 
   const updated = page.getByRole('button', { name: GOVERNED[1].headerName, exact: true })
   await scrollControlWithinPanel(page, updated, `${label}: Updated header`, observations)
   await realClick(page, updated, `${label}: Updated header`, observations)
   await page.getByRole('menuitem', { name: 'Sort ascending', exact: true }).click()
-  await expect(page.locator('thead th:nth-child(7)')).toHaveAttribute('aria-sort', 'ascending')
-  assert.deepEqual(await page.locator('tbody tr button[title]').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('title'))),
+  await expect(page.locator('thead th:nth-child(8)')).toHaveAttribute('aria-sort', 'ascending')
+  assert.deepEqual(await page.locator('tbody tr button[data-task-open]').evaluateAll((buttons) => buttons.map((button) => button.textContent)),
     ['Zulu synthetic task', PRIMARY_TITLE], `${label}: revealed Updated sorting orders the actual June 19/June 20 fixture dates`)
 }
 
@@ -566,7 +567,7 @@ test('instrument: removing only the compiled internal-scroll rule kills the SAME
       await resizePanel(page, 320)
       await page.evaluate((selector) => {
         globalThis.__listGeometryOriginalRow = globalThis.document.querySelector(selector)
-        globalThis.__listGeometryInitialUpdated = globalThis.__listGeometryOriginalRow.cells[6].textContent.trim()
+        globalThis.__listGeometryInitialUpdated = globalThis.__listGeometryOriginalRow.cells[7].textContent.trim()
       }, PRIMARY_ROW)
       const mutant = await measureColumns(page, session)
       // The data/accessibility nodes remain real and present. Only their
@@ -597,7 +598,7 @@ test('instrument: removing only the compiled internal-scroll rule kills the SAME
       await resizePanel(page, 320)
       await page.evaluate((selector) => {
         globalThis.__listGeometryOriginalRow = globalThis.document.querySelector(selector)
-        globalThis.__listGeometryInitialUpdated = globalThis.__listGeometryOriginalRow.cells[6].textContent.trim()
+        globalThis.__listGeometryInitialUpdated = globalThis.__listGeometryOriginalRow.cells[7].textContent.trim()
       }, PRIMARY_ROW)
     }
     assert.equal(sha256(assets.get(stylesheetPath)), sha256(pristine), 'Restoration must restore the exact compiled stylesheet bytes')
