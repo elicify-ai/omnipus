@@ -422,42 +422,6 @@ These are **future implementing targets**, not changed files in this ADR. E-key 
 
 **Only Q-FE-11/Q-FE-12 remain open**, from the newly handed-over activity scope. Earlier Q-FE-1–Q-FE-10 are answered by F and the confirmed session-core decisions and are removed, not re-interviewed. Recommendations below are not decisions; answer “Q-FE-11 A, Q-FE-12 A”. Backend serialization/publication dependencies remain in D5, without a duplicate founder choice here.
 
-### Q-FE-3 — Which figures, default and small-size rendering are approved? (A / B / C)
-
-R46 makes figure choice part of agent editing, but §5 question 15 leaves the default and small-size fallback open. The assets contain six figure variants and several face variants; the current demo offers four filled figures and defaults to Robot. R9 still says no faces. This must be resolved before persisting new choices or backfilling missing figures (R9/R11/R13/R46; S2::PERSON_ICONS, FIGURE_FACE).
-
-| Option | Figure policy |
-|---|---|
-| A | Offer the four demo figures — solid Robot, Man, Woman, Omnipus — with their minimal eye grammar; default Robot; retain figure-plus-role at all specified sizes. |
-| B | Same four and minimal-eye grammar, default Omnipus; use the plain role icon at small sizes where the badge is not legible, with the cutoff specified by the founder. |
-| C | Choose another offered/default figure set, face policy or small-size cutoff explicitly; no prototype variant becomes available merely because its SVG exists. |
-
-**Recommendation: A** as the smallest consistent set matching the current demo; verify legibility in the design-system stories. This also replaces only R9’s conflicting no-geometric-face wording, not its ban on illustrated mascots. The recommendation is not a brand decision made by this author.
-
-### Q-FE-4 — Where do uploaded agent images live and who removes them? (A / B / C)
-
-An agent identity is global across workspaces and outlives any one chat. R17 explicitly leaves storage open. Session-attached storage can tie identity to unrelated session deletion; workspace storage can make the same agent’s identity differ between workspaces (R8/R17; **media:// Ref Lifecycle and Store Invariants**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/internal/architecture/ADR-017-media-ref-lifecycle.md`::D5).
-
-| Option | Ownership/lifetime |
-|---|---|
-| A | Agent-owned application files, referenced through the existing agent configuration, replaced/removed with identity changes and cleaned up by the agent deletion path. |
-| B | Durable application-global library/media objects referenced by the agent, with explicit replacement/deletion ownership and authenticated access. |
-| C | Defer saved uploads to a later squad; revise the first-squad R46 scope explicitly instead of showing a local-only upload as saved. |
-
-**Recommendation: A**, reusing backend image-validation/re-encoding and file primitives where suitable, not introducing an upload service/runtime. Exact paths, retrieval contract and cleanup are backend design work; this ADR does not claim an existing upload handler already satisfies R17.
-
-### Q-FE-5 — How do GIF and uploaded-image motion fit the static-icon decision? (A / B / C)
-
-R18 permits hover/active GIF playback, R19 forbids status animation of the image itself, R29 scales the agent icon, and newer R14/R24 require static chat icons. Animating a saved GIF or scaling the uploaded image for waiting cannot be chosen by copying the prototype (R14/R17–R19/R24/R29).
-
-| Option | First-squad motion policy |
-|---|---|
-| A | Accept GIF as a server-re-encoded still first frame for now; images stay static everywhere. Waiting on an image uses the yellow halo without scaling image pixels; ordinary glyph icons retain R29’s scale pulse. |
-| B | Allow hover GIF playback only outside chat, never active-status playback or reduced-motion playback; use a static image with halo-only waiting attention. |
-| C | Deliver R18’s hover/active playback and image scaling now; explicitly amend R14/R19 and confirm the allowed surfaces, including chat. |
-
-**Recommendation: A** for this static first squad. It requires the founder’s explicit temporary R18/R29 image exception; it is not already decided. Keep full animation requirements on record for later, not secretly implemented.
-
 ### Q-FE-6 — What exact nearest-color migration should run once? (A / B / C)
 
 The founder has decided automatic migration to R16’s palette. The prototype matches hue and maps low-saturation colors to Grey, but its thresholds and tie behavior are not themselves confirmed requirements. Different algorithms can noticeably change an existing identity (R16; S1::§5 question 13; S2::toPalette).
