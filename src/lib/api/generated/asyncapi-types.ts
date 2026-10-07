@@ -415,6 +415,7 @@ export interface ReplayMessageFrame {
   truncated?: boolean;
   truncation_reason?: "cancelled" | "max_output_tokens";
   client_message_id?: string;
+  terminal_outcome?: boolean;
 }
 
 export interface ReplayErrorFrame {

@@ -29,7 +29,16 @@ export async function createTerminalSession(gw: GatewayProcess) {
     type: 'chat', agent_id: agent.id, workspace_id: workspace.id,
   } satisfies SessionCreateRequest);
   expect(sessionResult.ok, sessionResult.raw).toBe(true);
-  return { agent, session: Session.parse(sessionResult.body) };
+  // A second, untouched session of the same workspace. The SPA deliberately
+  // sends no second attach_session for a session that is already active
+  // (sessions.$sessionId.tsx: "An already-active session normally needs no
+  // second attach"), so a user can only trigger a FRESH attach of the terminal
+  // session by switching to another session and coming back via its link.
+  const otherResult = await gw.apiFetch('POST', '/api/v1/sessions', {
+    type: 'chat', agent_id: agent.id, workspace_id: workspace.id,
+  } satisfies SessionCreateRequest);
+  expect(otherResult.ok, otherResult.raw).toBe(true);
+  return { agent, session: Session.parse(sessionResult.body), otherSession: Session.parse(otherResult.body) };
 }
 
 /** Collect real browser traffic, without routing/stubbing any gateway frame.

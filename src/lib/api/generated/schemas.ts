@@ -16737,6 +16737,7 @@ export const ReplayMessageFrame = z
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
     client_message_id: z.string().optional(),
+    terminal_outcome: z.boolean().optional(),
   })
   .strict();
 
