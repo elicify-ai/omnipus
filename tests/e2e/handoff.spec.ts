@@ -382,6 +382,24 @@ test(
       .filter({ hasText: label });
     await expect(delegateLine.first()).toBeVisible({ timeout: 60_000 });
 
+    // (1b) PANEL OPEN, IN FLIGHT — open the Activity panel from the same
+    // anchor, while the child's span is still open, and hold it open. The
+    // ActivityBar mounts only while an agent span is open, a retained
+    // failure exists, or its own panel is open (ActivityBar.tsx::ActivityBar,
+    // `if (!showAgents && !showCommands) return null`); a successful child
+    // leaves it unmounted at idle with no other entry point to the panel.
+    // This child is a one-call `echo hello`, so it ends within seconds of
+    // the line's birth. The old order ran the guards and the axe scan
+    // (about 700 ms plus a page injection) BEFORE the bar click: CI run
+    // 37650712916 (job 112893755133, attempt 1) snapshotted the bar mounted
+    // at the click, then it unmounted when the child ended, and
+    // `locator.click` waited for a bar that never came back until the whole
+    // 300 s test timeout ("element is not stable" -> "element was detached
+    // from the DOM"); the retry won the same race. panelOpen (React state
+    // on the unchanged ChatScreen mount) holds the bar through completion —
+    // the pattern delegation-hidden.spec.ts adopted for the same race.
+    await openActivityPanel(page);
+
     // (2) THREAD — the guard: zero subagent-collapsed elements, ever.
     await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
 
@@ -391,26 +409,14 @@ test(
     // this test waits.
     await expect(page.locator('[data-testid="tool-call-badge"][data-tool="bash"]')).toHaveCount(0);
 
-    // a11y baseline check on the delegated event line, BEFORE navigating away
-    // to the child's session below (the parent's thread, delegated line
-    // included, leaves the DOM once the chat surface rebinds to the child).
-    // UPDATE 2026-09-27: the include used to name the delegate tool-call
-    // badge — verbose-only since fe1e2406a, so in this default non-verbose
-    // thread it matched nothing and axe passed silently over an empty
-    // selection (this file's own comment on the child-session scan below
-    // documents that exact false-green shape). The event line is the chip's
-    // replacement surface and keeps this scan real.
-    // Traces to: sprint-h-subagent-block-spec.md line 316 (Scenario 11) —
-    // same accessibility guarantee SubagentBlock used to carry, re-pointed
-    // at the surface that replaced it.
-    await expectA11yClean(page, {
-      include: ['[data-testid="delegation-event-line"]'],
-    });
+    // (The axe scan of the delegated event line moved to the end of this
+    // test, step (6): with the Activity panel held open above, its modal
+    // Sheet marks the thread aria-hidden, so a scan here would run over a
+    // hidden subtree and pass vacuously.)
 
-    // (4) PANEL — the row that replaced "click the collapsed header":
-    // opens the Activity panel, finds this delegation's row, and its open
-    // control into the child's own session.
-    await openActivityPanel(page);
+    // (4) PANEL — the row that replaced "click the collapsed header": this
+    // delegation's row and its open control into the child's own session,
+    // in the panel opened in flight at (1b).
     const row = page.locator('[data-testid="activity-row"]', { hasText: label });
     await expect(row).toBeVisible({ timeout: 30_000 });
     // child_session_id arrives WITH subagent_start (steer_frames.go's
@@ -478,6 +484,35 @@ test(
     // its top-level include selectors.
     await expectA11yClean(page, {
       include: ['[data-testid="bash-output-toggle"]', '[data-testid="tool-call-badge"]'],
+    });
+
+    // (6) a11y baseline check on the delegated event line, on the parent's
+    // own thread. It runs last, with the Activity panel closed (the panel is
+    // a modal Sheet: scanning under it would cover an aria-hidden thread and
+    // pass vacuously) and the parent's thread rebound by deep link (it left
+    // the DOM when the surface rebound to the child above). The line
+    // surviving a replay is pinned by steered-session-reachability.spec.ts.
+    // UPDATE 2026-09-27: the include used to name the delegate tool-call
+    // badge — verbose-only since fe1e2406a, so in this default non-verbose
+    // thread it matched nothing and axe passed silently over an empty
+    // selection (the child-session scan above documents that same
+    // false-green shape). The event line is the chip's replacement surface
+    // and keeps this scan real.
+    // Traces to: sprint-h-subagent-block-spec.md line 316 (Scenario 11) —
+    // same accessibility guarantee SubagentBlock used to carry, re-pointed
+    // at the surface that replaced it.
+    expect(parentSessionID, 'parent session id captured before opening the child').toBeTruthy();
+    expect(parentSessionID).not.toBe('__pending');
+    await openSession(page, parentSessionID as string);
+    await expect(
+      page
+        .locator('[data-testid="delegation-event-line"]')
+        .filter({ hasText: label })
+        .first(),
+      'the delegated event line must render on the parent thread so the axe scan below has a real subject',
+    ).toBeVisible({ timeout: 30_000 });
+    await expectA11yClean(page, {
+      include: ['[data-testid="delegation-event-line"]'],
     });
   },
 );
