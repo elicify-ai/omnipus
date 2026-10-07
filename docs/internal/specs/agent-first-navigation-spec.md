@@ -262,283 +262,114 @@ Figures: **Robot, Man, Woman, Omnipus**, default Omnipus; approved minimal eyes,
 
 ## BDD Scenarios
 
-BDD means behavior-driven development: concrete Given/When/Then examples form the independent behavioral oracle. Each scenario has one action, a parent acceptance back-reference and one category. IDs remain stable through review. Conditional choices below remain held until the founder records the answer; tests then instantiate the chosen branch, never a guessed branch.
+BDD is behavior-driven development. Each row is a scenario with one **When** action; `Traces to: US-x.y` means User Story x, Acceptance Scenario y. Categories stay unchanged. Outline examples are independent cases. Shared invariant references point to the single FR/contract home, not implementation output. Recovery rows below extend existing IDs, not the 58-ID inventory.
 
-### Feature: Stable navigation and safe destination
+### Stable navigation / attention
+| Scenario | Category | Traces to: | Given | When | Then / And |
+|---|---|---|---|---|---|
+| BDD-01.1 Main despite newer extra | Happy Path | US-1.1 | Mia's distinct mains/newer extras in Product launch/Operations | Select Product launch/Mia | Its main/owner row opens; next message never goes to extra/Operations. |
+| BDD-01.2 Eligibility outline | Happy Path | US-1.2 | Expanded authoritative agent/eligibility below | Render navigation | Presence matches example; no worker/hidden/main-ID guess. |
+| BDD-01.3 Existing panel navigation | Alternate Path | US-1.3 | Workspace chat open | Activate Team | Existing desktop panel/open state; no Chat/duplicate Library/replaced Agents destination. |
+| BDD-01.4 Refresh failure | Error Path | US-1.4 | Roster/member request fails; no cache or prior cache | Expand workspace | Error/Retry or marked stale cache; never empty-team success/fake main. |
+| BDD-02.1 Exact restore outline | Happy Path | US-2.1 | Browser pointer valid/visible; other chat newer | Enter Operations through example | Exact conversation/immutable owner returns; committed shown main uses bounded read, not initial attach. |
+| BDD-02.2 Welcome outline | Happy Path | US-2.2 | Saved/welcome states below | Enter workspace | Validated Ava main or unavailable/Team/Retry/no-send; zero extras. |
+| BDD-02.3 Failed entry | Error Path | US-2.3 | A committed; B validation/load/attach fails | Settle B attempt | A tuple stays coherent, B intent retryable/no send; no false switch/fallback/goal acknowledgement. |
+| BDD-02.4 Late selection success | Edge Case | US-2.4 | A unseen goal, delayed A resolution/attach, B wins before A shown | Deliver A success | B/pointers remain, A goal remains unseen for everyone; transport/server success is not foreground commit. |
+| BDD-03.1 Deliberate extra | Happy Path | US-3.1 | Selected pair, possibly unconfirmed first delivery | Activate + New chat | Existing abandonment guard; main intact, retries use original delivery identity. |
+| BDD-03.2 Pair-filtered history | Happy Path | US-3.2 | Older Product launch/Mia sessions among pairs | Activate Past sessions | One modal, visible removable pair filters; broadening reveals authorized results. |
+| BDD-03.3 Return to main/actions | Alternate Path | US-3.3 | Mia extra open/owner selected | Activate row by keyboard | Main opens; Past sessions then New chat are independent named hover/focus/touch targets. |
+| BDD-03.4 Refused history attach | Error Path | US-3.4 | Target inaccessible/disconnected | Select result | Visible refusal/recovery, no successful switch/closed interaction/lost committed chat. |
+| BDD-04.1 Attention-source outline | Happy Path | US-4.1 | Unopened main, source below | Reconcile attention | Exact source signal; no extra/helper/prose/global source inference. |
+| BDD-04.2 Shared observed open | Alternate Path | US-4.2 | Two people, unseen goal plus pending question/approval | Commit the main's shown foreground open | Observed-bound goal clears for both; decisions/newer outcome remain. Navigation/login/cold restore count only at that commit. |
+| BDD-04.3 Reduced-motion attention | Edge Case | US-4.3 | Two distinct mains need attention, reduced motion | Render collapsed workspace | Static 8 px warning cue/text/count two; expanded icon cue, zero loops/row dots. |
+| BDD-04.4 Missing attention | Error Path | US-4.4 | Main value missing/source failed | Render snapshot | Unknown/unavailable/Retry, never false/zero; no read acknowledgement. |
 
-#### Scenario: BDD-01.1 — Open the main despite a newer extra
-**Traces to:** User Story 1, Acceptance Scenario 1
-**Category:** Happy Path
-- **Given** Mia has distinct validated mains and newer extras in Product launch and Operations
-- **When** her Product launch row is selected
-- **Then** Product launch's Mia main opens with its owner row selected
-- **And** neither the newer extra nor Operations receives the next message
+**Examples — BDD-01.2**
+| Agent / eligibility | Presence |
+|---|---|
+| Mia / eligible member | Present |
+| Native worker / worker member | Absent |
+| External worker / worker member | Absent |
+| Judge or Plan Supervisor / hidden engine | Absent |
+| Admin / validated default main | Present only in default workspace |
 
-#### Scenario Outline: BDD-01.2 — List only eligible colleagues
-**Traces to:** User Story 1, Acceptance Scenario 2
-**Category:** Happy Path
-- **Given** the expanded workspace contains `<agent>` with authoritative `<eligibility>`
-- **When** navigation renders
-- **Then** sidebar presence is `<presence>`
-
-| agent | eligibility | presence |
-|---|---|---|
-| Mia | Eligible main colleague/member | Present |
-| Native worker | Worker/member | Absent |
-| External worker | Worker/member | Absent |
-| Judge or Plan Supervisor | Hidden engine agent | Absent |
-| Admin | Validated default-workspace main | Present only there |
-
-#### Scenario: BDD-01.3 — Preserve chat and existing panel navigation
-**Traces to:** User Story 1, Acceptance Scenario 3
-**Category:** Alternate Path
-- **Given** chat is open in a workspace with existing panel controls
-- **When** Team is activated
-- **Then** the existing Team panel opens beside desktop chat with truthful open state
-- **And** no Chat header item, duplicate Library launcher or replaced Agents destination appears
-
-#### Scenario: BDD-01.4 — Show roster or membership failure honestly
-**Traces to:** User Story 1, Acceptance Scenario 4
-**Category:** Error Path
-- **Given** roster or membership refresh fails with either no cache or a previous good cache
-- **When** the workspace is expanded
-- **Then** no-cache shows a load error and Retry; cached data remains visibly last-known/stale with Retry
-- **And** no empty-team success or invented main target is shown
-
-#### Scenario Outline: BDD-02.1 — Restore the exact remembered chat
-**Traces to:** User Story 2, Acceptance Scenario 1
-**Category:** Happy Path
-- **Given** a browser remembers a valid visible `<kind>` for Operations while another chat is more recent
-- **When** Operations is entered through `<entry>`
-- **Then** the exact remembered conversation and owner return
-
-| kind | entry |
+**Examples — BDD-02.1**
+| Kind | Entry |
 |---|---|
 | Main | Workspace name |
 | Extra | Workspace name after cold reload |
-| Extra | Login entry |
-| Main | Existing modal workspace switch |
+| Extra | Login |
+| Main | Modal workspace switch |
 
-#### Scenario Outline: BDD-02.2 — Resolve the welcome main without creating an extra
-**Traces to:** User Story 2, Acceptance Scenario 2
-**Category:** Happy Path
-- **Given** `<saved state>` and `<welcome availability>` for the entered workspace
-- **When** the workspace is entered
-- **Then** `<outcome>` occurs with zero extra-chat creation
-
-| saved state | welcome availability | outcome |
+**Examples — BDD-02.2**
+| Saved state | Welcome | Outcome |
 |---|---|---|
-| No real pointer | Validated Ava main | Ava main opens |
-| Confirmed deleted/hidden/inaccessible pointer | Validated Ava main | Ava main opens; invalid destination is not reused |
-| No real pointer | No eligible/accessible welcome destination | Unavailable state with Team/manage, Retry and no send |
+| No real pointer | Validated Ava main | Open Ava main |
+| Confirmed deleted/hidden/inaccessible | Validated Ava main | Open Ava; don't reuse invalid target |
+| No real pointer | No eligible/accessible welcome | Unavailable/Team/Retry/no send |
 
-#### Scenario: BDD-02.3 — Refuse split selection after failed load or attach
-**Traces to:** User Story 2, Acceptance Scenario 3
-**Category:** Error Path
-- **Given** A is committed and a B entry's validation/load/attach fails
-- **When** the pending B attempt settles
-- **Then** A's committed workspace/session/owner remain mutually consistent and B intent remains retryable
-- **And** unresolved-target send is unavailable; no fallback or false switch closes the interaction
-
-#### Scenario: BDD-02.4 — Reject a late losing selection
-**Traces to:** User Story 2, Acceptance Scenario 4
-**Category:** Edge Case
-- **Given** B has won while an older A request is pending
-- **When** A's response arrives
-- **Then** B stays active and another workspace's remembered destination is not overwritten
-
-#### Scenario: BDD-03.1 — Start an extra with delivery protection
-**Traces to:** User Story 3, Acceptance Scenario 1
-**Category:** Happy Path
-- **Given** a colleague/workspace main is selected and a pending unconfirmed first message may exist
-- **When** + New chat is activated
-- **Then** a deliberate extra starts only through the existing abandonment decision where required
-- **And** main remains intact; retained/retried first delivery uses its original request identity, not changed selections
-
-#### Scenario: BDD-03.2 — Open pair-filtered past sessions
-**Traces to:** User Story 3, Acceptance Scenario 2
-**Category:** Happy Path
-- **Given** Product launch/Mia has older sessions among other pairs
-- **When** its Past sessions action is activated
-- **Then** the existing Sessions modal opens with visible Product launch and Mia filters
-- **And** broadening either filter can reveal its authorized additional results
-
-#### Scenario: BDD-03.3 — Keep extra ownership and independent row actions
-**Traces to:** User Story 3, Acceptance Scenario 3
-**Category:** Alternate Path
-- **Given** Mia's extra is open and its owner row is selected
-- **When** Mia's row is activated by keyboard
-- **Then** Mia's main opens, not the extra
-- **And** Past sessions then + New chat remain independent named targets, visible on selected/hover/focus/touch rows
-
-#### Scenario: BDD-03.4 — Retain selection on refused history attachment
-**Traces to:** User Story 3, Acceptance Scenario 4
-**Category:** Error Path
-- **Given** a history destination is inaccessible or the connection rejects attach
-- **When** that result is selected
-- **Then** visible refusal/recovery remains without claiming a completed switch or losing the committed chat
-
-### Feature: Main-only attention
-
-#### Scenario Outline: BDD-04.1 — Signal only the four main sources
-**Traces to:** User Story 4, Acceptance Scenario 1
-**Category:** Happy Path
-- **Given** an unopened main with no prior attention receives `<source>`
-- **When** authoritative attention is reconciled
-- **Then** the main's sidebar signal is `<signal>`
-
-| source | signal |
+**Examples — BDD-04.1**
+| Source | Signal |
 |---|---|
-| Pending structured question card | On |
-| Pending tool approval | On |
-| Unseen finished goal | On |
-| Unseen failed goal | On |
+| Pending question card | On |
+| Pending approval | On |
+| Unseen finished goal (met) | On |
+| Unseen failed goal (rounds_exhausted/other) | On |
 | User-stopped goal | Off |
-| Ordinary unread message/free-text question | Off; user answers require the structured question workflow |
-| Extra/helper-only pending source | Off for this main |
-| Generic task notice or global plan verdict | Off unless a real allowed goal source belongs to this main |
+| Ordinary unread/free-text question | Off; answers require structured tool |
+| Extra/helper-only source | Off for main |
+| Generic task notice/global plan verdict | Off unless actual allowed goal belongs to main |
 
-#### Scenario: BDD-04.2 — Acknowledge observed goals, not pending decisions
-**Traces to:** User Story 4, Acceptance Scenario 2
-**Category:** Alternate Path
-- **Given** two people view the same main with an unseen goal plus unresolved question/approval
-- **When** one person successfully opens the main explicitly
-- **Then** observed goal attention clears for both people
-- **And** unresolved question/approval and a newer outcome beyond the observed bound remain attention-worthy
+### Identity / feed / Sessions
+| Scenario | Category | Traces to: | Given | When | Then / And |
+|---|---|---|---|---|---|
+| BDD-05.1 Figure outline | Happy Path | US-5.1 | Example figure + Developer/Azure | Render named surface | Same transparent figure/badge/color before normal name; badge remains small. |
+| BDD-05.2 Readable choices | Happy Path | US-5.2 | Chooser and named backgrounds | Open choices | Exact vocabulary/oracles; all-state ink ≥3:1, no brand/semantic colors. |
+| BDD-05.3 Stable migration | Alternate Path | US-5.3 | Fresh/custom/built-in legacy identities | Restart upgraded gateway repeatedly | Approved saved/rendered grammar and field locks persist. |
+| BDD-05.4 Identity failure | Error Path | US-5.4 | Lookup failed, cache or absent | Render identity | Honest cached/unknown, not removed/newly saved. |
+| BDD-06.1 Existing editor preview | Happy Path | US-6.1 | Custom agent/current unified editor | Change identity choice | Shared matching preview/global create-autosave; no second editor/image/demo preference. |
+| BDD-06.2 Protected editability | Alternate Path | US-6.2 | Built-in/server field rules | Open editor | Fixed identity locked, other allowed fields unchanged; no capability gain. |
+| BDD-06.3 Save failure | Error Path | US-6.3 | Draft save/create/activation fails | Settle operation | Visible real status, not saved everywhere. |
+| BDD-07.1 Name/kind outline | Happy Path | US-7.1 | Mia owner/Jim guest, kind/path below | Display feed | Both real names/no avatars, truthful above-feed kind/owner. |
+| BDD-07.2 Input-derived responder outline | Happy Path | US-7.2 | Session/turn/producer/tool/card/approval inputs below | Reconcile/render next reply slot | Indicator table derives phase/mount/name; motion oracles and opaque ink, no composer line/logo/owner switch. |
+| BDD-07.3 Command cleanup | Alternate Path | US-7.3 | Joint cutover | Open command/composer choices | /sessions only; old commands/picker/@ switching absent; model/Auto/attachments/send/Stop intact; Clear no new chat/history deletion. |
+| BDD-07.4 Selected controls/errors | Error Path | US-7.4 | A helpers/error; B open | Activate B's Stop | Truthful success/refusal/scope, not control of A; navigation never cancelled A, real error not lost in decorative phrases. Recovery action is a separate case below. |
+| BDD-08.1 Status/kind outline | Happy Path | US-8.1 | Permitted status/kind below | Display row | Title then muted status/kind/active/tokens; confirmed main dot, no HB/fabricated values. |
+| BDD-08.2 Strict hierarchy | Happy Path | US-8.2 | Main M, extras E1/E2, C under E1, O missing parent | Reveal group | M pinned/extras recency; C under E1 even child-only match; O under **parent chat unavailable**, still Openable, no hidden/fake parent title/session. |
+| BDD-08.3 Shared accessible actions | Alternate Path | US-8.3 | Desktop/phone, keyboard/coarse input | Focus row action | Sessions/subtitle/shared kit/actions legible; trap/restore focus and rename Escape safety; no new handmade tooltip. Stable activation cases below. |
+| BDD-08.4 Protection/refusal | Error Path | US-8.4 | Protected main or inaccessible/failed destination/source | Attempt action | Explicit refusal/protection/load error, no hidden target or Unfiled outage. |
+| BDD-09.1 Filter outline | Happy Path | US-9.1 | Composed title/workspace/agent/date and real states below | Select filter | Exact set; helper under nonmatching-parent context, no queued-as-running. Needs me main-only, even if helper awaits a decision. |
+| BDD-09.2 Open live overview | Happy Path | US-9.2 | B/modal search matches unopened A | Receive A state/attention/plan/member update | Reconcile in place/no reopen/search reset; no metadata-view goal acknowledgement or stop. |
+| BDD-09.3 Coverage error | Error Path | US-9.3 | Cached rows, page/source missing/failed/unstable | Settle refresh | Partial/unknown/Retry, not complete/all-idle/zero; successful moving-page counterexample below. |
+| BDD-09.4 Large child-only search | Edge Case | US-9.4 | >20 rows/multiple pages, only child title matches | Search title | Real ancestor/child reachable, truthful coverage/count, bounded virtual or supported plain path. |
+| BDD-09.5 Repeated helper expansion | Happy Path | US-9.5 | Nine identical consecutive helper titles/kinds under P, same title under Q | Expand **9 similar helper runs** | Every original ID/status/Open under P; Q separate, filtered counts truthful, summary not execution/session target. |
 
-#### Scenario: BDD-04.3 — Keep accessible attention without motion
-**Traces to:** User Story 4, Acceptance Scenario 3
-**Category:** Edge Case
-- **Given** two distinct main agents need attention and reduced motion is enabled
-- **When** their workspace is rendered collapsed
-- **Then** the static warning-yellow 8 px dot and meaningful attention text remain with distinct-agent count two
-- **And** expanded icons retain cues without loops or separate agent-row dots
-
-#### Scenario: BDD-04.4 — Treat missing main attention as unknown
-**Traces to:** User Story 4, Acceptance Scenario 4
-**Category:** Error Path
-- **Given** a valid main lacks its required authoritative attention value or the source fetch failed
-- **When** the navigation snapshot is rendered
-- **Then** attention coverage is unknown/unavailable with Retry, never false/zero because the value was absent
-
-### Feature: Shared identity and existing editor
-
-#### Scenario Outline: BDD-05.1 — Share the four figure identities
-**Traces to:** User Story 5, Acceptance Scenario 1
-**Category:** Happy Path
-- **Given** an agent with `<figure>`, Developer badge and Azure color
-- **When** a named identity surface renders it
-- **Then** the same transparent figure/role/color precedes its normal-color name, with badge present even at small size
-
-| figure |
-|---|
-| Robot |
-| Man |
-| Woman |
-| Omnipus — default for a new agent |
-
-#### Scenario: BDD-05.2 — Offer only approved readable choices
-**Traces to:** User Story 5, Acceptance Scenario 2
-**Category:** Happy Path
-- **Given** the agent identity chooser and sidebar/chat reference surfaces
-- **When** its choices are opened
-- **Then** exactly 31 roles in the five named groups and ten named colors are offered
-- **And** every identity graphic meets 3:1 contrast without semantic/brand-color choices
-
-#### Scenario: BDD-05.3 — Persist identity migration through reseeding
-**Traces to:** User Story 5, Acceptance Scenario 3
-**Category:** Alternate Path
-- **Given** fresh, custom legacy and built-in legacy identities and the approved mapping
-- **When** the upgraded gateway is restarted repeatedly
-- **Then** stored/rendered identities remain in the approved palette/role/figure grammar and fixed-field locks remain unchanged
-
-#### Scenario: BDD-05.4 — Do not invent saved identity after load failure
-**Traces to:** User Story 5, Acceptance Scenario 4
-**Category:** Error Path
-- **Given** an identity lookup fails with last-known or unavailable data
-- **When** the identity surface renders
-- **Then** its cached/unknown status is honest; a failed fetch does not rename the agent removed or claim a newly saved identity
-
-#### Scenario: BDD-06.1 — Preview through the existing global editor
-**Traces to:** User Story 6, Acceptance Scenario 1
-**Category:** Happy Path
-- **Given** a custom agent in the existing unified slide-out
-- **When** its identity choice changes
-- **Then** the live preview matches the shared figure/role/color and current global create/autosave semantics remain
-- **And** there is no new editor, upload/GIF control or app-wide figure setting
-
-#### Scenario: BDD-06.2 — Preserve protected-field editability
-**Traces to:** User Story 6, Acceptance Scenario 2
-**Category:** Alternate Path
-- **Given** a built-in with authoritative editable-field rules
-- **When** its editor opens
-- **Then** fixed identity stays locked while permitted existing configuration retains its exact editability
-
-#### Scenario: BDD-06.3 — Keep save/activation failure visible
-**Traces to:** User Story 6, Acceptance Scenario 3
-**Category:** Error Path
-- **Given** a draft preview whose create/save/activation fails
-- **When** the operation settles
-- **Then** error/save status remains visible and the draft is not reported saved everywhere
-
-### Feature: Truthful feed and immediate command cutover
-
-#### Scenario Outline: BDD-07.1 — Show kind and actual names without avatars
-**Traces to:** User Story 7, Acceptance Scenario 1
-**Category:** Happy Path
-- **Given** an inspected `<kind>` with messages from owner Mia and guest Jim
-- **When** `<render path>` displays it
-- **Then** both actual author names appear without bubble avatars, and the above-feed kind is truthful
-
-| kind | render path |
+**Examples — BDD-05.1:** Robot; Man; Woman; Omnipus (new-agent default), each with Developer/Azure across named surfaces.
+**Examples — BDD-07.1**
+| Kind | Path |
 |---|---|
 | Main chat | Live |
 | Extra chat — Launch notes | Historical virtualized |
 | Task run | Historical plain fallback |
 | Helper | Replay |
 
-#### Scenario Outline: BDD-07.2 — Replace thinking dots inline for the actual responder
-**Traces to:** User Story 7, Acceptance Scenario 2
-**Category:** Happy Path
-- **Given** `<responder>` is the real producer in `<state>` with `<motion setting>`
-- **When** the next reply slot renders
-- **Then** its shared icon/name/phrase appears inline with the locked motion rule, replacing old dots
-- **And** there is no composer status line, duplicate chat logo or owner change
-
-| responder | state | motion setting |
+**Examples — BDD-07.2 (real inputs, never injected phase)**
+| Producer / input | Motion | Expected phase / mount |
 |---|---|---|
-| Mia | Working | Normal |
-| Jim, with Mia still owner | Thinking | Normal |
-| Mia | Waiting | Normal |
-| Jim, with Mia still owner | Thinking | Reduced — zero loops, meaningful text retained |
+| Mia active + executing tool start | Normal | Working / mounted |
+| Jim active model-response, Mia owner | Normal | Thinking / Jim mounted |
+| Mia unresolved question, no active turn | Normal | Waiting / mounted beyond running-message end |
+| Jim active model-response, Mia owner | Reduced | Static Thinking text / Jim mounted, zero loops |
+| Active model/tool plus pending approval | Normal | Waiting overrides; actual pending producer |
+| Question and approval unresolved | Normal | Generic waiting-for-input, no invented reason/producer |
+| Accepted queued work only | Normal | Static Queued; not running/waiting-for-person |
+| Correlated terminal done/stopped/failed/interrupted, no decision | Either | That turn's indicator hidden; retained outcome/error truthful |
+| Disconnected/missing snapshot or ambiguous producer | Either | Static unavailable/reconnecting/Unknown, no guessed loops |
+| Reconnect then valid active/model/tool/decision snapshot | Either | Re-derive matching row, not stale cached phase |
+| Resolved idle initial chat, no active reply | Either | Static Idle/known owner, no duplicate terminal-reply indicator |
 
-#### Scenario: BDD-07.3 — Remove switching and old entry paths
-**Traces to:** User Story 7, Acceptance Scenario 3
-**Category:** Alternate Path
-- **Given** the navigation/command cutover is integrated
-- **When** the person opens the unified command/composer choices
-- **Then** only the session command opens Sessions; removed picker/new-chat/resume alias and mention switching are unavailable
-- **And** model/Auto/attachments/send/Stop stay available; Clear never creates a new chat or deletes saved history
-
-#### Scenario: BDD-07.4 — Preserve errors and selected-session Stop safety
-**Traces to:** User Story 7, Acceptance Scenario 4
-**Category:** Error Path
-- **Given** A has live helper work or a correlated reply error while B is open
-- **When** B's existing recovery/Stop action is activated
-- **Then** its delivery/refusal and scope are truthful, not a control of A
-- **And** merely leaving A did not cancel it; failures do not disappear into decorative status phrases
-
-### Feature: One Sessions modal as overall activity
-
-#### Scenario Outline: BDD-08.1 — Show truthful lifecycle and kind metadata
-**Traces to:** User Story 8, Acceptance Scenario 1
-**Category:** Happy Path
-- **Given** a permitted row in `<status>` and `<kind>`
-- **When** Sessions displays the row
-- **Then** its status chip and quiet kind remain visible with title then muted status/kind/active/tokens metadata
-- **And** main attention uses its confirmed yellow dot; no HB abbreviation appears
-
-| status | kind |
+**Examples — BDD-08.1**
+| Status | Kind |
 |---|---|
 | Working | Main chat |
 | Waiting for answer | Extra chat |
@@ -546,263 +377,102 @@ BDD means behavior-driven development: concrete Given/When/Then examples form th
 | Failed | Task run |
 | Stopped with cause | Scheduled run |
 | Interrupted | Extra chat |
-| Unavailable — no authoritative lifecycle | Permitted inspectable chat |
+| Unavailable/no lifecycle | Permitted inspectable chat |
 
-#### Scenario: BDD-08.2 — Order mains without flattening real children
-**Traces to:** User Story 8, Acceptance Scenario 2
-**Category:** Happy Path
-- **Given** main M, extras E1/E2, helper C under E1 and helper O with unavailable real-parent context
-- **When** the agent group is revealed
-- **Then** M is first/pinned, extras keep recency and C stays beneath E1 even when only C matches a filter/search
-- **And** O follows the founder-approved Q-M5 unavailable-parent treatment, never a top-level helper or invented navigable parent
-
-#### Scenario: BDD-08.3 — Use the shared accessible modal presentation
-**Traces to:** User Story 8, Acceptance Scenario 3
-**Category:** Alternate Path
-- **Given** Sessions at desktop or phone width with keyboard/coarse input
-- **When** a row action is focused
-- **Then** the title/subtitle, shared group/identity/count/row/search/filter presentation and independent actions remain legible and reachable
-- **And** focus is trapped/restored correctly; rename Escape cancels rename before closing the modal; no new handmade tooltip appears
-
-#### Scenario: BDD-08.4 — Preserve protection, refusal and load errors
-**Traces to:** User Story 8, Acceptance Scenario 4
-**Category:** Error Path
-- **Given** a protected main or failed/inaccessible list/destination
-- **When** its delete/open/list action is attempted
-- **Then** protection or failure is visible, hidden sessions do not open, and a workspace outage never presents as Unfiled/empty success
-
-#### Scenario Outline: BDD-09.1 — Apply the decided All / Running / Needs me filter
-**Traces to:** User Story 9, Acceptance Scenario 1
-**Category:** Happy Path
-- **Given** matching title/workspace/agent/date filters and authoritative running, queued, inactive and main-attention fixtures, with no non-main person-action case requiring Q-M6
-- **When** `<filter>` is selected
-- **Then** `<matching set>` is shown, with every matching helper beneath its parent even when that parent does not match
-- **And** all three decided choices are available, pair filters removable, and queued is not guessed to be executing
-
-| filter | matching set |
+**Examples — BDD-09.1**
+| Filter | Matching set |
 |---|---|
-| All | All authorized matches, preserving real parent context |
-| Running | Actual executing matches; queued/inactive excluded as matches; nonmatching parent retained as context for its running helper |
-| Needs me | Confirmed main attention in this fixture; no boolean borrowed by helpers; additional non-main matching waits for Q-M6 |
+| All | Authorized matches with real parent context |
+| Running | Actual executing only; exclude queued/inactive, retain nonmatching parent as context |
+| Needs me | **Mains with confirmed needs_attention only**, no helper/extra even if waiting; absent main value remains unknown |
 
-#### Scenario: BDD-09.2 — Refresh unopened-chat activity while modal stays open
-**Traces to:** User Story 9, Acceptance Scenario 2
-**Category:** Happy Path
-- **Given** Sessions is open in B with a search matching work in unopened A
-- **When** A's authorized status/attention/plan or membership update arrives
-- **Then** the matching metadata/results reconcile without reopening or clearing the search
-- **And** no view action acknowledges A's goals or stops its work
+**Combined live-keyboard cases — BDD-08.3/09.2/09.5 (MAJ-004)**
+A highlighted activation target is the **real entity identity and action kind**, never an array index. Live reorder retains it; if removed/hidden, clear activation, move focus safely to search and announce unavailability. Enter cannot activate a replacement without explicit navigation. Summary is expand-only, not a session; every unfolded helper Open stays independent. All cases run virtualized/plain, same/different list length.
+| Case / scenario | Given | When | Then |
+|---|---|---|---|
+| Reorder / BDD-09.2 | Extra A highlighted; B becomes newer | Deliver update | A remains activation target, no index-substituted B |
+| Enter-after-reorder / BDD-08.3 | Above reordered list, A still highlighted | Press Enter | Open A, not new row at its prior index |
+| Removal / BDD-09.2 | A highlighted | Remove A through live update | Clear target, safe search focus + announcement |
+| Enter-after-removal / BDD-08.3 | A unavailable/target cleared | Press Enter | No other session opens; explicit new navigation required |
+| Fold-hides-helper / BDD-09.5 | Helper H highlighted/visible | Collapse its summary | Safe cleared activation, no sibling/summary substituted as H |
+| Expand / BDD-09.5 | Summary focused | Expand summary | Reveal original helpers, no attach; stable independent targets |
+| Rename-cancel / BDD-08.3 | Inline rename active | Press Escape | Cancel rename/restore action focus, modal remains open |
 
-#### Scenario: BDD-09.3 — Mark partial overview coverage
-**Traces to:** User Story 9, Acceptance Scenario 3
-**Category:** Error Path
-- **Given** a page or source is missing/failed while cached rows exist
-- **When** the overview refresh settles
-- **Then** partial/unknown coverage and Retry are visible, with no complete/all-idle/zero claim from that cache
+### Plans / local activity / saved install
+| Scenario | Category | Traces to: | Given | When | Then / And |
+|---|---|---|---|---|---|
+| BDD-10.1 Starting-chat origin | Happy Path | US-10.1 | P started in A, other plan Tasks-only | Display A activity | P pill/parent/modal row refers to A; no B or Tasks-only fake origin. |
+| BDD-10.2 Plan-state outline | Alternate Path | US-10.2 | Reported state below | Update pill/row | Actual state/phase/progress, not optimistic accepted execution. |
+| BDD-10.3 Real start-target outline | Happy Path | US-10.3 | Authorized successful/idempotent result below | Activate Open | Actual Tasks/Graph or run session, not assignee main/duplicate execution. |
+| BDD-10.4 Unavailable target | Error Path | US-10.4 | Origin/handle missing or target forbidden/deleted | Use result/pill | Explicit unavailable/refusal/recovery; no prose URL/fake parent/foreground substitute. |
+| BDD-11.1 B local/A discoverable | Happy Path | US-11.1 | Distinct A/B work, A previously open; A shell still running after turn | Open B panel | B-only work; A in Sessions with **N background commands running**/origin Activity Open; no aggregate panel/elsewhere badge/new view. |
+| BDD-11.2 Distinct work/control | Happy Path | US-11.2 | MAIN task also child, scheduler independent run, queued/waiting helpers, shell | Reconcile open-session activity | Count real items once by kind/state/source; queued/waiting not executing; no fake parent/tree-Stop grant. |
+| BDD-11.3 Unattributed/source failure | Error Path | US-11.3 | Task/run/plan source failed or verdict no session relation | Render panel | Explicit partial/unknown/Retry; no unrelated/localized/zero claim. |
+| BDD-12.1 Saved continuation | Happy Path | US-12.1 | Supported ordinary/extra/Unfiled/child/heartbeat install | Apply upgrade | Legitimate history continuable; heartbeat under validated main; repeat loses/duplicates zero known content. |
+| BDD-12.2 Reach Admin replacement | Happy Path | US-12.2 | Joint validated default Admin main/no membership | Select Admin row | Opens/supports real send before old entry removal; no other-workspace main. |
+| BDD-12.3 Import failure | Error Path | US-12.3 | Known saved source/import or destination fails | Open chat | Retryable failure, not empty success, legacy fallback or delivery claim. |
 
-#### Scenario: BDD-09.4 — Reach a child-only match in a large list
-**Traces to:** User Story 9, Acceptance Scenario 4
-**Category:** Edge Case
-- **Given** more than 20 visible rows, multiple pages and a title match only in a child
-- **When** that title is searched
-- **Then** its real ancestors reveal the child and keyboard selection reaches it with truthful counts
-- **And** viewport-bounded rendering or the supported plain fallback keeps every result reachable
-
-#### Scenario: BDD-09.5 — Expand repeated helpers without flattening or merging jobs
-**Traces to:** User Story 9, Acceptance Scenario 5
-**Category:** Happy Path
-- **Given** nine consecutive identical helper titles/kinds with distinct identities/statuses/targets under P, and the same title under another parent Q
-- **When** the folded **9 similar helper runs** row under P is expanded
-- **Then** all nine original helpers and their status/Open actions are revealed beneath P, never top-level
-- **And** Q's helpers stay in their own parent group; filtered original counts remain truthful and the summary is not a synthetic chat/session or merged execution
-
-### Feature: Plan links and session-scoped activity
-
-#### Scenario: BDD-10.1 — Associate a plan with its real starting chat
-**Traces to:** User Story 10, Acceptance Scenario 1
-**Category:** Happy Path
-- **Given** P was started in A and another plan was created only in Tasks
-- **When** A's activity is shown
-- **Then** P's pill/parent row and modal starting-row association refer to A
-- **And** neither B nor a fabricated chat origin is assigned to the Tasks-only plan
-
-#### Scenario Outline: BDD-10.2 — Keep plan state truthful
-**Traces to:** User Story 10, Acceptance Scenario 2
-**Category:** Alternate Path
-- **Given** a plan's reported `<state>`
-- **When** the pill/row updates
-- **Then** `<meaning>` appears without inventing execution progress
-
-| state | meaning |
+**Examples — BDD-10.2**
+| State | Meaning |
 |---|---|
 | Approved | Waiting to start, not running |
-| Running | Real reported phase/pause/progress |
+| Running | Real phase/pause/progress |
 | Running but paused | Pause reason, not uninterrupted execution |
-| Done/failed/stopped | Real terminal result; no continuing-running claim |
+| Done/failed/stopped | Real terminal result, no continuing-running claim |
 
-#### Scenario Outline: BDD-10.3 — Follow validated successful start results
-**Traces to:** User Story 10, Acceptance Scenario 3
-**Category:** Happy Path
-- **Given** an authorized successful/idempotent `<start>` result retained `<display>`
-- **When** its Open control is activated
-- **Then** `<target>` opens through the existing workflow without duplicate execution
-
-| start | display | target |
+**Examples — BDD-10.3**
+| Start | Display | Target |
 |---|---|---|
-| Plan start | Live | Actual plan in its workspace Tasks/Graph |
-| Plan start | Replayed after reload | Same actual plan |
-| Task start | Live | Returned actual task-run session, not assignee main |
-| Task start | Replayed after reload | Same real run session |
+| Plan | Live | Actual plan/workspace Tasks/Graph |
+| Plan | Replayed after reload | Same actual plan |
+| Task | Live | Actual returned run session, not main |
+| Task | Replayed after reload | Same real run |
 
-#### Scenario: BDD-10.4 — Refuse invented or unavailable start targets
-**Traces to:** User Story 10, Acceptance Scenario 4
-**Category:** Error Path
-- **Given** missing origin/address metadata or a forbidden/deleted plan/run target
-- **When** the result/pill is used
-- **Then** unavailable/refusal/recovery is visible; no prose-derived link, foreground substitute or fake parent appears
+### Boundary cases — EC-01–EC-12
+| Scenario | Category | Traces to: | Given | When | Then / And |
+|---|---|---|---|---|---|
+| BDD-E01 Duplicate names | Edge Case | US-1.1 / EC-01 | Two Mia identities/pairs, mains/extras | Select Operations identity's row | Validated pair only; no name/recency substitution. |
+| BDD-E02 Pending-delivery decline | Edge Case | US-3.1 / EC-02 | Unconfirmed first send/no real ID | Decline abandonment | Original delivery/message retained; placeholder not main/saved pointer. |
+| BDD-E03 Rapid losing failure/success | Edge Case | US-2.4 / EC-03 | B committed, older A pending; A→B or A→B→A | Settle first A late failure/success | Winning tuple/pointers unchanged, losing A never acknowledges; later winning A has its own observed bound. |
+| BDD-E04 Delayed bounded acknowledgement | Edge Case | US-4.2 / EC-04 | Shown committed main captured goal1; goal2 later not shown | Complete/retry acknowledgement | Only original bound seen for everyone; no widened delayed/retry capture, decisions/goal2 stay unseen. |
+| BDD-E05 Palette-boundary outline | Edge Case | US-5.3 / EC-05 | Stored condition below | Apply one-time mapping | Expected color persists/repeat-stable, not per-screen remapping. |
+| BDD-E06 Extreme size/motion | Edge Case | US-5.1 / EC-06 | Every figure/named size, 20 px root, zoom/forced colors/reduced motion | Render surfaces | Badge/figure/text/focus remain; loops stop, no plain-role swap. Dimmest Thinking ink on both backgrounds stays ≥3:1. |
+| BDD-E07 Guest plain replay | Edge Case | US-7.1 / EC-07 | Saved task/helper/Jim guest, no virtualizer | Replay plain path | Jim name-only, true kind, owner unchanged. |
+| BDD-E08 Filtered repeated helpers | Edge Case | US-9.4 / EC-08 | 21 rows, nine identical siblings P, same-title Q, parent nonmatch | Apply helper-only title/status filter | Each matching group stays under real parent; filtered original counts/targets intact, no cross-parent merge; unavailable parent placeholder; virtual/plain. |
+| BDD-E09 Unopened recovery | Edge Case | US-9.3 / EC-09 | Unopened work/missing page/lifecycle/token values | Reconnect Sessions | Reconcile authorized metadata, explicit unknown/partial; no done/zero/goal acknowledgement from missing data. |
+| BDD-E10 Scheduler/task-child dedupe | Edge Case | US-11.2 / EC-10 | Starter/assignee/child same run, scheduler-only second run | Display activity | Each actual run once per legitimate view; no duplicate helper/control grant. |
+| BDD-E11 Tasks-only/idempotent plan | Edge Case | US-10.1 / EC-11 | No-origin plan + idempotent retry, deleted target variant | Reconcile plan metadata | No fake origin/duplicate pill; deleted target unavailable. |
+| BDD-E12 Interrupted conversion retry | Edge Case | US-12.1 / EC-12 | Known supported data/partial previous upgrade | Resume cutover | Actual continuation or visible failure; repeat never erases/duplicates known content. No rollback case added (S Q-G3). |
 
-#### Scenario: BDD-11.1 — Keep B's panel local and A reachable in Sessions
-**Traces to:** User Story 11, Acceptance Scenario 1
-**Category:** Happy Path
-- **Given** A and B have distinct ongoing work with A previously open
-- **When** B's Activity panel is opened
-- **Then** only B-associated work appears there, while A remains findable in the existing Sessions modal
-- **And** no aggregate side panel, elsewhere badge or new dashboard replaces that modal
-
-#### Scenario: BDD-11.2 — Deduplicate work and preserve control ownership
-**Traces to:** User Story 11, Acceptance Scenario 2
-**Category:** Happy Path
-- **Given** one MAIN task run also appears as a real child, a scheduler-only independent run, queued/waiting helpers and a shell
-- **When** their open-session activity reconciles
-- **Then** each distinct actual item counts once under the correct kind/state/source, with queued/waiting excluded from executing counts
-- **And** monitoring an independent run does not add tree-Stop authority or a fake parent
-
-#### Scenario: BDD-11.3 — Do not localize unattributed or unavailable work
-**Traces to:** User Story 11, Acceptance Scenario 3
-**Category:** Error Path
-- **Given** a task/run/plan source fails or a global verdict lacks a session association
-- **When** the panel renders
-- **Then** coverage is explicitly partial/unknown and unrelated work is not attributed to the open chat; Retry is offered for recoverable sources
-
-### Feature: Existing-installation cutover
-
-#### Scenario: BDD-12.1 — Continue real saved chat and heartbeat histories
-**Traces to:** User Story 12, Acceptance Scenario 1
-**Category:** Happy Path
-- **Given** a supported saved install contains ordinary, extra, Unfiled, child and heartbeat conversations
-- **When** the backend-owned upgrade is applied
-- **Then** legitimate conversations remain reachable and continuable, with heartbeat history under its validated main
-- **And** repeated upgrade preserves identity/content without duplicate histories
-
-#### Scenario: BDD-12.2 — Reach Admin before removing the old entry
-**Traces to:** User Story 12, Acceptance Scenario 2
-**Category:** Happy Path
-- **Given** the joint candidate publishes Admin's default-workspace main without team membership
-- **When** Admin's row is selected
-- **Then** it opens and supports a legitimate message before the obsolete Assets-only entry is removed
-- **And** no other-workspace Admin main is invented
-
-#### Scenario: BDD-12.3 — Expose saved-history import failure
-**Traces to:** User Story 12, Acceptance Scenario 3
-**Category:** Error Path
-- **Given** import or destination resolution failed for known saved history
-- **When** the person opens that chat
-- **Then** retryable failure remains visible rather than empty-success history, legacy owner/type guess or delivered-feature claim
-
-### Feature: Explicit boundary cases
-
-#### Scenario: BDD-E01 — Differentiate duplicate names across workspaces
-**Traces to:** User Story 1, Acceptance Scenario 1; EC-01
-**Category:** Edge Case
-- **Given** two different agent identities share the name Mia and each pair has a main plus extra
-- **When** the Operations row for one identity is selected
-- **Then** its validated pair alone opens; display name/recency never substitutes identity
-
-#### Scenario: BDD-E02 — Preserve a pending first send without saving a fake main
-**Traces to:** User Story 3, Acceptance Scenario 1; EC-02
-**Category:** Edge Case
-- **Given** an extra's first send is unconfirmed with no real saved chat ID
-- **When** New chat abandonment is declined
-- **Then** original message/delivery recovery remain and no pending placeholder is recorded as a main or real remembered destination
-
-#### Scenario: BDD-E03 — Win a rapid selection race without split state
-**Traces to:** User Story 2, Acceptance Scenario 4; EC-03
-**Category:** Edge Case
-- **Given** A's older resolution is pending while B has committed
-- **When** A fails or completes late
-- **Then** B's displayed/sending workspace/session/owner remain consistent and B's pointer is not overwritten
-
-#### Scenario: BDD-E04 — Retain a goal beyond the observed open bound
-**Traces to:** User Story 4, Acceptance Scenario 2; EC-04
-**Category:** Edge Case
-- **Given** an explicit main open captured one goal while another saved outcome raced beyond its bound
-- **When** acknowledgement completes
-- **Then** only the captured goal is seen for all viewers; the newer goal and unresolved decisions remain attention-worthy
-
-#### Scenario Outline: BDD-E05 — Apply color boundaries without render-time drift
-**Traces to:** User Story 5, Acceptance Scenario 3; EC-05
-**Category:** Edge Case
-- **Given** stored `<color condition>` in the supported migration source
-- **When** the one-time identity mapping is applied
-- **Then** `<mapping>` is persisted, stable on repeat and not recomputed by each rendered screen
-
-| color condition | mapping |
+**Examples — BDD-E05**
+| Condition | Mapping |
 |---|---|
 | Missing/invalid six-digit hex | Grey |
 | Saturation below 0.25 | Grey |
-| Saturation equal to or above 0.25 | Closest non-Grey circular hue |
-| Exact equal hue distances | First tied palette entry in published order |
-| Hue across 0/360 boundary | Shorter circular distance, not linear difference |
+| Saturation equal/above 0.25 | Closest non-Grey circular hue |
+| Exact hue-distance tie | First tied published entry |
+| Hue across 0/360 | Shorter circular, not linear distance |
 
-#### Scenario: BDD-E06 — Keep role badges and access at size/motion extremes
-**Traces to:** User Story 5, Acceptance Scenario 1; EC-06
-**Category:** Edge Case
-- **Given** every figure at 18/26/40/48 px, 20 px root/zoom/forced colors and reduced motion
-- **When** identity/status surfaces render
-- **Then** figure and badge remain present, text/focus/access remain meaningful and loops stop without substituting plain role glyphs
-
-#### Scenario: BDD-E07 — Preserve guest identity through plain replay
-**Traces to:** User Story 7, Acceptance Scenario 1; EC-07
-**Category:** Edge Case
-- **Given** a saved helper/task feed with actual guest Jim and no virtualizer support
-- **When** replay renders the plain path
-- **Then** Jim's name-only reply and truthful inspected kind remain; owner does not change
-
-#### Scenario: BDD-E08 — Keep filtered repeated helpers inside parent context
-**Traces to:** User Story 9, Acceptance Scenario 4; EC-08
-**Category:** Edge Case
-- **Given** 21 visible rows, nine consecutive identical helper runs under P and another same-title group under Q, including a helper whose parent does not match the current filter
-- **When** a helper-only title/status filter is applied
-- **Then** matching helpers and any repeated-helper summary remain inside their own parent context, never top-level or merged across parents
-- **And** the summary counts original matching helpers, expands to their individual identities/status/Open targets and follows the same rule in virtualized/plain paths; unavailable real parents follow Q-M5
-
-#### Scenario: BDD-E09 — Recover unopened-workspace metadata without false coverage
-**Traces to:** User Story 9, Acceptance Scenario 3; EC-09
-**Category:** Edge Case
-- **Given** an unopened workspace has real work and a later page is unavailable, including rows with no lifecycle or token metadata
-- **When** Sessions reconnects
-- **Then** authorized metadata reconciles with explicit unknown/partial state; missing values do not become done/zero and background recovery acknowledges no goal
-
-#### Scenario: BDD-E10 — Count scheduler and task-child identity once
-**Traces to:** User Story 11, Acceptance Scenario 2; EC-10
-**Category:** Edge Case
-- **Given** starter/assignee/child projections refer to the same run and another run was scheduler-only
-- **When** activity is displayed
-- **Then** each real run is represented once per legitimate viewing session without duplicate helper count or inferred controller authority
-
-#### Scenario: BDD-E11 — Keep a Tasks-only/idempotent plan origin honest
-**Traces to:** User Story 10, Acceptance Scenario 1; EC-11
-**Category:** Edge Case
-- **Given** a Tasks-only plan has no chat origin and another start is an idempotent retry
-- **When** plan metadata reconciles
-- **Then** no origin is invented for the first and no duplicate pill/work item is created for the second; deleted targets remain unavailable
-
-#### Scenario: BDD-E12 — Repeat cutover without empty-history success
-**Traces to:** User Story 12, Acceptance Scenario 1; EC-12
-**Category:** Edge Case
-- **Given** known supported saved history with an interrupted or partially failed previous upgrade
-- **When** backend cutover resumes
-- **Then** legitimate saved content/binding remains continuable or its failure is explicit; repeat work never duplicates or erases known history
+### Combined coverage and meaningful recovery cases (existing IDs)
+Each row below is an independent Given/When/Then case, not a compound When or new scenario ID. Error/edge categories remain error/edge. Negative outcomes followed by actual supported recovery satisfy S Q-G4, not the former literal Happy Path-label gate.
+| Scenario(s) | Given | When | Then |
+|---|---|---|---|
+| BDD-09.2/09.3/09.4 | `s1,s2,s3,s4`, first offset page `s1,s2`; s4 becomes active/moves ahead | Fetch second offset page | Success/end cursor returning `s2,s3` cannot certify complete/zero-running; reconcile stable cut until s4 appears. |
+| BDD-01.4 | Roster/member source recovered; error/stale cache visible | Retry expansion | Real eligible roster, notice clears only on success, no invented target. |
+| BDD-02.3 | Original B intent still current, valid after failed attach | Retry B entry | Valid coherent B shown/send enabled; acknowledge only shown main's observed bound. |
+| BDD-02.4/BDD-E03 | Losing A suppressed; B still valid | Explicitly select A again | New winning intent attaches/commits A; no old callback/pointer/bound reused. |
+| BDD-03.4 | Authorized history restored/connection live, original intent current | Retry selected history | Actual original chat opens once; no previous false success or unrelated target. |
+| BDD-04.4 | Main projection source recovered | Retry snapshot | Actual true/false cue, unknown notice clears; no automatic metadata-read acknowledgement. |
+| BDD-04.3 | Reduced-motion mode left static cues | Disable reduced motion | Locked motion returns, meaningful text/distinct count unchanged. |
+| BDD-05.4 | Agent lookup succeeds after failure | Retry identity | Authoritative same agent displayed, not a fabricated saved/deleted identity. |
+| BDD-06.3 | Failure resolved, existing create/autosave path available | Retry supported save | Only authoritative saved/activated receipt updates global identity, no preview-as-save shortcut. |
+| BDD-07.4 | B connection/selected control restored | Retry B control/recovery action | Supported B outcome/control only; A remains outside its scope, correlated error/reply safe. |
+| BDD-08.4 | List/ordinary destination recovered; main still protected | Retry supported non-destructive load/open | Authorized intended row opens; protected delete still refused, no hidden metadata leak. |
+| BDD-09.3/BDD-E09 | Failed page/coverage reconciled to stable authorized cut | Retry overview | Missing running work appears; complete only with proof, no false quiet interval. |
+| BDD-09.4/BDD-E08 | Highlighted helper hidden/removed during live change | Navigate explicitly to another visible target | Intended new identity activatable; prior Enter opened no substituted session. |
+| BDD-10.4 | Missing published handle/authorized target now available | Retry actual Open | Real plan/run opens, not guessed URL; permanently forbidden/deleted stays refused. |
+| BDD-11.3 | Source restored or verdict properly attributed | Retry activity load | Real local counts/state appear, no foreign/global localization; bad attribution stays unavailable. |
+| BDD-12.3/BDD-E12 | Supported importer/source repaired, known histories retained | Retry upgrade/open | Actual known chat content/binding/continuation, no fake empty-success or duplicate history. |
 
 ## Test-Driven Development Plan
 
