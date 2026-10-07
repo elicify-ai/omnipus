@@ -9,6 +9,20 @@
   ],
   "entries": [
     {
+      "source": "src/components/ui/filter-menu.tsx",
+      "classification": "composite",
+      "exports": ["FilterMenuOption", "FilterMenuProps", "FilterMenu"],
+      "publicExports": ["FilterMenu"],
+      "publicTypes": ["FilterMenuOption", "FilterMenuProps"]
+    },
+    {
+      "source": "src/components/ui/view-switch.tsx",
+      "classification": "composite",
+      "exports": ["ViewSwitchOption", "ViewSwitchProps", "ViewSwitch"],
+      "publicExports": ["ViewSwitch"],
+      "publicTypes": ["ViewSwitchOption", "ViewSwitchProps"]
+    },
+    {
       "source": "src/components/ui/AutoSaveIndicator.tsx",
       "classification": "domain",
       "exports": [

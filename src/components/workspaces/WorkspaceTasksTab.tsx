@@ -1,17 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Info, Plus, SquaresFour, ListBullets, Graph as GraphIcon, CaretDown, UsersThree, Tag } from '@phosphor-icons/react'
-import type { Icon } from '@phosphor-icons/react'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuCheckboxItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+import { Info, Plus, SquaresFour, ListBullets, Graph as GraphIcon, UsersThree, Tag } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
-import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { FilterMenu } from '@/components/ui/filter-menu'
+import { ViewSwitch, type ViewSwitchOption } from '@/components/ui/view-switch'
+import { Tooltip } from '@/components/ui/tooltip'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import { CreatePlanSlideOver } from './CreatePlanSlideOver'
@@ -21,46 +14,28 @@ import { ListView } from './ListView'
 import { WorkspaceGraphTab } from './WorkspaceGraphTab'
 import { TaskDetailSlideOver } from './TaskDetailSlideOver'
 import { CreateTaskSlideOver } from './CreateTaskSlideOver'
-import {
-  fetchTasks,
-  fetchPlans,
-  fetchAgents,
-  updateTask,
-  deletePlan,
-  isApiError,
-  taskMoveErrorMessage,
-  tasksQueryKeys,
-  plansQueryKeys,
-  workspacesQueryKeys,
-} from '@/lib/api'
-import type { Agent, Plan, Task } from '@/lib/api'
+import { useTasksBoardLayout } from './useTasksBoardLayout'
+import { fetchTasks, fetchPlans, fetchAgents, updateTask, deletePlan, isApiError, taskMoveErrorMessage, tasksQueryKeys, plansQueryKeys, workspacesQueryKeys } from '@/lib/api'
+import type { Plan, Task } from '@/lib/api'
 import { filterByTags, distinctTags, PLAN_FILTER_UNTAGGED } from '@/lib/planFilter'
 import { filterTasks } from '@/lib/taskFilters'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { cn, initialOf } from '@/lib/utils'
 
-interface WorkspaceTasksTabProps {
-  workspaceId: string
-}
-
+interface WorkspaceTasksTabProps { workspaceId: string }
 type TasksView = 'board' | 'list' | 'graph'
 
-/**
- * The combined "Tasks" screen (ADR-051 D1/D2/D4/D6) — Board, List, and Graph
- * collapse into ONE screen behind a segmented view switcher, over a single
- * workspace-wide, tasks-only board. A plans-as-filter band sits above it:
- * clicking a plan tile filters the task set below to that plan (it does not
- * navigate/drill — the board stays one flat kanban). An Owner filter ANDs
- * with the plan filter. Both combine with the existing tag filter to produce
- * the one filtered task set every view (Board/List) renders; Graph reads the
- * shared `activePlanId` store field directly (see WorkspaceGraphTab) so it
- * stays in scope-sync with the band without needing its own copy of the
- * filtered list.
+const VIEW_OPTIONS: readonly ViewSwitchOption<TasksView>[] = [
+  { value: 'board', label: 'Board', icon: <SquaresFour size={15} />, testId: 'tasks-view-board' },
+  { value: 'list', label: 'List', icon: <ListBullets size={15} />, testId: 'tasks-view-list' },
+  { value: 'graph', label: 'Graph', icon: <GraphIcon size={15} />, testId: 'tasks-view-graph' },
+]
+
+/** Combined Tasks screen: one plan/agent/tag scope shared by Board, List and Graph.
+ * Board stays the user's choice while a too-small content frame temporarily shows List.
  */
 export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
-  const { activeTags, setActiveTags, activePlanId, setActivePlanId } =
-    useWorkspacesStore()
+  const { activeTags, setActiveTags, activePlanId, setActivePlanId } = useWorkspacesStore()
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
   const [view, setView] = useState<TasksView>('board')
@@ -68,35 +43,19 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [createTaskOpen, setCreateTaskOpen] = useState(false)
   const [planSlideOver, setPlanSlideOver] = useState<{ open: boolean; plan: Plan | null }>({ open: false, plan: null })
+  const surfaceRef = useRef<HTMLDivElement>(null)
+  const frameRef = useRef<HTMLDivElement>(null)
+  const { boardFits, requestBoardWidth } = useTasksBoardLayout(surfaceRef, frameRef, view === 'board', workspaceId)
 
-  // Kanban drag-to-column status change.
-  //
-  // UAT round-2 N1: this reuses the same message mapper BoardView's own
-  // drag-end live-region announcement uses (`taskMoveErrorMessage`) so a
-  // sighted user's toast and a screen-reader user's announcement never say
-  // two different things about the same rejected drop. See
-  // `taskMoveErrorMessage`'s doc comment (src/lib/api.ts) for exactly which
-  // 409 causes this distinguishes and why the generic ApiError 409 default
-  // ("refresh and try again") is actively wrong for the plan-gate case.
   const moveMutation = useMutation({
-    mutationFn: ({ task, status }: { task: Task; status: Task['status'] }) =>
-      updateTask(task.id, { status }),
+    mutationFn: ({ task, status }: { task: Task; status: Task['status'] }) => updateTask(task.id, { status }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
       queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
     },
-    onError: (err) => {
-      addToast({ message: taskMoveErrorMessage(err, plans), variant: 'error' })
-    },
+    // Same message mapper as Board's confirmed drag-outcome live region.
+    onError: (err) => addToast({ message: taskMoveErrorMessage(err, plans), variant: 'error' }),
   })
-
-  // Plan-tile ⋯ menu's Clear (delete) — the only plan mutation this screen
-  // still owns. Execute/Stop/Play (the old Approve/Stop pair this block used
-  // to drive) moved entirely into the self-contained `PlanActionButton`
-  // (ADR-052 §6.8) — this tab no longer wires onApprovePlan/onStopPlan into
-  // PlansFilterBand (Gate-2 finding #4: that wiring, and the mutations behind
-  // it, were dead code once PlanActionButton took over). Edit reuses the same
-  // CreatePlanSlideOver as "New plan", opened with `plan` set.
   const clearPlanMutation = useMutation({
     mutationFn: (planId: string) => deletePlan(planId),
     onSuccess: () => {
@@ -105,559 +64,137 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
       addToast({ message: 'Plan cleared', variant: 'success' })
     },
     onError: (err) => {
-      // The backend rejects deleting a `running` plan (400) — surface that
-      // real reason rather than a generic message.
-      const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to clear plan'
-      addToast({ message: msg, variant: 'error' })
+      const message = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to clear plan'
+      addToast({ message, variant: 'error' })
     },
   })
 
-  // Operator UX fix: selecting a plan tile (the tile-select action — NOT the
-  // pencil/⋯/▶/■ controls, which are click-isolated siblings of the select
-  // button in PlansFilterBand and never call onSelectPlan at all, see
-  // PlansFilterBand.test.tsx) also switches the view below to Graph, so the
-  // operator lands directly on the plan's dependency graph instead of just a
-  // re-scoped Board. DESELECTING a plan — re-clicking the already-active
-  // tile, or the "All tasks" tile, both of which call onSelectPlan(null) —
-  // must NOT force a view change; it only clears the filter. Manual view
-  // switching keeps working afterwards (picking a different plan tile
-  // switches to Graph again, by design — see the ticket).
-  const handleSelectPlan = useCallback(
-    (planId: string | null) => {
-      setActivePlanId(planId)
-      if (planId !== null) setView('graph')
-    },
-    [setActivePlanId],
-  )
-
+  // Selecting a real plan also opens Graph. Clearing the scope never forces a view change.
+  // Edit/Clear/Execute controls remain isolated from this selection callback.
+  const handleSelectPlan = useCallback((planId: string | null) => {
+    setActivePlanId(planId)
+    if (planId !== null) setView('graph')
+  }, [setActivePlanId])
+  const handleSelectView = (next: TasksView) => {
+    if (next === 'board' && view === 'board') requestBoardWidth()
+    setView(next)
+  }
   const pendingAction: { planId: string; action: 'clear' } | null =
     clearPlanMutation.isPending && clearPlanMutation.variables
-      ? { planId: clearPlanMutation.variables, action: 'clear' }
-      : null
+      ? { planId: clearPlanMutation.variables, action: 'clear' } : null
 
   const { data: plans = [], isError: plansError } = useQuery({
-    queryKey: plansQueryKeys.list(workspaceId),
-    queryFn: () => fetchPlans(workspaceId),
-    // Polled (not WS-driven, out of this wave's scope) so a paused/blocked
-    // owner-disabled state (FR-086) still surfaces without a page reload.
-    refetchInterval: 15_000,
-    staleTime: 10_000,
-    enabled: !!workspaceId,
+    queryKey: plansQueryKeys.list(workspaceId), queryFn: () => fetchPlans(workspaceId),
+    refetchInterval: 15_000, staleTime: 10_000, enabled: !!workspaceId,
   })
-
-  const {
-    data: tasks = [],
-    isLoading: tasksLoading,
-    isError: tasksError,
-    refetch: refetchTasks,
-  } = useQuery({
+  const { data: tasks = [], isLoading: tasksLoading, isError: tasksError, refetch: refetchTasks } = useQuery({
     queryKey: tasksQueryKeys.list({ workspace_id: workspaceId, surface: 'user' }),
     queryFn: () => fetchTasks({ workspace_id: workspaceId, surface: 'user' }),
-    refetchInterval: 15_000,
-    staleTime: 10_000,
-    enabled: !!workspaceId,
+    refetchInterval: 15_000, staleTime: 10_000, enabled: !!workspaceId,
   })
-
   const { data: agents = [], isError: agentsError } = useQuery({
-    queryKey: ['agents'],
-    queryFn: fetchAgents,
-    staleTime: 60_000,
+    queryKey: ['agents'], queryFn: fetchAgents, staleTime: 60_000,
   })
+  const selectedPlan = useMemo(() => activePlanId != null ? plans.find((p) => p.id === activePlanId) ?? null : null, [activePlanId, plans])
+  const ownerAgent = useMemo(() => ownerAgentId != null ? agents.find((a) => a.id === ownerAgentId) ?? null : null, [ownerAgentId, agents])
 
-  const selectedPlan = useMemo(
-    () => (activePlanId != null ? (plans.find((p) => p.id === activePlanId) ?? null) : null),
-    [activePlanId, plans],
-  )
-  const ownerAgent = useMemo(
-    () => (ownerAgentId != null ? (agents.find((a) => a.id === ownerAgentId) ?? null) : null),
-    [ownerAgentId, agents],
-  )
-
-  // Defensively reset a stale filter once its source list has actually
-  // loaded — e.g. right after a plan tile's ⋯ → Clear deletes the plan the
-  // board is currently scoped to, `activePlanId` still points at it for one
-  // render. An empty `plans`/`agents` array before the first fetch resolves
-  // must never be read as "this id doesn't exist", hence the `.length` guard.
+  // Reset a stale source id only after a non-empty source list has loaded.
   useEffect(() => {
-    if (activePlanId && plans.length && !plans.some((p) => p.id === activePlanId)) {
-      setActivePlanId(null)
-    }
+    if (activePlanId && plans.length && !plans.some((p) => p.id === activePlanId)) setActivePlanId(null)
   }, [activePlanId, plans, setActivePlanId])
   useEffect(() => {
-    if (ownerAgentId && agents.length && !agents.some((a) => a.id === ownerAgentId)) {
-      setOwnerAgentId(null)
-    }
+    if (ownerAgentId && agents.length && !agents.some((a) => a.id === ownerAgentId)) setOwnerAgentId(null)
   }, [ownerAgentId, agents])
 
-  // Agent/Tag are BOARD-only affordances (the List owns per-column filtering;
-  // the Graph honors the plan scope alone). Reset them when leaving Board so a
-  // filter can't survive hidden-and-unapplied and then silently reappear on the
-  // way back — the "invisible retained state" the architecture review flagged.
-  // Switch-back to Board is a clean slate, matching "agent/tag are ephemeral
-  // Board affordances; the plan band is the durable cross-view scope."
-  useEffect(() => {
-    if (view !== 'board') {
-      setOwnerAgentId(null)
-      if (activeTags.length > 0) setActiveTags([])
-    }
-     
-  }, [view])
-
-  // Plan + owner + tag filters AND together (ADR-051 D2/D6) — the one
-  // filtered task set every view below renders (Graph excepted; it scopes
-  // itself off the shared activePlanId store field, see the header comment).
-  // Only scope by plan once `activePlanId` actually resolves against the
-  // loaded `plans` list (`selectedPlan`) — mirrors the Graph tab's own guard
-  // (WorkspaceGraphTab passes `planId={activePlan ? activePlanId : null}`),
-  // so a stale id (e.g. mid-Clear, or before `plans` has loaded) never blanks
-  // the board to zero matches with no active tile and no signal why.
-  const filteredTasks = useMemo(() => {
-    const tagFiltered = filterByTags(tasks, activeTags)
-    return filterTasks(tagFiltered, { planId: selectedPlan ? activePlanId : null, ownerAgentId })
-  }, [tasks, activeTags, activePlanId, selectedPlan, ownerAgentId])
-
-  // The List view owns its own per-column (Excel-style) Agent/Tag/Status/Pri
-  // filtering, so it receives the PLAN-scoped set only — not the toolbar's
-  // Agent/Tags narrowing (which stays a Board affordance). This keeps the
-  // column filter dropdowns showing the full value set in the current plan
-  // scope rather than a doubly-filtered subset.
-  const listTasks = useMemo(
-    () => filterTasks(tasks, { planId: selectedPlan ? activePlanId : null, ownerAgentId: null }),
-    [tasks, activePlanId, selectedPlan],
-  )
-
-  // Drives BoardView's empty-state copy ("no tasks match" vs "no tasks yet").
+  // Only apply a plan id that resolves. Agent/Tags remain visible and effective across views.
+  const filteredTasks = useMemo(() => filterTasks(filterByTags(tasks, activeTags), {
+    planId: selectedPlan ? activePlanId : null, ownerAgentId,
+  }), [tasks, activeTags, activePlanId, selectedPlan, ownerAgentId])
   const hasActiveFilter = selectedPlan != null || ownerAgentId != null || activeTags.length > 0
-
-  const selectedTask =
-    selectedTaskId != null ? (tasks.find((t) => t.id === selectedTaskId) ?? null) : null
-
+  const selectedTask = selectedTaskId != null ? tasks.find((t) => t.id === selectedTaskId) ?? null : null
   const heading = selectedPlan ? `${selectedPlan.title} — tasks` : 'Team Task Backlog'
+  const effectiveView = view === 'board' && !boardFits ? 'list' : view
+  const tagOptions = useMemo(() => [
+    { value: PLAN_FILTER_UNTAGGED, label: 'Untagged' },
+    ...distinctTags(tasks).map((tag) => ({ value: tag, label: tag })),
+  ], [tasks])
 
   return (
-    <div className="@container relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-      {/* ── Plans section ── bold heading + a minimalist "+ New Plan" text
-          link, over a thin separator. (Matches the operator mockup: section
-          labels + hairline separators + link-style create actions, generous
-          spacing.) */}
-      <div className="flex items-center justify-between px-[var(--space-4)] pt-[var(--space-3)] pb-[var(--space-2-5)] flex-shrink-0">
-        <h2 className="font-headline text-base font-bold text-[var(--color-secondary)]">Plans</h2>
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() => setPlanSlideOver({ open: true, plan: null })}
-          className="h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-accent)] transition-colors"
-        >
-          <Plus size={14} />
-          New Plan
-        </Button>
-      </div>
-      <div className="mx-[var(--space-4)] border-t border-[var(--color-border)]/60 flex-shrink-0" aria-hidden="true" />
-
-      {/* Plans-as-filter band (ADR-051 D2/D3) — overview + single-select
-          filter, not navigation. Its own dashed "New plan" tile is hidden;
-          the section header above owns that action. */}
-      <PlansFilterBand
-        plans={plans}
-        tasks={tasks}
-        agents={agents}
-        selectedPlanId={activePlanId}
-        onSelectPlan={handleSelectPlan}
-        onNewPlan={() => setPlanSlideOver({ open: true, plan: null })}
+    <div ref={surfaceRef} className="@container relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--color-surface-2)]">
+      <PlansFilterBand plans={plans} tasks={tasks} agents={agents} selectedPlanId={activePlanId}
+        onSelectPlan={handleSelectPlan} onNewPlan={() => setPlanSlideOver({ open: true, plan: null })}
         onEditPlan={(plan) => setPlanSlideOver({ open: true, plan })}
-        onClearPlan={(plan) => clearPlanMutation.mutate(plan.id)}
-        pendingAction={pendingAction}
-        showNewPlanTile={false}
-      />
+        onClearPlan={(plan) => clearPlanMutation.mutate(plan.id)} pendingAction={pendingAction} showNewPlanTile={false} />
 
-      {/* ── Team Task Backlog section ── dynamic heading (the plan name
-          replaces "Team Task Backlog" when a plan filter is active — ADR-051
-          D2, Visibility of System Status) + the Board/List/Graph switcher +
-          filters + a minimalist "+ New Task" link, over a thin separator. */}
-      {/* Phone-width fix (spec defect 2, docs/internal/design/components/zoomable-view.md
-          §"Defects this component must fix"): the single-row 3-column grid
-          (`1fr auto 1fr`) let the CENTER track (Agent/Tag filters, `auto`-sized
-          off its own content) claim whatever width it wanted before the two
-          `1fr` side tracks split what was left EQUALLY — at 390px the LEFT
-          track was squeezed to ~72px while the heading + non-shrinking
-          ViewSwitcher (`flex-shrink-0`, ~180px minimum) needed far more, so it
-          overflowed past its own track boundary into the CENTER track's paint
-          area. CENTER paints after LEFT in DOM order, so — the same "later
-          sibling wins the overlap" failure this skill's rule #12 documents for
-          touch hit-regions — a tap on the visually-peeking-through "Graph" tab
-          actually hit the Agent filter button underneath it. Reproduced with
-          Playwright at 390px: `document.elementFromPoint` at the Graph tab's
-          own rendered center resolved to `[data-testid="tasks-agent-filter"]`.
-          SP-33: answer to this panel's container, not the window. At a fixed
-          1440px viewport the real toolbar needs 838 / 879 / 1085px for its
-          three tracks at the supported 12 / 14 / 20px root sizes. The measured
-          1085px threshold retains the grid only when all three fit; below it
-          the groups stack. Within a group, wrapping keeps enlarged or selected
-          labels from covering the Board/List/Graph controls. */}
-      <div className="flex flex-col gap-[var(--space-2)] @min-[1085px]:grid @min-[1085px]:grid-cols-[1fr_auto_1fr] @min-[1085px]:items-center @min-[1085px]:gap-[var(--space-2-5)] px-[var(--space-4)] pt-[var(--space-4)] pb-[var(--space-2-5)] flex-shrink-0">
-        {/* Left: dynamic heading + the flat Board/List/Graph view switcher. */}
-        <div className="flex min-w-0 flex-wrap items-center gap-[var(--space-3)]">
-          <div className="flex min-w-0 items-center gap-[var(--space-1)]" data-testid="tasks-heading">
-            <h2 className="font-headline text-base font-bold text-[var(--color-secondary)] truncate">
-              {heading}
-            </h2>
-            {view === 'board' && ownerAgent && (
-              <span className="truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">· Agent: {ownerAgent.name}</span>
-            )}
+      {/* Two toolbar rows at every width: heading/view, then filters/create. */}
+      <div className="shrink-0 px-[var(--space-4)] pt-[var(--space-3)] pb-[var(--space-2-5)]">
+        <div className="flex min-w-0 items-center justify-between gap-[var(--space-3)]">
+          <div className="flex min-w-0 flex-1 items-center gap-[var(--space-1)]" data-testid="tasks-heading">
+            <Tooltip content={heading} containerClassName="min-w-0" triggerClassName="min-w-0 max-w-full">
+              <h2 className="truncate font-headline text-base font-bold text-[var(--color-secondary)]">{heading}</h2>
+            </Tooltip>
+            {ownerAgent && <span className="truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">· Agent: {ownerAgent.name}</span>}
           </div>
-          <ViewSwitcher value={view} onChange={setView} />
+          <ViewSwitch value={view} onValueChange={handleSelectView} options={VIEW_OPTIONS} aria-label="Task view" />
         </div>
-
-        {/* Center: Agent + Tag filters, centered over the board. Both flat
-            (borderless, chat-composer style). BOARD ONLY — the List view owns
-            per-column Excel-style filtering (Agent/Tags/Status/Pri live in the
-            table headers there), and the Graph view honors the plan filter
-            alone, so neither renders these toolbar filters. */}
-        <div className="flex flex-wrap items-center justify-center gap-[var(--space-2)]">
-          {view === 'board' && (
-            <AgentFilterDropdown agents={agents} value={ownerAgentId} onChange={setOwnerAgentId} />
-          )}
-          {view === 'board' && (
-            <TagFilterMultiSelect tasks={tasks} value={activeTags} onChange={setActiveTags} />
-          )}
-        </div>
-
-        {/* Right: New Task on its own. */}
-        <div className="flex flex-col items-end gap-[var(--space-0-5)]">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => setCreateTaskOpen(true)}
-            className="h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-accent)] transition-colors"
-          >
-            <Plus size={14} />
-            New Task
+        <div className="mt-[var(--space-2)] flex min-w-0 items-center justify-between gap-[var(--space-2)]">
+          <div className="flex min-w-0 items-center gap-[var(--space-2)]">
+            <FilterMenu mode="single" value={ownerAgentId} onChange={setOwnerAgentId} clearLabel="All agents"
+              label={ownerAgent?.name ?? 'Agent'} aria-label={`Filter by agent (current: ${ownerAgent?.name ?? 'all agents'})`}
+              data-testid="tasks-agent-filter" className="max-w-[200px]"
+              icon={ownerAgent?.icon ? <IconRenderer icon={ownerAgent.icon} size={13} /> : <UsersThree size={13} className="shrink-0" aria-hidden="true" />}
+              options={agents.map((agent) => ({ value: agent.id, label: agent.name, icon: agent.icon ? <IconRenderer icon={agent.icon} size={13} /> : undefined }))} />
+            <FilterMenu mode="multiple" value={activeTags} onChange={setActiveTags} clearLabel="Clear tags" options={tagOptions}
+              label={activeTags.length === 0 ? 'Tags' : `${activeTags.length} tag${activeTags.length === 1 ? '' : 's'}`}
+              aria-label="Filter by tags" data-testid="tasks-tag-filter" icon={<Tag size={13} className="shrink-0" aria-hidden="true" />} />
+          </div>
+          <Button type="button" variant="ghost" onClick={() => setCreateTaskOpen(true)}
+            className="h-auto shrink-0 gap-[var(--space-1)] p-0 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-accent)]">
+            <Plus size={14} />New Task
           </Button>
-          {/* S3 UAT finding — quick-create inside a plan-scoped board always
-              lands the new task UNPLANNED (`plan_id: null` — intended, see
-              CreateTaskSlideOver's `planId={null}` below: "no filter-scoped
-              quick-create"). With the heading reading "{plan} — tasks", a
-              user who creates a task here previously got no warning; the
-              board then immediately read "No tasks match the current
-              filter" and the task appeared to vanish. This is a plain-
-              language, ALWAYS-VISIBLE hint (not a tooltip) right where the
-              user is about to act, naming the real recovery path ("Move to
-              plan…" on the task detail panel, already documented above). */}
-          {selectedPlan && (
-            <span
-              data-testid="new-task-unplanned-hint"
-              className="text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]"
-            >
-              Lands unplanned, not in "{selectedPlan.title}" — use "Move to plan…" after creating
-            </span>
-          )}
         </div>
       </div>
-      <div className="mx-[var(--space-4)] border-t border-[var(--color-border)]/60 flex-shrink-0" aria-hidden="true" />
+      <div className="mx-[var(--space-4)] shrink-0 border-t border-[var(--color-border)]/60" aria-hidden="true" />
+      {selectedPlan && (
+        // Keep the existing quick-create warning visible, separate from the two toolbar rows.
+        <p data-testid="new-task-unplanned-hint" className="shrink-0 px-[var(--space-4)] py-[var(--space-1)] wrap-anywhere text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]">
+          Lands unplanned, not in "{selectedPlan.title}" — use "Move to plan…" after creating
+        </p>
+      )}
+      {agentsError && <div className="flex shrink-0 items-center gap-[var(--space-1)] bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"><Info size={12} weight="fill" className="shrink-0" />Agent details failed to load — task avatars may be missing.</div>}
+      {plansError && <div className="flex shrink-0 items-center gap-[var(--space-1)] bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"><Info size={12} weight="fill" className="shrink-0" />Plans failed to load — the plans filter band may be incomplete.</div>}
+      {tasksError && tasks.length > 0 && <div className="flex shrink-0 items-center gap-[var(--space-1)] bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"><Info size={12} weight="fill" className="shrink-0" />Couldn't refresh — showing last-known tasks.</div>}
 
-      {agentsError && (
-        <div className="flex items-center gap-[var(--space-1)] bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)] flex-shrink-0">
-          <Info size={12} weight="fill" className="shrink-0" />
-          Agent details failed to load — task avatars may be missing.
-        </div>
-      )}
-      {plansError && (
-        <div className="flex items-center gap-[var(--space-1)] bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)] flex-shrink-0">
-          <Info size={12} weight="fill" className="shrink-0" />
-          Plans failed to load — the plans filter band may be incomplete.
-        </div>
-      )}
-      {tasksError && tasks.length > 0 && (
-        <div className="flex items-center gap-[var(--space-1)] bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)] flex-shrink-0">
-          <Info size={12} weight="fill" className="shrink-0" />
-          Couldn't refresh — showing last-known tasks.
-        </div>
-      )}
-
-      {/* Content */}
-      <div className="relative flex-1 min-h-0 flex flex-col overflow-hidden">
-        {view === 'graph' ? (
-          // The Graph tab manages its own loading/error state and reads the
-          // shared activePlanId store field directly, so it bypasses the
-          // tasksLoading/tasksError gate below (which only guards Board/List,
-          // both fed from THIS screen's own filtered task query).
-          <WorkspaceGraphTab workspaceId={workspaceId} hidePlanSelector />
-        ) : tasksLoading ? (
-          <BoardSkeleton />
-        ) : tasksError && tasks.length === 0 ? (
-          <QueryErrorState
-            layout="fill"
-            message="Failed to load tasks. Check your connection and try again."
-            onRetry={() => void refetchTasks()}
-            testId="workspace-tasks-error"
-          />
-        ) : view === 'board' ? (
-          <BoardView
-            tasks={filteredTasks}
-            plans={plans}
-            agents={agents}
-            altitude="top-level"
-            hasActiveFilter={hasActiveFilter}
-            onTaskClick={(task) => setSelectedTaskId(task.id)}
-            onTaskMove={(task, status) => moveMutation.mutateAsync({ task, status })}
-            onMoveRejected={(reason) => addToast({ message: reason, variant: 'error' })}
-          />
-        ) : (
-          <ListView
-            tasks={listTasks}
-            agents={agents}
-            onTaskClick={(task) => setSelectedTaskId(task.id)}
-          />
+      <div ref={frameRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {view === 'board' && effectiveView === 'list' && (
+          <p role="status" className="shrink-0 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Board needs more room — showing list</p>
         )}
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          {effectiveView === 'graph' ? <WorkspaceGraphTab workspaceId={workspaceId} hidePlanSelector ownerAgentId={ownerAgentId} activeTags={activeTags} />
+            : tasksLoading ? <BoardSkeleton />
+            : tasksError && tasks.length === 0 ? <QueryErrorState layout="fill" message="Failed to load tasks. Check your connection and try again." onRetry={() => void refetchTasks()} testId="workspace-tasks-error" />
+            : effectiveView === 'board' ? <BoardView tasks={filteredTasks} plans={plans} agents={agents} altitude="top-level" hasActiveFilter={hasActiveFilter}
+              onTaskClick={(task) => setSelectedTaskId(task.id)} onTaskMove={(task, status) => moveMutation.mutateAsync({ task, status })}
+              onMoveRejected={(reason) => addToast({ message: reason, variant: 'error' })} />
+            : <ListView tasks={filteredTasks} agents={agents} onTaskClick={(task) => setSelectedTaskId(task.id)} />}
+        </div>
       </div>
-
       <TaskDetailSlideOver task={selectedTask} onClose={() => setSelectedTaskId(null)} />
-
-      <CreateTaskSlideOver
-        open={createTaskOpen}
-        onOpenChange={setCreateTaskOpen}
-        workspaceId={workspaceId}
-        // New tasks always land unplanned (the "no plan" bucket) — "Move to
-        // plan…" on the task detail panel is the explicit, single
-        // reassignment path (no filter-scoped quick-create).
-        planId={null}
-      />
-
-      <CreatePlanSlideOver
-        open={planSlideOver.open}
-        onOpenChange={(open) => setPlanSlideOver((s) => ({ ...s, open }))}
-        workspaceId={workspaceId}
-        plan={planSlideOver.plan}
-      />
-    </div>
-  )
-}
-
-// ── View switcher (Board / List / Graph segmented control) ─────────────────
-
-const VIEW_OPTIONS: { value: TasksView; label: string; Icon: Icon }[] = [
-  { value: 'board', label: 'Board', Icon: SquaresFour },
-  { value: 'list', label: 'List', Icon: ListBullets },
-  { value: 'graph', label: 'Graph', Icon: GraphIcon },
-]
-
-// WAI-ARIA radio group pattern (mirrors AltitudeToggle), via the shared
-// `RadioGroup`/`RadioGroupItem` primitive (src/components/ui/radio-group.tsx)
-// — built specifically to replace this component's own former hand-rolled
-// roving-tabindex implementation (see that file's doc comment, which names
-// this exact ViewSwitcher shape). Behavior is unchanged: exactly one option
-// is in the tab sequence (the checked one); arrow keys move AND immediately
-// select the adjacent option; RadioGroup additionally supports Home/End
-// (jump to first/last), a WAI-ARIA APG addition this component never had,
-// not a removed capability.
-function ViewSwitcher({ value, onChange }: { value: TasksView; onChange: (next: TasksView) => void }) {
-  return (
-    <RadioGroup
-      value={value}
-      onValueChange={(next) => onChange(next as TasksView)}
-      aria-label="Task view"
-      className="gap-[var(--space-3)] flex-shrink-0"
-    >
-      {VIEW_OPTIONS.map((opt) => {
-        const checked = value === opt.value
-        return (
-          <RadioGroupItem
-            key={opt.value}
-            value={opt.value}
-            data-testid={`tasks-view-${opt.value}`}
-            // Flat like the workspace header tabs — no border, background or
-            // shadow; just an icon + label on the header, gold when active.
-            className={cn(
-              'h-auto w-auto justify-start border-0 bg-transparent gap-[var(--space-1)] p-0 text-[length:var(--type-body-compact-size)] font-medium transition-colors',
-              checked
-                ? 'text-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-accent)]'
-                : 'text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]',
-            )}
-          >
-            <opt.Icon size={15} weight={checked ? 'fill' : 'regular'} />
-            {opt.label}
-          </RadioGroupItem>
-        )
-      })}
-    </RadioGroup>
-  )
-}
-
-// ── Agent filter dropdown ───────────────────────────────────────────────────
-
-interface AgentFilterDropdownProps {
-  agents: Agent[]
-  value: string | null
-  onChange: (agentId: string | null) => void
-}
-
-/** Small round agent avatar — the agent's icon (or name initial) on its colour
- * dot. Mirrors the chat composer's AgentPicker so the roster reads identically. */
-function AgentAvatar({ agent }: { agent: Agent }) {
-  return (
-    <div
-      aria-hidden="true"
-      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[length:var(--type-caption-size)] font-bold"
-      style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
-    >
-      {agent.icon ? <IconRenderer icon={agent.icon} size={11} /> : initialOf(agent.name)}
-    </div>
-  )
-}
-
-/**
- * Agent filter — filters the board by each task's ASSIGNED agent (`Task.agent_id`),
- * ANDed with the plan filter. Reuses the chat composer's AgentPicker visual
- * pattern (a `DropdownMenu` with an `IconRenderer` avatar dot in the agent's
- * colour + name), so it reads like the agent selector used elsewhere — with
- * icons — rather than a plain text dropdown. Default "All agents" clears it.
- */
-function AgentFilterDropdown({ agents, value, onChange }: AgentFilterDropdownProps) {
-  const selected = value ? (agents.find((a) => a.id === value) ?? null) : null
-  return (
-    <div data-testid="tasks-agent-filter">
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label={`Filter by agent (current: ${selected?.name ?? 'all agents'})`}
-            className="flex h-8 min-w-0 max-w-[200px] items-center gap-[var(--space-1)] px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-medium"
-          >
-            {selected ? (
-              <AgentAvatar agent={selected} />
-            ) : (
-              <div
-                aria-hidden="true"
-                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-3)] text-[var(--color-muted)]"
-              >
-                <UsersThree size={11} />
-              </div>
-            )}
-            <span className="truncate">{selected ? selected.name : 'Agent'}</span>
-            <CaretDown size={11} className="shrink-0 opacity-60" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-64">
-          <DropdownMenuItem onClick={() => onChange(null)} className="flex items-center gap-[var(--space-2)]">
-            <div
-              aria-hidden="true"
-              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-3)] text-[var(--color-muted)]"
-            >
-              <UsersThree size={11} />
-            </div>
-            <span className="truncate">All agents</span>
-            {value === null && (
-              <span className="ml-auto shrink-0 text-[length:var(--type-caption-size)] text-[var(--color-success)]">active</span>
-            )}
-          </DropdownMenuItem>
-          {agents.map((agent) => (
-            <DropdownMenuItem
-              key={agent.id}
-              onClick={() => onChange(agent.id)}
-              className="flex items-center gap-[var(--space-2)]"
-              title={agent.name}
-            >
-              <AgentAvatar agent={agent} />
-              <span className="truncate">{agent.name}</span>
-              {agent.id === value && (
-                <span className="ml-auto shrink-0 text-[length:var(--type-caption-size)] text-[var(--color-success)]">active</span>
-              )}
-            </DropdownMenuItem>
-          ))}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
-  )
-}
-
-// ── Tag filter (flat multiselect) ────────────────────────────────────────────
-
-interface TagFilterMultiSelectProps {
-  tasks: Task[]
-  value: string[]
-  onChange: (tags: string[]) => void
-}
-
-/**
- * Tag filter — a flat, borderless multiselect (chat-composer style): a ghost
- * `DropdownMenu` trigger over checkable tag items. Selecting multiple tags is a
- * union (a task matches ANY selected tag; see `filterByTags`). Includes an
- * "Untagged" option (`PLAN_FILTER_UNTAGGED`). Menu stays open while toggling
- * (DropdownMenuCheckboxItem), with a "Clear tags" action once any is set.
- */
-function TagFilterMultiSelect({ tasks, value, onChange }: TagFilterMultiSelectProps) {
-  const tags = distinctTags(tasks)
-  const toggle = (tag: string) =>
-    onChange(value.includes(tag) ? value.filter((t) => t !== tag) : [...value, tag])
-  const label = value.length === 0 ? 'Tags' : `${value.length} tag${value.length === 1 ? '' : 's'}`
-
-  return (
-    <div data-testid="tasks-tag-filter">
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label="Filter by tags"
-            className="flex h-8 min-w-0 max-w-[200px] items-center gap-[var(--space-1)] px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-medium"
-          >
-            <Tag size={13} className="shrink-0 opacity-70" />
-            <span className="truncate">{label}</span>
-            <CaretDown size={11} className="shrink-0 opacity-60" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="center" className="w-52">
-          {/* onSelect preventDefault keeps the menu OPEN while toggling multiple
-              tags — Radix closes a checkbox item's menu on select by default,
-              which would break multiselect. */}
-          <DropdownMenuCheckboxItem
-            checked={value.includes(PLAN_FILTER_UNTAGGED)}
-            onCheckedChange={() => toggle(PLAN_FILTER_UNTAGGED)}
-            onSelect={(e) => e.preventDefault()}
-            className="text-[length:var(--type-utility-xs-size)]"
-          >
-            Untagged
-          </DropdownMenuCheckboxItem>
-          {tags.length > 0 && <DropdownMenuSeparator />}
-          {tags.map((tag) => (
-            <DropdownMenuCheckboxItem
-              key={tag}
-              checked={value.includes(tag)}
-              onCheckedChange={() => toggle(tag)}
-              onSelect={(e) => e.preventDefault()}
-              className="text-[length:var(--type-utility-xs-size)]"
-            >
-              {tag}
-            </DropdownMenuCheckboxItem>
-          ))}
-          {value.length > 0 && (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => onChange([])} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-                Clear tags
-              </DropdownMenuItem>
-            </>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {/* Quick-create always lands unplanned; task detail's Move to plan is the explicit reassignment path. */}
+      <CreateTaskSlideOver open={createTaskOpen} onOpenChange={setCreateTaskOpen} workspaceId={workspaceId} planId={null} />
+      <CreatePlanSlideOver open={planSlideOver.open} onOpenChange={(open) => setPlanSlideOver((s) => ({ ...s, open }))} workspaceId={workspaceId} plan={planSlideOver.plan} />
     </div>
   )
 }
 
 function BoardSkeleton() {
   return (
-    <div className="flex gap-[var(--space-2-5)] p-[var(--space-3)] overflow-x-auto overscroll-contain flex-1">
+    <div className="flex min-w-0 flex-1 gap-[var(--space-2-5)] overflow-hidden p-[var(--space-3)]">
       {[1, 2, 3, 4, 5, 6].map((i) => (
-        <div
-          key={i}
-          className="flex flex-col min-w-[180px] flex-1 rounded-xl border border-[var(--color-border)] animate-pulse"
-        >
-          <div className="h-10 border-b border-[var(--color-border)] bg-[var(--color-surface-2)]" />
+        <div key={i} className="flex min-w-0 flex-1 flex-col rounded-xl border border-[var(--color-border)] animate-pulse">
+          <div className="h-10 border-b border-[var(--color-border)] bg-[var(--color-surface-1)]" />
           <div className="flex flex-col gap-[var(--space-2)] p-[var(--space-2)]">
-            {[1, 2].map((j) => (
-              <div key={j} className="h-14 rounded-lg bg-[var(--color-surface-2)]" />
-            ))}
+            {[1, 2].map((j) => <div key={j} className="h-14 rounded-lg bg-[var(--color-surface-1)]" />)}
           </div>
         </div>
       ))}

@@ -18,6 +18,9 @@ it('T8 reserves a separate zoom-control footer outside the card viewport and kee
   const footer = zoom.parentElement!
   expect(footer).toHaveClass('shrink-0')
   expect(footer.previousElementSibling).toContainElement(mounted.container.querySelector('.react-flow'))
-  expect(screen.getByRole('link', { name: 'React Flow' })).toBeVisible()
+  const credit = screen.getByRole('link', { name: 'React Flow attribution' })
+  expect(credit).toBeVisible()
+  expect(credit).toHaveTextContent('React Flow')
+  expect(credit).toHaveAttribute('href', 'https://reactflow.dev')
 })
 afterEach(() => { vi.unstubAllGlobals() })

@@ -12,6 +12,8 @@ import { PriorityBadge } from './PriorityBadge'
 import { TaskActionButton } from './TaskActionButton'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 // 6-state unified vocabulary + colour — single source of truth.
 import { STATUS_ORDER, statusLabel, taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
@@ -304,7 +306,7 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
         <table
           className={cn(
             'w-full table-fixed text-[length:var(--type-body-compact-size)]',
-            columnOverflow === 'shown' && 'min-w-[calc(31.5rem+var(--space-8)*2+var(--space-3))]',
+            columnOverflow === 'shown' && 'min-w-[calc(34rem+var(--space-8)*2+var(--space-3))]',
           )}
         >
           <thead className="sticky top-0 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)]">
@@ -317,6 +319,16 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
               </th>
               <th className="w-24 px-[var(--space-2)] py-[var(--space-2)] text-left" aria-sort={ariaSort('status')}>
                 <ColumnMenu label="Status" sort={sortCfg('status')} filter={buildFilter(statusValues, statusFilter, setStatusFilter)} />
+              </th>
+              {/* Actions stay beside Status; the same overflow control still reveals Tags/Updated. */}
+              <th className="w-20 px-[var(--space-2)] py-[var(--space-2)] text-left">
+                <div className="flex items-center gap-[var(--space-1)]">
+                  <span className="text-[length:var(--type-caption-size)] font-semibold text-[var(--color-muted)]">Actions</span>
+                  <Button variant="ghost" onClick={handleToggleOverflowColumns} aria-label={overflowControlLabel} title={overflowControlLabel}
+                    className="h-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]">
+                    <DotsThree size={14} weight="bold" />
+                  </Button>
+                </div>
               </th>
               {/* SP-34 — Tags and Updated are the hideable columns: narrow
                   container hides them (container query) unless the user has
@@ -351,24 +363,6 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
                 aria-sort={ariaSort('updated')}
               >
                 <ColumnMenu label="Updated" align="right" sort={sortCfg('updated')} />
-              </th>
-              {/* ADR-052 §6.8 — a row action column (▶ Play / ■ Stop per
-                  task state). Not sortable/filterable, so it's a plain
-                  header rather than a ColumnMenu trigger — but it does carry
-                  the SP-34 "⋯" overflow control that toggles Tags/Updated
-                  back into view when the narrow container has hidden them
-                  (and hides them again from a wide one). */}
-              <th className="w-10 px-[var(--space-2)] py-[var(--space-2)] text-right">
-                <span className="sr-only">Actions</span>
-                <Button
-                  variant="ghost"
-                  onClick={handleToggleOverflowColumns}
-                  aria-label={overflowControlLabel}
-                  title={overflowControlLabel}
-                  className="h-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
-                >
-                  <DotsThree size={14} weight="bold" />
-                </Button>
               </th>
             </tr>
           </thead>
@@ -456,7 +450,7 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
           variant="ghost"
           aria-label={`${label} column — ${affordance}`}
           className={cn(
-            'h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider hover:bg-transparent',
+            'h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-caption-size)] font-semibold hover:bg-transparent',
             isSorted || isFiltered
               ? 'text-[var(--color-secondary)]'
               : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
@@ -556,6 +550,7 @@ function TaskRow({
         />
       </td>
       <td className="px-[var(--space-2)] py-[var(--space-2)]">
+        <Tooltip interactive content={task.title} side="bottom" containerClassName="w-full min-w-0" triggerClassName="block w-full min-w-0">
         <Button
           variant="ghost"
           onClick={(e) => {
@@ -581,6 +576,7 @@ function TaskRow({
         >
           {task.title}
         </Button>
+        </Tooltip>
       </td>
       <td className="px-[var(--space-2)] py-[var(--space-2)]">
         {/* ADR-052 FR-015/US-8 — a user-cancelled task renders "Cancelled"
@@ -593,6 +589,10 @@ function TaskRow({
           </span>
         </div>
       </td>
+      {/* Always visible, and isolated from the row's open-detail action. */}
+      <td className="px-[var(--space-2)] py-[var(--space-2)]" onClick={(e) => e.stopPropagation()}>
+        <TaskActionButton task={task} />
+      </td>
       <td
         className={cn(
           'px-[var(--space-2)] py-[var(--space-2)]',
@@ -603,13 +603,9 @@ function TaskRow({
         {tags.length > 0 ? (
           <div className="flex max-w-[7rem] flex-wrap items-center gap-[var(--space-1)]">
             {tags.slice(0, 2).map((tag) => (
-              <span
-                key={tag}
-                title={tag}
-                className="max-w-[4rem] truncate rounded bg-[var(--color-accent)]/10 px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-accent)]"
-              >
+              <Badge key={tag} variant="outline" title={tag} className="block max-w-[4rem] truncate border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10 px-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-accent)]">
                 {tag}
-              </span>
+              </Badge>
             ))}
             {tags.length > 2 && <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">+{tags.length - 2}</span>}
           </div>
@@ -632,14 +628,6 @@ function TaskRow({
         )}
       >
         <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{formatUpdated(task.updated_at)}</span>
-      </td>
-      {/* ADR-052 §6.8 row action (▶ Play / ■ Stop per task state) — always
-          visible (not hover-gated) so it's reachable on touch devices, which
-          can't hover a row to discover it. TaskActionButton itself already
-          stops the click/pointerdown/keydown from bubbling into the row's
-          own onClick (open task). */}
-      <td className="px-[var(--space-2)] py-[var(--space-2)] text-right" onClick={(e) => e.stopPropagation()}>
-        <TaskActionButton task={task} />
       </td>
     </tr>
   )

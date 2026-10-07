@@ -14,7 +14,7 @@ The engine runs plans on the server: it hands each unblocked task to its assigne
 
 You see plans in the **Tasks** panel of a workspace, as tiles above the board showing the state badge, a progress count such as "4 of 6 tasks done", the owner, and one action button. Selecting a tile filters the view to that plan's tasks and switches to the Graph view, where the dependency graph is drawn.
 
-The Plans band keeps its horizontal tile strip inside the Tasks panel. Completed plans are hidden by default; use **Show done** to include them. When more tiles are off-screen, **scroll for more →** signals that you can scroll sideways, including on a phone.
+The Plans band keeps its horizontal tile strip inside the Tasks panel, on a darker background. Completed plans are hidden by default; use the **Show done (N)** checkbox in the **Plans header** to include them. **New Plan** shares the same header. The checkbox appears only when there are completed plans, and its count tells you how many it can reveal. There is no separate control row between the header and the tiles. When more tiles are off-screen, **scroll for more →** below the strip signals that you can scroll sideways, including on a phone. Long plan titles wrap within the tile and keep their two-line limit; hover or keyboard focus shows the full title.
 
 A running plan tile shows a spinning arrow without a token count. In the plan's Graph view, each **In Progress** task node uses the same arrow. Board and List running-task indicators also omit token counts; Chat's existing token counter is unchanged. With reduced motion enabled, the arrow stays visible but does not spin.
 

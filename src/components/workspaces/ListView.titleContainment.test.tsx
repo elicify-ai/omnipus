@@ -89,16 +89,16 @@ describe('ListView — long unbroken title containment (UAT Finding 2)', () => {
     renderList([makeTask()])
     const headerRow = screen.getAllByRole('row')[0]
     const headers = headerRow.querySelectorAll('th')
-    // Pri, Title, Status, Tags, Agent, Updated, Actions — 7 columns.
+    // T6: Pri, Title, Status, Actions, Tags, Agent, Updated — 7 columns.
     expect(headers.length).toBe(7)
     const widthClasses = Array.from(headers).map((th) => Array.from(th.classList).find((c) => /^w-\d+$/.test(c)))
     expect(widthClasses[0]).toBe('w-12') // Pri
     expect(widthClasses[1]).toBeUndefined() // Title — absorbs remaining width
     expect(widthClasses[2]).toBe('w-24') // Status
-    expect(widthClasses[3]).toBe('w-28') // Tags
-    expect(widthClasses[4]).toBe('w-24') // Agent
-    expect(widthClasses[5]).toBe('w-28') // Updated
-    expect(widthClasses[6]).toBe('w-10') // Actions
+    expect(widthClasses[3]).toBe('w-20') // Actions — visible label plus the kept overflow control.
+    expect(widthClasses[4]).toBe('w-28') // Tags
+    expect(widthClasses[5]).toBe('w-24') // Agent
+    expect(widthClasses[6]).toBe('w-28') // Updated
   })
 
   it('renders a 200-char unbroken title truncated (ellipsis) with a tooltip carrying the full string', () => {

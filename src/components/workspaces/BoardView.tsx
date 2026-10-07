@@ -113,37 +113,8 @@ const ARROW_COLUMN_STEP: Partial<Record<string, 1 | -1>> = {
   [KeyboardCode.Up]: -1,
 }
 
-/**
- * SP-33 narrow-board breakpoint, measured from the board's own content, not a
- * round guess: the wide board's minimum content width is one row of
- * STATUS_ORDER columns, each carrying `min-w-[162px]` (6 columns → 972px,
- * with no gap between columns). At or above 972px the wide board fits without
- * horizontal scroll; below it the columns would overflow, so the container
- * query (`@max-[971px]:…` variants, measured against this component's own
- * `@container` root — never the window) switches to the stacked single-column
- * narrow treatment. If STATUS_ORDER's length or the column min-width ever
- * changes, this number must be re-derived (columns × min-width − 1).
- */
-
-/**
- * Whether the status columns are currently laid out STACKED (the narrow
- * single-column treatment, see the SP-33 breakpoint comment) rather than in
- * one horizontal row. Derived purely from the measured droppable rects —
- * stacked means every column shares (≈) the same left edge while tops
- * strictly increase — so the keyboard getter needs no CSS-mode state to
- * mirror `ARROW_COLUMN_STEP` onto the vertical axis. Zero-sized rects
- * (nothing measured yet, e.g. jsdom) read as NOT stacked, keeping the
- * original horizontal math for every caller that runs without layout.
- */
-function isStackedColumnLayout(
-  droppableRects: Parameters<KeyboardCoordinateGetter>[1]['context']['droppableRects'],
-): boolean {
-  const rects = COLUMN_STATUSES.map((status) => droppableRects.get(status))
-  const first = rects[0]
-  if (!first || first.width === 0 || first.height === 0) return false
-  if (!rects.every((r) => !!r && Math.abs(r.left - first.left) < 1)) return false
-  return rects.slice(1).every((r, i) => !!r && !!rects[i] && r.top > rects[i].top)
-}
+// T5: no stacked Board layout. WorkspaceTasksTab substitutes the real List
+// below the six-column minimum, leaving every Board drag on the horizontal axis.
 
 export const boardKeyboardCoordinateGetter: KeyboardCoordinateGetter = (event, { context, currentCoordinates }) => {
   const step = ARROW_COLUMN_STEP[event.code]
@@ -152,14 +123,11 @@ export const boardKeyboardCoordinateGetter: KeyboardCoordinateGetter = (event, {
   const { collisionRect, droppableRects } = context
   if (!collisionRect) return undefined
 
-  const stacked = isStackedColumnLayout(droppableRects)
-  const axisStart = stacked ? 'top' : 'left'
-  const axisSize = stacked ? 'height' : 'width'
-  const rectCenter = collisionRect[axisStart] + collisionRect[axisSize] / 2
+  const axisStart = 'left'
+  const axisSize = 'width'
+  const rectCenter = collisionRect.left + collisionRect.width / 2
 
-  // Resolve the current column on the layout's axis: stacked columns share
-  // their X bounds, so only Y identifies the current status. Prefer an exact
-  // match, then the nearest column center on the same axis.
+  // Prefer the exact horizontal column, then its nearest center.
   let currentIndex = COLUMN_STATUSES.findIndex((status) => {
     const rect = droppableRects.get(status)
     return !!rect && rectCenter >= rect[axisStart] && rectCenter <= rect[axisStart] + rect[axisSize]
@@ -185,16 +153,6 @@ export const boardKeyboardCoordinateGetter: KeyboardCoordinateGetter = (event, {
   if (!targetRect) return undefined
 
   event.preventDefault()
-  // Narrow (stacked) board: "next/previous column" is below/above — teleport
-  // the drag rect onto the target group's vertical center, keeping x, the
-  // exact mirror of the wide board's horizontal teleport. Wide (one row):
-  // unchanged horizontal teleport, keeping y.
-  if (stacked) {
-    return {
-      x: currentCoordinates.x,
-      y: targetRect.top + targetRect.height / 2 - collisionRect.height / 2,
-    }
-  }
   return {
     x: targetRect.left + targetRect.width / 2 - collisionRect.width / 2,
     y: currentCoordinates.y,
@@ -392,10 +350,7 @@ export function BoardView({
   const counts = useMemo(() => countByStatus(rootTasks), [rootTasks])
 
   return (
-    // `@container` (SP-33): the narrow-board breakpoint below is measured
-    // against THIS element's own inline size — the panel's real content
-    // width — never the window's.
-    <div className="@container flex flex-col flex-1 min-h-0 overflow-hidden">
+    <div className="@container flex min-w-0 flex-col flex-1 min-h-0 overflow-hidden bg-[var(--color-surface-2)]">
       {orphanTasks.length > 0 && (
         <div
           role="status"
@@ -406,24 +361,10 @@ export function BoardView({
           {orphanTasks.length === 1 ? "isn't" : "aren't"} shown in any column.
         </div>
       )}
-      {/* UAT Finding 3 fix: this outer container used to be `overflow-auto`
-          (scrolling BOTH axes) wrapping a `min-h-full` (floor-only) inner
-          div — that made it ONE shared vertical scroller for the whole
-          board, so the tallest lane (e.g. Inbox) set the scrollHeight for
-          every column and scrolling past a short lane's content just showed
-          blank space under its still-visible header/count. Now this level
-          only ever scrolls HORIZONTALLY (for narrow viewports/many
-          columns); vertical scrolling is delegated to each column
-          individually (see StatusColumn's own `overflow-y-auto` below), so
-          the header row and each lane's own count stay meaningful no matter
-          how far any single lane is scrolled, and two lanes' cards can be
-          visible at once. */}
-      {/* Wide: horizontal-only scroll (UAT Finding 3, above). Narrow (SP-33,
-          ≤971px container): the single stacked column scrolls VERTICALLY here
-          instead — the wide per-lane scrollers become plain content-height
-          groups, so the scroll ownership moves up one level. */}
-      <div className="relative flex-1 min-h-0 overflow-x-auto overflow-y-hidden overscroll-contain @max-[971px]:overflow-x-hidden @max-[971px]:overflow-y-auto">
-        <div className="min-w-max flex flex-col h-full @max-[971px]:min-w-0">
+      {/* No horizontal scroller: all six equal columns fit the measured frame.
+          Each lane keeps its independent vertical scrolling and sticky count. */}
+      <div className="relative flex-1 min-w-0 min-h-0 overflow-hidden bg-[var(--color-surface-2)]">
+        <div className="flex min-w-0 flex-col h-full">
           <StatusHeaderRow counts={counts} />
           <StatusColumnsRow
             tasks={rootTasks}
@@ -460,13 +401,10 @@ function BoardEmptyState({ filtered }: { filtered: boolean }) {
 
 function StatusHeaderRow({ counts }: { counts: Record<TaskStatus, number> }) {
   return (
-    // Hidden in the SP-33 stacked narrow board — each stacked group carries
-    // its own label + count there (see StatusColumn's narrow header), so a
-    // single sticky strip above a one-column stack would be meaningless.
-    <div className="flex sticky top-0 z-10 bg-[var(--color-surface-0)] border-b border-[var(--color-border)]/15 @max-[971px]:hidden">
+    <div className="flex sticky top-0 z-10 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]/15">
       {COLUMNS.map((col) => (
         // Compact status header: a thin label + count strip.
-        <div key={col.status} className="flex-1 min-w-[162px] flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] h-[25px]">
+        <div key={col.status} className="flex-1 basis-0 min-w-[162px] flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] h-[25px]">
           <span className="text-[length:var(--type-utility-xs-size)] font-semibold leading-none" style={{ color: col.headerColor }}>
             {col.label}
           </span>
@@ -625,13 +563,8 @@ function StatusColumnsRow({
         onDragEnd={handleDragEnd}
         onDragCancel={() => setActiveTask(null)}
       >
-        {/* `min-h-0` lets this row take exactly the wrapper's remaining
-            height (after the header) rather than growing with content —
-            required for each StatusColumn's own `overflow-y-auto` below to
-            actually bound and scroll (Finding 3). Narrow (SP-33): the row
-            becomes the stacked single column — groups size to their own
-            content and the scroll ownership moves to the outer wrapper. */}
-        <div className="flex flex-1 min-h-0 @max-[971px]:flex-col @max-[971px]:flex-none @max-[971px]:gap-[var(--space-2-5)]">
+        {/* Bound the height so each lane, not the entire board, scrolls vertically. */}
+        <div className="flex flex-1 min-w-0 min-h-0">
           {COLUMNS.map((col) => (
             <StatusColumn
               key={col.status}
@@ -687,37 +620,6 @@ function StatusColumnsRow({
   )
 }
 
-/**
- * Stacked-group header label (SP-33 narrow board) — literal per-branch JSX
- * with a full `className` string, the `PriorityBadge` pattern: the
- * design-system static scanners can resolve each branch, so no record- or
- * helper-derived class value crosses their boundary (a class-returning
- * helper read via `cn` is an unresolvable "unsupported" for the spacing
- * scanner, and `StatusHeaderRow`'s `style={{ color }}` is accepted debt this
- * new header must not extend). Each branch is the same
- * `--status-<name>-foreground` token `statusHeaderColorVar` resolves (both
- * read `src/design-system/status.ts`'s `statusContract`); `color:` type hints
- * disambiguate `text-[…]` for the typography scanner.
- */
-function StackedGroupStatusLabel({ status, label }: { status: TaskStatus; label: string }) {
-  switch (status) {
-    case 'inbox':
-      return <span className="text-[length:var(--type-utility-xs-size)] font-semibold leading-none text-[color:var(--status-inbox-foreground)]">{label}</span>
-    case 'next':
-      return <span className="text-[length:var(--type-utility-xs-size)] font-semibold leading-none text-[color:var(--status-next-foreground)]">{label}</span>
-    case 'in_progress':
-      return <span className="text-[length:var(--type-utility-xs-size)] font-semibold leading-none text-[color:var(--status-in-progress-foreground)]">{label}</span>
-    case 'blocked':
-      return <span className="text-[length:var(--type-utility-xs-size)] font-semibold leading-none text-[color:var(--status-blocked-foreground)]">{label}</span>
-    case 'done':
-      return <span className="text-[length:var(--type-utility-xs-size)] font-semibold leading-none text-[color:var(--status-done-foreground)]">{label}</span>
-    case 'failed':
-      return <span className="text-[length:var(--type-utility-xs-size)] font-semibold leading-none text-[color:var(--status-failed-foreground)]">{label}</span>
-    default:
-      return <span className="text-[length:var(--type-utility-xs-size)] font-semibold leading-none text-[color:var(--status-inbox-foreground)]">{label}</span>
-  }
-}
-
 interface StatusColumnProps {
   config: ColumnConfig
   tasks: Task[]
@@ -754,39 +656,13 @@ function StatusColumn({
       role="group"
       aria-label={`${config.label} column`}
       className={cn(
-        // Vertical column dividers, restored (ADR-051 D4) — a subtle hairline
-        // between columns so the board reads as a real grid, not a loose row
-        // of stacks. Full-height via flex-1 stretch against the row's height.
-        // `min-h-0 overflow-y-auto overscroll-contain` (Finding 3): each lane
-        // gets its OWN vertical scroller bounded by the row's stretched
-        // height, instead of all six columns sharing one scroller sized to
-        // the tallest lane — a short lane's content (and its own header
-        // count above) stays visible/meaningful regardless of how far a
-        // neighboring lane has been scrolled, and scrolling one lane never
-        // bleeds into the page/board underneath (`overscroll-contain`).
-        //
-        // Narrow (SP-33, ≤971px container): this column becomes a full-width
-        // stacked group — its own bordered rounded box, content-height (no
-        // inner lane scroller; the outer wrapper scrolls), with the group's
-        // label + count as a header band. `@max-[971px]:overflow-hidden`
-        // replaces the lane scroller AND clips the header band's top corners
-        // to the group's radius. The wide `last:border-r-0` would strip the
-        // last group's right box edge, so the narrow rule re-asserts it
-        // (important — it must beat the higher-specificity `last:border-r-0`).
-        'flex flex-col flex-1 min-w-[162px] min-h-0 gap-[var(--space-2)] p-[var(--space-2)] overflow-y-auto overscroll-contain border-r border-[var(--color-border)]/25 last:border-r-0 transition-colors',
-        '@max-[971px]:flex-none @max-[971px]:min-w-0 @max-[971px]:overflow-hidden @max-[971px]:rounded-lg @max-[971px]:border @max-[971px]:border-[var(--color-border)]/40 @max-[971px]:last:border-r!',
+        // Equal-width columns, including their borders/padding; each lane
+        // keeps its own vertical scroller and never becomes a stacked group.
+        'flex flex-col flex-1 basis-0 min-w-[162px] min-h-0 gap-[var(--space-2)] p-[var(--space-2)] overflow-x-hidden overflow-y-auto overscroll-contain border-r border-[var(--color-border)]/25 last:border-r-0 transition-colors',
         isOver && canAccept && 'bg-[var(--color-accent)]/5 ring-1 ring-inset ring-[var(--color-accent)]/40',
         isOver && !canAccept ? 'bg-[var(--color-error)]/5 ring-1 ring-inset ring-[var(--color-error)]/40' : undefined,
       )}
     >
-      {/* Stacked-group header (SP-33) — hidden in the wide board, where the
-          shared sticky StatusHeaderRow carries label + count for all columns. */}
-      <div className="hidden @max-[971px]:flex items-center justify-between gap-[var(--space-2)] -mx-[var(--space-2)] -mt-[var(--space-2)] mb-[var(--space-1)] rounded-t-lg border-b border-[var(--color-border)]/40 bg-[var(--color-surface-1)] px-[var(--space-2)] py-[var(--space-1)]">
-        <StackedGroupStatusLabel status={config.status} label={config.label} />
-        <span className="rounded-full bg-[var(--color-surface-2)] px-[var(--space-1)] text-[length:var(--type-caption-size)] font-semibold leading-none text-[var(--color-muted)]">
-          {tasks.length}
-        </span>
-      </div>
       {tasks.map((task) => (
         <DraggableTaskCard
           key={task.id}

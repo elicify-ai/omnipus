@@ -94,6 +94,8 @@ const reviewedControls = new Set([
   'icon-button', 'field', 'confirm-dialog', 'skeleton', 'collection-state',
   'job-status', 'empty-state', 'error-state', 'query-error-state', 'zoomable-view',
   'RunningIndicator',
+  // T7's founder-approved public composites: exact files, never a ui-folder admission.
+  'filter-menu', 'view-switch',
 ].map((name) => `src/components/ui/${name}.tsx`))
 const reviewedFoundations = new Set([
   'src/index.ts', 'src/lib/utils.ts', 'src/lib/formatTokens.ts',
@@ -143,7 +145,7 @@ test('formatTokens is an internal foundation, never a new public application API
 })
 
 test('exact indicator/formatter admission still rejects stores, task domain code and adjacent UI domain components', () => {
-  const admitted = ['src/components/ui/RunningIndicator.tsx', 'src/lib/formatTokens.ts']
+  const admitted = ['src/components/ui/RunningIndicator.tsx', 'src/lib/formatTokens.ts', 'src/components/ui/filter-menu.tsx', 'src/components/ui/view-switch.tsx']
   assert.doesNotThrow(() => assertReviewedLibraryPaths(admitted))
   // The SAME boundary assertion rejects every injected dependency. A blanket
   // ui/lib/store admission would survive none of these negative controls.

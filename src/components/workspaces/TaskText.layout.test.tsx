@@ -3,7 +3,8 @@
 import { expect, it, vi } from 'vitest'
 import { fireEvent, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { compile } from 'tailwindcss'
+import { compile } from '@tailwindcss/node'
+import postcss from 'postcss'
 import { TaskCard } from './TaskCard'
 import { PlansFilterBand } from './PlansFilterBand'
 import { ListView } from './ListView'
@@ -11,10 +12,22 @@ import { layoutAgent, layoutPlan, layoutTask, renderLayout } from './tasksLayout
 
 it('T3 constrains spaced/unbroken plan and task titles, preserves clamps and reveals full text on hover/focus', async () => {
   const user = userEvent.setup()
-  const compiler = await compile('@tailwind utilities;')
+  const compiler = await compile('@import "tailwindcss";', { base: process.cwd(), onDependency: () => {} })
   const style = document.createElement('style')
-  style.textContent = compiler.build(['whitespace-nowrap', 'whitespace-normal', 'max-w-full', 'w-full', 'min-w-0', 'wrap-anywhere', 'truncate', 'line-clamp-2', 'flex-1', 'block'])
+  const css = compiler.build(['whitespace-nowrap', 'whitespace-normal', 'max-w-full', 'w-full', 'min-w-0', 'wrap-anywhere', 'truncate', 'line-clamp-2', 'flex-1', 'block'])
+  // jsdom does not cascade @layer. Extract the actual compiler's utility rules,
+  // unchanged, into a plain sheet; this is a CSS-engine adapter, not an oracle.
+  const utilities: string[] = []
+  postcss.parse(css).walkRules((rule) => {
+    if (rule.selector.startsWith('.') && !rule.selector.includes(':') && !rule.selector.includes(' ')) utilities.push(rule.toString())
+  })
+  style.textContent = utilities.join('\n')
   document.head.appendChild(style)
+  const control = document.createElement('span')
+  control.className = 'whitespace-nowrap'
+  document.body.appendChild(control)
+  expect(getComputedStyle(control).whiteSpace, 'the CSS instrument can detect nowrap').toBe('nowrap')
+  control.remove()
   try {
     for (const title of ['Omnipus marketing + docs website in a new private GitHub repo', 'X'.repeat(200)]) {
       const mounted = renderLayout(<>

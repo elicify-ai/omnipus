@@ -8,6 +8,8 @@ import { TaskActionButton } from './TaskActionButton'
 import { TaskActivityChip } from './TaskActivityChip'
 import { PriorityBadge } from './PriorityBadge'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
+import { Badge } from '@/components/ui/badge'
+import { Tooltip } from '@/components/ui/tooltip'
 import { taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
 import type { BoardAltitude } from '@/store/workspacesStore'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
@@ -275,12 +277,14 @@ export function TaskCard({
             content. `line-clamp-2` still truncates (with the native `title`
             tooltip below carrying the full text) — wrap-anywhere just makes
             sure that clamp actually happens within the card's own width. */}
-        <p
-          className="min-w-0 flex-1 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] leading-snug line-clamp-2 wrap-anywhere pr-[var(--space-4)]"
-          title={task.title}
-        >
-          {task.title}
-        </p>
+        <Tooltip content={task.title} side="bottom" containerClassName="min-w-0 flex-1" triggerClassName="block w-full min-w-0">
+          <p
+            className="min-w-0 flex-1 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] leading-snug line-clamp-2 wrap-anywhere pr-[var(--space-4)]"
+            title={task.title}
+          >
+            {task.title}
+          </p>
+        </Tooltip>
         {/* FR-022 (SP-41) + PI3: the ONE standard running indicator, spinner
             only, on every running task's card — never on a finished one. */}
         {running && <RunningIndicator className="flex-shrink-0 mt-[var(--space-0-5)]" />}
@@ -317,9 +321,9 @@ export function TaskCard({
       {/* Bottom row: agent badge */}
       {(task.agent_name || task.agent_id) && (
         <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)] flex-wrap">
-          <span className="rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+          <Badge variant="outline" className="min-w-0 max-w-full whitespace-normal wrap-anywhere bg-[var(--color-surface-2)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {task.agent_name ?? task.agent_id}
-          </span>
+          </Badge>
         </div>
       )}
 
@@ -332,7 +336,7 @@ export function TaskCard({
           className="mt-[var(--space-2)] flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] leading-snug text-[color:var(--color-warning)]"
         >
           <WarningCircle size={11} weight="bold" className="mt-[var(--border-width-hairline)] flex-shrink-0" aria-hidden="true" />
-          <span>{task.assignee_warning.message}</span>
+          <span className="min-w-0 wrap-anywhere">{task.assignee_warning.message}</span>
         </p>
       )}
 
@@ -341,13 +345,11 @@ export function TaskCard({
       {tags.length > 0 && (
         <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)] flex-wrap">
           {visibleTags.map((tag) => (
-            <span
-              key={tag}
-              title={tag}
-              className="max-w-[100px] truncate rounded-full bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/20 px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-accent)]"
-            >
-              {tag}
-            </span>
+            <Tooltip key={tag} content={tag} containerClassName="min-w-0 max-w-full" triggerClassName="min-w-0 max-w-full">
+              <Badge variant="outline" title={tag} className="block min-w-0 max-w-[100px] truncate border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10 text-[length:var(--type-caption-size)] text-[var(--color-accent)]">
+                {tag}
+              </Badge>
+            </Tooltip>
           ))}
           {overflowTagCount > 0 && (
             <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">+{overflowTagCount}</span>

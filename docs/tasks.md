@@ -12,11 +12,17 @@ Every workspace has a **Tasks** control in its top bar, alongside Calendar, Libr
 
 Above the views, the Plans band scopes the screen: click a plan tile to see that plan's tasks (the view also jumps to its graph), or **All tasks** to clear the filter.
 
-On the Board, the **Agent** and **Tags** filters narrow further. The List filters per column instead, like a spreadsheet: Priority, Status and Agent sort and filter; Tags filters only; Title and Updated sort only. The list refreshes itself about every 15 seconds, so an agent's changes appear without a reload.
+The **Agent** and **Tags** filters narrow all three views and combine with the selected plan. They remain applied when you switch views. List also offers per-column sorting and filtering, like a spreadsheet: Priority, Status and Agent sort and filter; Tags filters only; Title and Updated sort only. Tasks refresh about every 15 seconds, so an agent's changes appear without a reload.
 
-The toolbar follows the panel's own width, not the browser window. At narrow widths its groups stack, and the heading/view group and filters can wrap. The selector continues to offer Board, List and Graph.
+The heading and **Board / List / Graph** switch share the first toolbar row. The **Agent** and **Tags** filters sit to the left of **New Task** on one row directly underneath. This two-row layout is the same in a docked panel and full screen; long filter labels shorten rather than adding toolbar rows.
 
-The Board stacks its status groups vertically in a narrow panel. In List, Tags and Updated are hidden by default in a narrow panel. Use the three-dot control in the Actions header to reveal them. When the revealed table needs more room, scroll sideways inside the List panel to reach its columns and controls; the whole page does not scroll sideways, and Title keeps its own space. Scroll to the three-dot control and press it again to return to automatic column visibility for the panel's current width.
+Selecting **Board** widens the panel to its maximum docked width. Chat stays visible and never shrinks below its minimum width. Selecting **List** or **Graph** restores the previous width. Full-screen Board uses the window's available space.
+
+Board shows all six equal-width status columns without sideways scrolling. If the panel cannot fit six readable columns, Tasks shows List instead with the quiet note **Board needs more room — showing list**. Board remains your selected view. The view automatically returns to Board when the panel has enough room again; it does not turn into a vertical stack of status groups.
+
+List columns are **Pri, Title, Status, Actions, Tags, Agent, Updated**. The Run/Stop action sits between Status and Tags. In a narrow List panel, Tags and Updated are hidden by default. Use the three-dot control beside **Actions** to reveal them. When the revealed table needs more room, scroll sideways inside the List panel to reach its columns and controls; the whole page does not scroll sideways, and Title keeps its own space. Press the three-dot control again to return to automatic column visibility.
+
+Long plan and task titles wrap within their tiles or cards. Where titles are shortened to a fixed number of lines, or to one line in List, hover or keyboard focus reveals the full text. The Plans strip and Board status headers use a darker surface to separate them from the task area.
 
 ## When you would use it
 

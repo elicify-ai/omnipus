@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "component": "FilterMenu",
+  "exports": ["FilterMenu"],
+  "category": "composite",
+  "source": "src/components/ui/filter-menu.tsx",
+  "documentation": "docs/internal/design/components/filter-menu.md",
+  "owner": "design-system",
+  "themes": ["dark"],
+  "variants": ["single", "multiple"],
+  "sizes": ["default"],
+  "states": ["closed", "open", "selected", "disabled", "focus-visible"],
+  "stories": [{"file": "src/components/ui/filter-menu.stories.tsx", "exports": ["Default", "Selection"]}],
+  "checks": [
+    {"id": "filter-menu-unit", "kind": "unit", "file": "src/components/ui/tasks-controls.test.tsx", "test": "Tasks panel layout T7 uses shared flat FilterMenu/ViewSwitch, kit metadata badges and sentence-case List headers", "applicable": true},
+    {"id": "filter-menu-interaction", "kind": "interaction", "file": "src/components/ui/filter-menu.stories.tsx", "test": "Selection", "story": "Selection", "applicable": true},
+    {"id": "filter-menu-axe", "kind": "axe", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-axe] axe", "story": "Default", "applicable": true},
+    {"id": "filter-menu-keyboard", "kind": "keyboard", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-keyboard] keyboard", "story": "Default", "applicable": true},
+    {"id": "filter-menu-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-browser] browser", "story": "Default", "applicable": true},
+    {"id": "filter-menu-pointer", "kind": "pointer", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-pointer] pointer", "story": "Default", "applicable": true},
+    {"id": "filter-menu-reduced-motion", "kind": "reduced-motion", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-reduced-motion] reduced-motion", "story": "Default", "applicable": true},
+    {"id": "filter-menu-forced-colors", "kind": "forced-colors", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-forced-colors] forced-colors", "story": "Default", "applicable": true},
+    {"id": "filter-menu-root-size", "kind": "root-size", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-root-size] root-size", "story": "Default", "applicable": true},
+    {"id": "filter-menu-zoom", "kind": "zoom", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-zoom] zoom", "story": "Default", "applicable": true},
+    {"id": "filter-menu-reflow", "kind": "reflow", "file": "tests/design-system/browser.spec.ts", "test": "FilterMenu [check:filter-menu-reflow] reflow", "story": "Default", "applicable": true}
+  ]
+}

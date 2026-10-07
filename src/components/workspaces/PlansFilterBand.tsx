@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import {
   ListChecks,
   Plus,
@@ -20,7 +20,9 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
-import { Switch } from '@/components/ui/switch'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Badge } from '@/components/ui/badge'
+import { Tooltip } from '@/components/ui/tooltip'
 import { PlanActionButton } from './PlanActionButton'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
 import type { Agent, Plan, Task } from '@/lib/api'
@@ -121,11 +123,10 @@ export function PlansFilterBand({
   pendingAction = null,
   showNewPlanTile = true,
 }: PlansFilterBandProps) {
-  // SP-36 — done plans are hidden by default; the "Show done (N)" switch
-  // reveals them for the session. Only genuinely-`done` plans hide — a
-  // cancelled plan still renders its orange "Cancelled" tile (it is not a
-  // completed plan and must stay triageable).
+  // Done plans stay hidden by default. The header checkbox reveals only
+  // genuinely completed plans; cancelled plans remain visible for triage.
   const [showDone, setShowDone] = useState(false)
+  const showDoneId = useId()
   const doneCount = plans.filter((p) => p.state === 'done').length
   const visiblePlans = showDone ? plans : plans.filter((p) => p.state !== 'done')
 
@@ -150,43 +151,23 @@ export function PlansFilterBand({
   }, [plans, showDone])
 
   return (
-    // SP-36 wraps the tile strip in one announced group: the control row
-    // (Show-done switch + overflow hint) sits above the horizontal strip.
-    <div role="group" aria-label="Plans filter" className="flex flex-col flex-shrink-0">
-      {(doneCount > 0 || overflows) && (
-        <div className="flex flex-shrink-0 items-center gap-[var(--space-2)] px-[var(--space-4)] pt-[var(--space-2)]">
-          {doneCount > 0 && (
-            // A bare "Show done (0)" switch would be noise, so the switch
-            // only renders when there is something to reveal.
-            <label
-              htmlFor="plans-show-done"
-              className="flex cursor-pointer items-center gap-[var(--space-2)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
-            >
-              <Switch
-                id="plans-show-done"
-                checked={showDone}
-                onCheckedChange={(checked) => setShowDone(checked)}
-                aria-label="Show done plans"
-              />
-              <span>Show done ({doneCount})</span>
-            </label>
-          )}
-          {overflows && (
-            // Sighted-only affordance (the whole tile list is already in the
-            // accessibility tree, and the strip is a real scroll container).
-            <span
-              aria-hidden="true"
-              className="ml-auto whitespace-nowrap text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
-            >
-              scroll for more →
-            </span>
-          )}
-        </div>
-      )}
-      <div
-        ref={stripRef}
-        className="flex items-stretch gap-[var(--space-2-5)] overflow-x-auto px-[var(--space-4)] py-[var(--space-3)] bg-[var(--color-surface-0)] flex-shrink-0"
-      >
+    <div role="group" aria-label="Plans filter" className="flex shrink-0 flex-col bg-[var(--color-surface-1)]">
+      <div className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)]/60 px-[var(--space-4)] pt-[var(--space-3)] pb-[var(--space-2-5)]">
+        <h2 className="mr-auto font-headline text-base font-bold text-[var(--color-secondary)]">Plans</h2>
+        {doneCount > 0 && (
+          <label htmlFor={showDoneId} className="flex cursor-pointer items-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">
+            <Checkbox id={showDoneId} checked={showDone} onCheckedChange={(checked) => setShowDone(checked === true)} aria-label="Show done plans" />
+            <span>Show done ({doneCount})</span>
+          </label>
+        )}
+        {!showNewPlanTile && (
+          <Button type="button" variant="ghost" onClick={onNewPlan}
+            className="h-auto shrink-0 gap-[var(--space-1)] p-0 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-accent)]">
+            <Plus size={14} />New Plan
+          </Button>
+        )}
+      </div>
+      <div ref={stripRef} className="flex shrink-0 items-stretch gap-[var(--space-2-5)] overflow-x-auto bg-[var(--color-surface-1)] px-[var(--space-4)] py-[var(--space-3)]">
         <AllTasksTile
           selected={selectedPlanId === null}
           onSelect={() => onSelectPlan(null)}
@@ -233,6 +214,9 @@ export function PlansFilterBand({
         </Button>
       )}
       </div>
+      {overflows && (
+        <span aria-hidden="true" className="self-end px-[var(--space-4)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">scroll for more →</span>
+      )}
     </div>
   )
 }
@@ -396,12 +380,13 @@ function PlanFilterTile({
 
       {/* Select control — the tile's TITLE/body is the filter toggle (Von
           Restorff: `aria-pressed` + gold ring communicate the active tile). */}
+      <Tooltip interactive content={<>{plan.title}{owner && <><br />Agent: {owner.name}</>}</>} side="bottom" containerClassName="h-full w-full min-w-0" triggerClassName="h-full w-full min-w-0">
       <Button
         variant="ghost"
         aria-pressed={selected}
         aria-label={plan.title}
         onClick={onSelect}
-        className="h-full w-full flex-col items-start justify-start gap-[var(--space-2)] rounded-none p-0 pr-[var(--space-6)] text-left hover:bg-transparent"
+        className="h-full w-full min-w-0 flex-col items-start justify-start gap-[var(--space-2)] whitespace-normal rounded-none p-0 pr-[var(--space-6)] text-left hover:bg-transparent"
       >
         <span className="flex flex-wrap items-center gap-[var(--space-1)]">
           <span
@@ -457,7 +442,7 @@ function PlanFilterTile({
             the wrapping mode the spec requires browsers to factor into
             min-content sizing itself, so line-clamp-2 can actually clip
             within the tile instead of overflowing it. */}
-        <span className="line-clamp-2 min-w-0 wrap-anywhere text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]">
+        <span className="line-clamp-2 w-full min-w-0 max-w-full wrap-anywhere text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]">
           {plan.title}
         </span>
 
@@ -485,15 +470,13 @@ function PlanFilterTile({
             </span>
           </span>
           {owner && (
-            <span
-              title={owner.name}
-              className="max-w-[100px] truncate rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
-            >
+            <Badge variant="outline" title={owner.name} className="block min-w-0 max-w-[100px] truncate bg-[var(--color-surface-2)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
               {owner.name.split('—')[0].trim()}
-            </span>
+            </Badge>
           )}
         </span>
       </Button>
+      </Tooltip>
 
       <ConfirmDialog
         open={confirmClear}
