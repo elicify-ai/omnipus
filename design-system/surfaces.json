@@ -7848,6 +7848,10 @@
       "lane": 2
     },
     {
+      "source": "src/components/workspaces/useWorkspaceHeaderMode.ts",
+      "lane": 1
+    },
+    {
       "source": "src/main.tsx",
       "lane": 7
     },
