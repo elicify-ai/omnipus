@@ -149,7 +149,7 @@ func TestUpdateAgent_JudgeOtherIdentityFieldsStillForbidden(t *testing.T) {
 	}{
 		{"name", `{"name":"Rogue Judge"}`},
 		{"description", `{"description":"a rewritten description"}`},
-		{"color", `{"color":"#ff0000"}`},
+		{"color", `{"color":"#3B82F6"}`},
 		{"icon", `{"icon":"skull"}`},
 		{"skills", `{"skills":["some-skill"]}`},
 	}
@@ -498,7 +498,7 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 	t.Run("native Subagent", func(t *testing.T) {
 		api := buildExecutorTestAPI(t)
 		id := createNativeSubagent(t, api)
-		validPatch := `{"model":"test-model","max_tool_iterations":8,"color":"#d4af37","icon":"robot","description":"updated worker"}`
+		validPatch := `{"model":"test-model","max_tool_iterations":8,"color":"#FB923C","icon":"robot","description":"updated worker"}`
 		w := httptest.NewRecorder()
 		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(validPatch))
 		r.Header.Set("Content-Type", "application/json")
@@ -513,7 +513,7 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 		// forbidden on a subagent_3p PUT (agent_field_rules.go
 		// subagent3pForbiddenUpdateFields, extended in W2a). See
 		// TestUpdateAgent_Subagent3p_ForbiddenFields for the 400 case.
-		validPatch := `{"model":"test-model","color":"#d4af37","icon":"robot","description":"updated worker"}`
+		validPatch := `{"model":"test-model","color":"#FB923C","icon":"robot","description":"updated worker"}`
 		w := httptest.NewRecorder()
 		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(validPatch))
 		r.Header.Set("Content-Type", "application/json")
@@ -640,7 +640,7 @@ func TestUpdateAgent_UpdatedAtRejected(t *testing.T) {
 	//    current display-only value used by the presence-rejection cases.
 	w1 := httptest.NewRecorder()
 	r1 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
-		strings.NewReader(`{"color":"#FF0000"}`))
+		strings.NewReader(`{"color":"#3B82F6"}`))
 	r1.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w1, r1)
 	require.Equal(t, http.StatusOK, w1.Code, "establishing PUT body: %s", w1.Body.String())
@@ -789,7 +789,7 @@ func TestUpdateAgent_ConcurrentDeleteRace_Returns404NotPhantom200(t *testing.T) 
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(`{"revision":"`+strings.Repeat("0", 64)+`","color":"#123456"}`))
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(`{"revision":"`+strings.Repeat("0", 64)+`","color":"#3B82F6"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 

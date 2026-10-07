@@ -74,6 +74,8 @@ func suppliedRESTAgentFields(req *gen.AgentUpdateRequest) []string {
 	}
 	add(req.Name != nil, "name")
 	add(req.Description != nil, "description")
+	add(req.Figure != nil, "figure")
+	add(req.Role != nil, "role")
 	add(req.Color != nil, "color")
 	add(req.Icon != nil, "icon")
 	add(req.Soul != nil, "soul")
@@ -281,7 +283,38 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 			}
 		}
 	}
+	if !acceptAgentIdentityWrite(uf.w, &uf.ru.req) {
+		return true
+	}
 	return uf.validateMaxToolIterations()
+}
+
+// acceptAgentIdentityWrite rejects a present figure, role, or colour that is
+// not in the closed set, before any field is persisted. Colour letter-case is
+// normalized to the uppercase enum value. Omitted fields are left alone.
+func acceptAgentIdentityWrite(w http.ResponseWriter, req *gen.AgentUpdateRequest) bool {
+	if req.Figure != nil {
+		if _, ok := coreagent.CanonicalFigure(string(*req.Figure)); !ok {
+			jsonErr(w, http.StatusBadRequest, "figure must be Robot, Man, Woman, or Omnipus")
+			return false
+		}
+	}
+	if req.Role != nil {
+		if _, ok := coreagent.CanonicalRole(string(*req.Role)); !ok {
+			jsonErr(w, http.StatusBadRequest, "role must be one of the curated role slugs")
+			return false
+		}
+	}
+	if req.Color != nil {
+		canon, ok := coreagent.CanonicalColor(string(*req.Color))
+		if !ok {
+			jsonErr(w, http.StatusBadRequest, "color must be one of the ten identity colours")
+			return false
+		}
+		c := gen.AgentColor(canon)
+		req.Color = &c
+	}
+	return true
 }
 
 // validateMaxToolIterations is the #904 fast-path check of the per-agent
@@ -864,6 +897,7 @@ func (uf *restAPIUpdateAgentFlow) respond() {
 	if liveCfg := uf.ru.a.agentLoop.GetConfig(); liveCfg != nil {
 		for _, ac := range liveCfg.Agents.List {
 			if ac.ID == agentID {
+				applyStoredAgentIdentity(&ag, ac)
 				ag.Type = coreagent.ToWireType(ac)
 				// Derived from the settings singleton — see listAgents' comment
 				// for the full rationale. liveCfg is fetched fresh above, and
@@ -1131,8 +1165,14 @@ func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRe
 	// tool_feedback was removed from the wire in W1 (it's now per-channel
 	// runtime behavior driven by pkg/agent/loop.go: webchat skips). The
 	// global config-level agents.defaults.tool_feedback stays.
+	if rp.ru.req.Figure != nil {
+		agentRec.Figure = string(*rp.ru.req.Figure)
+	}
+	if rp.ru.req.Role != nil {
+		agentRec.Role = string(*rp.ru.req.Role)
+	}
 	if rp.ru.req.Color != nil {
-		agentRec.Color = *rp.ru.req.Color
+		agentRec.Color = string(*rp.ru.req.Color)
 	}
 	if rp.ru.req.Icon != nil {
 		agentRec.Icon = *rp.ru.req.Icon

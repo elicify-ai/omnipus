@@ -734,7 +734,7 @@ func FixtureSession_Edge() Session {
 // Agent
 
 func FixtureAgent_Populated() Agent {
-	color := "#D4AF37"
+	color := AgentColorHash3B82F6
 	icon := "Robot"
 	model := "claude-sonnet-4-6"
 	warning := strPtr("Config reload failed after update")
@@ -751,6 +751,8 @@ func FixtureAgent_Populated() Agent {
 		// #904: 50 is the agent's own value (≤ the global), so source=agent.
 		MaxToolIterationsSource:   MaxToolIterationsSourceAgent,
 		MaxToolIterationsOverride: intPtr(50),
+		Figure:                    AgentFigureOmnipus,
+		Role:                      AgentRoleGeneral,
 		Color:                     &color,
 		Icon:                      &icon,
 		Model:                     &model,
@@ -2457,7 +2459,7 @@ func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 //     variant at all.
 
 func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
-	color := "#D4AF37"
+	color := AgentColorHash3B82F6
 	icon := "Robot"
 	model := "claude-sonnet-4-6"
 	deny := AgentCreateRequestMainToolsCfgBuiltinPoliciesDeny
@@ -2523,7 +2525,7 @@ func FixtureAgentCreateRequestMain_InvalidType() AgentCreateRequestMain {
 }
 
 func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
-	color := "#4287f5"
+	color := AgentColorHash3B82F6
 	icon := "Robot"
 	model := "claude-sonnet-4-6"
 	description := "Native delegation-only research worker"
@@ -2576,7 +2578,7 @@ func FixtureAgentCreateRequestSubagent_InvalidType() AgentCreateRequestSubagent 
 // allows: type/name/description/model/provider/color/icon/rate_limits/soul/
 // executor/timeout_seconds. executor is REQUIRED.
 func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3p {
-	color := "#f542a7"
+	color := AgentColorHashF472B6
 	icon := "Terminal"
 	model := "claude-sonnet-4-6"
 	provider := "anthropic"
@@ -2666,7 +2668,7 @@ func FixtureAgentCreateRequestSubagent3p_ForbiddenFieldJSON() []byte {
 // Traces to: contracts/components/schemas/AgentUpdateRequest.yaml
 
 func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
-	color := "#D4AF37"
+	color := AgentColorHashFB923C
 	icon := "Robot"
 	model := "gpt-4o"
 	name := "Renamed Agent"

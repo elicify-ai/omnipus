@@ -38,7 +38,7 @@ func TestComputeSessionLifecycle_RestartInterruptedIsInterruptedNotFailed(t *tes
 		}
 	}
 	for _, c := range cases {
-		state, _ := computeSessionLifecycle(ls, c.id)
+		state, _, _ := computeSessionLifecycle(ls, c.id)
 		if state == nil {
 			t.Fatalf("%s: lifecycle_state absent, want %q", c.id, c.want)
 		}
