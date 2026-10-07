@@ -371,6 +371,39 @@ At the baseline, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-fron
 
 Viewing cross-session activity does not widen D4’s **main-only** `needs_attention`, change Stop’s selected-session/tree scope, grant peer authority, or make a plan cross-workspace. This consciously revisits **list_jobs — unified background-job visibility for agents**::Option D’s rejection of the SPA scope extension, while preserving that agent tool’s recovery purpose (https://github.com/elicify-ai/omnipus/issues/493; B::D5; D4).
 
+## One-round correction disposition
+
+This is the author’s correction evidence, **not an independent gate verdict** or product PASS. No second grill is run; unresolved new activity choices go to the founder. All original findings are addressed or scoped moot by the binding answers (review; F).
+
+| Finding | Disposition in this correction | Evidence / acceptance still required |
+|---|---|---|
+| **MAJ-001** pre-decode upload bounds | **Moot for first squad**: Q6/Q7 defer avatar uploads/GIFs completely. D9 preserves pre-decode/pixel, normalization/concurrency and future animation bounds for the later unit. | F::Q6/Q7; D9; existing maxImagePixels-before-decode source read. No upload endpoint/security PASS asserted. |
+| **MAJ-002** built-in identity reseeding | **Addressed**: D9 includes canonical compiled definitions, fresh seed, startup enforcement/persistence and protected-field preservation, not just one-time stored recoloring. | SeedConfig/core definitions/boot source; fresh/custom/built-in, reload/repeated-restart cases in D12. |
+| **MAJ-003** picker-owned freshness | **Addressed**: D2 moves the one cross-tab refresh mount to AppShell, refreshes roster+membership and replaces picker-open refresh with navigation/expansion. | Sole AgentPicker mount verified; real shell/sidebar-without-picker test required. |
+| **MAJ-004** entry/invalid restore | **Addressed** by F::Q1: exact valid last chat, else validated Ava welcome/default main; D3 covers missing/hidden/empty/error/late/failed-attach and send gating. | Existing session store/selection paths read; D12 negative cases, no runtime claim. |
+| **MIN-001** main/extra distinction | **Addressed** by F::Q2: persistent Main/Extra title above the feed, selected owner row during extra chat and row click returning to main. | Approved Q9 reference and D3/D12. |
+| **MIN-002** stale main interface question | **Addressed**: D5 consumes b76 D1.1 field names/invariants; answered alternatives removed. Settled needs_attention direction is cited separately, with honest spec publication state. | b76 immutable source; 17:45 record/steering; D4/D5. |
+
+### Founder-answer coverage — answered questions retired
+
+| Interview answer | Rule carried into this correction |
+|---|---|
+| Q1 | Last valid visible chat, else validated workspace welcome/default main (Ava); D3. |
+| Q2 | Main/Extra label above the feed, not in composer status; D3. |
+| Q3 | Upload budget question moot for first squad under Q6; later bounds retained, D9. |
+| Q4 / Q4b | Main only: structured questions, approvals, finished/failed goals. No prose parsing; structured-question prompt owned by prometheus. D4. |
+| Q5 | Four figures, Omnipus default, role badge at every size; D6. |
+| Q6 / Q7 | No avatar uploads/GIFs in first squad; later placement/design decision, D9/D11. |
+| Q8 | Wireframe nearest-hue/Grey rule approved; thresholds/ties/examples in specification for approval; canonical seeds included, D9/D10. |
+| Q9 FINAL + approved wireframe | Inline animated AgentIcon/name/phrase replaces old thinking indicator; name-only bubbles; addressed responder shown. No composer status line, D8. |
+| Q10 | Remove old paths now; /resume → /sessions; @ unavailable until messaging; /clear never creates a new session, D11. |
+| Q11 + 17:15 | THIS-cutover install/upgrade migration preserves saved-chat reachability/continuation and heartbeat→main. Backend dependency, D10. |
+| Q12 + 17:15/17:25 | Admin default-workspace main, shown there and explicitly pair-addressable elsewhere; no fake membership. Backend dependency, D5/D10/D11. |
+| 17:25 address rule | Always workspace + agent ID; current workspace default, another workspace chosen explicitly. D11. |
+| 17:45 waiting contract | Session.needs_attention; shared observed-goal acknowledgement; met finished, rounds_exhausted/other failed, stopped_by_user excluded; no prefetch/reconnect acknowledgement. D4. |
+| 17:45 task collaboration / #1221 | Backend canonical task-tool merge with optional explicit workspace; no cross-workspace plans. Per-agent Never auto-approve removed by companion #1221, not this avatar implementation. D9/D11. |
+| #1021 / #493 hand-over | D13/D14 add plan/link/drill-down and cross-session visibility. Q-FE-11/Q-FE-12 are genuinely new unanswered choices, not reopened original questions. |
+
 ## Consequences
 
 | Kind | Consequence | Basis / certainty |
