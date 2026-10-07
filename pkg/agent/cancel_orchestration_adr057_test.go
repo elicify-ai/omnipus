@@ -73,7 +73,7 @@ func u15RegisterActiveTurn(t *testing.T, al *AgentLoop, sessionID, turnID string
 // parentTurnID chain collectLiveDescendantTurnStates walks for ScopeSubtree.
 // Stored under its own turnID as the map key (mirrors
 // orphan_watch_test.go's existing convention for a non-root turn).
-func u15RegisterChildTurn(t *testing.T, al *AgentLoop, rootSessionID, childTranscriptSessionID, turnID, parentTurnID string, depth int, critical bool) *turnState {
+func u15RegisterChildTurn(t *testing.T, al *AgentLoop, rootSessionID, childTranscriptSessionID, turnID, parentTurnID string, depth int) *turnState {
 	t.Helper()
 	require.NotEqual(t, rootSessionID, childTranscriptSessionID,
 		"fixture must use distinct parent/child session ids (spec's distinct-ids-everywhere corollary)")
@@ -83,7 +83,6 @@ func u15RegisterChildTurn(t *testing.T, al *AgentLoop, rootSessionID, childTrans
 		routingSessionID:    session.RoutingSessionID(rootSessionID),
 		depth:               depth,
 		parentTurnID:        parentTurnID,
-		critical:            critical,
 		finishedChan:        make(chan struct{}),
 	}
 	al.activeTurnStates.Store(turnID, ts)
@@ -154,7 +153,7 @@ func TestU15Cancel_ScopeSubtreeReachesDelegateChild_ScopeSelfOnlyWouldNot(t *tes
 	// --- RED: ScopeSelfOnly, called directly ---
 	u15RegisterActiveTurn(t, al, rootID, "turn-u15-scope-selfonly-root", 0, "")
 	u15RegisterChildTurn(t, al, rootID, fmt.Sprintf("u15-scope-child-selfonly-%d", nonce),
-		"turn-u15-scope-selfonly-child", "turn-u15-scope-selfonly-root", 1, false)
+		"turn-u15-scope-selfonly-child", "turn-u15-scope-selfonly-root", 1)
 
 	selfOnlyReached, err := al.Interrupt(rootID, ScopeSelfOnly, "u15-test-self-only")
 	require.NoError(t, err)
@@ -171,7 +170,7 @@ func TestU15Cancel_ScopeSubtreeReachesDelegateChild_ScopeSelfOnlyWouldNot(t *tes
 	// --- GREEN: RequestCancel, which hardcodes ScopeSubtree ---
 	u15RegisterActiveTurn(t, al, rootID, "turn-u15-scope-subtree-root", 0, "")
 	u15RegisterChildTurn(t, al, rootID, fmt.Sprintf("u15-scope-child-subtree-%d", nonce),
-		"turn-u15-scope-subtree-child", "turn-u15-scope-subtree-root", 1, false)
+		"turn-u15-scope-subtree-child", "turn-u15-scope-subtree-root", 1)
 
 	outcome, err := al.RequestCancel(
 		context.Background(),
@@ -267,7 +266,7 @@ func TestU15PreArmLatch_KeysSetAndClearedMatch(t *testing.T) {
 
 // TestU15Cancel_PhaseB_HardAbortsLiveChild covers BDD-23: a registered root
 // turn that finishes gracefully almost immediately, plus a registered
-// Critical:true child turn that does NOT finish, must still be hard-aborted
+// child turn that does NOT finish, must still be hard-aborted
 // by PHASE B's 3s timer — proving PHASE B threads the PHASE-A-computed
 // descendant set (al.liveTurnStatesAmong(descendants)) rather than gating
 // solely on activeTurn.IsAlive() (which would already be false for the
@@ -282,9 +281,9 @@ func TestU15Cancel_PhaseB_HardAbortsLiveChild(t *testing.T) {
 
 	rootTS := u15RegisterActiveTurn(t, al, rootSessionID, "turn-u15-phaseb-root", 0, "")
 	childTS := u15RegisterChildTurn(t, al, rootSessionID, childTranscriptID,
-		"turn-u15-phaseb-child", "turn-u15-phaseb-root", 1, true)
+		"turn-u15-phaseb-child", "turn-u15-phaseb-root", 1)
 
-	require.True(t, childTS.IsAlive(), "precondition: the Critical child must be alive before the Stop")
+	require.True(t, childTS.IsAlive(), "precondition: the child must be alive before the Stop")
 	require.False(t, childTS.hardAbortRequested(), "precondition: no hard-abort has been requested yet")
 
 	outcome, err := al.RequestCancel(
@@ -297,18 +296,18 @@ func TestU15Cancel_PhaseB_HardAbortsLiveChild(t *testing.T) {
 	require.True(t, outcome.Fired)
 
 	// BDD-23's Given: the root finishes gracefully (almost immediately) while
-	// the Critical child keeps running — mirrors the existing package's
+	// the child keeps running — mirrors the existing package's
 	// fixture pattern (cancel_subagent_cascade_test.go) for simulating a
 	// finished turn without a real turn-processing goroutine.
 	rootTS.isFinished.Store(true)
 
 	require.Eventually(t, childTS.hardAbortRequested, 4*time.Second, 50*time.Millisecond,
-		"FR-024: PHASE B must hard-abort the still-live Critical child via the PHASE-A-computed "+
+		"FR-024: PHASE B must hard-abort the still-live child via the PHASE-A-computed "+
 			"descendant set, even though the root already finished gracefully")
 }
 
 // TestU15Cancel_PhaseC_DetachesSurvivingChild covers BDD-24: the SAME tree as
-// BDD-23, but the Critical child survives past PHASE B's hard-abort signal
+// BDD-23, but the child survives past PHASE B's hard-abort signal
 // (it never actually terminates — a stuck goroutine) — PHASE C's 5s-after-
 // hard timer must detach it (MarkAbandoned), again threading the SAME
 // PHASE-A-computed descendant set rather than re-scanning.
@@ -322,7 +321,7 @@ func TestU15Cancel_PhaseC_DetachesSurvivingChild(t *testing.T) {
 
 	rootTS := u15RegisterActiveTurn(t, al, rootSessionID, "turn-u15-phasec-root", 0, "")
 	childTS := u15RegisterChildTurn(t, al, rootSessionID, childTranscriptID,
-		"turn-u15-phasec-child", "turn-u15-phasec-root", 1, true)
+		"turn-u15-phasec-child", "turn-u15-phasec-root", 1)
 
 	outcome, err := al.RequestCancel(
 		context.Background(),
@@ -364,7 +363,7 @@ func TestU15Cancel_AuditNamesDescendants(t *testing.T) {
 
 	rootTS := u15RegisterActiveTurn(t, al, rootSessionID, "turn-u15-audit-root", 0, "")
 	u15RegisterChildTurn(t, al, rootSessionID, childTranscriptID,
-		"turn-u15-audit-child", "turn-u15-audit-root", 1, false)
+		"turn-u15-audit-child", "turn-u15-audit-root", 1)
 
 	outcome, err := al.RequestCancel(
 		context.Background(),
@@ -410,9 +409,9 @@ func TestU15Cancel_AuditNamesEveryDescendantAtDepth3(t *testing.T) {
 	rootID := fmt.Sprintf("u15-depth3-root-%d", nonce)
 
 	rootTS := u15RegisterActiveTurn(t, al, rootID, "turn-u15-d0", 0, "")
-	u15RegisterChildTurn(t, al, rootID, fmt.Sprintf("u15-depth3-d1-%d", nonce), "turn-u15-d1", "turn-u15-d0", 1, false)
-	u15RegisterChildTurn(t, al, rootID, fmt.Sprintf("u15-depth3-d2-%d", nonce), "turn-u15-d2", "turn-u15-d1", 2, false)
-	u15RegisterChildTurn(t, al, rootID, fmt.Sprintf("u15-depth3-d3-%d", nonce), "turn-u15-d3", "turn-u15-d2", 3, false)
+	u15RegisterChildTurn(t, al, rootID, fmt.Sprintf("u15-depth3-d1-%d", nonce), "turn-u15-d1", "turn-u15-d0", 1)
+	u15RegisterChildTurn(t, al, rootID, fmt.Sprintf("u15-depth3-d2-%d", nonce), "turn-u15-d2", "turn-u15-d1", 2)
+	u15RegisterChildTurn(t, al, rootID, fmt.Sprintf("u15-depth3-d3-%d", nonce), "turn-u15-d3", "turn-u15-d2", 3)
 
 	wantTurnIDs := []string{"turn-u15-d0", "turn-u15-d1", "turn-u15-d2", "turn-u15-d3"}
 

@@ -277,7 +277,6 @@ type turnState struct {
 	// Additional SubTurn fields
 	ctx          context.Context    // Context for this turn
 	cancelFunc   context.CancelFunc // Cancel function for this turn's context
-	critical     bool               // Whether this SubTurn should continue after parent ends
 	closeOnce    sync.Once          // Ensures pendingResults channel is closed once
 	finishedChan chan struct{}      // Closed when turn finishes
 
