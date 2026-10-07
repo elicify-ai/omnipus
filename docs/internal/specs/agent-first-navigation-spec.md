@@ -1,7 +1,7 @@
 # Feature Specification: Agent-first navigation and agent identity
 
 **Created**: 2026-10-07 (UTC)
-**Status**: In review — sole correction in progress; contract/visual dependencies remain. Not implementation approval.
+**Status**: In review — sole correction complete; contract/visual dependencies remain. Not implementation approval.
 **Size**: Feature. One frontend specification; backend U1 and this frontend land jointly.
 **Input**: Corrected **Agent-first navigation and agent identity**, D1–D14, at `b6fd39efb5bc4ee5bb77cb6f16be5baeec34265e`, with the newer founder answers below.
 **Worktree**: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav`
@@ -631,7 +631,7 @@ This is the **one normative requirement/decision/acceptance/scenario/test table*
 | FR-028 Modal plan pill/link on actual starting-chat row; no internal-owner/Tasks-only fake origin. | M A5; N D13; F Q-FE-12 | US-10.1 → BDD-10.1/E11 | T-09/T-20/T-27 |
 | FR-029 Live/unopened/focus/reconnect metadata+membership reconcile to consistent cut; stable keyboard identity, no service/row socket. | M A6; N D2/D5/D14; G MAJ-002/004 | US-9.2/9.3/8.3 → BDD-09.2/09.3/08.3/E09 | T-11/T-18/T-19/T-26 |
 | FR-030 Main pinned/extras recency; helper always real-parent nested under every filter/search. Authorized parent chat unavailable placeholder/Open; Unfiled/protection/virtual/plain intact. | M A7; R21/R22; N D3/D5/D10/D14; F grouping; S Q-M5 | US-8.2/9.1/9.4/9.5 → BDD-08.2/09.1/09.4/09.5/E08 | T-08/T-18/T-19/T-26 |
-| FR-031 Shared flat group/identity/Badge/count/row/search/filter, Sessions/subtitle; stable activation/focus/rename/delete/phone. Native titles await R45, no handmade view/tooltip. | M D1/D2/D3/D4/D5/D6/D7; R33/R35/R39/R41/R45; N D7/D11 | US-8.3/8.4 → BDD-08.3/08.4/09.2/09.5 | T-18/T-19/T-26/T-30 |
+| FR-031 Shared flat groups initially collapsed/uppercase, search/pair-filter reveals matches; identity/Badge/count/row/search/filter, Sessions/subtitle; stable activation/focus/rename/delete/phone. Native titles await R45, no handmade view/tooltip. | M D1/D2/D3/D4/D5/D6/D7; R33/R35/R39/R41/R45; N D7/D11 | US-8.3/8.4 → BDD-08.3/08.4/09.2/09.5 | T-18/T-19/T-26/T-30 |
 | FR-032 Distinct truthful metadata coverage/counts, unstable/missing/stale/unattributed = partial/unknown/error, never false quiet; no transcript fan-out/eight-active cap. | M A6; N D5/D13/D14; DEP-ACT; G MAJ-002 | US-9.3/9.4/11.3 → BDD-09.3/09.4/11.3/E09 | T-10/T-19/T-21/T-26/T-29 |
 | FR-033 Composed All/Running/Needs me; actual executing ≠queued; Needs me **mains only**; helper matches retain parent context. | M A2; F grouping; S Q-M6; N D14/BS | US-9.1 → BDD-09.1/E08 | T-08/T-19/T-26 |
 | FR-034 Identical consecutive helper siblings → expandable N similar helper runs; original IDs/status/attention/Open/counts/all paths, no cross-parent/execution/root merge/completed-only restriction. | M D8; F grouping; N D14 | US-9.4/9.5 → BDD-09.5/E08 | T-08/T-19/T-26 |
@@ -651,7 +651,7 @@ All are pass/fail on the future real joint candidate, not document publication.
 |---|---|
 | SC-001 | J-01/J-02 exact targets/send; zero recency/extra/split/losing-ack/unresolved-send errors. |
 | SC-002 | J-03 four-source/negative/shown-bound/shared/decision/newer-race proofs; unknown never false. |
-| SC-003 | Exact vocabulary/sizes/W, opaque ink ≥3:1 at dimmest frame both backgrounds; no colored names/avatars/reduced loops. |
+| SC-003 | Exact vocabulary/sizes/W, opaque ink ≥3:1 at dimmest frame both backgrounds; no agent-colored names/avatars/reduced loops. |
 | SC-004 | J-06 frozen identities/locks/mapping agree after reload and ≥2 gateway restarts. |
 | SC-005 | One complete-or-explicit-partial Sessions; strict parent/folding/filters/placeholder; stable activation, B local/A discoverable/shell count. |
 | SC-006 | Real supported live/replay/idempotent start links, truthful state; zero fake origin/run duplicates/control grants. |
