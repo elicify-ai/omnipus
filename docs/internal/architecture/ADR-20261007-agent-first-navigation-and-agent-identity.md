@@ -1,5 +1,11 @@
 # ADR-20261007 — Agent-first navigation and agent identity
 
+**Correction — 2026-10-07, the sole correction round:** at `554d21ffd` this ADR required avatars on messages, static chat icons and preservation of the old thinking indicator. Those rules are superseded by founder Q9: names-only bubbles and an animated indicator inline in the feed replace the old indicator; no composer status line. Founder Q5 selects Omnipus as default; Q6/Q7 defer avatar uploads/GIFs. The one review also exposed missing canonical seeding, refresh ownership and workspace-entry rules, addressed below. WIP checkpoints belong to this same correction round, not additional review/fix rounds.
+
+**F — binding founder answers:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/adr-frontend-nav-20261007/FOUNDER-ANSWERS-20261007.md`::Q1–Q12, plus the direct team-lead steering in this correction conversation. Latest steering fixes Q9’s inline placement and approves `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/navigation-menu-wireframe/index.html` as the Q9 visual reference. The screenshots under `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/navigation-menu-wireframe/evidence/q9/` are prototype evidence, not product acceptance.
+
+**Review:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/adr-frontend-nav-20261007/ADR-20261007-agent-first-navigation-and-agent-identity-review.md`::MAJ-001–MAJ-004, MIN-001–MIN-002. Reviewed commit `554d21ffd6963def6fa937865cb2b1e3df86f3c3`; exactly one grill and this one correction. Founder answers override review recommendations.
+
 | Header | Value |
 |---|---|
 | Status | Proposed — founder-confirmed requirements recorded; remaining founder questions are Q-FE-1–Q-FE-10. Not an implementation-ready specification or a delivery claim. |
@@ -61,9 +67,10 @@ The backend specification is planned at `/Users/danielpiatkowski/AI-Agent-Worksp
 | First-squad item | Boundary and basis |
 |---|---|
 | Sidebar | Workspaces expand to main conversation agents; agent click opens the main session; Past sessions and + New chat live on the row; R29 waiting cues. R3–R5, R21–R22, R29. |
-| Shared identity | One kit AgentIcon for all agent identity displays, with role, figure, color and uploaded-image rendering. R9–R19, R41, R46. Open figure/upload decisions block their dependent pieces, not independent kit preparation. |
-| Chat | Replace every agent-message avatar in its current position; add a permanent static status line above the composer; remove the composer agent picker; preserve the existing feed thinking indicator. R14, R20, R24. |
-| Create/edit | Extend the existing unified create/edit slide-outs with the new identity choices and the same live preview. Do not create a second wizard or editor. R7–R8, R46; E6. |
+| Shared identity | One kit AgentIcon: figure, role badge and color. Four figures; default Omnipus. Uploaded agent images and GIF behavior are outside this squad. F::Q5–Q7 overrides first-squad R17–R19; R41/R46. |
+| Chat | Name-only agent bubbles; inline animated AgentIcon/name/phrase replaces the old thinking indicator. No composer status line or agent picker. Persistent Main/Extra label above the feed. F::Q2/Q9/Q10 supersedes earlier R14/R24 wording. |
+| Create/edit | Extend the existing unified slide-outs with figure, role and palette choices plus shared live preview. No avatar upload control or second editor. R7/R8/R46; F::Q5–Q7; E6. |
+| Plan/activity visibility | Add the #1021 plan pill, start-tool links and drill-down; resolve #493’s active-session-only visibility through one existing activity projection. Reuse B::R-ACTIVITY/D5; remaining product choices are Q-FE-11/Q-FE-12. |
 | Joint delivery | Build independent frontend pieces now. Do not land the agent-navigation behavior separately from backend U1. Joint integration and the founder’s landing approval are required. S3::Split of work; S4::frontend/sidebar commission. |
 
 The broader Agents-feed redesign, new creation interview, Connectors, Skills & Tools, permission controls, app-wide component swaps and other R43 waves are not smuggled into this first squad. The roster’s identity renderer changes here; the roster’s full layout does not (R6a–R8, R30–R43; D11).
@@ -168,15 +175,24 @@ Adopt it in sidebar, Team, Agents roster, SearchModal agent headers, live **and*
 
 Recurring presentation such as the sidebar attention cue also belongs in the kit. It composes with AgentIcon and the workspace dot; it must not become a second agent-identity component (R29/R41; S5::rule 14).
 
-### D8 — Static chat identity, without replacing the thinking indicator
+### D8 — Inline animated agent indicator; name-only replies
 
-Every agent response uses its actual author’s AgentIcon and existing name label, in the current avatar position. Update both live and historical/plain-fallback rendering; do not repaint old messages with the currently selected agent or the chat’s owner. This also prepares the existing message layout for later group replies without implementing the group protocol now (R12/R23/R24; E5; B::D7).
+**Founder Q9 is FINAL.** The animated agent status indicator sits **inline in the chat feed, exactly where the old thinking indicator was**, replacing that indicator completely. There is **no separate status line above the composer**. Agent bubbles show their actual author’s **name only, with no avatar**. Apply this to live, replayed, virtualized and plain-fallback messages, not just the next streaming reply (F::Q9; approved S2::chat-feed, messageHtml, renderThinkPreview; E5).
 
-A **permanent static line directly above the message box** shows the open chat’s agent icon, name and status text. It remains when idle, thinking, working or awaiting user input; truthful stopped/interrupted/unavailable presentation must also be specified, rather than leaving a stale “working” label. It is not an agent selector and does not report a guest responder as the chat owner (R20/R24; Q-FE-7; E10).
+The inline indicator uses the shared AgentIcon, the responding agent’s name and a phrase. During an addressed `@` answer it shows the addressed agent, not the chat’s immutable owner. The owner does not switch; the permanent Main/Extra label above the feed continues to describe the open session. Full `@` messaging remains later and unavailable until its backend contract lands (F::Q2/Q9/Q10; B::D1.1/D7; D3/D11).
 
-No agent-icon animation runs in chat now. Working pulse, Thinking breathing and Waiting pop values remain in the reference source for later consideration, not shipped as dormant loops. The only new agent-icon motion is the sidebar R29 cue. **The existing feed thinking indicator stays unchanged**; do not turn its rotating phrases into authoritative status data (R14/R24; E5; S2::LOGO_CSS).
+| State | Approved reference motion |
+|---|---|
+| Working | 1.6s pulse/glow, scale 0.97–1.03; 2.4s sheen. |
+| Thinking | 2.6s breathing/glow, scale 0.96–1.01, opacity 0.55–1. |
+| Waiting | 3.4s pop/flash, peak scale 1.07. |
+| Idle / reduced motion | Static icon; meaningful name/state text remains. Reduced motion disables loops. |
 
-Remove the composer AgentPicker, retaining the model and Auto controls and existing attachment/send/Stop behavior. Remove or withdraw dead picker-opening actions in the coordinated cutover, rather than leaving inaccessible controls or an `@` path that still changes the speaker. The complete later `@` UI and backend messaging stay in D11; Q-FE-8 decides the safe interim surface (R20/R23; E4; B::D8).
+These values come from S2::LOGO_CSS and the founder-approved figure renderer, not a new animation design. Reuse the existing `THINKING_MESSAGES` phrases where appropriate; do not retain the old bouncing-dot animation or a duplicate ThinkingIndicator implementation. Phrases are presentation, not evidence of the execution state. Keep stable accessible agent/state text rather than announcing every decorative phrase change (F::Q9; R15; E5).
+
+Use explicit message/turn producer identity and the open session’s real state. Do not resurrect scalar `goalStatus` or guess another chat’s state from a global active-agent flag. Backend’s canonical per-goal/producer replacements remain its integration dependency; Q9 makes the review’s requirement to preserve the old InlineThinkingIndicator moot, not permission to lose genuine errors or correlation (B::DEL-F30–F43; review::Shared deletions).
+
+Remove AgentPicker, preserving the composer’s model, per-chat Auto, attachments and send/Stop controls. The approved wireframe contains demo controls and messages only: no Demo, simulation or app-wide figure switch is added to the product (F::Q9/Q10; S2::chat-feed/fig-switch; R20).
 
 ### D9 — New choices and live preview in the existing slide-outs
 
