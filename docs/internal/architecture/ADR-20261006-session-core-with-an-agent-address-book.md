@@ -1,551 +1,581 @@
-# ADR-20261006 — Session core with an agent address book: one queue per session, default session per agent and workspace
+# ADR-20261006 — Session core with an agent address book: reuse one standing session, one archive and the existing execution paths
 
-- **Status:** Draft — founder decisions recorded; Astra review pending. Design only; no code changes in this ADR. Open questions are listed in "Still open" at the end.
-- **Date:** 2026-10-06 (updated the same day to record the founder decisions made after the first draft).
-- **Deciders:** Daniel Piatkowski (founder). Every founder decision of 2026-10-06 in `coordination/CONTINUATION-20261005.md` is recorded below and marked **Founder decision**. Opus defaults that no decision touches are marked **default, founder may overrule**. Everything else is **Proposed (architect)**.
-- **Author:** architect.
-- **ID:** minted with `scripts/new-adr-id.sh` (date-and-title scheme, see `scripts/check-adr-id-scheme.sh`).
-- **Relates to (does not reopen):** [A sub-agent is a session steered by another session](./ADR-091-steered-sessions-replace-subagents.md) (a helper is an ordinary session); [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](./ADR-20260928-sub-agent-control-plane.md) (the Stop model); [Steering commands: no person question](./ADR-20261004-steering-commands-no-person-question.md) (messages are steering); [UI-independent turns and session-bound webchat streaming](./ADR-082-ui-independent-turns-and-session-bound-streaming.md) (a turn never depends on a UI connection); [Workspace-scoped heartbeat and global memory UI](./ADR-027-workspace-scoped-heartbeat-and-global-memory-ui.md) (the heartbeat session this ADR generalises).
-- **Open pull request this builds on:** PR #1204, branch `work/engine-admission-per-session-20261006` (state at writing: open, not merged). Called **U0** below.
+**Correction:** the previous draft prescribed several rules that later founder answers replaced: fresh sessions for every worker recurrence, task registration without the final MAIN-mode boundary, unrestricted agent eligibility, a special self-helper nesting ban, deletion of `joined`, and peer messaging being out of scope. Those statements are wrong under the October 7 decisions. Source correction during this rewrite: the old u11 name in AgentLoop cancel code survives as historical prose, not a live compatibility function; only the actual gateway shim is listed for removal. The current store-bound collector adapter is not a second Stop implementation. The current rules are recorded below; the earlier draft and review recommendations are not implementation authority.
 
-## Plain-English summary
-
-Today the engine decides "which queue does this message go into?" from several different keys. Some use the session id. Some use the agent. Some use the chat id of the connection. Two chats with the same agent can end up sharing a queue, a worker or a history window. That is the cause of the bugs in the audit below.
-
-This ADR makes one rule: **everything about a conversation is keyed by the session id, and nothing else.** To make that possible, a small **address book** turns "agent plus workspace" into a session id **before** a message enters any queue.
-
-The founder decisions of 2026-10-06 shape the rest:
-
-| Topic | What the ADR now says |
+| Header | Value |
 |---|---|
-| Default session | A main agent always has one standing **default session** per workspace. It is the heartbeat session, generalised. It is always protected while the agent is on the team. |
-| Workers | A worker agent has no default session. Each task or event starts a new worker session. |
-| Self-delegation | Every agent may delegate to itself. This is the existing `delegate` tool, not a fork. |
-| Main agent behaviour | A main agent keeps all the tools its role allows, but is told to **prioritise delegation**. This holds in every chat with a main agent. |
-| Events and tasks | They keep running as their own session, as today. New: the run is **registered in the main agent's default session** as if that session had started it. The default session can see it, steer it and receives its result. |
-| Queues | One steering queue per session (authority) and one inbox (no authority). All waiting messages are taken at once, each as its own message. The waiting room is gone. |
-| Channels | For now, every channel message goes to the agent's default session. No per-person session yet (issue #1206). |
-| Session end | A session ends after 30 idle minutes and a recap is written. Typing again resumes the same session. |
+| Status | Founder-commissioned rewrite — decided rules recorded, including the binding 15:10/15:20 answers. All six questions are answered, including the binding 15:55 Q1=A/Q4=A answers. No open product question remains at this hand-off. Design only, not an implementation or release acceptance claim. |
+| Date | 2026-10-06; rewritten 2026-10-07 after Astra R2 and the founder's answers. |
+| Decider | Daniel Piatkowski. Later founder entries win over earlier entries and every review recommendation. |
+| Author | Architect. |
+| Code baseline | Release `c6837a42dcfb503fb34a0cea86cd3ccc451e7b9b`, true-merged into this work branch by `250b72caeb5c615ebd37f043a23a12c7befd9e2f`. The old `07679737c` draft baseline is no longer the grounding. |
+| Scope and size | Feature-size design: session storage, intake, main-session addressing, task modes, existing helpers, direct messaging, navigation, commands and scoped deletion. No production code or contract files are edited by this ADR. |
+| Founder interview record | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md` — every October 6/7 entry, especially 13:40, 13:50, 14:00, 14:10 and 14:35 on October 7; plus the binding 14:45, 15:10, 15:20 and 15:55 steering messages. There is no separate interview document. |
+| Review inputs | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/adr-session-core-astra-r2-20261007/ASTRA-REVIEW-R2.md`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/adr-session-core-astra-r2-20261007/ARCHITECTURE-INVENTORY.md`; the earlier review, open questions and CLI research listed in Context. These explain seams, not new founder decisions. |
+| Frontend counterpart | Navigation and agent identity ADR, in progress. Exact path is not supplied; no filename is invented. That ADR owns sidebar/row/avatar/composer/mention/search layout; this ADR supplies the main-session contract and founder-decided behavior only. |
+| Remaining questions | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/session-core-adr-20261007/QUESTIONS.md`. Do not substitute a recommendation for an answer. |
+| Hand-off | Rewrite first; commit/push it; then produce the specification with `plan-spec`. Stop before `grill-spec`; team-lead arranges review. The founder's 14:45 instruction allows up to three subsequent spec grill-and-fix rounds, not a review run by this author. |
 
 ## Context
 
-### What exists today (verified in the tree at `origin/release/v0.1.1` @ `07679737c`)
+### What this means for a user
 
-| # | Fact | Evidence |
+Mia has one main conversation in each workspace. Clicking Mia opens that conversation; **+ New chat** on her agent row opens an extra conversation. A heartbeat runs in the main conversation. A task assigned to Mia normally runs as a real child of it, while remaining a task with its own run, goal and result. Asking `@Jim` sends Jim a message and returns Jim's answer into the same group-style chat; it does not switch Mia into Jim. These are founder rules, not a second coordinator, scheduler or chat product (D1, D5, D7, D8).
+
+The binding simplicity rule is **“avoid designing parallel systems or reinventing the wheel — use what we have.”** The tables identify exactly what is reused. New fields are permitted only where an existing record cannot express a decided rule; they do not justify a second store, queue, approval flow, task executor or dashboard. Every relevant undecided choice remains OPEN (founder 14:35/14:45).
+
+### Existing mechanisms and their verified limits
+
+The reuse keys below name **source files and symbols read at this task's baseline**. A key in a later table refers to this exact citation, not an unspecified future component. Source existence is **Verified, high confidence**; proposed behavior is not runtime-tested.
+
+| Reuse key | Existing mechanism and `file::symbol` | What needs maturing, not duplicating |
 |---|---|---|
-| C1 | The turn registry is keyed by `ts.sessionKey`, the routing key, and a second turn on the same key is refused rather than queued. | `pkg/agent/turn.go::registerTurnIfAbsent` (`activeTurnStates.LoadOrStore(ts.sessionKey, ts)`); `pkg/agent/ordinary_execution_admission.go::newTurnStateForAdmission` returns `steer.ErrStaleGeneration` when it is already claimed |
-| C2 | The routing key can be agent-level (`agent:<id>:main`) when the message carries no session id. With a session id it is `agent:<id>:session:<sid>`. PR #1204 forces the per-session form whenever `msg.SessionID` is set. | `pkg/agent/loop_inbound.go::agentSessionKey`; `pkg/agent/loop_inbound.go::resolveMessageRoute` (the #1204 hunk) |
-| C3 | Today a message can wait in **three** places: the 5 s previous-execution wait, the session worker's own inbox channel (capacity 8), and the in-turn steering queue. | `pkg/agent/ordinary_execution_admission.go::previousExecutionSettleBudget`, `::awaitPreviousOrdinaryExecution`; `pkg/agent/session_worker.go::workerInboxCap`, `sessionWorker.inbox`; `pkg/agent/steering.go::steeringQueue` |
-| C4 | `sessionWorker.enqueue` sends a message to the steering queue while a turn runs, and to the worker inbox otherwise. When the inbox is full the message is dropped with "Your message could not be queued". | `pkg/agent/session_worker.go::enqueue`, `::trySteerIntoLiveTurn` |
-| C5 | The steering queue is filled under `route.SessionKey` and drained under `ts.sessionKey`. At every step after the first, the turn polls it; each polled item becomes its own message. The default mode takes **one** item per poll. | `pkg/agent/steering.go::enqueueSteeringFromMessage`; `pkg/agent/loop_run_turn.go` (the `iteration > 1` poll of `dequeueSteeringMessagesForScope`); `pkg/agent/steering.go::dequeueItemsLocked`, `parseSteeringMode`; `pkg/config/defaults.go` (`SteeringMode: "one-at-a-time"`) |
-| C6 | A helper's report goes to the parent through `message_parent` into a durable inbox. The kinds are `progress`, `checkpoint`, `artifact`, `blocker`, `question`, `handback` (mode `final` or `pause`). The text is described as untrusted. | `pkg/tools/message_parent.go` (kind enum, "Untrusted narration/question text"); `pkg/tools/delegate.go::DelegateInboxStore` |
-| C7 | A hand-back wake reaches the parent as a queue item that carries a `wake` pointer, and it is admitted as an ordinary execution under `rec.SessionID`, not the route key. | `pkg/agent/steering.go::steeringQueueItem.wake`; `pkg/agent/loop_inbound.go::admitOrdinaryRootWake` |
-| C8 | A heartbeat already creates one eager standing session per (workspace, agent member). Type `heartbeat`, stamped with `workspace_id` and agent, id stored at `member_configs[agent].heartbeat.session_id`, `protected` (delete refused with 409) while the heartbeat is enabled. A worker agent may not have a heartbeat. | `pkg/session/unified.go::NewHeartbeatSession`; `pkg/workspace/member_config.go::MemberHeartbeat`, `ValidateMemberConfigs`; `pkg/gateway/rest_workspaces.go` (FR-010 block in `prepareWorkspacePutMembers`); `pkg/gateway/rest_sessions.go::computeSessionProtected`, delete guard; `contracts/components/schemas/WorkspaceMemberHeartbeat.yaml::session_id` |
-| C9 | A schedule picks its session by mode: `isolated` (new session per run), `continue` (job's own session), `main` (id `sched-main-<agent>`, no workspace in the id). | `pkg/gateway/schedules.go::pickSession`; `pkg/cron/service.go::SessionMode` |
-| C10 | A task gets its **own** new session (`SessionTypeTask`) every time, whatever the agent. The task, not the session, owns the goal. | `pkg/agent/task_executor.go::createTaskSessionSync`, `::activateTaskGoal` (`GetByOwner(GoalOwnerKindTask, t.ID)`) |
-| C11 | An owner (session or task) should have at most one active goal; more is reported as an error. | `pkg/goal/predicate.go::errMultipleActiveGoalsForOwner` |
-| C12 | A main versus worker distinction exists. A worker is delegation-only, never a chat target, never the routing default, has no heartbeat. Core and custom agents are chat targets. | `pkg/config/config_agents.go::AgentTypeWorker`, `AgentConfig.IsWorker` (founder Q27: already exists) |
-| C13 | A task run dispatched directly (not delegated) has no parent session, and `message_parent` says so. **Under this ADR this changes for a main agent**: its event and task runs are registered as children of the default session (D8). | `pkg/tools/message_parent.go` (the `ToolRunningTaskID` branch) |
-| C14 | A person typing into a helper's own chat steers that helper's existing execution. | `pkg/agent/session_worker.go::dispatchSessionWorker` (`deliverHumanHelperInput`); [Steering commands: no person question](./ADR-20261004-steering-commands-no-person-question.md), locked decision 5 |
+| R-MAIN | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/session/unified.go::NewHeartbeatSession`, `GetOrCreateScheduledSession`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/gateway/rest_workspaces.go::prepareWorkspacePutMembers`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/gateway/rest_sessions.go::computeSessionProtected` | Creation, metadata ownership, pinning and protection already exist. They currently depend on heartbeat enablement and a stored random session ID. Replace those predicates with the founder's computed main ID and membership rule. |
+| R-STORE | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/session/daypartition.go::PartitionStore.AppendMessage`, `TranscriptEntry`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/session/unified.go::UnifiedStore`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/memory/window.go::snapshotWindowLocked`, `AppendWindowMessage` | Day-file logic exists but its constructor has no production caller in the controlled source scan. Production has separate chat/model content histories, and its window snapshot reads the whole model archive from zero. Integrate the useful day logic into the production store; do not activate a second store beside it. |
+| R-RETENTION | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/session/retention_sweep.go::RetentionSweep` | File-age deletion and shared session locking already exist. Reconcile byte cursors and protected identity with expired content. The 15:20 Q2=A answer selects advancing to the first retained complete group, with an expired-history notice to the agent, or an empty same-ID window. |
+| R-QUEUE | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/steering.go::steeringQueue`, `steeringQueueItem`, `pushItemScopeChecked`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/session_worker.go::sessionWorker.processTurn`, `closeSteeringWhenDrained`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/ordinary_execution_admission.go::prepareOrdinarySessionExecution` | Reuse the existing runner, queue and settlement ownership. Delete its competing worker inbox, five-second waiting room, manual fallback queue and unserialized system fallback. Retain execution-identity checks. |
+| R-INBOX | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/session/message_inbox.go::MessageInboxStore`, `classifyEnvelope`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/steer_audience.go::SteerUpwardDeliverer.Deliver`, `wakeOwnerOrStore` | Durable reports, acknowledgement and consumption/wake identity already exist. The current classifier wakes selected reports only, and the child adapter requires a real edge. Extend the common delivery machinery; do not invent child edges for peers or independent tasks. |
+| R-REVIVE | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/revive_inbound.go::reviveRecordForHumanTurn`, `lifecycleInFlightStopFence` | Reuse genuine human revival and the current-generation Stop fence. Reports do not resume a stopped parent. |
+| R-STOP | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/stop_session.go::StopSession`, `StopDelegatedTree`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/stop_redirect_root.go`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/cancel.go::RequestCancel`, `CollectDescendantSessionIDs` | One Stop and redirect/cancel path already cover root/helper conversations and selected executions. No second Stop service or Stop-all button. |
+| R-DELEGATE | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/tools/delegate_run.go::launchAndDispatch`, `validateRequest`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/steer_launcher.go::SteerLauncher.Launch`, `launchSteered`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/loop_delegation.go::buildDelegationDenyChecker`, `evalUntargetedDelegation` | The same-agent helper already uses the ordinary launcher. Current explicit self-target checks only allow Jim/General Purpose with a self-edge; omitted target follows a different check. Normalize before the existing authorization decision and remove the obsolete self-only restriction. |
+| R-APPROVAL | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/loop_policy.go::inheritSessionPermissions`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/steer_launcher.go::inheritDelegatePermissions` | Standing grants and the per-chat Auto modifier already inherit, with the target agent's off-switch respected. MAIN tasks change the source to their main parent, by explicit founder choice. |
+| R-TASK | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/task_executor.go::ExecuteTask`, `StartTaskNow`, `startTaskNowViaLauncher`, `activateTaskGoal`, `SpawnTriggeredRun`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/task_executor_run.go::openRun`, `closeRun`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/task_executor_judge.go::deliverTaskCompletionUpward` | Reuse task claim, run identity, goal, attempts and completion. MAIN adds real parentage; it does not turn a task into an ordinary `delegate` call or introduce another outcome owner. |
+| R-SCHEDULER | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/gateway/schedules.go::scheduledRunner.pickSession`, `RunScheduled`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/task_trigger.go::TaskTriggerScheduler.RunScheduled`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/cron/service.go::SessionMode`, `AddJobFull` | ISOLATED/CONTINUE/MAIN and recurrence already exist. Replace `sched-main-<agent>` and remove the worker-schedule prohibition where the founder's worker modes require execution. Do not create another scheduler or restore the retired Schedules screen. |
+| R-COMMANDS | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/commands/builtin.go::BuiltinDefinitions`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/commands/cmd_clear.go::clearCommand`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/commands/executor.go::Executor.Execute` | Registry and dispatch already exist. Today the clear definition is `/new` with a hidden `/clear` alias. Replace the action and apply worker-context eligibility at menu and execution, not only in labels. |
+| R-RECAP | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/session_end.go::CloseSession`, `persistResponse`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/memory.go::MemoryStore.WriteLastSession`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/tools/memory.go::RetrospectiveTool.Execute` | Idle recap exists and writes agent memory, not the transcript. `joined` is the retrospective tool's live stamp. Repeated idle episodes need the existing claim/timer matured; no new summary step and no helper-memory change. |
+| R-CLI | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/runner/driver_claude.go::Input`, `Resume`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/runner/driver_codex.go::Input`, `Resume`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/runner/driver_opencode.go::Input`, `Resume`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/external_dispatch.go::policyApproverConsent.RequestConsent` | All three Input methods currently discard text; Resume starts a fresh run rather than resuming the native conversation. Mature these drivers using interrupt plus real native-ID resume. Their existing external approval exception remains distinct from the native popup. |
+| R-DELETE | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/gateway/rest_agents.go::deleteAgent`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/sysagent/tools/agent.go::cascadeDeleteAgentSessions`, `cascadeUnassignAgentTasks` | Existing deletion/cascade paths differ. Consolidate them into one path with truthful owned-session/memory deletion, guest-history preservation and the decided warning. Double confirmation is UI-only; agent tool/API retain their existing single-approval requirements (15:10 Q6=B). |
+| R-NAV | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/components/chat/useSelectSession.ts::useSelectSession`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/session.ts::startNewSession`, `attachToSession`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/hooks/useSlashMenu.ts::selectMentionAgent`, `runClientSlashCommand`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/connection.ts::setConnected` | Existing attach/navigation/new-chat/search/menu actions and roster invalidation are reused. Mention currently changes the agent in-place and clears the composer; replace that action, not the entire transport. Reconnect refresh is already wired. |
+| R-ACTIVITY | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/hooks/useRunningActivity.ts::useRunningActivity`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/components/chat/ActivityPanel.tsx::partitionRunning`, `ActivityRow`; existing ToolApprovalModal/ToolApprovalStore | Add the missing agent-task/run projection, actual token data and helper/run approval attribution to these existing views. Do not claim the current span-only feed already includes all scheduled task runs or per-helper tokens. |
 
-### The audit (read-only, at `07679737c` against `9e1c79f6f`, backend-lead, 2026-10-06)
 
-The audit summary found **6 Lane A hits** (A1 to A6) and **10 older hits** (O1 to O10) where a conversation structure is keyed by something other than the session id. They share one cause: a routing key or a chat id stands in for the session id. The audit's own severities:
+Primary architecture sources were read: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/AS-IS-architecture.md` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/plugin-extensibility-assessment.md`. Both contain dated observations; code wins. All 175 current ADR files were scanned with a known-positive recall control, and the relevant source clauses were reread through source excerpts. Numbers alone are not ADR citations.
 
-| Group | Hits | What goes wrong |
-|---|---|---|
-| Turn registry and admission (A1, A2, A5) | registry keyed by routing key; hand-back wake uses `rec.SessionID` while the human turn uses the route key; Stop matching falls back to `ts.sessionKey` | A second turn is refused instead of queued; one conversation has two admission buckets |
-| Workers and steering (A6, O1, O2) | workers and in-turn steering keyed by route key | Two conversations sharing a route key share one worker. Message B can be steered into A's live turn. HIGH for SSE/API clients without `agent_id` and channel DMs under `dm_scope=main|per-peer` |
-| History window (O3) | history window, recall span and continue guard keyed by routing key | Shared history on agent-level keys |
-| Delivery stamps (O5, O7) | web delivery maps keyed by connection chat id; wake debounce keyed by channel and chat id | Two sessions on one connection can get wrong session stamps |
-| Cancel latches (A3, A4, O8) | extra and fallback keys in cancel pre-arm; `/stop` may address an agent-level key | Wrong-chat latch possible, bounded by a 5 s TTL |
-
-The audit also lists what is already keyed by session id: steer admission, steering for steered sessions, post-finish revival, session lifecycle ledger and locks, `StopSession`, `StopDelegatedTree`, the `t:`/`s:` cancel latches, the gateway stop/redirect/cancel frames, WebSocket pending-message status, scheduled runs, and tools via `ToolTranscriptSessionID`. The audit labels A4, A5, A6 and O5 as **Inferred** and the others **Verified**; this ADR keeps those labels. I re-verified C1, C2, C5 and the heartbeat code (C8) in the tree myself; I did not re-run the audit's Inferred items.
-
-### Founder decisions of 2026-10-06 that frame this ADR
-
-| Decision | Founder's rule |
-|---|---|
-| Waiting room | Waiting room is per session, not per agent (20:15). Then **Q20**: remove the 5 s previous-execution wait; "remove the additional queue and use the normal message queue". |
-| Queue model | One FIFO queue per session. While a turn runs, take queued messages at the next step boundary, all at once. When a turn ends with messages queued, a new turn starts at once with all of them. No timer, no second waiting room. All queued messages go to the model at once, **but as separate messages**; each is shown as its own message in the chat. |
-| Who fills it | The person and the parent session. Parent messages carry the same authority as the person's. |
-| Inbox refinement | Keep a per-session **inbox** for messages from child sessions: status reports, finals, questions. Normally **no authority**. An agent-to-agent inbox for non-children is a later feature. |
-| Main and worker | Main agents: one ongoing **default session per workspace**; events and tasks for a main agent go into that session's queue. Worker agents: no default session; cloneable; each event or task for a worker starts a **new** worker session. |
-| Q24 | Write this ADR. |
-| Q25 | Extra parallel chats with a main agent are allowed. |
-| Q26 | Channels were postponed (separate ADR later). **Superseded by the 22:50 decision below.** Per-person channel sessions stay a later idea, issue #1206. |
-| Q27 | The main/worker distinction already exists (C12). |
-| Q28 | Reload the agent list on WebSocket connect and reconnect. The ledger entry records that it does not exist today (only the `agent_created` frame, window focus and cross-tab refresh). |
-| Address book key | (agent, workspace): one default session per agent per workspace. |
-| Stop | The Stop table of 2026-10-06 (summarised in D6). |
-| Self-delegation (22:09, round 1 Q-ADR-4) | The existing self-delegation is the default for all hands-on work a main agent does. It is not a new fork mechanism. **Every agent may self-delegate.** |
-| Events and tasks (round 1 Q-ADR-1 "mixed", Q-ADR-2) | They keep running as their **own session**, as today. The run is **registered in the main agent's default session** as if that session had started it: injected into its context, monitorable and steerable from it, and its result returns into it. They do not target the main session. |
-| Main agent tools (round 1 Q-ADR-2) | The main agent keeps **all** tools its role allows. It must **prioritise** delegation. This is an instruction, not a tool ban. |
-| Scope (round 1 Q-ADR-3) | The rule applies to **all chats** with a main agent. |
-| Session end (22:38, 22:41, 22:43) | A session ends after `idle_timeout_minutes` (default 30) of inactivity and the recap is written. Auto recap is **on by default**. The default session follows the same rule. Typing again resumes the same session. The unused recap triggers "lazy", "joined" and "explicit" (the `session_close` frame and its handler) are **deleted**; this is in progress on another branch. |
-| Channels (22:50) | For now **all channel messages go to the agent's default session** (per agent and workspace). No per-person session yet. |
-| Queue model (Q20 and the later clarifications) | One steering queue per session with authority, fed by the person and the parent session. The inbox carries no authority. The waiting room is removed entirely. The internal worker inbox merges into the steering queue. |
+Earlier inputs remain historical: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/adr-session-core-astra-20261006/ASTRA-REVIEW.md`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/adr-session-core-open-questions-20261006/OPEN-QUESTIONS.md`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/cli-live-steering-20261007/REPORT.md`. In particular, the research's long-lived CLI servers are not the founder-selected design, and its help/API checks are not a live model-steering PASS.
 
 ## Decision
 
-### D1 — Session core: only the session id keys a conversation
+### D1 — Mature the heartbeat standing session into the main session
 
-Every runtime structure about one conversation is keyed by the **session id** and by nothing else. No agent-level key. No chat-id key. No routing key.
-
-| Structure | Today's key (evidence) | Key under D1 |
-|---|---|---|
-| Steering queue | route key (`steering.go::enqueueSteeringFromMessage`) | session id |
-| Turn and turn registry | `ts.sessionKey` (`turn.go::registerTurnIfAbsent`) | session id |
-| Session worker / loop | route key plus session suffix (`session_worker.go::dispatchSessionWorker`, `loop_inbound.go::resolveSteeringTarget`) | session id |
-| Admission (one turn at a time) | route key (`ordinary_execution_admission.go`), session id after U0 | session id |
-| History window, recall span, continue guard | routing key (audit O3; `pkg/agent/loop_window.go`, `Sessions.GetHistory(sessionKey)`) | session id |
-| Stop and steering | session id already (audit, "correctly keyed") | unchanged |
-| Inbox | owner key plus child session id (`delegate.go::DelegateInboxStore`) | parent session id, child session id |
-| Wakes and debounce | channel plus chat id (`async_notifier.go::wakeWindows`) | session id |
-| Delivery stamps (turn id, message id) | connection chat id (`webchat_channel.go::streamed`, `::turnIdentity`) | session id |
-| Cancel latches | `"t:"+ts.sessionKey` and fallbacks (`cancel_prearm.go`) | `"t:"+session id` only |
-
-The routing key survives only as a **display and routing input** to the address book (D2), never as a state key. A session has one active agent (`UnifiedMeta.ActiveAgentID`), so the agent is a property of the session, not part of its key.
-
-### D2 — Agent address book: (agent, workspace) resolves to a session id before any queue
-
-A small function, the **address book**, runs at the entry of the engine, before a message touches any queue or worker. Its input is the sender intent and the address. Its output is a session id. The address book is keyed by **(agent, workspace)** (**Founder decision**).
-
-| Message is | Address book returns | Evidence or basis |
-|---|---|---|
-| An explicit chat (web chat with a session id, a person opening a chat) | That chat's own session id | Founder; `loop_inbound.go::agentSessionKey` already uses `msg.SessionID` |
-| A channel message for a main agent | The agent's **default session** in that workspace (D10) | **Founder decision** 22:50 |
-| An event or task for a **main** agent | The event or task runs as its **own session**, as today. The run is **registered** in the agent's default session (D8) | **Founder decision** (round 1 Q-ADR-1, Q-ADR-2) |
-| An event or task for a **worker** agent (`config.AgentTypeWorker`) | A **new worker session** (a clone). A worker has no default session | Founder; already true for tasks today, `task_executor.go::createTaskSessionSync`, and for delegation, `pkg/agent/steer_launcher.go::Launch` |
-| An extra parallel chat with a main agent | A new chat session beside the default | Founder Q25 |
-
-"Event" in this ADR means any input that is not typed by a person: a heartbeat fire, a schedule fire, a task trigger or task dispatch, a plan step.
-
-**D2.1 — The default session generalises the heartbeat session (Founder decision; the field details are Proposed, architect).** The heartbeat session is the right object: one standing session per (workspace, agent member), stamped with workspace and agent, stored in the workspace's `member_configs`, pinned in the Session panel and protected from deletion (C8). The default session is that object with the heartbeat taken out of its definition. No new machinery: the same create, protect and release code is reused.
-
-| Aspect | Heartbeat session today | Default session (target) |
-|---|---|---|
-| Who gets one | Core-team members of a workspace with the heartbeat switched on. Created in `pkg/gateway/rest_workspaces.go` when the heartbeat is enabled (`NewHeartbeatSession`) | **Always** exists for every **main** agent on the workspace team (never a worker; C12) |
-| Session type | `heartbeat` | `default` (replaces `heartbeat` in the type enum) |
-| Where the id lives | `member_configs[agent].heartbeat.session_id` | `member_configs[agent].default_session_id` (read-only on the wire); `heartbeat.session_id` is removed |
-| Created | Eagerly when a heartbeat is enabled | By the address book's get-or-create. The workspace PUT handler calls it for each new main team member, so the session appears in the UI at once. Any other path calls it lazily. One function creates it; a lock per (workspace, agent) makes it idempotent |
-| Who writes into it | Heartbeat fires only | Heartbeat fires, channel messages, a person who opens it, and the engine's notices about registered runs (D8) |
-| Protected from delete | While the heartbeat is enabled (`pkg/gateway/rest_sessions.go::computeSessionProtected`) | **Always, while the agent is on the workspace team** |
-| Released | When the heartbeat is disabled, and when the workspace is deleted | When the agent leaves the team and when the workspace is deleted. Turning the heartbeat off only removes the heartbeat cron job; the session stays |
-| Schedule `session_mode` | `isolated`, `continue`, `main` (C9) | See T7 below |
-
-**D2.2 — Migration: none (greenfield).** The founder ruled on 2026-09-15 that there is no upgrade path, no backfill, and that upgrade-only code and tests are dropped (greenfield, no upgrade path). So:
-
-- `heartbeat.session_id` and the `heartbeat` session type are deleted outright. No shim, no alias, no "deprecated" comment (founder 2026-09-21, delete superseded code).
-- An existing dev home with `heartbeat`-typed sessions is not converted. Fresh installs are the verified path. The implementing unit must prove that a fresh home creates the default session and must not add a conversion.
-- The contract change (the session `type` enum in `contracts/components/schemas/Session.yaml` and `SessionLifecycleRecord.yaml`, and its copy in `contracts/openapi.yaml`; `WorkspaceMemberConfig.yaml`; `WorkspaceMemberHeartbeat.yaml`; the `protected` description in `Session.yaml`) follows Hard Constraint 8. The task `surface: heartbeat` value in `Task.yaml` is a different field and is not touched here (**Inferred**: not traced in code). The order is: the schema first, then `scripts/gen-contracts.sh`, then code. Contract shapes are decided here; backend-lead edits the specs.
-
-**D2.3 — No workspace: My Workspace (default, founder may overrule, T3).** A message with no workspace uses **My Workspace**, the default workspace, not a separate agent-only session. Delegation already falls back this way (`pkg/agent/loop_delegation.go::resolveEffectiveWorkspaceID`), and heartbeat sessions always have a workspace. This replaces the earlier draft's `(agent, "")` key.
-
-**D2.4 — Other defaults on the default session (default, founder may overrule, T4).** The default session cannot be deleted while the agent is on the team. There is no "clear history" for now.
-
-### D3 — Two queues per session: steering (authority) and inbox (none)
-
-| | Steering queue | Inbox |
-|---|---|---|
-| Carries | Instructions | Reports from child sessions: `progress`, `checkpoint`, `artifact`, `blocker`, `question`, `handback` (founder's "final" is `handback` with mode `final`; mode `pause` is the other) |
-| Authority | Yes. Parent messages carry the same authority as a person's | **None**, normally. Text is untrusted (C6) |
-| Order | FIFO | Per child, arrival order (existing durable store) |
-| Fed by | The person typing in **this** session (web); the **parent** session (delegate steer or redirect); channel messages and heartbeat fires addressed to this session | A child session, through `message_parent`; and the engine's notices about registered runs (D8.3). No authority |
-| Existing code | `steering.go::steeringQueue`, to be keyed by session id | `session.MessageInboxStore` through `DelegateInboxStore` |
-
-Consequences of the split:
-
-- A person cannot message a child from the parent's chat. The person opens the child's chat; there the person is that session's steering source (C14).
-- A hand-back wake stops being a steering-queue item with a `wake` pointer (C7). It becomes "an inbox item arrived" (see D4 and the open questions).
-- An agent-to-agent inbox between non-related agents is **out of scope** (D7).
-
-### D4 — Turn rule: one turn at a time, all waiting steering messages at each step boundary
-
-1. **One turn at a time per session.** The session's own loop is the serialiser: take what is waiting, run a turn, settle it, then look again. A new message cannot start a second turn, so admission never refuses for "early". (This follows from D1 and D5.)
-2. **At every step boundary** (after a model response or after a tool call) the turn takes **all** waiting steering messages at once. Each one is injected as **its own** message and shown **separately** in the chat. Evidence for the mechanism: the poll already exists and already makes one message per item (C5). The change is the mode: the `one-at-a-time` default and the `steering_mode` setting go away; "all" is the only behaviour.
-3. **When a turn ends with messages waiting**, a new turn starts at once and takes all of them. No timer.
-4. **Inbox items (Proposed, architect; open question Q-ADR-7).**
-   - Inside a running turn, an inbox item enters at a step boundary, **marked as a report** (who sent it, which kind), with no authority, never as a person's message.
-   - Which reports wake an **idle** session is open (Q-ADR-7). The recommendation is that final reports, pauses, questions and blockers wake it, so a finished helper's `handback` is not left unread (C7).
-5. **Queue bound (Proposed, architect).** Keep the existing cap, `steering.go::MaxQueueSize` (200). Hitting it is a flood limit, not "early", and the refusal is shown to the sender. The 8-slot worker inbox and its drop message are deleted with D5.
-6. **After a Stop (open question Q-ADR-12).** A turn ended by Stop must not restart at once just because messages wait; that would make Stop look broken. Recommended: waiting messages stay queued, shown as held, until a person resumes the session.
-
-### D5 — No waiting room
-
-Deleted outright, with their tests:
-
-| Deleted | Evidence |
+| Decided rule | Existing mechanism reused |
 |---|---|
-| The 5 s previous-execution wait | `ordinary_execution_admission.go::previousExecutionSettleBudget`, `::awaitPreviousOrdinaryExecution` |
-| The "previous execution pending" refusal and its user text | `ErrPreviousExecutionPending`, `translate_error.go::previousReplyStillFinishingMessage` (both added by U0; U0 is a bridge, D5 removes them) |
-| The "execution already registered" refusal for a second admission | `ordinary_execution_admission.go::prepareOrdinarySessionExecution` |
-| The worker's separate inbox channel and its "could not be queued" drop | `session_worker.go::workerInboxCap`, `sessionWorker.inbox`, `::enqueue` |
-| The `steering_mode` setting | `pkg/config/config.go` (`SteeringMode`), `pkg/config/defaults.go` |
+| One main session per `(workspace, MAIN agent)`, created for eligible MAIN agents in the default workspace and when added to another workspace. ID: `main-session-<workspaceid>-<agentid>`. Get-or-create checks the persisted pair/owner, not merely an ID collision. | R-MAIN: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/session/unified.go::NewHeartbeatSession`, `GetOrCreateScheduledSession`; their current session lock and identity writer. This is a renaming/maturing of the standing-session path, not another address-book database. |
+| The session is pinned to its agent. Its protection/pinning is independent of heartbeat enablement; heartbeat-off does not delete it. Heartbeat uses this same session. | R-MAIN: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/gateway/rest_sessions.go::computeSessionProtected`; existing workspace member config and standing-session pinning. |
+| Native core/custom chat-target agents are MAIN; workers have no main session. Hidden system agents keep fixed tools. Admin stays standalone, with no main session and no team membership. | Existing `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/config/config_agents.go::IsWorker`, `IsSystem`, `IsChatTarget`; **Built-in agent configuration, skills, and visual file reading**. No new agent-type flag and no revived sentinel agent. |
+| Explicit session addresses stay explicit. A valid missing workspace may use the existing default-workspace resolution; missing, corrupt or unauthorized bindings must not be guessed into another workspace. Channels retain their configured `(workspace, agent)` ownership. | Existing route resolution and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/loop_delegation.go::resolveEffectiveWorkspaceID`; **A channel belongs to one (workspace, agent) pair, in both directions**. |
+| Team removal retains the main conversation until normal retention, but hides it from UI, channels and task addressing. Re-adding the same pair unhides it. Existence of metadata is not permission to execute. Hide immediately and admit no new work through the removed membership. Already-authorized runs settle and retain outcomes without waking the hidden main (15:20 Q5=A). | R-MAIN and R-DELETE; adapt the current workspace update/cleanup predicates, not another retirement service. |
 
-Nothing is refused for being early. It queues (founder, Q20).
+### D1.1 — Main-session contract shape for the frontend counterpart
 
-### D6 — Stop rules unchanged
+These are architect-owned shapes implementing the decided identity, not additional layout/product decisions. Backend-lead edits/regenerates the existing contracts before consumers; this document does not edit them.
 
-The founder's Stop decision of 2026-10-06 stands as written and this ADR does not change it. Summary:
-
-| Action | Behaviour |
-|---|---|
-| Stop click 1, Esc 1, `/stop` | Stops **this** session's current turn only; opens a 3 s window |
-| Stop click 2 or Esc 2 within 3 s | Stop all: this session and its whole helper tree |
-| `/cancel` | Stop all at once |
-| Separate "Stop all" button | Removed |
-| `/stop-redirect <instruction>` | Works in any session: stops this session's current turn and continues it with the instruction |
-| Channel `/stop`, `/cancel`, `/stop-redirect` | Same meaning |
-| Agent `delegate` stop and `stop_all` | Unchanged (one helper's turn; its tree) |
-| Plain Stop leaves background shells; Stop all and `/cancel` kill them | Unchanged |
-
-The interactions with this ADR are D4.6 (held messages) and D8.3 (a Stop all on a default session also reaches the registered runs; risk R10). Stop is already session-id keyed (audit, "correctly keyed": `StopSession`, `StopDelegatedTree`).
-
-### D7 — Out of scope
-
-| Out of scope | Where it goes |
-|---|---|
-| Per-person sessions for channel messages | Later idea, issue #1206. Until then every channel message goes to the default session (D10) |
-| An agent-to-agent inbox outside the parent and child relation | A later feature (founder, inbox refinement) |
-| Per-turn publication, context limits, goal and plan semantics | Their own ADRs; D8 only touches where a task's goal lives |
-
-### D8 — Self-delegation, and runs registered in the default session (Founder decision)
-
-This section replaces the earlier "fork per event or task" proposal. The founder ruled on 2026-10-06 (22:09) that this is **not a new fork mechanism**: the existing self-delegation is used.
-
-**D8.1 — Every agent may self-delegate (Founder decision, round 1 Q-ADR-4).** A helper is an ordinary session of the same agent with the same profile, started through `pkg/agent/steer_launcher.go::Launch` and `pkg/steer/types.go::LaunchRequest`, as a child of the session that delegated ([A sub-agent is a session steered by another session](./ADR-091-steered-sessions-replace-subagents.md)).
-
-| Point | Today (verified) | Under this ADR |
+| Existing contract | Target field/name and invariant | Reused source |
 |---|---|---|
-| Who may target themselves | Only Jim and General Purpose, and only with an explicit self entry in the workspace's delegation settings | **Every agent** |
-| Evidence | `pkg/agent/loop_delegation.go::buildDelegationDenyChecker`; `pkg/workspace/delegation.go::PermittedSelfDelegationID`; `DelegationEdge.Validate` | These rules change; this is a **permission change**, not only routing |
-| Mechanism (Proposed, architect) | | Always allowed for an agent's own helpers, with no workspace setting. The helper gains no extra power: same agent, same tools. Depth and parallel limits still apply. **Security-lead must review** |
-| Self-helper delegating again (default, founder may overrule, T6) | | A self-helper may not self-delegate again. It may still delegate to other agents under the workspace rules and the depth limit (default 3, `pkg/agent/delegation_runtime.go::defaultMaxSubTurnDepth`) |
+| Session | **type: main** replaces the standing **heartbeat** type; not a second **default** type. Require type on current-format responses; no missing-type legacy fallback. Main is server-created only, absent from client create-time enum. Keep existing task/delegate/scheduled/verifier distinctions. | Existing Session.yaml type field; R-MAIN standing-session classification. |
+| Session | **id = main-session-<workspaceid>-<agentid>**, **workspace_id** is the workspace, **agent_id** is the immutable owning agent. Server validates the persisted pair/owner, current membership and eligibility. Stop/revive/idle never mint another main ID. Session-ID validation across REST/WS must accommodate the computed ID rather than assuming UUID/128-character shapes; derive any upper bound from the existing validated workspace/agent ID bounds, not a new hash/short-ID algorithm. | Existing Session.id/workspace_id/agent_id and identity writer; R-MAIN. |
+| Session | **protected** remains a computed response boolean; true for the eligible current-member main independent of heartbeat enabled. Hiding removed membership is derived from workspace membership, not another stored main-address map. Other-session guest identity remains **Message.agent_id**, not mutable session routing ownership. | Existing protection calculation, session listing and Message identity. |
+| WorkspaceMemberConfig | **main_session_id**, string, **readOnly**, present for eligible MAIN members and omitted for workers/system/Admin. Value is the same computed ID as Session.id. Return it from the existing workspace member-config response after get-or-create; do not keep an independently persisted address book. | Existing workspace member-config heartbeat session-id response path, moved/matured rather than duplicated. |
+| WorkspaceMemberHeartbeat | Keep **enabled**, **interval_minutes**, **body**; delete **session_id**. Heartbeat always resolves its member's main_session_id. No stored heartbeat/default/main mapping trio. | Existing member heartbeat configuration and reconciliation. |
+| Session handover metadata/frames | Delete mutable **active_agent_id** handover semantics and agent-switch frames/actions. Use the required existing **agent_id** as owner throughout new current-format consumers. Contributor lists, if retained for display, do not confer ownership/control; guest answers use their own Message.agent_id. No fallback chain between old owner fields. | Existing owner field and per-entry agent attribution; founder pinning/removal decision. |
 
-**D8.2 — A main agent prioritises delegation (Founder decision, round 1 Q-ADR-2 and Q-ADR-3).** The main agent keeps **all** tools its role allows. It is told to prioritise delegation: the default session coordinates, and heavy or hands-on work runs in self-delegated helpers. This is an **instruction in the agent's prompt text, not a tool ban**. It applies to **all** chats with a main agent: the default session and every extra chat (Q25). There is no engine rule and no per-session tool removal, so Hard Constraint 6 ("two layers, no third") is untouched. Because it is an instruction, a model may ignore it; that is the accepted trade of the founder's choice.
+**Frontend counterpart: navigation and agent identity ADR, in progress.** It consumes these names; row/avatar/composer/search layout belongs there. This ADR adds no independent sidebar or picker design.
 
-**D8.3 — Events and tasks keep their own session and are registered in the default session (Founder decision, round 1 Q-ADR-1 "mixed", Q-ADR-2).** An event or task for a **main** agent does **not** target the default session. It runs straight as its **own session** as today. The only change: the run is **registered in the main agent's default session as if that session had started it**.
+### D2 — One append-only content archive, two views, UTC day files
 
-| Part | What happens | Basis |
-|---|---|---|
-| Parent link | The run is recorded as a child of the default session, using the same durable parent link a delegated helper has | Founder. The exact record is a spec item (**Inferred**: the link used by `StopDelegatedTree`) |
-| Injection | At the moment the run starts, the default session receives an engine-written notice. It enters the session's context. It carries no authority | Founder. Proposed (architect): the notice travels through the inbox (D3) |
-| Monitor and steer | The default session can read the run's reports and steer it, like any child (`delegate` steer, redirect and stop) | Founder; existing delegate tools |
-| Result | The run's final result returns into the default session, through the inbox | Founder |
-| Own limits and goal | The run keeps the task's own goal and time limits. The task, not the session, owns the goal, so the one-goal-per-owner rule is unaffected (C10, C11) | Default, founder may overrule (T5). Removes the earlier risk R2 |
-| Recap | A task or event session is not a `SessionTypeDelegate` session, so its session-end recap runs as today | Inferred from `pkg/agent/session_end.go` (`skipped_delegate_session`) |
-| Worker agents | No default session. Each task or event starts a new worker session. Who steers it is open (Q-ADR-14) | Founder; Q-ADR-14 |
-
-**What the default session sees, and how Stop acts on it.**
-
-| Question | Answer under the founder's rules |
+| Decided rule | Existing mechanism reused |
 |---|---|
-| Several runs finish near each other | Results arrive in arrival order, one per run, no merging (default, founder may overrule, T8). D4 takes all waiting items at one boundary, each as its own marked report |
-| A run fails | The default session receives the failure as a report. It never fails the default session (control-plane ADR, "Parents see a stop notice, not a failure") |
-| Reports while the default session is stopped | Wait until it resumes (default, founder may overrule, T9; control-plane ADR, D1.7) |
-| Plain Stop on the default session | Ends only its current turn. Registered runs and helpers keep running (D6) |
-| Stop all and `/cancel` on the default session | Stops the default session and its **whole tree**, which now includes registered task and event runs. See risk R10 |
+| The session ID owns one saved entry format. Every entry states whether it belongs to chat view, model view or both. There is no duplicate model-history content file. | R-STORE: mature `TranscriptEntry` and `UnifiedStore`; integrate the day-partition logic instead of keeping `PartitionStore` and the model JSONL backend as parallel production content stores. |
+| UTC day files hold the archive. The model start mark is `(file, byte position)` and can span yesterday into today. Read only that window, not the whole session before/after every append. Midnight is not a new conversation, execution or tool group. | R-STORE: `PartitionStore.AppendMessage` and the existing context-window surface; replace the full-read implementation in `snapshotWindowLocked`. |
+| A new message appends; over-threshold model context slides using the existing whole-turn/tool structural protections. Clear, interrupted-turn corrections and projection changes do not rewrite/delete prior archived bytes. Preserve real pending control identity, provider-valid call/result structure, recall and existing result references. | Existing window checkpoint/projection mechanism, including `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/memory/window.go::CommitWindow`, `RollbackWindow`; destructive rollback/hydration implementation is replaced, not preserved as a compatibility writer. If retention expires the marked day, advance to the earliest retained complete message/tool group, show the agent that older history expired, and use an empty window under the same identity if no content remains (15:20 Q2=A). |
+| `retention.session_days` remains the existing default 90-day, file-modification-age sweep, with disabled retention still respected. Old day files expire even for a long-lived main conversation. Protection of an eligible main identity does not keep all its old content forever. | R-RETENTION: `RetentionSweep`; retain the existing lock order, dependent retention hooks and identity protection. The 15:20 Q2=A answer supplies cursor repair within this same sweep/window mechanism; duration and disabled-retention behavior do not change. |
+| **No new summary step.** `EntryTypeCompaction` may remain a supported format tag, but there is no production compaction-entry writer. Idle recap continues to write agent memory through `memory.WriteLastSession`; it is not copied into the archive. | R-RECAP and R-STORE. This is the explicit 13:50 Q-R2-8 answer and 14:00 code verification, superseding the broad earlier “summaries are entries” interpretation. |
 
-**D8.4 — Schedules (default, founder may overrule, T7).** A schedule fire for a main agent runs as its own session and is registered in the default session (D8.3). The `main` session mode and its `sched-main-<agent>` session are replaced by the default session. `isolated` and `continue` stay as they are. A schedule fire for a worker agent gets a new session. Evidence: `pkg/gateway/schedules.go::pickSession`. This is a contract change to `session_mode` (see U4, risk R3).
+Day-file append ordering for delayed sources must preserve the accepted FIFO order and legal byte positions. The current `AppendMessage` chooses a day from the entry timestamp, so it cannot be wired unchanged for delayed messages. A replacement must satisfy the decided ordering and append-only rules; choosing a separate late-event archive is forbidden. Any remaining user-visible ordering choice is brought to the founder, not inferred from an old timestamp adapter.
 
-**D8.5 — Parallel limit and cost.** The existing global cap is 2,000 when nothing is configured (`pkg/config/config_defaults_apply.go::EffectiveMaxParallelAgents`, `physicalConcurrencySafetyCeiling`). That is a crash guard, not a real limit. Whether to add a smaller limit per default session is open (Q-ADR-9).
+### D3 — One instruction queue and the existing report inbox per session
 
-### D9 — Session end: idle timeout and recap (ADR requirement, Founder decision)
-
-| Rule | Detail | Evidence |
+| Input | Meaning | Existing reuse and target behavior |
 |---|---|---|
-| A session ends after `idle_timeout_minutes` of inactivity | Default 30. The recap is written when it ends | `pkg/config/config.go` (`IdleTimeoutMinutes`), `pkg/config/config_agents.go::GetIdleTimeoutMinutes` |
-| Auto recap is on by default | Today it is a setting that must be switched on | `pkg/config/config.go` (`AutoRecapEnabled`); `pkg/agent/session_end.go::CloseSession` |
-| The default session follows the same rule | It is not treated differently. Ending is not deleting: the session record stays and stays protected | Founder 22:38 |
-| Typing again resumes the same session | Same session id, same history | Founder 22:38 |
-| No unused triggers remain | `lazy`, `joined` and `explicit` (the `session_close` frame and its handler) are deleted. `idle` (and the separate boot-time `bootstrap`) remain | `pkg/agent/memory.go` (`TriggerLazy`, `TriggerJoined`, `TriggerExplicit`); `pkg/api/generated/asyncapi_types.gen.go` (`WsFrameTypeSessionClose`). Deletion is in progress on another branch |
-| There is no UI way to end a chat | Ending happens only by idle | Founder 22:38 |
+| Human web/channel message, or authorized parent-session instruction | Steering authority assigned by the server | R-QUEUE: one FIFO keyed by the actual session ID. All accepted waiting instructions enter at the next safe model/tool step boundary, together but as **separate messages** in model input and chat. |
+| Child progress/checkpoint/artifact/question/blocker/final or engine lifecycle report | Report data, normally no steering authority | R-INBOX: keep the existing report intake/acknowledgement, with all accepted helper report kinds wake-eligible for an idle non-stopped parent. A report cannot claim parent authority by its text. |
+| Task completion notice | Engine-authored run outcome plus the full stored result/reason | R-TASK + R-INBOX: same common report intake, with explicit run identity and captured recipients. Independent runs do not impersonate children. |
+| MAIN-peer request/reply | Direct addressed communication; not ancestor steering authority | R-INBOX and existing messaging transport, with a peer adapter (D7), never a synthetic parent edge. |
+| Heartbeat | Existing scheduler instruction in the main session | R-SCHEDULER + R-QUEUE: same runner; heavy work uses ordinary delegation. No separate heartbeat execution conversation. |
 
-This ADR does not do that deletion. It records the target so the units that follow can rely on it.
+A single existing session runner owns intake through final settlement on **every** entry path. If messages remain at a natural turn end, it starts the next turn immediately with the ready batch; there is no timer or “previous reply still finishing” refusal. An internal duplicate-owner/execution tripwire remains: session partitioning does not replace run ID, generation, boot epoch, message ID or sender/destination identity.
 
-### D10 — Channels: all channel messages go to the default session (Founder decision, 22:50)
+Visible per-message, aggregate and per-sender limits are checked **before acceptance**. Nothing accepted is silently shortened or cut out to make a request fit. The 15:55 founder answer selects the critically reviewed values: ordinary text **64 KiB (65,536 bytes)** through existing **session_messaging.steer_body**; **60/minute per authenticated sender + target session** through existing **session_messaging.steer_rate** and its sliding-window mechanism; keep **MaxQueueSize 200**; add exactly **ONE** aggregate setting, **session_messaging.steer_aggregate_body = 1 MiB (1,048,576 bytes)** of waiting ordinary text, AND the existing model-budget fit, whichever is stricter. Wire the existing settings into production boot/reload/intake (#1216); do not expose another settings tree or limiter service. The model-budget formula and estimator stay unchanged. Current values/scope and the five-scenario fit assessment remain in the question record, now answered. Q-R2-7 explicitly preserves today's **result-delivery behavior**: do not add a result-defer queue, new pagination/overflow protocol, retry service or summary workflow in response to the review. Large full results can exceed existing envelope/context limits; this is an accepted limitation, not a promise that every conceivable result batch fits.
 
-For now, **every channel message goes to the agent's default session**, per agent and workspace. There is no per-person session yet. Per-person sessions are a later idea (issue #1206). This replaces the earlier "channels out of scope" text.
+Acceptance preserves the existing **message plus authenticated sender information together, or neither** rule in **Steering commands: no person question**. A unified entry may remove the old paired-write layout; it must not acknowledge/echo/admit text whose provenance save failed. Queued/held human input may be lost on gateway restart under the retained #1198 deferral. Saved transcript, accepted input and model consumption are distinct claims.
 
-| Consequence | Detail |
+### D3.1 — In-scope bug obligations and unchanged-delivery boundary
+
+| Verified issue reference / scope | Required behavior and existing path extended | Evidence limit |
+|---|---|---|
+| [#1211 — Child-to-parent over-cap report refusal lacks parent loss visibility and machine-readable retry hint](https://github.com/elicify-ai/omnipus/issues/1211) | Keep existing report rate/body/delivery policies under Q-R2-7. On an actual refused arrival, child gets an explicit machine-readable rejection/retry hint, and parent can see that input was rejected/not delivered through the existing inbox/activity/status machinery. Do not pretend has_more:false proves no rejection occurred. Do not add a retry queue, automatic retry protocol or another report store. All accepted reports retain existing message-ID/ack/consumption and decided wake behavior. | Issue body is a reported live QA observation, not a reproduction by this author. Source MessageInboxStore.Append/checkSteerCaps failure boundaries are read; QA must reproduce before GREEN. |
+| [#1214 — Steer racing redirect leaks stale-generation details and an ambiguous outcome](https://github.com/elicify-ai/omnipus/issues/1214) | Serialize intake/control acceptance through R-QUEUE/R-STOP and existing selected-execution/control receipts. The caller must distinguish queued/applied/superseded/refused; a control cannot be reported refused while its text is delivered. Current-generation race/stale callback is not a failed conversation, and internal admission terms do not escape as the user-facing explanation. Preserve the existing authoritative control precedence, not a new redirect path. | Reported race/outcome is not locally reproduced here. Existing fences/supersession/curated errors are the code grounding; controlled race acceptance tests are required. |
+| [#1216 — steer_body/steer_rate settings are unwired](https://github.com/elicify-ai/omnipus/issues/1216) | Wire existing config/resolvers and approved values into the same live intake/steer check at boot and reload, for all ordinary sources. Changing the setting must change actual admission, not only stored config or displayed text. One new aggregate field only. | Source-confirmed: complete tracked Go caller scan found resolver/setter declarations only; no production invocation. |
+| Separate fix squad: [#1212 snapshot never reaches child](https://github.com/elicify-ai/omnipus/issues/1212), [#1213 respond correlation acceptance](https://github.com/elicify-ai/omnipus/issues/1213), [#1215 duplicate timeout notice](https://github.com/elicify-ai/omnipus/issues/1215) | Cross-reference and preserve the ordinary helper context/current control behavior. Do not repair these as side work, add another context path, or quietly expand this feature's proof claim. Coordinate same-file integration with that squad; no competing writers. | Founder explicitly assigns them outside this feature. Their live QA observations are not certified by this document. |
+
+The refused-arrival signal is not a summary, a replay/retry transport or a new result-delivery behavior. It is honest observability at the existing acceptance boundary, required by #1211 and the founder's visible-rejection rule.
+
+### D4 — Self-delegation reuses the delegate tool, ordinary context and normal limits
+
+| Decided rule | Existing mechanism reused |
 |---|---|
-| One shared conversation | Different people on a channel share one session and one history |
-| Reply routing | A reply must go back to the person and chat that sent the message. With one shared session this needs the channel and chat stamped on each message. How is a spec item (**Unknown**: not traced in code) |
-| Which workspace | How a channel message picks its workspace is a spec item (**Unknown**) |
-| `dm_scope` | The per-peer routing setting no longer decides the session. Its fate is a spec item (**Inferred**; the setting is named in the audit hit O1) |
-| Delivery stamps | D1 keys stamps by session id. Channel and chat identity must still travel with each message, so replies reach the right chat |
+| Native MAIN agents and native WORKERS may self-delegate, with no workspace self-edge setting. Delegate is available for these roles, unless an explicit operator policy denies it. Other-agent delegation keeps its existing workspace edge/mode/depth checks. | R-DELEGATE; the existing global ceiling plus tightening per-agent policy. Eligibility is not an override of a Deny. No third policy layer or self-only authorization resolver. |
+| Omitted target is normalized to the caller before the same authorization decision used for an explicit self-target. | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/tools/delegate_run.go::launchAndDispatch` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/loop_delegation.go::buildDelegationDenyChecker`; delete the untargeted outgoing-edge shortcut for self. |
+| MAIN agents keep all role-allowed tools and are instructed to prioritize delegation for hands-on work in the main conversation **and every extra chat**. | Ordinary launcher and existing role prompt/tool surface. This is a prompt priority, not a tool ban, coordinator-only registry or second hands-on engine. |
+| Self-helpers receive exactly ordinary helper context and have ordinary helper memory/recap behavior. They may self-delegate again within the normal depth limit (default 3). Keep the existing memory-based admission check and existing operator limits; show running/waiting helpers and actual tokens. | R-DELEGATE; existing depth and admission paths. Do not add a special snapshot inheritance, self-helper recap, one-self-hop rule, per-main quota or spend controller. |
+| External CLI workers can **never** create Omnipus self-helpers, permanently. Their internal harness behavior is not Omnipus-tracked delegation. System agents/Admin are not expanded. | Existing external/native runtime boundary (R-CLI) and agent-type checks. This is an explicit founder exception, not a temporary delivery omission. |
 
-## The target picture
+The existing parsed-but-unforwarded `snapshot` input is an incidental issue, not permission to fix or redesign self-helper context here. The implementing lead must report it separately rather than slip in a different context pipeline. The omitted-versus-explicit target mismatch, in contrast, lies directly in the decided authorization normalization change.
 
-```
-  person (web chat id)   parent session (delegate)   event / task / heartbeat
-          |                        |                        |
-          v                        v                        v
-   +-----------------------------------------------------------------+
-   |  ADDRESS BOOK   (agent, workspace, intent)  ->  session id      |
-   |   explicit chat -> its own session                              |
-   |   main agent    -> default session of (agent, workspace)        |
-   |   worker agent  -> NEW worker session (clone)                    |
-   +-----------------------------------------------------------------+
-                              | session id
-                              v
-   +------------------------ one SESSION ---------------------------+
-   |  steering queue (FIFO, authority)  <- person, parent, events    |
-   |  inbox (no authority)              <- child reports            |
-   |  one turn at a time; at each step boundary take ALL steering,   |
-   |  each as its own message; turn ends with waiting -> new turn    |
-   |  history window, registry, stop, wakes, stamps: keyed by id     |
-   +-----------------------------------------------------------------+
-```
+### D5 — Keep task execution and the existing three modes; change their automatic selection
+
+**MAIN always beats CONTINUE.** MAIN is a task run in a new real child of the assignee's main session; it is **not** hands-on execution inside the main model turn. The parent relationship and the task/run/goal relationship remain distinct.
+
+| Work | Mode and session | Ownership/Stop | Reuse |
+|---|---|---|---|
+| MAIN-agent task, manual or scheduled, one-time or recurring | MAIN; fresh child **for every run** | Real child of the assignee's main session. Main tree Stop reaches the current run, not the future schedule. | R-TASK launcher/task-origin path plus R-SCHEDULER modes. |
+| One-time worker task/schedule | ISOLATED; fresh independent session | Independent task run, not a child merely because a main chat monitors it. | Existing isolated-session creation and task claim/run records. |
+| Recurring worker task | CONTINUE; first run creates its independent session, later runs continue it | Same conversation, new run identity/result each occurrence. | Existing job session reuse plus TaskRun history. |
+| Scheduled task with optional **run isolated (one session per execution)** checked | ISOLATED; fresh independent session, including a MAIN assignee | Independent run with normal task controls and result recipients. | Extend the existing schedule/task trigger contract; one checkbox, no mode selector. |
+| Heartbeat of an eligible MAIN agent | Its main session | Same queue and turn owner; heavy work delegated. | R-MAIN + existing heartbeat reconciliation/runner. |
+
+User and agent choose the assignee, not among three modes. Only scheduled tasks have the optional isolation checkbox; there is no new Schedules UI. “Scheduler events” means the existing heartbeat and time-triggered task paths (one-time or recurring Calendar tasks; current representation findings below), **not** an outside-payload event bus.
+
+| Completion/admission rule | Existing mechanism reused |
+|---|---|
+| A future authorized scheduled MAIN occurrence may start a child while its main chat is stopped, **without waking/resuming the main model**. Reports wait for legitimate chat resume. Completed-but-idle main sessions also need no manufactured coordinator turn. | Narrow task-origin extension of `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/steer_launcher.go::launchSteered`/the current parent publication lock; Q-R2-1=A. Do not remove the general stopped-parent guard for arbitrary helper launches or bypass an in-flight Stop. |
+| Launch is ordered against Stop under the existing parent/cascade fence. Parentage changes do not replace task claim, task-owned goal, plan gates, attempts, limits, run identity or terminal outcome. MAIN uses the task's limits, not the delegate tool's default timeout. | R-TASK + R-STOP. Ordinary extra-chat helpers stay children of their actual initiating chat. |
+| Completion recipients are captured **at run start**: the main session of the MAIN agent that **started** the task, not its creator, plus the MAIN assignee's main session. Deduplicate if they are the same. If a captured session is gone, retain the result in the task/run view; no replacement recipient is guessed. | R-TASK run record and R-INBOX delivery. Creator, starter, notification recipient and steering parent are not one identity. |
+| Every actual finished run notifies: done, failed or stopped with reason; no per-retry notices. Skipped means it did not run. Use the authoritative outcome, so a late success cannot contradict a winning Stop. | Existing `completeTaskWithResult`, `openRun`/`closeRun` and task Stop guard. “Stopped” can use the existing failed-with-stop-reason task representation; this ADR does not invent a new Task status. |
+| The notice carries the **full stored task result**, already the summary, with a brief engine header. Finished runs wake an idle non-stopped main once; ready simultaneous notices are batched. A live main consumes them at a safe boundary; stopped mains hold them. | Existing result, inbox identity/consumption and runner. No new task-result card, launch-time model injection or second result delivery system. Q-R2-7 preserves current result-delivery limitations. |
+| Running agent tasks and scheduler activity also appear in the existing chat background-activity panel, even when not started by that chat's tool call. Starter and assignee may both see the run, with a truthful distinction. | Existing activity projection and task-run events. A displayed ISOLATED/CONTINUE run is not tree-stoppable by the displaying chat. A MAIN run is shown once, not once as task and again as helper. |
+
+### D6 — Preserve Stop, revive and selected-execution safety
+
+| Action/state | Decided effect | Reuse |
+|---|---|---|
+| First Stop/Esc/`/stop` | Stop this session's current turn only; helpers and MAIN task children may still run. Opens the existing 3-second escalation window. | R-STOP and **An open conversation must keep the ability to delegate**'s October 6 amendments. |
+| Second Stop/Esc/`/stop` within that window, or `/cancel` immediately | Stop the session's real helper tree, including current MAIN task children. Future recurrence remains configured. No separate Stop-all button or offer. | Same `StopSession` tree path. |
+| `/stop-redirect <instruction>` | Stop the selected current turn and continue the same session with the new instruction, in root and helper chats. | Existing root/helper redirect and one Stop path; do not implement another redirect runner. |
+| Pending human input at Stop | HELD and visible, with release/discard. A new message does not silently resurrect every held instruction. | R-QUEUE status/receipt surface + R-REVIVE. |
+| Older parent controls superseded by Stop | Never return after revival. Reports remain report data and may be held separately. | Existing `StopSession` supersession/control ledger; preserve execution and generation fences. |
+| Stopped parent with live helpers | Show **Stopped · N helpers still running**, counting actual running/waiting activity truthfully, not all historical children. | Existing lifecycle label and Activity projection; do not change Stop scope to make the label easier. |
+| Gateway restart cuts an execution | Conversation shows **Interrupted**, not a permanently Working or failed conversation because of restart. No boot dispatch of old input. Tasks may still fail with `interrupted: gateway restarted`; plan recovery is unchanged. | Existing boot recovery/lifecycle display path; do not copy the old blanket standing-root exemption into the new main type. |
+| External CLI worker plain Stop | Accepted exception: interrupt/Stop **may kill the CLI's background subprocesses before native-session resume**. Disclose it before users rely on native background-shell preservation. | R-CLI cancellation plus R-STOP selected-execution ordering; Q-R2-5=B. |
+
+Session ID partitions conversation state; it does not replace the execution identity selected by Stop. A late force, detach, completion or redirect callback must not touch a replacement turn. A viewer disconnect or navigation never stops work (**UI-independent turns and session-bound webchat streaming**).
+
+### D7 — Direct group messaging and shared channels use existing transport, not parentage
+
+| Decided rule | Existing mechanism reused |
+|---|---|
+| `@agentname` targets MAIN agents' main sessions only, in the same authorized workspace. Workers are excluded. A group message never performs handover. | Existing session messaging/inbox transport plus R-MAIN lookup; replace the current mention-selection action. |
+| Humans and agents address recipients directly. MAIN teammates may message each other without a delegation trust link. Receiver retains its own permissions; sender gains no Stop, context-read or approval-inheritance authority. No cross-workspace peer messaging. | R-INBOX common append/dedupe/wake machinery with authenticated peer adapter; Q-R2-6=A. Delegation edges remain the gate for actual other-agent delegation, not conversation. |
+| The addressed agent receives the addressed message and explicitly supplied material, **not the entire originating conversation**. Its answer returns as a normal agent response bearing its own icon/name. Persist identity and return correlation so replay matches live display. | Existing message envelope, per-message agent identity and transcript/replay; no shared-history copy or cloned coordinator. |
+| The chat's own agent sees both the human's `@` request and the guest answer in its context. The answer wakes it once when idle and non-stopped; silence is allowed, with no empty bubble. Stopped recipients keep the existing hold rule. | R-INBOX wake/consumption plus R-QUEUE. The later 10:25 answer-wake rule supersedes “no forced turn” only for the answer. |
+| Every answer in a mixed-source batch goes to its sender through the same addressed-message mechanism. Preserve each source, connector instance, chat/thread, original session and request correlation. An answer with no usable return correlation is refused visibly; the agent must address a sender. There is no fallback destination (15:10 Q3=B). | Existing message transport, `MessageTool.Execute` and the runner's response boundary. No blind broadcast of one batch answer. |
+| All channel messages for an agent/workspace go to its main session for now. Shared context/control is intentional; per-person sessions remain later (#1206). Correct reply routing is **not** a privacy boundary. | Existing channel-instance binding and the same main lookup/queue; preserve egress ownership and authenticated sender admission. |
+
+`SteerUpwardDeliverer.Deliver` currently requires an actual child edge. Reuse its underlying append, acknowledgement and wake mechanism, not that child-only authorization check. Peer requests, peer answers and independent task notices need authorized adapters into that same mechanism; neither a new inbox service nor a fake child edge is valid.
+
+### D8 — Navigation and slash commands change actions, not just labels
+
+| Surface | Decided behavior | Existing mechanism reused |
+|---|---|---|
+| Agent row click | Navigate to that agent's main session; preserve current team-only picker eligibility. Admin's existing standalone treatment remains. | Existing agent selection/session navigation. R-MAIN supplies the existing session instead of making a fresh chat. |
+| **+ New chat** on the agent row | Sole UI action for creating an extra MAIN-agent chat. No `/new`, alternate generic new-chat bypass or in-session handover. | Existing new-session action behind this one entry point. |
+| WebSocket connect/reconnect | Refresh the agent roster; do not widen eligible targets. | Existing connection callback/query invalidation. This refresh is already present at the merged baseline; preserve and test it, do not build a second refresh mechanism. |
+| `/resume` | Rename to `/sessions`, retaining today's session-search behavior; old name is deleted, not an alias. | Existing search modal/client command. |
+| `/agents` | Deleted. `/switch-agent <agentname>` is navigation to another MAIN session, not the deleted `switch_agent` tool. | Existing navigation and command registry. |
+| `/clear` | At the next safe step boundary: move the model window start and clear the chat display, with a marker. Delete nothing; keep history searchable/recallable; retain pending input; create no new session; do not claim the already-running step forgot its input. | Existing clear definition/runner boundary/window metadata and chat projection; Q-R2-9=A supersedes the earlier visible-display wording. |
+| Opened existing worker/child session | Human typing is allowed. During a live task it steers that run; after a finished task it continues the conversation without rewriting/rerunning the completed task. Rerun is the explicit existing task action. Workers are still not fresh chat or `@` targets. | Extend existing worker-helper input authorization to legitimate independent worker sessions; R-TASK and R-REVIVE, Q-R2-10=A. |
+
+**Final worker capability table (12:35, superseding 10:43/11:50):**
+
+| Allowed | Not allowed | Global removals |
+|---|---|---|
+| Navigation; `/help`, `/status`, `/stop`, `/cancel`, `/stop-redirect`, `/clear`, `/sessions`, `/workspace`, `/tasks`, `/recall`; read-only lists | `/remember`, `/retrospective`, `/goal`, `/loop`, model **switching**, `/config` | `/new`, `/agents`, `/list`, `/show`, `/switch`, `/check`, `/channel`, `/start`; old `/resume` name |
+
+Read-only listing is not permission to select a model or mutate configuration. The specification maps existing list commands/actions without restoring the earlier blanket ban on model/skill/channel lists. Typed commands and menus enforce the same session-aware capability; hiding a menu item alone is not enforcement. No new command registry is created.
+
+### D9 — Idle recap and deliberate deletion keep their separate meanings
+
+| Decided rule | Existing mechanism reused |
+|---|---|
+| Default `idle_timeout_minutes` is 30. **Any turn or message** resets actual session activity. Do not run idle cleanup while the session's execution still works/settles. Auto recap is on by default; main follows the same rule as other human chats. Typing resumes the same ID. | R-RECAP + existing `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/loop_idle.go::resetIdleTicker`; fix repeated idle episodes through this mechanism, not another lifetime/session object. |
+| Remove `lazy` and `explicit`, including `session_close` and its acknowledgement/handler. Keep idle/bootstrap and **KEEP `joined`** for agent-recorded retrospectives. No UI “end chat” action. | R-RECAP; the live `RetrospectiveTool.Execute` writes `Trigger: "joined"`. |
+| Self-helper recap/memory remains unchanged. No new compaction summarizer; no extra result-summary step. | Existing delegate eligibility gate in `CloseSession` and `MemoryStore.WriteLastSession`. |
+| Actual agent deletion warns that owned sessions and memory will be deleted, and requires double confirmation. Consolidate REST and agent-tool deletion into one cascade. Preserve locked/system/active-plan guards. | R-DELETE and existing confirmation/approval components. Double confirmation is UI-only; agent-tool and API entry points retain their existing single-approval requirements (15:10 Q6=B). |
+| Delete the agent's **own** sessions and memory. Historical guest answers in another agent's chat remain, labelled **deleted agent**; they do not remain executable identities. Report partial cleanup truthfully. | Existing cascade and per-entry identity, Q-R2-11=A. No redaction sweep across other agents' histories and no second deletion service. |
+
+### D10 — Constraints and delivery boundary
+
+| Constraint | Application and reuse |
+|---|---|
+| Single pure-Go binary; no new mandatory runtime/database | Reuse file-based sessions, cron and current optional CLI drivers. No sidecar controller, generic event bus, new native plugin system or security-critical shellout. Existing platform degradation stays. |
+| Two-layer tool policy | Existing global ceiling and tightening per-agent overrides remain; delegation preference is not a tool ban. Native target off-switches remain effective. MAIN task children inherit their **main parent's** approval state, not the starting extra chat's modifier (Q-R2-3=A). Unattended work still refuses a required human approval instead of waiting on a popup, per **Shell permission modes: Ask / Auto / God Mode; drop the block list; one rule format**::D10. |
+| Existing helper approval popup | Label/link the acting helper/run on the existing approval ID; no second queue/card/modal. Do not claim external CLI calls are protected by it: current external consent returns approval unconditionally and is post-hoc observability. |
+| Contract-first | Architect specifies the shapes; backend-lead alone changes/regenerates `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/openapi.yaml`, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/asyncapi.yaml` and shared schemas before Go/TypeScript consumers. Reuse Session, Message, SessionMessage, TaskRun, schedule and command contracts; remove obsolete shapes rather than aliasing them. |
+| Ecosystem and footprint | Preserve SKILL.md/HEARTBEAT.md/SOUL.md/AGENTS.md conventions, session-scoped tool/browser state, recall authorization and current memory admission. Do not keep every main archive or model runner permanently hot. No measured RAM/performance PASS is claimed. |
+| Reachability and gates | Real UI/agent entry points, not only store tests. Exact-commit hands-on UAT by tester plus independent validator uses `openrouter` + `deepseek/deepseek-v4.1-flash`. Historical named landing exceptions do not waive this feature's gate. |
+| Scope | #1198 waiting-input restart reconstruction and live descendant-stop retry remain deferred; per-person channel sessions (#1206), outside-payload events, new helper memory and new summary/result pipelines are excluded. All scoped legacy paths listed below are DELETE under the 14:45 ruling. |
+
+### New things and why nothing existing fits
+
+These are the unavoidable **extensions to existing records**, not parallel implementations. Anything else new requires a founder answer and an update to this table.
+
+| New thing | Existing candidate rejected as sufficient | Why it needs extending |
+|---|---|---|
+| Entry view membership and day/byte window mark | R-STORE's current TranscriptEntry plus line-count window | The transcript lacks the full provider-message representation and view selection; a line Skip on a separately reread model archive cannot express the decided single archive/bounded seek. Mature this record and store, not a second history. |
+| Authenticated peer/return addressing in the common message envelope | R-INBOX's child-only delivery adapter; R-QUEUE's provider-message-only item | A peer is not a child. One session ID cannot distinguish several senders/reply destinations. Add provenance/correlation to the existing envelope/adapters, not a new transport. Unaddressed answers fail visibly, with no fallback destination (15:10 Q3=B). |
+| Captured run recipients and the optional scheduled isolation flag | Existing TaskRun and schedule mode fields | Creator/assignee lookup at completion cannot express the founder's fixed starter-plus-assignee recipients. Existing user-selected `session_mode` does not express automatic selection plus one checkbox. Extend those records. |
+| Held/release/discard state, aggregate intake admission and typed refused-arrival visibility | Existing queue/status receipts and body/rate/count limits | Stop has control supersession but not the full decided held-human UI behavior; item count alone cannot bound bytes/context. Extend the same intake/status path. Values are approved at 15:55 Q1=A; the one new aggregate key is in the existing session_messaging namespace. |
+
+### Superseded earlier decisions — explicit history, not current options
+
+| Earlier rule | Later decision that wins | Current rule |
+|---|---|---|
+| Repair the waiting room by making it per session | October 6 Q20 | Delete it; one session instruction queue and settled runner. |
+| Remove every inbox / unrelated-agent inbox later | October 6 child-inbox refinement; October 7 group/peer messaging | Keep the report inbox; extend common messaging for decided MAIN peers. |
+| Every event/task runs in main; all are children; then no task is a child | October 7 modes and 10:13 | MAIN = fresh real task child; ISOLATED/CONTINUE independent; heartbeat in main. Task outcomes stay task-owned. |
+| Every worker occurrence gets a fresh conversation | October 7 mode clarification | Recurring worker CONTINUE; one-time worker ISOLATED; scheduled isolation override available. |
+| Every agent may self-delegate; self-helper cannot self-delegate again | October 7 07:29/10:25; Q-R2-2/4 | Eligible native MAIN/WORKER roles; normal depth; no self-edge; external workers permanently excluded; system/Admin unchanged. |
+| Delete `joined` recap trigger | October 6 Q29 | Keep joined retrospective stamp; remove lazy/explicit only. |
+| Automatic compaction summaries become entries | Q-R2-8 and October 7 14:00 verification | No new summary step; keep format type without manufacturing a writer. Idle recap remains agent memory. |
+| Generic task start injection and child-style result handling for every mode | Late October 6 R10 plus final October 7 task modes | Actual task-run registration, start visibility, brief completion/full stored result. Real parent only for MAIN. No extra start-time model turn. |
+| Guest answer requires no automatic own-agent turn | October 7 10:25 | Answer wakes once when eligible; silence still allowed. |
+| Channels out of scope / private per-person session now | October 6 22:50; October 7 06:54 | Shared main for now, with explicit shared-context/control limitation. |
+| Worker `/clear` and all model/skill/channel lists banned | October 7 12:35 | Clear/navigation/read-only lists allowed; named writes/model switching/config not allowed. |
+| `/clear` keeps old messages on the current chat display | Q-R2-9, October 7 14:10 | Clear context **and current display** at safe point; archive/search/recall retained. |
+| Handover/switch agent in place, `@` selects a different speaker | October 7 pinning/group decisions and 12:44 | Delete handover; navigation opens another main; mention communicates. |
+| Starter chat approval modifier follows a MAIN task | Q-R2-3=A | Main parent settings govern within target's own restrictions; disclose possible loosening. |
+| Native background-shell preservation promised for external CLI Stop | Q-R2-5=B | Disclose external subprocess-kill exception. |
+| Legacy/upgrade compatibility paths kept “just in case” | October 7 14:45 | Delete scoped paths, no migrations/shims; keep Calendar once/at_ms, delete old every_ms/cron_expr adapters and compatibility promises (15:55 Q4=A). |
+
+### Earlier ADR clauses amended by title and heading
+
+This is a dated correction map, **2026-10-07**. Where these older clauses conflict, the rule below wins only within this design's stated scope. Historical reviews are not new decisions. The source titles, headings and quotations were checked against the current files, rather than copied from the inventory unverified.
+
+| Inventory ref / source title and clause | Amendment / new rule | Reuse / section |
+|---|---|---|
+| A1 — **Context paging — sliding-window + recall replaces reactive compaction**::D11/D14 and line-count/“never active sessions” assumptions | One authoritative chat/model format in UTC day files; day/byte mark; daily retention applies to long-lived mains. Session-scoped provider-valid recall remains. | R-STORE/R-RETENTION; D2. |
+| A2 — **Context overflow — the sliding window extended mid-turn, tool results emptied with a recall mark, and a per-result cap at the door**::6.3, 6.5, 18.1/18.2 | Replace destructive archive rollback and separate-history hydration with append-only view/window effects. No new summarizer. Preserve full-result recall, whole tool structure and unconsumed controls. | R-STORE; D2/D8. |
+| A3 — **Workspace-scoped heartbeat config + global memory settings UI**::Amendment A1 F-02/F-04, A2 and D7 | Standing main created by eligible membership, not heartbeat enablement; computed pair ID; protection/pinning independent of heartbeat-on. Heartbeat config remains workspace-scoped. | R-MAIN; D1/D5. |
+| A4 — **Unified Slash-Command + Skill Menu (skill-as-command, partitioned palette)**::D7–D9 | Remove `/agents`/`/new`; `/switch-agent` navigates; `/sessions` retains search; `/clear` is safe-point context/display clear; final worker capabilities apply to actual execution. | R-COMMANDS; D8. |
+| A5 — **Tool manifest tier redesign: ToolSearch, a search-only third tier, switch_agent, and a cached catalog boundary**::D4/5.1 | Retire the handover tool outright. Preserve loaded-tool isolation by agent/session; group answers do not inherit a colleague's tool set. | R-DELEGATE; D1/D4/D7. |
+| A6 — **Built-in agent configuration, skills, and visual file reading**::Who talks to whom; Staff (not chat) | Remove Jim/General-Purpose-only self-edge rule and Researcher leaf restriction for eligible native roles. Workers remain non-new-chat targets but may receive human input in existing sessions. Admin/system/external exceptions remain explicit. | R-DELEGATE/R-CLI; D1/D4/D8. |
+| A7 — **A sub-agent is a session steered by another session**::D1/D3/D5 | MAIN task runs are real fresh children; ISOLATED/CONTINUE independent. Every helper report wakes an eligible idle parent. External steering uses interrupt/native resume. Peer publication is not delegated-child publication or parent control. | R-TASK/R-INBOX/R-CLI; D3–D7. |
+| A8 — **An open conversation must keep the ability to delegate**::D6 creator-root fallback, D7 interrupted wording, and D2 child launch guard | MAIN parentage follows assignee's main regardless of creator activity. Narrow authorized task admission allows a new scheduled child of a stopped main without main revival. Restart-cut conversation shows Interrupted. Preserve selected-execution Stop and ordinary human revival. | R-STOP/R-REVIVE/R-TASK; D5/D6. |
+| A9 — **PlanSupervisor — a System Agent that adjudicates and corrects running plans**::D14 owner equation | Creator, starter, notification recipient and steering parent are distinct for task runs; recipients fixed at start. This does not remove plan-owner/supervision linkage. | R-TASK; D5. |
+| A10 — **Remove the main sentinel agent**::What was deliberately KEPT; **Entity / config separation — per-entity files for agents**::D6 rule 5 | Actual deletion uses one owned-session/memory cascade and retains guest answers elsewhere. Team removal hides/retains; it is not deletion. No shadow main agent is restored. Partial cleanup is not silent success. | R-DELETE; D1/D9; 15:10 Q6=B / 15:20 Q5=A. |
+| A11 — **The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume**::D-G deferrals and “session never ends” vocabulary | Single entry format/intake and visible aggregate admission are now in scope. Waiting-input restart reconstruction/live stop retry stay deferred. Idle episode end/recap is not identity deletion or permanent unreachability. | R-QUEUE/R-RECAP; D2/D3/D6/D9. |
+| A12 — **CLI Minimization: a thin one-shot task-runner over the engine**::D4 broad worker rejection | Keep fresh one-shot chat-target selection restriction; allow authorized direct input in an existing worker/child conversation. No new worker main chat or worker mention. | R-REVIVE/R-TASK; D8. |
+| Additional boundary — **Shell permission modes: Ask / Auto / God Mode; drop the block list; one rule format**::D1 Delegation and D10 | MAIN child source is the main chat (Q-R2-3), within executing-agent constraints. Keep unattended immediate-refusal rule, one native popup and the existing external approval exception. | R-APPROVAL/R-CLI; D10. |
+| Additional boundary — **A channel belongs to one (workspace, agent) pair, in both directions**::handoff example and 4a | Delete the handoff example/path, not channel ownership or instance provenance. Replies belong to each source; shared main context does not confer another instance's send permission. | R-INBOX and existing MessageTool; D7. |
+
+**Additional 15:10 Calendar reconciliation:** **Calendar Recurrence Redesign (Recurring Tasks are Calendar Events)**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/specs/calendar-recurrence-redesign-spec.md`::Decisions Locked D1/D8 and User Story 5, no longer authorizes keeping old recurring every_ms/cron_expr firing/rendering/preservation adapters in this greenfield feature. Current repeating work reuses RRULE. Its User Story 1 scenario 6 and current buildTriggerForSave still author once for one-time tasks; that concrete dependency was reported to the founder, who chose **KEEP once/at_ms** and remove its misleading legacy label at 15:55. Old every/every_ms and recurring.cron_expr representations/adapters/previews/editor preservation/compat tests/docs are DELETE. Heartbeat's internal cron engine use is untouched.
+
+**Preserved inventory P1–P17:** session-scoped recall; external target configuration/workspace and real rather than invented resume IDs; re-keyed approval grants and one-directional session-lock/cache order; existing other-agent trust/depth gates; asymmetric human versus agent task assignment; one task series with distinct runs; channel-instance ownership; session-isolated loaded tools; receiver-gated requested skills; session-owned browser tabs; two policy layers and target Auto off-switch; fixed Admin/system tools; viewer-independent session streaming; chronological reply segmentation; separate goal/root-question ownership and retention; authenticated report/instruction provenance and atomic acceptance. Those source decisions are not a license to keep any live compatibility adapter listed for deletion below. R-MAIN through R-DELETE and the amendment rows identify the corresponding code boundaries.
 
 ## Consequences
 
-### Positive
+### Positive, negative and neutral
 
-- The audit's whole class of bug (two chats sharing a worker, a queue, a history window, a delivery stamp) cannot occur, because there is no other key left to share (D1; audit A1 to A6, O1 to O8).
-- One queue and one turn rule replace three waiting places and a timer (C3, D5). Less code, fewer states.
-- Events and tasks for a main agent are visible in, and steerable from, the default session, while still running as their own session.
-- Channel messages have one clear home: the default session (D10).
-- The heartbeat session machinery (eager create, pin, delete guard, release) is reused rather than duplicated (C8, D2.1).
-- Self-delegation uses the existing `delegate` tool and launcher; no fork machinery is built.
-
-### Negative
-
-- It is a broad change: about 99 production references to a `.sessionKey` field in 32 files, 92 production references to `activeTurnStates` in 19 files (48 test files), 26 to `sessionWorkers` in 3 files (counted with `grep` on `pkg/**/*.go`, tests excluded). Most of the cost is in tests that assert today's keys.
-- A contract change (session type, member config) reaches the generated Go and TypeScript types and the Session panel.
-- The default session lives across resumes, so its history keeps growing. It needs the existing context compaction to keep working over very long histories (not verified; see R4).
-- Self-delegation becomes a permission change for every agent, so security-lead must review it (D8.1).
-- Channel users share one session until per-person sessions exist (D10).
-
-### Neutral
-
-- The agent still decides **what** to do; the address book only decides **where** the input lands.
-- Worker sessions, delegation and task sessions that are already new sessions keep working as they do today.
-
-### What changes for users
-
-| For the user | Change |
-|---|---|
-| Messages typed while the agent works | All waiting messages go to the model at the next step, together, but each shown as its own message |
-| A message sent a moment after a reply | Never refused with "previous reply still finishing"; it queues |
-| History | Per session, never shared between two chats of the same agent |
-| The default session | Visible and pinned for each main agent in each workspace; heartbeat, channel messages and notices about task and event runs show up there |
-| Main agent behaviour | In every chat the agent is told to hand heavy work to its own helpers; it keeps all its tools |
-| Channels | Everyone on a channel talks to the same default session |
-| Session end | A chat ends after 30 idle minutes and a recap is written; typing again resumes it |
-| Stop | Same table as today (D6); messages waiting at Stop are held (Q-ADR-12, recommended) |
-| Agent picker | Reloads on WebSocket connect and reconnect (founder Q28; separate small unit, see U6) |
-
-### Implementation units, in order
-
-Each unit is shippable alone and keeps CI green. Counts are `grep` counts in `pkg/` (production files; tests excluded) and are **Verified** as counts, **Inferred** as a measure of risk.
-
-| Unit | What | Blast radius | Evidence |
-|---|---|---|---|
-| **U0** | PR #1204 (open): per-session admission, and the per-session route key whenever `msg.SessionID` is set; refusal text. Bridge only; D5 later deletes its refusal. | 9 files; `pkg/agent/ordinary_execution_admission.go`, `loop_inbound.go`, `translate_error.go`, `session_end.go`, tests | PR diff `origin/release/v0.1.1...origin/work/engine-admission-per-session-20261006` |
-| **U1** | **Address book and session id on arrival.** New resolver; the default session replaces the heartbeat session (type `default`, `default_session_id`, `protected` while on the team); every inbound message carries its session id before any queue. Contract change first. | `pkg/session/unified.go`; `pkg/workspace/member_config.go`; `pkg/gateway/rest_workspaces.go`, `rest_sessions.go`, `heartbeat_schedule.go`, `schedules.go`; contracts (`Session.yaml` `type` and `protected`, `SessionLifecycleRecord.yaml`, `WorkspaceMemberConfig.yaml`, `WorkspaceMemberHeartbeat.yaml`); generated Go and TS; the Session panel pin. 26 production references to heartbeat types in 8 files | `grep NewHeartbeatSession|SessionTypeHeartbeat|OriginKindHeartbeat` |
-| **U2** | **Worker scope per session id.** `sessionWorkers` keyed by session id; delete the `":"+sid` suffix match and the probe worker for channel hand-backs (A6). | `pkg/agent/session_worker.go`, `loop.go`, `loop_inbound.go`. 26 references in 3 files; `resolveSteeringTarget` 11 references in 4 files | `grep sessionWorkers`, `grep resolveSteeringTarget` |
-| **U3** | **One queue and all-at-once.** Merge the worker inbox into the steering queue; steering keyed by session id; "all" only; remove `steering_mode`; a new turn starts at once with everything waiting; the inbox separated from the steering queue (hand-back wake becomes an inbox arrival). | `pkg/agent/steering.go`, `session_worker.go`, `loop_run_turn*.go`, `async_notifier.go`; `pkg/config` (`SteeringMode`); WebSocket per-message status; `docs/internal/architecture/steering.md`. 38 references to `enqueueSteeringMessage` in 7 files; 14 dequeue references in 5 files | `grep enqueueSteeringMessage`, `grep dequeueSteeringMessagesForScope` |
-| **U4** | **Heartbeat and schedule input through the address book, run registration, and remove the waiting room.** `pickSession` and the task executor ask the address book; a main agent's event and task runs are registered in its default session (D8.3); delete D5's list. | `pkg/gateway/schedules.go`, `pkg/agent/task_executor*.go`, `ordinary_execution_admission.go`, `translate_error.go`; `ScheduleCreate`/`ScheduleUpdate` `session_mode` in the contract; 25 references in 4 files for the waiting-room symbols | `grep awaitPreviousOrdinaryExecution|activeScopes|attachExecution` |
-| **U5** | **Turn registry, history window, cancel latches and delivery stamps by session id.** The composite key becomes the plain session id. Heaviest unit; may split into U5a (registry and cancel) and U5b (history and stamps). | `activeTurnStates` 92 references in 19 files (48 test files); `Sessions.GetHistory` 14 references in 11 files (55 test files); `cancel_prearm.go`; `webchat_channel.go` | `grep activeTurnStates`, `grep 'GetHistory('` |
-| **U6** | **Agent list reload on WebSocket connect and reconnect** (founder Q28). Independent; may ship any time. | `src/` agent list store; no engine change | founder Q28 |
-| **U7** | **Self-delegation for every agent, and registered runs (D8).** Permit self-delegation for every agent (security-lead review); register event and task runs as children of the default session with an injected notice and a returned result; add the delegation-priority instruction to the main agents' prompt text (prometheus-prompt-engineer; backend-lead wires it). Needs U1, U3, U4. | `pkg/agent/loop_delegation.go`, `pkg/workspace/delegation.go`, `pkg/agent/steer_launcher.go`, `task_executor*.go`, `pkg/gateway/schedules.go`; agent prompt text in `pkg/coreagent`; the Session panel (runs listed under the default session) | D8; `pkg/steer/types.go::LaunchRequest` |
-| **U8** | **Channel messages to the default session (D10).** The channel inbound path asks the address book; reply routing keeps channel and chat per message. | `pkg/agent/loop_inbound.go`, `pkg/channels/*`, `pkg/agent/async_notifier.go` | D10; audit hit O1 |
-| **U9** | **Session end (D9).** Not built here: deletion of `lazy`, `joined`, `explicit` and auto recap on by default are in progress on another branch. This unit only checks that the default session follows the idle rule. | `pkg/agent/session_end.go`, `pkg/agent/memory.go`, `pkg/config/config.go` | D9 |
-
-Order reason: after U1 every message has a session id, so the composite route key is a pure function of (agent, session id). U2 to U4 can then move queues and workers to the session id without a second key to disagree with. U5 last removes the now-redundant agent part from the registry key, which is the largest test-churn change.
-
-### Risks
-
-| # | Risk | Evidence | Mitigation |
-|---|---|---|---|
-| R1 | A session can have more than one agent over time (handoff, `AgentIDs`, `ActiveAgentID`). "The key is the session id" must still pick the right agent for the turn. | `pkg/session/unified.go::NewHeartbeatSession` stamps `AgentIDs` and `ActiveAgentID`; audit O6 (handoff pin). **Inferred** for the exact handoff behaviour | U1 spec must define "the agent of a session" as `ActiveAgentID`; test a handoff mid-session |
-| R2 | The default session breaks a rule that was easy to keep per task: one goal per owner (C10, C11). | `pkg/goal/predicate.go::errMultipleActiveGoalsForOwner`; `task_executor.go::activateTaskGoal` | **Resolved by D8.3.** Tasks keep their own session, so each keeps its own goal |
-| R3 | Schedule modes `isolated` and `continue` were designed for per-run sessions. Replacing the `main` mode with the default session (D8.4) changes what `session_mode` means and is a contract change. | `pkg/gateway/schedules.go::pickSession`; `ScheduleCreate.yaml::session_mode` | U4 spec confirms D8.4: `main` is replaced, `isolated` and `continue` stay |
-| R4 | The default session keeps its history across idle ends and resumes (D9), so it grows and its context cost grows. | Same engine as a long chat. **Unknown** whether compaction covers a session that is resumed for months | U1 spec adds a long-run test; no new compaction here |
-| R5 | Lazy creation can race: two events for the same (agent, workspace) at once. | The existing eager path takes a lock for the whole handler (`rest_workspaces.go`, comment at the PUT handler) | Per (workspace, agent) lock in the address book; a concurrency test |
-| R6 | Removing the 5 s wait removes a guard that hid a real race: a new turn admitted while the old turn's tail still runs. | `ordinary_execution_admission.go::awaitPreviousOrdinaryExecution` doc | The session loop serialises (D4.1): the next turn starts only after the previous one settled. Test: turn B never starts before A's disposition settles |
-| R7 | Hand-back wake semantics move from the steering queue to the inbox (C7). The "poll or wake, never both, exactly once" rule must survive. | [The sub-agent control plane](./ADR-20260928-sub-agent-control-plane.md), amendment D-E | U3 keeps one durable message identity; test exactly-once across the move |
-| R8 | A held-after-Stop queue (D4.6) is easy to forget and looks like lost messages. | Founder Stop table; ADR-093 D4 rule that only a person resumes a stopped session ([An open conversation must keep the ability to delegate](./ADR-093-open-conversation-must-keep-delegation.md)) | Show held messages in the chat; open as Q-ADR-12 |
-| R9 | An event run over the parallel cap is dropped instead of queued, and a registered run that never reports leaves the default session waiting on nothing. | `task_executor.go::TryAcquireDispatchSema` returns a bool (refusal path); **Inferred** for events with no durable record | U7 spec: every registered run is recorded before launch; a run without a report ends in a visible failed or stopped state |
-| R10 | Stop all or `/cancel` on a default session now also stops every registered task and event run, including scheduled work, because they are children of it. A plain Stop leaves them running and looks like it did nothing. **Consequence of the founder's decisions, to be confirmed by the founder.** | Founder Stop table (D6); `StopDelegatedTree` | Show running registered runs in the default session. Recommended: confirm that Stop all should also stop scheduled runs, or exempt registered runs from the tree stop |
-| R11 | Self-delegation for every agent is a permission change, and the delegation-priority rule is only an instruction, so a model may ignore it. | `pkg/agent/loop_delegation.go::buildDelegationDenyChecker` | Security-lead reviews D8.1; the instruction text is tested in UAT, not assumed |
-| R12 | Channel users share one session. Replies could go to the wrong person if the channel and chat stamp is lost. | D10; audit hits O5, O7 | U8 spec: a test with two channel chats on one default session |
-
-## Alternatives considered
-
-| Alternative | Why rejected |
-|---|---|
-| Keep the agent-level keys and fix each hit by hand (what U0 did for admission) | The audit found 16 hits with one cause. Each fix leaves the next key in place. U0 shows the cost: one hit moved admission to the session id and exposed the registry as the next mismatch. |
-| Keep a short wait but make it per session | Founder Q20: no timer, no second waiting room. A timer is a guess; the loop's own ordering is exact. |
-| A new "default session" concept beside the heartbeat session | Two standing sessions per (agent, workspace) with the same shape. Founder 2026-10-06, simplest design first: reuse the existing path. |
-| One queue that also holds child reports | Child reports carry no authority; mixing them with person and parent instructions invites prompt-injection through a report. Founder inbox refinement rejects it (C6 marks the text untrusted). |
-| Tasks and events for a main agent run inside the default session | Founder round 1 (Q-ADR-2): they keep their own session as today and are only registered in the default session. |
-| A new fork mechanism of the default session | Founder 22:09: use the existing self-delegation. A fork would also be a second kind of child session. |
-| Remove hands-on tools from the main agent's default session | Founder round 1 (Q-ADR-2): the main agent keeps all its tools and is told to prioritise delegation. It would also add a per-session tool layer next to Hard Constraint 6. |
-| Per-person session for channel messages now | Founder 22:50: for now all channel messages go to the default session. Per-person sessions are a later idea, issue #1206. |
-
-## Affected components
-
-| Area | Components |
-|---|---|
-| Engine | `pkg/agent/turn.go`, `ordinary_execution_admission.go`, `session_worker.go`, `steering.go`, `loop_inbound.go`, `loop_run_turn*.go`, `loop_window.go`, `cancel_prearm.go`, `async_notifier.go`, `task_executor*.go`, `translate_error.go` |
-| Sessions and workspaces | `pkg/session/unified.go`, `pkg/workspace/member_config.go` |
-| Gateway | `pkg/gateway/rest_workspaces.go`, `rest_sessions.go`, `heartbeat_schedule.go`, `schedules.go`, `webchat_channel.go` |
-| Config | `pkg/config/config.go`, `defaults.go` (`SteeringMode`) |
-| Contracts | `Session.yaml` (`type`, `protected`), `SessionLifecycleRecord.yaml`, `WorkspaceMemberConfig.yaml`, `WorkspaceMemberHeartbeat.yaml`, `ScheduleCreate.yaml`, `ScheduleUpdate.yaml`, the session-type copy in `openapi.yaml`; generated Go and TS |
-| SPA | Session panel (default session pinned), separate display of each queued message, agent list reload (U6) |
-| Product prompt text | The main agents' delegation-priority instruction in `pkg/coreagent` (prometheus-prompt-engineer) |
-| Docs | `docs/internal/architecture/steering.md` and the user docs on delegation and sessions |
-
-## Defaults kept (default, founder may overrule)
-
-These are the Opus defaults (T1 to T11) that no founder decision contradicts. Each is **default, founder may overrule**.
-
-| # | Default | Status in this ADR |
+| Kind | Consequence | Basis / certainty |
 |---|---|---|
-| T1 | Self-delegation, not a fork. A helper is an ordinary session with the same agent and profile, started through `SteerLauncher.Launch` | Kept; now also a founder decision (D8.1) |
-| T2 | The default session is the heartbeat session generalised: one per main agent per workspace, kept when the heartbeat is off | Kept and **widened by the founder**: it always exists and is always protected while the agent is on the team (D2.1) |
-| T3 | No workspace means My Workspace | Kept (D2.3) |
-| T4 | The default session cannot be deleted while the agent is on the team; no "clear history" for now | Kept (D2.4) |
-| T5 | A task keeps its own task session and its own goal and "one goal per owner" rule | Kept, **adjusted**: the task session is registered as a child of the default session instead of becoming a helper of it (D8.3) |
-| T6 | A self-helper may not self-delegate again; it may delegate to other agents under the depth limit (default 3) | Kept (D8.1) |
-| T7 | Schedule modes | **Adjusted**: a schedule fire is its own session registered in the default session; `main` is replaced by the default session; `isolated` and `continue` stay (D8.4) |
-| T8 | Results are shown in arrival order, one per run, no merging | Kept (D8.3) |
-| T9 | Reports sent while the default session is stopped wait until it resumes | Kept (D8.3) |
-| T10 | Existing sessions: no conversion, no migration; only fresh installs are verified | Kept (D2.2) |
-| T11 | Channels stay out of scope | **Replaced** by the founder's 22:50 decision (D10) |
+| Positive | One standing session replaces heartbeat and sched-main standing conversations; a derived address replaces an independently maintained mapping. | D1/D5; R-MAIN. Inferred design simplification, high confidence. |
+| Positive | One intake owner replaces three waiting mechanisms, while retaining execution safety rather than guessing with a five-second timer. | D3/D6; R-QUEUE/R-STOP. Design, not a measured race fix. |
+| Positive | One bounded-window archive serves chat, model, recall and replay without duplicated content histories. | D2; R-STORE. Bounded read behavior still requires implementation/instrumented checks. |
+| Positive | MAIN task work, ordinary helpers and independent task runs use existing execution/monitoring paths with truthful ownership. | D4/D5; R-DELEGATE/R-TASK. |
+| Negative / accepted | A MAIN task started from an extra chat can inherit a more permissive main-chat Auto setting; the starting chat's modifier does not govern it. | Q-R2-3=A, chosen against Astra's recommendation. R-APPROVAL still respects target restrictions/unattended refusal. Disclose in UI/docs. |
+| Negative / accepted | External CLI Stop can kill background subprocesses; interruption does not undo already-performed side effects. External tool calls do not gain native popup enforcement. | Q-R2-5=B; R-CLI current cancellation/consent. Actual three-CLI resume behavior remains untested here. |
+| Negative / accepted | Shared channel and peer-group context can expose one sender's information/control to other admitted participants. | D7; founder retains minimal shared routing. Sender-specific egress is not privacy isolation. |
+| Negative / accepted | Queued/held human input can be lost across restart; existing result delivery retains its limits. Full valid results can collectively exceed model context. | #1198 deferral and Q-R2-7 NO CHANGE. Do not manufacture a delivery/durability guarantee or redesign overflow. |
+| Negative | Broad backend/frontend/contract adaptation is needed, including removal of reachable old paths. The recorded founder answers cover the remaining choices; broad integration and verification are still required. | Deletion table; Approved 15:55 Q1/Q4 answers. This is a design hand-off, not implementation acceptance. |
+| Neutral | Ordinary helper context/memory, task criteria/goal/attempts, plan recovery, approval IDs and existing calendar/task/helper views stay their own mechanisms. | D4/D5/D9/D10; preserved inventory. |
+| Neutral / accepted | Delegation priority is a prompt instruction a model may ignore. Every report can wake an idle parent and spend model tokens. No new spend/per-main quota is added. | October 6 Q-ADR-2/3; October 7 07:25/07:29. Existing usage/memory admission only. |
 
-## Contradictions in the first draft, and how they are resolved
+### Code and compatibility paths to DELETE
 
-| # | The first draft said | Resolved by |
+The 14:45 ruling binds these deletions. **Delete means remove implementation, registration, contract/alias support and compatibility-only tests/docs, while preserving behavioral safety tests through the replacement.** Do not delete a test simply because it detects a remaining race. Historical ADR evidence is not executable compatibility code. Nothing here is a production edit by this author.
+
+| Delete ID | Existing scoped path (`file::symbol`, under the verified worktree) | Replacement or nothing |
 |---|---|---|
-| X1 | D8 was a founder proposal with details open and introduced a "fork" as new machinery | Founder 22:09 and round 1. D8 is rewritten as self-delegation, decided. The word "fork" is gone |
-| X2 | Heartbeat and plain events ran in the default session directly; only tasks and schedule fires forked | Round 1 Q-ADR-1: events and tasks keep their own session and are registered in the default session (D8.3) |
-| X3 | Self-delegation was described as existing and needing no new target kind | Corrected. Today only Jim and General Purpose may do it, with a workspace entry. The founder decided every agent may (D8.1) |
-| X4 | D2 said "heavy work may run in a fork" in the default session | D2's table now follows D8.3 |
-| X5 | The draft was silent on extra chats and on typing in the default session | Round 1 Q-ADR-3: the delegation-priority rule applies to all chats with a main agent (D8.2) |
-| X7 | "A fork never forks (depth 1)" with no basis in the code's depth default of 3 | Kept as an explicit default (T6), not presented as existing behaviour |
-| X9 | No workspace meant the key `(agent, "")` | My Workspace (D2.3, T3) |
-| X10 | The old Q3 compared options without noting that the snapshot parameter is dropped | Defect N1 below; Q-ADR-8 states it |
-| X11 | Status said "Awaiting its one grill-spec ADR-mode review" | Status line changed. The Astra review waits until the founder says the design talk is over (founder 22:12) |
-| X6, X8 | "Use the existing global cap" (which is 2,000, no real limit); tasks in helpers would be force-stopped at 30 minutes | X8 is settled by round 1: event and task runs keep their own limits (D8.3). X6 stays open as Q-ADR-9 |
-| X12 (new) | Channels were out of scope (D7, T11) | Founder 22:50 (D10) |
-| X13 (new) | The default session never ended and the heartbeat disable path deleted it | D2.1 and D9 |
+| DEL-01 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/gateway/schedules.go::pickSession` — `sched-main-<agent>` standing-session branch; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/session/unified.go::NewHeartbeatSession` heartbeat-only identity/enable-coupled lifecycle | Mature that creation/get-or-create/protection path into the one computed main session. Delete separate stored heartbeat session-address mapping, not heartbeat configuration/origin. |
+| DEL-02 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/ordinary_execution_admission.go::awaitPreviousOrdinaryExecution`, `previousExecutionSettleBudget`, `ErrPreviousExecutionPending`; ordinary “still finishing” refusal mapping | Existing session runner owns settlement before next admission; retain internal duplicate-execution tripwire, not user-facing early-arrival refusal. |
+| DEL-03 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/session_worker.go::workerInboxCap`, `sessionWorker.inbox`, system-turn buffering/probe and legacy bare-goroutine fallback in `dispatchSystemMessageToSessionWorker` | Existing per-session steering queue/runner and report inbox. No capacity-full bypass dispatch. |
+| DEL-04 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/steering.go::manualSteeringScope`, `push`, `dequeue`, manual fallback drain, `SteeringOneAtATime`, `parseSteeringMode`; `SteeringMode` configuration | Resolved session address and the same FIFO, always all-at-once. No manual/unscoped queue or user-selectable dequeue modes. |
+| DEL-05 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/commands/cmd_clear.go::clearCommand` old `/new` action/hidden alias; `/resume` old client name; `/agents` old selector/list action | `/clear` safe-point context/display reset, `/sessions` search, `/switch-agent` MAIN-session navigation. Old names do not survive as hidden aliases. |
+| DEL-06 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/commands/builtin.go::BuiltinDefinitions` deprecated `/start`, `/show`, `/list`, `/switch`, `/check`; `/channel` alias/support wherever wired; their hidden/deprecated execution/menu guidance | Nothing for removed names. Current noun commands/actions remain as allowed by the final capability table. Remove Telegram compatibility `/start`, not a new greeting workflow. |
+| DEL-07 | Existing `switch_agent`/handover implementation, catalog, prompt/tool-exclusion entries; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/session/unified_write.go::SwitchAgent`; routing handoff pins and `agent_switched` consumers | Direct MAIN-peer messaging and session navigation. The slash navigation command is not a replacement tool with the same name. |
+| DEL-08 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/memory.go::TriggerLazy`, `TriggerExplicit`; explicit session-close WS frame, handler and ack; obsolete lazy/explicit invocation paths | Existing idle/bootstrap recap. **Joined stays**: `RetrospectiveTool.Execute` uses it. |
+| DEL-09 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/session/unified.go::migrateLegacy`, `writeUnifiedMetaDirect` migration writer and legacy missing-type fallback; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/memory/migration.go::MigrateFromJSON` | Nothing. Fresh-install single-format production store only; no conversion/backfill/dual reader. |
+| DEL-10 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/instance.go::initSessionStore` JSONL/SessionManager fallback; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/session/manager.go::SessionManager`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/loop_session.go::GetAgentStore`, `getLegacyAgentStore`, legacy scan/merge branches | Existing shared UnifiedStore, maturing it rather than keeping per-agent copies. Source errors remain visible; no fallback to a different history. Move all scoped callers, including task/verifier/delete/read paths, before removal. |
+| DEL-11 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/session/daypartition.go::SessionMeta.PostLoad` old multi-agent backfill; legacy owner/active-agent/type/token/truncation/provenance defaults in scoped storage/readers | Explicit current identity/entry fields and normal current zero/optional semantics. Remove only old-format adaptation, not legitimate current user/system zero-token entries or authenticated anonymous/shared modes. Contributor identity stays per entry, not handover state. |
+| DEL-12 | Separate model content history/backend rewrites, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/memory/window.go::RollbackWindow` destructive rewrite; whole-history `SetHistory` hydration/compaction paths; in-place transcript truncation/tool-result updates | One archive, current window/projection metadata and append-only correction effects. Keep provider-valid replay and full-result references; no compatibility second writer. |
+| DEL-13 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/steer_classify.go::Classify` pre-ADR-origin leniency/legacy delegate branch; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/boot_sweep.go::SteerBootRecovery.failLegacy`, `failedReasonPreADR091NotResumable`; obsolete legacy class enum/support | Current record/metadata validation and existing restart-stop settlement. Malformed current children do not become roots merely because an old compatibility branch did so. |
+| DEL-14 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/session/message_inbox.go::backfillSeq`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/workspace/delegation.go::legacyModeDirect`, `DelegationEdge.UnmarshalJSON` old-mode migration | Current persisted inbox sequence and current direct/task edge validation. No legacy sequence/mode rewrite. Preserve normal dedupe/ack and non-self trust checks. |
+| DEL-15 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/cron/service.go::migrateOwners`, `migrateOwnersUnsafe`, `AddJob` back-compat creation; boot default-agent migration wiring | Existing `AddJobFull`/JobSpec with explicit authorized owner and derived mode. No owner-less job upgrade backfill. |
+| DEL-16 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/gateway/sse.go::SSEHandler`, `newSSEHandler`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/gateway/gateway_boot.go` backward-compat SSE registration | Existing WebSocket persistent-session transport; remove matching old chat-stream contract/callers, not add another streaming fallback. |
+| DEL-17 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/gateway/websocket_cancel.go::u11CollectDescendantSessionIDs` signature shim; stale prose about the earlier u11 name in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/cancel.go` | Existing `CollectDescendantSessionIDs` and one Stop path, preserving returned errors/selected execution. Nothing replaces the gateway wrapper kept solely for an older signature. The current AgentLoop.collectDescendantSessionIDs is a store-bound canonical adapter, not a live u11 compatibility shim; preserve it or route its callers to the same collector without changing behavior. |
+| DEL-18 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/task_goal_terminal.go::mintLegacyTaskGoal`; legacy task-goal backfill branches reached from `activateTaskGoal`, task create/edit/wire | Existing fresh task-goal creation/update and task-owned goal activation. Keep intentional scratchpad/non-goal behavior; no upgrade-only goal minting. |
+| DEL-19 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/task_trigger.go::triggerToCronSchedule` old every/cron_expr branches; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/gateway/task_occurrences.go::expandCronServerZone`, legacy every projection; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/components/calendar/CalendarEventSlideOver.tsx::isLegacyTrigger`, old-trigger preservation/preview | **DELETE** old every_ms/cron_expr adapters and compatibility promises; recurring Calendar work uses existing RRULE/compileRecurrence/next-occurrence/rearm path. **KEEP once/at_ms**, the current Calendar one-time authoring format, and remove its misleading legacy label (15:55 Q4=A). Current buildTriggerForSave/triggerToCronSchedule use it through the same cron at-job engine as RRULE; no replacement one-time scheduler/encoding. |
+| DEL-20 | R-CLI no-op `Input` success and fresh-run `Resume` implementations presented as steering/resume; old CLI steering exclusion/help | Existing drivers matured for interrupt plus actual native-ID resume. No invented ID, successful no-op or silent fresh-session fallback. |
+| DEL-21 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/config/validate.go::MigrateLegacyToolPolicyKeys`, `migrateLegacyToolPolicyMap`, old tool-key rename entries feeding switch_agent; loader wiring for those retired aliases | DELETE upgrade-only tool-key remapping, especially hand_off/return_to_default → switch_agent. Current canonical policy names/global ceiling/per-agent tightening remain; do not delete ReconcileToolPolicyCeiling or resurrect fail-closed backfill. |
+| DEL-22 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/steering.go::InjectSteering` design-name alias and `EnqueueSteeringMessage` status-stripping compatibility wrapper; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/tools/delegate_followup.go` old/basic steering-sink fallback interfaces | DELETE aliases/signature compatibility; use the existing canonical session-targeted, status-carrying steering sink. Preserve post-finish queued status, receipt/control identity and visible failures; no second sink implementation. |
 
-## Known defects found while writing
 
-These were found in the code while preparing this ADR. They are reported, not fixed here.
+The implementing leads must finish the direct-caller deletion sweep and remove any further scoped live compatibility branch they encounter; they report that inventory instead of retaining a shim. Unrelated browser/security/provider compatibility and historical comments about already-deleted code are not silently expanded into this feature. A deletion conflict goes to QUESTIONS, not an exception chosen by an implementer. Module instruction updates travel with byte-identical AGENTS.md twins where applicable.
 
-| # | Defect | Where | Failure scenario | Certainty |
-|---|---|---|---|---|
-| N1 | **The delegate snapshot is silently dropped.** The `delegate` tool parses and size-checks a snapshot of references and notes, then never passes it on. `LaunchRequest` has no field for it | `pkg/tools/delegate_run.go` (`dt.snap` is set and validated; `launchAndDispatch` builds the `LaunchRequest` without it); `pkg/steer/types.go::LaunchRequest` | The model believes it handed the helper named files and notes. The helper never sees them and works without that context | Verified that it is dropped; Inferred as unintended |
-| N2 | **An untargeted self-delegation slips past the block.** `delegate` with no `agent_id` launches the caller's own agent once the caller has an edge to any other agent. The same request with `agent_id` set to itself is refused for every agent except Jim and General Purpose | `pkg/tools/delegate_run.go::launchAndDispatch` (an empty id becomes `ToolAgentID`); `pkg/agent/loop_delegation.go::evalUntargetedDelegation` | An agent that is not allowed to self-delegate does so anyway by leaving the id out. Under D8.1 the rule changes, but the two paths must agree | Verified in the code path; Inferred as unintended. Security-lead should look |
+### Additional frontend compatibility paths to DELETE
 
-## Evidence and verification
+These are the current-source mapping's explicit live branches, independently checked by the author through source excerpts/caller scans. Removal is of the named old branch/alias, **not the entire file or a legitimate current optional state**. Reuse canonical generated types, stamped producer/message identities, current keyed state and existing reducers. Preserve current kickoff, non-stream, ring-buffer, reconnect, control-error and plan-scope behavior by its actual producer/owner path; an old fallback must not be deleted by hiding a current message or inventing a new selection policy. If no current canonical producer supplies the necessary identity, report that gap to the founder before changing behavior.
 
-Read in this task: every 2026-10-06 entry in `coordination/CONTINUATION-20261005.md`; the Opus open-questions file (Q-ADR-1 to 14, T1 to T11, X1 to X11, N1, N2); the first draft of this ADR; and, in the tree at this branch, `pkg/config/config.go` (`IdleTimeoutMinutes`, `AutoRecapEnabled`), `pkg/config/config_agents.go::GetIdleTimeoutMinutes`, `pkg/agent/memory.go` (recap triggers), `pkg/api/generated/asyncapi_types.gen.go` (`WsFrameTypeSessionClose`), `pkg/gateway/rest_workspaces.go` (`NewHeartbeatSession` on enable, disable-path release), `pkg/gateway/rest_sessions.go::computeSessionProtected`, `pkg/tools/delegate_run.go` (`dt.snap`), `pkg/agent/loop_delegation.go` and `pkg/workspace/delegation.go`. The code claims about the audit, C1 to C14 and the 2,000 parallel cap were verified by the earlier passes and not re-run here. Items marked **Inferred** or **Unknown** are labelled where they appear. The deletion of the recap triggers is on another branch and is not verified here.
+| Delete ID | Existing source path/symbol | Old live branch | Existing replacement / boundary |
+|---|---|---|---|
+| DEL-F01 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/hooks/useSlashMenu.ts::runClientSlashCommand`, `executeSlashCommand`, `resolveClientCommand` | `name === 'new' || name === 'clear'`; palette/typed definition resolution also matches `c.aliases`. `/clear` is explicitly legacy and hidden. | Existing startNewSession only behind the founder-decided agent-row extra-chat action; canonical /clear is the new safe-point window/display action, not /new or a hidden alias. |
+| DEL-F02 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/components/chat/ChatScreen.tsx::commandLabelsWithAliases` | Adds `/${alias}` to built-in labels so old command aliases suppress skill chips. Live UserMessage/virtual user rows consume it. | Canonical command labels already come from `commands`; nothing for retired alias names. |
+| DEL-F03 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/lib/api/agents.ts::isWorker` | Third test `a.type === 'worker'`, explicitly retained for stale payloads. | `Subagent` / `subagent_3p` tests already present. |
+| DEL-F04 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/lib/agentKind.ts::isWorkerType`, `agentKindFlags` | Legacy `worker` recognition and `(type === 'worker' && executor.kind === 'external-cli')` classification. | Existing modern type-based native/external classification. |
+| DEL-F05 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/components/agents/AgentProfile.tsx::AgentProfile` (kind derivation) | Live profile derives worker/native/external gates through the legacy-aware `agentKindFlags`; the legacy case is used for heartbeat eligibility. | Same helper's modern type cases; no replacement worker kind. This row maps the profile consumer, not unrelated provider compatibility. |
+| DEL-F06 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/lib/api/sessions.ts::RawSession` | `type RawSession = _RawSessionInternal`, explicitly “Alias for backward-compat within this file”; used in adapters/request casts. | `_RawSessionInternal` already exists; no new wire type. |
+| DEL-F07 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/lib/api/sessions.ts::rawToSession` | Missing legacy type becomes `raw.type ?? 'chat'`. | Existing `raw.type`; **nothing** when the input lacks it. Current schema still makes type optional, so this map does not invent a new required-field contract. |
+| DEL-F08 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/session.ts::useSessionStore.enterWorkspaceChat` | Saved descriptor `id === '__pending'` treated as fresh; comment explicitly describes pointers written by older code. | Current writers already exclude transient `__pending` from saved real descriptors. **Nothing** for an old saved sentinel. Keep the live first-send sentinel distinct from this old saved-pointer branch. |
+| DEL-F09 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/components/chat/useSelectSession.ts::selectSession` | Joined-session agent resolution falls back `active_agent_id ?? agent_id`, supporting the single-agent shape described by the adapter. | Target D1.1 requires existing **agent_id** as immutable owner. Delete handover active-agent fallback, update all current readers to that one field; no dual owner-field chain. |
+| DEL-F10 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/routes/_app/sessions.$sessionId.tsx::SessionRoute` | Same single-agent fallback in `headerAgentId`. | Target D1.1 requires existing **agent_id** as immutable owner. Delete handover active-agent fallback, update all current readers to that one field; no dual owner-field chain. |
+| DEL-F11 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/session.ts::resolveRememberedSessionFromServer` | Same fallback while restoring a saved session. | Target D1.1 requires existing **agent_id** as immutable owner. Delete handover active-agent fallback, update all current readers to that one field; no dual owner-field chain. |
+| DEL-F12 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/components/search/SearchModal.tsx::bucketByAgent` | Same fallback in agent grouping, then `unknown`. | Target D1.1 requires existing **agent_id** as immutable owner. Delete handover active-agent fallback, update all current readers to that one field; no dual owner-field chain. |
+| DEL-F13 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/components/chat/OmnipusRuntimeProvider.tsx::resolveLastActiveAgentId` | Two cached-session fallback reads use `active_agent_id ?? agent_id`. | Target D1.1 requires existing **agent_id** as immutable owner. Delete handover active-agent fallback, update all current readers to that one field; no dual owner-field chain. |
+| DEL-F14 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/lib/ws.ts::WsSubagentStartFrame`, `WsSubagentEndFrame`, `WsReplayMessageFrame`, `WsRateLimitFrame`, `WsToolApprovalRequiredFrame`, `WsSessionStateFrame`, `WsReceiveFrame` | Live legacy type aliases, not historical mentions. | Existing generated `SubagentStartFrame`, `SubagentEndFrame`, `ReplayMessageFrame`, `RateLimitFrame`, `ToolApprovalRequiredFrame`, `SessionStateFrame`, `ServerFrame`. |
+| DEL-F15 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/frames.ts::createFrameSlice` | Imports/casts `WsSubagentStartFrame` / `WsSubagentEndFrame`. | Corresponding existing generated canonical types. |
+| DEL-F16 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/replay-and-status-frames.ts::handleReplayMessageFrame`, `handleTurnCanceledReplayEntry`, `handleReplayAndStatusFrame` | Imports/uses `WsReplayMessageFrame` / `WsRateLimitFrame`. | Corresponding existing generated canonical types. |
+| DEL-F17 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/toolApproval.ts::ToolApprovalStore` | `enqueue` / `reconcileWithSessionState` signatures use the legacy WS aliases. | Generated `ToolApprovalRequiredFrame` / `SessionStateFrame`; retain the one current approval store. |
+| DEL-F18 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/types.ts::ChatStore.handleFrame` | Uses legacy union alias `WsReceiveFrame`. | Existing generated `ServerFrame`. |
+| DEL-F19 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/lib/ws.ts::WsConnectionCallbacks.onFrame`, `WsConnection._flushBatch`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/components/chat/OmnipusRuntimeProvider.tsx::WsLifecycle` | Explicitly legacy single-frame callback remains live: provider supplies `onFrame: handleFrame`; flush falls back to looping it. | Existing `onFrames(batch)` callback is already defined and preferred by the transport. This is callback-shape reuse, not a new event schema. |
+| DEL-F20 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/lib/ws.ts::SessionCloseFrame`, `SessionCloseAckFrame` imports/re-exports; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/runtime-state.ts::SESSION_SCOPED_FRAME_TYPES` | Retained explicit-close type surface and live `session_close_ack` classification. No frontend sender was found. Explicit close is among the retired triggers recorded in the session-core brief. | **Nothing**: no replacement person-triggered close action is present. Generated union/spec changes remain backend-owned; this report edits none. |
+| DEL-F21 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/first-send-frames.ts::handleFirstSendFrame` | A `session_started` without `client_message_id` binds the known chat but retains unconfirmed first-send state and returns to the old reducer. | Existing correlated `confirmFirstSend` path and `message_status` receipt path; **nothing** establishing a save from an old uncorrelated ack. |
+| DEL-F22 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/frames.ts::createFrameSlice` (`session_started`) | Shared tail explicitly retained for “Kickoff and legacy acknowledgements”: old ordinary ack migrates the pending bucket/agent/mode without a correlated receipt. | Existing ordinary `handleFirstSendFrame` / `confirmFirstSend`. Kickoff resolution is a separate current use of this tail, not retired by this compatibility removal. |
+| DEL-F23 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/first-send.ts::firstSendBlocksQueue`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/store.ts::maybeDrainNext` | Explicit legacy exception lets a bound, unconfirmed chat stop blocking queued sends: `pending.status !== 'unconfirmed'` is part of the gate. | Existing correlated save/recovery gating; **nothing** that confirms the legacy ack. |
+| DEL-F24 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/types.ts::OutboundQueueItem`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/store.ts::drainQueuedMessage`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/components/chat/ChatScreen.tsx::ChatScreen` (`queuedMessages`) | String queue items retained for old persisted/test state are a live branch: drain sends an uncorrelated string; display filters strings out. | Existing `QueuedOutboundMessage {id, content, timestamp}` branch preserves correlation and display. **Nothing** supplies the missing identity/time for an old string. |
+| DEL-F25 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/frames.ts::createFrameSlice` (`done`, `isReplayTerminatorDone`) | Vestigial replay terminator is identified by `frames_emitted` with no tokens/cost. Still bakes stranded calls and drains. It does **not** currently finish catch-up. | Existing `catch_up_complete` handles catch-up completion; existing `bakeToolCallsByOwner` is the bake primitive. **Nothing** in the read completion branch yet duplicates this terminator's stranded-call flush; do not invent it. |
+| DEL-F26 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/hooks/useRunningActivity.ts::resolveSpanAgentId` | Pre-steered-session attribution workaround prefers originating delegate call's `params.agent_id` over `span.agentId`; the source comment says the old emitter gap was superseded. | Existing `span.agentId`, populated by the start/end reducer. Backend universality is not re-audited in this frontend map. |
+| DEL-F27 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/hooks/useRunningActivity.ts::activityStatusForSpan` | Explicit legacy fallback `default: return span.status`. | Existing lifecycle-state mapping; **nothing** for a span that has not received lifecycle data. The source also allows a live pre-state interval; no new display choice is made. |
+| DEL-F28 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/components/chat/ActivityPanel.tsx::ActivityRow` | Explicit legacy dot/label fallback `getSpanStatusDot(item.status)` when lifecycle is absent. | Existing `getLifecycleStatusDot(lifecycleState)`; **nothing** before a lifecycle is known. |
+| DEL-F29 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/frames.ts::createFrameSlice` (`subagent_end`, `subagent_message`, `subagent_state`) | Full backwards message scans when span index misses; end handler explicitly labels this the legacy path. Message/state use the same compatibility lookup before their pending-update path. | Existing `spanBySpanId` lookup; message/state already have `pendingSpanUpdatesBySpanId` for updates arriving before start. **Nothing** reconstructs a corrupt/missing index automatically here. |
+| DEL-F30 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/frames.ts::createFrameSlice` (`token`) | Legacy producer-less tokens retain permissive coalescing and guess `agentId` from `activeAgentId`; only stamped IDs split producers. | Existing incoming `frame.agent_id`, message-ID and turn-ID routing paths. **Nothing** identifies a producer when the old frame omits it. |
+| DEL-F31 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/frames.ts::createFrameSlice` (`done`, no-turn fallback) | Pre-#823 message-ID/last-message heuristic is retained when `turn_id` is missing or has no matching bubble; comments also identify a current no-stream fallback sharing it. | Existing turn-ID bubble lookup. **Nothing** supplies absent turn identity; no new handler for the nonlegacy no-stream use is designed here. |
+| DEL-F32 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/replay-and-status-frames.ts::handleTurnCanceledReplayEntry` | Explicit legacy/undecorated cancellation entry with no `turn_id` logs and drops without correlation. | Existing `findAssistantMessageIdByTurnId` path for identified turns; **nothing** for the unidentified old entry. |
+| DEL-F33 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/session.ts::bakeToolCallsByOwner`; callers in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/frames.ts::createFrameSlice` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/outbound-lifecycle.ts::clearStreamingState` | Legacy/unmapped owner uses fallback last message. Source also names live ring-buffer eviction as a reason ownership may be absent. | Existing `toolCallOwnerMessageId` mapping; **nothing** for a genuinely absent/evicted owner. No replacement ownership policy is chosen. |
+| DEL-F34 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/lib/omnipus-runtime.ts::buildContentParts` | Live-call filter accepts undefined owner as the pre-tracking legacy path, instead of requiring this message to own it. | Existing `toolCallOwnerMessageId[id] === msg.id`; **nothing** for old unmapped calls. |
+| DEL-F35 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/lib/omnipus-runtime.ts::pushHistoryParts`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/lib/messageParts.ts::splitMessageParts` | Explicit legacy no-offset rendering appends unknown-position calls after text (`Infinity` / `unpositioned`). Comments also cover current reconnects with a missing start snapshot. | Existing recorded `textAtToolCallStart` / `PositionedToolCall.textOffset` interleaving; **nothing** for genuinely unknown position. |
+| DEL-F36 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/lib/truncation.ts::normalizeTruncationReason`; consumers `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/lib/api/sessions.ts::rawToMessage`, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/replay-and-status-frames.ts::handleReplayMessageFrame`, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/frames.ts::createFrameSlice` (`done`) | Explicit legacy default `reason ?? 'cancelled'` when truncated. | Existing explicit `truncation_reason`; **nothing** establishing why an old truncated entry ended. |
+| DEL-F37 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/frames.ts::createFrameSlice` (`error`); `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/lib/llm-error.ts::sanitizeLegacyErrorMessage` | Legacy/no-typed-payload display falls back to sanitized `frame.message`. This shared path also serves current synthesized control/kickoff errors. | Existing typed `payload.llm_error` + `getLLMErrorDisplay` for model errors; **nothing** replacing all current untyped control errors. Remove the old-model-error compatibility, not unrelated security/auth mechanisms by implication. |
+| DEL-F38 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/replay-and-status-frames.ts::handleReplayAndStatusFrame` (`replay_error`); `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/lib/llm-error.ts::readLLMErrorFromReplayFrame` | Legacy replay shape yields no typed error and displays `frame.message`. | Existing typed replay-error display; **nothing** translating an old untyped payload. |
+| DEL-F39 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/types.ts::SessionChatState.goalStatus`, `ChatStore.goalStatus`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/session.ts::emptySessionState`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/store.ts::useChatStore`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/cursor.ts::applySnapshotHistoryWipe`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/replay-and-status-frames.ts::handleReplayAndStatusFrame` (`goal_status`) | Live single latest-goal scalar maintained/initialized/preserved beside the explicitly canonical per-goal map for back-compat. | Existing `goalPills` map and `mergeGoalPillFrame`; **nothing** is defined here as a replacement single “latest” selection rule. |
+| DEL-F40 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/components/chat/ChatScreen.tsx::InlineThinkingIndicator`, `FallbackToolUI`, `VirtualAssistantMessageRow`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/lib/goalSetupState.ts::isGoalRecordEmpty` | These are actual scalar `goalStatus` readers, not just fixture comments. Predicate then looks up merged criteria in `goalPills`. | Existing per-goal `goalPills` data; **nothing** deciding which goal these single-context indicators should select. No new goal-selection product choice is made. |
+| DEL-F41 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/replay-and-status-frames.ts::handleReplayAndStatusFrame` (`goal_status`); `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/lib/goalSetupState.ts::goalPillKey` | Missing/empty legacy `goal_id` goes into `_default`; a keyed frame additionally deletes that compatibility entry. | Existing explicit `goal_id` keys; **nothing** supplies an ID for the old unkeyed frame. |
+| DEL-F42 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/components/chat/GoalPillTray.tsx::GoalPill`, `GoalPillTray`, `describePillState` | Live guards skip the retired goal state `queued`; type narrowing also excludes it. This is the deleted goal-confirm state, **not** an agent helper waiting for an execution slot. | **Nothing** for retired queued goals; the eight-plus-current live goal-state branches already exist. Generated enum retirement is backend-owned. |
+| DEL-F43 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/store/chat/slices/replay-and-status-frames.ts::handleReplayAndStatusFrame` (`judge_verdict`) | Legacy task/goal verdict with no session ID remains global/panel-only. The same optional-field branch also intentionally permits current plan-scope global verdicts. | Existing session-addressed `buildJudgeVerdictInsertion` for task/goal; **nothing** identifies the session for an old task/goal verdict. Current plan-scope global behavior is not a legacy path to remove. |
 
-## Still open
+The full read-only map and bounded-source evidence live at `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/build/session-core-evidence/frontend-map.md`. Its statements of current behavior are not new design decisions; D1.1/D8 override its purely historical replacement naming for /new and mutable active-agent identity. No new palette, store, replay engine or approval queue is created by removing these branches.
 
-These are the Opus questions the founder has not answered. The ones the decisions above settle are removed: Q-ADR-1, 2, 3 and 4 are answered, and Q-ADR-10 is settled by "events and tasks keep their own session" (they keep their own limits and goal). Each question below states what it affects, the options and a recommendation.
+### Alternatives considered and why rejected
 
-### Q-ADR-5 — Where do a helper's approval requests appear? (A / B)
-
-On a fresh install, shell commands are set to "ask" (ADR-092). If hands-on work runs in helpers, most approval requests come from a helper. The approval message already carries the helper's session id (`pkg/gateway/approvals.go`, the `SessionID` field). Whether the web app shows it in the default chat today is **Unknown**.
-
-| Option | Where the person approves |
+| Alternative | Why rejected / existing candidate reused |
 |---|---|
-| A | In the default session (and the chat that started the helper), labelled with which helper asks. Also visible in the helper's own chat |
-| B | Only in the helper's own chat. The default session shows "helper waiting for approval" |
+| New persistent address-book mapping beside heartbeat and sched-main | Founder chose computed pair ID; mature R-MAIN and delete the two redundant standing-session definitions. |
+| New queue/runner or short wait hiding final-settlement races | Founder Q20; mature R-QUEUE and preserve its real execution/Stop fences. |
+| Second model archive, a new transcript database or a new summary workflow | Founder single-format/day-window choice and Q-R2-8; integrate R-STORE/R-RETENTION. |
+| Generic task executor replaced by ordinary delegate calls | Task goal/plan/run ownership already exists; extend R-TASK's task-origin launcher for MAIN only. |
+| Fake children for peers or independent runs; another result dashboard | Conversation is not execution ownership. Extend common messaging and existing Activity/task views. |
+| Self-only context, memory, nesting limit or extra approval queue | Explicitly rejected by the founder; reuse ordinary helpers, depth, admission and approval ID. |
+| Long-lived external CLI server protocols | Research recommendation, not founder decision. First implement/verify the simpler current-driver interrupt/native-resume direction. |
+| Result overflow deferral/pagination, new paid summaries, durable waiting-input reconstruction | Q-R2-7/Q-R2-8 and #1198; preserve accepted limits instead of silently improving them. |
+| Compatibility wrappers/migrations or retired command aliases | Greenfield 14:45 deletion rule. Change callers to the existing canonical path; no dual behavior. |
 
-**Recommendation: A.** Otherwise approvals are hidden in helper chats and work stalls unnoticed.
+### Affected components and user-facing documentation TODOs
 
-### Q-ADR-6 — How are results shown in the default session? (A / B / C)
-
-| Option | Presentation |
+| Area | Existing boundary extended / owner |
 |---|---|
-| A | The agent relays it: the report starts a turn and the agent writes the summary |
-| B | A result card only, no model turn |
-| C | Card plus turn: a card always appears and the agent also gets a turn |
+| Contracts | Existing Session/Message/SessionMessage/TaskRun/schedule/command/approval/frame schemas; backend-lead edits and regenerates first. |
+| Backend | R-MAIN through R-DELETE; session/archive/recall/replay, intake/admission, task/cron, controls, roster membership and shared deletion. Backend-lead implements; architect does not. |
+| Frontend | Existing sidebar agent/session rows, ChatScreen/composer mentions, command palette/search, activity, approval modal, calendar recurrence editor, lifecycle/usage and deletion confirmation. Frontend-lead implements within the design system. |
+| Product prompt text | Existing MAIN-agent delegation-priority and addressed-message guidance; prometheus-prompt-engineer authors, backend-lead wires. No new agent persona or coordinator. |
+| Tests | QA proves behavior with red-before-green and CHECK; exact candidate UAT is independently validated. No source-text “green” substitutes for execution/visibility. |
 
-**Recommendation: C.** The card guarantees nothing is lost; the turn lets the agent coordinate the next step. Founder decided that the result returns into the default session (D8.3); how it is shown is still open.
-
-### Q-ADR-7 — Which reports wake an idle default session? (A / B / C)
-
-Helpers send six kinds of report: progress, checkpoint, artifact, blocker, question and handback (`pkg/tools/message_parent.go`). In every option a report arriving during a turn enters at the next step boundary, marked as a report with no authority.
-
-| Option | Rule |
+| Existing user page (absolute path) | Specific TODO before implementation lands |
 |---|---|
-| A | Every report wakes an idle session |
-| B | Only final reports, pauses, questions and blockers wake it. Progress, checkpoint and artifact wait |
-| C | Nothing wakes it |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/agents.md` | Main/extra/worker sessions; native self-delegation and permanent CLI exception; worker direct input/follow-up; heartbeat's main home; native versus external approval/Stop/resume; owned deletion. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/using-omnipus-ui.md` | Row click/New chat/mention distinctions; group identity; final command table; held release/discard; safe-point clear marker/history retention; Interrupted and live-helper label. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/workspaces.md` | Computed per-pair main, membership hide/unhide versus deletion, unchanged team picker, self/peer/delegation authorization boundaries. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/calendar.md` | Automatic modes; scheduled isolation checkbox; fresh MAIN child each occurrence; current-run tree Stop does not delete/pause recurrence; captured completion recipients. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/connectors.md` | Shared main history/control and accepted privacy limit; per-source replies; instance/workspace binding; no per-person claim. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/settings.md` | Day-file retention, model window versus retained/searchable history, idle recap/joined, visible intake limits, restart queue loss and unchanged memory admission. |
+| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/reference/built-in-tools.md` | Generator-owned page: regenerate its General/System tool rows, do not hand-edit generated reference text. Remove switch/handover guidance; ordinary delegate context/depth; reports versus steering/peer requests; MAIN approval-source risk; CLI native resume/Stop capability limits. |
 
-**Recommendation: B.** It also decides whether the "run started" notice (D8.3) wakes the session; recommended: it does not.
+These are design-time TODOs, **not user-doc changes falsely claimed complete**. Implementing leads draft matching pages in the same behavior change; docs-verifier audits factual accuracy. Relevant usability criteria are truthful state (H1), clear/Stop/deletion doing what they promise (H3/H5), reuse of established components (H4) and accurate help (H10), not new branding/layout decisions.
 
-### Q-ADR-8 — What does a self-delegated helper receive? (A / B / C)
+## Decision coverage — all relevant founder rules and their supersessions
 
-Today a helper gets only the task text plus its own profile and memory. The snapshot is dropped (defect N1). For event and task runs, the task text is the input as today.
+Dates/times are ledger labels, not newly inferred timestamps. Each row's reuse key expands to the `file::symbol` table in Context. A historical row is recorded as superseded, not implemented. D01–D69 retain Astra R2's decision inventory for coverage; D70 onward record the later answers and this commission.
 
-| Option | Receives |
-|---|---|
-| A | Task text plus a short header (source, id, workspace, time). Fix N1 so the agent can pass named files and notes |
-| B | A plus the last few messages of the default session |
-| C | The full history of the default session |
+| Decision | Date / source label | Where in this ADR | Existing mechanism reused |
+|---|---|---|---|
+| D01 Per-session waiting, then delete waiting room | 10-06 20:15/Q20 | D3; DEL-02 | R-QUEUE admission/runner |
+| D02 One FIFO; all at boundaries/next turn; no timer | 10-06 Q20 | D3 | R-QUEUE steeringQueue/processTurn |
+| D03 Separate model/chat messages in a batch | 10-06 queue clarification | D3/D7 | R-QUEUE items; R-STORE entries |
+| D04 Human/parent steering authority | 10-06 queue clarification | D3 | R-QUEUE/R-INBOX provenance |
+| D05 Keep non-authoritative child inbox | 10-06 refinement | D3 | R-INBOX MessageInboxStore |
+| D06 Unrelated-agent messaging initially deferred | 10-06 refinement | Superseded table; D7 | R-INBOX, extended for decided peers |
+| D07 MAIN per-workspace default; initial task-in-main wording | 10-06 agent/session design | D1/D5; superseded table | R-MAIN; R-TASK |
+| D08 No worker default; initial fresh-every-run wording | 10-06 agent/session design | D1/D5; superseded table | Existing worker type; R-SCHEDULER CONTINUE |
+| D09 Finish design first and write ADR | 10-06 Q22/Q24 | Header/hand-off | Existing ADR/spec process, no production mechanism |
+| D10 Extra parallel MAIN chats | 10-06 Q25; 10-07 12:44 | D1/D8 | Existing session-create/navigation |
+| D11 Channels postponed then routed to default | 10-06 Q26/22:50 | D7; superseded table | Existing channel binding + R-MAIN |
+| D12 Existing main/worker distinction | 10-06 Q27 | D1 | /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/config/config_agents.go::IsWorker/IsChatTarget |
+| D13 Refresh roster on connect/reconnect | 10-06 Q28 | D8 | Existing connection callback, already implemented |
+| D14 Address `(agent, workspace)` | 10-06 address key | D1 | R-MAIN identity/get-or-create |
+| D15 Existing self-delegation for hands-on work | 10-06 22:09 | D4 | R-DELEGATE launcher/tool |
+| D16 Initial child/start injection for all task/events | 10-06 Q-ADR-1 | Superseded table; D5 | R-TASK run identity; MAIN-only real edge |
+| D17 Role tools stay; delegation by instruction | 10-06 Q-ADR-2 | D4/D10 | Existing prompt + two-layer policy |
+| D18 Applies to every MAIN chat | 10-06 Q-ADR-3 | D4 | Same launcher under actual chat |
+| D19 Initial “every agent self-delegates” | 10-06 Q-ADR-4 | Superseded table; D4 | Existing native/runtime type boundary |
+| D20 Auto recap on; 30-minute idle; same-ID resume | 10-06 22:38/22:41 | D9 | R-RECAP/R-REVIVE |
+| D21 Lazy/joined/explicit deletion, then KEEP joined | 10-06 22:41/22:43/Q29 | D9; DEL-08 | R-RECAP retrospective joined writer |
+| D22 Design/review holds and later review permission | 10-06 22:12/22:53/22:54 | Header; delivery dispositions | Existing founder-controlled design flow |
+| D23 Task execution separate from delegate; brief final injection | 10-06 late R10 | D5; superseded table | R-TASK completion + R-INBOX |
+| D24 Plain Stop keeps background shells; tree Stop kills | 10-06 Q13 | D6 | R-STOP; later external exception explicit |
+| D25 Sessions Interrupted on restart; tasks may fail | 10-06 23:20/23:55 | D6 | Existing boot/lifecycle presentation |
+| D26 Minimal shared channels retained | 10-07 06:54 ADR-19 | D7; accepted risks | Existing instance binding + R-MAIN |
+| D27 Held human input/release/discard; old controls never return | 10-07 06:54 ADR-12 | D3/D6 | R-QUEUE/R-STOP supersession |
+| D28 Whole-read question superseded by storage choice | 10-07 06:54/07:10 | Context R-STORE; D2 | Existing full-read snapshot replaced |
+| D29 One saved format/two views/append-only; summaries wording | 10-07 07:10; later Q-R2-8 | D2; superseded table | TranscriptEntry/day store; no summary writer added |
+| D30 Read only sliding window; storage-first proposed order | 10-07 07:10 | D2; hand-off | Existing window API; ordering proposal not ratified as founder sequence |
+| D31 UTC day files; file/byte mark spans days | 10-07 07:13 | D2 | R-STORE partition logic |
+| D32 Existing 90-day file-age sweep | 10-07 07:13 | D2; 15:20 Q2=A | R-RETENTION |
+| D33 Finished task wakes idle main once/batched; stopped holds | 10-07 07:18 | D3/D5 | R-INBOX consumption/wake + runner |
+| D34 Full stored task result, already summary | 10-07 07:18 | D5 | R-TASK stored outcome, no extra summary |
+| D35 Done/failed/stopped with reason; no retry notice; skipped no run | 10-07 07:18 | D5 | R-TASK terminal/stop outcome |
+| D36 No new event model; scheduler events only; trigger vocabulary corrected at 15:10 | 10-07 07:18/07:21; 15:10 | D5/D10 | R-SCHEDULER; no generic event bus |
+| D37 Heartbeat in main; heavy work delegated | 10-07 07:25 | D1/D5 | Existing heartbeat + R-QUEUE/R-DELEGATE |
+| D38 EVERY helper report wakes idle non-stopped parent | 10-07 07:25 | D3 | R-INBOX classifier/wake adapted |
+| D39 Waiting input may be lost on restart; #1198 retained | 10-07 07:25 | D3/D10; accepted risks | Existing queue/restart boundary, no recovery package |
+| D40 Visible per-message/aggregate/sender intake limits | 10-07 07:25 | D3; 15:55 Q1=A | Existing queue/body/rate/model budget |
+| D41 Existing helper approval popup, label/link | 10-07 07:29 | D10/docs TODO | R-APPROVAL; existing modal |
+| D42 Ordinary self-helper context, no special case | 10-07 07:29 | D4 | R-DELEGATE launchAndDispatch |
+| D43 Memory-only new-admission policy; show counts/tokens | 10-07 07:29 | D4 | Existing admission/usage/activity |
+| D44 Nested self-delegation under normal depth | 10-07 07:29 | D4 | Existing depth (default 3) |
+| D45 Self-helper memory/recap NO CHANGE | 10-07 later answers | D4/D9 | R-RECAP delegate gate |
+| D46 Existing helper/task views; add running agent scheduler activity | 10-07 later answers | D5 | Existing activity/task-run projection |
+| D47 Team removal retain; actual delete warn/double-confirm | 10-07 later answers; Q-R2-11/12 | D1/D9; 15:10 Q6=B / 15:20 Q5=A | R-MAIN/R-DELETE |
+| D48 Pin default; delete handover/tool/switching | 10-07 later answers | D1/D7/D8; DEL-07 | Existing pinned-session identity/navigation |
+| D49 Group `@` MAIN only; no full source-chat read | 10-07 later answers/08:29 | D7 | Common messaging + main lookup |
+| D50 Guest and main-to-main replies have responder identity | 10-07 group display | D7 | Existing message agent identity/replay |
+| D51 Own-agent awareness; answer wakes once/silence allowed | 10-07 group awareness/10:25 | D7 | Common inbox/wake and model view |
+| D52 Each batch answer to its sender | 10-07 later answers | D7; 15:10 Q3=B | Existing message/send boundaries with correlation |
+| D53 Starter not creator; MAIN assignee also sees/receives | 10-07 later answers | D5 | R-TASK run capture/activity |
+| D54 Any message/turn resets idle | 10-07 later answers | D9 | Existing idle ticker/recap |
+| D55 Recipients fixed at run start; gone session => task view | 10-07 10:25 | D5 | R-TASK/R-INBOX |
+| D56 Eager computed main ID; one per pair | 10-07 MAIN SESSION mechanism | D1 | R-MAIN standing-session path |
+| D57 Replace heartbeat/sched-main standing sessions | 10-07 MAIN SESSION mechanism | D1/D5; DEL-01 | Same main session; existing modes |
+| D58 Conflicting initial mode defaults clarified | 10-07 modes clarification | D5; superseded table | R-SCHEDULER modes |
+| D59 Automatic MAIN/CONTINUE/ISOLATED; scheduled checkbox only | 10-07 modes clarification | D5 | Existing dispatch/recurrence; no selector |
+| D60 Fresh real MAIN child per run; tree Stop current run only | 10-07 10:13 | D5/D6 | Existing launcher + task origin + Stop tree |
+| D61 MAIN/WORKER only; Admin/system unchanged | 10-07 10:25 | D1/D4 | Existing roster/type/runtime boundary |
+| D62 External steering research, then interrupt/native resume | 10-07 10:25/10:35 | D4/D6; R-CLI | Existing three drivers, no new server protocol |
+| D63 Delete new; resume=>sessions; context clear | 10-07 10:35; later Q-R2-9 | D8; DEL-05 | Existing registry/search/window |
+| D64 Earlier worker restrictions and agents rename | 10-07 10:43/11:50 | Superseded table; D8 | Existing menu/executor, final capabilities |
+| D65 Current team-only picker correct | 10-07 12:25 Q2 | D1/D8 | Existing discovery filtering |
+| D66 Stopped parent with running helpers is correct; clearer label | 10-07 12:25 Q4 | D6 | Existing lifecycle/activity |
+| D67 Final worker option A; deprecated commands deleted | 10-07 12:35 | D8; DEL-05/06 | Existing command registry/executor |
+| D68 Direct typing into opened worker/child permitted | 10-07 12:35 | D8 | Existing helper-input guard extended |
+| D69 Agent click=>main; row New chat only; mention=>message | 10-07 12:44 | D8/D7 | Existing session actions/composer |
+| D70 Stopped main permits future scheduled child, reports held | 10-07 13:40 Q-R2-1=A | D5 | Existing parent publication/Stop lock, task-only adaptation |
+| D71 No self-edge; delegate on; denials/depth/memory stay | 10-07 13:40 Q-R2-2=A | D4 | Existing delegate/policy/admission |
+| D72 MAIN child uses main approval settings, not starter chat | 10-07 13:40 Q-R2-3=A | D5/D10; accepted risk | R-APPROVAL inheritance |
+| D73 External workers NEVER Omnipus-self-delegate | 10-07 13:40 Q-R2-4 | D4 | Existing runtime capability boundary |
+| D74 External Stop subprocess exception, shown to users | 10-07 13:50 Q-R2-5=B | D6; accepted risk | Existing driver cancellation |
+| D75 Same-workspace MAIN peers no trust link; no transferred control | 10-07 13:50 Q-R2-6=A | D7 | Common messaging; existing receiver permissions |
+| D76 Result delivery unchanged | 10-07 13:50 Q-R2-7 | D3/D5; accepted risk | Existing result/inbox/consumption behavior |
+| D77 No new summary step; format type optional | 10-07 13:50 Q-R2-8; 14:00 verification | D2/D9 | EntryTypeCompaction has no writer; R-RECAP stays |
+| D78 Clear next safe point, display/context only, retain recall | 10-07 14:10 Q-R2-9=A | D8 | Existing window/command/boundary |
+| D79 Finished worker input continues conversation; explicit task rerun | 10-07 14:10 Q-R2-10=A | D8 | Existing human revival and task run action |
+| D80 Delete owned sessions/memory; guest answers remain/deleted label | 10-07 14:10 Q-R2-11=A | D9 | One existing cascade + message identity |
+| D81 Team removal hides main across UI/channels/tasks; re-add unhides | 10-07 14:10 Q-R2-12 | D1; 15:20 Q5=A | Existing member validation/visibility/retention |
+| D82 Rewrite then plan-spec, use what exists; stop before grill | 10-07 14:35/direct commission | Header/New things/hand-off | Existing ADR/spec flow; no production mechanism |
+| D83 Delete scoped deprecated/legacy/compatibility paths; greenfield | 10-07 14:45 steering | Consequences DEL-01–22/DEL-F01–43; 15:55 Q4=A | Existing canonical replacements listed per deletion |
+| D84 Every undecided relevant choice goes to founder; simplicity graded | 10-07 14:45 steering | Answered question record/New things/alternatives | Existing question/handoff workflow, not product behavior |
+| D85 Unaddressed answer refused visibly; no fallback | 10-07 15:10 Q3=B | D7 | Existing message response boundary, no second router |
+| D86 UI double confirmation only; agent/API existing single approval; one cascade | 10-07 15:10 Q6=B | D9/D10 | R-DELETE and existing approval/dialog |
+| D87 Verify Calendar; obsolete adapters DELETE, current dependency remains OPEN | 10-07 15:10 Q4 correction | DEL-19; 15:55 Q4=A | Existing Calendar buildTriggerForSave/compileRecurrence and triggerToCronSchedule |
+| D88 Advance expired cursor to first retained complete group; notify agent; empty same-ID if none | 10-07 15:20 Q2=A | D2 | R-RETENTION/window mechanism |
+| D89 Hide removed member; no new work; live work settles/no hidden-main wake | 10-07 15:20 Q5=A | D1 | Existing membership validation and task settlement |
+| D90 Critically assess all four limits against five scenarios; proposal only if needed | 10-07 15:20 Q1 | D3; answered QUESTIONS; 15:55 Q1=A | Existing body/rate/queue/model-budget paths; proposal unratified |
+| D91 Frontend counterpart owns layout; define shared main contract shape | 10-07 15:10 navigation note | D1.1/header | Existing Session/member-config identity path and frontend navigation |
+| D92 Approve the limits proposal exactly; wire settings | 10-07 15:55 Q1=A | D3; issue #1216 | Existing steer_body/steer_rate/queue/model budget; one aggregate field |
+| D93 Keep Calendar once/at_ms; delete every_ms/cron_expr; heartbeat internals untouched | 10-07 15:55 Q4=A | DEL-19; Calendar reconciliation | Current Calendar once/RRULE/task scheduler |
+| D94 #1211/#1214/#1216 in scope; #1212/#1213/#1215 separate fix squad | 10-07 15:55 | Tracked issue scope below | Existing inbox/admission/control/config paths, no side fixes |
 
-**Recommendation: A.** Cheapest, and keeps one event's untrusted content out of another run.
+### Delivery and non-session decisions — recorded, not turned into product requirements
 
-### Q-ADR-9 — How many helpers at once, and how is cost shown? (A / B / C)
+These complete the ledger disposition without pretending panel/release operating decisions are session features. All are verified **source instructions**, not fresh CI/UAT certifications by this author.
 
-The unconfigured cap is 2,000, which is no real limit (`pkg/config/config_defaults_apply.go::EffectiveMaxParallelAgents`).
+| Ledger decision(s) | Date/label | Disposition here |
+|---|---|---|
+| Exact-SHA engine tester+validator, agreed provider/model; five-reviewer rule text | 10-06 hands-on rule/Q12; 10-07 12:25 Q5 | Future session-core delivery gate in D10; named historical exceptions do not generalize. |
+| No Lane A revert; repair then gates/founder yes | 10-06 Q4 | Historical delivery, no revert work commissioned. |
+| A4seam placeholder removed; D6 live retry unnecessary; #1198 | 10-06 Q10 | Do not add deferred live-retry/waiting-recovery scope. |
+| Panel lead rereads five-reviewer rule; eight accepted if it refuses | 10-06 Q11 | Panel disposition only, not this feature's gate size. |
+| SEC01/S1 descoped; Library/S2 accepted; S2 reminder on 10-08 | 10-06 panel decisions/23:33 | Panel-only dispositions, no session-code side fix/reminder dispatch. |
+| Lane A no further review after current fix, CI then landing; S3 descoped; one-time UAT skip | 10-06 04:00/04:05 | Named historical exception only. |
+| No development-worker deadlines; watch/steer/resume own session | 10-06 06:05 | Author's delegation procedure; does not remove product task limits. |
+| One local panel gateway build at a time with guard intact | 10-06 Q17 | Panel-only build permission; no local product test/build run here. |
+| #1201 conditional landing after exact-SHA UAT+validator | 10-06 21:40 Q19 | Historical conditional approval; failed R7 was not a pass. |
+| Fresh UAT home/key from environment/protected credentials | 10-06 UAT setup | Required future isolated acceptance setup; no secrets copied here. |
+| Redirect fix and argument-hint correction | 10-06 R7/22:38; later diagnosis | Use real command path in later acceptance; do not cite the withdrawn helper “redirect pass.” |
+| One combined train #1204/#1207/#1201; one CI/UAT/landing | 10-06 Q30; 10-07 09:30 | Historical train grouping, not an instruction to create parallel session-core deliveries. |
+| Q15 initially held, then approved order 1,6,4,3,2,5,7 | 10-06 late questions/23:20 | Preserve later delivery approval; no seven new open design questions. |
+| #1196 immediate landing after named test-host fix, CI afterward; F6 stays open | 10-06 23:33 | Named panel exception; waiting-room deletion remains DEL-02. |
+| Approval-during-typing fix is test fixture only | 10-06 23:38 | No approval-modal redesign beyond the separately decided helper label/link. |
+| Panel spec-sync now | 10-07 06:54 Q32 | Panel-only; not authority for this specification before Phase 1 commit. |
+| Astra R2 first, founder questions, then grounded architect rewrite | 10-07 12:25 Q3; 13:40–14:10; 14:35 | This rewrite is authorized; author does not run another Astra/grill. |
+| #1209 land actual fixes now despite S7/I1; fixes follow | 10-07 12:38 | Named historical landing yes, not proof failed rows passed and not session-core landing approval. |
+| CI/UAT status, worker launches/disconnect/resumes, I1 option B and duplicate-lane correction | All other dated October 6/7 notes, including 13:05/14:10 | Evidence/coordination, not additional founder product decisions. I1 recommendation is team-lead's implementation default; this ADR does not certify its pending branch. |
 
-| Option | Limit |
-|---|---|
-| A | No new limit |
-| B | A small limit per default session (for example 4). Extra helpers wait in a visible queue, never dropped |
-| C | A small global default for the install |
+## Questions answered and hand-off boundaries
 
-**Recommendation: B, with the founder choosing the number.** Show helper count and token use per default session in the existing usage views.
+All six questions in the external question record are closed. No recommendation is silently substituted for an answer.
 
-### Q-ADR-11 — How does the default session keep its memory when work happens in helpers? (A / B / C)
+| Question | Binding answer | Rule |
+|---|---|---|
+| Q1 (formerly OPEN-Q1) | 15:55 A | Approved 64 KiB body / 60 per sender+target per minute / 200 items / one 1 MiB aggregate setting AND existing model fit; estimator and report delivery unchanged; production settings must be wired. |
+| Q2 | 15:20 A | Advance expired day/byte mark to first retained complete group, notify the agent of expiry; empty same-ID window if none remains. |
+| Q3 | 15:10 B | Refuse unaddressed answer visibly; agent must address sender; no fallback. |
+| Q4 (formerly OPEN-Q4) | 15:55 A | Keep current Calendar once/at_ms; remove misleading legacy label; delete every/every_ms/cron_expr compatibility; current repeat path is RRULE. |
+| Q5 | 15:20 A | Hide removed membership, admit no new work; authorized live work settles without waking hidden main; re-add unhides. |
+| Q6 | 15:10 B | UI double confirmation only; agent/API retain existing single approval; one accurate deletion cascade. |
 
-The session-end recap is skipped for delegate-type sessions (`pkg/agent/session_end.go`, `skipped_delegate_session`). Event and task runs are not delegate-type, so they recap as today (D8.3). The question is about helpers an agent starts itself.
+Storage-before-queue is recorded in the ledger as a **proposed** build order, not a founder-ratified new product decision. The specification may state dependency necessities, but team-lead owns implementation planning. If implementation discovers a genuinely new ambiguous product choice, it must be put to the founder; these six are not reopened. The next artifact is the specification; it is not a new founder interview or permission to implement/land.
 
-| Option | How facts reach memory |
-|---|---|
-| A | The helper's final report must carry the facts; the helper may write memory itself |
-| B | Run the recap for self-delegated helpers too, into the same agent's memory (one summary call per helper) |
-| C | The default session writes key facts to memory when a result arrives |
+**Code correct and tested:** not claimed; this task writes architectural documents and reads sources only.
 
-**Recommendation: B.** It reuses existing code and does not rely on the model remembering.
+**Reachable by a user/agent:** target entry points and documentation TODOs are named; proposed behavior has not been exercised or delivered.
 
-### Q-ADR-12 — Messages waiting when Stop is pressed (A / B / C)
+skills: omnipus-shared-rules, gitnexus-exploring, ux-heuristics-review
 
-| Option | Behaviour |
-|---|---|
-| A | Held: they stay queued, shown as held, and run when the person next sends or resumes |
-| B | Dropped, shown as "not sent" |
-| C | They start a new turn at once, which makes Stop look broken |
+## Evidence table
 
-**Recommendation: A.** The person's text is not lost and Stop means stop. The default session should show "N helpers or runs still running" after a plain Stop.
-
-### Q-ADR-13 — How does a person see and steer helpers? (A / B)
-
-| Option | Display |
-|---|---|
-| A | Helpers and registered runs are grouped under their default session in the session panel, collapsed by default. The default chat shows a live strip of running children. Steering happens in the child's own chat or through the default session |
-| B | Helpers hidden; the person steers only through the default session and the agent relays |
-
-**Recommendation: A.** It is what exists (issue #1083 tracks show and hide) plus grouping. B makes the person's instruction depend on the agent relaying it.
-
-### Q-ADR-14 — Who steers a worker session started by an event? (A / B)
-
-The founder decided a worker has no default session and each task or event starts a new worker session. Who is its parent is not decided.
-
-| Option | Rule |
-|---|---|
-| A | A standalone session with no parent. The person steers it from its own chat and it ends with its own result |
-| B | The default session of the agent that owns the trigger becomes its parent |
-
-**Recommendation: A.** B invents a parent that never asked for the work.
+| Claim | Evidence | Certainty |
+|---|---|---|
+| Current release is included by a true merge | `git merge --no-ff --no-commit origin/release/v0.1.1`, exit 0; merge `250b72caeb5c615ebd37f043a23a12c7befd9e2f` has parents `269354db4` and `c6837a42d`; `git merge-base --is-ancestor c6837a42d HEAD`, exit 0. | Verified, high confidence. |
+| Founder rules/supersessions and all founder answers and six closed question dispositions are recorded | Ledger absolute path in header::all October 6/7 entries; binding 14:45 steering; decision coverage D01–D94; QUESTIONS absolute path::closed Q1–Q6 and approved limits assessment. | Verified source, high confidence; runtime implementation remains Unknown. |
+| Reuse is grounded in current source rather than the old reviews | Context R-MAIN through R-DELETE::listed source symbols; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/build/session-core-evidence/` source scans/excerpts and frontend map. | Verified source, high confidence; runtime behavior not tested. |
+| No compaction writer or active day-store constructor is claimed | Controlled production scan found `NewPartitionStore` definition and `EntryTypeCompaction` declaration/reader; positive controls found known definitions. `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/session_end.go::persistResponse` calls `MemoryStore.WriteLastSession`, not a transcript summary append. | Verified, high confidence. |
+| Earlier clauses and live scoped legacy candidates and Calendar dependencies were checked | ADR source scan exit 0: `ADR_SCAN files_read=175 excerpt_sources=28 positive_control=session-scoped_recall`; original code symbols in DEL-01–22/DEL-F01–43 and preserved-source excerpts. | Verified source inventory, high confidence; DEL-19 boundary confirmed by 15:55 Q4=A. |
+| CLI native resume options exist; actual steering is not certified | `claude --help`, `codex exec resume --help`, `opencode run --help`, each exit 0; native resume/session options present. R-CLI source Input methods return nil without delivery. | Verified help/source, high confidence; live model/platform behavior Unknown. |
+| All six new issue IDs/scopes were traced | gh issue view 1211–1216 --repo elicify-ai/omnipus --json number,title,body,state,url: each exit 0, titles/scope match the 15:55 mandate; saved issue JSON under the worktree evidence directory. | Verified issue contents, high confidence; reported live failures not independently reproduced here. |
+| **Self-check** | Rechecked this rewrite against the founder ledger, Astra R2 D01–D69/Q-R2-1..12, inventory A1–A12/P1–P17, reuse/new/deletion tables and OPEN gaps. Reuse claims distinguish existing mechanisms from required adaptations; no production, CI, UAT or delivery PASS is asserted. Final document/citation/diff checks are captured with the Phase 1 commit evidence. | Verified document/source self-check; implementation remains untested. |

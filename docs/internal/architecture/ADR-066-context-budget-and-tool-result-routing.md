@@ -1,5 +1,12 @@
 # ADR-066: Context overflow — the sliding window extended mid-turn, tool results emptied with a recall mark, and a per-result cap at the door
 
+## Amended 2026-10-07 — session-core founder decisions
+
+**Dated correction of 6.3/6.5, destructive rollback/hydration and 18.1/18.2 storage premises.** The one append-only day archive replaces separate model-history content and destructive rollback/hydration; preserve bounded provider-valid projection, structural/tool groups and unconsumed controls. No new compaction-summary step; idle recap stays agent memory. /clear affects window/display, never archive bytes. The existing model-budget formula/estimator is unchanged.
+
+Authority and complete clause/reuse map: **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/ADR-20261006-session-core-with-an-agent-address-book.md`::Decision / Earlier ADR clauses amended; founder ledger `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md` plus the binding October 7 answers through 15:55. This is a design amendment, not a claim that production implements it. Conflicting older prescriptions below are historical within this scope; unrelated decisions and historical evidence remain unchanged.
+
+
 - **Status:** Accepted (operator approval 2026-08-23 — implementation plan approved). Proposed 2026-08-21; restructured 2026-08-22. Drafted from a live production incident on the operator's own instance.
 - **Date:** 2026-08-22
 - **Related:** [ADR-028](ADR-028-context-paging-sliding-window-recall.md) (`windowTrim` as the only compaction path — **extended, not superseded**: D6 changes *when* it runs and *what it may do mid-turn*; it remains the only path, and nothing here summarises); [ADR-051](ADR-051-media-handling-and-provider-error-translation.md) (`LLMError` classifier — extended by D7); [ADR-060](ADR-060-structured-tool-failure-family.md) (D5's recall mark is a candidate family member, §12); CLAUDE.md **Constraint #1** (single binary), **Constraint #6** (explicit tool policy), **Constraint #8** (contract-first wire formats).

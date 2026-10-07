@@ -1,5 +1,12 @@
 # ADR-071 — Tool manifest tier redesign: `ToolSearch`, a search-only third tier, `switch_agent`, and a cached catalog boundary
 
+## Amended 2026-10-07 — session-core founder decisions
+
+**Dated correction of D4/5.1 switch_agent and compatibility mappings.** The switch_agent/handover tool and in-session routing change are deleted, not renamed into another tool. /switch-agent is session navigation; @ is direct MAIN messaging. Preserve per-agent/session loaded-tool isolation and canonical two-layer policy; remove scoped upgrade-only old tool-key aliases.
+
+Authority and complete clause/reuse map: **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/ADR-20261006-session-core-with-an-agent-address-book.md`::Decision / Earlier ADR clauses amended; founder ledger `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md` plus the binding October 7 answers through 15:55. This is a design amendment, not a claim that production implements it. Conflicting older prescriptions below are historical within this scope; unrelated decisions and historical evidence remain unchanged.
+
+
 > **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
 
 - **Status:** Proposed — **revision 5** (2026-08-27). Every decision below was made by the operator

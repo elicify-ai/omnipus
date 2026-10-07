@@ -1,5 +1,12 @@
 # ADR-093 — An open conversation must keep the ability to delegate
 
+## Amended 2026-10-07 — session-core founder decisions
+
+**Dated correction of D2/D6 task child admission, D7 restart presentation and #1198 blanket deferral.** A future authorized scheduled MAIN occurrence may create a real child of a stopped main without resuming its model, ordered against Stop; reports hold. Preserve the general arbitrary-helper guard and selected-execution fences. A restart-cut conversation shows Interrupted, not Working/failed because of restart. Unified archive/intake and approved 64 KiB/60-per-sender/200/1 MiB+model limits are now in scope; waiting-input restart reconstruction/live stop retry stay deferred.
+
+Authority and complete clause/reuse map: **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/ADR-20261006-session-core-with-an-agent-address-book.md`::Decision / Earlier ADR clauses amended; founder ledger `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md` plus the binding October 7 answers through 15:55. This is a design amendment, not a claim that production implements it. Conflicting older prescriptions below are historical within this scope; unrelated decisions and historical evidence remain unchanged.
+
+
 **Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. A second Stop / Esc / `/stop` within that window stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. Agent delegate `stop` / `stop_all` is unchanged (one helper's turn / its tree). Authority: founder decision, 2026-10-06.
 
 ## Amended 2026-10-06 — founder decision
