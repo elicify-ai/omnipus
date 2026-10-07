@@ -44,6 +44,7 @@ describe('S7 reload (WS replay) — redirected vs plain-stopped turn', () => {
     const msgs = replayCancelledTurn('redirect-7f3a')
     const a = msgs.find((m) => m.role === 'assistant')
     expect(a?.content).toBe('partial text so far')
+    expect(a, 'assistant exists').toBeDefined()
     expect(getMessageStatusSuffix(a!), 'no (interrupted) after reload').toBeNull()
     expect(msgs.filter((m) => m.role === 'user').map((m) => m.content)).toEqual(['write a long answer', 'now just say the word mango'])
   })
@@ -51,6 +52,30 @@ describe('S7 reload (WS replay) — redirected vs plain-stopped turn', () => {
   it('control: a turn followed by an ordinary user message keeps "(interrupted)"', () => {
     const msgs = replayCancelledTurn('u-second')
     const a = msgs.find((m) => m.role === 'assistant')
+    expect(a, 'assistant exists').toBeDefined()
     expect(getMessageStatusSuffix(a!)).toBe('(interrupted)')
+  })
+
+  it('Stop, then a later unrelated user message, then a redirect: the earlier Stop marker stays', () => {
+    feed({ type: 'replay_message', role: 'user', id: 'u-first', content: 'q1' })
+    feed({ type: 'replay_message', role: 'assistant', id: 'a-1', content: 'stopped partial', turn_id: TURN, truncated: true, truncation_reason: 'cancelled' })
+    feed({ type: 'replay_message', role: 'turn_canceled', content: '', turn_id: TURN })
+    feed({ type: 'replay_message', role: 'user', id: 'u-2', content: 'q2' })
+    feed({ type: 'replay_message', role: 'assistant', id: 'a-2', content: 'second answer', turn_id: 'turn-2' })
+    feed({ type: 'replay_message', role: 'user', id: 'redirect-1', content: 'redirect idle chat' })
+    const msgs = getMessages(useChatStore.getState().sessionsById[SID])
+    const a1 = msgs.find((m) => m.id === 'a-1')
+    expect(a1, 'a-1 exists').toBeDefined()
+    expect(getMessageStatusSuffix(a1!), 'genuine Stop marker survives').toBe('(interrupted)')
+  })
+
+  it('turn_canceled stored AFTER the redirect instruction still leaves no marker', () => {
+    feed({ type: 'replay_message', role: 'user', id: 'u-first', content: 'write a long answer' })
+    feed({ type: 'replay_message', role: 'assistant', id: 'a-1', content: 'partial text so far', turn_id: TURN, truncated: true, truncation_reason: 'cancelled' })
+    feed({ type: 'replay_message', role: 'user', id: 'redirect-9', content: 'now just say the word mango' })
+    feed({ type: 'replay_message', role: 'turn_canceled', content: '', turn_id: TURN })
+    const a = getMessages(useChatStore.getState().sessionsById[SID]).find((m) => m.id === 'a-1')
+    expect(a, 'a-1 exists').toBeDefined()
+    expect(getMessageStatusSuffix(a!)).toBeNull()
   })
 })

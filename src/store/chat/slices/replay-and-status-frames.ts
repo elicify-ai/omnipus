@@ -32,7 +32,7 @@ import { useNotificationsStore } from '@/store/notifications'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { reconcilePendingAsks } from '@/store/pendingAskReconcile'
 import { logDiagnostic } from '@/lib/telemetry'
-import { clearRedirectedTurnMarker, isRedirectInstructionId, normalizeTruncationReason } from '@/lib/truncation'
+import { clearRedirectedTurnMarker, findPrecedingAssistantIndex, isRedirectInstructionId, normalizeTruncationReason } from '@/lib/truncation'
 import { buildGoalOutcomeInsertion } from '@/lib/goalOutcome'
 import { buildJudgeVerdictInsertion } from '@/lib/judgeVerdictThread'
 import {
@@ -529,6 +529,11 @@ function handleTurnCanceledReplayEntry({
         console.warn('chat.turn_canceled_no_match', { sessionId: targetSid, turnId: canceledTurnId })
         return
       }
+      // A redirect instruction already stored after this turn's assistant
+      // message means the turn was redirected, not interrupted (the
+      // turn_canceled entry can land after the instruction in the transcript).
+      const after = draft.messageOrder.slice(draft.messageOrder.indexOf(matchId) + 1)
+      if (after.some((id) => draft.messagesById[id]?.role === 'user' && isRedirectInstructionId(id))) return
       const m = draft.messagesById[matchId]
       if (m) { m.isStreaming = false; m.status = 'interrupted'; m.pendingTextBoundary = false }
     }) as Partial<SessionChatState>
@@ -720,9 +725,9 @@ function handleReplayMessageFrame({
       // turn means that turn was redirected, not interrupted — drop its
       // cancel marker (a turn_canceled entry marked it just before).
       if (role === 'user' && isRedirectInstructionId(messageId)) {
-        const tailId = draft.messageOrder[draft.messageOrder.length - 1]
-        const tail = tailId ? draft.messagesById[tailId] : undefined
-        if (tail?.role === 'assistant') clearRedirectedTurnMarker(tail)
+        const chat = draft.messageOrder.map((id) => draft.messagesById[id])
+        const j = findPrecedingAssistantIndex(chat, chat.length)
+        if (j >= 0) clearRedirectedTurnMarker(chat[j])
       }
       const newMsg: ChatMessage = {
         id: messageId ?? generateId(),

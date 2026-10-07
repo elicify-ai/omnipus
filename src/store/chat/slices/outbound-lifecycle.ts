@@ -815,6 +815,9 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // Playwright (or a real user) clicks it would silently do nothing because
       // isStreaming flips to false between render and click.
       get().markLastMessageInterrupted(sessionId)
+      // A plain Stop supersedes any pending redirect: its turn_canceled is a
+      // stop, and must keep "(interrupted)".
+      if (targetSid) pendingRedirectSids.delete(targetSid)
 
       // W2: a cancel that cannot even reach a transport is reported — to the
       // caller (return false, so the Stop window is never armed for a click

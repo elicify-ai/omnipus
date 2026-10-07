@@ -13,6 +13,20 @@ const userEntry = (id: string) => ({
   id, agent_id: 'jim', role: 'user', content: 'now just say the word mango', timestamp: '2026-10-07T10:00:05Z', status: 'ok',
 })
 
+// The role-less turn_canceled entry exactly as pkg/agent/cancel.go::RequestCancel
+// writes it (id <sid>_canceled, type turn_canceled, turn_id, no role), and the
+// role-less tool_call rows pkg/agent/turn_transcript.go writes. The REST route
+// (pkg/gateway/rest_sessions.go::getSessionMessages) returns them raw.
+const turnCanceled = {
+  id: 'sid-s7_canceled', type: 'turn_canceled', turn_id: 't1', timestamp: '2026-10-07T10:00:01Z',
+  canceled_by_user: 'u1', canceled_by_channel: 'web', cancel_method: 'graceful',
+}
+const toolCall = (id: string) => ({
+  id, type: 'tool_call', agent_id: 'jim', turn_id: 't1', timestamp: '2026-10-07T10:00:00Z',
+  tool_calls: [{ id, tool: 'web_search', status: 'success', parameters: { q: 'x' } }],
+})
+const ordinaryUser = userEntry('u-second')
+
 async function load(wire: unknown[]) {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(wire), {
     status: 200, headers: { 'Content-Type': 'application/json' },
@@ -21,18 +35,36 @@ async function load(wire: unknown[]) {
   return fetchSessionMessages('sid-s7')
 }
 
+const suffix = (m: unknown) => getMessageStatusSuffix(m as never)
+
 describe('fetchSessionMessages — redirected vs plain-stopped turn', () => {
   beforeEach(() => { vi.resetModules() })
   afterEach(() => { vi.unstubAllGlobals(); vi.resetModules() })
 
-  it('a cancelled turn followed by a redirect-… instruction has no marker and keeps its text', async () => {
-    const msgs = await load([cancelledAssistant, userEntry('redirect-7f3a')])
+  it('exact stored order assistant(cancelled) → turn_canceled → redirect-…: no marker, text kept', async () => {
+    const msgs = await load([cancelledAssistant, turnCanceled, userEntry('redirect-7f3a')])
     expect(msgs[0].content).toBe('partial text so far')
-    expect(getMessageStatusSuffix(msgs[0] as never)).toBeNull()
+    expect(suffix(msgs[0]), 'the real partial is cleared').toBeNull()
   })
 
-  it('control: followed by an ordinary user message it keeps "(interrupted)"', async () => {
-    const msgs = await load([cancelledAssistant, userEntry('u-second')])
-    expect(getMessageStatusSuffix(msgs[0] as never)).toBe('(interrupted)')
+  it('with tool_call rows between the partial and the redirect: no marker', async () => {
+    const msgs = await load([cancelledAssistant, toolCall('tc-1'), turnCanceled, toolCall('tc-2'), userEntry('redirect-7f3a')])
+    expect(suffix(msgs[0])).toBeNull()
+  })
+
+  it('redirect instruction stored before the turn_canceled entry: no marker', async () => {
+    const msgs = await load([cancelledAssistant, userEntry('redirect-7f3a'), turnCanceled])
+    expect(suffix(msgs[0])).toBeNull()
+  })
+
+  it('control: assistant → turn_canceled → ordinary user message keeps "(interrupted)"', async () => {
+    const msgs = await load([cancelledAssistant, turnCanceled, ordinaryUser])
+    expect(suffix(msgs[0])).toBe('(interrupted)')
+  })
+
+  it('Stop, then an unrelated user message and answer, then a redirect: the earlier Stop marker stays', async () => {
+    const second = { ...cancelledAssistant, id: 'a-2', status: 'ok', truncated: undefined, truncation_reason: undefined, turn_id: 't2' }
+    const msgs = await load([cancelledAssistant, turnCanceled, ordinaryUser, second, userEntry('redirect-7f3a')])
+    expect(suffix(msgs[0]), 'genuine Stop marker survives').toBe('(interrupted)')
   })
 })

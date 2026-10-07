@@ -859,7 +859,7 @@ function parseWireMessageList(items: unknown[], endpoint: string): Message[] {
     _recordApiSchemaError(endpoint, result.error.issues.length)
     messages.push(placeholderMessage(item, index))
   })
-  clearRedirectedTurnMarkers(messages)
+  clearRedirectedTurnMarkers(messages, items)
   if (dropped > 0) {
     void maybeDevToast(
       `[api] Dropped ${dropped} malformed message${dropped === 1 ? '' : 's'} from ${endpoint}: ${firstIssue ?? 'unknown'}`,

@@ -1335,6 +1335,11 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             // terminally acknowledged — stop treating it as "pending" so a
             // later, unrelated untagged frame doesn't get misattributed here.
             pendingCancelAckSids.delete(sid)
+            // A done ends the turn a pending redirect was aimed at (it either
+            // arrived after turn_canceled, which already consumed the flag, or
+            // the turn finished/ended silently): never carry it into a later,
+            // unrelated stop.
+            pendingRedirectSids.delete(sid)
             const priorBucket = get().sessionsById[sid] ?? EMPTY_BUCKET
             const wasReplaying = priorBucket.isReplaying
             const elapsed = wasReplaying ? Date.now() - (replayingStartedAt[sid] ?? 0) : 0
@@ -1852,9 +1857,14 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                     const msg = draft.messagesById[id]
                     const prevStatus = msg.status
                     // FR-21 / T21–T23: do NOT overwrite 'interrupted' status with 'error'.
-                    const resolvedStatus = (prevStatus === 'interrupted' || isCancelAck)
-                      ? 'interrupted'
-                      : redirectStoppedTurn ? 'done' : 'error'
+                    // A turn_canceled that no redirect of ours asked for (a Stop
+                    // from another tab or a channel) is a plain stop: the partial
+                    // stays, marked interrupted.
+                    const resolvedStatus = redirectStoppedTurn
+                      ? 'done'
+                      : (prevStatus === 'interrupted' || isCancelAck || llmError?.code === 'turn_canceled')
+                        ? 'interrupted'
+                        : 'error'
                     // Founder decision #1081 RC2 / Q4: a terminal error must
                     // always be visible, narration or not. Replace existing
                     // content with translated catalogue copy (typed payload)

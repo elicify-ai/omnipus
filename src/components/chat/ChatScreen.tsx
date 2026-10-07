@@ -2080,7 +2080,10 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     // The server's turn_canceled answer carries no cause; remember this send
     // so the live view finalises the partial as a redirected turn (no
     // "(interrupted)"), see runtime-state.ts::pendingRedirectSids.
-    pendingRedirectSids.add(frame.session_id)
+    // Only a chat with a streaming turn has anything for the redirect to stop.
+    if (useChatStore.getState().sessionsById[frame.session_id]?.isStreaming) {
+      pendingRedirectSids.add(frame.session_id)
+    }
   }, [])
   const slashMenu = useSlashMenu({
     isStreaming,

@@ -18,6 +18,7 @@ import { act } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { pendingRedirectSids } from '@/store/chat/runtime-state'
 
 class ResizeObserverStub {
   observe() {}
@@ -153,7 +154,6 @@ import { getMessages } from '@/store/chat'
 
 const SID = 'sess_test'
 const PARTIAL = 'Here is the first long part of a very long answer. '.repeat(40)
-const STOP_COPY = codeToDisplay.turn_canceled
 
 let send: ReturnType<typeof vi.fn>
 
@@ -166,29 +166,44 @@ function submitCommand(text: string) {
   })
 }
 
+const handle = (f: Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0]) =>
+  act(() => { useChatStore.getState().handleFrame(f) })
+
 function streamPartial() {
-  act(() => {
-    useChatStore.getState().handleFrame({ type: 'token', session_id: SID, agent_id: 'jim', content: PARTIAL })
-  })
+  handle({ type: 'token', session_id: SID, agent_id: 'jim', content: PARTIAL })
 }
 
+function typedError(code: 'turn_canceled' | 'turn_timed_out'): ErrorFrame {
+  const message = codeToDisplay[code]
+  return { type: 'error', session_id: SID, message, payload: { llm_error: { code, message, retryable: true } } }
+}
+
+// What the gateway emits when a turn is stopped: the typed error, then done.
 function deliverTurnStopped() {
-  const stopped: ErrorFrame = {
-    type: 'error', session_id: SID, message: STOP_COPY,
-    payload: { llm_error: { code: 'turn_canceled', message: STOP_COPY, retryable: true } },
-  }
-  act(() => {
-    useChatStore.getState().handleFrame(stopped)
-    useChatStore.getState().handleFrame({ type: 'done', session_id: SID })
-  })
+  handle(typedError('turn_canceled'))
+  handle({ type: 'done', session_id: SID })
 }
 
 const assistants = () => getMessages(useChatStore.getState().sessionsById[SID]).filter((m) => m.role === 'assistant')
+
+/** A second turn started from a normal send, streaming `text`. */
+function startNextTurn(text: string) {
+  act(() => { useChatStore.getState().sendMessage('next question') })
+  handle({ type: 'token', session_id: SID, agent_id: 'jim', content: text })
+}
+
+function lastAssistant() {
+  const all = assistants()
+  const m = all[all.length - 1]
+  expect(m, 'an assistant message exists').toBeDefined()
+  return m
+}
 
 beforeEach(() => {
   send = vi.fn().mockReturnValue(true)
   composerRuntime.setText('')
   composerRuntime.send.mockClear()
+  pendingRedirectSids.clear()
   act(() => {
     useConnectionStore.setState({
       connection: { send } as unknown as ReturnType<typeof useConnectionStore.getState>['connection'],
@@ -200,6 +215,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  pendingRedirectSids.clear()
   act(() => {
     useChatStore.setState(useChatStore.getInitialState(), true)
     useConnectionStore.setState({ connection: null, isConnected: true, connectionError: null })
@@ -208,7 +224,7 @@ afterEach(() => {
 })
 
 describe('S7 live — /stop-redirect on a streaming chat', () => {
-  it('keeps the partial text, shows no (interrupted) marker, and no stop-sentence replaces it', () => {
+  it('keeps the partial text, finalised done, no (interrupted) marker, no stop sentence', () => {
     render(<OmnipusComposer />)
     streamPartial()
     expect(useChatStore.getState().isStreaming, 'fixture: a turn is streaming').toBe(true)
@@ -217,25 +233,103 @@ describe('S7 live — /stop-redirect on a streaming chat', () => {
     expect(send.mock.calls.map((c) => c[0]), 'fixture: the real redirect frame left').toEqual([
       { type: 'redirect', session_id: SID, instruction: 'now just say the word mango' },
     ])
+    expect(pendingRedirectSids.has(SID), 'the redirect is remembered').toBe(true)
 
     deliverTurnStopped()
 
-    const msgs = assistants()
-    expect(msgs.map((m) => m.content), 'the partial text is the only assistant text, unchanged').toEqual([PARTIAL])
-    expect(msgs[0].status).not.toBe('interrupted')
-    expect(msgs[0].status).not.toBe('error')
-    expect(getMessageStatusSuffix(msgs[0]), 'no "(interrupted)" marker').toBeNull()
+    expect(assistants().map((m) => m.content), 'the partial text is the only assistant text, unchanged').toEqual([PARTIAL])
+    const m = lastAssistant()
+    expect(m.status).toBe('done')
+    expect(m.isStreaming).toBe(false)
+    expect(getMessageStatusSuffix(m), 'no "(interrupted)" marker').toBeNull()
     expect(useChatStore.getState().isStreaming).toBe(false)
+    expect(pendingRedirectSids.has(SID), 'flag consumed').toBe(false)
   })
 
-  it('control: a plain Stop keeps the partial text WITH "(interrupted)"', () => {
+  it('control: a plain Stop keeps the partial text WITH "(interrupted)" and clears a pending redirect', () => {
     render(<OmnipusComposer />)
     streamPartial()
+    submitCommand('/stop-redirect x')
+    expect(pendingRedirectSids.has(SID)).toBe(true)
     act(() => { fireEvent.click(screen.getByTestId('stop-btn')) })
+    expect(pendingRedirectSids.has(SID), 'a Stop supersedes the redirect').toBe(false)
     deliverTurnStopped()
 
-    const partial = assistants().find((m) => m.content === PARTIAL)
-    expect(partial, 'the partial text survives a plain Stop').toBeDefined()
-    expect(getMessageStatusSuffix(partial!)).toBe('(interrupted)')
+    const m = assistants().find((a) => a.content === PARTIAL)
+    expect(m, 'the partial text survives a plain Stop').toBeDefined()
+    expect(getMessageStatusSuffix(m!)).toBe('(interrupted)')
+  })
+
+  it('idle chat: a redirect with no streaming turn remembers nothing', () => {
+    render(<OmnipusComposer />)
+    expect(useChatStore.getState().isStreaming, 'fixture: idle').toBe(false)
+    submitCommand('/stop-redirect do it')
+    expect(send.mock.calls.map((c) => c[0])).toEqual([{ type: 'redirect', session_id: SID, instruction: 'do it' }])
+    expect(pendingRedirectSids.has(SID)).toBe(false)
+  })
+
+  it('redirect → natural done → a later turn_canceled from another tab shows "(interrupted)"', () => {
+    render(<OmnipusComposer />)
+    streamPartial()
+    submitCommand('/stop-redirect x')
+    handle({ type: 'done', session_id: SID }) // the turn had already finished
+    expect(pendingRedirectSids.has(SID), 'done clears the flag').toBe(false)
+
+    startNextTurn('second answer partial')
+    handle(typedError('turn_canceled')) // Stop pressed in another tab
+    handle({ type: 'done', session_id: SID })
+
+    const m = lastAssistant()
+    expect(m.content).toBe('second answer partial')
+    expect(m.status).toBe('interrupted')
+    expect(getMessageStatusSuffix(m)).toBe('(interrupted)')
+  })
+
+  it('a genuine non-cancel error while a redirect is pending shows the error and clears the flag', () => {
+    render(<OmnipusComposer />)
+    streamPartial()
+    submitCommand('/stop-redirect x')
+    handle(typedError('turn_timed_out'))
+    handle({ type: 'done', session_id: SID })
+
+    expect(lastAssistant().status, 'the error is shown, not hidden as a redirect').toBe('error')
+    expect(pendingRedirectSids.has(SID)).toBe(false)
+
+    startNextTurn('after the error')
+    deliverTurnStopped() // later Stop from another tab
+    const m = lastAssistant()
+    expect(m.content).toBe('after the error')
+    expect(getMessageStatusSuffix(m)).toBe('(interrupted)')
+  })
+
+  it('a socket drop mid-redirect forgets the redirect; a later Stop shows "(interrupted)"', () => {
+    render(<OmnipusComposer />)
+    streamPartial()
+    submitCommand('/stop-redirect x')
+    expect(pendingRedirectSids.has(SID)).toBe(true)
+    act(() => { useChatStore.getState().clearStreamingState() })
+    expect(pendingRedirectSids.has(SID), 'drop clears the flag').toBe(false)
+
+    startNextTurn('post-reconnect partial')
+    deliverTurnStopped()
+    expect(getMessageStatusSuffix(lastAssistant())).toBe('(interrupted)')
+  })
+
+  it('redirect before the first token: the empty placeholder ends done and invisible — no marker, no stop sentence', () => {
+    // Pinned current behaviour. The user sees their own message and then the
+    // continuation; nothing is shown for the redirected-away turn (an empty
+    // finished bubble renders nothing — ChatScreen isTerminalEmpty).
+    render(<OmnipusComposer />)
+    act(() => { useChatStore.getState().sendMessage('first question') })
+    expect(useChatStore.getState().isStreaming, 'fixture: placeholder streaming, no token yet').toBe(true)
+    submitCommand('/stop-redirect x')
+    deliverTurnStopped()
+
+    const m = lastAssistant()
+    expect(m.content).toBe('')
+    expect(m.status).toBe('done')
+    expect(m.isStreaming).toBe(false)
+    expect(getMessageStatusSuffix(m)).toBeNull()
+    expect(assistants().filter((a) => a.status === 'error'), 'no error bubble').toHaveLength(0)
   })
 })

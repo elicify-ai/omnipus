@@ -100,14 +100,54 @@ export function clearRedirectedTurnMarker(message: RedirectMarkerFields): void {
 }
 
 /**
- * Cold-load (REST) history pass: every assistant message directly followed by
- * a stored redirect instruction loses its cancel markers.
+ * Walk back from `index` to the assistant chat message the entry at `index`
+ * continues, over `entries` (each read as `{role, type}`): non-chat rows
+ * (the role-less `turn_canceled` entry pkg/agent/cancel.go writes, role-less
+ * `tool_call` rows, fallback notes, ...) are skipped, the first assistant
+ * entry of type `message` (or no type) is the answer, and any user entry stops
+ * the walk — a user message in between means the entry does not continue that
+ * assistant turn. Returns -1 when there is none.
  */
-export function clearRedirectedTurnMarkers(messages: readonly RedirectMarkerFields[]): void {
-  for (let i = 1; i < messages.length; i++) {
-    const prev = messages[i - 1]
-    if (messages[i].role === 'user' && isRedirectInstructionId(messages[i].id) && prev.role === 'assistant') {
-      clearRedirectedTurnMarker(prev)
-    }
+export function findPrecedingAssistantIndex(
+  entries: readonly { role?: string; type?: string }[],
+  index: number,
+): number {
+  for (let j = index - 1; j >= 0; j--) {
+    const e = entries[j]
+    if (e.role === 'user') return -1
+    if (e.role === 'assistant' && (e.type === undefined || e.type === 'message')) return j
   }
+  return -1
+}
+
+/**
+ * Cold-load (REST) history pass. `messages[i]` is the parsed form of
+ * `rawEntries[i]` (same length, same order). Every redirect instruction entry
+ * (`redirect-…` user id) clears the cancel markers of the assistant message it
+ * continues; the raw `role`/`type` decide what that message is because the
+ * parsed form maps the role-less `turn_canceled` / `tool_call` rows to role
+ * assistant.
+ *
+ * Known limit (no wire field exists to tell them apart): a plain Stop followed
+ * later, on an idle chat, by a redirect with no user message in between is
+ * stored exactly like a redirected turn, so that earlier Stop marker is lost
+ * on reload.
+ */
+export function clearRedirectedTurnMarkers(
+  messages: readonly RedirectMarkerFields[],
+  rawEntries: readonly unknown[],
+): void {
+  const entries = rawEntries.map((r) => {
+    const o = (typeof r === 'object' && r !== null ? r : {}) as { role?: unknown; type?: unknown; id?: unknown }
+    return {
+      role: typeof o.role === 'string' ? o.role : undefined,
+      type: typeof o.type === 'string' ? o.type : undefined,
+      id: typeof o.id === 'string' ? o.id : undefined,
+    }
+  })
+  entries.forEach((e, i) => {
+    if (e.role !== 'user' || !isRedirectInstructionId(e.id)) return
+    const j = findPrecedingAssistantIndex(entries, i)
+    if (j >= 0 && messages[j]) clearRedirectedTurnMarker(messages[j])
+  })
 }
