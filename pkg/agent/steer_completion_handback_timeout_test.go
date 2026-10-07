@@ -3,9 +3,11 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -155,5 +157,145 @@ func TestResumeAfterTimeoutThenHandback_CompletesAndOldHandbackDoesNotLeak(t *te
 	}
 	if got := mustLoadRec(t, al, child.SessionID); got.State != session.LifecycleCompleted {
 		t.Fatalf("resumed child that handed back then timed out = %q, want completed", got.State)
+	}
+}
+
+// ---- review round (#1215): edge cases of the completion mark ----
+
+type failMutateLifecycle struct{ *session.LifecycleStore }
+
+func (failMutateLifecycle) Mutate(string, func(*session.LifecycleRecord) error) error {
+	return errors.New("simulated lifecycle write failure")
+}
+
+func setHandbackMark(t *testing.T, al *AgentLoop, id string, mark session.FinalHandbackMark) {
+	t.Helper()
+	if err := al.GetSessionLifecycleStore().Mutate(id, func(r *session.LifecycleRecord) error {
+		r.FinalHandback = &mark
+		return nil
+	}); err != nil {
+		t.Fatalf("set mark: %v", err)
+	}
+}
+
+// A goal-bearing session ends through the goal loop, never through the mark.
+func TestHandbackMark_GoalSessionIsExcluded(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	lifecycle := session.NewLifecycleStore(t.TempDir())
+	al.SetSessionMessagingStores(session.NewMessageInboxStore(t.TempDir()), lifecycle)
+	wireSteerCompletionDeps(t, al)
+	parentMeta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "native-agent")
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	rec := stampG5ExitedExecution(t, al, launchGoalBearingChild947(t, al, parentMeta.ID, "call-1215-goal"))
+	setHandbackMark(t, al, rec.SessionID, session.FinalHandbackMark{
+		RunID: rec.ExecutionID.RunID, BootSeq: rec.ExecutionID.BootSeq, Result: "GOAL-CHILD-RESULT",
+	})
+	rec = mustLoadRec(t, al, rec.SessionID)
+
+	if err := al.completeSteeredTurn(context.Background(), rec, turnResult{}, context.DeadlineExceeded); err != nil {
+		t.Fatalf("completeSteeredTurn: %v", err)
+	}
+	// Unchanged pre-#1215 behaviour for a goal child: the deadline stops it.
+	got := mustLoadRec(t, al, rec.SessionID)
+	if got.State != session.LifecycleStopped || got.StopNote == nil || got.StopNote.Cause != session.StopCauseTimeout {
+		t.Fatalf("goal-bearing session after a deadline = %q %+v, want stopped(timeout) — the handback mark must not apply to it", got.State, got.StopNote)
+	}
+}
+
+func TestHandbackMark_EmptyResultSetsNoMark(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	parent := newTestSteeringSession(t, al, "ws-1215-empty")
+	child := u1LaunchChild(t, al, parent, "t1215-empty")
+	wireSteerCompletionDeps(t, al)
+	admitExecution(t, al, child.SessionID, "run-empty")
+
+	tool := tools.NewMessageParentTool(al.getUpwardDeliverer(), al.GetSessionLifecycleStore())
+	tool.SetSessionMessagingEnabled(func() bool { return true })
+	ctx := tools.WithDelegateSessionID(tools.WithTranscriptSessionID(context.Background(), child.SessionID), child.SessionID)
+	tool.Execute(ctx, map[string]any{"kind": "handback", "mode": "final", "result_so_far": "   "})
+	if got := mustLoadRec(t, al, child.SessionID); got.FinalHandback != nil {
+		t.Fatalf("an empty final handback set a completion mark: %+v", got.FinalHandback)
+	}
+}
+
+// The mark is keyed to RunID AND BootSeq: the same RunID from another boot is inert.
+func TestHandbackMark_SameRunIDEarlierBootSeqIsInert(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	parent := newTestSteeringSession(t, al, "ws-1215-boot")
+	child := u1LaunchChild(t, al, parent, "t1215-boot")
+	wireSteerCompletionDeps(t, al)
+	rec := admitExecution(t, al, child.SessionID, "run-boot")
+	setHandbackMark(t, al, child.SessionID, session.FinalHandbackMark{
+		RunID: "run-boot", BootSeq: rec.ExecutionID.BootSeq + 1, Result: "OTHER-BOOT-RESULT",
+	})
+	rec = mustLoadRec(t, al, child.SessionID)
+
+	if err := al.completeSteeredTurn(context.Background(), rec, turnResult{}, context.DeadlineExceeded); err != nil {
+		t.Fatalf("completeSteeredTurn: %v", err)
+	}
+	if got := mustLoadRec(t, al, child.SessionID); got.State != session.LifecycleStopped {
+		t.Fatalf("a mark from another boot completed the child (state %q); want stopped(timeout)", got.State)
+	}
+}
+
+// A failed mark write must be visible to the child, and the handback itself
+// still counts as delivered (no error result that would invite a re-send).
+func TestHandbackMark_SaveFailureIsVisibleInToolResult(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	parent := newTestSteeringSession(t, al, "ws-1215-fail")
+	child := u1LaunchChild(t, al, parent, "t1215-fail")
+	wireSteerCompletionDeps(t, al)
+	admitExecution(t, al, child.SessionID, "run-fail")
+
+	tool := tools.NewMessageParentTool(al.getUpwardDeliverer(), failMutateLifecycle{al.GetSessionLifecycleStore()})
+	tool.SetSessionMessagingEnabled(func() bool { return true })
+	ctx := tools.WithDelegateSessionID(tools.WithTranscriptSessionID(context.Background(), child.SessionID), child.SessionID)
+	res := tool.Execute(ctx, map[string]any{"kind": "handback", "mode": "final", "result_so_far": "DONE-1215"})
+	if res.IsError {
+		t.Fatalf("a delivered handback must not become an error result: %s", res.ForLLM)
+	}
+	if !strings.Contains(res.ForLLM, "WAS delivered") || !strings.Contains(res.ForLLM, "completion mark could not be saved") {
+		t.Fatalf("tool result must say the mark was not saved, got: %s", res.ForLLM)
+	}
+}
+
+// FACT for the founder (not an endorsement), measured here: a steer sent into
+// a LIVE turn after a final handback joins the SAME execution — no new RunID —
+// so the mark stays valid. Completion then does NOT complete over the queued
+// steer: it returns errCompleteSteeringPending and the child stays running so
+// the steer is consumed. (What happens if the continuation turn itself then
+// dies by deadline was not measured: by code reading the mark is still valid,
+// so it would complete with the first handback's result.)
+func TestHandbackMark_SteerIntoLiveTurnKeepsExecutionAndDefersCompletion(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	parent := newTestSteeringSession(t, al, "ws-1215-steer")
+	child := u1LaunchChild(t, al, parent, "t1215-steer")
+	wireSteerCompletionDeps(t, al)
+	admitExecution(t, al, child.SessionID, "run-steer")
+	sendFinalHandback(t, al, child.SessionID, "FIRST-RESULT")
+
+	if _, _, err := al.EnqueueSteeringMessageWithStatus(child.SessionID, child.AgentID,
+		providers.Message{Role: "user", Content: "one more thing"}, ""); err != nil {
+		t.Fatalf("steer: %v", err)
+	}
+	after := mustLoadRec(t, al, child.SessionID)
+	if after.ExecutionID == nil || after.ExecutionID.RunID != "run-steer" {
+		t.Fatalf("steer into a live turn changed the execution: %+v", after.ExecutionID)
+	}
+	if res, ok := after.FinalHandbackThisExecution(); !ok || res != "FIRST-RESULT" {
+		t.Fatalf("mark after the steer = %q ok=%v", res, ok)
+	}
+	err := al.completeSteeredTurn(context.Background(), after, turnResult{}, context.DeadlineExceeded)
+	if !errors.Is(err, errCompleteSteeringPending) {
+		t.Fatalf("completion over a queued steer = %v, want errCompleteSteeringPending", err)
+	}
+	if got := mustLoadRec(t, al, child.SessionID); got.State != session.LifecycleRunning {
+		t.Fatalf("state after the deferred completion = %q, want running (steer must be consumed first)", got.State)
 	}
 }

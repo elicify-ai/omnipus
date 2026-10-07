@@ -742,50 +742,66 @@ func (mt *messageParentToolExecute) finishDelivery() *ToolResult {
 	// pkg/agent/steer_cancel.go::deliverTerminalReport and
 	// pkg/agent/steer_completion.go::reportUndeliveredWake.
 	mt.reportUndeliveredWake()
-	mt.markFinalHandback()
+	completionNote := mt.markFinalHandback()
 
 	resp := generated.MessageParentResponse{Accepted: true, MessageId: &mt.delivery.MessageID}
 	if mt.correlationID != "" {
 		resp.CorrelationId = &mt.correlationID
 	}
 	payload, merr := json.Marshal(resp)
-	var result *ToolResult
+	text := string(payload)
 	if merr != nil {
-		result = NewToolResult(fmt.Sprintf("message_parent: accepted (message_id=%s)", mt.delivery.MessageID))
-	} else {
-		result = NewToolResult(string(payload))
+		text = fmt.Sprintf("message_parent: accepted (message_id=%s)", mt.delivery.MessageID)
 	}
-	return result
+	if completionNote != "" {
+		text += "\n" + completionNote
+	}
+	return NewToolResult(text)
 }
 
 // markFinalHandback records, on the child's lifecycle record, that a final
 // handback with a result was delivered in its current execution (issue #1215),
 // so a later timeout of this same execution completes the helper instead of
-// stopping it. A failure to record is logged at ERROR and degrades to the old
-// behaviour (a later timeout stops the helper); it is never turned into a tool
-// error because the handback itself is durably delivered and the child must not
-// be invited to send it again.
-func (mt *messageParentToolExecute) markFinalHandback() {
+// stopping it. It returns a note for the child's tool result when saving the
+// mark FAILED — never an error, because the handback itself is durably
+// delivered and the child must not be invited to send it again. The failure
+// is logged at ERROR; the benign no-identity / terminal skips are logged at WARN.
+func (mt *messageParentToolExecute) markFinalHandback() string {
 	if mt.kind != "handback" || mt.err != nil {
-		return
+		return ""
 	}
 	hb, err := mt.sm.AsSessionMessageHandback()
 	if err != nil || hb.Mode != generated.SessionMessageHandbackModeFinal || strings.TrimSpace(hb.ResultSoFar) == "" {
-		return
+		return ""
 	}
+	const unsaved = "Note: your handback WAS delivered, but the completion mark could not be saved, " +
+		"so if this run later times out it may be reported as stopped even though you finished."
+	skipped := ""
 	merr := mt.t.lifecycle.Mutate(mt.childSessionID, func(rec *session.LifecycleRecord) error {
-		if rec == nil || rec.Terminal() || rec.ExecutionID == nil {
-			return nil
-		}
-		rec.FinalHandback = &session.FinalHandbackMark{
-			RunID: rec.ExecutionID.RunID, BootSeq: rec.ExecutionID.BootSeq, Result: hb.ResultSoFar,
+		switch {
+		case rec == nil:
+			skipped = "no lifecycle record"
+		case rec.Terminal():
+			skipped = "record already terminal"
+		case rec.ExecutionID == nil:
+			skipped = "record has no execution identity"
+		default:
+			rec.FinalHandback = &session.FinalHandbackMark{
+				RunID: rec.ExecutionID.RunID, BootSeq: rec.ExecutionID.BootSeq, Result: hb.ResultSoFar,
+			}
 		}
 		return nil
 	})
 	if merr != nil {
 		slog.Error("message_parent: final handback delivered but could not be recorded on the lifecycle record — a later timeout of this execution will stop the helper instead of completing it",
 			"session_id", mt.childSessionID, "error", merr)
+		return unsaved
 	}
+	if skipped != "" {
+		slog.Warn("message_parent: final handback delivered but no completion mark was recorded",
+			"session_id", mt.childSessionID, "reason", skipped)
+	}
+	return ""
 }
 
 // reportUndeliveredWake logs, at ERROR, a delivery whose inbox entry was

@@ -1386,3 +1386,37 @@ func TestLaunch_Steered_SeedsSnapshotIntoFirstMessage(t *testing.T) {
 		t.Fatalf("title = %q, want the task text only", meta.Title)
 	}
 }
+
+// TestLaunch_SnapshotIsSeededOnceAcrossARevival: the snapshot rides only the
+// launch's first message. A revival appends just its own instruction
+// (appendSteeredInstruction) and never re-seeds the snapshot.
+func TestLaunch_SnapshotIsSeededOnceAcrossARevival(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	steerer := newTestSteeringSession(t, al, "ws-1")
+	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID, Task: "inspect the cart",
+		Origin: steer.Origin{Kind: steer.OriginKindDelegate}, ContextNotes: "MARKER-ONCE-7731",
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if aerr := al.appendSteeredInstruction(res.SessionID, testDefaultAgentID, "carry on"); aerr != nil {
+		t.Fatalf("appendSteeredInstruction: %v", aerr)
+	}
+	count := 0
+	for _, m := range al.GetSessionStore().GetHistory(res.SessionID) {
+		count += strings.Count(m.Content, "MARKER-ONCE-7731")
+	}
+	entries, rerr := al.GetSessionStore().ReadTranscript(res.SessionID)
+	if rerr != nil {
+		t.Fatalf("ReadTranscript: %v", rerr)
+	}
+	tcount := 0
+	for _, e := range entries {
+		tcount += strings.Count(e.Content, "MARKER-ONCE-7731")
+	}
+	if count != 1 || tcount != 1 {
+		t.Fatalf("snapshot marker appears %d times in history and %d in transcript after a revival instruction, want 1 and 1", count, tcount)
+	}
+}
