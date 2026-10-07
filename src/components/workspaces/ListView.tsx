@@ -46,18 +46,9 @@ const UNASSIGNED = '\u0000unassigned'
 // enumerates in ascending numeric order, exactly this list).
 const PRIORITY_ORDER: string[] = ['1', '2', '3', '4', '5']
 
-/**
- * SP-35 narrow-list visibility, using SP-33's container queries: keep the
- * existing 648px boundary for automatically hiding Tags/Updated behind "⋯".
- * The earlier 504px fixed-column budget assumed a 16px root. The actual
- * widths — Pri `w-12`, Status/Agent `w-24`, Tags/Updated `w-28`, Actions
- * `w-10` — total 31.5rem: 441px at the app's default 14px root, not 504px.
- * The 648px boundary is unchanged; it is not the current fixed-column sum
- * plus the intended 144px Title floor. On deliberate reveal, the table's
- * minimum width reserves that floor (two `--space-8` plus `--space-3`) in
- * addition to the rem-based column budget, so Title cannot collapse while
- * the table scrolls sideways inside the panel (founder decision B).
- * `@max-[648px]` measures this component's own container, never the window.
+/** T11 keeps every column present. The table reserves its fixed-column budget
+ * plus a readable Title floor (two --space-8 plus --space-3); a narrow panel
+ * scrolls the table viewport only instead of hiding or squeezing columns.
  */
 
 interface ListViewProps {
@@ -254,9 +245,7 @@ export function ListView({ tasks, agents, plans = [], onTaskClick }: ListViewPro
     sortKey === key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'
 
   return (
-    // `@container` (SP-34): the Tags/Updated breakpoint is measured against
-    // THIS element's own inline size — the panel's real content width —
-    // never the window's.
+    // The viewport is bounded by the actual panel, never the window's width.
     <div className="@container flex flex-1 flex-col overflow-hidden">
       {/* Native scrolling leaves room for the shared focus outline at either edge. */}
       <div className="flex-1 overflow-auto scroll-px-[var(--space-1)]">
@@ -270,9 +259,8 @@ export function ListView({ tasks, agents, plans = [], onTaskClick }: ListViewPro
             row's own explicit widths (w-12/w-24/w-28/w-10 on the other
             columns) instead — content can no longer drive column width, so
             Title takes the remaining width and its own `truncate` (see
-            TaskRow below) has effect. Deliberate reveal reserves the Title
-            floor and scrolls only this content area; auto/hidden keep their
-            existing fit and visibility. */}
+            TaskRow below) has effect. T11 reserves a Title floor and scrolls
+            only this content area; every column stays present. */}
         <table className="w-full min-w-[calc(34rem+var(--space-8)*2+var(--space-3))] table-fixed text-[length:var(--type-body-compact-size)]">
           <thead className="sticky top-0 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)]">
             <tr>
@@ -285,22 +273,10 @@ export function ListView({ tasks, agents, plans = [], onTaskClick }: ListViewPro
               <th className="w-24 px-[var(--space-2)] py-[var(--space-2)] text-left" aria-sort={ariaSort('status')}>
                 <ColumnMenu label="Status" sort={sortCfg('status')} filter={buildFilter(statusValues, statusFilter, setStatusFilter)} />
               </th>
-              {/* Actions stay beside Status; the same overflow control still reveals Tags/Updated. */}
+              {/* T6: Actions stay beside Status; T11 keeps all remaining columns present. */}
               <th className="w-20 px-[var(--space-2)] py-[var(--space-2)] text-left">
                 <span className="text-[length:var(--type-caption-size)] font-semibold text-[var(--color-muted)]">Actions</span>
               </th>
-              {/* SP-34 — Tags and Updated are the hideable columns: narrow
-                  container hides them (container query) unless the user has
-                  forced them shown via the ⋯ control below. DOM nodes and
-                  sort/filter state persist either way, but display:none removes
-                  hidden columns from the accessibility tree. Revealing them
-                  with the ⋯ control restores their accessibility exposure.
-                  The visibility classes are spelled out per state as literals
-                  so the design-system scanners can resolve every class (a
-                  shared computed class-string variable is an unresolved
-                  extension boundary for them). `auto` → only the container
-                  query hides; `shown` → nothing hides; `hidden` → always
-                  hidden — mutually exclusive, no cascade fights. */}
               <th
                 className="w-28 px-[var(--space-2)] py-[var(--space-2)] text-left"
               >
@@ -501,8 +477,8 @@ function TaskRow({ task, agents, plans, onClick }: { task: Task; agents: AgentRe
           }}
           data-task-open=""
           aria-label={`${task.title}, status ${taskDisplayLabel(task)}`}
-          // T3 founder steering: the whole title wraps in the width-stable
-          // column. No clipping or tooltip dependency; title is supplementary.
+          // T13: one-line ellipsis; T14 supplies the full portalled preview
+          // on hover/focus. The native title is supplementary only.
           title={task.title}
           className="block h-auto w-full min-w-0 truncate p-0 text-left text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent"
         >
