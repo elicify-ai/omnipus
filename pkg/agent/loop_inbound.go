@@ -930,13 +930,7 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	// content must be operator-visible without logging the body. Steered
 	// records are also refused by the admission reservation below.
 	if rec.SteeredBy == nil && (rec.State == session.LifecycleStopped || lifecycleInFlightStopFence(rec)) {
-		kind := strings.TrimSpace(msg.Sender.CanonicalID)
-		if kind == "" {
-			kind = "system"
-		}
-		logger.WarnCF("agent", "steer: wake held while session is stopped; content without an inbox entry is not retained",
-			map[string]any{"session_id": sessionID, "message_id": messageID, "kind": kind})
-		return "", nil
+		return "", al.logStoppedSystemWake(msg)
 	}
 
 	ts, err := al.reconstructSteeredTurn(rec, &steer.WakeInput{MessageID: messageID, Generation: generation})
