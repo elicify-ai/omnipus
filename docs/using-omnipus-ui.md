@@ -81,7 +81,7 @@ While a turn is running, the message box stays yours:
 
 ### If the gateway restarts during a reply
 
-A gateway restart ends an in-flight answer; losing only your browser connection does not. After restart recovery, the main conversation shows **Interrupted**, rather than staying **Working** forever. Its saved messages stay in the same chat, and its goal is not cleared. Work cut off in a helper session stays resumably **Stopped**.
+A gateway restart ends an in-flight answer; losing only your browser connection does not. After restart recovery, the main conversation shows **Interrupted**, rather than staying **Working** forever. Its saved messages stay in the same chat, and its goal is not cleared. Work cut off in a helper session stays resumably **Stopped**. An open Interrupted chat also shows a notice above the message box: **Interrupted · The restart cut this answer off. Send a message to continue.** The notice goes away as soon as you send a message. If your last question never got an answer, **Generate again** stays available beside the notice, but only in a tab that was already open when the gateway restarted; a tab opened or reloaded afterwards shows the notice alone. **Generate again** resends only when you click it.
 
 Omnipus does not automatically rerun the interrupted instruction. Send a new message to continue the same conversation and round of work with a fresh execution; the agent can delegate again. If the chat offers **Generate again** for an unanswered message, that is also an explicit new answer request, not an automatic replay, and it may repeat earlier work or tool actions. Another restart does not add another interruption to an already-stopped execution. Idle conversations and completed answers keep their previous state.
 
