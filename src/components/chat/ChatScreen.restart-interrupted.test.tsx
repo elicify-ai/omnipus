@@ -139,7 +139,7 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
     expect(screen.queryByText(/working/i)).not.toBeInTheDocument()
   })
 
-  it('live tab that saw the boot change: one Interrupted notice, no duplicate unfinished line, no Working', async () => {
+  it('live tab that saw the boot change, partial answer exists: Interrupted alone — no unfinished status, no Generate again, no Working', async () => {
     savedLifecycle = 'working'
     await mount()
     act(() => {
@@ -149,14 +149,26 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
     await waitFor(() => expect(useChatStore.getState().isStreaming).toBe(true))
     // The gateway is killed and restarted: the saved record now lands as interrupted.
     savedLifecycle = 'interrupted'
-    feed(freshTabAttach('boot_mismatch'))
+    // Real attach order: the server replays the user message under its own id, echoing the
+    // sender's client_message_id (so the optimistic bubble is reconciled in place), then the
+    // saved partial answer. History order is therefore [user, assistant].
+    feed([
+      { type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'boot_mismatch' },
+      { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z' },
+      { type: 'replay_message', session_id: SID, id: 'srv-u-1', client_message_id: 'u-1', role: 'user', content: 'Write the long report' },
+      { type: 'replay_message', session_id: SID, id: 'a-1', role: 'assistant', content: 'Partial text before the kill', turn_id: 't-1' },
+      { type: 'catch_up_complete', session_id: SID, seq: 4, boot_id: 'boot-2', mode: 'snapshot' },
+    ])
     expect(await screen.findByTestId('restart-interrupted-notice')).toHaveTextContent('Interrupted')
-    // The cut-off partial answer carries no second "couldn't be finished" line; the one
-    // status left is the manual Generate again under the unanswered question (Q1 = A).
-    expect(screen.getAllByTestId('assistant-connection-status')).toHaveLength(1)
-    expect(screen.getByRole('button', { name: /Generate again/ })).toBeInTheDocument()
+    const state = useChatStore.getState()
+    expect(state.messages.map((m) => [m.id, m.role])).toEqual([['srv-u-1', 'user'], ['a-1', 'assistant']])
+    expect(state.sessionsById[SID]?.unansweredLastUserMessageId).toBeNull() // an answer (partial) exists
+    expect(state.messagesById['a-1'].confirmedUnfinished).toBe(true) // the legacy line WOULD show without the suppression
+    expect(screen.queryByTestId('assistant-connection-status')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Generate again/ })).not.toBeInTheDocument()
+    expect(screen.queryByText(/couldn't be finished/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/working/i)).not.toBeInTheDocument()
-    expect(useChatStore.getState().isStreaming).toBe(false)
+    expect(state.isStreaming).toBe(false)
   })
 
   it('control: a genuinely running session (lifecycle working, active turn) is not shown as Interrupted', async () => {
