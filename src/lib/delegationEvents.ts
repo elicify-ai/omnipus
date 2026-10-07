@@ -259,7 +259,7 @@ function callError(call: ToolCall): string | undefined {
 function refusalReason(call: ToolCall): string | undefined {
   const json = parseLeadingJson(call.result)
   const code = json?.error
-  if (code === 'delegation_denied' || code === 'skill_not_found') {
+  if (code === 'delegation_denied' || code === 'skill_not_found' || code === 'skill_not_granted') {
     // A denial payload with neither reason nor message still has the frame's
     // error string (pkg/gateway/websocket_forward_hub.go::hubToolExecEnd).
     return jsonString(json, 'reason') ?? jsonString(json, 'message') ?? callError(call)
