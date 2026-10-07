@@ -35,7 +35,7 @@ import { render, act } from '@testing-library/react'
 // ── Mocks ────────────────────────────────────────────────────────────────
 
 let mockSearch: Record<string, unknown> = {}
-const mockRouter = { get state() { return { location: { pathname: '/workspaces/ws-1/chat' } } } }
+const mockRouter = { latestLocation: { pathname: '/workspaces/ws-1/chat' } }
 const mockNavigate = vi.fn()
 vi.mock('@tanstack/react-router', () => ({
   useRouter: () => mockRouter,

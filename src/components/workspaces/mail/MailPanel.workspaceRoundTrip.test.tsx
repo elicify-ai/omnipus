@@ -28,7 +28,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 // usePanelDeepLink.mailboxSwitch.test.tsx harness) ─────────────────────────
 let mockSearch: Record<string, unknown> = { panel: 'mail' }
 let mockPathname = '/workspaces/ws-A/chat'
-const mockRouter = { get state() { return { location: { pathname: mockPathname } } } }
+const mockRouter = { get latestLocation() { return { pathname: mockPathname } } }
 vi.mock('@tanstack/react-router', () => ({
   useRouter: () => mockRouter,
   useNavigate: () => vi.fn(),
