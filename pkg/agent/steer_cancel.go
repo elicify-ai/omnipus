@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -627,6 +628,22 @@ func (al *AgentLoop) steerCanceller() *SteerCanceller {
 	return c
 }
 
+// clearUnattendedForHuman drops the durable unattended posture (#891) when a
+// person revives the session: a human principal — the gateway's own
+// authenticated identity, Kind == human with a non-empty ID, the same test
+// principalAuthorizedForTarget applies (session_messaging_wire.go) — is the
+// audience now, so approvals must prompt normally. An agent or system revive
+// adds no audience and keeps the posture. Called inside Revive's own record
+// mutation so the clear and the revival are one write. Redirect and
+// human-instruction revivals reach the record only through Revive, so they are
+// covered by the same call. (A human message injected into a child's
+// STILL-RUNNING turn writes no record and does not change that turn.)
+func clearUnattendedForHuman(rec *session.LifecycleRecord, by steer.Principal) {
+	if by.Kind == steer.PrincipalKindHuman && strings.TrimSpace(by.ID) != "" {
+		rec.Unattended = false
+	}
+}
+
 // Revive resumes a stopped session on the SAME generation (ADR-20260928 D2
 // CRIT-001, round-4 R4-MAJ-001: an explicit RESUME atomically clears the
 // stop_note, any current-generation marker and the stop-effect metadata, and
@@ -641,7 +658,7 @@ func (al *AgentLoop) steerCanceller() *SteerCanceller {
 // on only in the superseded oracles
 // TestRevive_NewGeneration_OldMarkerInert / TestStopRevive_OrderUnderLock,
 // which qa-lead owns migrating.
-func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, _ steer.Principal) (int, error) {
+func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, by steer.Principal) (int, error) {
 	if c == nil || c.Lifecycle == nil {
 		return 0, session.ErrLifecycleNotFound
 	}
@@ -673,6 +690,7 @@ func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, _ steer.P
 			rec.ExecutionID = nil
 			rec.StopEffect = nil
 			generation = rec.Generation
+			clearUnattendedForHuman(rec, by)
 			revived = true
 			return nil
 		}
@@ -724,6 +742,7 @@ func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, _ steer.P
 		// Same-generation resume: the stopped-out run's identity is history.
 		// The resuming admission stamps its own before dispatching.
 		rec.ExecutionID = nil
+		clearUnattendedForHuman(rec, by)
 		revived = true
 		return nil
 	})

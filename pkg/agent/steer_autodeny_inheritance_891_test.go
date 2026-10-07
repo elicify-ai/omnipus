@@ -16,11 +16,17 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -128,4 +134,103 @@ func TestSteerLauncher_AutoDenyAskInheritance_AttendedChildIsNotUnattended(t *te
 	ts, err := al.reconstructSteeredTurn(rec, nil)
 	require.NoError(t, err)
 	require.False(t, ts.opts.AutoDenyAsk, "an attended child must not be marked unattended")
+}
+
+// reviveFixture is steerInheritanceFixture with a provider scripted for TWO
+// runs: tool call then answer, twice — the first run of the child, then the run
+// after a revive. The tool is an Ask-policy stub, so a run that is NOT
+// unattended raises exactly one approval request per run.
+func reviveFixture(t *testing.T) (al *AgentLoop, launcher *SteerLauncher, parentSessionID string, approver *autoRecordingApprover) {
+	t.Helper()
+	home := filepath.Join(t.TempDir(), "home")
+	require.NoError(t, os.MkdirAll(home, 0o700))
+	provider := testutil.NewScenario().
+		WithToolCalls([]providers.ToolCall{autoToolCall("rev-1", "knowledge_edit", `{}`)}).WithText("first done").
+		WithToolCalls([]providers.ToolCall{autoToolCall("rev-2", "knowledge_edit", `{}`)}).WithText("second done")
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home: home, DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens: 4096, MaxToolIterations: 10,
+			},
+			List: []config.AgentConfig{{ID: testDefaultAgentID, Home: home}, {ID: "worker", Home: home}},
+		},
+	}
+	al = mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
+	mintGenuineBootEpochForLoop(t, al)
+	t.Cleanup(func() { al.Close() })
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
+	inbox := session.NewMessageInboxStore(filepath.Join(home, "session_messages"))
+	al.SetSessionMessagingStores(inbox, lifecycle)
+	installAutoStubs(t, al, "worker", []string{"knowledge_edit"})
+	approver = &autoRecordingApprover{approve: false}
+	al.SetToolApprover(approver)
+	parentSessionID = newTestSteeringSession(t, al, "")
+	return al, NewSteerLauncher(al), parentSessionID, approver
+}
+
+// reviveAndRun revives childID under by, dispatches the new run and waits for
+// the child to finish it, returning the generation that ran.
+func reviveAndRun(t *testing.T, al *AgentLoop, launcher *SteerLauncher, childID string, by steer.Principal) int {
+	t.Helper()
+	gen, err := al.steerCanceller().Revive(context.Background(), childID, by)
+	require.NoError(t, err, "Revive")
+	_, err = launcher.Dispatch(context.Background(), childID, gen)
+	require.NoError(t, err, "Dispatch after revive")
+	lifecycle := al.GetSessionLifecycleStore()
+	waitFor(t, 15*time.Second, func() bool {
+		rec, loadErr := lifecycle.Load(childID)
+		return loadErr == nil && rec.Generation == gen && session.IsTerminalLifecycleState(rec.State)
+	})
+	return gen
+}
+
+// TestSteerLauncher_AutoDenyAskInheritance_HumanReviveClearsUnattended: a person
+// who revives an unattended child is the audience now, so the revived run must
+// PROMPT for its ask-policy call (founder ruling R2). The principal rule is the
+// gateway-identity one used by principalAuthorizedForTarget
+// (session_messaging_wire.go): Kind == human with a non-empty ID.
+func TestSteerLauncher_AutoDenyAskInheritance_HumanReviveClearsUnattended(t *testing.T) {
+	al, launcher, parentSessionID, approver := reviveFixture(t)
+	childID := launchOnly(t, launcher, tools.WithAutoDenyAsk(context.Background(), true), parentSessionID, "call-891-human-revive")
+	launch, err := al.GetSessionLifecycleStore().Load(childID)
+	require.NoError(t, err)
+	_, err = launcher.Dispatch(context.Background(), childID, launch.Generation)
+	require.NoError(t, err)
+	waitFor(t, 15*time.Second, func() bool {
+		rec, loadErr := al.GetSessionLifecycleStore().Load(childID)
+		return loadErr == nil && session.IsTerminalLifecycleState(rec.State)
+	})
+	require.Zero(t, approver.countFor("knowledge_edit"), "control: the unattended first run must auto-deny without a prompt")
+
+	reviveAndRun(t, al, launcher, childID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "alice"})
+
+	require.Equal(t, 1, approver.countFor("knowledge_edit"),
+		"after a human revive the run must prompt normally, not auto-deny")
+	rec, err := al.GetSessionLifecycleStore().Load(childID)
+	require.NoError(t, err)
+	require.False(t, rec.Unattended, "the human revive must clear Unattended in the revive's own record write")
+}
+
+// TestSteerLauncher_AutoDenyAskInheritance_AgentReviveKeepsUnattended: an agent
+// or system revive adds no audience, so the posture stays and the run still
+// auto-denies.
+func TestSteerLauncher_AutoDenyAskInheritance_AgentReviveKeepsUnattended(t *testing.T) {
+	al, launcher, parentSessionID, approver := reviveFixture(t)
+	childID := launchOnly(t, launcher, tools.WithAutoDenyAsk(context.Background(), true), parentSessionID, "call-891-agent-revive")
+	launch, err := al.GetSessionLifecycleStore().Load(childID)
+	require.NoError(t, err)
+	_, err = launcher.Dispatch(context.Background(), childID, launch.Generation)
+	require.NoError(t, err)
+	waitFor(t, 15*time.Second, func() bool {
+		rec, loadErr := al.GetSessionLifecycleStore().Load(childID)
+		return loadErr == nil && session.IsTerminalLifecycleState(rec.State)
+	})
+
+	reviveAndRun(t, al, launcher, childID, steer.Principal{Kind: steer.PrincipalKindAgent, ID: "scheduler"})
+
+	require.Zero(t, approver.countFor("knowledge_edit"), "an agent/system revive must keep auto-denying")
+	rec, err := al.GetSessionLifecycleStore().Load(childID)
+	require.NoError(t, err)
+	require.True(t, rec.Unattended, "an agent revive must not clear Unattended")
 }
