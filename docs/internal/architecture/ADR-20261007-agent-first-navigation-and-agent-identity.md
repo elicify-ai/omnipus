@@ -420,31 +420,7 @@ These are **future implementing targets**, not changed files in this ADR. E-key 
 
 ## Open questions for the founder
 
-**Answer format: “Q-FE-1 A, Q-FE-2 B …”.** These are recorded questions for the founder interview, not choices delegated to an implementer. No recommendation becomes the default silently. Backend-owned questions are coordinated with B rather than answered twice (S1::§5; S5::Spec-Driven Workflow).
-
-### Q-FE-1 — How does the frontend receive main-session and attention information? (A / B / C)
-
-The current schemas provide a heartbeat session reference and per-session lifecycle, not the required main/agent-attention guarantee. A computed ID cannot establish existence or membership. This is a **contract dependency on B::D10**, and blocks integrated navigation/attention until agreed (E10; R4/R29).
-
-| Option | Contract direction — property names deliberately unchosen |
-|---|---|
-| A | Extend existing workspace/member/session responses for a validated main association and attention snapshot; reuse existing live-update/reconnect mechanisms. |
-| B | Resolve each main through existing session detail/list contracts using the computed ID, and derive agreed attention from those responses/updates; prove coverage for all unopened workspaces. |
-| C | A new dedicated navigation response/update surface, only if A/B cannot express the requirements without excessive requests. |
-
-**Recommendation: A.** Reuse existing records and initial-load/reconnect paths; backend architect fixes the precise shape in B, backend-lead edits/regenerates it. Do not invent frontend wire fields here.
-
-### Q-FE-2 — Which outstanding user actions make an agent row wait? (A / B / C)
-
-R29 covers questions and approvals, but does not say whether an extra chat or helper request contributes to its agent/workspace row. A main-only projection can hide an approval in another chat; an indiscriminate helper-state count can falsely ask the user to act (R29; B::D10 Existing helper approval popup).
-
-| Option | Attention scope |
-|---|---|
-| A | Main session only. |
-| B | Main plus extra chats of that agent in that workspace. |
-| C | B plus genuinely user-actionable helper/run requests attributed to that agent/workspace, with distinct-agent counting and a route to the actual request. |
-
-**Recommendation: C**, using existing question/approval identities, not every helper `needs_input` state. The backend must define aggregation and clearing; the sidebar remains a projection, not another approval owner.
+**Only Q-FE-11/Q-FE-12 remain open**, from the newly handed-over activity scope. Earlier Q-FE-1–Q-FE-10 are answered by F and the confirmed session-core decisions and are removed, not re-interviewed. Recommendations below are not decisions; answer “Q-FE-11 A, Q-FE-12 A”. Backend serialization/publication dependencies remain in D5, without a duplicate founder choice here.
 
 ### Q-FE-3 — Which figures, default and small-size rendering are approved? (A / B / C)
 
