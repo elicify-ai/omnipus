@@ -69,8 +69,8 @@ func TestI1R4NoInboxStoppedWakeWarns(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, inboxBefore, inboxAfter)
 				if backing == "matching_entry" {
-					pending, _, _, err := h.al.GetMessageInboxStore().Drain(h.id, "i1-r5-child", "", 10)
-					require.NoError(t, err)
+					pending, _, _, drainErr := h.al.GetMessageInboxStore().Drain(h.id, "i1-r5-child", "", 10)
+					require.NoError(t, drainErr)
 					require.Len(t, pending, 1, "durable report must remain unacknowledged and available")
 					assert.Equal(t, wake.Metadata["steer_message_id"], messageIDOf(pending[0]))
 				}
