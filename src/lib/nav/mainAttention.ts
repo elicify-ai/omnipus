@@ -43,7 +43,9 @@ export type AckResult = {
   fields?: Record<string, unknown>
 }
 
-const NO_ACK: AckResult = { acknowledge: false }
+function noAck(): AckResult {
+  return { acknowledge: false }
+}
 
 export function projectMainAttention(sessions: Session[]): Projection {
   const byMainId: Record<string, Signal> = {}
@@ -75,7 +77,7 @@ function isWinningShownCommit(input: AckInput): input is AckInput & { observedBo
 }
 
 export function ackForShownCommit(input: AckInput): AckResult {
-  if (!isWinningShownCommit(input)) return NO_ACK
+  if (!isWinningShownCommit(input)) return noAck()
   const sessionId = input.session.id
   const observedBound = input.observedBound
   return {
