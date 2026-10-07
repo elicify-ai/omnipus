@@ -22,9 +22,12 @@ import (
 
 // not-wire-format: subprocess fixture receipt, never sent through the gateway.
 type i1CrashReceipt struct {
-	Config                                    *config.Config
-	Agents                                    []config.AgentConfig // Config omits its separately persisted agent list from JSON.
-	Root, LifecycleDir, InboxDir, SessionsDir string
+	Config       *config.Config       `json:"Config"`
+	Agents       []config.AgentConfig `json:"Agents"` // Config omits its separately persisted agent list from JSON.
+	Root         string               `json:"Root"`
+	LifecycleDir string               `json:"LifecycleDir"`
+	InboxDir     string               `json:"InboxDir"`
+	SessionsDir  string               `json:"SessionsDir"`
 }
 
 const i1CrashReceiptEnv = "OMNIPUS_I1_CRASH_RECEIPT"
@@ -146,7 +149,7 @@ func i1KillAdmittedRoot(t *testing.T) i1CrashReceipt {
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
 	var raw []byte
-	for raw == nil {
+	for {
 		bytes, readErr := os.ReadFile(path)
 		if readErr == nil {
 			raw = bytes

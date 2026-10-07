@@ -27,7 +27,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
-	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // reviveInboundIsHumanTurn is MIN-004's human predicate: only an ordinary
@@ -129,31 +128,9 @@ func (al *AgentLoop) inboundRevivable(sessionID string) bool {
 	return rec.Terminal() || rec.State == session.LifecycleStopped
 }
 
-// reviveRecordForHumanTurn revives a terminal or durably-stopped record to a
-// new generation — SteerCanceller.Revive's existing shape, unchanged
-// (generation+1, resumed_from = the session's own id, running, failed reason
-// cleared, the older Stop kept as inert history) — and resets the session's
-// UnifiedMeta.Status to active in the same revival (ADR-093 D4 / MIN-002:
-// SteerCanceller.Revive has no UnifiedStore, so the AgentLoop wrapper does
-// it). No dispatch lives here: whether the revived session runs an ordinary
-// inbound turn (processMessage) or is redispatched as steered
-// (ReviveStoppedSession) is the caller's routing decision.
-func (al *AgentLoop) reviveRecordForHumanTurn(ctx context.Context, sessionID string, by steer.Principal) error {
-	if _, err := al.steerCanceller().Revive(ctx, sessionID, by); err != nil {
-		al.markRevivalFailure(sessionID, err)
-		return err
-	}
-	// The record is live on its new generation from here — drop any stale
-	// revival-failure memory so a later, genuine stop-refusal is not
-	// mislabelled as a revival failure (gate SFH#6).
-	al.clearRevivalFailure(sessionID)
-	al.resetUnifiedMetaStatusActive(sessionID)
-	return nil
-}
-
 // resetUnifiedMetaStatusActive is the shared post-revive session-list status
 // reset (ADR-093 MIN-002), used by the human-message path
-// (reviveRecordForHumanTurn) and the child-revive path (steering.go::
+// (reviveOrdinaryRecordWithExecution) and the child-revive path (steering.go::
 // ReviveStoppedSession). It never reports success falsely (gate SFH#4): a
 // failed SetMeta or a missing store is error-logged with the session id — but
 // not returned as an error, because every caller has already completed the
