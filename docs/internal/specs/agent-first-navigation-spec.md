@@ -1,166 +1,90 @@
 # Feature Specification: Agent-first navigation and agent identity
 
 **Created**: 2026-10-07 (UTC)
-**Status**: Draft — WIP; founder questions and dependency checks remain. Not implementation approval.
+**Status**: In review — sole correction in progress; contract/visual dependencies remain. Not implementation approval.
 **Size**: Feature. One frontend specification; backend U1 and this frontend land jointly.
 **Input**: Corrected **Agent-first navigation and agent identity**, D1–D14, at `b6fd39efb5bc4ee5bb77cb6f16be5baeec34265e`, with the newer founder answers below.
 **Worktree**: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav`
 **Branch**: `work/adr-frontend-navigation-20261007`
 
-## Discovery, authority and confirmed requirements
+## Authority and scope
 
-This is specification work from an approved design, not a new architecture decision or a production implementation. A person chooses a colleague within a workspace, returns to the exact last conversation on workspace entry, and deliberately starts extra conversations only from that colleague's row. The open chat keeps its own activity panel. The existing Sessions modal is the overview across conversations, including background work; there is no new dashboard.
+A person chooses a colleague within a workspace, resumes the exact last chat, and starts extras deliberately. The open chat owns its Activity panel; the existing Sessions modal is the cross-session overview. P0: correct destination and saved-history continuation; P1: identity, attention and inspectable activity.
 
-The recorded founder interview and explicit wireframe approval satisfy discovery confirmation for the settled scope. This document does not re-interview those decisions. Unanswered choices are recorded under **Questions for the founder** for team-lead's interview. The ambiguity gate remains open until the founder resolves or explicitly acknowledges every warning; a completed draft is not a finalized or approved spec.
+**Correction — 2026-10-08, sole correction round:** the prior draft left selection/acknowledgement, moving pages, live keyboard targeting and phase selection underspecified, and faded identity ink below its contrast promise. The corrected contract below and S's answers control; no production or contract file is changed.
 
-### Source register and precedence
+### Sources and precedence
 
-Source keys expand to absolute paths. Cite decisions by title plus decision heading, never an ADR number alone. Latest founder answers override older requirements, ADR wording and prototype labels. The prototype is visual reference, not delivered functionality or authority for its demo controls.
+Newest founder answers override older design/prototype wording. Keys below are reusable citations; N/B cite the decision by title. Runtime facts come from current code; publication is not implementation.
 
-| Key | Binding source and verified baseline |
+| Key | Source / immutable baseline |
 |---|---|
-| N | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/internal/architecture/ADR-20261007-agent-first-navigation-and-agent-identity.md` — **Agent-first navigation and agent identity**, D1–D14, corrected/Proposed, at `b6fd39efb5bc4ee5bb77cb6f16be5baeec34265e`. This spec does not amend or re-grill that ADR. |
-| F | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/adr-frontend-nav-20261007/FOUNDER-ANSWERS-20261007.md` — Q1–Q12, Q9 FINAL, wireframe approval, **Q-FE-11/Q-FE-12 and Session modal A2/D8 + grouping**. All are answered: helpers always nested, All / Running / Needs me, and expandable repeated-helper folding are decisions. |
-| R | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/navigation-menu-wireframe/requirements.md` — R1–R47, including subrequirements R6a–R6c and R30a–R30b. The source-disposition table below records narrower first-squad scope and supersession. |
-| M | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/session-modal-review/review.md` — A1–A7 and D1–D8. F's newer modal answer settles A2 and D8: implement All / Running / Needs me and repeated-identical-helper folding; helpers never become top-level rows in any search/filter. The review's existing-app evidence is not a new approved modal wireframe. |
-| W | **Only approved visual reference:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/navigation-menu-wireframe/index.html`; Q9 reference screenshots in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/navigation-menu-wireframe/evidence/q9/`. Its adjacent assets supply approved figures, palette and motion. Missing screens go under Wireframe additions needed; this task changes none of them. |
-| B | **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, branch `work/adr-session-core-20261006`, D1.1 at `b76b412f61ff73d9a6643d34518224472d84223a`; immutable evidence copy `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/adr-frontend-nav-20261007/spec-evidence/backend-adr-b76.md`. Later migration/Admin/cross-workspace answers in F/N override conflicting older clauses. |
-| BS | Published backend specification `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/specs/session-core-spec.md`, verified from pushed branch `work/adr-session-core-20261006` at `0e1fececc5df91c140e21fd27cf03bfd0ee3c8dc`; immutable evidence copy `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/adr-frontend-nav-20261007/spec-evidence/backend-spec-published.md`. Publication is not proof of generated contracts or working U1. |
-| K | Tasks-panel squad, branch `work/tasks-panel-layout-20261007`, observed pushed tip `7946ac5f00163fa036033e75f329fcab2193bdaa`. Reuse its kit FilterMenu, ViewSwitch and shadcn HoverCard; do not build duplicates. Exact integration exports and publication readiness are dependency checks, not assumed APIs. |
-| P | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/CLAUDE.md` — Definition of Done, Hard Constraints, Spec-Driven Workflow, review gates and user-facing documentation; current code wins over dated architecture descriptions. |
+| S | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/adr-frontend-nav-20261007/FOUNDER-ANSWERS-SPEC-20261008.md` — Q-M4–Q-M6, Q-G1–Q-G4 and approved CUT C01–C14. |
+| G | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/adr-frontend-nav-20261007/agent-first-navigation-spec-review.md` — sole review of `fbcb417a948d1473310b8ccd6b5f92269dac2a11`; six MAJOR/two MINOR findings. |
+| N | **Agent-first navigation and agent identity**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/internal/architecture/ADR-20261007-agent-first-navigation-and-agent-identity.md`, D1–D14 at `b6fd39efb5bc4ee5bb77cb6f16be5baeec34265e`. |
+| F | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/adr-frontend-nav-20261007/FOUNDER-ANSWERS-20261007.md` — entry, Q9 FINAL, activity scope/origin, always-nested helpers and folding. |
+| R | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/navigation-menu-wireframe/requirements.md` — R1–R47 plus subrequirements; dispositions below. |
+| M | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/session-modal-review/review.md` — A1–A7/D1–D8, overridden by F/S where answered. |
+| W | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/navigation-menu-wireframe/index.html` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/navigation-menu-wireframe/evidence/q9/` — approved visual reference, not product acceptance. |
+| B | **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, D1.1 at `b76b412f61ff73d9a6643d34518224472d84223a`; read-only source copy `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/adr-frontend-nav-20261007/spec-evidence/backend-adr-b76.md`. |
+| BS | Backend spec at `0e1fececc5df91c140e21fd27cf03bfd0ee3c8dc`; read-only source copy `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/adr-frontend-nav-20261007/spec-evidence/backend-spec-published.md`. B's commit supplies the ADR, not this later spec. |
+| K | Tasks-panel branch `work/tasks-panel-layout-20261007`, observed source tip `7946ac5f00163fa036033e75f329fcab2193bdaa`: reuse FilterMenu/ViewSwitch/HoverCard; final publication remains DEP-KIT. |
+| P | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/CLAUDE.md` — hard constraints, reachability, documentation, contracts and feature delivery gates. |
 
-### Discovery summary
+### Commission boundary
 
-| Topic | Confirmed requirement |
+| In this squad | Outside / companion |
 |---|---|
-| Actors | Person using the web interface; eligible conversation agents, workers and protected built-ins; backend owners supplying validated session destinations and state. Workers remain inspectable through legitimate existing sessions, never sidebar conversation agents. |
-| Problem | Session recency and a composer picker obscure the stable colleague/workspace destination. Background work disappears when the foreground chat changes. Identity differs between editor, lists and chat. |
-| Main walkthrough | Expand workspace → select agent's main → use Past sessions for a specific older conversation or + New chat for an extra → inspect the open chat's Activity panel → open Sessions for work in other chats. |
-| Constraints | Preserve permissions, protected identities, saved history and existing execution control. No inferred waiting from prose; no silent empty/zero state on failed data. Respect reduced motion and shared-component standards. |
-| Integration | Existing workspace membership, session search/attachment, agent editor, chat rendering, plan/task inspection, live updates and shared kit. Backend U1, canonical identity persistence and published contracts are release dependencies. |
-| Priority | P0 for correct destination/send gating and saved-chat continuation; P1 for identity, attention and activity reachability. No new deadline or release line is invented. |
-| Human evaluation | In a joint build, a person reaches the intended main/extra/history, sees truthful identity and state, finds background work from another chat, and follows real plan/run links. Screenshots of the prototype alone cannot satisfy acceptance. |
+| Agent-row main/extra/history navigation, exact entry, freshness and attention | New chat store/address book, transcript-heavy navigation or new policy grants. |
+| Shared four-figure/role/palette identity, existing editor preview and canonical migration | Uploads/GIFs; later bounded-image unit retains R17 safety requirements. No new creation interview or full roster/Team redesign. |
+| Above-feed kind, name-only messages, inline responder and immediate command cleanup | Full workspace-qualified @ messaging and complete backend safe-point Clear; no old switching aliases retained meanwhile. |
+| Starting-chat plans/start links, local panel, Sessions status/filters/strict hierarchy/folding and origin-row shell counts | New dashboard/executor/scheduler, cross-workspace plans or authority from merely viewing independent runs. |
+| Minimum shared kit jobs and existing shell behavior | Broader Agents/Connectors/Skills/settings rollout; R44 header/R45 Tooltip and #1221 per-agent Auto removal stay companion-owned. |
 
-### Latest-answer corrections applied to the design
+Backend U1, generated contracts, canonical identity and activity coverage land **jointly** with frontend on one tested candidate after founder approval. Independent kit preparation may proceed; unresolved DEP/WF holds never authorize guessed consumers.
 
-| Older wording | Binding specification rule |
-|---|---|
-| N D14's unanswered aggregate scope; old Q-FE-11 options | **F Q-FE-11:** Activity side panel shows only the open session. Improve the existing Sessions modal for the overall view; no aggregate side panel or elsewhere badge is commissioned. |
-| N D13's unanswered plan association | **F Q-FE-12:** Pill and parent-panel row belong to the actual starting chat; modal carries cross-session access. A plan created only in Tasks has no invented chat origin. |
-| Avatars on bubbles; static/composer-linked indicator | **F Q9 FINAL:** Name-only agent bubbles, with animated agent/name/phrase inline where the old thinking indicator stood. No separate composer status line. |
-| Main interface awaiting a backend spec | BS is now pushed at the recorded tip; consume its agreed main/attention direction. Generated-contract and runtime dependencies remain open until verified. |
-| Images/GIF controls in R46 | **F Q6/Q7:** No uploads or GIF behavior in this squad. Figure/role/color only; future image safety requirements are retained as later work. |
-| M A2/D8 unresolved; current orphan-as-root modal fallback | **F Session modal A2/D8 + grouping:** helpers are always under their real parent, including search/filter hits; exact filter choices All / Running / Needs me; repeated identical helper runs fold under their parent into an expandable `N similar helper runs` row. No completed-only restriction is added. Missing-parent treatment is Q-M5, never permission for a top-level helper. |
-
-## Scope and delivery boundary
-
-| First-squad capability | Decisions and boundary |
-|---|---|
-| Navigation, restore and freshness | N D1–D5: agent rows, main click, exact remembered chat/welcome-main entry, independent Past sessions and + New chat actions, main-only attention, persistent refresh ownership without the removed picker. Keep workspace ordering/archive/pin/drawer and established focus behavior. |
-| Shared identity and existing editor | N D6–D10: four approved figures, 31 role badges, ten-color palette, one shared renderer, global create/edit preview, canonical built-in and one-time custom identity migration. Protected fields retain their locks. Only identity presentation changes in the existing Agents roster and Team. |
-| Chat and immediate cleanup | N D3/D8/D11: persistent kind label, name-only messages on every rendering path, inline animated responder indicator, no composer agent picker; remove old switching/new-chat commands and rename the session command without an alias. |
-| Plan/task visibility | N D13 plus F Q-FE-12: starting-chat plan pill, successful start-result links, open-session panel rows and real Tasks/Graph/session drill-down. Existing plan/task execution remains backend-owned. |
-| Overall activity | N D14 **as narrowed by F Q-FE-11**, M A1–A7/D1–D8 with F's newest modal answer: improve the one Sessions modal, with helpers **always beneath their parent in every search/filter**, the All / Running / Needs me filter and expandable `N similar helper runs` folding. Keep workspace → agent → parent-session grouping and real relations; no top-level helper, second overview, aggregate side panel or synthetic relationships. |
-| Joint release | N D12: independent kit/UI preparation may proceed, but agent navigation lands with working backend U1 after joint integration and the founder's approval. Main-only attention, saved-chat upgrade migration, default-workspace Admin, canonical identity and required activity/start-origin contracts must be on the same tested candidate. |
-
-### Later and companion work — recorded, not commissioned here
-
-| Item | Disposition |
-|---|---|
-| R6a–R6c, broader R37/R38 Agents-page redesign and new creation interview | Later rollout wave. Keep existing roster/editor behavior; apply shared identity here and retain the Agents/New agent naming already required. Do not copy the prototype's new manual/Ava creation flow. |
-| R17–R19 avatar upload/GIFs | Deferred by F Q6/Q7. Future unit retains format/SVG rejection/2 MB/server normalization plus pre-decode pixel/work/concurrency limits; animation placement needs founder approval. No upload endpoint, control or preview-only persistence substitute here. |
-| R23/R26–R28 full addressed group messaging and cross-workspace collaboration | Backend/later UI units. Explicit workspace + agent address, actual responder, immutable chat owner; no workers offered. For this cutover, old mention switching and suggestions are unavailable. Existing legitimate guest messages still render their actual author. No cross-workspace plans. |
-| Complete safe-point clear behavior | Backend session-core unit. This frontend never makes Clear create a chat or delete persisted history; consume that unit's approved behavior when integrated. |
-| R30–R32/R34/R36–R40 tool policy/loading/skill categorization, Connectors and broader pages | Later waves. Navigation/identity work must not silently add permission editors, settings moves, skill classifiers or page redesigns. Relevant shared kit styles are reused only where needed here. |
-| R33/R35/R39/R41 kit foundation | Use or publish the minimum shared jobs required by this spec. No app-wide migration. FilterMenu/ViewSwitch/HoverCard reuse K; single-choice versus multi-choice semantics follow the kit, not a locally invented dropdown. |
-| R42/R43 hardening and full rollout | Separate rollout/check-hardening work. No ratchet or test weakening to hide debt here. |
-| R44 measured-space header and R45 Tooltip migration | Companion units. Preserve their behavior; no second header fix or legacy Tooltip wrapper. M D5 explicitly leaves existing native tooltips until R45; introduce no new hand-built tooltip. |
-| Per-agent Never auto-approve removal | Companion #1221. Do not restore that obsolete checkbox or wire field; preserve still-supported composer model/Auto/attachment/send/Stop controls. |
-
-A pending founder choice gates only its dependent behavior, not unrelated settled kit preparation. A missing published wire representation gates every consumer of that representation. Neither a draft spec nor a WIP push authorizes production work or landing.
+**Process exception:** Q13=A commissions exactly one SPEC grill and this one correction; no second grill. S Q-G4 permits success coverage for positive capabilities and error/edge **plus meaningful recovery** for negative/edge criteria. Keep the old strict exit-1 receipt; no relabelling or duplicate filler. This is document correction, not implementation approval.
 
 ## Reachability
 
-Reachability is checked before correctness gates. This is a frontend feature, not a new agent tool: no new builtin registration or policy grant is proposed. Existing native plan/task tools and backend main addressing still require their owners' integration evidence.
-
-| Actor and entry point | Reachable outcome | Acceptance proof on the joint candidate |
+Check invocation before correctness gates. All entries below require the **real joint candidate**; no new builtin/policy grant is proposed.
+| Actor / entry | Destination / proof | Tests |
 |---|---|---|
-| Person: workspace disclosure and agent row | Eligible colleague's validated main in that workspace, even when an extra is newer. Workers and hidden engine agents do not become rows. | Select the same agent in two workspaces; verify different validated mains and the real send destination. |
-| Person: workspace name, login entry or workspace switch in Sessions | Exact valid remembered main/extra; otherwise the validated Ava welcome main. | Open, leave and return to each kind; test missing/hidden/error destinations without silent new-chat creation. |
-| Person: row Past sessions | Existing Sessions modal with both workspace and agent filters visible and removable. | Open an older conversation for that pair, then broaden filters and reach another workspace. |
-| Person: row + New chat | Deliberate extra owned by that pair; main remains reachable by row click. | Start an extra, send once, return to main and find the extra in Sessions. |
-| Person: sidebar magnifier or session slash command | The same Sessions modal listing authorized chats/helpers/runs, All / Running / Needs me and expandable repeated helpers; helpers always remain beneath the parent, even when only a helper matches. | Find A's work from B; use filters/search and expand `N similar helper runs` to follow each real helper. |
-| Person: existing Agents/New agent, existing Team/edit controls | One editor with global figure/role/color choices and a matching live preview; built-in locks unchanged. | Create and edit a custom agent; see matching identity in its workspaces after reload and backend restart. |
-| Person: start-result link or starting-chat plan pill | Actual plan through existing Tasks/Graph; task/helper through existing session inspection. | Navigate the returned entity live and after reload, without guessing a result address or opening the main instead of a task run. |
-| Person: open-session activity control | Existing Activity panel for that open session only. | Switch from A to B: A's work leaves B's panel but remains reachable in Sessions. View changes do not stop it. |
-| Person: Admin in default workspace | Server-validated Admin main before removal of the old Assets-only entry. | Open it and send on the joint candidate; no fake team membership or additional Admin mains. |
-| Agent: existing task/plan execution and structured questions | Existing authorized tools feed truthful frontend metadata; no new execution path or granted authority. | Backend owner demonstrates actual tool results, scheduler-only runs and structured question/approval/goal state; frontend follows their published handles. |
-
-**Code correct and tested:** not claimed by this document-only task. The Test-Driven Development Plan describes future executed gates.
-
-**Reachable by a user/agent:** not yet delivered. The entry points above must be exercised against the exact joint implementation commit before landing.
+| Person: workspace disclosure / agent row | Validated pair's main and actual send destination | T-01/T-12/T-23 |
+| Workspace name, login/cold entry, modal workspace switch | Exact remembered chat or validated Ava welcome main | T-02/T-12/T-23 |
+| Past sessions | One modal with removable workspace + agent filters | T-13/T-23 |
+| + New chat | Deliberate extra; original delivery safeguard; main intact | T-03/T-13/T-23 |
+| Magnifier / /sessions | Overall metadata, filters and real nested helper targets | T-18/T-19/T-26 |
+| Agents/New agent or Team/edit | Existing global editor/preview; saved identity and locks | T-16/T-22/T-25 |
+| Start-result link / plan pill | Actual plan Tasks/Graph or actual task/helper session, live/replay | T-20/T-27 |
+| Open-session activity / origin-row shell Open | That chat's existing Activity panel only | T-21/T-26/T-27 |
+| Default-workspace Admin | Real main/send before obsolete entry removal | T-23 |
+| Agent: existing plan/task/question tools | Authorized actual results, scheduler and attention sources | T-24/T-27 |
 
 ## Available Reference Patterns
 
-The optional generic Go index requested by plan-spec is absent: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/reference/go-implementation/00-overview.md`. A reference-directory control found `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/reference/built-in-tools.md`; no generic infrastructure is invented to fill the missing index. This is frontend presentation over existing services, not new auth/storage/payment infrastructure.
-
-| Reference | Applicable pattern and adaptation |
-|---|---|
-| P::Contract regeneration; N D5; BS::Contract Changes | Extend existing boundary contracts first, regenerate and consume generated types. Do not invent another session/address/attention store or copy backend structs into frontend code. |
-| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/.claude/skills/omnipus-design-system/SKILL.md`::Publishing a component is a four-part contract; A recurring UI job uses a catalogued component | Kit publication: catalog, public barrel, style source registration, manifest/story/executed evidence. Prefer existing primitives and ported shadcn jobs; no screen-local identity/status/pill copies. |
-| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/sessions/SessionTree.tsx`::SessionTree, flattenSessionTree | Keep genuine parent/child nesting and virtualized/plain rendering; change session-modal row presentation, not hierarchy ownership. |
-| `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/internal/false-green-patterns.md`::A substring scan is not a behavioural test; A hardcoded allowlist decides what CI runs | Mount real consumers, assert user-visible outcomes and request destinations, prove test discovery and mutation sensitivity. A document check proves only document coverage. |
-
-Conservative type design: no new nominal type without an invariant or domain meaning; generated wire types remain mandatory. The optional `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/reference/conservative-type-design.md` is not assumed present or cited as read.
+Use P's contract/kit rules and the existing seams below; no generic infrastructure is added. The optional `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/reference/go-implementation/00-overview.md` is absent; reference-directory control found `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/reference/built-in-tools.md`.
 
 ## Existing Codebase Context
 
-GitNexus MCP tools are not connected in this session. CLI status reports **Repository not indexed**; change detection for this exact checkout reports repository not found. No graph from another checkout is substituted and no heavy re-index is run. The following context is source-read; planned impact is **Inferred**, not a graph risk verdict. Implementers must repeat upstream impact analysis or the controlled caller sweep before each production edit.
+GitNexus MCP unavailable; this checkout is **not indexed**. Source/caller-derived impact is **Inferred**, not a graph verdict. Repeat impact analysis before implementation. Registry entries combine direct consumers and affected journeys; no production symbol is edited here.
 
-### Symbols involved
+| Key | Source::symbol — reuse/modify | Direct consumers / affected flow |
+|---|---|---|
+| C-NAV | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/layout/Sidebar.tsx`::Sidebar | Shell rows → validated selection; drawer/pin preserved. |
+| C-SHELL | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/layout/AppShell.tsx`::AppShell; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useAgentsCrossTabRefresh.ts`::useAgentsCrossTabRefresh | Move sole picker-owned refresh to shell; roster/member focus/reconnect. |
+| C-SELECT | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/chat/useSelectSession.ts`::useSelectSession, attachAndSeed | Sidebar/modal → atomic selection; failed cross-workspace attach. |
+| C-RESTORE | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/store/session.ts`::enterWorkspaceChat, resolveRememberedSessionFromServer, attachToSession | Browser pointer/route → attach/replay; winning foreground/read boundary. |
+| C-MODAL | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/search/SearchModal.tsx`::SearchModal, AgentSessionList, AgentHeader, SessionRow, handleSwitchWorkspace, bucketByAgent, sortSessions; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/store/ui.ts`::useUiStore.openSearchModal | Search/filter/hierarchy; replace index activation and helper orphan-root fallback. |
+| C-TREE | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/sessions/SessionTree.tsx`::SessionTree, flattenSessionTree | Real descendants, folded presentation, virtual/plain keyboard reachability. |
+| C-FEED | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/chat/ChatScreen.tsx`::ThinkingIndicator, InlineThinkingIndicator, AssistantMessage, VirtualAssistantMessageRow, AssistantMessageAvatar, OmnipusComposer | All feed paths/producer phases; preserve phrases, errors and composer controls. |
+| C-EDITOR | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/agents/AgentFormFields.tsx`::AvatarHeader, AvatarColorPicker, IconPicker | Current wizard/profile → shared preview/global identity, not fixed Robot. |
+| C-ACTIVITY | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useRunningActivity.ts`::useRunningActivity; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/chat/ActivityBar.tsx`::ActivityBar, ActivityPill; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/chat/ActivityPanel.tsx`::ActivityRow | Existing local projection, actual task/run/plan/shell attribution. |
+| C-PLAN | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/workspaces/WorkspaceTasksTab.tsx`::handleSelectPlan | Existing Tasks/Graph selection; real starting-chat hand-off. |
+| C-COMMAND | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useSlashMenu.ts`::useSlashMenu | Unified menu/registry/help cutover, no aliases. |
+| C-WIRE | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/contracts/components/schemas/Session.yaml`::properties; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/contracts/components/schemas/Agent.yaml`::properties | Generated consumers only; new main/attention/figure shapes remain DEP holds. |
 
-These C-keys are exact source citations, reusable throughout this spec. They describe existing seams, not delivered target behavior.
-
-| Key / symbol | Role and current source context |
-|---|---|
-| C-NAV | Modify `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/layout/Sidebar.tsx`::Sidebar. Existing selection calls C-SELECT; replace recent-session expansion with eligible main-agent rows. Preserve shell navigation rather than create a new sidebar. |
-| C-SHELL | Extend `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/layout/AppShell.tsx`::AppShell and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useAgentsCrossTabRefresh.ts`::useAgentsCrossTabRefresh. AppShell mounts the one SearchModal; AgentPicker is currently the only production refresh-hook mount. Move that responsibility, not its recovery behavior. |
-| C-SELECT | Modify `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/chat/useSelectSession.ts`::useSelectSession, attachAndSeed. Current cross-workspace path writes workspace before checking attach success. Joint selection must commit a consistent destination, not retain that partial-write ordering. |
-| C-RESTORE | Modify `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/store/session.ts`::enterWorkspaceChat, resolveRememberedSessionFromServer. Existing browser-scoped pointers and late-result guards are useful; blank/fresh/error fallbacks and mutable-owner precedence must be replaced by N D3/BS. |
-| C-MODAL | Extend `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/search/SearchModal.tsx`::SearchModal, AgentSessionList, AgentHeader, SessionRow, handleSwitchWorkspace, bucketByAgent, sortSessions; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/store/ui.ts`::useUiStore.openSearchModal. Keep metadata search/Unfiled and true child nesting; add pair/activity filters, shared repeated-helper presentation and M's information. **Current orphan-as-root behavior is superseded for helpers by latest F:** every helper/search/filter match remains under its parent; unavailable-parent treatment is Q-M5, never a fabricated parent or top-level helper. Workspace switching currently starts fresh; apply N D3 instead. |
-| C-TREE | Call existing `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/sessions/SessionTree.tsx`::SessionTree, flattenSessionTree. Plain fallback and virtualization already exist; do not invent a separate activity hierarchy. |
-| C-FEED | Replace `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/chat/ChatScreen.tsx`::ThinkingIndicator, InlineThinkingIndicator; adapt AssistantMessage, VirtualAssistantMessageRow, AssistantMessageAvatar and OmnipusComposer. Existing rotating phrases/context-specific labels are presentation inputs; scalar old goal state is not retained as a second truth source. |
-| C-EDITOR | Extend `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/agents/AgentFormFields.tsx`::AvatarHeader, AvatarColorPicker, IconPicker. Current header hardcodes Robot; use the shared preview and preserve existing editor/wizard consumers. |
-| C-ACTIVITY | Extend `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useRunningActivity.ts`::useRunningActivity; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/chat/ActivityBar.tsx`::ActivityBar, ActivityPill; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/chat/ActivityPanel.tsx`::ActivityRow. Foreground spans/shells exist; task/run/plan metadata must be integrated, not replaced by a new activity service. The current hook also reads session-agnostic judge verdicts: attribution is required before claiming those belong to the open session. |
-| C-PLAN | Call/adapt `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/workspaces/WorkspaceTasksTab.tsx`::handleSelectPlan. Current plan selection sets the plan and Graph view. Starting-chat links need a real hand-off into that workflow; existing local state alone is not a working deep link. |
-| C-COMMAND | Adapt `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useSlashMenu.ts`::useSlashMenu and existing session-modal opener. Coordinate registry/help/generated command consumers with BS rather than retain frontend aliases. |
-| C-WIRE | Consume `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/contracts/components/schemas/Session.yaml`::properties and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/contracts/components/schemas/Agent.yaml`::properties through generated types. Baseline has heartbeat/mutable owner and color/icon, not the commissioned main/attention/figure shape. |
-
-### Impact assessment
-
-`d=1` means direct consumers; `d=2` means their affected user workflows. These are controlled textual caller/source inferences, not GitNexus WILL BREAK/LIKELY AFFECTED results. The saved sweep is `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/adr-frontend-nav-20261007/spec-evidence/caller-sweep.log`.
-
-| Planned modified symbol group | Risk / certainty | d=1 consumers to update or test | d=2 / d=3 critical paths |
-|---|---|---|---|
-| C-NAV/C-SHELL / refresh hook | Broad shell impact; Inferred | AppShell's Sidebar/SearchModal, removed AgentPicker mount, shared agent/member query observers | Focus/visibility within stale time, reconnect, navigation from non-chat pages, drawer/touch keyboard behavior. |
-| C-SELECT/C-RESTORE | Concurrency-sensitive; Inferred | Sidebar and SearchModal selection, WorkspaceTabContainer entry, standalone session route and attach/replay | Late response after another selection, cross-workspace failed attach, saved-pointer reload, pending first-send delivery, send/Stop correlation. |
-| C-MODAL/C-TREE / modal store action | Cross-session search impact; Inferred | Existing sidebar and slash openers, workspace-switch mode, filtered tree and visible-row keyboard navigation | Child-only matches/orphans/large trees, protected delete/rename focus, Unfiled inspection, activity metadata pagination and live refresh. Shared flattening need not change unless required by these oracles. |
-| C-FEED/C-COMMAND | Multiple rendering paths; Inferred | Live message and historical virtual/plain rows, composer and slash menu | Replay/guest attribution, hidden-tool phrases, non-stream error handling, model/Auto/attachment and first-send safeguards. |
-| C-EDITOR / shared AgentIcon | Multi-surface identity; Inferred | Profile/wizard preview, sidebar, Team, roster, modal headers and Activity identity | Fresh/migrated identities, built-in locks/reseeding, all sizes/colors, reduced motion and screenshot/contrast gates. |
-| C-ACTIVITY/C-PLAN | Presentation/ownership-sensitive; Inferred | ActivityBar/Panel, real plan-result hand-off, Tasks/Graph and session inspection | Starting-chat association, scheduler-only work, task-child dedupe, monitoring versus Stop authority, reload/unopened-session coverage. |
-
-### Relevant execution flows
-
-| Source-derived flow — not a graph process name | Required preservation |
-|---|---|
-| Shell → workspace/agent selection → existing validated attach → replay → displayed chat | One committed workspace/session/owner; newer intent wins, main click is not recency. |
-| Magnifier/command/Past sessions → one SearchModal → filtered metadata/tree → existing inspection | Genuine children stay under their parent; expanding/searching is not read acknowledgement. |
-| Agent edit → backend configuration/canonical seed → shared roster → identity presentation | Preview is not saved truth; reload/restart must agree and locks remain server-owned. |
-| Plan/task start or scheduler → backend plan/run metadata → open-chat activity and Sessions → existing drill-down | No synthetic parent edge, no duplicate execution item, no new controller/executor. |
-
-### Cluster placement
-
-No indexed cluster/process names are available. Source-based placement spans shell/navigation, session/chat, agent identity/kit and plan/task inspection. That cross-tree footprint requires the feature gate and joint U1 acceptance, not independent navigation landing.
+Footprint spans shell/session/chat, identity/kit and task inspection; keep existing ownership/cache/attachment rather than another service. Paging seam: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/pkg/agent/loop_session.go`::ListAllSessions and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/lib/api/sessions.ts`::fetchSessions; mutable offset traversal alone cannot certify complete activity (DEP-ACT).
 
 ## User Stories & Acceptance Criteria
 
@@ -1605,32 +1529,3 @@ The founder has **not yet reviewed or acknowledged** these warnings in this task
 - **Setup**: Supported saved ordinary/extra/Unfiled/child/heartbeat histories and legacy identities, including a retained helper with unavailable parent context treated according to the later founder answer.
 - **Action**: Upgrade, reopen/continue histories, search/filter the helper, and repeat restart/upgrade.
 - **Expected outcome**: Known content/binding and actual continuation survive without duplication or empty-success failure. Helpers never become top-level rows; unavailable parent treatment is honest and approved. Main/heartbeat and canonical identities remain stable.
-
-## Assumptions
-
-| Item | Status / boundary |
-|---|---|
-| Approved design/interview | F's approved design and latest modal steering are explicit confirmation of the settled scope. This is not assumed implementation, independent review approval or final ambiguity acceptance. |
-| Backend U1/identity/activity | Required contracts and actual runtime integration remain owner dependencies. No unfinished dependency is disguised by client fallbacks or invented wire types. |
-| Later items | Full @/clear integration, uploads/GIFs, broader page redesign and app-wide kit swaps remain later/companion units as recorded, not silently delivered here. |
-| Current source baseline | This worktree's production code is the cited baseline; later branch publications are pinned sources, not checkout changes. Graph context is unavailable here; future impact is source-inferred. |
-| Modal decisions | Always-under-parent helpers, All / Running / Needs me and expandable N similar helper runs are **decided**, not assumptions or pending A2/D8 questions. Narrow missing-parent/non-main attention/shell cases remain explicitly unanswered. |
-| No unspecified defaults | No extra product bounds, endpoints, persisted property names, avatar storage, permission grants or unreviewed alternative glyphs are assumed. |
-
-Incidental notes for team-lead, not side fixes: (1) current selection source writes active workspace before failed attach; N D3 already commissions the consistent-selection replacement, with runtime proof still required. (2) K's observed FilterMenu source marks the selected item with the text `active`, whereas R39 asks for a check mark; its owner resolves that centrally, not via a duplicate here. (3) push receipts report 36 default-branch vulnerabilities (16 high/16 moderate/4 low); this author has not inspected or classified them, and this one-spec task does not change dependencies or claim vulnerability clearance.
-
-## Clarifications
-
-### 2026-10-07
-
-| Recorded answer / source fact | Specification effect |
-|---|---|
-| F Q1/Q2 | Exact remembered visible chat, otherwise server-validated Ava welcome main; persistent above-feed Main/Extra label. |
-| F Q4/Q4b; published BS C-ATTENTION | Main-only four-source needs_attention; structured user-question rule; shared observed-goal acknowledgement through published optional ack_attention, not prefetch/reconnect or unresolved decisions. |
-| F Q5–Q8 | Four figures/Omnipus default/role at every size; no first-squad uploads/GIFs; exact one-time palette threshold/ties/examples recorded. |
-| F Q9 FINAL and W approval | Name-only bubbles, actual responding-agent animation inline in the feed, no composer status line/old bouncing dots. |
-| F Q10 | Old paths removed now; /resume → /sessions without alias, @ switching/suggestions unavailable until proper messaging, Clear never new chat. |
-| F Q11/Q12 and later BS amendments | Supported upgrade preserves real saved-chat continuation, heartbeat→main, Admin default-workspace main/no fake membership. Backend scope is consumed, never re-invented. |
-| F Q-FE-11/Q-FE-12 | Activity panel belongs only to open session; overall view is existing Sessions modal. Plan pill/parent row in actual starting chat, other chats via modal, no-origin Tasks plan in existing workspace surfaces. |
-| F **Session modal A2/D8 + grouping**, re-read after team-lead steering | Helpers **always** nested under parent, never top-level even on search/filter hits; All / Running / Needs me and expandable **N similar helper runs** are decided. Updated US-8/US-9, BDD-08.2/09.1/09.5/E08, T-08/T-19/T-26, FR-030/033/034 and their traces. Former A2/D8/name-choice questions retired; only Q-M4/Q-M5/Q-M6 remain narrow unresolved cases. |
-| P feature workflow / plan-spec ambiguity gate | This is a complete **draft for interview/review**, not approved implementation. Team-lead handles outstanding interview, two spec grill/fix rounds and later joint gates; no extra ADR grill or independent author approval. |
