@@ -20,7 +20,7 @@ const fileText = 'Header regression selected file'
 const contexts: BrowserContext[] = []
 
 test.beforeAll(async () => {
-  gateway = await GatewayProcess.start({ model: 'deepseek/deepseek-v4.1-flash' })
+  gateway = await GatewayProcess.start()
   const listed = await gateway.apiFetch<Workspace[]>('GET', '/api/v1/workspaces')
   expect(listed.ok, `Workspace listing failed (${listed.status})`).toBe(true)
   const workspace = listed.body.find((entry) => entry.is_default) ?? listed.body[0]

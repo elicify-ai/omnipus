@@ -146,6 +146,16 @@ function adoptionContext(
 export function usePanelDeepLink(workspaceId: string, panel: string | undefined): void {
   const router = useRouter()
   const owningChatPath = `/workspaces/${workspaceId}/chat`
+  // The address a search-only navigate() builds from is the PENDING/LATEST
+  // location, which moves to the destination before `router.state.location`
+  // (committed) does and before this chat unmounts. Every writer below
+  // (cleanup, popstate re-projection, store->URL projection) goes through
+  // replaceSearch, so this one check, on that location, keeps the destination's
+  // own query (`/settings?tab=chat`) out of reach of cleanedSearch.
+  const isOwningChat = useCallback((): boolean => {
+    const { pathname } = router.pendingBuiltLocation ?? router.latestLocation
+    return pathname.replace(/\/+$/, '') === owningChatPath
+  }, [router, owningChatPath])
   const navigate = useNavigate()
   const rawSearch = useRouterState({ select: (s) => s.location.search }) as SearchRecord
   const activePanel = useUiStore((s) => s.activePanel)
@@ -171,14 +181,14 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
       // Router location changes before React necessarily unmounts this chat.
       // Never let its pending projection strip another route's context (for
       // example the full-screen panel's workspace/path during Expand).
-      if (router.state.location.pathname.replace(/\/+$/, '') !== owningChatPath.replace(/\/+$/, '')) return
+      if (!isOwningChat()) return
       selfWriteRef.current = true
       navigate({
         search: ((prev: SearchRecord) => cleanedSearch(prev, desired)) as never,
         replace: true,
       })
     },
-    [navigate, owningChatPath, router],
+    [navigate, isOwningChat],
   )
 
   useEffect(() => {
@@ -202,7 +212,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
 
   useEffect(() => {
     const onPopState = () => {
-      if (router.state.location.pathname.replace(/\/+$/, '') !== owningChatPath.replace(/\/+$/, '')) return
+      if (!isOwningChat()) return
       if (freshLinkRef.current?.href === window.location.href) return
       backForwardRef.current = true
       const current = useUiStore.getState().activePanel
@@ -210,10 +220,10 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
     }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
-  }, [replaceSearch, owningChatPath, router])
+  }, [replaceSearch, isOwningChat])
 
   useEffect(() => {
-    if (router.state.location.pathname.replace(/\/+$/, '') !== owningChatPath.replace(/\/+$/, '')) return
+    if (!isOwningChat()) return
     const freshLink = freshLinkRef.current?.href === window.location.href
       && freshLinkRef.current.workspaceId === workspaceId
     if (backForwardRef.current) {
@@ -251,7 +261,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
     // A named non-library param is a "no panel" verdict (US-7 AS-4/AS-5).
     // An absent param is not: in-app panel opens must survive projection.
     if (rawNamed !== undefined) gatedCloseIfOpen()
-  }, [rawSearch, workspaceId, replaceSearch, owningChatPath, router])
+  }, [rawSearch, workspaceId, replaceSearch, isOwningChat])
 
   // PROJECTION (store -> URL, SP-22 REPLACE). The mount pass records a
   // baseline and writes nothing — a store a mount STARTS with is not a
@@ -259,7 +269,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
   // or Browser panel scrubs `panel` (SP-28) without spreading leftover keys.
   const mountedRef = useRef(false)
   useEffect(() => {
-    if (router.state.location.pathname.replace(/\/+$/, '') !== owningChatPath.replace(/\/+$/, '')) return
+    if (!isOwningChat()) return
     if (!mountedRef.current) {
       mountedRef.current = true
       return
@@ -268,5 +278,5 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
     const validated = panel === undefined ? undefined : rawPanel({ panel })
     if (desired === validated) return
     replaceSearch(desired)
-  }, [activePanel, panel, replaceSearch, owningChatPath, router])
+  }, [activePanel, panel, replaceSearch, isOwningChat])
 }
