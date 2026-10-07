@@ -649,6 +649,17 @@ func (al *AgentLoop) reviveInactiveInbound(route routing.ResolvedRoute, msg bus.
 // (pkg/tools/delegate_followup.go), so the reconstructed turn actually sees
 // it.
 func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error) {
+	return al.reviveStoppedSession(ctx, sessionID, by, instruction, false)
+}
+
+// reviveStoppedSession is ReviveStoppedSession's body. asRedirect is true only
+// for the /stop-redirect delivery (RedirectSteeredSession's waiter and the
+// stopped-helper branch of RedirectSessionTurn): the instruction is then
+// stored under the same "redirect-<uuid>" transcript id the ordinary-chat
+// redirect writes (stop_redirect_root.go::continueOrdinaryAfterStop), which
+// is what the SPA keys on to drop the "(interrupted)" marker of the redirected
+// turn after reload. Follow-ups, answers and steer completions pass false.
+func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string, by steer.Principal, instruction string, asRedirect bool) (bool, error) {
 	if al == nil {
 		return false, fmt.Errorf("steer: revive %q: no AgentLoop wired", sessionID)
 	}
@@ -697,7 +708,7 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 	//     upward as a real result. Failing the revive is strictly better than
 	//     running the wrong instruction.
 	if trimmed := strings.TrimSpace(instruction); trimmed != "" {
-		if aerr := al.appendSteeredInstruction(sessionID, rec.AgentID, trimmed); aerr != nil {
+		if aerr := al.appendSteeredInstruction(sessionID, rec.AgentID, trimmed, asRedirect); aerr != nil {
 			return false, fmt.Errorf("steer: revive %q: %w", sessionID, aerr)
 		}
 	}
@@ -761,14 +772,22 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 // write the reconstructed turn actually reads AND the one that can report.
 // The entry id is fresh per call (a repeat revive is a new instruction, never
 // a duplicate of the last one).
-func (al *AgentLoop) appendSteeredInstruction(sessionID, agentID, instruction string) error {
+//
+// asRedirect selects the entry id shape: "redirect-<uuid>" for a /stop-redirect
+// instruction (the convention the SPA's clearRedirectedTurnMarkers reads),
+// "<sid>-instruction-<uuid>" for every other revival.
+func (al *AgentLoop) appendSteeredInstruction(sessionID, agentID, instruction string, asRedirect bool) error {
 	store := al.ResolveSessionStore(sessionID)
 	if store == nil {
 		return fmt.Errorf("record the new instruction for %q: no session store owns this session", sessionID)
 	}
 	store.AddMessage(sessionID, "user", instruction)
+	entryID := sessionID + "-instruction-" + uuid.NewString()
+	if asRedirect {
+		entryID = "redirect-" + uuid.NewString()
+	}
 	if err := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
-		ID:      sessionID + "-instruction-" + uuid.NewString(),
+		ID:      entryID,
 		Role:    "user",
 		AgentID: agentID,
 		Content: instruction,
