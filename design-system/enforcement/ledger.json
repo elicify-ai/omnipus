@@ -2474,6 +2474,13 @@
     },
     {
       "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/calendar/CalendarMonthGrid.tsx",
+      "syntax": "CalendarMonthGrid#dom-style.backgroundColor<-event.backgroundColor",
+      "reason": "Lead read (2026-10-04): SP-39 month-grid status dot reads the same event.backgroundColor EventChip paints (set by makeEvent from scanned palette consts), token fallback when absent; repair would replace FullCalendar's own event colouring (not invisible)",
+      "owner": "third-party integration boundary exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
       "path": "src/components/calendar/FullCalendarView.tsx",
       "syntax": "EventChip#dom-style.backgroundColor<-arg.event.backgroundColor",
       "reason": "Lead read (2026-09-20): line 135: colour read back from FullCalendar's event arg; set by makeEvent from scanned palette consts; repair would replace FullCalendar's own event colouring (not invisible)",
@@ -4958,6 +4965,27 @@
       "path": "src/test/assistantUiMock.tsx",
       "syntax": "MockAttachmentRemove#className",
       "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/RunningIndicator.tsx",
+      "syntax": "RunningIndicator#className",
+      "reason": "Category: caller pass-through — migration plan §5. RunningIndicator's own destructured prop `className` is forwarded unmodified to the root span's className via clsx('…', className) in src/components/ui/RunningIndicator.tsx — no transformation, conditional replacement, or non-forwarding read. Same registered category as AutoSaveIndicator#className; new-domain-component registration mirroring src/components/chat/composer/TokenCounter.tsx's className prop.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/RunningIndicator.tsx",
+      "syntax": "RunningIndicator#className",
+      "reason": "Category: caller pass-through — migration plan §5. RunningIndicator's own destructured prop `className` is forwarded unmodified to the root span's className via clsx('…', className) in src/components/ui/RunningIndicator.tsx — no transformation, conditional replacement, or non-forwarding read. Same registered category as AutoSaveIndicator#className; new-domain-component registration mirroring src/components/chat/composer/TokenCounter.tsx's className prop.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/RunningIndicator.tsx",
+      "syntax": "RunningIndicator#className",
+      "reason": "Category: caller pass-through — migration plan §5. RunningIndicator's own destructured prop `className` is forwarded unmodified to the root span's className via clsx('…', className) in src/components/ui/RunningIndicator.tsx — no transformation, conditional replacement, or non-forwarding read. Same registered category as AutoSaveIndicator#className; new-domain-component registration mirroring src/components/chat/composer/TokenCounter.tsx's className prop.",
       "owner": "caller pass-through exception registry"
     }
   ],
@@ -8241,6 +8269,11 @@
       "path": "src/components/ui/zoomable-view.stories.tsx",
       "kind": "story",
       "reason": "Storybook story file (exact .stories.js|jsx|ts|tsx suffix). Consumed only by the .storybook/main.ts glob, never by the production import graph (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/ui/RunningIndicator.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). This exact-path boundary covers the spinner-only test's dynamic whole-module import of '@/components/ui/RunningIndicator' (controls/shadcn-low-level-import). RunningIndicator and its props type are public barrel exports; the scanner treats dynamic module reach as namespace-equivalent even for published components. The boundary is test-only and does not alter production import rules."
     }
   ]
 }

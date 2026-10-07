@@ -1,20 +1,28 @@
 // Workspace Calendar — Outlook-style FullCalendar v6 surface.
-// Spec: docs/internal/specs/workspace-calendar-fullcalendar-spec.md (v2).
+// Spec: docs/internal/specs/workspace-calendar-fullcalendar-spec.md (v2);
+// SP-39 (side-panel wave 3): docks on Week by default; Day/Week/Month are
+// three equal in-panel choices; Month renders the compact CalendarMonthGrid
+// in place — it never routes away to a wider surface. Agenda is dropped.
 //
-// Replaces the former month-grouped list. The grid ALWAYS renders (the empty-state
-// bug is gone); supports Month/Week/Day/Agenda, drag-to-reschedule + a keyboard
-// path, and click/slot-select to create. This file is the integration hub: it maps
-// tasks → events (pure fn), hosts the wrapper + toolbar, and owns the
-// handlers/mutations (optimistic move handled by FullCalendar; revert + undo + toast
-// here). It also owns the optimistic query-cache patch + per-item rollback layer that
-// keeps the TanStack Query cache in sync with FullCalendar's DOM move — cancelling
-// in-flight queries before each patch and rolling back only the changed row on failure
-// so concurrent updates to other rows are never lost.
+// The grid ALWAYS renders (the empty-state bug is gone); supports Month/Week/Day,
+// drag-to-reschedule + a keyboard path, and click/slot-select to create. This
+// file is the integration hub: it maps tasks → events (pure fn), hosts the
+// wrapper + toolbar, and owns the handlers/mutations (optimistic move handled
+// by FullCalendar; revert + undo + toast here). It also owns the optimistic
+// query-cache patch + per-item rollback layer that keeps the TanStack Query
+// cache in sync with FullCalendar's DOM move — cancelling in-flight queries
+// before each patch and rolling back only the changed row on failure so
+// concurrent updates to other rows are never lost.
+//
+// Month engine note: FullCalendar stays mounted as the navigation/date engine
+// in EVERY view — while Month is active its DOM is hidden (visibility + inert)
+// and CalendarMonthGrid renders from FullCalendar's own reported range
+// (datesSet). The toolbar therefore keeps driving one calendar API unchanged.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type FullCalendar from '@fullcalendar/react'
-import type { EventClickArg, EventDropArg, DateSelectArg, EventInput } from '@fullcalendar/core'
+import type { EventClickArg, EventDropArg, DateSelectArg } from '@fullcalendar/core'
 import type { DateClickArg } from '@fullcalendar/interaction'
 import {
   fetchTasks,
@@ -30,6 +38,7 @@ import { mapToCalendarEvents } from '@/lib/calendar/eventMapping'
 import { useOccurrences } from '@/lib/calendar/useOccurrences'
 import { FullCalendarView } from '@/components/calendar/FullCalendarView'
 import { CalendarToolbar } from '@/components/calendar/CalendarToolbar'
+import { CalendarMonthGrid } from '@/components/calendar/CalendarMonthGrid'
 import { AGENT_FILTER_ALL, filterEventsByAgent } from '@/components/calendar/calendarAgentFilter'
 import type {
   CalendarViewName,
@@ -38,6 +47,7 @@ import type {
 import { CalendarEventSlideOver } from '@/components/calendar/CalendarEventSlideOver'
 import { TaskDetailSlideOver } from '@/components/workspaces/TaskDetailSlideOver'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
+import { cn } from '@/lib/utils'
 
 interface CalendarScreenProps {
   workspaceId: string
@@ -162,96 +172,26 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   }, [tasksError, addToast])
 
   // ── Toolbar state (driven by FullCalendar's datesSet) ─────────────────────────
-  const [currentView, setCurrentView] = useState<CalendarViewName>('dayGridMonth')
+  // SP-39: Calendar docks on Week by default — the initial view is Week, both
+  // here (switcher state) and in FullCalendarView's initialView below.
+  const [currentView, setCurrentView] = useState<CalendarViewName>('timeGridWeek')
   const [title, setTitle] = useState('')
+  // The visible range WHILE Month is active (null in Week/Day). CalendarMonthGrid
+  // renders only from this — never from a stale Week/Day range during the brief
+  // window between the switcher click and FullCalendar's next datesSet.
+  const [monthRange, setMonthRange] = useState<{ start: Date; end: Date } | null>(null)
 
   const handleDatesSet = useCallback(
     (nextTitle: string, view: CalendarViewName, activeStart: Date, activeEnd: Date) => {
       setTitle(nextTitle)
       setCurrentView(view)
       setActiveRange({ start: activeStart, end: activeEnd })
+      setMonthRange(view === 'dayGridMonth' ? { start: activeStart, end: activeEnd } : null)
     },
     [],
   )
 
   const handleViewChange = useCallback((view: CalendarViewName) => setCurrentView(view), [])
-
-  // ── Agenda "now" marker (live divider, listWeek ONLY) ─────────────────────────
-  // `nowIndicator={true}` (FullCalendarView.tsx) already renders a correct, live
-  // Google-Calendar-style "now" line in Week/Day via FullCalendar's own timeGrid
-  // machinery — untouched here. `@fullcalendar/list` (Agenda) has no time axis and
-  // structurally cannot render that built-in indicator, so a single synthetic
-  // `kind: 'now-marker'` EventInput is injected instead, ONLY while Agenda is the
-  // active view. `nowTick` only needs to advance roughly every 30-60s (no
-  // per-second precision required), and the interval is scoped to Agenda being
-  // open — no background ticking (and no timer leak) in Month/Week/Day.
-  // `Date.now()`-driven; resynced the INSTANT Agenda becomes active (not left to
-  // wait for the first 30s tick — switching in from a view that had been open for
-  // minutes would otherwise show a stale "now" position until the first tick).
-  const [nowTick, setNowTick] = useState<number>(() => Date.now())
-  useEffect(() => {
-    if (currentView !== 'listWeek') return
-    setNowTick(Date.now())
-    const id = window.setInterval(() => setNowTick(Date.now()), 30_000)
-    return () => window.clearInterval(id)
-  }, [currentView])
-
-  // Time label pre-formatted here (not read from FullCalendar's arg.timeText at
-  // render time — see the `now-marker` variant's doc comment in types.ts for why
-  // that's always empty in list view). Matches FullCalendarView's own
-  // eventTimeFormat/slotLabelFormat options so the label is visually consistent
-  // with every other view's time formatting.
-  const NOW_MARKER_TIME_FORMAT = useMemo(
-    () => new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit', hour12: true }),
-    [],
-  )
-
-  // Only materialize the marker when it would actually land inside FullCalendar's
-  // OWN reported visible range (`activeRange`, half-open — `end` exclusive, same
-  // convention as `onDatesSet`) — never in Month/Week/Day, never a stale marker
-  // outside the currently-viewed Agenda week, and only when there's at least one
-  // real item for it to sit among (a lone divider on an otherwise-empty Agenda
-  // has nothing to divide and would render simultaneously with the "No scheduled
-  // items" empty-state hint, which reads as contradictory/broken).
-  const nowMarkerEvent = useMemo<EventInput | null>(() => {
-    if (currentView !== 'listWeek' || !activeRange || filteredEvents.length === 0) return null
-    if (nowTick < activeRange.start.getTime() || nowTick >= activeRange.end.getTime()) return null
-    return {
-      id: 'now-marker',
-      start: new Date(nowTick),
-      // A minimal (1s) but STRICTLY GREATER-than-start `end` — NOT equal.
-      // WITHOUT any explicit `end`, FullCalendar assigns its own
-      // `defaultTimedEventDuration` (1 hour) to a timed event, which late at
-      // night pushed the marker's span past midnight; Agenda's list view then
-      // renders a segment of any day-spanning event on EVERY day it touches
-      // — the marker showed twice, once under today and once under
-      // tomorrow. The first fix (end === start) was ALSO wrong: FullCalendar
-      // itself treats `end <= start` as "no end provided" (@fullcalendar/
-      // core's parseSingle: `if (startMarker && endMarker <= startMarker)
-      // endMarker = null`) and falls through to the SAME 1-hour default —
-      // confirmed live, still duplicated. `end` must be strictly after
-      // `start`; 1 second is enough to satisfy that check while staying
-      // visually/semantically instantaneous (NowMarkerLine never renders
-      // anything duration-dependent).
-      end: new Date(nowTick + 1000),
-      allDay: false,
-      title: '',
-      editable: false,
-      extendedProps: { kind: 'now-marker', timeLabel: NOW_MARKER_TIME_FORMAT.format(nowTick) },
-    }
-  }, [currentView, activeRange, nowTick, filteredEvents.length, NOW_MARKER_TIME_FORMAT])
-
-  // Appended AFTER the agent-filter step (never before) — it is not a task and
-  // must never be dropped by `filterEventsByAgent`. Kept as a SEPARATE array from
-  // `filteredEvents` (rather than mutating it) so `isEmpty` above still reflects
-  // only real data — the marker is a visual divider, not a schedulable item, and
-  // must never mask a genuinely empty Agenda view. FullCalendar's list view sorts
-  // by `start` automatically, so the marker lands in the right chronological slot
-  // among the day's real events with no manual sorting needed.
-  const calendarEvents = useMemo(
-    () => (nowMarkerEvent ? [...filteredEvents, nowMarkerEvent] : filteredEvents),
-    [filteredEvents, nowMarkerEvent],
-  )
 
   // ── Slide-over / popover state ───────────────────────────────────────────────
   // CalendarEventSlideOver is a single component covering BOTH create (US-1)
@@ -314,17 +254,12 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   // `ext` is the discriminated CalendarEventExtProps union; the switch narrows
   // taskId with no defensive checks. NOT exhaustive over `kind` (a
   // pre-existing gap, not introduced here): task-occurrence/-agg/-more chips are
-  // never draggable (eventMapping.ts sets `editable: false` on all three), and
-  // now-marker is likewise `editable: false` (below), so `eventDrop` can never
-  // fire for any of them — an implicit fall-through-and-return is safe today.
-  // The `now-marker` case is still spelled out explicitly (mirrors the same
-  // defensive style already used for it in `patchCacheDate` and
-  // `handleEventClick`, both below) rather than relying on that fall-through.
+  // never draggable (eventMapping.ts sets `editable: false` on all three), so
+  // `eventDrop` can never fire for any of them — an implicit
+  // fall-through-and-return is safe today.
   const persistReschedule = useCallback(
     async (ext: CalendarEventExtProps, start: Date): Promise<void> => {
       switch (ext.kind) {
-        case 'now-marker':
-          return
         case 'task-due':
           // Task `due` is RFC3339 date-time (contract: format date-time), so a
           // date-only string is rejected 400. Write the dropped day's local-midnight
@@ -353,13 +288,6 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
   // only the single changed row, so concurrent updates to other rows are never lost.
   const patchCacheDate = useCallback(
     (ext: CalendarEventExtProps, start: Date): (() => void) => {
-      // The Agenda "now" divider is `editable: false` (see the marker event
-      // built above) — FullCalendar never fires `eventDrop`/reschedule for
-      // it, so this branch never runs in practice. Guarded here only so the
-      // rest of this function can safely narrow `ext` to the taskId-bearing
-      // members below (TypeScript exhaustiveness — `now-marker` has no
-      // `taskId`).
-      if (ext.kind === 'now-marker') return () => {}
       const key = tasksQueryKeys.list({ workspace_id: workspaceId })
       // Capture only the single prior task for a targeted rollback.
       const prevItem = queryClient
@@ -491,9 +419,6 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
         case 'task-occurrence-more':
           // Non-interactive truncation marker — no click action.
           return
-        case 'now-marker':
-          // Non-interactive Agenda "now" divider — no click action.
-          return
         case 'task-due':
         case 'task-fire': {
           const t = tasks.find((x) => x.id === ext.taskId)
@@ -546,8 +471,22 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
     setEventSlideOverOpen(true)
   }, [])
 
+  // Month grid (SP-39) — a compact-grid day-cell click is the pointer-parity of
+  // an all-day cell click: create pre-filled with that day at the same 9am
+  // default `openCreateAt` uses. Keyboard parity stays the toolbar's "New task"
+  // button (see CalendarToolbar's WCAG 2.1.1 note) — the same stance the
+  // FC-rendered views already take.
+  const handleMonthDayClick = useCallback(
+    (date: Date) => openCreateAt(null, date, true),
+    [openCreateAt],
+  )
+
+  // SP-39 — Month renders the compact grid in place; FullCalendar stays mounted
+  // as the navigation/date engine in every view (hidden while Month is active).
+  const isMonth = currentView === 'dayGridMonth'
+
   return (
-    <div className="absolute inset-0 flex flex-col overflow-x-hidden bg-[var(--color-surface-0)] text-[var(--color-secondary)]">
+    <div className="relative flex h-full min-h-0 min-w-0 flex-col overflow-x-hidden bg-[var(--color-surface-0)] text-[var(--color-secondary)]">
       <div className="@container flex-shrink-0 w-full min-w-0">
         <CalendarToolbar
           calendarRef={calendarRef}
@@ -562,7 +501,10 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
         />
       </div>
 
-      <div className="flex-1 min-h-0 min-w-0 p-[var(--space-2-5)]" data-testid="calendar-grid">
+      <div
+        className="relative flex-1 min-h-0 min-w-0 p-[var(--space-2-5)]"
+        data-testid="calendar-grid"
+      >
         {isBlockingError ? (
           <QueryErrorState
             layout="fill"
@@ -573,17 +515,44 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
             testId="calendar-error"
           />
         ) : (
-          <FullCalendarView
-            events={calendarEvents}
-            calendarRef={calendarRef}
-            isLoading={isLoading}
-            isEmpty={isEmpty}
-            onEventDrop={handleEventDrop}
-            onEventClick={handleEventClick}
-            onDateClick={handleDateClick}
-            onDateSelect={handleDateSelect}
-            onDatesSet={handleDatesSet}
-          />
+          <>
+            {/* FullCalendar keeps rendering (single navigation engine — the
+                toolbar drives this one API in all three views). While Month is
+                active its DOM is hidden (`visibility`, NOT display:none, so
+                its layout measurements stay valid for the switch back to
+                Week/Day) and inert, and CalendarMonthGrid renders in its
+                place from FullCalendar's own reported range. */}
+            <div
+              className={cn('h-full min-h-0', isMonth && 'invisible pointer-events-none')}
+              aria-hidden={isMonth || undefined}
+              inert={isMonth || undefined}
+            >
+              <FullCalendarView
+                events={filteredEvents}
+                calendarRef={calendarRef}
+                initialView="timeGridWeek"
+                isLoading={isLoading}
+                isEmpty={isEmpty}
+                onEventDrop={handleEventDrop}
+                onEventClick={handleEventClick}
+                onDateClick={handleDateClick}
+                onDateSelect={handleDateSelect}
+                onDatesSet={handleDatesSet}
+              />
+            </div>
+            {isMonth && monthRange && (
+              <div className="absolute inset-[var(--space-2-5)] flex min-h-0 flex-col">
+                <CalendarMonthGrid
+                  rangeStart={monthRange.start}
+                  rangeEnd={monthRange.end}
+                  events={filteredEvents}
+                  onDayClick={handleMonthDayClick}
+                  isLoading={isLoading}
+                  isEmpty={isEmpty}
+                />
+              </div>
+            )}
+          </>
         )}
       </div>
 

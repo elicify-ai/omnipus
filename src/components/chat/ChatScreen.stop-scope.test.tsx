@@ -1,32 +1,18 @@
-// ADR-20260928 D9 + MAJ-002 — web Stop/Esc surface scoping (RED pack).
+// Web Stop/Esc and current-chat redirect, asserted at connection.send (the
+// process edge), with the composer, both hooks and the stores left real.
 //
-// The user-visible contract under test, asserted at the WIRE level (a spied
-// connection.send — the process edge): which cancel frame each surface emits.
+// Founder 2026-10-06 (permission to replace removed-button assertions):
+// "why would we need a stop all button in addition if two times stop does
+// the job already? the button needs to go, /stop in chat needs to work like
+// one escape or one stop click, /stop-redirect in the chat does not redirect
+// a helper it redirects the chat itself not their helper".
 //
-//   - Single Stop press / single Esc (composer focused) → exactly one
-//     {type:'cancel', session_id} frame whose scope is absent or "session"
-//     (MAJ-002 default session) — NEVER "tree".
-//   - Second activation on the SAME session within the 3-second confirmation
-//     window — confirming the visible Stop-all offer, or a second Esc —
-//     sends a frame with scope:"tree". The window expires after 3 s, on
-//     focus change, and on session switch. (The Stop button itself unmounts
-//     once the cancel lands locally — markLastMessageInterrupted flips
-//     isStreaming — so the spec-named second-activation surface is the offer
-//     the first press must show, plus the Esc key.)
-//   - The FIRST press must VISIBLY offer the Stop-all confirmation (D9).
-//   - The Stop-all control and the /cancel command are themselves the
-//     confirmation: one action → one scope:"tree" frame.
-//   - Escape that closes an open slash menu/editor sends NO stop frame
-//     (D9: Esc first closes the active overlay).
-//
-// RED status (2026-10-02): the tests named RED below fail because no
-// double-press window, no visible offer, no Stop-all control, and no
-// tree-scoped frame exist anywhere in the funnel yet. Tests marked PIN
-// assert the decided single-surface behaviour that already works and must
-// survive GREEN unchanged.
-//
-// Oracle: ADR-20260928 D9 table + MAJ-002 wire enum; no expected value was
-// derived from running the implementation.
+// First Stop/Esc or /stop sends session scope and arms the existing 3 s
+// window. The next activation confirms tree scope; /cancel is immediate
+// tree. No separate Stop-all buttons remain. Redirect targets the current
+// chat, root or helper. Empty/missing targets still refuse without a frame.
+// Oracle: the founder's ruling + the generated wire contract; expected
+// values are not derived from observing the implementation.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
@@ -35,6 +21,7 @@ import { act } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
 
 class ResizeObserverStub {
   observe() {}
@@ -49,6 +36,19 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
 }
 
 import { OmnipusComposer } from './ChatScreen'
+
+// Presentation/runtime adapter only: stop/cancel interception and frame
+// construction stay real through OmnipusComposer, both hooks and the stores.
+const composerRuntime = vi.hoisted(() => {
+  let text = ''
+  return {
+    getState: () => ({ text }),
+    setText: vi.fn((value: string) => { text = value }),
+    send: vi.fn(),
+    addAttachment: vi.fn(),
+    subscribe: vi.fn(() => vi.fn()),
+  }
+})
 
 import { MockButton } from '@/test/assistantUiMock'
 vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
@@ -80,12 +80,7 @@ vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock
     Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
               React.createElement('div', { className }, children),
   },
-  useComposerRuntime: vi.fn(() => ({
-          getState: () => ({ text: '' }),
-          setText: vi.fn(),
-          addAttachment: vi.fn(),
-          subscribe: vi.fn(() => vi.fn()),
-        })),
+  useComposerRuntime: vi.fn(() => composerRuntime),
   useMessage: () => ({
           id: 'msg_1',
           role: 'assistant',
@@ -102,6 +97,8 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
     { name: 'model',   label: '/model',   description: 'Change the chat model',       delivery: 'client', available_while_streaming: false },
     { name: 'agents',  label: '/agents',  description: 'Open agent selector',         delivery: 'client', available_while_streaming: false },
     { name: 'cancel',  label: '/cancel',  description: 'Cancel the current turn',     delivery: 'client', available_while_streaming: true  },
+    { name: 'stop',    label: '/stop',    description: 'Stop only this conversation', delivery: 'client', available_while_streaming: true  },
+    { name: 'stop-redirect', label: '/stop-redirect', description: 'Replace this chat\'s turn', delivery: 'client', available_while_streaming: true, argument_hint: '<instruction>' },
   ]
   const mockSkills = [
     { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
@@ -181,11 +178,21 @@ function pressEscape() {
   act(() => { fireEvent.keyDown(input, { key: 'Escape' }) })
 }
 
-describe('Stop/Esc surface scoping (ADR-20260928 D9)', () => {
-  let send: ReturnType<typeof vi.fn>
+function submitCommand(text: string) {
+  const input = screen.getByTestId('composer-input')
+  act(() => {
+    composerRuntime.setText(text)
+    fireEvent.change(input, { target: { value: text } })
+    fireEvent.submit(screen.getByTestId('composer-form'))
+  })
+}
 
-  beforeEach(() => {
+let send: ReturnType<typeof vi.fn>
+
+beforeEach(() => {
     send = vi.fn().mockReturnValue(true)
+    composerRuntime.setText('')
+    composerRuntime.send.mockClear()
     act(() => {
       useConnectionStore.setState({
         connection: { send } as unknown as ReturnType<typeof useConnectionStore.getState>['connection'],
@@ -196,6 +203,7 @@ describe('Stop/Esc surface scoping (ADR-20260928 D9)', () => {
         activeSessionId: 'sess_test',
         activeAgentId: 'general-assistant',
         activeAgentType: null,
+        attachedSessionType: null,
       })
       useChatStore.setState({
         messages: [],
@@ -224,6 +232,7 @@ describe('Stop/Esc surface scoping (ADR-20260928 D9)', () => {
     })
   })
 
+describe('Single Stop surface scoping (ADR-20260928 D9)', () => {
   it('PIN single stop press sends exactly one cancel frame without tree scope', () => {
     render(<OmnipusComposer />)
     pressStop()
@@ -234,84 +243,213 @@ describe('Stop/Esc surface scoping (ADR-20260928 D9)', () => {
     assertNoTreeScope(frames, 'single stop press')
   })
 
-  it('RED confirming the stop-all offer within 3s sends scope tree', () => {
+})
+
+describe('Slash Stop/cancel and current-chat redirect (founder 2026-10-06)', () => {
+  it.each([
+    { chat: 'root', sessionType: null },
+    { chat: 'helper', sessionType: 'delegate' },
+  ] as const)('submitted /stop in a $chat chat sends only a session cancel and shows Stopping...', ({ sessionType }) => {
+    act(() => { useSessionStore.setState({ attachedSessionType: sessionType }) })
+    render(<OmnipusComposer />)
+
+    submitCommand('/stop')
+
+    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test' }]])
+    assertNoTreeScope(sentCancelFrames(send), `submitted /stop in ${sessionType ?? 'root'}`)
+    expect(screen.getByRole('button', { name: 'Stopping...' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /stop all/i })).not.toBeInTheDocument()
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+  })
+
+  it('palette /stop sends only a session cancel and uses the first-press state', () => {
+    render(<OmnipusComposer />)
+    const input = screen.getByTestId('composer-input')
+    act(() => { fireEvent.change(input, { target: { value: '/stop' } }) })
+    const stopItem = screen.getByText('/stop').closest('button')
+    expect(stopItem).not.toBeNull()
+    act(() => { fireEvent.mouseDown(stopItem!) })
+
+    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test' }]])
+    assertNoTreeScope(sentCancelFrames(send), 'palette /stop')
+    expect(screen.getByRole('button', { name: 'Stopping...' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /stop all/i })).not.toBeInTheDocument()
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+  })
+
+  it('/stop inside the armed window is exactly a second Stop activation', () => {
+    render(<OmnipusComposer />)
+    pressStop()
+    expect(screen.queryByRole('button', { name: /stop all/i })).not.toBeInTheDocument()
+
+    submitCommand('/stop')
+
+    // Founder: "/stop in chat needs to work like one escape or one stop
+    // click" — it reuses the same second-activation tree path when armed.
+    expect(send.mock.calls).toEqual([
+      [{ type: 'cancel', session_id: 'sess_test' }],
+      [{ type: 'cancel', session_id: 'sess_test', scope: 'tree' }],
+    ])
+    expect(screen.getByRole('button', { name: 'Stopping...' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /stop all/i })).not.toBeInTheDocument()
+  })
+
+  it('submitted /cancel still sends exactly one tree cancel frame', () => {
+    render(<OmnipusComposer />)
+
+    submitCommand('/cancel')
+
+    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test', scope: 'tree' }]])
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+    expect(screen.queryByText('Stop all')).not.toBeInTheDocument()
+  })
+
+  it('/cancel explicitly confirms Stop all after /stop without an extra session cancel', () => {
+    render(<OmnipusComposer />)
+    submitCommand('/stop')
+    expect(screen.queryByRole('button', { name: /stop all/i })).not.toBeInTheDocument()
+
+    submitCommand('/cancel')
+
+    expect(send.mock.calls).toEqual([
+      [{ type: 'cancel', session_id: 'sess_test' }],
+      [{ type: 'cancel', session_id: 'sess_test', scope: 'tree' }],
+    ])
+    expect(screen.queryByText('Stop all')).not.toBeInTheDocument()
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+  })
+
+  it.each(['Stop', 'Escape'] as const)('/stop arms the same window for a second %s after the stopping label resets', (confirmation) => {
+    vi.useFakeTimers()
+    render(<OmnipusComposer />)
+    submitCommand('/stop')
+    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test' }]])
+
+    // Past the 1 s label minimum but still inside the 3 s confirmation
+    // window: the same Stop button, not a separate offer, must be usable.
+    act(() => { vi.advanceTimersByTime(1001) })
+    if (confirmation === 'Stop') pressStop()
+    else pressEscape()
+
+    expect(send.mock.calls).toEqual([
+      [{ type: 'cancel', session_id: 'sess_test' }],
+      [{ type: 'cancel', session_id: 'sess_test', scope: 'tree' }],
+    ])
+  })
+
+  it.each([
+    { chat: 'root', sessionType: null },
+    { chat: 'helper', sessionType: 'delegate' },
+  ] as const)('/stop-redirect in a $chat chat sends the existing frame for that current chat', ({ sessionType }) => {
+    act(() => { useSessionStore.setState({ attachedSessionType: sessionType }) })
+    render(<OmnipusComposer />)
+
+    submitCommand('/stop-redirect focus on the failing tests')
+
+    // The socket edge is spied, not the backend's redirect implementation:
+    // this proves the SPA request, not server acceptance or execution.
+    expect(send.mock.calls).toEqual([[{
+      type: 'redirect',
+      session_id: 'sess_test',
+      instruction: 'focus on the failing tests',
+    }]])
+    expect(sentCancelFrames(send)).toEqual([])
+    expect(composerRuntime.send).not.toHaveBeenCalled()
+  })
+})
+
+describe('Double Stop/Esc confirmation and dismissal (founder 2026-10-06)', () => {
+  it('second Stop press within 3s sends scope tree', () => {
     vi.useFakeTimers()
     render(<OmnipusComposer />)
 
     pressStop()
-    // The offer is the second activation's surface (D9: the first press
-    // visibly offers the Stop-all confirmation; confirming it is the second
-    // press). Still inside the window at ~1s.
+    // Founder: "the button needs to go". Confirm through the SAME Stop
+    // button; retain all frame assertions from the removed-offer test.
     act(() => { vi.advanceTimersByTime(1000) })
-    const offer = screen.getByText(/stop all/i).closest('button')
-    expect(offer).not.toBeNull()
-    act(() => { fireEvent.click(offer!) })
+    pressStop()
 
     const frames = sentCancelFrames(send)
     expect(frames).toHaveLength(2)
     expect(frames[0].scope).not.toBe('tree')
-    expect(frames[1].scope, `confirming the offer within the 3s window must carry scope "tree" (D9), got ${JSON.stringify(frames[1].scope)}`).toBe('tree')
+    expect(frames[1].scope, `second Stop within the 3s window must carry scope "tree" (D9), got ${JSON.stringify(frames[1].scope)}`).toBe('tree')
   })
 
-  it('PIN stop-all offer is gone once the 3-second window expires', () => {
+  it('PIN confirmation closes once the 3-second window expires', () => {
     vi.useFakeTimers()
     render(<OmnipusComposer />)
 
     pressStop()
-    expect(screen.getByText(/stop all/i)).toBeInTheDocument()
-    // Past the window (3100ms > 3s) the confirmation is no longer offered —
-    // a fresh activation is a new FIRST press (single-session), so no tree
-    // frame may exist.
+    expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
+    // Founder: "the button needs to go" — the remaining Stop button is
+    // the confirmation surface, not the removed Stop-all offer.
     act(() => { vi.advanceTimersByTime(3100) })
-    expect(screen.queryByText(/stop all/i)).not.toBeInTheDocument()
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
     assertNoTreeScope(sentCancelFrames(send), 'after window expiry')
   })
 
-  it('PIN focus change closes the stop-all offer window', () => {
+  it('PIN focus change closes the confirmation window', () => {
     vi.useFakeTimers()
     render(<OmnipusComposer />)
 
     pressStop()
-    expect(screen.getByText(/stop all/i)).toBeInTheDocument()
+    expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
     act(() => { fireEvent(window, new Event('blur')) })
-    expect(screen.queryByText(/stop all/i)).not.toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(1001) })
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
     assertNoTreeScope(sentCancelFrames(send), 'after focus change')
   })
 
-  it('PIN session switch closes the stop-all offer window', () => {
+  it('PIN session switch closes the confirmation window', () => {
     vi.useFakeTimers()
     render(<OmnipusComposer />)
 
     pressStop()
-    expect(screen.getByText(/stop all/i)).toBeInTheDocument()
+    expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
     act(() => { useSessionStore.setState({ activeSessionId: 'sess_other' }) })
-    expect(screen.queryByText(/stop all/i)).not.toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(1001) })
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
     const frames = sentCancelFrames(send)
     expect(frames.map((f) => f.session_id)).not.toContain('sess_other')
     assertNoTreeScope(frames, 'after session switch')
   })
 
-  it('RED first stop press visibly offers the stop-all confirmation', () => {
+  it('first Stop press leaves no separate Stop-all offer button', () => {
     render(<OmnipusComposer />)
     pressStop()
 
-    // D9: the first press VISIBLY offers the Stop-all confirmation — an
-    // accessible "Stop all" affordance must be present after one press.
-    expect(screen.getByText(/stop all/i)).toBeInTheDocument()
+    // Founder: "the button needs to go". The armed-offer assertion is
+    // intentionally replaced with absence; the main Stop remains usable.
+    expect(screen.queryByRole('button', { name: /stop all/i })).not.toBeInTheDocument()
+    expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
   })
 
-  it('RED stop-all control sends tree scope in one action', () => {
+  it('streaming chat has no separate Stop-all control; /cancel remains one-action tree', () => {
     render(<OmnipusComposer />)
 
-    // The dedicated Stop-all control (chat session controls) is itself the
-    // confirmation: ONE activation → one scope:"tree" frame, no double press.
-    const stopAll = screen.getByRole('button', { name: /stop all/i })
-    act(() => { fireEvent.click(stopAll) })
+    // Founder: "why would we need a stop all button in addition if two
+    // times stop does the job already?" Keep the prior one-action frame
+    // assertions through /cancel, which is the remaining explicit command.
+    expect(screen.queryByRole('button', { name: /stop all/i })).not.toBeInTheDocument()
+    submitCommand('/cancel')
 
     const frames = sentCancelFrames(send)
     expect(frames).toHaveLength(1)
-    expect(frames[0].scope, `stop-all control must send scope "tree" in one action (D9), got ${JSON.stringify(frames[0].scope)}`).toBe('tree')
+    expect(frames[0].scope, `/cancel must send scope "tree" in one action (D9), got ${JSON.stringify(frames[0].scope)}`).toBe('tree')
     expect(frames[0].session_id).toBe('sess_test')
+  })
+
+  it('the same Stop button remains reachable at 2999ms and expires at 3000ms', () => {
+    vi.useFakeTimers()
+    render(<OmnipusComposer />)
+    pressStop()
+
+    // 3 s is the existing confirmation boundary, not a widened timeout.
+    act(() => { vi.advanceTimersByTime(2999) })
+    expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+    expect(send.mock.calls).toEqual([[{ type: 'cancel', session_id: 'sess_test' }]])
   })
 
   it('RED slash /cancel sends tree scope in one action', () => {
@@ -368,5 +506,241 @@ describe('Stop/Esc surface scoping (ADR-20260928 D9)', () => {
     expect(screen.queryByText('/cancel')).not.toBeInTheDocument()
 
     expect(sentCancelFrames(send)).toHaveLength(0)
+  })
+})
+
+// ── Reviewer round 2 (founder stop rules 2026-10-06) ─────────────────────
+// W1 stuck label · W2 undelivered Stop · W3 a closed window really is a
+// fresh first press · W4 /stop-redirect is neither arming nor a second Stop.
+// Oracle: the founder table (click 1 / Esc 1 / /stop = this chat only +
+// 3 s window; second activation in the window = tree; /cancel = tree;
+// /stop-redirect = this chat's own redirect frame) and the generated wire
+// types — not read off the implementation.
+
+const SESSION_FRAME = { type: 'cancel', session_id: 'sess_test' }
+const TREE_FRAME = { type: 'cancel', session_id: 'sess_test', scope: 'tree' }
+
+describe('W1 no stuck "Stopping..." after the stream ended', () => {
+  it('click 1, stream ended, click 2 inside the window sends one tree frame and Send returns after the window', () => {
+    vi.useFakeTimers()
+    render(<OmnipusComposer />)
+
+    pressStop()
+    // Premise: the first activation already ended the turn locally.
+    expect(useChatStore.getState().isStreaming).toBe(false)
+    act(() => { vi.advanceTimersByTime(1500) })
+    pressStop()
+
+    expect(send.mock.calls).toEqual([[SESSION_FRAME], [TREE_FRAME]])
+    expect(screen.getByRole('button', { name: 'Stopping...' })).toBeInTheDocument()
+
+    act(() => { vi.advanceTimersByTime(3100) })
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stopping...' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-send')).toBeInTheDocument()
+  })
+
+  it('/stop on an idle chat leaves no stuck label and the composer returns to Send', () => {
+    vi.useFakeTimers()
+    act(() => { useChatStore.setState({ isStreaming: false }) })
+    render(<OmnipusComposer />)
+
+    submitCommand('/stop')
+    act(() => { vi.advanceTimersByTime(3100) })
+
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stopping...' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-send')).toBeInTheDocument()
+  })
+
+  it('/stop twice on an idle chat inside the window sends one tree frame and then returns to Send', () => {
+    vi.useFakeTimers()
+    act(() => { useChatStore.setState({ isStreaming: false }) })
+    render(<OmnipusComposer />)
+
+    submitCommand('/stop')
+    act(() => { vi.advanceTimersByTime(1500) })
+    submitCommand('/stop')
+    expect(sentCancelFrames(send)).toEqual([TREE_FRAME])
+
+    act(() => { vi.advanceTimersByTime(3100) })
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-send')).toBeInTheDocument()
+  })
+})
+
+describe('Q16 the Stop button holds the Send position for the whole window (founder 2026-10-06)', () => {
+  it('stream ended: Stop is still present at 2999ms and Send only returns at 3000ms (Enter: see ChatScreen.uat-enter-after-stop)', () => {
+    vi.useFakeTimers()
+    render(<OmnipusComposer />)
+
+    pressStop()
+    expect(useChatStore.getState().isStreaming).toBe(false) // the turn ended
+    act(() => { vi.advanceTimersByTime(2999) })
+    expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
+
+    expect(sentCancelFrames(send)).toEqual([SESSION_FRAME])
+
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-send')).toBeInTheDocument()
+  })
+})
+
+describe('W2 a Stop that sent nothing does not arm the window', () => {
+  it('no connection: visible error toast, no Stopping label, next press is a first press', () => {
+    act(() => {
+      useUiStore.setState({ toasts: [] })
+      useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null })
+    })
+    render(<OmnipusComposer />)
+
+    pressStop()
+
+    const toasts = useUiStore.getState().toasts
+    expect(toasts).toHaveLength(1)
+    expect(toasts[0].variant).toBe('error')
+    expect(toasts[0].message).toMatch(/could not send/i)
+    expect(screen.queryByRole('button', { name: 'Stopping...' })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+
+    // The gateway comes back while the turn is still running: the next press
+    // is again a FIRST press (session scope), never a tree stop.
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send } as unknown as ReturnType<typeof useConnectionStore.getState>['connection'],
+        isConnected: true,
+      })
+      useChatStore.setState({ isStreaming: true })
+    })
+    pressStop()
+    expect(send.mock.calls).toEqual([[SESSION_FRAME]])
+  })
+
+  it('no connection on Escape: same visible error and no armed window', () => {
+    act(() => {
+      useUiStore.setState({ toasts: [] })
+      useConnectionStore.setState({ connection: null, isConnected: false, connectionError: null })
+    })
+    render(<OmnipusComposer />)
+
+    pressEscape()
+
+    expect(useUiStore.getState().toasts).toHaveLength(1)
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send } as unknown as ReturnType<typeof useConnectionStore.getState>['connection'],
+        isConnected: true,
+      })
+      useChatStore.setState({ isStreaming: true })
+    })
+    pressEscape()
+    expect(send.mock.calls).toEqual([[SESSION_FRAME]])
+  })
+})
+
+type Activation = 'Stop' | 'Escape' | '/stop'
+function activate(kind: Activation) {
+  if (kind === 'Stop') pressStop()
+  else if (kind === 'Escape') pressEscape()
+  else submitCommand('/stop')
+}
+// Closes the 3 s window by the three founder routes.
+type Closer = 'expiry' | 'blur' | 'session switch'
+function closeWindow(how: Closer) {
+  if (how === 'expiry') act(() => { vi.advanceTimersByTime(3100) })
+  else if (how === 'blur') act(() => { fireEvent(window, new Event('blur')) })
+  else act(() => { useSessionStore.setState({ activeSessionId: 'sess_other' }) })
+}
+
+describe('W3 after the window closes, the next activation is a true fresh first press', () => {
+  const kinds: Activation[] = ['Stop', 'Escape', '/stop']
+  const closers: Closer[] = ['expiry', 'blur', 'session switch']
+  const cases = closers.flatMap((closer) => kinds.map((kind) => ({ closer, kind })))
+
+  it.each(cases)('$kind after $closer sends a session-scoped frame, not tree', ({ closer, kind }) => {
+    vi.useFakeTimers()
+    render(<OmnipusComposer />)
+
+    pressStop() // arms the window
+    closeWindow(closer)
+    // A turn is running again so the same surfaces are available.
+    act(() => { useChatStore.setState({ isStreaming: true }) })
+    activate(kind)
+
+    const frames = sentCancelFrames(send)
+    expect(frames).toHaveLength(2)
+    expect(frames[0]).toEqual(SESSION_FRAME)
+    expect(frames[1].scope, `${kind} after ${closer} must be a fresh first press, got ${JSON.stringify(frames[1])}`).toBeUndefined()
+    expect(frames[1].session_id).toBe(closer === 'session switch' ? 'sess_other' : 'sess_test')
+  })
+})
+
+describe('W4 /stop-redirect neither arms the window nor counts as the second Stop', () => {
+  it('outside a window: exactly the redirect frame, and the next Stop is still a first press', () => {
+    render(<OmnipusComposer />)
+
+    submitCommand('/stop-redirect do the other thing')
+    expect(send.mock.calls).toEqual([[{ type: 'redirect', session_id: 'sess_test', instruction: 'do the other thing' }]])
+
+    pressStop()
+    expect(sentCancelFrames(send)).toEqual([SESSION_FRAME])
+  })
+
+  it('inside an armed window: exactly the redirect frame and no tree frame', () => {
+    vi.useFakeTimers()
+    render(<OmnipusComposer />)
+
+    pressStop()
+    act(() => { vi.advanceTimersByTime(500) })
+    submitCommand('/stop-redirect do the other thing')
+
+    expect(send.mock.calls).toEqual([
+      [SESSION_FRAME],
+      [{ type: 'redirect', session_id: 'sess_test', instruction: 'do the other thing' }],
+    ])
+    expect(sentCancelFrames(send).some((f) => f.scope === 'tree')).toBe(false)
+  })
+
+  // Window state after a redirect, read from useSlashMenu (the redirect branch
+  // only calls sendRedirectFrame) and useCancelState (arming happens only in
+  // activateFirstPress): the redirect neither disarms nor re-arms. The window
+  // armed at t=0 keeps its ORIGINAL 3 s timer: Stop is still there at t=2999
+  // and a press then is the confirmed tree stop; with no press, Send returns
+  // exactly at t=3000 (a re-arm would have pushed that to t=3500).
+  it('inside an armed window: the redirect leaves the window open, un-extended, and a following Stop is the tree stop', () => {
+    vi.useFakeTimers()
+    render(<OmnipusComposer />)
+
+    pressStop()
+    act(() => { vi.advanceTimersByTime(500) })
+    submitCommand('/stop-redirect do the other thing')
+
+    // Not disarmed: Stop still holds the Send position right after the redirect.
+    expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
+    expect(screen.queryByTestId('chat-send')).not.toBeInTheDocument()
+    act(() => { vi.advanceTimersByTime(2499) }) // t = 2999
+    expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
+
+    // Not re-armed: the original window closes at t = 3000.
+    act(() => { vi.advanceTimersByTime(1) })
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-send')).toBeInTheDocument()
+  })
+
+  it('inside an armed window: a Stop after the redirect is the second activation (tree)', () => {
+    vi.useFakeTimers()
+    render(<OmnipusComposer />)
+
+    pressStop()
+    act(() => { vi.advanceTimersByTime(500) })
+    submitCommand('/stop-redirect do the other thing')
+    pressStop()
+
+    expect(send.mock.calls).toEqual([
+      [SESSION_FRAME],
+      [{ type: 'redirect', session_id: 'sess_test', instruction: 'do the other thing' }],
+      [TREE_FRAME],
+    ])
   })
 })

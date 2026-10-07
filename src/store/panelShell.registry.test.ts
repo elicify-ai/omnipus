@@ -1,7 +1,8 @@
-// Production registry contract at wave 2. Library, Browser and Mail are
-// registered; future wave-3 ids remain absent. Every registered definition
-// uses the shell-owned full-screen codec, and panels that can hold unsaved
-// edits expose the shared leave gate.
+// Production registry contract at wave 3. Library, Browser, Mail, Tasks, Team
+// and Calendar are registered (spec §10 Wave 2 + Wave 3, FR-014); any other id
+// resolves nothing. Every registered definition uses the shell-owned
+// full-screen codec, and panels that can hold unsaved edits expose the shared
+// leave gate.
 
 import { describe, expect, it } from "vitest";
 import type { PanelDefinition } from "@/components/panel-shell/types";
@@ -31,7 +32,7 @@ async function loadRegistry(): Promise<{ panels: PanelDefinition[] }> {
   return { panels };
 }
 
-describe("panel registry — wave-2 registrations (§12 #1, SC-002)", () => {
+describe("panel registry — wave-2/3 registrations (§12 #1, SC-002)", () => {
   it("exposes a production registry module the shell can consume (spec §8.1; missing module fails loudly, never skips)", async () => {
     let panels: PanelDefinition[] | null = null;
     let blocked = "";
@@ -44,16 +45,19 @@ describe("panel registry — wave-2 registrations (§12 #1, SC-002)", () => {
     expect(panels).not.toBeNull();
   });
 
-  it("registers exactly the registered panels — library, browser and mail at wave 2 (spec §10 Wave 2 + FR-014; supersedes the wave-1 exactly-two pin)", async () => {
-    // WAVE 2 (spec §10 "Wave 2 — Mail adopts the shell" + FR-014): mail
-    // joins the production registry as a third registration — no shell
-    // modification. The wave-1 exactly-two pin is superseded by the wave-2
-    // exactly-three state; tasks/team/calendar remain wave 3 (tested below).
+  it("registers exactly the six panels — library, browser, mail (wave 2) plus tasks, team, calendar (wave 3) (spec §10 Wave 2/3 + FR-014; supersedes the wave-2 exactly-three pin)", async () => {
+    // Oracle: spec §10 "Wave 3 — Team, Tasks, Calendar become panels (SP-6)"
+    // and FR-014 (a new panel is one registry entry). The wave-2
+    // exactly-three pin is superseded: the registered set is the six panels
+    // named in the spec, alphabetically sorted here only for a stable compare.
     const { panels } = await loadRegistry();
     expect(panels.map((p) => p.id).sort()).toEqual([
       "browser",
+      "calendar",
       "library",
       "mail",
+      "tasks",
+      "team",
     ]);
   });
 
@@ -107,9 +111,27 @@ describe("panel registry — wave-2 registrations (§12 #1, SC-002)", () => {
     expect(mail?.beforeLeaveRequired).toBeTypeOf("function");
   });
 
-  it("unregistered ids resolve NOTHING — tasks/team/calendar are wave 3 (MAJ-012: an unregistered id is dropped exactly like an unknown one)", async () => {
+  it.each([
+    ["tasks", "Tasks"],
+    ["team", "Team"],
+    ["calendar", "Calendar"],
+  ])(
+    "%s resolves at wave 3 with title %s and a workspace-scoped full-screen codec (SP-6, SP-38/R11, FR-014)",
+    async (id, title) => {
+      const { panels } = await loadRegistry();
+      const panel = panels.find((p) => p.id === id);
+      expect(panel).toBeDefined();
+      expect(panel?.title).toBe(title);
+      const context = { workspaceId: "ws-1" };
+      const search = panel?.fullScreen.toSearch(context);
+      expect(search).toEqual({ workspace: "ws-1" });
+      expect(panel?.fullScreen.fromSearch(search ?? {})).toEqual(context);
+    },
+  );
+
+  it("unregistered ids resolve NOTHING — an id outside the six registered panels is dropped exactly like an unknown one (MAJ-012; settings stays a page in every wave, SP-6)", async () => {
     const { panels } = await loadRegistry();
-    for (const id of ["tasks", "team", "calendar"]) {
+    for (const id of ["bogus", "settings", "chat"]) {
       expect(panels.find((p) => p.id === id)).toBeUndefined();
     }
   });

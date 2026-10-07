@@ -6,6 +6,7 @@ import { getIconComponent } from '@/lib/agentIcons'
 import { cn } from '@/lib/utils'
 import { PRIORITY_LABELS, taskNodeVisual, type TaskGraphNode } from './taskGraph'
 import { TaskActionButton } from '../TaskActionButton'
+import { RunningIndicator } from '@/components/ui/RunningIndicator'
 
 /**
  * Priority pill colours — mirrors `PriorityBadge.tsx`'s P1..P5 ladder
@@ -149,14 +150,17 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
               backgroundColor: `${visual.color}1f`, // ~12% alpha tint
             }}
           >
-            <span
-              aria-hidden
-              className={cn(
-                'h-1.5 w-1.5 rounded-full',
-                visual.animated ? 'animate-pulse' : undefined,
-              )}
-              style={{ backgroundColor: visual.color }}
-            />
+            {/* PI2/PI3: running task nodes use the shared spinning arrow,
+                not a second graph-local pulse treatment or token count. */}
+            {task.status === 'in_progress' ? (
+              <RunningIndicator />
+            ) : (
+              <span
+                aria-hidden
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: visual.color }}
+              />
+            )}
             {visual.label}
           </span>
 

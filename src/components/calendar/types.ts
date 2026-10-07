@@ -72,18 +72,18 @@ export type OccurrenceChipStatus = TaskStatus | 'scheduled' | 'no_record' | 'ski
  */
 export type RunDerivedChipStatus = 'done' | 'in_progress' | 'failed' | 'skipped' | 'scheduled' | 'no_record'
 
-/** The four views offered by the toolbar (FR-006). */
-export type CalendarViewName =
-  | 'dayGridMonth'
-  | 'timeGridWeek'
-  | 'timeGridDay'
-  | 'listWeek'
+/**
+ * The three views offered by the toolbar (SP-39, side-panel wave 3 — Agenda is
+ * dropped; the spec names only Day/Week/Month). Month (`dayGridMonth`) renders
+ * as the compact in-panel grid (CalendarMonthGrid) — it never routes away to a
+ * wider surface (no Expand affordance).
+ */
+export type CalendarViewName = 'dayGridMonth' | 'timeGridWeek' | 'timeGridDay'
 
 export const CALENDAR_VIEWS: CalendarViewName[] = [
   'dayGridMonth',
   'timeGridWeek',
   'timeGridDay',
-  'listWeek',
 ]
 
 /** Human labels for the view switcher. */
@@ -91,7 +91,6 @@ export const CALENDAR_VIEW_LABELS: Record<CalendarViewName, string> = {
   dayGridMonth: 'Month',
   timeGridWeek: 'Week',
   timeGridDay: 'Day',
-  listWeek: 'Agenda',
 }
 
 /**
@@ -182,28 +181,6 @@ export type CalendarEventExtProps =
       dayEndMs: number
     }
   | { kind: 'task-occurrence-more'; taskId: string; status: TaskStatus; icon: 'Clock'; tooltip: string }
-  /**
-   * Synthetic live "now" divider — Agenda (`listWeek`) view ONLY, added
-   * because `@fullcalendar/list` has no time axis and structurally cannot
-   * render FullCalendar's built-in `nowIndicator` (Week/Day only — confirmed
-   * working there, untouched). `CalendarScreen` appends exactly one of these
-   * to `events` per render, ONLY while `listWeek` is the active view and the
-   * live-ticking "now" timestamp falls inside FullCalendar's own visible
-   * range; FullCalendar's own start-time sort then places it chronologically
-   * among that day's real rows, same as Google Calendar's agenda view.
-   * `FullCalendarView`'s `EventChip` branches to a bare `NowMarkerLine`
-   * divider instead of a real chip, and `CalendarScreen.handleEventClick`
-   * treats it as non-interactive (mirrors `task-occurrence-more`, above).
-   *
-   * `timeLabel` is pre-formatted by `CalendarScreen` at construction time
-   * (NOT read from FullCalendar's own `arg.timeText` at render time):
-   * `@fullcalendar/list` hardcodes `timeText: ""` for every custom
-   * `eventContent` in list/Agenda view (it renders the native time into its
-   * own separate `<td>` instead), so `arg.timeText` is always empty there —
-   * confirmed by reading `@fullcalendar/list`'s source and empirically in a
-   * real browser. Carrying the label as data sidesteps that entirely.
-   */
-  | { kind: 'now-marker'; timeLabel: string }
 
 /** Near-black chip text — clears WCAG AAA (>=7:1) on every chip background (SC-006b). */
 export const CHIP_TEXT_COLOR = 'var(--color-primary)'

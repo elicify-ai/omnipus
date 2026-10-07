@@ -1,10 +1,12 @@
 # ADR-091 WP-A — Launcher, steered-by edge, turn reconstruction, admission
 
+**Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. A second Stop / Esc / `/stop` within that window stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. Agent delegate `stop` / `stop_all` is unchanged (one helper's turn / its tree). Authority: founder decision, 2026-10-06.
+
 ## Amended 2026-10-06 — founder decision
 
-[The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md) and [Steering commands: no person question](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20261004-steering-commands-no-person-question.md) supersede conflicting session-control requirements and old acceptance expectations in this spec. **Plain Stop ends only the current turn of that one session, never helpers. Stop all / `/cancel` stops that session and its entire downward helper tree.** Human and agent triggers use `AgentLoop.StopSession`: polite immediately, forced after 3 s, detach 3 s after force. `cancel_grace`, the agent 5-second grace and public `hard` option are removed.
+[The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](../architecture/ADR-20260928-sub-agent-control-plane.md) and [Steering commands: no person question](../architecture/ADR-20261004-steering-commands-no-person-question.md) supersede conflicting session-control requirements and old acceptance expectations in this spec. Human and agent triggers use `AgentLoop.StopSession`: polite immediately, forced after 3 s, detach 3 s after force. `cancel_grace`, the agent 5-second grace and public `hard` option are removed.
 
-Landed stopped resumes the same generation with a fresh execution identity; committed done/failed starts the next round. Boot never dispatches from old messages. A finished root is lifecycle completed/done, **not archived/hidden**; human input continues it, and a new scheduled/heartbeat run may revive completed as the system principal, **never stopped**. A helper final is consumed once by poll OR wake; a stopped parent holds it unconsumed until resumed, and Stop all supersedes queued hand-back wakes without deleting saved results.
+Landed stopped resumes the same generation with a fresh execution identity; committed done/failed starts the next round. Boot never dispatches from old messages. A finished root is lifecycle completed/done, **not archived/hidden**; human input continues it, and a new scheduled/heartbeat run may revive completed as the system principal, **never stopped**. A helper final is consumed once by poll OR wake; a stopped parent holds it unconsumed until resumed, and the tree-scope stop supersedes queued hand-back wakes without deleting saved results.
 
 Delegated input is delivered only after exact text/identity is durably in the transcript; a failed write stays queued with a visible error. One route/record for all senders (transcript as record), waiting-message restart reconstruction, 256 KiB aggregate cap, ledger compaction and live failed-descendant-stop retry are **deferred to #1198 (founder 2026-10-06)**. F6 is the later post-landing simplification review, not authorization to remove safeguards now. The historical holdout below stays verbatim; conflicting old Stop, generation, person-question and automatic-boot-run oracles are not current acceptance.
 
@@ -69,7 +71,7 @@ Delegate run → launch → dispatch; task start → launch → dispatch; async 
 
 ## User stories and acceptance criteria
 
-**Amended 2026-10-06:** any earlier boot-reconstruction case now verifies no boot dispatch. Completion and admission must distinguish completed-root scheduled/heartbeat system-principal new rounds from stopped roots, where Stop holds. Stopped resumes use a fresh execution identity in the same generation. Only Stop all is a helper cascade; plain Stop cannot select helper admissions.
+**Amended 2026-10-06:** any earlier boot-reconstruction case now verifies no boot dispatch. Completion and admission must distinguish completed-root scheduled/heartbeat system-principal new rounds from stopped roots, where Stop holds. Stopped resumes use a fresh execution identity in the same generation. Only the tree-scope stop is a helper cascade; plain Stop cannot select helper admissions.
 
 ### US-1 — A steered session is created whole (P0)
 
@@ -132,7 +134,7 @@ Delegate run → launch → dispatch; task start → launch → dispatch; async 
 | Launch with a cycle (target chain leads back to the launcher) | refused; no write |
 | Ancestor record pruned while descendant live | pruning refuses; the ancestor stays |
 | Two re-entries for the same session race | `registerTurnIfAbsent` admits one; the other is dropped with a diagnostic |
-| A launch that lands while a Stop cascade is passing its parent | the launcher reads the parent's record; a marker of the current generation on the parent stamps the child at launch |
+| A launch that lands while a cascade stopping the chat and its helper tree is passing its parent | the launcher reads the parent's record; a marker of the current generation on the parent stamps the child at launch |
 | `StartTaskNow` for a task whose session already exists and is terminal | dispatch is a no-op; no second session |
 | Delayed or recurring task whose creating session no longer exists | launched as an `ordinary_root` |
 | Launch with `Goal` whose criteria fail task-style validation | refused with the same message `create_task` gives |
@@ -276,7 +278,7 @@ Feature: Steered session launch, reconstruction and admission
 
   # Error Path — Traces to: US-3 / AS-3
   Scenario: A stamped record refuses re-entry
-    Given Stop on R has stamped B's record for its current generation
+    Given a tree-scope stop on R has stamped B's record for its current generation
     When B's queued re-entry is dispatched
     Then dispatch is refused and no turn starts
 

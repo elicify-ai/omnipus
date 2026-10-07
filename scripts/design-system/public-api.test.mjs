@@ -81,24 +81,79 @@ test('public package retains its core controls and excludes application exports'
   assert.equal(new Set(names).size, names.length, 'duplicate public export')
 })
 
+// Finite package boundary, still independent of what the barrel exports.
+// Architect/coordinator ruling 2026-10-05 admits EXACTLY RunningIndicator
+// as a public composite and formatTokens as its internal pure foundation.
+// No domain, store, screen, folder or wildcard admission is introduced.
+const reviewedControls = new Set([
+  'accordion', 'alert-dialog', 'avatar', 'badge', 'button', 'calendar', 'card', 'checkbox',
+  'command', 'date-picker', 'date-time-picker', 'dialog', 'disclosure-row', 'dropdown-menu',
+  'input', 'label', 'popover', 'progress', 'radio-group', 'segmented-control',
+  'select', 'separator', 'sheet',
+  'resize-separator', 'slider', 'smart-select', 'switch', 'table', 'tabs', 'text-toggle', 'textarea', 'tooltip',
+  'icon-button', 'field', 'confirm-dialog', 'skeleton', 'collection-state',
+  'job-status', 'empty-state', 'error-state', 'query-error-state', 'zoomable-view',
+  'RunningIndicator',
+].map((name) => `src/components/ui/${name}.tsx`))
+const reviewedFoundations = new Set([
+  'src/index.ts', 'src/lib/utils.ts', 'src/lib/formatTokens.ts',
+  'src/design-system/tokens.ts', 'src/design-system/status.ts',
+  'src/design-system/use-loading-visibility.ts', 'src/styles/library.css',
+  'src/styles/tokens.generated.css', 'src/styles/tokens.theme.generated.css',
+])
+
+function assertReviewedLibraryPaths(paths) {
+  const forbidden = paths.filter((file) => !reviewedControls.has(file) && !reviewedFoundations.has(file))
+  assert.deepEqual(forbidden, [], 'application dependencies must remain outside the package entry')
+}
+
 test('public library dependency graph cannot reach application state or domain code', () => {
   const paths = [...localGraph(entry)].map((file) => relative(root, file).replaceAll('\\', '/'))
   assert.ok(paths.includes('src/components/ui/button.tsx'), 'graph must actually traverse the public controls')
-  // This finite source boundary is independent of what the entry happens to export.
-  // New shared modules require a deliberate boundary update and catalog classification.
-  const controls = new Set([
-    'accordion', 'alert-dialog', 'avatar', 'badge', 'button', 'calendar', 'card', 'checkbox',
-    'command', 'date-picker', 'date-time-picker', 'dialog', 'disclosure-row', 'dropdown-menu',
-    'input', 'label', 'popover', 'progress', 'radio-group', 'segmented-control',
-    'select', 'separator', 'sheet',
-    'resize-separator', 'slider', 'smart-select', 'switch', 'table', 'tabs', 'text-toggle', 'textarea', 'tooltip',
-    'icon-button', 'field', 'confirm-dialog', 'skeleton', 'collection-state',
-    'job-status', 'empty-state', 'error-state', 'query-error-state',
-    'zoomable-view',
-  ].map((name) => `src/components/ui/${name}.tsx`))
-  const foundations = new Set(['src/index.ts', 'src/lib/utils.ts', 'src/design-system/tokens.ts', 'src/design-system/status.ts', 'src/design-system/use-loading-visibility.ts', 'src/styles/library.css', 'src/styles/tokens.generated.css', 'src/styles/tokens.theme.generated.css'])
-  const forbidden = paths.filter((file) => !controls.has(file) && !foundations.has(file))
-  assert.deepEqual(forbidden, [], 'application dependencies must remain outside the package entry')
+  assertReviewedLibraryPaths(paths)
+})
+
+test('RunningIndicator is a public composite with its props type, not hidden domain debt', () => {
+  const names = exportsOf(entry)
+  assert.ok(names.includes('RunningIndicator'), 'public entry must export RunningIndicator')
+  assert.ok(names.includes('RunningIndicatorProps'), 'public entry must export RunningIndicatorProps')
+  const catalog = JSON.parse(readFileSync(resolve(root, 'design-system/catalog.json'), 'utf8'))
+  const indicator = catalog.entries.find((item) => item.source === 'src/components/ui/RunningIndicator.tsx')
+  assert.ok(indicator, 'the actual indicator source must be catalogued')
+  assert.equal(indicator.classification, 'composite')
+  assert.deepEqual(indicator.publicExports, ['RunningIndicator'])
+  assert.deepEqual(indicator.publicTypes, ['RunningIndicatorProps'])
+})
+
+test('the real public import graph reaches the indicator and its exact pure formatter foundation', () => {
+  const paths = [...localGraph(entry)].map((file) => relative(root, file).replaceAll('\\', '/'))
+  assert.ok(paths.includes('src/components/ui/RunningIndicator.tsx'), 'public graph must actually reach the indicator')
+  assert.ok(paths.includes('src/lib/formatTokens.ts'), 'the optional numeric path uses its pure formatter foundation')
+  assertReviewedLibraryPaths(paths)
+})
+
+test('formatTokens is an internal foundation, never a new public application API', () => {
+  const catalog = JSON.parse(readFileSync(resolve(root, 'design-system/catalog.json'), 'utf8'))
+  const formatter = catalog.entries.find((item) => item.source === 'src/lib/formatTokens.ts')
+  assert.ok(formatter, 'the formatter dependency requires exact foundation classification')
+  assert.equal(formatter.classification, 'foundations')
+  assert.deepEqual(formatter.publicExports, [])
+  assert.deepEqual(formatter.publicTypes, [])
+  assert.equal(exportsOf(entry).includes('formatTokens'), false, 'the formatter stays internal')
+})
+
+test('exact indicator/formatter admission still rejects stores, task domain code and adjacent UI domain components', () => {
+  const admitted = ['src/components/ui/RunningIndicator.tsx', 'src/lib/formatTokens.ts']
+  assert.doesNotThrow(() => assertReviewedLibraryPaths(admitted))
+  // The SAME boundary assertion rejects every injected dependency. A blanket
+  // ui/lib/store admission would survive none of these negative controls.
+  for (const forbidden of [
+    'src/store/ui.ts', 'src/components/workspaces/TaskCard.tsx',
+    'src/components/ui/AutoSaveIndicator.tsx', 'src/components/layout/AppShell.tsx',
+    'src/lib/api.ts', 'src/lib/formatTokens-extra.ts',
+  ]) {
+    assert.throws(() => assertReviewedLibraryPaths([...admitted, forbidden]), /application dependencies must remain outside/)
+  }
 })
 
 

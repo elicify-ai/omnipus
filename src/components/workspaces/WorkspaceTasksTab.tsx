@@ -235,7 +235,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
   const heading = selectedPlan ? `${selectedPlan.title} — tasks` : 'Team Task Backlog'
 
   return (
-    <div className="absolute inset-0 flex flex-col overflow-hidden">
+    <div className="@container relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       {/* ── Plans section ── bold heading + a minimalist "+ New Plan" text
           link, over a thin separator. (Matches the operator mockup: section
           labels + hairline separators + link-style create actions, generous
@@ -288,20 +288,21 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           actually hit the Agent filter button underneath it. Reproduced with
           Playwright at 390px: `document.elementFromPoint` at the Graph tab's
           own rendered center resolved to `[data-testid="tasks-agent-filter"]`.
-          Below `md` (768px, this repo's phone/tablet boundary) each of the
-          three groups below gets the FULL row width and they stack instead of
-          sharing one squeezed row, so no group's minimum content size can ever
-          exceed what's available; `md:`+ is byte-for-byte the original
-          single-row grid, unchanged. */}
-      <div className="flex flex-col gap-[var(--space-2)] md:grid md:grid-cols-[1fr_auto_1fr] md:items-center md:gap-[var(--space-2-5)] px-[var(--space-4)] pt-[var(--space-4)] pb-[var(--space-2-5)] flex-shrink-0">
+          SP-33: answer to this panel's container, not the window. At a fixed
+          1440px viewport the real toolbar needs 838 / 879 / 1085px for its
+          three tracks at the supported 12 / 14 / 20px root sizes. The measured
+          1085px threshold retains the grid only when all three fit; below it
+          the groups stack. Within a group, wrapping keeps enlarged or selected
+          labels from covering the Board/List/Graph controls. */}
+      <div className="flex flex-col gap-[var(--space-2)] @min-[1085px]:grid @min-[1085px]:grid-cols-[1fr_auto_1fr] @min-[1085px]:items-center @min-[1085px]:gap-[var(--space-2-5)] px-[var(--space-4)] pt-[var(--space-4)] pb-[var(--space-2-5)] flex-shrink-0">
         {/* Left: dynamic heading + the flat Board/List/Graph view switcher. */}
-        <div className="flex min-w-0 items-center gap-[var(--space-3)]">
+        <div className="flex min-w-0 flex-wrap items-center gap-[var(--space-3)]">
           <div className="flex min-w-0 items-center gap-[var(--space-1)]" data-testid="tasks-heading">
             <h2 className="font-headline text-base font-bold text-[var(--color-secondary)] truncate">
               {heading}
             </h2>
             {view === 'board' && ownerAgent && (
-              <span className="whitespace-nowrap text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">· Agent: {ownerAgent.name}</span>
+              <span className="truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">· Agent: {ownerAgent.name}</span>
             )}
           </div>
           <ViewSwitcher value={view} onChange={setView} />
@@ -312,7 +313,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
             per-column Excel-style filtering (Agent/Tags/Status/Pri live in the
             table headers there), and the Graph view honors the plan filter
             alone, so neither renders these toolbar filters. */}
-        <div className="flex items-center justify-center gap-[var(--space-2)]">
+        <div className="flex flex-wrap items-center justify-center gap-[var(--space-2)]">
           {view === 'board' && (
             <AgentFilterDropdown agents={agents} value={ownerAgentId} onChange={setOwnerAgentId} />
           )}

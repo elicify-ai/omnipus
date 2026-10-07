@@ -79,6 +79,8 @@ export interface UseSlashMenuParams {
   composerRuntime: ComposerRuntime
   appendMessage: (message: ChatMessage) => void
   startNewSession: () => void
+  /** `/stop` is one existing Stop/Esc activation, including its 3 s confirmation window. */
+  activateStop: () => void
   /**
    * `/cancel` delegates here. ADR-20260928 D9: `/cancel` is ITSELF the
    * Stop-all confirmation — the caller wires the self-confirming tree
@@ -91,25 +93,6 @@ export interface UseSlashMenuParams {
    */
   cancelIfStreaming: () => void
   /**
-   * D9: true only when the CURRENT chat targets a helper session — a
-   * "delegate"-type session (ADR-057 FR-008: the subordinate type a child
-   * session gains when minted by a delegation). The caller derives it from
-   * the attached session's server-minted wire metadata (the session store's
-   * `attachedSessionType`, recorded from `session.type` on every
-   * `attachToSession`), never from client-side guessing. Fail-closed by
-   * construction (seam ruling §3.2): any unresolvable or non-helper identity
-   * — a fresh "/new" chat (null), a root chat/ task / channel session — is
-   * `false` AT THE CALLER, so `/stop-redirect` takes the root-style refusal
-   * there.
-   *
-   * Required, per the endorsed D9 seam shape (architect adjudication F2,
-   * 2026-10-02): a caller that forgets to wire the helper identity must fail
-   * at compile time, not silently get root behavior — the "Unknown → root
-   * refuses" default belongs to the caller's resolution (ChatScreen), never
-   * to this hook. The live caller always passes the resolved value.
-   */
-  isHelperSession: boolean
-  /**
    * D9: sends the dedicated generated RedirectFrame
    * `{type:'redirect', session_id, instruction}` to the server over the WS
    * (the frame never touches message intake, which is what lets a redirect
@@ -117,7 +100,7 @@ export interface UseSlashMenuParams {
    * the `connection.send` call and a VISIBLE error when the send fails —
    * mirroring how `cancelIfStreaming` keeps its transport in the chat store.
    * The hook only constructs the frame (exact generated shape, no extra
-   * properties) after its own helper/root and usage gates pass.
+   * properties) for the current chat after its usage and active-session gates pass.
    *
    * Required, consistent with its sibling transport `cancelIfStreaming`
    * (architect adjudication F2, 2026-10-02): one required and one optional
@@ -241,20 +224,12 @@ const GHOST_TEXT_PLACEHOLDER = '<message>'
 // silently drift from this one.
 export const SECTION_CAP = 8
 
-// D9 user-facing texts for the /stop-redirect client branches below. The ADR
-// fixes the interaction ("refuse with guidance to target a helper"; the
-// command shape is "/stop-redirect <instruction>") without pinning exact SPA
-// wording; both texts satisfy the pack's oracle substrings ("helper" in the
-// refusal, "/stop-redirect" in the usage) and name the way out.
-const STOP_REDIRECT_ROOT_REFUSAL =
-  '`/stop-redirect` only works in a helper\'s chat — it stops that helper\'s current turn and continues it with a new instruction. Open the helper session you want to redirect and run the command there. To stop this conversation\'s current turn, use `/stop`.'
+// Redirect replaces the CURRENT chat's turn, whether root or helper. Invalid
+// instructions and unresolved session targets still refuse visibly.
 const STOP_REDIRECT_USAGE =
-  'Usage: `/stop-redirect <instruction>` — stops this helper\'s current turn and continues it with your new instruction. The instruction text is required; whitespace alone is not an instruction.'
-// Fail-closed edge (not expected in a real helper chat): the helper flag said
-// "helper" but no session is attached to aim the frame at. Refuse visibly
-// rather than sending a frame at an unresolvable target.
+  'Usage: `/stop-redirect <instruction>` — stops this chat\'s current turn and continues it with your new instruction. The instruction text is required; whitespace alone is not an instruction.'
 const STOP_REDIRECT_NO_SESSION =
-  '`/stop-redirect` could not resolve the helper session to redirect — no active session is attached to this chat. Re-open the helper\'s chat and try again.'
+  '`/stop-redirect` could not resolve the current chat — no active session is attached. Re-open the chat and try again.'
 
 // Root-cause fix (cancel-cross-channel T24a investigation, sendfile-fix):
 // the composer's `inputEnabled` (ChatScreen.tsx) depends only on the WS
@@ -359,8 +334,8 @@ interface ClientCommandDeps {
   allCommands: SlashCommand[]
   startNewSession: UseSlashMenuParams['startNewSession']
   appendMessage: UseSlashMenuParams['appendMessage']
+  activateStop: UseSlashMenuParams['activateStop']
   cancelIfStreaming: UseSlashMenuParams['cancelIfStreaming']
-  isHelperSession: boolean
   sendRedirectFrame: UseSlashMenuParams['sendRedirectFrame']
   composerRuntime: ComposerRuntime
   setInputValue: (value: string) => void
@@ -368,7 +343,7 @@ interface ClientCommandDeps {
 }
 
 function runClientSlashCommand(name: string, argument: string, deps: ClientCommandDeps): boolean {
-  const { allCommands, startNewSession, appendMessage, cancelIfStreaming, isHelperSession, sendRedirectFrame, composerRuntime, setInputValue, setSlashOpen } = deps
+  const { allCommands, startNewSession, appendMessage, activateStop, cancelIfStreaming, sendRedirectFrame, composerRuntime, setInputValue, setSlashOpen } = deps
   if (name === 'new' || name === 'clear') {
     // Renamed /clear → /new (the palette advertises /new; 'clear' survives
     // as a hidden backend alias for CLI/channel muscle memory). Starts a
@@ -433,38 +408,15 @@ function runClientSlashCommand(name: string, argument: string, deps: ClientComma
   }
 
   if (name === 'stop') {
-    // D9 row 1: /stop (root OR helper) = stop only this session's current
-    // turn — the same server behaviour as one Stop-button press (the tree
-    // cascade stays /cancel's and the confirmed second press's; /stop never
-    // cascades). The SPA consumer is therefore exactly the Stop button's
-    // single-press path: cancelIfStreaming() — the caller's useCancelState
-    // wiring sends the scope-less (session-default) cancel frame and runs
-    // the same "Stopping..." state machine the button uses. Not the
-    // redirect branch below; no /steer alias exists (founder O4).
-    cancelIfStreaming()
+    // Founder 2026-10-06: exactly one Stop/Esc activation, not /cancel's
+    // immediate tree stop. Reuse its label and 3 s confirmation window.
+    activateStop()
     return true
   }
 
   if (name === 'stop-redirect') {
-    // D9 rows 2–3: /stop-redirect <instruction> redirects THAT helper
-    // (stop first, then continue with the instruction) — valid only in a
-    // helper's chat. Fail-closed on identity (seam ruling §3.2): the
-    // caller's isHelperSession derives from the attached session's
-    // server-minted "delegate" type; anything unresolvable is root here.
-    // Root refusal comes FIRST — a root user gets the targeting guidance
-    // whatever they typed after the command, never a usage hint implying
-    // the command could work here.
-    if (!isHelperSession) {
-      appendMessage({
-        id: generateId(),
-        role: 'system',
-        content: STOP_REDIRECT_ROOT_REFUSAL,
-        timestamp: new Date().toISOString(),
-        status: 'done',
-      })
-      return true
-    }
-
+    // Founder 2026-10-06: redirect THIS chat's turn in any chat, not a
+    // separate helper target. The dedicated frame still bypasses intake.
     // Usage gate: an empty instruction (bare command, or whitespace-only —
     // JS .trim() is Unicode-aware, so NBSP/em-space-only residue is empty)
     // replies usage and changes nothing: no frame, no message, no stop.
@@ -479,10 +431,8 @@ function runClientSlashCommand(name: string, argument: string, deps: ClientComma
       return true
     }
 
-    // The frame targets the CURRENTLY OPEN session (D9 row 2 —
-    // conversation-scoped, #955: the helper's own chat redirects that
-    // helper). Read fresh from the store in this write path — never a
-    // render-captured value.
+    // Target the CURRENTLY OPEN session (#955), root or helper. Read fresh
+    // from the store in this write path, never a render-captured value.
     const sessionId = useSessionStore.getState().activeSessionId
     if (!sessionId) {
       appendMessage({
@@ -506,11 +456,11 @@ function runClientSlashCommand(name: string, argument: string, deps: ClientComma
     // Required in the type, but kept as a defensive runtime invariant: a
     // malformed untyped runtime call (plain JS) can still reach this line
     // with no transport — fail LOUDLY (never `?.`; a silently dropped
-    // redirect would leave the helper's turn running while the UI pretends
+    // redirect would leave this chat's turn running while the UI pretends
     // it redirected).
     if (!sendRedirectFrame) {
       throw new Error(
-        'useSlashMenu: /stop-redirect reached the send path with no sendRedirectFrame transport — the caller claimed isHelperSession but provided no frame sender.',
+        'useSlashMenu: /stop-redirect reached the send path with no sendRedirectFrame transport.',
       )
     }
     sendRedirectFrame({ type: 'redirect', session_id: sessionId, instruction: argument })
@@ -548,8 +498,8 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     composerRuntime,
     appendMessage,
     startNewSession,
+    activateStop,
     cancelIfStreaming,
-    isHelperSession,
     sendRedirectFrame,
   } = params
 
@@ -1006,8 +956,8 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       allCommands,
       startNewSession,
       appendMessage,
+      activateStop,
       cancelIfStreaming,
-      isHelperSession,
       sendRedirectFrame,
       composerRuntime,
       setInputValue,

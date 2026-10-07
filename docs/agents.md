@@ -1,14 +1,15 @@
 # Agents
 
-Agents do the work in Omnipus. Four ship with the product, and you can create your own from the Agents screen.
+Agents do the work in Omnipus. Omnipus ships four built-in chat colleagues—Mia, Jim, Ava and Admin—plus the native workers Planner, Researcher and General Purpose. Judge and Plan Supervisor are internal engine agents. You can create your own Main agents and workers from Agents.
 
 ## What it is
 
-Open **Agents** in the sidebar and the roster has three sections:
+Open **Agents** in the sidebar and the roster has four sections:
 
-- **Built-in roster** — the four agents Omnipus ships with. They are locked, and Mia is the initial default.
+- **Built-in roster** — Mia, Jim, Ava and Admin. Their identity and base instructions are protected, and Mia is the initial default.
 - **Main agents** — chat colleagues you create yourself.
-- **Sub-agent workers** — workers you create yourself. They never chat with you; other agents delegate work to them.
+- **Sub-agent workers** — shipped and user-created workers. They are not chat colleagues; other agents delegate work to them, and you can assign workspace tasks to workers on the team.
+- **System** — Judge and Plan Supervisor, internal engine agents that cannot be selected for chat or delegation.
 
 A filter above the roster narrows the list to one [workspace](workspaces.md) team.
 
@@ -28,7 +29,7 @@ The four built-in agents cover the everyday jobs.
 | Mia | Assistant | Your everyday starting point. Answers questions and connects you with the right specialist. |
 | Jim | Planner and Orchestrator | Turns a complex goal into tasks, delegates them to the right agents, and tracks the work to completion. |
 | Ava | Builder | Interviews you about what you need, then creates a custom agent with the personality and tools you asked for. |
-| Ray | Scout | Research. Digs into a topic, reads multiple sources, and reports back with citations. |
+| Admin | Operator | Configures connectors, providers, channels, diagnostics and document dependencies. |
 
 All four can hand the conversation to another agent when you ask them to. Ava is also a shortcut for creating agents: skip the form and describe what you want to her in chat.
 
@@ -98,8 +99,8 @@ flowchart LR
   Main -->|"delegate run<br/>(never blocks)"| Worker["Worker<br/>its own session"]
   Worker -->|"report"| Main
   Main -->|"answer"| You
-  Main -.->|"one delegate line"| MainChat[Main's chat]
-  Worker -.->|"status + Open"| Side[Side panel]
+  Main -.->|"delegation event lines"| MainChat[Main's chat]
+  Worker -.->|"status + Open"| Side[Activity panel]
   Side -.->|"Open"| Worker
   StopAll["Stop all on Main"] -.->|"stops everything below"| Worker
   Queue["At the cap"] -.->|"queued, with place in line"| Worker
@@ -107,15 +108,15 @@ flowchart LR
 
 What this looks like in practice:
 
-- The worker's voice never reaches your chat. The delegating agent's chat shows only the one line the `delegate` tool call produces. A worker's steps, narration, and output do not appear there.
-- The delegating agent can keep many workers running. Each one shows up in the **side panel** as a row with a one-line status that updates as the worker reports progress, and an **Open** button you can click to open that worker's session and watch it work.
+- The worker's own steps, narration and tool calls stay in its session. The parent's non-verbose chat uses muted delegation event lines; Verbose chat also shows delegate tool-call badges.
+- The delegating agent can keep many workers running. **Activity** lists each worker's status and an **Open** control for its session, where you can watch it work.
 - The worker reports only to the agent that delegated it, never to the person. It uses a separate `message_parent` channel plus the steering surface (`status`, `steer`, `respond`, `redirect`, `resume`, `stop_all`), and nothing else.
 - The delegating agent never blocks. The tool returns as soon as the worker is launched and dispatched, and the agent carries on. When it needs the worker's answer, the worker wakes it on completion.
 - **Stop pauses only the current session.** One Stop-button press or `/stop` ends that session's current turn, including its first turn and turns started by a schedule or heartbeat. It shows as **Stopped**, not failed. Its helpers keep working and send their results into its inbox. **Stopped** is shown after that execution's work and cleanup finish. A storage failure is reported as an error, not claimed as a successful Stop; a failure discovered after the request was accepted is reported when its execution settles. Work so far stays, the session is resumable on the same conversation and generation (the same round of work), and its goal stays active. A stopped helper's status is saved in its parent's session. Re-delivering an older stop notice after Resume does not change the helper's current state.
 - **Activity follows the helper's current state.** Stopped helpers leave **Running now** and the running count even though their delegation remains open for Resume. Their stopped rows keep **Open**, and do not keep counting elapsed running time. The **Agents · Activity** control remains available for retained stopped helpers. Resume on the same conversation returns the same helper to Running now when it is running again; a stopped helper is not reported as a failed one.
 - **Saved Stop notices are reminders, not failures.** After a restart, an untaken notice rings the working parent again under the same notice identity. A stopped parent keeps the notice without waking. The reminder does not resume the helper or clear its goal; only a new message or an explicit Resume continues it.
-- **Stop all pauses the whole tree below that session.** `/cancel` is the explicit Stop-all confirmation: it stops the current session and every helper under it, including helpers queued for a slot. It never reaches a parent or a sibling, and it never clears a goal. The delegating agent's `stop_all` is the same Stop all, with the same downward scope. Every Stop works the same way, whoever presses it: the running work is asked to stop at once, and if it is still going 3 seconds later it is stopped forcibly. That applies only to the run the Stop selected. A helper shows as stopped once its running work has shut down. If you resume the helper in the meantime, the resumed run is a new run and the pending forced stop leaves it alone; a new Stop is needed to stop it.
-- **Redirect replaces one helper's current turn.** Open that helper's chat and type `/stop-redirect <instruction>`. It stops that helper first, then continues it with the new instruction; its helpers keep working. A stopped helper continues on the same conversation and generation. A finished helper has no turn to replace: use Resume for its next round. In a root chat, `/stop-redirect` refuses and tells you to open a helper's chat; the root's own `/stop` still works. A blank instruction returns usage and changes nothing. Store or control failures are shown, not reported as a successful redirect. If the saved session cannot be read, Redirect reports a read error instead of treating the helper as a root chat.
+- **Stop all pauses the whole tree below that session.** In web chat, a first Stop-button press, Escape or `/stop` opens a three-second confirmation window; another Stop activation in that same chat confirms Stop all. The same Stop button stays available during the window—there is no separate Stop-all button. The window closes after three seconds, when the window loses focus, or when you switch chats. `/cancel` is the immediate, explicit Stop-all confirmation: it stops the current session and every helper under it, including helpers queued for a slot. It never reaches a parent or a sibling, and it never clears a goal. The delegating agent's `stop_all` is the same Stop all, with the same downward scope. Every Stop works the same way, whoever presses it: the running work is asked to stop at once, and if it is still going 3 seconds later it is stopped forcibly. That applies only to the run the Stop selected. A helper shows as stopped once its running work has shut down. If you resume the helper in the meantime, the resumed run is a new run and the pending forced stop leaves it alone; a new Stop is needed to stop it.
+- **The chat redirect command replaces the current chat's turn.** In any chat, root or helper, type `/stop-redirect <instruction>`. It stops that conversation's current turn, then continues that same conversation with the new instruction; its helpers keep working. It does not target a helper below the chat. A stopped helper continues on the same conversation and generation. A finished helper has no turn to replace: use Resume for its next round. A blank instruction returns usage and changes nothing. A chat without an attached active session shows guidance and sends no redirect. Store or control failures are shown, not reported as a successful redirect; an unreadable saved session reports a read error.
 - **A message steers too.** A message into a working helper is delivered into its current turn and never stops it. A message into a stopped helper resumes it on the same conversation, and a message into a finished (done or failed) helper starts its next round.
 - **No person-only wait.** When a helper needs a person, it asks its parent with an ordinary message and keeps working; the parent reaches you through ordinary chat text. There is no special pause and no 24-hour expiry — a helper never fails because a person was unavailable.
 - When too many workers are already running, the next one is **queued** — the parent's tool result tells it its place in line, and queued workers start in order as slots free. There is no blocking wait, and `delegate stop_all` stops a queued worker.
@@ -128,9 +129,9 @@ An instruction that reaches a helper just as its turn is ending is still deliver
 
 The exact caps on all of this — how deep a chain may go, how many may run at once, and how long a child may run — live on the Performance tab; see [settings](settings.md#delegation-limits) for the values and their defaults.
 
-A worker has its own settings — its model, its tools, its limits. The delegating agent hands over the task; the worker supplies everything else. Delegation itself is a per-workspace decision: which agent may delegate to which is set on that [workspace](workspaces.md) **Team** tab, and that rule applies only there.
+A worker has its own settings — its model, its tools, its limits. The delegating agent hands over the task; the worker supplies everything else. Delegation itself is a per-workspace decision: which agent may delegate to which is set in that [workspace](workspaces.md) **Team** panel, and that rule applies only there.
 
-**The built-in Worker can delegate onward when permitted.** By default, a workspace seeded with Worker on its team gets a Worker → Worker edge for task and background `delegate` calls, capped at depth 3 or a lower configured limit. Custom workers get no outgoing edge automatically; to let one delegate to another team agent, add the edge on that workspace's Team tab and allow its `delegate` tool. Without an edge, the request is denied; an edge alone does not grant a denied tool. Only built-in Jim and Worker can have an edge to themselves.
+**The built-in General Purpose worker can delegate onward when permitted.** By default, a workspace seeded with General Purpose on its team gets a General Purpose → General Purpose edge for task and background `delegate` calls, capped at depth 3 or a lower configured limit. Custom workers get no outgoing edge automatically; to let one delegate to another team agent, add the edge in that workspace's Team panel and allow its `delegate` tool. Without an edge, the request is denied; an edge alone does not grant a denied tool. Only built-in Jim and General Purpose can have an edge to themselves.
 
 An **external worker** runs on a command-line tool installed on the same machine as Omnipus: Claude Code, Codex, or OpenCode. Its model is a free-text name passed straight to that tool. Before it saves changes to an external worker, Omnipus checks the connection automatically: that the tool's program is present, that it answers, and that it is signed in. If the check fails, the save is refused. The check runs on the first save after you open the worker, and after that only when you change the path to the tool's program, or when the previous check failed — not on every save. It spends no model usage. To try the worker by hand, open it and use **Send a test message** on its **Runtime** tab; this runs a real request through the tool, so it spends a small amount of usage.
 
@@ -144,7 +145,7 @@ Two things to watch with external workers:
 
 A heartbeat is a scheduled check-in for one agent in one workspace. The same agent can have a different heartbeat, or none, in each workspace. Workers cannot have heartbeats.
 
-1. Open the workspace **Team** tab and open the agent from there. The edit slide-over now shows a **Heartbeat** tab.
+1. Open the workspace **Team** panel and open the agent from there. The edit slide-over now shows a **Heartbeat** tab.
 2. Open **Heartbeat** and switch **Enable heartbeat** on.
 3. Set **Interval (minutes)** to five or more.
 4. Write the **Heartbeat body**, which is the prompt the agent receives at each check-in. For example: "Check the inbox and start a task for anything new."
@@ -154,9 +155,9 @@ If nothing needs attention, the agent records an all-clear. Heartbeat sessions s
 
 ## Limits and things to watch
 
-- The built-in roster is locked. Name, description, persona, color, icon, and skills cannot change. Model and limits stay editable; tool permissions are read-only — create a custom agent to change those.
+- Ordinary built-in agents' identity and base instructions are protected. Model and supported execution limits remain editable, as do tool policies, connector assignments and skills.
 - Workers are invisible to chat. They have no voice, no heartbeat, and can never be the default.
-- A worker with no delegation edge does nothing. Wire the edge on the workspace Team tab.
+- Other agents need an appropriate workspace delegation edge to delegate to a worker. A worker on the workspace team can also be assigned a task by the user.
 - An external worker depends on its tool being installed. If the tool is missing, the create menu shows it greyed out.
 - An agent's own tool-call limit can only be lower than or equal to the global limit in Settings, Performance.
 - Editing autosaves. A red save indicator means the last change failed; correct the field it names and the next change saves.

@@ -118,7 +118,12 @@ func (al *AgentLoop) clearRevivalFailure(sessionID string) {
 // would crash the process), and an inner C8 recover that synthesizes a
 // terminal error frame and force-publishes it before re-panicking so the
 // outer recover still records the original panic.
-func (al *AgentLoop) runRevivedOrdinaryTurn(msg bus.InboundMessage, sessionKey string) {
+//
+// It reports whether the turn was admitted. A false return means shutdown had
+// closed intake and NOTHING ran; a caller that owns an instruction the user
+// typed (the /stop-redirect continuation) must tell the user, since the log
+// line alone reaches nobody.
+func (al *AgentLoop) runRevivedOrdinaryTurn(msg bus.InboundMessage, sessionKey string) bool {
 	// Tracked in activeRequests so shutdown drains it (#265), like the
 	// unroutable path.
 	if !al.beginActiveRequest() {
@@ -129,7 +134,7 @@ func (al *AgentLoop) runRevivedOrdinaryTurn(msg bus.InboundMessage, sessionKey s
 			"session_id":  msg.SessionID,
 			"session_key": sessionKey,
 		})
-		return
+		return false
 	}
 	go func() {
 		defer al.endActiveRequest()
@@ -235,4 +240,5 @@ func (al *AgentLoop) runRevivedOrdinaryTurn(msg bus.InboundMessage, sessionKey s
 			published = true
 		}
 	}()
+	return true
 }

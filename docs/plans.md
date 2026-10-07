@@ -12,7 +12,11 @@ A plan lives in a [workspace](workspaces.md) and has three parts:
 
 The engine runs plans on the server: it hands each unblocked task to its assignee, checks the result against that task's acceptance criteria, and judges the DoD once every member has finished.
 
-You see plans in the **Tasks** tab of a workspace, as tiles above the board showing the state badge, a progress count such as "4 of 6 tasks done", the owner, and one action button. Selecting a tile filters the view to that plan's tasks and switches to the Graph view, where the dependency graph is drawn.
+You see plans in the **Tasks** panel of a workspace, as tiles above the board showing the state badge, a progress count such as "4 of 6 tasks done", the owner, and one action button. Selecting a tile filters the view to that plan's tasks and switches to the Graph view, where the dependency graph is drawn.
+
+The Plans band keeps its horizontal tile strip inside the Tasks panel. Completed plans are hidden by default; use **Show done** to include them. When more tiles are off-screen, **scroll for more →** signals that you can scroll sideways, including on a phone.
+
+A running plan tile shows a spinning arrow without a token count. In the plan's Graph view, each **In Progress** task node uses the same arrow. Board and List running-task indicators also omit token counts; Chat's existing token counter is unchanged. With reduced motion enabled, the arrow stays visible but does not spin.
 
 A plan moves through five states. This table shows what each one means and what you can do from the tile.
 
@@ -45,7 +49,7 @@ Use a plan when several tasks depend on each other and you can state a checkable
 
 ## How to create and run a plan
 
-1. Open your workspace's **Tasks** tab and press **New Plan**. A form opens beside the board.
+1. Open your workspace's **Tasks** panel and press **New Plan**. A form opens beside the board.
 2. Give the plan a title, an optional goal and description, and pick the owner agent from the team. Title and owner are required.
 3. Add Definition of Done items and, if you want different limits, change the Bounds. Save the plan; it appears as a Draft tile.
 4. Add member tasks with the **+ New Task** action: pick the plan, set what the task is blocked by, and give it at least one acceptance criterion. Two fields matter for parallel work — the paths a task creates or edits, and the merge-point marker for a task several parallel tasks feed into.
@@ -76,23 +80,23 @@ The supervisor can apply four corrections.
 | Targeted retry | Re-runs one failed task |
 | Abandon | Ends the plan, recording that the Definition of Done cannot be reached |
 
-After a correction the plan returns to running; three wakes without a valid correction fail it. The tile shows a warning chip — "Re-planning — awaiting supervision" or "Stalled — needs a correction" — with an explanation underneath. There are no correction buttons for you: the supervisor is the only actor, and **Stop** halts the tasks, the checks, and the supervisor's review alike.
+After a correction the plan returns to running. The plan fails when its configured supervision-attempt limit is exhausted; the shipped default is three attempts without a valid correction. The tile shows a warning chip — "Re-planning — awaiting supervision" or "Stalled — needs a correction" — with an explanation underneath. There are no correction buttons for you: the supervisor is the only actor, and **Stop** halts the tasks, the checks, and the supervisor's review alike.
 
 ## Limits and things to watch
 
 - **Restart exists only for plans you stopped.** A plan that failed on its own — rounds exhausted, idle too long, DoD unreachable, supervisor unavailable — is closed for good. Write a new plan.
 - **Restart re-runs only unfinished tasks**, each from scratch. Finished tasks and their evidence are kept.
 - **Stop is a hard cancel** — in-flight tasks, checks, and shell commands. A stopped plan never resumes on its own.
-- **Run slots are capped at 16** active loops across the install — plans, conversation goals, and recurring loops together. A plan can wait at Approved and stays stoppable there.
+- **Run slots follow the install-wide active-loop cap**—16 by default—shared by plans, conversation goals and recurring loops. A plan can wait at Approved and stays stoppable there.
 - **Bounds are per plan** — the judge-round ceiling and idle-expiry days, defaulting to 20 rounds and 7 days. A plan idle that long ends failed.
 - **A running plan can pause.** If its owner agent is disabled, the plan pauses and the tile shows the reason.
 - **A running plan cannot be deleted.** The Clear action in a tile's menu works only on plans that are not running.
-- **Agent-driven execution is permission-gated.** By default, Jim starts and stops plans without a prompt; Mia, Ava, and Ray ask first. [Tools](tools.md) explains the per-agent settings.
+- **Agent-driven plan execution is permission-gated.** On a fresh install, Jim is allowed to execute and stop plans. Mia, Ava and Admin are denied those tools by their shipped role policies. Operators can configure supported per-agent permissions. [Tools](tools.md) explains the per-agent settings.
 
 ## Related pages
 
 - [tasks](tasks.md) — single tasks, their acceptance criteria, and the board they share with plans.
-- [workspaces](workspaces.md) — where the Tasks tab and its plan band live.
+- [workspaces](workspaces.md) — where the Tasks panel and its plan band live.
 - [agents](agents.md) — the owner agent's role, and the Judge and Plan Supervisor as system agents.
 - [goals](goals.md) — the same judging, applied to a goal set in a conversation.
 - [tools](tools.md) — the permission settings that gate plan tools per agent.

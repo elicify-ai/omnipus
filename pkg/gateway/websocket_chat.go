@@ -104,7 +104,10 @@ type wsHandlerHandleChatMessage struct {
 	acceptedMedia       []string
 	msg                 bus.InboundMessage
 	transcriptPersisted bool
-	admitted            bool
+	// transcriptEntryID is the id of the user entry persistUserMessage wrote
+	// successfully; empty for a kickoff (system-role pill) or no write.
+	transcriptEntryID string
+	admitted          bool
 	// firstMessage is an ordinary session-less send using save-before-ack.
 	// ID-bearing oversized sends are rejected before minting; legacy no-ID
 	// oversized input keeps ADR-066's separate agent-side refusal path.
@@ -1162,6 +1165,7 @@ func (hcm *wsHandlerHandleChatMessage) persistUserMessage() bool {
 func (hcm *wsHandlerHandleChatMessage) acceptPersistedUserMessage(entry session.TranscriptEntry) {
 	hcm.transcriptPersisted = true
 	if !hcm.setupKickoff {
+		hcm.transcriptEntryID = entry.ID
 		if hcm.firstMessage {
 			hcm.rememberAcceptedFirstMessage()
 			hcm.acknowledgeNewSession()
@@ -1221,7 +1225,10 @@ func (hcm *wsHandlerHandleChatMessage) buildInboundMessage() {
 		ChatID:        hcm.chatID,
 		Content:       turnContent,
 		SessionID:     hcm.sessionID,
-		Media:         hcm.acceptedMedia,
+		// The user entry persistUserMessage wrote for this very message —
+		// lets the agent loop's history rebuild recognise it by identity.
+		TranscriptEntryID: hcm.transcriptEntryID,
+		Media:             hcm.acceptedMedia,
 		// UserInitiated (ADR-049 Gap #8/r2, R6): the webchat WS `message`
 		// handler is the "Web WS message handler (authenticated gateway
 		// user)" origination point — always a genuine live user action.

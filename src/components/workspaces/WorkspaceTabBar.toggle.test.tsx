@@ -40,7 +40,7 @@
 
 import React from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { act } from 'react'
 import { useUiStore } from '@/store/ui'
 
@@ -132,10 +132,17 @@ describe('WorkspaceTabBar — toggle ARIA model (MAJ-007, wave 1)', () => {
     expect(screen.queryByRole('tablist', { name: 'Workspace views' })).not.toBeInTheDocument()
   })
 
-  it('the Chat entry shows aria-current="page" (not aria-selected) while it is the underlying page', () => {
+  it('the strip has NO Chat entry (SP-40 superseded this wave-1 assertion: chat is the base page, never an entry)', () => {
+    // Amended 2026-10-05 for the wave-3 join: FR-007 as amended by SP-40 —
+    // "Chat is NEVER rendered as a tab-strip or compact-dropdown entry (it
+    // is the base route, not a togglable panel)". The old assertion here
+    // pinned chat's aria-current="page" strip entry, exactly the surface
+    // SP-40 removes; the page-semantic aria-current moved to the
+    // workspace-name → settings entry.
     render(<WorkspaceTabBar workspaceId="ws-1" workspaceName="My Workspace" />)
-    const chatTab = screen.getByTestId('workspace-tab-chat')
-    expect(chatTab.getAttribute('aria-current')).toBe('page')
+    expect(screen.queryByTestId('workspace-tab-chat')).not.toBeInTheDocument()
+    const strip = screen.getByTestId('workspace-tab-strip')
+    expect(within(strip).queryByRole('button', { name: 'Chat' })).not.toBeInTheDocument()
   })
 
   it('the registered Library entry (segment "media") is a toggle button with aria-pressed, not a role="tab" link', () => {

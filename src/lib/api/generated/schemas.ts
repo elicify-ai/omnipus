@@ -103,9 +103,16 @@ type Session = {
   protected?: boolean | undefined;
   agent_id: string;
   title: string;
-  status: "active" | "archived" | "failed";
+  status: "active" | "archived" | "failed" | "interrupted";
   lifecycle_state?:
-    | ("working" | "waiting_for_answer" | "done" | "failed" | "stopped")
+    | (
+        | "working"
+        | "waiting_for_answer"
+        | "done"
+        | "failed"
+        | "stopped"
+        | "interrupted"
+      )
     | undefined;
   stop_note?:
     | {
@@ -3358,9 +3365,16 @@ export const Session: z.ZodType<Session> = z.object({
   protected: z.boolean().optional(),
   agent_id: z.string(),
   title: z.string(),
-  status: z.enum(["active", "archived", "failed"]),
+  status: z.enum(["active", "archived", "failed", "interrupted"]),
   lifecycle_state: z
-    .enum(["working", "waiting_for_answer", "done", "failed", "stopped"])
+    .enum([
+      "working",
+      "waiting_for_answer",
+      "done",
+      "failed",
+      "stopped",
+      "interrupted",
+    ])
     .optional(),
   stop_note: z
     .object({
@@ -7463,6 +7477,7 @@ export const DelegatePeekResponse = z.object({
     "stopped",
     "completed",
     "failed",
+    "interrupted",
   ]),
   latest_checkpoint_summary: z.string().optional(),
   latest_progress_text: z.string().optional(),
@@ -17655,8 +17670,8 @@ export const MailPanelObserverAckFrame = z
 export const MailPanelObserverErrorFrame = z
   .object({
     type: z.literal("mail_panel_observer_error"),
-    observer_id: z.string().min(1),
-    workspace_id: z.string().min(1),
+    observer_id: z.string().min(1).optional(),
+    workspace_id: z.string().min(1).optional(),
     code: z.enum(["unauthorized_workspace", "malformed_frame"]),
     error: z.string(),
   })

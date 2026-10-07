@@ -57,8 +57,13 @@ import {
   type TestInfo,
 } from '@playwright/test';
 
-/** the-internet.herokuapp.com / example.com — the plan's §3.4 fixture hosts. */
-const PAGE_A = 'https://the-internet.herokuapp.com/dropdown';
+/**
+ * example.org / example.com — two distinct IANA-served fixture hosts (the plan's §3.4
+ * needs two distinguishable hosts). PAGE_A was the-internet.herokuapp.com/dropdown, a
+ * slow third-party host that missed the 2 s interactive-navigate budget on a cold
+ * Chrome in ~8-20% of ui-browser runs; no assertion depended on its content.
+ */
+const PAGE_A = 'https://example.org/';
 const PAGE_B = 'https://example.com/';
 /** Public cookie echo. No account, no credential — it just reports the jar. */
 const COOKIE_SET = 'https://httpbin.org/cookies/set?uatws=';
@@ -534,7 +539,7 @@ test('UAT-09 a second workspace gets its own browser, profile and process', asyn
   if (isMemoryRefusal(b.error)) throw new Error(`BLOCKED by the memory ceiling: ${b.error}`);
   expect(b.error).toBeNull();
   expect(b.tabs.map((t) => t.url).join(','), "workspace B must be on its own page").toContain(PAGE_B);
-  expect(b.tabs.map((t) => t.url).join(','), "workspace B must NOT be showing workspace A's tab").not.toContain('the-internet');
+  expect(b.tabs.map((t) => t.url).join(','), "workspace B must NOT be showing workspace A's tab").not.toContain('example.org');
 
   const dirs = execFileSync('/bin/ps', ['ax', '-o', 'command'], { encoding: 'utf8' })
     .split('\n')
@@ -612,7 +617,7 @@ test('UAT-SEC an agent not on the chat workspace never reaches that workspace br
   // structurally-identical navigate-to-PAGE_A operation above (28_000ms) for
   // no evident reason. markA/markB.tabs is a snapshot captured when the
   // collect window closes — a navigation still in flight because a slow
-  // external site (the-internet.herokuapp.com) hadn't committed yet reads as
+  // external site (example.org) hadn't committed yet reads as
   // the tab never having moved (the exact failure this row is about: the
   // tab caught showing a leftover page from an earlier test). Matching
   // UAT-CTRL's window gives the same slow-navigation class the same runway.
@@ -622,7 +627,7 @@ test('UAT-SEC an agent not on the chat workspace never reaches that workspace br
     { afterAttachedMs: 12_000, frame: { type: 'browser_control', action: 'release' } },
   ], 28_000);
   if (isMemoryRefusal(markA.error)) throw new Error(`BLOCKED by the memory ceiling: ${markA.error}`);
-  expect(markA.tabs.map((t) => t.url).join(','), 'workspace A must be marked before the crossing').toContain('the-internet');
+  expect(markA.tabs.map((t) => t.url).join(','), 'workspace A must be marked before the crossing').toContain('example.org');
 
   const markB = await attachRetryingMemory(fx.chatB1, fx.agentB, [
     { afterAttachedMs: 500, frame: { type: 'browser_control', action: 'take' } },
@@ -637,7 +642,7 @@ test('UAT-SEC an agent not on the chat workspace never reaches that workspace br
   if (isMemoryRefusal(crossed.error)) throw new Error(`BLOCKED by the memory ceiling: ${crossed.error}`);
 
   const urls = crossed.tabs.map((t) => t.url ?? '').join(',');
-  expect(urls, "an agent off the team must NOT be shown the named workspace's browsing").not.toContain('the-internet');
+  expect(urls, "an agent off the team must NOT be shown the named workspace's browsing").not.toContain('example.org');
   if (crossed.error === null) {
     expect(urls, "if it attached at all, it must be to its OWN workspace's browser").toContain('example.com');
   }
@@ -648,7 +653,7 @@ test('UAT-SEC an agent not on the chat workspace never reaches that workspace br
   const mirroredUrls = mirrored.tabs.map((t) => t.url ?? '').join(',');
   expect(mirroredUrls, "an agent off the team must NOT be shown the named workspace's browsing").not.toContain('example.com');
   if (mirrored.error === null) {
-    expect(mirroredUrls, "if it attached at all, it must be to its OWN workspace's browser").toContain('the-internet');
+    expect(mirroredUrls, "if it attached at all, it must be to its OWN workspace's browser").toContain('example.org');
   }
 });
 

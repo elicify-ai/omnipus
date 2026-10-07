@@ -114,9 +114,9 @@ function MailPanelContent({ context, presentation, registerExpandContext }: Pane
     messageRef: workspaceContext.messageRef ?? null,
   })
 
-  // Read fresh from the ref on every call — registered ONCE, so the same
-  // getter keeps answering with Mail's live selection for as long as the
-  // panel stays mounted, and unregisters (null) on unmount.
+  // The stable getter reads Mail's live selection; re-register it when that
+  // selection changes so the full-screen shell can also report it to the owner.
+  // Unregister (null) on unmount.
   const getCurrentContext = useCallback((): PanelContext => ({
     workspaceId: workspaceContext.workspaceId,
     mailboxId: locationRef.current.mailboxId,
@@ -129,6 +129,16 @@ function MailPanelContent({ context, presentation, registerExpandContext }: Pane
     return () => registerExpandContext(null)
   }, [registerExpandContext, getCurrentContext])
 
+  const reportLocation = useCallback((location: MailPanelLocation) => {
+    const previous = locationRef.current
+    locationRef.current = location
+    if (previous.mailboxId === location.mailboxId && previous.folder === location.folder &&
+      previous.messageRef === location.messageRef) return
+    // Full-screen selection changes must reach the owner before an ordinary tab close,
+    // not only when the shell asks this getter for Expand or Back.
+    registerExpandContext(getCurrentContext)
+  }, [getCurrentContext, registerExpandContext])
+
   return (
     <MailPanel
       workspaceId={workspaceContext.workspaceId ?? ''}
@@ -136,7 +146,7 @@ function MailPanelContent({ context, presentation, registerExpandContext }: Pane
       layout={presentation === 'fullscreen' ? 'split' : 'stacked'}
       initialFolder={workspaceContext.folder ?? undefined}
       initialMessageRef={workspaceContext.messageRef ?? undefined}
-      onLocationChange={(location) => { locationRef.current = location }}
+      onLocationChange={reportLocation}
     />
   )
 }

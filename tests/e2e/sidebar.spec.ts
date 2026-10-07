@@ -7,8 +7,8 @@ import { expectA11yClean } from './fixtures/a11y';
 // HashRouter: TanStack Router generates href="/#/<path>" links (not href="/<path>").
 // Workspace-as-project IA: the top-level Chat (/#/) and Monitor (/#/monitor)
 // nav items were removed and Connectors replaced the old Channels item. The
-// main navigation's fixed-bottom "Library" group (Sidebar.tsx LIBRARY_ITEMS)
-// now exposes only Agents · Skills & Tools · Connectors as direct links.
+// main navigation's fixed-bottom "Assets" group (Sidebar.tsx ASSET_ITEMS)
+// now exposes Admin chat · Agents · Skills & Tools · Connectors as direct links.
 //
 // Settings is NOT one of them: it moved into the "Open user menu" profile
 // dropdown at the very bottom of the sidebar (Sidebar.tsx: DropdownMenuItem

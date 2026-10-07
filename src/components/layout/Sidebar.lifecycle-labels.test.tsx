@@ -2,9 +2,10 @@
 // lifecycle_state (RED pack).
 //
 // The sidebar's session rows (Sidebar.tsx::SidebarSessionRow) must render the
-// session's `lifecycle_state` as one of exactly five labels — working,
-// waiting for answer, done, failed, stopped (F0929-2 vocabulary; wire enum
-// `working|waiting_for_answer|done|failed|stopped`, generated Session schema)
+// session's `lifecycle_state` as one of exactly six labels — working,
+// waiting for answer, done, failed, stopped, interrupted (F0929-2 vocabulary
+// plus interrupted, founder 2026-10-06; wire enum
+// `working|waiting_for_answer|done|failed|stopped|interrupted`, generated Session schema)
 // — and a stopped row must additionally show its `stop_note.cause` (the
 // lasting who/when/why, MAJ-009). `Session.status` (active/archived/failed)
 // is COARSE transcript metadata and must never drive the label: the ADR's own
@@ -334,6 +335,22 @@ describe('Sidebar session rows — lifecycle_state labels (ADR-20260928 MAJ-009,
     }))
     const rowText = row.closest('button')?.textContent ?? ''
     expect(rowText).toMatch(/\bstopped\b/i)
+  })
+
+  it('RED row with lifecycle_state interrupted shows Interrupted, not Failed, in the neutral muted colour', async () => {
+    // Founder decision 2026-10-06: a session cut off by a server restart is
+    // "interrupted" (sixth status) — it does not fail. Not the error red.
+    const row = await renderRowFor(lcSession({ lifecycle_state: 'interrupted' }))
+    const rowButton = row.closest('button')
+    const rowText = rowButton?.textContent ?? ''
+    expect(rowText).toMatch(/\bInterrupted\b/)
+    expect(rowText).not.toMatch(/\bfailed\b/i)
+    const label = Array.from(rowButton?.querySelectorAll('span') ?? []).find(
+      (el) => el.textContent?.trim() === 'Interrupted',
+    )
+    expect(label).toBeTruthy()
+    expect(label?.className).toContain('text-[var(--color-muted)]')
+    expect(label?.className).not.toContain('text-[var(--color-error)]')
   })
 
   it('PIN session without lifecycle_state renders its row with no lifecycle label and no crash', async () => {

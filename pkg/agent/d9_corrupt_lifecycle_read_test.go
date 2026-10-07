@@ -14,7 +14,6 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
-	"github.com/elicify-ai/omnipus/pkg/commands"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -38,9 +37,9 @@ func d9IdentityReadCase(t *testing.T, mode string) {
 		if !errors.Is(loadErr, session.ErrLifecycleNotFound) {
 			t.Fatalf("absent owning store returned %v,want ErrLifecycleNotFound", loadErr)
 		}
-		helper, resolveErr := al.resolveHelperSession(rootID)
-		if helper || resolveErr != nil {
-			t.Errorf("genuine absent root helper=%v err=%v,want false,nil", helper, resolveErr)
+		// Genuine absence is "not a helper" (an ordinary chat), never a read error.
+		if _, resolveErr := al.helperSessionRecord(rootID); !errors.Is(resolveErr, errNotHelperSession) {
+			t.Errorf("genuine absent root resolved as %v, want errNotHelperSession", resolveErr)
 		}
 		return
 	}
@@ -100,19 +99,19 @@ func d9IdentityReadCase(t *testing.T, mode string) {
 		t.Fatal("instrument: physical existing journal incorrectly disappeared")
 	}
 	_, loadErr := al.GetSessionLifecycleStore().Load(child.SessionID)
-	helper, resolveErr := al.resolveHelperSession(child.SessionID)
+	_, resolveErr := al.helperSessionRecord(child.SessionID)
 	healthy := mode == "valid_helper" || mode == "last_valid_with_torn_tail"
 	if healthy {
-		if loadErr != nil || !helper || resolveErr != nil {
-			t.Errorf("valid/last-valid helper read=%v helper=%v err=%v,want nil,true,nil", loadErr, helper, resolveErr)
+		if loadErr != nil || resolveErr != nil {
+			t.Errorf("valid/last-valid helper read=%v err=%v,want nil,nil (resolved as a helper)", loadErr, resolveErr)
 		}
 		return
 	}
 	if loadErr == nil || errors.Is(loadErr, session.ErrLifecycleNotFound) {
 		t.Errorf("EXISTING unreadable lifecycle classified as absent/usable: Load=%v Exists=true; must return a real read/corruption error", loadErr)
 	}
-	if helper || resolveErr == nil || errors.Is(resolveErr, commands.ErrNotHelperSession) {
-		t.Errorf("true D9 helper resolver hid existing read failure as absent root: helper=%v err=%v,want visible non-root read error", helper, resolveErr)
+	if resolveErr == nil || errors.Is(resolveErr, errNotHelperSession) {
+		t.Errorf("true D9 helper resolver hid existing read failure as usable or absent root: err=%v,want visible non-root read error", resolveErr)
 	}
 	d9AssertRegisteredReadFailure(t, al, child.SessionID, resolveErr)
 }
@@ -133,7 +132,7 @@ func d9AssertRegisteredReadFailure(t *testing.T, al *AgentLoop, childID string, 
 	if !handled {
 		t.Fatal("BLOCKED: actual registered D9 /stop-redirect was not handled — preserved own command is required")
 	}
-	if !strings.HasPrefix(reply, "Redirect request failed: ") || reply == commands.StopRedirectRootRefusal {
+	if !strings.HasPrefix(reply, "Redirect request failed: ") {
 		t.Errorf("existing unreadable helper got root guidance instead of true read-error reply: %q", reply)
 	}
 	if resolveErr != nil && !strings.Contains(reply, resolveErr.Error()) {
