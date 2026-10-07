@@ -42,8 +42,10 @@ vi.mock('@/hooks/useVersionCheck', () => ({ useVersionCheck: vi.fn() }))
 // The Link double folds `search` into the href (same pattern as
 // Sidebar.test.tsx) so the God Mode corner-dot test can assert the full
 // /settings?focus=god-mode&tab=gateway target.
+const mockRouter = vi.hoisted(() => ({ navigate: vi.fn() }))
 vi.mock('@tanstack/react-router', () => ({
   Outlet: () => null,
+  useRouter: () => mockRouter,
   useNavigate: () => vi.fn(),
   useLocation: () => ({ pathname: '/' }),
   Link: ({ children, to, search, onClick, className, ...rest }: {

@@ -97,3 +97,15 @@ properties:
       frame means "cancelled" — every entry written before this field
       existed predates it and was always a cancel.
     example: "max_output_tokens"
+  terminal_outcome:
+    type: boolean
+    description: >
+      Present and true only on an assistant entry that is a turn's distinct
+      terminal outcome sentence (for example the tool-iteration-limit notice)
+      written after the turn's earlier narration was already persisted. Live,
+      the gateway closes the narration bubble with done(<narration id>) before
+      this entry arrives, so it is a separate message; the replay stream has no
+      such boundary, so the SPA must start a new message for this frame instead
+      of merging it into the preceding same-turn assistant entry. Absent on
+      every other frame, including entries written before this field existed.
+    example: true
