@@ -119,11 +119,44 @@ afterEach(() => {
   useUiStore.getState().closePanel()
   useWorkspacesStore.setState({ activeWorkspaceId: null })
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   if (originalClosed) Object.defineProperty(window, 'closed', originalClosed)
   else Reflect.deleteProperty(window, 'closed')
 })
 
 describe('shared full-screen exit', () => {
+  // E.2: an app window is the chat window itself, not a disposable pop-out.
+  // Even when the browser WOULD allow close, Back must navigate and re-dock.
+  it.each(['standalone', 'minimal-ui', 'window-controls-overlay', 'fullscreen'])('Back to chat in %s returns and re-docks without trying to close the app', async (mode) => {
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({ matches: query === `(display-mode: ${mode})` })))
+    Object.defineProperty(window, 'closed', { configurable: true, value: true })
+    const { router, client } = await renderPanel('/panel/library?workspace=ws-a&path=Notes%2FCurrent.md')
+    fireEvent.click(screen.getByRole('button', { name: 'Back to chat' }))
+    await waitFor(() => expect(mocks.beforeLeave).toHaveBeenCalledOnce())
+    expect(window.close).not.toHaveBeenCalled()
+    await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/ws-a/chat'))
+    expect(router.state.location.search).toMatchObject({ panel: 'library' })
+    expect(useUiStore.getState().activePanel).toEqual({
+      id: 'library', context: { workspaceId: 'ws-a', path: 'Notes/Current.md' },
+    })
+    expect(mocks.announceClosed).not.toHaveBeenCalled()
+    client.clear()
+  })
+
+  it('a cancelled installed-app Back keeps the full-screen editor and does not navigate or close', async () => {
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({ matches: query === '(display-mode: standalone)' })))
+    mocks.beforeLeave.mockResolvedValue(false)
+    const { router, client } = await renderPanel('/panel/library?workspace=ws-a&path=Notes%2FCurrent.md')
+    fireEvent.change(screen.getByTestId('panel-editor'), { target: { value: 'unsaved edit' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back to chat' }))
+    await waitFor(() => expect(mocks.beforeLeave).toHaveBeenCalledOnce())
+    expect(window.close).not.toHaveBeenCalled()
+    expect(router.state.location.pathname).toBe('/panel/library')
+    expect(screen.getByTestId('panel-editor')).toHaveValue('unsaved edit')
+    expect(mocks.announceClosed).not.toHaveBeenCalled()
+    client.clear()
+  })
+
   it.each([
     ['library', '/panel/library?workspace=ws-a&popout=popout-a'],
     ['browser', '/panel/browser?session=session-a&agent=agent-a&popout=popout-b'],

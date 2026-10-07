@@ -1,7 +1,7 @@
 import { useLocation, useNavigate } from '@tanstack/react-router'
 import { motion } from 'framer-motion'
 import {
-  List,
+  CaretDown,
   SquaresFour,
   CalendarBlank,
   UsersThree,
@@ -17,6 +17,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
+import { Tooltip } from '@/components/ui/tooltip'
+import { useWorkspaceHeaderMode } from './useWorkspaceHeaderMode'
 import { useUiStore } from '@/store/ui'
 import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import type { WorkspacePanelId } from '@/components/panel-shell/types'
@@ -122,18 +124,13 @@ interface WorkspaceTabBarProps {
  * reveals it. There is no page-semantic route entry left in the strip, so
  * the only aria-current carrier is the workspace-name → settings entry.
  *
- * Responsive strategy (container-query, relative to the @container top-bar):
- *   ≥ 72rem: full strip — name → settings, then the five panel toggles
- *     (hidden @6xl:flex)
- *   < 72rem: an icon-only menu trigger (flex @6xl:hidden, SP-11 —
- *     a plain menu icon, no text label) opening the same set: the five
- *     toggles plus settings, since narrow viewports have no other settings
- *     entry point here.
- *   72rem is 1008px at the default 14px root; its pixel equivalent changes
- *   with the user's 12–20px font-size preference.
+ * R44 responsive strategy: measure the available flex slot and the natural
+ * full/icons strip widths. Prefer name + icon/label toggles, then name +
+ * icon-only toggles with kit tooltips. When neither fits, the workspace name
+ * itself opens the kit menu (Settings + all five toggles). The only hamburger
+ * is the sidebar launcher. Off-layout probes avoid mode-dependent oscillation.
  *
- * The full strip retains all workspace-tab-<segment> test ids. Tests must
- * size the container against the rem threshold at the selected root size.
+ * Strip and menu item test ids and panel accessible names remain unchanged.
  *
  * Sits inline inside the WorkspaceTabContainer top-bar row (Row 1). The parent
  * row owns the background (no border — flat shell alignment); this component
@@ -144,149 +141,132 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
   const settingsActive =
     resolveActiveSegment(useLocation().pathname, workspaceId) === 'settings'
   const activePanelId = useUiStore((s) => s.activePanel?.id ?? null)
+  const { mode, availableRef, fullRef, iconsRef } = useWorkspaceHeaderMode()
 
-  /** US-5 AS-1/AS-2: toggle a registered panel scoped to this workspace —
-   * through the CRIT-001 leave gate (a dirty outgoing Library asks before
-   * it closes; clean runs synchronously). No navigation: the chat route
-   * stays the underlying page. */
+  /** Every toggle goes through the outgoing panel's leave gate; changing
+   * header mode must never change the scoped open/close action. */
   const togglePanel = (panelId: WorkspacePanelId) => {
     const outgoingPanelId = useUiStore.getState().activePanel?.id ?? null
     leaveGateThen(outgoingPanelId, () => {
       const state = useUiStore.getState()
-      if (state.activePanel?.id === panelId) {
-        state.closePanel()
-      } else {
-        state.openPanel(panelId, workspaceId ? { workspaceId } : {})
-      }
+      if (state.activePanel?.id === panelId) state.closePanel()
+      else state.openPanel(panelId, workspaceId ? { workspaceId } : {})
     })
   }
+  const openSettings = () => navigate({
+    to: '/workspaces/$workspaceId/settings', params: { workspaceId },
+  })
 
-  const tabUnderline = (active: boolean) =>
-    active ? (
-      <motion.div
-        layoutId="workspace-tab-underline"
-        className="absolute inset-x-1 -bottom-px h-0.5 rounded-full bg-[var(--color-accent)]"
-        transition={{ type: 'spring', stiffness: 500, damping: 32 }}
-      />
-    ) : null
+  // Shared JSX builders keep the natural probes byte-for-byte styled like
+  // the real strip. Probes are inert, off-layout and carry no trigger/test ids.
+  const nameButton = (menu: boolean, measuring = false) => (
+    <Button
+      variant="ghost"
+      onClick={menu || measuring ? undefined : openSettings}
+      title={menu ? 'Open panels menu' : 'Workspace settings'}
+      aria-label={menu ? 'Open panels menu' : `${workspaceName} — workspace settings`}
+      aria-current={settingsActive ? 'page' : undefined}
+      data-testid={measuring ? undefined : 'workspace-name-button'}
+      tabIndex={measuring ? -1 : 0}
+      className={cn(
+        'relative h-chrome-header min-h-chrome-header min-w-0 max-w-[24ch] shrink-0 justify-start gap-[var(--space-1)] rounded-t-sm rounded-b-none px-[var(--space-2-5)] py-0 font-headline whitespace-nowrap outline-none hover:bg-transparent',
+        menu && 'max-w-full shrink',
+        settingsActive
+          ? 'text-[var(--color-accent)]'
+          : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
+      )}
+    >
+      <Buildings size={16} weight={settingsActive ? 'fill' : 'regular'} className="shrink-0" aria-hidden="true" />
+      <span className="truncate">{workspaceName}</span>
+      {menu && <CaretDown size={16} className="shrink-0" aria-hidden="true" />}
+      {settingsActive && !measuring && (
+        <motion.div
+          layoutId="workspace-tab-underline"
+          className="absolute inset-x-1 -bottom-px h-0.5 rounded-full bg-[var(--color-accent)]"
+          transition={{ type: 'spring', stiffness: 500, damping: 32 }}
+        />
+      )}
+    </Button>
+  )
+
+  const stripEntries = (iconsOnly: boolean, measuring = false) => (
+    <>
+      {(measuring || mode !== 'narrow') && nameButton(false, measuring)}
+      {WORKSPACE_TABS.map(({ segment, label, Icon }) => {
+        const panelId = PANEL_TOGGLE_SEGMENTS[segment]
+        if (!panelId) return null
+        const pressed = activePanelId === panelId
+        const button = (
+          <Button
+            key={segment}
+            variant="ghost"
+            onClick={measuring ? undefined : () => togglePanel(panelId)}
+            title={iconsOnly ? undefined : label}
+            aria-label={label}
+            aria-pressed={pressed}
+            tabIndex={measuring ? -1 : 0}
+            data-panel-trigger={measuring ? undefined : panelId}
+            data-testid={measuring ? undefined : `workspace-tab-${segment}`}
+            className={cn(
+              'group relative flex shrink-0 items-center gap-[var(--space-1)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap outline-none transition-colors rounded-t-sm',
+              pressed
+                ? 'text-[var(--color-accent)]'
+                : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
+            )}
+          >
+            <Icon size={16} weight={pressed ? 'fill' : 'regular'} aria-hidden="true" />
+            {!iconsOnly && <span>{label}</span>}
+          </Button>
+        )
+        return iconsOnly && !measuring ? (
+          <Tooltip key={segment} content={label} side="bottom" interactive>{button}</Tooltip>
+        ) : button
+      })}
+    </>
+  )
 
   return (
-    <div className="flex-shrink-0 flex items-stretch">
-      {/* ── Full entry strip: shown when container ≥ 72rem (1008px at the default 14px root).
-          MAJ-007: this is NOT a role="tablist" — it is a set of panel
-          toggles (plus the name → settings entry), so the tablist
-          tab semantics would be wrong. NO overflow-x-auto: a scrollable
-          strip let mouse-wheel/touch gestures scroll it up/down (overflow
-          containers clip + scroll BOTH axes) — chrome must never move. The
-          strip's content is bounded (name + 5 toggles, name truncated) so
-          overflow can't occur. ─────── */}
-      <div
-        data-testid="workspace-tab-strip"
-        className="hidden @6xl:flex items-stretch gap-[var(--space-1)] min-w-0 flex-1"
-      >
-        {/* First strip entry: the workspace name → settings. Inside the strip
-            (not a stray sibling button) so it IS part of the menu component —
-            same styling; it navigates, so it carries aria-current, never
-            aria-pressed. */}
-        <Button
-          variant="ghost"
-          onClick={() =>
-            navigate({ to: '/workspaces/$workspaceId/settings', params: { workspaceId } })
-          }
-          title="Workspace settings"
-          aria-label={`${workspaceName} — workspace settings`}
-          aria-current={settingsActive ? 'page' : undefined}
-          data-testid="workspace-name-button"
-          className={cn(
-            'relative h-chrome-header min-h-chrome-header max-w-[24ch] flex-shrink-0 justify-start gap-[var(--space-1)] rounded-t-sm rounded-b-none px-[var(--space-2-5)] py-0 font-headline whitespace-nowrap outline-none hover:bg-transparent',
-            settingsActive
-              ? 'text-[var(--color-accent)]'
-              : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-          )}
-        >
-          <Buildings size={16} weight={settingsActive ? 'fill' : 'regular'} className="flex-shrink-0" />
-          <span className="truncate">{workspaceName}</span>
-          {tabUnderline(settingsActive)}
-        </Button>
-
-        {WORKSPACE_TABS.map(({ segment, label, Icon }) => {
-          // Every strip entry is a registered panel toggle (wave 3, SP-6/SP-11):
-          // a button with aria-pressed — opens/closes the panel scoped to this
-          // workspace, NO navigation. The deep-linkable route behind the
-          // segment stays reachable by URL only (it redirects to
-          // chat?panel=<id>).
-          const panelId = PANEL_TOGGLE_SEGMENTS[segment]
-          if (!panelId) return null
-          const pressed = activePanelId === panelId
-          return (
-            <Button
-              key={segment}
-              variant="ghost"
-              onClick={() => togglePanel(panelId)}
-              title={label}
-              aria-pressed={pressed}
-              data-panel-trigger={panelId}
-              data-testid={`workspace-tab-${segment}`}
-              className={cn(
-                // h-chrome-header fills the exact 44px tokenized chrome row;
-                // h-11 is rem-based and is only 38.5px at the app root size.
-                'group relative flex items-center gap-[var(--space-1)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap outline-none transition-colors rounded-t-sm',
-                pressed
-                  ? 'text-[var(--color-accent)]'
-                  : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-              )}
-            >
-              <Icon size={16} weight={pressed ? 'fill' : 'regular'} />
-              <span>{label}</span>
-            </Button>
-          )
-        })}
+    <div
+      ref={availableRef}
+      data-testid="workspace-header-entries"
+      data-mode={mode}
+      className="relative flex min-w-0 flex-1 items-stretch"
+    >
+      {/* Clip only the invisible probes, never the real strip's tooltips.
+          Both natural widths exist independently of the selected mode. */}
+      <div aria-hidden="true" inert className="pointer-events-none absolute inset-0 overflow-hidden invisible">
+        <div ref={fullRef} data-workspace-header-measure="full" className="flex w-max items-stretch gap-[var(--space-1)]">
+          {stripEntries(false, true)}
+        </div>
+        <div ref={iconsRef} data-workspace-header-measure="icons" className="flex w-max items-stretch gap-[var(--space-1)]">
+          {stripEntries(true, true)}
+        </div>
       </div>
 
-      {/* ── Compact panels menu: shown when container < 72rem (1008px at the default 14px root).
-          SP-11 (amended): the trigger is an ICON only — a plain menu icon,
-          no text label. With Chat never a strip entry (SP-40) there is no
-          page name left for a label to show. ── */}
-      <div className="flex @6xl:hidden items-center px-[var(--space-2)]">
+      {/* Panel toggles are buttons, not page tabs. Retain their ids/state
+          while hidden so the compact menu and strip share the same model. */}
+      <div
+        data-testid="workspace-tab-strip"
+        hidden={mode === 'narrow'}
+        className={cn('w-max shrink-0 items-stretch gap-[var(--space-1)]', mode === 'narrow' ? 'hidden' : 'flex')}
+      >
+        {stripEntries(mode === 'icons')}
+      </div>
+
+      <div hidden={mode !== 'narrow'} className={cn('min-w-0 max-w-full items-stretch', mode === 'narrow' ? 'flex' : 'hidden')}>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              data-testid="workspace-view-switcher"
-              aria-label="Open panels menu"
-              aria-haspopup="menu"
-              className={cn(
-                'h-11 w-11 justify-center px-0 whitespace-nowrap',
-                'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
-                'outline-none',
-                'pointer-coarse:min-h-[44px]',
-              )}
-            >
-              <List size={18} aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
+          {mode === 'narrow' && <DropdownMenuTrigger asChild>{nameButton(true)}</DropdownMenuTrigger>}
           <DropdownMenuContent align="start" className="w-44">
-            {/* Settings entry — narrow viewports have no other settings entry
-                point in this header (the full-strip name button is hidden
-                below @6xl), so the compact dropdown must carry one too. */}
             <DropdownMenuItem
-              key="settings"
               data-testid="workspace-view-switcher-settings"
               aria-current={settingsActive ? 'page' : undefined}
-              onClick={() => {
-                void navigate({ to: '/workspaces/$workspaceId/settings', params: { workspaceId } })
-              }}
-              className={cn(
-                'flex items-center gap-[var(--space-2)]',
-                settingsActive ? 'text-[var(--color-accent)]' : undefined,
-              )}
+              onClick={() => { void openSettings() }}
+              className={cn('flex items-center gap-[var(--space-2)]', settingsActive && 'text-[var(--color-accent)]')}
             >
-              <Buildings size={15} weight={settingsActive ? 'fill' : 'regular'} />
+              <Buildings size={15} weight={settingsActive ? 'fill' : 'regular'} aria-hidden="true" />
               <span>Settings</span>
               {settingsActive && (
-                <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-accent)]" aria-hidden="true">
-                  ●
-                </span>
+                <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-accent)]" aria-hidden="true">●</span>
               )}
             </DropdownMenuItem>
             {WORKSPACE_TABS.map(({ segment, label, Icon }) => {
@@ -300,20 +280,12 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
                   data-panel-trigger={panelId}
                   aria-pressed={pressed}
                   onClick={() => togglePanel(panelId)}
-                  className={cn(
-                    'flex items-center gap-[var(--space-2)]',
-                    pressed ? 'text-[var(--color-accent)]' : undefined,
-                  )}
+                  className={cn('flex items-center gap-[var(--space-2)]', pressed && 'text-[var(--color-accent)]')}
                 >
-                  <Icon size={15} weight={pressed ? 'fill' : 'regular'} />
+                  <Icon size={15} weight={pressed ? 'fill' : 'regular'} aria-hidden="true" />
                   <span>{label}</span>
                   {pressed && (
-                    <span
-                      className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-accent)]"
-                      aria-hidden="true"
-                    >
-                      ●
-                    </span>
+                    <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-accent)]" aria-hidden="true">●</span>
                   )}
                 </DropdownMenuItem>
               )

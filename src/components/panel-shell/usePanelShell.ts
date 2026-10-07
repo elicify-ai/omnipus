@@ -13,6 +13,8 @@
 
 import { useCallback, useEffect, useRef } from 'react'
 import { flushSync } from 'react-dom'
+import { useRouter } from '@tanstack/react-router'
+import { isStandaloneWindow } from '@/lib/browserDisplayMode'
 import type { OpenPanel, PanelDefinition, PanelContext, PanelId } from './types'
 import { usePanelShellStore } from './panelShellStore'
 import { readPanelWidth, writePanelWidth, deletePanelWidth, panelWidthScope } from './panelWidthMemory'
@@ -78,8 +80,9 @@ async function expandActivePanel(options: {
   getCurrentContext?: () => PanelContext
   runGuard: (definition: PanelDefinition | undefined) => Promise<boolean>
   finishClose: (id: PanelId, focusReturn: PanelFocusReturnReason) => void
+  navigateFullScreen: (id: PanelId, search: Record<string, string>) => Promise<void>
 }): Promise<PanelExpandResult> {
-  const { panels, getCurrentContext, runGuard, finishClose } = options
+  const { panels, getCurrentContext, runGuard, finishClose, navigateFullScreen } = options
   const { activePanel, guardPending } = usePanelShellStore.getState()
   if (activePanel === null || guardPending) return 'cancelled'
   const definition = panels.find((panel) => panel.id === activePanel.id)
@@ -94,6 +97,24 @@ async function expandActivePanel(options: {
       variant: 'error',
     })
     return 'error'
+  }
+
+  if (isStandaloneWindow()) {
+    try {
+      // App windows have no tabs. Use the existing full-screen route without
+      // a popout owner; its Back control re-docks in this same window. Await
+      // navigation before closing so takeover history cannot back out of it.
+      await navigateFullScreen(definition.id, definition.fullScreen.toSearch(context))
+      finishClose(activePanel.id, 'chat')
+      return 'opened'
+    } catch (error) {
+      console.error('[side-panel] Same-window Expand navigation failed', error)
+      usePanelShellStore.getState().addToast({
+        message: `${definition.title} could not open full screen. The panel remains here.`,
+        variant: 'error',
+      })
+      return 'error'
+    }
   }
 
   const popoutId = generateId()
@@ -208,6 +229,9 @@ async function expandActivePanel(options: {
 }
 
 export function usePanelShell(panels: readonly PanelDefinition[], username: string) {
+  // Normal-tab/demo shells do not need routing; installed-app expansion does.
+  // A missing router there is reported through Expand's visible error path.
+  const router = useRouter({ warn: false })
   const activePanel = usePanelShellStore((s) => s.activePanel)
   const guardPending = usePanelShellStore((s) => s.guardPending)
 
@@ -347,8 +371,12 @@ export function usePanelShell(panels: readonly PanelDefinition[], username: stri
       getCurrentContext,
       runGuard,
       finishClose,
+      navigateFullScreen: async (id, search) => {
+        if (!router) throw new Error('Full-screen navigation requires the app router.')
+        await router.navigate({ to: '/panel/$panelId', params: { panelId: id }, search })
+      },
     }),
-    [finishClose, runGuard],
+    [finishClose, runGuard, router],
   )
 
   /**
