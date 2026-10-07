@@ -1846,16 +1846,15 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   for (const id of streamingIds) {
                     const msg = draft.messagesById[id]
                     const prevStatus = msg.status
-                    // FR-21 / T21–T23: do NOT overwrite 'interrupted' status with 'error'.
-                    const resolvedStatus = (prevStatus === 'interrupted' || isCancelAck)
+                    // FR-21: preserve partial replies on server-originated cancellation
+                    // too. Redirect has no optimistic Stop; the typed turn_canceled
+                    // code is authoritative even when its copy says "stopped".
+                    const resolvedStatus = (prevStatus === 'interrupted' || isCancelAck || llmError?.code === 'turn_canceled')
                       ? 'interrupted'
                       : 'error'
-                    // Founder decision #1081 RC2 / Q4: a terminal error must
-                    // always be visible, narration or not. Replace existing
-                    // content with translated catalogue copy (typed payload)
-                    // or sanitized frame.message (legacy fallback, D5 Site 3).
-                    // This overturns ADR-051's partial-content preservation
-                    // for 'error' only; FR-21 still preserves 'interrupted'.
+                    // Founder decision #1081 RC2 / Q4: genuine errors replace
+                    // narration with catalogue/sanitized failure copy. Cancellation
+                    // is an interruption instead, so it keeps the partial reply.
                     const fallbackContent = llmError
                       ? translatedMessage
                       : safeMessage

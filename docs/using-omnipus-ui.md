@@ -91,6 +91,8 @@ Three slash commands in the message box control the current chat directly:
 
 After a first **Stop**, **Escape**, or `/stop`, the same Stop button stays available for three seconds. Press Stop or Escape again in that window to confirm Stop all; `/stop` follows the same activation rule. There is no separate **Stop all** button. The window closes after three seconds, when the window loses focus, or when you switch chats; the next activation is a first, current-chat-only Stop again. `/cancel` needs no second activation.
 
+When `/stop-redirect` interrupts a reply that is still streaming, the text already received stays visible with **(interrupted)** on that reply, without reloading the page. The new instruction and its answer follow in the same conversation; the new answer does not inherit the stopped reply's marker. Running helpers keep their own replies and state.
+
 `/stop-redirect` without an instruction (or with only spaces) replies with usage and changes nothing. The instruction is required and sent as typed after the command, with surrounding spaces removed. If no active session is attached to the current chat, a visible message asks you to reopen it; no redirect is sent. If the connection is down, the redirect cannot be sent: a visible error says so, this chat's turn keeps running, and you can run the command again once you are reconnected.
 
 ### If the first message loses its connection
