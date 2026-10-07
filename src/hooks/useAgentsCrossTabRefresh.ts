@@ -1,35 +1,41 @@
-// useAgentsCrossTabRefresh — agent-picker freshness fix, pull half
-// (2026-09-28, second half of the fix; GitHub issue #1009).
+// useAgentsCrossTabRefresh — shell freshness, pull half (T-11 / FR-010).
 //
-// Mirrors src/components/library/useLibraryCrossTabRefresh.ts (D-107)
-// almost verbatim, for the same reason: the WS agent_created frame (the
-// push half — see frames.ts's `case 'agent_created'` and the gateway's
+// AppShell is the only production caller. The composer agent picker used to
+// own this hook; that picker is gone, and a refresh that lived on it stopped
+// the moment the picker unmounted. The shell stays mounted for the whole
+// signed-in app, so focus and visibility refresh the roster and the workspace
+// membership list even while both queries are still inside their stale time.
+//
+// Mirrors src/components/library/useLibraryCrossTabRefresh.ts (D-107). The
+// WS agent_created frame (frames.ts `case 'agent_created'`, gateway
 // agent_created_broadcast.go) is fire-and-forget over a per-client send
 // buffer that can be full, and the WS connection itself can drop and
-// reconnect. Neither drops the picker permanently stale, but both leave a
-// window where a tab that never sees the frame keeps serving a cached
-// ['agents'] list that is missing the newly created agent — until
-// something else invalidates it, or its 30 s default staleTime
+// reconnect. Either leaves a window where a tab that never sees the frame
+// keeps a cached ['agents'] list, or a cached workspace membership list,
+// until something else invalidates it or the 30 s default staleTime
 // (queryClient.ts) elapses.
 //
 // This hook is the PULL half — the tab the user RETURNS to. It invalidates
-// the ['agents'] query on window focus and on visibilitychange→visible,
-// independent of staleTime, so a returning tab never serves a stale picker
-// for the remainder of that window after regaining focus.
+// ['agents'] and the active-workspace membership query on window focus and
+// on visibilitychange→visible, independent of staleTime. A hidden tab does
+// not invalidate: visibilitychange only counts when the document is visible.
 //
-// Why an explicit invalidation rather than relying on TanStack Query's
-// built-in refetchOnWindowFocus: that only refetches queries that are
-// already STALE, so an agent list still inside its staleTime window could
-// keep omitting the new agent for the remainder of that window after
-// focus. An invalidate marks it stale NOW and refetches whatever is
-// mounted.
+// Why an explicit invalidation rather than TanStack Query's built-in
+// refetchOnWindowFocus: that only refetches queries that are already STALE,
+// so a list still inside its staleTime window could keep omitting a new
+// agent or a new member for the rest of that window after focus. An
+// invalidate marks both stale NOW and refetches whatever is mounted.
+// Membership is the existing workspace list
+// (workspacesQueryKeys.list({ status: 'active' })), not a second store.
 
 import { useEffect } from 'react'
 import { queryClient } from '@/lib/queryClient'
+import { workspacesQueryKeys } from '@/lib/api'
 
 /**
- * Invalidate the `['agents']` query whenever this tab regains the user's
- * attention (window focus, or visibilitychange → visible).
+ * Invalidate the agent roster and the active workspace membership list
+ * whenever this tab regains the user's attention (window focus, or
+ * visibilitychange → visible). Hidden tabs do not invalidate.
  */
 export function useAgentsCrossTabRefresh() {
   useEffect(() => {
@@ -37,6 +43,9 @@ export function useAgentsCrossTabRefresh() {
 
     function invalidate() {
       void queryClient.invalidateQueries({ queryKey: ['agents'] })
+      void queryClient.invalidateQueries({
+        queryKey: workspacesQueryKeys.list({ status: 'active' }),
+      })
     }
 
     function onVisibilityChange() {

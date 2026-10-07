@@ -19,6 +19,7 @@ import { useUiStore } from '@/store/ui'
 import { useAuthStore } from '@/store/auth'
 import { useQuery } from '@tanstack/react-query'
 import { useVersionCheck } from '@/hooks/useVersionCheck'
+import { useAgentsCrossTabRefresh } from '@/hooks/useAgentsCrossTabRefresh'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { PANEL_TAKEOVER_PX } from '@/components/panel-shell/panelWidth'
 import { SidePanelShell } from '@/components/panel-shell/SidePanelShell'
@@ -66,6 +67,11 @@ export function AppShell() {
 
   // Version-drift detection (#110): shows a toast when build_sha changes
   useVersionCheck()
+
+  // T-11 / FR-010: the shell, not the removed composer agent picker, refreshes
+  // the agent roster and workspace membership on focus and on becoming visible,
+  // even while those queries are still inside their stale time.
+  useAgentsCrossTabRefresh()
 
   // Prefetch command center data on app load so it's cached when the user navigates there
   useEffect(() => {
