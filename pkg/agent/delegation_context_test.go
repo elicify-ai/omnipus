@@ -350,26 +350,23 @@ func TestBuildDelegationContext_AllSkipped(t *testing.T) {
 	}
 }
 
-// TestBuildDelegationContext_PerTargetOnwardForbidden verifies that when a
-// target's edge Depth is <= 0, a note about no onward delegation is emitted
-// for that target only, while other targets are unaffected.
+// TestBuildDelegationContext_PerTargetOnwardForbidden verifies that a target
+// whose edge Depth is <= 0 is NOT advertised — the gate denies delegation
+// through such an edge unconditionally (enforceEdgeModeAndDepth), so
+// advertising it would break advertisement ⊆ enforcement (#459 review) — while
+// other targets are unaffected.
 func TestBuildDelegationContext_PerTargetOnwardForbidden(t *testing.T) {
 	targets := []delegationTarget{
-		makeTarget("ava", nil, ptr(0)), // Depth=0: cannot delegate onward
-		makeTarget("ray", nil, nil),    // Depth=nil: inherits, no note
+		makeTarget("ava", nil, ptr(0)), // Depth=0: the gate denies this edge
+		makeTarget("ray", nil, nil),    // Depth=nil: inherits
 	}
 	got := buildDelegationContext(targets, 0, 0)
 
-	// Both sections must appear.
-	if !strings.Contains(got, "### → Ava") {
-		t.Errorf("missing ava section; got:\n%s", got)
+	if strings.Contains(got, "### → Ava") || strings.Contains(got, `delegate(agent_id="ava"`) {
+		t.Errorf("depth=0 edge must not be advertised; got:\n%s", got)
 	}
 	if !strings.Contains(got, "### → Ray") {
 		t.Errorf("missing ray section; got:\n%s", got)
-	}
-	// Depth=0 note must appear (contains the onward delegation message).
-	if !strings.Contains(got, "cannot delegate onward") {
-		t.Errorf("missing onward-forbidden note for depth=0 target; got:\n%s", got)
 	}
 }
 

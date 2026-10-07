@@ -21,7 +21,7 @@ import (
 // invariant advertisement ⊆ enforcement on the runtime-depth axis: a target is
 // advertised exactly when the gate would not deny it for depth.
 func TestBuildDelegationContext_AdvertisedSubsetOfEnforceable(t *testing.T) {
-	edgeDepths := []*int{nil, ptr(1), ptr(2), ptr(5)}
+	edgeDepths := []*int{nil, ptr(1), ptr(2), ptr(5), ptr(0), ptr(-1)}
 	globalCaps := []int{0, 2, 4}
 	for _, ed := range edgeDepths {
 		for _, gc := range globalCaps {
@@ -108,5 +108,41 @@ func TestWireDelegationInjectors_LargerEdgeCapNotClampedToBackstop(t *testing.T)
 	got := cb.buildDynamicContext(3, "", "", "", "", "")
 	if !strings.Contains(got, `delegate(agent_id="worker"`) {
 		t.Fatalf("edge cap 5 allows chain depth 3; block must advertise, got:\n%s", got)
+	}
+}
+
+// #459 review F2: an invalid performance.max_delegation_depth must not be
+// swallowed into "uncapped/backstop". The block fails closed (cannot-delegate)
+// with an ERROR naming the config key, and the gate denies on the same error,
+// so block and gate agree.
+func TestDelegation_InvalidMaxDepth_BlockAndGateFailClosedTogether(t *testing.T) {
+	const wsID = "01JWDEPTHPROMPT0000000461"
+	seedWorkspaceGraph(t, wsID, true, []graphEdge{edge("jim", "worker", nil, nil)})
+	al, cb := wireTestLoopWithGraphAndMaxDepth(t, "jim", 0)
+	lines := dwLogLines(t)
+	al.GetConfig().Performance.MaxDelegationDepth = -1
+
+	got := cb.buildDynamicContext(0, "", "", "", "", "")
+	if !strings.Contains(got, delegationFailClosedBlock) || strings.Contains(got, `delegate(agent_id="worker"`) {
+		t.Fatalf("block must fail closed on an invalid depth limit, got:\n%s", got)
+	}
+	found := false
+	for _, l := range lines() {
+		if strings.Contains(l, `"config_key":"performance.max_delegation_depth"`) {
+			found = true
+			if !strings.Contains(l, `"level":"error"`) {
+				t.Fatalf("invalid depth limit logged below error: %s", l)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no log line naming performance.max_delegation_depth: %v", lines())
+	}
+
+	check := buildDelegationDenyCheckerForDelegate("jim",
+		config.PerformanceConfig{MaxDelegationDepth: -1}, config.DelegationModeBackground)
+	denial := check(ctxAtDepth(0), "worker")
+	if denial == nil || denial.Policy != tools.DenyDepth {
+		t.Fatalf("gate must deny on the same invalid limit (DenyDepth), got %+v", denial)
 	}
 }

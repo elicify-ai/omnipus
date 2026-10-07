@@ -95,6 +95,13 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap, currentD
 			continue
 		}
 
+		// An edge whose own Depth is <= 0 grants NO delegation through it: the
+		// gate (enforceEdgeModeAndDepth) denies it unconditionally, so it is
+		// never advertised (advertisement ⊆ enforcement).
+		if tgt.Depth != nil && *tgt.Depth <= 0 {
+			continue
+		}
+
 		// Runtime-depth axis of advertisement ⊆ enforcement (#459): the gate
 		// (enforceEdgeModeAndDepth) denies once the chain depth reaches the
 		// effective cap, so a target at or past that cap is not advertised.
@@ -152,12 +159,6 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap, currentD
 				tgt.ID,
 			)
 		}
-		// Per-target note when the edge forbids onward delegation (Depth <= 0,
-		// mirroring the DEPTH INVARIANT in enforceEdgeModeAndDepth).
-		if tgt.Depth != nil && *tgt.Depth <= 0 {
-			sb.WriteString("\n  _(this target cannot delegate onward)_")
-		}
-
 		renderedCount++
 	}
 

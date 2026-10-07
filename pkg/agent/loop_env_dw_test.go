@@ -49,7 +49,7 @@ func requireErrorLevelLine(t *testing.T, lines []string, errorID string) {
 
 // TestWireDelegationInjectors_DW001NilRegistryIsErrorLevel (#458): a nil live
 // registry is an invariant break and must surface at error level with the
-// DW-001 id, while still failing safe (empty block).
+// DW-001 id, while still failing safe (cannot-delegate block).
 func TestWireDelegationInjectors_DW001NilRegistryIsErrorLevel(t *testing.T) {
 	al, cb := wireTestLoopWithGraphAndMaxDepth(t, "jim", 0)
 	lines := dwLogLines(t)
@@ -65,8 +65,8 @@ func TestWireDelegationInjectors_DW001NilRegistryIsErrorLevel(t *testing.T) {
 	})
 
 	got := cb.delegationInjector("", 0)
-	if got != "" {
-		t.Fatalf("fail-safe: expected empty delegation block, got %q", got)
+	if got != delegationFailClosedBlock {
+		t.Fatalf("expected the cannot-delegate block so the agent is told, got %q", got)
 	}
 	requireErrorLevelLine(t, lines(), "DW-001")
 }
@@ -82,8 +82,8 @@ func TestWireDelegationInjectors_DW002AgentAbsentIsErrorLevel(t *testing.T) {
 	}
 
 	got := cb.delegationInjector("", 0)
-	if got != "" {
-		t.Fatalf("fail-safe: expected empty delegation block, got %q", got)
+	if got != delegationFailClosedBlock {
+		t.Fatalf("expected the cannot-delegate block so the agent is told, got %q", got)
 	}
 	requireErrorLevelLine(t, lines(), "DW-002")
 }

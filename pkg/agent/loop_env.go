@@ -58,6 +58,12 @@ func (al *AgentLoop) wireEnvProviders(cfg *config.Config, registry *AgentRegistr
 	wireProjectShelfResolvers(al, registry)
 }
 
+// delegationFailClosedBlock is the "## Delegation" text rendered whenever the
+// injector cannot establish what the gate would allow (unreadable graph or
+// limit, unresolvable workspace, registry invariant break): the agent is told
+// plainly it cannot delegate rather than receiving no block at all.
+const delegationFailClosedBlock = "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
+
 // wireDelegationInjectors installs a delegation-context callback on every
 // agent's ContextBuilder in registry. The callback is invoked on each turn from
 // buildDynamicContext (the UN-CACHED path), receives the turn's workspaceID, and
@@ -95,7 +101,7 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 				logger.ErrorCF("agent.env",
 					"wireDelegationInjectors: registry is nil in delegation injector — invariant break",
 					map[string]any{"error_id": "DW-001", "agent_id": id})
-				return ""
+				return delegationFailClosedBlock
 			}
 			// DW-002: the agent must still be present in the live registry.
 			_, exists := liveRegistry.GetAgent(id)
@@ -103,7 +109,7 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 				logger.ErrorCF("agent.env",
 					"wireDelegationInjectors: agent not found in live registry — invariant break",
 					map[string]any{"error_id": "DW-002", "agent_id": id})
-				return ""
+				return delegationFailClosedBlock
 			}
 
 			// Resolve the effective workspace, mirroring resolveEffectiveWorkspaceID
@@ -120,7 +126,7 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 						"wireDelegationInjectors: cannot resolve default workspace — rendering fail-closed delegation block",
 						map[string]any{"agent_id": id, "error": errString(err)},
 					)
-					return "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
+					return delegationFailClosedBlock
 				}
 				wsID = def
 			}
@@ -134,7 +140,7 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 					"wireDelegationInjectors: workspace delegation graph unreadable — rendering fail-closed delegation block",
 					map[string]any{"agent_id": id, "workspace_id": wsID, "error": err.Error()},
 				)
-				return "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
+				return delegationFailClosedBlock
 			}
 
 			// Filter to outgoing edges from this agent.
@@ -150,7 +156,12 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 			// this general-roster footer.
 			configuredDepthCap, depthErr := liveCfg.Performance.EffectiveMaxDelegationDepth()
 			if depthErr != nil {
-				configuredDepthCap = 0
+				// An invalid limit cannot be advertised truthfully: fail closed
+				// (the gate denies on the same error — buildDelegationDenyChecker).
+				logger.ErrorCF("agent.env",
+					"wireDelegationInjectors: invalid performance.max_delegation_depth — rendering fail-closed delegation block",
+					map[string]any{"agent_id": id, "config_key": "performance.max_delegation_depth", "error": depthErr.Error()})
+				return delegationFailClosedBlock
 			}
 			globalDepthCap := resolveEffectiveDelegationDepth(nil, configuredDepthCap)
 
