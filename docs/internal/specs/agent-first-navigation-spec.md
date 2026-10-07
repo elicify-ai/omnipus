@@ -186,7 +186,7 @@ Backend-lead publishes existing-schema extensions and generated types **before c
 
 | Dependency / owner | Needed input → output / invariant | Failure / readiness proof |
 |---|---|---|
-| DEP-U1 — session-core | B D1.1: required current `Session.type=main`, validated `id/workspace_id/agent_id`, computed `protected`; readOnly `WorkspaceMemberConfig.main_session_id` for eligible mains. Main ID `main-session-<workspaceid>-<agentid>` is not client-created/UUID-assumed. Heartbeat keeps enabled/interval/body, deletes session_id. Immutable owner versus `Message.agent_id`; Admin default-main exception without fake membership. | Unknown/load refusal is not deletion; one winning tuple, no unresolved send. Publish generated main/Ava/Admin/hide/protection/migration shapes and prove T-12/T-22/T-23/T-28. |
+| DEP-U1 — session-core | B D1.1: required current `Session.type=main`, validated `id/workspace_id/agent_id`, computed `protected` independent of heartbeat enablement; readOnly `WorkspaceMemberConfig.main_session_id` for eligible members. Main ID `main-session-<workspaceid>-<agentid>` is server-created, not client-created/UUID-assumed. Heartbeat keeps `enabled/interval_minutes/body`, deletes `session_id`. Immutable owner versus `Message.agent_id`; Admin default-main exception without fake membership. | Unknown/load refusal is not deletion; one winning tuple, no unresolved send. Publish generated main/Ava/Admin/hide/protection/migration shapes and prove T-12/T-22/T-23/T-28. |
 | DEP-ATT — session-core + prompt owner | BS C-ATTENTION: optional/readOnly `Session.needs_attention`, true/false on every valid main including Admin, omitted elsewhere. Sources: pending structured question/approval or unseen met/rounds_exhausted/other; stopped_by_user excluded. Shared bounded goal-seen metadata; decisions clear on resolution only. Existing attach `ack_attention` optional/default false needs the supersession-safe observed-bound semantics below. Prompt owner authors structured-answer rule; backend wires it. | Missing main value/source remains unknown. No browser seen flag or per-user notification store. Publish agreed acknowledgement correlation/bound representation and unopened-main updates before consumers; T-12/T-14/T-24 combine selection and read races. |
 | DEP-ID — backend identity | Existing Agent list/create/update/editability/persistence → figure/role/color, approved canonical inventory, one-time mapping. Fix compiled built-ins, fresh seed and startup enforcement together; use shared global editor/preview. No separate figure wire representation was verified at baseline. | Preview != saved/activated; no local shadow/recoloring/unlock. Publish representation before persistence consumers; real custom/built-in migration, two restarts and lock proofs, T-16/T-22/T-25/T-28. |
 | DEP-ACT — backend task/plan/session owners | Existing plan state/phase/progress, actual start/run/session/workspace handles, real starting-chat association, task/scheduler/child/shell metadata → local panel and consistent Sessions enumeration. Tasks-only plans have no chat origin. No prose URLs, fake parent, foreground target substitute or agent-facing list_jobs use. Shell row: **N background commands running**, Open → origin chat's Activity panel (S Q-M4). Unavailable parent context: **parent chat unavailable**, authorized relation only, helper still Openable (S Q-M5). Needs me = mains with confirmed needs_attention only (S Q-M6). | Unattributed/global verdict, missing origin/handle/page/source is unknown/error. Task-child duplicates count once; independent monitoring is not Stop authority. Publish actual execution-vs-queued, shell origin, consistent enumeration and snapshot/live coverage; T-19/T-20/T-21/T-26/T-27. |
@@ -553,7 +553,7 @@ Five domains: DS-N destinations, DS-A attention, DS-I identity, DS-S overview, D
 | I11 | `#3B82F6`/valid role/repeated migration | Azure/role unchanged | BDD-05.3 |
 | I12 | Normalized Azure–Indigo midpoint, s≥0.25 | Azure first-entry tie; stage fixture, no fabricated stored color | BDD-E05 |
 | I13 | Hue below360/above0 | Shorter circular distance | BDD-E05 |
-| I14 | Code/Chat/MagnifyingGlass/PencilSimple/Shield/unmatched | Developer/General/Researcher/Writer/Security/General assistant | BDD-05.3 |
+| I14 | Code/Chat/MagnifyingGlass/PencilSimple/Shield/unmatched | Developer/General assistant/Researcher/Writer/Security/General assistant | BDD-05.3 |
 | I15 | Name a / 100 / 101 chars | Valid min/max render; max+1 validator failure, not new title rule | BDD-05.4/06.3 |
 | I16 | Unicode/combining/RTL/script-like title; 10 KiB malformed response | Inert accessible valid text; real contract failure, no silent clip/execution | BDD-05.4/08.4 |
 | S01 | Zero rows vs query failure | True empty vs Error/Retry, no Unfiled outage | BDD-08.4/09.3 |
@@ -702,46 +702,13 @@ No open product question from this review remains. Required publication/visual p
 
 ## Evaluation Scenarios (Holdout)
 
-**Holdout — post-implementation only.** Team-lead excludes this section from implementing-agent briefs/spec extracts and keeps it for the founder/independent evaluator; this task creates only the one canonical spec. These scenarios are not development tests and appear in neither the TDD plan nor traceability matrix. Evaluator supplies previously undisclosed names, message contents, retained data and race ordering, observes the real application externally and records screenshots/results. No source-code inspection as a substitute for outcomes.
-
-### Holdout H-01 — Choose the intended colleague after newer parallel work
-**Category:** Happy Path
-- **Setup**: Two authorized workspaces share a colleague and contain newer extras with evaluator-chosen similar titles.
-- **Action**: Select a colleague row, send a distinct message, leave and return to the workspace.
-- **Expected outcome**: Row selection reached its validated main; workspace return restored the exact last chat, not the globally newest conversation. The message was received only at the intended pair.
-
-### Holdout H-02 — Find other-chat work through Sessions, not the local panel
-**Category:** Happy Path
-- **Setup**: Real plan/task/helper/scheduler work starts in A; B is foreground. Include repeated identical helper titles and a child-only search term chosen by evaluator.
-- **Action**: Inspect B's panel, then find A's work with All / Running / Needs me and search, expand the repeated-helper summary and follow real links.
-- **Expected outcome**: B's panel contains only its legitimate work; A stays findable in the one Sessions modal. Matching helpers always remain under their parent; the folded summary exposes every original identity/target; the plan belongs to its real starting chat and Open reaches the real plan/run.
-
-### Holdout H-03 — Recognize saved identity and actual responder
-**Category:** Happy Path
-- **Setup**: Editable custom identity plus locked built-in, real guest responder distinct from chat owner, normal and reduced-motion browser settings.
-- **Action**: Edit identity through the current flow, reload/restart the candidate and read live then saved replies.
-- **Expected outcome**: Shared figure/badge/color/preview stays consistent and restart-stable; locked identity stays locked. Replies are names-only and inline indicator shows the actual responder; reduced motion stops loops without losing meaning.
-
-### Holdout H-04 — Recover a refused destination without sending into split state
-**Category:** Error
-- **Setup**: A is committed; evaluator makes B's destination/attachment inaccessible or unavailable during selection.
-- **Action**: Attempt B, inspect the error and retry after legitimate recovery.
-- **Expected outcome**: Visible failure/retry, no successful-looking workspace/owner mismatch or unresolved-target message; recovery uses the original intended destination rather than a guessed/new chat.
-
-### Holdout H-05 — Expose incomplete overview or invalid start target
-**Category:** Error
-- **Setup**: Work exists in an unopened session; evaluator denies a later metadata page or removes authorization to a saved plan/run target.
-- **Action**: Open Sessions and use the affected result/link.
-- **Expected outcome**: Partial/unavailable/refusal is explicit, no all-idle/zero/completeness claim or fabricated URL/foreground substitute; still-authorized work remains inspectable and recovery preserves scope.
-
-### Holdout H-06 — Preserve a newer main goal across another person's open
-**Category:** Edge Case
-- **Setup**: Two authorized people view one main with pending question/approval and evaluator-triggered goals bracketing a captured explicit-open boundary.
-- **Action**: One person opens the main while the newer outcome arrives; the other observes navigation/modal.
-- **Expected outcome**: Observed finished/failed goal acknowledgement is shared, pending decisions/newer outcome remain attention-worthy, and searching/reconnecting never acknowledges them by itself.
-
-### Holdout H-07 — Continue retained helper history with strict parent context after upgrade
-**Category:** Edge Case
-- **Setup**: Supported saved ordinary/extra/Unfiled/child/heartbeat histories and legacy identities, including a retained helper with unavailable parent context treated according to the later founder answer.
-- **Action**: Upgrade, reopen/continue histories, search/filter the helper, and repeat restart/upgrade.
-- **Expected outcome**: Known content/binding and actual continuation survive without duplication or empty-success failure. Helpers never become top-level rows; unavailable parent treatment is honest and approved. Main/heartbeat and canonical identities remain stable.
+**External post-implementation only.** Team-lead excludes this section from developer extracts/tests/matrix. Evaluator supplies undisclosed names/messages/data/race order and records real UI evidence, not source inspection. Seven IDs, 3 success/2 error/2 edge; no second spec.
+| ID | Category | External setup/action → observed outcome |
+|---|---|---|
+| H-01 | Happy Path | Same colleague/two workspaces/newer extras: select/send/return → intended main then exact remembered chat, actual pair receives message. |
+| H-02 | Happy Path | A plans/tasks/helpers/scheduler/shell, B foreground: panel/search/filter/fold/Open → B local, A discoverable/nested originals/real starter/run links/shell count. |
+| H-03 | Happy Path | Custom/locked identities, real guest, normal/reduced motion: edit/reload/restart/read → stable preview/locks/names/actual inline producer/readable ink/zero reduced loops. |
+| H-04 | Error | A committed, B refused/unavailable: attempt/recover → visible Retry, no split/unresolved send or losing goal read, original destination recovers. |
+| H-05 | Error | Unopened work, missing/moving page or forbidden plan/run: overview/Open → unknown/partial/refusal, no false quiet/link substitution; legitimate work remains reachable. |
+| H-06 | Edge Case | Two people, pending decisions and bracketing outcomes, overtaken view variant: open/race → only shown-bound goal shared-clear; newer/decisions retained, no background read. |
+| H-07 | Edge Case | Supported old histories/identities/parent unavailable: upgrade/continue/search/repeat → known content/main/identity stable, helper nested under placeholder, no duplicate/empty-success. |
