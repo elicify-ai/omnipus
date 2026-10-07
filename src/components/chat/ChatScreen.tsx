@@ -73,6 +73,7 @@ import {
 import { DelegationEventLineList, DelegationInlineProvider, DelegationLiveTail, DelegationToolGroup, useClaimedCallIds } from './DelegationEventLine'
 import { useChatDelegationEvents } from './useChatDelegationEvents'
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
+import { isGoalRunning } from '@/lib/goalActivity'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
 import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
@@ -2054,6 +2055,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   }, [searchModalOpenForFocus, focusChatInput])
 
   const cancelState = useCancelState(isStreaming, cancelStream)
+  // G1: Stop stays reachable in the idle gap between goal turns (see goalActivity.ts).
+  const goalRunning = useChatStore((s) => isGoalRunning(s.goalStatus))
   const fileUpload = useFileUpload(composerRuntime)
   // D9: the /stop-redirect transport — send the dedicated generated
   // RedirectFrame over the WS, with a VISIBLE error when it cannot be sent
@@ -2870,7 +2873,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           {/* The same Stop button confirms a second activation for all 3 s,
               including after streaming and the 1 s stopping label reset.
               No separate Stop-all control (founder 2026-10-06). */}
-          {isStreaming || cancelState.stopLabel === 'stopping' || cancelState.stopAllArmed ? (
+          {isStreaming || goalRunning || cancelState.stopLabel === 'stopping' || cancelState.stopAllArmed ? (
             // tabIndex={6}: this button replaces Send in the exact same ring
             // slot mid-stream (see the composer tab-ring map in
             // ChatControls.tsx) — it must keep Send's slot, not default to 0,

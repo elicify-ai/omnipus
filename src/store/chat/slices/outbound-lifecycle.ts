@@ -4,6 +4,7 @@
 import type { StoreApi } from 'zustand'
 import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
+import { isGoalRunning } from '@/lib/goalActivity'
 import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
@@ -806,6 +807,10 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         ? (get().sessionsById[sessionId]?.isStreaming ?? false)
         : get().isStreaming
 
+      // G1: between a goal's turns nothing streams but the goal keeper will resume
+      // the session, so an active goal counts as stoppable. No goal, nothing sent.
+      const goalRunning = isGoalRunning(targetSid ? get().sessionsById[targetSid]?.goalStatus : null)
+
       // FR-21 / T21–T25: always mark the last assistant message as interrupted
       // when the user explicitly invokes cancel (stop button, Escape, /cancel,
       // or the browser panel's "Take over" for its pinned session). Scoped to
@@ -857,7 +862,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // the completed-turn no-op gate exactly as before — sending cancel for
       // a completed turn is a no-op on the server but wastes a round-trip
       // and may confuse the audit log.
-      if (targetIsStreaming || scope === 'tree') {
+      if (targetIsStreaming || goalRunning || scope === 'tree') {
         // ADR-20260928 MAJ-002: `scope` rides the generated CancelFrame
         // verbatim. Omitted (every pre-existing call path) goes out WITHOUT
         // the key — the wire default is `session`, a single-session stop the

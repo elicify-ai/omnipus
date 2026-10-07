@@ -744,3 +744,32 @@ describe('W4 /stop-redirect neither arms the window nor counts as the second Sto
     ])
   })
 })
+
+// G1 (UAT): the idle gap between a goal's turns has isStreaming false, but the
+// goal keeper resumes the helper on its own, so Stop must stay reachable.
+describe('Stop during the idle gap of an active goal (G1)', () => {
+  // The shared setup above resets only flat fields; drop any goal frame a previous test filed.
+  beforeEach(() => { act(() => { useChatStore.setState(useChatStore.getInitialState(), true) }) })
+  afterEach(() => { act(() => { useChatStore.setState(useChatStore.getInitialState(), true) }) })
+
+  const goal = (state: 'active' | 'done') => ({
+    type: 'goal_status' as const, session_id: 'sess_test', goal_id: 'g1', condition: 'c',
+    round: 1, max_rounds: 5, latest_reason: '', active_loops: 1, cap: 3, state,
+  })
+
+  it('shows Stop while a goal is active and nothing streams, and Stop sends one cancel frame', () => {
+    act(() => { useChatStore.setState({ isStreaming: false }); useChatStore.getState().handleFrame(goal('active')) })
+    render(<OmnipusComposer />)
+    pressStop()
+    expect(sentCancelFrames(send)).toEqual([{ type: 'cancel', session_id: 'sess_test' }])
+  })
+
+  it('shows no Stop for an idle chat without a goal, or with a finished goal', () => {
+    act(() => { useChatStore.setState({ isStreaming: false }) })
+    const view = render(<OmnipusComposer />)
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+    act(() => { useChatStore.getState().handleFrame(goal('done')) })
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+    view.unmount()
+  })
+})
