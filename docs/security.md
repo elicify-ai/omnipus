@@ -33,12 +33,11 @@ On a new installation the shell tool, `bash`, is set to **Ask**.
 
 ### Turn Auto-approve on or off
 
-Auto-approve can be set in three places. On a new installation it is **on** globally.
+Auto-approve can be set in two places. On a new installation it is **on** globally.
 
 | Where | What it does | Example |
 |---|---|---|
 | **Settings → Security → Auto-approve** | The default for every agent and chat. Changing it asks you to confirm and re-type your password. | You turn it off. Every tool set to Ask now prompts every time, in every chat. |
-| An agent's **Tools & Permissions** panel → **Never auto-approve for this agent** | Turns Auto-approve off for that one agent. It can only turn it off, never on. | A finance agent should always ask. You tick the box; its Ask tools always prompt. |
 | The **Auto** switch next to the message box in a chat | Turns Auto-approve on or off for that chat. You can flip it before typing anything — a brand-new chat has no conversation yet, so the switch records your choice and applies it from your very first message, before any tool call in that first turn runs. In a chat that is already running, a flip applies from the agent's very next tool call, not just your next typed message — even mid-turn, while the agent is still working. A prompt that is already open when you flip the switch is not resolved for you; it has already asked, and stays open until you answer it. | Auto-approve is off globally, but you are watching this chat closely. You switch it on before typing your first message, and that first message already runs under it. In a chat that is already going, you switch it on mid-turn and the agent's next tool call already runs under it. |
 
 On the Security screen, the switch carries this description:
@@ -56,7 +55,7 @@ And a small note underneath *(2026-09-24: the note's wording changed twice — s
 
 That is a summary. The full list of tools that still ask, one row per tool, is under "What Auto-approve runs and what still asks" below.
 
-The chat switch is the one place that can turn Auto-approve **on** when the agent or the global default has it off, because you are present in that conversation. It has one limit: when the chat's agent hands work to another agent (a delegate), and that other agent has **Never auto-approve** ticked, the delegate's own switch wins. Your chat switch covers the agent you are talking to, not a delegate that was set to always ask.
+The chat switch is the one place that can turn Auto-approve **on** when the global default has it off, because you are present in that conversation. When the chat's agent hands work to another agent (a delegate), the delegate follows the chat's switch exactly as the agent you are talking to does: if Auto-approve is on for the chat, the delegate's Ask tools run under it too.
 
 ### Auto-approve and the kernel sandbox (changed 2026-09-24)
 
@@ -165,7 +164,7 @@ Auto-approve only matters for a tool set to **Ask**. Omnipus judges each call on
 
 For reading, this now matches the shell. Under Auto-approve, the shell command `cat /etc/hosts` runs, because the sandbox lets commands read outside the workspace, and `read_file` of `/etc/hosts` runs too. Only writing and sending keep the workspace rule above.
 
-**Messages and files sent to chat channels go out with no prompt.** `send_message` runs under Auto-approve, and so does `send_file` for a file inside the workspace or a mounted folder. A message, or a file from the workspace, can leave the machine to Telegram, Slack or another connected channel without anyone approving it. If that is not acceptable for an agent, set those two tools to Ask and tick **Never auto-approve** for that agent, or set them to Deny. Email is different: `send_email` and `reply` keep asking whenever they're set to Ask, even with Auto-approve on.
+**Messages and files sent to chat channels go out with no prompt.** `send_message` runs under Auto-approve, and so does `send_file` for a file inside the workspace or a mounted folder. A message, or a file from the workspace, can leave the machine to Telegram, Slack or another connected channel without anyone approving it. If that is not acceptable for an agent, turn Auto-approve off, or set those two tools to Deny for that agent. Email is different: `send_email` and `reply` keep asking whenever they're set to Ask, even with Auto-approve on.
 
 **These 28 tools keep asking whenever they're set to Ask, even with Auto-approve on:**
 
@@ -221,7 +220,7 @@ Auto-approve does not check what a command means. A command that deletes files i
 
 **The Plan Supervisor is not limited this way.** It is allowed to use `grep`, and its `grep` follows the same rule as every other agent's. That means it can search outside the workspace, including Omnipus's own session transcripts, tasks, plans and memory files, which are not among the protected files. This is an accepted choice: all agents follow one rule, rather than the Plan Supervisor having a special limit.
 
-**Personal secret folders outside Omnipus are not protected yet.** Folders such as `~/.ssh`, `~/.aws`, `~/.gnupg` and your browser profiles are not among Omnipus's protected files. With Auto-approve on, an agent whose reading tools are set to Ask can read and search them without a prompt, just as the shell could already read them. Protecting them for every tool is tracked in issue [#921](https://github.com/elicify-ai/omnipus/issues/921). Until then, if that matters for an agent, deny its reading tools and `bash`, or tick **Never auto-approve** for it.
+**Personal secret folders outside Omnipus are not protected yet.** Folders such as `~/.ssh`, `~/.aws`, `~/.gnupg` and your browser profiles are not among Omnipus's protected files. With Auto-approve on, an agent whose reading tools are set to Ask can read and search them without a prompt, just as the shell could already read them. Protecting them for every tool is tracked in issue [#921](https://github.com/elicify-ai/omnipus/issues/921). Until then, if that matters for an agent, deny its reading tools and `bash`, or turn Auto-approve off.
 
 Each `grep` search that runs is recorded in the audit log — see "How to review security activity" below.
 
