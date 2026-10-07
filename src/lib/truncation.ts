@@ -66,3 +66,48 @@ export function getMessageStatusSuffix(message: StatusSuffixInput): string | nul
   }
   return null
 }
+
+/**
+ * Id prefix of the user entry the gateway stores for a `/stop-redirect`
+ * instruction (pkg/agent/stop_redirect_root.go::continueOrdinaryAfterStop:
+ * `"redirect-" + uuid`). It is the one existing signal in stored history that
+ * a cancelled turn was redirected rather than stopped.
+ */
+export const REDIRECT_INSTRUCTION_ID_PREFIX = 'redirect-'
+
+export function isRedirectInstructionId(id: string | undefined): boolean {
+  return typeof id === 'string' && id.startsWith(REDIRECT_INSTRUCTION_ID_PREFIX)
+}
+
+/** The fields {@link clearRedirectedTurnMarker} reads and may reset. */
+export interface RedirectMarkerFields extends StatusSuffixInput { // not-wire-format: render-layer pick of ChatMessage/Message fields read and reset by clearRedirectedTurnMarker, never sent or received
+  id?: string
+  truncated?: boolean
+}
+
+/**
+ * Founder ruling 2026-10-07: a redirected turn is not an interruption. Resets
+ * the cancel markers (`status: 'interrupted'`, `truncationReason:
+ * 'cancelled'`) on an assistant message, keeping its text. Other truncation
+ * reasons (output-limit cutoff) are left alone.
+ */
+export function clearRedirectedTurnMarker(message: RedirectMarkerFields): void {
+  if (message.status === 'interrupted') message.status = 'done'
+  if (message.truncationReason === 'cancelled') {
+    delete message.truncated
+    delete message.truncationReason
+  }
+}
+
+/**
+ * Cold-load (REST) history pass: every assistant message directly followed by
+ * a stored redirect instruction loses its cancel markers.
+ */
+export function clearRedirectedTurnMarkers(messages: readonly RedirectMarkerFields[]): void {
+  for (let i = 1; i < messages.length; i++) {
+    const prev = messages[i - 1]
+    if (messages[i].role === 'user' && isRedirectInstructionId(messages[i].id) && prev.role === 'assistant') {
+      clearRedirectedTurnMarker(prev)
+    }
+  }
+}

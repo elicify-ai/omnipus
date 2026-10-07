@@ -26,7 +26,7 @@ import {
 } from '@/lib/llm-error'
 import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
-import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
+import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
 import { gateFrameBySeq, cursorFromTerminalFrame, insertHistoryMessageId, CURSOR_MINTING_FRAME_TYPES, type SeqFrameLike } from '../cursor'
 import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SessionCursor, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
@@ -1736,6 +1736,11 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             const sid = targetSid
             // F-S3: see the matching comment in the 'done' case above.
             pendingCancelAckSids.delete(sid)
+            // Founder ruling 2026-10-07 (S7): this session's pending redirect
+            // is answered by this frame. Only a turn_canceled answer means the
+            // redirect stopped the turn — then the still-streaming bubble
+            // below is finalised as a normal answer, never as error/interrupted.
+            const redirectStoppedTurn = pendingRedirectSids.delete(sid) && llmError?.code === 'turn_canceled'
             const wasReplaying = (get().sessionsById[sid] ?? EMPTY_BUCKET).isReplaying
             const replayElapsed = wasReplaying ? Date.now() - (replayingStartedAt[sid] ?? 0) : 0
             const MIN_REPLAY_DISPLAY_MS = 750
@@ -1849,7 +1854,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                     // FR-21 / T21–T23: do NOT overwrite 'interrupted' status with 'error'.
                     const resolvedStatus = (prevStatus === 'interrupted' || isCancelAck)
                       ? 'interrupted'
-                      : 'error'
+                      : redirectStoppedTurn ? 'done' : 'error'
                     // Founder decision #1081 RC2 / Q4: a terminal error must
                     // always be visible, narration or not. Replace existing
                     // content with translated catalogue copy (typed payload)
@@ -1859,7 +1864,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                     const fallbackContent = llmError
                       ? translatedMessage
                       : safeMessage
-                    msg.content = (resolvedStatus === 'interrupted')
+                    msg.content = (resolvedStatus === 'interrupted' || resolvedStatus === 'done')
                       ? msg.content
                       : (fallbackContent ?? '')
                     msg.isStreaming = false

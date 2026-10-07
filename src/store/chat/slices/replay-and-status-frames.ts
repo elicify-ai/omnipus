@@ -32,7 +32,7 @@ import { useNotificationsStore } from '@/store/notifications'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { reconcilePendingAsks } from '@/store/pendingAskReconcile'
 import { logDiagnostic } from '@/lib/telemetry'
-import { normalizeTruncationReason } from '@/lib/truncation'
+import { clearRedirectedTurnMarker, isRedirectInstructionId, normalizeTruncationReason } from '@/lib/truncation'
 import { buildGoalOutcomeInsertion } from '@/lib/goalOutcome'
 import { buildJudgeVerdictInsertion } from '@/lib/judgeVerdictThread'
 import {
@@ -714,6 +714,15 @@ function handleReplayMessageFrame({
         draft.toolCallOrder = []
         draft.textAtToolCallStart = {}
         draft.toolCallOwnerMessageId = {}
+      }
+      // Founder ruling 2026-10-07 (S7): the stored user entry of a
+      // /stop-redirect (id "redirect-…") directly after a cancelled assistant
+      // turn means that turn was redirected, not interrupted — drop its
+      // cancel marker (a turn_canceled entry marked it just before).
+      if (role === 'user' && isRedirectInstructionId(messageId)) {
+        const tailId = draft.messageOrder[draft.messageOrder.length - 1]
+        const tail = tailId ? draft.messagesById[tailId] : undefined
+        if (tail?.role === 'assistant') clearRedirectedTurnMarker(tail)
       }
       const newMsg: ChatMessage = {
         id: messageId ?? generateId(),

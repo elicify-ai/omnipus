@@ -1,7 +1,7 @@
 // sessions.ts: Sessions, the message union, wire adapters and the session tree
 
 import { maybeDevToast } from '../dev-toast'
-import { normalizeTruncationReason, type TruncationReason } from '../truncation'
+import { clearRedirectedTurnMarkers, normalizeTruncationReason, type TruncationReason } from '../truncation'
 import type { ZodType } from 'zod'
 import { z } from 'zod'
 import {
@@ -859,6 +859,7 @@ function parseWireMessageList(items: unknown[], endpoint: string): Message[] {
     _recordApiSchemaError(endpoint, result.error.issues.length)
     messages.push(placeholderMessage(item, index))
   })
+  clearRedirectedTurnMarkers(messages)
   if (dropped > 0) {
     void maybeDevToast(
       `[api] Dropped ${dropped} malformed message${dropped === 1 ? '' : 's'} from ${endpoint}: ${firstIssue ?? 'unknown'}`,

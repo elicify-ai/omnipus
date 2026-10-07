@@ -53,6 +53,7 @@ import { IconButton } from '@/components/ui/icon-button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useChatStore } from '@/store/chat'
 import { findFirstSendMessage, getPendingFirstSend } from '@/store/chat/first-send'
+import { pendingRedirectSids } from '@/store/chat/runtime-state'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
@@ -2074,7 +2075,12 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         message: 'Could not send the redirect — connection dropped. This chat\'s turn was NOT stopped; run /stop-redirect again.',
         variant: 'error',
       })
+      return
     }
+    // The server's turn_canceled answer carries no cause; remember this send
+    // so the live view finalises the partial as a redirected turn (no
+    // "(interrupted)"), see runtime-state.ts::pendingRedirectSids.
+    pendingRedirectSids.add(frame.session_id)
   }, [])
   const slashMenu = useSlashMenu({
     isStreaming,
