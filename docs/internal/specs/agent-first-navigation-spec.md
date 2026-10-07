@@ -1156,3 +1156,166 @@ Team-lead owns the joint candidate and execution receipts; QA coordinates backen
 | Feature review | Required five reviewers: code-reviewer, silent-failure-hunter, pr-test-analyzer, architect cross-cutting and security-lead. QA CHECK and docs-verifier are additional, not replacements. All findings closed or founder-approved tracked deferrals. |
 | Hands-on acceptance | Joint engine-touching work requires uat-tester and independent uat-validator on the exact landing SHA, founder-set provider/model, real screenshots and authorized entry-point proof. Prototype or mock-only tests cannot certify runtime readiness. |
 | Landing | Founder approval after joint packs, applicable remote gates, updated user docs and independent acceptance. Keep separate claims: code correct and tested; reachable by a user/agent. This draft claims neither. |
+
+### Test Datasets
+
+Frozen expected values come from the binding design, not a run of the implementation. Each row links to a BDD oracle. An upper bound not supplied by the sources is **not invented**: `N` below is the committed backend page size, not a product limit. Very large fixtures exercise coverage/rendering, not a new supported-capacity promise.
+
+#### Dataset DS-N — destinations, ordering and failure
+
+| # | Input | Boundary type | Expected output | Traces to | Notes |
+|---|---|---|---|---|---|
+| N01 | One eligible agent with main M and newer extra E | Minimum nonempty/happy | Row opens M, never E | BDD-01.1 | Exact pair fixture |
+| N02 | Same name on different identities in two workspaces | Duplicate/identity | Correct validated pair | BDD-E01 | Names are not keys |
+| N03 | Empty eligible roster/no Ava association | Zero/empty | Honest unavailable + Team/manage + Retry; no send | BDD-02.2 | Not a blank extra |
+| N04 | Null/absent saved pointer plus valid Ava main | Null/first visit | Validated Ava main | BDD-02.2 | No recency lookup |
+| N05 | Remembered valid main/extra; another tab's chat newer | Happy/cold restore | Exact browser pointer | BDD-02.1 | Both chat kinds |
+| N06 | Confirmed deleted/hidden/forbidden remembered target | Invalid/permission denied | Validated welcome destination or unavailable; hidden main never opened | BDD-02.2 | Only confirmed invalidity falls back |
+| N07 | Timeout/offline/server failure checking saved target | Dependency failure | Retain intent; visible Retry; no false deletion/new-chat fallback | BDD-02.3 | Controlled failed response, not elapsed-time guess |
+| N08 | A resolution late after B commit; attach rejection variants | Concurrent access/race | B remains consistent; A cannot overwrite pointers | BDD-E03 | Force order deterministically |
+| N09 | Pending first delivery with unknown real chat ID | Transient/abandonment | Original delivery retained on decline; placeholder not saved as main | BDD-E02 | New-chat guard preserved |
+| N10 | Authoritative worker/hidden-agent member; Admin default/other pair | Eligibility edge | Worker/hidden absent; Admin only validated default main | BDD-01.2 | No invented team membership |
+
+#### Dataset DS-A — attention, acknowledgement and motion
+
+| # | Input | Boundary type | Expected output | Traces to | Notes |
+|---|---|---|---|---|---|
+| A01 | Main pending structured question/approval, separately and together | Happy/OR composition | Attention true; resolution clears only resolved source | BDD-04.1, BDD-04.2 | Not text parsing |
+| A02 | Main unseen met / rounds_exhausted / other | Goal-source matrix | True; finished / failed / failed respectively | BDD-04.1 | Exact BS mapping |
+| A03 | stopped_by_user only; generic unread text/task notice/global verdict | Negative source | False for valid main unless another allowed source exists | BDD-04.1 | No new waiting source |
+| A04 | Extra/helper pending source; non-main response omits attention | Scope/absent | No agent-main signal from that other session | BDD-04.1 | Non-main omission is normal |
+| A05 | Valid main false; valid main true; main value absent | False/true/missing | Off; On; Unknown respectively | BDD-04.4 | General optional field is not a false fallback |
+| A06 | One goal observed; next outcome appended after captured bound | Concurrent open/write | Only observed goal acknowledged | BDD-E04 | Stable saved identity, backend-owned order |
+| A07 | User A successful explicit open; User B same main | Shared-state edge | Observed goal clears for both; questions/approvals persist | BDD-04.2 | Pair-wide, not per-person inbox |
+| A08 | Background prefetch/reconnect/replay/failed or unauthorized attach | Ack-negative matrix | No acknowledgement | BDD-E09, BDD-04.4 | Generated ack false/absent where applicable |
+| A09 | Two sessions for one main agent; two distinct mains needing attention | Count/deduplication | Workspace count by distinct confirmed mains, not sessions | BDD-04.3 | No agent-row dot |
+| A10 | Normal/reduced motion; selected/unselected/collapsed rows | Motion/accessibility | Locked pulse/dot; zero loops under reduced motion, text retained | BDD-04.3 | Measure cue and target geometry |
+
+#### Dataset DS-I — identity, migration and rendering
+
+Arithmetic fixtures were independently calculated and compared with the approved prototype source; receipts are `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/adr-frontend-nav-20261007/spec-evidence/palette-oracles.log` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/adr-frontend-nav-20261007/spec-evidence/palette-source-comparison.log`. These prove the reference calculation only, not the backend migration.
+
+| # | Input | Boundary type | Expected output | Traces to | Notes |
+|---|---|---|---|---|---|
+| I01 | All 4 figures × 31 roles × ten colors | Full valid vocabulary | Same figure/badge/color across named surfaces; Omnipus creation default | BDD-05.1, BDD-05.2 | Parameterized, not copied from component options |
+| I02 | 18/26/40/48 px; 20 px root; zoom/forced colors/reduced motion | Min/max named size/access edge | Badge/figure remain; meaningful text/targets, no loops when reduced | BDD-E06 | Small-size plain-role substitution must fail |
+| I03 | `#D4AF37` | Former brand hue | Orange `#FB923C` | BDD-E05 | Migrate once, persist |
+| I04 | `#7B1FA2` | Former low-contrast color | Fuchsia `#E879F9` | BDD-E05 | Not a guessed Purple mapping |
+| I05 | `#AD1457` | Former low-contrast color | Pink `#F472B6` | BDD-E05 | Circular hue oracle |
+| I06 | `#A0A079` | Threshold minus one RGB step; saturation 0.24375 | Grey `#9CA3AF` | BDD-E05 | Strictly below 0.25 |
+| I07 | `#A0A078` | Exact threshold; saturation 0.25 | Orange `#FB923C` | BDD-E05 | Equality goes to hue matching |
+| I08 | `#A0A077` | Threshold plus one RGB step; saturation 0.25625 | Orange `#FB923C` | BDD-E05 | Just above |
+| I09 | `#000000`, `#FFFFFF`, `#E2E8F0` | Zero/grey/semantic-silver | Grey `#9CA3AF` | BDD-E05 | No brand/semantic picker colors |
+| I10 | Missing/null/empty; `bad`, `#fff`, invalid digits | Empty/null/malformed | Grey `#9CA3AF` | BDD-E05 | Six-digit syntax only |
+| I11 | `#3B82F6` / already-valid curated role | Valid/repeat | Azure unchanged; valid role preserved | BDD-05.3 | No remapping every startup/render |
+| I12 | Normalized hue exactly midway between Azure and Indigo; same saturation ≥0.25 | Exact tie | Azure, earlier published entry | BDD-E05 | Tie stage oracle, no arbitrary persisted test color |
+| I13 | Hue immediately below 360 and above 0 | Circular endpoint | Shorter circular hue distance, not linear distance | BDD-E05 | Compare non-Grey candidates |
+| I14 | Code/Chat/MagnifyingGlass/PencilSimple/Shield/other old icon | Migration matrix | Developer/General assistant/Researcher/Writer/Security/General assistant | BDD-05.3 | Backend role representation published first |
+| I15 | Name `a`; 100-character valid name; 101-character invalid response name | Existing schema min/max/max+1 | Valid response sizes render; invalid response fails actual generated validation, never successful identity | BDD-05.4, BDD-06.3 | C-WIRE Agent schema, not new title policy |
+| I16 | Unicode/combining/RTL name; `<script>`-like title; 10 KiB malformed response string | Unicode/special/large invalid | Valid text is inert/accessible; malformed contract response shows failure, not execution or silently clipped success | BDD-05.4, BDD-08.4 | No new string budget; validate actual schema |
+
+#### Dataset DS-S — Sessions, activity and links
+
+| # | Input | Boundary type | Expected output | Traces to | Notes |
+|---|---|---|---|---|---|
+| S01 | Zero sessions versus failed sessions/workspaces query | Empty versus failure | Honest no matches versus explicit error/Retry, never Unfiled outage | BDD-08.4, BDD-09.3 | Positive valid-empty control |
+| S02 | 1, 19, 20 and 21 visible rows | Minimum/threshold−1/threshold/threshold+1 | Complete keyboard-reachable result set; viewport virtualization beyond current 20-row threshold and valid plain fallback | BDD-09.4, BDD-E08 | Existing C-MODAL threshold, not capacity cap |
+| S03 | N−1/N/N+1 rows across published page size; later-page error; 1,000 metadata rows | Page boundary/very large | Complete authorized matches or visibly partial coverage; no transcript fan-out | BDD-09.3, BDD-09.4 | N from real committed contract |
+| S04 | Main + extras + real child + unresolved-parent orphan + child-only title | Hierarchy/ordering | Main first; recency extras, nested real child and accessible orphan | BDD-08.2, BDD-E08 | No synthetic edges |
+| S05 | Nine equal helper titles, distinct IDs/status/attention/targets | Repeated content | Each remains reachable; collapsing only per approved Q-M2, preserving full information | BDD-E08 | No assumed title-only dedupe |
+| S06 | Every published lifecycle/kind; missing lifecycle; zero/missing tokens; invalid timestamp | State/null/zero | Truthful status/kind or unavailable state; zero versus missing not fabricated; no dangling metadata | BDD-08.1, BDD-E09 | Values through real generated validators |
+| S07 | One task run projected as starter/assignee/helper; scheduler-only independent run; >8 active items | Duplicates/non-tool origin/old finish cap+1 | Distinct actual counts uncapped; correct source/control scope | BDD-11.2, BDD-E10 | Eight-item finish display cap cannot cap active work |
+| S08 | Plan started in A; internal owner elsewhere; Tasks-only plan; idempotent start | Origin/absent/retry | A association only; no Tasks-only origin; no duplicate work | BDD-10.1, BDD-E11 | Requires published real origin |
+| S09 | Approved/running/paused/done/failed-with-stop-reason plan; success/replayed result | State matrix/happy | Canonical state/progress and actual Open plan/run destination | BDD-10.2, BDD-10.3 | Stopped is not invented Plan.state enum |
+| S10 | Missing handle, unauthorized/deleted target, unexpected/truncated payload | Dependency/error | Explicit unavailable/refusal; no fabricated URL or foreground/main substitute | BDD-10.4 | Published error surfaces only |
+| S11 | A unseen in this browser; modal open in B; missed WS update and reconnect | Initial coverage/concurrency | A's metadata reconciles; B panel local; no goal ack on refresh | BDD-09.2, BDD-E09, BDD-11.1 | Cache-only coverage must fail |
+| S12 | Same origin chat with live shell but no real stored shell-chat session | Non-session work | Follow approved Q-M4 metadata/drill-down presentation, never fake a chat row | BDD-11.1, BDD-11.3 | Held until UI/contract choice settled |
+
+Row dates/empty/null constraints preserve existing behavior and generated validation, rather than adding a new date-format API. Error twins include timeout, permission denied, unavailable dependency, truncated/unexpected data and recovery; the real candidate must also demonstrate those failure paths.
+
+### Regression Test Requirements
+
+This **modifies existing functionality**. Existing assertions for preserved behavior stay strong and pass unchanged where their fixture/interface remains current. Canonical main/immutable-owner/generated-contract fixture adaptations and explicitly retired behavior are tracked separately; do not demand that an old switching/fresh-entry test stay green by retaining the removed behavior. QA authors those targeted replacements, recording which acceptance decision changes the old oracle.
+
+| Preserved behavior | Existing test source read / tests to keep | New regression family |
+|---|---|---|
+| Confirmation before ordinary delete; active pointer pruning; rename Enter/Escape/focus restore; Escape closes only outside rename | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/search/SearchModal.test.tsx`::SearchModal — delete flow, rename flow, editing-state contract. Keep assertions; protected heartbeat fixture becomes a protected main under the coordinated contract cutover. | T-18; add main protection independent of heartbeat enabled. |
+| Child-inclusive flat search, child-only match reveals parent, large fan-out/plain fallback and default verifier exclusion | Same file::session query call shape, nests a child-only match under its parent and virtualizes a large fan-out. `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/sessions/SessionTree.tsx`::flattenSessionTree behavior retained. | T-08, T-19, T-26 with new filters/metadata, paging and pinned main. |
+| Unfiled standalone inspection; no duplicate replay reset/attach; token seed only after actual attachment | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/chat/useSelectSession.test.tsx`::Unfiled session, never calls setActiveSession, attach → seedSessionTokens → setActiveAgentType sequence. Keep outcome assertions; adapt current immutable owner/attach input. | T-12, T-23 with server-validated/failed cross-workspace selection. |
+| Socket rejection is visible; current-chat first Stop versus confirmed tree Stop remains scoped | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/store/chat.cancel-delivery.test.ts`::cancelStream delivery report, second cancel after the first one ended the turn locally. Existing refusal/tree-scope assertions remain. | T-17, T-29 after navigation/command cutover. |
+| Exactly-running helper count excludes queued, lifecycle-terminal/open-span and shells | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useRunningActivity.runningChildren-lifecycle.test.ts`::runningChildren is exactly-lifecycleState-running. | T-09, T-21 task-child/scheduler dedupe and new kind counts. |
+| Shell result liveness survives tool completion/baked messages; active work uncapped; recent-finish cap/recency | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useRunningActivity.test.ts`::bash session tracking survives turn finalization, running is uncapped/recentlyFinished capped, mergeAndCapFinished. Keep same-session liveness/recency oracles. | T-21, T-27; correctly attribute verdicts rather than preserve a global leak. |
+| One modal instance and clean mode reset; workspace mode includes zero-session real workspaces and excludes Unfiled switch | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/store/ui.store.searchModal.test.ts`::searchModal UI store — mode; SearchModal test::workspaces mode and workspace-switch arrow. | T-13, T-18 with pair filters and N D3 exact-entry behavior. |
+| Focus/visibility invalidation and listener cleanup | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useAgentsCrossTabRefresh.test.tsx`::focus path. Existing hook checks remain but cannot alone prove navigation freshness after picker removal. | T-11 real shell/sidebar without picker, roster + separate membership save. |
+| Unified command menu query failure remains visible | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/chat/ChatScreen.slash-commands-error.test.tsx`::commands query error. Preserve commands-unavailable/skills partition oracles; remove mention-switch-specific behavior only per F Q10. | T-17; no old aliases, visible failure and still-supported controls. |
+
+| Intentionally changed old oracle | Required replacement — not silent deletion |
+|---|---|
+| Modal workspace switch starts a fresh session; no-pointer entry shows blank composer | Replace with exact remembered chat/validated Ava main and honest failure. N D3/F Q1; T-02/T-12/T-23. |
+| Sessions-mode groups start expanded; handmade group/row controls | Apply R35/M D1 kit group defaults with search/prefilter match reveal while preserving descendants and keyboard scope. Update interaction setup, not assertions that all intended results stay reachable. T-08/T-18/T-19. |
+| Heartbeat-only ordering/protection; mutable owner precedence; UUID-only/128-character main assumptions | Coordinate BS main contract/owner/bounds, never browser fallbacks. Same preserved protection/continuation outcomes with validated computed IDs. T-01/T-12/T-22. |
+| Picker/mention switching, old commands, bubble avatars, old thinking/goal scalar | Replace only under F Q9/Q10 and BS coordinated deletion map. Keep actual author/correlation/replay/error/context-specific phrase behavior with canonical producers. T-07/T-17/T-25/T-29. |
+| Global unattributed verdict shown as local activity | Keep existing verdict detail reachable through correctly attributed existing plan/task/goal inspection; do not preserve misattribution to satisfy old global-feed fixtures. N D14 as narrowed by F Q-FE-11; T-10/T-21. |
+
+#### Regression Dataset DS-R — preserved old behavior
+
+Run these before and after implementation using a frozen baseline fixture; tests of deliberately new main contracts run RED first. Existing rename/protection/mode fixture input adaptations are explicit, not softened expected results.
+
+| # | Input | Previous behavior | Must still produce | Traces to |
+|---|---|---|---|---|
+| R01 | Ordinary session trash click, then cancel | No delete before confirmation | No delete before confirmation; cancellation does not delete | BDD-08.4 |
+| R02 | Inline rename then Escape/Enter; rerender or group collapse while editing | Cancel/commit and restore focus; no wedged modal | Same focus/rename/close semantics | BDD-08.3 |
+| R03 | Child-only title match at depth 3; unresolved parent | Nested context/orphan reachability | Same genuine hierarchy/accessible orphan after metadata/filter changes | BDD-E08 |
+| R04 | Unfiled session from non-chat route | One standalone inspection/attach, not attach-and-vanish | Same inspectable real destination, no duplicate replay reset | BDD-03.4, BDD-12.1 |
+| R05 | Background shell dispatch baked after turn ends, then poll completion | Liveness follows result and moves once to finished | Same single actual process/result state, not tool-call status | BDD-11.2 |
+| R06 | One running helper, one queued, one terminal open span and shell | Running helper number exactly 1 | Same helper count; new task/kind counts separate | BDD-E10 |
+| R07 | Rejected socket send for selected-chat Stop; unrelated A work | Visible refusal, truthful scope | Same refusal and no new control of A | BDD-07.4 |
+| R08 | Workspace mode with real empty workspace, then close and open Sessions | Empty workspace reachable; mode resets | Same workspace reachability with new entry destination; no stale mode/pair filter leak | BDD-02.1, BDD-03.2 |
+| R09 | Prior cached identity and failed agent query | Unknown, not removed | Same honest identity failure without local saved-value invention | BDD-05.4 |
+
+No source-text presence assertion, snapshot-only test or direct mocked hook invocation can replace a real destination, live-update, authority or rendered-identity oracle. No existing test is declared passing by this spec task.
+
+## Functional Requirements
+
+All MUST statements below are non-negotiable within the commissioned scope. Held choices specify a decision boundary, not an unapproved option. Wire publication and founder/wireframe holds remain; no named requirement authorizes bypassing them.
+
+| ID | Testable requirement | Binding source / ADR decision |
+|---|---|---|
+| FR-001 | Sidebar MUST list authoritative eligible main colleagues per workspace; exclude workers/hidden engine agents even when members, with only the validated default-workspace Admin exception. | R3/R5/R7; N D2/D5/D10; F Q12. |
+| FR-002 | Chat MUST remain the base surface without a Chat header item; existing workspace tools/panel behavior, single workspace Library and distinct global Library/Agents access, workspace ordering/archive/pin/drawer/keyboard behavior MUST be preserved. | R1/R2/R6–R8; N D1/D2/D11. |
+| FR-003 | Agent row click MUST attach that pair's validated main, never a newer extra/name-matched/computed-but-unvalidated destination. Extra inspection still selects its owner's row. | R4/R22; N D3/D5; B D1.1. |
+| FR-004 | Workspace/login/modal-switch entry MUST restore the exact valid visible remembered main/extra, else the validated Ava welcome main only for no real pointer or confirmed invalidity; unavailable destination and late/failed resolution MUST preserve honest intent, consistent selection and send gating. | R47; F Q1; N D3/D12. |
+| FR-005 | + New chat MUST be the deliberate extra-chat action for the selected pair, preserving main and first-send recovery/abandonment protection; its independent named target follows Past sessions and works on selected/hover/focus/touch rows. | R22; F Q10; N D3/D11. |
+| FR-006 | Past sessions MUST open the one existing Sessions modal with visible/removable workspace AND agent filters; the magnifier/session command remains the general opener and results use existing validated inspection. | R21/R22; N D3/D11; F Q-FE-11. |
+| FR-007 | Cutover MUST remove picker/mention switching, old /new and /agents paths, and rename /resume to /sessions across registry/client/help/docs with no old alias. @ suggestions remain unavailable until real addressed messaging; Clear MUST never create a chat or delete saved history. | R20/R22/R23/R47; F Q10; N D11; BS. |
+| FR-008 | A persistent label above the feed MUST show Main chat or Extra chat — title from the real kind; task/helper inspection MUST retain its truthful kind. | R24; F Q2; N D3/D8. |
+| FR-009 | Session selection/grouping/sending MUST use immutable Session.agent_id; actual message/turn producer identity MUST remain separate, including guest/live/replay responses. No mutable-owner fallback or history copy. | N D3/D5/D8; B D1.1; F Q9. |
+| FR-010 | Authenticated AppShell MUST own the existing cross-tab refresh once after picker removal, coordinating roster/member refresh on focus/visibility inside staleTime, existing reconnect, destination entry/expansion and separate membership saves. | N D2; C-SHELL; R4/R47. |
+| FR-011 | Failed/incomplete source data MUST show load/error/last-known/unknown and Retry rather than empty team, removed agent, deleted destination, false attention or successful split selection. | N D2–D5/D10/D14; M A6; P Definition of Done. |
+| FR-012 | Sidebar attention MUST consume main-only server needs_attention from pending structured question/approval or unseen met/rounds_exhausted/other outcomes; exclude stopped_by_user, extras/helpers and unrelated unread/global/task events. | R29/R47; F Q4/Q4b; N D4; BS C-ATTENTION. |
+| FR-013 | Only successful explicit foreground main open MUST request published ack_attention; it acknowledges observed goals for everyone, not pending asks/approvals or newer racing outcomes. Prefetch/reconnect/replay and failed/unauthorized attach MUST not acknowledge. | N D4/D5; BS C-ATTENTION; F Q4. |
+| FR-014 | Attention MUST use the locked 18%/1.6 s icon pulse/halo, no row dot, collapsed right-aligned 8 px warning-yellow dot and distinct-main count; meaningful general text stays under reduced motion with zero loops, unknown remains unknown. | R15/R29; N D4/D6/D7. |
+| FR-015 | Shared agent identity MUST offer Robot/Man/Woman/Omnipus, default Omnipus, with approved transparent figure and role badge at every named size; no plain-role fallback or app-wide figure preference. | R9 as superseded/R10/R46/R47; F Q5; N D6/D7. |
+| FR-016 | Role choices MUST be the exact 31 roles/five groups and approved badge assets; one-time old icon mappings MUST follow the specified obvious mappings, unmatched → General assistant, preserving valid curated roles. | R11; N D6/D9/D10. |
+| FR-017 | Choices MUST be the exact ten named palette colors with graphic contrast ≥3:1 on sidebar/chat; one-time stored color mapping MUST use strict saturation <0.25, circular nearest non-Grey hue and stable first-entry ties, invalid/missing → Grey. | R16/R47; F Q8; N D6/D9/D10. |
+| FR-018 | Shared identities MUST preserve the specified 26/18/40/48 px surface sizes, sidebar 13 px name, icon-before-name and normal text name color; selected styling MUST not recolor identity to brand gold. All-state text and non-overlapping keyboard/coarse targets MUST remain accessible. | R12/R13/R15; N D6/D7; P design system. |
+| FR-019 | AgentIcon and recurring identity/attention/inline-status/activity-pill jobs MUST be published once through catalog/barrel/style/manifest/story/executed evidence, use kit composition and layout-only screen overrides; MUST reuse K FilterMenu/ViewSwitch/HoverCard and avoid duplicates. | R33/R35/R39/R41; N D7; M D1–D6; user overlap instruction. |
+| FR-020 | Existing unified create/edit flow MUST add only figure/role/palette choices and the same live preview/global save semantics; draft != saved/activated, and no upload/GIF/new creation interview is added. | R7/R8/R46; F Q6/Q7; N D9. |
+| FR-021 | Canonical built-ins, fresh seeding, startup enforcement and existing custom migration MUST retain approved palette/role/figure through repeated backend restart, with protected-field/capability boundaries unchanged. | N D9/D10; F Q5/Q8; DEP-ID. |
+| FR-022 | Agent bubbles MUST show actual author name only, zero avatars, across live/replay/virtual/plain paths; guest attribution MUST not switch owner. | R24; F Q9 FINAL; N D8. |
+| FR-023 | Inline shared responding-agent icon/name/phrase MUST replace old thinking dots in the same feed slot with locked working/thinking/waiting motion and reduced-motion static text; reuse appropriate old phrases without stale scalar/global state or duplicate composer line. | R14/R15; F Q9 FINAL; N D8. |
+| FR-024 | Composer model/Auto/attachment/send/Stop and real correlated errors/replay/first-send safeguards MUST remain; navigation/view closure MUST not cancel work, change control authority or restore companion #1221's obsolete per-agent checkbox. | R20; N D8/D9/D11/D12; P/BS Stop and companion boundaries. |
+| FR-025 | Every permitted Sessions row MUST show authoritative Working/Waiting for answer/Done/Failed/Stopped with cause/Interrupted status when available, using a kit status chip; absent state MUST not become an invented running/done claim. | M A1; N D14 narrowed by F Q-FE-11; C-WIRE. |
+| FR-026 | Sessions rows MUST show truthful main/extra/helper/task/scheduled kind and title plus muted status/kind/active/tokens metadata, retaining real available date/token information and removing HB; missing values stay honest. | M A3/D4; N D3/D5/D14; B D1.1/D5. |
+| FR-027 | Main-session modal rows MUST show the same confirmed warning-yellow attention source as sidebar; metadata browsing MUST not acknowledge it and non-main rows MUST not inherit the main boolean. | M A4; R29; N D4; BS C-ATTENTION. |
+| FR-028 | Starting-chat row in Sessions MUST expose its real plan pill/link, associated with the actual starting chat, not internal owner or guessed source; Tasks-only plans MUST retain no fabricated origin. | M A5; N D13; F Q-FE-12. |
+| FR-029 | Sessions metadata MUST reconcile status/attention/plan and roster/membership while open, including missed updates/focus/reconnect and work never opened in the browser; reuse existing queries/live mechanisms, not another activity store/socket per row. | M A6; N D2/D5/D14; F Q-FE-11. |
+| FR-030 | Each agent's main MUST be first/pinned, then extras by existing recency with helpers/runs under their true parent; preserve child-only search ancestors, accessible orphans/Unfiled, protected delete and bounded virtual/plain rendering. | M A7; R21/R22; N D3/D5/D10/D14; C-MODAL/C-TREE. |
+| FR-031 | The existing modal MUST use kit flat group/disclosure, AgentIcon, Badge/count, shared row/Item, SearchField and K filter presentation; title Sessions and explanatory subtitle; preserve focus/rename/delete/keyboard/phone actions. Existing native tooltips remain for R45; no new handmade tooltip or view. | M D1–D7; R33/R35/R39/R41/R45; N D7/D11. |
+| FR-032 | Overview and panel MUST display truthful distinct counts and source/coverage; missing pages, unattributed verdicts, malformed snapshots or stale data MUST remain visibly partial/unknown/error, not complete or zero. No full-transcript navigation load or eight-item active cap. | M A6; N D5/D13/D14; F Q-FE-11; DEP-ACT. |
+| FR-033 | Sessions activity filters MUST implement **only** founder-recorded Q-M1/Q-M3 choices, compose with title/workspace/agent/date and preserve ancestor context. Before resolution, Needs me and queued/Running semantics MUST not be guessed. | M A2; F Q-FE-11; Questions for the founder Q-M1/Q-M3. |
+| FR-034 | Repeated helper display MUST retain distinct status/attention/identity/target reachability; optional consecutive-title collapsing MUST be held until Q-M2 is answered and never silently deduplicate actual work. | M D8; Questions for the founder Q-M2; N D14. |
+| FR-035 | Starting-chat plan pill/parent-panel row MUST use real approved/running/phase/pause/progress state; successful/idempotent start results MUST offer authorized Open plan/actual task-session links live and replay, using existing Tasks/Graph/session hand-off with visible unavailable/error, not prose URLs or a new executor. | N D13; F Q-FE-12; DEP-ACT; B D5. |
+| FR-036 | Activity side panel MUST show **only the open session's** legitimate plans/task-scheduler runs/helpers/shells; deduplicate real task children, distinguish queued/waiting/executing/terminal, preserve independent-run Stop authority. Other sessions remain in Sessions; shell overview layout waits for Q-M4. | F Q-FE-11; N D13/D14 as narrowed; B D5; DEP-ACT. |
+| FR-037 | Backend-owned one-cutover upgrade MUST keep legitimate saved ordinary/extra/Unfiled/child/heartbeat chats reachable and continuable through current contracts, repeat-safe and visibly failed when import fails; frontend MUST not introduce dual readers/type-owner guesses. | F Q11; R47; N D10/D12; BS C-MAIN/E-MIGRATE. |
+| FR-038 | Admin's backend-validated default-workspace main MUST be reachable before removal of the old Assets-only entry, without fake membership/other-workspace mains; later qualified addressing remains deferred and grants no new authority. | R25/R47; F Q12; N D5/D10/D11/D12; BS C-ADDRESS/C-MAIN. |
