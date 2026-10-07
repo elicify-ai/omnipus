@@ -159,7 +159,10 @@ export function PlansFilterBand({
         <AccordionTrigger className="gap-[var(--space-1)] p-0 font-headline text-base font-bold"><span>Plans</span></AccordionTrigger>
         {doneCount > 0 && (
           <label htmlFor={showDoneId} className="flex cursor-pointer items-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">
-            <Checkbox id={showDoneId} checked={showDone} onCheckedChange={(checked) => setShowDone(checked === true)} aria-label="Show done plans" />
+            <Checkbox id={showDoneId} checked={showDone} onCheckedChange={(checked) => {
+              setShowDone(checked === true)
+              if (checked === true) setExpanded(true)
+            }} aria-label="Show done plans" />
             <span>Show done ({doneCount})</span>
           </label>
         )}

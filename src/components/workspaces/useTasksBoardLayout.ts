@@ -32,8 +32,13 @@ export function useTasksBoardLayout(
 
   useEffect(() => {
     if (!boardSelected) return
-    requestBoardWidth()
+    // Cached Tasks mounts before the shell's parent hydration effect. Defer
+    // one frame so the maximum request and saved prior width follow hydration.
+    // Do not subscribe/re-maximise on later manual resizes: narrow List fallback
+    // must remain under the user's control.
+    const frame = requestAnimationFrame(requestBoardWidth)
     return () => {
+      cancelAnimationFrame(frame)
       const previous = previousWidth.current
       previousWidth.current = undefined
       if (previous === undefined) return
