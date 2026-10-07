@@ -156,7 +156,7 @@ export function SearchModal() {
   const sessionById = useMemo(() => new Map(sessions.map((session) => [session.id, session])), [sessions])
 
   const overview = useMemo(() => buildSessionOverview(sessions, {
-    filter: mode === 'sessions' ? statusFilter : 'all',
+    view: mode === 'sessions' ? statusFilter : 'all',
     query: mode === 'sessions' ? debouncedSearch : '',
     fromDate: mode === 'sessions' ? fromDate : '',
     toDate: mode === 'sessions' ? toDate : '',

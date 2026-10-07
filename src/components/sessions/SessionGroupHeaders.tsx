@@ -65,8 +65,7 @@ export function AgentHeader({ agent, name, isCollapsed, onToggle, panelId }: {
     >
       {isCollapsed ? <CaretRight size={9} className="shrink-0" /> : <CaretDown size={9} className="shrink-0" />}
       <span
-        className="w-[var(--space-3)] h-[var(--space-3)] rounded-full border border-[var(--color-primary)] flex items-center justify-center text-[length:var(--type-caption-size)] shrink-0"
-        style={{ backgroundColor: agent?.color ?? 'var(--color-surface-3)' }}
+        className="flex h-[var(--space-3)] w-[var(--space-3)] shrink-0 items-center justify-center rounded-full border border-[var(--color-primary)] bg-[var(--color-surface-3)] text-[length:var(--type-caption-size)]"
         aria-hidden="true"
       >
         {agent?.icon ? (

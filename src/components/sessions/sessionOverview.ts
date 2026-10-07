@@ -30,7 +30,8 @@ export function sessionActivation(id: string): SessionActivation {
 }
 
 export interface SessionOverviewOptions {
-  filter: 'all' | 'running'
+  /** 'running' keeps execution === 'running' only. Not a CSS filter. */
+  view: 'all' | 'running'
   query: string
   fromDate: string
   toDate: string
@@ -106,13 +107,13 @@ export function buildSessionOverview(sessions: Session[], opts: SessionOverviewO
 }
 
 function isNarrowing(opts: SessionOverviewOptions): boolean {
-  return opts.query.trim() !== '' || opts.filter === 'running' || opts.fromDate !== '' || opts.toDate !== ''
+  return opts.query.trim() !== '' || opts.view === 'running' || opts.fromDate !== '' || opts.toDate !== ''
 }
 
 function isHit(session: Session, opts: SessionOverviewOptions): boolean {
   if (!inDateRange(session, opts.fromDate, opts.toDate)) return false
   if (opts.query.trim() !== '' && !matchesQuery(session, opts)) return false
-  if (opts.filter === 'running' && session.execution !== 'running') return false
+  if (opts.view === 'running' && session.execution !== 'running') return false
   return true
 }
 

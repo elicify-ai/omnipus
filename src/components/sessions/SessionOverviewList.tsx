@@ -1,7 +1,7 @@
 // Renders one agent group's roots. Folds and missing-parent rows are expand
 // targets, not sessions: Enter must not attach them. Real rows keep their id.
 
-import { useMemo, useRef, type CSSProperties } from 'react'
+import { useMemo, useRef, type ReactNode } from 'react'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import type { Session, SessionTreeNode } from '@/lib/api'
 import { SessionExpandToggle, SessionTree, flattenSessionTree, type SessionTreeFlatRow } from './SessionTree'
@@ -19,9 +19,12 @@ function buildSearchNode(session: Session, childrenByParent: Map<string, Session
   }
 }
 
-function rowIndent(depth: number): CSSProperties | undefined {
-  if (depth <= 0) return undefined
-  return { '--search-modal-indent-depth': depth, paddingLeft: 'calc(var(--search-modal-indent-depth) * var(--space-3))' } as CSSProperties
+function IndentedRow({ depth, children }: { depth: number; children: ReactNode }) {
+  if (depth <= 0) return <div className="flex items-center">{children}</div>
+  if (depth === 1) return <div className="flex items-center pl-[var(--space-3)]">{children}</div>
+  if (depth === 2) return <div className="flex items-center pl-[var(--space-5)]">{children}</div>
+  if (depth === 3) return <div className="flex items-center pl-[var(--space-7)]">{children}</div>
+  return <div className="flex items-center pl-[var(--space-8)]">{children}</div>
 }
 
 export function SessionOverviewList({
@@ -63,7 +66,7 @@ export function SessionOverviewList({
     const session = row.node.session
     const marker = sessionActivation(session.id) === 'expand'
     return (
-      <div className="flex items-center" style={rowIndent(row.depth)}>
+      <IndentedRow depth={row.depth}>
         {marker ? (
           <MarkerRow
             session={session}
@@ -97,7 +100,7 @@ export function SessionOverviewList({
             </div>
           </>
         )}
-      </div>
+      </IndentedRow>
     )
   }
 
