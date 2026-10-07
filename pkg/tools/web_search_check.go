@@ -228,7 +228,9 @@ func (t *searchCheckTransport) outcome(ctx context.Context, providerErr error) (
 	case t.status != http.StatusOK:
 		return gen.SearchProviderCheckResponseStatusProviderError, nil
 	case t.oversized || !t.valid || providerErr != nil:
-		return gen.SearchProviderCheckResponseStatusInvalidResponse, nil
+		// providerErr is not dropped: it is the diagnostic's own finding, reported
+		// as the invalid_response status the caller returns to the operator.
+		return gen.SearchProviderCheckResponseStatusInvalidResponse, nil //nolint:nilerr // provider error is classified into the returned status, not swallowed
 	default:
 		return gen.SearchProviderCheckResponseStatusSuccess, nil
 	}
