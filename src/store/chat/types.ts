@@ -522,7 +522,7 @@ export interface SessionChatState {
   /**
    * ADR-092: this session's resolved per-chat Auto-approve state, or null
    * when no `session_mode_updated` ack has arrived yet for this session
-   * (the header badge falls back to the global x per-agent resolution in
+   * (the header badge falls back to the global default in
    * that case). Set by `session_mode_updated` frames; there is no
    * "rejected" case to handle — the server always acknowledges a
    * `session_mode_update` send. Distinct from the wire's own
@@ -1147,10 +1147,10 @@ export interface ChatStore {
   /**
    * ADR-092: set or clear this session's per-chat Auto-approve modifier
    * (`session_mode_update`). A human-only action — nothing agent-facing
-   * calls this. `true` turns Auto ON for this chat even when the resolved
-   * agent x global default has it off (the one deliberate loosening
+   * calls this. `true` turns Auto ON for this chat even when the
+   * global default has it off (the one deliberate loosening
    * exception in this contract); `false` turns it off; `null` clears the
-   * modifier and reverts to the inherited agent/global resolution. Always
+   * modifier and reverts to the global default (chat modifier, else global default). Always
    * acknowledged by a `session_mode_updated` frame — no rejection case.
    */
   sendSessionModeUpdate: (sessionId: string, autoApprove: boolean | null) => void

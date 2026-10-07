@@ -77,7 +77,7 @@ describe('AutoApprovePicker — resolution', () => {
     })
   })
 
-  it('a resolved session override wins over the agent/global resolution — including loosening past both being off', async () => {
+  it('a resolved session override wins over the global default — including loosening past both being off', async () => {
     act(() => {
       // The hook reads the foreground-synced field (matches every other
       // ModelPicker-style consumer) — set it directly rather than

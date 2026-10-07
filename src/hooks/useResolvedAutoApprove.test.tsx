@@ -3,7 +3,7 @@
  *
  * Founder decision (2026-09-24): Auto-approve no longer requires an
  * enforcing kernel sandbox — `resolved` must be true whenever the session/
- * pending/agent/global resolution says so, REGARDLESS of
+ * pending/global resolution (chat modifier, else global default) says so, REGARDLESS of
  * `kernel_sandbox_active`. `kernelSandboxActive` is exposed only as a
  * separate, warning-only flag for callers (the composer Auto button)
  * to build a caution from — it must never gate `resolved` here.

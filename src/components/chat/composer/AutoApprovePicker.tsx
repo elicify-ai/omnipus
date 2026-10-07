@@ -19,7 +19,7 @@ import { cn } from '@/lib/utils'
  * `resolved` and must be checked explicitly (see below) — see the hook's own
  * doc comment. Toggling always records an explicit
  * true/false for this chat — this is the ONE scope in the whole contract
- * allowed to LOOSEN past the agent/global default, because a human is
+ * allowed to LOOSEN past the global default, because a human is
  * present in this session to accept that.
  *
  * A brand-new chat has no server-known session yet — `session_mode_update`
