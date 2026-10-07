@@ -63,7 +63,7 @@ const seam = vi.hoisted(() => {
         : ''
       return mains.has(id)
     }),
-    mainSessionIdOfMember: vi.fn(() => undefined as string | undefined),
+    mainSessionIdOfMember: vi.fn((_member: unknown): string | undefined => undefined),
     attachAckFields: vi.fn((bound: unknown) => {
       const observed = bound && typeof bound === 'object' && 'observedBound' in bound
         ? String((bound as { observedBound: unknown }).observedBound)
@@ -80,21 +80,15 @@ vi.mock('@/lib/nav/sessionCoreSeam', () => ({
   attachAckFields: (bound: unknown) => seam.attachAckFields(bound),
 }))
 
-const STATS: Session['stats'] = {
-  tokens_in: 0, tokens_out: 0, tokens_total: 0, cost: 0, tool_calls: 0, message_count: 0,
-}
-
 function session(id: string, title: string, agentId = 'mia'): Session {
   return {
     id,
     agent_id: agentId,
     title,
-    status: 'active',
+    type: 'chat',
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
-    channel: 'webchat',
-    partitions: [],
-    stats: STATS,
+    message_count: 0,
     workspace_id: 'operations',
   }
 }

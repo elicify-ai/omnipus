@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
 import * as React from 'react'
-import { useChatStore, makeBucketMessages } from '@/store/chat'
+import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -84,7 +84,7 @@ import { ChatScreen } from './ChatScreen'
 
 const WS = 'ws-1'
 
-function seed(sessionId: string, descriptorType: 'chat' | 'task' | 'delegate' | undefined, title: string): void {
+function seed(sessionId: string, descriptorType: 'chat' | 'task' | 'delegate', title: string): void {
   const messages = [{
     id: 'msg-user',
     role: 'user' as const,
@@ -92,14 +92,11 @@ function seed(sessionId: string, descriptorType: 'chat' | 'task' | 'delegate' | 
     timestamp: '2026-03-29T10:00:00Z',
     status: 'done' as const,
   }]
-  const bucket = makeBucketMessages(messages)
-  useChatStore.setState((state) => ({
-    ...state,
-    sessionsById: { [sessionId]: { ...bucket, isStreaming: false, isReplaying: false } },
+  useChatStore.setState({
     messages,
     isStreaming: false,
     isReplaying: false,
-  }))
+  })
   useWorkspacesStore.setState({ activeWorkspaceId: WS })
   useSessionStore.setState({
     activeSessionId: sessionId,

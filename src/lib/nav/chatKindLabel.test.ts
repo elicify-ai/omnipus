@@ -22,9 +22,9 @@ const seam = vi.hoisted(() => ({
       : ''
     return seam.mains.has(id)
   }),
-  mainSessionIdOfMember: vi.fn(() => undefined as string | undefined),
-  sessionAttention: vi.fn((): 'unknown' => 'unknown'),
-  attachAckFields: vi.fn(() => ({})),
+  mainSessionIdOfMember: vi.fn((_member: unknown): string | undefined => undefined),
+  sessionAttention: vi.fn((_session: unknown): 'unknown' => 'unknown'),
+  attachAckFields: vi.fn((_bound: unknown) => ({})),
 }))
 
 vi.mock('@/lib/nav/sessionCoreSeam', () => ({
@@ -34,20 +34,13 @@ vi.mock('@/lib/nav/sessionCoreSeam', () => ({
   attachAckFields: (bound: unknown) => seam.attachAckFields(bound),
 }))
 
-const STATS: Session['stats'] = {
-  tokens_in: 0, tokens_out: 0, tokens_total: 0, cost: 0, tool_calls: 0, message_count: 1,
-}
-
 function session(partial: Partial<Session> & Pick<Session, 'id' | 'title'>): Session {
   return {
     agent_id: 'mia',
-    status: 'active',
+    type: 'chat',
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-02T00:00:00Z',
-    channel: 'webchat',
-    partitions: [],
-    stats: STATS,
-    type: 'chat',
+    message_count: 1,
     ...partial,
   }
 }

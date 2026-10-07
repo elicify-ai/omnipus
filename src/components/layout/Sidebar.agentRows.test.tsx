@@ -179,12 +179,9 @@ const home = workspace({
 
 function chatSession(partial: Pick<Session, 'id' | 'agent_id' | 'title' | 'updated_at' | 'workspace_id'>): Session {
   return {
-    status: 'active',
-    created_at: '2026-01-01T00:00:00Z',
-    channel: 'webchat',
-    partitions: [],
     type: 'chat',
-    stats: { tokens_in: 0, tokens_out: 0, tokens_total: 0, cost: 0, tool_calls: 0, message_count: 1 },
+    created_at: '2026-01-01T00:00:00Z',
+    message_count: 1,
     ...partial,
   }
 }
@@ -250,8 +247,8 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
   it('BDD-03.3 Past sessions comes before New chat, as two independent named buttons', async () => {
     renderSidebar()
     const mia = await screen.findByRole('group', { name: 'Mia' })
-    const past = within(mia).getByRole('button', { name: 'Past sessions', exact: true })
-    const newer = within(mia).getByRole('button', { name: 'New chat', exact: true })
+    const past = within(mia).getByRole('button', { name: /^Past sessions$/ })
+    const newer = within(mia).getByRole('button', { name: /^New chat$/ })
     expect(past.compareDocumentPosition(newer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(past.contains(newer)).toBe(false)
     expect(newer.contains(past)).toBe(false)
@@ -260,7 +257,7 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
   it('BDD-03.2 Past sessions opens one modal filtered by this workspace and this agent', async () => {
     renderSidebar()
     const mia = await screen.findByRole('group', { name: 'Mia' })
-    fireEvent.click(within(mia).getByRole('button', { name: 'Past sessions', exact: true }))
+    fireEvent.click(within(mia).getByRole('button', { name: /^Past sessions$/ }))
     const modal = useUiStore.getState() as {
       searchModalOpen: boolean
       searchModalWorkspaceFilter: string | null

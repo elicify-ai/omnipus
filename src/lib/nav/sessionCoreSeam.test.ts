@@ -20,12 +20,10 @@ const session: Session = {
   id: 'not-a-real-main',
   agent_id: 'mia',
   title: 'Question about the launch',
-  status: 'active',
+  type: 'chat',
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-10-08T00:00:00Z',
-  channel: 'webchat',
-  partitions: [],
-  stats: { tokens_in: 0, tokens_out: 0, tokens_total: 0, cost: 0, tool_calls: 0, message_count: 1 },
+  message_count: 1,
   workspace_id: 'product-launch',
 }
 
