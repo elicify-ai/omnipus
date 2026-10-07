@@ -36,6 +36,7 @@ async function load(wire: unknown[]) {
 }
 
 const suffix = (m: unknown) => getMessageStatusSuffix(m as never)
+const statusOf = (m: unknown) => (m as { status?: string }).status
 
 describe('fetchSessionMessages — redirected vs plain-stopped turn', () => {
   beforeEach(() => { vi.resetModules() })
@@ -45,16 +46,19 @@ describe('fetchSessionMessages — redirected vs plain-stopped turn', () => {
     const msgs = await load([cancelledAssistant, turnCanceled, userEntry('redirect-7f3a')])
     expect(msgs[0].content).toBe('partial text so far')
     expect(suffix(msgs[0]), 'the real partial is cleared').toBeNull()
+    expect(statusOf(msgs[0]), 'finalised as an ordinary finished answer').toBe('done')
   })
 
   it('with tool_call rows between the partial and the redirect: no marker', async () => {
     const msgs = await load([cancelledAssistant, toolCall('tc-1'), turnCanceled, toolCall('tc-2'), userEntry('redirect-7f3a')])
     expect(suffix(msgs[0])).toBeNull()
+    expect(statusOf(msgs[0])).toBe('done')
   })
 
   it('redirect instruction stored before the turn_canceled entry: no marker', async () => {
     const msgs = await load([cancelledAssistant, userEntry('redirect-7f3a'), turnCanceled])
     expect(suffix(msgs[0])).toBeNull()
+    expect(statusOf(msgs[0])).toBe('done')
   })
 
   it('control: assistant → turn_canceled → ordinary user message keeps "(interrupted)"', async () => {
@@ -66,5 +70,27 @@ describe('fetchSessionMessages — redirected vs plain-stopped turn', () => {
     const second = { ...cancelledAssistant, id: 'a-2', status: 'ok', truncated: undefined, truncation_reason: undefined, turn_id: 't2' }
     const msgs = await load([cancelledAssistant, turnCanceled, ordinaryUser, second, userEntry('redirect-7f3a')])
     expect(suffix(msgs[0]), 'genuine Stop marker survives').toBe('(interrupted)')
+  })
+
+  it('a user message with no reply between the Stop and the redirect stops the walk-back: marker stays', async () => {
+    const msgs = await load([cancelledAssistant, turnCanceled, ordinaryUser, userEntry('redirect-7f3a')])
+    expect(suffix(msgs[0]), 'the genuine Stop marker survives').toBe('(interrupted)')
+    expect(statusOf(msgs[0])).toBe('interrupted')
+  })
+
+  it('an output-limit cutoff followed by a redirect keeps its own "(cut off at the output limit)" marker', async () => {
+    const cutOff = { ...cancelledAssistant, status: 'ok', truncation_reason: 'max_output_tokens' }
+    const msgs = await load([cutOff, userEntry('redirect-7f3a')])
+    expect(suffix(msgs[0])).toBe('(cut off at the output limit)')
+  })
+
+  // KNOWN LIMIT (no wire field tells these apart): a plain Stop, then LATER a
+  // redirect on the now-idle chat with no user message in between, is stored
+  // exactly like a redirected turn (same turn_canceled entry, same
+  // redirect-<uuid> user entry), so that earlier Stop marker is lost on reload.
+  // Pinned so a change is noticed, not endorsed.
+  it('KNOWN LIMIT: plain Stop then an idle-chat redirect loses the Stop marker on reload', async () => {
+    const msgs = await load([cancelledAssistant, turnCanceled, userEntry('redirect-7f3a')])
+    expect(suffix(msgs[0])).toBeNull()
   })
 })

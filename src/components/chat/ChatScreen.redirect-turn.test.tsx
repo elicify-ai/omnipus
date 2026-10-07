@@ -332,4 +332,18 @@ describe('S7 live — /stop-redirect on a streaming chat', () => {
     expect(getMessageStatusSuffix(m)).toBeNull()
     expect(assistants().filter((a) => a.status === 'error'), 'no error bubble').toHaveLength(0)
   })
+
+  // KNOWN LIMIT: a turn_canceled carries no cause. If another tab or channel
+  // presses Stop while THIS tab's redirect is pending, the first turn_canceled
+  // this tab sees is attributed to the redirect, so it shows as a redirected
+  // turn (no "(interrupted)") instead of a stopped one. Pinned, not endorsed.
+  it('KNOWN LIMIT: another tab\'s Stop while this tab\'s redirect is pending shows as redirected', () => {
+    render(<OmnipusComposer />)
+    streamPartial()
+    submitCommand('/stop-redirect x')
+    deliverTurnStopped() // actually caused by the other tab's Stop
+    const m = lastAssistant()
+    expect(m.status).toBe('done')
+    expect(getMessageStatusSuffix(m)).toBeNull()
+  })
 })

@@ -46,6 +46,8 @@ describe('S7 reload (WS replay) — redirected vs plain-stopped turn', () => {
     expect(a?.content).toBe('partial text so far')
     expect(a, 'assistant exists').toBeDefined()
     expect(getMessageStatusSuffix(a!), 'no (interrupted) after reload').toBeNull()
+    expect(a!.status, 'finalised as an ordinary finished answer').toBe('done')
+    expect(a!.isStreaming).toBe(false)
     expect(msgs.filter((m) => m.role === 'user').map((m) => m.content)).toEqual(['write a long answer', 'now just say the word mango'])
   })
 
@@ -76,6 +78,39 @@ describe('S7 reload (WS replay) — redirected vs plain-stopped turn', () => {
     feed({ type: 'replay_message', role: 'turn_canceled', content: '', turn_id: TURN })
     const a = getMessages(useChatStore.getState().sessionsById[SID]).find((m) => m.id === 'a-1')
     expect(a, 'a-1 exists').toBeDefined()
+    expect(getMessageStatusSuffix(a!)).toBeNull()
+    expect(a!.status).toBe('done')
+    expect(a!.isStreaming, 'never left streaming').toBeFalsy()
+  })
+
+  it('a user message with no reply between the Stop and the redirect stops the walk-back: marker stays', () => {
+    feed({ type: 'replay_message', role: 'user', id: 'u-first', content: 'q1' })
+    feed({ type: 'replay_message', role: 'assistant', id: 'a-1', content: 'stopped partial', turn_id: TURN, truncated: true, truncation_reason: 'cancelled' })
+    feed({ type: 'replay_message', role: 'turn_canceled', content: '', turn_id: TURN })
+    feed({ type: 'replay_message', role: 'user', id: 'u-2', content: 'q2 with no reply' })
+    feed({ type: 'replay_message', role: 'user', id: 'redirect-2', content: 'redirect' })
+    const a = getMessages(useChatStore.getState().sessionsById[SID]).find((m) => m.id === 'a-1')
+    expect(a, 'a-1 exists').toBeDefined()
+    expect(getMessageStatusSuffix(a!)).toBe('(interrupted)')
+    expect(a!.status).toBe('interrupted')
+  })
+
+  it('an output-limit cutoff followed by a redirect keeps its own "(cut off at the output limit)" marker', () => {
+    feed({ type: 'replay_message', role: 'user', id: 'u-first', content: 'q1' })
+    feed({ type: 'replay_message', role: 'assistant', id: 'a-1', content: 'long answer cut', turn_id: TURN, truncated: true, truncation_reason: 'max_output_tokens' })
+    feed({ type: 'replay_message', role: 'user', id: 'redirect-3', content: 'redirect' })
+    const a = getMessages(useChatStore.getState().sessionsById[SID]).find((m) => m.id === 'a-1')
+    expect(a, 'a-1 exists').toBeDefined()
+    expect(getMessageStatusSuffix(a!)).toBe('(cut off at the output limit)')
+  })
+
+  // KNOWN LIMIT: see api.redirect-history.test.ts — plain Stop then a later
+  // idle-chat redirect (no user message between) is stored like a redirected
+  // turn, so the Stop marker is lost on reload. Pinned, not endorsed.
+  it('KNOWN LIMIT: plain Stop then an idle-chat redirect loses the Stop marker on reload', () => {
+    const msgs = replayCancelledTurn('redirect-idle')
+    const a = msgs.find((m) => m.role === 'assistant')
+    expect(a, 'assistant exists').toBeDefined()
     expect(getMessageStatusSuffix(a!)).toBeNull()
   })
 })
