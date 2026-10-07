@@ -273,9 +273,9 @@ export function TaskCard({
             `break-word`, which they're allowed to ignore for min-content) —
             together they cap this paragraph's contribution at a single
             glyph's width, so the column can never be forced wider by title
-            content. `line-clamp-2` still truncates (with the native `title`
-            tooltip below carrying the full text) — wrap-anywhere just makes
-            sure that clamp actually happens within the card's own width. */}
+            content. T3 founder steering removes the clamp: the whole title wraps
+            inside that bounded width. The native title is supplementary,
+            never the only way to read the task's name. */}
         <p
           className="min-w-0 flex-1 whitespace-normal wrap-anywhere pr-[var(--space-4)] text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]"
           title={task.title}

@@ -297,6 +297,7 @@ describe('TaskCard — long unbroken title containment (UAT Finding 2)', () => {
     render(<TaskCard task={baseTask({ title: 'Fix login bug' })} onClick={vi.fn()} showActions={false} />)
     const titleEl = screen.getByText('Fix login bug')
     expect(titleEl).toHaveAttribute('title', 'Fix login bug')
-    expect(titleEl).toHaveClass('wrap-anywhere', 'min-w-0', 'line-clamp-2')
+    expect(titleEl).toHaveClass('wrap-anywhere', 'min-w-0', 'whitespace-normal')
+    expect(titleEl).not.toHaveClass('line-clamp-2') // T3 founder steering: show the whole title.
   })
 })

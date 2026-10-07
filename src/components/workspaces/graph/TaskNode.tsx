@@ -174,7 +174,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
           </span>
         </div>
 
-        {/* Title — Outfit, two-line clamp. */}
+        {/* Full title — wrapping is bounded; GraphView reserves the measured height. */}
         <p title={task.title} className="min-w-0 max-w-full whitespace-normal wrap-anywhere font-headline text-[length:var(--type-caption-size)] font-semibold leading-snug text-[var(--color-secondary)]">
           {task.title}
         </p>

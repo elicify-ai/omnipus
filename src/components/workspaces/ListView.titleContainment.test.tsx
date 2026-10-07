@@ -73,7 +73,7 @@ function renderList(tasks: Task[]) {
 function injectRealTailwindDeclarations() {
   const style = document.createElement('style')
   style.textContent =
-    '.table-fixed{table-layout:fixed}.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
+    '.table-fixed{table-layout:fixed}.whitespace-normal{white-space:normal}.wrap-anywhere{overflow-wrap:anywhere}.min-w-0{min-width:0px}'
   document.head.appendChild(style)
   return () => style.remove()
 }
@@ -101,7 +101,7 @@ describe('ListView — long unbroken title containment (UAT Finding 2)', () => {
     expect(widthClasses[6]).toBe('w-28') // Updated
   })
 
-  it('renders a 200-char unbroken title truncated (ellipsis) with a tooltip carrying the full string', () => {
+  it('fully wraps a 200-char unbroken title within its fixed column, retaining the full string', () => {
     const removeStyle = injectRealTailwindDeclarations()
     try {
       const longTitle = 'B'.repeat(200) // exactly the create-task form's maxLength, no spaces
@@ -111,17 +111,17 @@ describe('ListView — long unbroken title containment (UAT Finding 2)', () => {
       // Full text is preserved in the DOM — only CSS (truncate) visually clips it.
       expect(titleButton.textContent).toBe(longTitle)
       expect(titleButton).toHaveAttribute('title', longTitle)
-      expect(titleButton).toHaveClass('truncate')
-      expect(titleButton).not.toHaveClass('line-clamp-1') // replaced: line-clamp has no ellipsis
+      expect(titleButton).toHaveClass('whitespace-normal', 'wrap-anywhere', 'min-w-0')
+      expect(titleButton).not.toHaveClass('truncate', 'line-clamp-1') // T3: no visually clipped title.
 
       // Real cascade resolution (not just a className string match): the
       // injected stylesheet mirrors Tailwind's ACTUAL compiled output
       // (verified above), proving the class takes effect through jsdom's
       // real CSSOM.
       const computed = getComputedStyle(titleButton)
-      expect(computed.overflow).toBe('hidden')
-      expect(computed.textOverflow).toBe('ellipsis')
-      expect(computed.whiteSpace).toBe('nowrap')
+      expect(computed.whiteSpace).toBe('normal')
+      expect(computed.overflowWrap).toBe('anywhere')
+      expect(computed.minWidth).toBe('0px')
 
       const table = screen.getByRole('table')
       expect(getComputedStyle(table).tableLayout).toBe('fixed')
@@ -135,6 +135,7 @@ describe('ListView — long unbroken title containment (UAT Finding 2)', () => {
     const titleButton = screen.getByRole('button', { name: /^Fix login bug, status/ })
     expect(titleButton.textContent).toBe('Fix login bug')
     expect(titleButton).toHaveAttribute('title', 'Fix login bug')
-    expect(titleButton).toHaveClass('truncate')
+    expect(titleButton).toHaveClass('whitespace-normal', 'wrap-anywhere', 'min-w-0')
+    expect(titleButton).not.toHaveClass('truncate')
   })
 })

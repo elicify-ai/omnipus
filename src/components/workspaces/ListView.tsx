@@ -61,10 +61,8 @@ const PRIORITY_ORDER: string[] = ['1', '2', '3', '4', '5']
 
 interface ListViewProps {
   /**
-   * Plan-scoped task set (the plan band filter applies upstream); the List
-   * owns everything else — per-column sort AND filter, Excel-style. Board's
-   * toolbar Agent/Tags filters are NOT applied here, so the column filter
-   * dropdowns always offer the full set of values in the current plan scope.
+   * Shared plan/agent/tag-scoped task set. List's own column sorting and
+   * filters further narrow that visible set; toolbar scope stays applied.
    */
   tasks: Task[]
   agents: AgentRef[]
@@ -306,6 +304,8 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
           className={cn(
             'w-full table-fixed text-[length:var(--type-body-compact-size)]',
             columnOverflow === 'shown' && 'min-w-[calc(34rem+var(--space-8)*2+var(--space-3))]',
+            columnOverflow === 'hidden' && 'min-w-[calc(20rem+var(--space-8)*2+var(--space-3))]',
+            columnOverflow === 'auto' && 'min-w-[calc(34rem+var(--space-8)*2+var(--space-3))] @max-[648px]:min-w-[calc(20rem+var(--space-8)*2+var(--space-3))]',
           )}
         >
           <thead className="sticky top-0 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)]">
@@ -560,15 +560,8 @@ function TaskRow({
             onClick()
           }}
           aria-label={`${task.title}, status ${taskDisplayLabel(task)}`}
-          // `title` gives a native tooltip with the full text (Finding 2 —
-          // "truncate with ellipsis plus a title/tooltip"). `truncate`
-          // (nowrap + overflow-hidden + ellipsis) — rather than the old
-          // `line-clamp-1` (which clips with no ellipsis once the row can't
-          // grow) — reads as a real single-line ellipsis, and now that the
-          // table itself is `table-fixed` (see ListView's <table> above),
-          // this button's `w-full` resolves against a WIDTH-STABLE column
-          // instead of one that grows to fit the very content it's meant to
-          // truncate.
+          // T3 founder steering: the whole title wraps in the width-stable
+          // column. No clipping or tooltip dependency; title is supplementary.
           title={task.title}
           className="block h-auto w-full min-w-0 whitespace-normal wrap-anywhere p-0 text-left text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent"
         >
@@ -600,7 +593,7 @@ function TaskRow({
         {tags.length > 0 ? (
           <div className="flex max-w-[7rem] flex-wrap items-center gap-[var(--space-1)]">
             {tags.slice(0, 2).map((tag) => (
-              <Badge key={tag} variant="outline" title={tag} className="block max-w-[4rem] truncate border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10 px-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-accent)]">
+              <Badge key={tag} variant="outline" title={tag} className="min-w-0 max-w-full whitespace-normal wrap-anywhere border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10 px-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-accent)]">
                 {tag}
               </Badge>
             ))}

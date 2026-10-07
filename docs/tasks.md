@@ -22,7 +22,7 @@ Board shows all six equal-width status columns without sideways scrolling. If th
 
 List columns are **Pri, Title, Status, Actions, Tags, Agent, Updated**. The Run/Stop action sits between Status and Tags. In a narrow List panel, Tags and Updated are hidden by default. Use the three-dot control beside **Actions** to reveal them. When the revealed table needs more room, scroll sideways inside the List panel to reach its columns and controls; the whole page does not scroll sideways, and Title keeps its own space. Press the three-dot control again to return to automatic column visibility.
 
-Long plan and task titles wrap within their tiles or cards. Where titles are shortened to a fixed number of lines, or to one line in List, hover or keyboard focus reveals the full text. The Plans strip and Board status headers use a darker surface to separate them from the task area.
+Long plan and task titles wrap fully within their tiles, cards, List rows and Graph nodes, including long text with no spaces. They do not depend on hover to reveal the title. Graph spacing follows each card's actual height. The Plans strip and Board status headers use a darker surface to separate them from the task area. On a very narrow panel or with enlarged text, List keeps a readable Title column and may scroll sideways inside the panel; the page itself does not scroll sideways.
 
 ## When you would use it
 

@@ -177,7 +177,8 @@ describe('PlansFilterBand — long unbroken plan title containment (round-2 UAT 
       const titleEl = screen.getByText(longTitle)
       // Full text is preserved in the DOM — only CSS (line-clamp) visually clips it.
       expect(titleEl.textContent).toBe(longTitle)
-      expect(titleEl).toHaveClass('line-clamp-2')
+      expect(titleEl).not.toHaveClass('line-clamp-2')
+      expect(titleEl).toHaveClass('whitespace-normal') // T3 founder steering: full wrapping, no Tooltip extension.
       expect(titleEl).toHaveClass('wrap-anywhere')
       expect(titleEl).toHaveClass('min-w-0')
       // TaskCard-specific row-layout classes must NOT leak in — this span
@@ -208,7 +209,8 @@ describe('PlansFilterBand — long unbroken plan title containment (round-2 UAT 
 
     const titleEl = screen.getByText('Payments revamp')
     expect(titleEl.textContent).toBe('Payments revamp')
-    expect(titleEl).toHaveClass('line-clamp-2', 'wrap-anywhere', 'min-w-0')
+    expect(titleEl).toHaveClass('whitespace-normal', 'wrap-anywhere', 'min-w-0')
+    expect(titleEl).not.toHaveClass('line-clamp-2')
 
     const tile = screen.getByTestId('plan-filter-tile-plan-short')
     expect(tile).toHaveAttribute('title', 'Payments revamp')

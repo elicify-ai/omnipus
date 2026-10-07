@@ -438,8 +438,8 @@ function PlanFilterTile({
             uniform). Same fix as TaskCard.tsx: `min-w-0` removes the
             min-content floor; `wrap-anywhere` (overflow-wrap: anywhere) is
             the wrapping mode the spec requires browsers to factor into
-            min-content sizing itself, so line-clamp-2 can actually clip
-            within the tile instead of overflowing it. */}
+            min-content sizing itself. T3 founder steering removes the clamp
+            and bounds the span to the button's content width for full wrapping. */}
         <span className="w-full min-w-0 max-w-full whitespace-normal wrap-anywhere text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]">
           {plan.title}
         </span>

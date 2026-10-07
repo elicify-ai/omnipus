@@ -17,7 +17,6 @@ import {
   type OnReconnect,
 } from '@xyflow/react'
 import { GraphIcon, Info } from '@phosphor-icons/react'
-import { useLibraryTabIndex } from '@/hooks/useLibraryTabIndex'
 import type { Task } from '@/lib/api'
 import { ZoomPill, useZoomableViewKeyboard } from '@/components/ui/zoomable-view'
 import {
@@ -29,6 +28,7 @@ import { TaskNode } from './TaskNode'
 import { DependencyEdge } from './DependencyEdge'
 import {
   buildTaskGraph,
+  NODE_HEIGHT,
   statusVisual,
   type AgentLike,
   type TaskGraphNode,
@@ -145,9 +145,10 @@ function GraphViewInner({
   onRemoveDependency,
   onReconnectDependency,
 }: GraphViewProps) {
+  const [nodeHeights, setNodeHeights] = useState<ReadonlyMap<string, number>>(() => new Map())
   const layout = useMemo(
-    () => buildTaskGraph(tasks, agents, planId != null ? { planId } : { collapseOrphans }),
-    [tasks, agents, planId, collapseOrphans],
+    () => buildTaskGraph(tasks, agents, planId != null ? { planId } : { collapseOrphans }, nodeHeights),
+    [tasks, agents, planId, collapseOrphans, nodeHeights],
   )
 
   // `onTaskClick` is commonly passed as a fresh inline arrow function by the
@@ -359,13 +360,36 @@ function GraphViewInner({
     [onReconnectDependency, setEdges],
   )
 
-  // The zoom pill's own buttons (ZoomPill, catalogued Button/IconButton) stamp
-  // an explicit tabIndex in their own JSX — useLibraryTabIndex is no longer
-  // needed for them. It stays wired for the one remaining library-rendered
-  // interactive element inside this canvas: React Flow's own attribution
-  // `<a href>` link (WebKit Tab reachability; see useLibraryTabIndex).
   const canvasRef = useRef<HTMLDivElement>(null)
-  useLibraryTabIndex(canvasRef)
+  // Fully wrapped titles change node heights. Feed real border-box geometry
+  // back to dagre; never guess line counts or let long cards cover siblings.
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const elements = [...canvas.querySelectorAll<HTMLElement>('.react-flow__node[data-id]')]
+    const measure = () => {
+      const zoom = getViewport().zoom
+      if (!(zoom > 0)) return
+      setNodeHeights((previous) => {
+        let next: Map<string, number> | undefined
+        for (const element of elements) {
+          const id = element.dataset.id
+          const height = Math.ceil(element.getBoundingClientRect().height / zoom)
+          if (!id || !Number.isFinite(height) || height <= 0) continue
+          const bounded = Math.max(NODE_HEIGHT, height)
+          if (Math.abs((previous.get(id) ?? NODE_HEIGHT) - bounded) < 1) continue
+          next ??= new Map(previous)
+          next.set(id, bounded)
+        }
+        return next ?? previous
+      })
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    for (const element of elements) observer.observe(element)
+    return () => observer.disconnect()
+  }, [nodeIdsKey, nodesInitialized, getViewport])
 
   // ZoomableView canvas preset (D18, docs/internal/design/components/zoomable-view.md):
   // wires the shared ZoomPill to this live React Flow instance — zoom in/out,
@@ -478,7 +502,7 @@ function GraphViewInner({
         isValidConnection={isValidConnection}
         {...zoomableCanvasFlowProps}
         minZoom={pill.min}
-        proOptions={{ hideAttribution: false }}
+        proOptions={{ hideAttribution: true }}
         nodesConnectable={!!onConnectDependency}
         nodesDraggable
         deleteKeyCode={onRemoveDependency ? ['Backspace', 'Delete'] : null}

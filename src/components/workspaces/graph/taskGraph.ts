@@ -119,8 +119,8 @@ export interface TaskNodeData extends Record<string, unknown> {
 
 export type TaskGraphNode = Node<TaskNodeData, 'task'>
 
-// Node box dimensions handed to dagre. Must match the rendered TaskNode so the
-// auto-layout reserves the right footprint and edges land on the handles.
+// Initial node footprint before browser measurement. GraphView supplies actual
+// wrapped-card heights to dagre; pure/model-only callers keep these defaults.
 export const NODE_WIDTH = 248
 export const NODE_HEIGHT = 96
 
@@ -239,6 +239,8 @@ export function buildTaskGraph(
   tasks: Task[],
   agents: AgentLike[] = [],
   options: BuildTaskGraphOptions = {},
+  // Local measured UI geometry, never a wire format. Defaults preserve existing callers.
+  nodeHeights: ReadonlyMap<string, number> = new Map(),
 ): { nodes: TaskGraphNode[]; edges: Edge[]; unlinked: Task[] } {
   // Can't destructure `collapseOrphans` directly alongside `planId` — it
   // only exists on the union's "no planId" branch, so TS needs the
@@ -290,7 +292,9 @@ export function buildTaskGraph(
   })
 
   for (const task of visible) {
-    g.setNode(task.id, { width: NODE_WIDTH, height: NODE_HEIGHT })
+    const measured = nodeHeights.get(task.id)
+    const height = measured !== undefined && Number.isFinite(measured) ? Math.max(NODE_HEIGHT, measured) : NODE_HEIGHT
+    g.setNode(task.id, { width: NODE_WIDTH, height })
   }
 
   interface PendingEdge {
@@ -322,7 +326,7 @@ export function buildTaskGraph(
         // dagre centres nodes; React Flow positions by top-left corner.
         position: {
           x: (pos?.x ?? 0) - NODE_WIDTH / 2,
-          y: (pos?.y ?? 0) - NODE_HEIGHT / 2,
+          y: (pos?.y ?? 0) - (pos?.height ?? NODE_HEIGHT) / 2,
         },
         data: {
           task,

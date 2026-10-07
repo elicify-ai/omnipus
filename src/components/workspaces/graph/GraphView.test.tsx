@@ -74,7 +74,12 @@ import { GraphView } from './GraphView'
 // ── React Flow jsdom shims ──────────────────────────────────────────────────
 beforeAll(() => {
   class ResizeObserverStub {
-    observe() {}
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(target: Element) {
+      // T3/T8 opening waits for measured nodes; model the browser edge rather
+      // than leaving React Flow's node-initialized signal permanently false.
+      this.callback([{ target, contentRect: target.getBoundingClientRect() } as ResizeObserverEntry], this as unknown as ResizeObserver)
+    }
     unobserve() {}
     disconnect() {}
   }
@@ -83,8 +88,8 @@ beforeAll(() => {
   g.DOMMatrixReadOnly = class {
     m22 = 1
   }
-  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 800 })
-  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 600 })
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get() { return this.classList.contains('react-flow__node') ? 248 : 800 } })
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get() { return this.classList.contains('react-flow__node') ? 96 : 600 } })
   // The canvas-frame measurement the mini-map visibility check reads
   // (GraphView's own ResizeObserver-on-canvasRef effect, mirroring
   // ZoomableMediaSurface's frame measurement) uses clientWidth/clientHeight,
