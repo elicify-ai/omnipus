@@ -205,8 +205,14 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	// re-pointings landed together in the email-mail-candidate merge —
 	// values below are the actual post-merge line numbers, re-derived by
 	// reading the merged file, not either side's stale value.)
-	"pkg/gateway/rest_workspace_delegation.go:139":             true,
-	"pkg/gateway/rest_workspace_delegation.go:212":             true,
+	// (Re-pointed 2026-10-08: the delegate-tools branch added six lines above
+	// the two rest_workspace_delegation.go call sites (139/212 -> 145/218) and
+	// five above workspace.go's WorkspaceGetTool.Execute (1373 -> 1378). Same
+	// statements, `ws := state.Workspace` / `w := state.Workspace` on a
+	// workspace.State read via ReadState/CheckRevisionLocked — the multi-agent
+	// workspace record, not an agent-config type.)
+	"pkg/gateway/rest_workspace_delegation.go:145":             true,
+	"pkg/gateway/rest_workspace_delegation.go:218":             true,
 	"pkg/gateway/rest_workspace_wire_snapshot_test.go:32":      true,
 	"pkg/gateway/rest_workspace_wire_snapshot_test.go:37":      true,
 	"pkg/gateway/rest_workspaces.go:390":                       true,
@@ -224,7 +230,7 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	"pkg/sysagent/tools/workspace.go:464":                      true,
 	"pkg/sysagent/tools/workspace.go:617":                      true,
 	"pkg/sysagent/tools/workspace.go:619":                      true,
-	"pkg/sysagent/tools/workspace.go:1373":                     true,
+	"pkg/sysagent/tools/workspace.go:1378":                     true,
 	"pkg/sysagent/tools/ava_configuration_context_test.go:236": true,
 	"pkg/sysagent/tools/ava_configuration_context_test.go:237": true,
 	"pkg/sysagent/tools/ava_configuration_context_test.go:238": true,
