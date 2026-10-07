@@ -8,14 +8,14 @@
 
 | Header | Value |
 |---|---|
-| Status | Proposed — founder-confirmed requirements recorded; remaining founder questions are Q-FE-1–Q-FE-10. Not an implementation-ready specification or a delivery claim. |
-| Date | 2026-10-07 (UTC). |
-| Decider | Daniel Piatkowski. Recommendations in the open questions are not decisions. |
+| Status | **Proposed** — binding founder answers folded in; only Q-FE-11/Q-FE-12 remain frontend product choices. No implementation-ready or delivery claim for their dependent activity behavior. |
+| Date | 2026-10-07 (UTC); sole correction after the founder interview. |
+| Decider | Daniel Piatkowski. Open-question recommendations are not decisions. |
 | Author | Architect. |
-| Size and scope | Feature-size frontend design. The first squad covers agent navigation, the shared agent icon, message avatars and static status line, and avatar choices in the existing create/edit slide-outs. Later work is identified separately in D11. |
-| Code baseline | `work/adr-frontend-navigation-20261007`, based on `release/v0.1.1` at `c6837a42dcfb503fb34a0cea86cd3ccc451e7b9b`. |
-| ID | Minted by `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/scripts/new-adr-id.sh` with the working title “Agent-first navigation and agent identity”. |
-| Review boundary | This document awaits its one ADR-mode grill, the founder interview on that review, and one correction round. It does not run that review, write a specification, edit contracts, or authorize implementation or landing. |
+| Size and scope | Feature-size frontend design: navigation/restore/freshness, shared figure identity, inline animated indicator and name-only bubbles, editor preview, plan/start-link visibility and cross-session activity. No first-squad avatar uploads/GIFs. |
+| Baselines | Reviewed ADR `554d21ffd6963def6fa937865cb2b1e3df86f3c3`; production sources remain release `c6837a42dcfb503fb34a0cea86cd3ccc451e7b9b`. Work branch `work/adr-frontend-navigation-20261007`. |
+| ID | Existing ADR identity retained; no rename or new ADR minted in this correction. |
+| Review boundary | Exactly one ADR grill, founder interview and this one correction round. WIP commits preserve this same round and are not squashed. No second grill or further author edits after publication without team-lead’s request; unresolved choices go to the founder. No code/specification/contract edit or landing authorization. |
 
 ## Context
 
@@ -421,30 +421,6 @@ These are **future implementing targets**, not changed files in this ADR. E-key 
 ## Open questions for the founder
 
 **Only Q-FE-11/Q-FE-12 remain open**, from the newly handed-over activity scope. Earlier Q-FE-1–Q-FE-10 are answered by F and the confirmed session-core decisions and are removed, not re-interviewed. Recommendations below are not decisions; answer “Q-FE-11 A, Q-FE-12 A”. Backend serialization/publication dependencies remain in D5, without a duplicate founder choice here.
-
-### Q-FE-9 — What saved-session preservation boundary does the joint cutover guarantee? (A / B / C)
-
-The frontend commission requires existing sessions to remain reachable. B removes old storage/conversion/compatibility paths and hides removed-member main sessions. The UI cannot recover records that the server no longer returns or authorize opening a deliberately hidden main. This is a real joint acceptance decision, not a frontend migration algorithm (R21/R22; B::D1 and Code and compatibility paths to DELETE).
-
-| Option | Preservation boundary |
-|---|---|
-| A | Require the navigation/U1 candidate to keep every previously supported ordinary/extra session reachable through existing search/inspection. Deliberately hidden main sessions follow B. Any storage-format break remains a separately founder-approved backend cutover; failure of this joint check blocks this landing. |
-| B | Authorize a narrowly defined backend conversion/reader to preserve older archives in the same cutover, explicitly changing B’s greenfield boundary. |
-| C | Accept a defined older-format reachability break, with backup/export guidance and user documentation; explicitly revise this brief’s preservation requirement. |
-
-**Recommendation: A.** Do not make a blanket legacy-data promise or smuggle a second reader into the frontend. Team removal is visibility, not deletion; re-add behavior remains owned by B. The scope of unsupported historical formats must be named before acceptance.
-
-### Q-FE-10 — What replaces Admin chat in workspace navigation? (A / B / C; later)
-
-R25 removes the Assets entry but leaves its replacement open. B explicitly gives Admin no team membership and no main session. Treating Admin as an ordinary main row or mention target would contradict that boundary (R25; S1::§5 question 10; E1/E8; B::D1).
-
-| Option | Replacement entry |
-|---|---|
-| A | A workspace-accessible operator action opens Admin’s existing standalone chat path, clearly distinct from main-agent navigation. |
-| B | An explicit special Admin sidebar row in each workspace, using the standalone operator path rather than a fabricated main session. |
-| C | `@admin` only, requiring an explicitly approved backend exception to main-session-only addressing and a discoverable entry for users who do not know the command. |
-
-**Recommendation: A.** Preserve current standalone access in the first squad; choose and test its workspace replacement before removing the Assets entry in the later unit.
 
 ### Q-FE-11 — What scope and detail does cross-session activity show? (A / B / C; new)
 
