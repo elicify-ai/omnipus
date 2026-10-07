@@ -86,6 +86,14 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   // when lifecycle_state is 'stopped'. The stopped sidebar row shows its
   // cause alongside the Stopped label.
   stop_note?: WireSessionShape['stop_note']
+  // Wave 1 Sessions. Set only when the lifecycle record is queued or running.
+  // Omitted otherwise. The Running filter uses this, never lifecycle_state
+  // (working collapses queued and running).
+  execution?: WireSessionShape['execution']
+  // How many background shell commands this session itself owns. Omitted when
+  // the process table is unavailable (unknown, not zero). Zero means checked
+  // and none. Not a roll-up of child sessions.
+  background_command_count?: WireSessionShape['background_command_count']
 }
 
 interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that renames nested stats fields before public Session type; the wire shape is validated via WireSessionSchema, this type only models the pre-transform intermediate
@@ -107,6 +115,8 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   // ADR-20260928 MAJ-009 — wire pass-through (see public Session above).
   lifecycle_state?: WireSessionShape['lifecycle_state']
   stop_note?: WireSessionShape['stop_note']
+  execution?: WireSessionShape['execution']
+  background_command_count?: WireSessionShape['background_command_count']
   stats?: {
     tokens_in: number
     tokens_out: number
@@ -151,6 +161,10 @@ function rawToSession(raw: RawSession): Session {
     // absent (a session with no lifecycle record shows no lifecycle label).
     lifecycle_state: raw.lifecycle_state,
     stop_note: raw.stop_note,
+    // Absent stays absent. Do not coerce a missing execution to a value, and
+    // do not turn a missing background count into 0 — unknown is not none.
+    execution: raw.execution,
+    background_command_count: raw.background_command_count,
   }
 }
 
@@ -660,12 +674,43 @@ export async function fetchSessionPage(
 // fetchSessionPage() remains the single-page primitive for callers that DO
 // want to control paging themselves — SessionTree.tsx's useSessionForest
 // fetches one node's children a page at a time by design (BDD-103).
+// Coverage rides on the array itself so existing callers (Sidebar, Usage,
+// session restore, pagination tests) keep using .map/.find/.length. The
+// Sessions view reads partialErrors/incomplete and must not treat a partial
+// list as proof that a parent is missing.
+export interface SessionFetchCoverage { // not-wire-format: client-only flags derived while walking SessionPage cursors; not a wire object
+  /** Sanitized per-store failure tokens gathered across every page. Empty when none reported any. */
+  partialErrors: string[]
+  /** True when any page reported partial_errors, or the max-page walk aborted. */
+  incomplete: boolean
+}
+
+export type SessionListResult = Session[] & SessionFetchCoverage
+
+export function readSessionFetchCoverage(sessions: readonly Session[] | undefined): SessionFetchCoverage {
+  if (!sessions) return { partialErrors: [], incomplete: false }
+  const extra = sessions as Partial<SessionFetchCoverage>
+  return {
+    partialErrors: Array.isArray(extra.partialErrors) ? extra.partialErrors : [],
+    incomplete: extra.incomplete === true,
+  }
+}
+
+function finishSessionFetch(sessions: Session[], partialErrors: string[], incomplete: boolean): SessionListResult {
+  const result = sessions as SessionListResult
+  result.partialErrors = partialErrors
+  result.incomplete = incomplete
+  return result
+}
+
 export async function fetchSessions(
   agentId?: string,
   type?: Session['type'],
   opts?: FetchSessionsOptions,
 ): Promise<Session[]> {
   const sessions: Session[] = []
+  const partialErrors: string[] = []
+  let incomplete = false
   let offset = opts?.offset
   // Safety valve, not a normal exit: the server's own default page size is
   // 50, so 1000 pages is 50,000 sessions — far past any real install. If a
@@ -676,15 +721,22 @@ export async function fetchSessions(
   for (let i = 0; i < MAX_PAGES; i++) {
     const page = await fetchSessionPage(agentId, type, { ...opts, offset })
     sessions.push(...page.sessions)
-    if (!page.nextCursor) return sessions
+    if (page.partialErrors && page.partialErrors.length > 0) {
+      incomplete = true
+      for (const token of page.partialErrors) {
+        if (!partialErrors.includes(token)) partialErrors.push(token)
+      }
+    }
+    if (!page.nextCursor) return finishSessionFetch(sessions, partialErrors, incomplete)
     offset = Number(page.nextCursor)
   }
+  incomplete = true
   console.warn(`[api] fetchSessions: aborted after ${MAX_PAGES} pages — server kept returning next_cursor; result is INCOMPLETE`)
   void maybeDevToast(
     `[api] Session list exceeded ${MAX_PAGES} pages — showing a partial set`,
     'GET:/sessions:max-pages',
   )
-  return sessions
+  return finishSessionFetch(sessions, partialErrors, incomplete)
 }
 
 // ── Session tree assembly (ADR-057 US-19/FR-091/FR-097, W16d) ─────────────────
