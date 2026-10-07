@@ -13,6 +13,7 @@ import { TaskActionButton } from './TaskActionButton'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { WordBoundaryText } from '@/components/ui/word-boundary-text'
 import { cn } from '@/lib/utils'
 // 6-state unified vocabulary + colour — single source of truth.
 import { STATUS_ORDER, statusLabel, taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
@@ -506,8 +507,8 @@ function TaskRow({ task, agents, plans, onClick }: { task: Task; agents: AgentRe
         {tags.length > 0 ? (
           <div className="flex max-w-[7rem] flex-wrap items-center gap-[var(--space-1)]">
             {tags.slice(0, 2).map((tag) => (
-              <Badge key={tag} variant="outline" title={tag} className="min-w-0 max-w-full whitespace-normal wrap-anywhere border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10 px-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-accent)]">
-                {tag}
+              <Badge key={tag} variant="outline" title={tag} className="min-w-0 max-w-full whitespace-normal break-normal wrap-break-word border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10 px-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-accent)]">
+                <WordBoundaryText text={tag} />
               </Badge>
             ))}
             {tags.length > 2 && <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">+{tags.length - 2}</span>}

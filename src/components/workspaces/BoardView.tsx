@@ -98,9 +98,8 @@ const COLUMN_STATUSES: TaskStatus[] = COLUMNS.map((c) => c.status)
  * This getter instead teleports the drag rect directly onto the CENTER of
  * the adjacent column (by `COLUMN_STATUSES` order — the wide board is a
  * single left-to-right row, so ArrowRight/ArrowDown both mean "next column"
- * and ArrowLeft/ArrowUp both mean "previous column"; the SP-33 stacked
- * narrow board mirrors the same order onto the vertical axis, see
- * `isStackedColumnLayout`), so one key press reliably moves exactly one
+ * and ArrowLeft/ArrowUp both mean "previous column"; narrow Tasks uses
+ * List instead of stacking this Board), so one key press moves exactly one
  * column and stops at the first/last column rather than drifting by a few
  * pixels. Paired with `closestCenter` (passed as the DndContext's
  * `collisionDetection` below, replacing the default `rectIntersection`) so

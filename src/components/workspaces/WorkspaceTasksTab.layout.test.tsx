@@ -157,6 +157,27 @@ describe('Tasks panel layout', () => {
     expect(screen.getByRole('table'), 'window events do not override the measured panel width').toBeVisible()
   })
 
+  it('G keeps the fallback live region mounted before and after a measured width change', async () => {
+    measuredWidth = 1001
+    await renderTab()
+    const region = screen.getByTestId('tasks-board-fallback')
+    expect(region).toHaveAttribute('role', 'status')
+    expect(region).toBeEmptyDOMElement()
+    resizeFrame(641)
+    expect(screen.getByText('Board needs more room — showing list')).toBe(region)
+    resizeFrame(1001)
+    expect(screen.getByTestId('tasks-board-fallback')).toBe(region)
+    expect(region).toBeEmptyDOMElement()
+  })
+
+  it('G includes the visible selected-tag count in the filter accessible name', async () => {
+    await renderTab()
+    act(() => useWorkspacesStore.getState().setActiveTags(['docs', 'build']))
+    const filter = within(screen.getByTestId('tasks-tag-filter')).getByRole('button')
+    expect(filter).toHaveTextContent('2 tags')
+    expect(filter).toHaveAccessibleName('Filter by tags (2 tags)')
+  })
+
   it('T6 orders List columns Pri, Title, Status, Actions, Tags, Agent, Updated and places Run in Actions', () => {
     renderLayout(<ListView tasks={[layoutTask()]} agents={[layoutAgent()]} onTaskClick={() => {}} />)
     const headers = screen.getAllByRole('columnheader')

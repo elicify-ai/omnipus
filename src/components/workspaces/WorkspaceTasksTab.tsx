@@ -143,7 +143,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
               options={agents.map((agent) => ({ value: agent.id, label: agent.name, icon: agent.icon ? <IconRenderer icon={agent.icon} size={13} /> : undefined }))} />
             <FilterMenu mode="multiple" value={activeTags} onChange={setActiveTags} clearLabel="Clear tags" options={tagOptions}
               label={activeTags.length === 0 ? 'Tags' : `${activeTags.length} tag${activeTags.length === 1 ? '' : 's'}`}
-              aria-label="Filter by tags" data-testid="tasks-tag-filter" icon={<Tag size={13} className="shrink-0" aria-hidden="true" />} />
+              aria-label={activeTags.length === 0 ? 'Filter by tags' : `Filter by tags (${activeTags.length} tag${activeTags.length === 1 ? '' : 's'})`} data-testid="tasks-tag-filter" icon={<Tag size={13} className="shrink-0" aria-hidden="true" />} />
           </div>
           <Button type="button" variant="ghost" onClick={() => setCreateTaskOpen(true)}
             className="h-auto shrink-0 gap-[var(--space-1)] p-0 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-accent)]">
@@ -163,9 +163,9 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
       {tasksError && tasks.length > 0 && <div className="flex shrink-0 items-center gap-[var(--space-1)] bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"><Info size={12} weight="fill" className="shrink-0" />Couldn't refresh — showing last-known tasks.</div>}
 
       <div ref={frameRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {view === 'board' && effectiveView === 'list' && (
-          <p role="status" className="shrink-0 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Board needs more room — showing list</p>
-        )}
+        <p role="status" data-testid="tasks-board-fallback" className="shrink-0 text-[length:var(--type-caption-size)] text-[var(--color-muted)] [&:not(:empty)]:px-[var(--space-3)] [&:not(:empty)]:py-[var(--space-1)]">
+          {view === 'board' && effectiveView === 'list' ? 'Board needs more room — showing list' : ''}
+        </p>
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           {effectiveView === 'graph' ? <WorkspaceGraphTab workspaceId={workspaceId} hidePlanSelector ownerAgentId={ownerAgentId} activeTags={activeTags} />
             : tasksLoading ? <BoardSkeleton />

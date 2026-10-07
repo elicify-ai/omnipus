@@ -24,8 +24,8 @@
 //
 //   1. T2 supersedes the switch seam: "Show done" is a kit CHECKBOX in the Plans header
 //      (`role="checkbox"`, aria-checked, accessible name "Show done plans",
-//      labelled "Show done (N)") — the spec's word is "toggle", and a switch
-//      IS the toggle primitive; the count makes the hidden state visible.
+//      labelled "Show done (N)") — the count makes the hidden state visible;
+//      a switch is not used for this completed-plan filter.
 //      Its a11y contract (name + checked state + reveals on check) is what
 //      this pack pins; the old pack's button/aria-pressed shape is retired
 //      with the renegotiated seam.

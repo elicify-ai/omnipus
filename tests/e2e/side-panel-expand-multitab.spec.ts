@@ -427,6 +427,12 @@ test.describe('native docking controls — SP-33/37/39', () => {
       expect(Math.abs(wide[i].y - wide[0].y)).toBeLessThanOrEqual(1)
       if (i > 0) expect(wide[i].x).toBeGreaterThan(wide[i - 1].x)
     }
+    const boardWidths = await groups.first().evaluate((lane) => {
+      const row = lane.parentElement!
+      return { client: row.clientWidth, scroll: row.scrollWidth }
+    })
+    expect(boardWidths.client).toBeGreaterThan(0)
+    expect(boardWidths.scroll, 'F: Board has no horizontal overflow').toBeLessThanOrEqual(boardWidths.client + 1)
     await separator.press('Home')
     await expect(separator).toHaveAttribute('aria-valuenow', '320')
     // T5 retires the stacked Board. The same selected Board choice must show
@@ -436,6 +442,13 @@ test.describe('native docking controls — SP-33/37/39', () => {
     await expect(page.getByText('Board needs more room — showing list', { exact: true })).toBeVisible()
     const table = page.getByTestId('side-panel').getByRole('table')
     await expect(table).toBeVisible()
+    const listWidths = await table.evaluate((element) => {
+      const viewport = element.parentElement!
+      return { client: viewport.clientWidth, scroll: viewport.scrollWidth, overflowX: getComputedStyle(viewport).overflowX }
+    })
+    expect(listWidths.client).toBeGreaterThan(0)
+    expect(listWidths.overflowX).toBe('auto')
+    expect(listWidths.scroll, 'F: narrow List retains columns through its own horizontal scrolling').toBeGreaterThan(listWidths.client)
     await expect(table.getByRole('columnheader')).toHaveCount(7)
     expect(await table.getByRole('columnheader').evaluateAll((headers) => headers.map((header) => header.textContent?.replace(/[↑↓]/g, '').trim()))).toEqual(['Pri', 'Title', 'Status', 'Actions', 'Tags', 'Agent', 'Updated'])
     const snapshot = await recordNativeDock(page, 'tasks', info)

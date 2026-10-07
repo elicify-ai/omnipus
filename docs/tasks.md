@@ -1,6 +1,6 @@
 # Tasks
 
-The Tasks panel inside a workspace is where you turn work into cards you can assign, start, and follow to completion. This page covers the Board and List views and the task detail panel.
+The Tasks panel inside a workspace is where you turn work into cards you can assign, start, and follow to completion. This page covers the Board, List and Graph views and the task detail panel.
 
 ## What it is
 
@@ -10,13 +10,13 @@ Every workspace has a **Tasks** control in its top bar, alongside Calendar, Libr
 - **List** — unscheduled user tasks as a table, with per-column sorting and filtering. Unlike the Board, it can include subtasks as rows.
 - **Graph** — top-level plan members and tasks with dependency relationships, drawn as a dependency map. That view belongs to planning; see [plans](plans.md).
 
-Above the views, the **Plans** header stays visible with **Show done (N)** and **New Plan**. The tiles are collapsed by default; click **Plans** to expand or collapse the flat band. It starts collapsed each time you open the panel. Once expanded, click a plan tile to see that plan's tasks (the view also jumps to its graph), or **All tasks** to clear the filter.
+Above the views, the **Plans** header and **New Plan** stay visible. The tiles are collapsed by default; click **Plans** to expand or collapse the flat band. It starts collapsed each time you open the panel. **Show done (N)** is a checkbox that appears only when completed plans exist. Checking it expands the band and reveals the completed tiles. Once expanded, click a plan tile to see that plan's tasks (the view also jumps to its graph), or **All tasks** to clear the filter.
 
 The **Agent** and **Tags** filters narrow all three views and combine with the selected plan. They remain applied when you switch views. List also offers per-column sorting and filtering, like a spreadsheet: Priority, Status and Agent sort and filter; Tags filters only; Title and Updated sort only. Tasks refresh about every 15 seconds, so an agent's changes appear without a reload.
 
 The heading and **Board / List / Graph** switch share the first toolbar row. The **Agent** and **Tags** filters sit to the left of **New Task** on one row directly underneath. This two-row layout is the same in a docked panel and full screen; long filter labels shorten rather than adding toolbar rows.
 
-Selecting **Board** widens the panel to its maximum docked width. Chat stays visible and never shrinks below its minimum width. Selecting **List** or **Graph** restores the previous width. Full-screen Board uses the window's available space.
+**Board** is the default view. Opening the panel on **Board**, or selecting **Board**, widens it to its maximum docked width. Chat stays visible and never shrinks below its minimum width. Selecting **List** or **Graph** restores the previous width. Full-screen Board uses the window's available space.
 
 Board shows all six equal-width status columns without sideways scrolling. If the panel cannot fit six readable columns, Tasks shows List instead with the quiet note **Board needs more room — showing list**. Board remains your selected view. The view automatically returns to Board when the panel has enough room again; it does not turn into a vertical stack of status groups.
 
