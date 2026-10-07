@@ -92,6 +92,7 @@ import {
   AssistantMessageConnectionStatus,
   UnansweredUserMessageStatus,
   ChatConnectionNotice,
+  RestartInterruptedNotice,
   UserMessageDeliveryStatus,
 } from './ConnectionStatus'
 
@@ -3373,6 +3374,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           )}
 
           <ChatConnectionNotice />
+          <RestartInterruptedNotice />
 
           {/* Rate-limit indicator — shown above composer. Tool-approval requests
               (including `bash`) are handled by the global ToolApprovalModal

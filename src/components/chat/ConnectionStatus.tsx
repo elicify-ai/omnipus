@@ -16,6 +16,7 @@ import { useChatStore } from '@/store/chat'
 import type { FirstSendStatus } from '@/store/chat/types'
 import { useSessionStore } from '@/store/session'
 import { cn } from '@/lib/utils'
+import { useRestartInterrupted, useRestartNoticeDismissal } from './useRestartInterrupted'
 
 export type UserDeliveryState = 'queued' | 'sending' | 'received' | 'working' | 'failed'
 
@@ -413,6 +414,30 @@ export function ChatConnectionStatusLine({ state, onRetry }: { state: ChatConnec
   )
 }
 
+/**
+ * I1: the chat-body twin of the sidebar's Interrupted label. A restart cut this
+ * chat's turn off; the partial text above stays, nothing resumes by itself, and
+ * the next message the user sends continues the same chat.
+ */
+export function RestartInterruptedNotice() {
+  useRestartNoticeDismissal()
+  const interrupted = useRestartInterrupted()
+  if (!interrupted) return null
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="restart-interrupted-notice"
+      className="flex min-h-8 items-center justify-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
+    >
+      <PauseCircle size={15} aria-hidden="true" />
+      <span>Interrupted</span>
+      <span aria-hidden="true">{' · '}</span>
+      <span>The restart cut this answer off. Send a message to continue.</span>
+    </div>
+  )
+}
+
 export function ChatConnectionNotice() {
   const connection = useConnectionStore((state) => state)
   const active = !connection.isConnected || connection.reconnectedAt !== null
@@ -512,7 +537,9 @@ export function AssistantMessageConnectionStatus({ messageId, agentName }: { mes
   const awaitingCatchUp = useChatStore((state) =>
     activeSessionId != null && !!state.sessionsById[activeSessionId]?.awaitingCatchUp,
   )
-  if (!disconnectedHere && !unfinishedHere) return null
+  const restartInterrupted = useRestartInterrupted()
+  // A restart-cut chat is announced once, as Interrupted (RestartInterruptedNotice).
+  if ((!disconnectedHere && !unfinishedHere) || restartInterrupted) return null
   const display = deriveConnectionDisplay({
     isConnected,
     reconnectPhase,
@@ -549,6 +576,9 @@ export function AssistantMessageConnectionStatus({ messageId, agentName }: { mes
 // comment covers the exact scope (boot_mismatch specifically, not
 // retention_exceeded, and only when the exchange truly has no reply and no
 // turn is running).
+// Founder decision Q1 = A (2026-10-07): for a restart-cut question that never got
+// an answer, "Generate again" stays as a manual button next to the Interrupted
+// notice. It only resends when the user clicks it; nothing resumes on its own.
 export function UnansweredUserMessageStatus({ messageId, agentName }: { messageId: string; agentName: string }) {
   const activeSessionId = useSessionStore((state) => state.activeSessionId)
   const unanswered = useChatStore((state) => {

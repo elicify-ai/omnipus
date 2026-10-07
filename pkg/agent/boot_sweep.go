@@ -157,7 +157,9 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 		}
 		switch class {
 		case steer.ClassOrdinaryRoot:
-			// Existing root boot recovery remains authoritative.
+			if err := r.recoverOrdinaryRoot(id, notice); err != nil {
+				refusals = append(refusals, err)
+			}
 		case steer.ClassSteered:
 			if err := r.recoverSteered(ctx, id, notice); err != nil {
 				refusals = append(refusals, err)
@@ -659,8 +661,11 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 		writingBootSeq = r.BootEpoch.Current()
 	}
 	err := r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
+		if current == nil {
+			return session.ErrLifecycleNotFound
+		}
 		if current.Terminal() || (current.Stop != nil && current.Stop.Generation == current.Generation) {
-			return nil
+			return errRestartStopUnchanged
 		}
 		if current.State == session.LifecycleStopped {
 			// Already-stopped arm (ADR-20260928 D8, founder decision
@@ -674,7 +679,16 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 			// its real one (D8.5). recoverSteered's D8 guard already keeps
 			// stopped records away from this call; the arm is the same rule
 			// restated at the writer, for any future caller.
-			return nil
+			return errRestartStopUnchanged
+		}
+		if rec.SteeredBy == nil {
+			allowed, guardErr := r.ordinaryRestartStopAllowedLocked(rec, current, writingBootSeq)
+			if guardErr != nil {
+				return guardErr
+			}
+			if !allowed {
+				return errRestartStopUnchanged
+			}
 		}
 		if writingBootSeq == 0 {
 			return fmt.Errorf("steer: boot: restart stop for %q refused: missing current writing boot epoch", current.SessionID)
@@ -719,6 +733,9 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 		current.NeedsInput = nil
 		return nil
 	})
+	if errors.Is(err, errRestartStopUnchanged) {
+		return nil
+	}
 	return err
 }
 
@@ -1641,20 +1658,5 @@ func (r *SteerBootRecovery) acceptedStopPending(rec *session.LifecycleRecord) (b
 	if err != nil {
 		return false, err
 	}
-	for _, intent := range intents {
-		target := intent.Selection.Effect.Target
-		if target.Generation != rec.Generation {
-			continue
-		}
-		if !target.Selected() {
-			if rec.ExecutionID == nil {
-				return true, nil
-			}
-			continue
-		}
-		if rec.ExecutionID != nil && rec.ExecutionID.RunID == target.RunID && rec.ExecutionID.BootSeq == target.BootSeq {
-			return true, nil
-		}
-	}
-	return false, nil
+	return acceptedStopSelectsExecution(rec, intents), nil
 }
