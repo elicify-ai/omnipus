@@ -421,3 +421,132 @@ Versions below are manifest requirements, not fabricated exact installed version
 | Unit/component testing | Vitest `4.1.11`, Testing Library, existing jsdom/test helpers | Same manifest::devDependencies; existing test files listed under Regression Test Requirements. |
 | Integration/end-to-end testing | Existing Playwright `^1.61.1`, real gateway and candidate data; static Storybook `10.6.0` kit checks | Same manifest; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/playwright.config.ts`::defineConfig. |
 | New infrastructure | None | N D1/D5/D7/D13/D14. |
+
+## Deployment / Runtime
+
+| Topic | Required deployment behavior |
+|---|---|
+| Target | Existing self-hosted Omnipus runtime on supported Linux/macOS/Windows, with the SPA embedded in the same binary. No new server, worker or browser-only main registry. P Hard Constraints; N D5. |
+| Delivery | U1 + dependent generated contracts + frontend + shared kit + migration/canonical identity on one joint integration candidate. Independent UI preparation is not an independently shippable navigation release. N D12. |
+| Start / stop | Use existing installed `omnipus start` and existing operational lifecycle. This spec adds no runtime command; chat Stop is not server shutdown. Existing operation instructions remain outside navigation implementation. |
+| Online / offline | Gateway metadata/attachment needs a connection. Disconnection retains honest last-known data and unresolved intent; reconnect recovers snapshots without acknowledging goals or stopping live work. |
+| Resource limits | No new per-row connections/pollers, full-transcript downloads for navigation or second activity/session store. Existing list paging and virtualized/plain paths remain; no new RAM/CPU guarantee is invented. |
+| Startup / restart | Backend owns one-cutover saved-chat import and canonical identity seeding. Repeat startup must not undo mapped identities or erase history; test real restart, not only a React remount. |
+| Health / logs / telemetry | Use existing load/attachment/error diagnostics and authenticated metadata smoke checks. No new telemetry; report query/contract coverage gaps visibly. Do not log credentials or claim a rendered welcome screen proves migration readiness. |
+
+## Integration Boundaries
+
+### Gateway sessions, membership and U1
+
+| Boundary aspect | Required contract and failure behavior |
+|---|---|
+| Data in | Authorized workspace/member associations, session identity/kind/immutable owner/protection, real hierarchy and validated welcome/Admin destinations. |
+| Data out | Explicit selected/remembered destination and existing authenticated attach intent; extra-chat creation only through the deliberate row action. |
+| Published shape consumed | B D1.1: `Session.type = main` replaces heartbeat; current-format type is required; `Session.id`, `workspace_id`, `agent_id` and computed `protected`; `WorkspaceMemberConfig.main_session_id` readOnly for eligible members; heartbeat keeps enabled/interval/body, drops session_id. Computed ID is `main-session-<workspaceid>-<agentid>` but frontend never manufactures it as proof of existence/access. |
+| Admin / ownership | Later BS/F override b76's Admin omission: default-workspace main through existing Session responses, no fake membership. Immutable `Session.agent_id` owns grouping/sending; `Message.agent_id` is the actual author. Delete coordinated mutable `active_agent_id`/handover consumers, not genuine guest attribution. |
+| Failure | Missing/invalid/inaccessible association is unavailable; failed load is unknown, not missing. Keep single winning selection intent and last committed tuple; send only after validated workspace/session/owner attachment agrees. |
+| Development | Generated-contract fixtures for UI/controlled races; real gateway for joint navigation, protection, upgrade and attach acceptance. A mock does not prove U1 works. |
+
+### Main-only attention and explicit open
+
+| Boundary aspect | Required contract and failure behavior |
+|---|---|
+| Data in | **BS::C-ATTENTION** publishes `Session.needs_attention`: optional readOnly boolean on the general schema, true/false present on every valid main including Admin, omitted on non-main. Existing question/approval/goal snapshots and frames supply authoritative state. |
+| Data out | **BS::C-ATTENTION** publishes `AttachSessionFrame.ack_attention`: optional boolean/default false. Only a genuine explicit foreground open of a main requests acknowledgement; background prefetch/reconnect/replay recovery use false/absent. A transport send alone is not successful backend acknowledgement. |
+| Goal mapping | Unseen `met` = finished; `rounds_exhausted` or `other` = failed; `stopped_by_user` excluded. Pending structured questions/approvals clear on resolution only. Shared pair-wide observed-outcome mark belongs to backend; a newer outcome beyond that bound stays unseen. |
+| Failure | Missing main boolean, failed source or failed/unauthorized attach remains unknown/error and acknowledges nothing; do not coerce to false or synthesize a seen mark in browser storage. |
+| Development | Parameterized snapshots/frames for UI; actual unopened-main updates, two people observing one main, explicit-open/append race and restart/reconnect against U1. Backend owner proves computation/seen ordering; frontend proves cue and intent behavior. |
+
+### Agent identity configuration and canonical seeding
+
+| Boundary aspect | Required contract and failure behavior |
+|---|---|
+| Data in / out | Existing Agent list/create/update responses, protected editability and truthful persistence/activation status. Choices are approved figure + role badge + color, global across workspaces. |
+| Publication gap | Baseline Agent schema has `color` and `icon`, **no published separate figure representation**. Backend identity owner must publish the existing Agent contract extension and generated consumer names before persistence code. This spec invents no `figure`, `avatar`, image or role wire key. Canonical built-in role/color/figure values must be published by that owner, not selected from names by frontend. |
+| Migration | N D9/D10 + F Q8: automatic one-time stored mapping, canonical definitions/fresh seed/startup enforcement together. R11 obvious old-icon mappings remain, unmatched → General assistant. New/missing figure follows approved Omnipus default through the backend representation. |
+| Failure | Draft preview is not saved/activated truth. Save errors retain the real status/retry behavior; no local-only identity shadow, recoloring repair or guessed unlock. |
+| Development | Pure identity component fixtures first; actual custom/built-in create/save/read/migrate/reload/repeated restart and lock validation on joint candidate. |
+
+### Plans, tasks, scheduler runs, helpers and shells
+
+| Boundary aspect | Required contract and failure behavior |
+|---|---|
+| Data in | Existing plan metadata/status/phase/progress; task/run metadata and actual run session; genuine child/session lifecycle; origin-associated shell metadata. Reuse BS/B D5 task/scheduler projection even when no foreground tool started the run. |
+| Data out | Existing authorized Tasks/Graph plan selection and session inspection. No new plan executor, report pipeline, job service or SPA call to an agent-facing job-listing tool. |
+| Start-result representation | N D13 requires successful/idempotent `execute_plan` and `run_task` results to expose the validated existing plan/task/run/session handle and authoritative workspace. Backend publishes any missing result-navigation schema before consumers; frontend never extracts addresses from prose or adds a URL field. |
+| Plan-origin representation | F Q-FE-12 requires the **actual starting chat**, not automatically the plan's internal owner or transport source. The authoritative starting-chat association is not yet verified as a committed generated contract. Backend owner must publish it in an existing contract surface. Tasks-only plans have no origin and remain in existing workspace plan/activity surfaces. |
+| Association / counts | Panel shows only the open session's legitimate starter/assignee/child associations. Same MAIN task child counts once as task/run, not again as helper. Shell processes are not invented stored chat sessions; their cross-session modal presentation is Q-M4 and requires metadata coverage. Global unattributed judge verdicts cannot become local session activity by assumption. |
+| Failure | Missing run/page/origin/address or forbidden/deleted target: explicit unknown/unavailable/refusal and Retry where recoverable, never synthetic parent, false zero or redirected foreground main. Readiness is held for published snapshot/live coverage of work not opened in this browser. |
+| Development | Generated fixtures and existing query invalidation for UI; real start/result/replay/Tasks hand-off, scheduler-only runs, dedupe and unopened-session reconciliation for acceptance. Controllable dependency twins test outages/order, not execution correctness. |
+
+### Shared kit and Tasks-panel overlap
+
+| Boundary aspect | Reuse and ownership |
+|---|---|
+| Identity / attention / status / pills | One published AgentIcon with figure/role/color/named size/motion; no fetch or session resolution inside the component. Shared recurring attention/inline-status/activity-pill jobs compose existing kit primitives and follow four-part publication. Screens pass layout-only classes. |
+| Sessions presentation | Use kit Dialog, flat group/disclosure composition, Badge, shared row/Item, SearchField and filter controls; publish a missing recurring job once, preferring a shadcn port. Keep genuine nested session hierarchy despite flat group-header styling. R35 still uses uppercase group labels; M D1 is not authority for inventing lowercase typography. |
+| K integration | Pushed K tip contains FilterMenu and ViewSwitch source/stories/manifests. Consume those components, with conforming selected-item/check behavior centrally repaired by their owner if needed; do not fork them here. Use K's shadcn HoverCard when richer hover content is required, with click/keyboard/touch alternatives. No new view switch is required merely to consume a dependency. |
+| Pending publication | HoverCard is not present at the observed K tip. Complete public-export/style/catalog/manifest/executed evidence and final interface agreement are integration dependencies, not presumed from file presence. |
+| Failure | If a component/contract is not published, hold its dependent implementation and ask its owner. Do not silently ship a screen-local substitute or treat a nonexistent HoverCard as verified. |
+| Development | Static Storybook checks and in-context application interactions; publication metadata alone is not browser/keyboard/accessibility evidence. |
+
+### Dependency ledger — check before consumers and before joint landing
+
+| ID | Dependency / owner | Verified state in this writing task | Landing condition |
+|---|---|---|---|
+| DEP-U1 | Session-core owner: main identity/membership, Ava destination, default Admin, protected/hide behavior, migration | b76 D1.1 and pushed BS at `0e1fececc5df91c140e21fd27cf03bfd0ee3c8dc` read. Implementation not certified. | Real U1 + generated contracts and continuation/attachment proofs on the candidate. |
+| DEP-ATT | Session-core backend: needs_attention/ack_attention, bound/shared seen mark, unopened-main query updates; prompt owner: structured-question rule | Names/semantics published in BS C-ATTENTION; baseline checkout lacks these generated additions. | Generated validation + actual source/ack/open race/reconnect/two-person tests. |
+| DEP-ID | Backend identity owner: Agent representation, approved canonical identity inventory and one-time mapping | Design approved; concrete figure wire representation and canonical per-built-in choices are not published here. | Contract + seeds/startup enforcement + locked-field/restart/migration proof. No frontend-picked seed colors. |
+| DEP-ACT | Backend task/run/plan owner: real start handles/origin, snapshots/live metadata and coverage for unopened sessions/shells | Existing mechanisms and BS projection direction read; complete required generated shape/coverage is not verified. | Publish/verify missing existing-contract extensions; real A/B session and scheduler/reload/partial-page tests. |
+| DEP-KIT | Tasks-panel owner: FilterMenu, ViewSwitch, HoverCard | First two source snapshots read at `7946ac5f00163fa036033e75f329fcab2193bdaa`; HoverCard not yet found there. | One shared implementation each, final publication/API/evidence integrated. |
+| DEP-CUT | Session-core command/runtime deletions and companion #1221/R44/R45 | Commissioned boundaries verified; no runtime completion claim. | Coordinated generated consumer cutover, preserved first-send/control behavior, no resurrected obsolete control. |
+| DEP-UX | Team-lead/founder: Q-M1–Q-M4 and missing wireframe screens | Pending decisions/visual additions; this draft does not choose them. | Interview, recorded decisions and approved missing visual states before their dependent UI is finalized. |
+
+## Wireframe reference and additions needed
+
+**Approved reference:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/navigation-menu-wireframe/index.html`. Every visual-reference entry below points to that file or its approved Q9 evidence; no alternate prototype is substituted. Source inspection and screenshots verify prototype placement, not delivered behavior or live animation.
+
+| Approved surface | Exact reference / acceptance boundary |
+|---|---|
+| Sidebar agent rows / row actions / collapsed-workspace attention | W::sidebar/ws-list and main-only waiting demo. Keep original shell/pin/header arrangement; do not copy Demo/source simulation controls into the product. |
+| Above-feed main/extra label | W::chat-label; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/navigation-menu-wireframe/evidence/q9/04-extra-chat-toggle.png`. Actual kind drives the label. |
+| Inline responder and name-only bubbles | W::chat-feed/chat-messages/think-preview; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/navigation-menu-wireframe/evidence/q9/01-inline-thinking.png` and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/navigation-menu-wireframe/evidence/q9/02-name-only-bubbles.png`. Feed slot, not composer status row. |
+| Actual non-owner responder | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-ux/navigation-menu-wireframe/evidence/q9/03-addressed-jim-answering.png`, illustrating W's approved design. Rendering genuine producer identity is in scope; enabling full @ messaging waits for its backend/later unit. |
+| Figure grammar | W's Robot/Man/Woman/Omnipus examples; Omnipus default, minimal eyes and role badge at every size. The app-wide demo switch is not the per-agent editor. |
+
+### Wireframe additions needed
+
+This task **does not edit the wireframe**. Team-lead commissions missing states in the same approved reference project, obtains founder approval, then resolves visual acceptance before production UI is finalized. Existing modal-review screenshots establish current behavior, not an approved redesigned screen.
+
+| ID | Missing screen/state in W | Required content / dependency |
+|---|---|---|
+| WF-01 | Improved Sessions modal on desktop and phone | All M A1–A7/D1–D7 details: lifecycle/kind/attention, main ordering with true child nesting, origin plan pill, flat kit groups/counts/rows/search/date/activity filters, keyboard/focus and touch targets. Q-M1/Q-M3 filter scope resolved first. |
+| WF-02 | Starting-chat plan pill, successful start links and plan/task rows in existing Activity panel | Approved/running/paused/failure states, independent Open controls, real plan/task/helper drill-down and Tasks-only no-origin case. No new overview or borrowed task-card layout. |
+| WF-03 | Figure/role/color controls in the **existing unified** create/edit slide-outs | Per-agent four-figure chooser, five grouped role choices, ten named swatches, locked built-in/error/save states and matching shared live preview. The prototype's new creation interview/app-wide switch does not specify this editor. |
+| WF-04 | Navigation restore/loading/stale/unknown/failed attach with drawer/coarse input | Clear unresolved destination/send gating, last-known data + Retry, missing welcome main and main-only attention unknown state. Preserve shell behavior at narrow width, zoom and reduced motion. |
+| WF-05 | Overall activity for non-session work and repeated-title helpers | Shell association/presentation after Q-M4; optional repeated-helper summary after Q-M2, without hiding distinct status/attention/targets. No fake persisted shell sessions. |
+
+### Locked identity vocabulary
+
+| Group | Exact role labels from R11 |
+|---|---|
+| Create (6) | Writer; Designer; Image creator; Video producer; Audio and voice; Social media. |
+| Build (8) | Developer; Data engineer; Data analyst; IT and operations; Automation; Security; Quality and QA; Science and lab. |
+| Business (10) | Orchestrator; Project manager; Product manager; Sales; Marketing; Finance; Legal and compliance; Customer support; Documents; Researcher. |
+| People (4) | People and HR; Tutor; Knowledge and library; Translator. |
+| Personal (3) | General assistant; Personal assistant; Office assistant. |
+
+| Palette order — binding for equal hue distances | Hex |
+|---|---|
+| 1 Azure | `#3B82F6` |
+| 2 Sky | `#38BDF8` |
+| 3 Cyan | `#22D3EE` |
+| 4 Indigo | `#818CF8` |
+| 5 Violet | `#A78BFA` |
+| 6 Purple | `#C084FC` |
+| 7 Fuchsia | `#E879F9` |
+| 8 Pink | `#F472B6` |
+| 9 Orange | `#FB923C` |
+| 10 Grey | `#9CA3AF` |
+
+Approved migration rule (N D10/F Q8, W adjacent palette asset): valid color is exactly a six-digit hex preceded by `#`. Invalid/missing color → Grey. Calculate hue and saturation from that RGB color; saturation **strictly below 0.25** → Grey. Otherwise choose the nearest non-Grey palette hue using the shorter circular distance. An equal distance keeps the **first palette entry in this table** because improvement is strict, not less-or-equal. Persist once; no per-render mapping. The Test Datasets contain independent boundary/example oracles for founder review; they are not a migration execution receipt. Obvious old role mappings: Code → Developer, Chat → General assistant, MagnifyingGlass → Researcher, PencilSimple → Writer, Shield → Security; other unmatched roles → General assistant. Preserve already-valid curated roles.
