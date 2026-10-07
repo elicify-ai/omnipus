@@ -71,10 +71,11 @@ func seedStoppedChild(t *testing.T, lc *session.LifecycleStore, sessionID string
 // replies to.
 func TestDelegateTool_Respond_StoppedChild_ResumesSameConversationViaReviver(t *testing.T) {
 	const sessionID = "child-respond-answer-resumes"
-	tool, lc, _, _ := newADR053TestTool(t)
+	tool, lc, inbox, _ := newADR053TestTool(t)
 	reviver := &fakeReviverSink{}
 	tool.SetSteeringSink(reviver)
 	seedStoppedChild(t, lc, sessionID)
+	seedOpenQuestion(t, inbox, "parent-1", sessionID, "corr-lands")
 
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	result := tool.Execute(ctx, map[string]any{
@@ -107,10 +108,11 @@ func TestDelegateTool_Respond_StoppedChild_ResumesSameConversationViaReviver(t *
 // must never read a failed resume as a delivered answer.
 func TestDelegateTool_Respond_RefusesVisiblyWhenTheReviveFails(t *testing.T) {
 	const sessionID = "child-respond-answer-refused"
-	tool, lc, _, _ := newADR053TestTool(t)
+	tool, lc, inbox, _ := newADR053TestTool(t)
 	sink := &failingReviverSink{err: errors.New("simulated revive failure: transcript append refused")}
 	tool.SetSteeringSink(sink)
 	seedStoppedChild(t, lc, sessionID)
+	seedOpenQuestion(t, inbox, "parent-1", sessionID, "corr-lost")
 
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	result := tool.Execute(ctx, map[string]any{
