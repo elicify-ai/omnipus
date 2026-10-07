@@ -686,7 +686,7 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 			return errRestartStopUnchanged
 		}
 		if rec.SteeredBy == nil {
-			allowed, guardErr := r.ordinaryRestartStopAllowedLocked(rec, current, writingBootSeq)
+			allowed, guardErr := r.ordinaryRestartStopAllowedLocked(rec, current)
 			if guardErr != nil {
 				return guardErr
 			}

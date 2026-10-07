@@ -548,14 +548,15 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 }
 
 // reviveInactiveInbound applies ADR-093 D4 when msg's session is terminal or
-// stopped for its current generation. handled is true when the message was
-// taken onto a new generation and must not also be enqueued. A blank id, a
+// stopped for its current generation. handled is true when the instruction is
+// owned by a continuation and must not also be enqueued. A blank id, a
 // missing store, an unreadable record, or a live record is not handled: the
 // caller enqueues as before. When ReviveStoppedSession declines, handled is
 // false and the caller enqueues too.
 //
-// An ordinary root is revived and then run as a fresh inbound turn (MAJ-003:
-// never a steered redispatch, never the steered instruction write). Damaged
+// An ordinary root continues as a fresh inbound turn, whose canonical admission
+// revives and stamps atomically after handoff (MAJ-003: never steered redispatch
+// or a steered instruction write). Damaged
 // and legacy rows (nil classify error, not an ordinary root) keep the
 // pre-ADR-093 revive-and-redispatch; a classify ERROR — including unreadable
 // metadata — fails the enqueue and does NOT revive.
@@ -598,19 +599,12 @@ func (al *AgentLoop) reviveInactiveInbound(route routing.ResolvedRoute, msg bus.
 	}
 	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}
 	if class == steer.ClassOrdinaryRoot {
-		// ADR-093 D4 + MIN-001: the revival itself is synchronous (the message
-		// must not be queued while the record is still terminal), but the TURN
-		// is not run inline — enqueueSteeringFromMessage is called from Run's
-		// dispatch loop, and an inline processMessage would block the pump for
-		// a whole turn (gate review F1) and return the turn's error as an
-		// "enqueue rejected" signal that session_worker's fallback answers by
-		// queuing the SAME message again (silent-failure-hunter #1: two runs,
-		// one per turn). runRevivedOrdinaryTurn owns the message from here:
-		// exactly one run, published like every other inbound turn (CC-1),
-		// under the Run-scoped context (CC-2), failures error-level.
-		if rerr := al.reviveRecordForHumanTurn(al.inboundRunContext(), sessionID, by); rerr != nil {
-			return false, fmt.Errorf("enqueueSteeringFromMessage: revive ordinary root %q: %w", sessionID, rerr)
-		}
+		// The detached ordinary turn owns this instruction from here, not the
+		// dying turn's steering queue. After handoff its processMessage entry
+		// performs the canonical atomic revival+execution stamp. Pre-reviving
+		// here would persist a live nil-identity root before that admission.
+		// Keep execution asynchronous so the pump is not blocked and a turn
+		// error is not mistaken for an enqueue refusal that runs the text twice.
 		// The handoff wait inside runRevivedOrdinaryTurn looks the replaced
 		// turn up in activeTurnStates under the key runTurn registers it
 		// under — resolveScopeKey's output, the same expression processMessage

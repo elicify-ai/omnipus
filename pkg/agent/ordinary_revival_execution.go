@@ -21,7 +21,7 @@ func copyRevivalExecution(identity *session.ExecutionIdentity) *session.Executio
 func (al *AgentLoop) reviveOrdinaryRecordWithExecution(ctx context.Context, selected *session.LifecycleRecord, identity session.ExecutionIdentity) error {
 	if _, err := al.steerCanceller().reviveWithExecution(ctx, selected.SessionID, selected, &identity); err != nil {
 		al.markRevivalFailure(selected.SessionID, err)
-		return err
+		return refuseOrdinaryIfStale(err)
 	}
 	al.clearRevivalFailure(selected.SessionID)
 	al.resetUnifiedMetaStatusActive(selected.SessionID)

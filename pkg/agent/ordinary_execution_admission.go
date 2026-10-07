@@ -122,8 +122,12 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 	// A person continues any landed stop. A normal scheduled trigger continues
 	// only a restart-stopped standing root, through the same existing revival.
 	if revival != nil && (rec.Terminal() || (rec.State == session.LifecycleStopped &&
-		(revival.Kind == steer.PrincipalKindHuman || restartStoppedStandingRoot(rec)))) {
+		(revival.Kind == steer.PrincipalKindHuman ||
+			(revival.Kind == scheduledRevivalPrincipal.Kind && revival.ID == scheduledRevivalPrincipal.ID && restartStoppedStandingRoot(rec))))) {
 		if reviveErr := al.reviveOrdinaryRecordWithExecution(ctx, rec, identity); reviveErr != nil {
+			if errors.Is(reviveErr, steer.ErrStaleGeneration) {
+				return ordinaryExecutionPreparation{}, reviveErr
+			}
 			return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: explicit revival failed: %w", reviveErr)
 		}
 		rec, err = store.Load(sessionID)

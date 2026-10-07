@@ -64,8 +64,11 @@ func (r *SteerBootRecovery) recoverOrdinaryRoot(id string, notice func(string, s
 
 // ordinaryRestartStopAllowedLocked validates the selected root execution in
 // the writer's lock hold. No new run, generation or human Stop may be replaced
-// by the scan's old snapshot. The existing steered recovery remains separate.
-func (r *SteerBootRecovery) ordinaryRestartStopAllowedLocked(selected, current *session.LifecycleRecord, writingBootSeq uint64) (bool, error) {
+// by the scan's old snapshot. recoverOrdinaryRoot already selects a prior-boot
+// snapshot, and full ExecutionID equality below rechecks its boot under this
+// lock; a second old-boot comparison here would be redundant. The existing
+// steered recovery remains separate.
+func (r *SteerBootRecovery) ordinaryRestartStopAllowedLocked(selected, current *session.LifecycleRecord) (bool, error) {
 	if !admittedStandingRoot(current) {
 		bootRestartStopDebug(current, "ordinary_ineligible_state_or_owner")
 		return false, nil
@@ -73,10 +76,6 @@ func (r *SteerBootRecovery) ordinaryRestartStopAllowedLocked(selected, current *
 	if selected.ExecutionID == nil || current.Generation != selected.Generation ||
 		*current.ExecutionID != *selected.ExecutionID {
 		bootRestartStopDebug(current, "ordinary_execution_changed")
-		return false, nil
-	}
-	if writingBootSeq != 0 && current.ExecutionID.BootSeq >= writingBootSeq {
-		bootRestartStopDebug(current, "ordinary_not_prior_boot")
 		return false, nil
 	}
 	intents, err := r.Lifecycle.UnfinishedStopIntentsLocked(current.SessionID)

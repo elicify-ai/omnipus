@@ -1146,9 +1146,10 @@ func (al *AgentLoop) finishOrdinaryWakeExecution(msg bus.InboundMessage, d *exec
 	}
 }
 
-// handbackRevivalPrincipal starts the next round of a finished ordinary
-// root that a helper's hand-back wakes. It never resumes a stopped root:
-// only a person does that.
+// handbackRevivalPrincipal starts the next round of a finished ordinary root.
+// It never continues a stopped root, including stopped(restart): that authority
+// belongs to a human message or a normal scheduled/heartbeat trigger. Replayed
+// helper reports stay in the inbox for that next turn, not boot-time compute.
 var handbackRevivalPrincipal = steer.Principal{Kind: steer.PrincipalKindAgent, ID: "handback"}
 
 // extractPeer extracts the routing peer from the inbound message's structured Peer field.
