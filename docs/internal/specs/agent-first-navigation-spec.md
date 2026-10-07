@@ -257,7 +257,7 @@ A person uses the existing Sessions modal to understand chats, helpers and runs 
 **Independent Test**: Open the modal with every lifecycle/kind plus real parent/child, orphan and protected-main fixtures.
 
 1. **Given** authorized sessions of each supported lifecycle and kind, **When** Sessions opens, **Then** each row shows a truthful status chip and quiet kind, a main's confirmed attention dot, and a title line plus muted status/kind/active/tokens metadata line; no HB abbreviation remains.
-2. **Given** an agent's main, extras and real helper/run children, **When** its group is revealed, **Then** the main is first/pinned, extras retain established recency order, children remain beneath their true parent, and an unresolved parent does not silently hide its accessible orphan.
+2. **Given** an agent's main, extras and real helper/run children, **When** its group is revealed, **Then** the main is first/pinned and extras retain recency; helpers stay under their real parent **always**, including search/filter hits. Missing parent context is visibly unavailable under the approved Q-M5 treatment, never a top-level helper or invented parent.
 3. **Given** desktop, phone, keyboard or assistive input, **When** the modal is explored, **Then** the title is Sessions, subtitle explains chats/helpers/runs, shared group/row/count/identity/search/filter controls are used, focus and independent actions work, and no new handmade tooltip/view appears.
 4. **Given** a protected main, inaccessible/deleted destination or failed list source, **When** a delete/open/list action is attempted, **Then** protection/refusal/error is explicit, no hidden session is opened, and an outage is not Unfiled/empty data.
 
@@ -268,10 +268,11 @@ A person narrows Sessions by existing title/workspace/date and new row-pair filt
 **Why this priority**: A stale or partial list claiming no running work would recreate issue #493.
 **Independent Test**: Open Sessions in chat B, update work in unopened chat A, filter it and inspect the live result without closing the modal.
 
-1. **Given** authorized running and inactive conversations, **When** the person applies the settled activity filter, **Then** matching sessions appear with their true parent context and other filters compose; the exact Running/Needs me choices await Q-M1/Q-M3 and must not be guessed.
+1. **Given** authorized running, attention-needed and inactive conversations, **When** the person selects **All / Running / Needs me**, **Then** the matching set appears with other filters composed; a matching helper stays inside its parent even when the parent itself does not match. Running uses authoritative executing state, never queued-as-running; Needs me includes confirmed main attention and any additional non-main source only after Q-M6 is answered.
 2. **Given** Sessions remains open with an unchanged title search, **When** background work changes state or membership changes, **Then** status, attention, plan presence and results reconcile without reopening; focus/reconnect also recover missed updates.
 3. **Given** a page/source is missing, delayed or failed, **When** Sessions loads or refreshes, **Then** visible partial/unknown coverage and Retry replace any complete/zero claim; cached conversations alone do not prove unseen work is covered.
 4. **Given** more results than a single page/viewport and a child-only title match, **When** the person searches or moves the keyboard highlight, **Then** the matching child remains reachable under its parent with truthful counts, bounded rendering and a usable plain fallback.
+5. **Given** nine consecutive identical helper runs under one parent and the modal's current search/filter match set, **When** the person expands **9 similar helper runs**, **Then** all nine original helper identities, statuses and Open targets appear under that same parent. Folding does not merge work, cross parents or silently omit matching helpers; the summary count reflects the actual grouped match set.
 
 ### User Story 10 — Follow plans and actual task runs (Priority: P1)
 
@@ -318,7 +319,7 @@ An existing user upgrades without losing saved ordinary, extra, Unfiled, child o
 | Main attention | When an authoritative main question/approval or unseen finished/failed goal exists, the system signals that main only. Explicit open acknowledges observed goals for everyone; answers/decisions resolve questions/approvals. |
 | Identity | When an agent is shown outside a message bubble, the system uses its shared transparent figure/role/color identity and normal-color name. Bubbles show only the actual author's name. |
 | Responding state | When an agent responds, the system shows that responder's animated icon/name/phrase inline in the feed; reduced motion keeps text and stops loops. |
-| Overall activity | When Sessions opens, the system shows authorized chat/helper/run metadata and real relationships across workspaces, updating while open without taking control of those sessions. |
+| Overall activity | When Sessions opens, the system shows authorized metadata with All / Running / Needs me and expandable `N similar helper runs` summaries. Helpers remain under their real parent in every search/filter, never top-level; live updates and folding do not change identity/counts/control authority. |
 | Local panel | When a chat's Activity panel opens, the system shows only work actually associated with that open chat. Changing chats never stops or completes work. |
 | Plans/links | When a plan starts in chat A, the system associates its pill and parent row with A and exposes the real plan/run through authorized existing drill-down, including replay. |
 | Missing coverage | When metadata, pagination, origin, identity or authorization is unavailable, the system shows unknown/partial/error and recovery, never fabricated zero, destination or success. |
@@ -337,7 +338,7 @@ Each EC key has a dedicated Edge Case scenario below; error recovery also appear
 | EC-05 | Invalid/missing hex, saturation just below/equal/above one quarter, circular-hue wrap/tie | Apply the approved one-time mapping, stable published-order tie rule and Grey fallback; no render-time recoloring. |
 | EC-06 | All four figures at smallest/largest named sizes; reduced motion/forced colors/zoom | Figure and role badge remain present; contrast, text and input access remain, without changing glyph grammar. |
 | EC-07 | Guest author, replayed message, no virtualizer support, truthful task/helper kind | Same actual author and names-only bubble; no owner switch or kind substitution. |
-| EC-08 | Child-only search hit, missing parent, more than 20 visible rows, same titles | Preserve accessible parent context/orphan, truthful total and bounded rendering; repeated helpers stay individually accessible unless Q-M2 is approved. |
+| EC-08 | Child-only search/filter hit, unavailable parent, more than 20 visible rows, repeated identical titles | Helpers **always stay under their parent**, never top-level; unavailable-parent treatment follows Q-M5. Repeated identical helpers fold into expandable `N similar helper runs`; each original identity/status/target remains reachable and the filtered count stays truthful. |
 | EC-09 | Unopened workspace work, missed update, missing list page, zero-token/no-state rows | Reconcile authorized snapshots and mark gaps; show unknown or zero according to actual data, never infer absent execution. |
 | EC-10 | Same run appears for starter/assignee and as helper; schedule has no foreground start call | Count distinct real work once; preserve actual associations and independent-control boundaries. |
 | EC-11 | Tasks-only plan; duplicate/idempotent start; deleted/inaccessible drill-down target | No invented starting chat or duplicate work; validate the actual target and show unavailable/refusal. |
