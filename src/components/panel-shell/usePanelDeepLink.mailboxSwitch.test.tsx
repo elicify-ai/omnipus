@@ -38,8 +38,8 @@ let mockSearch: Record<string, unknown> = {}
 const mockNavigate = vi.fn()
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mockNavigate,
-  useRouterState: <T,>({ select }: { select: (s: { location: { search: Record<string, unknown> } }) => T }) =>
-    select({ location: { search: mockSearch } }),
+  useRouterState: <T,>({ select }: { select: (s: { location: { search: Record<string, unknown>; pathname: string } }) => T }) =>
+    select({ location: { search: mockSearch, pathname: '/workspaces/ws-1/chat' } }),
   // MAJ-205's library-only blocker — irrelevant to this Mail-mailbox test,
   // no-op so the hook doesn't need a real router blocker context.
   useBlocker: () => undefined,

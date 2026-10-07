@@ -24,6 +24,12 @@
 //      does not adopt or close. Panel toggles are not pages.
 //   4. Our own replaces set a suppress flag so the search change they cause
 //      is not adopted again (no loop, no fight with projection).
+//   5. CHAT ROUTE ONLY. `router.state.location` is GLOBAL and already shows
+//      the destination while this (outgoing) route is still mounted. Search
+//      keys then belong to the destination (`/settings?tab=chat`), so the
+//      adoption/cleanup pass must not run unless the location is a workspace
+//      chat route; otherwise the keep-only-panel/agent updater erases the
+//      destination's own query.
 import { useCallback, useEffect, useRef } from 'react'
 import { useBlocker, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useUiStore } from '@/store/ui'
@@ -48,6 +54,8 @@ function rawPanel(search: SearchRecord): WorkspacePanelId | undefined {
   if (!getPanelDefinition(id)) return undefined
   return isWorkspaceScopedPanel(id) ? id : undefined
 }
+
+const WORKSPACE_CHAT_PATH = /^\/workspaces\/[^/?#]+\/chat\/?$/
 
 function hasForeignKey(search: SearchRecord): boolean {
   return Object.keys(search).some((key) => key !== 'panel' && key !== 'agent')
@@ -146,6 +154,9 @@ function adoptionContext(
 export function usePanelDeepLink(workspaceId: string, panel: string | undefined): void {
   const navigate = useNavigate()
   const rawSearch = useRouterState({ select: (s) => s.location.search }) as SearchRecord
+  const onChatRoute = useRouterState({
+    select: (s) => WORKSPACE_CHAT_PATH.test(s.location.pathname),
+  })
   const activePanel = useUiStore((s) => s.activePanel)
   const backForwardRef = useRef(false)
   const selfWriteRef = useRef(false)
@@ -206,6 +217,11 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
   }, [replaceSearch])
 
   useEffect(() => {
+    if (!onChatRoute) {
+      backForwardRef.current = false
+      selfWriteRef.current = false
+      return
+    }
     const freshLink = freshLinkRef.current?.href === window.location.href
       && freshLinkRef.current.workspaceId === workspaceId
     if (backForwardRef.current) {
@@ -243,7 +259,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
     // A named non-library param is a "no panel" verdict (US-7 AS-4/AS-5).
     // An absent param is not: in-app panel opens must survive projection.
     if (rawNamed !== undefined) gatedCloseIfOpen()
-  }, [rawSearch, workspaceId, replaceSearch])
+  }, [rawSearch, workspaceId, replaceSearch, onChatRoute])
 
   // PROJECTION (store -> URL, SP-22 REPLACE). The mount pass records a
   // baseline and writes nothing — a store a mount STARTS with is not a

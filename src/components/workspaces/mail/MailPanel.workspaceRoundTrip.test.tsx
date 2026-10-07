@@ -29,8 +29,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 let mockSearch: Record<string, unknown> = { panel: 'mail' }
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => vi.fn(),
-  useRouterState: <T,>({ select }: { select: (s: { location: { search: Record<string, unknown> } }) => T }) =>
-    select({ location: { search: mockSearch } }),
+  useRouterState: <T,>({ select }: { select: (s: { location: { search: Record<string, unknown>; pathname: string } }) => T }) =>
+    select({ location: { search: mockSearch, pathname: '/workspaces/ws-1/chat' } }),
   useBlocker: () => undefined,
 }))
 
