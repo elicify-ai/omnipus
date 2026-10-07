@@ -179,6 +179,13 @@ func (r *SteerBootRecovery) deliverPendingFinal(ctx context.Context, item sessio
 		// missing/lost file, a never-woken append, a torn line or a thinned
 		// inbox show none of that and fall through to the normal redelivery
 		// (the replay id dedups it). Say so out loud, never silently.
+		//
+		// RESIDUAL (accepted by the founder, no tombstone): an inbox restored
+		// from a backup, or one with a torn line, that happens to keep a full
+		// retention cap of acked messages while the final's entry is gone,
+		// reads as "compacted away" and the final is not redelivered. The
+		// operator notice below is the safety net — it names the session, the
+		// parent inbox and the counts so an operator can spot and re-send it.
 		notice("final-delivery-consumed:"+item.SessionID, fmt.Sprintf(
 			"session %s committed final %s is no longer in parent %s inbox (%d entries, %d acked messages retained, retention cap %d) but its durable facts show it appended and the parent woken — treated as consumed and compacted away, not redelivered (#1027)",
 			item.SessionID, replayID, commit.ParentSessionID, sighting.entries, sighting.ackedMessages, r.Inbox.AckedRetention()))
