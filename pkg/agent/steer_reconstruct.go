@@ -116,9 +116,10 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 		// session. Mark it as user-originated for the session-owned goal loop;
 		// wakes/re-entries carry their own origin and are not initial claims.
 		UserInitiated: wake == nil,
-		// Issue #891: a child of an unattended parent inherits AutoDenyAsk
-		// (marked at launch by inheritDelegatePermissions).
-		AutoDenyAsk: rec.SteeredBy != nil && al.SessionModes().IsUnattended(rec.SessionID),
+		// Issue #891: a child of an unattended parent inherits AutoDenyAsk —
+		// the posture persisted on its record at launch (durable across a
+		// restart or an idle close, unlike any in-memory per-session store).
+		AutoDenyAsk: rec.Unattended,
 	}
 	if wake == nil {
 		// A queued promotion consumes ALL wake content in arrival order. Take

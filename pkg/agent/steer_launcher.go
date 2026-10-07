@@ -191,9 +191,13 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 	if req.SteeringSessionID == "" {
 		return l.launchOrdinaryRoot(sessions, lifecycle, req, title, sessionType)
 	}
-	result, err := l.launchSteered(sessions, lifecycle, req, title, sessionType)
+	// #891: the launching tool's ctx carries AutoDenyAsk when the parent runs
+	// unattended (task/trigger/headless). The child's turn is rebuilt later from
+	// its lifecycle record on a detached context, so the posture is persisted
+	// ON that record, in the launch's own write (reconstructSteeredTurn reads it).
+	result, err := l.launchSteered(sessions, lifecycle, req, title, sessionType, tools.ToolAutoDenyAsk(ctx))
 	if err == nil {
-		l.inheritDelegatePermissions(ctx, lifecycle, req.SteeringSessionID, result.SessionID)
+		l.inheritDelegatePermissions(lifecycle, req.SteeringSessionID, result.SessionID)
 		l.publishSteeredLaunch(req, result)
 	}
 	return result, err
@@ -235,7 +239,7 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 // publishSteeredLaunch's own lifecycle.Load immediately below it: a read
 // failure here leaves the child on its own agent-level/global Auto defaults
 // rather than failing an already-committed launch.
-func (l *SteerLauncher) inheritDelegatePermissions(ctx context.Context, lifecycle *session.LifecycleStore, parentSessionID, childSessionID string) {
+func (l *SteerLauncher) inheritDelegatePermissions(lifecycle *session.LifecycleStore, parentSessionID, childSessionID string) {
 	if l == nil || l.al == nil || lifecycle == nil || parentSessionID == "" || childSessionID == "" {
 		return
 	}
@@ -250,14 +254,6 @@ func (l *SteerLauncher) inheritDelegatePermissions(ctx context.Context, lifecycl
 		return
 	}
 	l.al.inheritSessionPermissions(parentSessionID, rec.ParentAgentID, childSessionID, rec.AgentID)
-	// Issue #891: the launching tool's ctx carries AutoDenyAsk when the parent
-	// runs unattended (task/trigger/headless). The child's turn is rebuilt from
-	// its record on a detached context, so hand the posture over here — else
-	// the child raises an approval nobody can answer and pends for the full
-	// approval timeout. reconstructSteeredTurn reads the mark.
-	if tools.ToolAutoDenyAsk(ctx) {
-		l.al.SessionModes().MarkUnattended(childSessionID)
-	}
 }
 
 // subagentSpanTaskLabel resolves the live subagent_start frame's task_label
@@ -388,6 +384,7 @@ func (l *SteerLauncher) launchSteered(
 	req steer.LaunchRequest,
 	title string,
 	sessionType session.UnifiedSessionType,
+	unattended bool,
 ) (steer.LaunchResult, error) {
 	if req.WorkspaceID != "" || req.Owner != "" {
 		return steer.LaunchResult{}, fmt.Errorf(
@@ -524,6 +521,7 @@ func (l *SteerLauncher) launchSteered(
 				ParentAgentID:  parentAgentID,
 				Origin:         &origin,
 				SteeredBy:      steeredBy,
+				Unattended:     unattended,
 			}, nil
 		},
 	)

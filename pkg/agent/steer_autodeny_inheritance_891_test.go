@@ -79,3 +79,53 @@ func TestSteerLauncher_AutoDenyAskInheritance_AttendedParentStillPrompts(t *test
 		"an attended parent's child must still raise its approval request")
 	require.Zero(t, stub.calls.Load(), "the tool must not run before the (denied) prompt resolves")
 }
+
+// launchOnly launches (does not dispatch) a worker delegate under launchCtx and
+// returns the child's session id.
+func launchOnly(t *testing.T, launcher *SteerLauncher, launchCtx context.Context, parentSessionID, callID string) string {
+	t.Helper()
+	launch, err := launcher.Launch(launchCtx, steer.LaunchRequest{
+		SteeringSessionID: parentSessionID,
+		TargetAgentID:     "worker",
+		Task:              "edit the knowledge base",
+		Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: callID},
+	})
+	require.NoError(t, err, "Launch(worker delegate)")
+	return launch.SessionID
+}
+
+// TestSteerLauncher_AutoDenyAskInheritance_SurvivesRestartAndSessionEnd pins
+// that the unattended posture is DURABLE: it rides the child's lifecycle record,
+// so dropping every in-memory per-session store (what a restart or an idle
+// close does) must not lose it. A child rebuilt later for a wake would
+// otherwise ask a question nobody can answer and pend for the full approval
+// timeout.
+func TestSteerLauncher_AutoDenyAskInheritance_SurvivesRestartAndSessionEnd(t *testing.T) {
+	al, launcher, parentSessionID, _, _ := steerInheritanceFixture(t, false)
+	childID := launchOnly(t, launcher, tools.WithAutoDenyAsk(context.Background(), true), parentSessionID, "call-891-restart")
+
+	// Simulate the restart / session end: nothing in memory remembers the child.
+	al.SessionModes().ClearSession(childID)
+	al.SessionModes().ClearSession(parentSessionID)
+
+	rec, err := al.GetSessionLifecycleStore().Load(childID)
+	require.NoError(t, err)
+	ts, err := al.reconstructSteeredTurn(rec, nil)
+	require.NoError(t, err)
+	require.True(t, ts.opts.AutoDenyAsk,
+		"a rebuilt child of an unattended parent must still auto-deny ask-policy calls after in-memory state is gone")
+}
+
+// TestSteerLauncher_AutoDenyAskInheritance_AttendedChildIsNotUnattended is the
+// negative control for the durable path: an attended launch must rebuild with
+// AutoDenyAsk off.
+func TestSteerLauncher_AutoDenyAskInheritance_AttendedChildIsNotUnattended(t *testing.T) {
+	al, launcher, parentSessionID, _, _ := steerInheritanceFixture(t, false)
+	childID := launchOnly(t, launcher, context.Background(), parentSessionID, "call-891-attended-rebuild")
+
+	rec, err := al.GetSessionLifecycleStore().Load(childID)
+	require.NoError(t, err)
+	ts, err := al.reconstructSteeredTurn(rec, nil)
+	require.NoError(t, err)
+	require.False(t, ts.opts.AutoDenyAsk, "an attended child must not be marked unattended")
+}

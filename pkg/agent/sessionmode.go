@@ -59,16 +59,11 @@ func ResolveAutoApprove(cfg *config.Config, agentID string, chat *bool) bool {
 type SessionModeStore struct {
 	mu        sync.Mutex
 	modifiers map[string]bool // sessionID -> Auto-approve on/off for that chat
-	// unattended holds the sessions whose turns run with AutoDenyAsk: a
-	// delegated child of an unattended (headless/task/trigger) parent. The
-	// child's turn is rebuilt from its lifecycle record on a detached
-	// context, so the parent's ctx stamp cannot reach it any other way.
-	unattended map[string]struct{}
 }
 
 // NewSessionModeStore creates an empty session-mode store.
 func NewSessionModeStore() *SessionModeStore {
-	return &SessionModeStore{modifiers: make(map[string]bool), unattended: make(map[string]struct{})}
+	return &SessionModeStore{modifiers: make(map[string]bool)}
 }
 
 // Get returns sessionID's per-chat modifier, or (false, false) when none is
@@ -122,34 +117,8 @@ func (s *SessionModeStore) InheritFrom(srcSessionID, dstSessionID string) {
 	s.modifiers[dstSessionID] = src
 }
 
-// MarkUnattended records that sessionID's turns have no human audience, so
-// every ask-policy call in them is auto-denied (AutoDenyAsk). No-op on a nil
-// store or an empty sessionID.
-func (s *SessionModeStore) MarkUnattended(sessionID string) {
-	if s == nil || sessionID == "" {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.unattended == nil {
-		s.unattended = make(map[string]struct{})
-	}
-	s.unattended[sessionID] = struct{}{}
-}
-
-// IsUnattended reports whether sessionID was marked by MarkUnattended.
-func (s *SessionModeStore) IsUnattended(sessionID string) bool {
-	if s == nil || sessionID == "" {
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, ok := s.unattended[sessionID]
-	return ok
-}
-
-// ClearSession removes sessionID's modifier and unattended mark; the per-chat
-// setting ends with the chat. No-op on a nil store or an empty sessionID.
+// ClearSession removes sessionID's modifier; the per-chat setting ends with
+// the chat. No-op on a nil store or an empty sessionID.
 func (s *SessionModeStore) ClearSession(sessionID string) {
 	if s == nil || sessionID == "" {
 		return
@@ -157,5 +126,4 @@ func (s *SessionModeStore) ClearSession(sessionID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.modifiers, sessionID)
-	delete(s.unattended, sessionID)
 }
