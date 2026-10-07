@@ -5,7 +5,7 @@
 | Header | Value |
 |---|---|
 | Status | Decided rules recorded; specification in review after correction round 1. Design only, not implementation, runtime verification or landing approval. |
-| Date | 2026-10-06; corrected 2026-10-07 through founder 22:10. |
+| Date | 2026-10-06; correction completed 2026-10-08 using founder decisions through 2026-10-07 22:10. |
 | Decider | Daniel Piatkowski; later founder answers override earlier answers and review recommendations. |
 | Author | Architect. |
 | Code baseline | `c6837a42dcfb503fb34a0cea86cd3ccc451e7b9b`, true-merged by `250b72caeb5c615ebd37f043a23a12c7befd9e2f`; no production changes in this design task. |
@@ -140,7 +140,7 @@ Keep default-on auto recap, default 30-minute activity timeout, including main c
 
 Agent deletion uses one authorized owned-data cascade, preserving default/locked/system/active-plan guards. UI warns accurately and confirms twice; API/tool retain existing single approval. Owned sessions/memory are removed; guest answers elsewhere remain labelled **deleted agent** and never become a runnable identity (original Q6=B; FR-037).
 
-**R1-Q7=A:** before removing the entity, durably capture the deletion's original identity/revision and exact cleanup targets in the same protected mutation/storage boundary. The same DELETE/tool operation retries that remaining scope after entity removal/restart. Current authorization is checked; original scope cannot widen to new/recreated data. Retire/isolate old owned roots before recreation can reuse their names, or retain the guard until that isolation succeeds. Never delete “everything currently owned by this ID” on retry. Record step completion and partial errors; retain retry evidence until complete. C-DELETE specifies request, result and existing-screen recovery. No generic cleanup daemon/service (E-DELETE; FR-037/039).
+**R1-Q7=A:** before removing the entity, durably capture the deletion's original identity/revision/CreatedAt and exact cleanup targets/reference versions in the same protected mutation/storage boundary. Preserve that original author identity on guest entries so same-ID recreation cannot relabel old guest history as the new agent. The same DELETE/tool operation retries that remaining scope after entity removal/restart. Current authorization is checked; original scope cannot widen to new/recreated data. Retire/isolate old owned roots before recreation can reuse their names, or retain the guard until that isolation succeeds. Never delete “everything currently owned by this ID” on retry. Record step completion and partial errors; retain retry evidence until complete. C-DELETE specifies request, result and existing-screen recovery. No generic cleanup daemon/service (E-DELETE; FR-037/039).
 
 ### D10 — Goal indicators belong to their own run
 
@@ -177,7 +177,7 @@ This is the **only** justification table; the spec contains shapes/tests, not a 
 
 | Necessary extension | Existing candidate is insufficient because | Existing boundary / requirement |
 |---|---|---|
-| Entry view membership and day/byte mark | A separate model file plus line-count skip cannot express one archive/bounded seek. | E-STORE; FR-004–007 |
+| Entry view membership/day-byte mark and original author stamp | Separate model file/line skip cannot express one archive/bounded seek; agent_id alone cannot distinguish a deleted author from same-ID recreation. Reuse existing immutable CreatedAt for the stamp. | E-STORE/E-DELETE; FR-004–007/037 |
 | Request-bound `reply_to` and trusted source/guest attribution | Child-only return and content/channel/chat arguments do not bind another owner's connector return to an admitted guest request. | E-INBOX/E-MESSAGE/E-ADDRESS; C-REPLY; FR-027/028 |
 | Aggregate ordinary byte setting and discarded-input receipt | Count alone does not bound bytes; current receipts cannot state Stop-discard. No held/recovery action is added. | E-LIMIT/E-QUEUE; C-INPUT; FR-010/011/024 |
 | Captured recipients, scheduled isolation and CONTINUE segment identity | Completion-time lookup can change recipients; old session reuse ignores changed execution identity. | E-TASK/E-SCHEDULE; C-TASK; FR-017/019 |
