@@ -7,7 +7,6 @@ import { cn } from '@/lib/utils'
 import { PRIORITY_LABELS, taskNodeVisual, type TaskGraphNode } from './taskGraph'
 import { TaskActionButton } from '../TaskActionButton'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
-import { Tooltip } from '@/components/ui/tooltip'
 
 /**
  * Priority pill colours — mirrors `PriorityBadge.tsx`'s P1..P5 ladder
@@ -176,11 +175,9 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
         </div>
 
         {/* Title — Outfit, two-line clamp. */}
-        <Tooltip content={task.title} side="bottom" containerClassName="min-w-0 max-w-full" triggerClassName="block min-w-0 w-full">
-          <p title={task.title} className="min-w-0 max-w-full wrap-anywhere font-headline text-[length:var(--type-caption-size)] font-semibold leading-snug text-[var(--color-secondary)] line-clamp-2">
-            {task.title}
-          </p>
-        </Tooltip>
+        <p title={task.title} className="min-w-0 max-w-full whitespace-normal wrap-anywhere font-headline text-[length:var(--type-caption-size)] font-semibold leading-snug text-[var(--color-secondary)]">
+          {task.title}
+        </p>
 
         {/* ADR-053 FE-2 §7 (D7) — plan-member DAG signals. The join member
             (gold GitMerge pill) is the authored convergence point that folds

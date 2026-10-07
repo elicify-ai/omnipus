@@ -4,7 +4,6 @@ import { Info, Plus, SquaresFour, ListBullets, Graph as GraphIcon, UsersThree, T
 import { Button } from '@/components/ui/button'
 import { FilterMenu } from '@/components/ui/filter-menu'
 import { ViewSwitch, type ViewSwitchOption } from '@/components/ui/view-switch'
-import { Tooltip } from '@/components/ui/tooltip'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import { CreatePlanSlideOver } from './CreatePlanSlideOver'
@@ -130,9 +129,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
       <div className="shrink-0 px-[var(--space-4)] pt-[var(--space-3)] pb-[var(--space-2-5)]">
         <div className="flex min-w-0 items-center justify-between gap-[var(--space-3)]">
           <div className="flex min-w-0 flex-1 items-center gap-[var(--space-1)]" data-testid="tasks-heading">
-            <Tooltip content={heading} containerClassName="min-w-0" triggerClassName="min-w-0 max-w-full">
-              <h2 className="truncate font-headline text-base font-bold text-[var(--color-secondary)]">{heading}</h2>
-            </Tooltip>
+            <h2 title={heading} className="min-w-0 truncate font-headline text-base font-bold text-[var(--color-secondary)]">{heading}</h2>
             {ownerAgent && <span className="truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">· Agent: {ownerAgent.name}</span>}
           </div>
           <ViewSwitch value={view} onValueChange={handleSelectView} options={VIEW_OPTIONS} aria-label="Task view" />

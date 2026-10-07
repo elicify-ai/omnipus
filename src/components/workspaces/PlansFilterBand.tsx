@@ -22,7 +22,6 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
-import { Tooltip } from '@/components/ui/tooltip'
 import { PlanActionButton } from './PlanActionButton'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
 import type { Agent, Plan, Task } from '@/lib/api'
@@ -380,7 +379,6 @@ function PlanFilterTile({
 
       {/* Select control — the tile's TITLE/body is the filter toggle (Von
           Restorff: `aria-pressed` + gold ring communicate the active tile). */}
-      <Tooltip interactive content={<>{plan.title}{owner && <><br />Agent: {owner.name}</>}</>} side="bottom" containerClassName="h-full w-full min-w-0" triggerClassName="h-full w-full min-w-0">
       <Button
         variant="ghost"
         aria-pressed={selected}
@@ -442,7 +440,7 @@ function PlanFilterTile({
             the wrapping mode the spec requires browsers to factor into
             min-content sizing itself, so line-clamp-2 can actually clip
             within the tile instead of overflowing it. */}
-        <span className="line-clamp-2 w-full min-w-0 max-w-full wrap-anywhere text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]">
+        <span className="w-full min-w-0 max-w-full whitespace-normal wrap-anywhere text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]">
           {plan.title}
         </span>
 
@@ -470,13 +468,12 @@ function PlanFilterTile({
             </span>
           </span>
           {owner && (
-            <Badge variant="outline" title={owner.name} className="block min-w-0 max-w-[100px] truncate bg-[var(--color-surface-2)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+            <Badge variant="outline" title={owner.name} className="min-w-0 max-w-full whitespace-normal wrap-anywhere bg-[var(--color-surface-2)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
               {owner.name.split('—')[0].trim()}
             </Badge>
           )}
         </span>
       </Button>
-      </Tooltip>
 
       <ConfirmDialog
         open={confirmClear}

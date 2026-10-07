@@ -13,7 +13,6 @@ import { TaskActionButton } from './TaskActionButton'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Tooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 // 6-state unified vocabulary + colour — single source of truth.
 import { STATUS_ORDER, statusLabel, taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
@@ -550,7 +549,6 @@ function TaskRow({
         />
       </td>
       <td className="px-[var(--space-2)] py-[var(--space-2)]">
-        <Tooltip interactive content={task.title} side="bottom" containerClassName="w-full min-w-0" triggerClassName="block w-full min-w-0">
         <Button
           variant="ghost"
           onClick={(e) => {
@@ -572,11 +570,10 @@ function TaskRow({
           // instead of one that grows to fit the very content it's meant to
           // truncate.
           title={task.title}
-          className="h-auto w-full min-w-0 justify-start truncate p-0 text-left text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent"
+          className="block h-auto w-full min-w-0 whitespace-normal wrap-anywhere p-0 text-left text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent"
         >
           {task.title}
         </Button>
-        </Tooltip>
       </td>
       <td className="px-[var(--space-2)] py-[var(--space-2)]">
         {/* ADR-052 FR-015/US-8 — a user-cancelled task renders "Cancelled"

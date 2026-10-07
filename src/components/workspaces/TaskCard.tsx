@@ -9,7 +9,6 @@ import { TaskActivityChip } from './TaskActivityChip'
 import { PriorityBadge } from './PriorityBadge'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
 import { Badge } from '@/components/ui/badge'
-import { Tooltip } from '@/components/ui/tooltip'
 import { taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
 import type { BoardAltitude } from '@/store/workspacesStore'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
@@ -277,14 +276,12 @@ export function TaskCard({
             content. `line-clamp-2` still truncates (with the native `title`
             tooltip below carrying the full text) — wrap-anywhere just makes
             sure that clamp actually happens within the card's own width. */}
-        <Tooltip content={task.title} side="bottom" containerClassName="min-w-0 flex-1" triggerClassName="block w-full min-w-0">
-          <p
-            className="min-w-0 flex-1 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] leading-snug line-clamp-2 wrap-anywhere pr-[var(--space-4)]"
-            title={task.title}
-          >
-            {task.title}
-          </p>
-        </Tooltip>
+        <p
+          className="min-w-0 flex-1 whitespace-normal wrap-anywhere pr-[var(--space-4)] text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]"
+          title={task.title}
+        >
+          {task.title}
+        </p>
         {/* FR-022 (SP-41) + PI3: the ONE standard running indicator, spinner
             only, on every running task's card — never on a finished one. */}
         {running && <RunningIndicator className="flex-shrink-0 mt-[var(--space-0-5)]" />}
@@ -345,11 +342,9 @@ export function TaskCard({
       {tags.length > 0 && (
         <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)] flex-wrap">
           {visibleTags.map((tag) => (
-            <Tooltip key={tag} content={tag} containerClassName="min-w-0 max-w-full" triggerClassName="min-w-0 max-w-full">
-              <Badge variant="outline" title={tag} className="block min-w-0 max-w-[100px] truncate border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10 text-[length:var(--type-caption-size)] text-[var(--color-accent)]">
-                {tag}
-              </Badge>
-            </Tooltip>
+            <Badge key={tag} variant="outline" title={tag} className="min-w-0 max-w-full whitespace-normal wrap-anywhere border-[var(--color-accent)]/20 bg-[var(--color-accent)]/10 text-[length:var(--type-caption-size)] text-[var(--color-accent)]">
+              {tag}
+            </Badge>
           ))}
           {overflowTagCount > 0 && (
             <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">+{overflowTagCount}</span>

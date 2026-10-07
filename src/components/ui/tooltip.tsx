@@ -17,10 +17,6 @@ export interface TooltipProps {
   /** Which side of the trigger the tooltip bubble opens toward. */
   side?: 'top' | 'bottom'
   className?: string
-  /** Layout of the outer wrapper; defaults are unchanged for existing callers. */
-  containerClassName?: string
-  /** Layout of the trigger wrapper, e.g. a full-width clamped title. */
-  triggerClassName?: string
   'data-testid'?: string
   /**
    * Set when `children` is itself an interactive control (a link or
@@ -73,7 +69,7 @@ const CLOSE_GRACE_MS = 120
 // measurement on open, not a continuous positioning engine: it nudges the
 // bubble back inside the viewport with a small horizontal shift and leaves
 // vertical placement (`side`) exactly where the caller asked for it.
-export function Tooltip({ content, label, children, side = 'top', className, containerClassName, triggerClassName, interactive = false, ...rest }: TooltipProps) {
+export function Tooltip({ content, label, children, side = 'top', className, interactive = false, ...rest }: TooltipProps) {
   const [open, setOpen] = useState(false)
   const tooltipId = useId()
   const bubbleRef = useRef<HTMLSpanElement>(null)
@@ -152,7 +148,7 @@ export function Tooltip({ content, label, children, side = 'top', className, con
     : children
 
   return (
-    <span className={cn('relative inline-flex', containerClassName)}>
+    <span className="relative inline-flex">
       <span
         tabIndex={interactive ? -1 : 0}
         data-ds-action={interactive ? undefined : ''}
@@ -172,7 +168,7 @@ export function Tooltip({ content, label, children, side = 'top', className, con
         // opens it. Touch has no hover to dismiss with — closing then
         // relies on Escape or moving focus elsewhere (tapping away blurs).
         onClick={openNow}
-        className={cn('relative inline-flex', triggerClassName)}
+        className="relative inline-flex"
         {...rest}
       >
         {triggerChild}
