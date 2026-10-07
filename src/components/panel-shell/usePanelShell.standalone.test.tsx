@@ -1,7 +1,10 @@
 // Oracle: founder E.1–E.3. Native Chrome --app probe reports standalone=true.
-// The hook, store, full-screen context codec and router navigation are real;
-// only matchMedia and the browser popup handle are controlled browser edges.
-import { act, cleanup, render, waitFor } from '@testing-library/react'
+// This is a hook-level handoff/guard pack with a fixture codec/destination,
+// not production route acceptance. The real registry/content/route round trip
+// is covered by StandalonePanelRoundTrip.realRoute.test.tsx. Here the hook,
+// store and router remain real; matchMedia/popup/navigation faults are edges.
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { ToastContainer } from '@/components/ui/toast-container'
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { discardPanelPopout } from '@/lib/panelPopoutLifecycle'
@@ -39,7 +42,7 @@ async function renderSource(panel = definition()) {
   let shell: ReturnType<typeof usePanelShell> | undefined
   function Source() {
     shell = usePanelShell([panel], 'dana')
-    return <div>Chat source</div>
+    return <><div>Chat source</div><ToastContainer /></>
   }
   const root = createRootRoute({ component: Outlet })
   const chat = createRoute({ getParentRoute: () => root, path: '/workspaces/$workspaceId/chat', component: Source })
@@ -112,6 +115,8 @@ describe('E.3 standalone Expand leaves only after the Library/Mail guard', () =>
     expect(window.open).not.toHaveBeenCalled()
     expect(router.state.location.pathname).toBe('/workspaces/ws-1/chat')
     expect(usePanelShellStore.getState().activePanel).toEqual({ id, context })
+    expect(usePanelShellStore.getState().toasts).toEqual([])
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it.each(['library', 'mail'] as const)('%s remains mounted while its guard waits, then uses the current context', async (id) => {
@@ -133,6 +138,52 @@ describe('E.3 standalone Expand leaves only after the Library/Mail guard', () =>
     expect(router.state.location.search).toEqual({ workspace: 'ws-2', path: 'Updated.md' })
     expect(usePanelShellStore.getState().guardPending).toBe(false)
     expect(usePanelShellStore.getState().activePanel).toBeNull()
+  })
+
+  it.each([
+    ['library', 'throw'], ['library', 'reject'], ['mail', 'throw'], ['mail', 'reject'],
+  ] as const)('%s %s from beforeLeave is an error, not cancellation, and preserves all source state', async (id, failure) => {
+    displayMode('standalone')
+    const originalError = new Error('The leave check failed')
+    const guard = vi.fn(() => {
+      if (failure === 'throw') throw originalError
+      return Promise.reject(originalError)
+    })
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    usePanelShellStore.getState().openPanel(id, context)
+    const { router, expand } = await renderSource(definition(id, guard))
+    await act(async () => { await expect(expand()).resolves.toBe('error') })
+    expect(guard).toHaveBeenCalledExactlyOnceWith()
+    expect(router.state.location.pathname).toBe('/workspaces/ws-1/chat')
+    expect(router.state.location.search).toEqual({})
+    expect(usePanelShellStore.getState().activePanel).toEqual({ id, context })
+    expect(usePanelShellStore.getState().guardPending).toBe(false)
+    expect(window.open).not.toHaveBeenCalled()
+    expect(log).toHaveBeenCalledExactlyOnceWith('[side-panel] Expand leave guard failed', { panelId: id, error: originalError })
+    expect(usePanelShellStore.getState().toasts.map(({ message, variant }) => ({ message, variant }))).toEqual([{
+      message: `${id === 'library' ? 'Library' : 'Mail'} could not expand because its unsaved-change check failed. Try again.`, variant: 'error',
+    }])
+    expect(within(screen.getByRole('alert')).getByText(`${id === 'library' ? 'Library' : 'Mail'} could not expand because its unsaved-change check failed. Try again.`, { exact: true })).toBeVisible()
+  })
+
+  it('a rejected same-window navigation reports error without closing the dock or opening a popup', async () => {
+    displayMode('standalone')
+    const originalError = new Error('The destination could not load')
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    usePanelShellStore.getState().openPanel('library', context)
+    const { router, expand } = await renderSource()
+    vi.spyOn(router, 'navigate').mockRejectedValueOnce(originalError)
+    await act(async () => { await expect(expand()).resolves.toBe('error') })
+    expect(router.state.location.pathname).toBe('/workspaces/ws-1/chat')
+    expect(router.state.location.search).toEqual({})
+    expect(usePanelShellStore.getState().activePanel).toEqual({ id: 'library', context })
+    expect(usePanelShellStore.getState().guardPending).toBe(false)
+    expect(window.open).not.toHaveBeenCalled()
+    expect(log).toHaveBeenCalledExactlyOnceWith('[side-panel] Same-window Expand navigation failed', originalError)
+    expect(usePanelShellStore.getState().toasts.map(({ message, variant }) => ({ message, variant }))).toEqual([{
+      message: 'Library could not open full screen. The panel remains here.', variant: 'error',
+    }])
+    expect(within(screen.getByRole('alert')).getByText('Library could not open full screen. The panel remains here.', { exact: true })).toBeVisible()
   })
 
   it('does not navigate when another leave decision is already pending', async () => {

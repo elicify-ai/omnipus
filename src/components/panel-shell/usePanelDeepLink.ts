@@ -25,7 +25,7 @@
 //   4. Our own replaces set a suppress flag so the search change they cause
 //      is not adopted again (no loop, no fight with projection).
 import { useCallback, useEffect, useRef } from 'react'
-import { useBlocker, useNavigate, useRouterState } from '@tanstack/react-router'
+import { useBlocker, useNavigate, useRouter, useRouterState } from '@tanstack/react-router'
 import { useUiStore } from '@/store/ui'
 import { leaveGateThen } from './leaveGate'
 import { isWorkspaceScopedPanel } from './types'
@@ -144,6 +144,8 @@ function adoptionContext(
 }
 
 export function usePanelDeepLink(workspaceId: string, panel: string | undefined): void {
+  const router = useRouter()
+  const owningChatPath = `/workspaces/${workspaceId}/chat`
   const navigate = useNavigate()
   const rawSearch = useRouterState({ select: (s) => s.location.search }) as SearchRecord
   const activePanel = useUiStore((s) => s.activePanel)
@@ -166,13 +168,17 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
 
   const replaceSearch = useCallback(
     (desired: WorkspacePanelId | undefined): void => {
+      // Router location changes before React necessarily unmounts this chat.
+      // Never let its pending projection strip another route's context (for
+      // example the full-screen panel's workspace/path during Expand).
+      if (router.state.location.pathname !== owningChatPath) return
       selfWriteRef.current = true
       navigate({
         search: ((prev: SearchRecord) => cleanedSearch(prev, desired)) as never,
         replace: true,
       })
     },
-    [navigate],
+    [navigate, owningChatPath, router],
   )
 
   useEffect(() => {
@@ -196,6 +202,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
 
   useEffect(() => {
     const onPopState = () => {
+      if (router.state.location.pathname !== owningChatPath) return
       if (freshLinkRef.current?.href === window.location.href) return
       backForwardRef.current = true
       const current = useUiStore.getState().activePanel
@@ -203,9 +210,10 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
     }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
-  }, [replaceSearch])
+  }, [replaceSearch, owningChatPath, router])
 
   useEffect(() => {
+    if (router.state.location.pathname !== owningChatPath) return
     const freshLink = freshLinkRef.current?.href === window.location.href
       && freshLinkRef.current.workspaceId === workspaceId
     if (backForwardRef.current) {
@@ -243,7 +251,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
     // A named non-library param is a "no panel" verdict (US-7 AS-4/AS-5).
     // An absent param is not: in-app panel opens must survive projection.
     if (rawNamed !== undefined) gatedCloseIfOpen()
-  }, [rawSearch, workspaceId, replaceSearch])
+  }, [rawSearch, workspaceId, replaceSearch, owningChatPath, router])
 
   // PROJECTION (store -> URL, SP-22 REPLACE). The mount pass records a
   // baseline and writes nothing — a store a mount STARTS with is not a
@@ -251,6 +259,7 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
   // or Browser panel scrubs `panel` (SP-28) without spreading leftover keys.
   const mountedRef = useRef(false)
   useEffect(() => {
+    if (router.state.location.pathname !== owningChatPath) return
     if (!mountedRef.current) {
       mountedRef.current = true
       return
@@ -259,5 +268,5 @@ export function usePanelDeepLink(workspaceId: string, panel: string | undefined)
     const validated = panel === undefined ? undefined : rawPanel({ panel })
     if (desired === validated) return
     replaceSearch(desired)
-  }, [activePanel, panel, replaceSearch])
+  }, [activePanel, panel, replaceSearch, owningChatPath, router])
 }

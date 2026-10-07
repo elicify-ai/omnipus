@@ -87,7 +87,18 @@ async function expandActivePanel(options: {
   if (activePanel === null || guardPending) return 'cancelled'
   const definition = panels.find((panel) => panel.id === activePanel.id)
   if (definition === undefined) return 'cancelled'
-  if (definition.beforeLeave !== undefined && !(await runGuard(definition))) return 'cancelled'
+  if (definition.beforeLeave !== undefined) {
+    try {
+      if (!(await runGuard(definition))) return 'cancelled'
+    } catch (error) {
+      console.error('[side-panel] Expand leave guard failed', { panelId: definition.id, error })
+      usePanelShellStore.getState().addToast({
+        message: `${definition.title} could not expand because its unsaved-change check failed. Try again.`,
+        variant: 'error',
+      })
+      return 'error'
+    }
+  }
 
   const context = getCurrentContext?.() ?? activePanel.context
   const identity = panelIdentityFromContext(definition.id, context)

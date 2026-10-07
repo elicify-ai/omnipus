@@ -219,7 +219,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
           </Button>
         )
         return iconsOnly && !measuring ? (
-          <Tooltip key={segment} content={label} side="bottom" interactive>{button}</Tooltip>
+          <Tooltip key={segment} content={label} side="bottom" className="w-max" interactive>{button}</Tooltip>
         ) : button
       })}
     </>

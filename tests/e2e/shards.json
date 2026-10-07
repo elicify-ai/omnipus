@@ -92,7 +92,8 @@
         "tests/e2e/sidebar.spec.ts",
         "tests/e2e/skills.spec.ts",
         "tests/e2e/uat-audit-and-settings.spec.ts",
-        "tests/e2e/side-panel-expand-multitab.spec.ts"
+        "tests/e2e/side-panel-expand-multitab.spec.ts",
+        "tests/e2e/workspace-header-standalone.spec.ts"
       ]
     },
     {
