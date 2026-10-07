@@ -119,7 +119,12 @@ async function openNativeDock(page: Page, panel: 'tasks' | 'calendar' | 'team') 
 async function assertSameNativeChat(page: Page, baseline: Awaited<ReturnType<typeof openNativeDock>>, panel?: string, expectedTabs = baseline.tabs) {
   const hash = new URL(page.url()).hash
   expect(hash.split('?')[0], 'the original workspace Chat route stays under the dock').toBe(baseline.path)
-  expect(new URLSearchParams(hash.split('?')[1]).get('panel')).toBe(panel ?? null)
+  // usePanelDeepLink rewrites ?panel= one effect after the dock leaves the DOM (navigate replace),
+  // so a one-shot read can see the stale value; poll the live URL with the default timeout.
+  await expect.poll(
+    () => new URLSearchParams(new URL(page.url()).hash.split('?')[1]).get('panel'),
+    'the ?panel= deep-link param settles to the expected panel',
+  ).toBe(panel ?? null)
   expect(page.context().pages().length, 'only an explicit Expand may add its ONE child tab (PE1)').toBe(expectedTabs)
   expect(await baseline.chat.evaluate((el) => el.isConnected && el === document.querySelector('[data-testid="chat-column"]')),
     'opening/resizing/closing must preserve the actual chat node').toBe(true)
