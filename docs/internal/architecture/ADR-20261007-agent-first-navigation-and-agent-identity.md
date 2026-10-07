@@ -75,13 +75,23 @@ The backend specification is planned at `/Users/danielpiatkowski/AI-Agent-Worksp
 
 The broader Agents-feed redesign, new creation interview, Connectors, Skills & Tools, permission controls, app-wide component swaps and other R43 waves are not smuggled into this first squad. The roster’s identity renderer changes here; the roster’s full layout does not (R6a–R8, R30–R43; D11).
 
-### D2 — Sidebar membership comes from agents, not session recency
+### D2 — Agent membership and one persistent freshness owner
 
-Each expanded workspace lists its eligible main conversation agents. Use the existing agent taxonomy and worker predicate, joined to authoritative workspace membership. Do not manufacture membership from session history, a delegation edge, the existence of a computed main ID, or the global roster. Workers, including workers on a workspace team, never become sidebar conversation rows; hidden engine agents remain hidden (R3–R5, R7; E8; B::D1/D8).
+Expanded workspaces show eligible main conversation agents from authoritative workspace/member and Agent data, never from session recency or a guessed computed ID. Workers and hidden engine agents stay absent even when they are members. The founder’s **Admin default-workspace exception** is consumed from validated backend data, not fake membership; no Admin row is invented in other workspaces (R3–R5/R7; F::Q12; D5/D10).
 
-Keep existing workspace ordering, archive access, sidebar pin/drawer behavior and keyboard/focus handling unless the later specification identifies an unavoidable change. Removing a session tree is not permission to remove its sessions, cancel running work, or redesign the shell. The global Agents entry still lists the full roster, including workers and unassigned agents (R6–R8, R21; E1; S5::Retired surfaces).
+**AppShell is the persistent navigation freshness owner.** Move `useAgentsCrossTabRefresh` out of the removed AgentPicker and mount it once in authenticated AppShell, extending the existing invalidation to the shared agent and workspace/member caches. The current hook handles focus/visibility; AgentPicker is its sole production mount, so preserving reconnect alone is insufficient (MAJ-003; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useAgentsCrossTabRefresh.ts`::useAgentsCrossTabRefresh; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/layout/AppShell.tsx`::AppShell; E8).
 
-Chat remains the underlying workspace surface. Preserve the existing panel toggles and the separate global/workspace Library scopes; do not add a Chat header item or another panel system (R1–R2; E11).
+| Trigger | Shared-cache behavior |
+|---|---|
+| Focus / visibility becomes visible, even within staleTime | Refresh roster and membership through that one persistent owner. |
+| Existing WebSocket connect/reconnect | Preserve existing agent invalidation and coordinate membership refresh; no duplicate reconnect service. |
+| Sidebar navigation entry / workspace expansion | Refresh the destination roster/member data; replaces picker-open refresh after a separate membership save. |
+| Agent-created push followed later by member save | Use pushes plus the entry/focus recovery above; neither event nor array equality proves membership is current. |
+| Failed refresh | Keep usable last-known data with visible stale/error state and Retry. First-load failure is not an empty team. |
+
+Use existing query keys, coalesced invalidation and stable cached arrays. Remove picker-specific refresh dependence, not its recovery behavior. The test mounts the real shell/sidebar **without AgentPicker**, creates an agent in another tab, saves membership separately, then refocuses/expands inside the freshness window. A direct hook-only test cannot close MAJ-003 (`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useChatAgents.ts`::useChatAgents; review::MAJ-003).
+
+Keep workspace ordering, archive, pin/drawer and keyboard/focus behavior. Agents in Assets still exposes the full roster. Chat stays the base surface, with existing panel toggles and separate global/workspace Library scope; no Chat header entry or new panel system (R1/R2/R6–R8/R21; E1/E11).
 
 ### D3 — Main click, exact restore and deliberate extra chat
 
@@ -164,24 +174,24 @@ Use the kit warning-yellow token, not gold/orange. Initial load, unopened worksp
 
 Keep one shared query/cache/attachment path. No per-row live connections, transcript loading for navigation, second main store or new attention/event service. D2 assigns freshness independently of the removed picker. UI preparation can proceed now, but integrated landing remains held for committed generated contracts, working U1 and the matching dependent backend amendments on the joint candidate (R4/R29/R41; F; S5::Definition of Done).
 
-### D6 — One global visual identity per agent
+### D6 — Approved figures, role badges and one agent palette
 
-An agent’s **role icon, figure and color** form one identity. An uploaded image is the alternative image presentation, cropped to a circle; it does not change the agent’s kind, instructions or permissions. Editing identity remains global across the agent’s workspaces, as in the existing unified editor. The prototype’s app-wide figure demo switch is not a production setting (R7–R12, R17, R46; E6; S2::fig-switch).
+First-squad identity is **figure + role badge + color**, shared across workspaces. Offer **Robot, Man, Woman, Omnipus; DEFAULT = Omnipus**. Use the approved demo figures and minimal-eye grammar; keep figure plus role badge at **every size**, with legibility checks rather than a silent plain-role fallback. The earlier Robot recommendation and open figure question are answered. The app-wide demo switch is not a production setting (F::Q5; approved S2::fig-switch, FIGURE_FACE, figureInner).
 
-The role chooser uses the **31 roles in R11**, grouped as **Create / Build / Business / People / Personal**. Use R11’s curated duotone Phosphor role vocabulary, not arbitrary navigation glyphs or roles guessed from an agent’s name. The prototype’s regular-weight filled-figure/badge grammar does not silently supersede R11; its final combined grammar is included in Q-FE-3. Role/figure assets are trusted bundled graphics; accepting those assets does not permit user-uploaded SVG (R9–R11/R17; S2::PERSON_ICONS).
+The role chooser offers R11’s 31 roles, grouped Create / Build / Business / People / Personal. Reuse the trusted curated figure/badge assets and the standalone Phosphor role vocabulary, not role guesses from names or new illustrated mascots. Q5’s approved combined figure grammar supersedes conflicting older no-face/style wording where necessary. Uploads/GIF choices are deferred, not another first-squad identity lane (R9–R11/R46; F::Q5–Q7).
 
-Names use normal product text color. The icon carries the agent’s color; standard selection styling does not recolor the identity glyph into brand gold. The icon and adjacent agent name identify the same agent everywhere (R10/R12/R13).
+Names use normal product text color; identity color belongs to the icon. **Q9 is the explicit exception to “icon and name everywhere”: chat bubbles show the actual agent name only.** The inline responding-agent indicator still shows icon and name. Standard selection styling does not recolor an identity glyph to brand gold (R10/R12; F::Q9).
 
 | Surface | Identity size/arrangement |
 |---|---|
-| Sidebar | 26px icon, then 13px name text. R13. |
-| Team | 18px icon before the name. R13. |
-| Agents roster | 40px icon before the name. R13. |
-| Chat status line | 48px agent icon before the name/status. No second small icon and no separate Omnipus chat logo. R13/R24. |
-| Every agent message | New AgentIcon in **today’s avatar position**, using that message’s author. Preserve the existing message layout/density rather than applying the 48px status-line size to messages. R24; E5. |
-| Editor preview and `@` suggestions | The same identity renderer; no separate fixed Robot or colored-circle grammar. Exact unlisted size variants and small-badge treatment are part of Q-FE-3, not invented R13 values. R12/R46; E4/E6. |
+| Sidebar | 26px icon then 13px name text. R13. |
+| Team | 18px icon before name. R13. |
+| Agents roster | 40px icon before name. R13. |
+| Inline status indicator | 48px responding-agent icon, then name/phrase; no second small icon or separate chat logo. R13 retained by F::Q9; approved S2::renderThinkPreview. |
+| Message bubbles | Author’s name only; no avatar, on live and historical paths. F::Q9. |
+| Editor / later `@` suggestions | Same figure/role/color renderer and role badge, not fixed Robot or an independent circle helper. R46; F::Q5. |
 
-Replace the existing avatar palette with the ten named R16 colors. These hex values are governed identity data, not permission to introduce arbitrary chrome colors (R16; E7; S5::Governed data is not chrome).
+Use the ten named R16 colors below. Hex is governed identity data, not raw chrome styling. Figure/role/color remain global agent configuration; do not persist them in a separate browser settings store (R8/R16; E7; S5::Governed data is not chrome).
 
 | Name | Hex | Name | Hex |
 |---|---|---|---|
@@ -229,15 +239,19 @@ Use explicit message/turn producer identity and the open session’s real state.
 
 Remove AgentPicker, preserving the composer’s model, per-chat Auto, attachments and send/Stop controls. The approved wireframe contains demo controls and messages only: no Demo, simulation or app-wide figure switch is added to the product (F::Q9/Q10; S2::chat-feed/fig-switch; R20).
 
-### D9 — New choices and live preview in the existing slide-outs
+### D9 — Existing editor, canonical identity and deferred uploads
 
-Extend the existing create/edit flow with **figure, curated role icon, palette color and uploaded image** choices. The live preview uses AgentIcon with the current draft choice, so it matches the sidebar/chat after save. AvatarHeader must stop rendering a fixed Robot. Do not use a prototype-only renderer for the preview or create another avatar settings store (R8/R46; E6/E9).
+Create/edit slide-outs offer **figure, curated role badge and palette color**, with the same AgentIcon live preview used by sidebar and inline chat. AvatarHeader no longer hardcodes Robot. Preserve the unified editor, global autosave/create semantics and server-provided field editability; a draft preview is not a saved identity (R7/R8/R46; F::Q5–Q7; E6).
 
-Preserve global autosave/create behavior and server-provided identity field protections. Protected built-ins show the same renderer without gaining an unauthorized edit control. New identity properties need corresponding generated contract/editability support; “locked” is not permission to guess which new fields are writable (R7–R8; E6/E10; **Built-in agent configuration, skills, and visual file reading**::What users and Ava may edit).
+**MAJ-002: updating stored values once is insufficient for built-ins.** Backend-owned identity work must update canonical compiled definitions, fresh-install seeding and startup enforcement together. Current `SeedConfig` restores `Color`/`Icon` from compiled definitions and boot persists that roster; Jim currently supplies semantic green/graph and Ava brand gold/wrench. Rendering a migrated color cannot prevent restart from restoring those values (`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/pkg/coreagent/seed.go`::SeedConfig; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/pkg/coreagent/core.go`::Jim, Ava; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/pkg/gateway/boot_agent_roster.go`::seedAndPersistAgentRoster).
 
-PNG, JPG, WebP and GIF are accepted image inputs; SVG is rejected; maximum upload is **2 MB**. The server must validate and re-encode the upload to strip metadata/embedded content before it becomes the saved avatar. A client-side file filter or local preview is not that safety guarantee. Failed upload/save keeps the previous saved identity and shows an actionable error; preview is not reported as saved (R17/R46; S5::Definition of Done).
+The canonical role/icon/figure values must follow the approved vocabulary/default, and canonical colors the approved palette. Preserve built-in identity locks, names, base instructions and capability boundaries; do not make protected identity editable or use render-time recoloring as a repair. Require fresh install, existing custom/built-in migration, reload and repeated restarts, with the same rendered identity and unchanged field locks. Identity migration is expressly required by R11/R16, separate from the limited chat-format migration in D10 (F::Q5/Q8; MAJ-002; **Built-in agent configuration, skills, and visual file reading**::What users and Ava may edit).
 
-Storage, ownership, replacement/removal and authenticated retrieval are a backend dependency, Q-FE-4. GIF playback and status-driven image motion conflict with the newer static-icon direction and are Q-FE-5. These cannot be silently treated as a frontend-only upload or a completed part of U1 (R17–R19; E10).
+**MAJ-001 is moot for this squad:** founder Q6/Q7 defers agent-image uploads and GIF/playback placement entirely. No new avatar upload endpoint/control or preview-only saved-image substitute ships here. Existing chat/file/document uploads are not removed by this decision (F::Q6/Q7).
+
+For the later upload unit, retain R17’s format/2 MB/re-encoding/SVG-rejection requirements and the review’s **pre-decode** dimension/pixel bound, bounded normalization/concurrency and, if animation is approved, frame/total-work limits. Current normalization checks `maxImagePixels = 16 × 1024 × 1024` before full decode; post-decode resize alone is not safe. Exact later avatar budgets, authenticated ownership/cleanup and animation placement require that unit’s design and founder approval; no capacity or exploit PASS is claimed (`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/pkg/agent/loop_media.go`::maxImagePixels, encodeImageToDataURLCached; review::MAJ-001).
+
+Companion **#1221** deletes the per-agent “Never auto-approve” checkbox and associated layer completely. This avatar/editor decision neither preserves that checkbox nor implements its removal; #1221 owns it. Retain only the still-supported composer controls and consume the companion generated contract without reviving `auto_approve_disabled` (founder steering; https://github.com/elicify-ai/omnipus/issues/1221).
 
 ### D10 — Navigation migration preserves reachability, not obsolete data machinery
 
