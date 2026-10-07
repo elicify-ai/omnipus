@@ -36,6 +36,10 @@ it('T14 shows all task metadata in an unclipped hover/focus preview in every vie
     expect(preview.parentElement?.closest('.overflow-auto,.overflow-hidden,.overflow-y-auto'), 'portal escapes the table/column/canvas clipping ancestors').toBeNull()
     await user.keyboard('{Escape}')
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Task preview' })).not.toBeInTheDocument())
+    // C: a new keyboard visit previews; restored/programmatic focus does not.
+    await user.unhover(trigger)
+    fireEvent.blur(trigger)
+    fireEvent.keyDown(document, { key: 'Tab' })
     fireEvent.focus(trigger)
     expect(await screen.findByRole('dialog', { name: 'Task preview' })).toBeVisible()
     await user.keyboard('{Escape}')

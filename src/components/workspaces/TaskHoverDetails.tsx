@@ -24,7 +24,23 @@ export function TaskHoverDetails({ task, plans = [], agents = [], children, onOp
   const previewId = useId()
   const touch = useRef(false)
   const dismissed = useRef(false)
+  const keyboardFocus = useRef(false)
   const props = children.props
+  useEffect(() => {
+    if (!enabled) return
+    // A fresh keyboard navigation event may preview on focus. Focus restored
+    // by a task/confirmation dialog is not a new keyboard visit.
+    const keyboard = (event: KeyboardEvent) => {
+      keyboardFocus.current = event.key === 'Tab' || event.key.startsWith('Arrow')
+    }
+    const pointer = () => { keyboardFocus.current = false }
+    document.addEventListener('keydown', keyboard, true)
+    document.addEventListener('pointerdown', pointer, true)
+    return () => {
+      document.removeEventListener('keydown', keyboard, true)
+      document.removeEventListener('pointerdown', pointer, true)
+    }
+  }, [enabled])
   useEffect(() => {
     if (!open) return
     const escape = (event: KeyboardEvent) => {
@@ -38,27 +54,43 @@ export function TaskHoverDetails({ task, plans = [], agents = [], children, onOp
   }, [open])
   if (!enabled) return children
 
+  const independentAction = (target: EventTarget, owner: HTMLElement) => {
+    const action = target instanceof Element ? target.closest('button,a,input,select,textarea,[role="button"]') : null
+    return Boolean(action && action !== owner && !action.hasAttribute('data-task-open'))
+  }
+  const dismiss = () => { dismissed.current = true; keyboardFocus.current = false; setOpen(false) }
   const trigger = cloneElement(children, {
     'aria-describedby': [props['aria-describedby'], open ? previewId : undefined].filter(Boolean).join(' ') || undefined,
-    onPointerDown: (event) => {
-      dismissed.current = false
+    onPointerDownCapture: (event) => {
       touch.current = event.pointerType === 'touch'
-      props.onPointerDown?.(event)
+      if (independentAction(event.target, event.currentTarget)) dismiss()
+      props.onPointerDownCapture?.(event)
     },
     onClickCapture: (event) => {
       props.onClickCapture?.(event)
       if (event.defaultPrevented) return
-      if (!touch.current) { dismissed.current = true; setOpen(false); return }
-      const button = (event.target as HTMLElement).closest('button')
-      // Run/Stop and other independent nested actions retain their own behavior.
-      if (button && !button.hasAttribute('data-task-open')) return
+      // Capture runs even when the nested action isolates its bubble handlers.
+      if (independentAction(event.target, event.currentTarget) || !touch.current) { dismiss(); return }
       event.preventDefault()
       event.stopPropagation()
+      dismissed.current = false
       setOpen(true)
     },
     onPointerLeave: (event) => { props.onPointerLeave?.(event); dismissed.current = false },
-    onFocus: (event) => { dismissed.current = false; props.onFocus?.(event); if (!event.defaultPrevented) setOpen(true) },
-    onKeyDown: (event) => { touch.current = false; if (event.key === 'Enter' || event.key === ' ') setOpen(false); props.onKeyDown?.(event) },
+    onFocus: (event) => {
+      props.onFocus?.(event)
+      if (!event.defaultPrevented && keyboardFocus.current && !dismissed.current && !independentAction(event.target, event.currentTarget)) setOpen(true)
+      keyboardFocus.current = false
+    },
+    onBlur: (event) => {
+      props.onBlur?.(event)
+      if (!event.currentTarget.contains(event.relatedTarget)) dismissed.current = false
+    },
+    onKeyDown: (event) => {
+      touch.current = false
+      if (event.key === 'Enter' || event.key === ' ') dismiss()
+      props.onKeyDown?.(event)
+    },
   })
   const agent = task.agent_name ?? agents.find((value) => value.id === task.agent_id)?.name ?? task.agent_id ?? 'Unassigned'
   const plan = plans.find((value) => value.id === task.plan_id)?.title ?? task.plan_id ?? 'Unplanned'
@@ -66,7 +98,8 @@ export function TaskHoverDetails({ task, plans = [], agents = [], children, onOp
 
   return (
     <HoverCard open={open} onOpenChange={(next) => { if (!next || !dismissed.current) setOpen(next) }} openDelay={100} closeDelay={200}>
-      <HoverCardTrigger asChild>{trigger}</HoverCardTrigger>
+      {/* Focus is owned above; suppress Radix's unconditional focus-open timer. */}
+      <HoverCardTrigger asChild onFocus={(event) => event.preventDefault()}>{trigger}</HoverCardTrigger>
       <HoverCardContent id={previewId} role="dialog" aria-label="Task preview" data-testid={`task-preview-${task.id}`}>
         <WordBoundaryText as="h3" text={task.title} className="max-w-full whitespace-normal break-normal wrap-break-word font-headline font-bold text-[var(--color-secondary)]" />
         <dl className="mt-[var(--space-2)] grid grid-cols-[auto_minmax(0,1fr)] gap-x-[var(--space-3)] gap-y-[var(--space-1)]">
@@ -76,7 +109,7 @@ export function TaskHoverDetails({ task, plans = [], agents = [], children, onOp
           <dt className="text-[var(--color-muted)]">Plan</dt><dd className="break-normal wrap-break-word">{plan}</dd>
           <dt className="text-[var(--color-muted)]">Updated</dt><dd><time dateTime={task.updated_at}>{Number.isNaN(updated.getTime()) ? 'Unavailable' : updated.toLocaleString()}</time></dd>
         </dl>
-        <Button variant="ghost" onClick={(event) => { event.stopPropagation(); setOpen(false); onOpenTask() }} className="mt-[var(--space-2)] h-auto p-0 text-[var(--color-accent)]">Open task</Button>
+        <Button variant="ghost" onClick={(event) => { event.stopPropagation(); dismiss(); onOpenTask() }} className="mt-[var(--space-2)] h-auto p-0 text-[var(--color-accent)]">Open task</Button>
       </HoverCardContent>
     </HoverCard>
   )
