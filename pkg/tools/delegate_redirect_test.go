@@ -41,6 +41,7 @@ type fakeRedirecterSink struct {
 	reviveCalled      bool
 	reviveSessionID   string
 	reviveInstruction string
+	reviveAsRedirect  bool
 	queued            []providers.Message
 }
 
@@ -67,6 +68,15 @@ func (f *fakeRedirecterSink) ReviveStoppedSession(ctx context.Context, sessionID
 	f.reviveSessionID = sessionID
 	f.reviveInstruction = instruction
 	return true, nil
+}
+
+// ReviveStoppedSessionAsRedirect records the same fields as ReviveStoppedSession
+// and marks the call as the redirect form.
+func (f *fakeRedirecterSink) ReviveStoppedSessionAsRedirect(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error) {
+	f.mu.Lock()
+	f.reviveAsRedirect = true
+	f.mu.Unlock()
+	return f.ReviveStoppedSession(ctx, sessionID, by, instruction)
 }
 
 func seedRedirectChild(t *testing.T, lc *session.LifecycleStore, sessionID string, state session.LifecycleState, is3P bool) {
@@ -214,5 +224,27 @@ func TestDelegateTool_Redirect_3PChild_NotSteerable(t *testing.T) {
 	sink.mu.Unlock()
 	if called || queued != 0 {
 		t.Errorf("a 3P redirect must deliver nothing (redirecter=%v, queued=%d)", called, queued)
+	}
+}
+
+// An agent redirect of a stopped helper must deliver through the redirect form
+// of the revive, so the stored instruction carries the "redirect-" entry id the
+// SPA reads to drop the "(interrupted)" marker after reload.
+func TestDelegateTool_Redirect_StoppedChild_UsesRedirectFormOfRevive(t *testing.T) {
+	tool, lc, _, _ := newADR053TestTool(t)
+	sink := &fakeRedirecterSink{}
+	tool.SetSteeringSink(sink)
+	seedRedirectChild(t, lc, "child-redirect-stopped-form", session.LifecycleStopped, false)
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+	res := tool.Execute(ctx, map[string]any{
+		"action": "redirect", "session_id": "child-redirect-stopped-form", "text": "do this instead",
+	})
+	if res.IsError {
+		t.Fatalf("redirect errored: %s", res.ForLLM)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if !sink.reviveAsRedirect {
+		t.Fatal("stopped-helper redirect must revive through ReviveStoppedSessionAsRedirect")
 	}
 }

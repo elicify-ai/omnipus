@@ -652,6 +652,13 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 	return al.reviveStoppedSession(ctx, sessionID, by, instruction, false)
 }
 
+// ReviveStoppedSessionAsRedirect is ReviveStoppedSession for a redirect: the
+// instruction is stored under the "redirect-" entry id. The delegate tool's
+// redirect of a stopped helper reaches it through the tools-side steerRedirecter.
+func (al *AgentLoop) ReviveStoppedSessionAsRedirect(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error) {
+	return al.reviveStoppedSession(ctx, sessionID, by, instruction, true)
+}
+
 // reviveStoppedSession is ReviveStoppedSession's body. asRedirect is true only
 // for the /stop-redirect delivery (RedirectSteeredSession's waiter and the
 // stopped-helper branch of RedirectSessionTurn): the instruction is then

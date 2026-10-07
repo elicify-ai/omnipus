@@ -88,3 +88,19 @@ func TestReviveStoppedSession_FollowUpKeepsInstructionPrefixedEntry(t *testing.T
 		t.Fatalf("follow-up instruction entry id = %q, want prefix %q", id, want)
 	}
 }
+
+// The agent-side delegate redirect of a stopped helper revives through
+// ReviveStoppedSessionAsRedirect; it must store the redirect- entry.
+func TestReviveStoppedSessionAsRedirect_StoresRedirectPrefixedEntry(t *testing.T) {
+	al, childID := stoppedHelperForRedirectIDTest(t)
+	const instruction = "agent redirect: summarise instead"
+	by := steer.Principal{Kind: steer.PrincipalKindAgent, ID: "parent"}
+	revived, err := al.ReviveStoppedSessionAsRedirect(context.Background(), childID, by, instruction)
+	if err != nil || !revived {
+		t.Fatalf("ReviveStoppedSessionAsRedirect = %v/%v, want revived", revived, err)
+	}
+	id := lastUserEntryID(t, al, childID, instruction)
+	if !strings.HasPrefix(id, "redirect-") {
+		t.Fatalf("entry id = %q, want prefix %q", id, "redirect-")
+	}
+}
