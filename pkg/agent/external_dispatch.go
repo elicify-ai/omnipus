@@ -500,6 +500,9 @@ func drainExternalRun(
 	var sb strings.Builder
 	var runErr error
 	ended := false
+	// unpairedStartID is the generated id of the latest tool call the runner
+	// emitted without a CallID (#492), consumed by the next id-less result.
+	var unpairedStartID string
 
 	for {
 		select {
@@ -564,6 +567,11 @@ func drainExternalRun(
 			case runner.EventKindToolCall:
 				if ev.ToolCall != nil {
 					id := recordExternalToolCall(childTS, ev.ToolCall)
+					if ev.ToolCall.CallID == "" {
+						// The runner gave no call id: remember the generated one so a
+						// later id-less result can still pair with this start live.
+						unpairedStartID = id
+					}
 					emitExternalToolCallStart(al, childTS, id, ev.ToolCall)
 				}
 			case runner.EventKindDiff:
@@ -582,7 +590,7 @@ func drainExternalRun(
 				// transcript so the run shows the tool's outcome.
 				if ev.ToolResult != nil {
 					recordExternalToolResult(childTS, ev.ToolResult)
-					emitExternalToolCallEnd(al, childTS, ev.ToolResult)
+					emitExternalToolCallEnd(al, childTS, ev.ToolResult, &unpairedStartID)
 				}
 			case runner.EventKindEnd:
 				ended = true
@@ -722,14 +730,26 @@ func emitExternalToolCallStart(al *AgentLoop, childTS *turnState, callID string,
 
 // emitExternalToolCallEnd broadcasts the live tool_call_result for an
 // external-CLI child's tool result (#492); the counterpart of
-// emitExternalToolCallStart, paired by the runner's CallID.
-func emitExternalToolCallEnd(al *AgentLoop, childTS *turnState, tr *runner.ToolResultEvent) {
+// emitExternalToolCallStart, paired by the runner's CallID. When the runner
+// sent no CallID the result cannot be paired by id: it reuses the start id of
+// the latest id-less call (*unpairedStartID, consumed here) where one is
+// recorded, and logs a warning either way.
+func emitExternalToolCallEnd(al *AgentLoop, childTS *turnState, tr *runner.ToolResultEvent, unpairedStartID *string) {
 	if al == nil || childTS == nil {
 		return
 	}
 	id := tr.CallID
 	if id == "" {
-		id = fmt.Sprintf("ext-tool-result-%d", time.Now().UnixNano())
+		if unpairedStartID != nil && *unpairedStartID != "" {
+			id = *unpairedStartID
+			*unpairedStartID = ""
+			slog.Warn("external-cli dispatch: tool result has no call id; pairing with the latest id-less tool call",
+				"tool", tr.ToolName, "paired_call_id", id)
+		} else {
+			id = fmt.Sprintf("ext-tool-result-%d", time.Now().UnixNano())
+			slog.Warn("external-cli dispatch: tool result has no call id and no unpaired start; live result cannot pair",
+				"tool", tr.ToolName, "call_id", id)
+		}
 	}
 	al.emitEvent(
 		EventKindToolExecEnd,
@@ -741,11 +761,30 @@ func emitExternalToolCallEnd(al *AgentLoop, childTS *turnState, tr *runner.ToolR
 			Tool:              tr.ToolName,
 			ForLLMLen:         len(tr.Output),
 			IsError:           tr.IsError,
-			Result:            string(tr.Output),
+			Result:            externalToolResultForBroadcast(al, tr),
 			ParentSpawnCallID: session.ToolCallID(childTS.parentSpawnCallID),
 			AgentID:           childTS.resolveActiveAgentID(),
 		},
 	)
+}
+
+// externalToolResultForBroadcast gives an external tool result the same
+// treatment the native path applies before its tool_call_result carries
+// content: the prompt-guard sanitizer for untrusted tool names first
+// (sanitizeUntrustedToolResult), then config.FilterSensitiveData (credential
+// redaction, loop_run_turn_tools.go's tool-result choke point) — in that order,
+// reusing both functions rather than inventing a treatment. The native path
+// does not truncate here; the gateway offloads oversized results when it
+// builds the frame.
+func externalToolResultForBroadcast(al *AgentLoop, tr *runner.ToolResultEvent) string {
+	content := string(tr.Output)
+	if al.promptGuard != nil && isUntrustedToolResult(tr.ToolName) {
+		content = al.promptGuard.Sanitize(content, false)
+	}
+	if cfg := al.GetConfig(); cfg != nil {
+		content = cfg.FilterSensitiveData(content)
+	}
+	return content
 }
 
 // recordExternalPermission records a permission-request as a transcript line so the

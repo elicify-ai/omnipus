@@ -17,6 +17,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -105,4 +106,98 @@ collect:
 	require.False(t, end.IsError)
 	require.Equal(t, session.ToolCallID(parentCall), end.ParentSpawnCallID)
 	require.Equal(t, wantChatID, end.ChatID)
+}
+
+// collectExternalToolEvents runs an external-CLI sub-turn that emits evs and
+// returns every live tool_call_start / tool_call_result payload broadcast.
+func collectExternalToolEvents(t *testing.T, evs []runner.RunEvent, prep func(al *AgentLoop)) ([]ToolExecStartPayload, []ToolExecEndPayload) {
+	t.Helper()
+	t.Setenv(config.EnvHome, t.TempDir())
+	al, ts := newExternalTestLoop(t, "codex", "")
+	if prep != nil {
+		prep(al)
+	}
+	ts.chatID = "chat-ext-492b"
+	ts.opts.ChatID = ts.chatID
+	ts.parentSpawnCallID = "call_spawn_492b"
+	store, err := session.NewUnifiedStore(t.TempDir() + "/sessions")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	ts.transcriptStore = store
+	ts.transcriptSessionID = "session_ext_492b"
+
+	sub := al.SubscribeEvents(64)
+	defer al.UnsubscribeEvents(sub.ID)
+	fr, restore := withFakeDriver(t)
+	defer restore()
+	go func() {
+		for _, ev := range evs {
+			fr.InjectEvent(ev)
+		}
+		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		fr.Cancel()
+	}()
+	_, _ = runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+
+	var starts []ToolExecStartPayload
+	var ends []ToolExecEndPayload
+	for {
+		select {
+		case ev := <-sub.C:
+			switch p := ev.Payload.(type) {
+			case ToolExecStartPayload:
+				starts = append(starts, p)
+			case ToolExecEndPayload:
+				ends = append(ends, p)
+			}
+		default:
+			return starts, ends
+		}
+	}
+}
+
+// #492 review F5(a): a runner that sends no CallID must still pair the live
+// result with its start.
+func TestExternalDispatch_EmptyCallID_ResultPairsWithStart(t *testing.T) {
+	starts, ends := collectExternalToolEvents(t, []runner.RunEvent{
+		{Kind: runner.EventKindToolCall, ToolCall: &runner.ToolCallEvent{ToolName: "bash", ToolInput: []byte(`{"cmd":"ls"}`)}},
+		{Kind: runner.EventKindToolResult, ToolResult: &runner.ToolResultEvent{ToolName: "bash", Output: []byte(`"ok"`)}},
+	}, nil)
+	require.Len(t, starts, 1)
+	require.Len(t, ends, 1)
+	require.NotEmpty(t, starts[0].ToolCallID)
+	require.Equal(t, starts[0].ToolCallID, ends[0].ToolCallID, "id-less result must reuse the recorded start id")
+}
+
+// F5(c): an error result and an empty tool input both broadcast cleanly.
+func TestExternalDispatch_ErrorResultAndEmptyInput(t *testing.T) {
+	starts, ends := collectExternalToolEvents(t, []runner.RunEvent{
+		{Kind: runner.EventKindToolCall, ToolCall: &runner.ToolCallEvent{CallID: "c1", ToolName: "bash"}},
+		{Kind: runner.EventKindToolResult, ToolResult: &runner.ToolResultEvent{CallID: "c1", ToolName: "bash", Output: []byte(`{"err":"boom"}`), IsError: true}},
+	}, nil)
+	require.Len(t, starts, 1)
+	require.Len(t, ends, 1)
+	require.Empty(t, starts[0].Arguments, "empty ToolInput means no arguments")
+	require.True(t, ends[0].IsError)
+	require.Equal(t, `{"err":"boom"}`, ends[0].Result)
+}
+
+// F5(b): the native path redacts credentials from a tool result before its
+// tool_call_result carries it (config.FilterSensitiveData); the external path
+// reuses that function.
+func TestExternalDispatch_ResultIsRedactedLikeNative(t *testing.T) {
+	const secret = "sk-test-secret-value-492"
+	t.Cleanup(logger.SetSensitiveValueReplacer(nil)) // RegisterSensitiveValues publishes a process-wide scrubber
+	_, ends := collectExternalToolEvents(t, []runner.RunEvent{
+		{Kind: runner.EventKindToolCall, ToolCall: &runner.ToolCallEvent{CallID: "c1", ToolName: "bash"}},
+		{Kind: runner.EventKindToolResult, ToolResult: &runner.ToolResultEvent{
+			CallID: "c1", ToolName: "bash", Output: []byte(`{"stdout":"key=` + secret + `"}`)}},
+	}, func(al *AgentLoop) {
+		cfg := al.GetConfig()
+		cfg.Tools.FilterSensitiveData = true
+		cfg.RegisterSensitiveValues([]string{secret})
+	})
+	require.Len(t, ends, 1)
+	require.NotContains(t, ends[0].Result, secret, "credential must not reach the live frame")
+	require.Contains(t, ends[0].Result, "[FILTERED]")
 }
