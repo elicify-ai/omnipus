@@ -347,6 +347,11 @@ func Call(ctx context.Context, d Deps, raw []byte) (string, error) {
 		return Render(refusalResponse(req, "arguments as sent: "+string(raw), r)), r
 	}
 	resp, err := Find(ctx, d, req)
+	if err != nil && !IsRefusal(err) {
+		// A stopped query (cancelled or timed out) carries no response: rendering
+		// the zero value would print "0 records matched" beside the error.
+		return "", err
+	}
 	return Render(resp), err
 }
 
