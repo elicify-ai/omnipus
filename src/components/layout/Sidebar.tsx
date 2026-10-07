@@ -33,6 +33,8 @@ import { fetchWorkspaces, createWorkspace, workspacesQueryKeys, fetchSessions, f
 import { logError } from '@/lib/telemetry'
 import type { Workspace, Session } from '@/lib/api'
 import { useSessionStore } from '@/store/session'
+import { useChatStore } from '@/store/chat/store'
+import { getMessages } from '@/store/chat/messages'
 import { useSelectSession } from '@/components/chat/useSelectSession'
 import { SessionTree, SessionExpandToggle, useSessionForest, type SessionTreeFlatRow } from '@/components/sessions/SessionTree'
 import {
@@ -1045,6 +1047,19 @@ function SidebarSessionRow({
   const { node, depth, hasChildren, isExpanded, childrenEmpty } = row
   const session = node.session
   const title = session.title || 'Untitled'
+  // Same live spans and exact running lifecycle as the Agents pill's
+  // useRunningActivity.runningChildren. Read this row's bucket, never the
+  // foreground chat or child_count (which includes finished helpers).
+  const runningHelpers = useChatStore((state) => {
+    if (session.lifecycle_state !== 'stopped') return 0
+    const bucket = state.sessionsById[session.id]
+    if (!bucket) return 0
+    return getMessages(bucket).reduce(
+      (count, message) => count + (message.spans ?? []).filter((span) => span.lifecycleState === 'running').length,
+      0,
+    )
+  })
+  const helpersStillRunning = runningHelpers > 0
   // Base 12px is --space-2-5 (already on the registered token scale). The
   // legacy per-level step was 14px, a 14px-root Tailwind value D10 maps to
   // the nearest closed-scale step, 16px (--space-3) -- see
@@ -1070,6 +1085,7 @@ function SidebarSessionRow({
           aria-current={isActive ? 'page' : undefined}
           className={cn(
             'h-auto flex-1 min-w-0 justify-start gap-[var(--space-1)] py-[var(--space-1)] pl-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-left',
+            helpersStillRunning && 'flex-wrap',
             isActive
               ? 'text-[var(--color-accent)] font-medium hover:bg-transparent hover:text-[var(--color-accent)]'
               : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
@@ -1085,7 +1101,10 @@ function SidebarSessionRow({
           {session.lifecycle_state && LIFECYCLE_LABELS[session.lifecycle_state] && (
             <span
               className={cn(
-                'flex-shrink-0 text-[length:var(--type-caption-size)] leading-none',
+                'flex-shrink-0 text-[length:var(--type-caption-size)]',
+                helpersStillRunning
+                  ? 'order-1 w-full whitespace-normal leading-[var(--type-caption-line-height)]'
+                  : 'leading-none',
                 session.lifecycle_state === 'failed' || session.lifecycle_state === 'stopped'
                   ? 'text-[var(--color-error)]'
                   : session.lifecycle_state === 'waiting_for_answer'
@@ -1100,6 +1119,11 @@ function SidebarSessionRow({
                   vocabulary is the contract, word-separated. */}
               {' '}
               {LIFECYCLE_LABELS[session.lifecycle_state]}
+              {helpersStillRunning && (
+                <span className="text-[var(--color-muted)]">
+                  {' · '}{runningHelpers} {runningHelpers === 1 ? 'helper' : 'helpers'} still running
+                </span>
+              )}
               {session.lifecycle_state === 'stopped' && session.stop_note && (
                 <span className="text-[var(--color-muted)]"> · {session.stop_note.cause}</span>
               )}

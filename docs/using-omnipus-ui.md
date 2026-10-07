@@ -45,7 +45,9 @@ What the sidebar holds:
 
 The magnifier at the top of the sidebar searches all your conversations.
 
-Conversation rows show **Working**, **Waiting for answer**, **Done**, **Failed**, or **Stopped** when the server has a lifecycle record. A stopped row also shows its stop cause. Visible rows and expanded helper lists refresh automatically: activity events prompt a refresh, and a 15-second refresh catches a state saved after the last event. You do not need to reload the page after a reply or Stop. The number beside a parent conversation is its **total direct helpers**, including finished ones; it is not a running-helper count. A parent's label is its own server state, not a guess from its children's labels.
+Conversation rows show **Working**, **Waiting for answer**, **Done**, **Failed**, or **Stopped** when the server has a lifecycle record. A stopped row also shows its stop cause. When the chat's helper activity is loaded in this tab, a stopped parent with running helpers reads **Stopped · 2 helpers still running** (or **Stopped · 1 helper still running**), followed by its stop cause. This count uses the same current helper states as the **Agents** pill, updates as helpers finish, and drops the helper phrase at zero. Queued helpers, helpers waiting for an answer, and background commands do not count as running helpers.
+
+Visible rows and expanded helper lists refresh automatically: activity events prompt a refresh, and a 15-second refresh catches a state saved after the last event. You do not need to reload the page after a reply or Stop. The number beside a parent conversation is its **total direct helpers**, including finished ones; it is separate from the running-helper phrase. A parent's label is still its own server state, not a guess from its children's labels.
 
 If the sidebar shows **Could not load workspaces**, select **Retry** to reload the workspace list and **Archive** when it is expanded. If loading fails again, the message stays so you can retry again. If loading the list pauses because you are offline, the sidebar says **Offline — workspaces will load when you reconnect.** and loads the list once you are back online.
 
@@ -76,7 +78,7 @@ While a turn is running, the message box stays yours:
 | Control | What it does |
 |---|---|
 | **Enter** (with text typed) | Sends your message into the running turn — the agent takes it into account without stopping. A send button with the same effect appears next to Stop. |
-| **Stop** or **Escape** | The first activation asks only this chat's current turn to stop and shows **Stopping...**. A second activation in the same chat within three seconds confirms Stop all, including its helpers. |
+| **Stop** or **Escape** | The first activation asks only this chat's current turn to stop and shows **Stopping...**; its helpers keep running. A second activation in the same chat within three seconds confirms Stop all, including its helpers. |
 | Activity pill | Below the message box: the Agents number counts helpers whose current state is running. Select it to open the Activity panel. **Running now** excludes stopped and finished helpers; queued helpers and helpers waiting for an answer have their own sections. Stopped helpers remain inspectable with **Open**, without a growing elapsed timer or a failed-work label. A resumed helper returns to Running now when its state is running again. |
 
 ### Stop and redirect commands
