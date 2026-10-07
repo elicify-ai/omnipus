@@ -125,15 +125,15 @@ func TestI1R2RecoveryMutateControlLedgerRefusal(t *testing.T) {
 // suppress the good restart stop or another record's actual error.
 func TestI1R1RecoveryJoinsErrorsAndContinues(t *testing.T) {
 	f := newI1R1BootFixture(t)
-	badWrite := f.root(t, session.LifecycleRunning, f.oldEpoch)
+	badPath := f.root(t, session.LifecycleRunning, f.oldEpoch)
 	badLedger := f.root(t, session.LifecycleQueued, f.oldEpoch)
 	good := f.root(t, session.LifecycleRunning, f.oldEpoch)
-	badWriteBefore := f.journal(t, badWrite)
+	badPathBefore := f.journal(t, badPath)
 	r := f.recovery()
 	var restore func()
 	r.Classifier = i1R1FilesystemClassify{base: r.Classifier, after: func(classified string) {
-		if classified == badWrite {
-			restore = i1R2BlockJournalPath(t, filepath.Join(f.ls.Dir(), badWrite+".jsonl"))
+		if classified == badPath {
+			restore = i1R2BlockJournalPath(t, filepath.Join(f.ls.Dir(), badPath+".jsonl"))
 		}
 	}}
 	controls := filepath.Join(f.ls.Dir(), "controls")
@@ -142,14 +142,14 @@ func TestI1R1RecoveryJoinsErrorsAndContinues(t *testing.T) {
 	err := r.Run(context.Background())
 	var pathErr *os.PathError
 	require.ErrorAs(t, err, &pathErr, "the storage-path error must remain in errors.Join")
-	assert.Equal(t, filepath.Join(f.ls.Dir(), badWrite+".jsonl"), pathErr.Path)
+	assert.Equal(t, filepath.Join(f.ls.Dir(), badPath+".jsonl"), pathErr.Path)
 	var syntaxErr *json.SyntaxError
 	require.ErrorAs(t, err, &syntaxErr, "both actual error types must remain in errors.Join")
-	assert.Contains(t, err.Error(), badWrite)
+	assert.Contains(t, err.Error(), badPath)
 	assert.Contains(t, err.Error(), badLedger)
 	require.Len(t, f.notices, 2)
 	joinedNotices := strings.Join(f.notices, "\n")
-	assert.Contains(t, joinedNotices, badWrite)
+	assert.Contains(t, joinedNotices, badPath)
 	assert.Contains(t, joinedNotices, badLedger)
 	recovered, loadErr := f.ls.Load(good)
 	require.NoError(t, loadErr)
@@ -158,8 +158,8 @@ func TestI1R1RecoveryJoinsErrorsAndContinues(t *testing.T) {
 	assert.Equal(t, session.StopCauseRestart, recovered.StopNote.Cause)
 	require.NotNil(t, restore, "bad storage path must have been installed after actual classification")
 	restore()
-	assert.Equal(t, badWriteBefore, f.journal(t, badWrite), "failed storage path must retain its exact old journal")
-	for _, id := range []string{badWrite, badLedger, good} {
+	assert.Equal(t, badPathBefore, f.journal(t, badPath), "failed storage path must retain its exact old journal")
+	for _, id := range []string{badPath, badLedger, good} {
 		f.display(t, id, generated.SessionLifecycleStateInterrupted)
 	}
 }

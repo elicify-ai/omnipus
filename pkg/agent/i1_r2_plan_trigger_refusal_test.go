@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// SHOULD: a normal standing schedule continues after restart, but a task/plan
-// owner cannot use that exception to bypass its plan/task control path.
+// SHOULD / already-passing control: a normal standing schedule continues after
+// restart, but a task/plan owner cannot bypass its plan/task control path.
 func TestI1R2TaskPlanTriggerRefusal(t *testing.T) {
 	for _, kind := range []string{"task", "plan_nil_origin", "plan_chat_origin", "plan_scope"} {
 		for _, trigger := range []string{"heartbeat", "scheduled"} {

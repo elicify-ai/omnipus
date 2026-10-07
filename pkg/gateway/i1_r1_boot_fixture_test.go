@@ -87,6 +87,21 @@ func (f *i1R1BootFixture) display(t *testing.T, id string, want generated.Sessio
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &detail))
 	require.NotNil(t, detail.Session.LifecycleState)
 	assert.Equal(t, string(want), string(*detail.Session.LifecycleState), "chat detail and sidebar must agree")
+	w = httptest.NewRecorder()
+	f.api.HandleAgents(w, httptest.NewRequest(http.MethodGet, "/api/v1/agents/mia/sessions", nil))
+	require.Equal(t, http.StatusOK, w.Code, "agent-session producer must load the same saved chat")
+	var agentSessions []generated.Session
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &agentSessions))
+	found = false
+	for _, s := range agentSessions {
+		if s.Id != id {
+			continue
+		}
+		found = true
+		require.NotNil(t, s.LifecycleState)
+		assert.Equal(t, want, *s.LifecycleState, "agent-session list must pass the current boot epoch too")
+	}
+	require.True(t, found, "agent-session list must include this actual saved row")
 }
 
 // The unit remains real; this adapter changes only the external filesystem

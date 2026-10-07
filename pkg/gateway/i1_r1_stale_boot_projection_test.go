@@ -13,7 +13,7 @@ import (
 // Oracle: MUST 2. Old queued/running execution is not live after process death,
 // even when boot recovery never reaches it. The fallback is read-only.
 func TestI1R1StaleBootProjection(t *testing.T) {
-	for _, name := range []string{"prior_running", "prior_queued", "run_early_return", "current_boot_control", "future_boot_control", "idle_control", "completed_control"} {
+	for _, name := range []string{"prior_running", "prior_queued", "run_early_return", "current_boot_control", "future_boot_control", "idle_control", "completed_control", "steered_helper_control"} {
 		t.Run(name, func(t *testing.T) {
 			f := newI1R1BootFixture(t)
 			state, epoch := session.LifecycleRunning, f.oldEpoch
@@ -29,10 +29,19 @@ func TestI1R1StaleBootProjection(t *testing.T) {
 				want = generated.SessionLifecycleStateWorking
 			case "completed_control":
 				state, want = session.LifecycleCompleted, generated.SessionLifecycleStateDone
+			case "steered_helper_control":
+				want = generated.SessionLifecycleStateWorking
 			}
 			id := f.root(t, state, epoch)
 			if name == "idle_control" {
 				require.NoError(t, f.ls.Mutate(id, func(rec *session.LifecycleRecord) error { rec.ExecutionID = nil; return nil }))
+			}
+			if name == "steered_helper_control" {
+				require.NoError(t, f.ls.Mutate(id, func(rec *session.LifecycleRecord) error {
+					rec.SteeredBy = &session.SteeredBy{SteeringSessionID: "i1-parent", RootSessionID: "i1-parent"}
+					rec.OwnerScopeKind, rec.OwnerScopeID = session.OwnerScopeParentSession, "i1-parent"
+					return nil
+				}))
 			}
 			before := f.journal(t, id)
 			if name == "run_early_return" {
