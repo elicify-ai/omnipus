@@ -422,42 +422,6 @@ These are **future implementing targets**, not changed files in this ADR. E-key 
 
 **Only Q-FE-11/Q-FE-12 remain open**, from the newly handed-over activity scope. Earlier Q-FE-1–Q-FE-10 are answered by F and the confirmed session-core decisions and are removed, not re-interviewed. Recommendations below are not decisions; answer “Q-FE-11 A, Q-FE-12 A”. Backend serialization/publication dependencies remain in D5, without a duplicate founder choice here.
 
-### Q-FE-6 — What exact nearest-color migration should run once? (A / B / C)
-
-The founder has decided automatic migration to R16’s palette. The prototype matches hue and maps low-saturation colors to Grey, but its thresholds and tie behavior are not themselves confirmed requirements. Different algorithms can noticeably change an existing identity (R16; S1::§5 question 13; S2::toPalette).
-
-| Option | One-time mapping |
-|---|---|
-| A | Ratify the prototype’s hue-distance/low-saturation-Grey rule, with deterministic cutoff/ties documented and fixture examples approved. |
-| B | Use a perceptual color-distance rule, with the metric and examples approved before implementation. |
-| C | Founder supplies explicit mappings for legacy colors; unlisted colors await a decision rather than being silently remapped. |
-
-**Recommendation: A.** It matches the reference’s intended migration without a new color-classification system. Persist once through backend-owned configuration; no render-time rewrite or permanently parallel palette.
-
-### Q-FE-7 — What does the permanent status line say outside its three example states? (A / B / C)
-
-R24 names thinking, working and waiting, but requires visibility in every state. Today’s session lifecycle has stopped/interrupted/done and can be absent; it does not distinguish thinking from tool work by itself. An agent-global active flag would mislabel another open chat (R24; E5/E8/E10).
-
-| Option | State/copy policy |
-|---|---|
-| A | Use truthful existing session/execution/user-action data; add neutral ready/stopped/interrupted/loading/unavailable phrases, and use thinking/working only when the available data supports the distinction. |
-| B | Use a smaller session-state vocabulary without the thinking-versus-working distinction; amend R24’s examples accordingly. |
-| C | Founder supplies the full phrase/state table and any missing backend exposure before the dependent status-line behavior is specified. |
-
-**Recommendation: A**, with the phrase table confirmed in the founder interview. Preserve existing connection/error and thinking-indicator surfaces; do not create a new backend activity-state machine solely for this text.
-
-### Q-FE-8 — What is the safe first-squad command/mention cutover? (A / B / C)
-
-The brief places `/new` removal in both the first sidebar scope and the later command scope. Today `/agents` opens the soon-removed picker and `@` switches the speaker; leaving either alive contradicts pinned chats. Full group messaging is expressly later (R20/R22/R23; E4; B::D8).
-
-| Option | Cutover |
-|---|---|
-| A | First squad includes minimum cleanup: remove `/new`, generic extra-chat bypasses and dead picker/switch openers; withdraw switching `@` suggestions until group messaging is ready. Rename `/resume` to `/sessions` with this same cutover so Past sessions and help use one name. Group-reply UI and `/clear` remain later. |
-| B | Include the complete `@` messaging UI/backend and command changes with this first joint delivery; explicitly expand the first squad. |
-| C | Keep UI preparation on the branch but hold navigation/picker removal landing until the later messaging/command unit is ready; no interim old switching behavior ships with the new navigation. |
-
-**Recommendation: A**, as a narrow, explicit prerequisite exception to the “later” list. Backend registry/help and frontend interception must agree. Preserve the existing unsent/delivery-loss protection on + New chat; deleting a command must not delete that safeguard.
-
 ### Q-FE-9 — What saved-session preservation boundary does the joint cutover guarantee? (A / B / C)
 
 The frontend commission requires existing sessions to remain reachable. B removes old storage/conversion/compatibility paths and hides removed-member main sessions. The UI cannot recover records that the server no longer returns or authorize opening a deliberately hidden main. This is a real joint acceptance decision, not a frontend migration algorithm (R21/R22; B::D1 and Code and compatibility paths to DELETE).
