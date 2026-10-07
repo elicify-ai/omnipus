@@ -563,7 +563,8 @@ func drainExternalRun(
 				}
 			case runner.EventKindToolCall:
 				if ev.ToolCall != nil {
-					recordExternalToolCall(childTS, ev.ToolCall)
+					id := recordExternalToolCall(childTS, ev.ToolCall)
+					emitExternalToolCallStart(al, childTS, id, ev.ToolCall)
 				}
 			case runner.EventKindDiff:
 				if ev.Diff != nil {
@@ -581,6 +582,7 @@ func drainExternalRun(
 				// transcript so the run shows the tool's outcome.
 				if ev.ToolResult != nil {
 					recordExternalToolResult(childTS, ev.ToolResult)
+					emitExternalToolCallEnd(al, childTS, ev.ToolResult)
 				}
 			case runner.EventKindEnd:
 				ended = true
@@ -657,19 +659,15 @@ done:
 }
 
 // recordExternalToolCall mirrors an external runner tool-call event into the
-// sub-agent session transcript as a tool_call entry.
-func recordExternalToolCall(childTS *turnState, tc *runner.ToolCallEvent) {
+// sub-agent session transcript as a tool_call entry. It returns the call id
+// the entry was recorded under (the runner's own, or a generated one) so the
+// live tool_call_start event carries the SAME id.
+func recordExternalToolCall(childTS *turnState, tc *runner.ToolCallEvent) string {
 	id := tc.CallID
 	if id == "" {
 		id = fmt.Sprintf("ext-tool-%d", time.Now().UnixNano())
 	}
-	var args map[string]any
-	if len(tc.ToolInput) > 0 {
-		if uErr := json.Unmarshal(tc.ToolInput, &args); uErr != nil {
-			slog.Debug("external-cli dispatch: tool-call input is not a JSON object",
-				"tool", tc.ToolName, "call_id", id, "err", uErr)
-		}
-	}
+	args := parseExternalToolInput(tc, id)
 	// The external CLI emits the tool-call event when the call STARTS; Omnipus
 	// consent is post-hoc and we never observe the call's own success/failure from
 	// the stream. Recording "success" would assert an outcome we did not verify.
@@ -681,6 +679,73 @@ func recordExternalToolCall(childTS *turnState, tc *runner.ToolCallEvent) {
 		Status:     "completed",
 		Parameters: args,
 	})
+	return id
+}
+
+// parseExternalToolInput decodes a runner tool-call's raw JSON input into an
+// argument map; a non-object input yields nil (logged at debug).
+func parseExternalToolInput(tc *runner.ToolCallEvent, id string) map[string]any {
+	var args map[string]any
+	if len(tc.ToolInput) > 0 {
+		if uErr := json.Unmarshal(tc.ToolInput, &args); uErr != nil {
+			slog.Debug("external-cli dispatch: tool-call input is not a JSON object",
+				"tool", tc.ToolName, "call_id", id, "err", uErr)
+		}
+	}
+	return args
+}
+
+// emitExternalToolCallStart broadcasts the live tool_call_start for an
+// external-CLI child's tool call (#492), tied to the parent spawn call exactly
+// as the native path does (ParentSpawnCallID), so the SPA's existing
+// SubagentSpan.steps machinery renders it. It only adds a live broadcast
+// alongside the transcript write in recordExternalToolCall; storage is
+// unchanged.
+func emitExternalToolCallStart(al *AgentLoop, childTS *turnState, callID string, tc *runner.ToolCallEvent) {
+	if al == nil || childTS == nil {
+		return
+	}
+	al.emitEvent(
+		EventKindToolExecStart,
+		childTS.eventMeta("drainExternalRun", "turn.tool.start"),
+		ToolExecStartPayload{
+			ToolCallID:        session.ToolCallID(callID),
+			ChatID:            childTS.chatID,
+			SessionID:         u9ToolExecSessionIDs(childTS),
+			Tool:              tc.ToolName,
+			Arguments:         cloneEventArguments(parseExternalToolInput(tc, callID)),
+			ParentSpawnCallID: session.ToolCallID(childTS.parentSpawnCallID),
+			AgentID:           childTS.resolveActiveAgentID(),
+		},
+	)
+}
+
+// emitExternalToolCallEnd broadcasts the live tool_call_result for an
+// external-CLI child's tool result (#492); the counterpart of
+// emitExternalToolCallStart, paired by the runner's CallID.
+func emitExternalToolCallEnd(al *AgentLoop, childTS *turnState, tr *runner.ToolResultEvent) {
+	if al == nil || childTS == nil {
+		return
+	}
+	id := tr.CallID
+	if id == "" {
+		id = fmt.Sprintf("ext-tool-result-%d", time.Now().UnixNano())
+	}
+	al.emitEvent(
+		EventKindToolExecEnd,
+		childTS.eventMeta("drainExternalRun", "turn.tool.end"),
+		ToolExecEndPayload{
+			ToolCallID:        session.ToolCallID(id),
+			ChatID:            childTS.chatID,
+			SessionID:         u9ToolExecSessionIDs(childTS),
+			Tool:              tr.ToolName,
+			ForLLMLen:         len(tr.Output),
+			IsError:           tr.IsError,
+			Result:            string(tr.Output),
+			ParentSpawnCallID: session.ToolCallID(childTS.parentSpawnCallID),
+			AgentID:           childTS.resolveActiveAgentID(),
+		},
+	)
 }
 
 // recordExternalPermission records a permission-request as a transcript line so the
