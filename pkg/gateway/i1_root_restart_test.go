@@ -15,6 +15,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,6 +23,7 @@ import (
 // not-wire-format: subprocess fixture receipt, never sent through the gateway.
 type i1CrashReceipt struct {
 	Config                                    *config.Config
+	Agents                                    []config.AgentConfig // Config omits its separately persisted agent list from JSON.
 	Root, LifecycleDir, InboxDir, SessionsDir string
 }
 
@@ -37,7 +39,13 @@ func TestI1RootRestart(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, session.LifecycleRunning, rec.State)
 		require.NotNil(t, rec.ExecutionID, "instrument: genuine admission must be durable before SIGKILL")
-		raw, err := json.Marshal(i1CrashReceipt{f.al.GetConfig(), id, f.lifecycle.Dir(), inboxDir, f.al.GetSessionStore().BaseDir()})
+		// Operator-configured second agent and trust edge survive the same
+		// process receipt as the existing profile; delegation is not self-target.
+		cfg := f.al.GetConfig()
+		cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{ID: "i1-helper", Home: cfg.Agents.Defaults.Home})
+		ensureTestWorkspaceMembership(t, cfg)
+		require.NoError(t, workspace.SaveDelegation(cfg.Agents.Defaults.Home, rec.WorkspaceID, []workspace.DelegationEdge{{FromAgent: rec.AgentID, ToAgent: "i1-helper", Modes: []workspace.DelegationMode{workspace.ModeDirect}}}))
+		raw, err := json.Marshal(i1CrashReceipt{Config: f.al.GetConfig(), Agents: f.al.GetConfig().Agents.List, Root: id, LifecycleDir: f.lifecycle.Dir(), InboxDir: inboxDir, SessionsDir: f.al.GetSessionStore().BaseDir()})
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(receiptPath+".tmp", raw, 0600))
 		require.NoError(t, os.Rename(receiptPath+".tmp", receiptPath))
@@ -157,6 +165,7 @@ func i1KillAdmittedRoot(t *testing.T) i1CrashReceipt {
 	require.Error(t, waitErr, "instrument: the child must be killed before it finishes the turn")
 	var m i1CrashReceipt
 	require.NoError(t, json.Unmarshal(raw, &m))
+	m.Config.Agents.List = m.Agents
 	return m
 }
 

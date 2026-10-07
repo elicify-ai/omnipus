@@ -65,7 +65,7 @@ func i1ContinueHumanAndDelegate(t *testing.T, al *agent.AgentLoop, stg *setupAnd
 	require.True(t, ok)
 	toolCtx := tools.WithTranscriptSessionID(tools.WithAgentID(tools.WithWorkspaceID(ctx, crashed.WorkspaceID), crashed.AgentID), root)
 	toolCtx = tools.WithToolCallID(toolCtx, "i1-real-delegate")
-	result := dt.Execute(toolCtx, map[string]any{"action": "run", "agent_id": crashed.AgentID, "task": "Check the resumed conversation's helper work", "label": "I1 helper"})
+	result := dt.Execute(toolCtx, map[string]any{"action": "run", "agent_id": "i1-helper", "task": "Check the resumed conversation's helper work", "label": "I1 helper"})
 	require.NotNil(t, result)
 	require.False(t, result.IsError, "I1: registered delegation after restart refused: %s", result.ForLLM)
 	select {

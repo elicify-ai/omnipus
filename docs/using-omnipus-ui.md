@@ -45,7 +45,7 @@ What the sidebar holds:
 
 The magnifier at the top of the sidebar searches all your conversations.
 
-Conversation rows show **Working**, **Waiting for answer**, **Done**, **Failed**, or **Stopped** when the server has a lifecycle record. A stopped row also shows its stop cause. Visible rows and expanded helper lists refresh automatically: activity events prompt a refresh, and a 15-second refresh catches a state saved after the last event. You do not need to reload the page after a reply or Stop. The number beside a parent conversation is its **total direct helpers**, including finished ones; it is not a running-helper count. A parent's label is its own server state, not a guess from its children's labels.
+Conversation rows show **Working**, **Waiting for answer**, **Done**, **Failed**, **Interrupted**, or **Stopped** when the server has a lifecycle record. **Interrupted** means a gateway restart cut off that main conversation's work; it does not mean the conversation failed. A human Stop still shows **Stopped**, and an actual failure still shows **Failed**. A stopped row also shows its stop cause. Visible rows and expanded helper lists refresh automatically: activity events prompt a refresh, and a 15-second refresh catches a state saved after the last event. You do not need to reload the page after a reply or Stop. The number beside a parent conversation is its **total direct helpers**, including finished ones; it is not a running-helper count. A parent's label is its own server state, not a guess from its children's labels.
 
 If the sidebar shows **Could not load workspaces**, select **Retry** to reload the workspace list and **Archive** when it is expanded. If loading fails again, the message stays so you can retry again. If loading the list pauses because you are offline, the sidebar says **Offline — workspaces will load when you reconnect.** and loads the list once you are back online.
 
@@ -78,6 +78,12 @@ While a turn is running, the message box stays yours:
 | **Enter** (with text typed) | Sends your message into the running turn — the agent takes it into account without stopping. A send button with the same effect appears next to Stop. |
 | **Stop** or **Escape** | The first activation asks only this chat's current turn to stop and shows **Stopping...**. A second activation in the same chat within three seconds confirms Stop all, including its helpers. |
 | Activity pill | Below the message box: the Agents number counts helpers whose current state is running. Select it to open the Activity panel. **Running now** excludes stopped and finished helpers; queued helpers and helpers waiting for an answer have their own sections. Stopped helpers remain inspectable with **Open**, without a growing elapsed timer or a failed-work label. A resumed helper returns to Running now when its state is running again. |
+
+### If the gateway restarts during a reply
+
+A gateway restart ends an in-flight answer; losing only your browser connection does not. After restart recovery, the main conversation shows **Interrupted**, rather than staying **Working** forever. Its saved messages stay in the same chat, and its goal is not cleared. Work cut off in a helper session stays resumably **Stopped**.
+
+Omnipus does not automatically rerun the interrupted instruction. Send a new message to continue the same conversation and round of work with a fresh execution; the agent can delegate again. If the chat offers **Generate again** for an unanswered message, that is also an explicit new answer request, not an automatic replay, and it may repeat earlier work or tool actions. Another restart does not add another interruption to an already-stopped execution. Idle conversations and completed answers keep their previous state.
 
 ### Stop and redirect commands
 
