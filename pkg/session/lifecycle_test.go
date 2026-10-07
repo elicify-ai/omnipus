@@ -397,6 +397,35 @@ func TestLifecycleStateToDisplay_MirrorsWireEnum(t *testing.T) {
 	}
 }
 
+// TestLifecycleRecordToDisplay_InterruptedVersusFailed pins the sixth wire
+// value (founder ruling 2026-10-06): a failed record whose failed_reason is
+// "interrupted" (the boot sweep's) displays as interrupted; any other failed
+// record still displays as failed; non-failed records are unaffected by a
+// stray FailedReason.
+func TestLifecycleRecordToDisplay_InterruptedVersusFailed(t *testing.T) {
+	specs := []struct {
+		name string
+		rec  LifecycleRecord
+		wire generated.SessionLifecycleState
+	}{
+		{"failed_interrupted", LifecycleRecord{State: LifecycleFailed, FailedReason: "interrupted"}, generated.SessionLifecycleStateInterrupted},
+		{"failed_other_reason", LifecycleRecord{State: LifecycleFailed, FailedReason: "judge_rounds_exhausted"}, generated.SessionLifecycleStateFailed},
+		{"stopped_ignores_reason", LifecycleRecord{State: LifecycleStopped, FailedReason: "interrupted"}, generated.SessionLifecycleStateStopped},
+		{"completed", LifecycleRecord{State: LifecycleCompleted}, generated.SessionLifecycleStateDone},
+	}
+	for _, s := range specs {
+		t.Run(s.name, func(t *testing.T) {
+			got := LifecycleRecordToDisplay(&s.rec)
+			if string(got) != string(s.wire) {
+				t.Errorf("LifecycleRecordToDisplay = %q, want %q", got, s.wire)
+			}
+			if !s.wire.Valid() {
+				t.Errorf("wire value %q is not a valid generated SessionLifecycleState member", s.wire)
+			}
+		})
+	}
+}
+
 // --- Mutate primitive (Correctness-MAJOR-3) ---
 
 // TestLifecycleStore_Mutate_NotFoundFnReceivesNil proves fn receives nil when

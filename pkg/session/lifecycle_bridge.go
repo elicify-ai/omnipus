@@ -57,8 +57,8 @@ func lifecycleMutatorIsNil(ls LifecycleMutator) bool {
 // `stopped` (and waiting/working) stay coarse-active, so it joins
 // queued/running/needs_input in the no-mirror bucket below — exact helper
 // display now lives on Session.lifecycle_state (SessionLifecycleState), not
-// on this coarse status. StatusInterrupted is retired from the wire enum and
-// is never returned here.
+// on this coarse status. StatusInterrupted is never returned here: only the
+// boot sweep writes it (pkg/agent/boot_sweep.go::reconcileUnifiedMetaStatus).
 //
 //   - LifecycleCompleted → StatusArchived
 //   - LifecycleFailed    → StatusFailed
@@ -77,7 +77,7 @@ func lifecycleToUnifiedStatus(to LifecycleState) (SessionStatus, bool) {
 // LifecycleDisplayState is the domain mirror of the wire
 // Session.yaml::lifecycle_state enum (SessionLifecycleState in
 // pkg/api/generated) — the "exact helper-state display" referenced by
-// lifecycleToUnifiedStatus's own doc comment above. Its five string values
+// lifecycleToUnifiedStatus's own doc comment above. Its six string values
 // are chosen to equal the generated wire enum's values byte-for-byte, so a
 // plain string cast (gen.SessionLifecycleState(string(d))) at the REST
 // boundary is always schema-valid — the same mirroring contract
@@ -91,10 +91,39 @@ const (
 	LifecycleDisplayDone             LifecycleDisplayState = "done"
 	LifecycleDisplayFailed           LifecycleDisplayState = "failed"
 	LifecycleDisplayStopped          LifecycleDisplayState = "stopped"
+	// LifecycleDisplayInterrupted is a session a gateway restart cut off
+	// (founder ruling 2026-10-06: a session does not fail because of a
+	// restart). It is not a 7th LifecycleState: it is the display of a
+	// `failed` record whose FailedReason is FailedReasonInterrupted.
+	LifecycleDisplayInterrupted LifecycleDisplayState = "interrupted"
 )
 
+// FailedReasonInterrupted is the LifecycleRecord.FailedReason the boot sweep
+// writes for a session a restart cut off (failed(interrupted), FR-118).
+const FailedReasonInterrupted = "interrupted"
+
+// LifecycleRecordIsRestartInterrupted reports whether rec is a session a
+// gateway restart cut off: a failed record whose FailedReason is
+// FailedReasonInterrupted. The one predicate every reader that must not call
+// such a session "failed" uses.
+func LifecycleRecordIsRestartInterrupted(rec *LifecycleRecord) bool {
+	return rec.State == LifecycleFailed && rec.FailedReason == FailedReasonInterrupted
+}
+
+// LifecycleRecordToDisplay is the display for a whole record: a failed record
+// whose FailedReason is FailedReasonInterrupted shows as interrupted; every
+// other record shows as LifecycleStateToDisplay(rec.State), so a genuinely
+// failed record still shows as failed. Callers that hold the record must use
+// this, not LifecycleStateToDisplay alone.
+func LifecycleRecordToDisplay(rec *LifecycleRecord) LifecycleDisplayState {
+	if LifecycleRecordIsRestartInterrupted(rec) {
+		return LifecycleDisplayInterrupted
+	}
+	return LifecycleStateToDisplay(rec.State)
+}
+
 // LifecycleStateToDisplay is the CANONICAL mapping from a LifecycleRecord's
-// 6-value LifecycleState to the 5-value Session.yaml::lifecycle_state
+// 6-value LifecycleState to the Session.yaml::lifecycle_state
 // display enum — no other site may hand-roll this collapse (same "single
 // authority" rule as lifecycleToUnifiedStatus above). Per Session.yaml's own
 // field doc: `queued`/`running` both collapse to `working`, `needs_input`

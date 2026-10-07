@@ -1229,13 +1229,14 @@ func (pe *PlanEngine) reconcileUnifiedMetaStatus(rec *session.LifecycleRecord) {
 	if sessStore == nil {
 		return
 	}
-	// Sub-agent control plane ADR D4/MAJ-009: this function is only ever
-	// called on a record just swept to LifecycleFailed
-	// (sweepToFailedInterrupted, above), so the coarse mirror is the
-	// genuinely-failed case — StatusFailed, never the retired
-	// StatusInterrupted.
-	failed := session.StatusFailed
-	setErr := sessStore.SetMeta(rec.SessionID, session.MetaPatch{Status: &failed})
+	// Founder rule (2026-10-06): a session does not fail because of a
+	// restart. This function is only ever called on a record just swept by
+	// sweepToFailedInterrupted (above), whose cause is the restart itself, so
+	// the coarse chat-transcript status is StatusInterrupted — never
+	// StatusFailed, which is reserved for a genuinely landed lifecycle
+	// `failed` (session.lifecycleToUnifiedStatus).
+	interrupted := session.StatusInterrupted
+	setErr := sessStore.SetMeta(rec.SessionID, session.MetaPatch{Status: &interrupted})
 	if setErr == nil {
 		return
 	}

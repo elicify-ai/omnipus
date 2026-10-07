@@ -1116,6 +1116,14 @@ func (ix *Index) streamCandidates(ctx context.Context, q string, args []any, vis
 	}
 
 	for rows.Next() {
+		// database/sql closes the result set on cancellation from a watcher
+		// goroutine, so rows.Next() can keep returning rows — and the stream can
+		// run to its end and report success — for as long as that goroutine has
+		// not been scheduled. The stream therefore observes the cancellation
+		// itself, synchronously, once per row.
+		if cerr := ctx.Err(); cerr != nil {
+			return fmt.Errorf("propindex: the candidate stream was cancelled: %w", cerr)
+		}
 		var (
 			id                              int64
 			path, recordType, sourceHash    string

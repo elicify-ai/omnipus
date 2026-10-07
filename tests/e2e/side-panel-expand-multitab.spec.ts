@@ -119,7 +119,12 @@ async function openNativeDock(page: Page, panel: 'tasks' | 'calendar' | 'team') 
 async function assertSameNativeChat(page: Page, baseline: Awaited<ReturnType<typeof openNativeDock>>, panel?: string, expectedTabs = baseline.tabs) {
   const hash = new URL(page.url()).hash
   expect(hash.split('?')[0], 'the original workspace Chat route stays under the dock').toBe(baseline.path)
-  expect(new URLSearchParams(hash.split('?')[1]).get('panel')).toBe(panel ?? null)
+  // usePanelDeepLink rewrites ?panel= one effect after the dock leaves the DOM (navigate replace),
+  // so a one-shot read can see the stale value; poll the live URL with the default timeout.
+  await expect.poll(
+    () => new URLSearchParams(new URL(page.url()).hash.split('?')[1]).get('panel'),
+    'the ?panel= deep-link param settles to the expected panel',
+  ).toBe(panel ?? null)
   expect(page.context().pages().length, 'only an explicit Expand may add its ONE child tab (PE1)').toBe(expectedTabs)
   expect(await baseline.chat.evaluate((el) => el.isConnected && el === document.querySelector('[data-testid="chat-column"]')),
     'opening/resizing/closing must preserve the actual chat node').toBe(true)
@@ -238,9 +243,13 @@ test.describe('native docking regression', () => {
         'FR-009: retained child content survives reuse; no blanking/re-navigation').toBe(true)
       await expect(marker).toBeVisible()
 
-      const closed = child.waitForEvent('close')
-      await child.getByRole('button', { name: /back to chat/i }).click()
-      await closed
+      // The click's own effect is window.close() on this page, so Playwright can
+      // reject the click with TargetClosedError. Tolerate that ONLY if the page
+      // really closed; the close event is still awaited and asserted.
+      await Promise.all([
+        child.waitForEvent('close'),
+        child.getByRole('button', { name: /back to chat/i }).click().catch((e: unknown) => { if (!child.isClosed()) throw e }),
+      ])
       await expect(page.getByTestId('side-panel'), 'FR-018: child Back re-docks ONLY in its source').toBeVisible()
       await assertSameNativeChat(page, baseline, panel)
       const restored = panel === 'tasks' ? page.getByTestId('tasks-heading')
@@ -264,9 +273,11 @@ test.describe('native docking regression', () => {
       expect(query.get('popout')).toMatch(/^[A-Za-z0-9-]+$/)
       query.delete('popout') // a MANUAL tab has no opener-owned lifecycle tag
       generated.hash = `${generated.hash.split('?')[0]}?${query.toString()}`
-      const closed = ownedChild.waitForEvent('close')
-      await ownedChild.getByRole('button', { name: /back to chat/i }).click()
-      await closed
+      // Click closes its own page (window.close); tolerate the click error only if the page really closed.
+      await Promise.all([
+        ownedChild.waitForEvent('close'),
+        ownedChild.getByRole('button', { name: /back to chat/i }).click().catch((e: unknown) => { if (!ownedChild.isClosed()) throw e }),
+      ])
       await expect(page.getByTestId('side-panel')).toBeVisible()
       await assertNativeHeaderHit(page, 'panel-close')
       await page.getByTestId('panel-close').click()

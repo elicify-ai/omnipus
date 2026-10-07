@@ -138,6 +138,20 @@ type openAssistant struct {
 // hand-offs) are ignored at this layer — they are reconstructed by the agent
 // loop's own subturn machinery on demand.
 func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
+	return al.hydrateAgentHistory(sessionID, "")
+}
+
+// hydrateAgentHistory is HydrateAgentHistoryFromTranscript with one addition:
+// currentEntryID, when non-empty, is the id of the transcript entry the
+// inbound path durably wrote for the turn that is about to run. The turn
+// appends its own user message to the model request, so a rebuild that kept
+// that entry would send the model the same message twice. The entry is found
+// by identity — never by text, so a repeated "yes" or an unanswered earlier
+// message with the same words is kept. The rebuild leaves out that entry and
+// every user entry after it: those were written for later queued messages
+// whose turns have not started and must not reach the model early. An empty id (write failed, the
+// message was never transcribed) drops nothing.
+func (al *AgentLoop) hydrateAgentHistory(sessionID, currentEntryID string) error {
 	if sessionID == "" {
 		return fmt.Errorf("agent: HydrateAgentHistoryFromTranscript: sessionID required")
 	}
@@ -149,6 +163,7 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 	if err != nil {
 		return fmt.Errorf("agent: HydrateAgentHistoryFromTranscript: read transcript: %w", err)
 	}
+	entries = cutAtCurrentEntry(entries, currentEntryID, sessionID)
 	if len(entries) == 0 {
 		return nil
 	}
@@ -324,6 +339,36 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 		al.hydrateOneAgent(ag, agentID, sessionID, key, msgs)
 	}
 	return nil
+}
+
+// cutAtCurrentEntry removes the current turn's own user entry (the one whose
+// id is currentEntryID) and every user entry written after it — those are
+// later queued messages whose turns have not started. Non-user entries after
+// it are kept: an earlier message's assistant reply can land after a queued
+// later user entry (A, B, reply-to-A) and must survive. An empty id returns
+// entries untouched. An id the transcript does not hold also returns entries
+// untouched, with a WARN — the inbound path claimed a durable write the
+// transcript cannot show.
+func cutAtCurrentEntry(entries []session.TranscriptEntry, currentEntryID, sessionID string) []session.TranscriptEntry {
+	if currentEntryID == "" {
+		return entries
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].ID != currentEntryID {
+			continue
+		}
+		out := make([]session.TranscriptEntry, 0, len(entries)-1)
+		out = append(out, entries[:i]...)
+		for j := i + 1; j < len(entries); j++ {
+			if transcriptModelHistoryRole(&entries[j]) != "user" {
+				out = append(out, entries[j])
+			}
+		}
+		return out
+	}
+	logger.WarnCF("agent.attach", "current user entry not found in transcript; rebuilding without dropping it",
+		map[string]any{"session_id": sessionID, "entry_id": currentEntryID})
+	return entries
 }
 
 // hydrateOneAgent runs the FR-045/FR-048 check-write-verify-mark sequence for

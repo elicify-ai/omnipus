@@ -692,8 +692,14 @@ func TestListJobs_ActionableTracksProcessLifetimeAndTerminality(t *testing.T) {
 			ParentAgentID: "mia", State: session.LifecycleRunning},
 		{SessionID: "ses-orphan", WorkspaceID: "ws1", AgentID: "ray",
 			ParentAgentID: "mia", State: session.LifecycleRunning},
+		// Oracle change (founder rule 2026-10-06): failed(interrupted) is no
+		// longer a terminal failed row (it is a resumable, actionable blocked
+		// row — see ses-restart). This fixture exists to be TERMINAL, so it is
+		// a genuine failure.
 		{SessionID: "ses-dead", WorkspaceID: "ws1", AgentID: "ray",
-			ParentAgentID: "mia", State: session.LifecycleFailed, FailedReason: "interrupted"},
+			ParentAgentID: "mia", State: session.LifecycleFailed, FailedReason: "judge_rounds_exhausted"},
+		{SessionID: "ses-restart", WorkspaceID: "ws1", AgentID: "ray",
+			ParentAgentID: "mia", State: session.LifecycleFailed, FailedReason: session.FailedReasonInterrupted},
 	}}
 	plans := &fakeJobPlanStore{plans: []plan.Plan{
 		{ID: "pln-done", WorkspaceID: "ws1", Title: "Finished", OwnerAgentID: "mia", State: plan.StateDone},
@@ -716,8 +722,11 @@ func TestListJobs_ActionableTracksProcessLifetimeAndTerminality(t *testing.T) {
 		"ses-live":   true,  // live: non-terminal
 		"ses-orphan": true,  // durable record survived a restart; non-terminal
 		"ses-dead":   false, // terminal
-		"pln-live":   true,
-		"pln-done":   false, // terminal: execute_plan will not run a done plan
+		// A restart-cut session is resumable (follow_up / resume revive it):
+		// non-terminal, so actionable.
+		"ses-restart": true,
+		"pln-live":    true,
+		"pln-done":    false, // terminal: execute_plan will not run a done plan
 	}
 	for _, row := range roster.Rows {
 		expected, known := want[row.ID]
@@ -791,16 +800,22 @@ func TestListJobs_EmptyRosterIsNominalAndNotAnError(t *testing.T) {
 
 // TestListJobs_TerminalSuppressionIsCountedNotSilent is the post-restart case.
 //
-// After a boot sweep reconciles every one of a caller's sessions to
-// failed(interrupted), a default call returns zero rows. Without the count,
-// that response is BYTE-IDENTICAL to a caller who never had any background
-// work — and the agent concludes its work never existed.
+// When every one of a caller's sessions is terminal, a default call returns
+// zero rows. Without the count, that response is BYTE-IDENTICAL to a caller
+// who never had any background work — and the agent concludes its work never
+// existed.
+//
+// Oracle change (founder rule 2026-10-06): the fixtures were failed(interrupted)
+// as the post-restart case. A restart-cut session is no longer a terminal
+// failed row (it is a visible, resumable blocked row — covered by
+// TestNormalizeSubagent_RestartInterruptedIsNotFailed), so the terminal
+// fixtures here are genuine failures; what this test pins is unchanged.
 func TestListJobs_TerminalSuppressionIsCountedNotSilent(t *testing.T) {
 	lifecycles := &fakeJobLifecycleStore{records: []session.LifecycleRecord{
 		{SessionID: "ses-1", WorkspaceID: "ws1", AgentID: "ray", ParentAgentID: "mia",
-			State: session.LifecycleFailed, FailedReason: "interrupted"},
+			State: session.LifecycleFailed, FailedReason: "judge_rounds_exhausted"},
 		{SessionID: "ses-2", WorkspaceID: "ws1", AgentID: "ray", ParentAgentID: "mia",
-			State: session.LifecycleFailed, FailedReason: "interrupted"},
+			State: session.LifecycleFailed, FailedReason: "judge_rounds_exhausted"},
 		{SessionID: "ses-3", WorkspaceID: "ws1", AgentID: "ray", ParentAgentID: "mia",
 			State: session.LifecycleCompleted},
 	}}

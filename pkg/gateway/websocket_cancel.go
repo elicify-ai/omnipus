@@ -328,8 +328,9 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 			store := h.resolveSessionStore(sid)
 			if store != nil {
 				// A cancel is a stop, not a failure — sub-agent control
-				// plane ADR D4/MAJ-009: stopped stays coarse-active (the
-				// retired StatusInterrupted is never written here).
+				// plane ADR D4/MAJ-009: stopped stays coarse-active
+				// (StatusInterrupted is for a restart-cut session only — the boot
+				// sweep writes it; a cancel never does).
 				status := session.StatusActive
 				if err := store.SetMeta(sid, session.MetaPatch{Status: &status}); err != nil {
 					slog.Warn("ws: could not mark session active",

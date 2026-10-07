@@ -367,7 +367,7 @@ func computeSessionLifecycle(ls *session.LifecycleStore, id string) (*gen.Sessio
 		}
 		return nil, nil
 	}
-	state := gen.SessionLifecycleState(session.LifecycleStateToDisplay(rec.State))
+	state := gen.SessionLifecycleState(session.LifecycleRecordToDisplay(rec))
 	var note *stopNoteEntry
 	// Session.yaml::stop_note: the note of the session's CURRENT stop — the
 	// record is stopped, or carries its current-generation Stop in flight.
