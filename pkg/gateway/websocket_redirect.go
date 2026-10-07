@@ -16,8 +16,9 @@ func (wh *wsHandlerReadLoop) handleTurnControlFrame(data []byte, frameType strin
 	return wh.handleCancelFrame(data)
 }
 
-// handleRedirectFrame bypasses ordinary message intake, so the helper's live
-// turn cannot consume the command as steering text before it has stopped.
+// handleRedirectFrame bypasses ordinary message intake, so the session's live
+// turn (a chat's or a helper's) cannot consume the command as steering text
+// before it has stopped.
 func (wh *wsHandlerReadLoop) handleRedirectFrame(data []byte) wsHandlerReadLoopFlow {
 	var frame generated.RedirectFrame
 	if err := json.Unmarshal(data, &frame); err != nil {

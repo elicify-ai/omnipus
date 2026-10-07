@@ -236,8 +236,8 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			} else if sessionID != "" && h.partitions != nil {
 				// A disconnect/cancel mid-stream is a stop, not a failure —
 				// sub-agent control plane ADR D4/MAJ-009: stopped stays
-				// coarse-active (the retired StatusInterrupted is never
-				// written here).
+				// coarse-active (StatusInterrupted is for a restart-cut
+				// session only — the boot sweep writes it; a stop never does).
 				if err := h.partitions.SetStatus(sessionID, session.StatusActive); err != nil {
 					slog.Warn("sse: could not set session status active",
 						"session_id", sessionID, "error", err)

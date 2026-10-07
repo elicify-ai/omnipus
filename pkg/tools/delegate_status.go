@@ -120,7 +120,7 @@ func (t *DelegateTool) executeDurableStatus(ctx context.Context, sessionID strin
 		return ErrorResult(fmt.Sprintf("No subagent found with session ID: %s", sessionID))
 	}
 
-	state := string(rec.State)
+	state := delegateStateName(rec)
 	// extra is the G1-fix trailing annotation (live tool-call-argument
 	// progress plus recent transcript activity) for a running child — see
 	// delegateStatusExtra's own doc comment. Computed once and appended to
@@ -603,7 +603,7 @@ func (t *DelegateTool) executePeek(ctx context.Context, args map[string]any) *To
 	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: peek: %v", verr))
 	}
-	state := string(rec.State)
+	state := delegateStateName(rec)
 
 	// MEDIUM-2 (14-reviewer sign-off): key the Peek by rec.SteeringSessionID(),
 	// not the calling ownerKey — see executeInbox's identical fix above for
@@ -633,4 +633,16 @@ func (t *DelegateTool) executePeek(ctx context.Context, args map[string]any) *To
 		return NewToolResult(fmt.Sprintf("session %s: state=%s", sessionID, state))
 	}
 	return NewToolResult(string(payload))
+}
+
+// delegateStateName is the state word delegate status and peek show an agent
+// for rec: the lifecycle state, except that a session a restart cut off
+// (failed with failed_reason "interrupted") reads "interrupted" — never
+// "failed" (founder rule 2026-10-06: a session does not fail because of a
+// restart). A genuine failure still reads "failed".
+func delegateStateName(rec *session.LifecycleRecord) string {
+	if session.LifecycleRecordIsRestartInterrupted(rec) {
+		return string(generated.DelegatePeekResponseStateInterrupted)
+	}
+	return string(rec.State)
 }

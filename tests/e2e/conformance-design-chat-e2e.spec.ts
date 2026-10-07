@@ -110,9 +110,24 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
   // below; this test was NEVER flaky in its verdict half.
   //
   // The pill aria-label carries the condition truncated to its first 80
-  // graphemes (GoalPillTray.tsx truncateCondition); the whole condition is
-  // 33 graphemes, comfortably inside that window.
-  const condition = '[check: true exit:0] please continue'
+  // graphemes (GoalPillTray.tsx truncateCondition); the asserted fragment
+  // "please continue" is the first prose after the check marker (the compiler
+  // keeps the prose remainder verbatim, goal_compile.go::exciseMarkers), so it
+  // sits inside that window even with the worker guidance appended below.
+  // The tail keeps the autonomous goal worker off network-capable binaries.
+  // ADR-092 D8: under Auto-approve (the fresh-install default) a `bash git …`
+  // call still escalates to a network_preflight approval modal — Auto does NOT
+  // waive network access, and no existing setting (global/per-agent/per-chat
+  // Auto, tool_policies) removes it without also loosening approvals for the
+  // whole shard. Release run 36305587114 (job llm-conformance-chat): the worker
+  // ran `bash git log --oneline -20` while the steer was being typed and the
+  // modal swallowed ~380 characters. This test is about the goal/steer walk,
+  // not approvals, so the condition tells the worker the check needs only
+  // `true`. The prefix (check marker + "please continue") is unchanged, so the
+  // aria-label assertion below still holds.
+  const condition =
+    '[check: true exit:0] please continue — the check needs only bash `true`; ' +
+    'do not inspect the repository and do not run git, curl, npm, wget, ssh, docker or gh'
   await input.fill(`/goal ${condition}`)
   await input.press('Enter')
 
@@ -365,6 +380,15 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
     const bubblesBefore = await claimUserBubbles.count()
     await input.click()
     await input.pressSequentially(steerText)
+    // LOUD GUARD: a tool-approval modal that appeared mid-typing takes focus
+    // and swallows keystrokes (release run 36305587114: ~380 chars lost).
+    // Never send a truncated steer — fail here, naming the cause, instead of
+    // sending garbage or waiting out the done-pill budget.
+    await expect(
+      input,
+      `t0: composer text differs from the typed steer before Enter on attempt ${attempt}/${STEER_ATTEMPTS} — ` +
+        'a tool-approval modal (ADR-092 network_preflight) most likely took focus mid-typing and swallowed keystrokes.',
+    ).toHaveValue(steerText)
     await input.press('Enter')
 
     // FAIL FAST: the steer must reach the transcript as a user message. In

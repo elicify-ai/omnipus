@@ -54,6 +54,14 @@ type InboundMessage struct {
 	// by routing, handoff override, and per-agent history keying so two
 	// concurrent sessions in the same browser remain isolated.
 	SessionID string `json:"session_id,omitempty"`
+	// TranscriptEntryID is the id of the transcript entry the inbound path
+	// durably wrote for THIS message before the turn starts. Set only after
+	// that write succeeded; empty when the message was not transcribed (write
+	// failed, "system" channel, setup kickoff). The agent loop uses it to
+	// recognise the current message in the transcript by identity, never by
+	// text. Internal plumbing between inbound producers and the agent loop
+	// (pkg/bus is not part of the gateway/SPA wire boundary).
+	TranscriptEntryID string `json:"transcript_entry_id,omitempty"`
 	// InstanceID is the channel-instance key this message arrived on
 	// (ADR-019 FR-4b / NFR-1). Channels that know their instance set this
 	// directly; inboundInstanceID prefers it over Metadata for the
