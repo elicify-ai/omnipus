@@ -6,7 +6,7 @@
 
 | Header | Value |
 |---|---|
-| Status | Founder-commissioned rewrite — decided rules recorded, including the binding 15:10/15:20 answers. All six questions are answered, including the binding 15:55 Q1=A/Q4=A answers. Q1–Q8 are closed, including 17:45 shared seen/goal mapping and task-tool MERGE. Separate #1221 removes the per-agent Auto off-switch; no open product question is silently decided here. Design only, not an implementation or release acceptance claim. |
+| Status | Founder-commissioned rewrite — decided rules recorded, including the binding 15:10/15:20 answers. All eight questions are answered, including the binding 15:55 Q1=A/Q4=A and 17:45 Q7=A/Q8=MERGE answers. Q1–Q8 are closed, including 17:45 shared seen/goal mapping and task-tool MERGE. Separate #1221 removes the per-agent Auto off-switch; no open product question is silently decided here. Design only, not an implementation or release acceptance claim. |
 | Date | 2026-10-06; rewritten 2026-10-07 after Astra R2 and the founder's answers. |
 | Decider | Daniel Piatkowski. Later founder entries win over earlier entries and every review recommendation. |
 | Author | Architect. |
@@ -15,7 +15,7 @@
 | Founder interview record | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md` — every October 6/7 entry, especially 13:40, 13:50, 14:00, 14:10 and 14:35 on October 7; plus the binding 14:45, 15:10, 15:20, 15:55, 17:15, 17:25, 17:45 and 18:05 steering messages. There is no separate interview document. |
 | Review inputs | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/adr-session-core-astra-r2-20261007/ASTRA-REVIEW-R2.md`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-investigations/adr-session-core-astra-r2-20261007/ARCHITECTURE-INVENTORY.md`; the earlier review, open questions and CLI research listed in Context. These explain seams, not new founder decisions. |
 | Frontend counterpart | **ADR-20261007 — Agent-first navigation and agent identity**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/ADR-20261007-agent-first-navigation-and-agent-identity.md`, on `work/adr-frontend-navigation-20261007` at `554d21ffd`, status **Proposed**. The file is on that branch, not yet in this worktree. It owns frontend layout/identity; this ADR supplies the main-session contract and decided behavior. The sidebar lands together with the main-session backend after a joint integration test (counterpart::D5/D12; founder ledger 16:30). |
-| Founder answers | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/session-core-adr-20261007/QUESTIONS.md` — OPEN-Q1–Q6 are all closed: Q1=A, Q2=A, Q3=B, Q4=A, Q5=A, Q6=B. The answered table below records the binding 15:10/15:20/15:55 rules; no recommendation substitutes for an answer. |
+| Founder answers | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/session-core-adr-20261007/QUESTIONS.md` — OPEN-Q1–Q6 are all closed: Q1=A, Q2=A, Q3=B, Q4=A, Q5=A, Q6=B. Q7=A and Q8=MERGE are also closed at 17:45. The answered table below records the binding rules; no recommendation substitutes for an answer. |
 | Issue scope | In scope: [#1211](https://github.com/elicify-ai/omnipus/issues/1211), [#1214](https://github.com/elicify-ai/omnipus/issues/1214), [#1216](https://github.com/elicify-ai/omnipus/issues/1216). Cross-reference only: [#1212](https://github.com/elicify-ai/omnipus/issues/1212), [#1213](https://github.com/elicify-ai/omnipus/issues/1213), [#1215](https://github.com/elicify-ai/omnipus/issues/1215), [#1217](https://github.com/elicify-ai/omnipus/issues/1217), [#1206](https://github.com/elicify-ai/omnipus/issues/1206). No issue is claimed fixed by this document. |
 | Hand-off | Commit/push this follow-up, then produce the specification with `plan-spec`. Stop before `grill-spec`; team-lead arranges review. Latest founder process ruling, 14:50: two spec rounds, Astra then Opus, each with a founder interview before correction; a third requires the founder's say within the 14:45 ceiling. This author runs none of those reviews. |
 
@@ -280,7 +280,7 @@ These are the unavoidable **extensions to existing records**, not parallel imple
 | Handover/switch agent in place, `@` selects a different speaker | October 7 pinning/group decisions and 12:44 | Delete handover; navigation opens another main; mention communicates. |
 | Starter chat approval modifier follows a MAIN task | Q-R2-3=A | Main parent settings govern within target's own restrictions; disclose possible loosening. |
 | Native background-shell preservation promised for external CLI Stop | Q-R2-5=B | Disclose external subprocess-kill exception. |
-| Legacy/upgrade compatibility paths kept “just in case” | October 7 14:45 | Delete scoped paths, no migrations/shims; keep Calendar once/at_ms, delete old every_ms/cron_expr adapters and compatibility promises (15:55 Q4=A). |
+| Legacy/upgrade compatibility paths kept “just in case” | October 7 14:45, narrowed by 17:15 | DELETE ongoing runtime compatibility, except the one saved-chat cutover import preserving history/binding/heartbeat→main. Keep Calendar once/at_ms; old every_ms/cron_expr stays DELETE (Q4=A). |
 
 ### Earlier ADR clauses amended by title and heading
 
@@ -593,7 +593,7 @@ All eight questions in the external record are closed. D11 records 17:15/17:25 a
 | Q7 (formerly OPEN-Q7) | 17:45 A, amended mapping | Pair-wide shared bounded seen mark; computed read-only main needs_attention; met finished, rounds_exhausted+other failed, stopped_by_user excluded; opening never resolves pending asks/approvals. |
 | Q8 (formerly OPEN-Q8) | 17:45 MERGE | Canonical create_task/update_task/list_tasks gain optional explicit workspace_id; default own workspace; DELETE duplicate *_in_workspace task family, move callers/policies, Operator Deny wins, tasks not cross-workspace plans. |
 
-Storage-before-queue is recorded in the ledger as a **proposed** build order, not a founder-ratified new product decision. The specification may state dependency necessities, but team-lead owns implementation planning. If implementation discovers a genuinely new ambiguous product choice, it must be put to the founder; these six are not reopened. The next artifact is the specification; it is not a new founder interview or permission to implement/land.
+Storage-before-queue is recorded in the ledger as a **proposed** build order, not a founder-ratified new product decision. The specification may state dependency necessities, but team-lead owns implementation planning. If implementation discovers a genuinely new ambiguous product choice, it must be put to the founder; these eight answered questions are not reopened. The next artifact is the specification; it is not a new founder interview or permission to implement/land.
 
 **Code correct and tested:** not claimed; this task writes architectural documents and reads sources only.
 
