@@ -327,6 +327,42 @@ These pages were read. The implementing leads update the matching sections in th
 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/agents.md` | Explain role/figure/color/image choices, input types/2 MB/re-encoding, approved motion policy, shared global edits and protected built-in fields; workers hidden from navigation but existing worker sessions still inspectable. Replace dedicated-heartbeat/sidebar wording alongside U1 and remove handover claims alongside the backend cutover. Do not claim universal editable identity or group messaging before it ships. |
 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/workspaces.md` | Replace “workspace expands to chats” and composer-picker guidance; describe main per eligible agent/workspace, extra sessions and Past sessions; document worker membership versus conversation eligibility and backend hide/unhide rules. Keep Team’s actual membership/edit/delegation duties unchanged. |
 
+### D13 — Plan pill, start-tool links and real drill-down (#1021)
+
+The handed-over issue’s **R1–R4** are plan/task visibility requirements, distinct from navigation R1–R4. Provide a running plan pill in chat, a link from the successful start tool, presence in the existing ActivityPanel and real drill-down. Historical execution/schema/counting findings in that issue are not extra implementation scope (https://github.com/elicify-ai/omnipus/issues/1021::Requirements and 2026-10-07 hand-over comment).
+
+| Surface | Frontend decision |
+|---|---|
+| Plan pill | Visible for real ongoing plan work; title and actual reported state. `approved` is “waiting to start”, not running; `running` uses canonical phase/pause/progress. No optimistic running claim from an accepted start. |
+| `execute_plan` result | Accessible **Open plan** link attached to the successful/idempotent result, live and after replay. Use its validated plan handle and authoritative workspace metadata, not a URL/title guessed from prose or current workspace. |
+| `run_task` result | Accessible **Open task session** link to the actual returned run/session, not the agent’s main; visible error/unavailable guidance if no valid destination exists. |
+| ActivityPanel | Plan row plus task/run rows using the existing panel and common status/identity presentation. Distinguish plan, task and helper; do not create a parallel dashboard or synthetic parent edge. |
+| Drill-down | Open plan through the existing workspace Tasks/Graph plan-selection workflow; open task/helper through the existing session inspection path. Pill behavior reuses the existing activity-pill → panel interaction; Open controls remain independently keyboard-accessible. |
+
+Reuse B::R-ACTIVITY/D5 for task/scheduler data and execution ownership. A MAIN task child is represented once, not once as task and again as helper; monitoring an independent run does not make it tree-stoppable. Do not add a task executor, result summarizer or new outcome-delivery mechanism (B::D5).
+
+Existing seams: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/chat/ActivityBar.tsx`::ActivityPill/ActivityBar; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/chat/ActivityPanel.tsx`::ActivityRow; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/workspaces/WorkspaceTasksTab.tsx`::handleSelectPlan; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/lib/api/plans.ts`::fetchPlan/plansQueryKeys; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/contracts/components/schemas/Plan.yaml`::state/plan_phase/progress/owner_session_id.
+
+The current start tools already return `plan_id`/state and `task_id`/`session_id`, but not the requested usable navigation experience (`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/pkg/tools/plan.go`::PlanExecuteTool.Execute; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/pkg/tools/run_task.go`::TaskRunTool.Execute). Backend owns any required published result/address extensions; frontend does not invent a wire URL field. Existing panel context has no plan-selection field, so the implementing spec must adapt its actual hand-off rather than claim a deep link already works. **Which chats receive plan pills/parent rows is Q-FE-12**; `owner_session_id` or transport `source_chat_id` must not be assumed to identify the starting human chat.
+
+### D14 — Background work remains visible after changing chats (#493)
+
+**The active-session-only visibility ceiling is removed.** Extend the existing `useRunningActivity`/ActivityBar/ActivityPanel projection across the approved scope; do not add another activity store/service. Work started in chat A must not disappear or be reported as “no active background work” merely because chat B is foreground. Exact workspace scope and full rows versus an elsewhere indicator are **Q-FE-11**, not guessed (https://github.com/elicify-ai/omnipus/issues/493::Goal/Definition of done and 2026-10-07 hand-over comment).
+
+| Projection requirement | Boundary |
+|---|---|
+| Plans / task and scheduler runs / helpers / background shells | Reuse existing plan queries/status invalidation, B::R-ACTIVITY/D5 task/run projection and existing session-bucket activity. No agent-facing `list_jobs` call from the SPA. |
+| Starting/owning context | Label real workspace, owner and source/session; clicking Open targets that actual entity, never the foreground session by substitution. |
+| Counts | Count real distinct work by authoritative plan/run/child/shell identity. Deduplicate starter/assignee appearances; a plan’s member execution is not duplicated as an unrelated helper/task. Keep kind-specific counts truthful. |
+| State | Separate running, queued, awaiting input, stopped and finished. Changing view, disconnecting or hiding a workspace does not cancel or fabricate completion. |
+| Initial load / reload / reconnect | Reconcile authorized current snapshots and live updates. Cached `sessionsById` alone cannot prove coverage of work never opened in this browser. |
+| Missing/stale source or omitted page | Visible partial/unknown coverage and Retry; not zero/complete. Active counts are not silently capped by the eight-item recent-finish limit. |
+| Footprint | Metadata/state projection, not all transcripts, one socket per job/session or one independent poller per row. Reuse shared/coalesced query invalidation. |
+
+At the baseline, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/hooks/useRunningActivity.ts`::useRunningActivity reads foreground messages/toolCalls; ActivityBar is its sole production consumer. `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/store/chat/routing.ts`::schedulePlanStatusInvalidate already coalesces global plan updates; reuse that mechanism rather than a refetch storm. The exact producer/snapshot coverage remains a backend contract dependency, not a claim it already ships.
+
+Viewing cross-session activity does not widen D4’s **main-only** `needs_attention`, change Stop’s selected-session/tree scope, grant peer authority, or make a plan cross-workspace. This consciously revisits **list_jobs — unified background-job visibility for agents**::Option D’s rejection of the SPA scope extension, while preserving that agent tool’s recovery purpose (https://github.com/elicify-ai/omnipus/issues/493; B::D5; D4).
+
 ## Consequences
 
 | Kind | Consequence | Basis / certainty |
@@ -506,7 +542,31 @@ R25 removes the Assets entry but leaves its replacement open. B explicitly gives
 
 **Recommendation: A.** Preserve current standalone access in the first squad; choose and test its workspace replacement before removing the Assets entry in the later unit.
 
-skills: omnipus-shared-rules, omnipus-design-system, gitnexus-exploring, ux-heuristics-review, github-cli, jev-use:jev-use, commit-messages
+### Q-FE-11 — What scope and detail does cross-session activity show? (A / B / C; new)
+
+#493 requires visibility of genuine work outside the foreground chat, but does not choose a workspace-wide versus installation-wide view or full rows versus an elsewhere badge. This affects expectations when switching workspaces as well as chats; authorization and missing coverage must remain visible (D14; #493::Definition of done).
+
+| Option | Presentation |
+|---|---|
+| A | Aggregate all authorized sessions in the current workspace, with an explicit elsewhere count/control for work in other workspaces. |
+| B | One full aggregate across all authorized workspaces/sessions, labelled/grouped by workspace and source chat. |
+| C | Keep foreground detail and add a truthful “N running elsewhere” indicator with navigation to the existing detail surfaces. |
+
+**Recommendation: A**, keeping the existing workspace mental model without silently hiding other-workspace work. Backend snapshot coverage must support the chosen scope; no client-only completeness claim.
+
+### Q-FE-12 — Which chats show a plan’s pill and parent-panel row? (A / B / C; new)
+
+#1021 requires chat/parent-panel parity, but a plan’s internal owner session is not necessarily the human chat that started it, and plans created in the Tasks UI may have no chat origin. Picking one from agent identity or transport chat ID would misattribute the plan (D13; #1021::R1/R3; Plan::owner_session_id/source_chat_id).
+
+| Option | Plan association |
+|---|---|
+| A | Pill/parent row in the actual starting chat; other sessions see it through the qualified cross-session aggregate. Plans without chat origin stay in workspace activity. |
+| B | Pill/row in the owning agent’s workspace main, with starting chat access through the aggregate. |
+| C | Labelled workspace-plan pills in every chat in that workspace, without claiming each chat is the parent. |
+
+**Recommendation: A.** Use a real authorized start-origin relation where available; backend owner supplies any required existing-contract extension. No fake child edge, fabricated owner relationship or new plan engine.
+
+skills: omnipus-shared-rules, omnipus-design-system, gitnexus-exploring, ux-heuristics-review, github-cli, commit-messages
 
 ## Evidence table
 
