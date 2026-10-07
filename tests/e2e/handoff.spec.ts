@@ -1,6 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
 import { chatInput, selectAgent, waitForConnected } from './fixtures/selectors';
@@ -163,6 +163,29 @@ async function openActivityPanel(page: Page): Promise<void> {
     await bar.click();
   }
   await expect(bar).toHaveAttribute('aria-expanded', 'true', { timeout: 15_000 });
+}
+
+// Precondition for an axe scan of `subject`: the Activity panel (a modal Sheet)
+// is closed and `subject` is not inside an aria-hidden subtree. The panel's
+// own open control only navigates (ActivityPanel.tsx, activity-row-open) and
+// never closes the panel, and a hash navigation need not remount ChatScreen,
+// so panelOpen can survive a route change; the modal then marks the thread
+// aria-hidden and expectA11yClean (fixtures/a11y.ts) would pass over a hidden
+// or empty subtree without saying so. Close it if open, then assert both.
+async function closeActivityPanelBeforeAxe(page: Page, subject: Locator): Promise<void> {
+  const panel = page.getByRole('dialog', { name: 'Activity' });
+  if (await panel.isVisible()) {
+    await page.keyboard.press('Escape');
+  }
+  await expect(panel, 'the Activity panel must be closed before an axe scan').toHaveCount(0, {
+    timeout: 15_000,
+  });
+  await expect
+    .poll(() => subject.evaluate((el) => el.closest('[aria-hidden="true"]') === null), {
+      message: 'the axe subject must not sit inside an aria-hidden ancestor (axe would skip it)',
+      timeout: 15_000,
+    })
+    .toBe(true);
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -399,6 +422,11 @@ test(
     // on the unchanged ChatScreen mount) holds the bar through completion —
     // the pattern delegation-hidden.spec.ts adopted for the same race.
     await openActivityPanel(page);
+    // Instrument check for closeActivityPanelBeforeAxe: its "panel closed"
+    // assertion is a count of this exact locator, so prove here that the
+    // locator sees the panel while it is open — otherwise a name mismatch
+    // would make the later zero-count pass vacuously.
+    await expect(page.getByRole('dialog', { name: 'Activity' })).toBeVisible({ timeout: 15_000 });
 
     // (2) THREAD — the guard: zero subagent-collapsed elements, ever.
     await expect(page.locator('[data-testid="subagent-collapsed"]')).toHaveCount(0);
@@ -482,6 +510,7 @@ test(
     // makes axe scan nothing and pass silently, which would be a false
     // green for exactly the surface this check exists to guard. Axe unions
     // its top-level include selectors.
+    await closeActivityPanelBeforeAxe(page, childBashChip)
     await expectA11yClean(page, {
       include: ['[data-testid="bash-output-toggle"]', '[data-testid="tool-call-badge"]'],
     });
@@ -504,13 +533,15 @@ test(
     expect(parentSessionID, 'parent session id captured before opening the child').toBeTruthy();
     expect(parentSessionID).not.toBe('__pending');
     await openSession(page, parentSessionID as string);
+    const parentLine = page
+      .locator('[data-testid="delegation-event-line"]')
+      .filter({ hasText: label })
+      .first();
     await expect(
-      page
-        .locator('[data-testid="delegation-event-line"]')
-        .filter({ hasText: label })
-        .first(),
+      parentLine,
       'the delegated event line must render on the parent thread so the axe scan below has a real subject',
     ).toBeVisible({ timeout: 30_000 });
+    await closeActivityPanelBeforeAxe(page, parentLine)
     await expectA11yClean(page, {
       include: ['[data-testid="delegation-event-line"]'],
     });
