@@ -601,9 +601,8 @@ type OmnipusSandboxConfig struct {
 	// UI badge instead reads "Auto — no sandbox," and a shell command runs
 	// without a prompt only when it is read-only or covered by an operator
 	// allow rule; every other shell command asks first. This field does not
-	// change that. Tighten-only below this global default at the per-agent
-	// (AgentAutoApproveDisabled) and per-chat levels, enforced server-side
-	// (D1's tighten-only merge); loosening past this value requires the
+	// change that. The per-chat modifier sits on top of it (a human present in that chat
+	// may turn Auto on or off for it); loosening past this value requires the
 	// same password step-up as God Mode (rest_sandbox_config.go's
 	// requireReAuth gate). The agent-facing set_config tool blocks the
 	// whole sandbox.* subtree by ancestor closure

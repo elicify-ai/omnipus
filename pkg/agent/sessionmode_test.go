@@ -1,8 +1,8 @@
-// sessionmode_test.go: ADR-092 Auto-approve resolution across the three
-// scopes (global default, per-agent off-switch, per-chat modifier) and the
-// session-scoped per-chat modifier store. Expected values come from the
-// contract text (SandboxConfig.auto_approve, Agent.auto_approve_disabled,
-// SessionModeUpdateFrame), not from the implementation.
+// sessionmode_test.go: ADR-092 Auto-approve resolution across the two
+// scopes (global default, per-chat modifier) and the session-scoped per-chat
+// modifier store. Expected values come from the contract text
+// (SandboxConfig.auto_approve, SessionModeUpdateFrame), not from the
+// implementation.
 
 package agent
 
@@ -15,36 +15,28 @@ import (
 )
 
 func TestResolveAutoApprove(t *testing.T) {
-	cfgWith := func(global bool, agents ...config.AgentConfig) *config.Config {
+	cfgWith := func(global bool) *config.Config {
 		c := &config.Config{}
 		c.Sandbox.AutoApprove = global
-		c.Agents.List = agents
 		return c
 	}
-	disabled := config.AgentConfig{ID: "jim", AutoApproveDisabled: true}
-	enabled := config.AgentConfig{ID: "mia"}
 
 	cases := []struct {
-		name    string
-		cfg     *config.Config
-		agentID string
-		chat    *bool
-		want    bool
+		name string
+		cfg  *config.Config
+		chat *bool
+		want bool
 	}{
-		{"nil config is off", nil, "mia", nil, false},
-		{"global off", cfgWith(false, enabled), "mia", nil, false},
-		{"global on, agent follows", cfgWith(true, enabled), "mia", nil, true},
-		{"global on, agent not in list follows global", cfgWith(true), "ghost", nil, true},
-		{"global on, agent off-switch wins", cfgWith(true, disabled), "jim", nil, false},
-		{"agent off-switch cannot turn Auto on when global is off", cfgWith(false, enabled), "mia", nil, false},
-		{"chat on loosens past global off", cfgWith(false, enabled), "mia", boolPtr(true), true},
-		{"chat on loosens past the agent off-switch", cfgWith(true, disabled), "jim", boolPtr(true), true},
-		{"chat off tightens global on", cfgWith(true, enabled), "mia", boolPtr(false), false},
-		{"chat modifier applies even with nil config", nil, "mia", boolPtr(true), true},
+		{"nil config is off", nil, nil, false},
+		{"global off", cfgWith(false), nil, false},
+		{"global on", cfgWith(true), nil, true},
+		{"chat on loosens past global off", cfgWith(false), boolPtr(true), true},
+		{"chat off tightens global on", cfgWith(true), boolPtr(false), false},
+		{"chat modifier applies even with nil config", nil, boolPtr(true), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, ResolveAutoApprove(tc.cfg, tc.agentID, tc.chat))
+			assert.Equal(t, tc.want, ResolveAutoApprove(tc.cfg, tc.chat))
 		})
 	}
 }

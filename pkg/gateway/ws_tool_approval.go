@@ -298,7 +298,7 @@ func (h *WSHandler) sessionStateBytes(wc *wsConn, sessionID string) []byte {
 
 	// ADR-092 (review finding D): carry this session's per-chat Auto-approve
 	// modifier so a reloading SPA re-learns it instead of falling back to
-	// the agent x global value while the server still applies the chat's
+	// the global default while the server still applies the chat's
 	// own. Absent when no session is bound yet or no modifier is set — the
 	// store is in memory, so after a gateway restart it is absent too and
 	// the UI follows the server.
