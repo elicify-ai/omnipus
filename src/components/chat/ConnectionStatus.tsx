@@ -16,7 +16,7 @@ import { useChatStore } from '@/store/chat'
 import type { FirstSendStatus } from '@/store/chat/types'
 import { useSessionStore } from '@/store/session'
 import { cn } from '@/lib/utils'
-import { useRestartInterrupted } from './useRestartInterrupted'
+import { useRestartInterrupted, useRestartNoticeDismissal } from './useRestartInterrupted'
 
 export type UserDeliveryState = 'queued' | 'sending' | 'received' | 'working' | 'failed'
 
@@ -420,6 +420,7 @@ export function ChatConnectionStatusLine({ state, onRetry }: { state: ChatConnec
  * the next message the user sends continues the same chat.
  */
 export function RestartInterruptedNotice() {
+  useRestartNoticeDismissal()
   const interrupted = useRestartInterrupted()
   if (!interrupted) return null
   return (
@@ -575,6 +576,11 @@ export function AssistantMessageConnectionStatus({ messageId, agentName }: { mes
 // comment covers the exact scope (boot_mismatch specifically, not
 // retention_exceeded, and only when the exchange truly has no reply and no
 // turn is running).
+// Founder decision Q1 (pending): for a restart-cut question that never got an
+// answer, false removes the manual "Generate again" line (the Interrupted notice
+// stands alone); true keeps it as a manual button. Nothing ever resumes on its own.
+export const KEEP_GENERATE_AGAIN_WHEN_RESTART_INTERRUPTED = false
+
 export function UnansweredUserMessageStatus({ messageId, agentName }: { messageId: string; agentName: string }) {
   const activeSessionId = useSessionStore((state) => state.activeSessionId)
   const unanswered = useChatStore((state) => {
@@ -583,7 +589,7 @@ export function UnansweredUserMessageStatus({ messageId, agentName }: { messageI
   })
   const restartInterrupted = useRestartInterrupted()
   // A restart-cut chat is announced once, as Interrupted (RestartInterruptedNotice).
-  if (!unanswered || restartInterrupted) return null
+  if (!unanswered || (restartInterrupted && !KEEP_GENERATE_AGAIN_WHEN_RESTART_INTERRUPTED)) return null
   const generateAgain = () => {
     useChatStore.getState().resendMessage(messageId)
   }

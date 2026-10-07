@@ -472,6 +472,15 @@ export interface SessionChatState {
    * not accidentally inherit a stale true from an earlier restart.
    */
   snapshotWasBootMismatch?: boolean
+  /**
+   * I1: the user continued a chat whose saved lifecycle said `interrupted` (a
+   * turn started for it in this tab). The Interrupted notice and the
+   * suppression of the "couldn't be finished" statuses stay off until the saved
+   * lifecycle is seen at any other value — a stale list that still says
+   * `interrupted` after the user's own turn must never bring them back. See
+   * components/chat/useRestartInterrupted.ts.
+   */
+  restartNoticeDismissed?: boolean
   /** Narrow recovery flag: unknown_position alone does not mean interrupted. */
   recoveredFirstSend?: { clientMessageId: string; attemptGeneration: number; reconciled: boolean }
   sessionTokens: number

@@ -9,6 +9,8 @@ import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { ChatScreen } from './ChatScreen'
+import { codeToDisplay } from '@/lib/llm-error'
+import { KEEP_GENERATE_AGAIN_WHEN_RESTART_INTERRUPTED } from './ConnectionStatus'
 
 // I1 (UAT): after kill -9 + restart a chat whose turn was cut off must read
 // "Interrupted" in the chat body (the sidebar already does — see
@@ -42,13 +44,17 @@ const SID = 'i1-restart-cut-chat'
 const sender = { send: vi.fn<WsConnection['send']>().mockReturnValue(true) }
 const originalOptions = queryClient.getDefaultOptions()
 let savedLifecycle: WireSession['lifecycle_state']
+let stopCause: 'restart' | 'stop' | undefined
+let listFails = false
 
 function wireRow(lifecycle: WireSession['lifecycle_state']): WireSession {
-  const restartStop = lifecycle === 'interrupted'
+  const restartStop = lifecycle === 'interrupted' || stopCause === 'restart'
+  const humanStop = stopCause === 'stop'
   return {
     id: SID, agent_id: 'jim', title: 'Restart cut chat', type: 'chat', status: 'active',
     lifecycle_state: lifecycle, channel: 'webchat', partitions: [],
     ...(restartStop ? { stop_note: { at: '2026-10-07T06:00:00Z', by: 'restart', seq: 1, cause: 'restart' as const, boot_seq: 1 } } : {}),
+    ...(humanStop ? { stop_note: { at: '2026-10-07T06:00:00Z', by: 'human:owner', seq: 1, cause: 'stop' as const } } : {}),
     created_at: '2026-10-07T05:00:00Z', updated_at: '2026-10-07T06:00:00Z',
     stats: { tokens_in: 0, tokens_out: 0, tokens_total: 0, cost: 0, tool_calls: 0, message_count: 2 },
   }
@@ -58,10 +64,14 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', undefined)
   queryClient.clear()
   queryClient.setDefaultOptions({ queries: { retry: false, gcTime: Infinity } })
+  sender.send.mockClear()
   savedLifecycle = 'interrupted'
+  stopCause = undefined
+  listFails = false
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(String(input), 'http://localhost')
     if (url.pathname !== '/api/v1/sessions') throw new Error(`Unexpected HTTP request: ${url}`)
+    if (listFails) return new Response('boom', { status: 500 })
     const body: SessionPage = { sessions: [wireRow(savedLifecycle)] }
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
   }))
@@ -172,5 +182,136 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
     expect(useSessionStore.getState().activeSessionId).toBe(SID)
     expect(sender.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'message', session_id: SID, content: 'Please continue' }))
     expect(screen.getByText('Partial text before the kill')).toBeInTheDocument()
+  })
+
+  it('stale list: the turn ends while the list still says interrupted — the notice does not come back', async () => {
+    feed(freshTabAttach())
+    await mount()
+    await screen.findByTestId('restart-interrupted-notice')
+    // savedLifecycle stays 'interrupted': the server has not committed the new state yet.
+    const before = vi.mocked(fetch).mock.calls.length
+    act(() => { useChatStore.getState().sendMessage('Please continue', { clientMessageId: 'u-2' }) })
+    await waitFor(() => expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument())
+    feed([
+      { type: 'token', session_id: SID, turn_id: 't-2', message_id: 'a-2', content: 'Continued answer' },
+      { type: 'done', session_id: SID, turn_id: 't-2', stats: { tokens: 1, cost: 0 } },
+    ])
+    // done invalidated the list; wait for that refetch (which still says interrupted) to land.
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(before))
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
+    expect(useChatStore.getState().isStreaming).toBe(false)
+    expect(screen.getByText('Continued answer')).toBeInTheDocument()
+    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+  })
+
+  it('a later, second restart shows Interrupted again once the saved value was seen at something else', async () => {
+    feed(freshTabAttach())
+    await mount()
+    await screen.findByTestId('restart-interrupted-notice')
+    act(() => { useChatStore.getState().sendMessage('Please continue', { clientMessageId: 'u-2' }) })
+    await waitFor(() => expect(useChatStore.getState().sessionsById[SID]?.restartNoticeDismissed).toBe(true))
+    savedLifecycle = 'done'
+    feed([
+      { type: 'token', session_id: SID, turn_id: 't-2', message_id: 'a-2', content: 'Continued answer' },
+      { type: 'done', session_id: SID, turn_id: 't-2', stats: { tokens: 1, cost: 0 } },
+    ])
+    await waitFor(() => expect(useChatStore.getState().sessionsById[SID]?.restartNoticeDismissed).toBe(false))
+    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+    savedLifecycle = 'interrupted'
+    await act(async () => { await queryClient.invalidateQueries({ queryKey: ['sessions'] }) })
+    expect(await screen.findByTestId('restart-interrupted-notice')).toHaveTextContent('Interrupted')
+  })
+
+  it('failed continuation: the provider error shows, and the stale interrupted list does not hide or replace it', async () => {
+    feed(freshTabAttach())
+    await mount()
+    await screen.findByTestId('restart-interrupted-notice')
+    act(() => { useChatStore.getState().sendMessage('Please continue', { clientMessageId: 'u-2' }) })
+    feed([
+      { type: 'error', session_id: SID, message: codeToDisplay.provider_rejected, payload: { llm_error: { code: 'provider_rejected', message: codeToDisplay.provider_rejected, retryable: true } } },
+      { type: 'done', session_id: SID, turn_id: 't-2', stats: { tokens: 0, cost: 0 } },
+    ])
+    await act(async () => { await Promise.resolve() })
+    expect(useChatStore.getState().messages.at(-1)).toMatchObject({ role: 'assistant', status: 'error' })
+    expect(screen.getAllByText(codeToDisplay.provider_rejected).length).toBeGreaterThan(0)
+    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+  })
+
+  it('saved interrupted but a turn is active for the chat: no notice', async () => {
+    feed([
+      { type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'unknown_position' },
+      { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z', active_turn: { turn_id: 't-9', agent_id: 'jim', started_at: '2026-10-07T06:00:30Z' } },
+      { type: 'catch_up_complete', session_id: SID, seq: 4, boot_id: 'boot-2', mode: 'snapshot' },
+    ])
+    await mount()
+    await waitFor(() => expect(queryClient.getQueryState(['sessions'])?.status).toBe('success'))
+    expect(useChatStore.getState().sessionsById[SID]?.activeTurnId).toBe('t-9')
+    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+  })
+
+  it('degraded: GET /sessions 500 — no crash, no notice, no Working, the saved text stays', async () => {
+    listFails = true
+    feed(freshTabAttach())
+    await mount()
+    await waitFor(() => expect(queryClient.getQueryState(['sessions'])?.status).toBe('error'))
+    expect(screen.getByText('Partial text before the kill')).toBeInTheDocument()
+    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+    expect(screen.queryByText(/working/i)).not.toBeInTheDocument()
+  })
+
+  it('degraded live tab: list unavailable falls back to the boot-mismatch wording, still never Working', async () => {
+    listFails = true
+    await mount()
+    act(() => {
+      useChatStore.getState().sendMessage('Write the long report', { clientMessageId: 'u-1' })
+      useChatStore.getState().handleFrame({ type: 'token', session_id: SID, turn_id: 't-1', message_id: 'a-1', content: 'Partial text before the kill' })
+    })
+    feed(freshTabAttach('boot_mismatch'))
+    expect((await screen.findAllByText(/couldn't be finished/i)).length).toBeGreaterThan(0)
+    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+    expect(screen.queryByText(/working/i)).not.toBeInTheDocument()
+  })
+
+  // Oracle: pkg/gateway/i1_restart_rest_projection_test.go cases human_stop and genuine_failure.
+  it.each([
+    ['human_stop', 'stopped', 'stop'],
+    ['genuine_failure', 'failed', undefined],
+  ] as const)('%s lifecycle is not shown as Interrupted', async (_name, lifecycle, cause) => {
+    savedLifecycle = lifecycle
+    stopCause = cause
+    feed(freshTabAttach())
+    await mount()
+    await waitFor(() => expect(queryClient.getQueryState(['sessions'])?.status).toBe('success'))
+    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+    expect(screen.queryByText(/interrupted/i)).not.toBeInTheDocument()
+  })
+
+  it('restart-cut question with no answer: Interrupted stands alone — the manual Generate again line is off (pending founder Q1, one-line switch)', async () => {
+    feed([
+      { type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'boot_mismatch' },
+      { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z' },
+      { type: 'replay_message', session_id: SID, id: 'u-1', role: 'user', content: 'Write the long report' },
+      { type: 'catch_up_complete', session_id: SID, seq: 4, boot_id: 'boot-2', mode: 'snapshot' },
+    ])
+    expect(useChatStore.getState().sessionsById[SID]?.unansweredLastUserMessageId).toBe('u-1')
+    await mount()
+    expect(await screen.findByTestId('restart-interrupted-notice')).toHaveTextContent('Interrupted')
+    expect(KEEP_GENERATE_AGAIN_WHEN_RESTART_INTERRUPTED).toBe(false)
+    expect(screen.queryByText(/Generate again/)).not.toBeInTheDocument()
+    expect(sender.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'message' }))
+  })
+
+  it('without a restart-interrupted saved state the same unanswered question still offers Generate again (suppression is scoped)', async () => {
+    savedLifecycle = 'done'
+    feed([
+      { type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'boot_mismatch' },
+      { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z' },
+      { type: 'replay_message', session_id: SID, id: 'u-1', role: 'user', content: 'Write the long report' },
+      { type: 'catch_up_complete', session_id: SID, seq: 4, boot_id: 'boot-2', mode: 'snapshot' },
+    ])
+    await mount()
+    await waitFor(() => expect(queryClient.getQueryState(['sessions'])?.status).toBe('success'))
+    expect(screen.getByText(/Generate again/)).toBeInTheDocument()
+    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
   })
 })
