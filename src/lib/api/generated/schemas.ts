@@ -123,6 +123,8 @@ type Session = {
         boot_seq?: number | undefined;
       }
     | undefined;
+  execution?: ("queued" | "running") | undefined;
+  background_command_count?: number | undefined;
   created_at: string;
   updated_at: string;
   model?: string | undefined;
@@ -1234,7 +1236,9 @@ type Agent = {
   name: string;
   type: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
   locked: boolean;
-  color?: string | undefined;
+  figure: AgentFigure;
+  role: AgentRole;
+  color?: AgentColor | undefined;
   icon?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
@@ -1271,6 +1275,50 @@ type AgentFieldDescriptor = {
   editable: boolean;
   reason?: string | undefined;
 };
+type AgentFigure = "Robot" | "Man" | "Woman" | "Omnipus";
+type AgentRole =
+  | "writer"
+  | "designer"
+  | "image"
+  | "video"
+  | "audio"
+  | "social"
+  | "developer"
+  | "data"
+  | "analyst"
+  | "itops"
+  | "automation"
+  | "security"
+  | "quality"
+  | "science"
+  | "orchestrator"
+  | "project"
+  | "product"
+  | "sales"
+  | "marketing"
+  | "finance"
+  | "legal"
+  | "support"
+  | "documents"
+  | "researcher"
+  | "people"
+  | "tutor"
+  | "knowledge"
+  | "translator"
+  | "general"
+  | "personal"
+  | "office";
+type AgentColor =
+  | "#3B82F6"
+  | "#38BDF8"
+  | "#22D3EE"
+  | "#818CF8"
+  | "#A78BFA"
+  | "#C084FC"
+  | "#E879F9"
+  | "#F472B6"
+  | "#FB923C"
+  | "#9CA3AF";
 type MaxToolIterationsSource = "global" | "agent";
 type AgentToolsCfg = Partial<{
   builtin: {
@@ -1342,7 +1390,9 @@ type AgentCreateRequestMain = {
   description?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
-  color?: string | undefined;
+  figure?: AgentFigure | undefined;
+  role?: AgentRole | undefined;
+  color?: AgentColor | undefined;
   icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
   auto_approve_disabled?: boolean | undefined;
@@ -1374,7 +1424,9 @@ type AgentCreateRequestSubagent = {
   description?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
-  color?: string | undefined;
+  figure?: AgentFigure | undefined;
+  role?: AgentRole | undefined;
+  color?: AgentColor | undefined;
   icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
   auto_approve_disabled?: boolean | undefined;
@@ -1395,7 +1447,9 @@ type AgentCreateRequestSubagent3p = {
   description?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
-  color?: string | undefined;
+  figure?: AgentFigure | undefined;
+  role?: AgentRole | undefined;
+  color?: AgentColor | undefined;
   icon?: string | undefined;
   rate_limits?:
     | Partial<{
@@ -1421,7 +1475,9 @@ type AgentUpdateRequest = {
   context_window_override?: (number | null) | undefined;
   soul?: string | undefined;
   max_tool_iterations?: (number | null) | undefined;
-  color?: string | undefined;
+  figure?: AgentFigure | undefined;
+  role?: AgentRole | undefined;
+  color?: AgentColor | undefined;
   icon?: string | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?:
@@ -3391,6 +3447,8 @@ export const Session: z.ZodType<Session> = z.object({
       boot_seq: z.number().int().gte(1).optional(),
     })
     .optional(),
+  execution: z.enum(["queued", "running"]).optional(),
+  background_command_count: z.number().int().gte(0).optional(),
   created_at: z.string().datetime({ offset: true }),
   updated_at: z.string().datetime({ offset: true }),
   model: z.string().optional(),
@@ -3687,6 +3745,52 @@ export const AgentFieldDescriptor: z.ZodType<AgentFieldDescriptor> = z.object({
   editable: z.boolean(),
   reason: z.string().optional(),
 });
+export const AgentFigure = z.enum(["Robot", "Man", "Woman", "Omnipus"]);
+export const AgentRole = z.enum([
+  "writer",
+  "designer",
+  "image",
+  "video",
+  "audio",
+  "social",
+  "developer",
+  "data",
+  "analyst",
+  "itops",
+  "automation",
+  "security",
+  "quality",
+  "science",
+  "orchestrator",
+  "project",
+  "product",
+  "sales",
+  "marketing",
+  "finance",
+  "legal",
+  "support",
+  "documents",
+  "researcher",
+  "people",
+  "tutor",
+  "knowledge",
+  "translator",
+  "general",
+  "personal",
+  "office",
+]);
+export const AgentColor = z.enum([
+  "#3B82F6",
+  "#38BDF8",
+  "#22D3EE",
+  "#818CF8",
+  "#A78BFA",
+  "#C084FC",
+  "#E879F9",
+  "#F472B6",
+  "#FB923C",
+  "#9CA3AF",
+]);
 export const MaxToolIterationsSource = z.enum(["global", "agent"]);
 export const AgentToolsMcpServerBinding: z.ZodType<AgentToolsMcpServerBinding> =
   z
@@ -3761,10 +3865,9 @@ export const Agent: z.ZodType<Agent> = z
     name: z.string().min(1).max(100),
     type: z.enum(["core", "system", "Main", "Subagent", "subagent_3p"]),
     locked: z.boolean(),
-    color: z
-      .string()
-      .regex(/^#[0-9A-Fa-f]{6}$/)
-      .optional(),
+    figure: AgentFigure,
+    role: AgentRole,
+    color: AgentColor.optional(),
     icon: z.string().max(50).optional(),
     model: z.string().max(256).optional(),
     provider: z.string().max(64).optional(),
@@ -3816,10 +3919,9 @@ export const AgentCreateRequestMain =
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
-    color: z
-      .string()
-      .regex(/^#[0-9A-Fa-f]{6}$/)
-      .optional(),
+    figure: AgentFigure.optional(),
+    role: AgentRole.optional(),
+    color: AgentColor.optional(),
     icon: z.string().max(50).optional(),
     tools_cfg: AgentToolsCfg.optional(),
     auto_approve_disabled: z.boolean().optional(),
@@ -3843,10 +3945,9 @@ export const AgentCreateRequestSubagent =
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
-    color: z
-      .string()
-      .regex(/^#[0-9A-Fa-f]{6}$/)
-      .optional(),
+    figure: AgentFigure.optional(),
+    role: AgentRole.optional(),
+    color: AgentColor.optional(),
     icon: z.string().max(50).optional(),
     tools_cfg: AgentToolsCfg.optional(),
     auto_approve_disabled: z.boolean().optional(),
@@ -3867,10 +3968,9 @@ export const AgentCreateRequestSubagent3p =
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
-    color: z
-      .string()
-      .regex(/^#[0-9A-Fa-f]{6}$/)
-      .optional(),
+    figure: AgentFigure.optional(),
+    role: AgentRole.optional(),
+    color: AgentColor.optional(),
     icon: z.string().max(50).optional(),
     rate_limits: z
       .object({
@@ -3904,10 +4004,9 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   context_window_override: z.number().int().gte(1).nullish(),
   soul: z.string().min(1).optional(),
   max_tool_iterations: z.number().int().gte(1).lte(1000).nullish(),
-  color: z
-    .string()
-    .regex(/^#[0-9A-Fa-f]{6}$/)
-    .optional(),
+  figure: AgentFigure.optional(),
+  role: AgentRole.optional(),
+  color: AgentColor.optional(),
   icon: z.string().max(50).optional(),
   fallback_models: z.array(FallbackModel).max(2).optional(),
   model_params: z
