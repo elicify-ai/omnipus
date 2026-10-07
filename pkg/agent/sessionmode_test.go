@@ -78,7 +78,7 @@ func TestSessionModeStore_ClearSession(t *testing.T) {
 	s.ClearSession("sess")
 
 	_, ok := s.Get("sess")
-	assert.False(t, ok, "a cleared chat falls back to the agent and global defaults")
+	assert.False(t, ok, "a cleared chat falls back to the global default")
 	v, ok := s.Get("other")
 	assert.True(t, ok, "clearing one chat must not touch another")
 	assert.False(t, v)

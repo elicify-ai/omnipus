@@ -28,6 +28,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // goldenAutoAskList is the founder file's 28 catalog "asks" entries (§3),
@@ -304,11 +305,18 @@ func TestAutoApprove_T14_GodModeStillPrompts(t *testing.T) {
 // poll rather than assume synchronous completion.
 func delegateUnderAutoChat(t *testing.T) (*autoRecordingApprover, *autoStubTool) {
 	t.Helper()
+	return delegateToolUnderAutoChat(t, "knowledge_edit", config.ToolPolicyAsk)
+}
+
+// delegateToolUnderAutoChat is delegateUnderAutoChat for an arbitrary stub
+// tool and the worker's own per-agent policy for it.
+func delegateToolUnderAutoChat(t *testing.T, toolName string, workerPolicy config.ToolPolicy) (*autoRecordingApprover, *autoStubTool) {
+	t.Helper()
 
 	home := filepath.Join(t.TempDir(), "home")
 	require.NoError(t, os.MkdirAll(home, 0o700))
 	provider := testutil.NewScenario().WithToolCalls([]providers.ToolCall{
-		autoToolCall("t15-knowledge-edit", "knowledge_edit", `{}`),
+		autoToolCall("t15-"+toolName, toolName, `{}`),
 	}).WithText("done")
 
 	cfg := &config.Config{
@@ -339,8 +347,11 @@ func delegateUnderAutoChat(t *testing.T) (*autoRecordingApprover, *autoStubTool)
 	inbox := session.NewMessageInboxStore(filepath.Join(home, "session_messages"))
 	al.SetSessionMessagingStores(inbox, lifecycle)
 
-	stubs := installAutoStubs(t, al, "worker", []string{"knowledge_edit"})
-	stub := stubs["knowledge_edit"]
+	stubs := installAutoStubs(t, al, "worker", []string{toolName})
+	stub := stubs[toolName]
+	if inst, ok := al.GetRegistry().GetAgent("worker"); ok {
+		inst.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{toolName: workerPolicy}})
+	}
 
 	approver := &autoRecordingApprover{approve: false}
 	al.SetToolApprover(approver)
@@ -365,9 +376,9 @@ func delegateUnderAutoChat(t *testing.T) (*autoRecordingApprover, *autoStubTool)
 	// The child's turn runs on a detached goroutine; wait for its one tool
 	// call to either run (stub) or be prompted (approver) — whichever this
 	// case resolves to is the only tool call the scripted turn ever makes.
-	waitFor(t, 10*time.Second, func() bool {
-		return stub.calls.Load() > 0 || approver.countFor("knowledge_edit") > 0
-	})
+	// The scripted turn is one tool call then a text reply, so the second model
+	// request marks the call as resolved (run, prompted or denied alike).
+	waitFor(t, 10*time.Second, func() bool { return provider.CallCount() >= 2 })
 	// Give the turn a moment to finish writing its final text response after
 	// the tool call resolves, so a caller reading stub.pinned right after
 	// this return sees the settled value, not a write still in flight.
