@@ -484,8 +484,8 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 	// authorized-ancestor case FR-039 exists to permit — the ownerKey
 	// variable above and its own presence check remain (a caller must still
 	// have SOME resolvable session identity to reach this far at all), but
-	// the store key must be the target's own SteeringSessionID. executeRespond
-	// already uses this correct key (see its own Drain call).
+	// the store key must be the target's own SteeringSessionID. (executeRespond
+	// no longer reads the inbox at all: respond is an ordinary steering message.)
 	msgs, nextCursor, hasMore, derr := t.inbox.Drain(rec.SteeringSessionID(), sessionID, sinceCursor, maxMessages)
 	if derr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: inbox: %v", derr)).WithError(derr)
