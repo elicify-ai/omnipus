@@ -952,6 +952,19 @@ func boolInt(b bool) int {
 	return 0
 }
 
+// observeCancellation reports ctx's cancellation synchronously. database/sql
+// closes a result set on cancellation from a watcher goroutine, so until that
+// goroutine runs rows.Next() keeps returning rows and a row loop that never
+// looks at ctx itself can finish as a silent full success. Every row loop calls
+// this once per row. The returned error wraps ctx.Err(), so errors.Is matches
+// context.Canceled and context.DeadlineExceeded.
+func observeCancellation(ctx context.Context, what string) error {
+	if cerr := ctx.Err(); cerr != nil {
+		return fmt.Errorf("propindex: the %s was cancelled: %w", what, cerr)
+	}
+	return nil
+}
+
 // AllPaths visits every path this store holds, with its kind and source hash.
 //
 // Unlike every statement below this comment, this query carries NO narrowing
@@ -971,6 +984,9 @@ func (ix *Index) AllPaths(ctx context.Context, visit func(IndexedNote) error) (e
 	}()
 
 	for rows.Next() {
+		if err := observeCancellation(ctx, "path listing"); err != nil {
+			return err
+		}
 		var n IndexedNote
 		if err := rows.Scan(&n.Path, &n.Kind, &n.SourceHash, &n.DeclaredType, &n.SchemaFingerprint); err != nil {
 			return fmt.Errorf("propindex: reading an indexed path: %w", err)
@@ -1232,6 +1248,9 @@ func (ix *Index) Tasks(ctx context.Context, sel Selector, visit func(TaskHit) er
 	}()
 
 	for rows.Next() {
+		if err := observeCancellation(ctx, "task stream"); err != nil {
+			return err
+		}
 		var (
 			hit  TaskHit
 			text []byte
@@ -1272,6 +1291,9 @@ func (ix *Index) Relations(ctx context.Context, sel Selector, visit func(Relatio
 	}()
 
 	for rows.Next() {
+		if err := observeCancellation(ctx, "relation stream"); err != nil {
+			return err
+		}
 		var (
 			hit                           RelationHit
 			recordID                      []byte
@@ -1339,6 +1361,9 @@ func (ix *Index) Tags(ctx context.Context, sel Selector, visit func(TagHit) erro
 	}()
 
 	for rows.Next() {
+		if err := observeCancellation(ctx, "tag stream"); err != nil {
+			return err
+		}
 		var (
 			hit TagHit
 			tag []byte
@@ -1384,6 +1409,9 @@ func (ix *Index) Links(ctx context.Context, sel Selector, visit func(LinkHit) er
 	}()
 
 	for rows.Next() {
+		if err := observeCancellation(ctx, "link stream"); err != nil {
+			return err
+		}
 		var (
 			hit                           LinkHit
 			target, heading, display, raw []byte
