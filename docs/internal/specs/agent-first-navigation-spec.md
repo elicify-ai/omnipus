@@ -1605,3 +1605,32 @@ The founder has **not yet reviewed or acknowledged** these warnings in this task
 - **Setup**: Supported saved ordinary/extra/Unfiled/child/heartbeat histories and legacy identities, including a retained helper with unavailable parent context treated according to the later founder answer.
 - **Action**: Upgrade, reopen/continue histories, search/filter the helper, and repeat restart/upgrade.
 - **Expected outcome**: Known content/binding and actual continuation survive without duplication or empty-success failure. Helpers never become top-level rows; unavailable parent treatment is honest and approved. Main/heartbeat and canonical identities remain stable.
+
+## Assumptions
+
+| Item | Status / boundary |
+|---|---|
+| Approved design/interview | F's approved design and latest modal steering are explicit confirmation of the settled scope. This is not assumed implementation, independent review approval or final ambiguity acceptance. |
+| Backend U1/identity/activity | Required contracts and actual runtime integration remain owner dependencies. No unfinished dependency is disguised by client fallbacks or invented wire types. |
+| Later items | Full @/clear integration, uploads/GIFs, broader page redesign and app-wide kit swaps remain later/companion units as recorded, not silently delivered here. |
+| Current source baseline | This worktree's production code is the cited baseline; later branch publications are pinned sources, not checkout changes. Graph context is unavailable here; future impact is source-inferred. |
+| Modal decisions | Always-under-parent helpers, All / Running / Needs me and expandable N similar helper runs are **decided**, not assumptions or pending A2/D8 questions. Narrow missing-parent/non-main attention/shell cases remain explicitly unanswered. |
+| No unspecified defaults | No extra product bounds, endpoints, persisted property names, avatar storage, permission grants or unreviewed alternative glyphs are assumed. |
+
+Incidental notes for team-lead, not side fixes: (1) current selection source writes active workspace before failed attach; N D3 already commissions the consistent-selection replacement, with runtime proof still required. (2) K's observed FilterMenu source marks the selected item with the text `active`, whereas R39 asks for a check mark; its owner resolves that centrally, not via a duplicate here. (3) push receipts report 36 default-branch vulnerabilities (16 high/16 moderate/4 low); this author has not inspected or classified them, and this one-spec task does not change dependencies or claim vulnerability clearance.
+
+## Clarifications
+
+### 2026-10-07
+
+| Recorded answer / source fact | Specification effect |
+|---|---|
+| F Q1/Q2 | Exact remembered visible chat, otherwise server-validated Ava welcome main; persistent above-feed Main/Extra label. |
+| F Q4/Q4b; published BS C-ATTENTION | Main-only four-source needs_attention; structured user-question rule; shared observed-goal acknowledgement through published optional ack_attention, not prefetch/reconnect or unresolved decisions. |
+| F Q5–Q8 | Four figures/Omnipus default/role at every size; no first-squad uploads/GIFs; exact one-time palette threshold/ties/examples recorded. |
+| F Q9 FINAL and W approval | Name-only bubbles, actual responding-agent animation inline in the feed, no composer status line/old bouncing dots. |
+| F Q10 | Old paths removed now; /resume → /sessions without alias, @ switching/suggestions unavailable until proper messaging, Clear never new chat. |
+| F Q11/Q12 and later BS amendments | Supported upgrade preserves real saved-chat continuation, heartbeat→main, Admin default-workspace main/no fake membership. Backend scope is consumed, never re-invented. |
+| F Q-FE-11/Q-FE-12 | Activity panel belongs only to open session; overall view is existing Sessions modal. Plan pill/parent row in actual starting chat, other chats via modal, no-origin Tasks plan in existing workspace surfaces. |
+| F **Session modal A2/D8 + grouping**, re-read after team-lead steering | Helpers **always** nested under parent, never top-level even on search/filter hits; All / Running / Needs me and expandable **N similar helper runs** are decided. Updated US-8/US-9, BDD-08.2/09.1/09.5/E08, T-08/T-19/T-26, FR-030/033/034 and their traces. Former A2/D8/name-choice questions retired; only Q-M4/Q-M5/Q-M6 remain narrow unresolved cases. |
+| P feature workflow / plan-spec ambiguity gate | This is a complete **draft for interview/review**, not approved implementation. Team-lead handles outstanding interview, two spec grill/fix rounds and later joint gates; no extra ADR grill or independent author approval. |
