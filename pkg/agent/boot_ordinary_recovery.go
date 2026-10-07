@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -13,11 +14,25 @@ import (
 var errRestartStopUnchanged = errors.New("boot: restart stop no longer needed")
 
 // admittedStandingRoot separates an idle, usable conversation from a saved
-// execution that actually entered admission. The plan sweep still owns task
-// roots; standing roots belong to this run-aware restart recovery instead.
+// execution that actually entered admission. A prior-boot needs_input belongs
+// here too: its approval/question died with the process (#1217), so recovery
+// clears it through the same restart Stop rather than re-asking. The plan sweep
+// still owns task/plan roots.
 func admittedStandingRoot(rec *session.LifecycleRecord) bool {
-	return rec != nil && standingRootExemptFromSweep(*rec) && rec.ExecutionID != nil &&
-		(rec.State == session.LifecycleRunning || rec.State == session.LifecycleQueued)
+	return standingOrdinaryRoot(rec) && rec.ExecutionID != nil &&
+		(rec.State == session.LifecycleRunning || rec.State == session.LifecycleQueued || rec.State == session.LifecycleNeedsInput)
+}
+
+func standingOrdinaryRoot(rec *session.LifecycleRecord) bool {
+	return session.LifecycleRecordIsStandingRoot(rec)
+}
+
+// A restart stop ends the old execution, not the standing trigger. Normal
+// scheduled/heartbeat entries may reuse the existing same-generation revival;
+// a human Stop, timeout or steered helper never grants that automatic revival.
+func restartStoppedStandingRoot(rec *session.LifecycleRecord) bool {
+	return standingOrdinaryRoot(rec) && rec.State == session.LifecycleStopped &&
+		rec.StopNote != nil && rec.StopNote.Cause == session.StopCauseRestart
 }
 
 // recoverOrdinaryRoot never dispatches a turn. It settles only a standing
@@ -51,18 +66,35 @@ func (r *SteerBootRecovery) recoverOrdinaryRoot(id string, notice func(string, s
 // the writer's lock hold. No new run, generation or human Stop may be replaced
 // by the scan's old snapshot. The existing steered recovery remains separate.
 func (r *SteerBootRecovery) ordinaryRestartStopAllowedLocked(selected, current *session.LifecycleRecord, writingBootSeq uint64) (bool, error) {
-	if !admittedStandingRoot(current) || selected.ExecutionID == nil ||
-		current.Generation != selected.Generation || *current.ExecutionID != *selected.ExecutionID {
+	if !admittedStandingRoot(current) {
+		bootRestartStopDebug(current, "ordinary_ineligible_state_or_owner")
+		return false, nil
+	}
+	if selected.ExecutionID == nil || current.Generation != selected.Generation ||
+		*current.ExecutionID != *selected.ExecutionID {
+		bootRestartStopDebug(current, "ordinary_execution_changed")
 		return false, nil
 	}
 	if writingBootSeq != 0 && current.ExecutionID.BootSeq >= writingBootSeq {
+		bootRestartStopDebug(current, "ordinary_not_prior_boot")
 		return false, nil
 	}
 	intents, err := r.Lifecycle.UnfinishedStopIntentsLocked(current.SessionID)
 	if err != nil {
+		bootRestartStopDebug(current, "ordinary_controls_unreadable")
 		return false, fmt.Errorf("steer: boot: accepted Stop controls for %q unreadable: %w", current.SessionID, err)
 	}
-	return !acceptedStopSelectsExecution(current, intents), nil
+	if acceptedStopSelectsExecution(current, intents) {
+		bootRestartStopDebug(current, "ordinary_accepted_stop")
+		return false, nil
+	}
+	return true, nil
+}
+
+func bootRestartStopDebug(rec *session.LifecycleRecord, arm string) {
+	logger.DebugCF("agent", "boot: restart stop skipped or refused", map[string]any{
+		"session_id": rec.SessionID, "generation": rec.Generation, "arm": arm,
+	})
 }
 
 // A matching accepted human Stop owns the landing even if its fence never

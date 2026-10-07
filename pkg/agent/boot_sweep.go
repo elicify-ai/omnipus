@@ -645,7 +645,8 @@ func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, messag
 }
 
 // failInterrupted lands D8.3's automatic restart stop on a record the
-// restart interrupted mid-flight (queued or running). Correction C3 applies
+// restart interrupted mid-flight (queued/running, or a standing root whose
+// needs_input prompt was lost with the process). Correction C3 applies
 // to this landing like to any other: the fence-less transition is appended
 // to the control ledger IN THE SAME lock hold that writes the stop note —
 // allocated the next monotonic stop sequence, identifying the interrupted
@@ -662,12 +663,15 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 	}
 	err := r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
 		if current == nil {
+			bootRestartStopDebug(rec, "missing_record")
 			return session.ErrLifecycleNotFound
 		}
 		if current.Terminal() || (current.Stop != nil && current.Stop.Generation == current.Generation) {
+			bootRestartStopDebug(current, "terminal_or_current_stop_fence")
 			return errRestartStopUnchanged
 		}
 		if current.State == session.LifecycleStopped {
+			bootRestartStopDebug(current, "already_stopped")
 			// Already-stopped arm (ADR-20260928 D8, founder decision
 			// 2026-10-04): the record's run ended BEFORE the restart, so the
 			// restart interrupted nothing. The record stays stopped exactly
@@ -691,6 +695,7 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 			}
 		}
 		if writingBootSeq == 0 {
+			bootRestartStopDebug(current, "missing_writing_epoch")
 			return fmt.Errorf("steer: boot: restart stop for %q refused: missing current writing boot epoch", current.SessionID)
 		}
 		// Mid-flight arm (D8.3/F0929-3): the restart interrupted a LIVE
@@ -718,6 +723,7 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 		}
 		seq, ledgerErr := r.Lifecycle.RecordFencelessLandedStopLocked(current.SessionID, landed)
 		if ledgerErr != nil {
+			bootRestartStopDebug(current, "restart_ledger_refused")
 			return fmt.Errorf("steer: boot: restart stop for %q not landed: its transition could not be ledgered: %w",
 				current.SessionID, ledgerErr)
 		}
@@ -735,6 +741,9 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 	})
 	if errors.Is(err, errRestartStopUnchanged) {
 		return nil
+	}
+	if err != nil {
+		bootRestartStopDebug(rec, "restart_record_write_refused")
 	}
 	return err
 }
@@ -983,15 +992,14 @@ func (pe *PlanEngine) runBootSweep(ctx context.Context) BootSweepResult {
 // resolved.
 const DefaultLifecycleRetentionDays = 90
 
-// standingRootExemptFromSweep reports whether rec is a root the boot sweep
-// must leave alone (ADR-093 D3). A root has no SteeredBy edge. Its origin is
-// absent, or one of the standing kinds (chat, channel, heartbeat, scheduled):
-// the root stays usable on its CURRENT generation — the sweep must not mark
-// it failed(interrupted), and revival is only ever for a record a later Stop
-// or a terminal transition has ALREADY put into stopped/terminal state
-// (inboundRevivable's predicate), never something this sweep produces. A task
-// root never matches — persistLocked rejects origin kind task without a task
-// id — and is swept exactly as before.
+// standingRootExemptFromSweep keeps standing conversations out of the plan
+// engine's failed(interrupted) sweep (ADR-093 D3). A root has no SteeredBy edge;
+// its origin is absent or chat/channel/heartbeat/scheduled. SteerBootRecovery,
+// not this sweep, produces ledger-backed stopped(restart) for an admitted
+// prior-boot ordinary execution; idle roots have no run to interrupt. A later
+// normal trigger may resume that restart stop on the same generation, while
+// an operator Stop stays binding until explicit human resumption. Task roots
+// never match and plan-owned roots remain the plan engine's responsibility.
 func standingRootExemptFromSweep(rec session.LifecycleRecord) bool {
 	if rec.SteeredBy != nil {
 		return false

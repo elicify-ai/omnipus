@@ -116,9 +116,19 @@ func LifecycleRecordIsRestartInterrupted(rec *LifecycleRecord) bool {
 // LifecycleRecordToDisplay projects a whole record, including its restart
 // cause. A restart-cut root shows Interrupted without failing the conversation;
 // genuine failure and human Stop still show Failed and Stopped. Callers holding
-// the record must use this, not LifecycleStateToDisplay alone.
-func LifecycleRecordToDisplay(rec *LifecycleRecord) LifecycleDisplayState {
+// the record must use this, not LifecycleStateToDisplay alone, and should pass
+// the current process epoch when available to recognise unlanded dead runs.
+func LifecycleRecordToDisplay(rec *LifecycleRecord, currentBootSeq ...uint64) LifecycleDisplayState {
 	if LifecycleRecordIsRestartInterrupted(rec) {
+		return LifecycleDisplayInterrupted
+	}
+	// A prior-boot root execution cannot still be working in this process,
+	// even if its recovery write failed or boot returned before scanning it.
+	// This is a read-only projection, not a synthetic stop/failure landing.
+	if len(currentBootSeq) > 0 && currentBootSeq[0] != 0 && rec.SteeredBy == nil &&
+		rec.ExecutionID != nil && rec.ExecutionID.BootSeq < currentBootSeq[0] &&
+		(rec.State == LifecycleRunning || rec.State == LifecycleQueued ||
+			(rec.State == LifecycleNeedsInput && LifecycleRecordIsStandingRoot(rec))) {
 		return LifecycleDisplayInterrupted
 	}
 	return LifecycleStateToDisplay(rec.State)

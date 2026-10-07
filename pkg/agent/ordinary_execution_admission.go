@@ -77,8 +77,8 @@ func (al *AgentLoop) prepareOrdinaryExecution(ctx context.Context, msg bus.Inbou
 
 // prepareOrdinarySessionExecution is shared by human and scheduled entries.
 // A nil revival principal never revives: the ordinary dispatch guard still
-// refuses stopped/terminal records. A non-human principal never resumes a
-// stopped record. This does not reserve a worker or FIFO slot.
+// refuses stopped/terminal records. A non-human trigger resumes only a standing
+// root stopped by restart; an operator Stop remains binding. No steered slot is reserved.
 func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessionID string, opts processOptions, revival *steer.Principal) (ordinaryExecutionPreparation, error) {
 	store := al.GetSessionLifecycleStore()
 	if sessionID == "" || store == nil {
@@ -117,9 +117,10 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 	if fenceErr := al.inboundStopFenceInFlight(sessionID); fenceErr != nil {
 		return ordinaryExecutionPreparation{}, fenceErr
 	}
-	// A person revives a finished or stopped session; a scheduled entry
-	// revives a finished one only, so a Stop holds until a person resumes.
-	if revival != nil && (rec.Terminal() || (rec.State == session.LifecycleStopped && revival.Kind == steer.PrincipalKindHuman)) {
+	// A person resumes any landed stop. A normal automatic trigger resumes
+	// only a restart-stopped standing root: a human Stop stays binding.
+	if revival != nil && (rec.Terminal() || (rec.State == session.LifecycleStopped &&
+		(revival.Kind == steer.PrincipalKindHuman || restartStoppedStandingRoot(rec)))) {
 		if reviveErr := al.reviveRecordForHumanTurn(ctx, sessionID, *revival); reviveErr != nil {
 			return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: explicit revival failed: %w", reviveErr)
 		}

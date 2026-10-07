@@ -69,10 +69,10 @@ func TestI1OrdinaryBootGuards(t *testing.T) {
 			}
 			if name == "accepted_without_fence" || name == "stop_accepted_after_snapshot" {
 				stampErr := errors.New("fixture: crash after accepted Stop, before fence")
-				_, _, _, err := ls.AcceptStopControl(meta.ID, session.StopControlIntent{Cause: session.StopCauseStop, Actor: session.StopActorHumanUser("owner")}, func(*session.LifecycleRecord, session.ControlGrant, session.StopEffectTarget) error { return stampErr })
-				require.ErrorIs(t, err, stampErr, "instrument: real ledger intent must survive failed fence write")
-				intents, err := ls.UnfinishedStopIntents(meta.ID)
-				require.NoError(t, err)
+				_, _, _, acceptErr := ls.AcceptStopControl(meta.ID, session.StopControlIntent{Cause: session.StopCauseStop, Actor: session.StopActorHumanUser("owner")}, func(*session.LifecycleRecord, session.ControlGrant, session.StopEffectTarget) error { return stampErr })
+				require.ErrorIs(t, acceptErr, stampErr, "instrument: real ledger intent must survive failed fence write")
+				intents, intentReadErr := ls.UnfinishedStopIntents(meta.ID)
+				require.NoError(t, intentReadErr)
 				require.Len(t, intents, 1)
 			}
 			path := filepath.Join(ls.Dir(), meta.ID+".jsonl")
@@ -84,9 +84,9 @@ func TestI1OrdinaryBootGuards(t *testing.T) {
 				controls := filepath.Join(ls.Dir(), "controls")
 				require.NoError(t, os.MkdirAll(controls, 0700))
 				require.NoError(t, os.WriteFile(filepath.Join(controls, meta.ID+".jsonl"), []byte("{\n"), 0600))
-				err := recovery.Run(context.Background())
+				recoveryErr := recovery.Run(context.Background())
 				var syntaxErr *json.SyntaxError
-				require.ErrorAs(t, err, &syntaxErr, "a malformed JSON control ledger must reach the BootHook error channel")
+				require.ErrorAs(t, recoveryErr, &syntaxErr, "a malformed JSON control ledger must reach the BootHook error channel")
 				require.Len(t, notices, 1, "the refused recovery must also be operator-visible, not only a warning log")
 				assert.Contains(t, notices[0], meta.ID, "operator notice must identify the refused conversation")
 				after, readErr := os.ReadFile(path)
