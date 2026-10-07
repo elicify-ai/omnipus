@@ -775,9 +775,13 @@ func (l *SteerLauncher) walkVerifiedRoot(steeringSessionID string, steererRec *s
 func (l *SteerLauncher) startingRemainingDepth(steererRec *session.LifecycleRecord, targetAgentID string, parentDepth int) int {
 	globalMaxDepth := 0
 	if cfg := l.al.GetConfig(); cfg != nil {
-		if configured, err := cfg.Performance.EffectiveMaxDelegationDepth(); err == nil {
-			globalMaxDepth = configured
+		configured, depthOK := configuredDelegationDepth(cfg.Performance, "launch depth budget")
+		if !depthOK {
+			// No delegation budget on an invalid limit, matching the gate's
+			// denial (and the Depth <= 0 edge case below).
+			return 0
 		}
+		globalMaxDepth = configured
 	}
 	depthCap := resolveEffectiveDelegationDepth(nil, globalMaxDepth)
 	if steererRec.WorkspaceID != "" && steererRec.AgentID != "" && targetAgentID != "" {

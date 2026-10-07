@@ -5,6 +5,48 @@
 
 package agent
 
+import (
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+)
+
+// delegationDepthConfigKey is the operator-facing name of the depth limit,
+// carried as config_key on every invalid-limit log.
+const delegationDepthConfigKey = "performance.max_delegation_depth"
+
+// failClosedBoundedDepth is the tightest positive bound, used where a setter
+// treats 0 as "unset, use the default" and so cannot be told "none".
+const failClosedBoundedDepth = 1
+
+// configuredDelegationDepth is THE single reader of the operator's depth limit
+// for every consumer (delegation block, gate, launcher budget, ownership walk,
+// task recursion bound). An invalid (negative) value is never swallowed into
+// the unset/backstop default: it logs ERROR with config_key and site, and
+// reports valid=false so each caller fails closed in its own terms — the block
+// renders cannot-delegate, the gate denies, the launch budget is 0, and the
+// bound-style setters take failClosedBoundedDepth.
+func configuredDelegationDepth(perf config.PerformanceConfig, site string) (limit int, valid bool) {
+	limit, err := perf.EffectiveMaxDelegationDepth()
+	if err != nil {
+		logger.ErrorCF("agent", "invalid performance.max_delegation_depth — failing closed",
+			map[string]any{"config_key": delegationDepthConfigKey, "site": site, "error": err.Error()})
+		return 0, false
+	}
+	return limit, true
+}
+
+// delegationDepthBound is the bound the bound-style consumers (the ownership
+// walk, the task recursion ceiling) install: the shared effective depth when the
+// limit is valid, failClosedBoundedDepth when it is invalid (see
+// configuredDelegationDepth).
+func delegationDepthBound(perf config.PerformanceConfig, site string) int {
+	limit, valid := configuredDelegationDepth(perf, site)
+	if !valid {
+		return failClosedBoundedDepth
+	}
+	return resolveEffectiveDelegationDepth(nil, limit)
+}
+
 // resolveEffectiveDelegationDepth returns the effective onward-delegation depth
 // cap: the tighter of the edge's own Depth (nil = inherit, no per-edge cap) and
 // performance.max_delegation_depth (0 = unset, falls back to the safety-backstop

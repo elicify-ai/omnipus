@@ -154,13 +154,10 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 			// one exists for a specific target) is enforced separately when the
 			// target session is launched and does not change
 			// this general-roster footer.
-			configuredDepthCap, depthErr := liveCfg.Performance.EffectiveMaxDelegationDepth()
-			if depthErr != nil {
-				// An invalid limit cannot be advertised truthfully: fail closed
-				// (the gate denies on the same error — buildDelegationDenyChecker).
-				logger.ErrorCF("agent.env",
-					"wireDelegationInjectors: invalid performance.max_delegation_depth — rendering fail-closed delegation block",
-					map[string]any{"agent_id": id, "config_key": "performance.max_delegation_depth", "error": depthErr.Error()})
+			// An invalid limit cannot be advertised truthfully: fail closed (the
+			// gate denies on the same error — buildDelegationDenyChecker).
+			configuredDepthCap, depthOK := configuredDelegationDepth(liveCfg.Performance, "delegation block (agent "+id+")")
+			if !depthOK {
 				return delegationFailClosedBlock
 			}
 			globalDepthCap := resolveEffectiveDelegationDepth(nil, configuredDepthCap)
