@@ -2,6 +2,7 @@ import { cloneElement, useEffect, useId, useRef, useState, type HTMLAttributes, 
 import { HoverCard, HoverCardTrigger, HoverCardContent } from '@/components/ui/hover-card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { WordBoundaryText } from '@/components/ui/word-boundary-text'
 import { taskDisplayLabel } from '@/lib/statusColors'
 import type { Agent, Plan, Task } from '@/lib/api'
 
@@ -22,12 +23,14 @@ export function TaskHoverDetails({ task, plans = [], agents = [], children, onOp
   const [open, setOpen] = useState(false)
   const previewId = useId()
   const touch = useRef(false)
+  const dismissed = useRef(false)
   const props = children.props
   useEffect(() => {
     if (!open) return
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       event.stopPropagation()
+      dismissed.current = true
       setOpen(false)
     }
     document.addEventListener('keydown', escape, true)
@@ -38,13 +41,14 @@ export function TaskHoverDetails({ task, plans = [], agents = [], children, onOp
   const trigger = cloneElement(children, {
     'aria-describedby': [props['aria-describedby'], open ? previewId : undefined].filter(Boolean).join(' ') || undefined,
     onPointerDown: (event) => {
+      dismissed.current = false
       touch.current = event.pointerType === 'touch'
       props.onPointerDown?.(event)
     },
     onClickCapture: (event) => {
       props.onClickCapture?.(event)
       if (event.defaultPrevented) return
-      if (!touch.current) { setOpen(false); return }
+      if (!touch.current) { dismissed.current = true; setOpen(false); return }
       const button = (event.target as HTMLElement).closest('button')
       // Run/Stop and other independent nested actions retain their own behavior.
       if (button && !button.hasAttribute('data-task-open')) return
@@ -52,7 +56,8 @@ export function TaskHoverDetails({ task, plans = [], agents = [], children, onOp
       event.stopPropagation()
       setOpen(true)
     },
-    onFocus: (event) => { props.onFocus?.(event); if (!event.defaultPrevented) setOpen(true) },
+    onPointerLeave: (event) => { props.onPointerLeave?.(event); dismissed.current = false },
+    onFocus: (event) => { dismissed.current = false; props.onFocus?.(event); if (!event.defaultPrevented) setOpen(true) },
     onKeyDown: (event) => { touch.current = false; if (event.key === 'Enter' || event.key === ' ') setOpen(false); props.onKeyDown?.(event) },
   })
   const agent = task.agent_name ?? agents.find((value) => value.id === task.agent_id)?.name ?? task.agent_id ?? 'Unassigned'
@@ -60,10 +65,10 @@ export function TaskHoverDetails({ task, plans = [], agents = [], children, onOp
   const updated = new Date(task.updated_at)
 
   return (
-    <HoverCard open={open} onOpenChange={setOpen} openDelay={100} closeDelay={200}>
+    <HoverCard open={open} onOpenChange={(next) => { if (!next || !dismissed.current) setOpen(next) }} openDelay={100} closeDelay={200}>
       <HoverCardTrigger asChild>{trigger}</HoverCardTrigger>
       <HoverCardContent id={previewId} role="dialog" aria-label="Task preview" data-testid={`task-preview-${task.id}`}>
-        <h3 className="max-w-full whitespace-normal break-normal wrap-break-word font-headline font-bold text-[var(--color-secondary)]">{task.title}</h3>
+        <WordBoundaryText as="h3" text={task.title} className="max-w-full whitespace-normal break-normal wrap-break-word font-headline font-bold text-[var(--color-secondary)]" />
         <dl className="mt-[var(--space-2)] grid grid-cols-[auto_minmax(0,1fr)] gap-x-[var(--space-3)] gap-y-[var(--space-1)]">
           <dt className="text-[var(--color-muted)]">Status</dt><dd className="break-normal wrap-break-word">{taskDisplayLabel(task)}</dd>
           <dt className="text-[var(--color-muted)]">Agent</dt><dd className="break-normal wrap-break-word">{agent}</dd>

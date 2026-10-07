@@ -56,6 +56,7 @@
 @source "../components/ui/filter-menu.tsx";
 @source "../components/ui/view-switch.tsx";
 @source "../components/ui/hover-card.tsx";
+@source "../components/ui/word-boundary-text.tsx";
 
 @theme inline {
   --font-headline: var(--type-page-title-family);

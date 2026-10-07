@@ -10,6 +10,7 @@ import { PriorityBadge } from './PriorityBadge'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
 import { Badge } from '@/components/ui/badge'
 import { TaskHoverDetails } from './TaskHoverDetails'
+import { WordBoundaryText } from '@/components/ui/word-boundary-text'
 import { taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
 import type { BoardAltitude } from '@/store/workspacesStore'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
@@ -264,9 +265,7 @@ export function TaskCard({
       </div>
       {/* Full card width, normal word boundaries; only oversized words/URLs
           use overflow-wrap: break-word. Explicit bounds defeat min-content inflation. */}
-      <p title={task.title} className="mt-[var(--space-1)] h-[calc(var(--type-body-compact-size)*var(--type-body-compact-line-height)*2)] w-full min-w-0 max-w-full line-clamp-2 whitespace-normal break-normal wrap-break-word hyphens-none text-[length:var(--type-body-compact-size)] font-medium leading-[var(--type-body-compact-line-height)] text-[var(--color-secondary)]">
-        {task.title}
-      </p>
+      <WordBoundaryText as="p" text={task.title} title={task.title} className="mt-[var(--space-1)] h-[calc(var(--type-body-compact-size)*var(--type-body-compact-line-height)*2)] w-full min-w-0 max-w-full line-clamp-2 whitespace-normal break-normal wrap-break-word hyphens-none text-[length:var(--type-body-compact-size)] font-medium leading-[var(--type-body-compact-line-height)] text-[var(--color-secondary)]" />
 
       {/* Cancelled/Failed marker (ADR-052 FR-015/US-8) — a `failed` task
           gets an explicit state chip so a user-Stopped (orange "Cancelled")

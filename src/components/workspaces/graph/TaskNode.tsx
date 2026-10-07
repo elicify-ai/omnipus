@@ -8,6 +8,7 @@ import { PRIORITY_LABELS, taskNodeVisual, type TaskGraphNode } from './taskGraph
 import { TaskActionButton } from '../TaskActionButton'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
 import { TaskHoverDetails } from '../TaskHoverDetails'
+import { WordBoundaryText } from '@/components/ui/word-boundary-text'
 
 /**
  * Priority pill colours — mirrors `PriorityBadge.tsx`'s P1..P5 ladder
@@ -177,9 +178,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
         </div>
 
         {/* Full title — wrapping is bounded; GraphView reserves the measured height. */}
-        <p title={task.title} className="h-[calc(var(--type-caption-size)*var(--type-caption-line-height)*2)] min-w-0 max-w-full line-clamp-2 whitespace-normal break-normal wrap-break-word hyphens-none font-headline text-[length:var(--type-caption-size)] font-semibold leading-[var(--type-caption-line-height)] text-[var(--color-secondary)]">
-          {task.title}
-        </p>
+        <WordBoundaryText as="p" text={task.title} title={task.title} className="h-[calc(var(--type-caption-size)*var(--type-caption-line-height)*2)] min-w-0 max-w-full line-clamp-2 whitespace-normal break-normal wrap-break-word hyphens-none font-headline text-[length:var(--type-caption-size)] font-semibold leading-[var(--type-caption-line-height)] text-[var(--color-secondary)]" />
 
         {/* ADR-053 FE-2 §7 (D7) — plan-member DAG signals. The join member
             (gold GitMerge pill) is the authored convergence point that folds

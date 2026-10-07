@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
+import { WordBoundaryText } from '@/components/ui/word-boundary-text'
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/components/ui/accordion'
 import { PlanActionButton } from './PlanActionButton'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
@@ -446,9 +447,7 @@ function PlanFilterTile({
             the wrapping mode the spec requires browsers to factor into
             min-content sizing itself. T3 founder steering removes the clamp
             and bounds the span to the button's content width for full wrapping. */}
-        <span className="w-full min-w-0 max-w-full whitespace-normal break-normal wrap-break-word hyphens-none text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]">
-          {plan.title}
-        </span>
+        <WordBoundaryText text={plan.title} className="w-full min-w-0 max-w-full whitespace-normal break-normal wrap-break-word hyphens-none text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]" />
 
         {/* S3 UAT finding — `failed_reason` (e.g. `judge_rounds_exhausted`)
             was on the wire but never rendered; the tile showed only the word

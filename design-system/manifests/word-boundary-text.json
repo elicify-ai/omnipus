@@ -1,0 +1,17 @@
+{
+ "version":1,"component":"WordBoundaryText","exports":["WordBoundaryText"],"category":"primitive","source":"src/components/ui/word-boundary-text.tsx","documentation":"docs/internal/design/components/word-boundary-text.md","owner":"design-system","themes":["dark"],"variants":["default"],"sizes":["inherited"],"states":["default"],
+ "stories":[{"file":"src/components/ui/word-boundary-text.stories.tsx","exports":["Default","LongWord"]}],
+ "checks":[
+  {"id":"word-boundary-text-unit","kind":"unit","file":"src/components/ui/task-hover-details.test.tsx","test":"T14 shows all task metadata in an unclipped hover/focus preview in every view and touch tap does not open the task","applicable":true},
+  {"id":"word-boundary-text-interaction","kind":"interaction","applicable":false,"reason":"Static text has no activation or state-changing user interaction; owner hover/focus is verified separately."},
+  {"id":"word-boundary-text-axe","kind":"axe","file":"tests/design-system/browser.spec.ts","test":"WordBoundaryText [check:word-boundary-text-axe] axe","story":"Default","applicable":true},
+  {"id":"word-boundary-text-keyboard","kind":"keyboard","applicable":false,"reason":"Static text creates no focus target or keyboard action."},
+  {"id":"word-boundary-text-browser","kind":"browser","file":"tests/design-system/browser.spec.ts","test":"WordBoundaryText [check:word-boundary-text-browser] browser","story":"Default","applicable":true},
+  {"id":"word-boundary-text-pointer","kind":"pointer","applicable":false,"reason":"Static text has no pointer hit target or action."},
+  {"id":"word-boundary-text-motion","kind":"reduced-motion","applicable":false,"reason":"The text atom has no animation or transition."},
+  {"id":"word-boundary-text-forced-colors","kind":"forced-colors","file":"tests/design-system/browser.spec.ts","test":"WordBoundaryText [check:word-boundary-text-forced-colors] forced-colors","story":"Default","applicable":true},
+  {"id":"word-boundary-text-root-size","kind":"root-size","file":"tests/design-system/browser.spec.ts","test":"WordBoundaryText [check:word-boundary-text-root-size] root-size","story":"Default","applicable":true},
+  {"id":"word-boundary-text-zoom","kind":"zoom","file":"tests/design-system/browser.spec.ts","test":"WordBoundaryText [check:word-boundary-text-zoom] zoom","story":"Default","applicable":true},
+  {"id":"word-boundary-text-reflow","kind":"reflow","file":"tests/design-system/browser.spec.ts","test":"WordBoundaryText [check:word-boundary-text-reflow] reflow","story":"Default","applicable":true}
+ ]
+}

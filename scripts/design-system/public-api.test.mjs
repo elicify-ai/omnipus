@@ -95,7 +95,7 @@ const reviewedControls = new Set([
   'job-status', 'empty-state', 'error-state', 'query-error-state', 'zoomable-view',
   'RunningIndicator',
   // T7's founder-approved public composites: exact files, never a ui-folder admission.
-  'filter-menu', 'view-switch', 'hover-card',
+  'filter-menu', 'view-switch', 'hover-card', 'word-boundary-text',
 ].map((name) => `src/components/ui/${name}.tsx`))
 const reviewedFoundations = new Set([
   'src/index.ts', 'src/lib/utils.ts', 'src/lib/formatTokens.ts',
