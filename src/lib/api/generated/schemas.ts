@@ -1248,7 +1248,6 @@ type Agent = {
   max_tool_iterations_override?: number | undefined;
   max_tool_iterations_override_ignored: boolean;
   tools_cfg?: AgentToolsCfg | undefined;
-  auto_approve_disabled?: boolean | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?: AgentModelParams | undefined;
   rate_limits?: AgentRateLimits | undefined;
@@ -1345,7 +1344,6 @@ type AgentCreateRequestMain = {
   color?: string | undefined;
   icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
-  auto_approve_disabled?: boolean | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?:
     | Partial<{
@@ -1377,7 +1375,6 @@ type AgentCreateRequestSubagent = {
   color?: string | undefined;
   icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
-  auto_approve_disabled?: boolean | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?:
     | Partial<{
@@ -1431,7 +1428,6 @@ type AgentUpdateRequest = {
       }>
     | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
-  auto_approve_disabled?: boolean | undefined;
   default?: boolean | undefined;
   skills?: Array<string> | undefined;
   voice?: (string | null) | undefined;
@@ -3778,7 +3774,6 @@ export const Agent: z.ZodType<Agent> = z
     max_tool_iterations_override: z.number().int().gte(1).optional(),
     max_tool_iterations_override_ignored: z.boolean(),
     tools_cfg: AgentToolsCfg.optional(),
-    auto_approve_disabled: z.boolean().optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: AgentModelParams.optional(),
     rate_limits: AgentRateLimits.optional(),
@@ -3822,7 +3817,6 @@ export const AgentCreateRequestMain =
       .optional(),
     icon: z.string().max(50).optional(),
     tools_cfg: AgentToolsCfg.optional(),
-    auto_approve_disabled: z.boolean().optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: z
       .object({ temperature: z.number(), max_tokens: z.number().int() })
@@ -3849,7 +3843,6 @@ export const AgentCreateRequestSubagent =
       .optional(),
     icon: z.string().max(50).optional(),
     tools_cfg: AgentToolsCfg.optional(),
-    auto_approve_disabled: z.boolean().optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: z
       .object({ temperature: z.number(), max_tokens: z.number().int() })
@@ -3916,7 +3909,6 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
     .passthrough()
     .optional(),
   tools_cfg: AgentToolsCfg.optional(),
-  auto_approve_disabled: z.boolean().optional(),
   default: z.boolean().optional(),
   skills: z.array(z.string()).optional(),
   voice: z.string().nullish(),

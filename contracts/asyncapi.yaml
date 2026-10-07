@@ -677,8 +677,7 @@ operations:
     action: send
     channel:
       $ref: '#/channels/chat'
-    summary: 'Turn this session''s ADR-092 Auto-approve modifier on or off (or clear it). Unlike the global default and
-      the per-agent override, this may LOOSEN — turn Auto on for this chat even when the resolved agent x global default
+    summary: 'Turn this session''s ADR-092 Auto-approve modifier on or off (or clear it). Unlike the global default, this may LOOSEN — turn Auto on for this chat even when the global default
       has it off — because a human is present in the session.
 
       '
@@ -1797,9 +1796,8 @@ components:
           description: 'ADR-092 per-chat Auto-approve choice for the chat this message mints — meaningful only when session_id
             is absent (this frame is minting a new session); ignored when session_id is present, since an existing session''s
             mode is changed exclusively via session_mode_update. Same value space and null semantics as SessionModeUpdateFrame.auto_approve:
-            true loosens Auto-approve on for this one new chat (may loosen past the resolved agent x global default, because
-            a human is present), false tightens it off, null/absent leaves it unset (the chat follows whatever the agent x
-            global default resolves to). Carrying the choice on the minting message itself — instead of a follow-up session_mode_update
+            true loosens Auto-approve on for this one new chat (may loosen past the global default, because
+            a human is present), false tightens it off, null/absent leaves it unset (the chat follows whatever the global default resolves to). Carrying the choice on the minting message itself — instead of a follow-up session_mode_update
             sent after the session_started ack — is what lets the choice gate the new chat''s very first ask-policy tool call:
             a post-ack send can race the agent loop''s own first LLM round trip.
 
@@ -4818,9 +4816,8 @@ components:
             present (the connection-open emit carries neither). true —
             Auto-approve forced ON for this chat; false — forced OFF for
             this chat; null or absent — no per-chat modifier is set, the
-            chat follows the agent x global resolution
-            (SandboxStatus.auto_approve_effective floored by the agent's
-            auto_approve_disabled). Same value space as
+            chat follows the global default
+            (SandboxStatus.auto_approve_effective). Same value space as
             SessionModeUpdateFrame.auto_approve. The modifier lives in
             server memory only: after a gateway restart it is gone and
             this field reads null/absent, so the UI follows the server.
@@ -5010,10 +5007,9 @@ components:
         SandboxConfig.auto_approve for the full behavioural description).
 
         THE ONE EXCEPTION TO TIGHTEN-ONLY in this contract: unlike the
-        global default (SandboxConfig.auto_approve) and the per-agent
-        override (Agent.auto_approve_disabled, off-only), this frame may
-        LOOSEN — turn Auto ON for this one chat even when the resolved
-        agent x global default has it off — because a human is present in
+        global default (SandboxConfig.auto_approve), this frame may
+        LOOSEN — turn Auto ON for this one chat even when the global
+        default has it off — because a human is present in
         this session to accept that risk. It may also tighten (turn Auto
         off). Turning Auto on for a chat is deliberately a human-only
         action: the agent-facing `set_config` tool must never be able to
@@ -5043,10 +5039,10 @@ components:
           nullable: true
           description: >
             true — turn Auto-approve ON for this chat (may loosen past the
-            resolved agent x global default). false — turn Auto-approve OFF
+            global default). false — turn Auto-approve OFF
             for this chat (tightens, same as every other scope). null —
             clear this session's modifier; the chat reverts to whatever the
-            agent x global default currently resolves to, and will track
+            global default currently resolves to, and will track
             future changes to that default rather than staying pinned.
     SessionModeUpdatedFrame:
       title: SessionModeUpdatedFrame
