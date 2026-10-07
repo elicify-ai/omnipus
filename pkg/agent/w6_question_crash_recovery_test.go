@@ -121,8 +121,10 @@ func TestW6RespondToStoppedChild_AppendFailureRefusesVisiblyThenRecovers(t *test
 	transcriptFile := w6cTranscriptFile(al.GetSessionStore(), child.SessionID)
 	w6cDenyWrite(t, transcriptFile)
 
-	freshLC, _ := w6ReopenMessagingStores(t, al)
-	delegate, launches := w6ParentRespondTool(t, al, freshLC, nil)
+	// respond resolves its correlation_id against the durable inbox (#1213), so
+	// the tool is wired to the reopened inbox that holds the child's question.
+	freshLC, freshInbox := w6ReopenMessagingStores(t, al)
+	delegate, launches := w6ParentRespondTool(t, al, freshLC, freshInbox)
 	parentCtx := tools.WithTranscriptSessionID(context.Background(), parent.SessionID)
 
 	result := delegate.Execute(parentCtx, w6RespondArgs(child.SessionID, corr, w6cAnswer))
