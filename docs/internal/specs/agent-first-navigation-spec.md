@@ -305,3 +305,75 @@ An existing user upgrades without losing saved ordinary, extra, Unfiled, child o
 1. **Given** supported saved chat and heartbeat histories, **When** the backend-owned upgrade completes, **Then** each legitimate chat remains reachable and continuable, heartbeat history is in its validated main, and repeated upgrade does not duplicate or erase history.
 2. **Given** Admin's validated default-workspace main exists on the joint build, **When** his sidebar row is opened, **Then** it is reachable without fake membership or extra workspace mains; only then may the obsolete Assets-only entry be removed.
 3. **Given** migration/import or destination resolution fails, **When** saved history is opened, **Then** visible retryable failure replaces empty-success history, no legacy owner/type fallback bypasses the unfinished backend, and no integrated delivery is claimed.
+
+## Behavioral Contract
+
+| Flow | When / Then contract |
+|---|---|
+| Main selection | When an eligible colleague's row is selected, the system opens that pair's validated main, not the most recent chat. |
+| Workspace entry | When a valid visible remembered chat exists, the system restores that exact chat; otherwise, after confirmed invalidity or no pointer, it opens the validated Ava welcome main. |
+| Failed resolution | When validation/loading/attachment fails, the system keeps a retryable intent and consistent committed selection; sending to an unresolved destination is unavailable. Failure is not deletion. |
+| Parallel/history | When + New chat is used, the system starts a deliberate extra with delivery safeguards; when Past sessions is used, the one Sessions modal opens with the pair's removable filters. |
+| Main attention | When an authoritative main question/approval or unseen finished/failed goal exists, the system signals that main only. Explicit open acknowledges observed goals for everyone; answers/decisions resolve questions/approvals. |
+| Identity | When an agent is shown outside a message bubble, the system uses its shared transparent figure/role/color identity and normal-color name. Bubbles show only the actual author's name. |
+| Responding state | When an agent responds, the system shows that responder's animated icon/name/phrase inline in the feed; reduced motion keeps text and stops loops. |
+| Overall activity | When Sessions opens, the system shows authorized chat/helper/run metadata and real relationships across workspaces, updating while open without taking control of those sessions. |
+| Local panel | When a chat's Activity panel opens, the system shows only work actually associated with that open chat. Changing chats never stops or completes work. |
+| Plans/links | When a plan starts in chat A, the system associates its pill and parent row with A and exposes the real plan/run through authorized existing drill-down, including replay. |
+| Missing coverage | When metadata, pagination, origin, identity or authorization is unavailable, the system shows unknown/partial/error and recovery, never fabricated zero, destination or success. |
+| Upgrade | When the supported cutover migration succeeds, saved chats stay reachable and continuable; when it fails, the system reports the failure rather than displaying empty history as success. |
+
+## Edge Cases
+
+Each EC key has a dedicated Edge Case scenario below; error recovery also appears under its parent story.
+
+| Key | Boundary / unusual condition | Expected behavior |
+|---|---|---|
+| EC-01 | Same colleague in two workspaces; newer extras; same display names but different identities | Validate the pair and immutable owner, not name or recency. |
+| EC-02 | No real remembered pointer, pending first send, hidden/deleted main, no eligible welcome agent | Pending delivery is not a saved main; use validated entry or honest unavailable state, without silent new extras. |
+| EC-03 | Two rapid selections; old response/attach fails after a newer intent | Newer intent wins; no split selection or pointer overwrite. |
+| EC-04 | Question and goal overlap; another person opens the main; newer goal races the open | Only observed goal attention clears globally; pending question/approval and newer outcome remain. |
+| EC-05 | Invalid/missing hex, saturation just below/equal/above one quarter, circular-hue wrap/tie | Apply the approved one-time mapping, stable published-order tie rule and Grey fallback; no render-time recoloring. |
+| EC-06 | All four figures at smallest/largest named sizes; reduced motion/forced colors/zoom | Figure and role badge remain present; contrast, text and input access remain, without changing glyph grammar. |
+| EC-07 | Guest author, replayed message, no virtualizer support, truthful task/helper kind | Same actual author and names-only bubble; no owner switch or kind substitution. |
+| EC-08 | Child-only search hit, missing parent, more than 20 visible rows, same titles | Preserve accessible parent context/orphan, truthful total and bounded rendering; repeated helpers stay individually accessible unless Q-M2 is approved. |
+| EC-09 | Unopened workspace work, missed update, missing list page, zero-token/no-state rows | Reconcile authorized snapshots and mark gaps; show unknown or zero according to actual data, never infer absent execution. |
+| EC-10 | Same run appears for starter/assignee and as helper; schedule has no foreground start call | Count distinct real work once; preserve actual associations and independent-control boundaries. |
+| EC-11 | Tasks-only plan; duplicate/idempotent start; deleted/inaccessible drill-down target | No invented starting chat or duplicate work; validate the actual target and show unavailable/refusal. |
+| EC-12 | Supported saved ordinary/Unfiled/child/heartbeat data; repeated upgrade or import error | Backend conversion keeps continuation and truthful binding, is repeat-safe, and surfaces partial/failure rather than using dual frontend readers. |
+
+## Explicit Non-Behaviors & Safeguards
+
+### Qualitative prohibitions
+
+| The system must not… | Reason / authority |
+|---|---|
+| Reintroduce a sidebar session tree, composer picker, in-chat owner switching, new chat alias or a second Sessions view | R3/R20–R24; F Q10/Q-FE-11. |
+| Create a main from a browser-made address or pick a random/latest agent when resolution fails | N D3/D5; backend owns validation and permissions. |
+| Treat viewing/closing/navigating as execution cancellation, outcome completion or a grant of control | N D12–D14; selected-session/tree controls stay distinct from monitoring. |
+| Infer waiting from question marks, every unread message, extras/helpers or global activity | F Q4/Q4b; four main-only sources, not a transcript heuristic. |
+| Put avatars back on bubbles, add a composer status line or keep duplicate old thinking dots | F Q9 FINAL. |
+| Add upload/GIF controls, an app-wide figure switch, demo controls, new creation interview, new task engine or aggregate side panel | F Q5–Q7/Q-FE-11; N D1/D7/D11–D14. Prototype simulations are not product settings. |
+| Fake parent edges to nest peer/independent runs, or fake a plan's starting chat from its owner | N D13/D14; F Q-FE-12; B D5. |
+| Mark incomplete or failed queries as empty/complete/zero, or normalize missing current identity into success | N D2–D5/D10/D14; BS contract-first and failure semantics. |
+| Make locked identity editable, widen tool policy, or use a view's workspace to authorize foreign execution | P Hard Constraints; N D9–D11; backend owns authority. |
+| Duplicate K's FilterMenu/ViewSwitch/HoverCard, app-wide tooltip fixes or header fixes | User commission; N D7/D11; M D5/D6; R41/R44/R45. |
+
+### Machine-verifiable constraints
+
+These are observable frontend constraints, not new backend status/error definitions. Existing published error envelopes remain authoritative; no untraced HTTP status or error-body shape is added.
+
+| Category | Constraint / numeric oracle | Source |
+|---|---|---|
+| Identity choices | Exactly four figures, creation default Omnipus; exactly 31 grouped roles and ten named palette colors. Figure + role at every named size; zero bubble avatars. | N D6/D8; F Q5/Q9; R11/R16. |
+| Identity measurements | Sidebar icon 26 px/name 13 px; Team 18 px; roster 40 px; inline responder 48 px. Icon precedes name outside bubbles; graphic contrast ≥3:1 against sidebar `#111113` and chat `#0A0A0B`. Editor/modal list-size additions need wireframe confirmation, not invented dimensions. | N D6; R13/R16. |
+| Sidebar attention | Agent icon scale peak +18%, fading warning-yellow `#EAB308` halo, 1.6 s loop; zero separate agent-row dots. Collapsed workspace dot 8 px, beside caret on right; distinct-main-agent count only. | N D4; R29. |
+| Inline motion | Working scale 0.97–1.03 / 1.6 s glow-pulse / 2.4 s sheen; Thinking scale 0.96–1.01 / opacity 0.55–1 / 2.6 s; Waiting peak 1.07 / 3.4 s. Idle static; reduced motion zero loops everywhere. | N D8; W adjacent approved motion assets. |
+| Semantic labels | Sessions modal title `Sessions`; above-feed `Main chat` or `Extra chat — title`; real task/helper kind retained. General attention accessible label `Main chat needs your attention`; reason wording only with authoritative reason data. | N D3/D4; M A3/D7. |
+| Navigation | Zero sidebar worker/hidden-engine rows; row click creates zero extras; unresolved target allows zero sends; no late-result override of the winning selection. | N D2/D3; B D1.1. |
+| Activity ownership | Panel has zero unrelated-session rows; starting-chat plan association only; no duplicate actual run across task/helper representations; no queued/waiting item counted as executing. | F Q-FE-11/Q-FE-12; N D13/D14; B D5. |
+| Accessibility | Every row action has an independent accessible name/keyboard target, no nested buttons; coarse-pointer adjacent controls have non-overlapping targets at least 44 px. Normal text/focus stay governed by the kit; color/motion alone never communicates state. | P design-system rule; N D3/D7; M D3/D4. |
+| Scope/counts | Active metadata counts are uncapped by the eight-item recent-finished display limit. More than one page is not complete; list search includes permitted descendants, not only roots. | N D14; C-ACTIVITY/C-MODAL/C-TREE. |
+| Prohibited input paths | Session command has no old resume alias; no new-chat/picker/mention-switch path; Clear creates zero chats and deletes zero saved history. | F Q10; N D11; BS. |
+
+No new response-time, memory, session-title-length or pagination maximum is approved by the sources. Existing limits and virtualization are preserved; missing performance targets are explicit unknowns, not fabricated success criteria.
