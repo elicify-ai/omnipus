@@ -117,24 +117,31 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 	if fenceErr := al.inboundStopFenceInFlight(sessionID); fenceErr != nil {
 		return ordinaryExecutionPreparation{}, fenceErr
 	}
-	// A person resumes any landed stop. A normal automatic trigger resumes
-	// only a restart-stopped standing root: a human Stop stays binding.
+	identity := session.ExecutionIdentity{RunID: freshRunID(), BootSeq: bootSeq}
+	stampedByRevival := false
+	// A person continues any landed stop. A normal scheduled trigger continues
+	// only a restart-stopped standing root, through the same existing revival.
 	if revival != nil && (rec.Terminal() || (rec.State == session.LifecycleStopped &&
 		(revival.Kind == steer.PrincipalKindHuman || restartStoppedStandingRoot(rec)))) {
-		if reviveErr := al.reviveRecordForHumanTurn(ctx, sessionID, *revival); reviveErr != nil {
+		if reviveErr := al.reviveOrdinaryRecordWithExecution(ctx, rec, identity); reviveErr != nil {
 			return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: explicit revival failed: %w", reviveErr)
 		}
 		rec, err = store.Load(sessionID)
 		if err != nil {
 			return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: read revived session: %w", err)
 		}
+		stampedByRevival = true
 	}
 	if err := al.checkNewAdmission(rec); err != nil {
 		return ordinaryExecutionPreparation{}, refuseOrdinaryIfStale(err)
 	}
-	claim := executionClaim{SessionID: rec.SessionID, Generation: rec.Generation, RunID: freshRunID(), BootSeq: bootSeq}
-	if err := stampAdmissionExecution(store, rec.SessionID, rec.Generation, claim.RunID, claim.BootSeq, rec.ExecutionID); err != nil {
-		return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: %w", refuseOrdinaryIfStale(err))
+	claim := executionClaim{SessionID: rec.SessionID, Generation: rec.Generation, RunID: identity.RunID, BootSeq: identity.BootSeq}
+	if !stampedByRevival {
+		if err := stampAdmissionExecution(store, rec.SessionID, rec.Generation, claim.RunID, claim.BootSeq, rec.ExecutionID); err != nil {
+			return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: %w", refuseOrdinaryIfStale(err))
+		}
+	} else if !claim.matches(rec) {
+		return ordinaryExecutionPreparation{}, refuseOrdinaryIfStale(steer.ErrStaleGeneration)
 	}
 	d := newExecutionDisposition(claim)
 	if err := al.admission.attachExecution(sessionID, d); err != nil {
