@@ -22,6 +22,7 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -174,6 +175,29 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 			return steer.LaunchResult{}, fmt.Errorf(
 				"steer: launch: %w: skill %q requested for agent %q",
 				sentinel, requestedSkill, req.TargetAgentID)
+		}
+	}
+	// #948: a delegated worker whose message_parent is denied can finish its
+	// work and then has no way to report it — a silent hang. Refuse at launch,
+	// before any session is written, using the SAME policy resolution the
+	// runtime tool filter applies (no new layer; Hard Constraint #6). Only the
+	// delegate front door is checked: other origins (task runs, chat, ...)
+	// report through other surfaces. External-CLI targets deliver through the
+	// drained CLI stream, not the message_parent tool, so they are exempt.
+	if req.Origin.Kind == steer.OriginKindDelegate && !l.al.GetRegistry().IsExternalCLI(req.TargetAgentID) {
+		// Only an EXPLICIT entry can refuse. A target with no policy snapshot,
+		// or none naming message_parent on either layer, has nothing to
+		// resolve: coverage is the boot-time Reconcile's job (Hard
+		// Constraint #6) and the runtime tool filter stays the authority, so
+		// this pre-flight must not invent a deny from missing data.
+		if pol := targetAgent.LoadToolPolicy(); pol != nil {
+			_, agentSet := pol.Policies["message_parent"]
+			_, globalSet := pol.GlobalPolicies["message_parent"]
+			if (agentSet || globalSet) &&
+				tools.ResolveEffectivePolicy(pol, "message_parent") == string(config.ToolPolicyDeny) {
+				return steer.LaunchResult{}, fmt.Errorf(
+					"steer: launch: %w: agent %q", tools.ErrDelegateTargetCannotReport, req.TargetAgentID)
+			}
 		}
 	}
 	lifecycle := l.al.GetSessionLifecycleStore()

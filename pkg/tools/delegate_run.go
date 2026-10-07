@@ -39,6 +39,29 @@ var (
 	ErrRequestedSkillNotFound = errors.New("tools: requested_skill does not resolve to any installed skill visible to the delegation target")
 )
 
+// ErrDelegateTargetCannotReport is returned by the session launcher when a
+// `delegate` target's effective message_parent tool policy is "deny" (#948).
+// Such a worker can finish its task and then has no way to deliver the result
+// upward, which is indistinguishable from a hang. The launcher wraps this
+// sentinel (declared here for the same tools<->agent-cycle reason as the
+// requested_skill sentinels above) and the refusal happens before any child
+// session exists.
+var ErrDelegateTargetCannotReport = errors.New("tools: delegation target cannot deliver a result upward (message_parent denied)")
+
+// delegateTargetCannotReportResult is the visible refusal for
+// ErrDelegateTargetCannotReport. It names the agent and the policy, and says
+// plainly that this is a policy configuration problem, not a lifecycle
+// failure of a running child — nothing was started.
+func delegateTargetCannotReportResult(agentID string) *ToolResult {
+	return ErrorResult(fmt.Sprintf(
+		"delegate: refused — agent %q cannot be delegated to: its effective %q tool policy is %q, "+
+			"so it could do the work but would have no way to report the result back to you. "+
+			"No child session was started (this is a policy configuration problem, not a failed or hung child). "+
+			"Set %q to allow for that agent, or delegate to a different agent.",
+		agentID, "message_parent", "deny", "message_parent",
+	))
+}
+
 // requestedSkillDispatchFailureResult builds the structured, discriminated
 // ToolResult for a `delegate.run` requested_skill dispatch failure (ADR-072
 // D9, spec FR-053/FR-054): a pure function — it performs no lifecycle
@@ -233,6 +256,9 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 		// below is a plain errors.Is with no import cycle.
 		if errors.Is(err, ErrRequestedSkillDenied) || errors.Is(err, ErrRequestedSkillNotFound) {
 			return requestedSkillDispatchFailureResult(targetAgentID, strings.TrimSpace(dt.requestedSkill), err)
+		}
+		if errors.Is(err, ErrDelegateTargetCannotReport) {
+			return delegateTargetCannotReportResult(targetAgentID).WithError(err)
 		}
 		if result := steeringUnavailableResult(err); result != nil {
 			return result
