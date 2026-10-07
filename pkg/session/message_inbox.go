@@ -297,6 +297,12 @@ type MessageInboxStore struct {
 	dir  string
 	lock *lifecycleStripedLock
 
+	// answerReserved holds the (owner, child, correlation) triples whose
+	// answer is being delivered right now (ReserveAnswer) or was delivered
+	// but could not be recorded durably. In-memory by design: it only has to
+	// make check-and-answer atomic inside this process.
+	answerReserved sync.Map
+
 	// Caps — overridable by the caller wiring the real config (session_messaging
 	// section, FR-195); default to the ADR §Contract Surface values.
 	ChildSendRatePerMinute int
@@ -1017,6 +1023,9 @@ const (
 	CorrelationUnknown  CorrelationState = "unknown"
 	CorrelationOpen     CorrelationState = "open"
 	CorrelationAnswered CorrelationState = "answered"
+	// CorrelationAnswering: an answer is being delivered right now (or was
+	// delivered and not yet durably recorded) — a second answer must not go out.
+	CorrelationAnswering CorrelationState = "answering"
 )
 
 // CorrelationLookup is LookupCorrelation's result. AnsweredAt is set only for
@@ -1040,8 +1049,18 @@ func (s *MessageInboxStore) LookupCorrelation(ownerKey, childSessionID, correlat
 	}
 	mu := s.lock.Get(ownerKey)
 	mu.Lock()
+	defer mu.Unlock()
+	return s.lookupCorrelationLocked(ownerKey, childSessionID, correlationID)
+}
+
+func answerKey(ownerKey, childSessionID, correlationID string) string {
+	return ownerKey + "\x00" + childSessionID + "\x00" + correlationID
+}
+
+// lookupCorrelationLocked is LookupCorrelation's body; the caller holds
+// ownerKey's lock.
+func (s *MessageInboxStore) lookupCorrelationLocked(ownerKey, childSessionID, correlationID string) (CorrelationLookup, error) {
 	entries, err := s.readEntries(ownerKey)
-	mu.Unlock()
 	if err != nil {
 		return CorrelationLookup{}, err
 	}
@@ -1065,14 +1084,45 @@ func (s *MessageInboxStore) LookupCorrelation(ownerKey, childSessionID, correlat
 			res.OpenIDs = append(res.OpenIDs, p.CorrelationID)
 		}
 		if p.CorrelationID == correlationID {
-			if answered {
+			switch {
+			case answered:
 				res.State, res.AnsweredAt = CorrelationAnswered, at
-			} else {
+			default:
 				res.State = CorrelationOpen
+				if _, busy := s.answerReserved.Load(answerKey(ownerKey, childSessionID, correlationID)); busy {
+					res.State = CorrelationAnswering
+				}
 			}
 		}
 	}
 	return res, nil
+}
+
+// ReserveAnswer is the atomic check-and-claim a respond takes BEFORE it
+// delivers: under the owner lock it resolves correlationID and, when the
+// question is open and not already being answered, reserves it, so two
+// concurrent answers cannot both deliver. The caller must then either
+// RecordAnswer (delivered) or ReleaseAnswer (delivery failed). State is
+// CorrelationOpen exactly when the reservation was taken.
+func (s *MessageInboxStore) ReserveAnswer(ownerKey, childSessionID, correlationID string) (CorrelationLookup, error) {
+	if strings.TrimSpace(ownerKey) == "" {
+		return CorrelationLookup{}, ErrInboxEmptyOwnerKey
+	}
+	mu := s.lock.Get(ownerKey)
+	mu.Lock()
+	defer mu.Unlock()
+	res, err := s.lookupCorrelationLocked(ownerKey, childSessionID, correlationID)
+	if err != nil || res.State != CorrelationOpen {
+		return res, err
+	}
+	s.answerReserved.Store(answerKey(ownerKey, childSessionID, correlationID), struct{}{})
+	return res, nil
+}
+
+// ReleaseAnswer drops a reservation whose delivery failed, leaving the
+// question open for a retry.
+func (s *MessageInboxStore) ReleaseAnswer(ownerKey, childSessionID, correlationID string) {
+	s.answerReserved.Delete(answerKey(ownerKey, childSessionID, correlationID))
 }
 
 // RecordAnswer durably records that correlationID of childSessionID was
@@ -1091,6 +1141,7 @@ func (s *MessageInboxStore) RecordAnswer(ownerKey, childSessionID, correlationID
 	for _, e := range entries {
 		if e.Kind == InboxEntryAnswer && e.Answer != nil &&
 			e.Answer.SessionID == childSessionID && e.Answer.CorrelationID == correlationID {
+			s.answerReserved.Delete(answerKey(ownerKey, childSessionID, correlationID))
 			return nil
 		}
 	}
@@ -1101,6 +1152,7 @@ func (s *MessageInboxStore) RecordAnswer(ownerKey, childSessionID, correlationID
 	if err := fileutil.AppendJSONL(s.path(ownerKey), entry); err != nil {
 		return fmt.Errorf("session: inbox: record answer: %w", err)
 	}
+	s.answerReserved.Delete(answerKey(ownerKey, childSessionID, correlationID))
 	return nil
 }
 

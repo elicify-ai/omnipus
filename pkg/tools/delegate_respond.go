@@ -41,10 +41,19 @@ type delegateToolExecuteRespond struct {
 	by            steer.Principal
 	instruction   string
 	answers       delegateCorrelationStore
+	reserved      bool
 }
 
 func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
 	dt := &delegateToolExecuteRespond{t: t, ctx: ctx, args: args, cb: cb}
+	// The answer slot is reserved atomically inside validateAndLoad; every exit
+	// that did not deliver must give it back so the question stays open for a retry.
+	delivered := false
+	defer func() {
+		if dt.reserved && !delivered {
+			dt.answers.ReleaseAnswer(dt.rec.SteeringSessionID(), dt.sessionID, dt.correlationID)
+		}
+	}()
 
 	if r0, stop := dt.validateAndLoad(); stop {
 		return r0
@@ -56,13 +65,21 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, 
 	} else {
 		result = dt.deliverNative()
 	}
-	// The answer is recorded only once it was delivered: a failed delivery
-	// leaves the question open, so the caller can retry the same respond.
-	if !result.IsError {
-		if err := dt.answers.RecordAnswer(dt.rec.SteeringSessionID(), dt.sessionID, dt.correlationID); err != nil {
-			return ErrorResult(fmt.Sprintf(
-				"delegate: respond: the answer was delivered but could not be recorded (a repeat respond may be accepted): %v", err)).WithError(err)
-		}
+	if result.IsError {
+		return result
+	}
+	// Delivered: from here the slot is never released, only recorded.
+	delivered = true
+	if err := dt.answers.RecordAnswer(dt.rec.SteeringSessionID(), dt.sessionID, dt.correlationID); err != nil {
+		slog.Error("delegate: respond: the answer was delivered but could not be recorded as answered",
+			"session_id", dt.sessionID, "correlation_id", dt.correlationID, "error", err)
+		// Not an error result: the child HAS the answer, and an error would
+		// invite a retry that sends it twice. The slot stays reserved in
+		// memory, so a repeat respond in this process is refused too.
+		return NewToolResult(result.ForLLM + fmt.Sprintf(
+			"\nThe answer WAS delivered — do not send it again; use delegate(action=\"steer\", session_id=%q, text=...) for any follow-up. "+
+				"It could not be recorded as answered (%v), so after a restart this question may still show as open.",
+			dt.sessionID, err))
 	}
 	return result
 }
@@ -72,7 +89,8 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, 
 // answer (founder decision 2026-10-07, #1213: reverses ADR-20261004's
 // "correlation_id is address metadata, never a check" for respond).
 type delegateCorrelationStore interface {
-	LookupCorrelation(ownerKey, childSessionID, correlationID string) (session.CorrelationLookup, error)
+	ReserveAnswer(ownerKey, childSessionID, correlationID string) (session.CorrelationLookup, error)
+	ReleaseAnswer(ownerKey, childSessionID, correlationID string)
 	RecordAnswer(ownerKey, childSessionID, correlationID string) error
 }
 
@@ -86,14 +104,20 @@ func (dt *delegateToolExecuteRespond) checkCorrelation() *ToolResult {
 	if !ok {
 		return ErrorResult("delegate: respond: the message inbox cannot verify correlation_id, so the answer was not delivered")
 	}
-	lookup, err := store.LookupCorrelation(dt.rec.SteeringSessionID(), dt.sessionID, dt.correlationID)
+	lookup, err := store.ReserveAnswer(dt.rec.SteeringSessionID(), dt.sessionID, dt.correlationID)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("delegate: respond: resolve correlation_id: %v", err)).WithError(err)
 	}
 	dt.answers = store
 	switch lookup.State {
 	case session.CorrelationOpen:
+		dt.reserved = true
 		return nil
+	case session.CorrelationAnswering:
+		return ErrorResult(fmt.Sprintf(
+			"delegate: respond: already_answered: an answer to correlation_id %q of session %s is being delivered, or was just delivered. "+
+				`Do not send it again; for a follow-up use delegate(action="steer", session_id=%q, text=...).`,
+			dt.correlationID, dt.sessionID, dt.sessionID))
 	case session.CorrelationAnswered:
 		return ErrorResult(fmt.Sprintf(
 			"delegate: respond: already_answered: correlation_id %q of session %s was already answered at %s. "+
