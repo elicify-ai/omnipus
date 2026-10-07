@@ -7,32 +7,20 @@ package agent
 
 import (
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/logger"
 )
-
-// delegationDepthConfigKey is the operator-facing name of the depth limit,
-// carried as config_key on every invalid-limit log.
-const delegationDepthConfigKey = "performance.max_delegation_depth"
 
 // failClosedBoundedDepth is the tightest positive bound, used where a setter
 // treats 0 as "unset, use the default" and so cannot be told "none".
 const failClosedBoundedDepth = 1
 
-// configuredDelegationDepth is THE single reader of the operator's depth limit
-// for every consumer (delegation block, gate, launcher budget, ownership walk,
-// task recursion bound). An invalid (negative) value is never swallowed into
-// the unset/backstop default: it logs ERROR with config_key and site, and
-// reports valid=false so each caller fails closed in its own terms — the block
-// renders cannot-delegate, the gate denies, the launch budget is 0, and the
-// bound-style setters take failClosedBoundedDepth.
+// configuredDelegationDepth reads the operator's depth limit through the one
+// shared reader, config.ConfiguredMaxDelegationDepth: an invalid value logs
+// ERROR with config_key and site and reports valid=false, and each caller fails
+// closed in its own terms — the block renders cannot-delegate, the gate denies,
+// the launch budget is 0, the bound-style setters take failClosedBoundedDepth,
+// and the workspace edge validators use a ceiling no positive depth satisfies.
 func configuredDelegationDepth(perf config.PerformanceConfig, site string) (limit int, valid bool) {
-	limit, err := perf.EffectiveMaxDelegationDepth()
-	if err != nil {
-		logger.ErrorCF("agent", "invalid performance.max_delegation_depth — failing closed",
-			map[string]any{"config_key": delegationDepthConfigKey, "site": site, "error": err.Error()})
-		return 0, false
-	}
-	return limit, true
+	return config.ConfiguredMaxDelegationDepth(perf, site)
 }
 
 // delegationDepthBound is the bound the bound-style consumers (the ownership
