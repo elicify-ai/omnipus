@@ -170,6 +170,19 @@ func (r *SteerBootRecovery) deliverPendingFinal(ctx context.Context, item sessio
 		r.recordFinalDeliveryFacts(item, session.FinalDeliveryProgress{AckObserved: true}, notice)
 		return
 	}
+	if !sighting.appended && item.Progress.InboxAppended {
+		// The durable facts say this final WAS appended to the parent's
+		// inbox (a real receipt, recorded only after a successful append),
+		// yet neither the message nor an ack for it is visible now. The only
+		// way a message leaves the inbox is MessageInboxStore.compactLocked,
+		// which purges ACKED messages (and their acks) beyond the retention
+		// window — so this final was consumed and aged out. Delivering it
+		// again would start a second parent turn for one hand-back (#1027,
+		// ADR-091 "each upward event starts at most one parent turn").
+		// Record the consumption so the item stops being pending.
+		r.recordFinalDeliveryFacts(item, session.FinalDeliveryProgress{AckObserved: true}, notice)
+		return
+	}
 	if !sighting.appended {
 		event := steer.UpwardEvent{
 			ChildSessionID: item.SessionID,
