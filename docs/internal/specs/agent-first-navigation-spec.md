@@ -377,3 +377,47 @@ These are observable frontend constraints, not new backend status/error definiti
 | Prohibited input paths | Session command has no old resume alias; no new-chat/picker/mention-switch path; Clear creates zero chats and deletes zero saved history. | F Q10; N D11; BS. |
 
 No new response-time, memory, session-title-length or pagination maximum is approved by the sources. Existing limits and virtualization are preserved; missing performance targets are explicit unknowns, not fabricated success criteria.
+
+## Prerequisites
+
+| Topic | Source-grounded prerequisite |
+|---|---|
+| Hardware / OS | Existing supported Omnipus install on Linux, macOS or Windows; a supported browser. No new RAM/CPU minimum is set by this frontend work. P::Tech stack and platforms. |
+| Development runtimes | Existing repository Node/package-lock toolchain; TypeScript/React/Vite from the lockfile. Backend candidate uses Go 1.26.6 minimum, no CGo, required build tags. `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/go.mod`::go; P::Build, test, and quality gates. |
+| Services | Existing Omnipus gateway and authenticated account; working U1 and required generated contracts for joint tests. No new database, external activity service or plugin runtime. |
+| Network | Browser access to gateway REST/live connection; offline/disconnected/stale behavior is tested explicitly. UI metadata tests need no external model request; real agent acceptance needs the configured provider. |
+| Accounts / credentials | Preserve existing gateway authentication/authorization. Agent-driven onboarding/UAT uses founder-set `openrouter` + `deepseek/deepseek-v4.1-flash`; keys stay in existing credential storage, never in fixtures/reports. P::UAT provider/model. |
+| Shared components | Integrate K's published FilterMenu/ViewSwitch; HoverCard publication is pending at the observed tip. No dependency is replaced by a local duplicate to unblock a demo. |
+
+## Development Setup
+
+These are future implementing-lead steps, not execution receipts for this spec. Run from the assigned checkout, never the original repository or another squad's working copy. Install/build work is scheduled by team-lead under the shared-machine rule.
+
+| Step | Exact command or required action | Source / expected result |
+|---|---|---|
+| 1 | `git -C /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav status --short --branch` | Confirm `work/adr-frontend-navigation-20261007`; do not reset/checkout another squad's branch here. |
+| 2 | `npm --prefix /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav ci` | Locked frontend dependencies; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/Makefile`::spa-embed uses `npm ci`. No guessed package versions. |
+| 3 | Backend-lead publishes schema + regenerated artifacts; team-lead prepares the joint candidate with U1 and K components. | BS::Contract-first proof; P::Contract regeneration. Frontend does not run consumers against guessed main/identity/activity types. |
+| 4 | `npm --prefix /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav run dev` | Existing development server; script is `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/package.json`::scripts.dev. Connect to the existing gateway; do not invent a second application backend. |
+| 5 | For an installed candidate: `omnipus start`, then open its configured address. | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/getting-started.md`::How to go from nothing to your first conversation. Default install address is `http://localhost:5000`; a campaign's allocated port may differ. |
+| 6 | Exercise the Reachability table first; write/execute the test plan in controlled RED/GREEN/CHECK steps. | Real user invocation on the joint candidate, not a prototype demo or standalone hook mock. |
+
+**Expected first-run behavior**: Existing authenticated shell and setup remain. After implemented cutover, normal workspace entry resolves its validated destination; the magnifier opens the one Sessions modal. This is target behavior, not claimed behavior of today's branch.
+
+**Common first-run failures**: Missing required Go build tags, absent SPA embed directory on a fresh worktree, occupied gateway port, missing generated main/figure/activity contracts, or unavailable provider for live agent acceptance. Use P's documented handling. Do not mistake an unbuilt SPA or failed backend dependency for an approved empty chat. Full local Go build/suite and broad frontend suites are forbidden; CI/remote cluster owns heavy gates. No install, build or product test was run in this writing task.
+
+## Tech Stack
+
+Versions below are manifest requirements, not fabricated exact installed versions. Keep the committed lockfile as the installation authority; this spec introduces no runtime dependency.
+
+| Category | Choice / version in source | Source |
+|---|---|---|
+| Frontend language | TypeScript `^6.0.3` | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/package.json`::devDependencies.typescript. |
+| UI / routing / shared state | React 19; existing AssistantUI, TanStack Query/Router and Zustand | Same manifest::dependencies/peerDependencies; P::Tech stack. No competing store/router. |
+| Build / styling | Vite `^8.1.5`; existing Tailwind/shadcn/Radix kit and generated design tokens | Same manifest::devDependencies; design-system skill. New visual jobs require four-part publication. |
+| Backend runtime | Single Go binary, Go 1.26.6 minimum, pure Go; build tags `goolm,stdjson` | P Hard Constraints; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/go.mod`::go. |
+| Storage | Existing file-backed agent/session/configuration storage; browser remembered-chat pointer remains navigation preference, not backend truth | N D3/D5/D9/D10; BS. No new database or second archive. |
+| External APIs | Existing gateway REST/WebSocket and generated validation; configured provider only for real execution acceptance | BS::Contract Changes; P Hard Constraint #8. No SPA use of an agent-facing job-listing tool. |
+| Unit/component testing | Vitest `4.1.11`, Testing Library, existing jsdom/test helpers | Same manifest::devDependencies; existing test files listed under Regression Test Requirements. |
+| Integration/end-to-end testing | Existing Playwright `^1.61.1`, real gateway and candidate data; static Storybook `10.6.0` kit checks | Same manifest; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/playwright.config.ts`::defineConfig. |
+| New infrastructure | None | N D1/D5/D7/D13/D14. |
