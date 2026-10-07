@@ -83,51 +83,86 @@ Keep existing workspace ordering, archive access, sidebar pin/drawer behavior an
 
 Chat remains the underlying workspace surface. Preserve the existing panel toggles and the separate global/workspace Library scopes; do not add a Chat header item or another panel system (R1–R2; E11).
 
-### D3 — Main navigation and extra-chat creation are different actions
+### D3 — Main click, exact restore and deliberate extra chat
 
-| Action | Target behavior |
+| Action | Decided destination |
 |---|---|
-| Click an agent’s name/icon row | Resolve and open that agent’s **main session in that workspace**, even if a newer extra chat exists. Reuse session attachment/navigation rather than changing the speaker inside the currently open session. R4; E2; B::D1/D8. |
-| Past sessions | Open the existing SearchModal in session mode, initially filtered by **both agent and workspace**. Extend its existing opening/filter state; do not build another history modal. The user can broaden the filter to recover other saved sessions. R21–R22; E3. |
-| + New chat | Start one extra chat with that main agent in that workspace. It does not replace, reset or relabel the main session. It is the sole extra-chat creation entry point. R4/R22; B::D8. |
-| Sidebar magnifier / target `/sessions` command | Open the same general session search. Renaming the existing `/resume` entry changes its name, not its search behavior. R21–R22; E3/E4; B::D8. |
+| Agent row click | That agent/workspace pair’s validated main session, never its latest extra chat. Reuse existing attachment/navigation; no in-session speaker switch. R4; B::D1.1/D8. |
+| Workspace-name entry, login entry or SearchModal workspace switch | Restore the exact remembered visible chat; otherwise open the server-validated workspace welcome/default agent’s main. F::Q1. |
+| Past sessions | Existing SearchModal, initially filtered by both workspace and agent; filters can be broadened. No new history modal. R21/R22; E3. |
+| + New chat | Sole extra-chat creation action for the selected main agent/workspace. Preserve the main and current first-send delivery-loss safeguards. R22; F::Q10; E4. |
+| Magnifier / `/sessions` | Existing general session search; `/resume` is renamed, not kept as an alias. F::Q10; B::D8. |
 
-The selected agent row shows **Past sessions, then + New chat** on the right. Other rows reveal them on hover or keyboard focus; touch users must not depend on hover. They are separately labelled kit controls, not nested buttons that also trigger main-session navigation. Use product icons rather than storing the wireframe’s pictographs as UI labels (R22; S5::Brand & UI and component standard).
+The workspace-entry **welcome/default agent means Ava**, the built-in welcome agent, resolved by stable identity and the backend’s validated main association. It is not the global default/star setting (currently seeded to Mia), another agent named Ava, or a browser-generated main ID. Backend must supply an eligible, accessible destination; a missing/invalid association is visible and disables sending rather than choosing a random member (F::Q1; E8; D5).
 
-A row click must not silently choose the most recent session, fabricate a session record, start an extra chat, or fall back to a different agent when main-session resolution fails. Preserve visible attach failure and retry behavior. Ordinary workspace entry must not become another hidden extra-chat creation path; adapt existing generic New chat callers accordingly (R4/R22; E1–E3; B::D8). Missing main sessions are addressed in D10, not solved with a frontend-only ID map.
+| Entry or restore state | Required frontend behavior |
+|---|---|
+| First visit / no real saved pointer | Resolve and attach Ava’s validated main; create no extra chat. |
+| Remembered main or extra chat still valid and visible | Restore that exact session with `Session.agent_id` as immutable owner. |
+| Remembered session deleted, hidden or no longer authorized | Invalidate that destination and resolve the welcome/default main. Do not bypass membership hiding. |
+| No eligible agent / welcome main unavailable | Honest empty/unavailable state with Team/manage and Retry paths; no resolved composer destination and no send. |
+| Session/member load fails | Retain the remembered intent and show a retryable error. A failed request is not proof the chat was deleted and must not trigger silent default/new-chat fallback. |
+| Attach fails | Keep the committed workspace/session/owner consistent; roll back a partial selection or keep it pending with sending disabled. Do not retain E2’s set-workspace-before-failed-attach inconsistency. |
+| Earlier async result arrives after a newer selection | It may refresh its own cache, but cannot replace the newer active destination or another workspace’s saved pointer. |
+| Current first-send transient `__pending` | Preserve correlated delivery/recovery and explicit New chat abandonment protection. It is not a main or a saved real destination. |
 
-The requested first/later placement of command cleanup is inconsistent in the brief. Q-FE-8 resolves that cutover; no first-squad landing may violate the sole-entry-point rule or leave `/agents` opening the removed picker (R20/R22; E4; S3::Step 2).
+These cases replace the blank-composer fallback, picker auto-selection and workspace-switch `startNewSession` paths identified in MAJ-004. Use the existing session store/selection flow with a single selection-intent owner; no second restore store. Sending remains disabled until displayed workspace, owner, attached session and the winning intent agree (review::MAJ-004; E2/E4; B::DEL-F08–F13).
 
-### D4 — Waiting means the user has an outstanding action, not unread activity
+**Persistent kind label above the message feed:** “Main chat” or “Extra chat — title”. Use actual `Session.type`, not an ID prefix guess. Existing task/helper inspection must retain its truthful kind, not be renamed Extra chat. When an extra chat is open, its owner’s agent row is selected; row click still opens the main. The kind label makes that difference explicit. No session bar/tree is added (F::Q2; approved S2::chat-label/renderChat; MIN-001).
 
-Render the **agent’s own icon pulsing** when the backend says that agent awaits this user’s answer or approval in that workspace. There is **no extra dot on an agent row**. A collapsed workspace shows one **right-aligned yellow dot beside the expand caret**, labelled with the number of distinct waiting agents, not the number of sessions or messages (R29).
+Row actions remain Past sessions then + New chat: selected-row visibility, hover/keyboard-focus on other rows, usable touch controls, independent accessible names and no nested buttons (R22; S5::component standard).
+
+### D4 — Main-only attention from `Session.needs_attention`
+
+Consume **`Session.needs_attention`**, the settled session-core contract direction: optional boolean/readOnly on the general Session schema, but **present as true/false on every main response**, including Admin’s default-workspace main; omitted on non-main sessions. It is computed server-side and delivered in the existing sessions list, with existing pending-question/approval/goal-outcome snapshots and frames. The session-core specification is the serialization authority; its updated publication SHA is pending, not invented here (F::Q4; founder 17:45 steering; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/session-core-adr-20261007/QUESTIONS.md`::Q7 CLOSED).
+
+| Main-session source | Clear rule |
+|---|---|
+| Pending structured question card | Resolution clears it, not opening the main. |
+| Pending tool approval | Resolution clears it, not opening the main. |
+| Unseen goal outcome `met` | Finished-goal attention; explicit foreground open acknowledges observed outcomes. |
+| Unseen goal outcome `rounds_exhausted` or `other` | Failed-goal attention; same explicit-open acknowledgement. `stopped_by_user` is excluded. |
+
+Goal seen state is **shared per main chat**: one user’s explicit foreground open clears the observed goal attention for everyone. Backend reuses the existing attach path and bounded seen mark; reconnect, replay recovery and background prefetch are not read acknowledgement. A newer outcome racing the open must remain unseen. The frontend expresses the real user-open intent through the agreed generated attach contract; it does not author the backend read/acknowledgement machinery (17:45 steering; session-core Q7).
+
+Extra chats and helper sessions **do not light the agent’s sidebar signal**. Cross-session activity visibility in D14 is separate and cannot widen this four-source rule. An ordinary free-text question is not detected from punctuation: whenever the agent needs an answer it must use the structured question tool. Prometheus-prompt-engineer owns that prompt change; backend-lead wires it (F::Q4/Q4b; approved S2::main-chat-only waiting demo).
 
 | Cue | Required presentation |
 |---|---|
-| Agent row | Gentle 18% scale with fading yellow `#EAB308` halo, 1.6-second loop; label/hover explanation “Waiting for your reply”. Remains visible on the selected row. R29. |
-| Collapsed workspace | 8px yellow dot, the same pulse, right-aligned in the icon column; explanation “N agents waiting for your reply”. R29. |
-| Reduced motion | Stop the loops; keep the icon/dot and meaningful text visible. R15/R29. |
-| Clear condition | Backend waiting state ends. Merely opening the chat or expanding the workspace does **not** clear it. R29. |
+| Agent row | Agent’s own icon pulses: 18% scale, fading warning-yellow `#EAB308` halo, 1.6s loop. No separate agent-row dot; selected row remains signalled. |
+| Collapsed workspace | 8px yellow dot, right-aligned beside the expand caret; count distinct main agents with confirmed attention, not sessions/messages. |
+| Accessible text | “Main chat needs your attention”; reason-specific question/approval/goal wording only when authoritative reason data is available. Do not call finished work a pending answer. |
+| Reduced motion | No loops; icon/dot and meaningful text remain. |
+| Failed or incomplete source | Visible unavailable/unknown state; preserve honest last-known data. Missing `needs_attention` on a main or a failed fetch never becomes false or a zero waiting count. |
 
-Use the existing warning-yellow token for attention, not selection gold or a newly chosen orange. Identity color and attention color remain different things. The pulse is a reusable kit presentation, not independent animation logic on each screen (R16/R29/R41; S5::design-system rules).
+Use the kit warning-yellow token, not gold/orange. Initial load, unopened workspaces, clearing and reconnect must be verified against the joint backend, not a transcript heuristic or one socket per row (R15/R16/R29/R41; D5/D12).
 
-**Do not infer waiting from the last message containing a question mark, an unread counter, an agent’s global active/idle status, or a child’s lifecycle label.** Main sessions, extra chats and helper approvals make those shortcuts ambiguous. The scope of the authoritative attention projection is Q-FE-2; initial load, updates and reconnect depend on D5. Uploaded-image pulsing is Q-FE-5 (R29; E8/E10; B::D10 Existing helper approval popup).
+### D5 — Use the published main contract and settled waiting direction
 
-### D5 — Consume backend contracts; do not invent session wire fields
+**B::D1.1 at `b76b412f61ff73d9a6643d34518224472d84223a` fixes the main-session field names.** Remove the answered main-interface alternatives; do not design another address book. Later founder migration/Admin/addressing amendments override only their conflicting b76 clauses and must be carried by the session-core owner’s updated ADR/spec. Backend-lead alone edits schemas and regenerates before frontend consumption (MIN-002; F::Q11/Q12; S5::Hard Constraint #8).
 
-The session-core ADR’s **D10 Contract-first** and **Affected components → Contracts** are the shared contract authority. Backend-lead publishes the agreed schemas and generated Go/TypeScript types before consumers use them. This frontend ADR specifies the information it needs, **not new JSON property names, endpoints, frame types or an alternative session registry** (B::D10; S3::Shared interface; S5::Hard Constraint #8).
+| Contract | Frontend invariant |
+|---|---|
+| `Session.type` | Required on current-format responses; `main` replaces `heartbeat`, not a new `default` type. Main creation is server-only; client create enums do not gain it. |
+| `Session.id`, `workspace_id`, `agent_id` | Computed main ID **`main-session-<workspaceid>-<agentid>`**, validated workspace and immutable owner. No UUID-only navigation assumption or owner fallback to `active_agent_id`. |
+| `Session.protected` | Server-computed protection, independent of heartbeat enablement. Respect it in search/delete controls. |
+| `WorkspaceMemberConfig.main_session_id` | ReadOnly validated association for eligible main members; omitted for workers/hidden system agents. Consume existing member responses, not a persisted frontend mapping. |
+| `WorkspaceMemberHeartbeat` | Keep `enabled`, `interval_minutes`, `body`; delete `session_id`. Heartbeat consumers use the main association. |
+| `Message.agent_id` | Actual contributor identity remains separate from the session owner, including guest replies and replay. Remove mutable handover metadata/actions/frame consumers with the coordinated cutover. |
+| `Session.needs_attention` | D4’s settled optional/readOnly boolean, present on mains, omitted elsewhere; field direction confirmed at 17:45. Updated session-core spec publication SHA pending. |
 
-| Dependency | Frontend needs | State and owner |
-|---|---|---|
-| Main-session navigation — U1 | A server-validated association between the workspace/eligible agent and its existing main session, with enough generated session metadata to attach it safely. The founder-decided ID rule is **`main-session-<workspaceid>-<agentid>`**. That rule alone is not proof that a record exists or that membership permits opening it. | Open contract dependency on B::D1/D10; Q-FE-1. Backend owns resolution, existence, protection and visibility. |
-| Agent-awaits-user — U1 interface agreement | Authoritative waiting state scoped to workspace and agent, available on first load and after reconnect, plus changes when questions/approvals are answered or withdrawn. It must also cover unopened/collapsed workspaces. | Open contract dependency on B::D10; Q-FE-1/Q-FE-2. Existing session lifecycle data is not claimed sufficient. |
-| Static status line | Truthful state of the **open session**, including pending user actions and known execution activity. It must not display the state of another chat merely because the agent is the same. | Reuse generated session/execution/approval data where sufficient; unresolved state/copy mapping is Q-FE-7. |
-| Persisted visual identity | Existing agent create/update/list/detail contracts need to express the approved figure/role/image choices and applicable field locks, not just today’s free-form icon and color. | Additional backend dependency for R46; not silently assigned to U1. Backend-lead edits/regenerates after the architect/founder resolves Q-FE-3–Q-FE-6. |
-| Later group replies | Authenticated addressed recipient and actual per-message responding-agent identity, including live, replay and deleted-agent display. | Owned by B::D7/D10; only the later UI consumes it. No hand-written guest-message wire type here. |
+**Admin is the explicit later exception to b76’s omission.** He has a main in the default workspace without fake team membership. The backend publishes it through its existing session/address response surfaces; the frontend consumes that validated pair and does not create an Admin main for every workspace (F::Q12; 17:15/17:25 steering).
 
-Reuse existing query caches, session attachment and event invalidation. Roster refresh on connect/reconnect already exists at this baseline; preserve it rather than rebuilding S3’s now-stale U6 suggestion (E8; B::D8). Do not add a second “main sessions” store, subscribe one live chat connection per sidebar row, or read every main transcript to populate navigation. Request failures must not be represented as “nobody waiting” or “no members”; last-known data needs an honest unavailable/stale indication (E1–E3/E8; R29/R41; S5::Definition of Done).
+| Additional dependency | Owner / frontend boundary |
+|---|---|
+| Welcome/default main for ordinary entry | Backend supplies a server-validated Ava destination; D3 defines frontend restore/failure behavior, not backend membership creation. |
+| Persisted figure/role/color and canonical built-ins | Backend identity owner publishes the existing Agent create/update/list/editability representation and fixes canonical seeds; D6/D9. No invented avatar JSON keys or local-only saved identity. |
+| One-cutover chat migration, heartbeat → main | Session-core owner implements the agreed install/upgrade exception; D10 consumes current-format records and verifies continuation. |
+| Cross-workspace peer/address protocol | Session-core owner; the later `@` UI carries explicit workspace + agent ID. D11 adds no bare-ID routing or copied history. |
+| Running task/scheduler data | Reuse B::R-ACTIVITY/D5 and existing task/run events. D13/D14 add presentation/aggregation, not another task dispatcher or result pipeline. |
+| Activity/start links not covered by current schemas | Backend owner extends existing contract surfaces before consumers. No fabricated result URLs, current-session-only snapshot guarantee or handwritten wire types. |
 
-The frontend can build kit and independent UI pieces now. Contract-dependent integration remains held until the **committed generated contract and working U1** are available on the joint candidate. A frontend stub or guessed field does not discharge this dependency (S4::frontend/sidebar commission; S5::Hard Constraint #8).
+Keep one shared query/cache/attachment path. No per-row live connections, transcript loading for navigation, second main store or new attention/event service. D2 assigns freshness independently of the removed picker. UI preparation can proceed now, but integrated landing remains held for committed generated contracts, working U1 and the matching dependent backend amendments on the joint candidate (R4/R29/R41; F; S5::Definition of Done).
 
 ### D6 — One global visual identity per agent
 
