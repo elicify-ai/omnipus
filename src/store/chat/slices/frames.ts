@@ -721,6 +721,31 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
   draft.isStreaming = true
 }
 
+/**
+ * Founder ruling 2026-10-07 (S7): this session's pending redirect is answered by
+ * an error frame. Only a turn_canceled answer means the redirect stopped the
+ * turn; the still-streaming bubble is then finalised as a normal answer, never
+ * as error/interrupted. Always consumes the pending flag.
+ */
+function consumeRedirectStop(sid: string, errorCode: string | undefined): boolean {
+  return pendingRedirectSids.delete(sid) && errorCode === 'turn_canceled'
+}
+
+/**
+ * Status of a streaming bubble closed by an error frame. A turn_canceled that no
+ * redirect of ours asked for (a Stop from another tab or a channel) is a plain
+ * stop: the partial stays, marked interrupted (FR-21 / T21-T23: an already
+ * interrupted bubble is never overwritten with 'error').
+ */
+function resolveClosedBubbleStatus(
+  redirectStoppedTurn: boolean,
+  alreadyInterrupted: boolean,
+  errorCode: string | undefined,
+): 'done' | 'interrupted' | 'error' {
+  if (redirectStoppedTurn) return 'done'
+  return alreadyInterrupted || errorCode === 'turn_canceled' ? 'interrupted' : 'error'
+}
+
 interface FrameContext {
   set: StoreApi<ChatStore>['setState']
   get: StoreApi<ChatStore>['getState']
@@ -1335,10 +1360,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             // terminally acknowledged — stop treating it as "pending" so a
             // later, unrelated untagged frame doesn't get misattributed here.
             pendingCancelAckSids.delete(sid)
-            // A done ends the turn a pending redirect was aimed at (it either
-            // arrived after turn_canceled, which already consumed the flag, or
-            // the turn finished/ended silently): never carry it into a later,
-            // unrelated stop.
+            // A done ends the turn a pending redirect was aimed at: never carry it on.
             pendingRedirectSids.delete(sid)
             const priorBucket = get().sessionsById[sid] ?? EMPTY_BUCKET
             const wasReplaying = priorBucket.isReplaying
@@ -1741,11 +1763,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             const sid = targetSid
             // F-S3: see the matching comment in the 'done' case above.
             pendingCancelAckSids.delete(sid)
-            // Founder ruling 2026-10-07 (S7): this session's pending redirect
-            // is answered by this frame. Only a turn_canceled answer means the
-            // redirect stopped the turn — then the still-streaming bubble
-            // below is finalised as a normal answer, never as error/interrupted.
-            const redirectStoppedTurn = pendingRedirectSids.delete(sid) && llmError?.code === 'turn_canceled'
+            const redirectStoppedTurn = consumeRedirectStop(sid, llmError?.code)
             const wasReplaying = (get().sessionsById[sid] ?? EMPTY_BUCKET).isReplaying
             const replayElapsed = wasReplaying ? Date.now() - (replayingStartedAt[sid] ?? 0) : 0
             const MIN_REPLAY_DISPLAY_MS = 750
@@ -1857,14 +1875,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                     const msg = draft.messagesById[id]
                     const prevStatus = msg.status
                     // FR-21 / T21–T23: do NOT overwrite 'interrupted' status with 'error'.
-                    // A turn_canceled that no redirect of ours asked for (a Stop
-                    // from another tab or a channel) is a plain stop: the partial
-                    // stays, marked interrupted.
-                    const resolvedStatus = redirectStoppedTurn
-                      ? 'done'
-                      : (prevStatus === 'interrupted' || isCancelAck || llmError?.code === 'turn_canceled')
-                        ? 'interrupted'
-                        : 'error'
+                    const resolvedStatus = resolveClosedBubbleStatus(redirectStoppedTurn, prevStatus === 'interrupted' || isCancelAck, llmError?.code)
                     // Founder decision #1081 RC2 / Q4: a terminal error must
                     // always be visible, narration or not. Replace existing
                     // content with translated catalogue copy (typed payload)
