@@ -15,7 +15,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
-    fetchAgents: vi.fn(),
     fetchSandboxStatus: vi.fn(),
   }
 })
@@ -52,8 +51,6 @@ function renderPicker(props: { disabled?: boolean } = {}) {
   )
 }
 
-const AGENT_NO_OVERRIDE = { id: 'mia', name: 'Mia', type: 'core', status: 'active' }
-const AGENT_FORCES_OFF = { id: 'mia', name: 'Mia', type: 'core', status: 'active', auto_approve_disabled: true }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -61,12 +58,11 @@ beforeEach(() => {
     useSessionStore.setState({ activeAgentId: 'mia', activeSessionId: 'sess_1', activeAgentType: 'core' })
     useChatStore.setState({ autoApproveEffective: undefined, sessionsById: {}, pendingAutoApproveChoice: null })
   })
-  vi.mocked(api.fetchAgents).mockResolvedValue([AGENT_NO_OVERRIDE] as never)
   vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({ auto_approve_effective: false, kernel_sandbox_active: true }))
 })
 
 describe('AutoApprovePicker — resolution', () => {
-  it('reflects global on, no per-agent/per-chat override', async () => {
+  it('reflects global on, no per-chat override', async () => {
     vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({ auto_approve_effective: true, kernel_sandbox_active: true }))
     renderPicker()
     await waitFor(() => {
@@ -75,15 +71,6 @@ describe('AutoApprovePicker — resolution', () => {
   })
 
   it('reflects global off', async () => {
-    renderPicker()
-    await waitFor(() => {
-      expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-pressed', 'false')
-    })
-  })
-
-  it('the per-agent auto_approve_disabled floors it off even when global is on', async () => {
-    vi.mocked(api.fetchAgents).mockResolvedValue([AGENT_FORCES_OFF] as never)
-    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(sandboxStatus({ auto_approve_effective: true, kernel_sandbox_active: true }))
     renderPicker()
     await waitFor(() => {
       expect(screen.getByTestId('composer-auto-approve-toggle')).toHaveAttribute('aria-pressed', 'false')
