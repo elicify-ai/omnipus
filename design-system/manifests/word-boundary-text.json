@@ -2,7 +2,7 @@
  "version":1,"component":"WordBoundaryText","exports":["WordBoundaryText"],"category":"primitive","source":"src/components/ui/word-boundary-text.tsx","documentation":"docs/internal/design/components/word-boundary-text.md","owner":"design-system","themes":["dark"],"variants":["default"],"sizes":["inherited"],"states":["default"],
  "stories":[{"file":"src/components/ui/word-boundary-text.stories.tsx","exports":["Default","LongWord"]}],
  "checks":[
-  {"id":"word-boundary-text-unit","kind":"unit","file":"src/components/ui/task-hover-details.test.tsx","test":"T14 shows all task metadata in an unclipped hover/focus preview in every view and touch tap does not open the task","applicable":true},
+  {"id":"word-boundary-text-unit","kind":"unit","file":"src/components/ui/word-boundary-text.test.tsx","test":"preserves exact text and keeps only words that fit the measured owner width atomic across resizes","applicable":true},
   {"id":"word-boundary-text-interaction","kind":"interaction","applicable":false,"reason":"Static text has no activation or state-changing user interaction; owner hover/focus is verified separately."},
   {"id":"word-boundary-text-axe","kind":"axe","file":"tests/design-system/browser.spec.ts","test":"WordBoundaryText [check:word-boundary-text-axe] axe","story":"Default","applicable":true},
   {"id":"word-boundary-text-keyboard","kind":"keyboard","applicable":false,"reason":"Static text creates no focus target or keyboard action."},

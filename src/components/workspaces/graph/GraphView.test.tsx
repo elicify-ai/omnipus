@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, type RenderResult } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor, type RenderResult } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
@@ -44,6 +44,15 @@ const capturedEdgesCalls: Edge[][] = []
 // `useReactFlow`/`fitView` rather than replacing it outright, so the
 // ZoomPill's own internal `useReactFlow()` call keeps working.
 const fitViewCalls: unknown[] = []
+// Round-1 E controls only the asynchronous viewport API boundary. GraphView,
+// React Flow, layout and node initialization still execute their real code.
+const framingBoundary = vi.hoisted(() => ({
+  enabled: false,
+  fitView: vi.fn(),
+  getNodesBounds: vi.fn(),
+  getViewport: vi.fn(),
+  setViewport: vi.fn(),
+}))
 vi.mock('@xyflow/react', async () => {
   const actual = await vi.importActual<typeof import('@xyflow/react')>('@xyflow/react')
   return {
@@ -59,8 +68,13 @@ vi.mock('@xyflow/react', async () => {
         ...real,
         fitView: (options?: Parameters<typeof real.fitView>[0]) => {
           fitViewCalls.push(options)
-          return real.fitView(options)
+          return framingBoundary.enabled ? framingBoundary.fitView(options) : real.fitView(options)
         },
+        ...(framingBoundary.enabled ? {
+          getNodesBounds: framingBoundary.getNodesBounds,
+          getViewport: framingBoundary.getViewport,
+          setViewport: framingBoundary.setViewport,
+        } : {}),
       }
     },
   }
@@ -107,6 +121,11 @@ beforeAll(() => {
 })
 
 beforeEach(() => {
+  framingBoundary.enabled = false
+  framingBoundary.fitView.mockReset()
+  framingBoundary.getNodesBounds.mockReset()
+  framingBoundary.getViewport.mockReset()
+  framingBoundary.setViewport.mockReset()
   capturedNodesCalls.length = 0
   capturedEdgesCalls.length = 0
   fitViewCalls.length = 0
@@ -136,6 +155,46 @@ function renderGraph(ui: React.ReactElement): RenderResult & { client: QueryClie
   const utils = render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
   return { ...utils, client }
 }
+
+describe('GraphView — top framing and asynchronous fit races (round-1 E)', () => {
+  function controlFraming() {
+    framingBoundary.enabled = true
+    const pending: Array<(fitted: boolean) => void> = []
+    framingBoundary.fitView.mockImplementation(() => new Promise<boolean>((resolve) => pending.push(resolve)))
+    framingBoundary.getNodesBounds.mockReturnValue({ x: -40, y: 75, width: 1200, height: 900 })
+    framingBoundary.getViewport.mockReturnValue({ x: 100, y: 200, zoom: 0.8 })
+    framingBoundary.setViewport.mockResolvedValue(true)
+    return pending
+  }
+
+  it('E frames the measured opening bounds at 16px from the top/left using the fitted zoom', async () => {
+    const pending = controlFraming()
+    renderGraph(<GraphView tasks={[makeTask({ id: 'a' })]} agents={[]} onTaskClick={vi.fn()} />)
+    await waitFor(() => expect(pending).toHaveLength(1))
+    expect(framingBoundary.setViewport).not.toHaveBeenCalled()
+    await act(async () => pending[0](true))
+    expect(framingBoundary.getNodesBounds).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ id: 'a' })]))
+    expect(framingBoundary.setViewport).toHaveBeenCalledExactlyOnceWith({ zoom: 0.8, x: 16 - (-40 * 0.8), y: 16 - (75 * 0.8) })
+  })
+
+  it('E rejects a stale opening fit after a newer plan-scope fit and rejects a pending fit after unmount', async () => {
+    const pending = controlFraming()
+    const tasks = [makeTask({ id: 'a', plan_id: 'plan-1' }), makeTask({ id: 'b' })]
+    const { rerender, unmount, client } = renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={vi.fn()} />)
+    await waitFor(() => expect(pending).toHaveLength(1))
+    rerender(<QueryClientProvider client={client}><GraphView tasks={tasks} agents={[]} onTaskClick={vi.fn()} planId="plan-1" /></QueryClientProvider>)
+    await waitFor(() => expect(pending).toHaveLength(2))
+    await act(async () => pending[1](true))
+    expect(framingBoundary.setViewport).toHaveBeenCalledTimes(1)
+    await act(async () => pending[0](true))
+    expect(framingBoundary.setViewport, 'the old fit cannot overwrite the newer frame').toHaveBeenCalledTimes(1)
+    rerender(<QueryClientProvider client={client}><GraphView tasks={tasks} agents={[]} onTaskClick={vi.fn()} /></QueryClientProvider>)
+    await waitFor(() => expect(pending).toHaveLength(3))
+    unmount()
+    await act(async () => pending[2](true))
+    expect(framingBoundary.setViewport, 'an unmounted canvas cannot be reframed').toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('GraphView — empty state', () => {
   it('shows the empty state when there are no tasks', () => {
