@@ -27,8 +27,9 @@ import (
 //
 // ErrRequestedSkillDenied: the resolved delegation target exists and the
 // slug exists on some shelf visible to it, but the target is not granted
-// it — reported to the caller via DelegationDeniedCode, reusing the
-// existing discriminator per FR-053 rather than minting a new one.
+// it — reported to the caller via SkillNotGrantedCode (#895: not a
+// delegation_denied permission refusal, because the delegation itself was
+// permitted).
 //
 // ErrRequestedSkillNotFound: the slug does not resolve to any installed
 // skill on any shelf visible to the resolved delegation target at all —
@@ -76,27 +77,41 @@ func delegateTargetCannotReportResult(agentID string) *ToolResult {
 // distinction entirely.
 func requestedSkillDispatchFailureResult(agentID, skillSlug string, dispatchErr error) *ToolResult {
 	if errors.Is(dispatchErr, ErrRequestedSkillDenied) {
-		return DelegationDeniedResult("delegate", &DelegationDenial{
-			Reason: fmt.Sprintf(
-				"delegation target %q is not granted the requested_skill %q — the receiver's own "+
-					"grant is the only thing consulted (ADR-072 D9); the delegating agent's own skill "+
-					"grants have no bearing on this outcome",
-				agentID, skillSlug,
-			),
-			// No policy axis in the DelegationFailure contract (trust_set |
-			// mode | depth) names a skill-grant refusal specifically — this
-			// reuses the existing DelegationDeniedCode discriminator exactly
-			// as FR-053 requires, without minting a new wire enum value
-			// (Constraint #8: no new schema for this). DenyTrustSet is the
-			// closest existing axis (a permission boundary the caller does
-			// not control), and is also DelegationDeniedResult's own
-			// fallback for a policy value outside the enum — so this is
-			// documentary, not load-bearing.
-			Policy:        DenyTrustSet,
-			TargetAgentID: agentID,
-		})
+		return requestedSkillNotGrantedResult(agentID, skillSlug)
 	}
 	return requestedSkillNotFoundResult(agentID, skillSlug)
+}
+
+// requestedSkillNotGrantedResult builds the response for a requested_skill the
+// target exists but is not granted (#895). It is deliberately NOT a
+// delegation_denied / trust_set refusal: the delegation itself was permitted
+// (policy, edge and depth were all fine) and only the skill argument is
+// unusable, so wording it as a permission denial sent an operator to grant
+// delegation permissions that were never the blocker. It stays distinct from
+// skill_not_found (ADR-072 FR-053/FR-054: the receiver's own grant is the
+// gate, and "not granted" must remain distinguishable from "no such skill"),
+// and like SkillNotFoundCode it is an LLM-facing plain payload, not a wire
+// type (see SkillNotFoundCode's doc comment in result.go).
+func requestedSkillNotGrantedResult(agentID, skillSlug string) *ToolResult {
+	message := fmt.Sprintf(
+		"delegate: the delegation to %q is permitted, but requested_skill %q is not available to it — "+
+			"the target agent has not been granted that skill (the receiver's own skill grant is the only "+
+			"one consulted; yours has no bearing). This is not a delegation-permission problem. "+
+			"Nothing was started. Retry without requested_skill, or have the skill granted to %q.",
+		agentID, skillSlug, agentID,
+	)
+	payload := map[string]any{
+		"error":           SkillNotGrantedCode,
+		"tool":            "delegate",
+		"skill":           skillSlug,
+		"target_agent_id": agentID,
+		"message":         message,
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return ErrorResult(message)
+	}
+	return &ToolResult{ForLLM: string(encoded), IsError: true}
 }
 
 // requestedSkillNotFoundResult builds the structured not-found response for
