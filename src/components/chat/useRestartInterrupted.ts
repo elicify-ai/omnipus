@@ -54,6 +54,11 @@ export function useRestartInterrupted(): boolean {
   return saved === 'interrupted' && !running && !dismissed
 }
 
+/** Ends the notice at the user's own action before the new turn's first frame arrives. */
+export function dismissRestartNotice(sessionId: string) {
+  setDismissed(sessionId, true)
+}
+
 function setDismissed(sessionId: string, value: boolean) {
   useChatStore.setState((state) => {
     const bucket = state.sessionsById[sessionId]

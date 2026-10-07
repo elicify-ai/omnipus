@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Session as WireSession, SessionPage } from '@/lib/api/generated/openapi-types'
@@ -337,6 +337,67 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
     expect(useChatStore.getState().isStreaming).toBe(false)
     await act(async () => { fireEvent.click(button) })
     expect(sender.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'message', session_id: SID, content: 'Write the long report' }))
+  })
+
+  // F1 (UAT R1): one status per chat, and no control left behind once a new turn ran.
+  function unansweredAttach(): Frame[] {
+    return [
+      { type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'boot_mismatch' },
+      { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z' },
+      { type: 'replay_message', session_id: SID, id: 'u-1', role: 'user', content: 'Write the long report' },
+      { type: 'catch_up_complete', session_id: SID, seq: 4, boot_id: 'boot-2', mode: 'snapshot' },
+    ]
+  }
+  const answerFrames: Frame[] = [
+    { type: 'token', session_id: SID, turn_id: 't-2', message_id: 'a-2', content: 'Fresh answer' },
+    { type: 'done', session_id: SID, turn_id: 't-2', stats: { tokens: 1, cost: 0 } },
+  ]
+
+  it('F1: restart-cut unanswered question shows ONE status: the Interrupted notice owns Generate again, no "couldn\'t be finished" line', async () => {
+    feed(unansweredAttach())
+    await mount()
+    const notice = await screen.findByTestId('restart-interrupted-notice')
+    expect(notice).toHaveTextContent('Interrupted')
+    expect(within(notice).getByRole('button', { name: /Generate again/ })).toBeInTheDocument()
+    expect(screen.queryByText(/couldn't be finished/i)).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /Generate again/ })).toHaveLength(1)
+  })
+
+  it('F1: after Generate again and Done, no notice, no Generate again, no "couldn\'t be finished" remains (list still says interrupted)', async () => {
+    feed(unansweredAttach())
+    await mount()
+    const button = await within(await screen.findByTestId('restart-interrupted-notice')).findByRole('button', { name: /Generate again/ })
+    await act(async () => { fireEvent.click(button) })
+    expect(sender.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'message', content: 'Write the long report' }))
+    feed(answerFrames)
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
+    expect(screen.getByText('Fresh answer')).toBeInTheDocument()
+    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Generate again/ })).not.toBeInTheDocument()
+    expect(screen.queryByText(/couldn't be finished/i)).not.toBeInTheDocument()
+  })
+
+  it('F1: a new message (not Generate again) also leaves no Generate again control', async () => {
+    feed(unansweredAttach())
+    await mount()
+    await screen.findByTestId('restart-interrupted-notice')
+    act(() => { useChatStore.getState().sendMessage('Please continue', { clientMessageId: 'u-2' }) })
+    feed(answerFrames)
+    await waitFor(() => expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: /Generate again/ })).not.toBeInTheDocument()
+    expect(screen.queryByText(/couldn't be finished/i)).not.toBeInTheDocument()
+  })
+
+  it('F1: the non-restart "couldn\'t be finished" line also clears once Generate again ran to Done', async () => {
+    savedLifecycle = 'done'
+    feed(unansweredAttach())
+    await mount()
+    await waitFor(() => expect(queryClient.getQueryState(['sessions'])?.status).toBe('success'))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Generate again/ })) })
+    feed(answerFrames)
+    expect(screen.getByText('Fresh answer')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Generate again/ })).not.toBeInTheDocument()
+    expect(screen.queryByText(/couldn't be finished/i)).not.toBeInTheDocument()
   })
 
   it('without a restart-interrupted saved state the same unanswered question still offers Generate again (same line, no restart state)', async () => {

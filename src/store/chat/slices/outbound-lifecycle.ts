@@ -125,6 +125,8 @@ function performResendMessage(
       m.status = 'done'
       m.deliveryStatus = 'sending'
     }
+    // A new answer was requested for this question: it is no longer unanswered.
+    if (draft.unansweredLastUserMessageId === messageId) draft.unansweredLastUserMessageId = null
   }) as Partial<SessionChatState>)
 
   const { connection, isConnected } = useConnectionStore.getState()
