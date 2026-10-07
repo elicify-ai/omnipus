@@ -5,7 +5,7 @@
 | Header | Value |
 |---|---|
 | Status | Decided rules recorded; specification in its final cut correction after fixed review round 2. ADR not trimmed; only final-spec contradictions corrected. Design only, not implementation, runtime verification or landing approval. |
-| Date | 2026-10-06; correction completed 2026-10-08 using founder decisions through 2026-10-07 22:10. |
+| Date | 2026-10-06; contradiction corrections 2026-10-08 after final cut-round Q1=A/Q2=A, with earlier founder decisions retained. |
 | Decider | Daniel Piatkowski; later founder answers override earlier answers and review recommendations. |
 | Author | Architect. |
 | Code baseline | `c6837a42dcfb503fb34a0cea86cd3ccc451e7b9b`, true-merged by `250b72caeb5c615ebd37f043a23a12c7befd9e2f`; no production changes in this design task. |
