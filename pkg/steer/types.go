@@ -50,6 +50,14 @@ type LaunchRequest struct {
 	// not granted it or the slug does not resolve at all, rather than
 	// silently proceeding without it.
 	RequestedSkill string
+	// ContextReferences and ContextNotes are delegate.run's curated context
+	// snapshot (`snapshot.references` / `snapshot.notes`, R§8.5): the
+	// parent-named artifact references and free-text notes the child is
+	// meant to start with. Already validated against the snapshot caps by
+	// the delegate tool; Launch seeds them into the child's first message,
+	// after Task. Both empty means no snapshot.
+	ContextReferences []string
+	ContextNotes      string
 }
 
 // LaunchResult is SessionLauncher.Launch's output (I-2).

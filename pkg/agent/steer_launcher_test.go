@@ -1349,3 +1349,40 @@ func TestLaunch_LongTaskNoLabel_SubagentStartTaskLabelSurvivesContractCap(t *tes
 			"so live and replay agree)", frame.TaskLabel, wantLabel)
 	}
 }
+
+// TestLaunch_Steered_SeedsSnapshotIntoFirstMessage: issue #1212 — a launch
+// carrying the delegate snapshot seeds its notes and references into the
+// child's first (model-visible) message, after the task text; the session
+// title stays the task/label, never the snapshot.
+func TestLaunch_Steered_SeedsSnapshotIntoFirstMessage(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	steerer := newTestSteeringSession(t, al, "ws-1")
+
+	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: steerer,
+		TargetAgentID:     testDefaultAgentID,
+		Task:              "inspect the cart",
+		Origin:            steer.Origin{Kind: steer.OriginKindDelegate},
+		ContextNotes:      "MARKER-NOTES-7731",
+		ContextReferences: []string{"docs/marker-ref-7731.md"},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	hist := al.GetSessionStore().GetHistory(res.SessionID)
+	if len(hist) != 1 {
+		t.Fatalf("GetHistory = %v, want exactly one seeded message", hist)
+	}
+	c := hist[0].Content
+	if !strings.HasPrefix(c, "inspect the cart") || !strings.Contains(c, "MARKER-NOTES-7731") || !strings.Contains(c, "docs/marker-ref-7731.md") {
+		t.Fatalf("first message = %q, want task text followed by the snapshot notes and reference", c)
+	}
+	meta, err := al.GetSessionStore().GetMeta(res.SessionID)
+	if err != nil {
+		t.Fatalf("GetMeta: %v", err)
+	}
+	if meta.Title != "inspect the cart" {
+		t.Fatalf("title = %q, want the task text only", meta.Title)
+	}
+}

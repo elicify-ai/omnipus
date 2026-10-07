@@ -221,8 +221,10 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 		Limits: steer.Limits{
 			TimeoutSeconds: int(dt.timeout / time.Second),
 		},
-		ToolExclusions: []string{string(ExcludedSwitchAgent)},
-		RequestedSkill: strings.TrimSpace(dt.requestedSkill),
+		ToolExclusions:    []string{string(ExcludedSwitchAgent)},
+		RequestedSkill:    strings.TrimSpace(dt.requestedSkill),
+		ContextReferences: dt.snapshotReferences(),
+		ContextNotes:      dt.snapshotNotes(),
 	})
 	if err != nil {
 		// ADR-072 D9/FR-053/FR-054: a requested_skill dispatch failure is a
@@ -273,6 +275,22 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 			dispatch.ConcurrencyLimit, dispatch.QueuePosition, launch.SessionID)
 	}
 	return NewToolResult(result)
+}
+
+// snapshotReferences and snapshotNotes expose the validated curated context
+// snapshot to the launch request; both are zero when no snapshot was given.
+func (dt *delegateToolExecuteRun) snapshotReferences() []string {
+	if dt.snap == nil {
+		return nil
+	}
+	return dt.snap.References
+}
+
+func (dt *delegateToolExecuteRun) snapshotNotes() string {
+	if dt.snap == nil {
+		return ""
+	}
+	return dt.snap.Notes
 }
 
 // steeringUnavailableResult is ADR-093 D5. An inactive conversation is a
