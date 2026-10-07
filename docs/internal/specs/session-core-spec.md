@@ -5,7 +5,7 @@ ADR: [Session core with an agent address book: reuse one standing session, one a
 
 Created: 2026-10-07.
 Size: Feature. This is a specification, not implementation, testing or landing approval.
-Checkpoint: behavior and contract draft; acceptance expansion, datasets and final traceability follow before hand-off.
+Checkpoint: acceptance draft updated for binding 17:15/17:25 decisions; OPEN-Q7/Q8 hold proposal-dependent implementation. No pending choice is assumed.
 
 ## Overview
 
@@ -17,14 +17,14 @@ Use the existing standing-session creation, session store, instruction queue, re
 
 | Source key | Source and precedence |
 |---|---|
-| S-ADR | **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, linked above; original approved-decision rewrite at `b76b412f6`, dated reference/status follow-up at `b037e91f1`. Sections D1–D10, DEL-01–22 and DEL-F01–43 are normative. |
-| S-LEDGER | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md`::all founder entries on 2026-10-06/07. This is the interview record, not a missing interview file to invent. Later answers win, especially October 7 13:40, 13:50, 14:10, 14:35, 14:45, 15:10, 15:20 and 15:55. |
-| S-Q | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/session-core-adr-20261007/QUESTIONS.md`::All closed questions. Q1=A, Q2=A, Q3=B, Q4=A, Q5=A, Q6=B. Their former OPEN labels are not pending decisions. |
+| S-ADR | **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, linked above; original approved-decision rewrite at `b76b412f6`, dated reference/status follow-up at `b037e91f1`. Sections D1–D11, including the later 17:15/17:25 overrides, DEL-01–22 and DEL-F01–43 are normative; OPEN-Q7/Q8 proposals remain held. |
+| S-LEDGER | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md`::all founder entries on 2026-10-06/07. This is the interview record, not a missing interview file to invent. Later answers win, especially October 7 13:40, 13:50, 14:10, 14:35, 14:45, 15:10, 15:20, 15:55, **17:15 and 17:25**. |
+| S-Q | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/session-core-adr-20261007/QUESTIONS.md`::All closed questions. Q1=A, Q2=A, Q3=B, Q4=A, Q5=A, Q6=B. Their former OPEN labels are not pending decisions. New OPEN-Q7/Q8 record held waiting/read and ordinary cross-workspace task choices from the later answers. |
 | S-FE | **ADR-20261007 — Agent-first navigation and agent identity**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/ADR-20261007-agent-first-navigation-and-agent-identity.md`, `work/adr-frontend-navigation-20261007` at `554d21ffd`, **Proposed**. Read from that Git object; not present on this branch. D5 consumes the shared contract; D12 requires the sidebar and main-session backend to land together after a joint integration test. Layout, avatars and that ADR's unanswered frontend questions are not decided here. |
 | S-RULES | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/CLAUDE.md`::Hard Constraints, Definition of Done, Contract regeneration; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/.claude/skills/plan-spec/SKILL.md` and its knowledge templates. |
 | Grounding | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/AS-IS-architecture.md`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/plugin-extensibility-assessment.md`; current ADRs and code. These walkthroughs are dated; code wins on current behavior. |
 
-The sources are already the founder-confirmed requirements. No new interview, upgrade plan, review recommendation or provider research overrides them. Storage-before-queue was a proposed build order, not a ratified delivery sequence; team-lead owns task planning. Contracts must precede their consumers regardless of implementation grouping (S-ADR::Questions answered and D10).
+The sources are already the founder-confirmed requirements. No review recommendation or provider research overrides them. The binding 17:15 answer authorizes the narrow install/upgrade saved-chat migration described below; greenfield remains the rule outside that exception. Storage-before-queue was a proposed build order, not a ratified delivery sequence; team-lead owns task planning. Contracts must precede their consumers regardless of implementation grouping (S-ADR::Questions answered and D10).
 
 | Disposition | Issues and boundary |
 |---|---|
@@ -60,7 +60,17 @@ A requirement naming a reuse key below names these existing `file::symbol` paths
 | E-RECAP | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/loop_idle.go::resetIdleTicker`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/session_end.go::CloseSession`, `persistResponse`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/memory.go::MemoryStore.WriteLastSession`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/tools/memory.go::RetrospectiveTool.Execute` | Existing idle recap writes agent memory. Keep joined retrospective stamp; no archive summary writer is added. |
 | E-CLI | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/runner/driver_claude.go::Input`, `Resume`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/runner/driver_codex.go::Input`, `Resume`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/runner/driver_opencode.go::Input`, `Resume`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/external_dispatch.go::policyApproverConsent.RequestConsent` | Mature current drivers for interrupt plus actual native-conversation resume, with honest unavailable/error states. External consent is not native-popup enforcement. |
 | E-DELETE | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/gateway/rest_agents.go::deleteAgent`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/sysagent/tools/agent.go::cascadeDeleteAgentSessions`, `cascadeUnassignAgentTasks` | Consolidate existing differing cascades; delete owned history/memory, retain guest answers elsewhere, preserve guards and report partial cleanup. |
-| E-POLICY | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/config/defaults.go::defaultToolPoliciesGeneral`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/tools/general_builtin_catalog.go::GeneralBuiltinMetadata`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/loop_wire.go::registerDelegationTools` | Existing catalog, global ceiling and per-agent registration. Native eligibility does not override operator Deny; no new messaging or self-helper tool. |
+| E-POLICY | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/config/defaults.go::defaultToolPoliciesGeneral`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/tools/general_builtin_catalog.go::GeneralBuiltinMetadata`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/loop_wire.go::registerDelegationTools` | Existing catalog, global ceiling and per-agent registration. Native eligibility does not override operator Deny; no new messaging or self-helper tool. Ordinary cross-workspace task access is held at OPEN-Q8, not assumed from a privileged tool’s existence. |
+
+### Later founder amendments — additional existing seams
+
+| Key | Existing path read | Extension / evidence limit |
+|---|---|---|
+| E-ADDRESS | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/config/config.go::ChannelInstanceConfig`, `ChannelIdentity`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/config/config_channels_instance.go::ChannelInstanceConfig.IsWorkspaceBound`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/gateway/channel_ownership.go::channelOwnershipResolver.OwnerOf`, `OwnedBy`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/loop_inbound.go::resolveMessageRoute`, `resolveWorkspaceIDForContinuation` | Channels already bind WorkspaceID plus agent-kind Identity.ID, and OwnerOf/OwnedBy resolve/compare both. Extend that pair semantics to @/peers and the computed main lookup, including explicit cross-workspace targets; no new addressing namespace or bare agent ID. |
+| E-MIGRATE | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/session/unified.go::NewUnifiedStoreWithHome`, `migrateLegacy`, `writeUnifiedMetaDirect`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/memory/migration.go::MigrateFromJSON`; E-STORE current saved-chat readers | Reuse/mature current import/read/staged atomic-write patterns for this cutover only. Current imports can skip failures or synthesize incomplete identity; they cannot be declared sufficient unchanged. One new-format steady-state store remains. |
+| E-TASK-TARGET | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/sysagent/tools/task.go::TaskCreateTool.Execute`, `taskCreateToolExecute.resolveWorkspace`, `enforceDelegation`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/loop_delegation.go::NewSysagentDelegationDeny`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/tools/task.go::TaskCreateTool.resolveWorkspaceID`, `taskCreateToolExecute.buildTask`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/coreagent/role_policies_adr090.go::ADR090RolePolicyInventory`, `adr090SparseRolePolicies` | Explicit cross-workspace task creation already exists for permitted callers; ordinary create_task uses caller/default only and shipped ordinary roles do not receive create_task_in_workspace. OPEN-Q8 holds the smallest access-path/grant correction. Plans and task assignment/criteria/permission gates are not broadened. |
+| E-ATTENTION | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/gateway/ws_tool_approval.go::sessionStateBytes`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/gateway/ws_ask_user.go::broadcastAskUserCard`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/goal_outcome.go::recordGoalOutcome`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/gateway/goal_outcome_frame.go::goalOutcomeFrame`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/gateway/websocket_replay.go::handleAttachSession`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/notifications/store.go::MarkRead` | Real pending snapshots and live question/approval/goal updates exist. Goal outcomes save then emit under stable entry identity; no agreed goal-seen/read writer exists. Per-user notification MarkRead is a candidate, not proof of goal attention already wired. OPEN-Q7 holds the read scope/mapping proposal. |
+| E-PROMPT | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/coreagent/prompts_adr090.go::adr090Prompts`, `exactToolDiscoveryRule`; existing structured question tool/catalog and E-ATTENTION | Prometheus-prompt-engineer authors the instruction to use the structured question tool whenever a user answer is needed; backend-lead wires it. Preserve denied/unavailable-tool honesty, child report versus user-answer authority and unattended approval limits; architect writes no product prompt here. |
 
 ### Impact assessment and execution flows
 
@@ -95,7 +105,7 @@ The optional generic Go reference index named by the user-level skill is absent 
 
 | Contract key | Existing source read | Required extension/removal and invariant |
 |---|---|---|
-| C-MAIN | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/components/schemas/Session.yaml`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/components/schemas/WorkspaceMemberConfig.yaml`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/components/schemas/WorkspaceMemberHeartbeat.yaml` | S-ADR::D1.1 exactly: require current Session.type; replace heartbeat type with server-only main; immutable agent_id; computed pair ID; derived protected; readOnly main_session_id on eligible MAIN member config. Delete heartbeat.session_id and mutable active_agent_id/handover semantics. Main is absent from client-create enum; workers/system/Admin have no main_session_id. |
+| C-MAIN | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/components/schemas/Session.yaml`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/components/schemas/WorkspaceMemberConfig.yaml`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/components/schemas/WorkspaceMemberHeartbeat.yaml` | S-ADR::D1.1 exactly: require current Session.type; replace heartbeat type with server-only main; immutable agent_id; computed pair ID; derived protected; readOnly main_session_id on eligible MAIN member config. Delete heartbeat.session_id and mutable active_agent_id/handover semantics. Main is absent from client-create enum; workers/other system agents have no main_session_id. Admin has the default-workspace main; publish it through existing Session responses/list and any existing Admin config surface without fake team membership. |
 | C-INPUT | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/components/schemas/MessageFrame.yaml`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/components/schemas/Message.yaml`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/asyncapi.yaml`::MessageFrame, ReplayMessageFrame, SessionStateFrame, MessageStatusFrame | Carry the decided per-message source/return correlation and held/control status through current intake/status/replay surfaces. Server-authenticated identity, original session, connector instance and chat/thread remain attached to each accepted input. Extend the current entry to express chat/model/both membership and full model representation without duplicate content. Keep real message/turn/producer identities; remove old uncorrelated acknowledgements and guessed-producer branches. |
 | C-INBOX | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/openapi.yaml`::SessionMessage; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/components/schemas/SessionMessageSteer.yaml`, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/components/schemas/SessionMessageRespond.yaml`, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/components/schemas/SessionMessageQuestion.yaml` | Extend this envelope's addressing for the already-decided peer/independent-task adapters. Preserve message_id, sender_identity, correlation_id, generation and real child parentage where applicable. A peer is not parent_to_child authority; no invented parent_session_id/edge. Typed refusal/retry information and intake outcomes belong to existing response/status surfaces. The logical information is fixed by S-ADR::D3/D7; no new transport or server-chosen reply destination. |
 | C-TASK | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/components/schemas/TaskRun.yaml`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/components/schemas/TaskCreateRequest.yaml`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/components/schemas/TaskUpdateRequest.yaml`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/components/schemas/ScheduleCreate.yaml`, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/contracts/components/schemas/ScheduleUpdate.yaml` | Extend existing run records with recipients captured at start and existing scheduled-task records with the single optional isolation checkbox. Modes are derived, not user/agent-selected. Preserve task/run/goal IDs, result and outcome owners; no new stopped Task status. Real MAIN parent_session_id remains separate from task/run origin. |
@@ -122,7 +132,7 @@ Use the existing session list/detail/message/history, workspace/member, task/run
 
 | Data / execution rule | Backend obligation | Frontend obligation | Authority |
 |---|---|---|---|
-| Main pair | E-MAIN validates both stored owner/pair and current eligibility/membership under existing session locking; main creation is independent of heartbeat enabled. Native core/custom chat targets qualify; workers, system and standalone Admin do not. | E-NAV consumes C-MAIN, never derives another stored map, chooses a latest chat as main, or mutates the owner. | S-ADR::D1/D1.1 |
+| Main pair | E-MAIN validates both stored owner/pair and current eligibility/membership under existing session locking; main creation is independent of heartbeat enabled. Native core/custom chat targets qualify; workers and other system agents do not. Admin is the explicit exception: one main in the default workspace only, while his standalone/no-team operator role remains. | E-NAV consumes C-MAIN, never derives another stored map, chooses a latest chat as main, or mutates the owner. | S-ADR::D1/D1.1 |
 | Archive and window | E-STORE integrates one content format into UnifiedStore with view membership, UTC day files and a file/byte start mark. Append order follows accepted FIFO, including delayed sources whose original timestamps fall on an earlier day; timestamp-based back-insertion is not a valid implementation. Midnight cannot split a tool group. | Existing message/replay/search projections read the same saved identity. Clear affects current display, not archived search/recall. | S-ADR::D2/D8 |
 | Retention | E-RETENTION expires old day content by existing file modification age, default 90 days; disabled retention remains a no-op. Move an expired mark to the first retained complete group; show the agent expired-history information; empty same-ID window if none remains. Do not retain all main content forever. | Eligible main identity remains navigable with empty retained history. Do not label an expired history as a new conversation or a successful clear of stored data. | S-ADR::D2; Q2=A |
 | Intake | E-QUEUE accepts ordinary human/parent instructions in one FIFO per actual session and retains each as a separate message. One runner owns settlement; ready batches join at safe steps or immediately after natural turn end. Provenance save and admission are one truthful acceptance boundary. | Show each item and truthful accepted/applied/held/superseded/refused state through current status surfaces; do not call an echo a save or a save model consumption. | S-ADR::D3/D6; #1214 |
@@ -130,7 +140,7 @@ Use the existing session list/detail/message/history, workspace/member, task/run
 | Reports | E-INBOX keeps current report caps/exemptions/result-delivery limits while all **accepted** helper report kinds become wake-eligible for an idle non-stopped parent. Current code couples cap exemption to wake classification; changing wake eligibility must not accidentally remove the preserved report rate/count checks. This is an adaptation inside the existing classifier/admission, not another inbox. | Surface actual rejection/not-delivered information and acting child; has_more:false alone is not a no-loss proof. No automatic retry, result-defer or overflow queue. | S-ADR::D3.1/D5; Q-R2-7; #1211 |
 | Task modes | E-TASK/E-SCHEDULE derive MAIN for any MAIN-assignee task; recurring worker CONTINUE; one-time worker ISOLATED; scheduled isolation override ISOLATED for either. MAIN always beats CONTINUE. Every MAIN run has a fresh real child of the assignee's main; CONTINUE keeps the conversation but gets a new run ID. | One scheduled-task checkbox **run isolated (one session per execution)**; no mode selector. Use existing Calendar/task history views; display real parentage, not a synthetic monitor edge. | S-ADR::D5; 10:13 |
 | Task admission/results | Narrow task-origin admission allows a future authorized scheduled MAIN child under a stopped main without waking that main; launch is ordered with Stop. Capture starter-MAIN main plus assignee-MAIN main at start and dedupe. Deliver brief engine header plus full stored result for each actual done/failed/stopped run, with reason. Skipped did not run; no per-retry notice. | Activity distinguishes starter monitoring from assignee/parent authority, shows MAIN once, and links stored results even when a captured recipient disappeared. Never guess a substitute recipient. | S-ADR::D5/D6; Q-R2-1/3; 10:25 |
-| Peer/source addressing | E-INBOX plus existing send_message transport address same-workspace MAIN peers without a delegation edge. Message carries only addressed text/explicit material, not whole source history. Receiver keeps permissions; sender gains no steering/Stop/context/approval rights. Each answer names its sender/return correlation; missing destination is visibly refused. | Replace mention-switch action with message addressing; guest icon/name and persisted identity match replay. Owner sees request and answer; answer wakes idle non-stopped owner once, with silence allowed and no empty bubble. | S-ADR::D7; Q3=B |
+| Peer/source addressing | E-INBOX plus existing send_message transport address explicit workspace+MAIN-agent pairs, including other workspaces when needed, without a delegation edge. Message carries only addressed text/explicit material, not whole source history. Receiver keeps permissions; sender gains no steering/Stop/context/approval rights. Each answer names its sender/return correlation; missing destination is visibly refused. | Replace mention-switch action with message addressing; guest icon/name and persisted identity match replay. Owner sees request and answer; answer wakes idle non-stopped owner once, with silence allowed and no empty bubble. | S-ADR::D7; Q3=B |
 | Idle/deletion | E-RECAP runs default-on recap after 30 inactive minutes, resetting on any turn/message and excluding active settlement; repeated idle episodes remain possible. E-DELETE consolidates existing entry points. Team removal hides; deletion removes owned sessions/memory while preserving guest answers labelled deleted agent. | UI deletion warns and requires two confirmations; API/tool retain existing single approval. Report partial cleanup, preserve guards, and never expose a deleted identity as a runnable guest. | S-ADR::D9; Q5=A/Q6=B |
 
 MAIN task children inherit their **main parent's** approval state, not the starting extra chat's modifier; target restrictions and unattended immediate refusal still apply. This may be more permissive than the starting chat and must be disclosed. Current full-result delivery can exceed report/context limits; accepted Q-R2-7 does not promise universal delivery or model fit (S-ADR::D10/Consequences).
@@ -198,6 +208,7 @@ A main agent or native worker wants to hand hands-on work to an ordinary helper 
 2. **Given** an ordinary self-helper below the configured depth bound, **When** it delegates onward, **Then** normal depth and memory admission apply with no one-hop exception, per-main quota or special memory behavior.
 3. **Given** a Deny or an excluded external/system/Admin caller, **When** self-delegation is attempted, **Then** no Omnipus self-helper starts and the refusal is visible.
 4. **Given** delegation targets another agent, **When** it is requested, **Then** existing workspace trust/mode/depth and receiver permissions still apply, with exactly ordinary helper context and no snapshot side fix.
+5. **Given** an opened external worker has a valid native conversation, **When** live instruction text is sent, **Then** the existing driver interrupts and resumes that actual native conversation with the instruction; missing native identity or failed resume is visible, never successful no-op or a silent fresh conversation.
 
 ### User Story 6 — Tasks keep their own execution and results (Priority: P1)
 
@@ -231,7 +242,7 @@ Humans and main teammates want to address each other directly in a workspace and
 **Independent Test:** address two authorized main teammates from web and two connector instances, using different request markers and return destinations.
 
 1. **Given** a main chat owned by Mia, **When** a person sends an addressed request to Jim, **Then** Jim receives only the request/explicit material, answers as Jim in that same group chat, and Mia sees request and answer without changing ownership.
-2. **Given** two same-workspace main teammates with no delegation edge, **When** one messages the other, **Then** communication is allowed within receiver permissions but grants no Stop, context-read or inherited approval authority; a cross-workspace attempt is refused.
+2. **Given** two explicit workspace+main-agent pairs with no delegation edge, **When** one messages the other, **Then** same- or cross-workspace communication is allowed within receiver permissions but grants no Stop, context-read or inherited approval authority; invalid/unauthorized pairs are refused.
 3. **Given** a mixed batch from distinct admitted web/connector senders, **When** addressed answers are produced, **Then** each answer returns only to its sender with its original instance, chat/thread and correlation preserved.
 4. **Given** an answer has no usable return address, **When** delivery is attempted, **Then** it is visibly refused and the agent must address a sender, not guess a destination or broadcast.
 
@@ -379,7 +390,7 @@ Frontend-lead loads `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktree
 
 The system MUST NOT create another session store, address map, queue, task executor, scheduler, report retry/overflow service, approval modal or result dashboard: the relevant mechanisms already exist (S-ADR::Alternatives considered). It MUST NOT copy an originating conversation wholesale to an addressed guest, invent child edges for peers/independent tasks, treat visibility as Stop authority, or broaden workers into fresh chat/mention targets.
 
-It MUST NOT add a summary step, change helper recap/memory, create a self-only nesting rule, per-main spend controller or extra admission quota, resume stopped mains for reports, replay lost waiting input at boot, or keep upgrade-only adapters behind deprecated aliases. S-FE layout questions, #1212/#1213/#1215/#1217 fixes and #1206 privacy separation are not side work in this feature.
+It MUST NOT add a summary step, change helper recap/memory, create a self-only nesting rule, per-main spend controller or extra admission quota, resume stopped mains for reports, replay lost waiting input at boot, or keep ongoing upgrade adapters behind deprecated aliases. The 17:15 saved-chat cutover import is the only authorized compatibility exception. S-FE layout questions, #1212/#1213/#1215/#1217 fixes and #1206 privacy separation are not side work in this feature.
 
 ### Machine-verifiable constraints
 
@@ -409,21 +420,865 @@ It MUST NOT add a summary step, change helper recap/memory, create a self-only n
 
 | Area | Decision / boundary | Implementer must not assume |
 |---|---|---|
-| Session-core questions | All six S-Q answers are closed; this draft does not reopen them | Different limits, deleting current once, guessed reply destination, automatic hidden-main wake or tool/API double confirmation |
+| Session-core questions | Original six S-Q answers are closed; OPEN-Q7/Q8 are new held choices from 17:15/17:25 | Different limits, deleting current once, guessed reply destination, automatic hidden-main wake or tool/API double confirmation |
 | Known accepted risk | Restart waiting-input loss; result delivery/context caps; shared channel privacy; MAIN-parent approval can loosen relative to extra chat; CLI subprocess-kill exception | Extra durability, universal result fit, privacy separation or native-popup protection for external calls |
-| Counterpart | S-FE is Proposed and owns its unanswered layout/identity and joint cutover questions | A latest-session main fallback, avatar/storage/migration decision, unsupported saved-history conversion, or separate sidebar landing |
+| Counterpart | S-FE is Proposed; founder 17:15/17:25 decide migration/Admin/cross-workspace/pair addresses and waiting sources, while unrelated layout/identity questions remain there | A latest-session main fallback, avatar/storage/migration decision, unsupported saved-history conversion, or separate sidebar landing |
 | Scoped frontend branch removal | S-ADR::DEL-F preserves current shared producer behavior; each implementing deletion needs proof of its canonical current replacement | Dropping current non-stream/kickoff/evicted-owner output, choosing a latest goal, or guessing missing producer/position |
 
 There is no new session-core product assumption in these warnings. Any genuinely new unresolved choice goes to `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/session-core-adr-20261007/QUESTIONS.md` as the next OPEN-Qn with context/options/recommendation, and the affected document requirement is held. Do not implement a guessed answer. Frontend counterpart questions remain with that ADR's founder interview; referencing it does not mark it Approved.
 
+## BDD Scenarios
+
+BDD means behavior-driven acceptance testing. Oracles below come from S-ADR, the founder answers and this spec, not a recorded output of the old implementation. Expected counters, identity markers and failed-delivery observations must be asserted through real store/runner/UI seams. Each scenario has one action; outlines expand into individual cases. Proposed test IDs appear in the TDD plan, not claims of tests already written or run.
+
+### Feature: Main identity and retained history
+
+#### Scenario Outline: BDD-01.1 — Repeated pair lookup has one main
+**Traces to:** User Story 1, Acceptance Scenario 1.
+**Category:** Happy Path
+- **Given** eligible native agent Mia belongs to workspaces W1 and W2, both with heartbeat off
+- **When** main lookup for `<pair>` is requested concurrently
+- **Then** the returned ID is exactly `<id>` with the correct immutable owner/workspace and one stored identity for that pair
+- **And** the other pair and any extra chat are unchanged
+**Examples:**
+
+| pair | id |
+|---|---|
+| W1, mia | main-session-W1-mia |
+| W2, mia | main-session-W2-mia |
+
+**Oracle:** FR-002; S-ADR::D1/D1.1. Count actual persisted identities, not lookup calls alone; parameterize with existing valid maximum-bound IDs too.
+
+#### Scenario: BDD-01.2 — Heartbeat-off retains protection and identity
+**Traces to:** User Story 1, Acceptance Scenario 2.
+**Category:** Happy Path
+- **Given** Mia's main is pinned/protected and heartbeat is enabled
+- **When** heartbeat is disabled
+- **Then** the same main remains protected and navigable, with no replacement chat or heartbeat address mapping
+**Oracle:** FR-002; S-ADR::D1. The existing protected-delete behavior remains effective; a protection flag with an unguarded delete path is not a pass.
+
+#### Scenario: BDD-01.3 — Team removal hides without stealing a run's outcome
+**Traces to:** User Story 1, Acceptance Scenario 3.
+**Category:** Alternate Path
+- **Given** Mia's retained main has an authorized running child and a captured completion recipient
+- **When** Mia is removed from that workspace team
+- **Then** main disappears from UI, connector and task addressing and new work through removed membership is refused
+- **And** the authorized child may settle and retain its task result without waking the hidden main
+**Oracle:** FR-003; Q5=A. Re-add uses a separate test case beginning with this retained hidden pair and asserts the same ID is revealed, not a replacement.
+
+#### Scenario Outline: BDD-01.4 — Invalid main identity cannot become another chat
+**Traces to:** User Story 1, Acceptance Scenario 4.
+**Category:** Error Path
+- **Given** the requested pair has `<invalid_state>`
+- **When** main lookup or attachment is attempted
+- **Then** a visible refusal/error is returned with no replacement identity, wrong-owner attach or other-workspace dispatch
+**Examples:**
+
+| invalid_state |
+|---|
+| computed ID exists with the wrong persisted owner/workspace |
+| metadata is unreadable or corrupt |
+| authenticated caller cannot access that workspace |
+| worker/other system agent, or Admin outside his default workspace, is requested as a main |
+
+**Oracle:** FR-002/035; S-ADR::D1/D1.1. Include a valid pair control so a broken lookup cannot pass by rejecting every case.
+
+#### Scenario: BDD-02.1 — Window movement does not rewrite retained history
+**Traces to:** User Story 2, Acceptance Scenario 1.
+**Category:** Happy Path
+- **Given** retained archive messages A/B/C, a complete tool call/result group and a saved working start mark
+- **When** a new admitted message causes window sliding
+- **Then** prior archive byte prefixes are unchanged, retained A remains recallable, and chat/model views come from one content archive
+- **And** model-window reads start at the mark rather than reading the archive prefix
+**Oracle:** FR-004/005/006; S-ADR::D2. Instrument actual file reads and compare saved byte prefixes; window-sized returned data alone cannot prove bounded reading.
+
+#### Scenario: BDD-02.2 — Midnight and delayed sources retain FIFO and tool validity
+**Traces to:** User Story 2, Acceptance Scenario 2.
+**Category:** Edge Case
+- **Given** a tool call at 23:59 UTC awaits its result after midnight, and accepted instructions M1/M2 have timestamps from different prior days
+- **When** the next safe step consumes the ready batch
+- **Then** model input has the complete matching tool group and separate M1/M2 in accepted order
+- **And** day/byte references resolve without back-inserting older timestamps, creating another execution or copying content into a late-event archive
+**Oracle:** FR-005/009; S-ADR::D2/D3. Use non-ASCII/newline content and a result ID reused in another turn to challenge structural identity.
+
+#### Scenario Outline: BDD-02.3 — Expired marks repair to retained complete content
+**Traces to:** User Story 2, Acceptance Scenario 3.
+**Category:** Edge Case
+- **Given** the old marked day is expired and `<remaining>` content remains
+- **When** the working window is read after the retention sweep
+- **Then** the same session has `<window>` and the agent is told older history expired
+**Examples:**
+
+| remaining | window |
+|---|---|
+| a retained complete group preceded by a fragment | first retained complete group onward, no orphan call/result |
+| no retained content | empty window, same protected eligible main identity |
+
+**Oracle:** FR-007; Q2=A. A disabled-retention fixture leaves old content/mark unchanged; normal file-age equality and just-older fixtures preserve existing sweep semantics.
+
+#### Scenario Outline: BDD-02.4 — Save failure cannot manufacture acceptance
+**Traces to:** User Story 2, Acceptance Scenario 4.
+**Category:** Error Path
+- **Given** `<save_part>` fails during a message's acceptance
+- **When** that message is submitted
+- **Then** no accepted/saved receipt, live echo presented as saved, or model consumption claims success
+- **And** the authenticated sender gets the current save/admission failure surface
+**Examples:**
+
+| save_part |
+|---|
+| persisted owner/identity |
+| authenticated provenance |
+| content append |
+| acceptance/admission publication |
+
+**Oracle:** FR-008; S-ADR::D3 and **Steering commands: no person question**. A real saved entry and a consumed message are counted separately; failure injection is at the write/commit seam, not a mock successful store.
+
+### Feature: Intake and report delivery
+
+#### Scenario: BDD-03.1 — Safe-boundary batch contains every separate accepted input
+**Traces to:** User Story 3, Acceptance Scenario 1.
+**Category:** Happy Path
+- **Given** one tool/model step is blocked and three authenticated inputs from human/connector/authorized parent have been accepted in that order
+- **When** the step reaches its next safe boundary
+- **Then** the next model input contains all three separate messages in that order and chat shows their distinct identities
+- **And** no second runner or waiting mechanism executes any item
+**Oracle:** FR-009/008; S-LEDGER::October 6 Q20/queue clarification. Record the full input list and execution-owner count; concatenated text is not the oracle.
+
+#### Scenario: BDD-03.2 — Input during settlement starts the immediate next turn
+**Traces to:** User Story 3, Acceptance Scenario 2.
+**Category:** Edge Case
+- **Given** a natural reply is in final settlement and the same session has newly accepted ready input
+- **When** settlement completes
+- **Then** the existing runner starts one next turn with all ready input without a timer or previous-reply-still-finishing refusal
+**Oracle:** FR-009/023; S-ADR::D3. Use barriers and dispatch counts, not an elapsed-time assertion or a widened timeout.
+
+#### Scenario Outline: BDD-03.3 — Ordinary admission checks every applicable bound
+**Traces to:** User Story 3, Acceptance Scenario 3.
+**Category:** Error Path
+- **Given** an otherwise admissible batch reaches `<bound>`
+- **When** the candidate ordinary message arrives
+- **Then** admission is `<outcome>` with an explicit bound-specific refusal if rejected, and no already accepted text is shortened
+**Examples:**
+
+| bound | outcome |
+|---|---|
+| text 65,536 UTF-8 bytes, enough other headroom | accepted |
+| text 65,537 UTF-8 bytes | refused |
+| 59 prior admitted messages by the same sender+target inside the minute | candidate 60 accepted |
+| 60 prior admitted messages by that sender+target inside the minute | candidate 61 refused |
+| a different trusted sender makes its first message to that target | accepted if other bounds fit |
+| 199 waiting ordinary items | candidate 200 accepted if other bounds fit |
+| 200 waiting ordinary items | candidate 201 refused |
+| joint waiting text 1,048,576 bytes and model fit | accepted |
+| joint waiting text 1,048,577 bytes | refused |
+| joint request estimate exactly current B | accepted if other bounds fit |
+| joint request estimate B+1 even below aggregate bytes | refused |
+
+**Oracle:** FR-010; Q1=A. Per-message, sender, count, bytes and model limits are independent controlled fixtures, not all exercised by one oversized text. Trusted principal/connector identity, not displayed name, keys rate.
+
+#### Scenario: BDD-03.4 — Config save becomes real live admission at reload
+**Traces to:** User Story 3, Acceptance Scenario 4.
+**Category:** Happy Path
+- **Given** common intake is using configured ordinary limits and a second fixture saves different valid steer_body/steer_rate/aggregate values
+- **When** the running configuration reloads
+- **Then** real post-reload ordinary intake changes its acceptance boundary across web, channel, parent and peer adapters
+- **And** fresh boot reads the same values, while report caps/delivery remain unchanged
+**Oracle:** FR-011/013; #1216 and Q1=A. Include pre-reload, post-reload and fresh-boot probes; direct resolver outputs or stored JSON alone are insufficient.
+
+#### Scenario Outline: BDD-04.1 — Every accepted helper report can wake
+**Traces to:** User Story 4, Acceptance Scenario 1.
+**Category:** Happy Path
+- **Given** an idle non-stopped authorized parent with available existing wake delivery and a helper's valid `<kind>` report below preserved admission limits
+- **When** the report is accepted
+- **Then** it is saved to the common report inbox and participates in one parent wake/consumption with its original message identity
+**Examples:**
+
+| kind |
+|---|
+| progress |
+| checkpoint |
+| artifact |
+| question |
+| blocker |
+| handback/final |
+| engine lifecycle report |
+
+**Oracle:** FR-012; S-ADR::D3. Include all existing accepted report variants in QA's expansion. Report wake eligibility must not change preserved rate/count exemptions.
+
+#### Scenario: BDD-04.2 — A stopped parent holds a report without reviving
+**Traces to:** User Story 4, Acceptance Scenario 2.
+**Category:** Alternate Path
+- **Given** a parent is stopped in its current generation and its live helper has a valid accepted report
+- **When** the report is delivered
+- **Then** it remains in the existing inbox and the parent has zero report-triggered dispatches
+**Oracle:** FR-012/024; S-ADR::D6. A separate continuation fixture starts from this held state and proves one consumption; duplicate replay must not add another copy.
+
+#### Scenario Outline: BDD-04.3 — Refused arrival is visible to child and parent
+**Traces to:** User Story 4, Acceptance Scenario 3.
+**Category:** Error Path
+- **Given** a child has reached a preserved report `<limit>`
+- **When** another report is attempted
+- **Then** the child receives typed refusal and applicable retry/backoff information and the parent's existing status/inbox/activity surfaces record rejected/not delivered, not accepted content
+- **And** no automatic retry or second report store is created
+**Examples:**
+
+| limit |
+|---|
+| report rate cap for a non-exempt kind |
+| body envelope cap |
+| applicable unacked/question-blocker ceiling |
+
+**Oracle:** FR-013; #1211 and S-ADR::D3.1. Reproduce the reported over-rate case before GREEN; an empty drain/has_more:false cannot certify that no refusal occurred.
+
+#### Scenario: BDD-04.4 — Duplicates and full-result limits do not create another protocol
+**Traces to:** User Story 4, Acceptance Scenario 4.
+**Category:** Edge Case
+- **Given** one accepted report identity is retried and another full result exceeds existing delivery limits
+- **When** that delivery batch is processed
+- **Then** the accepted report is stored/consumed once and the over-limit result has an honest failure/limit observation
+- **And** no summary, pagination, deferred-result or retry queue makes the test appear universally successful
+**Oracle:** FR-012/013/021; S-ADR::D3/D5 and Q-R2-7. Payload identity and current cap exemptions are preserved; this does not repair #1213 or #1215.
+
+### Feature: Delegation and tasks
+
+#### Scenario Outline: BDD-05.1 — Native omitted and explicit self-target share authorization
+**Traces to:** User Story 5, Acceptance Scenario 1.
+**Category:** Happy Path
+- **Given** eligible native `<role>` has delegate permitted and no self-edge
+- **When** it delegates with `<target_form>`
+- **Then** one ordinary helper of that caller starts under the same policy/authorization and ordinary context as explicit self-target
+**Examples:**
+
+| role | target_form |
+|---|---|
+| MAIN in its main chat | omitted target |
+| MAIN in an extra chat | explicit self |
+| native WORKER | omitted target |
+| native WORKER | explicit self |
+
+**Oracle:** FR-014/015; S-ADR::D4. Compare launcher requests/context with the ordinary helper path; the MAIN role's delivered prompt prioritizes delegation while role tools remain available. No guarantee that a model will always obey that priority is claimed.
+
+#### Scenario Outline: BDD-05.2 — Nested self-helpers use ordinary limits
+**Traces to:** User Story 5, Acceptance Scenario 2.
+**Category:** Alternate Path
+- **Given** a self-helper is at `<depth>` under default depth 3 and `<admission>`
+- **When** it requests one more ordinary helper
+- **Then** the result is `<result>` without a self-only one-hop rule or a new per-main quota
+**Examples:**
+
+| depth | admission | result |
+|---|---|---|
+| below 3 | ordinary memory/operator admission available | ordinary helper accepted |
+| at 3 | ordinary admission otherwise available | visible depth refusal |
+| below 3 | ordinary memory admission cannot admit | existing admission disposition, no cap bypass |
+
+**Oracle:** FR-015; S-ADR::D4 and Q-R2-2. Helper memory/recap and the configured operator limits stay ordinary; no task/delegate default timeout conflation.
+
+#### Scenario Outline: BDD-05.3 — Policy and excluded runtimes remain gates
+**Traces to:** User Story 5, Acceptance Scenario 3.
+**Category:** Error Path
+- **Given** `<caller_state>`
+- **When** Omnipus self-delegation is attempted
+- **Then** no helper is launched and a visible policy/eligibility refusal is returned
+**Examples:**
+
+| caller_state |
+|---|
+| eligible native caller with explicit delegate Deny |
+| external CLI worker |
+| standalone Admin outside the expanded native role scope |
+| system agent with fixed tool surface |
+
+**Oracle:** FR-014/016; S-ADR::D4/D10. Eligibility is not an override of the global or per-agent Deny.
+
+#### Scenario Outline: BDD-05.4 — Other-agent trust remains separate from self
+**Traces to:** User Story 5, Acceptance Scenario 4.
+**Category:** Error Path
+- **Given** another-agent target has `<edge_state>` in the actual workspace
+- **When** ordinary delegation is requested
+- **Then** it is `<outcome>` under the existing edge/mode/depth, target policy and requested-skill checks
+- **And** accepted helpers have exactly ordinary context/memory, not a new snapshot mechanism
+**Examples:**
+
+| edge_state | outcome |
+|---|---|
+| no authorizing edge | refused |
+| authorized edge, allowed mode/depth/receiver | accepted |
+| wrong mode or exceeded edge depth | refused |
+| workspace graph unreadable | refused |
+
+**Oracle:** FR-015/039; S-ADR::D4/P1–P17. #1212 is a coordinated external fix, not an expectation to silently repair its snapshot here.
+
+#### Scenario Outline: BDD-05.5 — External live steering resumes the real conversation
+**Traces to:** User Story 5, Acceptance Scenario 5.
+**Category:** Alternate Path
+- **Given** `<driver>` has an actual native conversation containing marker N, a live run, and known runtime/workspace/model/caps
+- **When** instruction S is sent through its opened worker chat
+- **Then** the current driver interrupts and resumes that native conversation, receives S, preserves N and the configured runtime/workspace/model/caps, and remains the same Omnipus chat
+- **And** the UI/docs disclose that CLI background subprocesses may be killed; no Omnipus self-helper is created
+**Examples:**
+
+| driver |
+|---|
+| Claude Code |
+| Codex |
+| OpenCode |
+
+**Oracle:** FR-043/016/034; S-ADR::D6/DEL-20 and 10:35. Real driver/model acceptance is required; help output and a mock successful Input are not this proof.
+
+#### Scenario Outline: BDD-05.6 — Unavailable native resume is not successful steering
+**Traces to:** User Story 5, Acceptance Scenario 5.
+**Category:** Error Path
+- **Given** an external worker has `<problem>`
+- **When** live instruction/resume is attempted
+- **Then** the action fails visibly with no successful no-op, fabricated native ID or silently fresh conversation
+**Examples:**
+
+| problem |
+|---|
+| native conversation ID absent/invalid |
+| CLI unavailable or authentication invalid |
+| native resume rejects or crashes |
+| selected execution was superseded before delivery |
+
+**Oracle:** FR-043/023; S-ADR::D6/DEL-20. Preserve actual process/control failure and the selected-execution fence.
+
+#### Scenario Outline: BDD-06.1 — Automatic modes preserve chat and task-run ownership
+**Traces to:** User Story 6, Acceptance Scenario 1.
+**Category:** Happy Path
+- **Given** `<assignee>` task has `<timing>` and `<isolation>`
+- **When** the task's next actual execution starts
+- **Then** it uses `<mode>` and `<conversation>` with its own task/run/goal identity and normal task limits
+**Examples:**
+
+| assignee | timing | isolation | mode | conversation |
+|---|---|---|---|---|
+| MAIN | manual/one-time | not applicable or unchecked | MAIN | fresh real child of assignee main |
+| MAIN | recurring scheduled | unchecked | MAIN | fresh real child for each run |
+| native/external worker | one-time/manual | unchecked | ISOLATED | fresh independent chat |
+| native/external worker | recurring scheduled | unchecked | CONTINUE | same independent chat after first run, new run ID each occurrence |
+| MAIN or worker | one-time/recurring scheduled | checked | ISOLATED | fresh independent chat each execution |
+
+**Oracle:** FR-017/018/021; S-ADR::D5. Heartbeat is a separate fixture using main itself. Preserved Calendar once/RRULE timing and current overlap/skipped behavior use the existing engine.
+
+#### Scenario: BDD-06.2 — A scheduled MAIN child may run under stopped main
+**Traces to:** User Story 6, Acceptance Scenario 2.
+**Category:** Alternate Path
+- **Given** a future authorized scheduled MAIN task belongs to a stopped main, with a different starting-extra-chat Auto setting
+- **When** its occurrence fires
+- **Then** task-origin admission can launch a fresh child under the main without dispatching the main model, ordered against the parent Stop fence
+- **And** the child uses main-parent approval within target restrictions and task-owned limits, not the extra chat's setting or delegate defaults
+**Oracle:** FR-018/034; Q-R2-1=A/Q-R2-3=A. Race both orderings with Stop barriers; general stopped-parent helper launch guards remain, and unattended human-required Ask still refuses immediately.
+
+#### Scenario Outline: BDD-06.3 — Only actual terminal runs notify captured recipients
+**Traces to:** User Story 6, Acceptance Scenario 3.
+**Category:** Happy Path
+- **Given** creator A differs from MAIN starter B and MAIN assignee Mia, recipients B-main/Mia-main were captured at start, and the run has `<outcome>`
+- **When** the authoritative run outcome is published
+- **Then** `<notice>` goes to the captured deduplicated recipients, never creator A solely because it created the task
+- **And** an eligible idle recipient wakes once, live recipient consumes at a safe boundary, and stopped recipient holds without revival
+**Examples:**
+
+| outcome | notice |
+|---|---|
+| done | brief engine header plus full stored result |
+| failed | terminal reason plus full stored result |
+| stopped | winning Stop reason plus full stored result, no later success contradiction |
+| skipped fire | no actual-run completion notice |
+| retry attempt still within one run | no per-retry final notice |
+
+**Oracle:** FR-019/020; S-ADR::D5/10:25. Starter=assignee dedupes to one recipient; simultaneous ready notices are batched, not concatenated into a new result format.
+
+#### Scenario Outline: BDD-06.4 — Missing recipient or delivery overflow leaves truthful task result
+**Traces to:** User Story 6, Acceptance Scenario 4.
+**Category:** Error Path
+- **Given** an actual completed run has `<problem>`
+- **When** its captured-recipient completion is delivered
+- **Then** the authoritative task/run result remains inspectable and no substitute recipient, synthetic parent edge, summary or new overflow queue is used
+- **And** rejected delivery/limit is distinguishable from successful consumption
+**Examples:**
+
+| problem |
+|---|
+| captured recipient session deleted |
+| captured main hidden by membership removal |
+| full result exceeds current report envelope/context limits |
+| independent ISOLATED/CONTINUE run is displayed by an unrelated monitoring chat |
+
+**Oracle:** FR-003/019/021; S-ADR::D5 and Q-R2-7. A displayed independent run is not stopped by that viewer's chat-tree Stop.
+
+### Feature: Controls and communication
+
+#### Scenario Outline: BDD-07.1 — Stop scope follows the selected activation
+**Traces to:** User Story 7, Acceptance Scenario 1.
+**Category:** Happy Path
+- **Given** a native main has a live helper, a current MAIN task child, an independent monitored task and a future recurring schedule
+- **When** `<activation>` is performed in that main chat
+- **Then** `<scope>` is stopped under selected-execution identity and `<preserved>` is untouched
+**Examples:**
+
+| activation | scope | preserved |
+|---|---|---|
+| first Stop/Esc/stop command | main's current turn only | helpers, MAIN task child, independent task, future recurrence, native background shells |
+| second Stop activation within 3 seconds | main and real downward helper/MAIN-child tree | independent task and future recurrence |
+| cancel command | same real downward tree immediately | parent/sibling conversations, independent task, future recurrence |
+| Stop after escalation window has closed | current turn only | helpers and other conversations |
+
+**Oracle:** FR-022/033; S-ADR::D6. UI has no separate Stop-all button; label uses actual live helpers, not historical child_count. Assert native shell process liveness/termination via existing tests, not a control-result boolean alone.
+
+#### Scenario: BDD-07.2 — Redirect/steer race has one honest disposition
+**Traces to:** User Story 7, Acceptance Scenario 2.
+**Category:** Error Path
+- **Given** redirect and steer target the same selected execution and one is paused at its acceptance/publication fence
+- **When** the competing control is admitted
+- **Then** each caller receives its authoritative queued/applied/superseded/refused outcome, and text reported refused is never consumed
+- **And** root/helper redirect continues the same chat with the new instruction, without internal stale-generation explanation or replacement-turn mutation by a late callback
+**Oracle:** FR-023/009; #1214 and S-ADR::D6. Enumerate both ordering outcomes using barriers and receipt/consumed-message identity; control precedence stays existing, not arrival guessed from sleep timing.
+
+#### Scenario Outline: BDD-07.3 — Held human input is released or discarded deliberately
+**Traces to:** User Story 7, Acceptance Scenario 3.
+**Category:** Alternate Path
+- **Given** Stop won with human H1/H2 held visibly and older parent control P superseded
+- **When** `<action>` occurs
+- **Then** `<effect>` and P never returns
+**Examples:**
+
+| action | effect |
+|---|---|
+| a new ordinary human message N | N can continue the chat without silently replaying all H1/H2 |
+| explicit release of held input | authorized released input joins the same intake with visible disposition |
+| explicit discard of held input | discarded input does not reach the model and the display reports discard |
+
+**Oracle:** FR-024/008; S-ADR::D6. Clear also retains pending input. This does not add restart reconstruction for held input.
+
+#### Scenario: BDD-07.4 — Restart-cut execution is Interrupted, not replayed
+**Traces to:** User Story 7, Acceptance Scenario 4.
+**Category:** Edge Case
+- **Given** the gateway was killed while a conversation had an in-flight execution and old waiting input
+- **When** that saved chat is opened after restart
+- **Then** it shows Interrupted, not permanently Working or failed because of restart, and old waiting input has zero boot dispatches
+- **And** task interrupted-failure/plan recovery remains its existing behavior
+**Oracle:** FR-025; S-ADR::D6. Integrate the I1-owned #1217 waiting-for-answer variant and its next-message continuation decision; do not claim that external fix is delivered by this spec. Manual Generate again remains the existing separate action, not boot replay.
+
+#### Scenario: BDD-08.1 — A guest answers with its own identity without handover
+**Traces to:** User Story 8, Acceptance Scenario 1.
+**Category:** Happy Path
+- **Given** Mia owns chat C and Jim is an authorized MAIN teammate
+- **When** the person submits an addressed Jim request with explicit material X
+- **Then** Jim's main receives only that request/X, not C's whole history, and his answer returns to C labelled Jim live and on replay
+- **And** Mia's context includes request and answer; idle non-stopped Mia wakes once for the answer, may remain silent without an empty bubble, and remains immutable owner
+**Oracle:** FR-026/027/029; S-ADR::D7. Use a source-history-only secret marker that Jim must not receive; preserve exact responder/message/correlation IDs.
+
+#### Scenario Outline: BDD-08.2 — Peer messaging is not delegated control
+**Traces to:** User Story 8, Acceptance Scenario 2.
+**Category:** Alternate Path
+- **Given** sender/receiver are `<relationship>`
+- **When** a direct peer request is sent
+- **Then** the request is `<outcome>` without transferring Stop, context-read, grant inheritance or ancestor steering authority
+**Examples:**
+
+| relationship | outcome |
+|---|---|
+| eligible MAIN teammates in same authorized workspace, no delegation edge | accepted under receiver permissions |
+| eligible explicit destination pair in another workspace | accepted under receiver permissions, no control transfer |
+| target is a worker/other system agent or Admin at a non-default-workspace pair | visibly refused |
+| target main is hidden after team removal | visibly refused |
+
+**Oracle:** FR-026/003/034; S-ADR::D7. Text claiming to be a parent/human must not alter trusted classification.
+
+#### Scenario: BDD-08.3 — Mixed-source answers keep their own return address
+**Traces to:** User Story 8, Acceptance Scenario 3.
+**Category:** Happy Path
+- **Given** one main consumed requests from web sender U and two same-platform connector instances I1/I2 with distinct chats/threads/correlations
+- **When** the agent produces addressed answers to those requests
+- **Then** each answer goes only to its own sender's original instance/chat/thread/session/correlation, with no broadcast or conversation-level last-sender fallback
+**Oracle:** FR-028/008; S-ADR::D7. Capture outbound destinations and negative recipients. Correct egress is not a privacy boundary: the main's shared context still contains admitted inputs.
+
+#### Scenario: BDD-08.4 — Unaddressed output visibly refuses
+**Traces to:** User Story 8, Acceptance Scenario 4.
+**Category:** Error Path
+- **Given** a mixed-source response has no usable return correlation/destination
+- **When** that output is submitted for delivery
+- **Then** delivery visibly refuses and asks the agent to address a sender, with zero outbound sends to any guessed/default destination
+**Oracle:** FR-028; Q3=B. A warning followed by fallback delivery is a failure.
+
+### Feature: Frontend actions, activity and deliberate data removal
+
+#### Scenario Outline: BDD-09.1 — Navigation is distinct from extra-chat creation
+**Traces to:** User Story 9, Acceptance Scenario 1.
+**Category:** Happy Path
+- **Given** the current workspace has eligible Mia/Jim mains and a retained extra chat
+- **When** `<action>` is used
+- **Then** `<outcome>` occurs without mutable in-chat handover or a new generic chat-creation bypass
+**Examples:**
+
+| action | outcome |
+|---|---|
+| Mia agent row click | Mia main opens |
+| Mia row + New chat | one deliberate extra Mia chat opens |
+| switch-agent navigation to Jim | Jim main opens |
+| WebSocket connect/reconnect | existing roster refresh occurs; eligibility remains team-only with standalone Admin treatment unchanged |
+| sessions command | existing session search opens under its canonical name |
+
+**Oracle:** FR-029/031; S-ADR::D8; S-FE::D3/D5/D12. Unavailable attach is covered by BDD-01.4; never fall back to latest session or a fresh chat.
+
+#### Scenario: BDD-09.2 — Clear waits for the safe point and keeps history
+**Traces to:** User Story 9, Acceptance Scenario 2.
+**Category:** Happy Path
+- **Given** a live step holds old context, saved history A, and waiting input H
+- **When** clear is requested
+- **Then** the current step is not claimed to have forgotten its input; at the next safe point context/current display clear with a marker under the same session
+- **And** H remains pending and A stays searchable/recallable without archive-byte deletion
+**Oracle:** FR-030/006; Q-R2-9=A. Reopening history must preserve the clear projection; search/recall must still reach retained prior content.
+
+#### Scenario Outline: BDD-09.3 — Typed worker commands and palette agree
+**Traces to:** User Story 9, Acceptance Scenario 3.
+**Category:** Error Path
+- **Given** a human has an opened worker chat and invokes `<capability>` through `<entry>`
+- **When** that command/action is executed
+- **Then** the result is `<outcome>`, with no forbidden mutation hidden behind a read-only list or stale alias
+**Examples:**
+
+| capability | entry | outcome |
+|---|---|---|
+| help/status/stop/cancel/stop-redirect/clear/sessions/workspace/tasks/recall/navigation | typed and palette, each case | permitted within current authorization |
+| existing read-only model/skill/channel lists | typed and palette, each case | permitted as read-only, no selection/mutation |
+| remember/retrospective/goal/loop/model switching/config | typed and palette, each case | forbidden in worker context |
+| new/agents/list/show/switch/check/channel/start/old resume | any old command or alias | absent/refused everywhere, not hidden compatibility execution |
+
+**Oracle:** FR-031/038; S-ADR::D8 final 12:35 table. The singular retired channel alias is not a ban on current read-only channel lists.
+
+#### Scenario Outline: BDD-09.4 — Existing worker input does not rerun a completed task
+**Traces to:** User Story 9, Acceptance Scenario 4.
+**Category:** Alternate Path
+- **Given** a legitimate worker/task session has `<state>` and existing task/run history
+- **When** the authenticated human sends a message into that opened chat
+- **Then** `<effect>` occurs under the same conversation and current authorization
+- **And** the worker still cannot be selected for fresh chat or mention
+**Examples:**
+
+| state | effect |
+|---|---|
+| live task run | steers that current run |
+| task finished | conversation continues; old task/run outcome stays unchanged and no rerun is dispatched |
+| stopped conversation | legitimate human continuation respects Stop fence and held-input policy |
+
+**Oracle:** FR-032/024; Q-R2-10=A. Explicit task Rerun remains a different existing action.
+
+#### Scenario: BDD-10.1 — Existing Activity shows tasks once and distinguishes authority
+**Traces to:** User Story 10, Acceptance Scenario 1.
+**Category:** Happy Path
+- **Given** the agent has native helpers, a scheduled MAIN task child and an independent task monitored by its starter
+- **When** Activity is opened
+- **Then** the relevant run/helper rows and their actual running/queued/waiting state, available usage and own chat links are visible
+- **And** the MAIN task is one row rather than task-plus-helper duplicate; independent monitoring grants no tree Stop and historical child_count is not a live running count
+**Oracle:** FR-033/021; S-ADR::D4/D5/D6. Token values must match stamped provider/run usage where supplied; missing usage is not fabricated zero.
+
+#### Scenario: BDD-10.2 — One native approval names the acting helper/run
+**Traces to:** User Story 10, Acceptance Scenario 2.
+**Category:** Happy Path
+- **Given** a native helper/task run has one pending tool approval in the current workspace
+- **When** the existing approval modal renders
+- **Then** its acting helper/run label and Open link resolve to that execution under the same approval ID, actions and receiver restrictions
+- **And** no extra approval queue/card exists and external CLI calls are not described as natively popup-protected
+**Oracle:** FR-034/035; S-ADR::D10 and E-APPROVAL. Changing attribution must not change scope, Auto off-switch, pending resolution or unattended refusal behavior.
+
+#### Scenario Outline: BDD-10.3 — Missing or partial view data stays truthful
+**Traces to:** User Story 10, Acceptance Scenario 3.
+**Category:** Error Path
+- **Given** the existing surface is in `<state>`
+- **When** it renders
+- **Then** it shows `<truthful_state>` rather than fabricated activity/tokens, successful delivery, replacement main or lost-history recovery
+**Examples:**
+
+| state | truthful_state |
+|---|---|
+| roster/main lookup pending | loading, no auto-created extra |
+| protected main has no retained content | empty conversation, same identity |
+| roster refresh failed with cached choices | visible stale/error notice and current retry path |
+| activity lifecycle/usage not yet known | partial/unknown data, not guessed running/zero tokens |
+| report/result delivery rejected | not-delivered observation, stored task result remains accessible |
+| deletion cleanup incomplete | partial result, not full success |
+
+**Oracle:** FR-035/033/013/037; UI Screens and States. This does not choose a new status-label/product rule for a missing canonical producer.
+
+#### Scenario: BDD-10.4 — Keyboard and assistive controls reach the same behavior
+**Traces to:** User Story 10, Acceptance Scenario 4.
+**Category:** Happy Path
+- **Given** keyboard/assistive use in a workspace with main, worker, held input, activity and a deletion confirmation
+- **When** one authorized control is operated through its keyboard interaction
+- **Then** the same action/permission is applied with an accessible name, status/error announcement, visible focus and appropriate focus restoration
+- **And** escape/dismissal precedence remains safe; reflow/zoom/touch targets do not hide or overlap that control
+**Oracle:** FR-035; S-RULES/design-system D7/D16/D17. Parameterize individual controls and pointer/touch, 200% zoom and 320px width; do not assert a whole journey with one click.
+
+#### Scenario: BDD-11.1 — Repeated idle episodes recap the same main identity
+**Traces to:** User Story 11, Acceptance Scenario 1.
+**Category:** Happy Path
+- **Given** a settled main human chat has auto recap on by default and a last real message/turn activity time
+- **When** thirty inactive minutes elapse
+- **Then** one idle recap for that episode writes agent memory without an archive summary, new conversation or overlapping live execution
+**Oracle:** FR-036/006; S-ADR::D9. Separate fixtures add activity just before the boundary, keep a live settlement past it, or resume the same ID before another later idle episode; fake-clock/timer claims, not wall-clock sleeps.
+
+#### Scenario Outline: BDD-11.2 — Actual deletion uses one owned-data cascade
+**Traces to:** User Story 11, Acceptance Scenario 2.
+**Category:** Happy Path
+- **Given** deletable agent X has owned sessions/memory and a guest answer in Mia's chat, with `<confirmation>`
+- **When** X is deleted through `<entry>`
+- **Then** the one cascade removes X's owned sessions/memory and preserves the guest answer labelled deleted agent without a runnable X identity
+**Examples:**
+
+| entry | confirmation |
+|---|---|
+| UI | owned-data warning and both explicit confirmations |
+| existing authorized agent tool | existing single approval |
+| existing authorized API | existing single-approval requirements |
+
+**Oracle:** FR-037; Q6=B and Q-R2-11=A. Removal from Team is not this deletion action; default protection/locked/system/plan guards remain.
+
+#### Scenario Outline: BDD-11.3 — Guarded or partial delete is not reported complete
+**Traces to:** User Story 11, Acceptance Scenario 3.
+**Category:** Error Path
+- **Given** deletion has `<problem>`
+- **When** it is attempted
+- **Then** the current result reports the guard/refusal/partial cleanup accurately, retaining guest history and not claiming complete owned-data deletion
+**Examples:**
+
+| problem |
+|---|
+| UI first confirmation only or dismissed second confirmation |
+| locked/system/active-plan guard applies |
+| owned-session cleanup fails |
+| owned-memory cleanup fails after another cleanup part succeeded |
+
+**Oracle:** FR-037/035; S-ADR::D9. API/tool do not acquire the UI's second confirmation gate as a side effect.
+
+#### Scenario: BDD-11.4 — Current recap meanings remain and explicit close is gone
+**Traces to:** User Story 11, Acceptance Scenario 4.
+**Category:** Alternate Path
+- **Given** current bootstrap/idle/agent-recorded retrospective inputs and an ordinary helper's existing recap eligibility
+- **When** a recap action is requested
+- **Then** bootstrap/idle remain, retrospective retains joined, helper memory behavior is unchanged, and lazy/explicit/session-close actions cannot invoke a recap
+**Oracle:** FR-036/038; S-ADR::D9/DEL-08. No new compaction-summary or helper-memory workflow.
+
+### Feature: Canonical deletion, contracts and joint reachability
+
+#### Scenario Outline: BDD-12.1 — Every scoped retired path is removed, not aliased
+**Traces to:** User Story 12, Acceptance Scenario 1.
+**Category:** Error Path
+- **Given** `<deletion_id>` names the exact retired path and canonical replacement/nothing in the DELETE inventory
+- **When** its old callable/wire/config/reader/alias branch is challenged
+- **Then** the retired behavior is absent/refused and only its listed current replacement, or nothing, is reachable
+**Examples:** every DEL-01–DEL-22 and DEL-F01–DEL-F43 inventory row is an independent case; group aliases within a row into explicit subcases. Current once/at_ms is a positive control, not a deletion case.
+**Oracle:** FR-038/031/036; S-ADR::scoped deletion ruling and Q4=A. Static absence checks require positive recall controls and real callable/reader behavior tests; a comment containing a name is neither preserved behavior nor a second implementation.
+
+#### Scenario Outline: BDD-12.2 — Canonical current output survives shared-branch deletion
+**Traces to:** User Story 12, Acceptance Scenario 2.
+**Category:** Edge Case
+- **Given** a current `<producer_case>` has a valid canonical identity/state and shares handling with a retired branch
+- **When** that output is delivered or replayed
+- **Then** its current message/tool/lifecycle/goal/plan behavior remains visible and correctly owned without back-compat heuristics, hidden output or guessed latest entity
+**Examples:**
+
+| producer_case |
+|---|
+| ordinary correlated first-send and queued delivery |
+| current workspace kickoff acknowledgement |
+| current non-stream final answer with no prior streamed bubble |
+| tool owner evicted from the UI ring buffer |
+| reconnect with actual recorded text/tool offsets |
+| start/state/end out of order with valid span IDs |
+| typed model/replay error and current control/kickoff error |
+| current keyed goal state and current plan-scope global verdict |
+
+**Oracle:** FR-039/006/035; S-ADR::DEL-F preservation boundary/P1–P17. If the current producer lacks a required canonical identity, report the gap before deletion; do not fabricate a field, owner or goal-selection rule.
+
+#### Scenario Outline: BDD-12.3 — Generated boundary validation matches current contracts
+**Traces to:** User Story 12, Acceptance Scenario 3.
+**Category:** Error Path
+- **Given** `<payload>` is submitted through the real changed contract seam
+- **When** its generated runtime validator/consumer processes it
+- **Then** `<verdict>` holds with no hand-written wire-type bypass
+**Examples:**
+
+| payload | verdict |
+|---|---|
+| valid main/member/message/run/control response | accepted by current generated types/validators |
+| missing required current Session.type or wrong main owner/pair | schema or authoritative server refusal; no chat fallback |
+| client-created main, retired handover or session-close action | refused/not supported |
+| task every/every_ms/recurring.cron_expr | refused/not supported, not preserved |
+| current once/at_ms and RRULE task | accepted through the existing timing path |
+| malformed current correlated identity/typed error | refusal/visible validation failure, no producer guessing |
+
+**Oracle:** FR-001/038; Contract Changes. Validate a correct control first; a wrong payload rejected for an unrelated field is not proof of the intended constraint.
+
+#### Scenario: BDD-12.4 — Integrated real user and agent can invoke the feature
+**Traces to:** User Story 12, Acceptance Scenario 4.
+**Category:** Happy Path
+- **Given** the exact joint backend/sidebar candidate includes committed generated contracts and matching user-facing documentation
+- **When** its real user/agent reachability campaign is executed
+- **Then** the required main/extra/worker/group/task/control/approval/history paths are invoked through the actual UI and permitted tools
+- **And** RED/GREEN/CHECK, five-reviewer findings dispositions and exact-commit tester plus independent validator evidence are recorded separately from merely written plans
+**Oracle:** FR-041/042; Reachability and S-FE::D12. S-FE is still Proposed; successful static frontend preparation is not joint acceptance or landing approval.
+
+## Test-Driven Development Plan
+
+### Test hierarchy and execution discipline
+
+| Level | Real system under test | Allowed doubles / oracle |
+|---|---|---|
+| Unit | Existing identity/window/admission/classification/mode/reducer logic | Fixed fixture inputs, existing estimator arithmetic and controllable clock; do not substitute a mock successful store for the operation being proved |
+| Integration | Real session/inbox/lifecycle/run stores, runner/intake, controls, generated validators, task dispatch and common deletion | Model/connector/process boundary doubles and explicit write-failure/barrier hooks; compare actual saved/consumed/outbound identities |
+| E2E | Integrated candidate browser, actual permitted agent tools, task/calendar/approval/search/worker chat links | Isolated homes/accounts and controlled input; actual supported CLI lane needed for its real native-resume claim |
+
+QA authors RED before production edits and derives expected values from these oracles. Backend/frontend leads implement GREEN; a different qa-lead audits CHECK/test integrity. Existing behavioral safety assertions cannot be weakened, skipped or deleted because a path is renamed. Compatibility-only fixtures are removed only as the scoped DELETE requirements require, and replacement behavior/safety tests accompany that removal.
+
+CI is the authority for heavy Go/build/race/cross-platform/frontend gates. No full local Go or frontend suite is requested by this document; the one-at-a-time narrow local exception remains under S-RULES. Concurrency tests use the actual race gate and forced interleavings; compilation on the supported platforms and generated-runtime validation are separate checks. Every claimed future run requires saved log, direct exit code, exact SHA and named executed tests. RED-before-GREEN is shown from the tests-only pre-change commit or the permitted narrow run, not inferred from writing a test.
+
+### Proposed test implementation order
+
+Names are **proposed** test families for QA, not claims that files/tests exist. Each family expands all referenced scenario outline rows. Unit families precede integration, then E2E; this is test dependency order, not a new founder-approved implementation/landing sequence.
+
+| Order / ID | Proposed test family | Level | BDD scenarios | What must distinguish red from green |
+|---|---|---|---|---|
+| 1 / T01 | MainPairIdentityAndProtection | Unit | BDD-01.1, BDD-01.2, BDD-01.4 | Pair match/eligibility, concurrency/collision, computed long ID and protection rather than merely nonempty ID |
+| 2 / T02 | SingleArchiveBoundedWindowAndAppendEffects | Unit | BDD-02.1, BDD-02.2 | One archive, unchanged prefix, real read offset and complete call/result groups |
+| 3 / T03 | RetentionCursorRepairAndProtectedIdentity | Unit | BDD-02.3 | File age/disabled state, oldest complete group, agent expiry notice and same-ID empty window |
+| 4 / T04 | OrdinaryIntakeIndependentBounds | Unit | BDD-03.3 | Every body/rate/count/aggregate/model bound; bytes versus characters and trusted sender identity |
+| 5 / T05 | LiveConfigAdmissionSnapshot | Unit | BDD-03.4 | Settings actually wired to live check; integration complement below verifies gateway boot/reload |
+| 6 / T06 | AcceptedReportClassAndPreservedCaps | Unit | BDD-04.1, BDD-04.3, BDD-04.4 | Expanded wake eligibility without widening preserved cap exemptions; dedupe/rejection data |
+| 7 / T07 | NativeSelfAuthorizationAndOrdinaryLimits | Unit | BDD-05.1, BDD-05.2, BDD-05.3, BDD-05.4 | Omitted=explicit self, no self-edge, Deny/other-agent trust/depth/memory/runtime gates |
+| 8 / T08 | AutomaticTaskModeAndTiming | Unit | BDD-06.1 | MAIN precedence, fresh MAIN IDs, worker CONTINUE/new run, isolation checkbox, once/RRULE positive controls |
+| 9 / T09 | SelectedExecutionControlAndHeldState | Unit | BDD-07.1, BDD-07.2, BDD-07.3 | Correct scope/disposition and no stale turn mutation/held auto-replay |
+| 10 / T10 | PerSourcePeerReturnAddressing | Unit | BDD-08.2, BDD-08.3, BDD-08.4 | Permission/target scope and exact destination/correlation, zero guessed sends |
+| 11 / T11 | CanonicalSessionAwareCommandCapabilities | Unit | BDD-09.1, BDD-09.3, BDD-12.1 | Typed and menu actions agree; old aliases do not execute; no clear-as-new |
+| 12 / T12 | CurrentActivityAndCanonicalReducerCases | Unit | BDD-10.1, BDD-10.3, BDD-12.2 | Real run/usage identity, no duplicate MAIN row or missing-current-output heuristic |
+| 13 / T13 | IdleEpisodesAndCurrentRecapTriggers | Unit | BDD-11.1, BDD-11.4 | Activity resets, no settling overlap, repeat episode and joined retained |
+| 14 / T14 | CurrentGeneratedContractControls | Unit | BDD-12.3 | Passing valid payload plus targeted invalid field/action, byte-limit runtime check distinct from character schema |
+| 15 / T15 | AtomicProvenanceFIFOAndSettlement | Integration | BDD-02.4, BDD-03.1, BDD-03.2, BDD-03.4, BDD-07.2 | Actual save/intake/model inputs and boot/reload behavior; force settlement/control races |
+| 16 / T16 | ReportWakeHoldRefusalAndDedupe | Integration | BDD-04.1, BDD-04.2, BDD-04.3, BDD-04.4 | Real inbox/runner delivery, stopped zero dispatch, refusal visibility and unchanged full-result limitation |
+| 17 / T17 | TaskParentAdmissionCaptureAndTerminalNotice | Integration | BDD-01.3, BDD-06.1, BDD-06.2, BDD-06.3, BDD-06.4 | Real task/run/goal identity, stopped-main launch/Stop order, captured recipients and authoritative result |
+| 18 / T18 | AddressedGuestAndConnectorReplyRoute | Integration | BDD-08.1, BDD-08.2, BDD-08.3, BDD-08.4 | Minimal addressed context, own/guest awareness, replay identity and connector-instance egress |
+| 19 / T19 | CLINativeResumeAndFailureIdentity | Integration | BDD-05.5, BDD-05.6 | Actual process/driver request carries native ID and instruction; no fresh/no-op success |
+| 20 / T20 | RestartInterruptedWithoutWaitingReplay | Integration | BDD-07.4 | Source-integrated recovery, zero old-input boot dispatch, current manual continuation; #1217 lane remains independently owned |
+| 21 / T21 | CommonAgentDeletionAndPartialResult | Integration | BDD-11.2, BDD-11.3 | One cascade through UI/tool/API, guarded/partial result, owned data removal and guest-history retention |
+| 22 / T22 | SafeClearAndExistingWorkerContinuation | Integration | BDD-09.2, BDD-09.4 | Boundary-installed window/display, retained input/history and no completed-task rerun |
+| 23 / T23 | CanonicalDeletionAndContractGeneration | Integration | BDD-12.1, BDD-12.2, BDD-12.3 | Enumerated retired callers/shapes gone and current kickoff/no-stream/evicted-owner/plan-scope behavior still works |
+| 24 / T24 | JointMainExtraNavigationAndSearch | E2E | BDD-01.1, BDD-01.2, BDD-01.4, BDD-09.1, BDD-09.2 | Real sidebar/backend pair attach, sole row New chat, clear/search and protected delete refusal |
+| 25 / T25 | LiveStopRedirectHeldInput | E2E | BDD-07.1, BDD-07.2, BDD-07.3, BDD-09.4 | Real generated redirect path, UI live/reload consistency, correct held/tree scope |
+| 26 / T26 | GroupIdentityAndMixedSources | E2E | BDD-08.1, BDD-08.2, BDD-08.3, BDD-08.4 | Guest name/icon no handover, source-specific replies, visible unaddressed refusal |
+| 27 / T27 | AgentTaskActivityAndApprovalAttribution | E2E | BDD-10.1, BDD-10.2, BDD-10.3, BDD-06.4 | Existing Activity/approval/result links, real counts/usage, native/external distinction |
+| 28 / T28 | KeyboardWorkerCommandsAndControlStates | E2E | BDD-09.3, BDD-10.4 | Keyboard/menu/typed parity, names/focus/announcements, touch/zoom/reflow and safe dismissal |
+| 29 / T29 | IdleResumeAndDoubleConfirmOwnedDeletion | E2E | BDD-11.1, BDD-11.2, BDD-11.3, BDD-11.4, BDD-01.3 | Same-ID idle resume, UI-only double confirm, one cascade and hidden-versus-deleted distinction |
+| 30 / T30 | ExactCandidateJointReachabilityAndDocs | E2E | BDD-12.4, BDD-12.2 | Real tool/UI paths, joint generated contract, matching audited docs, complete tester+validator evidence |
+| 31 / T31 | ActualThreeCLILiveSteering | E2E | BDD-05.5, BDD-05.6 | Supported installed CLI preserves prior native marker and receives new instruction; unavailable/auth/resume failure remains explicit |
+
+### Test datasets
+
+Each table's rows expand rather than replace the scenario outlines. Null/empty/zero values use the current schema/effective-setting meanings; no new config-validation or media policy is invented. A fixture that disables a competing bound does so explicitly to isolate the intended failure.
+
+#### Dataset A — Ordinary intake and identity
+
+| Row | Input / state | Boundary type | Expected outcome | Traces to |
+|---|---|---|---|---|
+| A01 | 1-byte text with ample headroom | minimum valid | accepted with authenticated sender and distinct message | BDD-03.1 |
+| A02 | empty content, no media / null content | empty/null | current message schema rejects; no admission | BDD-02.4, BDD-12.3 |
+| A03 | empty caption, valid media reference | alternate valid | accepted if media/model/other bounds fit; reference retained | BDD-03.3 |
+| A04 | text 65,535 / 65,536 / 65,537 UTF-8 bytes | max−1/max/max+1 | accept/accept/refuse with other bounds isolated | BDD-03.3 |
+| A05 | combining characters, multibyte text, newlines at those byte boundaries | Unicode | same byte-bound result; not character-only maxLength | BDD-03.3 |
+| A06 | 0 / 59 / 60 previous admitted sends in the minute | zero/rate boundary | first / 60th accepted; 61st refused for same trusted sender+target | BDD-03.3 |
+| A07 | sender A reached 60; sender B and same display name on another trusted instance send once | fairness/provenance | B/distinct principal has own rate scope, subject to target's other bounds | BDD-03.3, BDD-08.3 |
+| A08 | 199 / 200 waiting ordinary items | count max−1/max | candidate 200 admitted if fits; candidate 201 refused | BDD-03.3 |
+| A09 | resulting aggregate 1,048,575 / 1,048,576 / 1,048,577 bytes | aggregate max−1/max/max+1 | accept/accept/refuse if model fits | BDD-03.3 |
+| A10 | real assembled estimate B−1 / B / B+1 after permitted old-window slide | model-fit boundary | accept/accept/refuse with byte/count/rate room | BDD-03.3 |
+| A11 | tiny text plus high media/tool/pinned overhead | non-text cost | current estimator/model fit, not text-only fit | BDD-03.3 |
+| A12 | late instruction during final-settlement barrier plus separate fresh chat of same agent | concurrency | immediate same-session next turn; no cross-chat queue/control contamination | BDD-03.2, BDD-07.2 |
+| A13 | valid non-default settings before reload/after reload/fresh boot | wiring | observed intake boundaries change only after current live application; all ordinary adapters agree | BDD-03.4 |
+| A14 | control text claims another sender/parent; provenance save denied | spoof/I/O failure | trusted identity cannot be replaced by text; failed atomic acceptance not consumed | BDD-02.4, BDD-08.2 |
+
+#### Dataset B — Window, retention and control order
+
+| Row | Input / state | Boundary type | Expected outcome | Traces to |
+|---|---|---|---|---|
+| B01 | zero retained entries; same eligible main metadata | empty | empty same-ID chat/model view, protection retained | BDD-02.3, BDD-10.3 |
+| B02 | marked yesterday's byte offset, today's complete tool group | day boundary | valid bounded multi-day window; prefix unchanged | BDD-02.1, BDD-02.2 |
+| B03 | delayed older timestamp after newer accepted input | ordering | accepted FIFO, no earlier-file back-insertion | BDD-02.2 |
+| B04 | call/result crosses midnight; repeated tool ID in later turn | structural identity | matching provider-valid group and correct result reference | BDD-02.2 |
+| B05 | file mtime younger than / equal to / older than 90-day cutoff | age boundary | current sweep's strict older-than deletion only; expired mark repaired | BDD-02.3 |
+| B06 | retention disabled; old content present | disabled | no deletion or expiry repair manufactured | BDD-02.3 |
+| B07 | retained fragment then complete group; no complete group/content | incomplete/empty | first retained complete group onward or empty same-ID; agent expiry notice | BDD-02.3 |
+| B08 | clear requested while step in flight, human H pending | safe point | old in-flight step unchanged; next boundary clears display/window, not H/archive | BDD-09.2 |
+| B09 | Stop with H1/H2 and older parent control P | held/superseded | new input doesn't release all H; explicit release/discard honored; P never returns | BDD-07.3 |
+| B10 | Stop/redirect/steer before/after publication barrier, then replacement turn | both race orderings | authoritative dispositions; refused text absent; stale force/completion cannot mutate replacement | BDD-07.2 |
+| B11 | first Stop, second at <3 seconds, after window expiry, cancel | activation boundary | current-turn/tree/current-turn/tree scope; no separate Stop-all UI | BDD-07.1 |
+| B12 | gateway crash while running / I1-owned waiting-for-answer, queued text present | restart | Interrupted integration, no old-input boot dispatch, manual next-message continuation | BDD-07.4 |
+
+#### Dataset C — Report, task, peer and runtime matrix
+
+| Row | Input / state | Boundary type | Expected outcome | Traces to |
+|---|---|---|---|---|
+| C01 | each accepted existing helper report kind; idle/live/stopped parent | delivery states | common wake/safe-boundary/held behavior without cap widening | BDD-04.1, BDD-04.2 |
+| C02 | same accepted report identity retried | duplicate | one saved/consumed content identity, no extra wake after acknowledgement | BDD-04.4 |
+| C03 | ordinary non-exempt report reaches current rate cap, then one more | preserved cap+1 | typed rejection/retry information and parent rejected visibility | BDD-04.3 |
+| C04 | report encoded envelope just below / at / above existing body cap | envelope boundary | preserve current cap behavior; rejected content not claimed delivered | BDD-04.3 |
+| C05 | multiple full TaskRun results individually valid but collectively too large | accepted limitation | current delivery/context failure visible; task results stay; no new summary/defer path | BDD-06.4 |
+| C06 | MAIN manual/once/RRULE / worker once/RRULE / scheduled isolate on/off | mode matrix | exact BDD-06.1 identities/modes; once/at_ms positive control, no old every/cron_expr | BDD-06.1, BDD-12.3 |
+| C07 | recurring worker first/later run; recurring MAIN first/later run | identity across runs | worker same chat/new run; MAIN fresh real child/new run each time | BDD-06.1 |
+| C08 | creator A, starter B, assignee Mia; starter=assignee variant | recipient identity/dedupe | captured B-main/Mia-main; one recipient when equal; no creator-only delivery | BDD-06.3 |
+| C09 | recipient deleted/hidden/reassigned after run start | lifecycle change | capture fixed, stored result retained, no guessed replacement/hidden wake | BDD-01.3, BDD-06.4 |
+| C10 | done/failed/winning Stop/late success/skipped/per-retry | outcome matrix | authoritative actual-run final/reason only; no contradictory late success, skipped/retry final notice | BDD-06.3 |
+| C11 | extra-chat Auto off, main Auto on, target Never auto-approve on; unattended required Ask | permission source/risk | main parent source within target restrictions; no unattended popup wait; loosening disclosure | BDD-06.2, BDD-10.2 |
+| C12 | omitted/explicit native self, depth below/at default 3, denied delegate, other-agent no edge | authorization boundaries | ordinary self parity; normal depth/policy/memory gates; other-agent edge unchanged | BDD-05.1, BDD-05.2, BDD-05.3, BDD-05.4 |
+| C13 | explicit same-/cross-workspace MAIN pairs without edge / Admin default pair / invalid or worker target | address eligibility | eligible pair communication permitted without control grant; invalid/unauthorized pair refused | BDD-08.2 |
+| C14 | source-history-only marker Z; addressed request carries X | minimal context | receiver gets request/X, not Z; owner sees request/guest answer | BDD-08.1 |
+| C15 | same-platform I1/I2, distinct principals/threads/correlations + web sender | return routing | exact per-answer source route; no broadcast or last-sender fallback | BDD-08.3 |
+| C16 | missing return address/null correlation; deleted recipient | error | visible refusal, no guessed outbound destination | BDD-08.4, BDD-06.4 |
+| C17 | each installed CLI with actual native ID/marker; missing ID/CLI/auth/resume failure | external runtime | true native resume with text/caps or explicit failure; never no-op/fresh fallback | BDD-05.5, BDD-05.6 |
+
+#### Dataset D — UI, canonical branches, recap and deletion
+
+| Row | Input / state | Boundary type | Expected outcome | Traces to |
+|---|---|---|---|---|
+| D01 | native MAIN in default/second workspace; Admin default-only; worker/other system agents; longest valid pair IDs | identity/eligibility | correct computed eligible mains only; invalid pairing refuses | BDD-01.1, BDD-01.4 |
+| D02 | row click/New chat/switch/sessions; roster connect/reconnect | entry-point matrix | main/extra/navigation/search distinct; existing roster refresh, no widening | BDD-09.1 |
+| D03 | every allowed/forbidden/retired worker command through typed and palette entry | capability matrix | final table parity at execution, no alias bypass | BDD-09.3 |
+| D04 | live / stopped / finished existing worker task chat | continuation | steer/legitimate continue/conversation-only follow-up, no task rerun | BDD-09.4 |
+| D05 | one MAIN run appears as task and child; independent monitored task; queued/waiting/terminal helper | projection | one MAIN row, truthful scope/count, real available usage and own Open link | BDD-10.1 |
+| D06 | existing approval pending/resolved/expired/out-of-workspace; native/external | approval boundary | existing scope/actions/ID preserved, acting attribution, no external protection claim | BDD-10.2 |
+| D07 | loading/no retained content/failed roster refresh/missing lifecycle or usage | view states | loading/empty/error/partial, no false main/running/token/success fallback | BDD-10.3 |
+| D08 | keyboard/screen-reader, menu/dialog Escape, touch versus pointer, 200% zoom/320px reflow | accessibility | named reachable controls, safe dismissal, focus ownership/restoration, no clipped/overlapping targets | BDD-10.4 |
+| D09 | idle 29:59 / 30:00 after last real activity; new message/turn reset; live settlement | idle boundary | recap only at actual idle threshold and after settlement; same ID continues | BDD-11.1 |
+| D10 | resume same ID, then another full idle episode; joined retrospective/helper fixture | repeated/current behavior | new idle episode recap possible, joined/helper memory unchanged, no archive summary | BDD-11.1, BDD-11.4 |
+| D11 | UI first-only/two confirmations; tool/API single approval | destructive-action gate | only authorized correctly confirmed invocation reaches common delete; no API/tool second gate | BDD-11.2, BDD-11.3 |
+| D12 | owned sessions/memory plus guest responses elsewhere; locked/system/active-plan; failed cleanup | data/partial failure | guards preserved; owned-only removal; guest deleted-agent label; accurate partial result | BDD-11.2, BDD-11.3 |
+| D13 | each of the 65 explicit deletion inventory rows | removal matrix | retired behavior absent; canonical replacement/nothing as specified | BDD-12.1 |
+| D14 | current kickoff, no-stream, evicted-owner, delayed spans, reconnect offsets, typed/control errors, keyed goals, plan verdict | preserved current producers | no lost/current hidden output or guessed owner/latest goal; real canonical identity path | BDD-12.2 |
+| D15 | valid and targeted-invalid current/generated boundary payloads | contract controls | validator/runtime agreement; old shapes/actions refused and current once/RRULE accepted | BDD-12.3 |
+| D16 | exact joint candidate and audited matching docs; all real tool/UI paths | delivery gate | reachability actually executed, exact SHA tester/validator and five-reviewer receipts | BDD-12.4 |
+
+### Regression test requirements
+
+This modifies substantial existing behavior. Preserve safety assertions; remove only obsolete compatibility expectations explicitly named for DELETE. The following **existing tests were read**, not run. QA ports their behavioral assertions to the matured canonical surfaces if a deleted fixture/store type prevents retaining the old test body; weakening the assertion is not a valid port.
+
+| Preserved behavior | Existing source test | Required regression complement |
+|---|---|---|
+| Window eviction deletes zero archive bytes; evicted history remains recallable | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/memory/archive_test.go::TestArchive_SkipEvictionDeletesZeroBytes`, `TestReadArchive_ReachesEvictedTurn` | T02/T03/T22 assert day-byte mark/projection/clear and unchanged prior prefixes |
+| Inbox message-ID dedupe | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/session/message_inbox_test.go::TestMessageInboxStore_DedupeByMessageID` | T06/T16 preserve dedupe and consumption/wake identity while extending accepted kinds |
+| Native plain Stop retains real background process; tree Stop kills it | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/stop_session_background_q13_unix_test.go::TestQ13StopSession_PlainStopEndsTurnLeavesRealBackgroundAlive`, `TestQ13StopSession_StopAllKillsRealBackgroundProcess` | T09/T25 keep selected-execution and downward-tree scope with MAIN task children; external exception is separate |
+| Current Calendar one-time authoring and common execution | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/src/components/calendar/CalendarEventSlideOver.tsx::buildTriggerForSave`; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/task_trigger.go::triggerToCronSchedule` | T08/T17/T23 keep once/at_ms and RRULE; no every/cron_expr compatibility fixture survives |
+| Current first-send/kickoff/non-stream/approval/goal/plan producers | Exact canonical producer/reducer mapping in DELETE inventory and E-NAV/E-APPROVAL/E-ACTIVITY | T12/T23/T24/T27 force current cases, not only old-schema absence or mocked successful render |
+| Task claim/goal/attempts/outcome and plan recovery | E-TASK/E-SCHEDULE existing task-origin path; S-ADR::P1–P17 | T17/T20 preserve one task outcome owner, separate run identity, task-specific limits and Stop-authoritative result |
+
+Regression dataset rows B02/B04/B10/B11, C01/C02/C06/C10/C11 and D06/D14 run against baseline and candidate where behavior is intentionally preserved. New decided behavior is expected RED on baseline, not mislabelled regression. Bugs #1211/#1214 need controlled baseline failure receipts; #1216 needs an actual setting/admission mismatch, not only a symbol-search receipt.
+
 ## Functional Requirements
 
-Each path key expands to the exact source citations above. MUST requirements are normative; no optional scope is introduced. Detailed acceptance, deletion inventory and traceability will be completed before this Draft becomes In review.
+Each path key expands to the exact source citations above. MUST requirements are normative; no optional scope is introduced. The traceability matrix maps every requirement, scenario and documentation TODO.
 
 | ID | Requirement | Existing path extended | Authority |
 |---|---|---|---|
 | FR-001 | All boundary changes MUST be contract-first and use committed generated types/runtime validation only; remove obsolete shapes, no parallel wire types. | C-MAIN–C-LIMIT and existing generation/validator path | S-RULES Constraint #8; S-ADR::D1.1/D10 |
-| FR-002 | Eligible MAIN membership MUST eagerly create/reuse exactly one computed pinned/protected main pair, heartbeat-independent; workers/system/Admin have none. Pair mismatch/corruption/unauthorized binding MUST refuse without guessing. | E-MAIN; existing role eligibility | S-ADR::D1/D1.1 |
+| FR-002 | Eligible MAIN membership MUST eagerly create/reuse exactly one computed pinned/protected main pair, heartbeat-independent; workers/other system agents have none, except Admin has a default-workspace main only. Pair mismatch/corruption/unauthorized binding MUST refuse without guessing. | E-MAIN; existing role eligibility | S-ADR::D1/D1.1 |
 | FR-003 | Team removal MUST immediately hide main from UI/channels/task addressing and reject new work through that membership; authorized live work keeps outcomes without hidden-main wake; re-add reveals retained pair. | E-MAIN/E-DELETE | S-ADR::D1; Q5=A |
 | FR-004 | One authoritative saved entry format MUST express chat/model/both and full model content; no duplicate model-content store. | E-STORE | S-ADR::D2 |
 | FR-005 | UTC day archives and file/byte marks MUST support bounded window reads across days, FIFO delayed arrival and complete tool groups; no whole-archive read on each append/model step. | E-STORE/E-QUEUE | S-ADR::D2/D3 |
@@ -447,7 +1302,7 @@ Each path key expands to the exact source citations above. MUST requirements are
 | FR-023 | Same-session root/helper redirect and steer race MUST preserve control precedence and selected-execution identity; queued/applied/superseded/refused must be truthful and curated, no refused-but-delivered text or stale callback touching replacement. | E-STOP/E-QUEUE | S-ADR::D3.1/D6; #1214 |
 | FR-024 | Stop MUST visibly hold pending human input for release/discard, never silently replay all held messages; older superseded parent controls never return on revival; report holds remain information. | E-STOP/E-QUEUE | S-ADR::D6; 06:54 |
 | FR-025 | Restart-cut conversations MUST show Interrupted without boot replay of old queued input; keep task interrupted-failure/plan recovery and integrate I1/#1217 without a competing recovery path. | Existing E-STOP/E-QUEUE boot/lifecycle readers | S-ADR::D6; #1217 cross-reference only |
-| FR-026 | Same-workspace MAIN peers MUST be addressable without delegation edges; workers excluded, no cross-workspace delivery, whole-source-history read or transferred control/permissions. | E-INBOX/E-MAIN; existing send_message path | S-ADR::D7 |
+| FR-026 | Same-workspace MAIN peers MUST be addressable without delegation edges; workers excluded, no bare-agent/unauthorized pair delivery, whole-source-history read or transferred control/permissions; explicitly addressed cross-workspace messaging is permitted. | E-INBOX/E-MAIN; existing send_message path | S-ADR::D7 |
 | FR-027 | Group requests/answers MUST preserve responder and return identity live/replay; owner sees both; guest answer wakes idle non-stopped owner once, stopped holds, silence creates no empty bubble. | E-INBOX/E-STORE/E-COMMAND | S-ADR::D7 |
 | FR-028 | Mixed-source answers MUST each address their sender with original instance/chat/thread/session/correlation; unaddressed output MUST visibly refuse, with no fallback/broadcast; channel input uses shared bound main for now. | E-INBOX/E-QUEUE; existing send_message ownership | S-ADR::D7; Q3=B; #1206 cross-reference |
 | FR-029 | Row click/switch navigation MUST open eligible main; only agent-row New chat creates extra MAIN chat in UI; preserve team picker and existing connect/reconnect roster refresh. | E-NAV/E-COMMAND | S-ADR::D8; S-FE::D3/D5/D12 |
@@ -459,23 +1314,207 @@ Each path key expands to the exact source citations above. MUST requirements are
 | FR-035 | Existing UI MUST cover loading/empty/error/partial/success, keyboard/assistive reachability and truthful no-guess state with catalogued components and current focus/touch/zoom rules; no new visual-design decisions. | E-NAV/E-COMMAND/E-ACTIVITY/E-APPROVAL/E-DELETE | S-RULES; S-FE layout boundary |
 | FR-036 | Default-on auto recap MUST use thirty-minute activity-based idle episodes including main, reset on any turn/message, not overlap execution/settlement, keep idle/bootstrap/joined and helper behavior, DELETE lazy/explicit session_close/ack. | E-RECAP/E-QUEUE | S-ADR::D9 |
 | FR-037 | One agent-delete cascade MUST keep guards, remove owned sessions/memory, retain guest responses labelled deleted agent, warn/twice-confirm UI only, keep tool/API single approval and truthful partial cleanup. | E-DELETE/E-STORE; existing profile confirmation | S-ADR::D9; Q6=B |
-| FR-038 | Every scoped DEL-01–22 and DEL-F01–43 MUST be DELETE with the named canonical replacement or nothing, including registration/contract/alias/compatibility-only tests/docs; no migration/backfill/shim. | Exact deletion inventory from S-ADR, to be expanded below | S-LEDGER::14:45; S-ADR::Consequences |
+| FR-038 | Every scoped DEL-01–22 and DEL-F01–43 MUST be DELETE with the named canonical replacement or nothing, including registration/contract/alias/compatibility-only tests/docs; no ongoing migration/backfill/shim outside the bounded 17:15 saved-chat import exception. | Exact deletion inventory from S-ADR, to be expanded below | S-LEDGER::14:45; S-ADR::Consequences |
 | FR-039 | Scoped removal MUST preserve current behavior sharing old branches and all preserved safety boundaries; finish direct-caller sweep before deletion, no guessed latest goal/owner/producer or side fixes outside scope. | Canonical paths in S-ADR::DEL-F and preserved inventory, E-STOP/E-STORE/E-POLICY | S-ADR::DEL-F boundary; P1–P17 |
 | FR-040 | Existing single pure-Go binary/file stores, supported platform degradation, session-scoped tool/browser/recall state, memory-based admission, lock order and security footprint ceiling MUST remain; no permanently hot lifetime main runner/archive. | E-STORE/E-RETENTION/E-POLICY and existing runtime | S-ADR::D10; S-RULES constraints |
 | FR-041 | Matching user-facing DOC TODOs MUST land with each behavior/UI change and be audited by docs-verifier; module instruction changes require byte-identical AGENTS twins. | Existing docs pages and module instruction process | S-RULES Definition of Done |
 | FR-042 | Real UI/agent reachability, RED/GREEN/CHECK, five-reviewer gate and tester+independent-validator UAT on exact candidate MUST precede landing; main navigation/sidebar land jointly after integration; this author stops before grill. | E-POLICY/E-NAV/E-TASK and existing feature delivery process | S-ADR::D10; S-FE::D12; S-LEDGER::14:50 |
+| FR-043 | All three existing external worker drivers MUST deliver live instruction through interrupt plus actual native-conversation resume with original runtime/workspace/model/caps preserved; missing native identity or failed delivery/resume MUST refuse visibly, not return successful no-op or silently start fresh. Disclose subprocess-kill exception. | E-CLI/E-STOP/E-QUEUE | S-ADR::D6; DEL-20; 10:35; Q-R2-5 |
 
-## Draft completion boundary
+## Success Criteria
 
-This checkpoint commits decided behavior, reuse, contract requirements and the first-class frontend surfaces. BDD scenarios, test datasets/regressions, the explicit per-path deletion table, documentation traceability and final success/reachability checks are still to be written. No implementation or review is authorized by this Draft.
+| ID | Pass/fail outcome | Proof required |
+|---|---|---|
+| SC-001 | One correct immutable protected main per eligible pair including Admin’s default-only main; zero worker/other-system mains, extra Admin-workspace mains or wrong-pair fallback | T01/T24 plus actual stored identity and contract/UI attach |
+| SC-002 | One archive/two views; zero prior retained-byte deletion from clear/correction/sliding; model-window reads begin at the file/byte mark and complete tool groups remain valid | T02/T03/T22 with read instrumentation, archive-prefix comparison and recall/replay |
+| SC-003 | Every applicable approved ordinary bound is enforced before admission; every accepted ready instruction is consumed in separate FIFO order; no extra wait/queue/runner | T04/T15 with boundary negatives, sender identity controls and forced settlement interleavings |
+| SC-004 | Live settings change admission at boot/reload; accepted helper-kind wake works while preserved report caps remain; rejected report is visible to child and parent | T05/T06/T16 and RED receipts for #1211/#1216 |
+| SC-005 | All mode/parent/recipient/outcome rows match this spec; task/run/goal authority stays task-owned; Stop/redirect never touch a replacement execution or deliver refused text | T08/T09/T17/T25 and RED #1214 race reproduction |
+| SC-006 | Every addressed guest/mixed-source answer retains its intended return destination and responder live/replay; zero whole-source-history transfers or guessed/unaddressed sends | T10/T18/T26 |
+| SC-007 | Navigation/clear/worker commands/input/activity/approval/idle/deletion behavior is reachable through actual UI and existing tools, including keyboard/error/partial states | T11/T12/T13/T21/T22/T24–T29; real screen evidence |
+| SC-008 | All 65 scoped DELETE rows removed with no alias/shim/migration; corresponding current producer/canonical behavior still passes; generated contracts and real validators agree | T14/T23 plus controlled caller/deletion inventory, positive absence controls, regeneration and runtime payload controls |
+| SC-009 | All three existing CLI drivers demonstrate real native-conversation steering or honestly refuse unsupported/unavailable identity; zero successful no-op/fresh-run fallbacks | T19/T31 with actual native marker/instruction evidence and documented Stop subprocess exception |
+| SC-010 | Matching DOC-001–DOC-009 updates audited, five-reviewer findings closed/deferred explicitly, exact candidate UAT independently validated, and joint navigation/main-backend integration completed before founder-approved landing | T30 and delivery evidence tied to exact candidate SHA; plans alone fail |
 
-skills: omnipus-shared-rules, plan-spec, gitnexus-exploring, ux-heuristics-review, omnipus-design-system, github-cli, jev-use:jev-use
+No measured latency/throughput claim, full-suite green, supported-platform certification or live CLI result is produced by this specification task. Existing platform/build/security footprint constraints remain separate release evidence, not a green inferred from the spec.
+
+## Reachability
+
+**Check reachability before correctness claims.** No new tool is added. Use the existing tool families and real screen entry points below. Registration alone grants no access: the reconciled global ceiling is the complete first policy layer; sparse per-agent overrides can only tighten. Do not add a third layer or per-agent deny backfill to make a reachability checklist appear complete.
+
+| User/agent invocation | Existing production registration/policy and surface | Required reachable proof |
+|---|---|---|
+| Main and extra chat | E-MAIN + E-NAV; existing agent-row/session attachment and generated C-MAIN | Real eligible row opens the computed main; only row New chat creates extra; heartbeat-off still navigable; no latest/fresh fallback |
+| Native self/helper work | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/tools/general_builtin_catalog.go::GeneralBuiltinMetadata` registers delegate metadata; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/loop_wire.go::registerDelegationTools` wires real runtime; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/config/defaults.go::defaultToolPoliciesGeneral` carries delegate in the global ceiling | Permitted native MAIN/WORKER can actually call delegate with omitted/explicit self; Deny still blocks; ordinary helper's real chat/activity link opens |
+| Reporting/addressed communication | Existing message_parent and send_message metadata/global policy in the same catalog/defaults; existing `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/agent/session_messaging_wire.go::wireSessionMessagingForAgent` and E-INBOX/send_message wiring | Real child report, authorized MAIN-peer send and human mention reach the same common transport; status/reply returns with identity/correlation, no fake parent edge |
+| Existing operator config | Global tool-policy data remains in `/Users/danielpiatkowski/.omnipus/config.json` under sandbox.tool_policies and existing per-agent policies; do not edit this live installation for this task. Source defaults/config loader remain the policy reference | Fresh isolated fixture has complete ceiling entries for delegate/message_parent/send_message and target Deny/Ask behavior; sparse per-agent coverage is normal |
+| Task/scheduled execution | E-TASK/E-SCHEDULE and current task tool/API/Calendar paths, existing workspace/task/run UI | Manual/Calendar firing actually dispatches assignee under derived mode; current task/run result and activity Open link reach the correct chat |
+| Controls and worker follow-up | E-STOP/E-COMMAND and actual generated WS/REST/command path; opened worker/task session route | Real Stop/redirect/held release/discard/clear and typed/menu capabilities operate; completed-task chat input does not rerun the task |
+| Approval/usage/deletion | E-APPROVAL/E-ACTIVITY/E-DELETE; existing profile, modal, background panel and task/run views | Real native approval names/opens acting run; known usage is actual; UI-only double confirmation and tool/API common cascade are exercised |
+| External worker steering | E-CLI through existing opened worker chat, not a new direct CLI product | Native prior marker survives interrupt/resume and new text arrives in all supported installed CLI lanes; absent capability fails visibly |
+
+Tool registration/policy verification searches the **whole tracked catalog/default/config/core-agent/loop wiring**, with a known tool positive control, then invokes the real effective agent tool surface. A zero match on one guessed file or metadata-only registry is not proof of unreachability or readiness. Remove switch_agent from registration, policy and prompts as required by DEL-07/21; that does not add a similarly named tool for slash navigation.
+
+### Execution and hand-off gates
+
+| Stage / owner | Required action; no action in this document task is claimed complete |
+|---|---|
+| Contract step — backend-lead | Commit schemas and regeneration first; concrete exchange names/fields must implement C-MAIN–C-LIMIT and no extra design |
+| RED — qa-lead | Implement scenario/dataset families, reproduce scoped bugs and record failing pre-change evidence |
+| GREEN — backend/frontend leads; prompt engineer | Existing-path implementation, scoped deletions, matching docs; source-appropriate prompt authorship; no test weakening/side fixes |
+| CHECK — different qa-lead | Independent integrity/mutation checks prove assertions detect intended failure; executed test plan, not merely tests on disk |
+| Joint navigation integration | Include S-FE's reviewed/answered frontend work and working main-session backend on the same candidate; actual main/extra/history/failed-attach/identity integration before joint landing. Frontend kit preparation alone does not satisfy it. |
+| Feature gate | Three mandatory plugin reviewers plus architect cross-cutting and security-lead; clean findings or explicitly approved tracked deferrals. Review is read-only; authors do not adjudicate disputes over their own design. |
+| Exact-commit hands-on UAT | uat-tester plus independent uat-validator, exact SHA being landed. Agent-driven onboarding/UAT uses openrouter + deepseek/deepseek-v4.1-flash. Isolated account/home evidence; each capability/runtime success is separate and named. Missing CLI/platform/connector live evidence stays Unknown, never certified by mocks. |
+| Founder landing | Founder approval remains required. This branch is documentation only and never lands into release/main by this architect. |
+| This hand-off | Stop before grill-spec. Team-lead owns round 1; latest S-LEDGER::14:50 names Astra then Opus rounds, founder interview before each correction; a third only by founder's say within the ceiling. No grill/review file is authored or invoked here. |
+
+**Code correct and tested:** not claimed; this task writes/validates a specification, not production or test implementations.
+
+**Reachable by a user/agent:** required paths/proofs above are specified, not delivered; real joint candidate acceptance is pending.
+
+## User-facing documentation
+
+The destination pages were read before these TODOs were named. Implementing leads draft matching updates in the **same behavior/UI change**; docs-verifier audits against the actual candidate before landing. Coordinate overlap with S-FE rather than publishing contradictory navigation instructions. Internal spec/ADR changes alone do not discharge these TODOs.
+
+| TODO | User-facing page | Specific matching update |
+|---|---|---|
+| DOC-001 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/agents.md` | Main/extra/existing worker chats; heartbeat main home; native self-delegation without self-edge, normal context/depth/memory and role prompt priority; permanent external self-helper exclusion, real CLI steering and subprocess/approval exception; remove in-chat handover and blanket worker-no-input language; owned deletion versus guest history. |
+| DOC-002 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/using-omnipus-ui.md` | Row click/New chat/mention/navigation/search differences; final command and worker capability table; held release/discard; safe-point clear/display marker with retained search/recall; Interrupted and actual live-helper label; task activity/approval links; remove old uncorrelated-ack and old-command guidance without erasing current first-send recovery limits. |
+| DOC-003 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/workspaces.md` | One computed main per eligible pair; immediate membership hide/unhide/no new work and running-work settlement; same team picker/standalone Admin; self/peer communication versus other-agent delegation edges, no transferred control. |
+| DOC-004 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/calendar.md` | Automatic MAIN/CONTINUE/ISOLATED behavior, scheduled isolation checkbox, fresh MAIN child each run, current-run tree Stop not recurrence removal, captured starter/assignee recipients and full result/delivery limitation. Remove old recurring-format keep-firing/preservation promise; current one-time authoring and RRULE remain. |
+| DOC-005 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/connectors.md` | Shared bound main context/control for now and accepted privacy limit; source/instance/chat/thread-specific addressed replies, unaddressed visible refusal and no destination fallback; no per-person privacy claim (#1206 later). |
+| DOC-006 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/settings.md` | Actual wired ordinary defaults/units/sender scope, sole aggregate key and model-fit limit, boot/reload effect and visible refusals; report caps unchanged. UTC day/file-age retention, expired-window notice, model window versus retained searchable content, 30-minute repeated idle recap/joined and accepted restart waiting-input loss. |
+| DOC-007 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/reference/built-in-tools.md` | Generator-owned page: regenerate via the existing docs-reference generator; do not hand-edit table text. Remove switch/handover entries and old guidance; reflect ordinary delegate/report/addressed messaging behavior, actual refusal/limits and native/external capabilities. |
+| DOC-008 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/security.md` | MAIN task main-parent approval source can be more permissive than starter extra chat; target off-switch/global ceiling remain. Native helper attribution under one popup versus external exception; unattended Ask refusal, authenticated peer no authority transfer, UI-only double deletion confirmation. |
+| DOC-009 | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/tools.md` | Keep two-layer policy and unattended behavior accurate; native self/other-agent delegation boundaries; current report refusal/retry observability and ordinary sender limits; send_message direct return-address requirement, no guest-context/control inheritance, external policy limitation. |
+
+Module instructions that describe replaced mechanisms must be updated by their implementing lead with byte-identical AGENTS.md twins. S-ADR's dated older-ADR amendment map remains authority; do not retain its superseded compatibility promises as implementation requirements.
+
+## Traceability Matrix
+
+Every FR has scenario/test/doc coverage. Every BDD identifier and DOC TODO appears here; deletion rows inherit FR-038/039 and their explicit deletion trace table. Txx are the proposed families above; exact executed test names/logs are supplied by QA later. Holdout evaluation is deliberately excluded.
+
+| Requirement | User Story | BDD scenarios | Proposed tests | Documentation TODOs / no-effect reason |
+|---|---|---|---|---|
+| FR-001 | US12 | BDD-12.3, BDD-12.4 | T14, T23, T30 | Internal generated-type plumbing has no separate user action; changed behavior documented by DOC-001–DOC-009 |
+| FR-002 | US1 | BDD-01.1, BDD-01.2, BDD-01.4 | T01, T24 | DOC-001, DOC-002, DOC-003 |
+| FR-003 | US1, US6 | BDD-01.3, BDD-06.4 | T17, T29 | DOC-001, DOC-003, DOC-004, DOC-005 |
+| FR-004 | US2 | BDD-02.1 | T02 | DOC-006 |
+| FR-005 | US2, US3 | BDD-02.1, BDD-02.2, BDD-03.1 | T02, T15 | DOC-002, DOC-006 |
+| FR-006 | US2, US9, US11 | BDD-02.1, BDD-09.2, BDD-11.1 | T02, T22, T13 | DOC-002, DOC-006 |
+| FR-007 | US2 | BDD-02.3 | T03 | DOC-006 |
+| FR-008 | US2, US3, US8 | BDD-02.4, BDD-03.1, BDD-08.3 | T15, T18 | DOC-002, DOC-005, DOC-006 |
+| FR-009 | US3 | BDD-03.1, BDD-03.2 | T15 | DOC-002, DOC-006 |
+| FR-010 | US3 | BDD-03.3 | T04 | DOC-006, DOC-009 |
+| FR-011 | US3 | BDD-03.4 | T05, T15 | DOC-006 |
+| FR-012 | US4 | BDD-04.1, BDD-04.2, BDD-04.4 | T06, T16 | DOC-001, DOC-002, DOC-007 |
+| FR-013 | US4, US10 | BDD-04.3, BDD-04.4, BDD-10.3 | T06, T16, T27 | DOC-002, DOC-007, DOC-009 |
+| FR-014 | US5 | BDD-05.1, BDD-05.3 | T07 | DOC-001, DOC-003, DOC-007, DOC-009 |
+| FR-015 | US5 | BDD-05.1, BDD-05.2, BDD-05.4 | T07 | DOC-001, DOC-007, DOC-009 |
+| FR-016 | US5 | BDD-05.3, BDD-05.5 | T07, T19, T31 | DOC-001, DOC-007 |
+| FR-017 | US6 | BDD-06.1 | T08, T17 | DOC-001, DOC-004 |
+| FR-018 | US6 | BDD-06.1, BDD-06.2 | T08, T17 | DOC-004, DOC-008 |
+| FR-019 | US6 | BDD-06.3, BDD-06.4 | T17 | DOC-004 |
+| FR-020 | US6 | BDD-06.3 | T17 | DOC-004, DOC-007 |
+| FR-021 | US6, US10 | BDD-06.1, BDD-06.4, BDD-10.1 | T17, T27 | DOC-002, DOC-004 |
+| FR-022 | US7 | BDD-07.1 | T09, T25 | DOC-001, DOC-002, DOC-004 |
+| FR-023 | US7, US3 | BDD-07.2, BDD-03.2, BDD-05.6 | T09, T15, T19, T25 | DOC-002, DOC-007 |
+| FR-024 | US7, US9 | BDD-07.3, BDD-09.4, BDD-04.2 | T09, T16, T22, T25 | DOC-002, DOC-006 |
+| FR-025 | US7 | BDD-07.4 | T20 | DOC-002, DOC-006; #1217 independently owned |
+| FR-026 | US8 | BDD-08.1, BDD-08.2 | T10, T18, T26 | DOC-001, DOC-003, DOC-005, DOC-009 |
+| FR-027 | US8 | BDD-08.1 | T18, T26 | DOC-001, DOC-002 |
+| FR-028 | US8 | BDD-08.3, BDD-08.4 | T10, T18, T26 | DOC-005, DOC-009 |
+| FR-029 | US9 | BDD-09.1 | T11, T24 | DOC-001, DOC-002, DOC-003 |
+| FR-030 | US9 | BDD-09.2 | T22, T24, T25 | DOC-002, DOC-006 |
+| FR-031 | US9, US12 | BDD-09.1, BDD-09.3, BDD-12.1 | T11, T23, T28 | DOC-002 |
+| FR-032 | US9 | BDD-09.4 | T22, T25 | DOC-001, DOC-002 |
+| FR-033 | US10 | BDD-10.1, BDD-10.3, BDD-07.1 | T12, T27, T25 | DOC-002, DOC-004 |
+| FR-034 | US10, US6 | BDD-10.2, BDD-06.2 | T17, T27 | DOC-001, DOC-002, DOC-008, DOC-009 |
+| FR-035 | US1, US10 | BDD-01.4, BDD-10.3, BDD-10.4 | T01, T27, T28 | DOC-002 |
+| FR-036 | US11 | BDD-11.1, BDD-11.4 | T13, T29 | DOC-001, DOC-006 |
+| FR-037 | US11 | BDD-11.2, BDD-11.3 | T21, T29 | DOC-001, DOC-008 |
+| FR-038 | US12, US9, US11 | BDD-12.1, BDD-12.3, BDD-09.3, BDD-11.4 | T11, T23, T14 | DOC-002, DOC-004, DOC-007; internal-only aliases/readers have no distinct new user action |
+| FR-039 | US12, US5 | BDD-12.2, BDD-05.4 | T12, T23, T07 | DOC-002; safety/canonical plumbing remains unchanged user behavior |
+| FR-040 | US2, US5, US12 | BDD-02.1, BDD-05.2, BDD-12.2 | T02, T07, T23 plus existing platform/build/race/footprint gates | No new runtime/security setting or platform; existing user promises remain; DOC-006 describes changed retention/intake behavior |
+| FR-041 | US12 | BDD-12.4 | T30 | DOC-001–DOC-009 |
+| FR-042 | US12 | BDD-12.4 | T30 | DOC-001–DOC-009 |
+| FR-043 | US5 | BDD-05.5, BDD-05.6 | T19, T31 | DOC-001, DOC-007, DOC-008 |
+
+### DELETE requirement traceability
+
+All inventory rows are independently enumerated in BDD-12.1/T23 and dataset D13; current-behavior preservation additionally uses BDD-12.2/T12/T23/D14. This table makes shared safety/current-branch coverage explicit instead of pretending absence is behavioral proof.
+
+| DELETE rows | Requirement | Additional behavior scenarios / test families | Documentation |
+|---|---|---|---|
+| DEL-01 | FR-002/017/038 | BDD-01.1/01.2/06.1; T01/T08/T17/T24 | DOC-001/003/004 |
+| DEL-02–04, DEL-22 | FR-009/023/038/039 | BDD-03.1/03.2/07.2/07.3; T09/T15/T25 | DOC-002/006 |
+| DEL-05–06, DEL-F01–02 | FR-029/030/031/038 | BDD-09.1/09.2/09.3; T11/T22/T24/T28 | DOC-002 |
+| DEL-07, DEL-21, DEL-F09–13 | FR-002/026/027/038/039 | BDD-01.4/08.1/08.2/12.2; T01/T18/T23/T26 | DOC-001/002/003/007 |
+| DEL-08, DEL-F20 | FR-036/038 | BDD-11.1/11.4; T13/T29 | DOC-001/006 |
+| DEL-09–12 | FR-004/005/006/007/038/039 | BDD-02.1/02.2/02.3/02.4/12.2; T02/T03/T15/T23 | DOC-006; internal migration/store aliases have no separate user action |
+| DEL-13–15, DEL-17–18 | FR-018/022/023/025/038/039 | BDD-06.2/06.3/07.1/07.2/07.4; T09/T17/T20/T23 | DOC-001/002/004; signature/backfill internals no new action |
+| DEL-16 | FR-001/038 | BDD-12.1/12.3; T14/T23 | DOC-002/007; current webchat remains WebSocket |
+| DEL-19 | FR-017/038 | BDD-06.1/12.3; T08/T17/T23 | DOC-004 |
+| DEL-20 | FR-043/038 | BDD-05.5/05.6; T19/T31 | DOC-001/007/008 |
+| DEL-F03–08 | FR-002/029/038/039 | BDD-01.4/09.1/12.2/12.3; T01/T12/T23/T24 | DOC-001/002 |
+| DEL-F14–19 | FR-001/038/039 | BDD-12.2/12.3; T12/T14/T23 | Internal aliases/callback signature only; unchanged current UI behavior |
+| DEL-F21–25 | FR-008/029/038/039 | BDD-02.4/03.2/12.2; T12/T15/T23/T24 | DOC-002 |
+| DEL-F26–29 | FR-033/035/038/039 | BDD-10.1/10.3/12.2; T12/T23/T27 | DOC-002 |
+| DEL-F30–38 | FR-006/035/038/039 | BDD-12.2/12.3; T12/T14/T23 | DOC-002; retain legitimate current control/errors/non-stream/reconnect output |
+| DEL-F39–43 | FR-038/039 | BDD-12.2/12.3; T12/T14/T23 | DOC-002; no new goal/plan selection behavior |
+
+## Evaluation Scenarios (Holdout)
+
+These are post-implementation **evaluation outlines**, not developer test fixtures. The independent evaluator creates unseen actual inputs/nonces and chooses interleavings after implementation; do not share those concrete holdout values with implementers or add them to the TDD/traceability plan. Publicly reading these outlines does not make an ordinary scripted test a private holdout.
+
+| Outline | Category | External action / independent outcome |
+|---|---|---|
+| HE1 | Happy Path | On a fresh isolated home, create an unfamiliar workspace/team and return to a main after heartbeat-off. The same protected conversation opens; deliberately created extra chat stays distinct. |
+| HE2 | Happy Path | Start a task from an extra chat with a different creator and MAIN assignee; inspect real result/chat/activity links. Starter and assignee receive one truthful result; creator is not substituted. |
+| HE3 | Happy Path | Address a teammate with evaluator-chosen material and a source-history-only decoy. Guest answer bears guest identity; receiver never sees whole originating history; owner stays the same. |
+| HE4 | Error Path | Interleave a steer with redirect at an evaluator-chosen step in an opened real helper. Compare caller receipts, visible text, persisted history and final execution; no refused-but-delivered instruction or stale replacement Stop. |
+| HE5 | Error Path | Attempt an over-limit ordinary message and a refused helper report while watching the sender and recipient separately. Refusals remain visible; no false successful send/no-loss report. |
+| HE6 | Edge Case | Run across midnight/retention with evaluator-chosen history and a tool group, then clear/search/recall. Retained bytes and matching results survive, model mark stays valid, old retained history is recallable. |
+| HE7 | Edge Case | Stop a main with real task/helper descendants and an independent monitored run, then trigger a future schedule and remove membership. Scope, held reports, future recurrence and hidden-main behavior match the decided rules without guessing new recipients. |
+
+## Assumptions and Clarifications
+
+### No new product assumptions
+
+| Item | Recorded boundary |
+|---|---|
+| Founder confirmation | S-ADR/S-LEDGER/S-Q provide the confirmed interview/six answers and binding 17:15/17:25 overrides; OPEN-Q7/Q8 hold only the remaining source-dependent choices; no separate interview JSON is invented. |
+| Frontend | S-FE is Proposed with its own remaining questions/review. Binding later founder cutover/Admin/addressing/waiting-source decisions are recorded here; no unrelated avatar/layout choice or frontend-only landing is assumed. |
+| Reference/graph availability | Generic Go reference library was not found with positive control; GitNexus MCP is unavailable. Existing source patterns/caller sweeps used; no graph impact/cluster output fabricated. |
+| Test and deployment state | This is a spec-only change. Production, contract edits/regeneration, RED/GREEN/CHECK, actual CLI/connector/platform tests and exact-commit UAT are future implementation/delivery work. |
+| Greenfield / cutover exception | One install/upgrade migration preserves existing supported saved-chat history/binding and turns heartbeat into main, idempotently and visibly on failure. Outside that cutover, scoped runtime compatibility remains DELETE; no guessed identity or generic backfill. |
+| New ambiguity | Stop and record the next OPEN-Qn in S-Q with the affected requirement held. Do not use this section as an assumption to answer it. |
+
+### 2026-10-07 closed answers
+
+| Question | Binding answer | Normative location |
+|---|---|---|
+| OPEN-Q1 | 15:55 A: 64 KiB body, 60/min trusted sender+target, keep 200, exactly one 1 MiB aggregate setting AND existing model fit; reports/estimator unchanged | C-LIMIT; FR-010/011/013; dataset A |
+| OPEN-Q2 | 15:20 A: first retained complete group, agent expiry notice, empty same-ID when none | FR-007; BDD-02.3 |
+| OPEN-Q3 | 15:10 B: unaddressed answer visibly refused; agent must address sender, no fallback | FR-028; BDD-08.4 |
+| OPEN-Q4 | 15:55 A: KEEP once/at_ms; DELETE every/every_ms and recurring.cron_expr paths; internal heartbeat cron unchanged | C-TIMING; DEL-19; FR-017/038 |
+| OPEN-Q5 | 15:20 A: hide immediately/no new work; authorized live work settles/no hidden-main wake; re-add reveals | FR-003; BDD-01.3 |
+| OPEN-Q6 | 15:10 B: double confirmation UI only; API/tool single existing approval, one common cascade | FR-037; BDD-11.2/11.3 |
+
+OPEN-Q7/Q8 are newly pending and proposal-dependent implementation is HELD; original Q1–Q6 stay closed. No new OPEN question is answered by this author. Any additional question discovered during grill or implementation follows the founder interview boundary. Current shared-producer preservation requirements are proof obligations, not permission to invent a new owner/goal selection rule.
+
+skills: omnipus-shared-rules, plan-spec (repo-specific instructions and templates), gitnexus-exploring, ux-heuristics-review, omnipus-design-system, github-cli, jev-use:jev-use
 
 ## Evidence table
 
 | Claim | Evidence | Certainty |
 |---|---|---|
-| Requirements are existing founder decisions, not new choices | S-ADR::D1–D10/Questions answered; S-LEDGER::all October 6/7 entries; S-Q::six closed answers | Verified instruction, high confidence |
-| Existing mechanisms are reused, contracts lead consumers | Source citations E-MAIN–E-POLICY; C-MAIN–C-LIMIT; direct controlled source/caller scans under `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/build/session-core-evidence/continuation-20261007/` | Verified source presence; proposed behavior untested |
-| Frontend counterpart and issue boundaries are explicit | `git show 554d21ffd:docs/internal/architecture/ADR-20261007-agent-first-navigation-and-agent-identity.md`, exit 0: Proposed, D5/D12; eight `gh issue view` receipts, exit 0 each | Verified reference/instruction, high confidence |
-| **Self-check** | Draft reviewed against the ADR/ledger and repo-specific template; first-line Draft reflects incomplete acceptance/deletion/traceability work. No production, contracts, tests, grill or release PASS claimed. | Verified document boundary; completion pending |
+| Requirements translate confirmed decisions, including all six closed answers | S-ADR::D1–D10/Questions answered; S-LEDGER::all October 6/7 entries; S-Q::All closed questions, 15:10/15:20/15:55 answers | Verified instruction, high confidence |
+| Existing code/contract/UI surfaces are named instead of parallel systems | Exact E-MAIN–E-POLICY and C-MAIN–C-LIMIT source reads; controlled source/caller excerpts in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/build/session-core-evidence/continuation-20261007/` | Verified source presence; impact Inferred and target behavior untested |
+| Intake config gap and report wake/cap coupling require the specified adaptation | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/pkg/session/message_inbox.go::Append/classifyEnvelope`; complete production caller scan in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/build/session-core-evidence/continuation-20261007/intake-callers.txt`: resolver/setter declarations only, with live child-cap wiring as positive control | Verified source, high confidence; no runtime fix/reproduction claimed |
+| CLI current no-op Input and fresh Resume are not certified steering | E-CLI::Input/Resume read directly in all three drivers; they return nil/discard text or call fresh Run; BDD-05.5/05.6 and T19/T31 require actual native identity/live proof | Verified source, high confidence; actual future native resume Unknown |
+| Frontend counterpart and all eight issue references are traced | `git show 554d21ffd:docs/internal/architecture/ADR-20261007-agent-first-navigation-and-agent-identity.md`, exit 0: Proposed, D5/D12; eight gh issue view JSON receipts, exit 0 each, in evidence directory | Verified reference/instruction; reported issues not reproduced here |
+| User-doc destinations and catalog reuse were checked | DOC-001–DOC-009 pages read; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/design-system/catalog.json`::entries; source generator-owned header of built-in reference | Verified source, high confidence; actual public-doc updates pending implementation |
+| Document checks / coverage | Final structural/citation/traceability checks and mutation controls are required before hand-off; receipts recorded with the final documentation commit | Pending final document check, not a product test claim |
+| **Self-check** | Recheck artifact/diff against confirmed scope, repo template, all FR/scenario/test/doc/deletion links, oracle independence, current-producer safeguards, absolute citations and no production/contracts/scratch changes. Hand-off stops before grill and asserts neither code correctness nor reachability delivered. | Pending final self-check; implementation untested |
