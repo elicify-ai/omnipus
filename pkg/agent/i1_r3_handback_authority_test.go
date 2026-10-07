@@ -23,23 +23,27 @@ func i1R3RestartStopped(t *testing.T) *d2bRoot {
 // W1 lower-boundary RED: helper hand-back authority is not normal schedule
 // authority and cannot revive an Interrupted root even if it reaches admission.
 func TestI1R3HandbackCannotContinueRestartStop(t *testing.T) {
-	h := i1R3RestartStopped(t)
-	before, journal := h.load(t), h.journal(t)
-	ts := &turnState{opts: processOptions{SessionKey: "agent:" + testDefaultAgentID + ":session:" + h.id, TranscriptSessionID: h.id, TranscriptStore: h.al.GetSessionStore(), WorkspaceID: testHarnessWorkspaceMembershipID}}
-	d, admitted, err := h.al.admitOrdinaryRootWake(context.Background(), bus.InboundMessage{Channel: "system", AsyncTranscriptSessionID: h.id}, ts)
-	if d != nil {
-		t.Cleanup(func() { _ = h.al.finishExecutionDisposition(d) })
+	for _, trigger := range []string{"heartbeat", "scheduled"} {
+		t.Run(trigger, func(t *testing.T) {
+			h := i1R3RestartStopped(t)
+			before, journal := h.load(t), h.journal(t)
+			ts := &turnState{opts: processOptions{SessionKey: "agent:" + testDefaultAgentID + ":session:" + h.id, TranscriptSessionID: h.id, TranscriptStore: h.al.GetSessionStore(), WorkspaceID: testHarnessWorkspaceMembershipID}}
+			d, admitted, err := h.al.admitOrdinaryRootWake(context.Background(), bus.InboundMessage{Channel: "system", AsyncTranscriptSessionID: h.id}, ts)
+			if d != nil {
+				t.Cleanup(func() { _ = h.al.finishExecutionDisposition(d) })
+			}
+			require.ErrorIs(t, err, steer.ErrDispatchCancelled, "only normal scheduler/heartbeat authority may continue a restart stop")
+			assert.False(t, admitted)
+			assert.Nil(t, d)
+			assert.Equal(t, before, h.load(t))
+			assert.Equal(t, journal, h.journal(t))
+			assert.Empty(t, h.provider.calls())
+			response, triggerErr := h.scheduledTurn(trigger, "Normal next tick may continue.")
+			require.NoError(t, triggerErr)
+			assert.Equal(t, d2bReply, response)
+			assert.Len(t, h.provider.calls(), 1, "restriction must preserve founder-approved normal trigger continuation")
+		})
 	}
-	require.ErrorIs(t, err, steer.ErrDispatchCancelled, "only normal scheduler/heartbeat authority may continue a restart stop")
-	assert.False(t, admitted)
-	assert.Nil(t, d)
-	assert.Equal(t, before, h.load(t))
-	assert.Equal(t, journal, h.journal(t))
-	assert.Empty(t, h.provider.calls())
-	response, triggerErr := h.scheduledTurn("heartbeat", "Normal next tick may continue.")
-	require.NoError(t, triggerErr)
-	assert.Equal(t, d2bReply, response)
-	assert.Len(t, h.provider.calls(), 1, "restriction must preserve founder-approved normal trigger continuation")
 }
 
 // Healthy outer-path control: a replayed helper wake is kept pending, not
