@@ -764,6 +764,22 @@ describe('Stop during the idle gap of an active goal (G1)', () => {
     expect(sentCancelFrames(send)).toEqual([{ type: 'cancel', session_id: 'sess_test' }])
   })
 
+  it('Escape in the focused composer sends exactly one cancel frame while a goal is active and nothing streams', () => {
+    act(() => { useChatStore.setState({ isStreaming: false }); useChatStore.getState().handleFrame(goal('active')) })
+    render(<OmnipusComposer />)
+    pressEscape()
+    expect(sentCancelFrames(send)).toEqual([{ type: 'cancel', session_id: 'sess_test' }])
+  })
+
+  it('Escape on an idle chat without a goal (or a finished goal) sends nothing', () => {
+    act(() => { useChatStore.setState({ isStreaming: false }) })
+    render(<OmnipusComposer />)
+    pressEscape()
+    act(() => { useChatStore.getState().handleFrame(goal('done')) })
+    pressEscape()
+    expect(sentCancelFrames(send)).toEqual([])
+  })
+
   it('shows no Stop for an idle chat without a goal, or with a finished goal', () => {
     act(() => { useChatStore.setState({ isStreaming: false }) })
     const view = render(<OmnipusComposer />)

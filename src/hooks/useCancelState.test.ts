@@ -260,3 +260,40 @@ describe('useCancelState — W2 an undelivered cancel does not arm the window', 
     expect(result.current.stopAllArmed).toBe(false)
   })
 })
+
+// G1: the idle gap between a goal's turns has isStreaming false, but the goal
+// keeper resumes the session on its own, so an unfocused Escape must stop it.
+describe('useCancelState — global Escape in the idle gap of a goal (G1)', () => {
+  const goalState = (state: 'active' | 'done') => ({
+    type: 'goal_status' as const, session_id: 's', goal_id: 'g', condition: 'c',
+    round: 1, max_rounds: 5, latest_reason: '', active_loops: 1, cap: 3, state,
+  })
+  afterEach(() => { act(() => { useChatStore.setState({ goalStatus: null }) }) })
+
+  it('cancels when a goal is running and nothing streams', () => {
+    const cancelStream = vi.fn().mockReturnValue(true)
+    renderHook(() => useCancelState(false, cancelStream))
+    act(() => { useChatStore.setState({ goalStatus: goalState('active') }) })
+    act(() => pressEscape())
+    expect(cancelStream).toHaveBeenCalledTimes(1)
+  })
+
+  it('does nothing for a finished goal or no goal', () => {
+    const cancelStream = vi.fn()
+    renderHook(() => useCancelState(false, cancelStream))
+    act(() => pressEscape())
+    act(() => { useChatStore.setState({ goalStatus: goalState('done') }) })
+    act(() => pressEscape())
+    expect(cancelStream).not.toHaveBeenCalled()
+  })
+
+  it('still skips an Escape that was already defaultPrevented upstream', () => {
+    const cancelStream = vi.fn()
+    renderHook(() => useCancelState(false, cancelStream))
+    act(() => { useChatStore.setState({ goalStatus: goalState('active') }) })
+    const e = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
+    e.preventDefault()
+    act(() => { document.dispatchEvent(e) })
+    expect(cancelStream).not.toHaveBeenCalled()
+  })
+})

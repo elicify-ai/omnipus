@@ -2334,7 +2334,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     // first activation already ended the turn locally (isStreaming false,
     // label reset). Higher-priority surfaces keep precedence: the
     // menu-close branch above runs first and stops propagation.
-    if (e.key === 'Escape' && (isStreaming || cancelState.stopLabel === 'stopping' || cancelState.stopAllArmed)) {
+    if (e.key === 'Escape' && (isStreaming || goalRunning || cancelState.stopLabel === 'stopping' || cancelState.stopAllArmed)) {
       e.preventDefault()
       cancelState.cancelIfStreaming()
       return
