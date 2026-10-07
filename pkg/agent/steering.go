@@ -614,7 +614,9 @@ func (al *AgentLoop) reviveInactiveInbound(route routing.ResolvedRoute, msg bus.
 		// turn overlapped the turn it replaces while that turn was still
 		// appending its final history writes (rev2 review, gate CC-2's
 		// overlap half).
-		al.runRevivedOrdinaryTurn(msg, resolveScopeKey(route, msg.SessionKey))
+		if !al.runRevivedOrdinaryTurn(msg, resolveScopeKey(route, msg.SessionKey)) {
+			return false, fmt.Errorf("enqueueSteeringFromMessage: ordinary root %q continuation refused after intake closed: %w", sessionID, context.Canceled)
+		}
 		return true, nil
 	}
 	revived, rerr := al.ReviveStoppedSession(context.Background(), sessionID, by, msg.Content)
