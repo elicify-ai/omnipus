@@ -742,6 +742,7 @@ func (mt *messageParentToolExecute) finishDelivery() *ToolResult {
 	// pkg/agent/steer_cancel.go::deliverTerminalReport and
 	// pkg/agent/steer_completion.go::reportUndeliveredWake.
 	mt.reportUndeliveredWake()
+	mt.markFinalHandback()
 
 	resp := generated.MessageParentResponse{Accepted: true, MessageId: &mt.delivery.MessageID}
 	if mt.correlationID != "" {
@@ -755,6 +756,36 @@ func (mt *messageParentToolExecute) finishDelivery() *ToolResult {
 		result = NewToolResult(string(payload))
 	}
 	return result
+}
+
+// markFinalHandback records, on the child's lifecycle record, that a final
+// handback with a result was delivered in its current execution (issue #1215),
+// so a later timeout of this same execution completes the helper instead of
+// stopping it. A failure to record is logged at ERROR and degrades to the old
+// behaviour (a later timeout stops the helper); it is never turned into a tool
+// error because the handback itself is durably delivered and the child must not
+// be invited to send it again.
+func (mt *messageParentToolExecute) markFinalHandback() {
+	if mt.kind != "handback" || mt.err != nil {
+		return
+	}
+	hb, err := mt.sm.AsSessionMessageHandback()
+	if err != nil || hb.Mode != generated.SessionMessageHandbackModeFinal || strings.TrimSpace(hb.ResultSoFar) == "" {
+		return
+	}
+	merr := mt.t.lifecycle.Mutate(mt.childSessionID, func(rec *session.LifecycleRecord) error {
+		if rec == nil || rec.Terminal() || rec.ExecutionID == nil {
+			return nil
+		}
+		rec.FinalHandback = &session.FinalHandbackMark{
+			RunID: rec.ExecutionID.RunID, BootSeq: rec.ExecutionID.BootSeq, Result: hb.ResultSoFar,
+		}
+		return nil
+	})
+	if merr != nil {
+		slog.Error("message_parent: final handback delivered but could not be recorded on the lifecycle record — a later timeout of this execution will stop the helper instead of completing it",
+			"session_id", mt.childSessionID, "error", merr)
+	}
 }
 
 // reportUndeliveredWake logs, at ERROR, a delivery whose inbox entry was

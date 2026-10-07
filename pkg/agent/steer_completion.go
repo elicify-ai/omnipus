@@ -67,6 +67,22 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 	defer al.setSteeredCompletionWrite(rec.SessionID, false)
 
 	answer := strings.TrimSpace(result.finalContent)
+	activeGoal, goalErr := activeGoalForSession(rec.SessionID)
+	if goalErr != nil {
+		return false, fmt.Errorf("steer: complete: cannot determine goal state: %w", goalErr)
+	}
+	// Issue #1215: a final handback already delivered in THIS execution makes
+	// a later deadline a normal completion with that result — the helper has
+	// finished and reported, so it must not be stopped (and its parent sent a
+	// second, timeout notice). A goal-bearing session is excluded: the claim/
+	// Judge loop owns how it ends.
+	if activeGoal == nil && errors.Is(runErr, context.DeadlineExceeded) {
+		if handedBack, ok := rec.FinalHandbackThisExecution(); ok {
+			runErr = nil
+			answer = strings.TrimSpace(handedBack)
+			result.finalContent = answer
+		}
+	}
 	outcome, nextState, failureReason := completionDisposition(result, runErr, answer)
 	// A goal-bearing session's SUCCESS is decided only by the claim/Judge
 	// loop (finishSteeredGoalTurn). Its DEATH is not: a turn that failed, ran
@@ -83,10 +99,6 @@ func (al *AgentLoop) completeSteeredTurnDurably(ctx context.Context, snapshot *s
 	// kept deferring after the goal had ended: the verdict was delivered, the
 	// goal record closed, and the child stayed `running` for ever — the exact
 	// #947 hang.
-	activeGoal, goalErr := activeGoalForSession(rec.SessionID)
-	if goalErr != nil {
-		return false, fmt.Errorf("steer: complete: cannot determine goal state: %w", goalErr)
-	}
 	if activeGoal != nil && !session.IsTerminalLifecycleState(nextState) && nextState != session.LifecycleStopped {
 		return false, nil
 	}
