@@ -1,8 +1,11 @@
 # Feature Specification: Workspace side-panel shell (shared, resizable)
 
 **Created**: 2026-09-26
-**Status:** Approved
-**Approved on**: 2026-09-26 — fix round 2 applied; the final round of the fixed two-round grill process. Wave 1 built on feat/resizable-side-panels (not yet landed).
+**Status:** Implemented
+**Approved on**: 2026-09-26 — fix round 2 applied; the final round of the fixed two-round grill process.
+**Implemented on**: 2026-10-07 (spec-sync) — all three waves are in `release/v0.1.1`; wave 3 landed 2026-10-06 as merge `b45fd6f16` of PR #1196 (head `d8703d0d2`). "Implemented" means the code landed and this spec was reconciled to it. It does **not** mean certified: see "Implementation status" below for the accepted deviations and the points that were not proven.
+
+**Correction (2026-10-07):** this line used to say wave 1 was "built on feat/resizable-side-panels (not yet landed)". That was true on 2026-09-26. The shell, Library and Browser are already present in the release branch before PR #1196 (`src/components/panel-shell/SidePanelShell.tsx` exists at `07679737c`), and wave 3 is in `b45fd6f16`.
 **Input**: Founder interview output — `docs/internal/specs/spec-side-panel-shell.md` (request verbatim + Decisions Log SP-1..SP-31). Process order (founder, verbatim): "capture the requirements and update the design documents first, after another demo — let's do it properly." Requirements → this spec → clickable demo reviewed by the founder in a real browser (SP-10, split per SP-31) → spec review rounds → build.
 
 **Review-fix round 1 (2026-09-26)**: grill-spec round 1 returned BLOCK
@@ -54,6 +57,55 @@ editor, Calendar's default view and Month behaviour, and the new cross-view runn
 indicator, FR-022) are new wave-3 scope and are stated in full in §10 and §13; none of
 them touch wave 1/2 behaviour. Search across tasks/team agents/calendar events is
 explicitly OUT OF SCOPE for wave 3 (tracked in issue #1054).
+
+**Correction (2026-10-07):** item 1 above (SP-38, same-tab "Back to chat" route for Tasks, Team and Calendar) was later reversed by the founder: all six panels expand to a new tab (PE1, 2026-10-05). See "Implementation status", D1.
+
+---
+
+## Implementation status (spec-sync, 2026-10-07)
+
+This section was added after landing. The landed code is the fact; where it differs from
+the sections below, the difference is listed here and marked with a dated
+**Correction** line at the passage. Original text is kept, not deleted.
+
+### What landed
+
+| Wave | Landed in | Note |
+|---|---|---|
+| 0, 1, 2 (demo, shell + Library + Browser, Mail) | already in `release/v0.1.1` before PR #1196 | Shell files exist at `07679737c`; Mail registers through `mailPanelDefinition` in `src/components/panel-shell/registry.tsx`. |
+| 3 (Tasks, Team, Calendar, narrow layouts, running indicator) | `b45fd6f16` (PR #1196, 2026-10-06) | The registry lists library, browser, mail, tasks, team, calendar. The PR was merged on the founder's yes without waiting for CI. |
+
+### Accepted deviations from the approved text
+
+Each of these is a founder decision recorded after approval. The spec text was written
+before them.
+
+| # | Spec said | What landed | Authority |
+|---|---|---|---|
+| D1 | SP-38 / FR-008: Tasks, Team and Calendar expand to a chrome-less "Back to chat" route in the **same tab**. | All six panels expand to a **new browser tab** (decision PE1, 2026-10-05). The same-tab route option was removed from the registry in `11458d3d4`. | Founder answer Q6, "New tabs for all". |
+| D2 | SP-41 / FR-022: running indicator = spinning icon **plus token count**. | Spinner only on Board cards, List rows, Graph nodes, sub-tasks and Plans tiles; no token count there (decisions PI1-PI3, 2026-10-05). Chat's own token counter is unchanged. The shared component is `src/components/ui/RunningIndicator.tsx`; its `tokens` prop is optional and no task or plan surface passes it. | Founder answers Q1 and Q2. |
+| D3 | Wave 3 fits the existing raw bundle-growth budget. | The raw bundle growth allowance was raised from 422 KiB to 430 KiB (commits `28dfcc3ac`, `4c3d8886e`). The frozen baseline was kept. | Founder answer Q4. |
+
+### Points that are open or not proven
+
+| # | Point | State at 2026-10-07 |
+|---|---|---|
+| O1 | Issue #1200, four unproven panel edge cases | The issue is still open and still lists all four as unproven. Reading the code at `b45fd6f16`: candidate 3 (Team cached refresh error) and candidate 4 (agent picker cached discovery error) now have fixes (`4fd817c9c`, `34de9d898`) and tests (`TeamPanel.cachedError.integration.test.tsx`, `AgentPicker.cached-discovery-error.test.tsx`). Candidate 1 (a copied expanded-tab address shares one identity) and candidate 2 (unsaved-changes prompt skipped on same-document navigation in full-screen Library) have no fix and no proving test that I could find. The issue text is stale for 3 and 4; it was not edited here. |
+| O2 | Invisible-SVG coverage gap (comment on #1200) | A test-coverage gap, not a product defect: a mutant that makes a panel SVG icon invisible survives the panel tests. Unfixed. Whether the design-system appearance gate in CI already catches it is unverified. |
+| O3 | Release CI at `b45fd6f16` | The `PR` run (`37498151152`) concluded failure. Failed jobs: Go Tests (agent), E2E llm-light, llm-chat, ui-browser, llm-agents, llm-conformance-replan and llm-conformance-exec, plus the aggregate Tests and CI jobs. E2E ui-3 and ui-4 passed. For ui-browser I read the log: the failing test is in `tests/e2e/uat-ownership-api.spec.ts`. The slow-host fix for the UAT-CTRL test is **not** in `b45fd6f16`; it arrives with PR #1204, which is open and not landed. The other failed jobs were not attributed here. |
+| O4 | Local native run of the ui-3 browser tests | Not done. The independent check of the changed tests was static plus fixture level and did not certify native execution. The only native evidence is the GitHub ui-3 job, which passed on `b45fd6f16`. |
+| O5 | Items verified by reading only | The review checkpoints marked several multi-tab and sign-out edge cases "source only, runtime not reproduced" (issue #1200 candidates 1 and 2 are the public ones). "Implemented" does not mean runtime-certified for them. |
+| O6 | Accepted risk | An accepted risk is tracked privately. It is not described here. |
+| O7 | Graph narrow layout (SP-35) | Specified as deferred. No commit in the wave-3 range mentions a narrow Graph layout. Still deferred. |
+| O8 | Stale code comment | `src/components/panel-shell/types.ts::PanelContentProps.expand` still says "through its shared full-screen route (SP-38)". After D1 that wording is wrong. Not changed here (documentation-only task); it needs a code owner. |
+
+### Not changed by this sync
+
+- Section 16 (holdout evaluation scenarios) is untouched.
+- `docs/internal/specs/mail-live-access-w3-panel-and-settings-spec.md` is a different
+  feature (its "W3" is the mail lane, not panel wave 3). Its Status stays "In review".
+- `docs/internal/specs/spec-side-panel-shell.md` is the interview record; its Status
+  ("Interview output") stays true.
 
 ---
 
@@ -1303,7 +1355,7 @@ founder's wireframe-v2 answers (SP-32..SP-42).** Their tab entries become toggle
 the tab strip entirely (SP-40) and the compact dropdown trigger becomes a menu icon,
 not a text label. Tasks/Team/Calendar's full-screen presentation is the shared
 chrome-less "Back to chat" shell route (SP-38), not a new-tab Expand — their existing
-routes stay their deep-link targets only. Stories: the three sets replace their
+routes stay their deep-link targets only. **Correction (2026-10-07):** superseded by PE1 — Tasks, Team and Calendar expand to a new tab like the other three (Implementation status, D1). Stories: the three sets replace their
 stand-ins (SP-24). Narrow layouts are per-panel content work, explicitly in scope per
 SP-6, and are PANEL-container-width-responsive (CSS container queries, the same
 mechanism as the compact-dropdown breakpoint above) with breakpoints measured from
@@ -1315,7 +1367,7 @@ real content, not assumed:
 | Tasks — Plans band | Keeps its tile strip with side (horizontal) scroll; completed plans hidden by default behind a "Show done" toggle; a small "scroll for more →" hint shows when the strip overflows, on phone too (SP-36). The plan editor is UNCHANGED — it slides in from the window edge like the existing agent/task editors; no large modal is introduced; where it needs the full viewport it uses the same chrome-less full-screen presentation as the rest of the panel (SP-37). |
 | Team | Graph gets zoom/scroll inside the panel |
 | Calendar | Docks by default on Week; Day/Week/Month all user-selectable. Month MUST work inside the docked panel AND in the phone full-screen presentation — it never jumps to a different, wider surface (SP-39, corrects the earlier "month view routes to the full page" line). |
-| Board, List, Graph, Plans | Every running task shows the ONE standard running indicator (chat's spinning icon + token count), extracted into a catalogued `omnipus-design-system` component rather than a second copy (SP-41, FR-022). |
+| Board, List, Graph, Plans | Every running task shows the ONE standard running indicator (chat's spinning icon + token count), extracted into a catalogued `omnipus-design-system` component rather than a second copy (SP-41, FR-022). **Correction (2026-10-07):** spinner only, no token count, on these surfaces (PI1-PI3; Implementation status, D2). |
 
 Search (tasks, team agents, calendar events) is OUT OF SCOPE for wave 3 — issue #1054
 (SP-42). Settings stays a page in every wave (SP-6).
@@ -1908,12 +1960,14 @@ panel automatically.
   full-screen presentation is the shared chrome-less "Back to chat" shell route (same
   mechanism as Library/Browser/Mail's full-screen work). [SP-12, MAJ-202, MAJ-209,
   SP-38; US-6]
+  **Correction (2026-10-07):** the SP-38 amendment was reversed (PE1, 2026-10-05). All six panels, Tasks/Team/Calendar included, expand to a NEW tab under this requirement. Landed in `11458d3d4`.
 - **FR-022** [wave 3, NEW requirement, SP-41]: Every running task surfaced in the Tasks
   panel's Board, List and Graph views, and in the Plans band, MUST show ONE standard
   "running" indicator — the same spinning-icon-plus-token-count treatment already used
   in chat. This indicator MUST be a catalogued `omnipus-design-system` component; the
   implementing lead extracts chat's existing indicator into that catalogued component
   if it is not already one, rather than building a second, divergent copy. [SP-41]
+  **Correction (2026-10-07):** on Board, List, Graph, sub-tasks and Plans tiles the landed indicator is the spinning icon only. The token count was dropped by founder decision (PI1-PI3); chat keeps its own counter. Landed as `src/components/ui/RunningIndicator.tsx`.
 - **FR-009** [wave 1]: If a panel's full-page tab with the SAME identity key is already
   open, re-invoking ANY of its entry points MUST SWITCH to it — toggle, Expand, sidebar
   Library, "Open library", "Watch live" (SP-30) — via the in-memory handle registry
@@ -2074,10 +2128,10 @@ when wave 3's TDD plan is written (§12 covers waves 1-2 only as of this amendme
 | SP-35 *(2026-09-29)* | List narrow hides Tags/Updated behind "…"; Graph narrow deferred to a later real-node-count pass | §10 Wave 3 table | Wave-3 stories/tests, TBD |
 | SP-36 *(2026-09-29)* | Plans band: tile strip + side scroll kept; done plans hidden by default + toggle; "scroll for more →" hint (incl. phone) | §10 Wave 3 table | Wave-3 stories/tests, TBD |
 | SP-37 *(2026-09-29)* | Plan editor unchanged (slides from window edge); no large modal; full-viewport case uses the shared chrome-less full-screen presentation | §10 Wave 3 table | Wave-3 stories/tests, TBD |
-| SP-38 *(2026-09-29, amends FR-008)* | Tasks/Team/Calendar full screen = shared chrome-less "Back to chat" shell route, NOT a new-tab Expand | FR-008, §10 Wave 3 table | Wave-3 stories/tests, TBD |
+| SP-38 *(2026-09-29, amends FR-008)* | Tasks/Team/Calendar full screen = shared chrome-less "Back to chat" shell route, NOT a new-tab Expand. **Superseded 2026-10-05 by PE1: all six panels open a new tab.** | FR-008, §10 Wave 3 table | Wave-3 stories/tests, TBD |
 | SP-39 *(2026-09-29)* | Calendar docks default Week, view selectable; Month works inside the panel AND on phone, never jumps out | §10 Wave 3 table | Wave-3 stories/tests, TBD |
 | SP-40 *(2026-09-29, amends FR-007)* | Chat entry removed from the tab strip entirely; compact trigger becomes a menu icon | FR-007, §10 Wave 3 | Wave-3 stories/tests, TBD |
-| SP-41 *(2026-09-29)* | One catalogued running-indicator component (chat's spinner + token count) on every running task, Board/List/Graph/Plans | FR-022, §10 Wave 3 table | Wave-3 stories/tests, TBD |
+| SP-41 *(2026-09-29)* | One catalogued running-indicator component (chat's spinner + token count) on every running task, Board/List/Graph/Plans. **Token count dropped 2026-10-05 (PI1-PI3): spinner only.** | FR-022, §10 Wave 3 table | Wave-3 stories/tests, TBD |
 | SP-42 *(2026-09-29)* | Search (tasks/team agents/calendar events) is OUT OF SCOPE for wave 3 | §10 Wave 3 | Issue #1054 |
 | MAJ-201 | Identity keys: panelId × workspaceId (Browser + session + agent) | §8.1, §8.3, FR-009 | Test 14 |
 | MAJ-202 | No stable window names; `_blank` opens; opener severed after | §8.3, FR-008 | Test 14; W4 |
@@ -2161,6 +2215,8 @@ inventory in §2.1):
   Storybook build (SP-16) with evidence, THEN the founder demo (SP-10) — before
   build; the §9 wave-1 real-app rows pass against a running dev build before wave
   1's own gate (SP-31, SC-009).
+**Correction (2026-10-07):** wave 3 landed in `b45fd6f16`. Reachable by a user: the registry lists all six panels (code read). Not certified: no local native ui-3 run was done; GitHub ui-3 passed on `b45fd6f16`, but the release run is red in other jobs (Implementation status, O3-O5).
+
 - Wave-1 delivery claims a user can: open Library and Browser from at least two entry
   points each, resize both, expand both to tabs, deep-link both, on desktop and phone
   widths — evidenced by executed tests, not written ones.

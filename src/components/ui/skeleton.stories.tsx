@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, waitFor, within } from 'storybook/test'
+import { motionResolvedTokens } from '../../design-system/tokens'
 import { Skeleton } from './skeleton'
 
 const meta = {
@@ -12,5 +13,18 @@ const meta = {
 } satisfies Meta<typeof Skeleton>
 export default meta
 type Story = StoryObj<typeof meta>
-export const Loading: Story = { args: { pending: true }, play: async ({ canvasElement }) => { await waitFor(() => expect(within(canvasElement).getByTestId('skeleton')).toHaveAttribute('data-visible', 'true')) } }
+// Real timer in a real browser: the indicator appears after motion.loading.delay, and webkit under CI
+// contention was measured at 1238-1362 ms against the old 1000 ms default. Deadline = token delay + a 4600 ms
+// margin (5000 ms at the 400 ms token). The exact 399/400 ms boundary is pinned by skeleton.test.tsx (fake timers).
+const loadingDelayMs = Number.parseFloat(motionResolvedTokens['motion.loading.delay'])
+const loadingWaitTimeoutMs = loadingDelayMs + 4600
+export const Loading: Story = {
+  args: { pending: true },
+  play: async ({ canvasElement }) => {
+    await waitFor(
+      () => expect(within(canvasElement).getByTestId('skeleton')).toHaveAttribute('data-visible', 'true'),
+      { timeout: loadingWaitTimeoutMs },
+    )
+  },
+}
 export const ReservedBeforeDelay: Story = { args: { pending: false } }

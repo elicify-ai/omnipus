@@ -986,7 +986,7 @@ type RateLimitFrame struct {
 	Type      string  `json:"type"`
 }
 
-// RedirectFrame — Client → server redirect one session: stop its in-progress turn, then resume it on the same generation with the instruction (D2/D9). The instruction ceiling is 16384 UTF-8 bytes (16 KiB) — JSON maxLength counts characters, not bytes, so the byte ceiling is runtime-enforced server-side.
+// RedirectFrame — Client → server redirect one chat, root or helper: stop its own in-progress turn, then continue that same chat with the instruction as its next user message (D2/D9; founder rule 2026-10-06). The instruction ceiling is 16384 UTF-8 bytes (16 KiB) — JSON maxLength counts characters, not bytes, so the byte ceiling is runtime-enforced server-side.
 type RedirectFrame struct {
 	Instruction string `json:"instruction"`
 	SessionId   string `json:"session_id"`

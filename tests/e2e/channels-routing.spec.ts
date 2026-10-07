@@ -1,9 +1,11 @@
 /**
- * channels-routing.spec.ts — E2E tests for the Channels screen and channel
- * routing configuration (sprint/258-jun-2026).
+ * channels-routing.spec.ts — E2E tests for the Connectors screen (route
+ * /#/connectors, formerly Channels) and channel routing configuration
+ * (sprint/258-jun-2026).
  *
  * Tests exercise:
- *   (a) Channels sidebar item renders and navigates to /#/channels.
+ *   (a) The "Connectors" sidebar item (Assets group) renders and navigates to
+ *       /#/connectors.
  *   (b) Channel feed renders cards from the real gateway GET /api/v1/channels.
  *   (c) Opening Configure opens the ChannelConfigPanel sheet for a channel.
  *   (d) Setting a Default agent now goes through the workspace-scoped
@@ -46,14 +48,20 @@ import { selectNativeOptionByLabel } from './fixtures/selectors'
 //
 // Traces to: sprint/258-jun-2026 — Sidebar "Connectors" nav item (IA rename).
 
-test('(a) Channels sidebar item navigates to /#/channels', async ({ page }) => {
+test('(a) Connectors sidebar item navigates to /#/connectors', async ({ page }) => {
   await page.goto('/')
 
-  // A wide window starts with the sidebar docked.
+  // A fresh visit is not pinned: the sidebar starts closed and renders
+  // nav[aria-label="Main navigation"] only while open. Open it through the
+  // header's "Show sidebar" button, exactly as sidebar.spec.ts does.
+  const showSidebar = page.getByRole('button', { name: 'Show sidebar' })
   const nav = page.locator('nav[aria-label="Main navigation"]')
+  await expect(showSidebar).toBeVisible({ timeout: 10_000 })
+  await showSidebar.click()
   await expect(nav).toBeVisible({ timeout: 5_000 })
 
-  // HashRouter: link href="/#/connectors" (renamed from Channels in the IA update)
+  // HashRouter: link href="/#/connectors" (Sidebar.tsx ASSET_ITEMS, label
+  // "Connectors"; this item replaced the retired "Channels" one).
   const connectorsLink = nav.locator('a[href="/#/connectors"]')
   await expect(connectorsLink).toBeVisible({ timeout: 5_000 })
 

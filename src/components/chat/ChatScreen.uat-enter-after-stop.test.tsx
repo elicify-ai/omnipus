@@ -174,13 +174,27 @@ function acknowledgeStop(tree: boolean) {
 describe('release UAT D3 — Enter after Stop sends in the selected parent chat', () => {
   it.each([
     { id: 'D3-E1', stopName: 'Stop generation', tree: false },
-    { id: 'D3-E2', stopName: 'Stop all', tree: true },
+    { id: 'D3-E2', stopName: '/cancel (Stop all)', tree: true },
   ])('$id: Enter after $stopName sends the continuation in this chat instead of opening a helper', async ({ stopName, tree }) => {
     seedParentAndHelper()
     const router = await renderRealScreen()
     const user = userEvent.setup()
 
-    await user.click(screen.getByRole('button', { name: stopName }))
+    // Founder 2026-10-06: "the button needs to go". Use the remaining
+    // immediate-tree /cancel command; every frame and continuation oracle
+    // below is unchanged from the removed-button scenario.
+    if (tree) {
+      act(() => {
+        client.setQueryData(['commands', 'web'], [{
+          name: 'cancel', label: '/cancel', description: 'Stop this chat and its helpers',
+          delivery: 'client', available_while_streaming: true,
+        }])
+      })
+      await user.type(screen.getByRole('combobox', { name: 'Message input' }), '/cancel')
+      await user.keyboard('{Enter}')
+    } else {
+      await user.click(screen.getByRole('button', { name: stopName }))
+    }
     expect(sender.send.mock.calls.map(([frame]) => frame), 'instrument: the actual Stop control emitted the intended parent cancel').toStrictEqual([
       tree ? { type: 'cancel', session_id: PARENT, scope: 'tree' } : { type: 'cancel', session_id: PARENT },
     ])
@@ -213,5 +227,30 @@ describe('release UAT D3 — Enter after Stop sends in the selected parent chat'
     expect(input, 'D3: Enter must clear the submitted text rather than leave it in the composer').toHaveValue('')
     expect(useChatStore.getState().sessionsById[CHILD], 'D3: Enter in the parent must not modify the helper transcript/state').toStrictEqual(childBeforeEnter)
     expect(screen.queryByText(CHILD_TEXT, { exact: true }), 'D3: helper transcript must remain out of the main pane').not.toBeInTheDocument()
+  })
+
+  // Founder Q16 (2026-10-06): after the first Stop the same Stop button holds
+  // the Send position for the whole 3 s window even though the turn already
+  // ended, and Enter still sends — as a message, never as a second Stop.
+  it('Q16: stream ended inside the window, Stop is still shown and Enter still sends (no tree frame)', async () => {
+    seedParentAndHelper()
+    await renderRealScreen()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: 'Stop generation' }))
+    acknowledgeStop(false)
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, STOP_LABEL_DISPLAY_MS)) })
+    expect(screen.getByTestId('stop-btn'), 'Q16: the same Stop button is still present inside the 3 s window').toBeInTheDocument()
+    sender.send.mockClear()
+
+    await user.type(screen.getByRole('combobox', { name: 'Message input' }), CONTINUATION)
+    await user.keyboard('{Enter}')
+
+    expect(sender.send.mock.calls.map(([frame]) => frame), 'Q16: Enter sends the message; no cancel/tree frame').toStrictEqual([
+      {
+        type: 'message', session_id: PARENT, content: CONTINUATION,
+        client_message_id: expect.any(String), agent_id: 'jim', metadata: { workspace_id: WORKSPACE },
+      },
+    ])
   })
 })

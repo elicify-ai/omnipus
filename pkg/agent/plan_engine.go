@@ -176,7 +176,7 @@ const (
 
 	// failedReasonInterrupted is the LifecycleRecord.FailedReason value the
 	// boot sweep writes (FR-118: failed(interrupted)).
-	failedReasonInterrupted = "interrupted"
+	failedReasonInterrupted = session.FailedReasonInterrupted
 
 	// planSupervisorAgentID is the id of the PlanSupervisor System Agent —
 	// the adjudicator every SUPERVISION wake is addressed to (ADR-055/FR-012:

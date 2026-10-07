@@ -84,19 +84,22 @@ While a turn is running, the message box stays yours:
 | Control | What it does |
 |---|---|
 | **Enter** (with text typed) | Sends your message into the running turn — the agent takes it into account without stopping. A send button with the same effect appears next to Stop. |
-| **Stop** or **Escape** | Asks the agent to halt. The button shows a stopping state, then the turn ends as cancelled. |
+| **Stop** or **Escape** | The first activation asks only this chat's current turn to stop and shows **Stopping...**. A second activation in the same chat within three seconds confirms Stop all, including its helpers. |
 | Activity pill | Below the message box: the Agents number counts helpers whose current state is running. Select it to open the Activity panel. **Running now** excludes stopped and finished helpers; queued helpers and helpers waiting for an answer have their own sections. Stopped helpers remain inspectable with **Open**, without a growing elapsed timer or a failed-work label. A resumed helper returns to Running now when its state is running again. |
 
 ### Stop and redirect commands
 
-Two slash commands in the message box control a running turn directly:
+Three slash commands in the message box control the current chat directly:
 
 | Command | Where it works | What it does |
 |---|---|---|
-| `/stop` | Any chat | Stops only this conversation's current turn — the same as one press of **Stop**. It never stops other sessions or their turns. |
-| `/stop-redirect <instruction>` | A helper's chat (a delegated agent's own conversation) | Stops that helper's current turn and continues it with your instruction — for example `/stop-redirect focus on the failing tests`. The helper's own chat is what redirects that helper. |
+| `/stop` | Any chat | Exactly one **Stop** activation: first asks only this conversation's current turn to stop and opens the same three-second confirmation window. |
+| `/cancel` | Any chat | Immediately requests Stop all for this chat and every helper below it. It never stops a parent or sibling chat. |
+| `/stop-redirect <instruction>` | Any chat, root or helper | Stops this chat's current turn, then continues this same chat with your instruction — for example `/stop-redirect focus on the failing tests`. Its helpers keep working; the command does not target one of them. |
 
-In any other chat — a new conversation, a root conversation, a task or channel — `/stop-redirect` refuses with guidance to open the helper session you want to redirect, and points at `/stop` for the current one. `/stop-redirect` without an instruction (or with only spaces) replies with usage and changes nothing. The instruction is sent as typed after the command, and it is required. If the connection is down, the redirect cannot be sent: a visible error says so, the helper's turn keeps running, and you can run the command again once you are reconnected.
+After a first **Stop**, **Escape**, or `/stop`, the same Stop button stays available for three seconds. Press Stop or Escape again in that window to confirm Stop all; `/stop` follows the same activation rule. There is no separate **Stop all** button. The window closes after three seconds, when the window loses focus, or when you switch chats; the next activation is a first, current-chat-only Stop again. `/cancel` needs no second activation.
+
+`/stop-redirect` without an instruction (or with only spaces) replies with usage and changes nothing. The instruction is required and sent as typed after the command, with surrounding spaces removed. If no active session is attached to the current chat, a visible message asks you to reopen it; no redirect is sent. If the connection is down, the redirect cannot be sent: a visible error says so, this chat's turn keeps running, and you can run the command again once you are reconnected.
 
 ### If the first message loses its connection
 

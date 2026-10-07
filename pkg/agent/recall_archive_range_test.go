@@ -47,7 +47,8 @@ import (
 // deferred to a DIFFERENT qa-lead CHECK instance.
 
 // One exact-name, narrowly scoped invocation runs this sub-unit, not pkg/agent's
-// full suite. No t.Parallel: the retained-memory observer needs a quiet process.
+// full suite. No t.Parallel. The two retained-memory subtests re-exec this binary (cwInQuietChild)
+// so their process-wide heap measurement is quiet by construction.
 func TestRecallConversation_ArchiveRange(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
 	cases := []struct {
@@ -67,8 +68,8 @@ func TestRecallConversation_ArchiveRange(t *testing.T) {
 		{"early_and_late_read_errors", cwRangeReadErrors},
 		{"current_session_only", cwRangeSessionScope},
 		{"quoted_data_not_historical_calls", cwRangeDataOnly},
-		{"memory_observer_control", cwRangeMemoryObserverControl},
-		{"range_independent_retained_memory", cwRangeBoundedMemory},
+		{"memory_observer_control", cwInQuietChild(cwRangeMemoryObserverControl)},
+		{"range_independent_retained_memory", cwInQuietChild(cwRangeBoundedMemory)},
 		{"cooperative_cancellation_and_deadline", cwRangeCancellation},
 		{"breadcrumbs_use_actual_skip", cwRangeBreadcrumbs},
 	}

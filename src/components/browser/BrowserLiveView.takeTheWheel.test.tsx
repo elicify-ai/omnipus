@@ -231,7 +231,7 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
-    const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => true)
     const container = stubFrameRect()
 
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
@@ -247,7 +247,7 @@ describe('BrowserLiveView — watch-only while the agent is working (ADR-040 D2)
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
-    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => true)
     const container = stubFrameRect()
 
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
@@ -359,7 +359,7 @@ describe('BrowserLiveView — waiting-overlay click before the first frame decod
       callbacksRef.current?.onConnected?.()
     })
     setAgentWorking('s1', true)
-    const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => true)
     const container = screen.getByTestId('browser-live-frame')
     expect(screen.getByTestId('browser-live-waiting-overlay')).toBeInTheDocument()
 
@@ -387,7 +387,7 @@ describe('BrowserLiveView — waiting-overlay click before the first frame decod
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
-    const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => true)
     const container = stubFrameRect()
 
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
@@ -403,7 +403,7 @@ describe('BrowserLiveView — "Take over" (ADR-040 D2)', () => {
     render(<BrowserLiveView sessionId="s2" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s2', true)
-    const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => true)
 
     fireEvent.click(screen.getByRole('button', { name: /take over/i }))
 
@@ -441,7 +441,7 @@ describe('BrowserLiveView — control handover while the agent keeps working', (
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
-    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => true)
 
     fireEvent.click(screen.getByRole('button', { name: /take over/i }))
 
@@ -455,7 +455,7 @@ describe('BrowserLiveView — control handover while the agent keeps working', (
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
-    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => true)
 
     fireEvent.click(screen.getByRole('button', { name: /take over/i }))
     mockSendControl.mockClear()
@@ -471,7 +471,7 @@ describe('BrowserLiveView — control handover while the agent keeps working', (
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
-    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => true)
     const container = stubFrameRect()
 
     fireEvent.click(screen.getByRole('button', { name: /take over/i }))
@@ -493,7 +493,7 @@ describe('BrowserLiveView — control handover while the agent keeps working', (
       { index: 1, title: 'Tab B', url: 'https://b.example.com' },
     ])
     setAgentWorking('s1', true)
-    const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    const cancelSpy = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => true)
 
     fireEvent.click(screen.getByTestId('browser-tab-1'))
 
@@ -508,7 +508,7 @@ describe('BrowserLiveView — control handover while the agent keeps working', (
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'Only tab', url: 'https://example.com' }])
     setAgentWorking('s1', true)
-    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => true)
 
     fireEvent.click(screen.getByTestId('browser-tab-0'))
     mockSendControl.mockClear()
@@ -523,7 +523,7 @@ describe('BrowserLiveView — control handover while the agent keeps working', (
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
-    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => true)
 
     fireEvent.click(screen.getByRole('button', { name: /take over/i }))
     act(() => {
@@ -609,7 +609,7 @@ describe('BrowserLiveView — control state resilience during chat and send fail
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     setAgentWorking('s1', true)
-    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => true)
     mockSendControl.mockReturnValueOnce(false)
 
     fireEvent.click(screen.getByRole('button', { name: /take over/i }))
@@ -1015,7 +1015,7 @@ describe('BrowserLiveView — shared human input reliability', () => {
 
   it('keeps human input available during chat without cancelling the response', () => {
     setAgentWorking('s1', true)
-    const cancel = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => {})
+    const cancel = vi.spyOn(useChatStore.getState(), 'cancelStream').mockImplementation(() => true)
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const frame = stubFrameRect()

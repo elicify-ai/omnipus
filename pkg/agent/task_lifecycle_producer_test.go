@@ -171,9 +171,9 @@ func TestExecuteTask_LifecycleRecord_HappyPathReachesCompleted(t *testing.T) {
 //     (FR-118/G-13's own contract), and
 //  2. the OTHER store — session.UnifiedMeta.Status, the field GET
 //     /api/v1/sessions and the SPA actually read — reconciles to
-//     StatusFailed too (sub-agent control plane ADR D4/MAJ-009 retires the
-//     former StatusInterrupted wire value in favor of this one for a
-//     genuine lifecycle failure). Before this wave's fix, assertion (1)
+//     StatusInterrupted (founder rule 2026-10-06: a session does not fail
+//     because of a restart; this supersedes the sub-agent control plane ADR
+//     D4/MAJ-009 retirement of that wire value). Before this wave's fix, assertion (1)
 //     failed outright (no LifecycleRecord ever existed to sweep); the fix
 //     for (1) alone would still have left (2) failing forever, which is the
 //     user-visible half of the gap the parent brief called out explicitly.
@@ -264,8 +264,8 @@ func TestBootSweep_ReconcilesCrashedTaskDispatchSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get post-sweep meta: %v", err)
 	}
-	if postMeta.Status != session.StatusFailed {
-		t.Errorf("post-sweep session status = %q, want failed — the two stores must agree "+
+	if postMeta.Status != session.StatusInterrupted {
+		t.Errorf("post-sweep session status = %q, want interrupted — the two stores must agree "+
 			"after a boot sweep, not just the internal S2 record", postMeta.Status)
 	}
 }

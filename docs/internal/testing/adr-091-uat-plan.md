@@ -1,5 +1,7 @@
 # ADR-091 — UAT plan: steered sessions (delegation) and visibility
 
+**Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. A second Stop / Esc / `/stop` within it stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. Agent delegate `stop` / `stop_all` is unchanged. Authority: founder decision, 2026-10-06 and **The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume**::D2 / D7 / D9. C1/C2 and D1's Stop setup below use this rule; these are amended expectations, not executed UAT or release certification. Unrelated dated expectations are not re-decided here.
+
 **What this covers.** ADR-091 removed the old "sub-agent" special case. A delegated
 worker is now an ordinary session that another session steers. This plan checks the
 behaviour a person actually sees: work gets delegated, results come back, Stop
@@ -29,7 +31,7 @@ plan, **that is a finding** — report it rather than adjusting the plan.
 | At the concurrency cap a delegation is **queued with its place in line**, never refused | `docs/settings.md` — "How many agents run at once" |
 | Concurrency floor is **2** when memory cannot be measured | same |
 | A delegated session's lifetime cap is **30 minutes**, and a follow-up does **not** restart it | `docs/settings.md` — "How long a child may run" |
-| The status words a row may show: `queued`, `running`, `needs_input`, `paused`, `completed`, `failed`, `cancelled`, `timed_out` | `contracts/components/schemas/SubagentStateFrame.yaml` |
+| **Amended 2026-10-06 (founder):** a selected turn that stops shows **Stopped**, remains resumable, and is not a failure. The first Stop does not change helper states; the tree-scope stop reaches the whole tree. | **The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume**::D2 / D7 / D9; founder Stop-controls table |
 | Side panel holds at most **50** pending updates | `docs/settings.md` — "Safety stops that are not settings" |
 
 ---
@@ -185,50 +187,50 @@ worker visibly starts and is then killed.
 
 ---
 
-## Lane C — Stop, and what it reaches (~20 min)
+## Lane C — First Stop is this turn; second Stop selects the helper tree (~20 min)
 
-### C1 — Stop on a running worker takes effect at once, and reaches its children
+**Amended 2026-10-06 (founder):** the first Stop must leave helpers running. The second Stop/Esc within 3 s is the tree-stop confirmation; `/cancel` requests that tree stop immediately. No separate button is used.
+
+### C1 — First Stop leaves running helpers; second Stop stops the chat and its helper tree
 
 **Setup.** Agents `uat-c-boss`, `uat-c-worker`, `uat-c-sub`; boss→worker→sub.
 
 **Steps.**
 1. Open a chat with `uat-c-boss`.
 2. Send: `Ask uat-c-worker to ask uat-c-sub to count slowly from 1 to 500, reporting every number.`
-3. Wait until you can see both the worker and its child running.
-4. Press **Stop**.
-5. Watch both rows for 60 seconds.
+3. Wait until both helpers are running and this chat has a current turn to stop.
+4. Press **Stop once**: only this chat's current turn is selected; its helpers keep working.
+5. Press **Stop or eligible Esc again within 3 s** of the first press. Do not wait for the first turn to settle: the window starts at the first press.
+6. Watch both helper rows for 60 seconds. In a fresh case, send `/cancel` instead: it requests the same tree scope without a first press.
 
 **Expected.**
-- Both rows leave `running` promptly and settle on `cancelled` (or `interrupted` on
-  the row's detail).
-- No row is still `running` or `queued` 60 seconds later.
-- The chat is usable again immediately.
+- The first Stop stops only the current chat turn; it does not stop either helper.
+- The second Stop/Esc within the window stops this chat and its whole helper tree; selected running/queued helpers settle as **Stopped**, not failed.
+- After the tree stop settles, neither helper remains running or queued. The chat remains usable.
+- A helper's natural completion is not a Stop failure; record if the setup ended before its scope could be exercised.
 
-**Screenshots.** (a) both rows running, before Stop; (b) both rows 60s after Stop.
+**Screenshots.** (a) both helpers running before Stop; (b) the first-Stop scope before confirming, without delaying the second press past 3 s; (c) both rows after the tree stop.
 
-**PASS** if every level stops and nothing is left running.
-**FAIL** if any level keeps running, if a child outlives its parent, or if Stop
-appears to do nothing.
+**PASS** if the first Stop leaves helpers unaffected and the second press or `/cancel` stops the tree.
+**FAIL** if the first Stop stops a helper, if a helper keeps running after the confirmed tree stop settles, or if a separate button is required.
 
-### C2 — Stop on a worker that never started still cancels it
+### C2 — A second Stop / Esc or `/cancel` reaches a queued helper; first Stop leaves it eligible
 
-**Setup.** Same agents. You need a worker sitting in `queued` — easiest right after
-C1's Stop, or by starting several workers at once (see Lane E).
+**Setup.** Same agents. Start enough workers to leave one helper queued (see Lane E).
 
 **Steps.**
-1. Start enough delegations that at least one row shows `queued`.
-2. Without waiting for it to start, press **Stop**.
-3. Watch the queued row for 60 seconds.
+1. With a helper still queued, use **a second Stop / Esc within 3 s, or `/cancel` immediately**, in its parent chat to stop the chat and its helper tree.
+2. Watch that queued helper for 60 seconds.
+3. In a separate queued setup, use only one Stop or `/stop`; check that the helper is not stopped by that request. It may remain queued or start normally as a slot becomes free.
 
 **Expected.**
-- The queued row becomes `cancelled` promptly.
-- It does **not** stay `queued`, and it does **not** start running afterwards.
+- A tree-scope stop selects the queued helper as part of the tree; it settles as **Stopped** and is not admitted after that tree stop.
+- Plain Stop selects only the parent's current turn. It does not cancel or discard the queued helper.
 
-**Screenshots.** (a) the row showing `queued` before Stop; (b) the same row 60s after.
+**Screenshots.** (a) the queued row before the tree request; (b) the same row after; (c) the plain-Stop case with the helper still eligible to work.
 
-**PASS** if the queued worker reaches `cancelled` without ever running.
-**FAIL** if it stays `queued`, or starts running after Stop. *This was a real
-defect — a queued worker used to stay stuck until the server restarted.*
+**PASS** if the second Stop / Esc or `/cancel` prevents the selected queued helper from running and the first Stop leaves it eligible.
+**FAIL** if the first Stop cancels it, or if it remains eligible after the tree stop. Report a setup that started before the tree request as such, not as proof of queued-stop coverage.
 
 ---
 
@@ -241,7 +243,7 @@ defect — a queued worker used to stay stuck until the server restarted.*
 **Steps.**
 1. Open a chat with `uat-d-boss`.
 2. Send: `Ask uat-d-worker to write a long essay about the history of the bicycle.`
-3. Once the worker row shows `running`, press **Stop**.
+3. Once the worker row shows `running`, send **`/cancel` in the boss chat** (an immediate stop of the chat and its helper tree), and confirm the worker is Stopped. One Stop in that parent chat would stop only the parent, not this worker.
 4. Now send: `Never mind the bicycle. Ask uat-d-worker instead for a single word: the capital of France.`
 5. Wait for the reply.
 
@@ -573,7 +575,7 @@ level dies and its ancestors wait for ever.*
 | P | Pre-flight, record settings | 1 account | 10 min |
 | A | Delegation end-to-end, containment | 1 account, 2 agents | 20 min |
 | B | Three-level nesting, depth limit | 1 account, 7 agents | 25 min |
-| C | Stop on running and on queued | 1 account, 3 agents | 20 min |
+| C | First Stop is this turn; second Stop/Esc within 3 s or `/cancel` reaches running and queued helpers | 1 account, 3 agents | 20 min |
 | D | Revive with a new instruction, step limit | 1 account, 4 agents | 25 min |
 | E | Concurrency queue and ordering | 1 account, 5 agents, settings change | 20 min |
 | F | Panel visibility, reload, long label | 1 account, 5 agents | 20 min |
@@ -593,8 +595,7 @@ dedicated instance**, or it will corrupt every other lane's result.
    expanded row rather than the main chat is the intended design (see A2).
 2. **Shortened labels.** A long task shown with an ellipsis is correct. A *missing*
    row is the bug.
-3. **`interrupted` vs `cancelled`.** A stopped worker may read `cancelled` on the row
-   and `interrupted` in the detail. Both mean stopped.
+3. **Stop is not failure.** A selected stopped turn shows **Stopped** and remains resumable. Plain Stop leaves helpers working; their continuing after the first press is correct, not an allowed cascade failure.
 4. **A worker may finish before hitting its step limit** (D2). Record "limit not
    reached" rather than forcing it.
 5. **Queue position may not update every second.** Slightly stale ordering is not a

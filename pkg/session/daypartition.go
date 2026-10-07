@@ -71,16 +71,11 @@ const (
 	// control plane ADR D4/MAJ-009). An explicit RESUME of a done/failed
 	// session resets coarse metadata back to StatusActive.
 	StatusFailed SessionStatus = "failed"
-	// StatusInterrupted is RETIRED from the wire enum (sub-agent control
-	// plane ADR D4/MAJ-009, Session.yaml::status) — "interrupted" is no
-	// longer a valid Session.status value. No production caller writes this
-	// value any longer (pkg/agent/boot_sweep.go::reconcileUnifiedMetaStatus
-	// was the last one, fixed to StatusFailed). The constant is kept only
-	// for tests that assert its ABSENCE (e.g.
-	// pkg/gateway/turn_survives_disconnect_test.go) and for any legacy
-	// on-disk meta.json a pre-ADR install may still carry — reading one
-	// back is not itself an error (greenfield has no upgrade/migration
-	// path; see CLAUDE.md). Do not add a new writer.
+	// StatusInterrupted is a session whose turn a gateway restart cut off.
+	// Founder rule (2026-10-06): a session does not fail because of a
+	// restart. pkg/agent/boot_sweep.go::reconcileUnifiedMetaStatus is its only
+	// writer (a Stop never writes it); it is part of the Session.yaml::status
+	// wire enum. An explicit RESUME resets it back to StatusActive.
 	StatusInterrupted SessionStatus = "interrupted"
 )
 

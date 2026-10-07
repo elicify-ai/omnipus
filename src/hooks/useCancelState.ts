@@ -11,25 +11,18 @@
 //
 // Owns the D9 Stop-all scoping on top of the plain cancel:
 //
-//   First Stop press / Esc on a session  → single-session cancel (wire
-//     default scope: the frame carries NO scope key) and ARMS a 3-second
-//     confirmation window during which the composer visibly offers
-//     "Stop all".
-//   Second Stop press / Esc on the SAME session within the window (or a
-//     click on the visible offer) → confirmed Stop all: one
-//     `cancelStream(undefined, 'tree')` frame; the server stops the
-//     session and every reachable descendant (ADR D7 — down only, never up
-//     or sideways).
-//   The window expires after 3 s, on window blur (focus change) and on
-//     session switch — after that the next activation is a fresh FIRST
-//     press again.
-//   `/cancel` and the dedicated Stop-all control are THEMSELVES the
-//     confirmation (D9): one action → one tree frame, no window.
+//   First Stop press / Esc / `/stop` → single-session cancel (NO scope key)
+//     and a 3-second confirmation window. The same Stop button stays visible.
+//   Second activation on the SAME session inside that window → confirmed
+//     Stop all: one `cancelStream(undefined, 'tree')` frame, down only.
+//   Expiry after 3 s, window blur and session switch disarm the window —
+//     the next activation is a fresh first press.
+//   `/cancel` is itself the confirmation: one action → one tree frame.
+//   No separate Stop-all buttons (founder 2026-10-06).
 //
 // The arming decision reads a ref (`stopAllArmedRef`), not the state
 // mirror, so the global document-level Escape handler can never act on a
-// stale closure; the state exists only so the composer can render the
-// offer.
+// stale closure; the state keeps the same Stop button reachable while armed.
 //
 // Three call sites need to trigger a cancel, and they are NOT equivalent —
 // see `cancelIfStreaming` vs `cancelUnconditional` below. This hook exposes
@@ -51,11 +44,10 @@ export type StopLabel = 'stop' | 'stopping'
 export interface UseCancelStateResult {
   stopLabel: StopLabel
   /**
-   * True while the D9 Stop-all confirmation window is open — the composer
-   * renders the visible "Stop all" offer (a tree-scoped cancel button)
-   * exactly while this is true. The window arms on every first activation
-   * (Stop press / Esc) and expires after 3 s, on window blur and on
-   * session switch.
+   * True while the Stop-all confirmation window is open — the composer
+   * keeps the same Stop button reachable for a second activation. Arms on
+   * the first Stop/Esc or `/stop`, expires after 3 s, window blur or session
+   * switch. There is no separate Stop-all button.
    */
   stopAllArmed: boolean
   /**
@@ -75,23 +67,21 @@ export interface UseCancelStateResult {
   cancelIfStreaming: () => void
   /**
    * Unconditionally sets the button to 'stopping' before calling
-   * `cancelStream()` — used ONLY by the Stop button's onClick. Do NOT guard
+   * `cancelStream()` — used by the Stop button and `/stop`. Do NOT guard
    * this with `isStreaming`: `cancelStream()` handles the server-send gate
    * internally, and guarding here would silently no-op when the turn races
    * to completion between render (when the button became clickable) and
    * the click itself, preventing the "(interrupted)" label from appearing.
    *
-   * D9: first press = single-session cancel + the visible Stop-all offer;
-   * a second press inside the window confirms (tree frame).
+   * First activation = single-session cancel + the 3 s window; a second
+   * activation inside that window confirms (tree frame).
    */
   cancelUnconditional: () => void
   /**
    * The self-confirming Stop all (D9): one call → one `cancelStream
-   * (undefined, 'tree')` frame, no double activation. Used by the
-   * composer's dedicated Stop-all control AND by the `/cancel` slash
-   * command (via useSlashMenu) — both are explicit confirmations by
-   * themselves. Also closes any open confirmation window without sending
-   * anything extra.
+   * (undefined, 'tree')` frame, no double activation. Used by `/cancel`
+   * (via useSlashMenu) and by the confirmed second Stop/Esc activation.
+   * Also closes any open confirmation window without sending anything extra.
    */
   cancelAllTreeScoped: () => void
 }
@@ -108,10 +98,9 @@ const MIN_STOPPING_DISPLAY_MS = 1000
 const CANCEL_RACE_WINDOW_MS = 8_000
 
 /**
- * ADR-20260928 D9: how long the first Stop/Esc activation's visible
- * "Stop all" offer stays open. A second activation on the same session
- * inside this window is the confirmed tree stop; past it (or on focus/
- * session change) the next activation is a fresh first press.
+ * How long the first Stop/Esc or `/stop` activation's confirmation window
+ * stays open. A second activation on the same session confirms a tree stop;
+ * past it (or on focus/session change) the next is a fresh first press.
  */
 export const STOP_ALL_CONFIRM_WINDOW_MS = 3_000
 
@@ -153,7 +142,7 @@ function useStopAllConfirmWindow() {
     stopAllTimerRef.current = setTimeout(disarmStopAll, STOP_ALL_CONFIRM_WINDOW_MS)
   }, [disarmStopAll])
 
-  // D9: focus change closes the offer window.
+  // D9: focus change closes the confirmation window.
   useEffect(() => {
     if (!stopAllArmed) {
       return undefined
@@ -163,7 +152,7 @@ function useStopAllConfirmWindow() {
     return () => window.removeEventListener('blur', onWindowBlur)
   }, [stopAllArmed, disarmStopAll])
 
-  // D9: switching sessions closes the offer window (and no frame may ever
+  // D9: switching sessions closes the confirmation window (and no frame may ever
   // target the NEW session from a window armed on the old one).
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   useEffect(() => {
@@ -190,7 +179,11 @@ export function useCancelState(
   // The store action's full signature — the D9 tree paths call
   // `cancelStream(undefined, 'tree')` (ADR-20260928 MAJ-002); every other
   // path keeps the bare single-session call.
-  cancelStream: (sessionId?: string, scope?: CancelFrame['scope']) => void,
+  //
+  // It returns `false` only when the cancel could not be handed to the socket
+  // (a visible error toast was already shown). Such a press sent nothing, so
+  // it neither shows "Stopping..." nor arms the confirmation window (W2).
+  cancelStream: (sessionId?: string, scope?: CancelFrame['scope']) => boolean,
 ): UseCancelStateResult {
   const [stopLabel, setStopLabel] = useState<StopLabel>('stop')
 
@@ -218,15 +211,25 @@ export function useCancelState(
   const { stopAllArmed, stopAllArmedRef, armStopAll, disarmStopAll } =
     useStopAllConfirmWindow()
 
-  // The self-confirming tree stop (D9): `/cancel`, the dedicated Stop-all
-  // control, and the confirmation of the visible offer all land here — one
+  // `/cancel` and a confirmed second Stop/Esc activation land here — one
   // call, one scope:"tree" frame, window closed, nothing else sent.
   const cancelAllTreeScoped = useCallback(() => {
     disarmStopAll()
     stoppingStartedAt.current = Date.now()
+    if (cancelStream(undefined, 'tree') === false) return
     setStopLabel('stopping')
-    cancelStream(undefined, 'tree')
   }, [cancelStream, disarmStopAll])
+
+  // The single first-activation path (button, `/stop`, local and global
+  // Escape): session-scoped cancel, then "Stopping..." (when asked for) and
+  // the 3 s window — but only if the cancel was actually handed to the
+  // socket; an undelivered press leaves the next press a first press (W2).
+  const activateFirstPress = useCallback((showStopping: boolean) => {
+    stoppingStartedAt.current = Date.now()
+    if (cancelStream() === false) return
+    if (showStopping) setStopLabel('stopping')
+    armStopAll()
+  }, [cancelStream, armStopAll])
 
   useEffect(() => {
     if (isStreaming) {
@@ -237,6 +240,10 @@ export function useCancelState(
   // EC-15: reset the stop label back to 'stop' whenever streaming ends so
   // the button is fresh for the next turn.
   // T25: enforce a minimum 1000ms display of "Stopping..." before resetting.
+  // W1: also re-evaluate when the label itself changes — a second activation
+  // or `/stop` after the stream already ended sets 'stopping' with
+  // isStreaming already false, so [isStreaming] alone never ran again and
+  // the button stuck on "Stopping...".
   useEffect(() => {
     if (!isStreaming) {
       const elapsed = Date.now() - stoppingStartedAt.current
@@ -251,38 +258,30 @@ export function useCancelState(
     // window already elapsed) — explicit return so every path is typed
     // consistently as `void | (() => void)` under noImplicitReturns.
     return undefined
-  }, [isStreaming])
+  }, [isStreaming, stopLabel])
 
   const cancelIfStreaming = useCallback(() => {
     // D9: an activation while the window is open is the CONFIRMED tree
-    // stop (the visible offer's keyboard twin). Otherwise this is a first
+    // stop (the same Stop button's keyboard twin). Otherwise this is a first
     // activation: single-session cancel, then arm the window.
     if (stopAllArmedRef.current) {
       cancelAllTreeScoped()
       return
     }
-    if (isStreaming) {
-      stoppingStartedAt.current = Date.now()
-      setStopLabel('stopping')
-    }
-    cancelStream()
-    armStopAll()
-  }, [isStreaming, cancelStream, cancelAllTreeScoped, armStopAll])
+    activateFirstPress(isStreaming)
+  }, [isStreaming, cancelAllTreeScoped, activateFirstPress])
 
   const cancelUnconditional = useCallback(() => {
     // D9: same contract as cancelIfStreaming, minus the streaming guard —
     // the Stop button keeps its always-morphs semantics; first press sends
-    // the session-scoped frame and offers Stop all, a press inside the
+    // the session-scoped frame and arms the window; a press inside that
     // window confirms the tree stop.
     if (stopAllArmedRef.current) {
       cancelAllTreeScoped()
       return
     }
-    stoppingStartedAt.current = Date.now()
-    setStopLabel('stopping')
-    cancelStream()
-    armStopAll()
-  }, [cancelStream, cancelAllTreeScoped, armStopAll])
+    activateFirstPress(true)
+  }, [cancelAllTreeScoped, activateFirstPress])
 
   // US-1.4 / FR-23: Global Escape key handler — cancels a turn even when
   // the input does not have focus (e.g. user clicked somewhere else on the
@@ -381,19 +380,14 @@ export function useCancelState(
         cancelAllTreeScoped()
         return
       }
-      if (liveState.isStreaming) {
-        stoppingStartedAt.current = Date.now()
-        setStopLabel('stopping')
-      }
-      cancelStream()
-      armStopAll()
+      activateFirstPress(liveState.isStreaming)
     }
     document.addEventListener('keydown', handleGlobalEscape)
     return () => document.removeEventListener('keydown', handleGlobalEscape)
     // stopLabel is included so the effect re-registers when the label
     // changes, ensuring the closure capture of stopLabel is fresh for the
     // 'stopping' guard.
-  }, [stopLabel, cancelStream, cancelAllTreeScoped, armStopAll])
+  }, [stopLabel, cancelAllTreeScoped, activateFirstPress])
 
   return { stopLabel, stopAllArmed, cancelIfStreaming, cancelUnconditional, cancelAllTreeScoped }
 }

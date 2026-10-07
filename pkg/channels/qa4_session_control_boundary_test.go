@@ -80,7 +80,6 @@ func TestQA4ChannelRedirect_AuthorizesBeforeControlAndInterceptsBeforeIntake(t *
 		{name: "denied_structured_sender", denied: true},
 		{name: "denied_legacy_sender", denied: true, legacySender: true},
 		{name: "authorized_redirect", wantReply: commands.StopRedirectReply(nil)},
-		{name: "authorized_root_refusal", controlErr: commands.ErrNotHelperSession, wantReply: commands.StopRedirectRootRefusal},
 		{name: "authorized_finished_helper_refusal", controlErr: commands.ErrNothingToRedirect, wantReply: commands.StopRedirectReply(commands.ErrNothingToRedirect)},
 		{name: "authorized_redirect_refusal_is_visible", controlErr: refused, wantReply: commands.StopRedirectReply(refused)},
 		{name: "authorized_failed_reply_propagates", sendErr: sendErr, wantReply: commands.StopRedirectReply(nil)},

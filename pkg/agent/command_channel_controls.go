@@ -2,10 +2,10 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/channels"
-	"github.com/elicify-ai/omnipus/pkg/commands"
 )
 
 var _ channels.CancelInterceptor = (*AgentLoop)(nil)
@@ -63,7 +63,11 @@ func (al *AgentLoop) RequestRedirectByChannelChat(ctx context.Context, channelNa
 		return err
 	}
 	if sessionID == "" {
-		return commands.ErrNotHelperSession
+		return fmt.Errorf("there is no conversation here to redirect yet; send a message first")
+	}
+	if _, helperErr := al.helperSessionRecord(sessionID); errors.Is(helperErr, errNotHelperSession) {
+		// An ordinary chat continues on this channel and chat.
+		return al.redirectOrdinarySession(ctx, sessionID, instruction, userID, channelName, chatID)
 	}
 	return al.RedirectSessionTurn(ctx, sessionID, instruction, userID, channelName)
 }

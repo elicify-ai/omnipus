@@ -75,6 +75,21 @@ async function waitForViewportInput(page: Page): Promise<void> {
 async function takeControlFromRenderedVideo(page: Page, testInfo: TestInfo): Promise<void> {
   const frame = browserLiveFrame(page);
   const video = browserLiveVideo(page);
+  // A <video> element is not a picture: videoWidth/videoHeight stay 0 until a
+  // frame actually decodes (ICE/DTLS can finish after the frame container is
+  // visible). Same 45 s budget as waitForViewportInput.
+  await expect
+    .poll(() => video.evaluate((el) => (el as HTMLVideoElement).videoWidth), {
+      message: 'the live video never decoded a first frame (videoWidth stayed 0)',
+      timeout: 45_000,
+    })
+    .toBeGreaterThan(0);
+  await expect
+    .poll(() => video.evaluate((el) => (el as HTMLVideoElement).videoHeight), {
+      message: 'the live video never decoded a first frame (videoHeight stayed 0)',
+      timeout: 45_000,
+    })
+    .toBeGreaterThan(0);
   const box = await frame.boundingBox();
   if (!box) throw new Error('the live frame has no bounding box');
   const media = await video.evaluate((el) => {
@@ -113,10 +128,12 @@ async function endTurnDeterministically(page: Page): Promise<void> {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/');
   // Squad J instrumentation — patch RTCPeerConnection so the first oracle
-  // failure in this spec can dump pc/track/stats state. Idempotent.
+  // failure in this spec can dump pc/track/stats state. Idempotent. Installed
+  // BEFORE goto: addInitScript applies "whenever the page is navigated", so an
+  // install after the first load would leave that load unwrapped (peers=[]).
   await installWebrtcDebug(page);
+  await page.goto('/');
 });
 
 test(

@@ -333,11 +333,6 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			sessionID = opts.SessionKey
 		}
 		rt.SessionID = func() string { return sessionID }
-		rt.ResolveHelperSession = func() (bool, error) { return al.resolveHelperSession(sessionID) }
-		rt.IsHelperSession = func() bool {
-			helper, err := rt.ResolveHelperSession()
-			return err == nil && helper
-		}
 	}
 
 	// The loop supplies the distinct session Stop, tree Stop and redirect seams.

@@ -534,10 +534,33 @@ func runDialValue[T any](g *mailAccountGate, ctx context.Context, fn func(contex
 	select {
 	case g.slots <- struct{}{}:
 		defer func() { <-g.slots }()
+		// The select above can pick the slot while ctx's bound has already
+		// passed but its Done is not yet delivered (a derived context's timer
+		// fires on its own schedule — the coalesced flight's detached context
+		// carries the caller's deadline on a second timer; or both cases were
+		// ready and the pick was random). A call past its bound is refused
+		// like one that queued past it: ErrMailBusy, never a dial.
+		if err := boundExpired(ctx); err != nil {
+			return zero, fmt.Errorf("%w: %w", ErrMailBusy, err)
+		}
 		return fn(ctx)
 	case <-ctx.Done():
 		return zero, fmt.Errorf("%w: %w", ErrMailBusy, ctx.Err())
 	}
+}
+
+// boundExpired reports why ctx's bound has already passed, or nil while it
+// still holds: its error once Done fired, else DeadlineExceeded when the
+// reported deadline is behind the wall clock even though Done has not been
+// delivered yet.
+func boundExpired(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if dl, ok := ctx.Deadline(); ok && !time.Now().Before(dl) {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 // ErrRevisionSuperseded is the superseded-read determination (§4.9.3): the
