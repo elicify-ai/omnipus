@@ -203,22 +203,22 @@ Use the ten named R16 colors below. Hex is governed identity data, not raw chrom
 
 The implementation must verify the required **3:1 graphic contrast** on sidebar/chat surfaces; this ADR records the requirement, not a measured contrast PASS. Gold, warning yellow, semantic greens/reds and Liquid Silver are not selectable agent colors (R16). Figure defaults, the remaining R9 face wording and small-size fallback are Q-FE-3. Exact color migration is Q-FE-6.
 
-### D7 — Publish AgentIcon once through the kit’s four-part contract
+### D7 — One published AgentIcon and reusable kit presentation
 
-**AgentIcon is one shared composite, not one avatar helper per screen.** It renders supplied identity and a named size variant; it does not fetch agents, decide membership, resolve sessions or own activity state. Its glyph lane is transparent. Its uploaded-image lane reuses the existing Avatar image/crop primitives, with appropriate fallback. Any required primitive variant is defined centrally, not a screen-level visual override or an import cycle (R10/R41/R46; E9; S5::component rules 1, 9, 14).
+AgentIcon is one composite for supplied figure/role/color, named sizes and approved motion variants. It performs no agent fetch, membership/session resolution or activity aggregation. Keep the transparent glyph grammar; do not force existing Avatar’s circle clipping onto it, duplicate Avatar, paste the prototype’s SVG-string renderer into screens or add an image-upload lane in this squad (R10/R41/R46; F::Q5–Q9; E9).
 
-| Publication part | Required implementing change — not created by this ADR |
+| Publication part | Implementing requirement — no component created by this ADR |
 |---|---|
-| Catalog/source | One composite entry in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/design-system/catalog.json`, naming AgentIcon’s implementation and public exports/types. Proposed new source: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/ui/agent-icon.tsx`. |
-| Public barrel | Re-export the approved component/API from `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/index.ts`. |
-| Styling registration | Register its source explicitly in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/styles/library.css`; automatic class discovery is disabled there. |
-| Verification manifest | Proposed new `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/design-system/manifests/agent-icon.json`, linked to stories and executed checks, covering unit, interaction, axe, keyboard, browser, pointer, reduced-motion, forced-colors, root-size, zoom and reflow. Inapplicable means genuinely inapplicable with a reason, never “not tested”. |
+| Catalog/source | One composite entry in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/design-system/catalog.json`. Proposed source: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/components/ui/agent-icon.tsx`; explicit public exports/types. |
+| Public barrel | Re-export from `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/index.ts`. |
+| Style registration | Explicit source registration in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/src/styles/library.css`; automatic discovery is disabled. |
+| Manifest/evidence | Proposed `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/design-system/manifests/agent-icon.json`: unit, interaction, axe, keyboard, browser, pointer, reduced-motion, forced-colors, root-size, zoom and reflow; stories plus executed static-Storybook checks. Inapplicable is never “not tested”. |
 
-All four parts are required by S5::Publishing a component is a four-part contract. Story examples and visual checks must cover the approved figure/role/color combinations, every named size, image load failure and the reduced-motion attention use. A catalog entry without rendered/executed checks is not publication evidence (S5::manifest and Storybook rules; R13/R15/R16/R29).
+Apply the same four-part publication rule to genuinely new recurring jobs such as shared attention/inline status/activity-pill presentation. Compose kit Button/Badge/RunningIndicator and approved variants rather than separate screen-local Plan/Agents/Commands pill implementations. Screens pass layout-only classes; look and motion remain central (R41; S5::rules 9/10/14).
 
-Adopt it in sidebar, Team, Agents roster, SearchModal agent headers, live **and** historical/plain-fallback messages, status line, create/edit preview and existing agent identity displays in Activity. Later `@` suggestions use it too. Preserve external-worker/type labels separately; do not encode agent kind by inventing another avatar renderer. Non-agent terminal/activity symbols are not agent identities and need not be replaced (R12/R41/R46; E3–E6/E12).
+Adopt AgentIcon in Sidebar, Team, Agents roster, SearchModal headers, editor preview, inline responding-agent indicator and agent identities in Activity; later `@` suggestions use it too. **Do not put it back in message bubbles.** Non-agent terminal symbols and separate runtime-kind labels retain their own jobs (F::Q9; E3/E6/E12).
 
-Recurring presentation such as the sidebar attention cue also belongs in the kit. It composes with AgentIcon and the workspace dot; it must not become a second agent-identity component (R29/R41; S5::rule 14).
+Stories must prove all four figures with role badges at every named size, approved motion/amplitudes, contrast and reduced motion. Publication metadata alone is not rendered or accessibility evidence. Avatar image/failure tests belong to the deferred upload unit, not a pretend first-squad image feature (R13/R15/R16/R29; F::Q5–Q9; S5::four-part contract).
 
 ### D8 — Inline animated agent indicator; name-only replies
 
@@ -253,30 +253,40 @@ For the later upload unit, retain R17’s format/2 MB/re-encoding/SVG-rejection 
 
 Companion **#1221** deletes the per-agent “Never auto-approve” checkbox and associated layer completely. This avatar/editor decision neither preserves that checkbox nor implements its removal; #1221 owns it. Retain only the still-supported composer controls and consume the companion generated contract without reviving `auto_approve_disabled` (founder steering; https://github.com/elicify-ai/omnipus/issues/1221).
 
-### D10 — Navigation migration preserves reachability, not obsolete data machinery
+### D10 — The one-cutover migration is a backend dependency
 
-| Existing state | Required handling |
+**F::Q11 and the confirmed 17:15 steering override the earlier no-migration clause for THIS cutover only.** Existing saved chats must remain **reachable and continuable** after install/upgrade; heartbeat sessions become mains. The session-core owner records and implements that exception using its existing storage/import mechanisms. This ADR does not choose file conversion, ID remapping, history merging or a dual reader (F::Q11; B’s dated migration amendment; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md`::17:15).
+
+| State | Frontend requirement |
 |---|---|
-| Saved ordinary/extra sessions no longer listed in the sidebar | Keep them reachable through Past sessions and general SearchModal, including its existing Unfiled route and nested helper inspection. Do not rename, merge, delete or reassign their history as a side effect of changing navigation. R21/R22; E2/E3. |
-| Main agent has no main session yet | Show honest resolution/loading/error state and use the backend U1 get-or-create/resolution behavior. Never choose the latest chat as a substitute or create a frontend-only main. R4; B::D1; D5. |
-| Worker is a workspace member | Keep membership, task/delegation capability and access to existing worker sessions through current inspection/search surfaces. Hide only the fresh conversation row; do not create a worker main session or an `@` target. R5/R7/R28; E8; B::D1/D8. |
-| Agent leaves/rejoins the team | Follow B’s hide/unhide visibility rule for its main session; existence on disk is not permission to bypass it through SearchModal. Ordinary-history reachability and hidden-main visibility are different rules. B::D1; Q-FE-9. |
-| Older icon/color identity | Apply R11’s explicit obvious legacy-icon mappings; unmatched icons become General assistant. R16 requires one automatic nearest-palette color migration. Do not use the prototype’s name-keyword role inference or repeatedly rewrite colors while rendering. R11/R16; S2::toPalette; Q-FE-3/Q-FE-6. |
+| Existing saved ordinary/extra/Unfiled/child chats | Keep search/inspection and legitimate continuation through current-format backend responses; verify actual migrated data, not fresh fixtures only. |
+| Former heartbeat session | Consume backend migration’s `main` response and validated association; no browser inference from an old heartbeat ID/type. |
+| Eligible main missing | Visible resolve/loading/error and backend get-or-create; no latest-chat substitute, extra chat or frontend-only main. |
+| Worker on team | Remains a worker, hidden from fresh sidebar conversation rows; existing task/child sessions remain inspectable/continuable under B’s authority. |
+| Removed/re-added member | Respect backend hide/unhide; migration is not permission to open a deliberately hidden main. |
+| Admin | Validated main in the default workspace, shown as its main-agent row; `@` from elsewhere uses that default-workspace pair. No fake team membership or extra Admin mains. |
+| Import/source/contract failure | Visible and retryable; no silent empty-history substitution or “migration succeeded” claim from a rendered Welcome screen. |
 
-This ADR does **not** introduce archive conversion, a compatibility reader or heartbeat-to-main backfill in the frontend. B’s greenfield storage/deletion decisions and this commission’s “existing sessions stay reachable” requirement need a joint, explicit preservation boundary. Q-FE-9 is mandatory if U1/storage changes stop the server returning previously accessible records. A frontend test with only fresh sessions cannot prove that preservation requirement (R21; B::Code and compatibility paths to DELETE; S5::false-green guidance).
+Keep the greenfield/delete-superseded rule outside that expressly bounded migration. The frontend does not retain missing-type or mutable-owner fallback chains to compensate for an unfinished backend import. Joint acceptance must open and continue saved chats and former heartbeat history, including failure/retry and repeated upgrade behavior; backend owns the migration algorithm (F::Q11/Q12; B::D1.1 and dated amendment).
 
-### D11 — Record later work; do not build it in the first squad
+**F::Q8 approves S2::toPalette.** For a valid hex, saturation below 0.25 maps to Grey; otherwise minimize circular hue distance among the non-Grey palette entries. Invalid/missing hex maps to Grey; equal distances retain the first entry in the published palette order because the update uses strict `<`. Write thresholds, ties and representative fixtures into the specification for approval. Persist the mapping once; update canonical built-ins as D9 requires, not on every render. R11’s explicit obvious icon mappings remain; unmatched icons become General assistant (R11/R16; F::Q8; S2::hsv/toPalette).
 
-| Later surface | Recorded direction and dependency |
+### D11 — Immediate cleanup; later workspace-qualified messaging
+
+**F::Q10 decides the cutover now:** remove `/new`, `/agents` picker openers, generic extra-chat bypasses and mention-driven switching with the sidebar. Rename `/resume` to `/sessions` across registry/client/help/docs, with no old alias. `@` suggestions are unavailable until proper messaging lands. `/clear` must never retain a new-session action or alias, even while its complete safe-point behavior remains backend-dependent. Preserve New chat’s first-send recovery/abandonment guard (F::Q10; B::D8/DEL-F01–F02; E4).
+
+| Later or companion work | Frontend direction |
 |---|---|
-| `@` composer addressing and group replies | Main agents only, to their main sessions; no in-chat switch. Guest replies show the actual responder’s icon/name using AgentIcon. Consume B’s generated messaging/replay contracts; do not duplicate recipient authority, queue, context or wake decisions here. R23; B::D7/D10. |
-| Session commands | `/resume` becomes `/sessions`; `/new` is deleted, not kept as an alias. Its minimum first-squad prerequisite is Q-FE-8 because + New chat must be the only extra-chat action. R22; B::D8. |
-| `/clear` marker | Render the backend-owned safe-point clear/projection marker. Do not implement it by starting a new chat or deleting history. The exact model/display semantics are B::D8, including its later correction, not the obsolete “history stays on the current display” wording. S4::14:10 Q-R2-9; B::D8. |
-| Header modes | R44’s measured available-space progression: labels → icons with kit Tooltip → workspace-name dropdown containing panels and Settings. One sidebar menu icon only. This is already in review according to the commission; this ADR records it, not a second header implementation. R1/R2/R38/R44; E11. |
-| Tooltip replacement | R45’s shadcn/Radix interface replaces the old hand-built kit API, with its catalog/manifest/stories/callers updated in that work. No legacy-props wrapper or app-wide tooltip codemod is added by this first squad. R45; E11. |
-| Admin entry | Later remove Assets’ Admin chat entry only with its replacement access path. Admin has no main session and no team membership under B; do not invent one to make the new sidebar simpler. First-squad removal of the composer picker must not remove the still-existing standalone Admin access. R25; E1/E8; B::D1; Q-FE-10. |
+| Full `@` group messaging | Every selected address is **workspace + agent ID**, resolving to that pair’s main. Default picker workspace is the open chat’s current workspace; another workspace is chosen explicitly and visibly. Carry the qualified pair through draft/send/retry, not a bare name/ID or the mutable global workspace at send time. |
+| Addressed replies | Name-only bubble for the actual responder; inline AgentIcon/name/phrase while that agent answers. No owner switch, whole-history copy or guessed return destination. |
+| Admin access | Default-workspace main shown there; elsewhere explicitly address Admin’s default-workspace pair. Remove the old Assets-only entry only when the replacement main is actually reachable on the joint build. |
+| `/clear` | Consume B’s safe-point context/display marker and retained-history semantics. No browser history deletion or new chat. |
+| Header / Tooltip | Retain separately delivered R44 measured-space modes and R45 shadcn-interface replacement; do not build another header fix or legacy Tooltip wrapper here. |
+| Avatar uploads/GIFs | R17–R19 deferred. Later founder decision determines animation placement/resource bounds; no first-squad still-GIF substitute. |
 
-R26–R28’s older cross-workspace capability language does not authorize a frontend peer-messaging protocol. B::D7 and S4::13:50 Q-R2-6 restrict this group/peer design to the same authorized workspace. Backend capability/permission questions remain with B/the founder, not inferred from a list of visible icons (R23/R26–R28; B::D7).
+The **17:15/17:25 founder decisions supersede b76’s no-cross-workspace limit**: agents collaborate across workspaces through peer messages and tasks in any workspace, **not cross-workspace plans**. Backend owns eligibility, policy enforcement, explicit pair resolution and the merged task-tool contracts; the UI does not grant tools or invent worker mains. 17:45 merges canonical `create_task`/`update_task`/`list_tasks` with optional explicit `workspace_id`; default is the agent’s own workspace, another destination only by explicit choice. This is a session-core dependency, not a new frontend task engine (F; S4::17:15/17:25/17:45; session-core questions::Q8 CLOSED).
+
+Admin’s role/tool protections remain governed by the backend; having a main or viewing another workspace’s activity grants no additional control. Worker sidebar exclusion and valid existing-session inspection remain distinct from backend peer/task capabilities (R5/R7; D5/D10).
 
 ### D12 — Build in parallel; integrate and land together
 
