@@ -92,7 +92,7 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 			// After a hot-reload, al.registry is the new value.
 			liveRegistry := al.GetRegistry()
 			if liveRegistry == nil {
-				logger.WarnCF("agent.env",
+				logger.ErrorCF("agent.env",
 					"wireDelegationInjectors: registry is nil in delegation injector — invariant break",
 					map[string]any{"error_id": "DW-001", "agent_id": id})
 				return ""
@@ -100,7 +100,7 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 			// DW-002: the agent must still be present in the live registry.
 			_, exists := liveRegistry.GetAgent(id)
 			if !exists {
-				logger.WarnCF("agent.env",
+				logger.ErrorCF("agent.env",
 					"wireDelegationInjectors: agent not found in live registry — invariant break",
 					map[string]any{"error_id": "DW-002", "agent_id": id})
 				return ""
