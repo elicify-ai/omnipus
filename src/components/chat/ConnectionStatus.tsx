@@ -576,20 +576,16 @@ export function AssistantMessageConnectionStatus({ messageId, agentName }: { mes
 // comment covers the exact scope (boot_mismatch specifically, not
 // retention_exceeded, and only when the exchange truly has no reply and no
 // turn is running).
-// Founder decision Q1 (pending): for a restart-cut question that never got an
-// answer, false removes the manual "Generate again" line (the Interrupted notice
-// stands alone); true keeps it as a manual button. Nothing ever resumes on its own.
-export const KEEP_GENERATE_AGAIN_WHEN_RESTART_INTERRUPTED = false
-
+// Founder decision Q1 = A (2026-10-07): for a restart-cut question that never got
+// an answer, "Generate again" stays as a manual button next to the Interrupted
+// notice. It only resends when the user clicks it; nothing resumes on its own.
 export function UnansweredUserMessageStatus({ messageId, agentName }: { messageId: string; agentName: string }) {
   const activeSessionId = useSessionStore((state) => state.activeSessionId)
   const unanswered = useChatStore((state) => {
     if (activeSessionId == null) return false
     return state.sessionsById[activeSessionId]?.unansweredLastUserMessageId === messageId
   })
-  const restartInterrupted = useRestartInterrupted()
-  // A restart-cut chat is announced once, as Interrupted (RestartInterruptedNotice).
-  if (!unanswered || (restartInterrupted && !KEEP_GENERATE_AGAIN_WHEN_RESTART_INTERRUPTED)) return null
+  if (!unanswered) return null
   const generateAgain = () => {
     useChatStore.getState().resendMessage(messageId)
   }

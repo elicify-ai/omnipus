@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Session as WireSession, SessionPage } from '@/lib/api/generated/openapi-types'
@@ -10,7 +10,6 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { ChatScreen } from './ChatScreen'
 import { codeToDisplay } from '@/lib/llm-error'
-import { KEEP_GENERATE_AGAIN_WHEN_RESTART_INTERRUPTED } from './ConnectionStatus'
 
 // I1 (UAT): after kill -9 + restart a chat whose turn was cut off must read
 // "Interrupted" in the chat body (the sidebar already does — see
@@ -140,7 +139,7 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
     expect(screen.queryByText(/working/i)).not.toBeInTheDocument()
   })
 
-  it('live tab that saw the boot change: Interrupted replaces "couldn\'t be finished", no Working', async () => {
+  it('live tab that saw the boot change: one Interrupted notice, no duplicate unfinished line, no Working', async () => {
     savedLifecycle = 'working'
     await mount()
     act(() => {
@@ -152,7 +151,10 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
     savedLifecycle = 'interrupted'
     feed(freshTabAttach('boot_mismatch'))
     expect(await screen.findByTestId('restart-interrupted-notice')).toHaveTextContent('Interrupted')
-    expect(screen.queryByText(/couldn't be finished/i)).not.toBeInTheDocument()
+    // The cut-off partial answer carries no second "couldn't be finished" line; the one
+    // status left is the manual Generate again under the unanswered question (Q1 = A).
+    expect(screen.getAllByTestId('assistant-connection-status')).toHaveLength(1)
+    expect(screen.getByRole('button', { name: /Generate again/ })).toBeInTheDocument()
     expect(screen.queryByText(/working/i)).not.toBeInTheDocument()
     expect(useChatStore.getState().isStreaming).toBe(false)
   })
@@ -286,7 +288,7 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
     expect(screen.queryByText(/interrupted/i)).not.toBeInTheDocument()
   })
 
-  it('restart-cut question with no answer: Interrupted stands alone — the manual Generate again line is off (pending founder Q1, one-line switch)', async () => {
+  it('restart-cut question with no answer: Interrupted plus a manual Generate again that resends only on click (founder Q1 = A)', async () => {
     feed([
       { type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'boot_mismatch' },
       { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z' },
@@ -296,12 +298,15 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
     expect(useChatStore.getState().sessionsById[SID]?.unansweredLastUserMessageId).toBe('u-1')
     await mount()
     expect(await screen.findByTestId('restart-interrupted-notice')).toHaveTextContent('Interrupted')
-    expect(KEEP_GENERATE_AGAIN_WHEN_RESTART_INTERRUPTED).toBe(false)
-    expect(screen.queryByText(/Generate again/)).not.toBeInTheDocument()
+    const button = await screen.findByRole('button', { name: /Generate again/ })
+    // Nothing automatic: shown, but no message has been sent until the user clicks.
     expect(sender.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'message' }))
+    expect(useChatStore.getState().isStreaming).toBe(false)
+    await act(async () => { fireEvent.click(button) })
+    expect(sender.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'message', session_id: SID, content: 'Write the long report' }))
   })
 
-  it('without a restart-interrupted saved state the same unanswered question still offers Generate again (suppression is scoped)', async () => {
+  it('without a restart-interrupted saved state the same unanswered question still offers Generate again (same line, no restart state)', async () => {
     savedLifecycle = 'done'
     feed([
       { type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'boot_mismatch' },
