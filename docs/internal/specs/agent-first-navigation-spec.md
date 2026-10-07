@@ -88,279 +88,97 @@ Footprint spans shell/session/chat, identity/kit and task inspection; keep exist
 
 ## User Stories & Acceptance Criteria
 
-These stories describe observable behavior only. Acceptance numbers are stable trace keys; technical mechanisms belong to the later integration/test sections. Open choice branches are not silently enabled.
+Acceptance IDs are stable `US-story.acceptance` keys. Their normative Given/When/Then outcomes live **once** in the linked BDD cases; the matrix links requirements/tests. Priorities are P0 (destination/history safety) and P1 (usable identity/activity).
 
-### User Story 1 — Choose a colleague, not a recent thread (Priority: P0)
+### US-1 — Choose a colleague, not a recent thread (P0)
+A person reaches the intended colleague's main. **Why:** avoid wrong-chat sends. **Independent test:** same agent, two workspaces, newer extras.
+**Acceptance IDs:** US-1.1 → BDD-01.1; US-1.2 → BDD-01.2; US-1.3 → BDD-01.3; US-1.4 → BDD-01.4.
 
-A person selects the colleague they want within a workspace and always reaches that colleague's main chat. Newer parallel chats must not redirect that choice.
+### US-2 — Return to the exact chat safely (P0)
+A person resumes their own last chat or the validated welcome main. **Why:** no silent new work/recipient change. **Independent test:** main/extra pointers, reload, failure and late response.
+**Acceptance IDs:** US-2.1 → BDD-02.1; US-2.2 → BDD-02.2; US-2.3 → BDD-02.3; US-2.4 → BDD-02.4.
 
-**Why this priority**: A wrong destination can send the person's message to the wrong conversation.
-**Independent Test**: Give Mia mains and newer extras in two workspaces; select each row and inspect the actual destination.
+### US-3 — Start extras deliberately and find history (P1)
+A person keeps the main while using row actions. **Why:** parallel conversations without a session tree. **Independent test:** keyboard/touch actions and original first-delivery recovery.
+**Acceptance IDs:** US-3.1 → BDD-03.1; US-3.2 → BDD-03.2; US-3.3 → BDD-03.3; US-3.4 → BDD-03.4.
 
-1. **Given** Mia has a main and a newer extra in each of two workspaces, **When** her row is selected in one workspace, **Then** its main opens and that row is selected, not the newer extra.
-2. **Given** a team contains eligible colleagues, workers and hidden engine agents, **When** the workspace is expanded, **Then** only eligible colleagues appear; Admin appears only through his validated default-workspace exception.
-3. **Given** a usable shell, **When** an existing workspace tool is opened, **Then** it uses the existing panel system, chat stays the base surface, and the distinct global Library/Agents destinations remain reachable without adding a Chat header item.
-4. **Given** roster or membership refresh fails, **When** the person expands the workspace, **Then** first-load error is not an empty team; last-known data is visibly stale with Retry and no guessed chat target.
+### US-4 — Know when a main needs attention (P1)
+A person finds real decisions/outcomes, not unrelated activity. **Why:** truthful attention. **Independent test:** four sources, negative sessions and observed-open races.
+**Acceptance IDs:** US-4.1 → BDD-04.1; US-4.2 → BDD-04.2; US-4.3 → BDD-04.3; US-4.4 → BDD-04.4.
 
-### User Story 2 — Return to the exact chat safely (Priority: P0)
+### US-5 — Recognize one consistent identity (P1)
+A person recognizes the same figure/badge/color everywhere. **Why:** no workspace/responder drift. **Independent test:** every approved size/color and restart-stable migration.
+**Acceptance IDs:** US-5.1 → BDD-05.1; US-5.2 → BDD-05.2; US-5.3 → BDD-05.3; US-5.4 → BDD-05.4.
 
-A person returning to a workspace resumes the conversation they actually left. On a first visit or a confirmed invalid saved destination, they reach the workspace's validated Ava welcome main instead of a blank extra chat.
+### US-6 — Preview/edit through the existing flow (P1)
+A person previews global edits in one editor. **Why:** no local-only identity. **Independent test:** custom save, protected editability and rejected activation.
+**Acceptance IDs:** US-6.1 → BDD-06.1; US-6.2 → BDD-06.2; US-6.3 → BDD-06.3.
 
-**Why this priority**: Restore must not silently create work or change the intended recipient.
-**Independent Test**: Remember a main and then an extra in different workspaces; exercise normal return, cold reload and refused attachment.
+### US-7 — Read a truthful feed (P1)
+A person sees the actual author/responder and kind. **Why:** displayed and sending identity agree. **Independent test:** live/replay/virtual/plain, real phase inputs and controls.
+**Acceptance IDs:** US-7.1 → BDD-07.1; US-7.2 → BDD-07.2; US-7.3 → BDD-07.3; US-7.4 → BDD-07.4.
 
-1. **Given** a valid visible remembered main or extra, **When** the person enters the workspace from login, its name or the modal workspace switch, **Then** that exact chat and immutable owner return.
-2. **Given** no saved real chat or a confirmed deleted/hidden/inaccessible one, **When** the person enters the workspace, **Then** the backend-validated Ava welcome main opens; an absent eligible destination shows Team/manage and Retry with sending unavailable.
-3. **Given** session/member loading or attachment fails, **When** entry is attempted, **Then** the intent remains retryable, the last committed selection stays consistent, and no unresolved-target send or silent default/new-chat fallback occurs.
-4. **Given** a first selection resolves after a second selection has won, **When** the old result arrives, **Then** it cannot replace the active destination or another workspace's remembered chat.
+### US-8 — Understand sessions and hierarchy (P1)
+A person inspects the existing overall view. **Why:** no lost/mislabelled helpers. **Independent test:** all lifecycle/kinds, strict parent context, accessible/protected actions.
+**Acceptance IDs:** US-8.1 → BDD-08.1; US-8.2 → BDD-08.2; US-8.3 → BDD-08.3; US-8.4 → BDD-08.4.
 
-### User Story 3 — Deliberately start extras and find older chats (Priority: P1)
+### US-9 — Find current work without reopening (P1)
+A person filters live metadata and follows folded helpers. **Why:** no false quiet overview. **Independent test:** unopened A from B, moving pages, stable activation and every original target.
+**Acceptance IDs:** US-9.1 → BDD-09.1; US-9.2 → BDD-09.2; US-9.3 → BDD-09.3; US-9.4 → BDD-09.4; US-9.5 → BDD-09.5.
 
-A person keeps a stable main while deliberately starting extra chats or finding history through the same Sessions modal. These actions must not accidentally select the row's main or erase a message still being delivered.
+### US-10 — Follow plans and actual runs (P1)
+A starter sees real state and drill-down. **Why:** accepted is not running. **Independent test:** real starts/live/replay links and no-origin plans.
+**Acceptance IDs:** US-10.1 → BDD-10.1; US-10.2 → BDD-10.2; US-10.3 → BDD-10.3; US-10.4 → BDD-10.4.
 
-**Why this priority**: Parallel conversations remain useful without reintroducing the old session tree.
-**Independent Test**: Activate both row actions by keyboard and touch, send the first extra message once, and broaden history filters.
+### US-11 — Keep panel local, overview global (P1)
+A person monitors work without gaining control. **Why:** preserve ownership. **Independent test:** A/B isolation, scheduler-only runs, shell count and task-child dedupe.
+**Acceptance IDs:** US-11.1 → BDD-11.1; US-11.2 → BDD-11.2; US-11.3 → BDD-11.3.
 
-1. **Given** a selected colleague/workspace, **When** + New chat is activated, **Then** an extra for that pair starts while the main remains intact; the established first-send delivery/abandonment safeguards remain effective.
-2. **Given** several agents and workspaces have history, **When** Past sessions is activated, **Then** the existing modal opens visibly filtered by both row agent and workspace, with filters that can be broadened.
-3. **Given** an extra is open, **When** its owner's row is selected, **Then** the main opens; selected-row actions are visible, other-row actions work on hover/focus/touch, and Past sessions precedes + New chat.
-4. **Given** opening a past chat is refused or disconnected, **When** its result is selected, **Then** the refusal is visible and retryable without closing into a false successful switch or losing the committed chat.
-
-### User Story 4 — Know when a main needs attention (Priority: P1)
-
-A person sees which main chats need an answer, approval or review of a finished/failed goal, including in collapsed workspaces. Activity elsewhere must not masquerade as that main's waiting signal.
-
-**Why this priority**: Missing a real question or displaying false attention both undermine trust.
-**Independent Test**: Drive each permitted source in an unopened main plus negative sources in extras/helpers and inspect both expanded/collapsed navigation.
-
-1. **Given** a main has a pending question, pending approval, unseen finished goal or unseen failed goal, **When** its authoritative state becomes visible, **Then** its own icon pulses and a collapsed workspace shows the warning-yellow dot; unrelated extra/helper work, generic unread text and user-stopped goals do not light it.
-2. **Given** outstanding questions/approvals and observed goal outcomes, **When** a person explicitly opens the main, **Then** only observed goal attention is acknowledged for everyone; questions/approvals await resolution and a newer racing goal remains unseen.
-3. **Given** attention is present and reduced motion is enabled, **When** navigation is rendered, **Then** loops stop, cues/text remain, no separate agent-row dot appears, and collapsed-workspace counts count distinct main agents.
-4. **Given** attention data is missing, incomplete or failed, **When** navigation refreshes, **Then** unavailable/unknown coverage and Retry remain visible, never fabricated false or zero.
-
-### User Story 5 — Recognize one consistent identity (Priority: P1)
-
-A person recognizes the same figure, role badge and color in lists and responding-agent indicators. Small icons must not quietly become a different visual identity.
-
-**Why this priority**: Stable recognition avoids confusion across workspaces and guest replies.
-**Independent Test**: Compare all four figures across the named sizes and surfaces with the approved reference.
-
-1. **Given** an agent's approved figure, role and color, **When** sidebar, Team, roster, modal header, Activity identity or inline indicator displays it, **Then** one transparent figure-plus-role rendering precedes its normal-color name; Omnipus is the creation default and no small-size badge fallback is substituted.
-2. **Given** the identity choices are shown, **When** a person selects a color or role, **Then** only the ten named colors and 31 roles in the five approved groups are offered, with graphic contrast at least 3:1 on sidebar/chat surfaces.
-3. **Given** legacy custom and built-in identities, **When** the approved one-time migration and repeated restart complete, **Then** saved identities use the approved palette/role/default grammar and stay stable; canonical seeding does not restore forbidden colors.
-4. **Given** identity loading fails, **When** a surface renders cached identity, **Then** it does not claim a new saved identity or a removed agent from a failed request; unknown identity stays honest.
-
-### User Story 6 — Preview and edit through the existing flow (Priority: P1)
-
-A person creates or edits an agent through the existing unified slide-outs, previews exactly what navigation/chat will show, and knows the edit applies everywhere the agent is used.
-
-**Why this priority**: A separate editor or local-only preview would produce incompatible identities.
-**Independent Test**: Change each editable identity choice in the existing flow, save and reopen it in two workspaces.
-
-1. **Given** a custom agent's existing create/edit flow, **When** its figure, role or color is changed, **Then** the live preview matches the shared identity and global save/create behavior remains; no upload or GIF control is offered.
-2. **Given** a protected built-in with server-defined editability, **When** its editor is opened, **Then** fixed identity remains locked and allowed settings retain their established editability; a visual change grants no capability.
-3. **Given** a create/save fails or is not activated, **When** the person submits or autosave settles, **Then** the real error/save status remains visible and a draft preview is not presented as saved everywhere.
-
-### User Story 7 — Read a clear, truthful chat feed (Priority: P1)
-
-A person sees which chat is open and who actually responds, without bubble avatars or a second composer status line. Model/Auto, attachments, send and Stop keep their established behavior.
-
-**Why this priority**: Feed identity and sending identity must agree even through replay or guest responses.
-**Independent Test**: Render live, historical virtual and plain messages plus an actual non-owner producer and reduced-motion mode.
-
-1. **Given** a main, extra, task or helper is inspected, **When** its feed is rendered, **Then** the persistent above-feed kind is truthful; agents' bubbles show actual author names only on every rendering path, never avatars or a renamed task/helper as Extra chat.
-2. **Given** a real responding agent and working/thinking/waiting state, **When** the next reply position is displayed, **Then** its shared animated icon/name/phrase replaces the old thinking indicator inline; reduced motion leaves stable meaningful text without loops.
-3. **Given** the navigation cutover, **When** composer and command choices are opened, **Then** no agent picker, mention switching, old new-chat command, picker command or old resume alias is available; the session command opens the existing modal and Clear never starts a chat.
-4. **Given** a real reply/connection error or active helper tree, **When** the person uses the existing recovery or Stop control, **Then** errors and current control scope remain truthful; changing chats or closing a view never cancels work and no unsupported composer control is restored.
-
-### User Story 8 — Understand sessions and their hierarchy (Priority: P1)
-
-A person uses the existing Sessions modal to understand chats, helpers and runs across workspaces, without confusing a stopped helper with completed work or losing a child underneath search filters.
-
-**Why this priority**: This is the founder-selected overall activity view, not optional duplicate navigation.
-**Independent Test**: Open the modal with every lifecycle/kind plus real parent/child, orphan and protected-main fixtures.
-
-1. **Given** authorized sessions of each supported lifecycle and kind, **When** Sessions opens, **Then** each row shows a truthful status chip and quiet kind, a main's confirmed attention dot, and a title line plus muted status/kind/active/tokens metadata line; no HB abbreviation remains.
-2. **Given** an agent's main, extras and real helper/run children, **When** its group is revealed, **Then** the main is first/pinned and extras retain recency; helpers stay under their real parent **always**, including search/filter hits. Missing parent context is visibly unavailable under the approved Q-M5 treatment, never a top-level helper or invented parent.
-3. **Given** desktop, phone, keyboard or assistive input, **When** the modal is explored, **Then** the title is Sessions, subtitle explains chats/helpers/runs, shared group/row/count/identity/search/filter controls are used, focus and independent actions work, and no new handmade tooltip/view appears.
-4. **Given** a protected main, inaccessible/deleted destination or failed list source, **When** a delete/open/list action is attempted, **Then** protection/refusal/error is explicit, no hidden session is opened, and an outage is not Unfiled/empty data.
-
-### User Story 9 — Find current work without reopening the modal (Priority: P1)
-
-A person narrows Sessions by existing title/workspace/date and new row-pair filters, sees current activity while it remains open, and distinguishes a complete overview from missing pages or stale data.
-
-**Why this priority**: A stale or partial list claiming no running work would recreate issue #493.
-**Independent Test**: Open Sessions in chat B, update work in unopened chat A, filter it and inspect the live result without closing the modal.
-
-1. **Given** authorized running, attention-needed and inactive conversations, **When** the person selects **All / Running / Needs me**, **Then** the matching set appears with other filters composed; a matching helper stays inside its parent even when the parent itself does not match. Running uses authoritative executing state, never queued-as-running; Needs me includes confirmed main attention and any additional non-main source only after Q-M6 is answered.
-2. **Given** Sessions remains open with an unchanged title search, **When** background work changes state or membership changes, **Then** status, attention, plan presence and results reconcile without reopening; focus/reconnect also recover missed updates.
-3. **Given** a page/source is missing, delayed or failed, **When** Sessions loads or refreshes, **Then** visible partial/unknown coverage and Retry replace any complete/zero claim; cached conversations alone do not prove unseen work is covered.
-4. **Given** more results than a single page/viewport and a child-only title match, **When** the person searches or moves the keyboard highlight, **Then** the matching child remains reachable under its parent with truthful counts, bounded rendering and a usable plain fallback.
-5. **Given** nine consecutive identical helper runs under one parent and the modal's current search/filter match set, **When** the person expands **9 similar helper runs**, **Then** all nine original helper identities, statuses and Open targets appear under that same parent. Folding does not merge work, cross parents or silently omit matching helpers; the summary count reflects the actual grouped match set.
-
-### User Story 10 — Follow plans and actual task runs (Priority: P1)
-
-A person starting work from a chat sees its plan there, follows a successful start result to the real entity, and can find the same starting-chat association later in Sessions.
-
-**Why this priority**: Accepted starts are not proof of running work or usable drill-down.
-**Independent Test**: Start one plan and one task, reload and follow each retained link to the actual Graph/run session.
-
-1. **Given** a plan was started from chat A, **When** A's activity is displayed, **Then** its pill/parent-panel row is associated with A and its starting row in Sessions; B does not claim to be the starter, and Tasks-only plans get no fabricated chat origin.
-2. **Given** an approved-not-started, running, paused or terminal plan, **When** its state updates, **Then** pill/row state reflects that state, approved means waiting to start, and progress/phase comes from real reported data rather than an optimistic start acceptance.
-3. **Given** a successful or idempotent plan/task start with an authorized destination, **When** Open plan or Open task session is activated, **Then** the real plan opens through existing Tasks/Graph or the returned task-run session opens through existing inspection, live and after replay.
-4. **Given** missing origin/address metadata, deleted entity or refused drill-down, **When** a pill/result is used, **Then** unavailable/error guidance is visible and no prose-derived address, foreground-session substitute or synthetic parent link is invented.
-
-### User Story 11 — Keep the panel local and the overview global (Priority: P1)
-
-A person monitors the open chat's actual plans/tasks/helpers/shells locally and finds other chats through Sessions. Seeing an independent task does not grant the current chat authority to stop it.
-
-**Why this priority**: This enforces the two newest founder answers and preserves execution ownership.
-**Independent Test**: Start work in A, view B's panel and Sessions, and verify a scheduler-only task plus the same MAIN task represented as a child.
-
-1. **Given** work in A and B, **When** B's Activity panel is opened, **Then** only work legitimately associated with B appears; A remains findable in Sessions, without an extra dashboard or aggregate side panel.
-2. **Given** task/scheduler/helper/shell records include a task also represented as a real child, **When** the open chat's activity is reconciled, **Then** distinct work counts once with correct kind/state/source; queued/waiting is not counted as executing, and independent runs gain no tree-Stop control.
-3. **Given** a missing/stale task/run/plan source or an unattributed global verdict, **When** activity renders, **Then** incomplete coverage is explicit, no false zero or foreign-session row is shown, and Retry uses existing recovery paths.
-
-### User Story 12 — Continue saved chats and reach Admin after cutover (Priority: P0)
-
-An existing user upgrades without losing saved ordinary, extra, Unfiled, child or former heartbeat conversations. Admin's replacement destination works before the old entry disappears.
-
-**Why this priority**: Fresh-fixture demos cannot prove a safe navigation/storage cutover.
-**Independent Test**: Upgrade a known supported saved installation, reopen and continue its chats, restart again and open Admin's default-workspace main.
-
-1. **Given** supported saved chat and heartbeat histories, **When** the backend-owned upgrade completes, **Then** each legitimate chat remains reachable and continuable, heartbeat history is in its validated main, and repeated upgrade does not duplicate or erase history.
-2. **Given** Admin's validated default-workspace main exists on the joint build, **When** his sidebar row is opened, **Then** it is reachable without fake membership or extra workspace mains; only then may the obsolete Assets-only entry be removed.
-3. **Given** migration/import or destination resolution fails, **When** saved history is opened, **Then** visible retryable failure replaces empty-success history, no legacy owner/type fallback bypasses the unfinished backend, and no integrated delivery is claimed.
+### US-12 — Continue saved chats and reach Admin (P0)
+An existing user retains legitimate history. **Why:** fresh-fixture demos cannot prove cutover. **Independent test:** supported saved install, real follow-up/restart and replacement Admin access.
+**Acceptance IDs:** US-12.1 → BDD-12.1; US-12.2 → BDD-12.2; US-12.3 → BDD-12.3.
 
 ## Behavioral Contract
 
-| Flow | When / Then contract |
-|---|---|
-| Main selection | When an eligible colleague's row is selected, the system opens that pair's validated main, not the most recent chat. |
-| Workspace entry | When a valid visible remembered chat exists, the system restores that exact chat; otherwise, after confirmed invalidity or no pointer, it opens the validated Ava welcome main. |
-| Failed resolution | When validation/loading/attachment fails, the system keeps a retryable intent and consistent committed selection; sending to an unresolved destination is unavailable. Failure is not deletion. |
-| Parallel/history | When + New chat is used, the system starts a deliberate extra with delivery safeguards; when Past sessions is used, the one Sessions modal opens with the pair's removable filters. |
-| Main attention | When an authoritative main question/approval or unseen finished/failed goal exists, the system signals that main only. Explicit open acknowledges observed goals for everyone; answers/decisions resolve questions/approvals. |
-| Identity | When an agent is shown outside a message bubble, the system uses its shared transparent figure/role/color identity and normal-color name. Bubbles show only the actual author's name. |
-| Responding state | When an agent responds, the system shows that responder's animated icon/name/phrase inline in the feed; reduced motion keeps text and stops loops. |
-| Overall activity | When Sessions opens, the system shows authorized metadata with All / Running / Needs me and expandable `N similar helper runs` summaries. Helpers remain under their real parent in every search/filter, never top-level; live updates and folding do not change identity/counts/control authority. |
-| Local panel | When a chat's Activity panel opens, the system shows only work actually associated with that open chat. Changing chats never stops or completes work. |
-| Plans/links | When a plan starts in chat A, the system associates its pill and parent row with A and exposes the real plan/run through authorized existing drill-down, including replay. |
-| Missing coverage | When metadata, pagination, origin, identity or authorization is unavailable, the system shows unknown/partial/error and recovery, never fabricated zero, destination or success. |
-| Upgrade | When the supported cutover migration succeeds, saved chats stay reachable and continuable; when it fails, the system reports the failure rather than displaying empty history as success. |
+The normative contract is the single FR/decision/acceptance/BDD/test matrix below; error/recovery and boundary outcomes are in its linked BDD cases, not a second restatement.
 
 ## Edge Cases
 
-Each EC key has a dedicated Edge Case scenario below; error recovery also appears under its parent story.
-
-| Key | Boundary / unusual condition | Expected behavior |
-|---|---|---|
-| EC-01 | Same colleague in two workspaces; newer extras; same display names but different identities | Validate the pair and immutable owner, not name or recency. |
-| EC-02 | No real remembered pointer, pending first send, hidden/deleted main, no eligible welcome agent | Pending delivery is not a saved main; use validated entry or honest unavailable state, without silent new extras. |
-| EC-03 | Two rapid selections; old response/attach fails after a newer intent | Newer intent wins; no split selection or pointer overwrite. |
-| EC-04 | Question and goal overlap; another person opens the main; newer goal races the open | Only observed goal attention clears globally; pending question/approval and newer outcome remain. |
-| EC-05 | Invalid/missing hex, saturation just below/equal/above one quarter, circular-hue wrap/tie | Apply the approved one-time mapping, stable published-order tie rule and Grey fallback; no render-time recoloring. |
-| EC-06 | All four figures at smallest/largest named sizes; reduced motion/forced colors/zoom | Figure and role badge remain present; contrast, text and input access remain, without changing glyph grammar. |
-| EC-07 | Guest author, replayed message, no virtualizer support, truthful task/helper kind | Same actual author and names-only bubble; no owner switch or kind substitution. |
-| EC-08 | Child-only search/filter hit, unavailable parent, more than 20 visible rows, repeated identical titles | Helpers **always stay under their parent**, never top-level; unavailable-parent treatment follows Q-M5. Repeated identical helpers fold into expandable `N similar helper runs`; each original identity/status/target remains reachable and the filtered count stays truthful. |
-| EC-09 | Unopened workspace work, missed update, missing list page, zero-token/no-state rows | Reconcile authorized snapshots and mark gaps; show unknown or zero according to actual data, never infer absent execution. |
-| EC-10 | Same run appears for starter/assignee and as helper; schedule has no foreground start call | Count distinct real work once; preserve actual associations and independent-control boundaries. |
-| EC-11 | Tasks-only plan; duplicate/idempotent start; deleted/inaccessible drill-down target | No invented starting chat or duplicate work; validate the actual target and show unavailable/refusal. |
-| EC-12 | Supported saved ordinary/Unfiled/child/heartbeat data; repeated upgrade or import error | Backend conversion keeps continuation and truthful binding, is repeat-safe, and surfaces partial/failure rather than using dual frontend readers. |
+EC-01–EC-12 trace respectively to BDD-E01–BDD-E12; each retains its independent action and boundary oracle, with DS fixtures in the test plan.
 
 ## Explicit Non-Behaviors & Safeguards
 
-### Qualitative prohibitions
+The system must not add a second navigation/activity/session store, synthetic parent edge, prose-derived target, tool-policy grant, demo/upload lane or screen-local copy of a kit job (N D1/D5/D7/D11–D14). Other prohibitions belong to FR-007/009/011/020/024/030/032/034/036; these references do not weaken them.
 
-| The system must not… | Reason / authority |
-|---|---|
-| Reintroduce a sidebar session tree, composer picker, in-chat owner switching, new chat alias or a second Sessions view | R3/R20–R24; F Q10/Q-FE-11. |
-| Create a main from a browser-made address or pick a random/latest agent when resolution fails | N D3/D5; backend owns validation and permissions. |
-| Treat viewing/closing/navigating as execution cancellation, outcome completion or a grant of control | N D12–D14; selected-session/tree controls stay distinct from monitoring. |
-| Infer waiting from question marks, every unread message, extras/helpers or global activity | F Q4/Q4b; four main-only sources, not a transcript heuristic. |
-| Put avatars back on bubbles, add a composer status line or keep duplicate old thinking dots | F Q9 FINAL. |
-| Add upload/GIF controls, an app-wide figure switch, demo controls, new creation interview, new task engine or aggregate side panel | F Q5–Q7/Q-FE-11; N D1/D7/D11–D14. Prototype simulations are not product settings. |
-| Fake parent edges to nest peer/independent runs, or fake a plan's starting chat from its owner | N D13/D14; F Q-FE-12; B D5. |
-| Promote a helper to a top-level result when its parent fails a search/filter, or treat a repeated-helper summary as one merged execution | F Session modal A2/D8 + grouping: always nested, expandable folding only; each real identity/status/target/count remains intact. |
-| Mark incomplete or failed queries as empty/complete/zero, or normalize missing current identity into success | N D2–D5/D10/D14; BS contract-first and failure semantics. |
-| Make locked identity editable, widen tool policy, or use a view's workspace to authorize foreign execution | P Hard Constraints; N D9–D11; backend owns authority. |
-| Duplicate K's FilterMenu/ViewSwitch/HoverCard, app-wide tooltip fixes or header fixes | User commission; N D7/D11; M D5/D6; R41/R44/R45. |
+### Numeric and presentation oracles
 
-### Machine-verifiable constraints
-
-These are observable frontend constraints, not new backend status/error definitions. Existing published error envelopes remain authoritative; no untraced HTTP status or error-body shape is added.
-
-| Category | Constraint / numeric oracle | Source |
+| Oracle | Exact constraint | Source |
 |---|---|---|
-| Identity choices | Exactly four figures, creation default Omnipus; exactly 31 grouped roles and ten named palette colors. Figure + role at every named size; zero bubble avatars. | N D6/D8; F Q5/Q9; R11/R16. |
-| Identity measurements | Sidebar icon 26 px/name 13 px; Team 18 px; roster 40 px; inline responder 48 px. Icon precedes name outside bubbles; graphic contrast ≥3:1 against sidebar `#111113` and chat `#0A0A0B`. Editor/modal list-size additions need wireframe confirmation, not invented dimensions. | N D6; R13/R16. |
-| Sidebar attention | Agent icon scale peak +18%, fading warning-yellow `#EAB308` halo, 1.6 s loop; zero separate agent-row dots. Collapsed workspace dot 8 px, beside caret on right; distinct-main-agent count only. | N D4; R29. |
-| Inline motion | Working scale 0.97–1.03 / 1.6 s glow-pulse / 2.4 s sheen; Thinking scale 0.96–1.01 / opacity 0.55–1 / 2.6 s; Waiting peak 1.07 / 3.4 s. Idle static; reduced motion zero loops everywhere. | N D8; W adjacent approved motion assets. |
-| Semantic labels | Sessions modal title `Sessions`; above-feed `Main chat` or `Extra chat — title`; real task/helper kind retained. General attention accessible label `Main chat needs your attention`; reason wording only with authoritative reason data. | N D3/D4; M A3/D7. |
-| Navigation | Zero sidebar worker/hidden-engine rows; row click creates zero extras; unresolved target allows zero sends; no late-result override of the winning selection. | N D2/D3; B D1.1. |
-| Activity ownership | Panel has zero unrelated-session rows; starting-chat plan association only; no duplicate actual run across task/helper representations; no queued/waiting item counted as executing. | F Q-FE-11/Q-FE-12; N D13/D14; B D5. |
-| Accessibility | Every row action has an independent accessible name/keyboard target, no nested buttons; coarse-pointer adjacent controls have non-overlapping targets at least 44 px. Normal text/focus stay governed by the kit; color/motion alone never communicates state. | P design-system rule; N D3/D7; M D3/D4. |
-| Scope/counts | Active metadata counts are uncapped by the eight-item recent-finish limit. Missing pages are not complete. Matching helpers always remain beneath their parent; repeated identical helper siblings fold into `N similar helper runs`, counting original matching identities, not one merged job. | N D14; F Session modal A2/D8 + grouping; C-MODAL/C-TREE. |
-| Modal activity filter | Exact options **All / Running / Needs me**. Running uses authoritative executing metadata; confirmed main attention matches Needs me, further non-main matching waits for Q-M6. No top-level helper in any option or text/pair/date filter. | F Session modal A2/D8 + grouping; N D14; BS C-ATTENTION; DEP-ACT. |
-| Prohibited input paths | Session command has no old resume alias; no new-chat/picker/mention-switch path; Clear creates zero chats and deletes zero saved history. | F Q10; N D11; BS. |
+| Identity | Four figures; 31 roles/five groups; ten named colors, vocabulary below. Badge stays at every size, no circle/role fallback. | R10/R11/R16; N D6; F Q5 |
+| Sizes | Sidebar 26 px icon/13 px name; Team 18; roster 40; inline responder 48. Other new list/editor sizes need WF approval. | R13; N D6 |
+| Contrast / selection | Identity ink fully opaque and ≥3:1 on sidebar `#111113` and chat `#0A0A0B`, including dimmest motion frame; normal-color names, identity never recolored gold by selection. | R12/R16; S Q-G2 |
+| Attention | Icon +18% warning-yellow `#EAB308` halo/1.6 s; collapsed 8 px right dot beside caret. No agent-row dot; distinct confirmed main-agent count. | N D4; R29 |
+| Working | Scale 0.97–1.03, 1.6 s pulse/glow, 2.4 s sheen. | N D8/W |
+| Thinking | Scale 0.96–1.01/2.6 s. **Decorative glow** opacity 0.55–1; figure/badge ink opacity stays 1. No parent opacity that fades the ink. | N D8 corrected by S Q-G2 |
+| Waiting / motion accessibility | Peak scale 1.07/3.4 s. Reduced motion disables all loops; stable name/state text remains. Mount/state rules are in the indicator table, not inferred from animation. | R14/R15; N D8 |
+| Labels | `Sessions`; `Main chat` / `Extra chat — title`; real task/helper kind. `Main chat needs your attention` unless authoritative reason supports more specific wording. | M A3/D7; N D3/D4 |
+| Actions | Independent accessible names/targets, no nested buttons; adjacent coarse-pointer targets ≥44 px and non-overlapping. Focus/colors use kit rules, never color/motion-only meaning. | N D3/D7; P |
+| Coverage | Active counts never inherit the eight-item recent-finish cap; failed/incomplete/unstable enumeration is unknown/partial, not false/zero/complete. | FR-011/032; DEP-ACT |
 
-No new response-time, memory, session-title-length or pagination maximum is approved by the sources. Existing limits and virtualization are preserved; missing performance targets are explicit unknowns, not fabricated success criteria.
+Use existing published error envelopes. No new latency/RAM/page/title budgets, error-body shape, backend phase property or credential logging is commissioned. No nominal wire types outside generated contracts. No metadata browsing, filtering or placeholder/summary expansion implies goal acknowledgement or control authority.
 
 ## Prerequisites
-
-| Topic | Source-grounded prerequisite |
-|---|---|
-| Hardware / OS | Existing supported Omnipus install on Linux, macOS or Windows; a supported browser. No new RAM/CPU minimum is set by this frontend work. P::Tech stack and platforms. |
-| Development runtimes | Existing repository Node/package-lock toolchain; TypeScript/React/Vite from the lockfile. Backend candidate uses Go 1.26.6 minimum, no CGo, required build tags. `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/go.mod`::go; P::Build, test, and quality gates. |
-| Services | Existing Omnipus gateway and authenticated account; working U1 and required generated contracts for joint tests. No new database, external activity service or plugin runtime. |
-| Network | Browser access to gateway REST/live connection; offline/disconnected/stale behavior is tested explicitly. UI metadata tests need no external model request; real agent acceptance needs the configured provider. |
-| Accounts / credentials | Preserve existing gateway authentication/authorization. Agent-driven onboarding/UAT uses founder-set `openrouter` + `deepseek/deepseek-v4.1-flash`; keys stay in existing credential storage, never in fixtures/reports. P::UAT provider/model. |
-| Shared components | Integrate K's published FilterMenu/ViewSwitch; HoverCard publication is pending at the observed tip. No dependency is replaced by a local duplicate to unblock a demo. |
+Existing authenticated gateway/browser, supported Linux/macOS/Windows and provider for real-agent acceptance; no new service/runtime requirement (P).
 
 ## Development Setup
-
-These are future implementing-lead steps, not execution receipts for this spec. Run from the assigned checkout, never the original repository or another squad's working copy. Install/build work is scheduled by team-lead under the shared-machine rule.
-
-| Step | Exact command or required action | Source / expected result |
-|---|---|---|
-| 1 | `git -C /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav status --short --branch` | Confirm `work/adr-frontend-navigation-20261007`; do not reset/checkout another squad's branch here. |
-| 2 | `npm --prefix /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav ci` | Locked frontend dependencies; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/Makefile`::spa-embed uses `npm ci`. No guessed package versions. |
-| 3 | Backend-lead publishes schema + regenerated artifacts; team-lead prepares the joint candidate with U1 and K components. | BS::Contract-first proof; P::Contract regeneration. Frontend does not run consumers against guessed main/identity/activity types. |
-| 4 | `npm --prefix /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav run dev` | Existing development server; script is `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/package.json`::scripts.dev. Connect to the existing gateway; do not invent a second application backend. |
-| 5 | For an installed candidate: `omnipus start`, then open its configured address. | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/getting-started.md`::How to go from nothing to your first conversation. Default install address is `http://localhost:5000`; a campaign's allocated port may differ. |
-| 6 | Exercise the Reachability table first; write/execute the test plan in controlled RED/GREEN/CHECK steps. | Real user invocation on the joint candidate, not a prototype demo or standalone hook mock. |
-
-**Expected first-run behavior**: Existing authenticated shell and setup remain. After implemented cutover, normal workspace entry resolves its validated destination; the magnifier opens the one Sessions modal. This is target behavior, not claimed behavior of today's branch.
-
-**Common first-run failures**: Missing required Go build tags, absent SPA embed directory on a fresh worktree, occupied gateway port, missing generated main/figure/activity contracts, or unavailable provider for live agent acceptance. Use P's documented handling. Do not mistake an unbuilt SPA or failed backend dependency for an approved empty chat. Full local Go build/suite and broad frontend suites are forbidden; CI/remote cluster owns heavy gates. No install, build or product test was run in this writing task.
+Use P's existing build/test/SPA-embed instructions and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/docs/getting-started.md`; no copied setup tutorial or local heavy gate. Establish the joint candidate before consumer tests.
 
 ## Tech Stack
-
-Versions below are manifest requirements, not fabricated exact installed versions. Keep the committed lockfile as the installation authority; this spec introduces no runtime dependency.
-
-| Category | Choice / version in source | Source |
-|---|---|---|
-| Frontend language | TypeScript `^6.0.3` | `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/package.json`::devDependencies.typescript. |
-| UI / routing / shared state | React 19; existing AssistantUI, TanStack Query/Router and Zustand | Same manifest::dependencies/peerDependencies; P::Tech stack. No competing store/router. |
-| Build / styling | Vite `^8.1.5`; existing Tailwind/shadcn/Radix kit and generated design tokens | Same manifest::devDependencies; design-system skill. New visual jobs require four-part publication. |
-| Backend runtime | Single Go binary, Go 1.26.6 minimum, pure Go; build tags `goolm,stdjson` | P Hard Constraints; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/go.mod`::go. |
-| Storage | Existing file-backed agent/session/configuration storage; browser remembered-chat pointer remains navigation preference, not backend truth | N D3/D5/D9/D10; BS. No new database or second archive. |
-| External APIs | Existing gateway REST/WebSocket and generated validation; configured provider only for real execution acceptance | BS::Contract Changes; P Hard Constraint #8. No SPA use of an agent-facing job-listing tool. |
-| Unit/component testing | Vitest `4.1.11`, Testing Library, existing jsdom/test helpers | Same manifest::devDependencies; existing test files listed under Regression Test Requirements. |
-| Integration/end-to-end testing | Existing Playwright `^1.61.1`, real gateway and candidate data; static Storybook `10.6.0` kit checks | Same manifest; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/playwright.config.ts`::defineConfig. |
-| New infrastructure | None | N D1/D5/D7/D13/D14. |
+P and committed `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/package.json` / `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/adr-frontend-nav/go.mod` own versions. Existing embedded SPA/single Go binary, generated boundaries and shared caches; no new runtime or datastore.
 
 ## Deployment / Runtime
-
-| Topic | Required deployment behavior |
-|---|---|
-| Target | Existing self-hosted Omnipus runtime on supported Linux/macOS/Windows, with the SPA embedded in the same binary. No new server, worker or browser-only main registry. P Hard Constraints; N D5. |
-| Delivery | U1 + dependent generated contracts + frontend + shared kit + migration/canonical identity on one joint integration candidate. Independent UI preparation is not an independently shippable navigation release. N D12. |
-| Start / stop | Use existing installed `omnipus start` and existing operational lifecycle. This spec adds no runtime command; chat Stop is not server shutdown. Existing operation instructions remain outside navigation implementation. |
-| Online / offline | Gateway metadata/attachment needs a connection. Disconnection retains honest last-known data and unresolved intent; reconnect recovers snapshots without acknowledging goals or stopping live work. |
-| Resource limits | No new per-row connections/pollers, full-transcript downloads for navigation or second activity/session store. Existing list paging and virtualized/plain paths remain; no new RAM/CPU guarantee is invented. |
-| Startup / restart | Backend owns one-cutover saved-chat import and canonical identity seeding. Repeat startup must not undo mapped identities or erase history; test real restart, not only a React remount. |
-| Health / logs / telemetry | Use existing load/attachment/error diagnostics and authenticated metadata smoke checks. No new telemetry; report query/contract coverage gaps visibly. Do not log credentials or claim a rendered welcome screen proves migration readiness. |
+U1/frontend/contracts/identity/K publish on one exact candidate. Existing operational lifecycle remains; no new command. Offline/stale metadata retains honest intent, not acknowledgements or cancellation. Backend migration/restart readiness requires real saved-history continuation and canonical identity proofs; no welcome-screen shortcut.
+S Q-G3 adds **no downgrade/rollback promise, procedure, support, warning or extra documentation/test scope**. Existing upgrade behavior alone remains commissioned; interrupted conversion/retry is not redefined as post-success rollback.
 
 ## Integration Boundaries
 
