@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { CaretDown, ArrowUp, ArrowDown, Check, DotsThree } from '@phosphor-icons/react'
+import { useEffect, useMemo, useState } from 'react'
+import { CaretDown, ArrowUp, ArrowDown, Check } from '@phosphor-icons/react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,7 +17,8 @@ import { cn } from '@/lib/utils'
 // 6-state unified vocabulary + colour — single source of truth.
 import { STATUS_ORDER, statusLabel, taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
 import { isScheduledTrigger } from './taskFormFields'
-import type { Task, Agent } from '@/lib/api'
+import type { Task, Agent, Plan } from '@/lib/api'
+import { TaskHoverDetails } from './TaskHoverDetails'
 
 type SortKey = 'priority' | 'title' | 'status' | 'agent' | 'updated'
 type SortDir = 'asc' | 'desc'
@@ -66,6 +67,7 @@ interface ListViewProps {
    */
   tasks: Task[]
   agents: AgentRef[]
+  plans?: Plan[]
   onTaskClick: (task: Task) => void
 }
 
@@ -92,36 +94,12 @@ function resolveAgentName(task: Task, agents: AgentRef[]): string | null {
  * prop. Borderless: no filled header slab, no row rules — rows separate by
  * padding + hover only.
  */
-export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
+export function ListView({ tasks, agents, plans = [], onTaskClick }: ListViewProps) {
   const [sortKey, setSortKey] = useState<SortKey>('updated')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
 
-  // SP-34 — Tags/Updated column visibility. `auto` (default) lets the
-  // `@max-[648px]:hidden` container query decide (narrow container → hidden);
-  // the "⋯" overflow control overrides it for the session until toggled
-  // back. The direction of the FIRST toggle ("what am I looking at right
-  // now?") is read from the narrow-probe span below — the container query
-  // itself stays the single source of truth for the breakpoint, so JS never
-  // re-derives it (no window width, no duplicated constant).
-  const [columnOverflow, setColumnOverflow] = useState<'auto' | 'shown' | 'hidden'>('auto')
-  const narrowProbeRef = useRef<HTMLSpanElement | null>(null)
-
-  function handleToggleOverflowColumns(): void {
-    const containerNarrow = narrowProbeRef.current
-      ? getComputedStyle(narrowProbeRef.current).display !== 'none'
-      : false
-    setColumnOverflow((prev) => {
-      if (prev !== 'auto') return 'auto'
-      return containerNarrow ? 'shown' : 'hidden'
-    })
-  }
-
-  let overflowControlLabel = 'Show or hide Tags and Updated columns'
-  if (columnOverflow === 'hidden') {
-    overflowControlLabel = 'Show Tags and Updated columns'
-  } else if (columnOverflow === 'shown') {
-    overflowControlLabel = 'Hide Tags and Updated columns'
-  }
+  // T11: no hidden columns or reveal toggle. One width-stable table scrolls
+  // inside its own viewport; its sticky header shares that exact geometry.
 
   // Per-column value filters (empty set = no filter on that column). Priority
   // keys are stringified ('1'..'5') so all four filters share one Set<string>.
@@ -280,11 +258,6 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
     // THIS element's own inline size — the panel's real content width —
     // never the window's.
     <div className="@container flex flex-1 flex-col overflow-hidden">
-      {/* Narrow-probe (SP-34): purely a read-out of the container query below
-          the breakpoint, so `handleToggleOverflowColumns` can know which way
-          "toggle" means without JS re-deriving the breakpoint. Never visible;
-          carries no semantics. */}
-      <span ref={narrowProbeRef} aria-hidden="true" className="hidden @max-[648px]:block" />
       {/* Native scrolling leaves room for the shared focus outline at either edge. */}
       <div className="flex-1 overflow-auto scroll-px-[var(--space-1)]">
         {/* UAT Finding 2 fix: `table-layout: auto` (the default) sizes
@@ -300,14 +273,7 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
             TaskRow below) has effect. Deliberate reveal reserves the Title
             floor and scrolls only this content area; auto/hidden keep their
             existing fit and visibility. */}
-        <table
-          className={cn(
-            'w-full table-fixed text-[length:var(--type-body-compact-size)]',
-            columnOverflow === 'shown' && 'min-w-[calc(34rem+var(--space-8)*2+var(--space-3))]',
-            columnOverflow === 'hidden' && 'min-w-[calc(20rem+var(--space-8)*2+var(--space-3))]',
-            columnOverflow === 'auto' && 'min-w-[calc(34rem+var(--space-8)*2+var(--space-3))] @max-[648px]:min-w-[calc(20rem+var(--space-8)*2+var(--space-3))]',
-          )}
-        >
+        <table className="w-full min-w-[calc(34rem+var(--space-8)*2+var(--space-3))] table-fixed text-[length:var(--type-body-compact-size)]">
           <thead className="sticky top-0 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)]">
             <tr>
               <th className="w-12 px-[var(--space-3)] py-[var(--space-2)] text-left" aria-sort={ariaSort('priority')}>
@@ -321,13 +287,7 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
               </th>
               {/* Actions stay beside Status; the same overflow control still reveals Tags/Updated. */}
               <th className="w-20 px-[var(--space-2)] py-[var(--space-2)] text-left">
-                <div className="flex items-center gap-[var(--space-1)]">
-                  <span className="text-[length:var(--type-caption-size)] font-semibold text-[var(--color-muted)]">Actions</span>
-                  <Button variant="ghost" onClick={handleToggleOverflowColumns} aria-label={overflowControlLabel} title={overflowControlLabel}
-                    className="h-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]">
-                    <DotsThree size={14} weight="bold" />
-                  </Button>
-                </div>
+                <span className="text-[length:var(--type-caption-size)] font-semibold text-[var(--color-muted)]">Actions</span>
               </th>
               {/* SP-34 — Tags and Updated are the hideable columns: narrow
                   container hides them (container query) unless the user has
@@ -342,11 +302,7 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
                   query hides; `shown` → nothing hides; `hidden` → always
                   hidden — mutually exclusive, no cascade fights. */}
               <th
-                className={cn(
-                  'w-28 px-[var(--space-2)] py-[var(--space-2)] text-left',
-                  columnOverflow === 'auto' && '@max-[648px]:hidden',
-                  columnOverflow === 'hidden' && 'hidden',
-                )}
+                className="w-28 px-[var(--space-2)] py-[var(--space-2)] text-left"
               >
                 <ColumnMenu label="Tags" filter={buildFilter(tagValues, tagFilter, setTagFilter)} />
               </th>
@@ -354,11 +310,7 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
                 <ColumnMenu label="Agent" sort={sortCfg('agent')} filter={buildFilter(agentValues, agentFilter, setAgentFilter)} />
               </th>
               <th
-                className={cn(
-                  'w-28 px-[var(--space-3)] py-[var(--space-2)] text-right',
-                  columnOverflow === 'auto' && '@max-[648px]:hidden',
-                  columnOverflow === 'hidden' && 'hidden',
-                )}
+                className="w-28 px-[var(--space-3)] py-[var(--space-2)] text-right"
                 aria-sort={ariaSort('updated')}
               >
                 <ColumnMenu label="Updated" align="right" sort={sortCfg('updated')} />
@@ -374,7 +326,7 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
               </tr>
             ) : (
               sorted.map((task) => (
-                <TaskRow key={task.id} task={task} agents={agents} onClick={() => onTaskClick(task)} columnOverflow={columnOverflow} />
+                <TaskRow key={task.id} task={task} agents={agents} plans={plans} onClick={() => onTaskClick(task)} />
               ))
             )}
           </tbody>
@@ -516,20 +468,7 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
   )
 }
 
-function TaskRow({
-  task,
-  agents,
-  onClick,
-  columnOverflow,
-}: {
-  task: Task
-  agents: AgentRef[]
-  onClick: () => void
-  /** SP-34 column-visibility state, threaded from ListView so the Tags and
-   * Updated cells hide/show in lockstep with their headers. The visibility
-   * classes themselves are inlined below as literals (scanner-resolvable). */
-  columnOverflow?: 'auto' | 'shown' | 'hidden'
-}) {
+function TaskRow({ task, agents, plans, onClick }: { task: Task; agents: AgentRef[]; plans: Plan[]; onClick: () => void }) {
   const priority = task.priority ?? 3
   const tags = task.tags ?? []
   const agentName = resolveAgentName(task, agents)
@@ -541,6 +480,7 @@ function TaskRow({
     // The row is mouse-clickable for whole-row convenience; the REAL keyboard/AT
     // entry point is the Title button below (one tab stop per row, announced as
     // actionable). Borderless — separation is padding + hover, not a rule.
+    <TaskHoverDetails task={task} plans={plans} agents={agents} onOpenTask={onClick}>
     <tr onClick={onClick} className="cursor-pointer transition-colors hover:bg-[var(--color-surface-2)]/40">
       <td className="px-[var(--space-3)] py-[var(--space-2)]">
         <PriorityBadge
@@ -559,11 +499,12 @@ function TaskRow({
             e.stopPropagation()
             onClick()
           }}
+          data-task-open=""
           aria-label={`${task.title}, status ${taskDisplayLabel(task)}`}
           // T3 founder steering: the whole title wraps in the width-stable
           // column. No clipping or tooltip dependency; title is supplementary.
           title={task.title}
-          className="block h-auto w-full min-w-0 whitespace-normal break-normal wrap-break-word hyphens-none p-0 text-left text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent"
+          className="block h-auto w-full min-w-0 truncate p-0 text-left text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent"
         >
           {task.title}
         </Button>
@@ -584,11 +525,7 @@ function TaskRow({
         <TaskActionButton task={task} />
       </td>
       <td
-        className={cn(
-          'px-[var(--space-2)] py-[var(--space-2)]',
-          columnOverflow === 'auto' && '@max-[648px]:hidden',
-          columnOverflow === 'hidden' && 'hidden',
-        )}
+        className="px-[var(--space-2)] py-[var(--space-2)]"
       >
         {tags.length > 0 ? (
           <div className="flex max-w-[7rem] flex-wrap items-center gap-[var(--space-1)]">
@@ -611,15 +548,12 @@ function TaskRow({
         )}
       </td>
       <td
-        className={cn(
-          'px-[var(--space-3)] py-[var(--space-2)] text-right',
-          columnOverflow === 'auto' && '@max-[648px]:hidden',
-          columnOverflow === 'hidden' && 'hidden',
-        )}
+        className="px-[var(--space-3)] py-[var(--space-2)] text-right"
       >
         <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{formatUpdated(task.updated_at)}</span>
       </td>
     </tr>
+    </TaskHoverDetails>
   )
 }
 

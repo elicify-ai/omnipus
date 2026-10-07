@@ -299,6 +299,6 @@ describe('TaskCard — long unbroken title containment (UAT Finding 2)', () => {
     const titleEl = screen.getByText('Fix login bug')
     expect(titleEl).toHaveAttribute('title', 'Fix login bug')
     expect(titleEl).toHaveClass('wrap-break-word', 'min-w-0', 'whitespace-normal')
-    expect(titleEl).not.toHaveClass('line-clamp-2') // T3 founder steering: show the whole title.
+    expect(titleEl).toHaveClass('line-clamp-2') // T13: fixed two-line title, full data in the Hover Card.
   })
 })

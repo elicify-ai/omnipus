@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { PlansFilterBand } from './PlansFilterBand'
@@ -147,6 +147,7 @@ function renderBand(overrides: Partial<React.ComponentProps<typeof PlansFilterBa
       <PlansFilterBand {...props} />
     </QueryClientProvider>,
   )
+  fireEvent.click(screen.getByRole('button', { name: 'Plans' })) // T12: retained tile tests run expanded.
   return { onSelectPlan, onNewPlan, onEditPlan, onClearPlan, ...utils }
 }
 

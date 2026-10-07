@@ -29,6 +29,7 @@ describe('Tasks panel layout', () => {
     const user = userEvent.setup()
     renderLayout(<WorkspaceTasksTab workspaceId="ws-layout" />)
     await screen.findByText('Ray report')
+    await user.click(screen.getByRole('button', { name: 'Plans' })) // T12 only changes the tile setup.
     const group = screen.getByRole('radiogroup', { name: 'Task view' })
     expect(group).toHaveAttribute('data-slot', 'view-switch')
     for (const id of ['tasks-agent-filter', 'tasks-tag-filter']) expect(screen.getByTestId(id)).toHaveAttribute('data-slot', 'filter-menu')
@@ -43,7 +44,8 @@ describe('Tasks panel layout', () => {
     expect(screen.getByRole('radio', { name: 'List' })).toHaveFocus()
     expect(screen.getByRole('radio', { name: 'List' })).toHaveAttribute('aria-checked', 'true')
     for (const header of screen.getAllByRole('columnheader')) {
-      const trigger = header.querySelector('button')
+      const trigger = header.querySelector('button') ?? header.querySelector('span') // T11 removes the Actions reveal control.
+      expect(trigger, 'every header keeps a visible sentence-case label').not.toBeNull()
       expect(trigger).not.toHaveClass('uppercase', 'tracking-wider')
     }
     await user.click(screen.getByRole('button', { name: 'Filter by tags' }))

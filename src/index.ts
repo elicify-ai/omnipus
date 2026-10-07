@@ -31,6 +31,7 @@ export { Dialog, DialogPortal, DialogOverlay, DialogTrigger, DialogClose, Dialog
 export { DisclosureRow } from './components/ui/disclosure-row'
 export type { DisclosureRowProps } from './components/ui/disclosure-row'
 export { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuCheckboxItem, DropdownMenuRadioItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuGroup, DropdownMenuPortal, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuRadioGroup } from './components/ui/dropdown-menu'
+export { HoverCard, HoverCardTrigger, HoverCardContent } from './components/ui/hover-card'
 export { FilterMenu } from './components/ui/filter-menu'
 export type { FilterMenuProps, FilterMenuOption } from './components/ui/filter-menu'
 export { ViewSwitch } from './components/ui/view-switch'

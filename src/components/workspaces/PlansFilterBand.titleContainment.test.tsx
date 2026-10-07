@@ -48,7 +48,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { PlansFilterBand } from './PlansFilterBand'
 import type { Agent, Plan, Task } from '@/lib/api'
@@ -148,11 +148,13 @@ function renderBand(overrides: Partial<React.ComponentProps<typeof PlansFilterBa
     onClearPlan: vi.fn(),
     ...overrides,
   }
-  return render(
+  const mounted = render(
     <QueryClientProvider client={makeClient()}>
       <PlansFilterBand {...props} />
     </QueryClientProvider>,
   )
+  fireEvent.click(screen.getByRole('button', { name: 'Plans' }))
+  return mounted
 }
 
 /** Real, compiled Tailwind v4.3.3 output for the two utilities this fix

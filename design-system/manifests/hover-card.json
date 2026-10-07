@@ -1,0 +1,27 @@
+{
+  "version":1,
+  "component":"HoverCard",
+  "exports":["HoverCard","HoverCardTrigger","HoverCardContent"],
+  "category":"primitive",
+  "source":"src/components/ui/hover-card.tsx",
+  "documentation":"docs/internal/design/components/hover-card.md",
+  "owner":"design-system",
+  "themes":["dark"],
+  "variants":["default"],
+  "sizes":["content"],
+  "states":["closed","open","focus-visible"],
+  "stories":[{"file":"src/components/ui/hover-card.stories.tsx","exports":["Default","HoverAndFocus"]}],
+  "checks":[
+    {"id":"hover-card-unit","kind":"unit","file":"src/components/ui/task-hover-details.test.tsx","test":"T14 shows all task metadata in an unclipped hover/focus preview in every view and touch tap does not open the task","applicable":true},
+    {"id":"hover-card-interaction","kind":"interaction","file":"src/components/ui/hover-card.stories.tsx","test":"Hover And Focus","story":"HoverAndFocus","applicable":true},
+    {"id":"hover-card-axe","kind":"axe","file":"tests/design-system/browser.spec.ts","test":"HoverCard [check:hover-card-axe] axe","story":"Default","applicable":true},
+    {"id":"hover-card-keyboard","kind":"keyboard","file":"tests/design-system/browser.spec.ts","test":"HoverCard [check:hover-card-keyboard] keyboard","story":"Default","applicable":true},
+    {"id":"hover-card-browser","kind":"browser","file":"tests/design-system/browser.spec.ts","test":"HoverCard [check:hover-card-browser] browser","story":"Default","applicable":true},
+    {"id":"hover-card-pointer","kind":"pointer","file":"tests/design-system/browser.spec.ts","test":"HoverCard [check:hover-card-pointer] pointer","story":"Default","applicable":true},
+    {"id":"hover-card-reduced-motion","kind":"reduced-motion","file":"tests/design-system/browser.spec.ts","test":"HoverCard [check:hover-card-reduced-motion] reduced-motion","story":"Default","applicable":true},
+    {"id":"hover-card-forced-colors","kind":"forced-colors","file":"tests/design-system/browser.spec.ts","test":"HoverCard [check:hover-card-forced-colors] forced-colors","story":"Default","applicable":true},
+    {"id":"hover-card-root-size","kind":"root-size","file":"tests/design-system/browser.spec.ts","test":"HoverCard [check:hover-card-root-size] root-size","story":"Default","applicable":true},
+    {"id":"hover-card-zoom","kind":"zoom","file":"tests/design-system/browser.spec.ts","test":"HoverCard [check:hover-card-zoom] zoom","story":"Default","applicable":true},
+    {"id":"hover-card-reflow","kind":"reflow","file":"tests/design-system/browser.spec.ts","test":"HoverCard [check:hover-card-reflow] reflow","story":"Default","applicable":true}
+  ]
+}

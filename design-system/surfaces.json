@@ -6361,6 +6361,7 @@
     }
   ],
   "sourceOwners": [
+    {"source":"src/components/workspaces/TaskHoverDetails.tsx","lane":1},
     { "source": "src/components/workspaces/tasksLayoutFixtures.tsx", "lane": 1 },
     { "source": "src/components/workspaces/useTasksBoardLayout.ts", "lane": 1 },
     {

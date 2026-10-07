@@ -17,7 +17,7 @@ import {
   type OnReconnect,
 } from '@xyflow/react'
 import { GraphIcon, Info } from '@phosphor-icons/react'
-import type { Task } from '@/lib/api'
+import type { Task, Plan } from '@/lib/api'
 import { ZoomPill, useZoomableViewKeyboard } from '@/components/ui/zoomable-view'
 import {
   contentExceedsFrame,
@@ -40,6 +40,7 @@ import '../reactflow-theme.css'
 // nodeTypes/edgeTypes object every render.
 const NODE_TYPES: NodeTypes = { task: TaskNode }
 const EDGE_TYPES: EdgeTypes = { dependency: DependencyEdge }
+const EMPTY_PLANS: Plan[] = []
 
 // Minimap node colour = the task's status colour, so the overview map reads
 // like the canvas at a glance.
@@ -76,6 +77,7 @@ const GRAPH_FIT_VIEW_OPTIONS = { padding: 0.25, maxZoom: 1.1, minZoom: 0.8 }
 interface GraphViewProps {
   tasks: Task[]
   agents: AgentLike[]
+  plans?: Plan[]
   /** Opens the task detail (slide-over) — mirrors the Board's onTaskClick. */
   onTaskClick: (task: Task) => void
   /** Id of the currently-open task, so its node renders selected. */
@@ -137,6 +139,7 @@ interface GraphViewProps {
 function GraphViewInner({
   tasks,
   agents,
+  plans = EMPTY_PLANS,
   onTaskClick,
   selectedTaskId,
   planId = null,
@@ -201,9 +204,9 @@ function GraphViewInner({
         // key would also drop a selected node from the canvas (local-only, then
         // restored on re-seed — a confusing flicker).
         deletable: false,
-        data: { ...n.data, onOpen: stableOnOpen },
+        data: { ...n.data, onOpen: stableOnOpen, plans, agents },
       })),
-    [layout.nodes, stableOnOpen],
+    [layout.nodes, stableOnOpen, plans, agents],
   )
 
   // Inject the (stable) remove callback into each edge's data and switch them

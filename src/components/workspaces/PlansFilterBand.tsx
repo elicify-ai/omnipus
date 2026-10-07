@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Badge } from '@/components/ui/badge'
+import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/components/ui/accordion'
 import { PlanActionButton } from './PlanActionButton'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
 import type { Agent, Plan, Task } from '@/lib/api'
@@ -125,6 +126,7 @@ export function PlansFilterBand({
   // Done plans stay hidden by default. The header checkbox reveals only
   // genuinely completed plans; cancelled plans remain visible for triage.
   const [showDone, setShowDone] = useState(false)
+  const [expanded, setExpanded] = useState(false)
   const showDoneId = useId()
   const doneCount = plans.filter((p) => p.state === 'done').length
   const visiblePlans = showDone ? plans : plans.filter((p) => p.state !== 'done')
@@ -147,12 +149,13 @@ export function PlansFilterBand({
     const ro = new ResizeObserver(check)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [plans, showDone])
+  }, [plans, showDone, expanded])
 
   return (
-    <div role="group" aria-label="Plans filter" className="flex shrink-0 flex-col bg-[var(--color-surface-1)]">
-      <div className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)]/60 px-[var(--space-4)] pt-[var(--space-3)] pb-[var(--space-2-5)]">
-        <h2 className="mr-auto font-headline text-base font-bold text-[var(--color-secondary)]">Plans</h2>
+    <Accordion type="single" collapsible value={expanded ? 'plans' : ''} onValueChange={(value) => setExpanded(value === 'plans')} role="group" aria-label="Plans filter" className="shrink-0 bg-[var(--color-surface-1)]">
+      <AccordionItem value="plans" className="border-0">
+      <div className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)]/60 px-[var(--space-4)] pt-[var(--space-3)] pb-[var(--space-2-5)] [&>h3]:mr-auto">
+        <AccordionTrigger className="gap-[var(--space-1)] p-0 font-headline text-base font-bold"><span>Plans</span></AccordionTrigger>
         {doneCount > 0 && (
           <label htmlFor={showDoneId} className="flex cursor-pointer items-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">
             <Checkbox id={showDoneId} checked={showDone} onCheckedChange={(checked) => setShowDone(checked === true)} aria-label="Show done plans" />
@@ -166,6 +169,7 @@ export function PlansFilterBand({
           </Button>
         )}
       </div>
+      <AccordionContent>
       <div ref={stripRef} className="flex shrink-0 items-stretch gap-[var(--space-2-5)] overflow-x-auto bg-[var(--color-surface-1)] px-[var(--space-4)] py-[var(--space-3)]">
         <AllTasksTile
           selected={selectedPlanId === null}
@@ -214,9 +218,11 @@ export function PlansFilterBand({
       )}
       </div>
       {overflows && (
-        <span aria-hidden="true" className="self-end px-[var(--space-4)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">scroll for more →</span>
+        <span aria-hidden="true" className="block text-right px-[var(--space-4)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">scroll for more →</span>
       )}
-    </div>
+      </AccordionContent>
+      </AccordionItem>
+    </Accordion>
   )
 }
 

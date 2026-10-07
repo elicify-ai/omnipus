@@ -11,7 +11,7 @@
 
 import dagre from '@dagrejs/dagre'
 import { MarkerType, Position, type Edge, type Node } from '@xyflow/react'
-import type { Task } from '@/lib/api'
+import type { Task, Plan } from '@/lib/api'
 import {
   STATUS_ANIMATED,
   STATUS_COLORS,
@@ -115,6 +115,9 @@ export interface TaskNodeData extends Record<string, unknown> {
    * GraphView.test.tsx's keyboard-operability assertions), not by the type.
    */
   onOpen?: (task: Task) => void
+  /** Local caches for the task preview, not additional wire fields. */
+  plans?: Plan[]
+  agents?: AgentLike[]
 }
 
 export type TaskGraphNode = Node<TaskNodeData, 'task'>

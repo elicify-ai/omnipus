@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils'
 import { PRIORITY_LABELS, taskNodeVisual, type TaskGraphNode } from './taskGraph'
 import { TaskActionButton } from '../TaskActionButton'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
+import { TaskHoverDetails } from '../TaskHoverDetails'
 
 /**
  * Priority pill colours — mirrors `PriorityBadge.tsx`'s P1..P5 ladder
@@ -82,6 +83,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
   }, [onOpen, task])
 
   return (
+    <TaskHoverDetails task={task} plans={data.plans} agents={data.agents} onOpenTask={handleOpen}>
     <motion.div
       initial={{ opacity: 0, scale: 0.96 }}
       animate={{ opacity: 1, scale: 1 }}
@@ -175,7 +177,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
         </div>
 
         {/* Full title — wrapping is bounded; GraphView reserves the measured height. */}
-        <p title={task.title} className="min-w-0 max-w-full whitespace-normal break-normal wrap-break-word hyphens-none font-headline text-[length:var(--type-caption-size)] font-semibold leading-snug text-[var(--color-secondary)]">
+        <p title={task.title} className="h-[calc(var(--type-caption-size)*var(--type-caption-line-height)*2)] min-w-0 max-w-full line-clamp-2 whitespace-normal break-normal wrap-break-word hyphens-none font-headline text-[length:var(--type-caption-size)] font-semibold leading-[var(--type-caption-line-height)] text-[var(--color-secondary)]">
           {task.title}
         </p>
 
@@ -223,6 +225,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
         )}
       </div>
     </motion.div>
+    </TaskHoverDetails>
   )
 }
 

@@ -595,6 +595,7 @@ function StatusColumnsRow({
                 // interactive-looking control following the cursor mid-drag
                 // would just be visual noise.
                 showActions={false}
+                previewEnabled={false}
               />
             </div>
           ) : null}

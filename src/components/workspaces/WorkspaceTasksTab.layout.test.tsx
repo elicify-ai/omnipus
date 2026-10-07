@@ -94,8 +94,10 @@ describe('Tasks panel layout', () => {
     expect(header).toContainElement(check)
     expect(within(header).getByRole('button', { name: 'New Plan' })).toBeVisible()
     expect(within(header).getByText('Show done (1)')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Plans' })) // T12: expand before testing tile behavior.
     const strip = screen.getByTestId('all-tasks-tile').parentElement
-    expect(header.nextElementSibling, 'no control row between the header and tiles').toBe(strip)
+    expect(header.nextElementSibling, 'the Accordion content directly follows the header').toContainElement(strip)
+    expect(header.nextElementSibling).toHaveAttribute('role', 'region')
     expect(check).not.toBeChecked()
     expect(screen.queryByTestId('plan-filter-tile-done-plan')).not.toBeInTheDocument()
     await user.click(check)
@@ -167,6 +169,7 @@ describe('Tasks panel layout', () => {
   it('T9 gives the plan strip and status headers the darker panel surface without filling empty columns', async () => {
     vi.mocked(fetchTasks).mockResolvedValue([layoutTask()])
     await renderTab()
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Plans' }))
     const strip = screen.getByTestId('all-tasks-tile').parentElement!
     expect(strip).toHaveClass('bg-[var(--color-surface-1)]')
     const inbox = screen.getByRole('group', { name: 'Inbox column' })

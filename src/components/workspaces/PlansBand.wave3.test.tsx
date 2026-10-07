@@ -116,6 +116,7 @@ function renderBand(plans: Plan[], tasks: BandProps['tasks'] = []) {
         />
       </QueryClientProvider>,
     )
+  fireEvent.click(mounted.getByRole('button', { name: 'Plans' })) // T12: preserve completed-plan/overflow oracles.
   return { mounted, rerenderWith, onSelectPlan }
 }
 

@@ -10,7 +10,7 @@ Every workspace has a **Tasks** control in its top bar, alongside Calendar, Libr
 - **List** — unscheduled user tasks as a table, with per-column sorting and filtering. Unlike the Board, it can include subtasks as rows.
 - **Graph** — top-level plan members and tasks with dependency relationships, drawn as a dependency map. That view belongs to planning; see [plans](plans.md).
 
-Above the views, the Plans band scopes the screen: click a plan tile to see that plan's tasks (the view also jumps to its graph), or **All tasks** to clear the filter.
+Above the views, the **Plans** header stays visible with **Show done (N)** and **New Plan**. The tiles are collapsed by default; click **Plans** to expand or collapse the flat band. It starts collapsed each time you open the panel. Once expanded, click a plan tile to see that plan's tasks (the view also jumps to its graph), or **All tasks** to clear the filter.
 
 The **Agent** and **Tags** filters narrow all three views and combine with the selected plan. They remain applied when you switch views. List also offers per-column sorting and filtering, like a spreadsheet: Priority, Status and Agent sort and filter; Tags filters only; Title and Updated sort only. Tasks refresh about every 15 seconds, so an agent's changes appear without a reload.
 
@@ -20,9 +20,11 @@ Selecting **Board** widens the panel to its maximum docked width. Chat stays vis
 
 Board shows all six equal-width status columns without sideways scrolling. If the panel cannot fit six readable columns, Tasks shows List instead with the quiet note **Board needs more room — showing list**. Board remains your selected view. The view automatically returns to Board when the panel has enough room again; it does not turn into a vertical stack of status groups.
 
-List columns are **Pri, Title, Status, Actions, Tags, Agent, Updated**. The Run/Stop action sits between Status and Tags. In a narrow List panel, Tags and Updated are hidden by default. Use the three-dot control beside **Actions** to reveal them. When the revealed table needs more room, scroll sideways inside the List panel to reach its columns and controls; the whole page does not scroll sideways, and Title keeps its own space. Press the three-dot control again to return to automatic column visibility.
+List columns are **Pri, Title, Status, Actions, Tags, Agent, Updated**. The Run/Stop action sits between Status and Tags. All columns stay present. When they need more room, scroll sideways inside the table to reach them; the header and rows stay aligned. No columns are hidden, and the page itself does not scroll sideways.
 
-Long plan and task titles wrap fully within their tiles, cards, List rows and Graph nodes. Normal words stay together; only a word or URL longer than the available width breaks inside the word as a last resort. They do not depend on hover to reveal the title. Graph spacing follows each card's actual height. The Plans strip and Board status headers use a darker surface to separate them from the task area. On a very narrow panel or with enlarged text, List keeps a readable Title column and may scroll sideways inside the panel; the page itself does not scroll sideways.
+Task titles use fixed-height slots: **two lines with ellipsis** on Board cards and Graph nodes, **one line with ellipsis** in List. Narrowing the panel does not make a title slot taller. Normal words stay together; a word or URL longer than a whole line breaks only as a last resort. Plan tiles still wrap long titles within their width. The Plans strip and Board status headers use a darker surface than the task area.
+
+Hover over a task, or focus it with the keyboard, to show a detail card with its **full title, status, agent, tags, plan and last updated time**. The preview appears above the scroll areas, never clipped by a column or table. Move away or press **Escape** to close it. On touch, **one tap opens the preview without opening the task**; use **Open task** inside the preview for the main action. Independent Run/Stop buttons keep their own behavior.
 
 ## When you would use it
 
@@ -105,7 +107,7 @@ A task flows from Inbox toward Done; Blocked hangs off to the side until its dep
 
 ## The task detail panel
 
-Click any card or List row and the detail panel slides in. Every field saves as you edit; there is no Save button. From here you can:
+On desktop, click a card or List row and the detail panel slides in. On touch, tap for the preview, then choose **Open task**. Every field in the detail panel saves as you edit; there is no Save button. From here you can:
 
 - Change the status, assign a different agent, or move the task to another plan.
 - Edit the goal, priority, tags, dependencies, due date, and checklist.

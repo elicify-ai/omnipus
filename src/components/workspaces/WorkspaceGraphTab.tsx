@@ -367,6 +367,7 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false, owner
         <GraphView
           tasks={filteredTasks}
           agents={agents}
+          plans={plans}
           selectedTaskId={selectedTaskId}
           onTaskClick={(task) => setSelectedTaskId(task.id)}
           // Only scope the canvas to a plan once it's actually resolvable

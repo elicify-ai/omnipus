@@ -9,6 +9,7 @@ import { TaskActivityChip } from './TaskActivityChip'
 import { PriorityBadge } from './PriorityBadge'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
 import { Badge } from '@/components/ui/badge'
+import { TaskHoverDetails } from './TaskHoverDetails'
 import { taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
 import type { BoardAltitude } from '@/store/workspacesStore'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
@@ -142,6 +143,8 @@ interface TaskCardProps {
    * anyway (never keyboard/pointer reachable).
    */
   showActions?: boolean
+  /** The drag overlay is visual-only and must never open a preview. */
+  previewEnabled?: boolean
 }
 
 export function TaskCard({
@@ -153,6 +156,7 @@ export function TaskCard({
   onChildClick,
   drag,
   showActions = true,
+  previewEnabled = true,
 }: TaskCardProps) {
   const priority = task.priority ?? 3
   // FR-022/SP-41 with founder decisions PI1/PI2/PI3 (2026-10-05):
@@ -199,6 +203,7 @@ export function TaskCard({
     : undefined
 
   return (
+    <TaskHoverDetails task={task} plans={plans} agents={agents} onOpenTask={onClick} enabled={previewEnabled}>
     <div
       ref={drag?.activatorRef}
       role="button"
@@ -259,7 +264,7 @@ export function TaskCard({
       </div>
       {/* Full card width, normal word boundaries; only oversized words/URLs
           use overflow-wrap: break-word. Explicit bounds defeat min-content inflation. */}
-      <p title={task.title} className="mt-[var(--space-1)] w-full min-w-0 max-w-full whitespace-normal break-normal wrap-break-word hyphens-none text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]">
+      <p title={task.title} className="mt-[var(--space-1)] h-[calc(var(--type-body-compact-size)*var(--type-body-compact-line-height)*2)] w-full min-w-0 max-w-full line-clamp-2 whitespace-normal break-normal wrap-break-word hyphens-none text-[length:var(--type-body-compact-size)] font-medium leading-[var(--type-body-compact-line-height)] text-[var(--color-secondary)]">
         {task.title}
       </p>
 
@@ -357,5 +362,6 @@ export function TaskCard({
         />
       )}
     </div>
+    </TaskHoverDetails>
   )
 }

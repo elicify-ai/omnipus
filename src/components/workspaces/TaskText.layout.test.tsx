@@ -1,7 +1,7 @@
 // Oracle: T3, amended by founder steering: full wrapping is preferred; Tooltip is frozen.
 // Real compiled utility rules, adapted only because jsdom does not cascade @layer.
 import { expect, it, vi } from 'vitest'
-import { screen, within } from '@testing-library/react'
+import { screen, within, fireEvent } from '@testing-library/react'
 import { compile } from '@tailwindcss/node'
 import postcss from 'postcss'
 import { TaskCard } from './TaskCard'
@@ -36,6 +36,7 @@ it('T3 wraps titles at word boundaries, contains long URLs, and reserves measure
         <section aria-label="Graph titles"><GraphView tasks={[layoutTask({ title })]} agents={[]} onTaskClick={vi.fn()} /></section>
       </>)
       const plan = within(screen.getByRole('region', { name: 'Plan titles' }))
+      fireEvent.click(plan.getByRole('button', { name: 'Plans' }))
       expect(getComputedStyle(plan.getByRole('button', { name: title })).whiteSpace).toBe('normal')
       const titles = [
         plan.getByText(title),
@@ -43,15 +44,20 @@ it('T3 wraps titles at word boundaries, contains long URLs, and reserves measure
         within(screen.getByRole('region', { name: 'List titles' })).getByRole('button', { name: `${title}, status Inbox` }),
         await within(screen.getByRole('region', { name: 'Graph titles' })).findByText(title),
       ]
-      for (const element of titles) {
+      for (const element of [titles[0], titles[1], titles[3]]) {
         expect(element.textContent).toBe(title)
         expect(getComputedStyle(element).whiteSpace).toBe('normal')
         expect(getComputedStyle(element).overflowWrap).toBe('break-word')
         expect(getComputedStyle(element).wordBreak).toBe('normal')
         expect(element).not.toHaveClass('break-all', 'wrap-anywhere')
         expect(getComputedStyle(element).minWidth).toBe('0px')
-        expect(element).not.toHaveClass('line-clamp-2', 'truncate')
+        expect(element).not.toHaveClass('truncate')
       }
+      expect(titles[0]).not.toHaveClass('line-clamp-2') // T3 still governs plan tile wrapping.
+      expect(titles[1]).toHaveClass('line-clamp-2') // T13 supersedes full task-title wrapping.
+      expect(titles[3]).toHaveClass('line-clamp-2')
+      expect(titles[2]).toHaveClass('truncate')
+      expect(titles[2].textContent).toBe(title)
       expect(titles[1].parentElement, 'Board title owns the full card width, not a priority/title flex row').toHaveAttribute('role', 'button')
       expect(titles[1]).toHaveClass('w-full', 'max-w-full')
       expect(titles[1]).not.toHaveClass('pr-[var(--space-4)]')

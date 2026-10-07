@@ -120,7 +120,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
 
   return (
     <div ref={surfaceRef} className="@container relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-[var(--color-surface-2)]">
-      <PlansFilterBand plans={plans} tasks={tasks} agents={agents} selectedPlanId={activePlanId}
+      <PlansFilterBand key={workspaceId} plans={plans} tasks={tasks} agents={agents} selectedPlanId={activePlanId}
         onSelectPlan={handleSelectPlan} onNewPlan={() => setPlanSlideOver({ open: true, plan: null })}
         onEditPlan={(plan) => setPlanSlideOver({ open: true, plan })}
         onClearPlan={(plan) => clearPlanMutation.mutate(plan.id)} pendingAction={pendingAction} showNewPlanTile={false} />
@@ -173,7 +173,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
             : effectiveView === 'board' ? <BoardView tasks={filteredTasks} plans={plans} agents={agents} altitude="top-level" hasActiveFilter={hasActiveFilter}
               onTaskClick={(task) => setSelectedTaskId(task.id)} onTaskMove={(task, status) => moveMutation.mutateAsync({ task, status })}
               onMoveRejected={(reason) => addToast({ message: reason, variant: 'error' })} />
-            : <ListView tasks={filteredTasks} agents={agents} onTaskClick={(task) => setSelectedTaskId(task.id)} />}
+            : <ListView tasks={filteredTasks} agents={agents} plans={plans} onTaskClick={(task) => setSelectedTaskId(task.id)} />}
         </div>
       </div>
       <TaskDetailSlideOver task={selectedTask} onClose={() => setSelectedTaskId(null)} />

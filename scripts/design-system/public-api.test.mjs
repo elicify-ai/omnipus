@@ -95,7 +95,7 @@ const reviewedControls = new Set([
   'job-status', 'empty-state', 'error-state', 'query-error-state', 'zoomable-view',
   'RunningIndicator',
   // T7's founder-approved public composites: exact files, never a ui-folder admission.
-  'filter-menu', 'view-switch',
+  'filter-menu', 'view-switch', 'hover-card',
 ].map((name) => `src/components/ui/${name}.tsx`))
 const reviewedFoundations = new Set([
   'src/index.ts', 'src/lib/utils.ts', 'src/lib/formatTokens.ts',
@@ -230,7 +230,7 @@ test('public controls use only approved external foundation dependencies', () =>
     'react', 'react-dom', '@phosphor-icons/react', 'react-day-picker', 'cmdk',
     'class-variance-authority', 'clsx', 'tailwind-merge',
     ...['accordion', 'alert-dialog', 'avatar', 'checkbox', 'dialog', 'dropdown-menu',
-      'label', 'popover', 'progress', 'select', 'separator', 'slider', 'slot', 'switch', 'tabs']
+      'label', 'popover', 'hover-card', 'progress', 'select', 'separator', 'slider', 'slot', 'switch', 'tabs']
       .map((name) => `@radix-ui/react-${name}`),
   ])
   const metadata = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
