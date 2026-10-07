@@ -4,6 +4,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -22,13 +23,33 @@ func (f fixedProgressReader) ProgressForSession(string) (ToolCallProgressSnapsho
 
 const quietNoteFragment = "no live tool-call activity recorded"
 
+// fakeTranscriptStore is a DelegateSessionStore returning fixed entries/error.
+type fakeTranscriptStore struct {
+	entries []session.TranscriptEntry
+	err     error
+}
+
+func (f fakeTranscriptStore) ReadTranscript(string) ([]session.TranscriptEntry, error) {
+	return f.entries, f.err
+}
+
 func statusOf(t *testing.T, reader DelegateProgressReader, is3P bool) string {
+	t.Helper()
+	return statusWith(t, reader, is3P, fakeTranscriptStore{}, true)
+}
+
+// statusWith drives action=status for a running child created 30 s ago.
+// store==nil-valued (withStore=false) leaves the session store unwired.
+func statusWith(t *testing.T, reader DelegateProgressReader, is3P bool, store DelegateSessionStore, withStore bool) string {
 	t.Helper()
 	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
 	tool, lifecycle, _, _ := newADR053TestTool(t)
 	tool.SetClock(func() time.Time { return now })
 	if reader != nil {
 		tool.SetProgressReader(reader)
+	}
+	if withStore {
+		tool.SetSessionStore(store)
 	}
 	ctx := WithTranscriptSessionID(context.Background(), "parent-quiet")
 	if err := lifecycle.Persist(&session.LifecycleRecord{
@@ -37,6 +58,7 @@ func statusOf(t *testing.T, reader DelegateProgressReader, is3P bool) string {
 		SteeredBy:   &session.SteeredBy{SteeringSessionID: "parent-quiet", RootSessionID: "parent-quiet"},
 		WorkspaceID: "ws-quiet", AgentID: "worker", ParentAgentID: "orchestrator",
 		CreatedAt: now.Add(-30 * time.Second), Is3P: is3P,
+		Origin: &session.Origin{Kind: session.OriginKindDelegate, CallID: "spawn-call-1"},
 	}); err != nil {
 		t.Fatalf("persist: %v", err)
 	}
@@ -56,7 +78,8 @@ func TestDelegateStatus_RunningNoActivitySaysCannotReport(t *testing.T) {
 		"reader reports false": fixedProgressReader{},
 	} {
 		got := statusOf(t, reader, false)
-		if !strings.Contains(got, quietNoteFragment) || !strings.Contains(got, "does not mean the child is stalled") {
+		if !strings.Contains(got, quietNoteFragment) || !strings.Contains(got, "does not mean the child is stalled") ||
+			!strings.Contains(got, "running for 30 s") {
 			t.Errorf("%s: status must carry the explicit quiet-vs-cannot-report note, got %q", name, got)
 		}
 	}
@@ -84,5 +107,26 @@ func TestDelegateStatus_Running3PKeepsOwnNote(t *testing.T) {
 	got := statusOf(t, nil, true)
 	if !strings.Contains(got, delegate3PStatusNote) || strings.Contains(got, quietNoteFragment) {
 		t.Errorf("3P status = %q", got)
+	}
+}
+
+// #614 review F4: when the activity source could not be read (read error, or no
+// store wired) status must say the data is unavailable and must NOT claim the
+// child is not stalled — it does not know.
+func TestDelegateStatus_ReadErrorOrNoStore_IsUnavailableNotQuiet(t *testing.T) {
+	t.Parallel()
+	for name, got := range map[string]string{
+		"transcript read error": statusWith(t, nil, false, fakeTranscriptStore{err: errors.New("disk on fire")}, true),
+		"no store wired":        statusWith(t, nil, false, nil, false),
+	} {
+		if !strings.Contains(got, "status data unavailable") {
+			t.Errorf("%s: want the data-unavailable note, got %q", name, got)
+		}
+		if strings.Contains(got, quietNoteFragment) || strings.Contains(got, "not mean the child is stalled") {
+			t.Errorf("%s: must not claim the child is not stalled: %q", name, got)
+		}
+		if !strings.Contains(got, "running for 30 s") {
+			t.Errorf("%s: elapsed time since launch missing: %q", name, got)
+		}
 	}
 }
