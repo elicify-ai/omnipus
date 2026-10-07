@@ -66,6 +66,11 @@ func TestStopSession_TransitionsLifecycleRecordAfterOwnerTail(t *testing.T) {
 	assert.Equal(t, *held.StopNote, *rec.StopNote, "D2: landing keeps the original cause, actor, time and sequence")
 	postMeta, err := al.GetSessionStore().GetMeta(child.SessionID)
 	require.NoError(t, err)
+	// Not load-bearing on its own (#1161): every session starts active, so this
+	// line cannot fail if the landing code is deleted. The rec.State/StopNote
+	// assertions above are the load-bearing proof. It is kept because it does
+	// fail if a landing ever starts mirroring a distinct status (the retired
+	// interrupted-mirror).
 	assert.Equal(t, session.StatusActive, postMeta.Status,
 		"UnifiedMeta stays coarse-active when the owner's lifecycle lands stopped (ADR D4)")
 }
