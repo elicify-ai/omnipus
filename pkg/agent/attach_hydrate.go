@@ -147,9 +147,9 @@ func (al *AgentLoop) HydrateAgentHistoryFromTranscript(sessionID string) error {
 // appends its own user message to the model request, so a rebuild that kept
 // that entry would send the model the same message twice. The entry is found
 // by identity — never by text, so a repeated "yes" or an unanswered earlier
-// message with the same words is kept — and the rebuild stops there: entries
-// after it were written for later queued messages whose turns have not
-// started and must not reach the model early. An empty id (write failed, the
+// message with the same words is kept. The rebuild leaves out that entry and
+// every user entry after it: those were written for later queued messages
+// whose turns have not started and must not reach the model early. An empty id (write failed, the
 // message was never transcribed) drops nothing.
 func (al *AgentLoop) hydrateAgentHistory(sessionID, currentEntryID string) error {
 	if sessionID == "" {
@@ -341,20 +341,30 @@ func (al *AgentLoop) hydrateAgentHistory(sessionID, currentEntryID string) error
 	return nil
 }
 
-// cutAtCurrentEntry returns the entries written before the entry whose id is
-// currentEntryID: that entry is the current turn's own user message, and
-// everything after it was written for later queued messages (see
-// hydrateAgentHistory). An empty id returns entries untouched. An id the
-// transcript does not hold also returns entries untouched, with a WARN — the
-// inbound path claimed a durable write the transcript cannot show.
+// cutAtCurrentEntry removes the current turn's own user entry (the one whose
+// id is currentEntryID) and every user entry written after it — those are
+// later queued messages whose turns have not started. Non-user entries after
+// it are kept: an earlier message's assistant reply can land after a queued
+// later user entry (A, B, reply-to-A) and must survive. An empty id returns
+// entries untouched. An id the transcript does not hold also returns entries
+// untouched, with a WARN — the inbound path claimed a durable write the
+// transcript cannot show.
 func cutAtCurrentEntry(entries []session.TranscriptEntry, currentEntryID, sessionID string) []session.TranscriptEntry {
 	if currentEntryID == "" {
 		return entries
 	}
 	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].ID == currentEntryID {
-			return entries[:i]
+		if entries[i].ID != currentEntryID {
+			continue
 		}
+		out := make([]session.TranscriptEntry, 0, len(entries)-1)
+		out = append(out, entries[:i]...)
+		for j := i + 1; j < len(entries); j++ {
+			if transcriptModelHistoryRole(&entries[j]) != "user" {
+				out = append(out, entries[j])
+			}
+		}
+		return out
 	}
 	logger.WarnCF("agent.attach", "current user entry not found in transcript; rebuilding without dropping it",
 		map[string]any{"session_id": sessionID, "entry_id": currentEntryID})

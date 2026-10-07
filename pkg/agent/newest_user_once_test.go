@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -368,4 +369,99 @@ func TestProcessMessage_NewestUserMessageOnce_AfterRestartEmptyWindow(t *testing
 	if n := countUserContent(last, "RESTART-MARKER-3310"); n != 1 {
 		t.Fatalf("after restart: newest appears %d times, want 1; request=%+v", n, last)
 	}
+}
+
+func entryIDs(entries []session.TranscriptEntry) []string {
+	out := make([]string, len(entries))
+	for i := range entries {
+		out[i] = entries[i].ID
+	}
+	return out
+}
+
+// (i) An id that is set but absent from the transcript drops nothing and
+// logs a WARN.
+func TestCutAtCurrentEntry_IDMissing_DropsNothingAndWarns(t *testing.T) {
+	readLog := captureLogFile(t, logger.WARN)
+	entries := []session.TranscriptEntry{
+		{ID: "e1", Role: "user", Content: "one"},
+		{ID: "e2", Role: "assistant", Content: "two"},
+	}
+	got := cutAtCurrentEntry(entries, "no-such-id", "sess-1")
+	if want := []string{"e1", "e2"}; !equalStrings(entryIDs(got), want) {
+		t.Fatalf("entries = %v, want %v", entryIDs(got), want)
+	}
+	if log := readLog(); !strings.Contains(log, "current user entry not found in transcript") ||
+		!strings.Contains(log, "no-such-id") {
+		t.Fatalf("expected the WARN naming the missing id, log was:\n%s", log)
+	}
+}
+
+// An empty id is the "nothing was written" case: no drop and no WARN.
+func TestCutAtCurrentEntry_EmptyID_DropsNothingQuietly(t *testing.T) {
+	readLog := captureLogFile(t, logger.WARN)
+	entries := []session.TranscriptEntry{{ID: "e1", Role: "user", Content: "one"}}
+	got := cutAtCurrentEntry(entries, "", "sess-1")
+	if !equalStrings(entryIDs(got), []string{"e1"}) {
+		t.Fatalf("entries = %v, want [e1]", entryIDs(got))
+	}
+	if log := readLog(); strings.Contains(log, "current user entry not found") {
+		t.Fatalf("empty id must not WARN, log was:\n%s", log)
+	}
+}
+
+// (ii) and N1: entries after the current one are cut only when they are user
+// entries. A non-user entry after it (here an assistant reply to an earlier
+// message that landed after a queued later user entry, plus a tool_call) is
+// kept.
+func TestCutAtCurrentEntry_KeepsNonUserAfterCurrent_DropsLaterUsers(t *testing.T) {
+	entries := []session.TranscriptEntry{
+		{ID: "a", Role: "user", Content: "A"},
+		{ID: "b", Role: "user", Content: "B"},
+		{ID: "reply-a", Role: "assistant", Content: "reply to A"},
+		{ID: "tool-a", Type: session.EntryTypeToolCall},
+		{ID: "c", Role: "user", Content: "C"},
+	}
+	// At B's turn: B (current) and C (later user) go; A and A's reply stay.
+	got := cutAtCurrentEntry(entries, "b", "sess-1")
+	if want := []string{"a", "reply-a", "tool-a"}; !equalStrings(entryIDs(got), want) {
+		t.Fatalf("entries = %v, want %v", entryIDs(got), want)
+	}
+	// At A's turn: A goes, later user entries B and C go, non-user kept.
+	got = cutAtCurrentEntry(entries, "a", "sess-1")
+	if want := []string{"reply-a", "tool-a"}; !equalStrings(entryIDs(got), want) {
+		t.Fatalf("entries = %v, want %v", entryIDs(got), want)
+	}
+}
+
+// N1 end to end: order A, B, reply-to-A in the transcript; at B's turn with an
+// empty window the model sees A, A's reply and B once each.
+func TestProcessMessage_ReplyToEarlierLandsAfterQueuedUser_Kept(t *testing.T) {
+	h, rec := newestOnceHarness(t)
+	now := time.Now().UTC()
+	h.append(t,
+		session.TranscriptEntry{ID: "n1a", Role: "user", Content: "N1-A-4410", AgentID: h.agentID, Timestamp: now},
+		session.TranscriptEntry{ID: "n1b", Role: "user", Content: "N1-B-4411", AgentID: h.agentID, Timestamp: now.Add(time.Second)},
+		session.TranscriptEntry{ID: "n1r", Role: "assistant", Content: "N1-REPLY-TO-A", AgentID: h.agentID, Timestamp: now.Add(2 * time.Second)},
+	)
+	runTurnFor(t, h, "webchat", "N1-B-4411", "n1b")
+	req := lastRequest(t, rec)
+	if a, b := countUserContent(req, "N1-A-4410"), countUserContent(req, "N1-B-4411"); a != 1 || b != 1 {
+		t.Fatalf("A=%d (want 1), B=%d (want 1); request=%+v", a, b, req)
+	}
+	if !strings.Contains(joinContents(req), "N1-REPLY-TO-A") {
+		t.Fatalf("the reply to A was lost; request=%+v", req)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
