@@ -52,6 +52,13 @@ func i1R5WakeForRetention(t *testing.T, h *d2bRoot, backing string) bus.InboundM
 		require.Equal(t, h.id, wake.AsyncTranscriptSessionID)
 		require.NotEmpty(t, wake.Content)
 		require.NotEmpty(t, wake.Metadata["steer_message_id"])
+		if backing == "matching_entry" {
+			require.Equal(t, "i1-r5-child:1:final", wake.Metadata["steer_message_id"])
+			require.Equal(t, "async:message_parent:handback", wake.Sender.CanonicalID)
+		} else {
+			require.Equal(t, "Private goal follow-up content must not appear in the warning.", wake.Content)
+			require.Equal(t, goalLoopFollowUpSenderID, wake.Sender.CanonicalID)
+		}
 		return wake
 	case <-time.After(5 * time.Second):
 		t.Fatal("actual publisher must produce the wake under test")
