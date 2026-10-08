@@ -939,13 +939,19 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 			al.drainSteerQueue(claim)
 			return steer.DispatchResult{}, commitErr
 		}
+		// The task run owns this reservation's execution disposition, like the
+		// delegate front below: a person's Stop finds the barrier, and the
+		// run's release finishes it (retiring the slot and landing the Stop).
+		execution, attachErr := al.attachSteeredExecution(claim)
+		if attachErr != nil {
+			al.drainSteerQueue(claim)
+			return steer.DispatchResult{}, attachErr
+		}
 		gate.entryMu.Unlock()
 		entryLocked = false
-		if dispatchErr := al.taskExecutor.dispatchLaunchedTask(running, func() {
-			al.drainSteerQueue(claim)
-		}); dispatchErr != nil {
-			al.drainSteerQueue(claim)
-			return steer.DispatchResult{}, dispatchErr
+		finishRun := al.taskExecutor.finishTaskRun(execution, rec.Origin.TaskID, nil)
+		if dispatchErr := al.taskExecutor.dispatchLaunchedTask(running, execution, finishRun); dispatchErr != nil {
+			return steer.DispatchResult{}, errors.Join(dispatchErr, al.finishExecutionDisposition(execution))
 		}
 		if al.steering != nil {
 			al.steering.reopenScopeForGeneration(sessionID, gen)

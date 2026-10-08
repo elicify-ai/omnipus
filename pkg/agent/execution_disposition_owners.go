@@ -61,19 +61,31 @@ func (al *AgentLoop) executionDispositionFor(claim executionClaim) *executionDis
 }
 
 func (al *AgentLoop) attachSteeredDisposition(ts *turnState, claim executionClaim) error {
+	d, err := al.attachSteeredExecution(claim)
+	if err != nil {
+		return err
+	}
+	ts.opts.executionDisposition = d
+	return nil
+}
+
+// attachSteeredExecution gives the selected steered reservation its execution
+// disposition without binding it to a turn. A producer whose turns are built
+// later, one per run-loop pass (a task run), carries the returned owner to
+// them itself. The caller holds entryMu.
+func (al *AgentLoop) attachSteeredExecution(claim executionClaim) (*executionDisposition, error) {
 	gate := al.steerAdmission()
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
 	entry, ok := gate.active[claim.SessionID]
 	if !ok || entry.executionClaim() != claim || entry.disposition != nil {
-		return fmt.Errorf("admission: selected steered reservation is not available for its producer")
+		return nil, fmt.Errorf("admission: selected steered reservation is not available for its producer")
 	}
 	d := newExecutionDisposition(claim)
 	d.steered = true
 	entry.disposition = d
 	gate.active[claim.SessionID] = entry
-	ts.opts.executionDisposition = d
-	return nil
+	return d, nil
 }
 
 // The caller holds entryMu. Full claim AND pointer protect both owner maps;

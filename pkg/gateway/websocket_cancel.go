@@ -134,8 +134,22 @@ func cancelPartialSummary(report steer.CancelReport) string {
 	if len(report.Unreachable) == 0 {
 		return ""
 	}
+	// Count sessions, not list entries. The cascade lists a session as Reached
+	// when its Stop is stamped and as Unreachable when firing the live cancel
+	// then fails, so one session can sit in both lists (and a session can be
+	// unreachable for more than one reason). It is unreachable, once.
+	unreachable := make(map[string]struct{}, len(report.Unreachable))
+	for _, item := range report.Unreachable {
+		unreachable[item.ID] = struct{}{}
+	}
+	stopped := make(map[string]struct{}, len(report.Reached))
+	for _, id := range report.Reached {
+		if _, failed := unreachable[id]; !failed {
+			stopped[id] = struct{}{}
+		}
+	}
 	return fmt.Sprintf("stopped %d of %d; %d unreachable",
-		len(report.Reached), len(report.Reached)+len(report.Unreachable), len(report.Unreachable))
+		len(stopped), len(stopped)+len(unreachable), len(unreachable))
 }
 
 // cancelIncompleteSubtreeSummary answers a DIFFERENT question from
