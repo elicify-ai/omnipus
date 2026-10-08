@@ -9,7 +9,14 @@ import { isMainSession } from './sessionCoreSeam'
 
 const EM_DASH = '—'
 
-export function feedKindLabel(session: Session): string {
+/** The fields the label reads. A full Session satisfies this; the workspace descriptor does too once a null title is coerced to ''. */
+export interface FeedKindSource {
+  id: string
+  type: Session['type']
+  title: string
+}
+
+export function feedKindLabel(session: FeedKindSource): string {
   if (session.type === 'task') return 'Task run'
   if (session.type === 'delegate') return 'Helper'
   if (isMainSession(session)) return 'Main chat'
