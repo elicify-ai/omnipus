@@ -37,7 +37,7 @@ describe('useCancelState — cancelIfStreaming (guarded)', () => {
 
   it('leaves stopLabel as stop but still calls cancelStream when isStreaming is false', () => {
     // Mirrors /cancel and the local Escape handler firing on an already-finished
-    // turn — cancelStream() still safely marks the last message interrupted.
+    // turn — cancelStream() sends nothing and marks nothing (only a streaming turn is marked).
     const cancelStream = vi.fn()
     const { result } = renderHook(() => useCancelState(false, cancelStream))
 

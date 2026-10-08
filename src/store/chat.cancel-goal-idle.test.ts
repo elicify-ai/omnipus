@@ -87,6 +87,23 @@ describe('cancelStream is honest about what it did (round-1 review)', () => {
     expect(snapshot()).toEqual(before)
   })
 
+  // Accepted trade-off (round-2 review): a Stop that races a `done` frame marks
+  // nothing, because the answer did finish. Replaces the old "always mark" rule.
+  it('a Stop that races a done frame (turn just finished, no goal) marks nothing and sends nothing', () => {
+    const frames = [
+      { type: 'token', session_id: SID, turn_id: 't-1', message_id: 'a-1', content: 'Complete answer' },
+      { type: 'done', session_id: SID, turn_id: 't-1', stats: { tokens: 1, cost: 0 } },
+    ] as Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0][]
+    act(() => { for (const f of frames) useChatStore.getState().handleFrame(f) })
+    expect(useChatStore.getState().isStreaming).toBe(false)
+    const before = snapshot()
+    expect(before).toEqual([['a-1', 'done', 'Complete answer']])
+    act(() => { useChatStore.getState().cancelStream() })
+    expect(sender.send).not.toHaveBeenCalled()
+    expect(snapshot()).toEqual(before)
+    expect(useChatStore.getState().messages.some((m) => m.status === 'interrupted')).toBe(false)
+  })
+
   it('idle gap of an active goal: the cancel is sent and the finished answer is left as it was', () => {
     finishedAnswer()
     act(() => { useChatStore.getState().handleFrame(goalFrame('active')) })
