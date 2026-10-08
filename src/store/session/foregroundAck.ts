@@ -2,10 +2,10 @@
  * Shown-commit acknowledgement (FR-013).
  *
  * The initial attach never acknowledges. A catch_up_complete for the winning
- * foreground main asks ackForShownCommit, then spreads that result's fields
- * onto one attach_session. An empty field object (production seam) sends
- * nothing. A retry resends the fields captured at the shown commit, never a
- * newer bound.
+ * foreground main asks ackForShownCommit with the server snapshot remembered
+ * for that session. The integer bound comes only from attentionBoundOfFrame.
+ * No server bound means no acknowledgement and no attach fields. A retry
+ * resends the fields captured at the shown commit, never a newer snapshot.
  */
 import type { Session } from '@/lib/api'
 import type { AttachSessionFrame } from '@/lib/api/generated/asyncapi-types'
@@ -16,16 +16,21 @@ import { useSessionStore } from '@/store/session'
 type ForegroundCommit = {
   sessionId: string
   generation: number
-  observedBound: string
   acked: boolean
   captured: Record<string, unknown> | null
 }
 
 let generation = 0
 let foreground: ForegroundCommit | null = null
+const snapshotBySession = new Map<string, unknown>()
 
 function documentIsHidden(): boolean {
   return typeof document !== 'undefined' && document.hidden === true
+}
+
+/** Remember the server snapshot whose attention bound the seam may read later. */
+export function noteServerAttentionFrame(sessionId: string, frame: unknown): void {
+  snapshotBySession.set(sessionId, frame)
 }
 
 /** A successful visible attach becomes the foreground commit. It does not acknowledge. */
@@ -34,7 +39,6 @@ export function noteForegroundAttach(sessionId: string): void {
   foreground = {
     sessionId,
     generation,
-    observedBound: `shown-${generation}`,
     acked: false,
     captured: null,
   }
@@ -53,9 +57,10 @@ function sendCaptured(sessionId: string, fields: Record<string, unknown>): boole
 }
 
 /**
- * catch_up_complete for sessionId. Acknowledges only a shown winning main.
- * Prefetch, hidden reconnect, unknown attention, a non-main, a failed send,
- * and an overtaken attempt do not.
+ * catch_up_complete for sessionId. Acknowledges only a shown winning main
+ * whose server frame carries an integer bound. Prefetch, hidden reconnect,
+ * unknown attention, a non-main, a failed send, a missing bound, and an
+ * overtaken attempt do not.
  */
 export function acknowledgeShownCatchUp(sessionId: string): void {
   const current = foreground
@@ -71,15 +76,20 @@ export function acknowledgeShownCatchUp(sessionId: string): void {
   if (hidden) attemptKind = 'prefetch'
   else if (!current || current.sessionId !== sessionId || activeId !== sessionId) attemptKind = 'overtaken'
 
+  const frame = snapshotBySession.get(sessionId) ?? null
   const session = { id: sessionId } as Session
   const result = ackForShownCommit({
     attemptKind,
     session,
     generation: current?.generation ?? 0,
-    observedBound: current && current.sessionId === sessionId ? current.observedBound : null,
+    frame,
     newerOutcomeId: null,
     foreground: current
-      ? { sessionId: current.sessionId, generation: current.generation, observedBound: current.observedBound }
+      ? {
+          sessionId: current.sessionId,
+          generation: current.generation,
+          frame: snapshotBySession.get(current.sessionId) ?? null,
+        }
       : null,
     viewerId: 'local',
   })

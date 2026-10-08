@@ -3,11 +3,12 @@
  *
  * Needs me counts mains whose seam says on. Extras, helpers, titles, and an
  * unknown value never create a signal and never an acknowledgement. Only a
- * shown commit of the winning foreground bound is acknowledged, and only for
- * that observed bound.
+ * shown commit of the winning foreground is acknowledged, and only for the
+ * integer attention bound the seam reads off the server frame. No server
+ * bound means no acknowledgement. A client string is not a bound.
  */
 import type { Session } from '@/lib/api'
-import { attachAckFields, isMainSession, sessionAttention } from './sessionCoreSeam'
+import { attachAckFields, attentionBoundOfFrame, isMainSession, sessionAttention } from './sessionCoreSeam'
 
 export type Signal = 'on' | 'off' | 'unknown'
 
@@ -30,16 +31,16 @@ export type AckInput = { // not-wire-format: arguments describing one shown-comm
     | 'late-failure'
   session: Session
   generation: number
-  observedBound: string | null
-  newerOutcomeId: string | null
-  foreground: { sessionId: string; generation: number; observedBound: string } | null
+  frame: unknown
+  newerOutcomeId: number | null
+  foreground: { sessionId: string; generation: number; frame: unknown } | null
   viewerId: string
 }
 
 export type AckResult = { // not-wire-format: client decision of whether this viewer should acknowledge; the actual acknowledgement uses generated wire types
   acknowledge: boolean
   sessionId?: string
-  observedBound?: string
+  attentionBound?: number
   fields?: Record<string, unknown>
 }
 
@@ -62,28 +63,20 @@ export function projectMainAttention(sessions: Session[]): Projection {
   }
 }
 
-function isWinningShownCommit(input: AckInput): input is AckInput & { observedBound: string } {
-  if (input.attemptKind !== 'shown-commit') return false
-  if (!isMainSession(input.session)) return false
-  if (sessionAttention(input.session) === 'unknown') return false
-  const foreground = input.foreground
-  if (foreground == null) return false
-  if (input.observedBound == null || input.observedBound === '') return false
-  return (
-    foreground.sessionId === input.session.id
-    && foreground.generation === input.generation
-    && foreground.observedBound === input.observedBound
-  )
-}
-
 export function ackForShownCommit(input: AckInput): AckResult {
-  if (!isWinningShownCommit(input)) return noAck()
-  const sessionId = input.session.id
-  const observedBound = input.observedBound
+  if (input.attemptKind !== 'shown-commit') return noAck()
+  if (!isMainSession(input.session)) return noAck()
+  if (sessionAttention(input.session) === 'unknown') return noAck()
+  const foreground = input.foreground
+  if (foreground == null) return noAck()
+  const attentionBound = attentionBoundOfFrame(input.frame)
+  if (attentionBound === undefined) return noAck()
+  if (attentionBoundOfFrame(foreground.frame) !== attentionBound) return noAck()
+  if (foreground.sessionId !== input.session.id || foreground.generation !== input.generation) return noAck()
   return {
     acknowledge: true,
-    sessionId,
-    observedBound,
-    fields: attachAckFields({ sessionId, observedBound }),
+    sessionId: input.session.id,
+    attentionBound,
+    fields: attachAckFields(attentionBound),
   }
 }
