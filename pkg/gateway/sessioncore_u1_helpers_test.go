@@ -248,8 +248,13 @@ func (e *u1Env) storedOfType(t *testing.T, typ string) map[string]u1Stored {
 	return out
 }
 
+// u1MainID derives the computed main-session id per the founder ruling on the
+// id format (Q1=B, 2026-10-08): the literal prefix "main-session-", the
+// workspace ID, a "+" separator, then the agent ID. The "+" join (not "-") is
+// load-bearing: it keeps the ids of two distinct (workspace, agent) pairs
+// distinct (see the collision guard in sessioncore_u1_main_identity_test.go).
 func u1MainID(workspaceID, agentID string) string {
-	return "main-session-" + workspaceID + "-" + agentID
+	return "main-session-" + workspaceID + "+" + agentID
 }
 
 func u1Prefixed(m map[string]u1Stored, prefix string) []string {

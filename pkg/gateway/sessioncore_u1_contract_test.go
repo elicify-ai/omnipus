@@ -28,7 +28,7 @@ import (
 // u1SessionDoc returns a complete, otherwise-valid Session document.
 func u1SessionDoc(typ any) map[string]any {
 	doc := map[string]any{
-		"id":           "main-session-W1-mia",
+		"id":           "main-session-W1+mia",
 		"agent_id":     "mia",
 		"workspace_id": "W1",
 		"title":        "Mia",
@@ -84,7 +84,7 @@ func TestSessionCoreU1_SessionSchemaRefusesActiveAgentID(t *testing.T) {
 
 // C-MAIN: WorkspaceMemberConfig gains readOnly main_session_id.
 func TestSessionCoreU1_MemberConfigSchemaAcceptsMainSessionID(t *testing.T) {
-	assert.Empty(t, u1Validate(t, "WorkspaceMemberConfig", map[string]any{"main_session_id": "main-session-W1-mia"}),
+	assert.Empty(t, u1Validate(t, "WorkspaceMemberConfig", map[string]any{"main_session_id": "main-session-W1+mia"}),
 		"C-MAIN: main_session_id is part of WorkspaceMemberConfig")
 }
 
