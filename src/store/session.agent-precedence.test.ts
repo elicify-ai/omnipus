@@ -25,6 +25,13 @@ import { useSessionStore } from './session'
 import { useWorkspacesStore } from './workspacesStore'
 import { useUiStore } from './ui'
 
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>()
+  return { ...actual, fetchSessions: vi.fn() }
+})
+
+import { fetchSessions } from '@/lib/api'
+
 const WS_A = 'ws-alpha'
 const WS_B = 'ws-beta'
 const SESSION_ID = 'sess-mia-created'
@@ -59,6 +66,7 @@ function resetStores() {
     })
     useWorkspacesStore.setState({ activeWorkspaceId: WS_A })
     useUiStore.setState({ toasts: [] })
+    vi.mocked(fetchSessions).mockReset()
   })
 }
 
@@ -86,74 +94,65 @@ function agentIdOfSentMessage(mockSend: ReturnType<typeof connectMock>): string 
   return messageFrames[0].agent_id
 }
 
-describe('agent precedence — an explicit user selection outranks a session attach', () => {
-  it('a session attach does not move the picker off the agent the user chose, and the next message goes to that agent', () => {
+describe('agent precedence — the session owner is the send destination', () => {
+  it('a session attach sets the immutable owner, and a later same-session hint does not move the next message', () => {
     const mockSend = connectMock()
 
-    // The user picks Jim in the composer's agent picker / "@" menu.
-    act(() => {
-      useSessionStore.getState().selectAgent('jim', 'core')
-    })
-    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+    // FR-009: there is no composer picker. selectAgent is gone.
+    expect(typeof (useSessionStore.getState() as { selectAgent?: unknown }).selectAgent).not.toBe('function')
 
-    // A session attach lands afterwards carrying the session's own agent
-    // (Mia) — the exact write that used to clobber the pick.
     act(() => {
       useSessionStore.getState().attachToSession(SESSION_ID, 'chat', undefined, 'mia')
     })
-
-    // The picker still reads Jim.
-    expect(useSessionStore.getState().activeAgentId).toBe('jim')
-    expect(useSessionStore.getState().activeAgentType).toBe('core')
-    // The attach itself still happened.
     expect(useSessionStore.getState().activeSessionId).toBe(SESSION_ID)
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
 
-    // And the message the user sends next is routed to Jim, not Mia.
+    // A hint for the same session must not replace the owner.
+    act(() => {
+      useSessionStore.getState().setActiveSession(SESSION_ID, 'jim', 'core')
+    })
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
+
     act(() => {
       useChatStore.getState().sendMessage('who is answering this?')
     })
-    expect(agentIdOfSentMessage(mockSend)).toBe('jim')
+    expect(agentIdOfSentMessage(mockSend)).toBe('mia')
   })
 
-  it('a backend-created session synced via setActiveSession does not clobber the pick either', () => {
+  it('a newly activated session adopts the owner passed to setActiveSession', () => {
     const mockSend = connectMock()
 
-    act(() => {
-      useSessionStore.getState().selectAgent('jim', 'core')
-    })
-    // `session_started` ack / deep-link seed / reattach reseed all land here.
     act(() => {
       useSessionStore.getState().setActiveSession(SESSION_ID, 'mia', 'core')
     })
 
-    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
 
     act(() => {
-      useChatStore.getState().sendMessage('still Jim?')
+      useChatStore.getState().sendMessage('still Mia?')
     })
-    expect(agentIdOfSentMessage(mockSend)).toBe('jim')
+    expect(agentIdOfSentMessage(mockSend)).toBe('mia')
   })
 
-  it('a session-derived agent TYPE cannot land on top of the picked agent either (no mismatched id/type pair)', () => {
+  it('setActiveAgentType records the type of the attached owner', () => {
     connectMock()
     act(() => {
-      useSessionStore.getState().selectAgent('jim', 'core')
-      // useSelectSession does exactly this right after its attach.
       useSessionStore.getState().attachToSession(SESSION_ID, 'chat', undefined, 'ava')
       useSessionStore.getState().setActiveAgentType('Main')
     })
 
-    expect(useSessionStore.getState().activeAgentId).toBe('jim')
-    expect(useSessionStore.getState().activeAgentType).toBe('core')
+    expect(useSessionStore.getState().activeAgentId).toBe('ava')
+    expect(useSessionStore.getState().activeAgentType).toBe('Main')
   })
 
-  it('the pick survives /new (startNewSession) — a fresh conversation is not an un-choosing', () => {
+  it('starting a new chat keeps the attached owner and drops the session id', () => {
     act(() => {
-      useSessionStore.getState().selectAgent('jim', 'core')
+      useSessionStore.getState().attachToSession(SESSION_ID, 'chat', undefined, 'mia')
       useSessionStore.getState().startNewSession()
     })
     expect(useSessionStore.getState().activeSessionId).toBeNull()
-    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+    // FR-005: the extra composer keeps the pair's owner.
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
   })
 })
 
@@ -191,18 +190,18 @@ describe('agent precedence — the ordinary case still adopts the session agent'
     expect(useSessionStore.getState().activeAgentId).toBe('mia')
   })
 
-  it('re-selecting a different agent replaces the previous pick', () => {
+  it('there is no picker action that can point the composer at a second agent', () => {
+    // FR-009: re-selecting in the composer is gone with the picker.
+    expect(typeof (useSessionStore.getState() as { selectAgent?: unknown }).selectAgent).not.toBe('function')
     act(() => {
-      useSessionStore.getState().selectAgent('jim', 'core')
-      useSessionStore.getState().selectAgent('ava', 'Main')
+      useSessionStore.getState().attachToSession(SESSION_ID, 'chat', undefined, 'mia')
     })
-    expect(useSessionStore.getState().activeAgentId).toBe('ava')
-    expect(useSessionStore.getState().activeAgentType).toBe('Main')
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
   })
 })
 
 describe('agent precedence — scope and override', () => {
-  it('the pick is released when the user moves to a DIFFERENT workspace, so that workspace\'s own agent is restored', () => {
+  it('entering another workspace restores that workspace session\'s owner, not a picker pin', async () => {
     connectMock()
     act(() => {
       useSessionStore.setState({
@@ -210,39 +209,66 @@ describe('agent precedence — scope and override', () => {
           [WS_B]: { id: 'sess-beta', type: 'chat', title: null, agentId: 'ray' },
         },
       })
-      useSessionStore.getState().selectAgent('jim', 'core')
+      useSessionStore.getState().attachToSession('sess-alpha', 'chat', undefined, 'jim')
     })
     expect(useSessionStore.getState().activeAgentId).toBe('jim')
 
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-beta',
+        agent_id: 'ray',
+        title: 'Beta',
+        type: 'chat',
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        message_count: 1,
+        workspace_id: WS_B,
+      },
+    ])
     act(() => {
       useWorkspacesStore.setState({ activeWorkspaceId: WS_B })
-      useSessionStore.getState().enterWorkspaceChat(WS_B)
     })
+    await useSessionStore.getState().enterWorkspaceChat(WS_B)
 
-    // Workspace beta's own remembered agent wins — the pick was scoped to alpha.
+    // FR-004 / FR-009: the visible pointer's immutable owner, not the previous pin.
     expect(useSessionStore.getState().activeAgentId).toBe('ray')
+    expect(useSessionStore.getState().activeSessionId).toBe('sess-beta')
   })
 
-  it('re-entering the SAME workspace keeps the pick', () => {
+  it('re-entering the same workspace restores the session owner, not a picker pin', async () => {
     connectMock()
     act(() => {
       useSessionStore.setState({
         sessionByWorkspace: {
-          [WS_A]: { id: 'sess-alpha', type: 'chat', title: null, agentId: 'mia' },
+          [WS_A]: { id: 'sess-alpha', type: 'chat', title: null, agentId: 'jim' },
         },
+        activeSessionId: null,
+        activeAgentId: null,
       })
-      useSessionStore.getState().selectAgent('jim', 'core')
-      useSessionStore.getState().enterWorkspaceChat(WS_A)
     })
-    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+    vi.mocked(fetchSessions).mockResolvedValue([
+      {
+        id: 'sess-alpha',
+        agent_id: 'mia',
+        title: 'Alpha',
+        type: 'chat',
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        message_count: 1,
+        workspace_id: WS_A,
+      },
+    ])
+    await useSessionStore.getState().enterWorkspaceChat(WS_A)
+    // The pointer remembered jim; the session's immutable owner is mia.
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
+    expect(useSessionStore.getState().activeSessionId).toBe('sess-alpha')
   })
 
-  it('a server-driven handover (WS agent_switched) DOES override the pick — the picker must name whoever is actually answering', () => {
+  it('a server-driven handover names the agent who is actually answering, and a same-session hint does not replace that', () => {
     const mockSend = connectMock()
 
     act(() => {
-      useSessionStore.getState().selectAgent('jim', 'core')
-      useSessionStore.getState().setActiveSession(SESSION_ID, null, null)
+      useSessionStore.getState().setActiveSession(SESSION_ID, 'jim', 'core')
     })
     expect(useSessionStore.getState().activeAgentId).toBe('jim')
 
@@ -255,40 +281,40 @@ describe('agent precedence — scope and override', () => {
     })
     expect(useSessionStore.getState().activeAgentId).toBe('ray')
 
-    // And the pin is genuinely released, not merely bypassed once: a later
-    // session-derived hint is adopted normally.
+    // FR-009: a later hint for the same session does not move the destination.
     act(() => {
       useSessionStore.getState().setActiveSession(SESSION_ID, 'ava', 'Main')
     })
-    expect(useSessionStore.getState().activeAgentId).toBe('ava')
+    expect(useSessionStore.getState().activeAgentId).toBe('ray')
 
     act(() => {
       useChatStore.getState().sendMessage('who now?')
     })
-    expect(agentIdOfSentMessage(mockSend)).toBe('ava')
+    expect(agentIdOfSentMessage(mockSend)).toBe('ray')
   })
 
-  it('selecting an agent updates the workspace\'s remembered agent, so a later mount restores the pick', () => {
+  it('attaching records the session owner on the workspace pointer', () => {
     act(() => {
       useSessionStore.setState({
         sessionByWorkspace: {
           [WS_A]: { id: 'sess-alpha', type: 'chat', title: null, agentId: 'mia' },
         },
       })
-      useSessionStore.getState().selectAgent('jim', 'core')
+      useSessionStore.getState().attachToSession('sess-alpha', 'chat', undefined, 'mia')
     })
-    expect(useSessionStore.getState().sessionByWorkspace[WS_A]?.agentId).toBe('jim')
+    expect(useSessionStore.getState().sessionByWorkspace[WS_A]?.agentId).toBe('mia')
+    expect(typeof (useSessionStore.getState() as { selectAgent?: unknown }).selectAgent).not.toBe('function')
   })
 
-  it('selecting an agent does not detach the session or wipe the "Task:" banner', () => {
+  it('there is no picker action that detaches the session or wipes the Task banner', () => {
     act(() => {
       useSessionStore.setState({
         activeSessionId: 'sess-task',
         attachedSessionType: 'task',
         attachedTaskTitle: 'Migrate the database',
       })
-      useSessionStore.getState().selectAgent('jim', 'core')
     })
+    expect(typeof (useSessionStore.getState() as { selectAgent?: unknown }).selectAgent).not.toBe('function')
     const state = useSessionStore.getState()
     expect(state.activeSessionId).toBe('sess-task')
     expect(state.attachedSessionType).toBe('task')
