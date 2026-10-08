@@ -13,3 +13,25 @@ export function isGoalRunning(goalStatus: GoalStatusFrame | null | undefined): b
   const state = goalStatus?.state
   return state === 'active' || state === 're-planning' || state === 'judging' || state === 'judge_unavailable'
 }
+
+/** The slice of a session bucket that decides whether its goal is still running. */
+export interface GoalRunningBucket {
+  goalStatus?: GoalStatusFrame | null
+  /** When a cancel frame last left for this session (client clock). */
+  goalStopSentAt?: number | null
+  lastUserMessageAt?: number | null
+}
+
+/**
+ * The goal is running unless the person stopped it and has not written since.
+ * pkg/agent/goal_triggers.go::pauseGoalKeeperForStop pauses the keeper after any
+ * explicit Stop until a user message arrives ("the goal stays active"), and no frame
+ * announces that pause, so the client mirrors the gateway rule: a Stop sent after the
+ * last user message means paused. Not persisted: a reload forgets it, and Stop is then
+ * offered again until the next message (the gateway still honours a second Stop).
+ */
+export function isBucketGoalRunning(bucket: GoalRunningBucket | null | undefined): boolean {
+  if (!bucket || !isGoalRunning(bucket.goalStatus)) return false
+  const stoppedAt = bucket.goalStopSentAt ?? 0
+  return !(stoppedAt > 0 && stoppedAt > (bucket.lastUserMessageAt ?? 0))
+}

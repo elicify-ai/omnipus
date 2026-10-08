@@ -4,7 +4,7 @@
 import type { StoreApi } from 'zustand'
 import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
-import { isGoalRunning } from '@/lib/goalActivity'
+import { isBucketGoalRunning } from '@/lib/goalActivity'
 import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
@@ -128,6 +128,7 @@ function performResendMessage(
     }
     // A new answer was requested for this question: it is no longer unanswered.
     if (draft.unansweredLastUserMessageId === messageId) draft.unansweredLastUserMessageId = null
+    draft.lastUserMessageAt = Date.now()
   }) as Partial<SessionChatState>)
 
   const { connection, isConnected } = useConnectionStore.getState()
@@ -809,7 +810,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
 
       // G1: between a goal's turns nothing streams but the goal keeper will resume
       // the session, so an active goal counts as stoppable. No goal, nothing sent.
-      const goalRunning = isGoalRunning(targetSid ? get().sessionsById[targetSid]?.goalStatus : null)
+      const goalRunning = isBucketGoalRunning(targetSid ? get().sessionsById[targetSid] : null)
       // A Stop marks the answer interrupted only while a turn is actually streaming.
       // An idle gap (goal running, nothing streaming) sends the cancel but leaves
       // the finished answer untouched; an idle chat with no goal sends nothing and
@@ -850,6 +851,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // socket (the send-failed toast below is already shown). A completed
       // turn with nothing to send is not a failure.
       let delivered = true
+      let cancelSent = false
 
       // ADR-20260928 D9: a CONFIRMED tree stop sends even when this
       // session's own turn already ended locally (the first activation
@@ -884,6 +886,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           // arrives while a DIFFERENT session is foreground can be attributed
           // here instead of misrouted to whatever's active — see handleFrame.
           pendingCancelAckSids.add(targetSid)
+          cancelSent = true
         }
       }
 
@@ -903,7 +906,8 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         // arrives within a few seconds and performs the correct isStreaming:false
         // transition. markLastMessageInterrupted() above already set the message's
         // own isStreaming:false so AssistantUI renders it as incomplete/cancelled.
-        return { toolCalls: updated }
+        // The gateway pauses the goal keeper on any explicit Stop (see lib/goalActivity.ts).
+        return cancelSent ? { toolCalls: updated, goalStopSentAt: Date.now() } : { toolCalls: updated }
       })
       return delivered
     },

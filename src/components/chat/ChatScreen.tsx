@@ -73,7 +73,7 @@ import {
 import { DelegationEventLineList, DelegationInlineProvider, DelegationLiveTail, DelegationToolGroup, useClaimedCallIds } from './DelegationEventLine'
 import { useChatDelegationEvents } from './useChatDelegationEvents'
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
-import { isGoalRunning } from '@/lib/goalActivity'
+import { isBucketGoalRunning } from '@/lib/goalActivity'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
 import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
@@ -2056,7 +2056,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
 
   const cancelState = useCancelState(isStreaming, cancelStream)
   // G1: Stop stays reachable in the idle gap between goal turns (see goalActivity.ts).
-  const goalRunning = useChatStore((s) => isGoalRunning(s.goalStatus))
+  const goalSessionId = useSessionStore((s) => s.activeSessionId)
+  const goalRunning = useChatStore((s) => isBucketGoalRunning(goalSessionId ? s.sessionsById[goalSessionId] : null))
   const fileUpload = useFileUpload(composerRuntime)
   // D9: the /stop-redirect transport — send the dedicated generated
   // RedirectFrame over the WS, with a VISIBLE error when it cannot be sent
