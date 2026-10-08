@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import type { ComponentType } from 'react'
+import { AZURE, CYAN, GREY, ORANGE, VIOLET } from '@/test/agentPalette'
 
 // Runtime import so Vitest collects these tests before the component exists.
 // ARCH-DECISIONS 3.1 requires src/components/ui/agent-icon.tsx.
@@ -49,7 +50,7 @@ describe('AgentIcon', () => {
     const AgentIcon = await loadAgentIcon()
     for (const row of FIGURES) {
       const { container, unmount } = render(
-        <AgentIcon figure={row.figure} role="developer" color="#3B82F6" size={40} />,
+        <AgentIcon figure={row.figure} role="developer" color={AZURE} size={40} />,
       )
       expect(container.querySelector('[data-art]')?.getAttribute('data-art')).toBe(row.art)
       if (row.figure !== 'Omnipus') {
@@ -64,7 +65,7 @@ describe('AgentIcon', () => {
     const AgentIcon = await loadAgentIcon()
     for (const size of SIZES) {
       const { container, unmount } = render(
-        <AgentIcon figure="Woman" role="developer" color="#3B82F6" size={size} />,
+        <AgentIcon figure="Woman" role="developer" color={AZURE} size={size} />,
       )
       const badge = container.querySelector('[data-role="developer"]')
       expect(badge, `badge at ${size}px`).not.toBeNull()
@@ -80,7 +81,7 @@ describe('AgentIcon', () => {
   it('keeps ink opacity at 1 while a separate glow layer carries thinking motion', async () => {
     const AgentIcon = await loadAgentIcon()
     const { container } = render(
-      <AgentIcon figure="Robot" role="security" color="#FB923C" size={48} motion="thinking" reducedMotion={false} />,
+      <AgentIcon figure="Robot" role="security" color={ORANGE} size={48} motion="thinking" reducedMotion={false} />,
     )
     const ink = inkOf(container)
     const glow = container.querySelector('[data-glow]')
@@ -97,7 +98,7 @@ describe('AgentIcon', () => {
     async (motion) => {
       const AgentIcon = await loadAgentIcon()
       const { container } = render(
-        <AgentIcon figure="Man" role="writer" color="#9CA3AF" size={26} motion={motion} reducedMotion={false} />,
+        <AgentIcon figure="Man" role="writer" color={GREY} size={26} motion={motion} reducedMotion={false} />,
       )
       const ink = inkOf(container)
       expect(ink).toHaveStyle({ opacity: '1' })
@@ -115,7 +116,7 @@ describe('AgentIcon', () => {
       <AgentIcon
         figure="Omnipus"
         role="general"
-        color="#22D3EE"
+        color={CYAN}
         size={18}
         motion="thinking"
         reducedMotion
@@ -132,14 +133,14 @@ describe('AgentIcon', () => {
   it('hides a decorative mark and names a non-decorative mark with the agent name', async () => {
     const AgentIcon = await loadAgentIcon()
     const decorative = render(
-      <AgentIcon figure="Robot" role="developer" color="#3B82F6" size={26} />,
+      <AgentIcon figure="Robot" role="developer" color={AZURE} size={26} />,
     )
     expect(decorative.container.querySelector('[aria-hidden="true"]')).not.toBeNull()
     expect(decorative.queryByRole('img')).toBeNull()
     decorative.unmount()
 
     render(
-      <AgentIcon figure="Robot" role="developer" color="#3B82F6" size={26} decorative={false} name="Mia" />,
+      <AgentIcon figure="Robot" role="developer" color={AZURE} size={26} decorative={false} name="Mia" />,
     )
     expect(screen.getByRole('img', { name: 'Mia' })).toBeInTheDocument()
     expect(screen.queryByRole('img', { name: 'Developer' })).toBeNull()
@@ -149,7 +150,7 @@ describe('AgentIcon', () => {
   it('does not fetch an agent', async () => {
     const AgentIcon = await loadAgentIcon()
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no network'))
-    render(<AgentIcon figure="Woman" role="researcher" color="#A78BFA" size={40} motion="working" />)
+    render(<AgentIcon figure="Woman" role="researcher" color={VIOLET} size={40} motion="working" />)
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
