@@ -301,6 +301,8 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
     },
 
     sendMessage: (content, opts) => {
+      const entry = useSessionStore.getState().workspaceEntry
+      if (entry && 'sendEnabled' in entry && entry.sendEnabled === false) return
       const mediaRefs = opts?.mediaRefs ?? []
       const attachments = opts?.attachments ?? []
       const { clientMessageId, queuedAt, queuedMessage } = beginSend(content, opts)
