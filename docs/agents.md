@@ -56,12 +56,28 @@ You create one of three types. The create buttons sit in the section headers of 
 | Subagent (External) | An external command-line tool | Other agents, through delegation | No |
 
 1. Click **+ New Main** or **+ New Subagent** in its section header. For an external worker, click **+ Add Subagent (External)** and pick the command-line tool from the menu; entries for tools not installed on the host are greyed out.
-2. Fill in **Identity**: name, color, icon, and model. For workers, the description is required — it is what other agents read to decide when to delegate to this one.
+2. Fill in **Identity**: name, figure, job badge, colour, and model. The preview shows Omnipus, General assistant, and Grey until you choose otherwise; leaving those untouched does not store a different choice — a new agent gets those three. There is no picture upload. For workers, the description is required — it is what other agents read to decide when to delegate to this one.
 3. Fill in **Personality**: the soul, the agent's persona prompt, is required for every type.
 4. Main and Subagent have a third step, **Tools**, for tool permissions, skills, and fallback models. An external worker has no Tools step — it brings its own.
 5. Create the agent. Its card appears in its section.
 
 To change an agent, open its card. The edit slide-over saves as you type. Its tabs are **Basics**, **Personality**, **Tools**, **Skills**, and **Advanced**; an external worker shows **Runtime** instead of Tools and Skills. **Delete agent** asks you to confirm.
+
+## How an agent looks
+
+Each agent has a mark made of three choices:
+
+| Choice | What you pick | If you leave it unset on a new agent |
+|---|---|---|
+| Figure | Robot, Man, Woman, or Omnipus | Omnipus |
+| Job badge | One of 31 jobs, in five groups: Create, Build, Business, People, and Personal | General assistant |
+| Colour | Azure, Sky, Cyan, Indigo, Violet, Purple, Fuchsia, Pink, Orange, or Grey | Grey |
+
+The create form and the edit slide-over show the mark live as you change it. That preview is not saved until you create the agent, or until the edit slide-over saves. You cannot upload a picture.
+
+Built-in agents keep a fixed figure, job badge, and colour. On their card those three controls are visible and locked. The older icon name (for example `lightbulb`) is still stored and still shown, and it is locked too. Editing a built-in does not clear that name.
+
+An agent you created before this change keeps its old icon name. On upgrade, Omnipus fills in a figure, a job badge, and a palette colour when those are missing. A job badge you already set stays. Otherwise a few old icon names become a matching badge, and every other old icon becomes General assistant. A colour that is already one of the ten stays; any other colour moves to the nearest of the ten. The old icon name itself is not rewritten.
 
 ## How to lower one agent's tool-call limit
 

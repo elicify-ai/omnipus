@@ -6,8 +6,26 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { VoiceProviderSub } from './voice-provider-sub'
 import { useUiStore } from '@/store/ui'
-import { AVATAR_COLORS, AVATAR_COLORS_BY_NAME } from '@/lib/constants'
+import { AgentIcon } from '@/components/ui/agent-icon'
+import type { AgentColor as AgentColorValue, AgentFigure, AgentRole } from '@/lib/api/generated/openapi-types'
+import { AgentColor } from '@/lib/api/generated/schemas'
+import { FIGURE_ART, IDENTITY_GROUP_ORDER, ROLE_VOCABULARY } from '@/lib/agentIdentity'
 import { ICON_OPTIONS, getIconComponent, type IconName } from '@/lib/agentIcons'
+
+const PALETTE_NAMES = ['Azure', 'Sky', 'Cyan', 'Indigo', 'Violet', 'Purple', 'Fuchsia', 'Pink', 'Orange', 'Grey'] as const
+
+export function paletteSwatches(): { hex: AgentColorValue; name: (typeof PALETTE_NAMES)[number] }[] {
+  return AgentColor.options.map((hex, index) => {
+    const name = PALETTE_NAMES[index]
+    if (!name) throw new Error(`Palette is missing a name for ${hex}`)
+    return { hex, name }
+  })
+}
+
+export function paletteInk(value: string | null | undefined): AgentColorValue {
+  const hit = AgentColor.options.find((hex) => hex.toLowerCase() === (value ?? '').toLowerCase())
+  return hit ?? AgentColor.options[AgentColor.options.length - 1]
+}
 
 // ── AgentFormFields ──────────────────────────────────────────────────────────
 //
@@ -255,6 +273,8 @@ export interface AvatarColorPickerProps {
   testIdPrefix?: string
   /** Optional className for the wrapper. */
   className?: string
+  /** Built-in identity lock. Choices stay visible and cannot be changed. */
+  disabled?: boolean
 }
 
 /**
@@ -270,24 +290,23 @@ export function AvatarColorPicker({
   onChange,
   testIdPrefix = 'avatar-color',
   className,
+  disabled = false,
 }: AvatarColorPickerProps) {
+  const selected = paletteInk(value)
   return (
-    <div className={className ?? 'flex gap-[var(--space-2)]'}>
-      {AVATAR_COLORS.map((color) => {
-        const name = AVATAR_COLORS_BY_NAME[color] ?? color
-        const isSelected = value === color
+    <div className={className ?? 'flex flex-wrap gap-[var(--space-2)]'}>
+      {paletteSwatches().map(({ hex, name }) => {
+        const isSelected = selected === hex
         return (
           <IconButton
-            key={color}
+            key={hex}
             variant="ghost"
             size="sm"
+            disabled={disabled}
             data-testid={`${testIdPrefix}-${name}`}
-            onClick={() => onChange(color)}
-            className="h-7 w-7 rounded-full p-0 transition-transform hover:scale-110 hover:bg-transparent"
-            style={{
-              backgroundColor: color,
-              boxShadow: isSelected ? `0 0 0 2px var(--color-primary), 0 0 0 4px ${color}` : undefined,
-            }}
+            onClick={() => onChange(hex)}
+            className="h-7 w-7 rounded-full p-0"
+            style={{ backgroundColor: hex }}
             aria-label={name}
             aria-pressed={isSelected}
             title={name}
@@ -296,6 +315,81 @@ export function AvatarColorPicker({
       })}
     </div>
   )
+}
+
+export function FigurePicker({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value: AgentFigure
+  onChange: (figure: AgentFigure) => void
+  disabled?: boolean
+}) {
+  return (
+    <div className="flex flex-wrap gap-[var(--space-1)]">
+      {(Object.keys(FIGURE_ART) as AgentFigure[]).map((figure) => (
+        <Button
+          key={figure}
+          type="button"
+          variant={value === figure ? 'default' : 'outline'}
+          size="sm"
+          disabled={disabled}
+          aria-pressed={value === figure}
+          onClick={() => onChange(figure)}
+        >
+          {figure}
+        </Button>
+      ))}
+    </div>
+  )
+}
+
+export function RolePicker({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value: AgentRole
+  onChange: (role: AgentRole) => void
+  disabled?: boolean
+}) {
+  return (
+    <div className="space-y-[var(--space-2)]">
+      {IDENTITY_GROUP_ORDER.map((group) => (
+        <div key={group} className="space-y-[var(--space-1)]">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{group}</p>
+          <div className="flex flex-wrap gap-[var(--space-1)]">
+            {ROLE_VOCABULARY.filter((row) => row.group === group).map((row) => (
+              <Button
+                key={row.slug}
+                type="button"
+                variant={value === row.slug ? 'default' : 'outline'}
+                size="sm"
+                disabled={disabled}
+                aria-pressed={value === row.slug}
+                onClick={() => onChange(row.slug)}
+              >
+                {row.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function IdentityPreview({
+  figure,
+  role,
+  color,
+}: {
+  figure: AgentFigure
+  role: AgentRole
+  color: string | null | undefined
+}) {
+  return <AgentIcon figure={figure} role={role} color={paletteInk(color)} size={40} />
 }
 
 // ── Avatar icon picker (lifted from AgentProfile.tsx:869-878) ──────────────

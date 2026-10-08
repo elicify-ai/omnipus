@@ -38,6 +38,8 @@ import type {
   RegistryTool,
 } from '@/lib/api'
 import { findOrphanedPresetOverrideKeys, resolveToolsCfg } from '@/lib/toolPolicyPresets'
+import { AgentColor } from '@/lib/api/generated/schemas'
+import type { AgentColor as AgentColorValue, AgentFigure, AgentRole } from '@/lib/api/generated/openapi-types'
 import { isProviderUsable } from '@/lib/providerStatus'
 
 import {
@@ -107,6 +109,29 @@ function normalizeWizardType(
  *    not carry `tools_cfg` at all — the external CLI runs its own tool loop
  *    and never reaches the Tools step (2-step wizard for that type).
  */
+function paletteColor(value: string): AgentColorValue | undefined {
+  for (const hex of AgentColor.options) {
+    if (hex === value) return hex
+  }
+  return undefined
+}
+
+/** Figure, role, and colour only. `icon` is never copied: the editor does not
+ *  write the legacy Phosphor name. An untouched colour (the old seeded hex,
+ *  or empty) is omitted so the server applies Grey. */
+function identityOnCreate(payload: WizardSubmitPayload): {
+  figure?: AgentFigure
+  role?: AgentRole
+  color?: AgentColorValue
+} {
+  const color = paletteColor(payload.color)
+  return {
+    ...(payload.figure ? { figure: payload.figure } : {}),
+    ...(payload.role ? { role: payload.role } : {}),
+    ...(color ? { color } : {}),
+  }
+}
+
 function payloadToCreateRequest(
   payload: WizardSubmitPayload,
   tools: RegistryTool[],
@@ -119,8 +144,7 @@ function payloadToCreateRequest(
     const req: AgentCreateRequestSubagent3p = {
       type: 'subagent_3p',
       name,
-      color: payload.color,
-      icon: payload.icon,
+      ...identityOnCreate(payload),
       soul,
       // The external CLI is the runner; the variant requires the block.
       executor: { kind: 'external-cli' },
@@ -149,8 +173,7 @@ function payloadToCreateRequest(
     const req: AgentCreateRequestSubagent = {
       type: 'Subagent',
       name,
-      color: payload.color,
-      icon: payload.icon,
+      ...identityOnCreate(payload),
       soul,
     }
     if (description) req.description = description
@@ -172,8 +195,7 @@ function payloadToCreateRequest(
   const req: AgentCreateRequestMain = {
     type: 'Main',
     name,
-    color: payload.color,
-    icon: payload.icon,
+    ...identityOnCreate(payload),
     soul,
   }
   if (description) req.description = description

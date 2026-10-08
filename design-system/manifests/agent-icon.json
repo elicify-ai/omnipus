@@ -34,7 +34,7 @@
       "id": "agent-icon-unit",
       "kind": "unit",
       "file": "src/components/ui/agent-icon.test.tsx",
-      "test": "draws the supplied figure, role badge, and opaque ink at the four sizes",
+      "test": "draws the supplied figure and does not substitute Omnipus",
       "applicable": true
     },
     {
