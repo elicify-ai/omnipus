@@ -156,7 +156,6 @@ vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -189,7 +188,7 @@ beforeEach(() => {
 })
 
 describe('Send-button click — client-command interception (bugfixes3 deferred item 1)', () => {
-  it('typing "/clear" (a client command) and clicking Send runs the command locally — nothing is sent', async () => {
+  it('typing "/clear" and clicking Send does not start a new chat', async () => {
     const realStartNewSession = useSessionStore.getState().startNewSession
     const startNewSession = vi.fn()
     act(() => { useSessionStore.setState({ startNewSession }) })
@@ -214,12 +213,8 @@ describe('Send-button click — client-command interception (bugfixes3 deferred 
       act(() => { fireEvent.change(input, { target: { value: '/clear' } }) })
       act(() => { fireEvent.click(sendButton) })
 
-      // The client command ran locally (runClientCommand's 'clear' branch
-      // calls startNewSession — see useSlashMenu.ts).
-      expect(startNewSession).toHaveBeenCalledTimes(1)
-      // The internal composer.send() callback must NOT have run — the
-      // literal text "/clear" was never dispatched as a chat message.
-      expect(mockComposerSend).not.toHaveBeenCalled()
+      // /clear is not a client command (FR-007). It must not start a chat.
+      expect(startNewSession).not.toHaveBeenCalled()
     } finally {
       act(() => { useSessionStore.setState({ startNewSession: realStartNewSession }) })
     }
@@ -270,6 +265,9 @@ describe('Send-button click — client-command interception (bugfixes3 deferred 
     const messages = useChatStore.getState().messages
     expect(messages).toHaveLength(1)
     expect(messages[0].role).toBe('system')
-    expect(messages[0].content).toContain('/clear')
+    expect(messages[0].content).toContain('/help')
+    expect(messages[0].content).not.toContain('/clear')
+    expect(messages[0].content).not.toContain('/new')
+    expect(messages[0].content).not.toContain('switch agents')
   })
 })

@@ -166,7 +166,6 @@ vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null })
 // to mock the workspaces/providers query plumbing (fetchWorkspaces,
 // workspacesQueryKeys, isWorker) those sub-components own. Their own behavior
 // is covered by composer/AgentPicker.test.tsx (+ .agent-selector-open.test.tsx).
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -246,7 +245,7 @@ describe('T15 / US-4: slash menu — API-driven palette, delivery dispatch, stre
     expect(screen.queryByText('/agents')).not.toBeInTheDocument()
   })
 
-  it('US-4/AC-1: non-streaming shows all 5 API commands including /cancel', async () => {
+  it('non-streaming lists the remaining API commands and not /clear', async () => {
     act(() => {
       useChatStore.setState({ isStreaming: false })
     })
@@ -262,16 +261,16 @@ describe('T15 / US-4: slash menu — API-driven palette, delivery dispatch, stre
       fireEvent.keyDown(input, { key: 'ArrowDown' })
     })
 
-    // All 5 API commands must appear (in the Commands section)
+    // /clear is no longer a client command (FR-007). The others still appear.
     expect(screen.getByText('/cancel')).toBeInTheDocument()
-    expect(screen.getByText('/clear')).toBeInTheDocument()
+    expect(screen.queryByText('/clear')).not.toBeInTheDocument()
+    expect(screen.queryByText('/new')).not.toBeInTheDocument()
     expect(screen.getByText('/help')).toBeInTheDocument()
     expect(screen.getByText('/model')).toBeInTheDocument()
     expect(screen.getByText('/agents')).toBeInTheDocument()
   })
 
-  it('US-4/AC-2: delivery:client /clear runs its client handler and does NOT send a message', async () => {
-    // /clear must clear messages locally and NOT send "/clear" to the backend.
+  it('typing /clear does not list it and does not clear the chat', async () => {
     act(() => {
       useChatStore.setState({ isStreaming: false, messages: [{ id: 'msg1', role: 'user', content: 'hi', timestamp: '', status: 'done' }] })
       useSessionStore.setState({ activeAgentId: 'general-assistant', activeSessionId: 'sess_1' })
@@ -281,24 +280,15 @@ describe('T15 / US-4: slash menu — API-driven palette, delivery dispatch, stre
 
     const input = screen.getByTestId('composer-input')
 
-    // Type "/clear" to filter the menu to /clear.
     act(() => {
       fireEvent.change(input, { target: { value: '/clear' } })
     })
     act(() => {
-      fireEvent.keyDown(input, { key: 'ArrowDown' })
-    })
-
-    // "/clear" must appear in the menu.
-    expect(screen.getByText('/clear')).toBeInTheDocument()
-
-    // Press Enter to execute the command.
-    act(() => {
       fireEvent.keyDown(input, { key: 'Enter' })
     })
 
-    // After executing /clear, messages should be cleared.
-    expect(useChatStore.getState().messages).toHaveLength(0)
+    expect(screen.queryByText('/clear')).not.toBeInTheDocument()
+    expect(useChatStore.getState().messages).toHaveLength(1)
   })
 
   it('US-4/AC-3: delivery:client /agents opens the agent selector (client command dispatch)', async () => {
@@ -634,7 +624,7 @@ describe('Partitioned slash menu — Skills section', () => {
     expect(mockSetText).toHaveBeenCalledWith('/code-review ')
   })
 
-  it('typing "/cl" shows /clear command but NOT unrelated skills', async () => {
+  it('typing "/cl" does not list /clear and does not show unrelated skills', async () => {
     act(() => {
       useChatStore.setState({ isStreaming: false })
     })
@@ -649,8 +639,7 @@ describe('Partitioned slash menu — Skills section', () => {
       fireEvent.keyDown(input, { key: 'ArrowDown' })
     })
 
-    // /clear must appear in Commands section
-    expect(screen.getByText('/clear')).toBeInTheDocument()
+    expect(screen.queryByText('/clear')).not.toBeInTheDocument()
     // Skills that don't start with "cl" must NOT appear
     expect(screen.queryByText('/web-research')).not.toBeInTheDocument()
     expect(screen.queryByText('/data-analysis')).not.toBeInTheDocument()

@@ -178,11 +178,11 @@ export function AppShell() {
       {/* Skip-to-content link — first focusable element in the shell, visually
           hidden until it receives keyboard focus (WCAG 2.4.1 Bypass Blocks).
           tabIndex={1}: the composer's positive tab ring (see the map in
-          ChatControls.tsx) starts at 2, so this link is guaranteed to be the
-          FIRST stop document-wide regardless of DOM position — without an
-          explicit positive index here, the chat screen's positive-tabIndex
-          controls would win the first Tab and the skip link would never be
-          reachable (WCAG 2.4.1 functionally dead). */}
+          ChatControls.tsx) starts at 2. Slot 3, the old agent picker, is gone.
+          This link is still the first stop document-wide — without an explicit
+          positive index here, the chat screen's positive-tabIndex controls
+          would win the first Tab and the skip link would never be reachable
+          (WCAG 2.4.1 functionally dead). */}
       <a
         href="#main-content"
         tabIndex={1}

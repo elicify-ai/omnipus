@@ -111,7 +111,6 @@ vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null })
 // change the drop-zone structure: the drag/drop handlers (onDragOver/
 // onDragLeave/onDrop) live on OmnipusComposer's outermost wrapper div,
 // unaffected by what renders in the context row above the input.
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 

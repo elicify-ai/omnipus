@@ -93,7 +93,6 @@ vi.mock('./tools/BrowserTool', () => ({ isReplayBrowserToolName: () => false, Br
 vi.mock('./tools/WebServeUI', () => ({ WebServeBlock: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => React.createElement('div', {}) }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 vi.mock('@/lib/memory-observer', () => ({

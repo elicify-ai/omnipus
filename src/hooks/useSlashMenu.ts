@@ -367,7 +367,8 @@ function runClientSlashCommand(name: string, argument: string, deps: ClientComma
   }
 
   if (name === 'agents') {
-    // Open the agent selector in the composer card (composer/AgentPicker.tsx) via the ui store flag.
+    // /agents still sets the ui flag. The composer picker that used to open
+    // on it is gone (FR-007); nothing in the composer reads the flag.
     useUiStore.getState().setAgentSelectorOpen(true)
     return true
   }

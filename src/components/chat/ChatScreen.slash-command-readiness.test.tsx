@@ -136,7 +136,6 @@ vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -178,7 +177,7 @@ async function mockRuntimeWithText(text: string) {
 }
 
 describe('slash command typed before the command list resolves', () => {
-  it('"/new" is never dispatched as a chat message, and runs as the client command once the list lands', async () => {
+  it('"/new" is held while the list loads, then sent as an ordinary message, and does not start a chat', async () => {
     const { setText, send } = await mockRuntimeWithText('/new')
 
     const { rerender } = render(<OmnipusComposer />)
@@ -203,12 +202,11 @@ describe('slash command typed before the command list resolves', () => {
     commandsStillLoading = false
     act(() => { rerender(<OmnipusComposer />) })
 
-    // "/new" now does what the user asked: starts a new conversation
-    // (startNewSession clears activeSessionId) and clears the composer...
-    expect(useSessionStore.getState().activeSessionId).toBeNull()
-    expect(setText).toHaveBeenCalledWith('')
-    // ...and it was never sent to the backend at any point.
-    expect(send).not.toHaveBeenCalled()
+    // /new is not a client command (FR-007). The held text is sent, and the
+    // session is not cleared.
+    expect(useSessionStore.getState().activeSessionId).toBe('sess_readiness_test')
+    expect(setText).not.toHaveBeenCalledWith('')
+    expect(send).toHaveBeenCalledTimes(1)
   })
 
   it('a non-command "/zzz hi" is held and then delivered verbatim — the gate never eats input', async () => {
@@ -248,7 +246,7 @@ describe('slash command typed before the command list resolves', () => {
     expect(send).not.toHaveBeenCalled()
   })
 
-  it('once the list has loaded, "/new" is handled synchronously (no hold at all)', async () => {
+  it('once the list has loaded, "/new" is not a client command and is not held', async () => {
     commandsStillLoading = false
     const { setText, send } = await mockRuntimeWithText('/new')
 
@@ -260,9 +258,11 @@ describe('slash command typed before the command list resolves', () => {
     let dispatched = true
     act(() => { dispatched = fireEvent.submit(form) })
 
-    expect(dispatched).toBe(false)
-    expect(useSessionStore.getState().activeSessionId).toBeNull()
-    expect(setText).toHaveBeenCalledWith('')
+    // Not intercepted: the submit is not preventDefault'd, and the session
+    // is not cleared.
+    expect(dispatched).toBe(true)
+    expect(useSessionStore.getState().activeSessionId).toBe('sess_readiness_test')
+    expect(setText).not.toHaveBeenCalledWith('')
     expect(send).not.toHaveBeenCalled()
   })
 })

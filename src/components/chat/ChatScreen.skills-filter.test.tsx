@@ -161,7 +161,6 @@ vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null })
 // Composer Redesign (variant A1): the skills-filter slash menu is independent
 // of the picker/model/token sub-components — stub them to null so their
 // workspaces/providers query plumbing doesn't need mocking here.
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -213,8 +212,9 @@ describe('Skills filter mode (D9)', () => {
     act(() => { fireEvent.change(input, { target: { value: '/' } }) })
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
 
-    // Commands present
-    expect(screen.getByText('/clear')).toBeInTheDocument()
+    // Commands present. /clear is no longer listed (FR-007).
+    expect(screen.queryByText('/clear')).not.toBeInTheDocument()
+    expect(screen.getByText('/help')).toBeInTheDocument()
     expect(screen.getByText('/cancel')).toBeInTheDocument()
     // Skills present
     expect(screen.getByText('/web-research')).toBeInTheDocument()
