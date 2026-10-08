@@ -20,7 +20,7 @@ Use this page once, on a fresh install or a new machine. If Omnipus is already r
 4. **Open `http://localhost:5000`.** On a fresh install the app takes you straight to the setup wizard. On a Mac, the first start may ask you to approve the binary under System Settings, then Privacy & Security.
 5. **Work through the wizard's four screens.** The wizard table below describes each one. **Finish** creates your account and saves the provider in one step, then logs you in.
 6. **Select Start chatting** on the "Mia — Assistant" screen. The app opens **My Workspace** on **Chat**, its base page.
-7. **Type a message and send it.** Mia answers. Use the agent picker next to the message box to talk to a different agent. The workspace bar at the top offers **Tasks**, **Calendar**, **Library**, **Mail**, and **Team** as panel toggles; on a narrow bar, use the panels menu.
+7. **Type a message and send it.** To talk with a different agent, open the sidebar and select that agent's name under the workspace: that opens the agent's main chat. **Past sessions** on the same row opens earlier chats for this workspace and that agent. **New chat** starts an extra chat and leaves the main chat in place. There is no agent picker beside the message box. Which chat is open is the one this browser last had in the workspace, or Ava's main chat when there is none yet; [workspaces](workspaces.md) covers that. The workspace bar at the top offers **Tasks**, **Calendar**, **Library**, **Mail**, and **Team** as panel toggles; on a narrow bar, use the panels menu.
 
 Three ways to install, and what each is good for:
 
