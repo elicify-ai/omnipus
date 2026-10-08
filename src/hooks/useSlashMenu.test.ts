@@ -327,6 +327,9 @@ describe('useSlashMenu — prefix filtering', () => {
     expect(result.current.slashItems.map((i) => i.key)).not.toContain('/clear')
     act(() => result.current.onInputChange('/cl'))
     expect(result.current.slashItems.map((i) => i.key)).not.toContain('/clear')
+    // Founder X3: aliases are not separate server rows. No command or skill
+    // matches /cl in this fixture, so even an unrelated /help row is a defect.
+    expect(result.current.slashItems).toHaveLength(0)
   })
 })
 

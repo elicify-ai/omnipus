@@ -184,7 +184,7 @@ function resetStores() {
 
 beforeEach(() => {
   resetStores()
-  mockComposerSend.mockClear()
+  mockComposerSend.mockReset()
 })
 
 describe('Send-button click — client-command interception (bugfixes3 deferred item 1)', () => {
@@ -198,11 +198,17 @@ describe('Send-button click — client-command interception (bugfixes3 deferred 
     // nullish) — mirrors ChatScreen.agents-command.test.tsx's own
     // send-path-interception test, which does the same for the Enter path.
     const { useComposerRuntime } = await import('@assistant-ui/react')
+    let composerText = '/clear'
+    const sentTexts: string[] = []
+    // Observe text at the actual send callback. setText updates live state so
+    // a client rewrite before sending cannot masquerade as an unchanged send.
+    mockComposerSend.mockImplementation(() => { sentTexts.push(composerText) })
     ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
-      getState: () => ({ text: '/clear' }),
-      setText: vi.fn(),
+      getState: () => ({ text: composerText }),
+      setText: vi.fn((text: string) => { composerText = text }),
       addAttachment: vi.fn(),
       subscribe: vi.fn(() => vi.fn()),
+      send: mockComposerSend,
     })
 
     try {
@@ -213,8 +219,10 @@ describe('Send-button click — client-command interception (bugfixes3 deferred 
       act(() => { fireEvent.change(input, { target: { value: '/clear' } }) })
       act(() => { fireEvent.click(sendButton) })
 
-      // /clear is not a client command (FR-007). It must not start a chat.
+      // Founder X3: /clear is server-owned, not a client new-chat command.
       expect(startNewSession).not.toHaveBeenCalled()
+      expect(mockComposerSend).toHaveBeenCalledTimes(1)
+      expect(sentTexts).toEqual(['/clear'])
     } finally {
       act(() => { useSessionStore.setState({ startNewSession: realStartNewSession }) })
     }

@@ -189,7 +189,7 @@ function resetStores() {
 
 beforeEach(() => {
   resetStores()
-  mockComposerSend.mockClear()
+  mockComposerSend.mockReset()
   mockSetText.mockClear()
   // One test below overrides useComposerRuntime's return value (to control
   // composerRuntime.getState().text for the client-command-interception
@@ -247,9 +247,14 @@ describe('OmnipusComposer — mid-turn steering send (Enter)', () => {
 
     try {
       const { useComposerRuntime } = await import('@assistant-ui/react')
+      let composerText = '/clear'
+      const sentTexts: string[] = []
+      // Founder X3: observe the unchanged command at the actual runtime-send
+      // boundary, including any setText rewrite made before that send.
+      mockComposerSend.mockImplementation(() => { sentTexts.push(composerText) })
       ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
-        getState: () => ({ text: '/clear' }),
-        setText: mockSetText,
+        getState: () => ({ text: composerText }),
+        setText: vi.fn((text: string) => { composerText = text }),
         addAttachment: vi.fn(),
         subscribe: vi.fn(() => vi.fn()),
         send: mockComposerSend,
@@ -262,6 +267,8 @@ describe('OmnipusComposer — mid-turn steering send (Enter)', () => {
       act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
 
       expect(startNewSession).not.toHaveBeenCalled()
+      expect(mockComposerSend).toHaveBeenCalledTimes(1)
+      expect(sentTexts).toEqual(['/clear'])
     } finally {
       act(() => { useSessionStore.setState({ startNewSession: realStartNewSession }) })
     }
