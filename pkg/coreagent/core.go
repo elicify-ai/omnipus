@@ -119,8 +119,10 @@ type CoreAgent struct {
 	Name        string // Display name (e.g., "Jim")
 	Subtitle    string // Role subtitle (e.g., "General Purpose")
 	Description string // One-line description
-	Color       string // Hex color for avatar (e.g., "#22C55E")
-	Icon        string // Phosphor icon name (e.g., "chat-circle")
+	Figure      string // Mark body: Robot, Man, Woman, or Omnipus
+	Role        string // Curated role slug (the badge, not Icon)
+	Color       string // Canonical palette hex
+	Icon        string // Legacy Phosphor catalog name (not the role)
 }
 
 // All returns every seeded agent in display order: the 4 base agents (Mia first,
@@ -282,8 +284,10 @@ func Jim() *CoreAgent {
 		Subtitle: "Planner & Orchestrator",
 		Description: "Your planning hub — decomposes complex goals into a task DAG, " +
 			"delegates to the right specialists, tracks progress, and drives work to completion.",
-		Color: "#22C55E",
-		Icon:  "graph",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#22D3EE",
+		Icon:   "graph",
 	}
 }
 
@@ -295,8 +299,10 @@ func Ava() *CoreAgent {
 		Subtitle: "Builder",
 		Description: "Configures agents, teams and skills, including models, tool permissions and connector assignments. " +
 			"Reviews one combined proposal with you before applying changes and checking the result.",
-		Color: "#D4AF37",
-		Icon:  "wrench",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#FB923C",
+		Icon:   "wrench",
 	}
 }
 
@@ -308,8 +314,10 @@ func Mia() *CoreAgent {
 		Subtitle: "Assistant",
 		Description: "Your friendly everyday assistant — guides you through Omnipus, " +
 			"answers questions, and connects you with the right specialist when needed.",
-		Color: "#3B82F6",
-		Icon:  "lightbulb",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#3B82F6",
+		Icon:   "lightbulb",
 	}
 }
 
@@ -319,7 +327,8 @@ func Admin() *CoreAgent {
 	return &CoreAgent{
 		ID: IDAdmin, Name: "Admin", Subtitle: "Operator",
 		Description: "Configures connectors, providers, channels, diagnostics, and document dependencies.",
-		Color:       "#F97316", Icon: "shield",
+		Figure:      DefaultFigure, Role: string(generated.AgentRoleSecurity),
+		Color: "#FB923C", Icon: "shield",
 	}
 }
 
@@ -336,8 +345,10 @@ func Worker() *CoreAgent {
 		Subtitle: "General Purpose",
 		Description: "General-purpose sub-agent worker — executes one delegated task at a time, " +
 			"does the work, and returns a concise result. Not a chat persona; invoked via delegation.",
-		Color: "#6B7280",
-		Icon:  "robot",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#9CA3AF",
+		Icon:   "robot",
 	}
 }
 
@@ -352,8 +363,10 @@ func Planner() *CoreAgent {
 		Subtitle: "Planning Specialist",
 		Description: "Builds a structured plan from the goal and available context. " +
 			"Uses permitted delegation to gather additional evidence when needed. Invoked via delegation; not a chat persona.",
-		Color: "#0EA5E9",
-		Icon:  "tree-structure",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#38BDF8",
+		Icon:   "tree-structure",
 	}
 }
 
@@ -366,7 +379,9 @@ func Researcher() *CoreAgent {
 		Subtitle: "Research Specialist",
 		Description: "Researches external sources — the web and fetched documents — and " +
 			"synthesizes findings with citations. Invoked via delegation; not a chat persona.",
-		Color: "#8B5CF6",
-		Icon:  "books",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#A78BFA",
+		Icon:   "books",
 	}
 }

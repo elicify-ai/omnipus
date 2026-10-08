@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -241,8 +240,12 @@ type restAPICreateAgentPrepareAgent struct {
 	description    *string
 	model          *string
 	provider       *string
-	color          *string
+	color          *gen.AgentColor
+	figure         *gen.AgentFigure
+	role           *gen.AgentRole
 	icon           *string
+	resolvedFigure string
+	resolvedRole   string
 	skills         *[]string
 	fallbackModels *[]gen.FallbackModel
 	modelParamsIn  *agentModelParamsInput
@@ -419,6 +422,8 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.description = vreq.Description
 		pap.model = vreq.Model
 		pap.provider = vreq.Provider
+		pap.figure = vreq.Figure
+		pap.role = vreq.Role
 		pap.color = vreq.Color
 		pap.icon = vreq.Icon
 		pap.cra.soul = vreq.Soul
@@ -440,6 +445,8 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.description = vreq.Description
 		pap.model = vreq.Model
 		pap.provider = vreq.Provider
+		pap.figure = vreq.Figure
+		pap.role = vreq.Role
 		pap.color = vreq.Color
 		pap.icon = vreq.Icon
 		pap.cra.soul = vreq.Soul
@@ -460,6 +467,8 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.description = vreq.Description
 		pap.model = vreq.Model
 		pap.provider = vreq.Provider
+		pap.figure = vreq.Figure
+		pap.role = vreq.Role
 		pap.color = vreq.Color
 		pap.icon = vreq.Icon
 		pap.cra.soul = vreq.Soul
@@ -555,20 +564,36 @@ func (pap *restAPICreateAgentPrepareAgent) validateCreateFields() (string, strin
 		jsonErr(pap.cra.w, http.StatusBadRequest, "soul is required (whitespace-only is rejected as minLength violation)")
 		return "", "", "", true
 	}
-	colorVal := ""
-	if pap.color != nil {
-		colorVal = *pap.color
+	pap.resolvedFigure = coreagent.DefaultFigure
+	if pap.figure != nil && string(*pap.figure) != "" {
+		canon, ok := coreagent.CanonicalFigure(string(*pap.figure))
+		if !ok {
+			jsonErr(pap.cra.w, http.StatusBadRequest, "figure must be Robot, Man, Woman, or Omnipus")
+			return "", "", "", true
+		}
+		pap.resolvedFigure = canon
+	}
+	pap.resolvedRole = coreagent.DefaultRole
+	if pap.role != nil && string(*pap.role) != "" {
+		canon, ok := coreagent.CanonicalRole(string(*pap.role))
+		if !ok {
+			jsonErr(pap.cra.w, http.StatusBadRequest, "role must be one of the curated role slugs")
+			return "", "", "", true
+		}
+		pap.resolvedRole = canon
+	}
+	colorVal := coreagent.DefaultColor
+	if pap.color != nil && string(*pap.color) != "" {
+		canon, ok := coreagent.CanonicalColor(string(*pap.color))
+		if !ok {
+			jsonErr(pap.cra.w, http.StatusBadRequest, "color must be one of the ten identity colours")
+			return "", "", "", true
+		}
+		colorVal = canon
 	}
 	iconVal := ""
 	if pap.icon != nil {
 		iconVal = *pap.icon
-	}
-	// color hex regex (spec §4.4).
-	if colorVal != "" {
-		if matched, _ := regexp.MatchString(`^#[0-9A-Fa-f]{6}$`, colorVal); !matched {
-			jsonErr(pap.cra.w, http.StatusBadRequest, "color must be a valid hex code (e.g. #D4AF37)")
-			return "", "", "", true
-		}
 	}
 	// icon maxLength:50 (spec §4.4).
 	if len(iconVal) > 50 {
@@ -608,6 +633,8 @@ func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool)
 		ID:          uuid.New().String(),
 		Name:        pap.name,
 		Description: descTrimmed,
+		Figure:      pap.resolvedFigure,
+		Role:        pap.resolvedRole,
 		Color:       colorVal,
 		Icon:        iconVal,
 		Type:        pap.createType,
@@ -861,12 +888,8 @@ func (cra *restAPICreateAgent) publishResponse() {
 	if cra.ac.Description != "" {
 		ag.Description = &cra.ac.Description
 	}
-	if cra.ac.Color != "" {
-		ag.Color = &cra.ac.Color
-	}
-	if cra.ac.Icon != "" {
-		ag.Icon = &cra.ac.Icon
-	}
+	applyStoredAgentIdentity(&ag, cra.ac)
+
 	// Type reflects the chosen classification (custom or worker). For
 	// "custom" this matches the pre-existing hardcoded behavior. For
 	// "worker" it surfaces the create-time choice so the response — and

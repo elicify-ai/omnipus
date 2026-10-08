@@ -113,7 +113,7 @@ func TestShellModeAudit_PerAgentAutoApproveDisabledWrite(t *testing.T) {
 
 func TestShellModeAudit_PerAgentWriteWithoutTheFieldIsSilent(t *testing.T) {
 	api, root := newShellModeAuditAPI(t)
-	w := putAgentJSON(t, api, "agent-a", `{"color":"#123456"}`)
+	w := putAgentJSON(t, api, "agent-a", `{"color":"#3B82F6"}`)
 	require.Equal(t, 200, w.Code, "body: %s", w.Body.String())
 	assert.Empty(t, shellModeChanges(t, root))
 }

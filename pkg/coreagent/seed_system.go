@@ -562,6 +562,8 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 				ID:          string(sa.ID),
 				Name:        sa.Name,
 				Description: sa.Description,
+				Figure:      sa.Figure,
+				Role:        sa.Role,
 				Color:       sa.Color,
 				Icon:        sa.Icon,
 				Type:        config.AgentTypeSystem,
@@ -619,6 +621,14 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 			}
 			if a.Description != sa.Description {
 				a.Description = sa.Description
+				modified = true
+			}
+			if a.Figure != sa.Figure {
+				a.Figure = sa.Figure
+				modified = true
+			}
+			if a.Role != sa.Role {
+				a.Role = sa.Role
 				modified = true
 			}
 			if a.Color != sa.Color {
@@ -748,8 +758,10 @@ func Judge() *CoreAgent {
 		Description: "Impartial acceptance-criteria evaluator for the Planning & Goals engine. " +
 			"Adjudicates as a real agent in a read-only verifier role, in its own session; " +
 			"not a chat persona.",
-		Color: "#64748B",
-		Icon:  "gavel",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#3B82F6",
+		Icon:   "gavel",
 		// systemAgentSeed defines fixed capabilities; this constructor defines identity only.
 	}
 }
@@ -782,8 +794,10 @@ func PlanSupervisor() *CoreAgent {
 		Description: "Sole adjudicator authorised to correct a running plan. Woken when a plan's " +
 			"Definition of Done is ruled unmet or its DAG has stalled, it issues exactly one " +
 			"correction per wake; not a chat persona.",
-		Color: "#0F766E",
-		Icon:  "compass-tool",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#22D3EE",
+		Icon:   "compass-tool",
 		// systemAgentSeed defines fixed capabilities; this constructor defines identity only.
 	}
 }
