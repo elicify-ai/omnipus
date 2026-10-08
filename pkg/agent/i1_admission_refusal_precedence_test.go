@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,7 +50,7 @@ func TestI1AdmissionRefusalPrecedenceKeepsExecution(t *testing.T) {
 			defer cancel()
 			refused, err := al.prepareOrdinaryExecution(ctx, msg, opts)
 			require.ErrorIs(t, err, want)
-			if want == ErrPreviousExecutionPending {
+			if errors.Is(want, ErrPreviousExecutionPending) {
 				require.NotErrorIs(t, err, context.DeadlineExceeded)
 			} else {
 				require.NotErrorIs(t, err, ErrPreviousExecutionPending)
