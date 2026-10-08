@@ -9,7 +9,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useCancelState } from './useCancelState'
 import { useChatStore } from '@/store/chat'
-import { useSessionStore } from '@/store/session'
 
 function pressEscape() {
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
@@ -266,18 +265,15 @@ describe('useCancelState — W2 an undelivered cancel does not arm the window', 
 // keeper resumes the session on its own, so an unfocused Escape must stop it.
 describe('useCancelState — global Escape in the idle gap of a goal (G1)', () => {
   const goalState = (state: 'active' | 'done') => ({
-    type: 'goal_status' as const, session_id: 'sess-goal', goal_id: 'g', condition: 'c',
+    type: 'goal_status' as const, session_id: 's', goal_id: 'g', condition: 'c',
     round: 1, max_rounds: 5, latest_reason: '', active_loops: 1, cap: 3, state,
   })
-  beforeEach(() => { act(() => { useSessionStore.getState().setActiveSession('sess-goal', 'jim') }) })
-  afterEach(() => { act(() => { useChatStore.setState(useChatStore.getInitialState(), true); useSessionStore.setState(useSessionStore.getInitialState(), true) }) })
-  // The goal lives in the active session's bucket (a Stop is per session).
-  const fileGoal = (state: 'active' | 'done') => useChatStore.getState().handleFrame(goalState(state))
+  afterEach(() => { act(() => { useChatStore.setState({ goalStatus: null }) }) })
 
   it('cancels when a goal is running and nothing streams', () => {
     const cancelStream = vi.fn().mockReturnValue(true)
     renderHook(() => useCancelState(false, cancelStream))
-    act(() => { fileGoal('active') })
+    act(() => { useChatStore.setState({ goalStatus: goalState('active') }) })
     act(() => pressEscape())
     expect(cancelStream).toHaveBeenCalledTimes(1)
   })
@@ -286,7 +282,7 @@ describe('useCancelState — global Escape in the idle gap of a goal (G1)', () =
     const cancelStream = vi.fn()
     renderHook(() => useCancelState(false, cancelStream))
     act(() => pressEscape())
-    act(() => { fileGoal('done') })
+    act(() => { useChatStore.setState({ goalStatus: goalState('done') }) })
     act(() => pressEscape())
     expect(cancelStream).not.toHaveBeenCalled()
   })
@@ -294,7 +290,7 @@ describe('useCancelState — global Escape in the idle gap of a goal (G1)', () =
   it('still skips an Escape that was already defaultPrevented upstream', () => {
     const cancelStream = vi.fn()
     renderHook(() => useCancelState(false, cancelStream))
-    act(() => { fileGoal('active') })
+    act(() => { useChatStore.setState({ goalStatus: goalState('active') }) })
     const e = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
     e.preventDefault()
     act(() => { document.dispatchEvent(e) })

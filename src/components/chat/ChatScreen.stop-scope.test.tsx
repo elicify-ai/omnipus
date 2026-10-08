@@ -780,34 +780,6 @@ describe('Stop during the idle gap of an active goal (G1)', () => {
     expect(sentCancelFrames(send)).toEqual([])
   })
 
-  // CI run 37723139967: goal-card-position / goal-work-first press Stop and expect the button
-  // gone. pkg/agent/goal_triggers.go::pauseGoalKeeperForStop pauses the keeper until the user
-  // sends a message ("the goal stays active", no new frame), so the client must stop offering
-  // Stop for a goal the person already stopped, until they send a message again.
-  it('hides Stop once the person stopped the running goal, and offers it again after their next message', () => {
-    vi.useFakeTimers()
-    act(() => { useChatStore.setState({ isStreaming: false }); useChatStore.getState().handleFrame(goal('active')) })
-    render(<OmnipusComposer />)
-    pressStop()
-    expect(sentCancelFrames(send)).toEqual([{ type: 'cancel', session_id: 'sess_test' }])
-    act(() => { vi.advanceTimersByTime(3100) })
-    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
-
-    act(() => { useChatStore.getState().sendMessage('keep going', { clientMessageId: 'u-9' }) })
-    act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: 'sess_test', turn_id: 't-9', stats: { tokens: 1, cost: 0 } }) })
-    expect(screen.getByTestId('stop-btn')).toBeInTheDocument() // goal still active, not stopped since the message
-  })
-
-  it('Stop during a streaming goal turn: after the turn ends and the window closes, Stop is gone', () => {
-    vi.useFakeTimers()
-    act(() => { useChatStore.getState().handleFrame(goal('active')) }) // isStreaming stays true from setup
-    render(<OmnipusComposer />)
-    pressStop()
-    act(() => { useChatStore.setState({ isStreaming: false }) })
-    act(() => { vi.advanceTimersByTime(3100) })
-    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
-  })
-
   it('shows no Stop for an idle chat without a goal, or with a finished goal', () => {
     act(() => { useChatStore.setState({ isStreaming: false }) })
     const view = render(<OmnipusComposer />)

@@ -126,20 +126,3 @@ describe('cancelStream is honest about what it did (round-1 review)', () => {
     expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID_A }]])
   })
 })
-
-// CI run 37723139967: a goal the person already stopped is paused by the gateway until they
-// send a message (pauseGoalKeeperForStop), though the goal_status frame still says "active".
-describe('a goal the person stopped is no longer running until their next message', () => {
-  it('a second plain Stop sends nothing, and a new user message makes the goal stoppable again', () => {
-    act(() => { useConnectionStore.getState().setConnected(true) })
-    act(() => { useChatStore.getState().handleFrame(goalFrame('active')) })
-    act(() => { useChatStore.getState().cancelStream() })
-    expect(sender.send).toHaveBeenCalledTimes(1)
-    act(() => { useChatStore.getState().cancelStream() })
-    expect(sender.send).toHaveBeenCalledTimes(1)
-    act(() => { useChatStore.getState().sendMessage('keep going', { clientMessageId: 'u-2' }) })
-    sender.send.mockClear()
-    act(() => { useChatStore.setState({ isStreaming: false }); useChatStore.getState().cancelStream() })
-    expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID }]])
-  })
-})

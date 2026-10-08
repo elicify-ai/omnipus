@@ -481,11 +481,6 @@ export interface SessionChatState {
    * components/chat/useRestartInterrupted.ts.
    */
   restartNoticeDismissed?: boolean
-  /**
-   * When a cancel frame last left for this session. With lastUserMessageAt it tells
-   * whether the gateway's goal keeper is paused by Stop (see lib/goalActivity.ts).
-   */
-  goalStopSentAt?: number | null
   /** Narrow recovery flag: unknown_position alone does not mean interrupted. */
   recoveredFirstSend?: { clientMessageId: string; attemptGeneration: number; reconciled: boolean }
   sessionTokens: number

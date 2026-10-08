@@ -37,7 +37,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
-import { isBucketGoalRunning } from '@/lib/goalActivity'
+import { isGoalRunning } from '@/lib/goalActivity'
 import type { CancelFrame } from '@/lib/api/generated/asyncapi-types'
 
 export type StopLabel = 'stop' | 'stopping'
@@ -373,7 +373,7 @@ export function useCancelState(
       // surface — the second (unfocused) Esc inside it confirms, even
       // though the first activation already ended the turn locally.
       const shouldCancel =
-        liveState.isStreaming || isBucketGoalRunning(liveState.sessionsById[useSessionStore.getState().activeSessionId ?? '']) || withinRaceWindow || stopLabel === 'stopping' || stopAllArmedRef.current
+        liveState.isStreaming || isGoalRunning(liveState.goalStatus) || withinRaceWindow || stopLabel === 'stopping' || stopAllArmedRef.current
       if (!shouldCancel) return
       e.preventDefault()
       // D9: an Escape inside the confirmation window is the second
