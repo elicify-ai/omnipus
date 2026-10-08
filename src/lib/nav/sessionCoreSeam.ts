@@ -14,11 +14,13 @@
 
 /** Validated main session id for a workspace member, or unavailable. */
 export function mainSessionIdOfMember(_member: unknown): string | undefined {
+  void _member
   return undefined
 }
 
 /** True only when the session is a validated main. Unavailable reads are false. */
 export function isMainSession(_session: unknown): boolean {
+  void _session
   return false
 }
 
@@ -27,6 +29,7 @@ export function isMainSession(_session: unknown): boolean {
  * is missing. Unavailable is unknown, never a fabricated off.
  */
 export function sessionAttention(_session: unknown): 'on' | 'off' | 'unknown' {
+  void _session
   return 'unknown'
 }
 
@@ -36,6 +39,7 @@ export function sessionAttention(_session: unknown): 'on' | 'off' | 'unknown' {
  * so every frame is unavailable. A string is never a bound.
  */
 export function attentionBoundOfFrame(_frame: unknown): number | undefined {
+  void _frame
   return undefined
 }
 
@@ -46,5 +50,6 @@ export function attentionBoundOfFrame(_frame: unknown): number | undefined {
  * client-invented string.
  */
 export function attachAckFields(_bound: unknown): Record<string, unknown> {
+  void _bound
   return {}
 }
