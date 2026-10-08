@@ -75,6 +75,17 @@ A queued dispatch tries to save **Failed** and verifies the saved status. A new 
 
 This is a pre-start refusal, not a failure after tools or an external command have already acted. It does not imply that a later execution failure undoes those actions.
 
+## A heartbeat or scheduled check-in is skipped
+
+Read the gateway diagnostic log. These cron warnings remain visible at the default **warn** log level and carry the affected `job_id`.
+
+| Warning | Meaning | What to check |
+|---|---|---|
+| `previous run still in progress` (`reason: overlap`) | Omnipus still considers an earlier run in progress and skips this tick rather than starting overlapping work. | Inspect that job's current work and cleanup before retrying it. |
+| `no owning agent` (`reason: owner-missing`) | The job has no owning agent ID, so it cannot run through the agent runner. | Check its agent assignment and workspace heartbeat configuration. |
+
+Cron's `failed to save store`, `failed to persist skip-reschedule` and `failed to persist Running reset` diagnostics are logged at **ERROR**, with `job_id` (or `job_ids` for a batch) and the underlying storage error. Work may already have happened even though its latest state was not saved. Resolve the disk, permissions or path problem before relying on the saved state after a restart. The error does not undo completed work, and retrying may repeat earlier actions.
+
 ## The provider rejects your model requests
 
 **"Context window exceeded. Compressing history and retrying..."** means the model provider rejected a request as too long. Omnipus first removes injected recall, then removes the oldest eligible whole piece — a complete old step (assistant calls plus all their matching results), or an older assistant reply that made no tool calls, whichever comes first in the conversation; if nothing can leave, it shortens retained tool-result text. It does this even when its own estimate says the request fits. Each retry must contain less retained content: the context retry counter is not reset, and there are at most two such retries after the initial request.
