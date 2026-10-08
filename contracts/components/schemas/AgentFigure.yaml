@@ -1,0 +1,11 @@
+type: string
+enum:
+  - Robot
+  - Man
+  - Woman
+  - Omnipus
+description: >
+  Body of the agent mark. Product words, exact case. Default Omnipus,
+  applied by the server when omitted on create or missing in stored config.
+  Not the art-file keys.
+example: Omnipus

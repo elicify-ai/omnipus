@@ -1,0 +1,37 @@
+type: string
+description: >
+  Curated role slug. The badge, not the legacy Phosphor `icon`.
+  Labels and the five groups are not on the wire.
+enum:
+  - writer
+  - designer
+  - image
+  - video
+  - audio
+  - social
+  - developer
+  - data
+  - analyst
+  - itops
+  - automation
+  - security
+  - quality
+  - science
+  - orchestrator
+  - project
+  - product
+  - sales
+  - marketing
+  - finance
+  - legal
+  - support
+  - documents
+  - researcher
+  - people
+  - tutor
+  - knowledge
+  - translator
+  - general
+  - personal
+  - office
+example: general

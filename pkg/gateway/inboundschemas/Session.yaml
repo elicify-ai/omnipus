@@ -114,6 +114,27 @@ properties:
       current generation last landed `stopped`) — the durable, lasting
       reason for the stop (who/when/why). Absent for every other
       `lifecycle_state`, and for a session with no lifecycle record.
+  execution:
+    type: string
+    enum:
+      - queued
+      - running
+    description: >
+      Set only when this session's lifecycle record state is queued or
+      running. Omitted for every other state, and when the session has no
+      lifecycle record. `lifecycle_state: working` remains the collapsed
+      display value and is not changed. The Sessions Running filter uses
+      this field, not `lifecycle_state`.
+    example: running
+  background_command_count:
+    type: integer
+    minimum: 0
+    description: >
+      How many background shell commands this session itself owns right now.
+      Omitted when the process table is not available (unknown, not zero).
+      Zero means the table was checked and this session owns none.
+      Not a roll-up of child sessions.
+    example: 2
   created_at:
     type: string
     format: date-time

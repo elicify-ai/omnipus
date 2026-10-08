@@ -4435,6 +4435,17 @@ export interface components {
             /** @description Present only when `lifecycle_state == stopped` (or the session's current generation last landed `stopped`) — the durable, lasting reason for the stop (who/when/why). Absent for every other `lifecycle_state`, and for a session with no lifecycle record. */
             stop_note?: components["schemas"]["StopNote"];
             /**
+             * @description Set only when this session's lifecycle record state is queued or running. Omitted for every other state, and when the session has no lifecycle record. `lifecycle_state: working` remains the collapsed display value and is not changed. The Sessions Running filter uses this field, not `lifecycle_state`.
+             * @example running
+             * @enum {string}
+             */
+            execution?: "queued" | "running";
+            /**
+             * @description How many background shell commands this session itself owns right now. Omitted when the process table is not available (unknown, not zero). Zero means the table was checked and this session owns none. Not a roll-up of child sessions.
+             * @example 2
+             */
+            background_command_count?: number;
+            /**
              * Format: date-time
              * @description RFC3339 timestamp when the session was created.
              * @example 2026-05-16T10:00:00Z
@@ -8294,6 +8305,24 @@ export interface components {
              */
             types?: string[];
         };
+        /**
+         * @description Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys.
+         * @example Omnipus
+         * @enum {string}
+         */
+        AgentFigure: "Robot" | "Man" | "Woman" | "Omnipus";
+        /**
+         * @description Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire.
+         * @example general
+         * @enum {string}
+         */
+        AgentRole: "writer" | "designer" | "image" | "video" | "audio" | "social" | "developer" | "data" | "analyst" | "itops" | "automation" | "security" | "quality" | "science" | "orchestrator" | "project" | "product" | "sales" | "marketing" | "finance" | "legal" | "support" | "documents" | "researcher" | "people" | "tutor" | "knowledge" | "translator" | "general" | "personal" | "office";
+        /**
+         * @description Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write.
+         * @example #3B82F6
+         * @enum {string}
+         */
+        AgentColor: "#3B82F6" | "#38BDF8" | "#22D3EE" | "#818CF8" | "#A78BFA" | "#C084FC" | "#E879F9" | "#F472B6" | "#FB923C" | "#9CA3AF";
         /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT. */
         Agent: {
             revision: components["schemas"]["ConfigurationRevision"];
@@ -8324,13 +8353,11 @@ export interface components {
              * @example false
              */
             locked: boolean;
+            figure: components["schemas"]["AgentFigure"];
+            role: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
-             * @description Hex color code for agent avatar display (e.g. "#D4AF37").
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
+             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
              * @example Robot
              */
             icon?: string;
@@ -8641,13 +8668,11 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
-             * @description Hex color code for the agent avatar.
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for the agent avatar.
+             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
              * @example ChartBar
              */
             icon?: string;
@@ -8739,13 +8764,11 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
-             * @description Hex color code for the agent avatar.
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for the agent avatar.
+             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
              * @example ChartBar
              */
             icon?: string;
@@ -8829,13 +8852,11 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
-             * @description Hex color code for the agent avatar.
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for the agent avatar.
+             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
              * @example ChartBar
              */
             icon?: string;
@@ -8921,13 +8942,11 @@ export interface components {
              * @example 100
              */
             max_tool_iterations?: number | null;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
-             * @description Hex color code for agent avatar display (e.g. "#D4AF37").
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
+             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
              * @example Robot
              */
             icon?: string;
@@ -26715,6 +26734,9 @@ export type VaultSearchNoteHit = components["schemas"]["VaultSearchNoteHit"];
 export type VaultSearchRecordHit = components["schemas"]["VaultSearchRecordHit"];
 export type VaultSearchViewHit = components["schemas"]["VaultSearchViewHit"];
 export type ValidationReport = components["schemas"]["ValidationReport"];
+export type AgentFigure = components["schemas"]["AgentFigure"];
+export type AgentRole = components["schemas"]["AgentRole"];
+export type AgentColor = components["schemas"]["AgentColor"];
 export type Agent = components["schemas"]["Agent"];
 export type AgentModelParams = components["schemas"]["AgentModelParams"];
 export type AgentRateLimits = components["schemas"]["AgentRateLimits"];
