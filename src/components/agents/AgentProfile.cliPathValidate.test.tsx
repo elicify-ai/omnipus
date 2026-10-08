@@ -80,6 +80,8 @@ const mockExternalAgent: Agent = {
   executor: { kind: 'external-cli', cli: 'claude-code' },
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
   memory_enabled: true,
+  figure: 'Omnipus',
+  role: 'general',
 }
 
 function detect(overrides: Partial<CliDetect> = {}): CliDetect {

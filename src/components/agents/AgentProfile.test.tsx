@@ -102,6 +102,8 @@ const mockCoreAgent: Agent = {
   stats: { total_sessions: 5, total_tokens: 12000, total_cost: 0.05 },
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
   memory_enabled: true,
+  figure: 'Omnipus',
+  role: 'general',
   editable_fields: COMMON_EDITABLE_FIELDS,
 }
 
@@ -122,6 +124,8 @@ const mockLockedCoreAgent: Agent = {
   max_tool_iterations_override_ignored: false,
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
   memory_enabled: true,
+  figure: 'Omnipus',
+  role: 'general',
   editable_fields: BUILTIN_EDITABLE_FIELDS,
 }
 
@@ -185,6 +189,8 @@ const mockJudgeAgent: Agent = {
   max_tool_iterations_source: 'global',
   max_tool_iterations_override_ignored: false,
   memory_enabled: false,
+  figure: 'Omnipus',
+  role: 'general',
   editable_fields: COMMON_EDITABLE_FIELDS.map((field) => ({
     ...field,
     editable: field.name === 'soul' || ['model', 'provider', 'fallback_models', 'model_params', 'max_tool_iterations', 'context_window_override'].includes(field.name),
@@ -2974,11 +2980,11 @@ describe('AgentProfile — locked core agent identity fields: visible read-only 
   })
 
   it('shows a static read-only avatar color swatch (not the interactive picker)', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, color: '#D4AF37' })
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, color: '#3B82F6' })
     renderProfile('mia')
     await screen.findByText('Mia')
     expect((await screen.findAllByTestId('avatar-color-readonly')).length).toBeGreaterThanOrEqual(1)
-    expect(screen.queryByTestId('avatar-color-Forge Gold')).toBeNull()
+    expect(screen.queryByTestId('avatar-color-Azure')).toBeNull()
   })
 
   it('shows a static read-only avatar icon (not the interactive picker)', async () => {
@@ -3129,10 +3135,10 @@ describe('AgentProfile — Default-agent toggle visibility (field matrix, W2c)',
 // agent (not just locked core ones) would slip through undetected.
 describe('AgentProfile — unlocked Main agent: interactive identity fields render (isLocked regression guard, W2c)', () => {
   it('renders the interactive avatar color and icon pickers (not the read-only swatch) for an editable Main agent', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#D4AF37' })
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#3B82F6' })
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    expect((await screen.findAllByTestId('avatar-color-Forge Gold')).length).toBeGreaterThanOrEqual(1)
+    expect((await screen.findAllByTestId('avatar-color-Azure')).length).toBeGreaterThanOrEqual(1)
     expect((await screen.findAllByTestId('avatar-icon-trigger')).length).toBeGreaterThanOrEqual(1)
     expect(screen.queryAllByTestId('avatar-color-readonly').length).toBe(0)
     expect(screen.queryAllByTestId('avatar-icon-readonly').length).toBe(0)

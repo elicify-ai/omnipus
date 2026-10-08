@@ -3,7 +3,7 @@
  *
  * Tests for the three primitives lifted from AgentProfile.tsx so the
  * wizard and the edit slide-over share one widget:
- *   - <AvatarColorPicker>  — 8-swatch palette with semantic aria-labels
+ *   - <AvatarColorPicker>  — 10-colour identity palette (Azure..Grey) with semantic aria-labels
  *   - <IconPicker>         — SmartSelect over ICON_OPTIONS
  *   - <AvatarHeader>       — 48-px circle with bg color + icon
  *
@@ -32,55 +32,64 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
 
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { AvatarColorPicker, IconPicker, AvatarHeader } from './AgentFormFields'
-import { AVATAR_COLORS, AVATAR_COLORS_BY_NAME } from '@/lib/constants'
 import { ICON_OPTIONS } from '@/lib/agentIcons'
 
+// SPEC "Locked identity vocabulary" ordered palette (Azure..Grey).
+// Not src/lib/constants.ts AVATAR_COLORS (the retired eight brand swatches)
+// and not a value read off the picker.
+const IDENTITY_PALETTE = [
+  { name: 'Azure', hex: '#3B82F6' },
+  { name: 'Sky', hex: '#38BDF8' },
+  { name: 'Cyan', hex: '#22D3EE' },
+  { name: 'Indigo', hex: '#818CF8' },
+  { name: 'Violet', hex: '#A78BFA' },
+  { name: 'Purple', hex: '#C084FC' },
+  { name: 'Fuchsia', hex: '#E879F9' },
+  { name: 'Pink', hex: '#F472B6' },
+  { name: 'Orange', hex: '#FB923C' },
+  { name: 'Grey', hex: '#9CA3AF' },
+] as const
+
+const RETIRED_SWATCH_NAMES = ['Verdant', 'Amethyst', 'Saffron', 'Ember', 'Crimson', 'Slate', 'Forge Gold'] as const
+
 describe('AvatarColorPicker', () => {
-  it('renders one button per AVATAR_COLORS entry (8 swatches)', () => {
-    // Traces: wave5a-wire-ui-spec.md US-7 AC1 — Identity section exposes
-    // every brand-palette color.
+  it('renders one button per identity palette colour (Azure through Grey) and not the retired swatches', () => {
+    // Traces: navigation spec FR-017 / BDD-05.2 — the editor offers the ten
+    // ordered palette colours, not the previous eight brand swatches.
     const onChange = vi.fn()
-    render(<AvatarColorPicker value={AVATAR_COLORS[0]} onChange={onChange} />)
-    for (const color of AVATAR_COLORS) {
-      const name = AVATAR_COLORS_BY_NAME[color] ?? color
+    render(<AvatarColorPicker value={IDENTITY_PALETTE[0].hex} onChange={onChange} />)
+    for (const { name, hex } of IDENTITY_PALETTE) {
       expect(
         screen.getByRole('button', { name }),
-        `missing swatch for ${name} (${color})`,
+        `missing swatch for ${name} (${hex})`,
       ).toBeInTheDocument()
     }
-    // Sanity: exactly 8 buttons (no extras, no duplicates).
     const buttons = screen.getAllByRole('button')
-    expect(buttons).toHaveLength(AVATAR_COLORS.length)
+    expect(buttons).toHaveLength(IDENTITY_PALETTE.length)
+    for (const retired of RETIRED_SWATCH_NAMES) {
+      expect(screen.queryByRole('button', { name: retired }), retired).not.toBeInTheDocument()
+    }
   })
 
-  it('calls onChange with the chosen hex when a swatch is clicked', () => {
-    // Traces: wave5a-wire-ui-spec.md US-7 AC1 — clicking a swatch commits
-    // the choice back to the parent.
+  it('calls onChange with the canonical Sky hex when Sky is clicked', () => {
+    // Traces: FR-017 — the second palette entry is Sky #38BDF8, uppercase.
     const onChange = vi.fn()
-    render(<AvatarColorPicker value={AVATAR_COLORS[0]} onChange={onChange} />)
-    // Pick the second swatch ("Azure" = '#3B82F6') and click it.
-    const target = AVATAR_COLORS[1]
-    const name = AVATAR_COLORS_BY_NAME[target]
-    fireEvent.click(screen.getByRole('button', { name }))
+    const sky = IDENTITY_PALETTE[1]
+    render(<AvatarColorPicker value={IDENTITY_PALETTE[0].hex} onChange={onChange} />)
+    fireEvent.click(screen.getByRole('button', { name: sky.name }))
     expect(onChange).toHaveBeenCalledTimes(1)
-    expect(onChange).toHaveBeenCalledWith(target)
+    expect(onChange).toHaveBeenCalledWith(sky.hex)
   })
 
   it('marks the selected swatch with aria-pressed=true (and others false)', () => {
-    // Traces: wave5a-wire-ui-spec.md US-7 AC1 — selected swatch is
-    // distinguishable for screen readers. aria-pressed is the canonical
-    // signal for a toggle button.
+    // Traces: the selected palette swatch is distinguishable. aria-pressed
+    // is the signal for a toggle button. Fuchsia is palette entry 7.
     const onChange = vi.fn()
-    const selected = AVATAR_COLORS[3] // Saffron '#EAB308'
-    render(<AvatarColorPicker value={selected} onChange={onChange} />)
-    for (const color of AVATAR_COLORS) {
-      const name = AVATAR_COLORS_BY_NAME[color] ?? color
+    const selected = IDENTITY_PALETTE[6]
+    render(<AvatarColorPicker value={selected.hex} onChange={onChange} />)
+    for (const { name, hex } of IDENTITY_PALETTE) {
       const btn = screen.getByRole('button', { name })
-      if (color === selected) {
-        expect(btn).toHaveAttribute('aria-pressed', 'true')
-      } else {
-        expect(btn).toHaveAttribute('aria-pressed', 'false')
-      }
+      expect(btn).toHaveAttribute('aria-pressed', hex === selected.hex ? 'true' : 'false')
     }
   })
 
@@ -88,19 +97,17 @@ describe('AvatarColorPicker', () => {
     // Traces: wave5a-wire-ui-spec.md — wizard and profile can share the
     // component without colliding on test ids. The profile uses
     // "avatar-color" (default), so we pick a different prefix here to
-    // assert the prefix actually flows through.
+    // assert the prefix actually flows through. Azure is palette entry 1.
     const onChange = vi.fn()
+    const azure = IDENTITY_PALETTE[0]
     render(
       <AvatarColorPicker
-        value={AVATAR_COLORS[0]}
+        value={azure.hex}
         onChange={onChange}
         testIdPrefix="wizard-color"
       />,
     )
-    const firstName = AVATAR_COLORS_BY_NAME[AVATAR_COLORS[0]]
-    expect(
-      screen.getByTestId(`wizard-color-${firstName}`),
-    ).toBeInTheDocument()
+    expect(screen.getByTestId(`wizard-color-${azure.name}`)).toBeInTheDocument()
   })
 })
 
@@ -163,11 +170,12 @@ describe('AvatarHeader', () => {
     // agent's chosen brand color. The wrapper is the first <div> rendered
     // by the component. jsdom normalizes inline `backgroundColor: hex`
     // to its `rgb(...)` form, so we compare on the canonical rgb string.
-    const color = AVATAR_COLORS[7] // Forge Gold '#D4AF37'
+    // Azure #3B82F6 → rgb(59, 130, 246). 0x3B = 59, 0x82 = 130, 0xF6 = 246.
+    const color = IDENTITY_PALETTE[0].hex
     const { container } = render(<AvatarHeader color={color} />)
     const wrapper = container.firstElementChild as HTMLElement
     expect(wrapper).not.toBeNull()
-    expect(wrapper.style.backgroundColor).toBe('rgb(212, 175, 55)')
+    expect(wrapper.style.backgroundColor).toBe('rgb(59, 130, 246)')
   })
 
   it('falls back to a surface token when color is missing', () => {
@@ -184,7 +192,7 @@ describe('AvatarHeader', () => {
     // The component accepts a className prop so consumers (e.g. the
     // wizard) can size the circle without forking the implementation.
     const { container } = render(
-      <AvatarHeader color={AVATAR_COLORS[0]} className="w-20 h-20" />,
+      <AvatarHeader color={IDENTITY_PALETTE[0].hex} className="w-20 h-20" />,
     )
     const wrapper = container.firstElementChild as HTMLElement
     expect(wrapper).toHaveClass('w-20')
