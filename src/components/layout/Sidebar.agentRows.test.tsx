@@ -315,7 +315,7 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
 
   it('A10 an expanded workspace uses the icon halo and not a row dot', async () => {
     renderSidebar()
-    const expand = await screen.findByRole('button', { name: 'Expand Product launch sessions' })
+    const expand = await screen.findByRole('button', { name: 'Show Product launch agents' })
     fireEvent.click(expand)
     const productGroup = await screen.findByRole('group', { name: 'Product launch' })
     const mia = within(productGroup).getByRole('group', { name: 'Mia' })
@@ -336,7 +336,7 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
   it('BDD-01.4 a failed agent roster is Retry, not an empty-team success', async () => {
     vi.mocked(fetchAgents).mockRejectedValue(new Error('roster down'))
     renderSidebar()
-    const expand = await screen.findByRole('button', { name: 'Expand Product launch sessions' })
+    const expand = await screen.findByRole('button', { name: 'Show Product launch agents' })
     fireEvent.click(expand)
     expect(await screen.findByRole('button', { name: 'Retry' })).toBeTruthy()
     expect(screen.queryByText('No sessions yet')).toBeNull()
@@ -347,7 +347,7 @@ describe('Sidebar freshness (T-11, FR-010)', () => {
   it('expanding a workspace inside staleTime invalidates agents and membership', async () => {
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined)
     renderSidebar()
-    const expand = await screen.findByRole('button', { name: 'Expand Product launch sessions' })
+    const expand = await screen.findByRole('button', { name: 'Show Product launch agents' })
     invalidate.mockClear()
     fireEvent.click(expand)
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['agents'] })
