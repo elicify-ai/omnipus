@@ -24,6 +24,8 @@ export type ViewSwitchProps<T extends string = string> = Pick<RadioGroupProps, '
  * contract instead of a ToggleGroup that permits deselecting the only view.
  */
 export function ViewSwitch<T extends string>({ value, onValueChange, options, className, disabled, ...name }: ViewSwitchProps<T>) {
+  // Highlight is not a text colour on ButtonFace (Firefox's pair is 2.42:1).
+  // Keep the system's ButtonText/ButtonFace pair and underline the selection.
   const accessibleName = name['aria-label'] !== undefined
     ? { 'aria-label': name['aria-label'] }
     : { 'aria-labelledby': name['aria-labelledby'] ?? '' }
@@ -33,9 +35,9 @@ export function ViewSwitch<T extends string>({ value, onValueChange, options, cl
       {options.map((option) => (
         <RadioGroupItem key={option.value} value={option.value} disabled={option.disabled} data-testid={option.testId}
           className={cn(
-            'h-auto w-auto justify-start border-0 bg-transparent gap-[var(--space-1)] p-0 text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]',
+            'h-auto w-auto justify-start border-0 bg-transparent gap-[var(--space-1)] p-0 text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)] forced-colors:hover:text-[ButtonText] forced-colors:hover:bg-[ButtonFace]',
             value === option.value
-              ? 'text-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-accent)] forced-colors:text-[Highlight]'
+              ? 'text-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-accent)] forced-colors:text-[ButtonText] forced-colors:underline'
               : 'text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] forced-colors:text-[ButtonText]',
           )}>
           {option.icon}{option.label}

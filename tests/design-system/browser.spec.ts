@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
@@ -547,6 +547,20 @@ for (const manifest of manifests) {
       } else if (check.kind === 'forced-colors') {
         expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches), `forced colors unsupported in ${testInfo.project.name}; record as a coverage gap`).toBe(true)
         await assertForcedColorsContract(page, metadata.forcedColors)
+        if (manifest.component === 'ViewSwitch') {
+          const board = page.getByRole('radio', { name: 'Board', exact: true })
+          const list = page.getByRole('radio', { name: 'List', exact: true })
+          const decoration = (target: Locator) => target.evaluate((element) => getComputedStyle(element).textDecorationLine)
+          await expect.poll(() => decoration(board), 'the selected view needs a visible cue beyond label contrast').toBe('underline')
+          await expect.poll(() => decoration(list)).toBe('none')
+          await board.focus()
+          await board.press('ArrowRight')
+          await expect(list).toBeFocused()
+          await expect(list).toHaveAttribute('aria-checked', 'true')
+          await expect(board).toHaveAttribute('aria-checked', 'false')
+          await expect.poll(() => decoration(list), 'the selection cue must follow keyboard selection').toBe('underline')
+          await expect.poll(() => decoration(board)).toBe('none')
+        }
       } else if (check.kind === 'root-size') {
         for (const [input, expected] of [[10, 12], [12, 12], [14, 14], [20, 20], [22, 20]]) {
           await page.evaluate((size) => { document.documentElement.style.setProperty('--user-font-size', `${size}px`) }, input)

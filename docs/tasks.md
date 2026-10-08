@@ -14,7 +14,7 @@ Above the views, the compact **Plans** header and **New Plan** stay visible. The
 
 The **Agent** and **Tags** filters narrow all three views and combine with the selected plan. They remain applied when you switch views. List also offers per-column sorting and filtering, like a spreadsheet: Priority, Status and Agent sort and filter; Tags filters only; Title and Updated sort only. Tasks refresh about every 15 seconds, so an agent's changes appear without a reload.
 
-The heading and **Board / List / Graph** switch share the first toolbar row. The **Agent** and **Tags** filters sit to the left of **New Task** on one row directly underneath. This two-row layout is the same in a docked panel and full screen; long filter labels shorten rather than adding toolbar rows.
+The heading and **Board / List / Graph** switch share the first toolbar row. The **Agent** and **Tags** filters sit to the left of **New Task** on one row directly underneath. This two-row layout is the same in a docked panel and full screen; long filter labels shorten rather than adding toolbar rows. With your system's high-contrast colours, the selected view is underlined.
 
 **Board** is the default view. Opening the panel on **Board**, or selecting **Board**, widens it to its maximum docked width. Chat stays visible and never shrinks below its minimum width. Selecting **List** or **Graph** restores the previous width. Full-screen Board uses the window's available space.
 
