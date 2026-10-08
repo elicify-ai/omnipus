@@ -380,7 +380,10 @@ func (al *AgentLoop) emitGoalStatusFrameWithCriteriaAndDoD(
 	// other reason") so the client never has to infer a Stop itself: every
 	// `active` frame — the stopped turn's own completion, a reattach snapshot —
 	// is reported as waiting_on_user for as long as the pause holds.
-	if state == goalPillActive && al.goalKeeperPausedByStop(sessionID) {
+	// The worker's own typed GOAL_STATUS: waiting_on_user park (goalIsWaitingOnUser,
+	// keyed by goal id) is the same pause, so a reattach snapshot of a parked
+	// goal reports it instead of `active`.
+	if state == goalPillActive && (al.goalKeeperPausedByStop(sessionID) || (goalID != "" && al.goalIsWaitingOnUser(goalID))) {
 		state = goalPillWaitingOnUser
 	}
 	active, capN := al.activeLoopsSnapshot("goal")

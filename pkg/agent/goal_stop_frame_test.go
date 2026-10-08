@@ -307,3 +307,116 @@ func TestGoalStopFrame_NextUserMessagePublishesActiveAndGoalContinues(t *testing
 		t.Errorf("record state = %q; want active", rec.State)
 	}
 }
+
+// stoppedGoalSession arms a goal, saves the user message that started the
+// (now Stopped) turn BEFORE the Stop, and Stops through the real cancel path.
+func stoppedGoalSession(t *testing.T, al *AgentLoop, agentID string) (*session.UnifiedStore, string, *eventCollector, func()) {
+	t.Helper()
+	store, sid := newGoalTestSession(t, al, agentID)
+	armGoalRecord(t, sid, "ship the report", recordedGoalCriteria("ship the report"), 0, time.Now())
+	if err := store.AppendTranscript(sid, session.TranscriptEntry{
+		ID: "user-before-stop", Role: "user", AgentID: agentID,
+		Content: "write the report", Timestamp: time.Now().UTC().Add(-time.Second),
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	c, cleanup := newEventCollector(t, al)
+	if _, _, err := al.RequestCancelForSession(context.Background(), sid, "tester", "web"); err != nil {
+		cleanup()
+		t.Fatalf("Stop: %v", err)
+	}
+	waitForStopFrameState(t, c, sid, goalPillWaitingOnUser)
+	return store, sid, c, cleanup
+}
+
+func assertNeverActive(t *testing.T, c *eventCollector, sid string) {
+	t.Helper()
+	settleEvents()
+	for _, st := range stopFrameStates(c, sid) {
+		if st == goalPillActive {
+			t.Fatalf("an `active` goal_status was published while the Stop-pause should hold; states = %v", stopFrameStates(c, sid))
+		}
+	}
+}
+
+// TestGoalStopFrame_TurnsThatAreNotANewUserMessageKeepThePause drives the real
+// runAgentLoop: the keeper's own follow-up (UserInitiated=false) — even with a
+// newer user message in the transcript — and a user-initiated turn with NO
+// newer user message must both leave the pause in place and publish no active.
+func TestGoalStopFrame_TurnsThatAreNotANewUserMessageKeepThePause(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		userInit     bool
+		sender       string
+		newerMessage bool
+	}{
+		{"keeper follow-up with a newer user message", false, goalLoopFollowUpSenderID, true},
+		{"user turn with no newer user message", true, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetGoalTriggerStateForTest()
+			al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+			agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+			store, sid, c, cleanup := stoppedGoalSession(t, al, agentInst.ID)
+			defer cleanup()
+			if tc.newerMessage {
+				if err := store.AppendTranscript(sid, session.TranscriptEntry{
+					ID: "user-after-stop", Role: "user", AgentID: agentInst.ID,
+					Content: "later", Timestamp: time.Now().UTC().Add(time.Second),
+				}); err != nil {
+					t.Fatalf("append: %v", err)
+				}
+			}
+			opts := processOptions{
+				TranscriptStore: store, TranscriptSessionID: sid,
+				Channel: "webchat", ChatID: "c1", SessionKey: "sk1",
+				UserInitiated: tc.userInit, SenderID: tc.sender, UserMessage: "x",
+			}
+			if _, err := al.runAgentLoop(context.Background(), agentInst, opts); err != nil {
+				t.Fatalf("runAgentLoop: %v", err)
+			}
+			if !al.goalKeeperPausedByStop(sid) {
+				t.Fatal("the Stop-pause was lifted by a turn that is not a new user message")
+			}
+			assertNeverActive(t, c, sid)
+		})
+	}
+}
+
+// TestGoalStopFrame_JudgingAndJudgeUnavailablePassThroughDuringPause: only
+// `active` is remapped; the judge's own states keep the Stop button visible.
+func TestGoalStopFrame_JudgingAndJudgeUnavailablePassThroughDuringPause(t *testing.T) {
+	resetGoalTriggerStateForTest()
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	_, sid, c, cleanup := stoppedGoalSession(t, al, agentInst.ID)
+	defer cleanup()
+	gid := goalRecordForSession(t, sid).GoalID
+	for _, st := range []string{goalPillJudging, goalPillJudgeUnavailable} {
+		al.emitGoalStatusFrame(sid, gid, "ship the report", 0, 20, "r", st)
+		waitForStopFrameState(t, c, sid, st)
+	}
+}
+
+// TestGoalStopFrame_SnapshotOfWorkerParkedGoalReportsWaitingOnUser: the worker's
+// own typed waiting_on_user park (goalIsWaitingOnUser) is also reported by a
+// reattach snapshot, with no Stop involved.
+func TestGoalStopFrame_SnapshotOfWorkerParkedGoalReportsWaitingOnUser(t *testing.T) {
+	resetGoalTriggerStateForTest()
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
+	_, sid := newGoalTestSession(t, al, agentInst.ID)
+	gid := armGoalRecord(t, sid, "ship the report", recordedGoalCriteria("ship the report"), 0, time.Now())
+	c, cleanup := newEventCollector(t, al)
+	defer cleanup()
+
+	al.EmitGoalStatusRehydrate(sid)
+	waitForStopFrameState(t, c, sid, goalPillActive)
+	al.goalSetWaitingOnUser(gid, true)
+	al.EmitGoalStatusRehydrate(sid)
+	waitForStopFrameState(t, c, sid, goalPillWaitingOnUser)
+
+	al.goalSetWaitingOnUser(gid, false)
+	al.EmitGoalStatusRehydrate(sid)
+	waitForStopFrameState(t, c, sid, goalPillActive)
+}
