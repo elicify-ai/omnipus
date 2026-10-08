@@ -780,6 +780,30 @@ describe('Stop during the idle gap of an active goal (G1)', () => {
     expect(sentCancelFrames(send)).toEqual([])
   })
 
+  // CI run 37723139967: the gateway pauses the goal keeper on a person's Stop and reports it as
+  // goal_status waiting_on_user (GoalStatusFrame.yaml), then active again on the next message.
+  // The client follows that server signal only; it keeps no parallel pause state.
+  it('Stop follows the server goal state: shown while active, hidden on waiting_on_user, shown again on active', () => {
+    act(() => { useChatStore.setState({ isStreaming: false }); useChatStore.getState().handleFrame(goal('active')) })
+    render(<OmnipusComposer />)
+    expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
+    act(() => { useChatStore.getState().handleFrame({ ...goal('active'), state: 'waiting_on_user' }) })
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+    act(() => { useChatStore.getState().handleFrame(goal('active')) })
+    expect(screen.getByTestId('stop-btn')).toBeInTheDocument()
+  })
+
+  it('Stop of a running goal sends one cancel frame, and the button goes once the server reports waiting_on_user', () => {
+    vi.useFakeTimers()
+    act(() => { useChatStore.setState({ isStreaming: false }); useChatStore.getState().handleFrame(goal('active')) })
+    render(<OmnipusComposer />)
+    pressStop()
+    expect(sentCancelFrames(send)).toEqual([{ type: 'cancel', session_id: 'sess_test' }])
+    act(() => { useChatStore.getState().handleFrame({ ...goal('active'), state: 'waiting_on_user' }) })
+    act(() => { vi.advanceTimersByTime(3100) })
+    expect(screen.queryByTestId('stop-btn')).not.toBeInTheDocument()
+  })
+
   it('shows no Stop for an idle chat without a goal, or with a finished goal', () => {
     act(() => { useChatStore.setState({ isStreaming: false }) })
     const view = render(<OmnipusComposer />)

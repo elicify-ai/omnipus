@@ -126,3 +126,18 @@ describe('cancelStream is honest about what it did (round-1 review)', () => {
     expect(sender.send.mock.calls).toEqual([[{ type: 'cancel', session_id: SID_A }]])
   })
 })
+
+// The gateway reports a person's Stop as goal_status waiting_on_user and the next message as active.
+describe('cancelStream follows the server goal state across a pause', () => {
+  it('sends nothing while the goal is waiting_on_user, and again once the server reports active', () => {
+    act(() => { useChatStore.getState().handleFrame(goalFrame('active')) })
+    act(() => { useChatStore.getState().cancelStream() })
+    expect(sender.send).toHaveBeenCalledTimes(1)
+    act(() => { useChatStore.getState().handleFrame(goalFrame('waiting_on_user')) })
+    act(() => { useChatStore.getState().cancelStream() })
+    expect(sender.send).toHaveBeenCalledTimes(1)
+    act(() => { useChatStore.getState().handleFrame(goalFrame('active')) })
+    act(() => { useChatStore.getState().cancelStream() })
+    expect(sender.send).toHaveBeenCalledTimes(2)
+  })
+})
