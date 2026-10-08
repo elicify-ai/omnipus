@@ -682,7 +682,7 @@ for (const manifest of manifests) {
   }
 }
 
-test('AgentIcon renders commissioned motion frames and opaque >=3:1 ink on both backgrounds', async ({ page }) => {
+test('AgentIcon renders commissioned motion frames and opaque >=3:1 ink on both backgrounds', async ({ page }, testInfo) => {
     // Spec Safeguards / ARCH decision 3.2. Compile the real publication CSS
     // with the classes selected by real AgentIcon renders. No fake animation
     // styles, phase data attributes or source-text checks certify a frame.
@@ -773,7 +773,7 @@ test('AgentIcon renders commissioned motion frames and opaque >=3:1 ink on both 
         const inkL = luminance(sample.fill)
         const backgroundL = luminance(sample.background)
         expect((Math.max(inkL, backgroundL) + 0.05) / (Math.min(inkL, backgroundL) + 0.05), `dimmest ink contrast on ${background}`).toBeGreaterThanOrEqual(3)
-        const directory = resolve('test-results/wave1-testpower')
+        const directory = testInfo.outputPath('wave1-testpower')
         await mkdir(directory, { recursive: true })
         await thinking.screenshot({ path: resolve(directory, `thinking-dimmest-${background.slice(1)}.png`), animations: 'allow' })
       }
