@@ -20,6 +20,7 @@ import { queryClient } from '@/lib/queryClient'
 import { workspacesQueryKeys } from '@/lib/api'
 import { useSidebarStore } from '@/store/sidebar'
 import { useUiStore } from '@/store/ui'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 
 let reducedMotion = false
 
@@ -197,6 +198,13 @@ function renderSidebar() {
   )
 }
 
+async function expandAgents(workspaceName: string) {
+  const hide = screen.queryByRole('button', { name: `Hide ${workspaceName} agents` })
+  if (hide) return
+  const show = await screen.findByRole('button', { name: `Show ${workspaceName} agents` })
+  fireEvent.click(show)
+}
+
 beforeEach(() => {
   reducedMotion = false
   seam.mains.clear()
@@ -212,6 +220,7 @@ beforeEach(() => {
   mockNavigate.mockReset()
   act(() => {
     useSidebarStore.setState({ isOpen: true, isPinned: true })
+    useWorkspacesStore.setState({ activeWorkspaceId: null })
     useUiStore.setState({
       searchModalOpen: false,
       searchModalWorkspaceFilter: null,
@@ -242,6 +251,8 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
     renderSidebar()
     // FR-003 / BDD-01.1: the click is the Product launch pair. Mia is also a
     // member of Default (FR-001), so an unscoped name matches two rows.
+    // FR-002: a collapsed workspace hides its rows, so the click expands first.
+    await expandAgents('Product launch')
     const productGroup = await screen.findByRole('group', { name: 'Product launch' })
     fireEvent.click(within(productGroup).getByRole('button', { name: 'Mia' }))
     expect(mockSelectSession).toHaveBeenCalledTimes(1)
@@ -255,6 +266,8 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
     // This fixture shares one member record, so it proves per-workspace
     // presence, not two identities. The identity half of N02 / BDD-E01 is
     // eligibleMainAgents in src/lib/nav/eligibleMains.test.ts.
+    await expandAgents('Product launch')
+    await expandAgents('Default')
     const productGroup = await screen.findByRole('group', { name: 'Product launch' })
     const defaultGroup = await screen.findByRole('group', { name: 'Default' })
     const productMia = within(productGroup).getByRole('button', { name: 'Mia' })
@@ -264,6 +277,7 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
 
   it('BDD-03.3 Past sessions comes before New chat, as two independent named buttons', async () => {
     renderSidebar()
+    await expandAgents('Product launch')
     const productGroup = await screen.findByRole('group', { name: 'Product launch' })
     const mia = within(productGroup).getByRole('group', { name: 'Mia' })
     const past = within(mia).getByRole('button', { name: /^Past sessions$/ })
@@ -275,6 +289,7 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
 
   it('BDD-03.2 Past sessions opens one modal filtered by this workspace and this agent', async () => {
     renderSidebar()
+    await expandAgents('Product launch')
     const productGroup = await screen.findByRole('group', { name: 'Product launch' })
     const mia = within(productGroup).getByRole('group', { name: 'Mia' })
     fireEvent.click(within(mia).getByRole('button', { name: /^Past sessions$/ }))
@@ -290,12 +305,43 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
 
   it('N10 Admin is a row in the default workspace and not in Product launch', async () => {
     renderSidebar()
+    await expandAgents('Default')
+    await expandAgents('Product launch')
     const homeGroup = await screen.findByRole('group', { name: 'Default' })
     const productGroup = await screen.findByRole('group', { name: 'Product launch' })
     expect(within(homeGroup).getByRole('button', { name: 'Admin' })).toBeTruthy()
     expect(within(productGroup).queryByRole('button', { name: 'Admin' })).toBeNull()
     expect(within(productGroup).queryByRole('button', { name: 'Native worker' })).toBeNull()
     expect(within(productGroup).queryByRole('button', { name: 'Judge' })).toBeNull()
+  })
+
+  it('FR-002 a collapsed workspace shows no agent rows, only the 8px dot and the count', async () => {
+    renderSidebar()
+    const cue = await screen.findByRole('status', { name: '2 main chats need your attention' })
+    expect(cue).toHaveAttribute('data-cue-px', '8')
+    const show = await screen.findByRole('button', { name: 'Show Product launch agents' })
+    expect(show).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryAllByRole('button', { name: 'Mia' }), 'collapsed: no Mia row').toEqual([])
+    expect(screen.queryAllByRole('button', { name: 'Jim' }), 'collapsed: no Jim row').toEqual([])
+    expect(screen.queryAllByRole('button', { name: 'Admin' }), 'collapsed: no Admin row').toEqual([])
+    expect(screen.queryAllByRole('group', { name: 'Mia' }), 'collapsed: no Mia group').toEqual([])
+  })
+
+  it('the active workspace starts expanded and a collapsed workspace still hides its rows', async () => {
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'product-launch' })
+    })
+    renderSidebar()
+    const hide = await screen.findByRole('button', { name: 'Hide Product launch agents' })
+    expect(hide).toHaveAttribute('aria-expanded', 'true')
+    const productGroup = await screen.findByRole('group', { name: 'Product launch' })
+    expect(within(productGroup).getByRole('button', { name: 'Mia' })).toBeTruthy()
+    expect(within(productGroup).getByRole('button', { name: 'Jim' })).toBeTruthy()
+    const showDefault = await screen.findByRole('button', { name: 'Show Default agents' })
+    expect(showDefault).toHaveAttribute('aria-expanded', 'false')
+    const defaultGroup = screen.getByRole('group', { name: 'Default' })
+    expect(within(defaultGroup).queryByRole('button', { name: 'Mia' })).toBeNull()
+    expect(within(defaultGroup).queryByRole('button', { name: 'Admin' })).toBeNull()
   })
 
   it('A10 collapsed workspace shows a static-or-looping count of two and no agent-row dot', async () => {
@@ -321,6 +367,8 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
     fireEvent.click(expand)
     const productGroup = await screen.findByRole('group', { name: 'Product launch' })
     const mia = within(productGroup).getByRole('group', { name: 'Mia' })
+    expect(within(productGroup).getByRole('button', { name: 'Mia' })).toBeTruthy()
+    expect(within(productGroup).getByRole('button', { name: 'Jim' })).toBeTruthy()
     expect(mia.querySelector('[data-attention-halo="warning"]')).toBeTruthy()
     expect(mia.querySelector('[data-cue-px="8"]')).toBeNull()
     expect(screen.queryByRole('status', { name: '2 main chats need your attention' })).toBeNull()
