@@ -810,10 +810,13 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // G1: between a goal's turns nothing streams but the goal keeper will resume
       // the session, so an active goal counts as stoppable. No goal, nothing sent.
       const goalRunning = isGoalRunning(targetSid ? get().sessionsById[targetSid]?.goalStatus : null)
-      // A Stop marks the answer interrupted only when a turn is open to interrupt.
+      // A Stop marks the answer interrupted only while a turn is actually streaming.
       // An idle gap (goal running, nothing streaming) sends the cancel but leaves
       // the finished answer untouched; an idle chat with no goal sends nothing and
-      // marks nothing (the caller, useCancelState, shows no "Stopping..." for it).
+      // marks nothing. A Stop that races a `done` frame therefore marks nothing: the
+      // answer did finish. The one idle case that still shows "Stopping..." is `/stop`
+      // (cancelUnconditional): by design, the founder's second-Stop tree rule needs
+      // its first press to arm the confirmation window even on an idle parent chat.
       if (targetIsStreaming) get().markLastMessageInterrupted(sessionId)
       // A plain Stop supersedes any pending redirect: its turn_canceled is a
       // stop, and must keep "(interrupted)".
