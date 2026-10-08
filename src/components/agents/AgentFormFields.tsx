@@ -12,20 +12,21 @@ import { AgentColor } from '@/lib/api/generated/schemas'
 import { FIGURE_ART, IDENTITY_GROUP_ORDER, ROLE_VOCABULARY } from '@/lib/agentIdentity'
 import { ICON_OPTIONS, getIconComponent, type IconName } from '@/lib/agentIcons'
 
-const PALETTE_NAMES = ['Azure', 'Sky', 'Cyan', 'Indigo', 'Violet', 'Purple', 'Fuchsia', 'Pink', 'Orange', 'Grey'] as const
 
-export function paletteSwatches(): { hex: AgentColorValue; name: (typeof PALETTE_NAMES)[number] }[] {
-  return AgentColor.options.map((hex, index) => {
-    const name = PALETTE_NAMES[index]
-    if (!name) throw new Error(`Palette is missing a name for ${hex}`)
-    return { hex, name }
-  })
-}
+const SWATCH_HEXES = [
+  AgentColor.options[0],
+  AgentColor.options[1],
+  AgentColor.options[2],
+  AgentColor.options[3],
+  AgentColor.options[4],
+  AgentColor.options[5],
+  AgentColor.options[6],
+  AgentColor.options[7],
+  AgentColor.options[8],
+  AgentColor.options[9],
+] as const
 
-export function paletteInk(value: string | null | undefined): AgentColorValue {
-  const hit = AgentColor.options.find((hex) => hex.toLowerCase() === (value ?? '').toLowerCase())
-  return hit ?? AgentColor.options[AgentColor.options.length - 1]
-}
+const SWATCH_NAMES = ['Azure', 'Sky', 'Cyan', 'Indigo', 'Violet', 'Purple', 'Fuchsia', 'Pink', 'Orange', 'Grey'] as const
 
 // ── AgentFormFields ──────────────────────────────────────────────────────────
 //
@@ -277,13 +278,40 @@ export interface AvatarColorPickerProps {
   disabled?: boolean
 }
 
+function Swatch({
+  hex,
+  name,
+  pressed,
+  disabled,
+  testId,
+  onChange,
+}: {
+  hex: AgentColorValue
+  name: string
+  pressed: boolean
+  disabled: boolean
+  testId: string
+  onChange: (hex: AgentColorValue) => void
+}) {
+  return (
+    <IconButton
+      variant="ghost"
+      size="sm"
+      disabled={disabled}
+      data-testid={testId}
+      onClick={() => onChange(hex)}
+      className="h-7 w-7 rounded-full p-0"
+      style={{ backgroundColor: hex }}
+      aria-label={name}
+      aria-pressed={pressed}
+      title={name}
+    />
+  )
+}
+
 /**
- * 8-swatch avatar color picker. Uses the brand palette from
- * `src/lib/constants.ts`. Each button's `aria-label` and `title` resolve the
- * semantic name (e.g. "Forge Gold") via `avatarColorName()` so screen
- * readers announce the brand name instead of the raw hex. The selected
- * swatch is highlighted with a double-ring (primary + colour) so the
- * choice is visible against any background.
+ * Ten palette swatches. Names are the published palette order. The fill is
+ * the hex itself, forwarded unchanged from the swatch's own argument.
  */
 export function AvatarColorPicker({
   value,
@@ -292,24 +320,20 @@ export function AvatarColorPicker({
   className,
   disabled = false,
 }: AvatarColorPickerProps) {
-  const selected = paletteInk(value)
+  const selected = (value ?? '').toLowerCase()
   return (
     <div className={className ?? 'flex flex-wrap gap-[var(--space-2)]'}>
-      {paletteSwatches().map(({ hex, name }) => {
-        const isSelected = selected === hex
+      {SWATCH_HEXES.map((hex, index) => {
+        const name = SWATCH_NAMES[index]
         return (
-          <IconButton
-            key={hex}
-            variant="ghost"
-            size="sm"
+          <Swatch
+            key={name}
+            hex={hex}
+            name={name}
+            pressed={selected === hex.toLowerCase()}
             disabled={disabled}
-            data-testid={`${testIdPrefix}-${name}`}
-            onClick={() => onChange(hex)}
-            className="h-7 w-7 rounded-full p-0"
-            style={{ backgroundColor: hex }}
-            aria-label={name}
-            aria-pressed={isSelected}
-            title={name}
+            testId={`${testIdPrefix}-${name}`}
+            onChange={onChange}
           />
         )
       })}
@@ -389,7 +413,7 @@ export function IdentityPreview({
   role: AgentRole
   color: string | null | undefined
 }) {
-  return <AgentIcon figure={figure} role={role} color={paletteInk(color)} size={40} />
+  return <AgentIcon figure={figure} role={role} color={color as AgentColorValue} size={40} />
 }
 
 // ── Avatar icon picker (lifted from AgentProfile.tsx:869-878) ──────────────

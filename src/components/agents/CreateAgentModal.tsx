@@ -109,26 +109,22 @@ function normalizeWizardType(
  *    not carry `tools_cfg` at all — the external CLI runs its own tool loop
  *    and never reaches the Tools step (2-step wizard for that type).
  */
-function paletteColor(value: string): AgentColorValue | undefined {
-  for (const hex of AgentColor.options) {
-    if (hex === value) return hex
-  }
-  return undefined
+function isPaletteColor(value: string): value is AgentColorValue {
+  return (AgentColor.options as readonly string[]).includes(value)
 }
 
 /** Figure, role, and colour only. `icon` is never copied: the editor does not
- *  write the legacy Phosphor name. An untouched colour (the old seeded hex,
- *  or empty) is omitted so the server applies Grey. */
+ *  write the legacy Phosphor name. A colour that is not one of the ten is
+ *  omitted so the server applies Grey. */
 function identityOnCreate(payload: WizardSubmitPayload): {
   figure?: AgentFigure
   role?: AgentRole
   color?: AgentColorValue
 } {
-  const color = paletteColor(payload.color)
   return {
     ...(payload.figure ? { figure: payload.figure } : {}),
     ...(payload.role ? { role: payload.role } : {}),
-    ...(color ? { color } : {}),
+    ...(isPaletteColor(payload.color) ? { color: payload.color } : {}),
   }
 }
 

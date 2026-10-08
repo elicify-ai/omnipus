@@ -181,7 +181,7 @@ function reducer(state: WizardSubmitPayload, action: Action): WizardSubmitPayloa
 function initialPayload(initialType: WizardType, initialCli?: WizardCli): WizardSubmitPayload {
   // Untouched colour is Grey, the server default (ARCH 1.2). It is a palette
   // hex, so create sends it. Figure and role stay unset until picked.
-  const defaultColorHex = AgentColor.options[AgentColor.options.length - 1]
+  const defaultColorHex = AgentColor.options[9]
   return {
     type: initialType,
     cli: initialCli,

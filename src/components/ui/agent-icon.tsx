@@ -4,7 +4,7 @@ import type { AgentColor, AgentFigure, AgentRole } from '@/lib/api/generated/ope
 import { FIGURE_ART } from '@/lib/agentIdentity'
 import { cn } from '@/lib/utils'
 
-import { agentIconInner } from './agent-icon-art'
+import { agentIconInner } from '@/lib/agentIconArt'
 
 type AgentIconSize = 18 | 26 | 40 | 48
 type AgentIconMotion = 'none' | 'thinking' | 'working' | 'waiting'

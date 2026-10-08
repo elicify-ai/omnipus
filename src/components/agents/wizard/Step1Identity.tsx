@@ -33,7 +33,6 @@ import {
   FigurePicker,
   IdentityPreview,
   RolePicker,
-  paletteInk,
 } from '../AgentFormFields'
 import { ModelSelector, type ModelGroup } from '@/components/ui/model-selector'
 import { InheritToggle } from './InheritToggle'
@@ -154,7 +153,7 @@ export function Step1Identity({
 
       <div className="space-y-[var(--space-2)]">
         <Label>Preview</Label>
-        <IdentityPreview figure={payload.figure ?? 'Omnipus'} role={payload.role ?? 'general'} color={paletteInk(payload.color)} />
+        <IdentityPreview figure={payload.figure ?? 'Omnipus'} role={payload.role ?? 'general'} color={payload.color} />
       </div>
 
       <div className="space-y-[var(--space-2)]">
@@ -170,7 +169,7 @@ export function Step1Identity({
       <div className="space-y-[var(--space-2)]">
         <Label>Colour</Label>
         <AvatarColorPicker
-          value={paletteInk(payload.color)}
+          value={payload.color}
           onChange={(c) => setField('color', c)}
           testIdPrefix="wizard-color"
         />

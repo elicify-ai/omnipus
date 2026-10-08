@@ -910,13 +910,6 @@
       "publicTypes": ["AgentIconProps"]
     },
     {
-      "source": "src/components/ui/agent-icon-art.ts",
-      "classification": "domain",
-      "exports": ["agentIconInner"],
-      "publicExports": [],
-      "publicTypes": []
-    },
-    {
       "source": "src/lib/utils.ts",
       "classification": "foundations",
       "exports": [

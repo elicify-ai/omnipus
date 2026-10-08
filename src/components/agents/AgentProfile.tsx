@@ -40,7 +40,7 @@ import {
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { ExecutorSelector } from './ExecutorSelector'
-import { BehaviorFields, AvatarColorPicker, FigurePicker, RolePicker, AvatarHeader, UploadMdButton, paletteInk } from './AgentFormFields'
+import { BehaviorFields, AvatarColorPicker, FigurePicker, RolePicker, AvatarHeader, UploadMdButton } from './AgentFormFields'
 import { CliPathValidationHint } from './CliPathValidationHint'
 import { CommandPreview } from './CommandPreview'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -1500,7 +1500,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               <div className="space-y-[var(--space-1)]">
                 <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Colour</p>
                 <AvatarColorPicker
-                  value={paletteInk(selectedColor)}
+                  value={selectedColor}
                   disabled={!isFieldEditable('color')}
                   onChange={(color) => { markDirty(); setSelectedColor(color) }}
                   testIdPrefix="avatar-color"
