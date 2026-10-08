@@ -188,7 +188,7 @@ function WorkspaceBlock({
             onToggle()
           }}
           aria-expanded={isExpanded}
-          aria-label={isExpanded ? `Collapse ${project.name} sessions` : `Expand ${project.name} sessions`}
+          aria-label={isExpanded ? `Hide ${project.name} agents` : `Show ${project.name} agents`}
           className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] -m-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
         >
           {isExpanded ? <CaretDown size={12} /> : <CaretRight size={12} />}
