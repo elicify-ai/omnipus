@@ -4,6 +4,8 @@ A workspace is the container your work happens in. The chats, the tasks and thei
 
 ## What it is
 
+The main-chat destinations and attention cues on this page require the matching server update. If they are unavailable, follow the unavailable notice and **Retry**; Omnipus does not guess a main chat from recent conversations.
+
 Everything you do in Omnipus happens inside a workspace:
 
 - **Chats.** Every conversation belongs to a workspace. The sidebar lists your workspaces, and under each name it lists that workspace's main agents (Admin appears only on the default workspace). Choose an agent to open that pair's main chat, not whichever chat was most recently active. **Past sessions** opens earlier chats for that workspace and that agent, with both filters shown so you can remove one. **New chat** on the same row starts an extra chat with that agent and leaves the main chat in place. An amber dot on a collapsed workspace means one or more of its main chats need you; the text beside the dot says how many. If that count cannot be known, the sidebar says **Attention unavailable** and offers **Retry** instead of showing zero.
@@ -14,7 +16,7 @@ Everything you do in Omnipus happens inside a workspace:
 
 Opening a workspace restores the conversation this browser last opened there, when that conversation still belongs to the workspace. Otherwise it opens Ava's main chat. Chat shows **Restoring your conversation…** while it decides. If loading the conversation list fails, a warning says **Could not restore your last conversation. Retry to try again.** and offers **Retry**, which tries that choice again. The open chat stays; Omnipus does not switch to Ava. When there is no remembered conversation and Ava's main chat cannot be identified, the message box says **This chat is unavailable right now**, **Retry** tries again, and sending is turned off.
 
-Admin is listed under the default workspace even when Admin is not on the team. Workers are not listed. The agent list refreshes when you expand a workspace, when you select its name, and when you return to this browser tab. A tab you are not looking at does not refresh. You do not need to reload the page. If that list fails before any agents have loaded, an expanded workspace says **Could not load team** and offers **Retry**. If an earlier list is still held, that list stays.
+Admin is listed under the default workspace even when Admin is not on the team. Workers are not listed. The agent list refreshes when you expand a workspace, when you select its name, and when you return to this browser tab. The visibility-change refresh runs when this tab becomes visible. You do not need to reload the page. If that list fails before any agents have loaded, an expanded workspace says **Could not load team** and offers **Retry**. If an earlier list is still held, that list stays.
 
 On a fresh install, Omnipus creates one workspace for you, named **My Workspace**, with Mia, Jim, Ava, Planner, Researcher and General Purpose on the team. Admin remains available as the standalone operator without team membership. It is the default workspace: it is where Omnipus sends you when no other workspace is chosen, and it cannot be archived or deleted.
 
