@@ -585,7 +585,11 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
         await test.info().attach(`completed-${ordering}`, { body: await page.screenshot(), contentType: 'image/png' })
       } finally {
         releaseList()
-        await gw.stop()
+        // done refreshes the lifecycle list. Drain its active route.fetch
+        // before stopping the server or letting Playwright close the context;
+        // wait preserves handler failures, unlike ignoreErrors.
+        try { await page.unrouteAll({ behavior: 'wait' }) }
+        finally { await gw.stop() }
       }
     })
   }
