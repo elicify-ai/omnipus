@@ -6,7 +6,7 @@ A workspace is the container your work happens in. The chats, the tasks and thei
 
 Everything you do in Omnipus happens inside a workspace:
 
-- **Chats.** Every conversation belongs to a workspace. The sidebar lists your workspaces, and each one expands to show its own chats.
+- **Chats.** Every conversation belongs to a workspace. The sidebar lists your workspaces, and under each name it lists that workspace's main agents (Admin appears only on the default workspace). Choose an agent to open that pair's main chat, not whichever chat was most recently active. **Past sessions** opens earlier chats for that workspace and that agent, with both filters shown so you can remove one. **New chat** on the same row starts an extra chat with that agent and leaves the main chat in place. A yellow dot on a collapsed workspace means one or more of its main chats need you; the number is how many. If that count cannot be known, the sidebar says so and offers Retry instead of showing zero.
 - **Work items.** Tasks, plans, and the calendar of scheduled and repeating work are per workspace.
 - **Files.** A workspace holds its own library of files and notes.
 - **Team.** Each workspace picks its own agents, and sets its own rules for who may hand work to whom.

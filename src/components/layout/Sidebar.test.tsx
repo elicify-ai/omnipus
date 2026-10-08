@@ -3,7 +3,6 @@ import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useSidebarStore } from '@/store/sidebar'
 import { fetchWorkspaces, fetchSessions, fetchSessionPage, logout, fetchAppState, fetchGodMode } from '@/lib/api'
-import type { Session } from '@/lib/api'
 
 // JSDOM does not implement window.matchMedia — Sidebar uses it for pin breakpoint detection.
 // Return matches: true so canPin=true and the pin toggle button renders in tests.
@@ -331,13 +330,10 @@ describe('Sidebar — overlay rendering when open', () => {
 // the new, still-narrower contract that actually matters: the sidebar's
 // top-level query calls fetchSessions with ZERO opts (so the roots-only
 // default and the excluded-verifier default both still apply by
-// construction) — `toHaveBeenCalledWith()` still holds today because
-// Sidebar.tsx's top-level `fetchSessions()` call is genuinely unchanged
-// (paging happens one level down, per-node, via fetchSessionPage in
-// useSessionForest — see the BDD-104 tree test below for that call shape).
-// Restated as an explicit positive assertion instead of the previous
-// "called with literally nothing" phrasing so a future paging change to
-// THIS call site is caught here rather than silently drifting.
+// construction). Sidebar.tsx::fetchSessions is still that zero-arg call.
+// The old per-node fetchSessionPage tree is gone with the session accordion;
+// this assertion stays because verifier exclusion is still the default of
+// the remaining query.
 describe('Sidebar — ADR-052 FR-036: verifier sessions excluded by default', () => {
   it('calls the top-level fetchSessions() with zero options — no include_verifier, no explicit paging (roots-only default applies)', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
@@ -570,309 +566,17 @@ describe('Sidebar — username popup: Notifications', () => {
   })
 })
 
-// ── Workspace session accordion ────────────────────────────────────────────
-//
-// Previously zero coverage: fetchSessions was mocked to [] and useSelectSession
-// was a bare `() => vi.fn()` in every existing test, so the accordion's session
-// rows, "New chat" row, and "More…" entry never actually rendered or fired.
+// Removed with the sidebar session accordion (agent-first navigation).
+// Those cases asserted session titles, "More…", a workspace-level New chat,
+// heartbeat-first ordering, an HB badge, accordion delete-absence, and the
+// ADR-057 parent/delegate tree. The sidebar now lists eligible main agents
+// (FR-001, FR-003), not session rows. Extras start only from the agent-row
+// action (FR-005; Sidebar.agentRows.test.tsx). Session titles, per-row
+// status, and parent/helper nesting live in the Sessions view (FR-006,
+// FR-026, FR-030, BDD-08.2). The case "sessions are absent before expand"
+// passed only because it queried a session title the sidebar no longer
+// renders, so it was removed with them rather than left as a vacuous green.
 
-const accordionWorkspace = {
-  id: 'ws-accordion-1',
-  name: 'Accordion Workspace',
-  is_default: false,
-  status: 'active' as const,
-  pinned: false,
-  pin_order: 0,
-  task_count: 0,
-  created_at: '2026-04-01T00:00:00Z',
-  updated_at: '2026-04-01T00:00:00Z',
-}
-
-const accordionSession = {
-  id: 'sess-accordion-1',
-  agent_id: 'agent-1',
-  active_agent_id: 'agent-1',
-  title: 'Accordion Session One',
-  type: 'chat' as const,
-  workspace_id: accordionWorkspace.id,
-  channel: 'webchat',
-  created_at: '2026-04-01T00:00:00Z',
-  updated_at: '2026-04-01T02:00:00Z',
-  message_count: 1,
-}
-
-// A second, regular (non-heartbeat) session, MORE recently updated than
-// `accordionSession` — used to prove "More…" still lands last with >=2
-// session rows (the previous fixture only ever had one).
-const accordionSessionTwo = {
-  id: 'sess-accordion-2',
-  agent_id: 'agent-1',
-  active_agent_id: 'agent-1',
-  title: 'Accordion Session Two',
-  type: 'chat' as const,
-  workspace_id: accordionWorkspace.id,
-  channel: 'webchat',
-  created_at: '2026-04-01T00:00:00Z',
-  updated_at: '2026-04-01T03:00:00Z',
-  message_count: 1,
-}
-
-// A heartbeat-type session, deliberately OLDER (by updated_at) than both
-// regular sessions above — Sidebar.tsx's accordion sort (:382-383) sorts
-// heartbeat sessions first regardless of recency, then falls back to
-// recent-first. This fixture proves the sort is type-driven, not just
-// recency-driven (a heartbeat session with a newer updated_at would pass a
-// weaker "heartbeat sorts by recency too" test even if the type-priority
-// branch were deleted).
-const accordionSessionHeartbeat = {
-  id: 'sess-accordion-hb',
-  agent_id: 'agent-1',
-  active_agent_id: 'agent-1',
-  title: 'Accordion Heartbeat Session',
-  type: 'heartbeat' as const,
-  workspace_id: accordionWorkspace.id,
-  channel: 'webchat',
-  created_at: '2026-04-01T00:00:00Z',
-  updated_at: '2026-04-01T00:30:00Z',
-  message_count: 1,
-}
-
-// Locates the expanded accordion body (the sibling div rendered right after
-// the workspace's header row) from its "Expand … sessions" toggle button.
-function getAccordionBody(workspaceName: string): HTMLElement {
-  // The toggle's aria-label flips between "Expand …" and "Collapse …" once
-  // expanded, so match either.
-  const toggleButton = screen.getByLabelText(new RegExp(`(Expand|Collapse) ${workspaceName} sessions`))
-  const headerRow = toggleButton.closest('div')
-  const body = headerRow?.nextElementSibling
-  if (!body) throw new Error('accordion body not found — workspace group is not expanded')
-  return body as HTMLElement
-}
-
-async function renderAndExpandAccordion() {
-  vi.mocked(fetchWorkspaces).mockResolvedValue([accordionWorkspace] as never)
-  act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-  render(<Sidebar />, { wrapper: makeWrapper() })
-
-  const expandButton = await screen.findByLabelText('Expand Accordion Workspace sessions')
-  act(() => { fireEvent.click(expandButton) })
-  return expandButton
-}
-
-describe('Sidebar — workspace session accordion', () => {
-  it('renders the workspace sessions once the workspace is expanded', async () => {
-    vi.mocked(fetchSessions).mockResolvedValue([accordionSession] as never)
-    await renderAndExpandAccordion()
-
-    expect(await screen.findByText('Accordion Session One')).toBeTruthy()
-  })
-
-  it('does not render sessions before the workspace is expanded', async () => {
-    vi.mocked(fetchSessions).mockResolvedValue([accordionSession] as never)
-    vi.mocked(fetchWorkspaces).mockResolvedValue([accordionWorkspace] as never)
-    act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
-    render(<Sidebar />, { wrapper: makeWrapper() })
-
-    await screen.findByText('Accordion Workspace')
-    expect(screen.queryByText('Accordion Session One')).toBeNull()
-  })
-
-  it('renders the "More…" entry LAST in the accordion body, after the New-chat row and every session row', async () => {
-    vi.mocked(fetchSessions).mockResolvedValue([accordionSession] as never)
-    await renderAndExpandAccordion()
-    await screen.findByText('Accordion Session One')
-
-    const body = getAccordionBody('Accordion Workspace')
-    const buttons = Array.from(body.querySelectorAll('button'))
-    expect(buttons.length).toBeGreaterThanOrEqual(3) // New chat, the session row, More…
-
-    const last = buttons[buttons.length - 1]
-    expect(last.textContent).toBe('More…')
-
-    // Every other button (New chat + session rows) must precede it.
-    for (const btn of buttons.slice(0, -1)) {
-      expect(btn.textContent).not.toBe('More…')
-    }
-  })
-
-  it('renders "More…" LAST with >=2 session rows (not just the single-session fixture above)', async () => {
-    vi.mocked(fetchSessions).mockResolvedValue(
-      [accordionSession, accordionSessionTwo] as never,
-    )
-    await renderAndExpandAccordion()
-    await screen.findByText('Accordion Session One')
-    await screen.findByText('Accordion Session Two')
-
-    const body = getAccordionBody('Accordion Workspace')
-    const buttons = Array.from(body.querySelectorAll('button'))
-    // New chat, session one, session two, More… — at least 4 rows.
-    expect(buttons.length).toBeGreaterThanOrEqual(4)
-
-    const last = buttons[buttons.length - 1]
-    expect(last.textContent).toBe('More…')
-    for (const btn of buttons.slice(0, -1)) {
-      expect(btn.textContent).not.toBe('More…')
-    }
-  })
-
-  it('sorts heartbeat-type sessions before regular sessions regardless of recency (heartbeat-first, Sidebar.tsx accordion sort)', async () => {
-    // accordionSessionHeartbeat.updated_at is OLDER than both regular
-    // sessions — if the sort were purely recency-based, it would sort last,
-    // not first. This proves the `s.type === 'heartbeat'` branch is real.
-    vi.mocked(fetchSessions).mockResolvedValue(
-      [accordionSession, accordionSessionTwo, accordionSessionHeartbeat] as never,
-    )
-    await renderAndExpandAccordion()
-    await screen.findByText('Accordion Heartbeat Session')
-    await screen.findByText('Accordion Session One')
-    await screen.findByText('Accordion Session Two')
-
-    const body = getAccordionBody('Accordion Workspace')
-    const rowTitles = Array.from(body.querySelectorAll('button'))
-      .map((b) => (b.textContent ?? '').trim())
-      .filter((t) => t !== 'New chat' && t !== 'More…')
-
-    // Heartbeat session must be the FIRST session row (right after "New chat").
-    expect(rowTitles[0]).toContain('Accordion Heartbeat Session')
-    // The two regular sessions follow, most-recently-updated first.
-    expect(rowTitles[1]).toContain('Accordion Session Two')
-    expect(rowTitles[2]).toContain('Accordion Session One')
-
-    // The heartbeat row also carries the "HB" badge (the other cue for the
-    // same underlying state).
-    const hbRow = screen.getByText('Accordion Heartbeat Session').closest('button')
-    expect(hbRow?.textContent).toContain('HB')
-  })
-
-  it('does not offer a delete/remove action for any session row in the accordion (none exists in Sidebar.tsx today)', async () => {
-    // Session.protected (see src/lib/api.ts) documents that a protected
-    // (heartbeat-backed) session should have its delete button HIDDEN — but
-    // the accordion never renders a delete/trash action for ANY session,
-    // protected or not, so there is nothing to conditionally disable here.
-    // Asserting the absence directly (rather than skipping this) keeps a
-    // future "add session delete to the sidebar" change honest about also
-    // wiring the protected-session guard.
-    vi.mocked(fetchSessions).mockResolvedValue(
-      [accordionSession, accordionSessionHeartbeat] as never,
-    )
-    await renderAndExpandAccordion()
-    await screen.findByText('Accordion Session One')
-    await screen.findByText('Accordion Heartbeat Session')
-
-    const body = getAccordionBody('Accordion Workspace')
-    const interactive = Array.from(body.querySelectorAll('button, [role="button"]'))
-    expect(interactive.length).toBeGreaterThan(0)
-
-    for (const el of interactive) {
-      const signal = [
-        el.getAttribute('aria-label') ?? '',
-        el.getAttribute('title') ?? '',
-        el.textContent ?? '',
-      ]
-        .join(' ')
-        .toLowerCase()
-      expect(signal).not.toMatch(/delete|remove|trash/)
-    }
-  })
-
-  it('the New-chat row exists and triggers startNewSession + workspace activation on click', async () => {
-    const expandButton = await renderAndExpandAccordion()
-    void expandButton
-
-    const newChatButton = await screen.findByText('New chat')
-    act(() => { fireEvent.click(newChatButton) })
-
-    expect(mockSetActiveWorkspaceId).toHaveBeenCalledWith(accordionWorkspace.id)
-    expect(mockStartNewSession).toHaveBeenCalledTimes(1)
-    // Overlay (unpinned) sidebar closes after the action.
-    expect(useSidebarStore.getState().isOpen).toBe(false)
-  })
-
-  it('clicking a session row calls the select-session handler with that session', async () => {
-    vi.mocked(fetchSessions).mockResolvedValue([accordionSession] as never)
-    await renderAndExpandAccordion()
-
-    const sessionRow = await screen.findByText('Accordion Session One')
-    act(() => { fireEvent.click(sessionRow) })
-
-    expect(mockSelectSession).toHaveBeenCalledTimes(1)
-    expect(mockSelectSession).toHaveBeenCalledWith(
-      expect.objectContaining({ id: accordionSession.id, title: accordionSession.title }),
-    )
-  })
-})
-
-// ADR-057 US-19/FR-093/BDD-104 (operator decision 1 — nested under parent,
-// not the `verifier` hidden-with-a-flag precedent): a wide delegation
-// fan-out must never evict the parent chat from the sidebar's maxVisible=9
-// root budget, because delegate children are never top-level rows in the
-// first place — they render nested under their real parent, collapsed by
-// default, fetched only on expand (test #101
-// TestSidebarTree_ParentSurvivesWideFanOut).
-describe('Sidebar — ADR-057 US-19/FR-093: session tree survives a wide delegation fan-out', () => {
-  function makeChild(i: number, parentId: string): Session {
-    return {
-      id: `child-${i}`,
-      agent_id: 'agent-1',
-      active_agent_id: 'agent-1',
-      title: `Delegated task ${i}`,
-      type: 'delegate',
-      workspace_id: accordionWorkspace.id,
-      created_at: '2026-04-02T00:00:00Z',
-      updated_at: '2026-04-02T00:00:00Z',
-      message_count: 1,
-      parent_session_id: parentId,
-    }
-  }
-
-  it('the parent chat stays visible and its 24 children are collapsed behind an expand affordance, not counted against the root budget', async () => {
-    // Positive lower bound (Rule 4): the fixture really does carry 24
-    // children before asserting anything about them being hidden — a test
-    // asserting "zero children rendered" against an empty fixture would pass
-    // vacuously.
-    const children = Array.from({ length: 24 }, (_, i) => makeChild(i, accordionSession.id))
-    expect(children).toHaveLength(24)
-
-    // The default (non-flat) session list is roots-only per FR-091 — the
-    // fixture reflects that contract: only the ROOT parent chat comes back
-    // from the top-level fetchSessions() call, carrying child_count.
-    vi.mocked(fetchSessions).mockResolvedValue([
-      { ...accordionSession, child_count: 24 },
-    ] as never)
-    await renderAndExpandAccordion()
-
-    // The parent is present — the R-9 eviction this story exists to prevent
-    // would instead show 9 delegate-child rows and no parent at all.
-    expect(await screen.findByText('Accordion Session One')).toBeTruthy()
-
-    // Its children are NOT inline — an expand affordance exists instead.
-    const expandChildrenBtn = await screen.findByRole('button', {
-      name: 'Expand Accordion Session One delegated sessions',
-    })
-    expect(expandChildrenBtn).toBeTruthy()
-    expect(expandChildrenBtn.getAttribute('aria-expanded')).toBe('false')
-    expect(screen.queryByText('Delegated task 0')).toBeNull()
-    expect(screen.queryByText('Delegated task 23')).toBeNull()
-
-    // Expanding fetches and reveals them, nested under the parent — a single
-    // request scoped to this node (BDD-103: O(expanded nodes), not O(all
-    // sessions)) — never a bulk load of every session up front.
-    vi.mocked(fetchSessionPage).mockResolvedValueOnce({ sessions: children })
-    act(() => { fireEvent.click(expandChildrenBtn) })
-
-    expect(await screen.findByText('Delegated task 0')).toBeTruthy()
-    expect(screen.getByText('Delegated task 23')).toBeTruthy()
-    expect(vi.mocked(fetchSessionPage)).toHaveBeenCalledWith(
-      undefined,
-      undefined,
-      expect.objectContaining({ parentSessionId: accordionSession.id }),
-    )
-    expect(expandChildrenBtn.getAttribute('aria-expanded')).toBe('true')
-
-    // The parent is STILL present — expanding its children never displaces it.
-    expect(screen.getByText('Accordion Session One')).toBeTruthy()
-  })
-})
 
 describe('Sidebar — username popup: User + Sign out', () => {
   it('renders the username on the trigger button', () => {
