@@ -1833,6 +1833,13 @@ func (al *AgentLoop) runAgentLoop(
 		}
 	}
 
+	// A user message saved after a Stop lifts the goal keeper's Stop-pause as
+	// its turn STARTS, so the client is told the goal is active again while the
+	// turn runs (not only once it ends). Cheap no-op unless a pause is held.
+	if (opts.UserInitiated || opts.IsTaskRun) && opts.TranscriptStore != nil && opts.TranscriptSessionID != "" {
+		al.liftGoalKeeperStopPauseIfNewTurn(opts.TranscriptStore, opts.TranscriptSessionID)
+	}
+
 	ts, admissionErr := al.newTurnStateForAdmission(agent, opts)
 	if admissionErr != nil {
 		return "", admissionErr
