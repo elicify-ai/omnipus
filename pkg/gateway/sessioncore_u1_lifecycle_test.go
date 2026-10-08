@@ -117,6 +117,8 @@ func TestSessionCoreU1_MainWorkspaceTagCannotBeRepointed(t *testing.T) {
 	env.seedWorkspace(t, ws, false, "jim")
 	require.Equal(t, http.StatusOK, env.putTeam(t, ws, "jim", "mia").Code, "control: add Mia")
 	mainID := u1MainID(ws, "mia")
+	_, code := env.getSession(t, mainID)
+	require.Equal(t, http.StatusOK, code, "precondition: the main exists, so a SetMeta error below is about immutability, not absence")
 
 	other := "01JU1OTHERTARGET0000000D"
 	err := env.store(t).SetMeta(mainID, session.MetaPatch{WorkspaceID: &other})
