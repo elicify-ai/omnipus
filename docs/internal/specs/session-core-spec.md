@@ -1,5 +1,5 @@
 Repository root: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/
-Status: In review
+Status: Approved (founder, 2026-10-08)
 ADR: [Session core with an agent address book: reuse one standing session, one archive and the existing execution paths](../architecture/ADR-20261006-session-core-with-an-agent-address-book.md)
 
 # Feature Specification: Session core
