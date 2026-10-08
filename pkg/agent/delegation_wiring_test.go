@@ -67,7 +67,7 @@ func TestDelegationWiring_GraphSource(t *testing.T) {
 	_ = al
 
 	// workspaceID="" → injector resolves the default workspace (wsID flagged is_default).
-	got := cb.buildDynamicContext("", "", "", "", "")
+	got := cb.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(got, "## Delegation") {
 		t.Fatalf("Delegation block missing.\ngot: %s", got)
 	}
@@ -95,7 +95,7 @@ func TestDelegationWiring_RuntimeGraphRefresh(t *testing.T) {
 	_ = al
 
 	// Phase A: worker must appear.
-	got1 := cb.buildDynamicContext("", "", "", "", "")
+	got1 := cb.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(got1, "worker") {
 		t.Fatalf("Phase A: expected 'worker' in Delegation block.\ngot: %s", got1)
 	}
@@ -104,7 +104,7 @@ func TestDelegationWiring_RuntimeGraphRefresh(t *testing.T) {
 	rewriteWorkspaceGraph(t, home, wsID, true, nil)
 
 	// The SAME ContextBuilder — no rebuild — now reads the updated graph.
-	got2 := cb.buildDynamicContext("", "", "", "", "")
+	got2 := cb.buildDynamicContext(0, "", "", "", "", "")
 	if strings.Contains(got2, "ray") {
 		t.Fatalf("Phase B: 'ray' must be gone after graph edit.\ngot: %s", got2)
 	}
@@ -129,7 +129,7 @@ func TestDelegationWiring_RuntimeGraphRefresh_AddEdge(t *testing.T) {
 	al, cb := wireTestLoopWithGraph(t, agentID)
 	_ = al
 
-	got1 := cb.buildDynamicContext("", "", "", "", "")
+	got1 := cb.buildDynamicContext(0, "", "", "", "", "")
 	// Without edges, the injector renders cannot-delegate.
 	if !strings.Contains(got1, "cannot delegate") {
 		t.Logf("Phase A: got: %s", got1)
@@ -140,7 +140,7 @@ func TestDelegationWiring_RuntimeGraphRefresh_AddEdge(t *testing.T) {
 		edge("jim", "worker", nil, nil),
 	})
 
-	got2 := cb.buildDynamicContext("", "", "", "", "")
+	got2 := cb.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(got2, "## Delegation") {
 		t.Fatalf("Phase B: Delegation block missing after adding edge.\ngot: %s", got2)
 	}
@@ -173,7 +173,7 @@ func TestDelegationWiring_BootPath(t *testing.T) {
 		t.Fatalf("agent %q not in registry at boot", agentID)
 	}
 
-	got := inst.ContextBuilder.buildDynamicContext("", "", "", "", "")
+	got := inst.ContextBuilder.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(got, "## Delegation") {
 		t.Fatalf("boot path: Delegation block missing for %q.\ngot: %s", agentID, got)
 	}
@@ -216,7 +216,7 @@ func TestDelegationWiring_AgentAddedOnReload(t *testing.T) {
 		t.Fatalf("new agent %q not in registry after reload", newAgentID)
 	}
 
-	got := inst.ContextBuilder.buildDynamicContext("", "", "", "", "")
+	got := inst.ContextBuilder.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(got, "## Delegation") {
 		t.Fatalf("new agent added on reload: Delegation block missing.\ngot: %s", got)
 	}
@@ -258,7 +258,7 @@ func TestDelegationWiring_Race_ConcurrentRenderAndSwap(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				_ = cb.buildDynamicContext("", "", "", "", "")
+				_ = cb.buildDynamicContext(0, "", "", "", "", "")
 			}
 		}
 	}()
@@ -303,7 +303,7 @@ func TestDelegationWiring_NilInjectorNoBlock(t *testing.T) {
 
 	cb := NewContextBuilder(dir) // no WithDelegationInjector call
 
-	got := cb.buildDynamicContext("", "", "", "", "")
+	got := cb.buildDynamicContext(0, "", "", "", "", "")
 
 	if strings.Contains(got, "## Delegation") {
 		t.Errorf("with no injector set, Delegation block must not appear.\ngot: %s", got)
@@ -324,7 +324,7 @@ func TestDelegationWiring_BlockInDynamicNotCachedSection(t *testing.T) {
 	delegationBlock := "## Delegation\nSentinel delegation text"
 
 	cb := NewContextBuilder(dir)
-	cb.WithDelegationInjector(func(_ string) string { return delegationBlock })
+	cb.WithDelegationInjector(func(_ string, _ int) string { return delegationBlock })
 
 	// The static cached prompt must NOT contain the delegation block.
 	staticPrompt := cb.BuildSystemPromptWithCache()
@@ -333,7 +333,7 @@ func TestDelegationWiring_BlockInDynamicNotCachedSection(t *testing.T) {
 	}
 
 	// The dynamic context MUST contain the delegation block.
-	dynamic := cb.buildDynamicContext("", "", "", "", "")
+	dynamic := cb.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(dynamic, "Sentinel delegation text") {
 		t.Errorf("delegation block must appear in buildDynamicContext output; got:\n%s", dynamic)
 	}
@@ -355,7 +355,7 @@ func TestDelegationWiring_FailClosedWhenNoDefaultWorkspace(t *testing.T) {
 	al, cb := wireTestLoopWithGraph(t, agentID)
 	_ = al
 
-	got := cb.buildDynamicContext("", "", "", "", "")
+	got := cb.buildDynamicContext(0, "", "", "", "", "")
 	// Must fail-closed: no workspace ⇒ "cannot delegate".
 	if !strings.Contains(got, "cannot delegate") {
 		t.Fatalf("expected fail-closed 'cannot delegate' when no default workspace, got:\n%s", got)
@@ -378,7 +378,7 @@ func TestDelegationWiring_FailClosedWhenWorkspaceUnreadable(t *testing.T) {
 
 	// Pass a workspace ID that does not exist on disk.
 	const missingWS = "01JWWIRINGMISS00000000001"
-	got := cb.buildDynamicContext(missingWS, "", "", "", "")
+	got := cb.buildDynamicContext(0, missingWS, "", "", "", "")
 	if !strings.Contains(got, "cannot delegate") {
 		t.Fatalf("expected fail-closed 'cannot delegate' for unreadable workspace, got:\n%s", got)
 	}
@@ -410,13 +410,13 @@ func TestDelegationWiring_WorkspaceIDThreaded(t *testing.T) {
 	_ = al
 
 	// Without workspaceID (resolves to default): worker must appear.
-	gotDefault := cb.buildDynamicContext("", "", "", "", "")
+	gotDefault := cb.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(gotDefault, "worker") {
 		t.Fatalf("default workspace: expected 'worker'; got:\n%s", gotDefault)
 	}
 
 	// With bound workspaceID (wsBound): ava must appear, worker must NOT.
-	gotBound := cb.buildDynamicContext(wsBound, "", "", "", "")
+	gotBound := cb.buildDynamicContext(0, wsBound, "", "", "", "")
 	if !strings.Contains(gotBound, "ava") {
 		t.Fatalf("bound workspace: expected 'ava'; got:\n%s", gotBound)
 	}
@@ -454,7 +454,7 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 	_ = al
 
 	// (a) render the delegation block.
-	got := cb.buildDynamicContext(wsID, "", "", "", "")
+	got := cb.buildDynamicContext(0, wsID, "", "", "", "")
 
 	// jim must appear.
 	if !strings.Contains(got, "jim") {

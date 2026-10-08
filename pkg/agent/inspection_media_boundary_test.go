@@ -386,7 +386,7 @@ func TestReadImage_ProviderFailureAndCandidate(t *testing.T) {
 		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "inspect-1", Type: "function", Name: "boundary_inspection"}}},
 		{Role: "tool", ToolCallID: "inspect-1", Content: inspectionMarker},
 	}
-	if _, err := rt.callProvider(canonical, nil); err != nil {
+	if _, err := rt.callProviderOnce(canonical, nil); err != nil {
 		t.Fatal(err)
 	}
 	if rechecks != 2 {
@@ -417,7 +417,7 @@ func TestReadImage_ProviderFailureAndCandidate(t *testing.T) {
 		activeCandidates: []providers.FallbackCandidate{{Provider: "302ai", Model: "chatgpt-4o-latest"}, {Provider: "302ai", Model: "deepseek-chat"}},
 		llmModel:         "chatgpt-4o-latest", inspectionImages: map[string][]tools.InspectionImage{"inspect-1": {{Bytes: imageBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { nonVisionChecks++; return nil }}}},
 	}
-	if _, err := nonVisionRT.callProvider(canonical, nil); err != nil {
+	if _, err := nonVisionRT.callProviderOnce(canonical, nil); err != nil {
 		t.Fatal(err)
 	}
 	if nonVisionChecks != 1 {
@@ -445,7 +445,7 @@ func TestReadImage_ProviderFailureAndCandidate(t *testing.T) {
 		activeCandidates: []providers.FallbackCandidate{{Provider: "302ai", Model: "chatgpt-4o-latest"}, {Provider: "zai", Model: "glm-4.5v"}},
 		llmModel:         "chatgpt-4o-latest", inspectionImages: map[string][]tools.InspectionImage{"inspect-1": {{Bytes: imageBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { cancelChecks++; return nil }}}},
 	}
-	if _, err := cancelRT.callProvider(canonical, nil); !errors.Is(err, context.Canceled) {
+	if _, err := cancelRT.callProviderOnce(canonical, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled provider error = %v, want context.Canceled", err)
 	}
 	if cancelChecks != 1 || len(cancelProvider.requests["glm-4.5v"]) != 0 {
@@ -461,7 +461,7 @@ func TestReadImage_ProviderFailureAndCandidate(t *testing.T) {
 		inspectionImages: map[string][]tools.InspectionImage{"inspect-1": {{Bytes: imageBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { unknownChecks++; return nil }}}},
 	}
 	unknownRT.al.SetCapabilityCatalog(cat)
-	if _, err := unknownRT.callProvider(canonical, nil); err != nil {
+	if _, err := unknownRT.callProviderOnce(canonical, nil); err != nil {
 		t.Fatal(err)
 	}
 	if unknownChecks != 1 || !requestHasInspectionMedia(unknownProvider.requests["future-model"]) {
@@ -479,7 +479,7 @@ func TestReadImage_ProviderFailureAndCandidate(t *testing.T) {
 		activeCandidates: []providers.FallbackCandidate{{Provider: "302ai", Model: "chatgpt-4o-latest"}, {Provider: "zai", Model: "glm-4.5v"}}, llmModel: "chatgpt-4o-latest",
 		inspectionImages: map[string][]tools.InspectionImage{"inspect-1": {{Bytes: imageBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { timeoutChecks++; return nil }}}},
 	}
-	if _, err := timeoutRT.callProvider(canonical, nil); err != nil {
+	if _, err := timeoutRT.callProviderOnce(canonical, nil); err != nil {
 		t.Fatal(err)
 	}
 	if timeoutChecks != 2 || !requestHasInspectionMedia(timeoutProvider.requests["glm-4.5v"]) {

@@ -11,11 +11,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -248,9 +246,6 @@ type restAPICreateAgentPrepareAgent struct {
 	modelParamsIn  *agentModelParamsInput
 	mcpServers     *[]agentCreateMCPServerInput
 	policyChanges  *agentmutation.ToolPolicyChanges
-	// autoApproveDisabled is ADR-092's per-agent "Never auto-approve"
-	// switch (Main and Subagent only; subagent_3p runs its own CLI's tools).
-	autoApproveDisabled *bool
 	// maxToolIterations is the new agent's own tool-iteration limit (#904,
 	// every variant incl. subagent_3p per D14); nil = rides the global.
 	maxToolIterations *int
@@ -415,7 +410,6 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 			return nil, true
 		}
 		pap.name = vreq.Name
-		pap.autoApproveDisabled = vreq.AutoApproveDisabled
 		pap.description = vreq.Description
 		pap.model = vreq.Model
 		pap.provider = vreq.Provider
@@ -436,7 +430,6 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 			return nil, true
 		}
 		pap.name = vreq.Name
-		pap.autoApproveDisabled = vreq.AutoApproveDisabled
 		pap.description = vreq.Description
 		pap.model = vreq.Model
 		pap.provider = vreq.Provider
@@ -629,11 +622,6 @@ func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool)
 	// helper that fix introduced for updateAgent; existing is nil here since
 	// this is a brand-new agent record.
 	pap.cra.ac.ModelParams = mergeAgentModelParams(nil, pap.modelParamsIn)
-	// ADR-092: the operator may create an agent with Auto-approve forced off
-	// (tighten-only; false or absent inherits the global default).
-	if pap.autoApproveDisabled != nil {
-		pap.cra.ac.AutoApproveDisabled = *pap.autoApproveDisabled
-	}
 	// Heartbeat is workspace-scoped (ADR-027); no per-agent heartbeat at create.
 	if pap.skills != nil && len(*pap.skills) > 0 {
 		pap.cra.ac.Skills = make([]string, len(*pap.skills))
@@ -847,7 +835,6 @@ func (cra *restAPICreateAgent) publishResponse() {
 	//
 	// The "warning" field signals a partial success — frontend must check this field.
 	createReloadWarning := cra.a.fastAgentUpsert(cra.ac.ID)
-	cra.auditAutoApproveDisabled()
 	// Build the response from local variables only (do NOT read from live config — race).
 	respModel := cra.defaultModelName
 	if cra.ac.Model != nil && cra.ac.Model.Primary != "" {
@@ -901,19 +888,4 @@ func (cra *restAPICreateAgent) publishResponse() {
 	changed := []string{"name", "type", "soul"}
 	ag.ChangedFields = &changed
 	jsonCreated(cra.w, ag)
-}
-
-// auditAutoApproveDisabled writes ADR-092's FR-032(a) mode-change event when
-// an agent is created with Auto-approve forced off, mirroring the PUT path's
-// auditAutoApproveChange. A create without the switch (or with it false)
-// inherits the global default unchanged, so there is no change to record.
-func (cra *restAPICreateAgent) auditAutoApproveDisabled() {
-	if !cra.ac.AutoApproveDisabled || cra.a.agentLoop == nil {
-		return
-	}
-	al := cra.a.agentLoop
-	resolved := agent.ResolveAutoApprove(al.GetConfig(), cra.ac.ID, nil)
-	audit.EmitShellModeChange(cra.r.Context(), al.AuditLogger(), audit.DecisionAllow,
-		shellModeName(resolved), "agent", audit.ShellModeActorOperator,
-		cra.ac.ID, "", "agents."+cra.ac.ID+".auto_approve_disabled")
 }

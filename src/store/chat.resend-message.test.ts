@@ -181,3 +181,44 @@ describe('chat store — resendMessage (review finding 17)', () => {
     expect(mockSend).not.toHaveBeenCalled()
   })
 })
+
+describe('chat store — resendMessage and the unanswered marker (F1)', () => {
+  const unansweredBucket = (marker: string | null): SessionChatState => ({
+    ...bucketFor([
+      { id: 'u-1', session_id: TEST_SESSION_ID, role: 'user', content: 'Write the report', timestamp: '2026-10-07T00:00:00Z', status: 'done' },
+    ]),
+    unansweredLastUserMessageId: marker,
+  })
+
+  it('clears unansweredLastUserMessageId when an answer is requested for that question', () => {
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send: vi.fn().mockReturnValue(true), disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
+        isConnected: true,
+      })
+      useChatStore.setState({ sessionsById: { [TEST_SESSION_ID]: unansweredBucket('u-1') } })
+    })
+    act(() => { useChatStore.getState().resendMessage('u-1') })
+    expect(useChatStore.getState().sessionsById[TEST_SESSION_ID]?.unansweredLastUserMessageId).toBeNull()
+  })
+
+  it('clears it even when the resend cannot be delivered (the failed state, not a stale marker, is what the person sees)', () => {
+    act(() => { useChatStore.setState({ sessionsById: { [TEST_SESSION_ID]: unansweredBucket('u-1') } }) })
+    act(() => { useChatStore.getState().resendMessage('u-1') }) // offline: connection is null
+    const bucket = useChatStore.getState().sessionsById[TEST_SESSION_ID]
+    expect(bucket?.unansweredLastUserMessageId).toBeNull()
+    expect(bucket?.messagesById['u-1']?.deliveryStatus).toBe('failed')
+  })
+
+  it('leaves a marker for a different question untouched', () => {
+    act(() => {
+      useConnectionStore.setState({
+        connection: { send: vi.fn().mockReturnValue(true), disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
+        isConnected: true,
+      })
+      useChatStore.setState({ sessionsById: { [TEST_SESSION_ID]: unansweredBucket('some-other-id') } })
+    })
+    act(() => { useChatStore.getState().resendMessage('u-1') })
+    expect(useChatStore.getState().sessionsById[TEST_SESSION_ID]?.unansweredLastUserMessageId).toBe('some-other-id')
+  })
+})

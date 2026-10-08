@@ -121,7 +121,7 @@ func (al *AgentLoop) RedirectSessionTurn(ctx context.Context, sessionID, instruc
 	if rec.Stopped() {
 		// ReviveStoppedSession refuses the in-flight fence before writing any
 		// instruction; only a landed stopped session may resume here.
-		revived, err := al.ReviveStoppedSession(ctx, sessionID, by, instruction)
+		revived, err := al.reviveStoppedSession(ctx, sessionID, by, instruction, true)
 		if err != nil {
 			return err
 		}

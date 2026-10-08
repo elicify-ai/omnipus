@@ -275,10 +275,7 @@ func adr093GlobalAutoOn(t *testing.T, al *AgentLoop) {
 		t.Fatal("setup: agent loop has no config")
 	}
 	cfg.Sandbox.AutoApprove = true
-	if al.agentAutoApproveDisabled(testDefaultAgentID) {
-		t.Fatal("setup: the test agent has its own auto-approve off switch; this case is about the chat's switch")
-	}
-	if !al.SessionAutoApprove(testDefaultAgentID, "adr093-no-modifier") {
+	if !al.SessionAutoApprove("adr093-no-modifier") {
 		t.Fatal("setup: global auto-approve is not on, so a chat's off switch cannot be told apart from the default")
 	}
 }
@@ -670,7 +667,7 @@ func TestAdr093TaskFromStoppedChat_InheritsNeverAutoApprove(t *testing.T) {
 		t.Fatalf("startTaskNowViaLauncher: %v — ADR-093 D6: the task still runs", err)
 	}
 	adr093AssertOrdinaryTaskRoot(t, al, childID, tk.ID)
-	if al.SessionAutoApprove(testDefaultAgentID, childID) {
+	if al.SessionAutoApprove(childID) {
 		t.Fatalf("task session %s has auto-approve on — the stopped chat had turned it off, and ADR-092's per-chat off switch still applies (D6 does not drop it)", childID)
 	}
 }
@@ -695,7 +692,7 @@ func TestAdr093TaskFromLiveChat_InheritsNeverAutoApprove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("startTaskNowViaLauncher: %v", err)
 	}
-	if al.SessionAutoApprove(testDefaultAgentID, childID) {
+	if al.SessionAutoApprove(childID) {
 		t.Fatalf("task session %s has auto-approve on — a live chat's off switch must be inherited (control for the stopped-chat case)", childID)
 	}
 }

@@ -206,7 +206,7 @@ func (al *AgentLoop) awaitStoppedAndRevive(ctx context.Context, initial *session
 			return
 		}
 		if rec.State == session.LifecycleStopped || rec.Terminal() {
-			revived, rerr := al.ReviveStoppedSession(ctx, sessionID, by, instruction)
+			revived, rerr := al.reviveStoppedSession(ctx, sessionID, by, instruction, true)
 			if rerr != nil {
 				logger.ErrorCF("agent", "steer: redirect: the replacement instruction could not be delivered",
 					map[string]any{"session_id": sessionID, "error": rerr.Error()})

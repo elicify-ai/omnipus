@@ -241,6 +241,7 @@ func TestFitInvariantHolds_WindowPlusRecall(t *testing.T) {
 		"- turns 1–2 · earlier · \"This was an earlier question\""
 
 	assembled := cb.BuildMessages(
+		0,
 		window,
 		"Current question",
 		nil,
@@ -375,6 +376,7 @@ func TestRecallSpan_ZeroDuplicateOrphanToolCallIDs_EndToEnd(t *testing.T) {
 	}
 
 	assembled := cb.BuildMessages(
+		0,
 		liveWindow,
 		"What did we find?",
 		nil,
@@ -666,6 +668,7 @@ func TestBuildMessages_SpanPlacedViaRealContextBuilder(t *testing.T) {
 	currentMsg := "CURRENT_MSG: what is Paris known for?"
 
 	assembled := cb.BuildMessages(
+		0,
 		windowMsgs,
 		currentMsg,
 		nil,

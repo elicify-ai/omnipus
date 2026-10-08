@@ -83,13 +83,6 @@ func TestShellPermissionGate_LiveMode(t *testing.T) {
 		al := newGateTestLoop(t, "ask", false)
 		assert.Equal(t, tools.ShellModeAsk, al.shellGate.ResolveShellMode(ctx, testDefaultAgentID, "sess"))
 	})
-	t.Run("per-agent off-switch resolves Ask", func(t *testing.T) {
-		withKernelSandbox(t)
-		al := newGateTestLoop(t, "ask", true, config.AgentConfig{ID: "jim", AutoApproveDisabled: true})
-		assert.Equal(t, tools.ShellModeAsk, al.shellGate.ResolveShellMode(ctx, "jim", "sess"))
-		assert.Equal(t, tools.ShellModeAuto, al.shellGate.ResolveShellMode(ctx, testDefaultAgentID, "sess"),
-			"another agent still follows the global default")
-	})
 	t.Run("per-chat on loosens past a global off", func(t *testing.T) {
 		withKernelSandbox(t)
 		al := newGateTestLoop(t, "ask", false)

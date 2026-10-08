@@ -101,11 +101,11 @@ func TestFinish_ConcurrentCalls(t *testing.T) {
 // ====================== Graceful vs Hard Finish Tests ======================
 
 // TestFinish_GracefulVsHard verifies the behavior difference between:
-// - Finish(false): graceful finish, signals parentEnded but doesn't cancel children
+// - Finish(false): graceful finish, doesn't cancel children
 // - Finish(true): hard abort, immediately cancels all children
 func TestFinish_GracefulVsHard(t *testing.T) {
-	// Test 1: Graceful finish should set parentEnded but not cancel context
-	t.Run("Graceful_SetsParentEnded", func(t *testing.T) {
+	// Test 1: Graceful finish should not cancel context
+	t.Run("Graceful_DoesNotCancelChildren", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -119,11 +119,6 @@ func TestFinish_GracefulVsHard(t *testing.T) {
 
 		// Finish gracefully
 		ts.Finish(false)
-
-		// Verify parentEnded is set
-		if !ts.parentEnded.Load() {
-			t.Error("parentEnded should be true after graceful finish")
-		}
 
 		// Verify context is NOT canceled (for graceful finish, children continue)
 		// Note: In graceful mode, we don't call cancelFunc()
@@ -154,40 +149,6 @@ func TestFinish_GracefulVsHard(t *testing.T) {
 			t.Log("✓ Context canceled after hard abort")
 		default:
 			t.Error("Context should be canceled after hard abort")
-		}
-	})
-
-	// Test 3: IsParentEnded returns correct value
-	t.Run("IsParentEnded", func(t *testing.T) {
-		ctx := context.Background()
-
-		parentTS := &turnState{
-			ctx:            ctx,
-			turnID:         "parent-isended-test",
-			depth:          0,
-			pendingResults: make(chan *tools.ToolResult, 16),
-		}
-		parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
-
-		childTS := &turnState{
-			ctx:             ctx,
-			turnID:          "child-isended-test",
-			depth:           1,
-			parentTurnState: parentTS,
-			pendingResults:  make(chan *tools.ToolResult, 16),
-		}
-
-		// Before parent finishes
-		if childTS.IsParentEnded() {
-			t.Error("IsParentEnded should be false before parent finishes")
-		}
-
-		// Finish parent gracefully
-		parentTS.Finish(false)
-
-		// After parent finishes
-		if !childTS.IsParentEnded() {
-			t.Error("IsParentEnded should be true after parent finishes gracefully")
 		}
 	})
 }

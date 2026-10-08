@@ -251,13 +251,40 @@ const maxStatusActivityLines = 5
 // own doc comment for why no live snapshot is attempted for these.
 const delegate3PStatusNote = "  note:   external agent — no live progress; results on completion"
 
+// delegateNoActivityStatusNote is the action:"status" annotation for a running
+// native session that has neither a live progress snapshot nor any persisted
+// transcript activity (#614). That silence has two causes the status reader
+// cannot tell apart — the child is genuinely quiet, or this deployment cannot
+// report progress at all (a non-streaming provider such as Azure, Bedrock or
+// anthropic_messages, or an agent routed through fallback candidates) — and
+// reading it as "hung" got healthy workers killed. Saying so explicitly is the
+// minimum fix; it does not give those providers progress reporting.
+const delegateNoActivityStatusNote = "  note:   no live tool-call activity recorded (this does not mean the child is stalled)"
+
+// delegateStatusUnavailableNote is the annotation when the activity source
+// itself could not be consulted (no session store, no spawn call id to key on,
+// or a transcript read error). That is a different statement from "nothing was
+// recorded": it must NOT claim the child is not stalled, because the status
+// reader simply does not know.
+const delegateStatusUnavailableNote = "  note:   status data unavailable (recent activity could not be read); this says nothing about whether the child is progressing"
+
+// statusElapsedSuffix renders how long the child has been running when its
+// record carries a creation time, so a long-quiet child is visible as such.
+func (t *DelegateTool) statusElapsedSuffix(rec *session.LifecycleRecord) string {
+	if rec == nil || rec.CreatedAt.IsZero() {
+		return ""
+	}
+	return "; running for " + formatDelegateStatusAge(t.now().Sub(rec.CreatedAt))
+}
+
 // delegateStatusExtra computes action:"status"'s trailing annotation for the
 // child addressed by sessionID, whose own durable record is rec (W2, G1).
 // Only a running session gets anything:
 //   - a native session gets up to maxStatusActivityLines of its own recent
 //     transcript activity (recentActivityLines), plus live tool-call-argument
-//     progress when a progress reader is wired, or "" if neither has
-//     anything yet;
+//     progress when a progress reader is wired, or delegateNoActivityStatusNote
+//     when neither has anything (quiet and cannot-report look identical, so
+//     the status says so instead of saying nothing — #614);
 //   - an external-CLI (Is3P) session gets the fixed delegate3PStatusNote
 //     instead of any attempted snapshot (batch/report-on-completion by
 //     design).
@@ -303,10 +330,13 @@ func (t *DelegateTool) delegateStatusExtra(rec *session.LifecycleRecord, session
 	if rec.Origin != nil {
 		spawnCallID = rec.Origin.CallID
 	}
-	lines := t.recentActivityLines(sessionID, spawnCallID, maxStatusActivityLines)
+	lines, readable := t.recentActivityLines(sessionID, spawnCallID, maxStatusActivityLines)
 	if len(lines) == 0 {
 		if sb.Len() == 0 {
-			return ""
+			if !readable {
+				return "\n" + delegateStatusUnavailableNote + t.statusElapsedSuffix(rec)
+			}
+			return "\n" + delegateNoActivityStatusNote + t.statusElapsedSuffix(rec)
 		}
 		return "\n" + sb.String()
 	}
@@ -391,15 +421,19 @@ const maxStatusActivityLineRunes = 120
 // empty activity path must leave a trace an operator can find, not degrade
 // silently into the exact same "nothing available" shape as an unwired
 // store or a transcript-read error.
-func (t *DelegateTool) recentActivityLines(sessionID, spawnCallID string, maxLines int) []string {
+//
+// The second return value is false when the activity source could not be
+// consulted at all (no store, no id to key on, or a read error) — distinct from
+// a clean read that found nothing (true, no lines).
+func (t *DelegateTool) recentActivityLines(sessionID, spawnCallID string, maxLines int) ([]string, bool) {
 	if t.sessionStore == nil || sessionID == "" || spawnCallID == "" {
-		return nil
+		return nil, false
 	}
 	entries, err := t.sessionStore.ReadTranscript(sessionID)
 	if err != nil {
 		slog.Warn("delegate: status snapshot: failed to read transcript",
 			"session_id", sessionID, "error", err)
-		return nil
+		return nil, false
 	}
 
 	var lines []string
@@ -420,14 +454,14 @@ func (t *DelegateTool) recentActivityLines(sessionID, spawnCallID string, maxLin
 	if len(lines) == 0 {
 		slog.Info("delegate: status snapshot: no recent activity found for this task yet",
 			"session_id", sessionID, "spawn_call_id", spawnCallID)
-		return nil
+		return nil, true
 	}
 	// Entries are in chronological (append) order — keep only the most
 	// recent `maxLines`, preserving chronological order within that window.
 	if len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
 	}
-	return lines
+	return lines, true
 }
 
 func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *ToolResult {
@@ -484,8 +518,8 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 	// authorized-ancestor case FR-039 exists to permit — the ownerKey
 	// variable above and its own presence check remain (a caller must still
 	// have SOME resolvable session identity to reach this far at all), but
-	// the store key must be the target's own SteeringSessionID. executeRespond
-	// already uses this correct key (see its own Drain call).
+	// the store key must be the target's own SteeringSessionID. (executeRespond
+	// no longer reads the inbox at all: respond is an ordinary steering message.)
 	msgs, nextCursor, hasMore, derr := t.inbox.Drain(rec.SteeringSessionID(), sessionID, sinceCursor, maxMessages)
 	if derr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: inbox: %v", derr)).WithError(derr)

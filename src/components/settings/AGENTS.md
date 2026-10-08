@@ -24,10 +24,9 @@ the script or test for each.
   are retired (ADR-092 D2/D5) — do not reintroduce them. There is no
   three-mode selector: `bash` keeps an ordinary Allow/Ask/Deny tool policy,
   and Auto-approve is a separate on/off switch that only acts on tools set
-  to Ask. It lives at three scopes: the global switch
+  to Ask. It lives at two scopes: the global switch
   (`SecuritySection.tsx::AutoApproveControl`, re-auth gated, writes
-  `sandbox.auto_approve`), the per-agent "Never auto-approve for this agent"
-  checkbox (`src/components/agents/ToolsAndPermissions.tsx`, off-only), and
+  `sandbox.auto_approve`) and
   the per-chat composer control
   (`src/components/chat/composer/AutoApprovePicker.tsx`, a labelled Auto button). God Mode stays in
   `GodModeControl.tsx`; the chat header no longer shows a mode badge. Operator command rules are

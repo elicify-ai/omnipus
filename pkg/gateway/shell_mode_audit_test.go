@@ -99,19 +99,7 @@ func TestShellModeAudit_GlobalAutoApproveWrite(t *testing.T) {
 	assert.Equal(t, "sandbox.auto_approve", events[0].PolicyRule)
 }
 
-func TestShellModeAudit_PerAgentAutoApproveDisabledWrite(t *testing.T) {
-	api, root := newShellModeAuditAPI(t)
-	w := putAgentJSON(t, api, "agent-a", `{"auto_approve_disabled":true}`)
-	require.Equal(t, 200, w.Code, "body: %s", w.Body.String())
-
-	events := shellModeChanges(t, root)
-	require.Len(t, events, 1)
-	assert.Equal(t, "agent", events[0].Details["level"])
-	assert.Equal(t, "ask", events[0].Details["new_mode"], "global on + agent off-switch resolves to Ask")
-	assert.Equal(t, "agent-a", events[0].AgentID)
-}
-
-func TestShellModeAudit_PerAgentWriteWithoutTheFieldIsSilent(t *testing.T) {
+func TestShellModeAudit_AgentWriteIsSilent(t *testing.T) {
 	api, root := newShellModeAuditAPI(t)
 	w := putAgentJSON(t, api, "agent-a", `{"color":"#123456"}`)
 	require.Equal(t, 200, w.Code, "body: %s", w.Body.String())

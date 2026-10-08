@@ -400,9 +400,18 @@ func buildDelegationDenyChecker(
 	selfAssignmentExempt bool,
 	agentExists ...func(id string) bool,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-	globalDepthCap, depthErr := performance.EffectiveMaxDelegationDepth()
-	if depthErr != nil {
-		globalDepthCap = 0
+	globalDepthCap, depthOK := configuredDelegationDepth(performance, "delegation gate (agent "+currentAgentID+")")
+	if !depthOK {
+		// An invalid depth limit fails CLOSED, like an unreadable graph: the
+		// same error makes the delegation-awareness block render
+		// cannot-delegate (wireDelegationInjectors), so block and gate agree.
+		return func(_ context.Context, targetAgentID string) *tools.DelegationDenial {
+			return &tools.DelegationDenial{
+				Reason:        "delegation is disabled: performance.max_delegation_depth is invalid (must be >= 0)",
+				Policy:        tools.DenyDepth,
+				TargetAgentID: targetAgentID,
+			}
+		}
 	}
 
 	return func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
