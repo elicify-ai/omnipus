@@ -18,6 +18,7 @@ import { applySnapshotHistoryWipe, cursorFromTerminalFrame } from '../cursor'
 import { replayErrorRetryAttempts, replayErrorRetryTimers } from '../runtime-state'
 import type { ChatMessage, ChatStore, SessionChatState } from '../types'
 import { finishRecoveredFirstSend } from './first-send-frames'
+import { acknowledgeShownCatchUp } from '@/store/session/foregroundAck'
 
 type Frame = Parameters<ChatStore['handleFrame']>[0]
 interface CatchUpFrameContext {
@@ -194,6 +195,7 @@ export function handleCatchUpFrame({ frame, targetSid, get, set, withBucket }: C
         draft.snapshotWasBootMismatch = undefined
       }))
       finishRecoveredFirstSend({ set, get, withBucket }, targetSid)
+      acknowledgeShownCatchUp(targetSid)
       return true
     }
 

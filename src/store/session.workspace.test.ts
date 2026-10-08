@@ -178,12 +178,14 @@ describe('sessionByWorkspace — written by attachToSession', () => {
 describe('sessionByWorkspace — written by startNewSession', () => {
   beforeEach(resetAll)
 
-  it('writes null for the active workspace when starting a new session', () => {
+  it('does not clear a saved pointer when starting a new session', () => {
+    // FR-005: + New chat starts an extra. It must not write the retired
+    // blank-chat null that used to mean "stay fresh".
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
 
     useSessionStore.getState().startNewSession()
 
-    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeUndefined()
   })
 
   it('does not write when there is no active workspace', () => {
@@ -239,9 +241,9 @@ describe('setActiveSession — never records the "__pending" sentinel', () => {
 describe('enterWorkspaceChat — legacy "__pending" descriptor (defense-in-depth)', () => {
   beforeEach(resetAll)
 
-  it('starts fresh instead of attaching when the stored descriptor id is "__pending"', () => {
-    // Simulates a descriptor written by some other/legacy path before this
-    // fix — enterWorkspaceChat must never call attachToSession('__pending').
+  it('starts fresh instead of attaching when the stored descriptor id is "__pending"', async () => {
+    // `__pending` is not a real pointer (FR-004). With no validated Ava main
+    // the entry is unavailable: do not attach the sentinel.
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
     useSessionStore.setState({
       activeSessionId: 'some-other-session',
@@ -249,12 +251,12 @@ describe('enterWorkspaceChat — legacy "__pending" descriptor (defense-in-depth
         'ws-1': { id: '__pending', type: 'chat', title: null, agentId: 'agent-1' },
       },
     })
+    vi.mocked(fetchSessions).mockResolvedValue([])
 
-    useSessionStore.getState().enterWorkspaceChat('ws-1')
+    await useSessionStore.getState().enterWorkspaceChat('ws-1')
 
-    // startNewSession, not attachToSession — activeSessionId resets to null,
-    // never becomes '__pending'.
     expect(useSessionStore.getState().activeSessionId).toBeNull()
+    expect(useSessionStore.getState().activeSessionId).not.toBe('__pending')
   })
 
   it('is a no-op (activeSessionId stays null) when already null and the stored descriptor is "__pending"', () => {
@@ -290,25 +292,28 @@ describe('enterWorkspaceChat — first visit / no local descriptor (browser has 
     // Simulate a session from a different context being active
     useSessionStore.setState({ activeSessionId: 'other-sess', sessionByWorkspace: {} })
 
+    vi.mocked(fetchSessions).mockResolvedValue([])
     await useSessionStore.getState().enterWorkspaceChat('ws-1')
 
-    // The defining behavior of this fix: no network round-trip at all.
-    expect(fetchSessions).not.toHaveBeenCalled()
+    // FR-004: an absent pointer asks for the validated main. The production
+    // seam has none, so entry is unavailable — not a persisted blank chat,
+    // and not the other context's session.
+    expect(fetchSessions).toHaveBeenCalled()
     expect(useSessionStore.getState().activeSessionId).toBeNull()
-    // Explicitly recorded as null (not left `undefined`) so a same-tab
-    // re-entry doesn't re-derive it every time.
-    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeUndefined()
   })
 
   it('is a no-op (activeSessionId stays null) when already null and this browser has no persisted decision', async () => {
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
     useSessionStore.setState({ activeSessionId: null, sessionByWorkspace: {} })
 
+    vi.mocked(fetchSessions).mockResolvedValue([])
     await useSessionStore.getState().enterWorkspaceChat('ws-1')
 
-    expect(fetchSessions).not.toHaveBeenCalled()
+    // Same unavailable entry as a first visit: looked up, not persisted as null.
+    expect(fetchSessions).toHaveBeenCalled()
     expect(useSessionStore.getState().activeSessionId).toBeNull()
-    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeUndefined()
   })
 
   it(
@@ -339,9 +344,12 @@ describe('enterWorkspaceChat — first visit / no local descriptor (browser has 
 
       await useSessionStore.getState().enterWorkspaceChat('ws-1')
 
-      expect(fetchSessions).not.toHaveBeenCalled()
+      // The list is read so a validated main can be found. A session that
+      // merely exists server-side is not the pointer and is not opened.
+      expect(fetchSessions).toHaveBeenCalled()
       expect(useSessionStore.getState().activeSessionId).toBeNull()
-      expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
+      expect(useSessionStore.getState().activeSessionId).not.toBe('sess-from-another-browser')
+      expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeUndefined()
     },
   )
 
@@ -352,7 +360,9 @@ describe('enterWorkspaceChat — first visit / no local descriptor (browser has 
     await useSessionStore.getState().enterWorkspaceChat('ws-1')
     await useSessionStore.getState().enterWorkspaceChat('ws-1')
 
-    expect(fetchSessions).not.toHaveBeenCalled()
+    // No blank-chat marker is persisted, so the lookup runs again. It still
+    // does not open a session (FR-004, production seam has no main).
+    expect(fetchSessions).toHaveBeenCalledTimes(2)
     expect(useSessionStore.getState().activeSessionId).toBeNull()
   })
 })
@@ -420,15 +430,23 @@ describe('enterWorkspaceChat — remembered-session restore after reload (browse
         makeSession({
           id: 'sess-old',
           workspace_id: 'ws-1',
+          agent_id: 'jim',
+          updated_at: '2026-01-01T00:00:00Z',
+        }),
+        makeSession({
+          id: 'sess-newer-other',
+          workspace_id: 'ws-1',
           updated_at: '2026-07-27T12:00:00Z',
         }),
       ])
 
       await useSessionStore.getState().enterWorkspaceChat('ws-1')
 
-      expect(fetchSessions).not.toHaveBeenCalled()
-      expect(useSessionStore.getState().activeSessionId).toBeNull()
-      expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
+      // FR-005 leaves the saved pointer in place, and FR-004 restores that
+      // exact chat — not whichever session the server lists as newest, and
+      // not a blank composer.
+      expect(useSessionStore.getState().activeSessionId).toBe('sess-old')
+      expect(useSessionStore.getState().activeSessionId).not.toBe('sess-newer-other')
     },
   )
 
@@ -474,8 +492,12 @@ describe('enterWorkspaceChat — remembered-session restore after reload (browse
 
     await useSessionStore.getState().enterWorkspaceChat('ws-1')
 
+    // FR-004: a deleted pointer is not reused and is not saved as a blank
+    // null. With no validated main the entry is unavailable.
     expect(useSessionStore.getState().activeSessionId).toBeNull()
-    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
+    expect(useSessionStore.getState().activeSessionId).not.toBe('sess-deleted-elsewhere')
+    expect(useSessionStore.getState().activeSessionId).not.toBe('sess-unrelated')
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeUndefined()
   })
 
   it('does not clobber a descriptor another code path already wrote while the fetch was in flight', async () => {
@@ -584,17 +606,20 @@ describe('enterWorkspaceChat — remembered-session restore after reload (browse
 describe('enterWorkspaceChat — explicit fresh (descriptor is null)', () => {
   beforeEach(resetAll)
 
-  it('clears active session when the workspace was previously freshly started and session is active', () => {
+  it('clears active session when the workspace was previously freshly started and session is active', async () => {
+    // A null pointer is no longer a blank chat (FR-004). With no validated
+    // main the entry is unavailable, so the previous session is not kept.
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
     useSessionStore.setState({
       activeSessionId: 'some-session',
       sessionByWorkspace: { 'ws-1': null },
     })
+    vi.mocked(fetchSessions).mockResolvedValue([])
 
-    useSessionStore.getState().enterWorkspaceChat('ws-1')
+    await useSessionStore.getState().enterWorkspaceChat('ws-1')
 
-    // startNewSession clears activeSessionId
     expect(useSessionStore.getState().activeSessionId).toBeNull()
+    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
   })
 
   it('is a no-op (activeSessionId stays null) when already null and workspace explicitly freshly started', () => {
@@ -616,7 +641,7 @@ describe('enterWorkspaceChat — explicit fresh (descriptor is null)', () => {
 describe('enterWorkspaceChat — restore stored session', () => {
   beforeEach(resetAll)
 
-  it('attaches to the stored session when descriptor.id differs from activeSessionId', () => {
+  it('attaches to the stored session when descriptor.id differs from activeSessionId', async () => {
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
     // No WS connection — uses the offline path of attachToSession
     useSessionStore.setState({
@@ -625,10 +650,13 @@ describe('enterWorkspaceChat — restore stored session', () => {
         'ws-1': { id: 'prev-sess', type: 'chat', title: 'Previous chat', agentId: 'agent-1' },
       },
     })
+    // FR-004: the pointer is opened only once the list shows it in this workspace.
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession({ id: 'prev-sess', workspace_id: 'ws-1', agent_id: 'agent-1', title: 'Previous chat' }),
+    ])
 
-    useSessionStore.getState().enterWorkspaceChat('ws-1')
+    await useSessionStore.getState().enterWorkspaceChat('ws-1')
 
-    // attachToSession (offline path) sets activeSessionId to the stored session's id
     expect(useSessionStore.getState().activeSessionId).toBe('prev-sess')
   })
 
@@ -663,7 +691,7 @@ describe('enterWorkspaceChat — restore stored session', () => {
 describe('enterWorkspaceChat — workspace switch restores correct session', () => {
   beforeEach(resetAll)
 
-  it('switches to ws-2 stored session when entering ws-2', () => {
+  it('switches to ws-2 stored session when entering ws-2', async () => {
     // No WS connection — offline path
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-2' })
     useSessionStore.setState({
@@ -673,10 +701,12 @@ describe('enterWorkspaceChat — workspace switch restores correct session', () 
         'ws-2': { id: 'sess-ws2', type: 'chat', title: 'WS2 chat', agentId: 'jim' },
       },
     })
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession({ id: 'sess-ws2', workspace_id: 'ws-2', agent_id: 'jim', title: 'WS2 chat' }),
+    ])
 
-    useSessionStore.getState().enterWorkspaceChat('ws-2')
+    await useSessionStore.getState().enterWorkspaceChat('ws-2')
 
-    // Should be on ws-2's session now
     expect(useSessionStore.getState().activeSessionId).toBe('sess-ws2')
   })
 })
@@ -936,7 +966,7 @@ describe('attachToSession — WS-down user feedback (fix 6)', () => {
 describe('pruneSessionDescriptor — round-2 fix: no zombie reattach after delete', () => {
   beforeEach(resetAll)
 
-  it('nulls the sessionByWorkspace entry for a deleted session so entering that workspace does not reattach the dead id', () => {
+  it('nulls the sessionByWorkspace entry for a deleted session so entering that workspace does not reattach the dead id', async () => {
     // BDD: Given workspace W's stored descriptor points at session S,
     //   When S is deleted (pruneSessionDescriptor(S) is called, e.g. from
     //   SearchModal's deleteMut.onSuccess),
@@ -955,9 +985,12 @@ describe('pruneSessionDescriptor — round-2 fix: no zombie reattach after delet
     // dead id.
     expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
 
-    // Entering ws-1 now must start fresh, never attach the dead session id.
-    useSessionStore.getState().enterWorkspaceChat('ws-1')
+    // Entering ws-1 must not attach the dead id. A nulled pointer with no
+    // validated main is unavailable (FR-004), not a reattach.
+    vi.mocked(fetchSessions).mockResolvedValue([])
+    await useSessionStore.getState().enterWorkspaceChat('ws-1')
     expect(useSessionStore.getState().activeSessionId).toBeNull()
+    expect(useSessionStore.getState().activeSessionId).not.toBe('sess-deleted')
   })
 
   it('clears activeSessionId when the deleted session is the currently-attached one', () => {
@@ -1048,8 +1081,10 @@ describe('pending Auto-approve choice — cleared on every workspace switch (cod
     await useSessionStore.getState().enterWorkspaceChat('ws-brand-new')
 
     expect(clearSpy).toHaveBeenCalled()
-    // And the fix doesn't disturb the existing "no server round-trip" contract.
-    expect(fetchSessions).not.toHaveBeenCalled()
+    // FR-004 looks the workspace up. The choice is still cleared first, and
+    // a never-visited workspace is not given some other session.
+    expect(fetchSessions).toHaveBeenCalled()
+    expect(useSessionStore.getState().activeSessionId).toBeNull()
   })
 
   it('clears the pending choice even on the already-attached no-op restore path (unconditional, not gated on a state change)', () => {
@@ -1159,24 +1194,15 @@ describe('sessionByWorkspace descriptor — pin-rejection regression (#600, fix 
       activeAgentId: 'jim',
     })
 
-    // The hint argument ('ray') is a DIFFERENT agent than the pin winner —
-    // adoptsAgentHint rejects it, so the precedence rule must keep 'jim'.
+    // FR-009: the agent argument of a newly activated session is the immutable
+    // owner. The retired picker pin no longer outranks it.
     useSessionStore.getState().setActiveSession('sess-pin-setActive', 'ray', 'core')
 
-    // The pin still wins for routing (pre-existing coverage, re-asserted here
-    // as the setup check for what follows).
-    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+    expect(useSessionStore.getState().activeAgentId).toBe('ray')
 
-    // The regression: the descriptor must remember the EFFECTIVE agent
-    // ('jim'), never the rejected hint ('ray').
     const descriptor = useSessionStore.getState().sessionByWorkspace['ws-1']
-    expect(descriptor?.agentId).toBe('jim')
-    expect(descriptor?.agentId).not.toBe('ray')
-
-    // And the localStorage round-trip — the value replayed on the NEXT
-    // workspace re-entry — carries the same winner, not the hint.
-    expect(readPersistedAgentId('ws-1')).toBe('jim')
-    expect(readPersistedAgentId('ws-1')).not.toBe('ray')
+    expect(descriptor?.agentId).toBe('ray')
+    expect(readPersistedAgentId('ws-1')).toBe('ray')
   })
 
   it('attachToSession (connected): with an active user pin, the descriptor remembers the PIN WINNER, not the rejected hint', () => {
@@ -1190,14 +1216,13 @@ describe('sessionByWorkspace descriptor — pin-rejection regression (#600, fix 
 
     useSessionStore.getState().attachToSession('sess-pin-attach', 'chat', 'Pinned chat', 'ray')
 
-    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+    // FR-009: attach's agent argument is the session owner and the send
+    // destination. A leftover picker pin does not replace it.
+    expect(useSessionStore.getState().activeAgentId).toBe('ray')
 
     const descriptor = useSessionStore.getState().sessionByWorkspace['ws-1']
-    expect(descriptor?.agentId).toBe('jim')
-    expect(descriptor?.agentId).not.toBe('ray')
-
-    expect(readPersistedAgentId('ws-1')).toBe('jim')
-    expect(readPersistedAgentId('ws-1')).not.toBe('ray')
+    expect(descriptor?.agentId).toBe('ray')
+    expect(readPersistedAgentId('ws-1')).toBe('ray')
   })
 
   it('Binding Rule 4 (positive control): with NO pin, the hint IS adopted and stored — in the slice and via the localStorage round-trip', () => {
