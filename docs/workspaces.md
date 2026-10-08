@@ -14,6 +14,19 @@ Everything you do in Omnipus happens inside a workspace:
 
 On a fresh install, Omnipus creates one workspace for you, named **My Workspace**, with Mia, Jim, Ava, Planner, Researcher and General Purpose on the team. Admin remains available as the standalone operator without team membership. It is the default workspace: it is where Omnipus sends you when no other workspace is chosen, and it cannot be archived or deleted.
 
+### Each agent's own chat, per workspace
+
+Every agent on a workspace has one standing chat of its own — its **main** chat for that workspace. Clicking the agent in the roster opens it, and it is the conversation that agent keeps with you in that workspace. Alongside it you can start extra chats with the same agent; those are ordinary conversations and can be deleted as usual.
+
+Some things about the main chat are fixed:
+
+- **It is kept, not deleted.** The main chat shows no delete control, and asking the API to delete it is refused. If you take an agent off the team, its main chat disappears from the list but is not erased — put that agent back on the same team and the very same chat returns, with its history.
+- **It is the workspace's, not a setting's.** Enabling or disabling an agent's heartbeat does not create, replace or delete this chat. Heartbeat runs happen in it — there is no separate heartbeat chat to find or clean up.
+- **Admin's main chat lives in the default workspace only.** Admin is not a team member anywhere; in any other workspace Admin has no main chat.
+- **Workers and system agents have none.** They are not chat targets, so they have no standing chat.
+
+Each pair of workspace and agent has exactly one main chat, named from the two: `main-session-<workspace>+<agent>`. The name is computed, so it never changes and duplicates cannot appear. Because a chat's name is also its folder on disk, a pair whose combined name would exceed 255 bytes is refused outright, with a message naming the limit — shorten the workspace or agent name if you hit it. Nothing is guessed, shortened or renamed behind your back.
+
 ## When you would use it
 
 Use more than one workspace when your work splits into contexts that should stay separate. One workspace per client keeps that client's chats, files, and task history inside it; a separate one for internal operations can carry a different team. The rosters can overlap, because the same agent can sit on several workspaces, but each workspace keeps its own chats, tasks, files, memory, and trust lines. A single workspace is a perfectly good way to run everything if you have one context.
