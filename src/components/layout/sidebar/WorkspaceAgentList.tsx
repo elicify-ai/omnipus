@@ -9,6 +9,7 @@ import type { EligibleRow } from '@/lib/nav/eligibleMains'
 import { useSelectSession } from '@/components/chat/useSelectSession'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { ErrorState } from '@/components/ui/error-state'
 import { IconButton } from '@/components/ui/icon-button'
 import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
@@ -67,6 +68,7 @@ export function WorkspaceAgentList({
     if (mains.result.status === 'ready') cacheRef.current.set(project.id, mains.result.rows)
     return { project, mains }
   })
+  const staleRoster = derived.some((item) => item.mains.result.status === 'stale')
   const missingMain = derived.some((item) => item.mains.result.reason === 'main-id-missing')
   const attentionUnknown = !missingMain && derived.some((item) => item.mains.unknown)
   const motion = useAttentionMotion()
@@ -74,6 +76,13 @@ export function WorkspaceAgentList({
 
   return (
     <>
+      {staleRoster && (
+        <ErrorState
+          message="Could not refresh team — showing cached, out-of-date agents"
+          onRetry={refreshWorkspaceRoster}
+          className="px-[var(--space-3)] py-[var(--space-2)]"
+        />
+      )}
       {missingMain && (
         <UnavailableNote label="Main chat unavailable" onRetry={retryAttention} />
       )}
