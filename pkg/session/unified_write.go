@@ -180,7 +180,18 @@ func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
 	if err != nil {
 		return err
 	}
-	if meta.ActiveAgentID == newAgentID {
+	// session-core U1 (DEL-11): a session no longer SEEDS ActiveAgentID at
+	// creation, so an empty value means "no handover has happened" — and the
+	// agent that is active is then the session's immutable owner. Resolving the
+	// current agent that way keeps this method's documented idempotence
+	// contract (switching to the agent that is already active is a no-op that
+	// reports ErrAlreadyActive) instead of silently writing a redundant
+	// handover owner equal to the owner the session already has.
+	current := meta.ActiveAgentID
+	if current == "" {
+		current = meta.AgentID
+	}
+	if current == newAgentID {
 		return ErrAlreadyActive
 	}
 	meta.ActiveAgentID = newAgentID
