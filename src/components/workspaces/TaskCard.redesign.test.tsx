@@ -76,7 +76,9 @@ it('T26 agent/activity/elapsed occupy row four, checklist row five is optional, 
     terminal.unmount()
   }
   renderLayout(<TaskCard task={layoutTask({ status: 'failed', started_at: 'invalid', completed_at: '2026-10-08T18:02:05Z' })} onClick={vi.fn()} />)
-  expect(screen.getByLabelText('Execution time unavailable')).toHaveTextContent('—')
+  expect(screen.getByTestId('task-execution-row')).toHaveTextContent(/^Ray$/)
+  expect(screen.queryByLabelText('Execution time unavailable')).not.toBeInTheDocument()
+  expect(screen.getByTestId('task-execution-row').querySelector('time')).toBeNull()
 })
 
 it('the founder card-alert correction keeps approval and assignee warning icons visible in controls, with the exact meaning in info', async () => {

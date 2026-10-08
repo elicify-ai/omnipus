@@ -47,7 +47,7 @@ export function TaskCard({ task, plans = [], agents = [], altitude = 'top-level'
   const queue = useToolApprovalStore((state) => state.queue)
   const approval = taskAwaitingApproval(task, queue)
   const showsExecutionTime = running || task.status === 'done' || task.status === 'failed'
-  const agentName = task.agent_name ?? agents.find((agent) => agent.id === task.agent_id)?.name ?? task.agent_id ?? 'Unassigned'
+  const agentName = task.agent_name ?? agents.find((agent) => agent.id === task.agent_id)?.name ?? task.agent_id
   const todos = task.todos ?? []
   const doneTodos = todos.filter((todo) => todo.status === 'completed').length
   const isDraggable = Boolean(drag)
@@ -100,12 +100,9 @@ export function TaskCard({ task, plans = [], agents = [], altitude = 'top-level'
       {/* T26: one execution line; truncating a long agent keeps separators
           between values, never stranded at a line edge. Full name is in info. */}
       <div data-testid="task-execution-row" className="flex min-w-0 items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-        <span className="min-w-0 flex-1 truncate">{agentName}</span>
-        {showsExecutionTime && <>
-          <span aria-hidden="true" className="shrink-0">·</span>
-          {running && <RunningIndicator className="shrink-0" />}
-          <TaskElapsedTime key={task.started_at ?? 'execution'} task={task} live={showDetails} />
-        </>}
+        {agentName && <span className="min-w-0 flex-1 truncate">{agentName}</span>}
+        {running && <>{agentName && <span aria-hidden="true" className="shrink-0">·</span>}<RunningIndicator className="shrink-0" /></>}
+        {showsExecutionTime && <TaskElapsedTime key={task.started_at ?? 'execution'} task={task} live={showDetails} separator={Boolean(agentName) && !running} />}
       </div>
       {todos.length > 0 && <div data-testid="task-checklist-row" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
         <CheckSquare size={11} aria-hidden="true" /><span>{doneTodos}/{todos.length}</span>
