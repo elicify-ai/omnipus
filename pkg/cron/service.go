@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -560,7 +561,7 @@ func (cs *CronService) RunDueJobs(now time.Time) {
 	}
 
 	if err := cs.saveStoreUnsafe(); err != nil {
-		log.Printf("[cron] failed to save store: %v", err)
+		slog.Error("cron failed to save store", "job_ids", dueJobIDs, "error", err)
 	}
 
 	cs.mu.Unlock()
@@ -632,7 +633,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 				cs.rescheduleSkippedUnsafe(job)
 				onSkip := cs.onSkip
 				cs.mu.Unlock()
-				log.Printf("[cron] ⤳ job '%s' (id: %s) skipped — previous run still in progress", job.Name, jobID)
+				slog.Warn("cron job skipped: previous run still in progress", "job_id", jobID, "reason", "overlap")
 				if onSkip != nil {
 					onSkip(jobID, "overlap")
 				}
@@ -645,7 +646,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 				cs.rescheduleSkippedUnsafe(job)
 				onSkip := cs.onSkip
 				cs.mu.Unlock()
-				log.Printf("[cron] ⚠ job '%s' (id: %s) skipped — no owning agent", job.Name, jobID)
+				slog.Warn("cron job skipped: no owning agent", "job_id", jobID, "reason", "owner-missing")
 				if onSkip != nil {
 					onSkip(jobID, "owner-missing")
 				}
@@ -659,7 +660,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	}
 	if callbackJob != nil {
 		if err := cs.saveStoreUnsafe(); err != nil {
-			log.Printf("[cron] failed to save store: %v", err)
+			slog.Error("cron failed to save store", "job_id", jobID, "error", err)
 		}
 	}
 	cs.mu.Unlock()
@@ -780,7 +781,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	}
 
 	if err := cs.saveStoreUnsafe(); err != nil {
-		log.Printf("[cron] failed to save store: %v", err)
+		slog.Error("cron failed to save store", "job_id", jobID, "error", err)
 	}
 }
 
@@ -814,7 +815,7 @@ func (cs *CronService) clearRunningUnsafe(jobID string) {
 			if cs.store.Jobs[i].State.Running {
 				cs.store.Jobs[i].State.Running = false
 				if err := cs.saveStoreUnsafe(); err != nil {
-					log.Printf("[cron] failed to persist Running reset: %v", err)
+					slog.Error("cron failed to persist Running reset", "job_id", jobID, "error", err)
 				}
 			}
 			return
@@ -832,7 +833,7 @@ func (cs *CronService) rescheduleSkippedUnsafe(job *CronJob) {
 	}
 	job.State.NextRunAtMS = cs.computeNextRun(&job.Schedule, cs.clockNowUnsafeMS())
 	if err := cs.saveStoreUnsafe(); err != nil {
-		log.Printf("[cron] failed to persist skip-reschedule: %v", err)
+		slog.Error("cron failed to persist skip-reschedule", "job_id", job.ID, "error", err)
 	}
 	cs.notify()
 }
@@ -942,17 +943,17 @@ func (cs *CronService) migrateOwnersUnsafe() {
 	if cs.defaultAgentID == "" || cs.store == nil {
 		return
 	}
-	changed := false
+	var migratedJobIDs []string
 	for i := range cs.store.Jobs {
 		if cs.store.Jobs[i].AgentID == "" {
 			cs.store.Jobs[i].AgentID = cs.defaultAgentID
-			changed = true
+			migratedJobIDs = append(migratedJobIDs, cs.store.Jobs[i].ID)
 		}
 	}
-	if changed {
+	if len(migratedJobIDs) > 0 {
 		log.Printf("[cron] migration: backfilled owner-less jobs with default agent %q", cs.defaultAgentID)
 		if err := cs.saveStoreUnsafe(); err != nil {
-			log.Printf("[cron] failed to persist owner migration: %v", err)
+			slog.Error("cron failed to persist owner migration", "job_ids", migratedJobIDs, "error", err)
 		}
 	}
 }
@@ -1272,7 +1273,7 @@ func (cs *CronService) removeJobUnsafe(jobID string) bool {
 
 	if removed {
 		if err := cs.saveStoreUnsafe(); err != nil {
-			log.Printf("[cron] failed to save store after remove: %v", err)
+			slog.Error("cron failed to save store after remove", "job_id", jobID, "error", err)
 		}
 	}
 
@@ -1298,7 +1299,7 @@ func (cs *CronService) EnableJob(jobID string, enabled bool) *CronJob {
 			}
 
 			if err := cs.saveStoreUnsafe(); err != nil {
-				log.Printf("[cron] failed to save store after enable: %v", err)
+				slog.Error("cron failed to save store after enable", "job_id", jobID, "error", err)
 			}
 
 			cs.notify()
