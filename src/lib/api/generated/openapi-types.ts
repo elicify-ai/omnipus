@@ -8306,19 +8306,19 @@ export interface components {
             types?: string[];
         };
         /**
-         * @description Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys.
+         * @description Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
          * @example Omnipus
          * @enum {string}
          */
         AgentFigure: "Robot" | "Man" | "Woman" | "Omnipus";
         /**
-         * @description Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire.
+         * @description Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
          * @example general
          * @enum {string}
          */
         AgentRole: "writer" | "designer" | "image" | "video" | "audio" | "social" | "developer" | "data" | "analyst" | "itops" | "automation" | "security" | "quality" | "science" | "orchestrator" | "project" | "product" | "sales" | "marketing" | "finance" | "legal" | "support" | "documents" | "researcher" | "people" | "tutor" | "knowledge" | "translator" | "general" | "personal" | "office";
         /**
-         * @description Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write.
+         * @description Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
          * @example #3B82F6
          * @enum {string}
          */
@@ -8886,7 +8886,7 @@ export interface components {
              */
             max_tool_iterations?: number;
         };
-        /** @description Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected. */
+        /** @description Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected. For figure, role, and color, only omission means unchanged. Explicit null and invalid supplied values are rejected with HTTP 400, and no sibling field, timestamp, or revision is changed. */
         AgentUpdateRequest: {
             revision: components["schemas"]["ConfigurationRevision"];
             /** @description Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected. */

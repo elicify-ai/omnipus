@@ -5,6 +5,9 @@ description: >
   and skills are editable. Hidden Judge/Supervisor instructions are editable while
   their identity and capabilities remain fixed. Runtime applicability is validated
   before any mutation. Protected same-value echoes are still rejected.
+  For figure, role, and color, only omission means unchanged. Explicit null and
+  invalid supplied values are rejected with HTTP 400, and no sibling field,
+  timestamp, or revision is changed.
 minProperties: 2
 additionalProperties: false
 required:
