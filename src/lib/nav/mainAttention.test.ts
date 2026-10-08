@@ -333,6 +333,26 @@ describe('ackForShownCommit (T-14, A06–A08, N08)', () => {
     expect(seam.attachAckFields).not.toHaveBeenCalled()
   })
 
+  it('N08 / BDD-E03 a shown commit with the same session and bound but a losing generation does not acknowledge', async () => {
+    const mainA = session('session-a', 'losing open')
+    seam.mains.add('session-a')
+    seam.attention.set('session-a', 'on')
+    const result = await ack({
+      attemptKind: 'shown-commit',
+      session: mainA,
+      generation: 1,
+      observedBound: 'goal-a3',
+      newerOutcomeId: null,
+      foreground: { sessionId: 'session-a', generation: 3, observedBound: 'goal-a3' },
+      viewerId: 'user-a',
+    }, 'FR-013, BDD-E03, dataset N08')
+    expect(result.acknowledge, 'a losing generation is not the winning shown commit').toBe(false)
+    expect(result.fields).toBeUndefined()
+    expect(result.observedBound).toBeUndefined()
+    expect(result.sessionId).toBeUndefined()
+    expect(seam.attachAckFields).not.toHaveBeenCalled()
+  })
+
   it('N08 / BDD-E03 late A success after B wins does not acknowledge or replace B', async () => {
     const losing = session('session-a', 'losing A')
     seam.mains.add('session-a')
