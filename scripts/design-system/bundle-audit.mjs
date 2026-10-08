@@ -27,7 +27,15 @@ export const INITIAL_GZIP_BUDGET_BYTES = 25 * 1024
 // the observed Lane A (+436,023 bytes) and sidebar-with-Lane-A (+437,825 bytes)
 // growth. The frozen baseline, provenance checks, and initial-gzip ceiling stay
 // unchanged; the unfinished panel still requires its own build and measurement.
-export const TOTAL_RAW_BUDGET_BYTES = 430 * 1024
+// Authorized Wave-1 allowance (2026-10-08, confirmed by squad lead): 430 KiB
+// to 482 KiB. Same-lock release base 641491cfb measures 26,570,995 raw bytes;
+// Wave-1 head 04b990636 measures 26,620,796 (+49,801: JS +48,178, CSS +1,623).
+// The release base had only 630 bytes left against the frozen-baseline cap.
+// Cumulative delta +489,491 needs 482 KiB for the documented ~8% feature
+// margin: 4,077 bytes / 49,801 = 8.19%; 481 KiB leaves only 6.13%.
+// Baseline, initial-gzip ceiling and all Storybook/provenance checks stay fixed.
+// Decision/evidence: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/nav-wave1-fe1/docs/internal/design/evidence/nav-wave1-production-budget-20261008.md.
+export const TOTAL_RAW_BUDGET_BYTES = 482 * 1024
 
 export function compareProductionBundles(baseline, candidate, provenance = null) {
   const initialGzipDelta = candidate.initial.gzipBytes - baseline.initial.gzipBytes
