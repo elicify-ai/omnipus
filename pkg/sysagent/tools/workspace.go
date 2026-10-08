@@ -1053,7 +1053,12 @@ func workspaceDelegationDepthCeiling(d *Deps) int {
 	}
 	cfg := d.GetCfg()
 	if cfg != nil {
-		if depth, err := cfg.Performance.EffectiveMaxDelegationDepth(); err == nil && depth > 0 {
+		depth, valid := config.ConfiguredMaxDelegationDepth(cfg.Performance, "sysagent workspace delegation edge validation")
+		if !valid {
+			// Same rule as gateway.delegationDepthCeiling: fail closed.
+			return 0
+		}
+		if depth > 0 {
 			return depth
 		}
 	}

@@ -39,10 +39,16 @@ var workspaceSaveDelegationFn = workspace.SaveDelegation
 
 // delegationDepthCeiling returns the effective maximum delegation chain depth a
 // caller may request. It uses performance.max_delegation_depth when set (> 0),
-// otherwise the shared default of 3.
+// otherwise the shared default of 3. An invalid (negative) value fails closed: 0, which rejects every positive edge depth, with an ERROR naming the config key.
 func delegationDepthCeiling(cfg *config.Config) int {
 	if cfg != nil {
-		if depth, err := cfg.Performance.EffectiveMaxDelegationDepth(); err == nil && depth > 0 {
+		depth, valid := config.ConfiguredMaxDelegationDepth(cfg.Performance, "gateway workspace delegation edge validation")
+		if !valid {
+			// Invalid limit: a ceiling no positive edge depth satisfies, so a
+			// saved edge cannot be validated against a made-up default.
+			return 0
+		}
+		if depth > 0 {
 			return depth
 		}
 	}

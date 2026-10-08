@@ -391,6 +391,26 @@ func (p PerformanceConfig) EffectiveMaxDelegationDepth() (int, error) {
 	return p.MaxDelegationDepth, nil
 }
 
+// DelegationDepthConfigKey is the operator-facing name of the depth limit,
+// carried as config_key on every invalid-limit log.
+const DelegationDepthConfigKey = "performance.max_delegation_depth"
+
+// ConfiguredMaxDelegationDepth is THE single reader every consumer of
+// performance.max_delegation_depth uses (delegation block, gate, launcher
+// budget, bound setters, and the workspace edge validators). An invalid
+// (negative) value is never swallowed into the unset/backstop default: it logs
+// ERROR with config_key and the caller's site, and returns valid=false so each
+// caller fails closed in its own terms.
+func ConfiguredMaxDelegationDepth(p PerformanceConfig, site string) (limit int, valid bool) {
+	limit, err := p.EffectiveMaxDelegationDepth()
+	if err != nil {
+		logger.ErrorCF("config", "invalid performance.max_delegation_depth — failing closed",
+			map[string]any{"config_key": DelegationDepthConfigKey, "site": site, "error": err.Error()})
+		return 0, false
+	}
+	return limit, true
+}
+
 // EffectiveDelegationTimeoutMinutes returns DelegationTimeoutMinutes, or an
 // error when it is negative. 0 (unset) is not an error.
 func (p PerformanceConfig) EffectiveDelegationTimeoutMinutes() (int, error) {

@@ -68,7 +68,7 @@ func TestWorkingDirWiring_CoreTeamMember_BlockPresent(t *testing.T) {
 	al, cb := wireTestLoopWithGraph(t, agentID)
 	_ = al
 
-	got := cb.buildDynamicContext("", "", "", "", "")
+	got := cb.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(got, "## Working Directory") {
 		t.Fatalf("Working Directory block missing.\ngot: %s", got)
 	}
@@ -99,7 +99,7 @@ func TestWorkingDirWiring_NotCoreTeamMember_BlockAbsent(t *testing.T) {
 	al, cb := wireTestLoopWithGraph(t, agentID)
 	_ = al
 
-	got := cb.buildDynamicContext("", "", "", "", "")
+	got := cb.buildDynamicContext(0, "", "", "", "", "")
 	if strings.Contains(got, "## Working Directory") {
 		t.Fatalf("did not expect a Working Directory block for a non-CoreTeam agent.\ngot: %s", got)
 	}
@@ -121,7 +121,7 @@ func TestWorkingDirWiring_PrefersCurrentSessionWorkspace(t *testing.T) {
 	al, cb := wireTestLoopWithGraph(t, "worker")
 	_ = al
 
-	got := cb.buildDynamicContext(wsZ, "", "", "", "")
+	got := cb.buildDynamicContext(0, wsZ, "", "", "", "")
 	if !strings.Contains(got, "Workspace Z") {
 		t.Errorf("expected the CURRENT session's workspace name %q in block.\ngot: %s", "Workspace Z", got)
 	}

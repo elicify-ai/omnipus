@@ -22,6 +22,7 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -174,6 +175,29 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 			return steer.LaunchResult{}, fmt.Errorf(
 				"steer: launch: %w: skill %q requested for agent %q",
 				sentinel, requestedSkill, req.TargetAgentID)
+		}
+	}
+	// #948: a delegated worker whose message_parent is denied can finish its
+	// work and then has no way to report it — a silent hang. Refuse at launch,
+	// before any session is written, using the SAME policy resolution the
+	// runtime tool filter applies (no new layer; Hard Constraint #6). Only the
+	// delegate front door is checked: other origins (task runs, chat, ...)
+	// report through other surfaces. External-CLI targets deliver through the
+	// drained CLI stream, not the message_parent tool, so they are exempt.
+	if req.Origin.Kind == steer.OriginKindDelegate && !l.al.GetRegistry().IsExternalCLI(req.TargetAgentID) {
+		// Resolve through the same global x agent resolution the runtime tool
+		// filter uses (exact and wildcard entries, strictest wins). Only a
+		// RESOLVED deny refuses: a nil snapshot, or one with no coverage for
+		// message_parent on either layer, has nothing to resolve — coverage is
+		// the boot-time Reconcile's job (Hard Constraint #6) and the runtime
+		// filter stays the authority — so this pre-flight never invents a deny
+		// from missing data (ResolveEffectivePolicy itself would fail closed to
+		// deny and log an Error for an uncovered tool).
+		if verdict, covered := tools.ResolveEffectivePolicyIfCovered(
+			targetAgent.LoadToolPolicy(), "message_parent"); covered &&
+			verdict == string(config.ToolPolicyDeny) {
+			return steer.LaunchResult{}, fmt.Errorf(
+				"steer: launch: %w: agent %q", tools.ErrDelegateTargetCannotReport, req.TargetAgentID)
 		}
 	}
 	lifecycle := l.al.GetSessionLifecycleStore()
@@ -786,9 +810,13 @@ func (l *SteerLauncher) walkVerifiedRoot(steeringSessionID string, steererRec *s
 func (l *SteerLauncher) startingRemainingDepth(steererRec *session.LifecycleRecord, targetAgentID string, parentDepth int) int {
 	globalMaxDepth := 0
 	if cfg := l.al.GetConfig(); cfg != nil {
-		if configured, err := cfg.Performance.EffectiveMaxDelegationDepth(); err == nil {
-			globalMaxDepth = configured
+		configured, depthOK := configuredDelegationDepth(cfg.Performance, "launch depth budget")
+		if !depthOK {
+			// No delegation budget on an invalid limit, matching the gate's
+			// denial (and the Depth <= 0 edge case below).
+			return 0
 		}
+		globalMaxDepth = configured
 	}
 	depthCap := resolveEffectiveDelegationDepth(nil, globalMaxDepth)
 	if steererRec.WorkspaceID != "" && steererRec.AgentID != "" && targetAgentID != "" {
