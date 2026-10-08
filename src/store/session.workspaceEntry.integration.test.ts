@@ -36,10 +36,10 @@ const seam = vi.hoisted(() => {
   const mains = new Map<object, string | undefined>()
   return {
     mains,
-    mainSessionIdOfMember: vi.fn((member: object) => mains.get(member)),
-    isMainSession: vi.fn(() => false),
-    sessionAttention: vi.fn((): 'unknown' => 'unknown'),
-    attachAckFields: vi.fn(() => ({})),
+    mainSessionIdOfMember: vi.fn((member: object): string | undefined => mains.get(member)),
+    isMainSession: vi.fn((_session: unknown): boolean => false),
+    sessionAttention: vi.fn((_session: unknown): 'unknown' => 'unknown'),
+    attachAckFields: vi.fn((_bound: unknown): Record<string, unknown> => ({})),
   }
 })
 
@@ -75,19 +75,9 @@ function session(partial: {
   return {
     type: 'chat',
     title: partial.title ?? partial.id,
-    status: 'active',
     created_at: '2026-01-01T00:00:00Z',
     updated_at: partial.updated_at ?? '2026-01-01T00:00:00Z',
-    channel: 'web',
-    partitions: [],
-    stats: {
-      tokens_in: 0,
-      tokens_out: 0,
-      tokens_total: 0,
-      cost: 0,
-      tool_calls: 0,
-      message_count: 1,
-    },
+    message_count: 1,
     ...partial,
   }
 }

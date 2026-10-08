@@ -68,20 +68,10 @@ function session(id: string, agentId = 'mia'): Session {
     agent_id: agentId,
     title: id,
     type: 'chat',
-    status: 'active',
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',
-    channel: 'web',
-    partitions: [],
+    message_count: 0,
     workspace_id: 'operations',
-    stats: {
-      tokens_in: 0,
-      tokens_out: 0,
-      tokens_total: 0,
-      cost: 0,
-      tool_calls: 0,
-      message_count: 0,
-    },
   }
 }
 

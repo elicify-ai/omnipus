@@ -215,10 +215,11 @@ describe('startNewSession behind decideNewChat (T-03, N09)', () => {
     })
     useSessionStore.getState().attachToSession(MAIN, 'chat', 'Mia main', 'mia')
     useSessionStore.getState().attachToSession(EXTRA, 'chat', 'Launch notes', 'mia')
-    const state = useSessionStore.getState() as { mainPointerByPair?: Record<string, string> }
+    const state = useSessionStore.getState()
+    const mainPointer = (state as { mainPointerByPair?: Record<string, string> }).mainPointerByPair?.[PAIR] ?? null
     expect({
       remembered: state.sessionByWorkspace[WS]?.id ?? null,
-      mainPointer: state.mainPointerByPair?.[PAIR] ?? null,
+      mainPointer,
       pendingSaved: state.sessionByWorkspace[WS]?.id === '__pending',
     }).toEqual({
       remembered: EXTRA,
