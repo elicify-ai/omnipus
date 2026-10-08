@@ -9,6 +9,8 @@
 
 import type { StoreApi } from 'zustand'
 import { produce } from 'immer'
+import { queryClient } from '@/lib/queryClient'
+import { logDiagnostic } from '@/lib/telemetry'
 import type {
   CatchUpCompleteFrame,
   SessionSnapshotFrame,
@@ -195,10 +197,17 @@ export function handleCatchUpFrame({ frame, targetSid, get, set, withBucket }: C
         // The held-open tab has its own confirmed restart signal. Do not race
         // an optional/stale REST lifecycle to choose between two status lines.
         // A same-boot rebuild after continuation must not undo dismissal.
-        if (draft.snapshotWasBootMismatch && bootChanged && completeFrame.boot_id && completeFrame.boot_id !== draft.restartInterruptedBootId && !draft.activeTurnId &&
-          (draft.unansweredLastUserMessageId != null || draft.messageOrder.some((id) => draft.messagesById[id]?.confirmedUnfinished))) {
+        const hasEvidence = wasWipedOpen.size > 0 &&
+          (draft.unansweredLastUserMessageId != null || draft.messageOrder.some((id) => draft.messagesById[id]?.confirmedUnfinished))
+        if (draft.snapshotWasBootMismatch && bootChanged && completeFrame.boot_id && completeFrame.boot_id !== draft.restartInterruptedBootId && !draft.activeTurnId && hasEvidence) {
           draft.restartInterruptedBootId = completeFrame.boot_id
+          draft.restartInterruptedListVersion = queryClient.getQueryState(['sessions'])?.dataUpdateCount ?? 0
           draft.restartNoticeDismissed = false
+        } else if (!draft.activeTurnId && (draft.snapshotWasBootMismatch || (bootChanged && wasWipedOpen.size > 0))) {
+          logDiagnostic('chatRestartSignalSkipped', {
+            reason: !draft.snapshotWasBootMismatch ? 'snapshot_not_boot_mismatch' : !completeFrame.boot_id ? 'missing_boot_id' : !hasEvidence ? 'no_witnessed_cut' : 'boot_already_observed',
+            hasBootId: !!completeFrame.boot_id, bootChanged, hasEvidence,
+          })
         }
         draft.snapshotWasBootMismatch = undefined
       }))

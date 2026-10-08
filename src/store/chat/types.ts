@@ -475,10 +475,12 @@ export interface SessionChatState {
   /**
    * SPA-only: a completed boot-mismatch attach confirmed a cut-off answer in
    * this tab. Keeps Interrupted independent of the optional REST lifecycle's
-   * arrival. Retains the boot identity through history rebuilds/continuation,
-   * so only a later restart can reset restartNoticeDismissed.
+   * arrival. Retains boot identity through rebuilds so the same boot cannot
+   * undo dismissal. Later confirmed progress clears it; a later cut can relatch it.
    */
   restartInterruptedBootId?: string
+  /** Session-list cache version at confirmation; older cached values cannot clear the notice. */
+  restartInterruptedListVersion?: number
   /**
    * I1: the user continued a chat whose saved lifecycle said `interrupted` (a
    * turn started for it in this tab). The Interrupted notice and the

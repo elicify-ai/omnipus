@@ -460,15 +460,17 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
       const gw = await GatewayProcess.start({ env: { OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '300' } })
       let crashed = false
       let releaseList!: () => void
-      let listReachedPage!: () => void
+      let listReachedPage = false
       const listHeld = new Promise<void>((resolve) => { releaseList = resolve })
-      const listDelivered = new Promise<void>((resolve) => { listReachedPage = resolve })
+      const waitForLifecycleList = () => expect.poll(() => listReachedPage, {
+        timeout: 60_000, message: 'The SPA must refetch its lifecycle list after reconnecting; the ordering gate cannot wait forever.',
+      }).toBe(true)
       let regenerating = false
       let targetSessionId: string | null = null
       const retryDone: import('@/lib/api/generated/asyncapi-types').DoneFrame[] = []
       const retryErrors: import('@/lib/api/generated/asyncapi-types').ErrorFrame[] = []
       page.on('websocket', (socket) => socket.on('framereceived', ({ payload }) => {
-        const frame = JSON.parse(payload.toString()) as import('@/lib/ws').WsReceiveFrame
+        const frame = JSON.parse(payload.toString()) as import('@/lib/api/generated/asyncapi-types').ServerFrame
         if (!regenerating || !('session_id' in frame) || frame.session_id !== targetSessionId) return
         if (frame.type === 'done') retryDone.push(frame)
         if (frame.type === 'error') retryErrors.push(frame)
@@ -488,15 +490,15 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
           }
           if (ordering === 'catch-up first') await listHeld
           await route.fulfill({ response })
-          listReachedPage()
+          listReachedPage = true
         })
         if (ordering === 'lifecycle first') {
           await page.routeWebSocket(/\/api\/v1\/chat\/ws/, (socket) => {
             const server = socket.connectToServer()
             socket.onMessage((message) => server.send(message))
             server.onMessage(async (message) => {
-              const frame = JSON.parse(message.toString()) as import('@/lib/ws').WsReceiveFrame
-              if (crashed && frame.type === 'catch_up_complete') await listDelivered
+              const frame = JSON.parse(message.toString()) as import('@/lib/api/generated/asyncapi-types').ServerFrame
+              if (crashed && frame.type === 'catch_up_complete') await waitForLifecycleList()
               socket.send(message)
             })
             socket.onClose((code, reason) => server.close({ code, reason }))
@@ -555,7 +557,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
         // The late-list case has already asserted the status while REST is
         // held. Releasing it must not replace or duplicate that same status.
         releaseList()
-        await listDelivered
+        await waitForLifecycleList()
         await assertSingleStatus()
         await test.info().attach(`interrupted-${ordering}`, { body: await page.screenshot(), contentType: 'image/png' })
 

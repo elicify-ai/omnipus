@@ -227,6 +227,7 @@ export function applySnapshotHistoryWipe(bucket: SessionChatState): SessionChatS
     // Its received status keeps it in history order, not in the unsent tail.
     recoveredFirstSend: bucket.recoveredFirstSend ? { ...bucket.recoveredFirstSend, reconciled: false } : undefined,
     restartInterruptedBootId: bucket.restartInterruptedBootId,
+    restartInterruptedListVersion: bucket.restartInterruptedListVersion,
     restartNoticeDismissed: bucket.restartNoticeDismissed,
     // Item 3 follow-up (orchestrator, Lane A confirmed the gateway side is
     // correct): the client sets isReplaying:true BEFORE session_snapshot
