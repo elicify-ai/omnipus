@@ -142,6 +142,35 @@ When the current first message has no known chat ID, `/new` shows **“Delivery 
 
 **Limits:** recovery before a chat ID is known lives only in the open tab; a full browser reload can lose it. The gateway remembers delivery IDs only for its current process, and only for a limited number of recent first messages: up to 256 per account and 10,000 in total. When those limits are reached, the oldest are forgotten first, so a Retry of a very old unconfirmed first message can create a second chat and answer twice, exactly as after a restart. If it crashes after saving the message but before acknowledging it, Retry after that restart can likewise create a second chat and answer twice. Reusing a delivery ID for a different message is refused with a conflict error instead of being treated as the same message. Delivery Retry is not a guarantee of exactly-once answers or tool actions. After a gateway upgrade, reload any browser tab that was already open: an older tab does not understand the new delivery messages, so starting a new chat there can appear to hang until the page is reloaded.
 
+## Sessions
+
+Type `/sessions` in the message box and press Enter to open **Sessions**. It is the same list as the sidebar search. The command is `/sessions` only.
+
+The view is titled **Sessions**. **All** lists every session. **Running** lists only sessions that are executing right now. A session that is queued is not running: under **All** its status says **Queued**, and **Running** hides it.
+
+Each row shows the session title, then a status word, a kind, when it started, when it was last active, and its token count when that count is known. A stored count of zero is shown as 0. A missing count is left blank rather than shown as zero.
+
+| Status | When you see it |
+|---|---|
+| **Working** | The session is executing. |
+| **Waiting** | It is waiting for an answer. |
+| **Queued** | It is queued, not executing. |
+| **Done** | It finished, or the chat is archived. |
+| **Failed** | It failed. |
+| **Stopped** | It was stopped. The cause is included when Omnipus has one, for example **Stopped · timeout**. |
+| **Interrupted** | A restart cut the turn off. |
+| **Unavailable** | Omnipus has no status record for this session. An active chat without that record is not shown as Working. |
+
+Kind is the session's real type: **Chat**, **Task**, **Helper**, **Scheduled**, **Channel**, **Heartbeat**, or **Verifier**. A helper is a session started under another chat.
+
+Helpers stay under that chat in **All**, **Running**, and search, even when the chat itself would not match. If the list is complete and the parent chat is not in it, the helper sits under a row that says **parent chat unavailable**. You can still open the helper. Omnipus does not invent a title for the missing chat. If the list is incomplete, those helpers are not marked unavailable. A notice says the list is incomplete, and **Retry** loads it again.
+
+Identical helper runs in a row under the same chat fold into **N similar helper runs**. Expand that row to see each original run, with its own status and **Open**. The same title under a different chat stays separate.
+
+When a chat itself owns background commands, its row says **N background commands running** (or **1 background command running**). A checked count of zero, or an unknown count, shows no sentence. The count is not a total of commands owned by helpers.
+
+Arrow keys move the highlight. Enter, or **Open** on a row, attaches that chat and opens its Activity panel. A folded row expands instead of opening. If that session disappears, the highlight clears and focus returns to the search field. Enter does not open a different session in its place.
+
 ## Panels beside chat
 
 [Tasks](tasks.md), [Calendar](calendar.md), [Library](library.md), [Mail](mail.md), and Team open from the workspace bar or its compact panels menu and use the shared panel controls, as does [Browser](browser.md). **Library** is also in the sidebar. **Open browser** at the top of the chat opens the agent's live Browser panel when a browser session is available. Only one panel sits beside Chat at a time. Choosing another replaces it; if the outgoing editor reports protected unsaved changes, you are asked before it leaves.
