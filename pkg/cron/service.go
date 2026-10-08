@@ -239,7 +239,7 @@ func NewCronService(storePath string) *CronService {
 	cs := &CronService{
 		storePath:         storePath,
 		gronx:             gronx.New(),
-		wakeChan:          make(chan struct{}),
+		wakeChan:          make(chan struct{}, 1),
 		clock:             realClock{},
 		maxConcurrentRuns: defaultMaxConcurrentRuns,
 		retryBackoffMs:    append([]int64(nil), defaultRetryBackoffMs...),
@@ -375,7 +375,7 @@ func (cs *CronService) initRunStateUnsafe(physicalBoot bool) (started bool, err 
 
 	cs.stopChan = make(chan struct{})
 	if cs.wakeChan == nil {
-		cs.wakeChan = make(chan struct{})
+		cs.wakeChan = make(chan struct{}, 1)
 	}
 	// Fresh lane context for this run window (a prior Stop canceled the old one).
 	if cs.laneCtx == nil || cs.laneCtx.Err() != nil {
@@ -698,6 +698,8 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	// deferred reset that ALWAYS runs, so even an early return (job vanished)
 	// or a panic in the state-update code below leaves no stuck Running=true.
 	cs.mu.Lock()
+	// Completion can happen while runLoop is recalculating its timer.
+	defer cs.notify()
 	defer cs.mu.Unlock()
 	defer cs.clearRunningUnsafe(jobID)
 
@@ -832,6 +834,7 @@ func (cs *CronService) rescheduleSkippedUnsafe(job *CronJob) {
 	if err := cs.saveStoreUnsafe(); err != nil {
 		log.Printf("[cron] failed to persist skip-reschedule: %v", err)
 	}
+	cs.notify()
 }
 
 // scheduleNextRunUnsafe computes and assigns the job's next fire after a run,
