@@ -65,7 +65,10 @@ const seam = vi.hoisted(() => {
     },
     sessionAttention: () => 'off' as const,
     attachAckFields: () => ({}),
-    attentionBoundOfFrame: (_frame: unknown) => undefined,
+    attentionBoundOfFrame: (_frame: unknown) => {
+      void _frame
+      return undefined
+    },
   }
 })
 

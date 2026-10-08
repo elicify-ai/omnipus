@@ -64,10 +64,22 @@ const seam = vi.hoisted(() => {
   return {
     mains,
     mainSessionIdOfMember: vi.fn((member: object) => mains.get(member)),
-    isMainSession: vi.fn((_session: unknown) => false),
-    sessionAttention: vi.fn((_session: unknown): 'unknown' => 'unknown'),
-    attachAckFields: vi.fn((_bound: unknown) => ({})),
-    attentionBoundOfFrame: vi.fn((_frame: unknown): number | undefined => undefined),
+    isMainSession: vi.fn((_session: unknown) => {
+      void _session
+      return false
+    }),
+    sessionAttention: vi.fn((_session: unknown): 'unknown' => {
+      void _session
+      return 'unknown'
+    }),
+    attachAckFields: vi.fn((_bound: unknown) => {
+      void _bound
+      return {}
+    }),
+    attentionBoundOfFrame: vi.fn((_frame: unknown): number | undefined => {
+      void _frame
+      return undefined
+    }),
   }
 })
 
