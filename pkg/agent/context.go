@@ -114,7 +114,7 @@ type ContextBuilder struct {
 	// authority the enforcement gate reads — so the block advertises exactly
 	// what the gate allows. Set via WithDelegationInjector; wired by
 	// wireDelegationInjectors in loop_env.go.
-	delegationInjector func(workspaceID string) string
+	delegationInjector func(workspaceID string, currentDepth int) string
 
 	// workingDirInjector is an optional per-turn callback that renders a
 	// "## Working Directory" block telling the agent where its file tools
@@ -166,12 +166,13 @@ type ContextBuilder struct {
 }
 
 // WithDelegationInjector installs the per-turn delegation context callback. fn
-// receives the turn's effective workspaceID (ts.opts.WorkspaceID, may be "") and
-// is called on every turn from buildDynamicContext (the UN-CACHED path). The
+// receives the turn's effective workspaceID (ts.opts.WorkspaceID, may be "")
+// and the turn's current delegation-chain depth (the value
+// currentDelegationDepth reports to the enforcement gate), and is called on every turn from buildDynamicContext (the UN-CACHED path). The
 // closure reads the workspace delegation graph for that workspace so the block
 // advertises exactly what the enforcement gate allows. Passing nil disables the
 // block (no delegation section is appended).
-func (cb *ContextBuilder) WithDelegationInjector(fn func(workspaceID string) string) *ContextBuilder {
+func (cb *ContextBuilder) WithDelegationInjector(fn func(workspaceID string, currentDepth int) string) *ContextBuilder {
 	cb.delegationInjector = fn
 	return cb
 }
@@ -1216,7 +1217,7 @@ func formatCurrentSenderLine(senderID, senderDisplayName string) string {
 	}
 }
 
-func (cb *ContextBuilder) buildDynamicContext(workspaceID, channel, chatID, senderID, senderDisplayName string) string {
+func (cb *ContextBuilder) buildDynamicContext(delegationDepth int, workspaceID, channel, chatID, senderID, senderDisplayName string) string {
 	localNow := time.Now()
 	// Finding 10(b): the local time carried no timezone, so the model could not
 	// tell how it related to any timestamp it reads elsewhere in context (e.g.
@@ -1242,7 +1243,7 @@ func (cb *ContextBuilder) buildDynamicContext(workspaceID, channel, chatID, send
 	// expire. workspaceID is the turn's effective workspace — the same value the
 	// enforcement gate resolves, so advertisement == enforcement by construction.
 	if cb.delegationInjector != nil {
-		if block := cb.delegationInjector(workspaceID); block != "" {
+		if block := cb.delegationInjector(workspaceID, delegationDepth); block != "" {
 			fmt.Fprintf(&sb, "\n\n%s", block)
 		}
 	}
@@ -1275,6 +1276,11 @@ func (cb *ContextBuilder) buildDynamicContext(workspaceID, channel, chatID, send
 //  3. history messages (the Skip-trimmed sliding window, post-eviction).
 //  4. Current user message.
 //
+// delegationDepth is the turn's current delegation-chain depth (ts.depth, the
+// value the enforcement gate compares against its cap); it lets the
+// "## Delegation" block stop advertising targets an at-ceiling agent cannot
+// reach.
+//
 // workspaceID is the turn's effective workspace (ts.opts.WorkspaceID). It is
 // threaded into buildDynamicContext and thence into delegationInjector so the
 // "## Delegation" block reads the SAME workspace graph the enforcement gate
@@ -1289,6 +1295,7 @@ func (cb *ContextBuilder) buildDynamicContext(workspaceID, channel, chatID, send
 // is placed after the breadcrumb and before the sliding window so the model
 // sees recalled (old) context before the most-recent window turns.
 func (cb *ContextBuilder) BuildMessages(
+	delegationDepth int,
 	history []providers.Message,
 	currentMessage string,
 	media []string,
@@ -1319,7 +1326,7 @@ func (cb *ContextBuilder) BuildMessages(
 
 	// Build short dynamic context (time, runtime, session, delegation) — changes per request.
 	// workspaceID is threaded so the delegation block reads the same graph the gate enforces.
-	dynamicCtx := cb.buildDynamicContext(workspaceID, channel, chatID, senderID, senderDisplayName)
+	dynamicCtx := cb.buildDynamicContext(delegationDepth, workspaceID, channel, chatID, senderID, senderDisplayName)
 
 	// Compose a single system message: static (cached) + dynamic + breadcrumb.
 	// Keeping all system content in one message ensures every provider adapter can

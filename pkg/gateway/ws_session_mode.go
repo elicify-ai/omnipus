@@ -68,7 +68,7 @@ func (h *WSHandler) applySessionModeChoice(ctx context.Context, agentID, session
 		modes.Set(sessionID, *autoApprove)
 		newMode = shellModeName(*autoApprove)
 	}
-	effective := al.SessionAutoApprove(agentID, sessionID)
+	effective := al.SessionAutoApprove(sessionID)
 	audit.EmitShellModeChange(ctx, al.AuditLogger(), audit.DecisionAllow,
 		newMode, "chat", audit.ShellModeActorOperator, agentID, sessionID, source)
 	return effective
@@ -76,7 +76,7 @@ func (h *WSHandler) applySessionModeChoice(ctx context.Context, agentID, session
 
 // handleSessionModeUpdateFrame applies ADR-092's per-chat Auto-approve
 // modifier (SessionModeUpdateFrame): auto_approve true/false sets it, null
-// clears it so the chat follows the agent and global defaults again. This is
+// clears it so the chat follows the global default again. This is
 // the one scope the contract lets LOOSEN, because a human is present in the
 // chat; it is reachable only from an authenticated browser WebSocket, never
 // from an agent tool. Always acknowledged with session_mode_updated carrying

@@ -58,7 +58,7 @@ func TestCWSlideR1_InjectedSteeringSurvivesPreSendFailureAndPressure(t *testing.
 	deadProvider, err := providers.NewHTTPProviderWithTimeouts("r1-inert-fixture-key", deadURL, "", "max_tokens", 10, 0, nil)
 	require.NoError(t, err)
 	ri.rf.rt.activeProvider = deadProvider
-	_, sendErr := ri.rf.rt.callProvider(ri.rf.callMessages, nil)
+	_, sendErr := ri.rf.rt.callProviderOnce(ri.rf.callMessages, nil)
 	var netErr *net.OpError
 	require.ErrorAs(t, sendErr, &netErr, "instrument: real failure is the pre-send dial, not context cancellation")
 	require.Equal(t, "dial", netErr.Op)

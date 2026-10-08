@@ -170,6 +170,18 @@ type ExecutionIdentity struct {
 	BootSeq uint64 `json:"boot_seq"`
 }
 
+// FinalHandbackMark records that the child delivered a final message_parent
+// handback during the execution identified by RunID/BootSeq (issue #1215).
+// It is keyed to the execution identity, never the generation, because a
+// stopped-session resume keeps its generation.
+//
+// not-wire-format: internal disk bookkeeping.
+type FinalHandbackMark struct {
+	RunID   string `json:"run_id"`
+	BootSeq uint64 `json:"boot_seq"`
+	Result  string `json:"result"`
+}
+
 // LifecycleRecord is the durable, per-generation session-lifecycle record
 // (ADR-053 §Contract Surface — SessionLifecycleRecord). Field shapes mirror
 // the generated pkg/api/generated.SessionLifecycleRecord one-for-one (minus
@@ -242,6 +254,26 @@ type LifecycleRecord struct {
 	// the wire SessionLifecycleRecord (this is not session status). See
 	// ExecutionIdentity's own doc comment for the tuple's shape.
 	ExecutionID *ExecutionIdentity `json:"execution_id,omitempty"`
+
+	// Unattended is the durable "no human audience" posture of a steered
+	// session: set once at launch when the launching tool's context carried
+	// AutoDenyAsk (a task/trigger/headless parent), and read whenever the
+	// session's turn is rebuilt from this record — first dispatch, a wake, a
+	// restart — so every ask-policy call in it is auto-denied instead of
+	// pending an approval nobody can answer (#891).
+	//
+	// not-wire-format: internal steered-launch bookkeeping, omitted from the
+	// wire SessionLifecycleRecord (it is not session status).
+	Unattended bool `json:"unattended,omitempty"`
+
+	// FinalHandback marks a final handback delivered in the execution it
+	// names. It is read only when it matches the record's current ExecutionID
+	// (FinalHandbackThisExecution), so a mark left by an earlier execution is
+	// inert and needs no clearing.
+	//
+	// not-wire-format: internal completion bookkeeping, omitted from the wire
+	// SessionLifecycleRecord.
+	FinalHandback *FinalHandbackMark `json:"final_handback,omitempty"`
 
 	// FinalDelivery is the protected terminal/outbox commit tuple (ADR-20260928
 	// sub-agent control plane, D2 CRIT-001): the one outcome/publication
@@ -1334,4 +1366,17 @@ func (s *LifecycleStore) hasNonTerminalDescendant(rootSessionID string) (bool, e
 		}
 	}
 	return false, nil
+}
+
+// FinalHandbackThisExecution returns the result of a final handback the child
+// delivered during the record's CURRENT execution, if any.
+func (rec *LifecycleRecord) FinalHandbackThisExecution() (string, bool) {
+	if rec == nil || rec.ExecutionID == nil || rec.FinalHandback == nil {
+		return "", false
+	}
+	m := rec.FinalHandback
+	if m.RunID != rec.ExecutionID.RunID || m.BootSeq != rec.ExecutionID.BootSeq {
+		return "", false
+	}
+	return m.Result, true
 }

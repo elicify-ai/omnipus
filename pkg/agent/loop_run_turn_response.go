@@ -50,7 +50,7 @@ func (rr *agentLoopRunTurnResponse) callLLMWithRetries() agentLoopRunTurnRespons
 		if err := cr.rr.rq.checkpointRequest(true); err != nil {
 			return nil, err
 		}
-		return cr.rr.rq.ri.rf.rt.callProvider(cr.rr.rq.ri.rf.callMessages, toolDefsForCall)
+		return cr.rr.rq.ri.rf.rt.callProviderOnce(cr.rr.rq.ri.rf.callMessages, toolDefsForCall)
 	}
 
 	cr.rr.rq.ri.rf.response = nil

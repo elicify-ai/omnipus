@@ -519,6 +519,14 @@ const (
 // generated shape to route through.
 const SkillNotFoundCode = "skill_not_found"
 
+// SkillNotGrantedCode is the discriminator for a `delegate` requested_skill
+// whose slug exists but is not granted to the delegation target (#895). It is
+// a plain LLM-facing payload exactly like SkillNotFoundCode (same ADR-072 §7
+// reasoning: no gateway/SPA wire type, so not in AllStructuredFailureCodes) and
+// replaces the earlier delegation_denied/trust_set wording, which read as a
+// permissions failure when the delegation itself was allowed.
+const SkillNotGrantedCode = "skill_not_granted"
+
 // AllStructuredFailureCodes returns every structured tool-failure
 // discriminator this package defines. This is the SINGLE authoritative
 // enumeration a new producer's Code constant must be added to — pkg/gateway

@@ -37,6 +37,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
+import { isGoalRunning } from '@/lib/goalActivity'
 import type { CancelFrame } from '@/lib/api/generated/asyncapi-types'
 
 export type StopLabel = 'stop' | 'stopping'
@@ -57,8 +58,8 @@ export interface UseCancelStateResult {
    * (focused-input) Escape handler — it checks "is a turn actually running
    * right now" before flipping the visual state, since Escape can also
    * fire when the button isn't even showing (nothing to cancel;
-   * `cancelStream()` still safely no-ops the network send but still marks
-   * the last message interrupted).
+   * `cancelStream()` then sends nothing and marks nothing: the last message
+   * is marked interrupted only while a turn is actually streaming).
    *
    * D9: this is the FIRST activation surface — when the confirmation
    * window is already armed it confirms instead (one tree frame), and
@@ -69,9 +70,11 @@ export interface UseCancelStateResult {
    * Unconditionally sets the button to 'stopping' before calling
    * `cancelStream()` — used by the Stop button and `/stop`. Do NOT guard
    * this with `isStreaming`: `cancelStream()` handles the server-send gate
-   * internally, and guarding here would silently no-op when the turn races
-   * to completion between render (when the button became clickable) and
-   * the click itself, preventing the "(interrupted)" label from appearing.
+   * internally, and the first press must still arm the Stop-all window and
+   * show "Stopping..." when the turn raced to completion between render (when
+   * the button became clickable) and the click. In that race nothing is marked
+   * "(interrupted)": the answer did finish, and `cancelStream()` marks only
+   * while a turn is actually streaming.
    *
    * First activation = single-session cancel + the 3 s window; a second
    * activation inside that window confirms (tree frame).
@@ -301,8 +304,8 @@ export function useCancelState(
   //   and deliver the done frame in <1s, so by the time Escape fires:
   //   isStreaming=false, stopLabel='stop' (the reset effect above already
   //   ran), and a naive guard `if (!isStreaming && stopLabel !== 'stopping')`
-  //   would silently no-op — cancellation never happens and "(interrupted)"
-  //   never appears.
+  //   would silently no-op — the Stop window never arms for a Stop the user
+  //   pressed on a turn they just watched stream.
   //
   //   Fix: read through to the Zustand store to check if the last assistant
   //   message is in a cancellable state: either actively streaming
@@ -310,9 +313,9 @@ export function useCancelState(
   //   window). This is a snapshot read — it bypasses the React closure's
   //   stale isStreaming value entirely.
   //
-  // cancelStream() internally gates the WS send on isStreaming, so calling
-  // it when the turn is already done is safe: it just marks the last
-  // message interrupted, which is correct and desired here.
+  // cancelStream() internally gates the WS send (and the "(interrupted)" mark)
+  // on a turn actually streaming, so calling it when the turn is already done
+  // is safe: it sends nothing and marks nothing, because the answer finished.
   //
   // bugfixes3 Fix 3: this listener is intentionally NOT menu-aware — it has
   // no idea whether the composer's "/" or "@" menu is open. That's handled
@@ -370,7 +373,7 @@ export function useCancelState(
       // surface — the second (unfocused) Esc inside it confirms, even
       // though the first activation already ended the turn locally.
       const shouldCancel =
-        liveState.isStreaming || withinRaceWindow || stopLabel === 'stopping' || stopAllArmedRef.current
+        liveState.isStreaming || isGoalRunning(liveState.goalStatus) || withinRaceWindow || stopLabel === 'stopping' || stopAllArmedRef.current
       if (!shouldCancel) return
       e.preventDefault()
       // D9: an Escape inside the confirmation window is the second

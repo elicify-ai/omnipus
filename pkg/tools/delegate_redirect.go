@@ -20,6 +20,10 @@ import (
 // forced to also implement redirection.
 type steerRedirecter interface {
 	RedirectSteeredSession(ctx context.Context, sessionID string, by steer.Principal, instruction string) error
+	// ReviveStoppedSessionAsRedirect is ReviveStoppedSession with the
+	// instruction stored as a redirect entry (the "redirect-" id the SPA reads
+	// to drop the interrupted marker after reload).
+	ReviveStoppedSessionAsRedirect(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error)
 }
 
 // executeRedirect replaces the target's current turn with the new
@@ -89,11 +93,11 @@ func (t *DelegateTool) executeRedirect(ctx context.Context, args map[string]any)
 	// stopped: skip the stop half; the redirect is the resume instruction
 	// (same conversation, same generation — Correction C1's stopped row).
 	if rec.Stopped() {
-		reviver, ok := t.steering.(steerReviver)
+		reviver, ok := t.steering.(steerRedirecter)
 		if !ok {
 			return ErrorResult(fmt.Sprintf("delegate: redirect: session %s is stopped and cannot be resumed: no reviver configured", sessionID))
 		}
-		revived, rerr := reviver.ReviveStoppedSession(ctx, sessionID, by, text)
+		revived, rerr := reviver.ReviveStoppedSessionAsRedirect(ctx, sessionID, by, text)
 		if rerr != nil {
 			return ErrorResult(fmt.Sprintf("delegate: redirect: resume stopped session %s: %v", sessionID, rerr)).WithError(rerr)
 		}

@@ -168,8 +168,6 @@ describe('ToolsAndPermissions — new endpoint (FR-027, FR-029)', () => {
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     await waitFor(() => {
@@ -184,8 +182,6 @@ describe('ToolsAndPermissions — new endpoint (FR-027, FR-029)', () => {
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     await waitFor(() => {
@@ -215,8 +211,6 @@ describe('ToolsAndPermissions — ADR-092 J14 "Under Auto" marker', () => {
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     const categoryGrid = await screen.findByTestId('category-grid')
@@ -239,8 +233,6 @@ describe('ToolsAndPermissions — ADR-092 J14 "Under Auto" marker', () => {
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     const categoryGrid = await screen.findByTestId('category-grid')
@@ -258,8 +250,6 @@ describe('ToolsAndPermissions — source badge (FR-027)', () => {
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     await waitFor(() => {
@@ -276,8 +266,6 @@ describe('ToolsAndPermissions — source badge (FR-027)', () => {
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     await waitFor(() => {
@@ -307,8 +295,6 @@ describe('ToolsAndPermissions — system.* in flat category grid (US-1 / AC5 / F
         agentType="Main"
         tools={{ builtin: { policies: { 'system.config.set': 'allow' } } }}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     await waitFor(() => {
@@ -327,8 +313,6 @@ describe('ToolsAndPermissions — system.* in flat category grid (US-1 / AC5 / F
         agentType="Main"
         tools={{ builtin: { policies: { 'system.config.set': 'allow' } } }}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     await waitFor(() => {
@@ -344,8 +328,6 @@ describe('ToolsAndPermissions — system.* in flat category grid (US-1 / AC5 / F
         agentType="Main"
         tools={{ builtin: { policies: { 'system.config.set': 'allow' } } }}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     await waitFor(() => {
@@ -388,8 +370,6 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
         agentType="Main"
         tools={conflictTools}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />,
     )
     await waitFor(() => {
@@ -409,8 +389,6 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
         agentType="Main"
         tools={noConflictTools}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />,
     )
     await waitFor(() => {
@@ -425,8 +403,6 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />,
     )
     await waitFor(() => {
@@ -446,8 +422,6 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
         agentType="Main"
         tools={conflictTools}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />,
     )
     await waitFor(() => {
@@ -466,8 +440,6 @@ describe('ToolsAndPermissions — role preset selector (US-D2 / #333)', () => {
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     await waitFor(() => {
@@ -484,8 +456,6 @@ describe('ToolsAndPermissions — role preset selector (US-D2 / #333)', () => {
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     // Preset buttons render before the tools draft hydrates; awaiting
@@ -528,8 +498,6 @@ describe('ToolsAndPermissions — locked agent (B-2 / US-D5 / #332)', () => {
         isLocked={true}
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     await waitFor(() => {
@@ -545,8 +513,6 @@ describe('ToolsAndPermissions — locked agent (B-2 / US-D5 / #332)', () => {
         isLocked={true}
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     await waitFor(() => {
@@ -569,8 +535,6 @@ describe('ToolsAndPermissions — external-cli agent (subagent_3p) is read-only 
         agentType="subagent_3p"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     await waitFor(() => {
@@ -587,8 +551,6 @@ describe('ToolsAndPermissions — external-cli agent (subagent_3p) is read-only 
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     await waitFor(() => {
@@ -604,8 +566,6 @@ describe('ToolsAndPermissions — external-cli agent (subagent_3p) is read-only 
         agentType="subagent_3p"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     await waitFor(() => {
@@ -622,8 +582,6 @@ describe('ToolsAndPermissions — external-cli agent (subagent_3p) is read-only 
         agentType="subagent_3p"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     await waitFor(() => {
@@ -643,122 +601,12 @@ describe('ToolsAndPermissions — external-cli agent (subagent_3p) is read-only 
         agentType="subagent_3p"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
     await waitFor(() => {
       expect(document.querySelector('[data-testid="tool-policy-editor"]')).toBeInTheDocument()
     })
     expect(screen.queryByText(/override.*Default:/i)).toBeNull()
-  })
-})
-
-describe('ToolsAndPermissions — ADR-092 per-agent Auto-approve off-switch', () => {
-  it('renders unchecked when the agent does not force Auto off', async () => {
-    renderWithQuery(
-      <ToolsAndPermissions
-        agentId="agent-1"
-        agentType="Main"
-        tools={DEFAULT_TOOLS_CFG}
-        onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
-      />
-    )
-    const checkbox = await screen.findByTestId('agent-auto-approve-disabled')
-    expect(checkbox).toHaveAttribute('data-state', 'unchecked')
-  })
-
-  it('renders checked when the agent forces Auto off', async () => {
-    renderWithQuery(
-      <ToolsAndPermissions
-        agentId="agent-1"
-        agentType="Main"
-        tools={DEFAULT_TOOLS_CFG}
-        onChange={NOOP_CHANGE}
-        autoApproveDisabled
-        onAutoApproveDisabledChange={() => {}}
-      />
-    )
-    const checkbox = await screen.findByTestId('agent-auto-approve-disabled')
-    expect(checkbox).toHaveAttribute('data-state', 'checked')
-  })
-
-  it('checking it calls onAutoApproveDisabledChange(true) — an off-only control, never an "on" affordance', async () => {
-    const onChange = vi.fn()
-    renderWithQuery(
-      <ToolsAndPermissions
-        agentId="agent-1"
-        agentType="Main"
-        tools={DEFAULT_TOOLS_CFG}
-        onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={onChange}
-      />
-    )
-    const checkbox = await screen.findByTestId('agent-auto-approve-disabled')
-    fireEvent.click(checkbox)
-    expect(onChange).toHaveBeenCalledWith(true)
-  })
-
-  it('unchecking it calls onAutoApproveDisabledChange(false)', async () => {
-    const onChange = vi.fn()
-    renderWithQuery(
-      <ToolsAndPermissions
-        agentId="agent-1"
-        agentType="Main"
-        tools={DEFAULT_TOOLS_CFG}
-        onChange={NOOP_CHANGE}
-        autoApproveDisabled
-        onAutoApproveDisabledChange={onChange}
-      />
-    )
-    const checkbox = await screen.findByTestId('agent-auto-approve-disabled')
-    fireEvent.click(checkbox)
-    expect(onChange).toHaveBeenCalledWith(false)
-  })
-
-  it('is hidden for an external-CLI agent (subagent_3p) — Omnipus has no ask/allow/deny concept to auto-approve there', async () => {
-    renderWithQuery(
-      <ToolsAndPermissions
-        agentId="ext-1"
-        agentType="subagent_3p"
-        tools={DEFAULT_TOOLS_CFG}
-        onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
-      />
-    )
-    await waitFor(() => {
-      expect(screen.getByTestId('external-cli-tools-notice')).toBeInTheDocument()
-    })
-    expect(screen.queryByTestId('agent-auto-approve-disabled')).toBeNull()
-  })
-
-  it('describes the real per-chat override rule — a delegate off-switch always wins, but the chat\'s own agent can still be loosened', async () => {
-    // pkg/agent/sessionmode.go::ResolveAutoApprove: the chat modifier is the
-    // one scope allowed to loosen the chat's own agent, but a delegate's own
-    // off-switch is never overridden by a chat toggle. The old copy claimed
-    // the off-switch "always prompts, even when ... turned on for this
-    // chat" unconditionally, which is false for the chat's own agent.
-    renderWithQuery(
-      <ToolsAndPermissions
-        agentId="agent-1"
-        agentType="Main"
-        tools={DEFAULT_TOOLS_CFG}
-        onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
-      />
-    )
-    await screen.findByTestId('agent-auto-approve-disabled')
-
-    expect(
-      screen.queryByText(/always prompts, even when auto-approve is on\s+globally or turned on for this chat/i),
-    ).not.toBeInTheDocument()
-    expect(screen.getByText(/delegate.*off-switch always wins/i)).toBeInTheDocument()
-    expect(screen.getByText(/chat.*own agent.*can still override this switch/i)).toBeInTheDocument()
   })
 })
 
@@ -789,8 +637,6 @@ describe('ToolsAndPermissions — no spurious PUT on tab open (bug fix)', () => 
         agentType="Main"
         tools={parentConfig}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
 
@@ -828,8 +674,6 @@ describe('ToolsAndPermissions — no spurious PUT on tab open (bug fix)', () => 
         agentType="Main"
         tools={parentConfig}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
 
@@ -858,8 +702,6 @@ describe('ToolsAndPermissions — re-auth-gated save on real edit', () => {
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
 
@@ -905,8 +747,6 @@ describe('ToolsAndPermissions — re-auth-gated save on real edit', () => {
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
 
@@ -972,8 +812,6 @@ describe('ToolsAndPermissions — 403 re-auth path (Spec-6 FR-12.2)', () => {
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={onChange}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
 
@@ -1013,8 +851,6 @@ describe('ToolsAndPermissions — 403 re-auth path (Spec-6 FR-12.2)', () => {
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
 
@@ -1098,8 +934,6 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
 
@@ -1198,8 +1032,6 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={NOOP_CHANGE}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />
     )
 

@@ -432,6 +432,7 @@ func TestAssembleMessages_ReadArchiveError_FallsBackToBreadcrumb(t *testing.T) {
 
 	// Must not panic.
 	assembled := cb.BuildMessages(
+		0,
 		liveWindow,
 		currentMsg,
 		nil,
@@ -477,6 +478,7 @@ func TestAssembleMessages_ReadArchiveError_FallsBackToBreadcrumb(t *testing.T) {
 		"- turns 1–2 · 2h ago · \"DIFFERENTIATION_BREADCRUMB_SENTINEL\""
 
 	assembledWithBreadcrumb := cb.BuildMessages(
+		0,
 		liveWindow,
 		currentMsg,
 		nil,

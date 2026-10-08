@@ -92,12 +92,12 @@ func (al *AgentLoop) SessionModes() *SessionModeStore {
 }
 
 // SessionAutoApprove reports the resolved Auto-approve setting for
-// sessionID's chat driven by agentID: the global default, the agent's
-// off-switch, then the chat's own modifier (ResolveAutoApprove). This is the
+// sessionID's chat: the chat's own modifier when set, otherwise the global
+// default (ResolveAutoApprove). This is the
 // value the session_mode_updated frame reports; it does not fold in whether
 // a kernel sandbox is active (the SPA combines it with
 // SandboxStatus.kernel_sandbox_active).
-func (al *AgentLoop) SessionAutoApprove(agentID, sessionID string) bool {
+func (al *AgentLoop) SessionAutoApprove(sessionID string) bool {
 	if al == nil {
 		return false
 	}
@@ -105,7 +105,7 @@ func (al *AgentLoop) SessionAutoApprove(agentID, sessionID string) bool {
 	if v, ok := al.sessionModes.Get(sessionID); ok {
 		chat = &v
 	}
-	return ResolveAutoApprove(al.GetConfig(), agentID, chat)
+	return ResolveAutoApprove(al.GetConfig(), chat)
 }
 
 // SandboxBackend returns the active sandbox backend, or nil if sandboxing is

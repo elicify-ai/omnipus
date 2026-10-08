@@ -40,8 +40,8 @@ import (
 
 // steerInheritanceFixture builds a real AgentLoop wired for delegation
 // (SteerLauncher.Launch/Dispatch) from a parent chat run by testDefaultAgentID
-// to a delegate target agent "worker" (no AutoApproveDisabled of its own —
-// each test sets only what it needs on top). Global Auto-approve is set to
+// to a delegate target agent "worker" (each test sets only what it needs on
+// top). Global Auto-approve is set to
 // globalAutoApprove. "worker" gets a single RUNS-classified stub tool,
 // knowledge_edit (ADR-092 D9's J11: "Knowledge-writing tools Run"), on Ask,
 // scripted to be called exactly once.

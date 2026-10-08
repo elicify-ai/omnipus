@@ -1242,23 +1242,6 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 		}
 	}
 
-	// Check if parent turn has ended (SubTurn support)
-	if ri.rf.rt.ts.parentTurnState != nil && ri.rf.rt.ts.IsParentEnded() {
-		if !ri.rf.rt.ts.critical {
-			logger.InfoCF("agent", "Parent turn ended, non-critical SubTurn exiting gracefully", map[string]any{
-				"agent_id":  ri.rf.rt.ts.agentID,
-				"iteration": ri.rf.rt.iteration,
-				"turn_id":   ri.rf.rt.ts.turnID,
-			})
-			return agentLoopRunTurnIterationBreak
-		}
-		logger.InfoCF("agent", "Parent turn ended, critical SubTurn continues running", map[string]any{
-			"agent_id":  ri.rf.rt.ts.agentID,
-			"iteration": ri.rf.rt.iteration,
-			"turn_id":   ri.rf.rt.ts.turnID,
-		})
-	}
-
 	// Poll for pending SubTurn results
 	if ri.rf.rt.ts.pendingResults != nil {
 		select {
@@ -1416,7 +1399,7 @@ func (rf *agentLoopRunTurnFallbacks) synthesizeImageRejection(pe *ProviderError,
 }
 
 // callProviderOnce calls the configured provider or fallback chain once and records streaming progress.
-// Delegated-turn rate-limit retries wrap this method in loop_provider_retry.go.
+// Provider rate-limit retries for every turn, delegated included, live in the fallback chain (§7.4).
 func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (response *providers.LLMResponse, err error) {
 	if cwErr := rt.ts.contextWindowError(); cwErr != nil {
 		return nil, cwErr
@@ -1473,18 +1456,23 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 	}
 	defer rt.al.endActiveRequest()
 
-	// §7.4 (D3, gate finding F1): a ROOT turn runs the fallback chain even
-	// with a single candidate — the chain owns the §7.4 per-candidate
-	// in-place retry (C-8: 3 total calls, C-9 ceiling, D14 budget, C-12
-	// Stop) and the provider_retry frame. A DELEGATED turn (parentTurnState
-	// set) keeps its own bounded retry in
-	// loop_provider_retry.go::callProvider — §13 keeps the delegated path
-	// dark for provider_retry frames. The single-candidate chain runs on a
+	// C-10 counts bytes streamed by THIS provider round only. The deleted
+	// delegated wrapper used to reset the counter per call; a value left over
+	// from an earlier round must never disable the chain's in-place retry
+	// (the multi-candidate closure below never resets it itself).
+	rt.providerCallStreamedBytes.Store(0)
+
+	// §7.4 (D3, gate finding F1): every turn — root or steered child — runs
+	// the fallback chain even with a single candidate: the chain owns the
+	// §7.4 per-candidate in-place retry (C-8: 3 total calls, C-9 ceiling,
+	// D14 budget, C-12 Stop) and the provider_retry frame. There is no
+	// separate delegated retry path (issue #857). The single-candidate chain
+	// runs on a
 	// throwaway cooldown tracker (WithCooldown): today's plain path marks
 	// nothing, and a shared-tracker MarkFailure would cooldown-skip the only
 	// candidate on a LATER turn — an all-skipped exhaustion whose generic
 	// message would replace the real error.
-	useChain := rt.al.fallback != nil && len(rt.activeCandidates) > 0 && (rt.ts.parentTurnState == nil || len(rt.activeCandidates) > 1)
+	useChain := rt.al.fallback != nil && len(rt.activeCandidates) > 0
 	if useChain {
 		// §7.4: carry the D14 per-turn wait budget and the C-11 retry
 		// observer on the provider ctx for this chain call. The budget is

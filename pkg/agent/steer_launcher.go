@@ -22,6 +22,7 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -95,7 +96,7 @@ func launchSessionType(kind steer.OriginKind) session.UnifiedSessionType {
 // step leaves no session and no lifecycle record; the caller receives an
 // error naming the failed write via errors.Is against the returned
 // steer.Err* sentinel.
-func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (steer.LaunchResult, error) {
+func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (steer.LaunchResult, error) {
 	if req.Label == "" && req.Task == "" {
 		return steer.LaunchResult{}, steer.ErrTitleRequired
 	}
@@ -176,6 +177,29 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 				sentinel, requestedSkill, req.TargetAgentID)
 		}
 	}
+	// #948: a delegated worker whose message_parent is denied can finish its
+	// work and then has no way to report it — a silent hang. Refuse at launch,
+	// before any session is written, using the SAME policy resolution the
+	// runtime tool filter applies (no new layer; Hard Constraint #6). Only the
+	// delegate front door is checked: other origins (task runs, chat, ...)
+	// report through other surfaces. External-CLI targets deliver through the
+	// drained CLI stream, not the message_parent tool, so they are exempt.
+	if req.Origin.Kind == steer.OriginKindDelegate && !l.al.GetRegistry().IsExternalCLI(req.TargetAgentID) {
+		// Resolve through the same global x agent resolution the runtime tool
+		// filter uses (exact and wildcard entries, strictest wins). Only a
+		// RESOLVED deny refuses: a nil snapshot, or one with no coverage for
+		// message_parent on either layer, has nothing to resolve — coverage is
+		// the boot-time Reconcile's job (Hard Constraint #6) and the runtime
+		// filter stays the authority — so this pre-flight never invents a deny
+		// from missing data (ResolveEffectivePolicy itself would fail closed to
+		// deny and log an Error for an uncovered tool).
+		if verdict, covered := tools.ResolveEffectivePolicyIfCovered(
+			targetAgent.LoadToolPolicy(), "message_parent"); covered &&
+			verdict == string(config.ToolPolicyDeny) {
+			return steer.LaunchResult{}, fmt.Errorf(
+				"steer: launch: %w: agent %q", tools.ErrDelegateTargetCannotReport, req.TargetAgentID)
+		}
+	}
 	lifecycle := l.al.GetSessionLifecycleStore()
 	sessions := l.al.GetSessionStore()
 	if lifecycle == nil || sessions == nil {
@@ -191,7 +215,11 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 	if req.SteeringSessionID == "" {
 		return l.launchOrdinaryRoot(sessions, lifecycle, req, title, sessionType)
 	}
-	result, err := l.launchSteered(sessions, lifecycle, req, title, sessionType)
+	// #891: the launching tool's ctx carries AutoDenyAsk when the parent runs
+	// unattended (task/trigger/headless). The child's turn is rebuilt later from
+	// its lifecycle record on a detached context, so the posture is persisted
+	// ON that record, in the launch's own write (reconstructSteeredTurn reads it).
+	result, err := l.launchSteered(sessions, lifecycle, req, title, sessionType, tools.ToolAutoDenyAsk(ctx))
 	if err == nil {
 		l.inheritDelegatePermissions(lifecycle, req.SteeringSessionID, result.SessionID)
 		l.publishSteeredLaunch(req, result)
@@ -233,7 +261,7 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 // ActiveAgentID at launch time), so this reads the committed truth instead
 // of re-resolving a possibly-stale copy. Best-effort, matching
 // publishSteeredLaunch's own lifecycle.Load immediately below it: a read
-// failure here leaves the child on its own agent-level/global Auto defaults
+// failure here leaves the child on the global Auto default
 // rather than failing an already-committed launch.
 func (l *SteerLauncher) inheritDelegatePermissions(lifecycle *session.LifecycleStore, parentSessionID, childSessionID string) {
 	if l == nil || l.al == nil || lifecycle == nil || parentSessionID == "" || childSessionID == "" {
@@ -380,6 +408,7 @@ func (l *SteerLauncher) launchSteered(
 	req steer.LaunchRequest,
 	title string,
 	sessionType session.UnifiedSessionType,
+	unattended bool,
 ) (steer.LaunchResult, error) {
 	if req.WorkspaceID != "" || req.Owner != "" {
 		return steer.LaunchResult{}, fmt.Errorf(
@@ -516,6 +545,7 @@ func (l *SteerLauncher) launchSteered(
 				ParentAgentID:  parentAgentID,
 				Origin:         &origin,
 				SteeredBy:      steeredBy,
+				Unattended:     unattended,
 			}, nil
 		},
 	)
@@ -698,12 +728,13 @@ func (l *SteerLauncher) writeChildMetaAndHistory(
 	}
 
 	if req.Task != "" {
-		sessions.AddMessage(childID, "user", req.Task)
+		firstMessage := firstMessageWithSnapshot(req)
+		sessions.AddMessage(childID, "user", firstMessage)
 		taskEntry := session.TranscriptEntry{
 			ID:        childID + "-task",
 			Role:      "user",
 			AgentID:   req.TargetAgentID,
-			Content:   req.Task,
+			Content:   firstMessage,
 			Timestamp: time.Now().UTC(),
 		}
 		if appendErr := sessions.AppendTranscriptStrict(childID, taskEntry); appendErr != nil {
@@ -711,6 +742,34 @@ func (l *SteerLauncher) writeChildMetaAndHistory(
 		}
 	}
 	return nil
+}
+
+// firstMessageWithSnapshot is the child's first user message: the task text,
+// followed — only when the parent passed a delegate snapshot — by a labelled
+// "Curated context" section carrying its notes and references (issue #1212:
+// the snapshot was validated and then dropped, so the child never saw it).
+func firstMessageWithSnapshot(req steer.LaunchRequest) string {
+	notes := strings.TrimSpace(req.ContextNotes)
+	if notes == "" && len(req.ContextReferences) == 0 {
+		return req.Task
+	}
+	var b strings.Builder
+	b.WriteString(req.Task)
+	b.WriteString("\n\n## Curated context from the parent\n")
+	if notes != "" {
+		b.WriteString("\nNotes:\n")
+		b.WriteString(notes)
+		b.WriteString("\n")
+	}
+	if len(req.ContextReferences) > 0 {
+		b.WriteString("\nReferences:\n")
+		for _, ref := range req.ContextReferences {
+			b.WriteString("- ")
+			b.WriteString(ref)
+			b.WriteString("\n")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // walkVerifiedRoot resolves the cascade root for a new child steered by
@@ -751,9 +810,13 @@ func (l *SteerLauncher) walkVerifiedRoot(steeringSessionID string, steererRec *s
 func (l *SteerLauncher) startingRemainingDepth(steererRec *session.LifecycleRecord, targetAgentID string, parentDepth int) int {
 	globalMaxDepth := 0
 	if cfg := l.al.GetConfig(); cfg != nil {
-		if configured, err := cfg.Performance.EffectiveMaxDelegationDepth(); err == nil {
-			globalMaxDepth = configured
+		configured, depthOK := configuredDelegationDepth(cfg.Performance, "launch depth budget")
+		if !depthOK {
+			// No delegation budget on an invalid limit, matching the gate's
+			// denial (and the Depth <= 0 edge case below).
+			return 0
 		}
+		globalMaxDepth = configured
 	}
 	depthCap := resolveEffectiveDelegationDepth(nil, globalMaxDepth)
 	if steererRec.WorkspaceID != "" && steererRec.AgentID != "" && targetAgentID != "" {
@@ -939,13 +1002,19 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 			al.drainSteerQueue(claim)
 			return steer.DispatchResult{}, commitErr
 		}
+		// The task run owns this reservation's execution disposition, like the
+		// delegate front below: a person's Stop finds the barrier, and the
+		// run's release finishes it (retiring the slot and landing the Stop).
+		execution, attachErr := al.attachSteeredExecution(claim)
+		if attachErr != nil {
+			al.drainSteerQueue(claim)
+			return steer.DispatchResult{}, attachErr
+		}
 		gate.entryMu.Unlock()
 		entryLocked = false
-		if dispatchErr := al.taskExecutor.dispatchLaunchedTask(running, func() {
-			al.drainSteerQueue(claim)
-		}); dispatchErr != nil {
-			al.drainSteerQueue(claim)
-			return steer.DispatchResult{}, dispatchErr
+		finishRun := al.taskExecutor.finishTaskRun(execution, rec.Origin.TaskID, nil)
+		if dispatchErr := al.taskExecutor.dispatchLaunchedTask(running, execution, finishRun); dispatchErr != nil {
+			return steer.DispatchResult{}, errors.Join(dispatchErr, al.finishExecutionDisposition(execution))
 		}
 		if al.steering != nil {
 			al.steering.reopenScopeForGeneration(sessionID, gen)

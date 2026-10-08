@@ -67,7 +67,6 @@ func cancelBrowserFixture(
 		routingSessionID: childRouting,
 		depth:            1,
 		parentTurnID:     parent.turnID,
-		parentTurnState:  parent,
 		ctx:              cctx,
 		turnCancel:       childCancel,
 	}
