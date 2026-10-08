@@ -3140,7 +3140,7 @@ describe('AgentProfile — unlocked Main agent: interactive identity fields rend
     expectEditableIdentityChoices(screen.getByRole('tabpanel', { name: 'Basics' }))
     expect(screen.queryByTestId('avatar-icon-trigger')).toBeNull()
     expect(screen.queryAllByTestId('avatar-color-readonly').length).toBe(0)
-    expect(screen.getByTestId('avatar-icon-readonly')).toHaveTextContent('Chat')
+    expect(screen.getByTestId('avatar-icon-readonly').querySelector('span')?.textContent).toBe('Chat')
   })
 
   it('does NOT disable the description textarea for an editable Main agent', async () => {
