@@ -7,7 +7,7 @@ import '@/styles/agent-icon-motion.css'
 
 import { AgentIcon } from '@/components/ui/agent-icon'
 import type { AgentColor, AgentFigure, AgentRole } from '@/lib/api/generated/openapi-types'
-import { AGENT_ROLES, FIGURE_PRESENTATION } from '@/lib/agentIdentity'
+import { FIGURE_ART, ROLE_VOCABULARY } from '@/lib/agentIdentity'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
@@ -103,11 +103,11 @@ function usePrefersReducedMotion(): boolean {
 }
 
 function isFigure(value: string | undefined): value is AgentFigure {
-  return value != null && Object.prototype.hasOwnProperty.call(FIGURE_PRESENTATION, value)
+  return value != null && Object.prototype.hasOwnProperty.call(FIGURE_ART, value)
 }
 
 function isRole(value: string | undefined): value is AgentRole {
-  return value != null && Object.prototype.hasOwnProperty.call(AGENT_ROLES, value)
+  return value != null && ROLE_VOCABULARY.some((row) => row.slug === value)
 }
 
 function isPaletteColor(value: string | undefined): value is AgentColor {
@@ -214,7 +214,7 @@ export function AgentStatusIndicator({
   return (
     <span className="inline-flex items-center gap-[var(--space-2)] py-[var(--space-1)] text-[var(--color-muted)] italic">
       {drawnFigure && drawnRole && drawnColor && (
-        <span data-art={FIGURE_PRESENTATION[drawnFigure].art}>
+        <span data-art={FIGURE_ART[drawnFigure].art}>
           <AgentIcon
             figure={drawnFigure}
             role={drawnRole}
