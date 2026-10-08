@@ -25,7 +25,7 @@ import {
   File,
   Lightning,
 } from '@phosphor-icons/react'
-import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
+import { OMNIPUS_MARK_URL as OmnipusAvatar } from '@/lib/brandAssets'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { Wordmark } from '@/components/shared/Wordmark'
 import { GenericToolCall } from './tools/GenericToolCall'
