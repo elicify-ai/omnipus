@@ -6,7 +6,7 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { logDiagnostic } from '@/lib/telemetry'
 import { noteForegroundAttach } from '@/store/session/foregroundAck'
-import { runStartNewSession } from '@/store/session/newChatFlow'
+import { runStartNewSession, type NewChatStartArg } from '@/store/session/newChatFlow'
 import type { NewChatPrompt } from '@/store/session/newChatFlow'
 import { runWorkspaceEntry } from '@/store/session/workspaceEntryFlow'
 import type { WorkspaceEntryView } from '@/store/session/workspaceEntryFlow'
@@ -210,7 +210,7 @@ interface SessionStore {
   ) => boolean
   setAttachedContext: (type: Session['type'], title: string | null) => void
   startNewSession: (
-    agentId?: string | null | { choice?: 'decline' | 'confirm' },
+    agentId?: NewChatStartArg,
     agentType?: AgentKind | null,
   ) => void
   sessionByWorkspace: Record<string, WorkspaceSessionDescriptor | null>

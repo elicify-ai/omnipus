@@ -43,27 +43,54 @@ export function currentNewChatInput(mainSessionId: string): GuardInput {
 
 type ChatNavigate = (opts: { to: '/workspaces/$workspaceId/chat'; params: { workspaceId: string } }) => void
 
+/** The unconfirmed send the dialog opened against. Confirm may abandon only this id. */
+export type CapturedPending = { clientMessageId: string; workspaceId: string | null }
+
+/** Snapshot taken when the guard opens, not whatever occupies the slot later. */
+export function captureUnconfirmedTarget(): CapturedPending | null {
+  const pending = getPendingFirstSend(useChatStore.getState())
+  if (!pending || pending.sessionId) return null
+  return { clientMessageId: pending.clientMessageId, workspaceId: pending.workspaceId }
+}
+
+/**
+ * The deleted composer gate: the captured id is still the message in the
+ * selected bucket, in the same workspace. A newer message that reused the
+ * pending slot does not match.
+ */
+export function pendingIdStillSelected(captured: CapturedPending | null): boolean {
+  if (!captured) return false
+  const selected = useSessionStore.getState().activeSessionId
+  const bucket = selected ? useChatStore.getState().sessionsById[selected] : undefined
+  return (useWorkspacesStore.getState().activeWorkspaceId || null) === captured.workspaceId
+    && !!findFirstSendMessage(bucket, captured.clientMessageId)
+}
+
 /**
  * Start an extra chat for this pair. Does not write a new main id.
  * Sets the workspace first so the fresh pointer lands on that workspace.
+ * `confirm` passes the dialog choice and this row's owner together: a bare
+ * agent id is treated as "not yet confirmed" and will not abandon a delivery.
  */
-export function beginPairExtra(workspaceId: string, agentId: string, navigate: ChatNavigate, closeOverlay: () => void) {
+export function beginPairExtra(
+  workspaceId: string,
+  agentId: string,
+  navigate: ChatNavigate,
+  closeOverlay: () => void,
+  mode: 'start' | 'confirm' = 'start',
+  captured?: CapturedPending | null,
+) {
   useWorkspacesStore.getState().setActiveWorkspaceId(workspaceId)
-  useSessionStore.getState().startNewSession(agentId)
+  if (mode === 'confirm') {
+    useSessionStore.getState().startNewSession({
+      choice: 'confirm',
+      agentId,
+      clientMessageId: captured?.clientMessageId,
+    })
+  } else {
+    useSessionStore.getState().startNewSession(agentId)
+  }
   navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId } })
   closeOverlay()
 }
 
-/**
- * Same gate the composer uses before abandoning an unconfirmed first send:
- * the pending message is still the selected one in this workspace.
- */
-export function unconfirmedSendStillSelected(): boolean {
-  const pending = getPendingFirstSend(useChatStore.getState())
-  if (!pending) return false
-  const selected = useSessionStore.getState().activeSessionId
-  if (selected !== '__pending') return false
-  if ((useWorkspacesStore.getState().activeWorkspaceId || null) !== pending.workspaceId) return false
-  const bucket = useChatStore.getState().sessionsById[selected]
-  return !!findFirstSendMessage(bucket, pending.clientMessageId)
-}

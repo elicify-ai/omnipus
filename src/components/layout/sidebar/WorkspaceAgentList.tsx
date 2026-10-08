@@ -14,7 +14,13 @@ import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
 import { SidebarAgentIcon } from './SidebarAgentIcon'
 import { attentionCountLabel, useAttentionMotion } from './attentionCue'
-import { beginPairExtra, currentNewChatInput, unconfirmedSendStillSelected } from './pairExtra'
+import {
+  beginPairExtra,
+  captureUnconfirmedTarget,
+  currentNewChatInput,
+  pendingIdStillSelected,
+  type CapturedPending,
+} from './pairExtra'
 import { workspaceMains, type RosterState } from './workspaceRoster'
 import './attention.css'
 
@@ -261,6 +267,7 @@ function AgentMainRow({
 }) {
   const navigate = useNavigate()
   const [promptOpen, setPromptOpen] = useState(false)
+  const [abandonTarget, setAbandonTarget] = useState<CapturedPending | null>(null)
   const [unresolved, setUnresolved] = useState(false)
 
   const openMain = () => {
@@ -276,6 +283,7 @@ function AgentMainRow({
   const startExtra = () => {
     const decision = decideNewChat(currentNewChatInput(row.mainSessionId))
     if (decision.action === 'prompt') {
+      setAbandonTarget(captureUnconfirmedTarget())
       setPromptOpen(true)
       return
     }
@@ -285,15 +293,25 @@ function AgentMainRow({
   }
 
   const confirmExtra = () => {
+    const target = abandonTarget
     const decision = decideNewChat({ ...currentNewChatInput(row.mainSessionId), choice: 'confirm' })
+    setAbandonTarget(null)
     setPromptOpen(false)
-    if (decision.action === 'confirm' && unconfirmedSendStillSelected()) {
-      beginPairExtra(workspace.id, row.agentId, navigate, onOverlayClose)
+    // Abandon only the id this dialog opened against. A newer message that
+    // reused the pending slot is a different delivery.
+    if (
+      target
+      && decision.action === 'confirm'
+      && decision.abandonedClientMessageId === target.clientMessageId
+      && pendingIdStillSelected(target)
+    ) {
+      beginPairExtra(workspace.id, row.agentId, navigate, onOverlayClose, 'confirm', target)
     }
   }
 
   const declineExtra = () => {
     decideNewChat({ ...currentNewChatInput(row.mainSessionId), choice: 'decline' })
+    setAbandonTarget(null)
     setPromptOpen(false)
   }
 

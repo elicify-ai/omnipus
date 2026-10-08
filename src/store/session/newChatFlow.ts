@@ -22,14 +22,32 @@ export type NewChatPrompt = {
   started: false
 }
 
+/** A string is the extra's owner. An object is the dialog choice, plus that owner. */
+export type NewChatStartArg =
+  | string
+  | null
+  | { choice?: 'decline' | 'confirm'; agentId?: string | null; clientMessageId?: string }
+
 function choiceOf(arg: unknown): 'decline' | 'confirm' | undefined {
   if (!arg || typeof arg !== 'object' || !('choice' in arg)) return undefined
   const choice = (arg as { choice?: unknown }).choice
   return choice === 'decline' || choice === 'confirm' ? choice : undefined
 }
 
+function agentHintOf(arg: NewChatStartArg | undefined): string | undefined {
+  if (typeof arg === 'string') return arg
+  if (arg && typeof arg === 'object' && typeof arg.agentId === 'string') return arg.agentId
+  return undefined
+}
+
+/** Dialog confirm names the id it opened against. A bare confirm means "the one pending now". */
+function capturedClientMessageId(arg: NewChatStartArg | undefined): string | undefined {
+  if (!arg || typeof arg !== 'object' || typeof arg.clientMessageId !== 'string') return undefined
+  return arg.clientMessageId
+}
+
 export function runStartNewSession(
-  agentOrChoice?: string | null | { choice?: 'decline' | 'confirm' },
+  agentOrChoice?: NewChatStartArg,
   agentType?: AgentKind | null,
 ): void {
   const state = useSessionStore.getState()
@@ -58,11 +76,19 @@ export function runStartNewSession(
     useSessionStore.setState({ newChatPrompt: null })
     return
   }
+  // A dialog opened against an older id must not discard the message that
+  // has since reused the pending slot. A confirm with no captured id still
+  // abandons whatever is pending now.
+  const capturedId = capturedClientMessageId(agentOrChoice)
+  if (decision.action === 'confirm' && capturedId && readPendingFirstSend()?.clientMessageId !== capturedId) {
+    useSessionStore.setState({ newChatPrompt: null })
+    return
+  }
 
   clearPendingAutoApproveOnSessionChange()
   abandonRegisteredPendingFirstSend()
   useSessionStore.setState({ newChatPrompt: null })
-  const hint = typeof agentOrChoice === 'string' ? agentOrChoice : undefined
+  const hint = agentHintOf(agentOrChoice)
   // A new extra keeps the pair's owner. It does not clear the saved pointer
   // and it does not replace the main pointer the sidebar row uses.
   useSessionStore.getState().setActiveSession(null, hint, agentType ?? undefined)
