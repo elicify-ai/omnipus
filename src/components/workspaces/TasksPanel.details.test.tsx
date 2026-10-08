@@ -70,8 +70,7 @@ it('T16 plan info shows full title state progress owner and update time without 
   expect(screen.queryByRole('dialog', { name: 'Plan details' })).not.toBeInTheDocument()
 })
 
-it('T18 task and plan metadata use plain text without bordered pills, retaining exact status agent progress and tags', async () => {
-  const user = userEvent.setup()
+it('T18/T26 task and plan metadata retain exact data without bordered pills, with card status/tags kept in info', () => {
   const task = layoutTask({ tags: ['docs', 'release'], todos: [{ text: 'Done', status: 'completed' }, { text: 'Pending', status: 'pending' }] })
   const mounted = renderLayout(<TaskCard task={task} onClick={vi.fn()} />)
   expect(mounted.container.querySelector('.rounded-full.border')).toBeNull()

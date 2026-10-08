@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BoardView } from './BoardView'
+import { showTaskInfo } from './tasksLayoutFixtures'
 import type { Task, Agent, Plan } from '@/lib/api'
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
@@ -133,6 +134,7 @@ describe('BoardView delegation roll-up', () => {
     })
 
     renderBoard([parentWithRollup], [agentRay])
+    showTaskInfo('Parent task') // T26: delegation remains reachable in info.
 
     // The badge should be visible
     const badge = screen.getByLabelText(/1 sub-agent running/i)
@@ -154,6 +156,7 @@ describe('BoardView delegation roll-up', () => {
     const agentAva: Agent = { ...agentRay, id: 'ava', name: 'Ava', color: '#A855F7', icon: 'Gear' }
 
     renderBoard([parentWithRollup], [agentRay, agentAva])
+    showTaskInfo('Parent task')
 
     // Same two agents and statuses remain accessible, without avatar pills.
     const agentList = screen.getByRole('list', { name: 'Sub-agents' })

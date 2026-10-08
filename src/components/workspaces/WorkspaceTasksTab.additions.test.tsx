@@ -58,6 +58,7 @@ it('T20 starts Plans open when populated, keeps compact header controls visible,
   expect(screen.getByTestId('all-tasks-tile')).toBeVisible()
   mounted.unmount()
   renderLayout(<WorkspaceTasksTab workspaceId="ws-layout" />)
+  await screen.findByTestId('plan-filter-tile-plan-layout') // T20 default follows async data, not the initial empty cache.
   expect(screen.getByRole('button', { name: 'Plans' })).toHaveAttribute('aria-expanded', 'true')
 })
 

@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { TaskCard } from './TaskCard'
-import { layoutTask, renderLayout } from './tasksLayoutFixtures'
+import { layoutTask, renderLayout, showTaskInfo } from './tasksLayoutFixtures'
 
 afterEach(() => vi.unstubAllGlobals())
 it('T15 corrected opens only on info hover/focus, allows entering the panel, closes on leave/Escape and never activates the task', async () => {
@@ -34,8 +34,9 @@ it('T15 corrected opens only on info hover/focus, allows entering the panel, clo
 })
 
 it('T18 every metadata separator follows a value inside its own wrapping group, never leads the next line', () => {
-  const mounted = renderLayout(<TaskCard task={layoutTask({ tags: ['docs', 'release'], todos: [{ text: 'Done', status: 'completed' }] })} onClick={vi.fn()} showActions={false} />)
-  const separators = [...mounted.container.querySelectorAll<HTMLElement>('[aria-hidden="true"]')].filter((element) => element.textContent === '·')
+  renderLayout(<TaskCard task={layoutTask({ tags: ['docs', 'release'], todos: [{ text: 'Done', status: 'completed' }] })} onClick={vi.fn()} showActions={false} />)
+  const details = showTaskInfo('Ray report') // T26 removes card tags; their wrap contract remains in info.
+  const separators = [...details.querySelectorAll<HTMLElement>('[aria-hidden="true"]')].filter((element) => element.textContent === '·')
   expect(separators.length).toBeGreaterThan(0)
   for (const separator of separators) {
     expect(separator.parentElement).toHaveClass('inline-flex')

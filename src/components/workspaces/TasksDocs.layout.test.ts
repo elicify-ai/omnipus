@@ -13,8 +13,8 @@ it('T10 documents the two-row toolbar, Board widening/fallback/restoration, chec
   expect(tasks).toMatch(/Agent[^.\n]*Tags[^.\n]*New Task[^.\n]*one row/i)
   expect(tasks).toContain('Pri, Title, Status, Details, Actions, Tags, Agent, Updated')
   expect(tasks).not.toMatch(/groups stack|stacks its status groups vertically/i)
-  expect(plans).toMatch(/Show done[^.\n]*checkbox[^.\n]*Plans header/i)
-  expect(plans).toMatch(/New Plan[^.\n]*(?:same|header)/i)
+  expect(plans).toMatch(/Unhide done plans[^.\n]*checkbox[^.\n]*bottom-left/i)
+  expect(plans).toMatch(/header[^.\n]*New Plan/i)
 })
 
 it('H documents all three views, Board opening/default and the collapsed Plans checkbox reveal precisely', () => {
@@ -26,9 +26,10 @@ it('H documents all three views, Board opening/default and the collapsed Plans c
   expect(tasks).toMatch(/Board[^.\n]*default view/i)
   expect(tasks).toMatch(/Opening[^.\n]*Board[^.\n]*selecting[^.\n]*Board[^.\n]*maximum docked width/i)
   const aboveViews = tasks.split('\n').find((line) => line.startsWith('Above the views,'))!
-  expect(aboveViews).toMatch(/collapsed[^.\n]*default/i)
-  expect(aboveViews).toMatch(/checkbox[^.\n]*only[^.\n]*completed plans/i)
-  expect(aboveViews).toMatch(/Checking[^.\n]*expands[^.\n]*completed (?:plans|tiles)/i)
+  expect(aboveViews).toMatch(/open by default[^.\n]*plans exist[^.\n]*collapsed[^.\n]*none/i)
+  expect(aboveViews).toMatch(/checkbox[^.\n]*bottom-left[^.\n]*All tasks/i)
+  expect(aboveViews).toMatch(/appears[^.\n]*completed plans exist/i)
+  expect(aboveViews).toMatch(/Checking[^.\n]*reveals[^.\n]*completed (?:plans|tiles)/i)
   expect(plans.split('\n').find((line) => line.startsWith('You see plans'))).toMatch(/collapsible[^.\n]*Plans[^.\n]*above[^.\n]*views/i)
-  expect(plans).toMatch(/Checking[^.\n]*expands[^.\n]*completed (?:plans|tiles)/i)
+  expect(plans).toMatch(/Checking[^.\n]*reveals[^.\n]*tiles/i)
 })
