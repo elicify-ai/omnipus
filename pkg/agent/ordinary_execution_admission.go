@@ -93,13 +93,11 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 	gate := al.steerAdmission()
 	gate.entryMu.Lock()
 	defer gate.entryMu.Unlock()
-	// Waiting for a predecessor or this lock can outlive the caller. A dead
-	// context cannot own a revival/admission or consume a pending parent report.
-	if err := ctx.Err(); err != nil {
+	// Explicit cancellation cannot revive a root or consume a parent report.
+	// A deadline may only have ended the predecessor wait: preserve the pending
+	// owner's refusal below instead of disguising it as a context timeout.
+	if err := ctx.Err(); errors.Is(err, context.Canceled) {
 		return ordinaryExecutionPreparation{}, err
-	}
-	if al.activeTurnForCancel(sessionID, CancelScope{SessionID: sessionID, TurnOnly: true}) != nil {
-		return ordinaryExecutionPreparation{}, refuseOrdinaryAdmission(fmt.Errorf("ordinary admission: %w: an execution is already registered", steer.ErrStaleGeneration))
 	}
 	al.admission.mu.Lock()
 	owner := al.admission.activeScopes[sessionID]
@@ -107,6 +105,13 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 	al.admission.mu.Unlock()
 	if pending {
 		return ordinaryExecutionPreparation{}, ErrPreviousExecutionPending
+	}
+	// With no pending owner, an ended caller still cannot admit fresh work.
+	if err := ctx.Err(); err != nil {
+		return ordinaryExecutionPreparation{}, err
+	}
+	if al.activeTurnForCancel(sessionID, CancelScope{SessionID: sessionID, TurnOnly: true}) != nil {
+		return ordinaryExecutionPreparation{}, refuseOrdinaryAdmission(fmt.Errorf("ordinary admission: %w: an execution is already registered", steer.ErrStaleGeneration))
 	}
 	bootSeq := al.bootEpochFor()
 	if bootSeq == 0 {
