@@ -323,12 +323,19 @@ func Mia() *CoreAgent {
 
 // Admin returns the chat-capable operator role. Admin configures the harness;
 // it is a core runtime identity, not a hidden system agent.
+//
+// Visible roster colours (All, the set TestCoreAgentMetadataDifferentiation
+// checks) are distinct: Mia Azure #3B82F6, Jim Cyan #22D3EE, Ava Orange
+// #FB923C, Admin Pink #F472B6, Planner Sky #38BDF8, Researcher Violet
+// #A78BFA, General Purpose Grey #9CA3AF. Admin is Pink so it does not share
+// Ava's Orange. Hidden Judge (Azure) and Plan Supervisor (Cyan) are not in
+// All() and are outside that check.
 func Admin() *CoreAgent {
 	return &CoreAgent{
 		ID: IDAdmin, Name: "Admin", Subtitle: "Operator",
 		Description: "Configures connectors, providers, channels, diagnostics, and document dependencies.",
 		Figure:      DefaultFigure, Role: string(generated.AgentRoleSecurity),
-		Color: "#FB923C", Icon: "shield",
+		Color: "#F472B6", Icon: "shield",
 	}
 }
 

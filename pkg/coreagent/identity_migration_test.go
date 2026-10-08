@@ -277,7 +277,9 @@ func TestSeedConfig_BuiltInsEnforceCanonicalTriplesAndSecondCallIsStable(t *test
 		{id: string(IDMia), role: "general", color: "#3B82F6", icon: "lightbulb"},
 		{id: string(IDJim), role: "general", color: "#22D3EE", icon: "graph"},
 		{id: string(IDAva), role: "general", color: "#FB923C", icon: "wrench"},
-		{id: string(IDAdmin), role: "security", color: "#FB923C", icon: "shield"},
+		// Admin is Pink, not Orange, so the visible roster stays distinct.
+		// Squad decision 2026-10-08. Ava stays Orange.
+		{id: string(IDAdmin), role: "security", color: "#F472B6", icon: "shield"},
 		{id: string(IDPlanner), role: "general", color: "#38BDF8", icon: "tree-structure"},
 		{id: string(IDResearcher), role: "general", color: "#A78BFA", icon: "books"},
 		{id: string(IDWorker), role: "general", color: "#9CA3AF", icon: "robot"},
