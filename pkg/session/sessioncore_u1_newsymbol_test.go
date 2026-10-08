@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -263,18 +264,22 @@ func TestSessionCoreU1_ComputedIDOverTheByteCapIsRefused(t *testing.T) {
 	require.NoError(t, rerr)
 	// Oracle derivation: BaseDir() also holds the store's own ".context/"
 	// directory — NewUnifiedStoreWithHome seeds it (unified.go) and the list
-	// path skips it explicitly (unified_list.go: `entry.Name() == ".context"`),
-	// so it is the store's internal context backend, not a session. Count
-	// SESSION directories only (exclude dot-entries): exactly the one healthy
-	// control main, and no directory for the over-cap id.
+	// path skips it explicitly (`entry.Name() == ".context"`), so it is the
+	// store's internal context backend, not a session. Exclude EXACTLY that one
+	// entry — NOT every dot-prefixed directory: a refusal that smuggled a HIDDEN
+	// stray directory (e.g. ".c1-stray-session") must be caught, and a blanket
+	// "skip every dot entry" filter hid exactly that (C1 CHECK survivor m24).
+	// The exact SET then proves the refusal stored nothing but the healthy
+	// control — no directory of any name, hidden or not, for the over-cap id.
 	var sessionDirs []string
 	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+		if e.IsDir() && e.Name() != ".context" {
 			sessionDirs = append(sessionDirs, e.Name())
 		}
 	}
+	sort.Strings(sessionDirs)
 	assert.Equal(t, []string{"main-session-W1+mia"}, sessionDirs,
-		"only the healthy control main is stored; the over-cap pair must not create a directory")
+		"only the healthy control main is stored; the over-cap pair must create no directory (hidden or not)")
 }
 
 // Id-format ruling (Q1=B): the "+" join keeps two distinct (workspace, agent)
@@ -299,6 +304,24 @@ func TestSessionCoreU1_DistinctPairsNeverCollideOnOneID(t *testing.T) {
 	_, ok2 := ids["main-session-a+b-c"]
 	assert.True(t, ok1, "pair (a-b, c) has its own stored main")
 	assert.True(t, ok2, "pair (a, b-c) has its own stored main")
+
+	// C1 CHECK survivor m21: u1StoredIdentities keys only PARSEABLE meta-bearing
+	// records (it requires a valid meta.json), so a retired hyphen-collision
+	// directory with no parseable metadata escapes the absence check above. Scan
+	// the RAW store listing — every directory, independent of type or metadata —
+	// so a stray "main-session-a-b-c" of ANY shape is caught. Exclude only the
+	// store's own ".context" backend.
+	rawEntries, rerr := os.ReadDir(store.BaseDir())
+	require.NoError(t, rerr)
+	var rawDirs []string
+	for _, e := range rawEntries {
+		if e.IsDir() && e.Name() != ".context" {
+			rawDirs = append(rawDirs, e.Name())
+		}
+	}
+	sort.Strings(rawDirs)
+	assert.Equal(t, []string{"main-session-a+b-c", "main-session-a-b+c"}, rawDirs,
+		"the raw store holds EXACTLY the two pairs' mains; no hyphen-collision directory of any shape may exist")
 }
 
 // FR-002 / BDD-01.4: invalid pair components are refused with an error and
@@ -369,20 +392,24 @@ func TestSessionCoreU1_CorruptStoredMetadataIsRefusedNotRepaired(t *testing.T) {
 	after, rerr := os.ReadFile(filepath.Join(dir, "meta.json"))
 	require.NoError(t, rerr)
 	assert.Equal(t, corrupt, after, "corrupt record must not be overwritten (no guessing)")
-	entries, _ := os.ReadDir(store.BaseDir())
+	entries, rerr := os.ReadDir(store.BaseDir())
+	require.NoError(t, rerr)
 	// Oracle derivation: BaseDir() also holds the store's own ".context/"
-	// directory (NewUnifiedStoreWithHome in unified.go; unified_list.go skips it
-	// when listing — not a session). Count session directories only (exclude
-	// dot-entries): exactly the one corrupt main's directory, and no replacement
-	// directory for the pair.
+	// directory (NewUnifiedStoreWithHome in unified.go; the list path skips it
+	// when listing — not a session). Exclude EXACTLY that one entry, NOT every
+	// dot-prefixed directory: a refusal that wrote a HIDDEN replacement main
+	// (e.g. ".c1-stray-session") must be caught, and a blanket "skip every dot
+	// entry" filter hid it (C1 CHECK survivor m25). The exact SET then proves
+	// only the corrupt main's directory remains — no replacement of any name.
 	var sessionDirs []string
 	for _, e := range entries {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+		if e.IsDir() && e.Name() != ".context" {
 			sessionDirs = append(sessionDirs, e.Name())
 		}
 	}
+	sort.Strings(sessionDirs)
 	assert.Equal(t, []string{"main-session-W1+mia"}, sessionDirs,
-		"only the corrupt main's directory remains; no replacement directory may appear")
+		"only the corrupt main's directory remains; no replacement directory of any name (hidden or not) may appear")
 }
 
 // C-MAIN: Session.agent_id / workspace_id are immutable. Existing public seam:

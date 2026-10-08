@@ -179,4 +179,18 @@ func TestSessionCoreU1_LiveSessionRowsValidateAndCarryNoRetiredFields(t *testing
 	_, has := heartbeat["session_id"]
 	assert.False(t, has, "C-MAIN: heartbeat.session_id is gone from the workspace wire")
 	assert.Empty(t, u1Validate(t, "WorkspaceMemberConfig", mc), "member config validates against the current schema")
+
+	// C1 CHECK survivor m19r: the wire projection can conceal a retired heartbeat
+	// address that REMAINS in the persisted workspace settings. Assert on the
+	// PERSISTED record on disk, not only the wire: no "session_id" key under the
+	// member's heartbeat, whatever the wire shows.
+	persisted := env.u1PersistedWorkspace(t, ws)
+	pMCs, _ := persisted["member_configs"].(map[string]any)
+	pMC, _ := pMCs["mia"].(map[string]any)
+	require.NotNil(t, pMC, "persisted member config for mia must exist: %v", persisted)
+	pHB, _ := pMC["heartbeat"].(map[string]any)
+	require.NotNil(t, pHB, "persisted heartbeat settings for mia must exist: %v", pMC)
+	_, persistedHas := pHB["session_id"]
+	assert.False(t, persistedHas,
+		"C-MAIN/DEL-01: heartbeat.session_id must not be persisted in the workspace record: %v", pHB)
 }

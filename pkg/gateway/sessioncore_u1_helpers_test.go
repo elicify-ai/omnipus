@@ -198,10 +198,12 @@ type u1Stored struct {
 	doc map[string]any
 }
 
-// storedSessions scans every distinct session store directory (shared + each
-// per-agent store) and returns the persisted identities keyed by directory
-// name. BDD-01.1: counts persisted identities, not calls.
-func (e *u1Env) storedSessions(t *testing.T) map[string]u1Stored {
+// u1StoreDirs returns every distinct session-store base directory this env
+// exposes: the shared store first, then each per-agent store, in a
+// deterministic order. Two stores can legitimately hold DIFFERENT sessions; the
+// same computed main id must never appear in two of them (C1 CHECK survivor
+// m26), so callers enumerate locations, never only merged names.
+func (e *u1Env) u1StoreDirs(t *testing.T) []string {
 	t.Helper()
 	seen := map[string]bool{}
 	var dirs []string
@@ -216,8 +218,73 @@ func (e *u1Env) storedSessions(t *testing.T) map[string]u1Stored {
 	for _, id := range e.agentIDs {
 		add(e.api.agentLoop.GetAgentStore(id))
 	}
+	return dirs
+}
+
+// u1LocationsOf returns the store base directories that physically contain a
+// session directory named id. A computed main id must have EXACTLY ONE such
+// location: a second physical copy in a per-agent store is hidden from a
+// name-keyed merge (C1 CHECK survivor m26: the same "main-session-<ws>+<agent>"
+// persisted in both the shared and a per-agent store survived a count that
+// keyed by directory name).
+func (e *u1Env) u1LocationsOf(t *testing.T, id string) []string {
+	t.Helper()
+	var out []string
+	for _, d := range e.u1StoreDirs(t) {
+		if info, err := os.Stat(filepath.Join(d, id)); err == nil && info.IsDir() {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// u1RawDirNames returns every session-store directory NAME across the shared
+// and per-agent stores, taken from the RAW listing — independent of whether it
+// carries parseable metadata. It excludes only the store's own ".context"
+// backend. (C1 CHECK survivor m21: a stray directory with no meta.json is
+// invisible to the meta-bearing helpers, so the absence of a forbidden id must
+// be checked raw.)
+func (e *u1Env) u1RawDirNames(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for _, d := range e.u1StoreDirs(t) {
+		entries, err := os.ReadDir(d)
+		require.NoError(t, err)
+		for _, ent := range entries {
+			if ent.IsDir() && ent.Name() != ".context" {
+				out = append(out, ent.Name())
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// u1PersistedWorkspace reads the workspace record straight off disk
+// ($OMNIPUS_HOME/workspaces/<id>.json) as raw JSON. This is the PERSISTED
+// settings, distinct from the wire projection, which may conceal a field the
+// record still carries (C1 CHECK survivor m19r: a retired heartbeat session
+// address stayed in the persisted record while the wire hid it).
+func (e *u1Env) u1PersistedWorkspace(t *testing.T, wsID string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(e.home, "workspaces", wsID+".json"))
+	require.NoError(t, err, "persisted workspace record %s.json must exist", wsID)
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(raw, &out))
+	return out
+}
+
+// storedSessions scans every distinct session store directory (shared + each
+// per-agent store) and returns the persisted identities keyed by directory
+// name. BDD-01.1: counts persisted identities, not calls.
+//
+// CAVEAT (C1 CHECK survivor m26): keying by directory NAME merges the SAME id
+// persisted in two stores into one entry, hiding a duplicate physical copy. Use
+// u1LocationsOf for any claim that a computed id exists in exactly one place.
+func (e *u1Env) storedSessions(t *testing.T) map[string]u1Stored {
+	t.Helper()
 	out := map[string]u1Stored{}
-	for _, d := range dirs {
+	for _, d := range e.u1StoreDirs(t) {
 		entries, err := os.ReadDir(d)
 		require.NoError(t, err)
 		for _, ent := range entries {

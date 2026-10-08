@@ -73,6 +73,17 @@ func TestSessionCoreU1_EligibleMembersGetExactlyOneMainPerWorkspaceHeartbeatOff(
 	assert.Equal(t, want, u1Sorted(env.storedOfType(t, "main")),
 		"exactly one persisted main per eligible (workspace, agent) pair, spec literal IDs")
 
+	// C1 CHECK survivor m26: storedOfType keys by directory NAME into one map, so
+	// the same main persisted in BOTH the shared store and a per-agent store
+	// collapses to a single entry and a second physical copy is invisible.
+	// Enumerate the store LOCATIONS per id: each computed main must exist in
+	// EXACTLY ONE of them.
+	for _, id := range want {
+		locs := env.u1LocationsOf(t, id)
+		assert.Len(t, locs, 1,
+			"main %s must have exactly one physical copy across shared+per-agent stores; found %d: %v", id, len(locs), locs)
+	}
+
 	for _, pair := range [][2]string{{wsDefault, "mia"}, {wsOther, "mia"}, {wsDefault, "jim"}, {wsOther, "jim"}} {
 		id := u1MainID(pair[0], pair[1])
 		sess, code := env.getSession(t, id)
@@ -436,6 +447,17 @@ func TestSessionCoreU1_DistinctPairsNeverCollideOnOneID(t *testing.T) {
 	assert.Contains(t, stored, id2, "pair (a, b-c) has its own main")
 	assert.NotContains(t, stored, "main-session-a-b-c",
 		"the would-be-collided hyphen-join id must not exist (the + join keeps the pairs distinct)")
+
+	// C1 CHECK survivor m21: storedOfType keeps only PARSEABLE main-typed
+	// records, so a hyphen-collision DIRECTORY with no parseable metadata escapes
+	// the absence assertion above. Assert against the RAW directory listing —
+	// every directory name across every store, whatever its metadata — so no
+	// "main-session-a-b-c" directory of any shape can exist.
+	rawDirs := env.u1RawDirNames(t)
+	assert.NotContains(t, rawDirs, "main-session-a-b-c",
+		"the raw store must hold no would-be-collided hyphen-join directory, independent of metadata; got %v", rawDirs)
+	assert.Contains(t, rawDirs, id1, "pair (a-b, c) main exists in the raw store")
+	assert.Contains(t, rawDirs, id2, "pair (a, b-c) main exists in the raw store")
 	// Oracle derivation: Jim is a member of BOTH workspaces — each putTeam above
 	// sets core_team with "jim" — and ensureMainsForTeam (main_session.go) mints a
 	// main for EVERY eligible member, so each workspace also gets Jim's main. Four
