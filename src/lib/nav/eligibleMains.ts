@@ -8,14 +8,14 @@
 import type { Agent, Session, WorkspaceMemberConfig } from '@/lib/api'
 import { mainSessionIdOfMember } from './sessionCoreSeam'
 
-export type EligibleRow = {
+export type EligibleRow = { // not-wire-format: browser-built roster row for one eligible workspace main; assembled from seam ids, never a gateway payload
   agentId: string
   workspaceId: string
   name: string
   mainSessionId: string
 }
 
-export type EligibleResult = {
+export type EligibleResult = { // not-wire-format: in-browser result of the eligible-mains computation, including retry and stale flags; never crosses the gateway
   status: 'ready' | 'unavailable' | 'stale'
   retry: boolean
   reason: 'main-id-missing' | 'roster-failed' | null
@@ -23,12 +23,12 @@ export type EligibleResult = {
   missingMainAgentIds: string[]
 }
 
-export type EligibleRosterEntry = {
+export type EligibleRosterEntry = { // not-wire-format: local pairing of a generated Agent with its workspace member, used only inside eligible-mains logic
   agent: Agent
   member: WorkspaceMemberConfig
 }
 
-export type EligibleInput = {
+export type EligibleInput = { // not-wire-format: function arguments assembled from already-loaded SPA state for eligible mains; not a request or response body
   workspaceId: string
   isDefaultWorkspace: boolean
   rosterState: 'fresh' | 'failed-no-cache' | 'failed-stale-cache'

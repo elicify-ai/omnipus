@@ -10,7 +10,7 @@ import { isMainSession } from './sessionCoreSeam'
 const EM_DASH = '—'
 
 /** The fields the label reads. A full Session satisfies this; the workspace descriptor does too once a null title is coerced to ''. */
-export interface FeedKindSource {
+export interface FeedKindSource { // not-wire-format: SPA-only fields the above-feed kind label reads; a Session satisfies it, but this shape is never a request or response
   id: string
   type: Session['type']
   title: string

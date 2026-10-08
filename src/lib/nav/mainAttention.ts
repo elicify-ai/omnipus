@@ -11,13 +11,13 @@ import { attachAckFields, isMainSession, sessionAttention } from './sessionCoreS
 
 export type Signal = 'on' | 'off' | 'unknown'
 
-export type Projection = {
+export type Projection = { // not-wire-format: in-browser attention projection counted from seam signals for mains only; never serialized to the gateway
   byMainId: Record<string, Signal>
   distinctMainCount: number
   needsMeMainIds: string[]
 }
 
-export type AckInput = {
+export type AckInput = { // not-wire-format: arguments describing one shown-commit acknowledgement attempt inside the SPA; not the acknowledgement request body
   attemptKind:
     | 'shown-commit'
     | 'prefetch'
@@ -36,7 +36,7 @@ export type AckInput = {
   viewerId: string
 }
 
-export type AckResult = {
+export type AckResult = { // not-wire-format: client decision of whether this viewer should acknowledge; the actual acknowledgement uses generated wire types
   acknowledge: boolean
   sessionId?: string
   observedBound?: string

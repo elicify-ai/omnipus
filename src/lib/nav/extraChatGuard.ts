@@ -8,7 +8,7 @@
 
 type PendingStatus = 'sending' | 'unconfirmed' | 'retrying' | 'not_saved' | 'check_failed' | 'saved'
 
-export type GuardInput = {
+export type GuardInput = { // not-wire-format: arguments to the in-browser new-chat guard, including the unconfirmed pending send; never sent as this shape
   mainSessionId: string
   activeSessionId: string | null
   pending: {

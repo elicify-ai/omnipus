@@ -20,7 +20,7 @@ export type PointerVerdict =
   | 'server-error'
   | 'absent'
 
-export type EntryInput = {
+export type EntryInput = { // not-wire-format: arguments to the in-browser workspace-entry decision, assembled from SPA state; never sent to the gateway
   workspaceId: string
   entryKind: EntryKind
   rememberedSessionId: string | null | undefined
@@ -30,7 +30,7 @@ export type EntryInput = {
   committed: { sessionId: string; agentId: string } | null
 }
 
-export type ExactEntry = {
+export type ExactEntry = { // not-wire-format: client entry outcome for a visible remembered chat, consumed only by the SPA; not a gateway response
   status: 'exact'
   sessionId: string
   agentId: string
@@ -38,7 +38,7 @@ export type ExactEntry = {
   acknowledged: false
 }
 
-export type WelcomeEntry = {
+export type WelcomeEntry = { // not-wire-format: client entry outcome that opens Ava's validated main chat; drives SPA routing only, never a wire body
   status: 'welcome'
   sessionId: string
   agentId: 'ava'
@@ -46,7 +46,7 @@ export type WelcomeEntry = {
   acknowledged: false
 }
 
-export type UnavailableEntry = {
+export type UnavailableEntry = { // not-wire-format: client entry outcome when no main id is available; drives the SPA unavailable state and keeps send off
   status: 'unavailable'
   sessionId: null
   sendEnabled: false
@@ -54,7 +54,7 @@ export type UnavailableEntry = {
   retry: true
 }
 
-export type FailedAttempt = {
+export type FailedAttempt = { // not-wire-format: client entry outcome that keeps the committed chat after a transport failure; SPA-only, never a wire body
   status: 'failed-attempt'
   committed: { sessionId: string; agentId: string } | null
   attempted: { sessionId: string; sendEnabled: false }
