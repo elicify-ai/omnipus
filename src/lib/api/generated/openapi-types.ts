@@ -14829,14 +14829,14 @@ export interface components {
              */
             owner?: string;
             /**
-             * @description Per-member (agentId → config) heartbeat settings for this workspace. Absent when no member has a config (empty map). Keys are agent IDs.
+             * @description Per-member (agentId → config) settings for this workspace, keyed by agent ID. Absent when no member has a config (empty map). Carries heartbeat settings and the server-computed read-only main_session_id; it does NOT carry a session address for the heartbeat — a heartbeat runs in the member's computed main session, and the retired per-member session_id is no longer part of this shape.
              * @example {
              *       "mia": {
+             *         "main_session_id": "main-session-ws-123+mia",
              *         "heartbeat": {
              *           "enabled": true,
              *           "interval_minutes": 30,
-             *           "body": "Check the project board.",
-             *           "session_id": "550e8400-e29b-41d4-a716-446655440000"
+             *           "body": "Check the project board."
              *         }
              *       }
              *     }
@@ -14936,7 +14936,7 @@ export interface components {
             pinned?: boolean;
             pin_order?: number;
             core_team?: string[];
-            /** @description Per-member (agentId → config) heartbeat settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. session_id is server-managed (set at heartbeat-enable time) and ignored on input. */
+            /** @description Per-member (agentId → config) settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. main_session_id is server-owned and read-only: a value sent here is ignored, and the server always reprojects its own computed main session id. There is no client-supplied session address of any kind. */
             member_configs?: {
                 [key: string]: components["schemas"]["WorkspaceMemberConfig"];
             };

@@ -121,12 +121,16 @@ properties:
     additionalProperties:
       $ref: './WorkspaceMemberConfig.yaml'
     description: >
-      Per-member (agentId → config) heartbeat settings for this workspace.
-      Absent when no member has a config (empty map). Keys are agent IDs.
+      Per-member (agentId → config) settings for this workspace, keyed by agent
+      ID. Absent when no member has a config (empty map). Carries heartbeat
+      settings and the server-computed read-only main_session_id; it does NOT
+      carry a session address for the heartbeat — a heartbeat runs in the
+      member's computed main session, and the retired per-member session_id is
+      no longer part of this shape.
     example:
       mia:
+        main_session_id: "main-session-ws-123+mia"
         heartbeat:
           enabled: true
           interval_minutes: 30
           body: "Check the project board."
-          session_id: "550e8400-e29b-41d4-a716-446655440000"

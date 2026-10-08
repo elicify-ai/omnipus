@@ -28263,7 +28263,7 @@ type Workspace struct {
 	// IsDefault True only for the auto-created default workspace. The default workspace cannot be deleted and always appears first in the sidebar.
 	IsDefault *bool `json:"is_default,omitempty"`
 
-	// MemberConfigs Per-member (agentId → config) heartbeat settings for this workspace. Absent when no member has a config (empty map). Keys are agent IDs.
+	// MemberConfigs Per-member (agentId → config) settings for this workspace, keyed by agent ID. Absent when no member has a config (empty map). Carries heartbeat settings and the server-computed read-only main_session_id; it does NOT carry a session address for the heartbeat — a heartbeat runs in the member's computed main session, and the retired per-member session_id is no longer part of this shape.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
 	Message       *string                           `json:"message,omitempty"`
 
@@ -28499,7 +28499,7 @@ type WorkspaceUpdateRequest struct {
 	} `json:"delegation,omitempty"`
 	Description *string `json:"description,omitempty"`
 
-	// MemberConfigs Per-member (agentId → config) heartbeat settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. session_id is server-managed (set at heartbeat-enable time) and ignored on input.
+	// MemberConfigs Per-member (agentId → config) settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. main_session_id is server-owned and read-only: a value sent here is ignored, and the server always reprojects its own computed main session id. There is no client-supplied session address of any kind.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
 	Name          *string                           `json:"name,omitempty"`
 	PinOrder      *int                              `json:"pin_order,omitempty"`
