@@ -7,6 +7,9 @@ import { SearchModal } from './SearchModal'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
+import { useChatStore } from '@/store/chat'
+import { useConnectionStore } from '@/store/connection'
+import type { WsConnection } from '@/lib/ws'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import type { Agent, Session, Workspace } from '@/lib/api'
 
@@ -52,12 +55,13 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchAgents: vi.fn(),
     fetchSessions: vi.fn(),
     fetchWorkspaces: vi.fn(),
+    fetchWorkspace: vi.fn(),
     renameSession: vi.fn(),
     deleteSession: vi.fn(),
   }
 })
 
-import { fetchAgents, fetchSessions, fetchWorkspaces, renameSession, deleteSession } from '@/lib/api'
+import { fetchAgents, fetchSessions, fetchWorkspaces, fetchWorkspace, renameSession, deleteSession } from '@/lib/api'
 
 function makeSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -134,6 +138,7 @@ const realCloseSearchModal = useUiStore.getState().closeSearchModal
 beforeEach(() => {
   vi.mocked(fetchAgents).mockReset().mockResolvedValue([makeAgent()])
   vi.mocked(fetchWorkspaces).mockReset().mockResolvedValue([makeWorkspace()])
+  vi.mocked(fetchWorkspace).mockReset().mockResolvedValue(makeWorkspace())
   vi.mocked(fetchSessions).mockReset().mockResolvedValue([makeSession()])
   vi.mocked(renameSession).mockReset().mockImplementation(async (id, title) => makeSession({ id, title }))
   vi.mocked(deleteSession).mockReset().mockResolvedValue({ success: true })
@@ -144,14 +149,11 @@ beforeEach(() => {
     // describe block below flips it to 'workspaces' for its own tests, and
     // without this reset that would leak into whichever test runs next.
     useUiStore.setState({ searchModalOpen: true, searchModalWorkspaceFilter: null, searchModalMode: 'sessions', closeSearchModal: realCloseSearchModal })
-    useSessionStore.setState({
-      activeSessionId: null,
-      activeAgentId: null,
-      activeAgentType: null,
-      attachedSessionType: null,
-      attachedTaskTitle: null,
-    })
+    useSessionStore.setState(useSessionStore.getInitialState(), true)
+    useChatStore.setState(useChatStore.getInitialState(), true)
+    useConnectionStore.setState(useConnectionStore.getInitialState(), true)
     useWorkspacesStore.setState({ activeWorkspaceId: null })
+    localStorage.clear()
   })
 })
 
@@ -555,34 +557,82 @@ describe('SearchModal — workspace-switch arrow', () => {
     expect(screen.queryByLabelText('Switch to workspace Unfiled')).not.toBeInTheDocument()
   })
 
-  it('clicking it switches the active workspace, starts a fresh session, navigates, and closes the modal', async () => {
+  it('clicking it restores the target workspace\'s remembered chat and owner, navigates, and closes the modal', async () => {
     const user = userEvent.setup()
+    const send = vi.fn<WsConnection['send']>().mockReturnValue(true)
+    const source = { id: 'source-chat', type: 'chat' as const, title: 'Source chat', agentId: 'source-owner' }
+    const target = { id: 's-1', type: 'chat' as const, title: 'Session One', agentId: 'agent-1' }
     act(() => {
-      useSessionStore.setState({ activeSessionId: 's-1', activeAgentId: 'agent-1', activeAgentType: 'core' })
+      useConnectionStore.setState({ connection: { send } as unknown as WsConnection, isConnected: true })
+      useWorkspacesStore.setState({ activeWorkspaceId: 'source-workspace' })
+      useSessionStore.setState({ activeSessionId: source.id, activeAgentId: source.agentId, activeAgentType: 'core' })
+      useSessionStore.getState().setWorkspaceSessionDescriptor('source-workspace', source)
+      useSessionStore.getState().setWorkspaceSessionDescriptor('ws-1', target)
     })
     renderModal()
     await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
 
     await user.click(screen.getByTestId('workspace-switch-arrow'))
 
-    // setActiveWorkspaceId
+    // Wave-2 FR-004 / BDD-02.1 includes the modal workspace switch. The old
+    // "fresh composer => null pointer" oracle was intentional pre-Wave-2
+    // behaviour; now the exact remembered chat wins, not a New chat action.
+    await waitFor(() => expect(useSessionStore.getState().activeSessionId).toBe(target.id))
     expect(useWorkspacesStore.getState().activeWorkspaceId).toBe('ws-1')
-    // startNewSession — clears the previously-active session (exactly what
-    // Sidebar's "New chat" workspace-row action does; session.ts's
-    // startNewSession implementation).
-    expect(useSessionStore.getState().activeSessionId).toBeNull()
-    expect(useSessionStore.getState().attachedSessionType).toBeNull()
-    // navigate
+    expect(useSessionStore.getState().activeAgentId).toBe(target.agentId)
+    expect(useSessionStore.getState().attachedSessionType).toBe('chat')
+    expect(useSessionStore.getState().attachedTaskTitle).toBe('Session One')
+    expect(useSessionStore.getState().workspaceEntry).toStrictEqual({ status: 'exact', acknowledged: false })
+    expect(useSessionStore.getState().newChatPrompt).toBeNull()
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenNthCalledWith(1, { type: 'attach_session', session_id: target.id })
+    expect(fetchWorkspace).toHaveBeenCalledWith('ws-1')
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' } })
-    // closes the modal
     await waitFor(() => expect(useUiStore.getState().searchModalOpen).toBe(false))
-    // Order pin (load-bearing): setActiveWorkspaceId must run BEFORE
-    // startNewSession — startNewSession clears sessionByWorkspace for the
-    // CURRENT workspace, so only the correct order leaves the TARGET
-    // workspace's slot explicitly null (fresh composer, no silent
-    // re-attach). If the two calls were swapped, this key would be
-    // undefined, not null.
-    expect(useSessionStore.getState().sessionByWorkspace['ws-1']).toBeNull()
+    expect(useSessionStore.getState().sessionByWorkspace).toStrictEqual({
+      'source-workspace': source,
+      'ws-1': target,
+    })
+    expect(JSON.parse(localStorage.getItem('omnipus.sessionByWorkspace.v1')!)).toStrictEqual({
+      'source-workspace': source,
+      'ws-1': target,
+    })
+  })
+
+  it('keeps the committed chat and both remembered pointers when target-workspace restore fails', async () => {
+    const user = userEvent.setup()
+    const source = { id: 'source-chat', type: 'chat' as const, title: 'Source chat', agentId: 'source-owner' }
+    const target = { id: 's-1', type: 'chat' as const, title: 'Session One', agentId: 'agent-1' }
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'source-workspace' })
+      useSessionStore.setState({ activeSessionId: source.id, activeAgentId: source.agentId })
+      useSessionStore.getState().setWorkspaceSessionDescriptor('source-workspace', source)
+      useSessionStore.getState().setWorkspaceSessionDescriptor('ws-1', target)
+    })
+    renderModal()
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+    // Network failure after the modal has loaded; the real entry resolver must
+    // retain the committed chat, never fall back to a blank or guessed main.
+    vi.mocked(fetchSessions).mockRejectedValueOnce(new Error('restore unavailable'))
+
+    await user.click(screen.getByTestId('workspace-switch-arrow'))
+
+    await waitFor(() => expect(useSessionStore.getState().workspaceEntry).toStrictEqual({
+      status: 'failed-attempt',
+      committed: { sessionId: source.id, agentId: source.agentId },
+      attempted: { sessionId: target.id, sendEnabled: false },
+      acknowledged: false,
+      retry: true,
+      fellBack: false,
+    }))
+    expect(useSessionStore.getState().activeSessionId).toBe(source.id)
+    expect(useSessionStore.getState().activeAgentId).toBe(source.agentId)
+    expect(useSessionStore.getState().sessionByWorkspace).toStrictEqual({
+      'source-workspace': source,
+      'ws-1': target,
+    })
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' } })
+    expect(useUiStore.getState().searchModalOpen).toBe(false)
   })
 
   it('is a no-op switch on the ALREADY-active workspace — navigates and closes but does not detach the live session', async () => {

@@ -619,17 +619,11 @@ export function SearchModal() {
     [manualExpandedIds, autoExpandIds],
   )
 
-  // Workspace-switch arrow (WorkspaceHeader) — mirrors Sidebar.tsx's
-  // "New chat" workspace-row action EXACTLY (setActiveWorkspaceId ->
-  // startNewSession -> navigate -> close): switching from search should land
-  // the user on a fresh composer in the target workspace, not silently
-  // re-attach whatever session happened to be active there before. The
-  // setActiveWorkspaceId-BEFORE-startNewSession order is load-bearing:
-  // startNewSession clears sessionByWorkspace for the CURRENT workspace, so
-  // the switch must happen first for the target to get the fresh slate.
-  // Reads both stores via getState() (a plain click handler, not something
-  // that needs reactive re-renders) — the same pattern deleteMut's
-  // pruneSessionDescriptor call below uses.
+  // FR-004: a modal workspace switch uses the same exact remembered-chat /
+  // validated Ava entry as the workspace name, not the + New chat action.
+  // Switch the workspace before entry so a successful attach persists the
+  // target descriptor under the right key; a failed restore retains the
+  // committed chat and exposes Retry without erasing either saved pointer.
   const handleSwitchWorkspace = useCallback((ws: Workspace) => {
     if (ws.id === useWorkspacesStore.getState().activeWorkspaceId) {
       // Already there: the arrow says "Switch", not "New chat" — don't
@@ -639,7 +633,7 @@ export function SearchModal() {
       return
     }
     useWorkspacesStore.getState().setActiveWorkspaceId(ws.id)
-    useSessionStore.getState().startNewSession()
+    void useSessionStore.getState().enterWorkspaceChat(ws.id)
     void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: ws.id } })
     close()
   }, [close, navigate])
