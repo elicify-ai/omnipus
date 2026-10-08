@@ -114,6 +114,20 @@ async function mount() {
   await act(async () => { render(<QueryClientProvider client={queryClient}><ChatScreen /></QueryClientProvider>) })
 }
 
+function unansweredAttach(): Frame[] {
+  return [
+    { type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'boot_mismatch' },
+    { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z' },
+    { type: 'replay_message', session_id: SID, id: 'u-1', role: 'user', content: 'Write the long report' },
+    { type: 'catch_up_complete', session_id: SID, seq: 4, boot_id: 'boot-2', mode: 'snapshot' },
+  ]
+}
+const answerFrames: Frame[] = [
+  { type: 'token', session_id: SID, turn_id: 't-2', message_id: 'a-2', content: 'Fresh answer' },
+  { type: 'done', session_id: SID, turn_id: 't-2', stats: { tokens: 1, cost: 0 } },
+]
+
+
 describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Working', () => {
   it('fresh tab: saved lifecycle_state "interrupted" shows Interrupted, keeps the partial text, nothing auto-resumes', async () => {
     feed(freshTabAttach())
@@ -383,100 +397,6 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
     expect(screen.queryByRole('button', { name: /Generate again/ })).not.toBeInTheDocument()
   })
 
-  it.each([undefined, 'stopped'] as const)('restart control: unanswered %s chat without a witnessed running turn is not relabelled Interrupted', async (lifecycle) => {
-    savedLifecycle = lifecycle
-    stopCause = lifecycle === 'stopped' ? 'stop' : undefined
-    await mount()
-    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
-    let release!: () => void
-    listGate = new Promise<void>((resolve) => { release = resolve })
-    try {
-      feed(unansweredAttach())
-      expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
-      expect(useChatStore.getState().sessionsById[SID]?.restartInterruptedBootId).toBeUndefined()
-      expect(useChatStore.getState().sessionsById[SID]?.unansweredLastUserMessageId).toBe('u-1')
-      release()
-      await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
-      expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
-    } finally { release() }
-  })
-
-  it.each(['working', 'done', 'stopped'] as const)('restart clearing: a fresh %s lifecycle clears the observed signal, but the pre-restart cached value cannot', async (lifecycle) => {
-    savedLifecycle = 'working'
-    await mount()
-    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
-    feed([{ type: 'token', session_id: SID, turn_id: 't-1', message_id: 'a-1', content: 'First real token', seq: 5 }])
-    let release!: () => void
-    listGate = new Promise<void>((resolve) => { release = resolve })
-    try {
-      feed(unansweredAttach())
-      expect(await screen.findByTestId('restart-interrupted-notice')).toHaveTextContent('Interrupted')
-      expect(useChatStore.getState().sessionsById[SID]?.restartInterruptedBootId).toBe('boot-2')
-      savedLifecycle = lifecycle
-      stopCause = lifecycle === 'stopped' ? 'stop' : undefined
-      release()
-      await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
-      await waitFor(() => expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument())
-      expect(useChatStore.getState().sessionsById[SID]?.restartInterruptedBootId).toBeUndefined()
-      expect(useChatStore.getState().sessionsById[SID]?.restartNoticeDismissed).toBe(false)
-    } finally { release() }
-  })
-
-  it('restart clearing: another tab completes the chat while this tab is disconnected; same-boot catch-up does not retain Interrupted', async () => {
-    savedLifecycle = 'interrupted'
-    feed([{ type: 'token', session_id: SID, turn_id: 't-1', message_id: 'a-1', content: 'First real token', seq: 5 }])
-    feed(unansweredAttach())
-    await mount()
-    await screen.findByTestId('restart-interrupted-notice')
-    expect(useChatStore.getState().sessionsById[SID]?.restartNoticeDismissed).not.toBe(true)
-    savedLifecycle = 'done'
-    feed([
-      { type: 'session_snapshot', session_id: SID, seq: 9, boot_id: 'boot-2', reason: 'unknown_position' },
-      { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z' },
-      { type: 'replay_message', session_id: SID, id: 'u-1', role: 'user', content: 'Write the long report' },
-      { type: 'replay_message', session_id: SID, id: 'a-other-tab', role: 'assistant', content: 'Completed elsewhere', turn_id: 't-elsewhere' },
-      { type: 'catch_up_complete', session_id: SID, seq: 9, boot_id: 'boot-2', mode: 'snapshot' },
-    ])
-    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
-    expect(useChatStore.getState().isStreaming).toBe(false)
-    expect(screen.getByText('Completed elsewhere')).toBeInTheDocument()
-    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Generate again/ })).not.toBeInTheDocument()
-  })
-
-  it('restart scope: a second interrupted boot is shown from REST even without witnessed cut-off evidence after the first dismissal', async () => {
-    savedLifecycle = 'interrupted'
-    feed([{ type: 'token', session_id: SID, turn_id: 't-1', message_id: 'a-1', content: 'First real token', seq: 5 }])
-    feed(unansweredAttach())
-    await mount()
-    const notice = await screen.findByTestId('restart-interrupted-notice')
-    await act(async () => { fireEvent.click(within(notice).getByRole('button', { name: 'Generate again' })) })
-    feed(answerFrames)
-    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
-    expect(useChatStore.getState().sessionsById[SID]?.restartNoticeDismissed).toBe(true)
-    feed(freshTabAttach('unknown_position').map((frame) => frame.type === 'session_snapshot' || frame.type === 'catch_up_complete'
-      ? { ...frame, boot_id: 'boot-3' } : frame))
-    expect(await screen.findByTestId('restart-interrupted-notice')).toHaveTextContent('Interrupted')
-    expect(screen.queryByTestId('assistant-connection-status')).not.toBeInTheDocument()
-  })
-
-  it.each(['missing_boot_id', 'unknown_position'] as const)('restart diagnostics: %s near miss records why the client signal was not latched', (reason) => {
-    const diagnostic = vi.spyOn(telemetry, 'logDiagnostic')
-    try {
-      feed([{ type: 'token', session_id: SID, turn_id: 't-1', message_id: 'a-1', content: 'First real token', seq: 5 }])
-      feed(unansweredAttach().map((frame) => {
-        if (frame.type === 'session_snapshot' && reason === 'unknown_position') return { ...frame, reason: 'unknown_position' }
-        if (frame.type === 'catch_up_complete' && reason === 'missing_boot_id') return { ...frame, boot_id: undefined }
-        return frame
-      }))
-      expect(diagnostic).toHaveBeenCalledWith('chatRestartSignalSkipped', {
-        reason: reason === 'missing_boot_id' ? 'missing_boot_id' : 'snapshot_not_boot_mismatch',
-        hasBootId: reason !== 'missing_boot_id', bootChanged: true, hasEvidence: reason === 'missing_boot_id',
-      })
-      expect(useChatStore.getState().sessionsById[SID]?.restartInterruptedBootId).toBeUndefined()
-    } finally { diagnostic.mockRestore() }
-  })
-
   // Oracle: pkg/gateway/i1_restart_rest_projection_test.go cases human_stop and genuine_failure.
   it.each([
     ['human_stop', 'stopped', 'stop'],
@@ -510,19 +430,6 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
   })
 
   // F1 (UAT R1): one status per chat, and no control left behind once a new turn ran.
-  function unansweredAttach(): Frame[] {
-    return [
-      { type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'boot_mismatch' },
-      { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z' },
-      { type: 'replay_message', session_id: SID, id: 'u-1', role: 'user', content: 'Write the long report' },
-      { type: 'catch_up_complete', session_id: SID, seq: 4, boot_id: 'boot-2', mode: 'snapshot' },
-    ]
-  }
-  const answerFrames: Frame[] = [
-    { type: 'token', session_id: SID, turn_id: 't-2', message_id: 'a-2', content: 'Fresh answer' },
-    { type: 'done', session_id: SID, turn_id: 't-2', stats: { tokens: 1, cost: 0 } },
-  ]
-
   it('F1: restart-cut unanswered question shows ONE status: the Interrupted notice owns Generate again, no "couldn\'t be finished" line', async () => {
     feed(unansweredAttach())
     await mount()
@@ -626,4 +533,122 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
       expect(screen.queryByTestId('assistant-connection-status')).not.toBeInTheDocument()
     } finally { release() }
   })
+})
+
+describe('Restart observation — witnessed cut, lifecycle freshness, and boot scope', () => {
+  it.each([undefined, 'stopped'] as const)('restart control: unanswered %s chat without a witnessed running turn is not relabelled Interrupted', async (lifecycle) => {
+    savedLifecycle = lifecycle
+    stopCause = lifecycle === 'stopped' ? 'stop' : undefined
+    await mount()
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
+    let release!: () => void
+    listGate = new Promise<void>((resolve) => { release = resolve })
+    try {
+      feed(unansweredAttach())
+      expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+      expect(useChatStore.getState().sessionsById[SID]?.restartInterruptedBootId).toBeUndefined()
+      expect(useChatStore.getState().sessionsById[SID]?.unansweredLastUserMessageId).toBe('u-1')
+      release()
+      await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
+      expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+    } finally { release() }
+  })
+
+  it.each(['working', 'done', 'stopped'] as const)('restart clearing: a fresh %s lifecycle clears the observed signal, but the pre-restart cached value cannot', async (lifecycle) => {
+    savedLifecycle = 'working'
+    await mount()
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
+    feed([{ type: 'token', session_id: SID, turn_id: 't-1', message_id: 'a-1', content: 'First real token', seq: 5 }])
+    let release!: () => void
+    listGate = new Promise<void>((resolve) => { release = resolve })
+    try {
+      feed(unansweredAttach())
+      expect(await screen.findByTestId('restart-interrupted-notice')).toHaveTextContent('Interrupted')
+      expect(useChatStore.getState().sessionsById[SID]?.restartInterruptedBootId).toBe('boot-2')
+      savedLifecycle = lifecycle
+      stopCause = lifecycle === 'stopped' ? 'stop' : undefined
+      release()
+      await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
+      await waitFor(() => expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument())
+      expect(useChatStore.getState().sessionsById[SID]?.restartInterruptedBootId).toBeUndefined()
+      expect(useChatStore.getState().sessionsById[SID]?.restartNoticeDismissed).toBe(false)
+    } finally { release() }
+  })
+
+  it('restart clearing: another tab completes the chat while this tab is disconnected; same-boot catch-up does not retain Interrupted', async () => {
+    savedLifecycle = 'interrupted'
+    feed([{ type: 'token', session_id: SID, turn_id: 't-1', message_id: 'a-1', content: 'First real token', seq: 5 }])
+    feed(unansweredAttach())
+    await mount()
+    await screen.findByTestId('restart-interrupted-notice')
+    expect(useChatStore.getState().sessionsById[SID]?.restartNoticeDismissed).not.toBe(true)
+    savedLifecycle = 'done'
+    feed([
+      { type: 'session_snapshot', session_id: SID, seq: 9, boot_id: 'boot-2', reason: 'unknown_position' },
+      { type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-10-07T06:01:00Z' },
+      { type: 'replay_message', session_id: SID, id: 'u-1', role: 'user', content: 'Write the long report' },
+      { type: 'replay_message', session_id: SID, id: 'a-other-tab', role: 'assistant', content: 'Completed elsewhere', turn_id: 't-elsewhere' },
+      { type: 'catch_up_complete', session_id: SID, seq: 9, boot_id: 'boot-2', mode: 'snapshot' },
+    ])
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
+    expect(useChatStore.getState().isStreaming).toBe(false)
+    expect(screen.getByText('Completed elsewhere')).toBeInTheDocument()
+    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Generate again/ })).not.toBeInTheDocument()
+  })
+
+  it('restart scope: a second interrupted boot is shown from REST even without witnessed cut-off evidence after the first dismissal', async () => {
+    savedLifecycle = 'interrupted'
+    feed([{ type: 'token', session_id: SID, turn_id: 't-1', message_id: 'a-1', content: 'First real token', seq: 5 }])
+    feed(unansweredAttach())
+    await mount()
+    const notice = await screen.findByTestId('restart-interrupted-notice')
+    await act(async () => { fireEvent.click(within(notice).getByRole('button', { name: 'Generate again' })) })
+    feed(answerFrames)
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
+    expect(useChatStore.getState().sessionsById[SID]?.restartNoticeDismissed).toBe(true)
+    feed(freshTabAttach('unknown_position').map((frame) => frame.type === 'session_snapshot' || frame.type === 'catch_up_complete'
+      ? { ...frame, boot_id: 'boot-3' } : frame))
+    expect(await screen.findByTestId('restart-interrupted-notice')).toHaveTextContent('Interrupted')
+    expect(screen.queryByTestId('assistant-connection-status')).not.toBeInTheDocument()
+  })
+
+  it.each(['missing_boot_id', 'unknown_position', 'no_witnessed_cut'] as const)('restart diagnostics: %s near miss records why the client signal was not latched', (reason) => {
+    const diagnostic = vi.spyOn(telemetry, 'logDiagnostic')
+    try {
+      if (reason !== 'no_witnessed_cut') feed([{ type: 'token', session_id: SID, turn_id: 't-1', message_id: 'a-1', content: 'First real token', seq: 5 }])
+      feed(unansweredAttach().map((frame) => {
+        if (frame.type === 'session_snapshot' && reason === 'unknown_position') return { ...frame, reason: 'unknown_position' }
+        if (frame.type === 'catch_up_complete' && reason === 'missing_boot_id') return { ...frame, boot_id: undefined }
+        return frame
+      }))
+      expect(diagnostic).toHaveBeenCalledWith('chatRestartSignalSkipped', {
+        reason: reason === 'unknown_position' ? 'snapshot_not_boot_mismatch' : reason,
+        hasBootId: reason !== 'missing_boot_id', bootChanged: true, hasEvidence: reason === 'missing_boot_id',
+      })
+      expect(useChatStore.getState().sessionsById[SID]?.restartInterruptedBootId).toBeUndefined()
+    } finally { diagnostic.mockRestore() }
+  })
+
+  it.each(['working', 'done'] as const)('restart freshness: failed refetch retaining cached %s cannot clear the observed interruption', async (cached) => {
+    savedLifecycle = cached
+    await mount()
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
+    feed([{ type: 'token', session_id: SID, turn_id: 't-1', message_id: 'a-1', content: 'First real token', seq: 5 }])
+    let release!: () => void
+    listGate = new Promise<void>((resolve) => { release = resolve })
+    try {
+      feed(unansweredAttach())
+      expect(await screen.findByTestId('restart-interrupted-notice')).toHaveTextContent('Interrupted')
+      listFails = true
+      release()
+      await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
+      expect(queryClient.getQueryState(['sessions'])?.status).toBe('error')
+      expect(queryClient.getQueryData<ReturnType<typeof wireRow>[]>(['sessions'])?.[0].lifecycle_state).toBe(cached)
+      expect(screen.getByTestId('restart-interrupted-notice')).toHaveTextContent('Interrupted')
+      expect(useChatStore.getState().sessionsById[SID]?.restartInterruptedBootId).toBe('boot-2')
+      expect(screen.queryByTestId('assistant-connection-status')).not.toBeInTheDocument()
+    } finally { release() }
+  })
+
 })
