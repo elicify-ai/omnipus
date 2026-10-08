@@ -152,7 +152,7 @@ Identical helper runs in a row under the same chat fold into **N similar helper 
 
 When a chat itself owns background commands, its row says **N background commands running** (or **1 background command running**). A checked count of zero, or an unknown count, shows no sentence. The count is not a total of commands owned by helpers.
 
-Arrow keys move the highlight. Enter opens the highlighted session, or expands a folded row. If that session disappears, the highlight clears and focus returns to the search field. Enter does not open a different session in its place.
+Arrow keys move the highlight. Enter, or **Open** on a row, attaches that chat and opens its Activity panel. A folded row expands instead of opening. If that session disappears, the highlight clears and focus returns to the search field. Enter does not open a different session in its place.
 
 ## Panels beside chat
 

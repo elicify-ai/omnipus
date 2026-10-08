@@ -43,6 +43,14 @@ interface UiStore {
   openSearchModal: (workspaceId?: string) => void
   openWorkspaceSwitcher: () => void
   closeSearchModal: () => void
+  /**
+   * One-shot: Sessions Open asked for this session's Activity panel.
+   * ActivityBar opens the panel only after this id is the active chat, then clears it.
+   * Null means nobody is waiting.
+   */
+  activityPanelRequest: string | null
+  requestActivityPanel: (sessionId: string) => void
+  consumeActivityPanelRequest: (sessionId: string) => void
 
   // Create agent modal
   createAgentModalOpen: boolean
@@ -198,6 +206,11 @@ export const useUiStore = create<UiStore>((set, get) => ({
   // any other close path, e.g. Escape/outside-click, which don't call
   // openSearchModal at all).
   closeSearchModal: () => set({ searchModalOpen: false, searchModalWorkspaceFilter: null, searchModalMode: 'sessions' }),
+  activityPanelRequest: null,
+  requestActivityPanel: (sessionId) => set({ activityPanelRequest: sessionId }),
+  consumeActivityPanelRequest: (sessionId) => {
+    if (get().activityPanelRequest === sessionId) set({ activityPanelRequest: null })
+  },
 
   createAgentModalOpen: false,
   createAgentModalType: 'Main',

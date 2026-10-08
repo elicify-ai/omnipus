@@ -151,7 +151,13 @@ export function SearchModal() {
     enabled: open,
   })
   const coverage = readSessionFetchCoverage(sessions)
-  const selectSession = useSelectSession({ agents, workspaces, onClose: close })
+  const requestActivityPanel = useUiStore((s) => s.requestActivityPanel)
+  const selectSession = useSelectSession({
+    agents,
+    workspaces,
+    onClose: close,
+    onSelected: (session) => requestActivityPanel(session.id),
+  })
   const wsMap = useMemo(() => new Map(workspaces.map((workspace) => [workspace.id, workspace])), [workspaces])
   const sessionById = useMemo(() => new Map(sessions.map((session) => [session.id, session])), [sessions])
 
