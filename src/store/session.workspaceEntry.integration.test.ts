@@ -40,6 +40,7 @@ const seam = vi.hoisted(() => {
     isMainSession: vi.fn((_session: unknown): boolean => false),
     sessionAttention: vi.fn((_session: unknown): 'unknown' => 'unknown'),
     attachAckFields: vi.fn((_bound: unknown): Record<string, unknown> => ({})),
+    attentionBoundOfFrame: vi.fn((_frame: unknown): number | undefined => undefined),
   }
 })
 
@@ -48,6 +49,7 @@ vi.mock('@/lib/nav/sessionCoreSeam', () => ({
   isMainSession: (session: unknown) => seam.isMainSession(session),
   sessionAttention: (session: unknown) => seam.sessionAttention(session),
   attachAckFields: (bound: unknown) => seam.attachAckFields(bound),
+  attentionBoundOfFrame: (frame: unknown) => seam.attentionBoundOfFrame(frame),
 }))
 
 vi.mock('@/lib/api', async (importOriginal) => {

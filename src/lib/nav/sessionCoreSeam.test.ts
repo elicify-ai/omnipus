@@ -14,6 +14,7 @@ type SeamModule = {
   isMainSession: (session: unknown) => boolean
   sessionAttention: (session: unknown) => 'on' | 'off' | 'unknown'
   attachAckFields: (bound: unknown) => Record<string, unknown>
+  attentionBoundOfFrame: (frame: unknown) => number | undefined
 }
 
 const session: Session = {
@@ -38,7 +39,7 @@ describe('sessionCoreSeam production default', () => {
       seam = await loadSeam()
     } catch (err) {
       expect.fail(
-        `BLOCKED: ${SEAM} not implemented — required by the wave seam contract. Expected mainSessionIdOfMember undefined, isMainSession false, sessionAttention "unknown", attachAckFields {}. Actual: module missing (${err instanceof Error ? err.message : String(err)})`,
+        `BLOCKED: ${SEAM} not implemented — required by the wave seam contract. Expected mainSessionIdOfMember undefined, isMainSession false, sessionAttention "unknown", attachAckFields {}, attentionBoundOfFrame undefined. Actual: module missing (${err instanceof Error ? err.message : String(err)})`,
       )
     }
     expect(seam.mainSessionIdOfMember({})).toBeUndefined()
@@ -47,7 +48,14 @@ describe('sessionCoreSeam production default', () => {
     expect(seam.isMainSession(undefined)).toBe(false)
     expect(seam.sessionAttention(session)).toBe('unknown')
     expect(seam.sessionAttention(undefined)).toBe('unknown')
-    expect(seam.attachAckFields({ sessionId: session.id, observedBound: 'goal1' })).toEqual({})
+    expect(seam.attachAckFields(1)).toEqual({})
+    expect(seam.attachAckFields(undefined)).toEqual({})
+    expect(typeof seam.attentionBoundOfFrame, 'PLAN 5.2 attentionBoundOfFrame').toBe('function')
+    const snapshot = { type: 'session_snapshot', session_id: session.id, seq: 4, attention_bound: 1 }
+    expect(seam.attentionBoundOfFrame(snapshot), 'production default reads no server bound').toBeUndefined()
+    expect(seam.attentionBoundOfFrame(undefined)).toBeUndefined()
+    expect(seam.attentionBoundOfFrame({ attention_bound: 'goal1' }), 'a string is not an integer bound').toBeUndefined()
+    expect(seam.attachAckFields(seam.attentionBoundOfFrame(snapshot)), 'no ack fields without a server bound').toEqual({})
   })
 
   it('callers show unavailable / Retry, never a fabricated main and never an ack', async () => {
@@ -127,9 +135,13 @@ describe('sessionCoreSeam production default', () => {
         attemptKind: 'shown-commit',
         session,
         generation: 1,
-        observedBound: 'goal1',
+        frame: { type: 'session_snapshot', session_id: session.id, seq: 4, attention_bound: 1 },
         newerOutcomeId: null,
-        foreground: { sessionId: session.id, generation: 1, observedBound: 'goal1' },
+        foreground: {
+          sessionId: session.id,
+          generation: 1,
+          frame: { type: 'session_snapshot', session_id: session.id, seq: 4, attention_bound: 1 },
+        },
         viewerId: 'user-a',
       })
     } catch (err) {

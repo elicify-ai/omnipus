@@ -29,7 +29,8 @@ vi.mock('@/lib/nav/sessionCoreSeam', () => ({
   mainSessionIdOfMember: () => undefined,
   isMainSession: () => false,
   sessionAttention: () => 'unknown',
-  attachAckFields: () => ({ ack_attention: true, observed_bound: 'goal-1' }),
+  attachAckFields: () => ({ ack_attention: true, attention_bound: 1 }),
+  attentionBoundOfFrame: () => undefined,
 }))
 
 vi.mock('@/lib/api', async (importOriginal) => {

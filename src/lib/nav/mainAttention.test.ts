@@ -32,16 +32,16 @@ type AckInput = {
     | 'late-failure'
   session: Session
   generation: number
-  observedBound: string | null
-  newerOutcomeId: string | null
-  foreground: { sessionId: string; generation: number; observedBound: string } | null
+  frame: Record<string, unknown> | null
+  newerOutcomeId: number | null
+  foreground: { sessionId: string; generation: number; frame: Record<string, unknown> | null } | null
   viewerId: string
 }
 
 type AckResult = {
   acknowledge: boolean
   sessionId?: string
-  observedBound?: string
+  attentionBound?: number
   fields?: Record<string, unknown>
 }
 
@@ -64,11 +64,14 @@ const seam = vi.hoisted(() => {
       return mains.has(id)
     }),
     mainSessionIdOfMember: vi.fn((_member: unknown): string | undefined => undefined),
+    attentionBoundOfFrame: vi.fn((frame: unknown): number | undefined => {
+      if (!frame || typeof frame !== 'object' || !('attention_bound' in frame)) return undefined
+      const value = (frame as { attention_bound: unknown }).attention_bound
+      return typeof value === 'number' && Number.isInteger(value) ? value : undefined
+    }),
     attachAckFields: vi.fn((bound: unknown) => {
-      const observed = bound && typeof bound === 'object' && 'observedBound' in bound
-        ? String((bound as { observedBound: unknown }).observedBound)
-        : ''
-      return { ack_attention: true, observed_bound: observed }
+      if (typeof bound !== 'number' || !Number.isInteger(bound)) return {}
+      return { ack_attention: true, attention_bound: bound }
     }),
   }
 })
@@ -78,6 +81,7 @@ vi.mock('@/lib/nav/sessionCoreSeam', () => ({
   isMainSession: (session: unknown) => seam.isMainSession(session),
   sessionAttention: (session: unknown) => seam.sessionAttention(session),
   attachAckFields: (bound: unknown) => seam.attachAckFields(bound),
+  attentionBoundOfFrame: (frame: unknown) => seam.attentionBoundOfFrame(frame),
 }))
 
 function session(id: string, title: string, agentId = 'mia'): Session {
@@ -124,6 +128,7 @@ beforeEach(() => {
   seam.sessionAttention.mockClear()
   seam.isMainSession.mockClear()
   seam.attachAckFields.mockClear()
+  seam.attentionBoundOfFrame.mockClear()
 })
 
 describe('projectMainAttention (T-04, A01–A05, A09)', () => {
@@ -238,37 +243,56 @@ describe('ackForShownCommit (T-14, A06–A08, N08)', () => {
     }
   }
 
-  function shown(sessionId: string, generation: number, observedBound: string, viewerId: string, newer: string | null): AckInput {
+  // PLAN 5.2: attention_bound is an integer on the server snapshot. The old
+  // goal-id strings were not a wire field. 1 is A06's shown bound, 2 is the
+  // newer outcome that must not be acked, 3 is the later winning A.
+  function serverFrame(sessionId: string, attentionBound?: number): Record<string, unknown> {
+    const frame: Record<string, unknown> = {
+      type: 'session_snapshot',
+      session_id: sessionId,
+      seq: 4,
+    }
+    if (attentionBound !== undefined) frame.attention_bound = attentionBound
+    return frame
+  }
+
+  function shown(sessionId: string, generation: number, attentionBound: number, viewerId: string, newer: number | null): AckInput {
+    const frame = serverFrame(sessionId, attentionBound)
     return {
       attemptKind: 'shown-commit',
       session: session('placeholder', 'placeholder'),
       generation,
-      observedBound,
+      frame,
       newerOutcomeId: newer,
-      foreground: { sessionId, generation, observedBound },
+      foreground: { sessionId, generation, frame },
       viewerId,
     }
   }
 
-  it('A06 / BDD-E04 acknowledges goal1 only, including a delayed retry, and does not expand to goal2', async () => {
+  it('A06 / BDD-E04 acknowledges bound 1 only, including a delayed retry, and does not expand to bound 2', async () => {
     const goal = session('main-a', 'goal')
     seam.mains.add('main-a')
     seam.attention.set('main-a', 'on')
     const input = (viewerId: string): AckInput => ({
-      ...shown('main-a', 1, 'goal1', viewerId, 'goal2'),
+      ...shown('main-a', 1, 1, viewerId, 2),
       session: goal,
     })
     const expected = {
       acknowledge: true,
       sessionId: 'main-a',
-      observedBound: 'goal1',
-      fields: { ack_attention: true, observed_bound: 'goal1' },
+      attentionBound: 1,
+      fields: { ack_attention: true, attention_bound: 1 },
     }
     expect(await ack(input('user-a'), 'FR-013, BDD-E04, dataset A06')).toEqual(expected)
     expect(await ack(input('user-a'), 'dataset A06 delayed retry does not recapture')).toEqual(expected)
+    expect(seam.attentionBoundOfFrame).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'session_snapshot',
+      session_id: 'main-a',
+      attention_bound: 1,
+    }))
     expect(seam.attachAckFields).toHaveBeenCalledTimes(2)
     for (const call of seam.attachAckFields.mock.calls) {
-      expect(call[0]).toEqual({ sessionId: 'main-a', observedBound: 'goal1' })
+      expect(call[0]).toBe(1)
     }
   })
 
@@ -279,16 +303,38 @@ describe('ackForShownCommit (T-14, A06–A08, N08)', () => {
     const expected = {
       acknowledge: true,
       sessionId: 'main-a',
-      observedBound: 'goal1',
-      fields: { ack_attention: true, observed_bound: 'goal1' },
+      attentionBound: 1,
+      fields: { ack_attention: true, attention_bound: 1 },
     }
-    const first = await ack({ ...shown('main-a', 1, 'goal1', 'user-a', null), session: goal }, 'BDD-04.2, dataset A07')
-    const second = await ack({ ...shown('main-a', 1, 'goal1', 'user-b', null), session: goal }, 'BDD-04.2, dataset A07')
+    const first = await ack({ ...shown('main-a', 1, 1, 'user-a', null), session: goal }, 'BDD-04.2, dataset A07')
+    const second = await ack({ ...shown('main-a', 1, 1, 'user-b', null), session: goal }, 'BDD-04.2, dataset A07')
     expect(first).toEqual(expected)
     expect(second).toEqual(expected)
     expect(JSON.stringify(first.fields)).not.toContain('user-a')
     expect(JSON.stringify(second.fields)).not.toContain('user-b')
     expect(first.fields).not.toHaveProperty('clear_decisions')
+    expect(first.fields).not.toHaveProperty('observed_bound')
+  })
+
+  it('a shown commit does not acknowledge when the server frame has no integer attention_bound', async () => {
+    const goal = session('main-a', 'goal')
+    seam.mains.add('main-a')
+    seam.attention.set('main-a', 'on')
+    const frame = serverFrame('main-a')
+    const result = await ack({
+      attemptKind: 'shown-commit',
+      session: goal,
+      generation: 1,
+      frame,
+      newerOutcomeId: null,
+      foreground: { sessionId: 'main-a', generation: 1, frame, observedBound: 'goal1' },
+      viewerId: 'user-a',
+      observedBound: 'goal1',
+    } as AckInput, 'PLAN 5.2: no ack without a server attention_bound')
+    expect(result.acknowledge).toBe(false)
+    expect(result.fields).toBeUndefined()
+    expect(result.attentionBound).toBeUndefined()
+    expect(seam.attachAckFields).not.toHaveBeenCalled()
   })
 
   it.each(['prefetch', 'hidden-reconnect', 'replay', 'failed-attach', 'forbidden', 'overtaken'] as const)(
@@ -297,18 +343,19 @@ describe('ackForShownCommit (T-14, A06–A08, N08)', () => {
       const goal = session('main-a', 'goal')
       seam.mains.add('main-a')
       seam.attention.set('main-a', 'on')
+      const frame = serverFrame('main-a', 1)
       const result = await ack({
         attemptKind,
         session: goal,
         generation: 1,
-        observedBound: 'goal1',
+        frame,
         newerOutcomeId: null,
-        foreground: { sessionId: 'main-a', generation: 1, observedBound: 'goal1' },
+        foreground: { sessionId: 'main-a', generation: 1, frame },
         viewerId: 'user-a',
       }, 'FR-013, BDD-04.4, dataset A08')
       expect(result.acknowledge).toBe(false)
       expect(result.fields).toBeUndefined()
-      expect(result.observedBound).toBeUndefined()
+      expect(result.attentionBound).toBeUndefined()
       expect(seam.attachAckFields).not.toHaveBeenCalled()
     },
   )
@@ -317,7 +364,7 @@ describe('ackForShownCommit (T-14, A06–A08, N08)', () => {
     const goal = session('main-a', 'goal')
     seam.mains.add('main-a')
     seam.attention.set('main-a', 'unknown')
-    const result = await ack({ ...shown('main-a', 1, 'goal1', 'user-a', null), session: goal }, 'BDD-04.4, dataset A05')
+    const result = await ack({ ...shown('main-a', 1, 1, 'user-a', null), session: goal }, 'BDD-04.4, dataset A05')
     expect(result.acknowledge).toBe(false)
     expect(seam.attachAckFields).not.toHaveBeenCalled()
   })
@@ -326,7 +373,7 @@ describe('ackForShownCommit (T-14, A06–A08, N08)', () => {
     const extra = session('extra-1', 'extra goal')
     seam.attention.set('extra-1', 'on')
     const result = await ack({
-      ...shown('extra-1', 1, 'goal1', 'user-a', null),
+      ...shown('extra-1', 1, 1, 'user-a', null),
       session: extra,
     }, 'FR-012, dataset A04')
     expect(result.acknowledge).toBe(false)
@@ -337,18 +384,19 @@ describe('ackForShownCommit (T-14, A06–A08, N08)', () => {
     const mainA = session('session-a', 'losing open')
     seam.mains.add('session-a')
     seam.attention.set('session-a', 'on')
+    const frame = serverFrame('session-a', 3)
     const result = await ack({
       attemptKind: 'shown-commit',
       session: mainA,
       generation: 1,
-      observedBound: 'goal-a3',
+      frame,
       newerOutcomeId: null,
-      foreground: { sessionId: 'session-a', generation: 3, observedBound: 'goal-a3' },
+      foreground: { sessionId: 'session-a', generation: 3, frame },
       viewerId: 'user-a',
     }, 'FR-013, BDD-E03, dataset N08')
     expect(result.acknowledge, 'a losing generation is not the winning shown commit').toBe(false)
     expect(result.fields).toBeUndefined()
-    expect(result.observedBound).toBeUndefined()
+    expect(result.attentionBound).toBeUndefined()
     expect(result.sessionId).toBeUndefined()
     expect(seam.attachAckFields).not.toHaveBeenCalled()
   })
@@ -361,14 +409,14 @@ describe('ackForShownCommit (T-14, A06–A08, N08)', () => {
       attemptKind: 'late-success',
       session: losing,
       generation: 1,
-      observedBound: 'goal-a',
+      frame: serverFrame('session-a', 1),
       newerOutcomeId: null,
-      foreground: { sessionId: 'session-b', generation: 2, observedBound: 'goal-b' },
+      foreground: { sessionId: 'session-b', generation: 2, frame: serverFrame('session-b', 2) },
       viewerId: 'user-a',
     }, 'FR-013, BDD-02.4, BDD-E03, dataset N08')
     expect(result.acknowledge).toBe(false)
     expect(result.fields).toBeUndefined()
-    expect(result.observedBound).toBeUndefined()
+    expect(result.attentionBound).toBeUndefined()
     expect(seam.attachAckFields).not.toHaveBeenCalled()
   })
 
@@ -380,9 +428,9 @@ describe('ackForShownCommit (T-14, A06–A08, N08)', () => {
       attemptKind: 'late-success',
       session: mainA,
       generation: 1,
-      observedBound: 'goal-a1',
-      newerOutcomeId: 'goal-a3',
-      foreground: { sessionId: 'session-a', generation: 3, observedBound: 'goal-a3' },
+      frame: serverFrame('session-a', 1),
+      newerOutcomeId: 3,
+      foreground: { sessionId: 'session-a', generation: 3, frame: serverFrame('session-a', 3) },
       viewerId: 'user-a',
     }, 'BDD-E03, dataset N08')
     expect(losing.acknowledge).toBe(false)
@@ -392,16 +440,17 @@ describe('ackForShownCommit (T-14, A06–A08, N08)', () => {
       attemptKind: 'shown-commit',
       session: mainA,
       generation: 3,
-      observedBound: 'goal-a3',
+      frame: serverFrame('session-a', 3),
       newerOutcomeId: null,
-      foreground: { sessionId: 'session-a', generation: 3, observedBound: 'goal-a3' },
+      foreground: { sessionId: 'session-a', generation: 3, frame: serverFrame('session-a', 3) },
       viewerId: 'user-a',
     }, 'BDD-E03 later winning A has its own bound')
     expect(winning).toEqual({
       acknowledge: true,
       sessionId: 'session-a',
-      observedBound: 'goal-a3',
-      fields: { ack_attention: true, observed_bound: 'goal-a3' },
+      attentionBound: 3,
+      fields: { ack_attention: true, attention_bound: 3 },
     })
+    expect(winning.fields).not.toHaveProperty('observed_bound')
   })
 })

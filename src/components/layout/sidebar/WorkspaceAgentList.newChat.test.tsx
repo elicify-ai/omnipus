@@ -65,6 +65,7 @@ const seam = vi.hoisted(() => {
     },
     sessionAttention: () => 'off' as const,
     attachAckFields: () => ({}),
+    attentionBoundOfFrame: (_frame: unknown) => undefined,
   }
 })
 
@@ -73,6 +74,7 @@ vi.mock('@/lib/nav/sessionCoreSeam', () => ({
   isMainSession: (session: unknown) => seam.isMainSession(session),
   sessionAttention: () => seam.sessionAttention(),
   attachAckFields: () => seam.attachAckFields(),
+  attentionBoundOfFrame: (frame: unknown) => seam.attentionBoundOfFrame(frame),
 }))
 
 vi.mock('@tanstack/react-router', () => ({

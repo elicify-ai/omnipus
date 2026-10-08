@@ -11,7 +11,10 @@
  * Prefetch (document.hidden), hidden reconnect, a non-main, unknown
  * attention, a failed send, and an overtaken A do not.
  *
- * The seam fixture returns { ack_attention: true, observed_bound }.
+ * PLAN 5.2: the integer comes from the server snapshot through
+ * attentionBoundOfFrame. attachAckFields(bound) returns
+ * { ack_attention: true, attention_bound } only for that integer. No server
+ * bound means no acknowledgement.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Session } from '@/lib/api'
@@ -26,14 +29,9 @@ type Signal = 'on' | 'off' | 'unknown'
 const seam = vi.hoisted(() => {
   const mains = new Set<string>()
   const attention = new Map<string, Signal>()
-  let observed = 'goal-1'
   return {
     mains,
     attention,
-    observed: () => observed,
-    setObserved: (value: string) => {
-      observed = value
-    },
     mainSessionIdOfMember: () => undefined as string | undefined,
     isMainSession: (session: unknown) => {
       const id = session && typeof session === 'object' && 'id' in session
@@ -47,7 +45,15 @@ const seam = vi.hoisted(() => {
         : ''
       return attention.get(id) ?? 'unknown'
     },
-    attachAckFields: () => ({ ack_attention: true, observed_bound: observed }),
+    attentionBoundOfFrame: vi.fn((frame: unknown): number | undefined => {
+      if (!frame || typeof frame !== 'object' || !('attention_bound' in frame)) return undefined
+      const value = (frame as { attention_bound: unknown }).attention_bound
+      return typeof value === 'number' && Number.isInteger(value) ? value : undefined
+    }),
+    attachAckFields: vi.fn((bound: unknown): Record<string, unknown> => {
+      if (typeof bound !== 'number' || !Number.isInteger(bound)) return {}
+      return { ack_attention: true, attention_bound: bound }
+    }),
   }
 })
 
@@ -55,7 +61,8 @@ vi.mock('@/lib/nav/sessionCoreSeam', () => ({
   mainSessionIdOfMember: () => seam.mainSessionIdOfMember(),
   isMainSession: (session: unknown) => seam.isMainSession(session),
   sessionAttention: (session: unknown) => seam.sessionAttention(session),
-  attachAckFields: () => seam.attachAckFields(),
+  attachAckFields: (bound: unknown) => seam.attachAckFields(bound),
+  attentionBoundOfFrame: (frame: unknown) => seam.attentionBoundOfFrame(frame),
 }))
 
 const hidden = { value: false }
@@ -79,7 +86,8 @@ function resetAll() {
   hidden.value = false
   seam.mains.clear()
   seam.attention.clear()
-  seam.setObserved('goal-1')
+  seam.attentionBoundOfFrame.mockClear()
+  seam.attachAckFields.mockClear()
   useSessionStore.setState({
     activeSessionId: null,
     activeAgentId: null,
@@ -127,6 +135,17 @@ function show(sessionId: string) {
   })
 }
 
+function deliverBound(sessionId: string, attentionBound?: number) {
+  const frame: Record<string, unknown> = {
+    type: 'session_snapshot',
+    session_id: sessionId,
+    seq: 3,
+    reason: 'unknown_position',
+  }
+  if (attentionBound !== undefined) frame.attention_bound = attentionBound
+  useChatStore.getState().handleFrame(frame as never)
+}
+
 describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
   beforeEach(() => {
     resetAll()
@@ -139,12 +158,12 @@ describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
     }
   })
 
-  it('BDD-04.2 a shown main catch-up carries the seam acknowledgement and that observed bound', () => {
+  it('BDD-04.2 a shown main catch-up carries the server attention_bound', () => {
     const send = connect()
     const main = session('main-a')
     seam.mains.add(main.id)
     seam.attention.set(main.id, 'on')
-    seam.setObserved('goal-1')
+    deliverBound(main.id, 1)
     useSessionStore.getState().attachToSession(main.id, 'chat', main.title, main.agent_id)
     show(main.id)
 
@@ -153,23 +172,46 @@ describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
         type: 'attach_session',
         session_id: main.id,
         ack_attention: true,
-        observed_bound: 'goal-1',
+        attention_bound: 1,
       },
     ])
+    expect(seam.attentionBoundOfFrame).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'session_snapshot',
+      session_id: main.id,
+      attention_bound: 1,
+    }))
+    expect(seam.attachAckFields).toHaveBeenCalledWith(1)
   })
 
-  it('A06 / BDD-E04 a retry keeps the bound captured at the shown commit and does not pick up goal-2', () => {
+  it('A06 / BDD-E04 a retry keeps the bound captured at the shown commit and does not pick up bound 2', () => {
     const send = connect()
     const main = session('main-a')
     seam.mains.add(main.id)
     seam.attention.set(main.id, 'on')
-    seam.setObserved('goal-1')
+    deliverBound(main.id, 1)
     useSessionStore.getState().attachToSession(main.id, 'chat', main.title, main.agent_id)
     show(main.id)
-    seam.setObserved('goal-2')
+    deliverBound(main.id, 2)
     show(main.id)
 
-    expect(acks(send).map((frame) => frame.observed_bound)).toEqual(['goal-1'])
+    expect(acks(send).map((frame) => frame.attention_bound)).toEqual([1])
+  })
+
+  it('a shown main with no server attention_bound is not acknowledged', () => {
+    const send = connect()
+    const main = session('main-a')
+    seam.mains.add(main.id)
+    seam.attention.set(main.id, 'on')
+    deliverBound(main.id)
+    useSessionStore.getState().attachToSession(main.id, 'chat', main.title, main.agent_id)
+    show(main.id)
+
+    expect(acks(send)).toEqual([])
+    expect(seam.attentionBoundOfFrame).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'session_snapshot',
+      session_id: main.id,
+    }))
+    expect(seam.attachAckFields).not.toHaveBeenCalled()
   })
 
   it('A08 a hidden prefetch does not replace the committed chat and does not acknowledge', () => {
@@ -203,22 +245,22 @@ describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
     seam.mains.add(winner.id)
     seam.attention.set(first.id, 'on')
     seam.attention.set(winner.id, 'on')
-    seam.setObserved('goal-a1')
+    deliverBound(first.id, 11)
     useSessionStore.getState().attachToSession(first.id, 'chat', first.title, first.agent_id)
-    seam.setObserved('goal-b')
+    deliverBound(winner.id, 20)
     useSessionStore.getState().attachToSession(winner.id, 'chat', winner.title, winner.agent_id)
     show(first.id)
     show(winner.id)
-    seam.setObserved('goal-a2')
+    deliverBound(first.id, 12)
     useSessionStore.getState().attachToSession(first.id, 'chat', first.title, first.agent_id)
     show(first.id)
 
     expect(acks(send).map((frame) => ({
       session_id: frame.session_id,
-      observed_bound: frame.observed_bound,
+      attention_bound: frame.attention_bound,
     }))).toEqual([
-      { session_id: winner.id, observed_bound: 'goal-b' },
-      { session_id: first.id, observed_bound: 'goal-a2' },
+      { session_id: winner.id, attention_bound: 20 },
+      { session_id: first.id, attention_bound: 12 },
     ])
   })
 
@@ -231,11 +273,13 @@ describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
     seam.mains.add(shown.id)
     seam.attention.set(unknownMain.id, 'unknown')
     seam.attention.set(shown.id, 'on')
-    seam.setObserved('goal-shown')
+    deliverBound(unknownMain.id, 4)
     useSessionStore.getState().attachToSession(unknownMain.id, 'chat', unknownMain.title, unknownMain.agent_id)
     show(unknownMain.id)
+    deliverBound(helper.id, 5)
     useSessionStore.getState().attachToSession(helper.id, 'chat', helper.title, helper.agent_id)
     show(helper.id)
+    deliverBound(shown.id, 7)
     send.mockReturnValueOnce(false)
     useSessionStore.getState().attachToSession(shown.id, 'chat', shown.title, shown.agent_id)
     send.mockReturnValue(true)
@@ -244,9 +288,9 @@ describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
 
     expect(acks(send).map((frame) => ({
       session_id: frame.session_id,
-      observed_bound: frame.observed_bound,
+      attention_bound: frame.attention_bound,
     }))).toEqual([
-      { session_id: shown.id, observed_bound: 'goal-shown' },
+      { session_id: shown.id, attention_bound: 7 },
     ])
   })
 
@@ -255,16 +299,16 @@ describe('foreground commit acknowledgement (T-14, A06–A08)', () => {
     const main = session('main-a')
     seam.mains.add(main.id)
     seam.attention.set(main.id, 'on')
-    seam.setObserved('goal-1')
+    deliverBound(main.id, 1)
     useSessionStore.getState().attachToSession(main.id, 'chat', main.title, main.agent_id)
     show(main.id)
     hidden.value = true
-    seam.setObserved('goal-2')
+    deliverBound(main.id, 2)
     reattachActiveSession(
       { send: (frame) => send(frame) },
       () => undefined,
     )
 
-    expect(acks(send).map((frame) => frame.observed_bound)).toEqual(['goal-1'])
+    expect(acks(send).map((frame) => frame.attention_bound)).toEqual([1])
   })
 })

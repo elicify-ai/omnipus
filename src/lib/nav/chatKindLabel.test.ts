@@ -25,6 +25,7 @@ const seam = vi.hoisted(() => ({
   mainSessionIdOfMember: vi.fn((_member: unknown): string | undefined => undefined),
   sessionAttention: vi.fn((_session: unknown): 'unknown' => 'unknown'),
   attachAckFields: vi.fn((_bound: unknown) => ({})),
+  attentionBoundOfFrame: vi.fn((_frame: unknown): number | undefined => undefined),
 }))
 
 vi.mock('@/lib/nav/sessionCoreSeam', () => ({
@@ -32,6 +33,7 @@ vi.mock('@/lib/nav/sessionCoreSeam', () => ({
   isMainSession: (session: unknown) => seam.isMainSession(session),
   sessionAttention: (session: unknown) => seam.sessionAttention(session),
   attachAckFields: (bound: unknown) => seam.attachAckFields(bound),
+  attentionBoundOfFrame: (frame: unknown) => seam.attentionBoundOfFrame(frame),
 }))
 
 function session(partial: Partial<Session> & Pick<Session, 'id' | 'title'>): Session {

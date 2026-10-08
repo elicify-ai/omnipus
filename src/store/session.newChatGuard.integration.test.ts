@@ -35,6 +35,7 @@ vi.mock('@/lib/nav/sessionCoreSeam', () => ({
   },
   sessionAttention: () => 'off' as const,
   attachAckFields: () => ({}),
+  attentionBoundOfFrame: () => undefined,
 }))
 
 function resetAll() {

@@ -26,6 +26,7 @@ vi.mock('@/lib/nav/sessionCoreSeam', () => ({
   },
   sessionAttention: () => 'unknown',
   attachAckFields: () => ({}),
+  attentionBoundOfFrame: () => undefined,
 }))
 
 vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock())

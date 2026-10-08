@@ -131,6 +131,7 @@ const seam = vi.hoisted(() => {
       return attention.get(id) ?? 'unknown'
     },
     attachAckFields: () => ({}),
+    attentionBoundOfFrame: (_frame: unknown) => undefined,
   }
 })
 
@@ -139,6 +140,7 @@ vi.mock('@/lib/nav/sessionCoreSeam', () => ({
   isMainSession: (session: unknown) => seam.isMainSession(session),
   sessionAttention: (session: unknown) => seam.sessionAttention(session),
   attachAckFields: () => seam.attachAckFields(),
+  attentionBoundOfFrame: (frame: unknown) => seam.attentionBoundOfFrame(frame),
 }))
 
 import { fetchWorkspaces, fetchSessions, fetchAgents } from '@/lib/api'
