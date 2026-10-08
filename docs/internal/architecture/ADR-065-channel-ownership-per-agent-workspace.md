@@ -1,5 +1,12 @@
 # ADR-065 — A channel belongs to one (workspace, agent) pair, in both directions
 
+## Amended 2026-10-07 — session-core founder decisions
+
+**Dated correction of handoff examples and 4a provenance boundary.** Delete in-session switch_agent/handover. All admitted channel messages for a bound pair enter its main session for now; histories/control are shared. Keep channel-instance ownership and per-message sender/return correlation, with no guessed output destination or transferred peer permissions.
+
+Authority and complete clause/reuse map: **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/ADR-20261006-session-core-with-an-agent-address-book.md`::Decision / Earlier ADR clauses amended; founder ledger `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md` plus the binding October 7 answers through 15:55. This is a design amendment, not a claim that production implements it. Conflicting older prescriptions below are historical within this scope; unrelated decisions and historical evidence remain unchanged.
+
+
 - **Status:** Accepted (2026-08-14) — operator decision. Design only; no code has been written against it yet.
 - **Date:** 2026-08-14
 - **Deciders:** founder (decided the ownership model); lead (mechanism)

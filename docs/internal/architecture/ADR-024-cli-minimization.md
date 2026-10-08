@@ -1,5 +1,12 @@
 # ADR-024 — CLI Minimization: a thin one-shot task-runner over the engine
 
+## Amended 2026-10-07 — session-core founder decisions
+
+**Dated correction of D4 worker targeting.** Fresh one-shot worker chat targets remain excluded, but an authenticated human may type into an existing worker/child conversation. A finished task conversation continues without rerunning the task.
+
+Authority and complete clause/reuse map: **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/ADR-20261006-session-core-with-an-agent-address-book.md`::Decision / Earlier ADR clauses amended; founder ledger `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md` plus the binding October 7 answers through 15:55. This is a design amendment, not a claim that production implements it. Conflicting older prescriptions below are historical within this scope; unrelated decisions and historical evidence remain unchanged.
+
+
 - **Status:** Proposed (revised 2026-06-28 after grill-spec review)
 - **Date:** 2026-06-28
 - **Deciders:** operator, Albert (architect)

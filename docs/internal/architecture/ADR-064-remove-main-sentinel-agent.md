@@ -1,5 +1,12 @@
 # ADR-064 — Remove the "main" sentinel agent
 
+## Amended 2026-10-07 — session-core founder decisions
+
+**Dated correction of What was deliberately KEPT / agent-history survival.** No main sentinel agent is restored. Actual deletion removes that agent's owned sessions and memory through one cascade; historical guest answers in other agents' chats remain. Team removal is hide/retain rather than deletion.
+
+Authority and complete clause/reuse map: **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/ADR-20261006-session-core-with-an-agent-address-book.md`::Decision / Earlier ADR clauses amended; founder ledger `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md` plus the binding October 7 answers through 15:55. This is a design amendment, not a claim that production implements it. Conflicting older prescriptions below are historical within this scope; unrelated decisions and historical evidence remain unchanged.
+
+
 - **Status:** Accepted (2026-08-14) — operator decision, taken after a code review established what the sentinel still did.
 - **Date:** 2026-08-14
 - **Deciders:** founder (decided removal, and that there is no back-compat); lead (mechanism)

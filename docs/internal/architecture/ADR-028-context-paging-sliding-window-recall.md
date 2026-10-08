@@ -1,5 +1,12 @@
 # ADR-028: Context paging — sliding-window + recall replaces reactive compaction
 
+## Amended 2026-10-07 — session-core founder decisions
+
+**Dated correction of D11/D14, line Skip and active-session retention assumptions.** One authoritative chat/model entry format in UTC day files replaces separate content histories; the live start mark is file/byte position and hot reads are bounded to the window. Existing day-file age retention applies to long-lived mains. Recall stays session-scoped/provider-valid. Expired marks advance to retained complete groups, with agent-visible expiry or empty same-ID context.
+
+Authority and complete clause/reuse map: **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/ADR-20261006-session-core-with-an-agent-address-book.md`::Decision / Earlier ADR clauses amended; founder ledger `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md` plus the binding October 7 answers through 15:55. This is a design amendment, not a claim that production implements it. Conflicting older prescriptions below are historical within this scope; unrelated decisions and historical evidence remain unchanged.
+
+
 > **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
 
 - **Status:** Proposed (rev. 3 — post re-grill)
