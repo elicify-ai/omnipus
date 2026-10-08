@@ -5,6 +5,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -155,7 +156,7 @@ func i1KillAdmittedRoot(t *testing.T) i1CrashReceipt {
 			raw = bytes
 			break
 		}
-		require.True(t, os.IsNotExist(readErr), "read actual subprocess admission receipt: %v", readErr)
+		require.True(t, errors.Is(readErr, os.ErrNotExist), "read actual subprocess admission receipt: %v", readErr)
 		select {
 		case <-tick.C:
 		case <-deadline.C:
