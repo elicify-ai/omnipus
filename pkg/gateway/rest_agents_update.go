@@ -280,34 +280,42 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 			}
 		}
 	}
-	if !acceptAgentIdentityWrite(uf.w, &uf.ru.req) {
+	if !acceptAgentIdentityWrite(uf.w, &uf.ru.req, presence) {
 		return true
 	}
 	return uf.validateMaxToolIterations()
 }
 
 // acceptAgentIdentityWrite rejects a present figure, role, or colour that is
-// not in the closed set, before any field is persisted. Colour letter-case is
-// normalized to the uppercase enum value. Omitted fields are left alone.
-func acceptAgentIdentityWrite(w http.ResponseWriter, req *gen.AgentUpdateRequest) bool {
+// null or not in the closed set, before any field is persisted. The raw-body
+// presence map distinguishes null from omission, which the generated pointers
+// cannot. Colour letter-case is normalized; omitted fields are left alone.
+func acceptAgentIdentityWrite(w http.ResponseWriter, req *gen.AgentUpdateRequest, presence map[string]json.RawMessage) bool {
+	figureValid := true
 	if req.Figure != nil {
-		if _, ok := coreagent.CanonicalFigure(string(*req.Figure)); !ok {
-			jsonErr(w, http.StatusBadRequest, "figure must be Robot, Man, Woman, or Omnipus")
-			return false
-		}
+		_, figureValid = coreagent.CanonicalFigure(string(*req.Figure))
 	}
+	if !figureValid || bytes.Equal(bytes.TrimSpace(presence["figure"]), []byte("null")) {
+		jsonErr(w, http.StatusBadRequest, "figure must be Robot, Man, Woman, or Omnipus")
+		return false
+	}
+	roleValid := true
 	if req.Role != nil {
-		if _, ok := coreagent.CanonicalRole(string(*req.Role)); !ok {
-			jsonErr(w, http.StatusBadRequest, "role must be one of the curated role slugs")
-			return false
-		}
+		_, roleValid = coreagent.CanonicalRole(string(*req.Role))
+	}
+	if !roleValid || bytes.Equal(bytes.TrimSpace(presence["role"]), []byte("null")) {
+		jsonErr(w, http.StatusBadRequest, "role must be one of the curated role slugs")
+		return false
+	}
+	canon, colorValid := "", true
+	if req.Color != nil {
+		canon, colorValid = coreagent.CanonicalColor(string(*req.Color))
+	}
+	if !colorValid || bytes.Equal(bytes.TrimSpace(presence["color"]), []byte("null")) {
+		jsonErr(w, http.StatusBadRequest, "color must be one of the ten identity colours")
+		return false
 	}
 	if req.Color != nil {
-		canon, ok := coreagent.CanonicalColor(string(*req.Color))
-		if !ok {
-			jsonErr(w, http.StatusBadRequest, "color must be one of the ten identity colours")
-			return false
-		}
 		c := gen.AgentColor(canon)
 		req.Color = &c
 	}

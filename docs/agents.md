@@ -85,6 +85,8 @@ The role choices are grouped like this:
 
 The create form shows the full mark live as you change these choices. The preview is a draft: it is saved only when creation succeeds. In the edit slide-over, **Basics** offers the same Figure, Role, and Colour choices and saves changes automatically. Its header mark previews the selected figure, role badge, and colour immediately, before the save completes. Check the save indicator before treating an edit as saved. There is no agent-picture or GIF upload; this does not affect attaching files to a chat.
 
+When updating an existing agent through the API, omit `figure`, `role`, or `color` to keep its stored value. Sending JSON `null`, an empty string, or another invalid identity value rejects the whole update with HTTP 400: even valid sibling changes are not saved, and the stored fields, display timestamp, and configuration revision stay unchanged. Null does not clear an identity choice or restore a create default. To choose a default again, select it in the editor or send its actual value: `Omnipus`, `general`, or `#9CA3AF`.
+
 ### Built-in identity is locked
 
 Open a built-in agent's card, then **Basics**: the figure, role, and colour choices remain visible but cannot be changed. Omnipus restores their fixed values whenever the server starts. The jobs described in the base-agent table above are distinct from these badge choices.
