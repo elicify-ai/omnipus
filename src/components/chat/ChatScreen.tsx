@@ -42,7 +42,6 @@ import { GoalPillTray } from './GoalPillTray'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
 import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
-import { AgentPicker } from './composer/AgentPicker'
 import { ModelPicker } from './composer/ModelPicker'
 import { AutoApprovePicker } from './composer/AutoApprovePicker'
 import { TokenCounter } from './composer/TokenCounter'
@@ -52,14 +51,12 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useChatStore } from '@/store/chat'
-import { findFirstSendMessage, getPendingFirstSend } from '@/store/chat/first-send'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
 import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
-import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall, shouldRenderJudgeVerdictInThread, shouldRenderContextWindowNoticeInThread } from '@/lib/toolVisibility'
@@ -81,7 +78,7 @@ import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@
 import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
 import { ComposerMediaLibraryButton, LibraryAttachmentChips } from './ComposerMediaLibrary'
-import { cn, initialOf } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { ChatImage } from './ChatImage'
 import { useSlashMenu, SECTION_CAP } from '@/hooks/useSlashMenu'
@@ -1952,15 +1949,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const appendMessage = useChatStore((s) => s.appendMessage)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const startNewSession = useSessionStore((s) => s.startNewSession)
-  const [abandonFirstSend, setAbandonFirstSend] = useState<{ clientMessageId: string; workspaceId: string | null } | null>(null)
-  const requestNewSession = useCallback(() => {
-    const pending = getPendingFirstSend(useChatStore.getState())
-    if (pending && !pending.sessionId && useSessionStore.getState().activeSessionId === '__pending') {
-      setAbandonFirstSend({ clientMessageId: pending.clientMessageId, workspaceId: pending.workspaceId })
-    } else {
-      startNewSession()
-    }
-  }, [startNewSession])
   const composerRuntime = useComposerRuntime()
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
@@ -2082,7 +2070,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     inputEnabled,
     composerRuntime,
     appendMessage,
-    startNewSession: requestNewSession,
+    // /new and /clear are not client commands (FR-007), so this is not
+    // reached from the palette. Kept because the hook's parameter is required.
+    startNewSession,
     // /stop is one Stop-button activation; /cancel stays immediate tree.
     activateStop: cancelState.cancelUnconditional,
     cancelIfStreaming: cancelState.cancelAllTreeScoped,
@@ -2101,7 +2091,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // purpose so the two can't drift apart).
   const hasMenuContent =
     slashMenu.slashItems.length > 0 ||
-    (slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode)
+    (slashMenu.commandsError && !slashMenu.isSkillsFilter)
 
   // Deferred item 2: single source of truth for "the menu is actually
   // mounted right now" — reused by the render gate below, the combobox
@@ -2138,12 +2128,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // truth for the currently-active capped section's overflow state, shared
   // by the VISIBLE "+N more" footer row below AND its sr-only announcement
   // mirror (menuFooterAnnouncement) — computed once so the two can never say
-  // different things. Only one capped section can be showing a footer at a
-  // time: "/" mode caps skills (commands has no cap), "@" mode caps agents,
-  // and the two triggers are mutually exclusive by construction (see
-  // useSlashMenu.ts's file header), so `isMentionMode` alone picks the right
-  // count.
-  const activeSectionHiddenCount = slashMenu.isMentionMode ? slashMenu.agentsHiddenCount : slashMenu.skillsHiddenCount
+  // different things. Only skills are capped (commands has no cap). The "@"
+  // agent menu is gone (FR-007).
+  const activeSectionHiddenCount = slashMenu.skillsHiddenCount
   // Cap-footer copy (gate 2 LOW): in the "/skills" special-filter state (D9
   // — exact input "/skills" shows every skill, capped, ignoring "skills"
   // itself as a filter string), "keep typing to narrow" is impossible advice
@@ -2382,21 +2369,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       onDragLeave={attachDisabled ? undefined : fileUpload.onDragLeave}
       onDrop={attachDisabled ? undefined : fileUpload.onDrop}
     >
-      {/* a11y HIGH: "@" mention-selection announcement. Selecting an agent
-          via "@" silently empties the composer and silently changes where
-          the next message routes — zero non-visual feedback for a
-          screen-reader user. Mirrors the sr-only aria-live pattern in
-          ChatScreen (see the message-list's own `aria-live="polite"`
-          region near the top of the ChatScreen component) so a mention
-          selection reads the same way a new assistant response does.
-          Content-change-triggers-announcement: re-selecting the SAME agent
-          leaves the text unchanged, so it does not re-announce (see
-          useSlashMenu.ts's mentionAnnouncement doc comment) — acceptable,
-          nothing actually changed. */}
-      <div aria-live="polite" aria-atomic="true" className="sr-only" data-testid="agent-mention-announcement">
-        {slashMenu.mentionAnnouncement && <span>Now chatting with {slashMenu.mentionAnnouncement}</span>}
-      </div>
-
       {/* SR gap (gate 4 MODERATE): the "Commands unavailable" error row
           inside the listbox below is deliberately `role="presentation"` —
           excluded from the listbox's accessible option children (see that
@@ -2416,7 +2388,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           `aria-atomic="true"`, matching the pattern above explicitly for
           clarity. */}
       <div role="status" aria-atomic="true" className="sr-only" data-testid="slash-menu-status">
-        {menuIsRendered && slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode && (
+        {menuIsRendered && slashMenu.commandsError && !slashMenu.isSkillsFilter && (
           <span>Commands unavailable</span>
         )}
         {menuIsRendered && menuFooterAnnouncement && <span>{menuFooterAnnouncement}</span>}
@@ -2429,14 +2401,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       )}
 
 
-      {/* Slash command + skills + "@" agent-mention partitioned dropdown
-          (FR-005). One container/list renders three different sections
-          depending on the trigger: "/" opens Commands+Skills, "@" opens
-          Agents (see useSlashMenu.ts's isMentionMode) — the two triggers
-          are mutually exclusive by construction, so `slashItems` is always
-          either [commands, skills] or [agents], never a mix (J.4
-          correction, bugfixes3 sign-off — this comment previously only
-          mentioned the "/" side).
+      {/* Slash command + skills dropdown (FR-005). "/" opens Commands+Skills.
+          The "@" agent menu is gone (FR-007): a leading "@" does not open
+          this list and does not switch the agent.
           F6: unified slashItems.map() — emits a section header on each section
           transition, making the `section` field load-bearing and removing the
           duplicate render blocks + the off-by-one `globalIndex` variable.
@@ -2463,7 +2430,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           data-testid="slash-menu"
           id="composer-slash-menu"
           role="listbox"
-          aria-label="Commands, skills and agents"
+          aria-label="Commands and skills"
           // max-h + scroll: the menu opens UPWARD from the composer, so a tall
           // list (many commands + skills) pushed its top rows above the
           // viewport. 40dvh caps it to the visible area; overflow-y scrolls.
@@ -2475,19 +2442,13 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
               the whole Commands section there, so an error row would be a
               non-sequitur). Muted styling matches SearchModal's own
               query-error row (src/components/search/SearchModal.tsx).
-              Fix 1: also hidden in "@" mention mode — a commands-fetch
-              error has nothing to do with the agent-mention menu, and this
-              render gate must match useSlashMenu's own shouldShowSlash
-              fallback (useSlashMenu.ts), which already excludes
-              isMentionMode from the "keep the menu open on error" carve-out.
-              Without this clause the row leaked into the "@" menu whenever
-              the commands query happened to be erroring, even though the
-              "@" menu has nothing to do with commands.
+              Hidden during the "/skills" filter only. The "@" mention menu
+              this row used to stay out of is gone (FR-007).
               Deferred item 2: `role="presentation"` — this row is
               informational text, not a selectable listbox option; without
               this it would silently pollute the `listbox`'s accessible
               children with a non-option row. */}
-          {slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode && (
+          {slashMenu.commandsError && !slashMenu.isSkillsFilter && (
             <div
               data-testid="slash-commands-error"
               role="presentation"
@@ -2506,9 +2467,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             // Only skills/agents are capped (commands has no cap — see
             // useSlashMenu.ts) — 0 for commands, so the footer simply never
             // renders there.
-            const sectionHiddenCount =
-              item.section === 'skills' ? slashMenu.skillsHiddenCount :
-              item.section === 'agents' ? slashMenu.agentsHiddenCount : 0
+            const sectionHiddenCount = item.section === 'skills' ? slashMenu.skillsHiddenCount : 0
             return (
               <React.Fragment key={item.key}>
                 {isFirstInSection && (
@@ -2520,7 +2479,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                         ? 'border-b border-[var(--color-border)]'
                         : 'border-t border-[var(--color-border)]',
                     )}>
-                    {item.section === 'commands' ? 'Commands' : item.section === 'skills' ? 'Skills' : 'Agents'}
+                    {item.section === 'commands' ? 'Commands' : 'Skills'}
                   </div>
                 )}
                 <button
@@ -2544,10 +2503,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   // textarea's own onKeyDown → slashMenu.handleKeyDown) —
                   // neither depends on this button ever receiving focus.
                   tabIndex={-1}
-                  // "@" mention menu rows only — mirrors the slash-command/skill
-                  // rows' shared markup exactly, so this testid is additive
-                  // rather than a fork of the row.
-                  data-testid={item.section === 'agents' ? 'agent-mention-item' : undefined}
                   // Fix 11: semantic highlight marker — lets a test assert the
                   // highlighted row without depending on the visual class
                   // string below (which stays purely presentational; `undefined`
@@ -2569,29 +2524,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   }}
                   onMouseEnter={() => slashMenu.onHoverItem(globalIndex)}
                 >
-                  {/* Agent rows only — same avatar-dot markup as AgentPicker's
-                      DropdownMenuItem rows (composer/AgentPicker.tsx) so the
-                      mention menu and the picker dropdown read as the same
-                      "agent row" everywhere in the composer.
-                      Fix 9: aria-hidden — the initial/icon is decorative; the
-                      row BUTTON's accessible name should come from the label/
-                      description text, not this dot's text content. Initial is
-                      derived from `item.agentName` (astral-safe via
-                      `initialOf`), not `label.charAt(1)` — the old approach
-                      assumed `label` was always "@" + exactly one BMP
-                      character, which breaks for a name whose first character
-                      is outside the BMP (e.g. an emoji). */}
-                  {item.section === 'agents' && (
-                    <div
-                      aria-hidden="true"
-                      className="w-5 h-5 rounded-full flex items-center justify-center text-[length:var(--type-caption-size)] font-bold shrink-0"
-                      style={{ backgroundColor: item.agentColor ?? 'var(--color-surface-3)' }}
-                    >
-                      {item.agentIcon
-                        ? <IconRenderer icon={item.agentIcon} size={11} />
-                        : initialOf(item.agentName ?? '')}
-                    </div>
-                  )}
                   {/* Fixed-width label column so descriptions align across rows
                       (a two-column table, not per-row flow). 9.5rem fits the
                       longest current label; truncate guards outliers. */}
@@ -2603,10 +2535,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                     <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-muted)] opacity-70 font-mono shrink-0">
                       {item.argumentHint}
                     </span>
-                  )}
-                  {/* Mirrors AgentPicker's "active" marker (composer/AgentPicker.tsx) */}
-                  {item.section === 'agents' && item.isActiveAgent && (
-                    <span className="ml-auto shrink-0 text-[var(--color-success)] text-[length:var(--type-caption-size)]">active</span>
                   )}
                 </button>
                 {/* Deferred item 3: "+N more" footer — rendered right after
@@ -2658,9 +2586,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         className="flex items-center gap-[var(--space-1)] min-w-0 overflow-x-auto px-[var(--space-1)] py-[var(--space-1)]"
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
       >
-        {/* Agent → model. Attach lives INSIDE the input card (leading the
-            textarea, ChatGPT/Claude-style) — it was visually lost up here. */}
-        <AgentPicker disabled={agentRemoved} tabIndex={3} />
+        {/* Model. The agent picker is gone (FR-007). Attach lives INSIDE the
+            input card (leading the textarea). */}
         <ModelPicker disabled={agentRemoved} tabIndex={4} />
         {/* ADR-092: per-chat Auto-approve quick switch. Deliberately NO
             explicit tabIndex — the closed 1-8 composer ring documented
@@ -2706,7 +2633,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             // would misleadingly suggest Enter/Send still route through here
             // while a turn is running.
             // Send-path interception: if the typed text is exactly a client-delivery
-            // slash command (e.g. "/new", "/help", "/model", "/cancel"), handle it
+            // slash command (e.g. "/help", "/model", "/cancel" — not "/new"
+            // or "/clear", FR-007), handle it
             // locally and prevent it from reaching the backend. This converges the
             // typed+Enter path with the palette selection path.
             if (slashMenu.interceptClientCommand()) {
@@ -2718,12 +2646,10 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             // WITHOUT firing the textarea's onChange (no synthetic change
             // event is dispatched for the runtime-driven clear), so
             // `slashMenu.inputValue` — which only updates via onInputChange —
-            // kept the just-sent text (e.g. "@mia hello everyone") even
-            // though the visible textarea was now empty. A subsequent
-            // ArrowDown in the (visually empty) textarea then read the STALE
-            // "@..." mirror, reopened the full agent-mention menu, and Enter
-            // silently switched the active agent with no text on screen to
-            // explain why. Only reached here when the send actually
+            // kept the just-sent text even though the visible textarea was
+            // now empty. A subsequent ArrowDown then read that stale mirror
+            // and reopened the slash menu. The "@" agent menu this used to
+            // reopen is gone (FR-007). Only reached here when the send actually
             // proceeded (neither the isStreaming guard nor
             // interceptClientCommand() intercepted it above), so this can't
             // clear the mirror out from under a blocked/intercepted send.
@@ -3051,25 +2977,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       <div className="px-[var(--space-1)] pt-[var(--space-1)] empty:hidden">
         <ActivityBar />
       </div>
-
-      <ConfirmDialog
-        open={abandonFirstSend !== null}
-        onOpenChange={(open) => { if (!open) setAbandonFirstSend(null) }}
-        title="Start a new chat?"
-        description="Delivery not confirmed. Copy your message before starting a new chat."
-        cancelLabel="Keep this chat"
-        confirmLabel="Start a new chat"
-        emphasis="cancel"
-        onConfirm={() => {
-          const selected = useSessionStore.getState().activeSessionId
-          const bucket = selected ? useChatStore.getState().sessionsById[selected] : undefined
-          const stillSelected = abandonFirstSend
-            && (useWorkspacesStore.getState().activeWorkspaceId || null) === abandonFirstSend.workspaceId
-            && findFirstSendMessage(bucket, abandonFirstSend.clientMessageId)
-          setAbandonFirstSend(null)
-          if (stillSelected) startNewSession()
-        }}
-      />
 
       {/* Harmful-file upload double-confirm — replaces the native window.confirm pair.
           Stage 1 warns and lists the flagged files; stage 2 is the second

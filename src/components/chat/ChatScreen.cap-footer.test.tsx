@@ -166,7 +166,6 @@ vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -195,59 +194,6 @@ function resetStores() {
 }
 
 beforeEach(resetStores)
-
-describe('"@" agent-mention menu — cap + hidden-count footer (deferred item 3)', () => {
-  it('10 agents show exactly 8 alphabetically-ordered rows plus a "+2 more" footer', () => {
-    render(<OmnipusComposer />)
-    const input = screen.getByTestId('chat-input')
-
-    act(() => { fireEvent.change(input, { target: { value: '@' } }) })
-
-    const rows = screen.getAllByTestId('agent-mention-item')
-    expect(rows).toHaveLength(8)
-    expect(rows.map((r) => r.textContent?.match(/@(\S+)/)?.[1])).toEqual([
-      'Agent01', 'Agent02', 'Agent03', 'Agent04', 'Agent05', 'Agent06', 'Agent07', 'Agent08',
-    ])
-    expect(screen.getByTestId('slash-menu-footer')).toHaveTextContent('+2 more')
-  })
-
-  it('narrowing to a filter with ≤8 matches removes the footer', () => {
-    render(<OmnipusComposer />)
-    const input = screen.getByTestId('chat-input')
-
-    // "@agent1" prefix-matches only "Agent10" (the other 9 all have
-    // "agent0" at that position, not "agent1").
-    act(() => { fireEvent.change(input, { target: { value: '@agent1' } }) })
-
-    expect(screen.getAllByTestId('agent-mention-item')).toHaveLength(1)
-    expect(screen.queryByTestId('slash-menu-footer')).not.toBeInTheDocument()
-  })
-
-  it('the footer row is not reachable by ArrowDown — cycling wraps within the 8 visible rows only', () => {
-    render(<OmnipusComposer />)
-    const input = screen.getByTestId('chat-input')
-    act(() => { fireEvent.change(input, { target: { value: '@' } }) })
-
-    // Cycle ArrowDown 8 times — wraps back to row 0 (Agent01). If the
-    // footer were reachable, the highlight would land on it at some point
-    // and no row would carry data-highlighted at that step; since the
-    // footer isn't part of slashItems (and has no data-highlighted
-    // attribute at all — it isn't even a candidate), every one of these 8
-    // presses lands on a real, highlighted agent row.
-    for (let i = 0; i < 8; i++) {
-      act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
-      const highlighted = screen.getAllByTestId('agent-mention-item').find((r) => r.getAttribute('data-highlighted') === 'true')
-      expect(highlighted).toBeDefined()
-    }
-    // After exactly 8 presses (wrapping modulo 8), we're back at row 0.
-    const finalHighlighted = screen.getAllByTestId('agent-mention-item').find((r) => r.getAttribute('data-highlighted') === 'true')
-    expect(finalHighlighted?.textContent).toContain('Agent01')
-    // The footer itself never carries data-highlighted or role="option".
-    const footer = screen.getByTestId('slash-menu-footer')
-    expect(footer).not.toHaveAttribute('data-highlighted')
-    expect(footer).not.toHaveAttribute('role', 'option')
-  })
-})
 
 // Cap-footer copy fix (gate 2 LOW): in the "/skills" special-filter state
 // (D9 — exact input "/skills" shows every skill, capped, ignoring "skills"

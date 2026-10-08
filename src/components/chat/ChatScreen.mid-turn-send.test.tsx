@@ -160,7 +160,6 @@ vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -240,13 +239,8 @@ describe('OmnipusComposer — mid-turn steering send (Enter)', () => {
     expect(screen.queryByTestId('chat-send-mid-stream')).not.toBeInTheDocument()
   })
 
-  it('a typed client command ("/clear") mid-stream still intercepts locally instead of steering literal text into the turn', async () => {
-    // "/clear" is NOT available_while_streaming (see the mocked commands
-    // list above), so it never matches the mid-stream-filtered menu —
-    // shouldShowSlash is false, routing this Enter through
-    // submitMidStreamMessage()'s OWN interceptClientCommand() check rather
-    // than the menu's Enter-selects-item branch (covered by the next
-    // describe block below).
+  it('typing /clear mid-stream does not start a new chat', async () => {
+    // /clear is not a client command (FR-007). It must not call startNewSession.
     const realStartNewSession = useSessionStore.getState().startNewSession
     const startNewSession = vi.fn()
     act(() => { useSessionStore.setState({ startNewSession }) })
@@ -267,10 +261,7 @@ describe('OmnipusComposer — mid-turn steering send (Enter)', () => {
       act(() => { fireEvent.change(input, { target: { value: '/clear' } }) })
       act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
 
-      // Intercepted locally — the client command ran...
-      expect(startNewSession).toHaveBeenCalledTimes(1)
-      // ...and the literal text "/clear" was never steered into the turn.
-      expect(mockComposerSend).not.toHaveBeenCalled()
+      expect(startNewSession).not.toHaveBeenCalled()
     } finally {
       act(() => { useSessionStore.setState({ startNewSession: realStartNewSession }) })
     }
