@@ -63,9 +63,8 @@ properties:
       meaningful when session_id is present (the connection-open emit
       carries neither). true — Auto-approve forced ON for this chat; false —
       forced OFF for this chat; null or absent — no per-chat modifier is
-      set, the chat follows the agent x global resolution
-      (SandboxStatus.auto_approve_effective floored by the agent's
-      auto_approve_disabled). Same value space as
+      set, the chat follows the global default
+      (SandboxStatus.auto_approve_effective). Same value space as
       SessionModeUpdateFrame.auto_approve. The modifier lives in server
       memory only: after a gateway restart it is gone and this field reads
       null/absent, so the UI follows the server. Keep in sync by hand with

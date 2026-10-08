@@ -3,7 +3,7 @@
  *
  * Founder decision (2026-09-24): Auto-approve no longer requires an
  * enforcing kernel sandbox — `resolved` must be true whenever the session/
- * pending/agent/global resolution says so, REGARDLESS of
+ * pending/global resolution (chat modifier, else global default) says so, REGARDLESS of
  * `kernel_sandbox_active`. `kernelSandboxActive` is exposed only as a
  * separate, warning-only flag for callers (the composer Auto button)
  * to build a caution from — it must never gate `resolved` here.
@@ -20,7 +20,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
-    fetchAgents: vi.fn(),
     fetchSandboxStatus: vi.fn(),
   }
 })
@@ -52,7 +51,6 @@ beforeEach(() => {
     useSessionStore.setState({ activeAgentId: 'mia', activeSessionId: 'sess_1', activeAgentType: 'core' })
     useChatStore.setState({ autoApproveEffective: undefined, sessionsById: {}, pendingAutoApproveChoice: null })
   })
-  vi.mocked(api.fetchAgents).mockResolvedValue([{ id: 'mia', name: 'Mia', type: 'core', status: 'active' }] as never)
 })
 
 describe('useResolvedAutoApprove — Auto is effective without a sandbox (2026-09-24)', () => {
@@ -105,5 +103,38 @@ describe('useResolvedAutoApprove — Auto is effective without a sandbox (2026-0
       expect(result.current.resolved).toBe(false)
       expect(result.current.kernelSandboxActive).toBe(true)
     })
+  })
+})
+
+describe('useResolvedAutoApprove — two levels only: chat modifier, else global', () => {
+  it('a chat modifier of false wins over a global of true', async () => {
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(
+      sandboxStatus({ auto_approve_effective: true, kernel_sandbox_active: true }),
+    )
+    act(() => {
+      useChatStore.setState({ autoApproveEffective: false })
+    })
+    const { result } = renderHook(() => useResolvedAutoApprove(), { wrapper })
+    await waitFor(() => expect(api.fetchSandboxStatus).toHaveBeenCalled())
+    await waitFor(() => expect(result.current.resolved).toBe(false))
+  })
+
+  it('a chat modifier of true wins over a global of false', async () => {
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(
+      sandboxStatus({ auto_approve_effective: false, kernel_sandbox_active: true }),
+    )
+    act(() => {
+      useChatStore.setState({ autoApproveEffective: true })
+    })
+    const { result } = renderHook(() => useResolvedAutoApprove(), { wrapper })
+    await waitFor(() => expect(result.current.resolved).toBe(true))
+  })
+
+  it('with no chat modifier it resolves to the global value', async () => {
+    vi.mocked(api.fetchSandboxStatus).mockResolvedValue(
+      sandboxStatus({ auto_approve_effective: true, kernel_sandbox_active: true }),
+    )
+    const { result } = renderHook(() => useResolvedAutoApprove(), { wrapper })
+    await waitFor(() => expect(result.current.resolved).toBe(true))
   })
 })

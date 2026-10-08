@@ -95,7 +95,7 @@ func (al *AgentLoop) TaskAssigneeCannotFinish(agentID string, judged []task.Acce
 		// itself applies — this pre-run gate and the Judge must never
 		// disagree, see TestTaskReadiness_CheckRunnerPolicyMatchesTheJudge.
 		if policy := machineCheckRunnerPolicy(inst); policy != string(config.ToolPolicyAllow) &&
-			!al.machineCheckAskPolicyAcceptable(agentID, policy) {
+			!al.machineCheckAskPolicyAcceptable(policy) {
 			problems = append(problems, assigneeCannotRunChecksText(name, policy))
 		}
 	}

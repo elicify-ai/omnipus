@@ -237,7 +237,7 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 // ActiveAgentID at launch time), so this reads the committed truth instead
 // of re-resolving a possibly-stale copy. Best-effort, matching
 // publishSteeredLaunch's own lifecycle.Load immediately below it: a read
-// failure here leaves the child on its own agent-level/global Auto defaults
+// failure here leaves the child on the global Auto default
 // rather than failing an already-committed launch.
 func (l *SteerLauncher) inheritDelegatePermissions(lifecycle *session.LifecycleStore, parentSessionID, childSessionID string) {
 	if l == nil || l.al == nil || lifecycle == nil || parentSessionID == "" || childSessionID == "" {
