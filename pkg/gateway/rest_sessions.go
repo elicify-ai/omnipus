@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // jsonSessionDetail writes a response that conforms to the gen.SessionDetail wire
@@ -53,7 +54,7 @@ func jsonSessionDetail(
 	ls *session.LifecycleStore,
 ) {
 	genSession := unifiedMetaToGenSession(meta)
-	genSession.LifecycleState, genSession.StopNote = computeSessionLifecycle(ls, meta.ID)
+	attachSessionRuntimeFields(&genSession, ls, meta.ID)
 	if messages == nil {
 		messages = []session.TranscriptEntry{}
 	}
@@ -356,16 +357,16 @@ func computeSessionProtected(homePath string, m *session.UnifiedMeta) *bool {
 // LifecycleRecord (the common case for an ordinary chat session), exactly
 // matching Session.yaml's "absent for a session with no lifecycle record"
 // contract. Never panics or errors on either degenerate input.
-func computeSessionLifecycle(ls *session.LifecycleStore, id string) (*gen.SessionLifecycleState, *stopNoteEntry) {
+func computeSessionLifecycle(ls *session.LifecycleStore, id string) (*gen.SessionLifecycleState, *stopNoteEntry, *gen.SessionExecution) {
 	if ls == nil || id == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	rec, err := ls.Load(id)
 	if err != nil {
 		if !errors.Is(err, session.ErrLifecycleNotFound) {
 			slog.Warn("rest: compute session lifecycle: load failed", "session_id", id, "error", err)
 		}
-		return nil, nil
+		return nil, nil, nil
 	}
 	state := gen.SessionLifecycleState(session.LifecycleRecordToDisplay(rec))
 	var note *stopNoteEntry
@@ -383,7 +384,29 @@ func computeSessionLifecycle(ls *session.LifecycleStore, id string) (*gen.Sessio
 			Seq:   int64(rec.StopNote.Seq),
 		}
 	}
-	return &state, note
+	var execution *gen.SessionExecution
+	switch rec.State {
+	case session.LifecycleQueued:
+		v := gen.SessionExecutionQueued
+		execution = &v
+	case session.LifecycleRunning:
+		v := gen.SessionExecutionRunning
+		execution = &v
+	}
+	return &state, note, execution
+}
+
+// attachSessionRuntimeFields sets lifecycle_state, stop_note, execution, and
+// background_command_count from the same reads the list and the detail GET use.
+// execution is omitted unless the lifecycle record is queued or running.
+// background_command_count is omitted when no process table is wired; a wired
+// table sends 0 when this session owns no running background command.
+func attachSessionRuntimeFields(s *gen.Session, ls *session.LifecycleStore, id string) {
+	s.LifecycleState, s.StopNote, s.Execution = computeSessionLifecycle(ls, id)
+	if sm := tools.GetSharedSessionManager(); sm != nil {
+		n := sm.CountRunningBackgroundCommands(id)
+		s.BackgroundCommandCount = &n
+	}
 }
 
 // u18DefaultSessionPageLimit is the page size GET /api/v1/sessions uses when
@@ -501,7 +524,7 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 		// Sub-agent control plane ADR D4/MAJ-009: lifecycle_state/stop_note,
 		// absent when this session has no LifecycleRecord (the common case
 		// for an ordinary chat session).
-		s.LifecycleState, s.StopNote = computeSessionLifecycle(lifecycleStore, m.ID)
+		attachSessionRuntimeFields(&s, lifecycleStore, m.ID)
 		genSessions = append(genSessions, s)
 	}
 
@@ -681,7 +704,7 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 	s := unifiedMetaToGenSession(meta)
-	s.LifecycleState, s.StopNote = computeSessionLifecycle(a.agentLoop.GetSessionLifecycleStore(), meta.ID)
+	attachSessionRuntimeFields(&s, a.agentLoop.GetSessionLifecycleStore(), meta.ID)
 	jsonOK(w, s)
 }
 
@@ -963,7 +986,7 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 	// are minted by the delegate/task paths, not this handler) — this call
 	// degrades to both fields absent in that common case, same as every
 	// other producer of gen.Session.
-	s.LifecycleState, s.StopNote = computeSessionLifecycle(a.agentLoop.GetSessionLifecycleStore(), meta.ID)
+	attachSessionRuntimeFields(&s, a.agentLoop.GetSessionLifecycleStore(), meta.ID)
 	jsonCreated(w, s)
 }
 
