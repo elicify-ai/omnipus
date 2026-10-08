@@ -499,3 +499,44 @@ func TestBoardTaskRunStop_IsNotRefused(t *testing.T) {
 		t.Fatal("the board task's turn was not interrupted by the Stop")
 	}
 }
+
+// acceptStopWithoutInterrupting accepts a real Stop on sessionID (fence stamped,
+// run barrier bound through the real canceller) but does not interrupt the turn
+// in flight, so the turn ends on its own and the Stop meets the run BETWEEN
+// turns.
+func (f *taskStopFixture) acceptStopWithoutInterrupting(t *testing.T) {
+	t.Helper()
+	report, err := f.al.steerCanceller().StopTurnsWithCause(context.Background(), f.sessionID,
+		steer.Principal{Kind: steer.PrincipalKindHuman, ID: "person"}, false, session.StopCauseStop,
+		func(ctx context.Context, id string, generation int) (GenerationCancelResult, error) {
+			_, _, retainErr := f.al.retainSelectedStop(ctx, id, generation, nil)
+			return GenerationCancelResult{Found: true}, retainErr
+		})
+	require.NoError(t, err)
+	require.Equal(t, []string{f.sessionID}, report.Reached)
+	require.Empty(t, report.Unreachable)
+}
+
+// TestTaskRunStop_AcceptedBetweenTurns_EndsStoppedNotRestarted: a Stop accepted
+// while the goal-driven run has no turn in flight meets the next turn's
+// admission, which refuses it. That refusal must read as the Stop it is - the
+// task ends "Stopped:" - and never as a broken run that restarts the task in a
+// fresh session or spends an attempt.
+func TestTaskRunStop_AcceptedBetweenTurns_EndsStoppedNotRestarted(t *testing.T) {
+	for _, front := range []taskStopFront{taskFrontExecute, taskFrontLauncher} {
+		t.Run(string(front), func(t *testing.T) {
+			f := newTaskStopFixture(t, front, false, "progress so far, no claim yet", "the next turn must never run")
+			f.start(t, front)
+			f.acceptStopWithoutInterrupting(t)
+			f.provider.open(0) // turn 1 ends by itself; the run now goes for turn 2
+
+			f.awaitRunJoined(t)
+			f.requireLifecycleStopped(t)
+			f.requireTaskEndedStoppedNotRestarted(t)
+			require.Len(t, f.provider.Requests(), 1, "no turn may run after the accepted Stop")
+			got, err := f.al.taskStore.Get(f.task.ID)
+			require.NoError(t, err)
+			require.Equal(t, 0, got.AttemptCount, "a Stop spends no attempt")
+		})
+	}
+}

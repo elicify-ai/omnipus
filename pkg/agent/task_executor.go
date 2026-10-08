@@ -2059,7 +2059,7 @@ func (al *AgentLoop) processTaskDirect(
 		return al.processTaskDirectExternalCLI(taskCtx, ag, prompt, sessionKey, taskChatID, delegationDepth)
 	}
 
-	return al.runAgentLoop(taskCtx, ag, processOptions{
+	resp, runErr := al.runAgentLoop(taskCtx, ag, processOptions{
 		SessionKey:             sessionKey,
 		Channel:                "webchat",
 		ChatID:                 taskChatID,
@@ -2099,6 +2099,15 @@ func (al *AgentLoop) processTaskDirect(
 		// was the gap.
 		WorkspaceID: tools.ToolWorkspaceID(taskCtx),
 	})
+	// A Stop accepted while the run had no turn in flight is met by the next
+	// turn's admission as a cancelled dispatch. For a run that owns an
+	// execution that refusal IS the Stop: report it as the stopped turn it is,
+	// so the run loop ends the task "Stopped" instead of reading a broken run
+	// and restarting the task in a fresh session.
+	if runErr != nil && errors.Is(runErr, steer.ErrDispatchCancelled) && taskExecutionFor(taskCtx, taskChatID) != nil {
+		return resp, fmt.Errorf("%w: %w", ErrTurnCanceled, runErr)
+	}
+	return resp, runErr
 }
 
 // ExecuteBoardTask dispatches a GTD board task to the agent loop in a background
