@@ -28,7 +28,9 @@ func TestAgentIdentity_CreateDefaultsOmnipusGeneralGrey(t *testing.T) {
 	assert.Equal(t, "general", body["role"])
 	assert.Equal(t, "#9CA3AF", body["color"])
 
-	saved := savedAgent(t, api, body["id"].(string))
+	id, idOK := body["id"].(string)
+	require.True(t, idOK, "create response id must be a string, got %#v", body["id"])
+	saved := savedAgent(t, api, id)
 	assert.Equal(t, "Omnipus", saved["figure"])
 	assert.Equal(t, "general", saved["role"])
 	assert.Equal(t, "#9CA3AF", saved["color"])
@@ -77,7 +79,9 @@ func TestAgentIdentity_CreateNormalisesHexAndKeepsIcon(t *testing.T) {
 	assert.Equal(t, "#FB923C", body["color"])
 	assert.Equal(t, "magnifying-glass", body["icon"], "legacy icon is stored as sent; the hyphenated name is not a role")
 
-	saved := savedAgent(t, api, body["id"].(string))
+	id, idOK := body["id"].(string)
+	require.True(t, idOK, "create response id must be a string, got %#v", body["id"])
+	saved := savedAgent(t, api, id)
 	assert.Equal(t, "Woman", saved["figure"])
 	assert.Equal(t, "writer", saved["role"])
 	assert.Equal(t, "#FB923C", saved["color"])
@@ -96,7 +100,9 @@ func TestAgentIdentity_UpdateOmittedLeavesStoredAndRejectsBadValues(t *testing.T
 		"icon":"magnifying-glass"
 	}`)
 	require.Equal(t, http.StatusCreated, created.Code, "body: %s", created.Body.String())
-	id := decodeObject(t, created.Body.Bytes())["id"].(string)
+	createdBody := decodeObject(t, created.Body.Bytes())
+	id, idOK := createdBody["id"].(string)
+	require.True(t, idOK, "create response id must be a string, got %#v", createdBody["id"])
 
 	omit := putAgent(t, api, id, `{"description":"renamed only"}`)
 	require.Equal(t, http.StatusOK, omit.Code, "body: %s", omit.Body.String())

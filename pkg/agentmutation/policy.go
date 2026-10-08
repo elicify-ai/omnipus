@@ -25,7 +25,7 @@ func (e *FieldError) Error() string {
 }
 
 var knownFields = map[string]struct{}{
-	"name": {}, "description": {}, "color": {}, "icon": {}, "type": {}, "locked": {}, "soul": {},
+	"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "icon": {}, "type": {}, "locked": {}, "soul": {},
 	"skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "model": {}, "provider": {},
 	"fallback_models": {}, "context_window_override": {}, "model_params": {}, "max_tool_iterations": {},
 	"memory_enabled": {}, "default": {}, "voice": {}, "executor": {}, "cli_path": {},
@@ -45,9 +45,9 @@ var operatorOnly = map[string]struct{}{"auto_approve_disabled": {}}
 const operatorOnlyReason = "only the operator can change this safety setting; an agent cannot change it for itself or another agent"
 
 var alwaysImmutable = map[string]struct{}{"type": {}, "locked": {}}
-var ordinaryProtected = map[string]struct{}{"name": {}, "description": {}, "color": {}, "icon": {}, "type": {}, "locked": {}, "soul": {}, "executor": {}}
+var ordinaryProtected = map[string]struct{}{"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "icon": {}, "type": {}, "locked": {}, "soul": {}, "executor": {}}
 var hiddenProtected = map[string]struct{}{
-	"name": {}, "description": {}, "color": {}, "icon": {}, "type": {}, "locked": {}, "skills": {}, "mcp_servers": {},
+	"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "icon": {}, "type": {}, "locked": {}, "skills": {}, "mcp_servers": {},
 	"tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {}, "executor": {}, "default": {}, "voice": {},
 }
 var externalUnsupported = map[string]struct{}{
@@ -71,7 +71,7 @@ type FieldDescriptor struct {
 	Reason   string
 }
 
-var describedFields = []string{"name", "description", "color", "icon", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "default", "voice", "type", "auto_approve_disabled"}
+var describedFields = []string{"name", "description", "figure", "role", "color", "icon", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "default", "voice", "type", "auto_approve_disabled"}
 
 // FieldDescriptors is the AGENT view of which fields may be changed (the
 // sysagent read tool): operatorOnly fields are listed as not editable.
