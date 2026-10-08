@@ -6570,6 +6570,14 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/AgentStatusIndicator.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useChatAgents.ts",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/ChatScreen.tsx",
       "lane": 3
     },
@@ -7336,6 +7344,26 @@
     {
       "source": "src/components/search/SearchModal.tsx",
       "lane": 8
+    },
+    {
+      "source": "src/components/sessions/SessionGroupHeaders.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/sessions/SessionOverviewList.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/sessions/SessionRow.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/sessions/sessionLabels.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/sessions/sessionOverview.ts",
+      "lane": 3
     },
     {
       "source": "src/components/sessions/SessionTree.tsx",

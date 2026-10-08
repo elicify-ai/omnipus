@@ -1,7 +1,6 @@
 import { useId } from 'react'
 
-import type { AgentColor, AgentFigure, AgentRole } from '@/lib/api/generated/openapi-types'
-import { FIGURE_ART } from '@/lib/agentIdentity'
+import { FIGURE_ART, type AgentIconColor, type AgentIconFigure, type AgentIconRole } from '@/design-system/agent-identity'
 import { cn } from '@/lib/utils'
 
 import { agentIconInner } from '@/lib/agentIconArt'
@@ -10,10 +9,10 @@ type AgentIconSize = 18 | 26 | 40 | 48
 type AgentIconMotion = 'none' | 'thinking' | 'working' | 'waiting'
 
 type AgentIconBase = {
-  figure: AgentFigure
-  role: AgentRole
+  figure: AgentIconFigure
+  role: AgentIconRole
   /** Palette ink. Fully opaque. Passed through as currentColor. */
-  color: AgentColor
+  color: AgentIconColor
   size: AgentIconSize
   /** Default `none`. The icon does not own the state phrase. */
   motion?: AgentIconMotion
@@ -60,7 +59,7 @@ const GLOW_CLASS_FORCED = {
 const SHEEN_CLASS = 'agent-icon-sheen pointer-events-none absolute inset-y-0 left-0 w-1/3 animate-[agent-icon-sheen_2.4s_ease-in-out_infinite] motion-reduce:animate-none'
 const SHEEN_CLASS_FORCED = 'agent-icon-sheen pointer-events-none absolute inset-y-0 left-0 w-1/3 animate-[agent-icon-sheen_2.4s_ease-in-out_infinite]'
 
-function withBadgeRole(markup: string, role: AgentRole) {
+function withBadgeRole(markup: string, role: AgentIconRole) {
   const needle = '<g transform="translate('
   const index = markup.lastIndexOf(needle)
   if (index < 0) return markup

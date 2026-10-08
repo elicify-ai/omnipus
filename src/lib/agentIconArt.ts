@@ -6,10 +6,9 @@
 // reproduces the wireframe inner SVG. Mask cutouts keep the wireframe's
 // #fff/#000 literals; they are silhouette data, not chrome, and are not paint
 // attributes. Do not recolour them.
-import type { AgentRole } from '@/lib/api/generated/openapi-types'
+import type { AgentIconRole } from '@/design-system/agent-identity'
 
-const ART_KEYS = ['robotSolid', 'man', 'woman', 'octopus'] as const
-type AgentIconArtKey = (typeof ART_KEYS)[number]
+type AgentIconArtKey = 'robotSolid' | 'man' | 'woman' | 'octopus'
 
 const FIGURES: Record<AgentIconArtKey, string> = {
   "robotSolid": "<defs><mask id=\"MASK_ID\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"256\" height=\"256\"><rect width=\"256\" height=\"256\" fill=\"#fff\"/><circle cx=\"196\" cy=\"196\" r=\"66\" fill=\"#000\"/></mask></defs><g mask=\"url(#MASK_ID)\"><g transform=\"translate(0 2) scale(0.86)\"><mask id=\"MASK_ID_face\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"256\" height=\"256\"><rect width=\"256\" height=\"256\" fill=\"#fff\"/><rect x=\"96\" y=\"68\" width=\"22\" height=\"30\" rx=\"6\" fill=\"#000\"/><rect x=\"138\" y=\"68\" width=\"22\" height=\"30\" rx=\"6\" fill=\"#000\"/></mask><rect x=\"68\" y=\"30\" width=\"120\" height=\"114\" rx=\"30\" mask=\"url(#MASK_ID_face)\"/><path d=\"M48 226 V204 C48 178 80 162 128 162 C176 162 208 178 208 204 V226 Z\"/></g></g>",
@@ -50,10 +49,10 @@ const BADGES = {
   "documents": "<g transform=\"translate(140 140) scale(0.44)\"><path d=\"M216.49,79.52l-56-56A12,12,0,0,0,152,20H56A20,20,0,0,0,36,40V216a20,20,0,0,0,20,20H200a20,20,0,0,0,20-20V88A12,12,0,0,0,216.49,79.52ZM160,57l23,23H160ZM60,212V44h76V92a12,12,0,0,0,12,12h48V212Zm112-80a12,12,0,0,1-12,12H96a12,12,0,0,1,0-24h64A12,12,0,0,1,172,132Zm0,40a12,12,0,0,1-12,12H96a12,12,0,0,1,0-24h64A12,12,0,0,1,172,172Z\"></path></g>",
   "personal": "<g transform=\"translate(140 140) scale(0.44)\"><path d=\"M228,128a12,12,0,0,1-12,12H128a12,12,0,0,1,0-24h88A12,12,0,0,1,228,128ZM128,76h88a12,12,0,0,0,0-24H128a12,12,0,0,0,0,24Zm88,104H128a12,12,0,0,0,0,24h88a12,12,0,0,0,0-24ZM79.51,39.51,56,63l-7.51-7.52a12,12,0,0,0-17,17l16,16a12,12,0,0,0,17,0l32-32a12,12,0,0,0-17-17Zm0,64L56,127l-7.51-7.52a12,12,0,1,0-17,17l16,16a12,12,0,0,0,17,0l32-32a12,12,0,0,0-17-17Zm0,64L56,191l-7.51-7.52a12,12,0,1,0-17,17l16,16a12,12,0,0,0,17,0l32-32a12,12,0,0,0-17-17Z\"></path></g>",
   "science": "<g transform=\"translate(140 140) scale(0.44)\"><path d=\"M225.15,197.71,164,95.81V44h4a12,12,0,0,0,0-24H88a12,12,0,0,0,0,24h4V95.81L30.85,197.71A20,20,0,0,0,48,228H208a20,20,0,0,0,17.15-30.29ZM140,44V99.14a12,12,0,0,0,1.71,6.17l35.13,58.54c-10.79.86-25.15-1.31-43.42-10.56-14-7.08-27.46-11.33-40.27-12.76l21.14-35.22A12,12,0,0,0,116,99.14V44ZM55.06,204,79,164.19c13-1.11,27.62,2.42,43.62,10.52,19.61,9.92,36.25,13.31,49.85,13.31A75.44,75.44,0,0,0,190.11,186l10.83,18Z\"></path></g>"
-} satisfies Record<AgentRole, string>
+} satisfies Record<AgentIconRole, string>
 
 /** Inner SVG (no outer <svg>) for one figure and role. Mask ids are rewritten so two marks on one page do not collide. */
-export function agentIconInner(art: AgentIconArtKey, role: AgentRole, maskId: string): string {
+export function agentIconInner(art: AgentIconArtKey, role: AgentIconRole, maskId: string): string {
   const figure = FIGURES[art]
   const badge = BADGES[role]
   if (!figure || !badge) {
