@@ -124,6 +124,48 @@ func TestAgentIdentity_UpdateOmittedLeavesStoredAndRejectsBadValues(t *testing.T
 	state, err := agentstore.New(api.homePath).ReadState(id)
 	require.NoError(t, err)
 	assert.Equal(t, before.Revision, state.Revision, "rejected update is zero-write")
+
+	// ARCH-DECISIONS 1.2/1.4: each supplied identity value belongs to its
+	// closed set. One invalid field must not hide another field's missing
+	// guard. The other identity values and description are valid but changed,
+	// so a partial write cannot pass the state/revision oracle.
+	// Error-copy literals characterize the existing published validation API;
+	// the semantic rejection/no-write oracles come from the architecture.
+	cases := []struct {
+		name, body, errorText string
+	}{
+		{"invalid figure alone", `{"figure":"octopus","role":"writer","color":"#22D3EE","description":"must not save"}`, "figure must be Robot, Man, Woman, or Omnipus"},
+		{"invalid role alone", `{"figure":"Woman","role":"Developer","color":"#22D3EE","description":"must not save"}`, "role must be one of the curated role slugs"},
+		{"invalid color alone", `{"figure":"Woman","role":"writer","color":"#123456","description":"must not save"}`, "color must be one of the ten identity colours"},
+		{"empty figure", `{"figure":"","role":"writer","color":"#22D3EE"}`, "figure must be Robot, Man, Woman, or Omnipus"},
+		{"empty role", `{"figure":"Woman","role":"","color":"#22D3EE"}`, "role must be one of the curated role slugs"},
+		{"empty color", `{"figure":"Woman","role":"writer","color":""}`, "color must be one of the ten identity colours"},
+		{"null figure", `{"figure":null,"role":"writer","color":"#22D3EE"}`, "figure must be Robot, Man, Woman, or Omnipus"},
+		{"null role", `{"figure":"Woman","role":null,"color":"#22D3EE"}`, "role must be one of the curated role slugs"},
+		{"null color", `{"figure":"Woman","role":"writer","color":null}`, "color must be one of the ten identity colours"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// A prior rejected case must not supply state to this one, even
+			// while the suite is red and the implementation partially writes.
+			api := buildExecutorTestAPI(t)
+			created := postAgent(t, api, `{"name":"Isolated Editable","type":"Main","soul":"editable-soul","figure":"Man","role":"developer","color":"#3B82F6","icon":"magnifying-glass"}`)
+			require.Equal(t, http.StatusCreated, created.Code, "body: %s", created.Body.String())
+			id, ok := decodeObject(t, created.Body.Bytes())["id"].(string)
+			require.True(t, ok, "created identity id must be a string")
+			storedBefore := savedAgent(t, api, id)
+			stateBefore, readErr := agentstore.New(api.homePath).ReadState(id)
+			require.NoError(t, readErr)
+			rejected := putAgent(t, api, id, tc.body)
+			assert.Equal(t, http.StatusBadRequest, rejected.Code, "invalid identity must be rejected; body: %s", rejected.Body.String())
+			assert.Equal(t, "application/json", rejected.Header().Get("Content-Type"))
+			assert.Equal(t, map[string]any{"error": tc.errorText}, decodeObject(t, rejected.Body.Bytes()), "specific ErrorResponse, not unknown-field rejection")
+			assert.Equal(t, storedBefore, savedAgent(t, api, id), "all stored fields survive independently invalid update")
+			stateAfter, readErr := agentstore.New(api.homePath).ReadState(id)
+			require.NoError(t, readErr)
+			assert.Equal(t, stateBefore.Revision, stateAfter.Revision, "invalid identity update is zero-write")
+		})
+	}
 }
 
 func TestAgentIdentity_UpdateNormalisesPaletteHex(t *testing.T) {
