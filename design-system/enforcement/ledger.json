@@ -5004,13 +5004,6 @@
     },
     {
       "ruleId": "ts-colors/extension-boundary",
-      "path": "src/components/ui/agent-icon.test.tsx",
-      "syntax": "icon#svg-attribute.color<-AgentColor.options[9]",
-      "reason": "Category: user-authored colours — test ink is the last generated AgentColor option (Grey), not a handwritten hex. The attribute is the AgentIcon color prop.",
-      "owner": "user-authored colours exception registry"
-    },
-    {
-      "ruleId": "ts-colors/extension-boundary",
       "path": "src/components/agents/AgentFormFields.tsx",
       "syntax": "Swatch#dom-style.backgroundColor<-hex",
       "reason": "Category: user-authored colours — a palette swatch fills itself from its own hex argument, one of the ten generated AgentColor options. The argument is read unchanged.",

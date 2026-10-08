@@ -267,7 +267,7 @@ export function BehaviorFields({
 
 export interface AvatarColorPickerProps {
   /** Currently selected color (hex). */
-  value: string
+  value: string | null | undefined
   /** Called with the chosen color (hex) on click. */
   onChange: (color: string) => void
   /** Optional testid prefix; the full id is `${testidPrefix}-${semanticName}`. */
