@@ -93,17 +93,17 @@ describe('TaskCard — orange "Cancelled" vs red "Failed" marker (ADR-052 FR-015
         <TaskCard task={baseTask({ status: 'failed', cancel_reason: 'stopped_by_user' })} onClick={vi.fn()} />
       </QueryClientProvider>,
     )
-    const cancelledColor = screen.getByText('Cancelled').style.color
+    const beforePaint = getComputedStyle(screen.getByText('Cancelled')).color
 
     rerender(
       <QueryClientProvider client={client}>
         <TaskCard task={baseTask({ status: 'failed' })} onClick={vi.fn()} />
       </QueryClientProvider>,
     )
-    const failedColor = screen.getByText('Failed').style.color
-    expect(cancelledColor).not.toBe(failedColor)
-    expect(cancelledColor).not.toBe('')
-    expect(failedColor).not.toBe('')
+    const afterPaint = getComputedStyle(screen.getByText('Failed')).color
+    expect(beforePaint).not.toBe(afterPaint)
+    expect(beforePaint).not.toBe('')
+    expect(afterPaint).not.toBe('')
   })
 
   // Gate-2 finding #1 regression: TaskCard.tsx:236 builds the pill's tint

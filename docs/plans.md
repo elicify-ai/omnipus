@@ -16,15 +16,15 @@ You see plans in the **Tasks** panel of a workspace, as tiles in the collapsible
 
 The Plans band starts **collapsed** each time the Tasks panel opens. Click **Plans** to expand or collapse its horizontal tile strip, on a darker background. The header and its controls stay visible while collapsed. Completed plans are hidden by default; use the **Show done (N)** checkbox in the **Plans header** to include them. **New Plan** shares the same header. The checkbox appears only when there are completed plans, and its count tells you how many it can reveal. Checking it expands the band and reveals the completed tiles. There is no separate control row between the header and the tiles. When more tiles are off-screen, **scroll for more →** below the strip signals that you can scroll sideways, including on a phone. Long plan titles wrap fully within the tile, normally at spaces. A word or URL longer than the tile's available width breaks only as a last resort. The whole title is visible without hovering.
 
-Every plan tile has an **info icon** showing its full title, status, progress (done/total), owner agent and last updated time. Click or tap the icon, or press **Enter** or **Space** while it is focused. The details panel appears above scroll areas and closes with **Escape** or a click/tap outside. It does not select the plan. Selecting the tile's title or body still filters the tasks and opens Graph.
+Every plan tile has an **info icon** showing its full title, status, progress (done/total), owner agent and last updated time. Hover over the icon, focus it with the keyboard, or tap it on touch. You can move into the details panel to read it. The panel appears above scroll areas and closes when you move away, press **Escape**, or click/tap outside. It does not select the plan. Selecting the tile's title or body still filters the tasks and opens Graph.
 
-Graph opens at the top of the map, with its first card fully visible. Its zoom controls sit below the map rather than on top of cards. Graph task titles use a fixed two-line slot with ellipsis. Task details use the same click-only info icon, with full title, status, agent, tags, plan and update time, and **Open task** inside it. Hover and focus alone do not open details. Metadata is plain text rather than pills; eligible actions stay visible without hovering.
+Graph opens at the top of the map, with its first card fully visible. Its zoom controls sit below the map rather than on top of cards. Graph task titles use a fixed two-line slot with ellipsis. Task details use the same info-icon hover, keyboard-focus and touch-tap interaction, with full title, status, agent, tags, plan and update time, and **Open task** inside it. Hovering the rest of the task node does not open details. Metadata is plain text rather than pills; eligible actions stay visible without hovering.
 
 A running plan tile shows a spinning arrow without a token count. In the plan's Graph view, each **In Progress** task node uses the same arrow. Board and List running-task indicators also omit token counts; Chat's existing token counter is unchanged. With reduced motion enabled, the arrow stays visible but does not spin.
 
 A plan moves through five states. This table shows what each one means and what you can do from the tile.
 
-| State | Badge | What it means | Your action |
+| State | Status appearance | What it means | Your action |
 |---|---|---|---|
 | Draft | Grey | Authored, not running | Execute |
 | Approved | Blue | Accepted, waiting for a free run slot | Stop |

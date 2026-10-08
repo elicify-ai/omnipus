@@ -22,7 +22,7 @@ beforeEach(() => {
 })
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
-it('T15 task details open only from the info icon in every view, without activating the task, and dismiss on Escape/outside click', async () => {
+it('T15 corrected task details open only from info hover in every view, without activating the task, and dismiss on Escape/outside click', async () => {
   const user = userEvent.setup()
   const task = layoutTask({ plan_id: 'plan-layout', tags: ['docs', 'release'] })
   for (const view of ['board', 'list', 'graph']) {
@@ -36,7 +36,7 @@ it('T15 task details open only from the info icon in every view, without activat
     fireEvent.pointerEnter(screen.getByText(task.title))
     fireEvent.focus(info)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    fireEvent.click(info)
+    fireEvent.pointerEnter(info, { pointerType: 'mouse' })
     const details = await screen.findByRole('dialog', { name: 'Task details' })
     for (const text of [task.title, 'Inbox', 'Ray', 'docs', 'release', 'Launch plan']) expect(within(details).getByText(text)).toBeVisible()
     expect(details.querySelector('time')).toHaveAttribute('datetime', task.updated_at)
@@ -44,7 +44,7 @@ it('T15 task details open only from the info icon in every view, without activat
     expect(onOpen, `${view}: info activation must not open the task`).not.toHaveBeenCalled()
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog', { name: 'Task details' })).not.toBeInTheDocument()
-    fireEvent.click(info)
+    fireEvent.pointerEnter(info, { pointerType: 'mouse' })
     expect(await screen.findByRole('dialog', { name: 'Task details' })).toBeVisible()
     await user.click(document.body)
     expect(screen.queryByRole('dialog', { name: 'Task details' })).not.toBeInTheDocument()

@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within, fireEvent } from '@testing-library/react'
 import { TaskCard } from './TaskCard'
 import type { Task } from '@/lib/api'
 
@@ -69,9 +69,12 @@ describe('TaskCard — tag chips (replaces the milestone chip)', () => {
     expect(screen.queryByText(/^milestone$/i)).toBeNull()
   })
 
-  it('a chip carries the full tag as its title (tooltip) for truncation', () => {
+  it('T15 exposes the full long tag from info hover, without a whole-card hover tooltip', async () => {
     const longTag = 'a'.repeat(64)
     render(<TaskCard task={makeTask({ tags: [longTag] })} onClick={() => {}} showActions={false} />)
-    expect(screen.getByTitle(longTag)).toBeInTheDocument()
+    expect(screen.getByText(longTag)).not.toHaveAttribute('title')
+    fireEvent.pointerEnter(screen.getByRole('button', { name: 'Task details: Sample task' }), { pointerType: 'mouse' })
+    const details = await screen.findByRole('dialog', { name: 'Task details' })
+    expect(within(details).getByText(longTag)).toBeVisible()
   })
 })

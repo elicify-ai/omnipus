@@ -219,10 +219,10 @@ describe('BoardView narrow — SP-34: cards stacked by status, single column', (
     expect(row).not.toHaveClass('flex-col')
     expect(within(row).getByText('Alpha card')).toBeInTheDocument()
     expect(within(row).getByText('Beta card')).toBeInTheDocument()
-    // T3 adds tooltip wrappers; count the actual card homes, not ancestor textContent copies.
+    // T15 removes native hover titles; count actual card homes and caption text.
     const cards = Array.from(row.querySelectorAll('[role="button"]'))
     expect(cards).toHaveLength(2)
-    expect(cards.map((card) => card.querySelector('p[title]')?.textContent)).toEqual(['Alpha card', 'Beta card'])
+    expect(cards.map((card) => card.querySelector('p.line-clamp-2')?.textContent)).toEqual(['Alpha card', 'Beta card'])
   })
 })
 

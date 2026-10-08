@@ -145,8 +145,6 @@ interface TaskCardProps {
   showActions?: boolean
   /** The drag overlay is visual-only and must not expose details controls. */
   showDetails?: boolean
-  /** T18 visual comparison; plain text is the default, never a saved preference. */
-  priorityPresentation?: 'plain' | 'badge'
 }
 
 export function TaskCard({
@@ -159,7 +157,6 @@ export function TaskCard({
   drag,
   showActions = true,
   showDetails = true,
-  priorityPresentation = 'plain',
 }: TaskCardProps) {
   const priority = task.priority ?? 3
   // FR-022/SP-41 with founder decisions PI1/PI2/PI3 (2026-10-05):
@@ -251,7 +248,7 @@ export function TaskCard({
       <div data-task-card-content={showDetails ? 'item' : 'visual'} className="flex min-w-0 flex-col gap-[var(--space-1)] p-[var(--space-2)]">
       {/* Info and eligible actions are always visible, isolated from open/drag. */}
       <div className="flex min-w-0 items-start gap-[var(--space-1)]">
-        <PriorityBadge priority={priority} className={cn('shrink-0 text-[length:var(--type-caption-size)] font-bold leading-tight', priorityPresentation === 'plain' ? 'bg-transparent p-0' : 'rounded px-[var(--space-1)] py-[var(--space-0-5)]')} />
+        <PriorityBadge priority={priority} className="shrink-0 bg-transparent p-0 text-[length:var(--type-caption-size)] font-bold leading-tight" />
         <WordBoundaryText as="p" text={task.title} className="h-[calc(var(--type-body-compact-size)*var(--type-body-compact-line-height)*2)] min-w-0 max-w-full flex-1 line-clamp-2 whitespace-normal break-normal wrap-break-word hyphens-none text-[length:var(--type-body-compact-size)] font-medium leading-[var(--type-body-compact-line-height)] text-[var(--color-secondary)]" />
         {showDetails && <TaskDetailsPopover task={task} plans={plans} agents={agents} onOpenTask={onClick} />}
         {showActions && <TaskActionButton task={task} />}
@@ -260,11 +257,12 @@ export function TaskCard({
         <span className="inline-flex items-center gap-[var(--space-1)]" style={{ color: taskDisplayColor(task) }}>
           {running ? <RunningIndicator /> : <span aria-hidden="true">●</span>}
           <span>{taskDisplayLabel(task)}</span>
+          {(task.agent_name || task.agent_id || todos.length > 0 || tags.length > 0) && <span aria-hidden="true" className="text-[var(--color-muted)]">·</span>}
         </span>
-        {(task.agent_name || task.agent_id) && <><span aria-hidden="true">·</span><span className="min-w-0 break-normal wrap-break-word">{task.agent_name ?? task.agent_id}</span></>}
-        {todos.length > 0 && <><span aria-hidden="true">·</span><span className="inline-flex items-center gap-[var(--space-1)]"><CheckSquare size={11} aria-hidden="true" /><span>{doneTodos}/{todos.length}</span></span></>}
-        {visibleTags.map((tag) => <span key={tag} className="inline-flex min-w-0 max-w-full items-center gap-[var(--space-1)]"><span aria-hidden="true">·</span><WordBoundaryText text={tag} className="break-normal wrap-break-word" /></span>)}
-        {overflowTagCount > 0 && <span>· +{overflowTagCount}</span>}
+        {(task.agent_name || task.agent_id) && <span className="inline-flex min-w-0 max-w-full items-center gap-[var(--space-1)]"><span className="min-w-0 break-normal wrap-break-word">{task.agent_name ?? task.agent_id}</span>{(todos.length > 0 || tags.length > 0) && <span aria-hidden="true">·</span>}</span>}
+        {todos.length > 0 && <span className="inline-flex items-center gap-[var(--space-1)]"><CheckSquare size={11} aria-hidden="true" /><span>{doneTodos}/{todos.length}</span>{tags.length > 0 && <span aria-hidden="true">·</span>}</span>}
+        {visibleTags.map((tag, index) => <span key={tag} className="inline-flex min-w-0 max-w-full items-center gap-[var(--space-1)]"><WordBoundaryText text={tag} className="break-normal wrap-break-word" />{(index < visibleTags.length - 1 || overflowTagCount > 0) && <span aria-hidden="true">·</span>}</span>)}
+        {overflowTagCount > 0 && <span>+{overflowTagCount}</span>}
       </div>
 
       {/* Delegation roll-up badge (only on parent cards with active sub-agent runs) */}

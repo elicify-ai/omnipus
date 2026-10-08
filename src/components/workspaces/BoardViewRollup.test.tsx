@@ -143,7 +143,7 @@ describe('BoardView delegation roll-up', () => {
     expect(avatar).toBeDefined()
   })
 
-  it('renders multiple avatars in a rollup', () => {
+  it('T18 renders every delegated agent as plain text in the rollup', () => {
     const parentWithRollup = baseTask({
       rollup: [
         { agent_id: 'ray', label: 'Research', status: 'in_progress' },
@@ -155,10 +155,12 @@ describe('BoardView delegation roll-up', () => {
 
     renderBoard([parentWithRollup], [agentRay, agentAva])
 
-    // Two avatars should be listed in the avatar row
-    const avatarList = screen.getByRole('list', { name: /sub-agent avatars/i })
-    const items = within(avatarList).getAllByRole('listitem')
+    // Same two agents and statuses remain accessible, without avatar pills.
+    const agentList = screen.getByRole('list', { name: 'Sub-agents' })
+    const items = within(agentList).getAllByRole('listitem')
     expect(items.length).toBe(2)
+    expect(within(agentList).getByLabelText('Ray — in_progress')).toHaveTextContent('Ray')
+    expect(within(agentList).getByLabelText('Ava — next')).toHaveTextContent('Ava')
   })
 
   it('does NOT render subtask cards as top-level cards in any column', () => {

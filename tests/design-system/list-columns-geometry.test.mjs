@@ -340,7 +340,7 @@ async function assertColumns(page, session, visible, label, observations) {
   }
   const data = await page.locator(PRIMARY_ROW).evaluate((row) => ({
     sameRow: row === globalThis.__listGeometryOriginalRow,
-    tags: [...row.cells[5].querySelectorAll('[data-task-tag]')].map((tag) => tag.lastElementChild.textContent),
+    tags: [...row.cells[5].querySelectorAll('[data-task-tag]')].map((tag) => tag.firstElementChild.textContent),
     updated: row.cells[7].textContent.trim(),
     initialUpdated: globalThis.__listGeometryInitialUpdated,
     title: row.querySelector('button[data-task-open]').textContent,

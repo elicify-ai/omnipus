@@ -422,10 +422,11 @@ function PlanFilterTile({
             <span className="tabular-nums">
               {memberDone}/{memberTotal}
             </span>
+            {owner && <span aria-hidden="true">·</span>}
           </span>
           {owner && (
             <span className="inline-flex min-w-0 max-w-full items-center gap-[var(--space-1)] whitespace-normal break-normal wrap-break-word text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-              <span aria-hidden="true">·</span><span>{owner.name.split('—')[0].trim()}</span>
+              <span>{owner.name.split('—')[0].trim()}</span>
             </span>
           )}
         </span>

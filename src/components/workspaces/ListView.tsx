@@ -505,9 +505,9 @@ function TaskRow({ task, agents, plans, onClick }: { task: Task; agents: AgentRe
       >
         {tags.length > 0 ? (
           <div className="flex max-w-[7rem] flex-wrap items-center gap-[var(--space-1)]">
-            {tags.slice(0, 2).map((tag) => (
+            {tags.slice(0, 2).map((tag, index) => (
               <span key={tag} data-task-tag="" className="inline-flex min-w-0 max-w-full items-center gap-[var(--space-1)] whitespace-normal break-normal wrap-break-word text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-                {tags.indexOf(tag) > 0 && <span aria-hidden="true">·</span>}<WordBoundaryText text={tag} />
+                <WordBoundaryText text={tag} />{index < Math.min(tags.length, 2) - 1 && <span aria-hidden="true">·</span>}
               </span>
             ))}
             {tags.length > 2 && <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">+{tags.length - 2}</span>}
