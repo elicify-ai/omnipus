@@ -139,7 +139,13 @@ func cancelPartialSummary(report steer.CancelReport) string {
 	// then fails, so one session can sit in both lists (and a session can be
 	// unreachable for more than one reason). It is unreachable, once.
 	unreachable := make(map[string]struct{}, len(report.Unreachable))
+	treeUnlisted := false
 	for _, item := range report.Unreachable {
+		if item.HelperTreeUnlisted {
+			// Not a failure of item.ID's own Stop: reported on its own below.
+			treeUnlisted = true
+			continue
+		}
 		unreachable[item.ID] = struct{}{}
 	}
 	stopped := make(map[string]struct{}, len(report.Reached))
@@ -148,8 +154,14 @@ func cancelPartialSummary(report steer.CancelReport) string {
 			stopped[id] = struct{}{}
 		}
 	}
-	return fmt.Sprintf("stopped %d of %d; %d unreachable",
-		len(stopped), len(stopped)+len(unreachable), len(unreachable))
+	summary := fmt.Sprintf("stopped %d of %d", len(stopped), len(stopped)+len(unreachable))
+	if len(unreachable) > 0 {
+		summary += fmt.Sprintf("; %d unreachable", len(unreachable))
+	}
+	if treeUnlisted {
+		summary += "; helper sessions could not be listed"
+	}
+	return summary
 }
 
 // cancelIncompleteSubtreeSummary answers a DIFFERENT question from

@@ -768,3 +768,21 @@ func TestExecuteTask_AdmissionRefusalReleasesTheDispatchSlot(t *testing.T) {
 	require.Equal(t, task.StatusFailed, got.Status, "the refused task is failed visibly, not left in_progress")
 	require.Empty(t, f.provider.Requests(), "no worker call for a refused dispatch")
 }
+
+// TestKillTreeBackgroundShells_ListingFailureIsMarkedAsAnUnlistedTree: when the
+// helper tree cannot be listed for the background-shell sweep, the failure is
+// still reported (helpers may be running), but marked as concerning the tree and
+// not as a failure to stop the session itself.
+func TestKillTreeBackgroundShells_ListingFailureIsMarkedAsAnUnlistedTree(t *testing.T) {
+	al, _ := newSteerAL(t)
+	notADir := filepath.Join(t.TempDir(), "lifecycle_is_a_file")
+	require.NoError(t, os.WriteFile(notADir, []byte("x"), 0o600))
+	al.SetSessionMessagingStores(al.GetMessageInboxStore(), session.NewLifecycleStore(notADir))
+	var res StopResult
+
+	al.killTreeBackgroundShells("root-session", func(string) CancelHooks { return CancelHooks{} }, map[string]bool{}, &res)
+
+	require.Len(t, res.Report.Unreachable, 1, "the listing failure must still be reported")
+	require.Equal(t, "root-session", res.Report.Unreachable[0].ID)
+	require.True(t, res.Report.Unreachable[0].HelperTreeUnlisted, "and marked as an unlisted tree, not a failed Stop of the root")
+}

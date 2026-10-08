@@ -229,6 +229,11 @@ type WakeInput struct {
 type UnreachableSession struct {
 	ID     string
 	Reason string
+	// HelperTreeUnlisted marks an entry that says nothing about ID's own Stop:
+	// ID itself was stopped, but its durable helper tree could not be listed,
+	// so helpers under it may still be running. Summaries count ID as stopped
+	// and report the unlisted tree separately.
+	HelperTreeUnlisted bool
 }
 
 // CancelReport is Canceller.CancelSubtree's output (I-6). Partial walks are

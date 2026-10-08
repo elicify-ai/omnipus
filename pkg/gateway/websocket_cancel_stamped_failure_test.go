@@ -51,3 +51,40 @@ func TestCancelPartialSummary_StampedSessionWhoseCancelFailedIsCountedOnce(t *te
 		})
 	}
 }
+
+// A failure to list the helper tree for the background-shell sweep says
+// nothing about the root's own Stop: the root is stopped, and the unlisted tree
+// is reported on its own, never as "stopped 0 of 1".
+func TestCancelPartialSummary_UnlistedHelperTreeDoesNotUncountTheStoppedRoot(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		report steer.CancelReport
+		want   string
+	}{
+		{
+			name: "only the helper tree could not be listed",
+			report: steer.CancelReport{
+				Reached:     []string{"root"},
+				Unreachable: []steer.UnreachableSession{{ID: "root", Reason: "could not be listed", HelperTreeUnlisted: true}},
+			},
+			want: "stopped 1 of 1; helper sessions could not be listed",
+		},
+		{
+			name: "a real unreachable session and an unlisted tree",
+			report: steer.CancelReport{
+				Reached: []string{"root", "task"},
+				Unreachable: []steer.UnreachableSession{
+					{ID: "task", Reason: "cancel failed"},
+					{ID: "root", Reason: "could not be listed", HelperTreeUnlisted: true},
+				},
+			},
+			want: "stopped 1 of 2; 1 unreachable; helper sessions could not be listed",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cancelPartialSummary(tc.report); got != tc.want {
+				t.Fatalf("cancelPartialSummary = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
