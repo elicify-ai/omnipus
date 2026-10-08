@@ -236,17 +236,34 @@ beforeEach(() => {
 })
 
 describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
-  it('N01 clicking Mia opens her seam main, not the newer extra', async () => {
+  it('N01 clicking Mia in Product launch opens her seam main, not the newer extra', async () => {
     renderSidebar()
-    await screen.findByRole('button', { name: 'Mia' })
-    fireEvent.click(screen.getByRole('button', { name: 'Mia' }))
+    // FR-003 / BDD-01.1: the click is the Product launch pair. Mia is also a
+    // member of Default (FR-001), so an unscoped name matches two rows.
+    const productGroup = await screen.findByRole('group', { name: 'Product launch' })
+    fireEvent.click(within(productGroup).getByRole('button', { name: 'Mia' }))
+    expect(mockSelectSession).toHaveBeenCalledTimes(1)
     expect(mockSelectSession).toHaveBeenCalledWith(expect.objectContaining({ id: 'seam-opaque-mia', agent_id: 'mia' }))
     expect(mockSelectSession).not.toHaveBeenCalledWith(expect.objectContaining({ id: 'extra-newer' }))
   })
 
+  it('N02-style Mia is a separate row under Default and under Product launch', async () => {
+    renderSidebar()
+    // FR-001: an eligible member is listed in each workspace they belong to.
+    // This fixture shares one member record, so it proves per-workspace
+    // presence, not two identities. The identity half of N02 / BDD-E01 is
+    // eligibleMainAgents in src/lib/nav/eligibleMains.test.ts.
+    const productGroup = await screen.findByRole('group', { name: 'Product launch' })
+    const defaultGroup = await screen.findByRole('group', { name: 'Default' })
+    const productMia = within(productGroup).getByRole('button', { name: 'Mia' })
+    const defaultMia = within(defaultGroup).getByRole('button', { name: 'Mia' })
+    expect(productMia).not.toBe(defaultMia)
+  })
+
   it('BDD-03.3 Past sessions comes before New chat, as two independent named buttons', async () => {
     renderSidebar()
-    const mia = await screen.findByRole('group', { name: 'Mia' })
+    const productGroup = await screen.findByRole('group', { name: 'Product launch' })
+    const mia = within(productGroup).getByRole('group', { name: 'Mia' })
     const past = within(mia).getByRole('button', { name: /^Past sessions$/ })
     const newer = within(mia).getByRole('button', { name: /^New chat$/ })
     expect(past.compareDocumentPosition(newer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
@@ -256,7 +273,8 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
 
   it('BDD-03.2 Past sessions opens one modal filtered by this workspace and this agent', async () => {
     renderSidebar()
-    const mia = await screen.findByRole('group', { name: 'Mia' })
+    const productGroup = await screen.findByRole('group', { name: 'Product launch' })
+    const mia = within(productGroup).getByRole('group', { name: 'Mia' })
     fireEvent.click(within(mia).getByRole('button', { name: /^Past sessions$/ }))
     const modal = useUiStore.getState() as {
       searchModalOpen: boolean
@@ -299,7 +317,8 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
     renderSidebar()
     const expand = await screen.findByRole('button', { name: 'Expand Product launch sessions' })
     fireEvent.click(expand)
-    const mia = await screen.findByRole('group', { name: 'Mia' })
+    const productGroup = await screen.findByRole('group', { name: 'Product launch' })
+    const mia = within(productGroup).getByRole('group', { name: 'Mia' })
     expect(mia.querySelector('[data-attention-halo="warning"]')).toBeTruthy()
     expect(mia.querySelector('[data-cue-px="8"]')).toBeNull()
     expect(screen.queryByRole('status', { name: '2 main chats need your attention' })).toBeNull()
