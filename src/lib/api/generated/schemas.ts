@@ -3200,7 +3200,7 @@ export const LoginResponse: z.ZodType<LoginResponse> = z.object({
   warning: z.string().optional(),
 });
 export const BrowserInspectRequest = z.object({
-  session_id: z.string().min(1).max(128),
+  session_id: z.string().min(1).max(255),
   agent_id: z.string().min(1).max(128),
   x: z.number().gte(0),
   y: z.number().gte(0),
@@ -5432,7 +5432,7 @@ export const WorkspaceMemberHeartbeat: z.ZodType<WorkspaceMemberHeartbeat> = z
   .partial();
 export const WorkspaceMemberConfig: z.ZodType<WorkspaceMemberConfig> = z
   .object({
-    main_session_id: z.string().max(128),
+    main_session_id: z.string().max(255),
     heartbeat: WorkspaceMemberHeartbeat,
   })
   .partial();
@@ -13419,7 +13419,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         name: "session_id",
         type: "Path",
-        schema: z.string().min(1).max(128),
+        schema: z.string().min(1).max(255),
       },
       {
         name: "ref",
@@ -16426,7 +16426,7 @@ export const MessageFrameBase = z
     type: z.literal("message"),
     client_message_id: z.string().min(1).max(128).optional(),
     content: z.string().max(5242880),
-    session_id: z.string().min(1).max(128).optional(),
+    session_id: z.string().min(1).max(255).optional(),
     agent_id: z.string().min(1).max(128).optional(),
     media: z.array(z.string().min(1).max(256)).max(16).optional(),
     auto_approve: z.boolean().nullable().optional(),
@@ -16460,7 +16460,7 @@ export const MessageFrame = MessageFrameBase.refine((v) => ((typeof v["content"]
 export const CancelFrame = z
   .object({
     type: z.literal("cancel"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     scope: z.enum(["session", "tree"]).optional(),
   })
   .strict();
@@ -16468,7 +16468,7 @@ export const CancelFrame = z
 export const RedirectFrame = z
   .object({
     type: z.literal("redirect"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     instruction: z.string().min(1).max(16384).regex(/\S/),
   })
   .strict();
@@ -16488,7 +16488,7 @@ export const PongFrame = z
 export const AttachSessionFrame = z
   .object({
     type: z.literal("attach_session"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     since_seq: z.number().int().min(1).optional(),
     boot_id: z.string().optional(),
     ack_attention: z.boolean().optional(),
@@ -16519,7 +16519,7 @@ export const SessionStartedFrame = z
 export const MessageStatusFrame = z
   .object({
     type: z.literal("message_status"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     client_message_id: z.string().min(1).max(128),
     state: z.enum(["received", "working", "failed"]),
     seq: z.number().int().min(1).optional(),
@@ -16529,7 +16529,7 @@ export const MessageStatusFrame = z
 export const TokenFrame = z
   .object({
     type: z.literal("token"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     content: z.string().max(65536),
     agent_id: z.string().optional(),
     turn_id: z.string().optional(),
@@ -16596,7 +16596,7 @@ export const LLMErrorReplay = z
 export const ErrorFrame = z
   .object({
     type: z.literal("error"),
-    session_id: z.string().max(128).optional(),
+    session_id: z.string().max(255).optional(),
     message: z.string().min(1).max(4096),
     client_message_id: z.string().min(1).max(128).optional(),
     first_message_error: z.enum(["not_saved", "delivery_unknown", "answer_not_started"]).optional(),
@@ -16612,7 +16612,7 @@ export const ErrorFrame = z
 export const ToolCallStartFrame = z
   .object({
     type: z.literal("tool_call_start"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     tool: z.string().min(1).max(128),
     call_id: z.string().min(1),
     params: z.record(z.unknown()),
@@ -16707,7 +16707,7 @@ export const ToolResultRecallMark = z
 export const ToolCallResultFrame = z
   .object({
     type: z.literal("tool_call_result"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     tool: z.string().min(1).max(128),
     call_id: z.string().min(1),
     result: z.unknown(),
@@ -16852,7 +16852,7 @@ export const ReplayErrorFrame = z
 export const ToolResultProjectionFrame = z
   .object({
     type: z.literal("tool_result_projection"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     tool_call_id: z.string().min(1),
     archive_line: z.number().int().min(0),
     content_state: z.enum(["capped", "emptied"]),
@@ -16878,7 +16878,7 @@ export const RateLimitFrame = z
 export const ProviderRetryFrame = z
   .object({
     type: z.literal("provider_retry"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     turn_id: z.string().min(1).max(128),
     provider: z.string().min(1).max(256),
     model: z.string().min(1).max(256),
@@ -16902,7 +16902,7 @@ export const ContextWindowNoticeFrameNotice = z
 export const ContextWindowNoticeFrame = z
   .object({
     type: z.literal("context_window_notice"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     turn_id: z.string().min(1).max(128),
     agent_id: z.string().min(1).max(128),
     entry_id: z.string().min(1).max(128),
@@ -16915,7 +16915,7 @@ export const ContextWindowNoticeFrame = z
 export const ProviderFallbackFrame = z
   .object({
     type: z.literal("provider_fallback"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     turn_id: z.string().min(1).max(128),
     answered_model: z.string().min(1).max(256),
     unavailable_model: z.string().min(1).max(256),
@@ -16927,7 +16927,7 @@ export const ProviderFallbackFrame = z
 export const ProviderFallbackNote = z
   .object({
     type: z.literal("replay_provider_fallback"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     entry_id: z.string().min(1).max(128),
     timestamp: z.string(),
     answered_model: z.string().min(1).max(256).optional(),
@@ -17232,7 +17232,7 @@ export const NotificationFrame = z
 export const BrowserAttachFrame = z
   .object({
     type: z.literal("browser_attach"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     agent_id: z.string().min(1).max(128),
     input_mode: z.enum(["websocket", "dedicated"]).optional(),
   })
@@ -17277,7 +17277,7 @@ export const BrowserControlFrame = z
 export const BrowserDetachFrame = z
   .object({
     type: z.literal("browser_detach"),
-    session_id: z.string().max(128).optional(),
+    session_id: z.string().max(255).optional(),
   })
   .strict();
 
@@ -17310,7 +17310,7 @@ export const BrowserViewportFrame = z
 export const BrowserTabActionFrame = z
   .object({
     type: z.literal("browser_tab_action"),
-    session_id: z.string().max(128).optional(),
+    session_id: z.string().max(255).optional(),
     agent_id: z.string().max(128).optional(),
     action: z.enum(["switch", "close", "open"]),
     index: z.number().int().min(0).optional(),
@@ -17322,7 +17322,7 @@ export const BrowserTabActionFrame = z
 export const BrowserTabsFrame = z
   .object({
     type: z.literal("browser_tabs"),
-    session_id: z.string().max(128).optional(),
+    session_id: z.string().max(255).optional(),
     active_index: z.number().int().min(0),
     tabs: z.array(z
     .object({
@@ -17339,7 +17339,7 @@ export const BrowserWebRTCOfferFrame = z
   .object({
     type: z.literal("browser_webrtc_offer"),
     agent_id: z.string().min(1).max(128),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     sdp: z.string().min(1).max(131072),
     capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
     capture_id: z.string().min(1).max(128).optional(),
@@ -17350,7 +17350,7 @@ export const BrowserWebRTCOfferFrame = z
 export const BrowserWebRTCAnswerFrame = z
   .object({
     type: z.literal("browser_webrtc_answer"),
-    session_id: z.string().max(128).optional(),
+    session_id: z.string().max(255).optional(),
     sdp: z.string().min(1).max(131072),
     capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
     capture_id: z.string().min(1).max(128).optional(),
@@ -17361,7 +17361,7 @@ export const BrowserWebRTCAnswerFrame = z
 export const BrowserWebRTCStateFrame = z
   .object({
     type: z.literal("browser_webrtc_state"),
-    session_id: z.string().max(128).optional(),
+    session_id: z.string().max(255).optional(),
     available: z.boolean(),
     reason: z.enum(["disabled", "not_capable", "lite_build", "error", "multi_agent_capture_denied", "ingest_timeout"]).optional(),
     reason_detail: z.string().max(512).optional(),
@@ -17380,7 +17380,7 @@ export const BrowserWebRTCStateFrame = z
 export const BrowserVideoHealthFrame = z
   .object({
     type: z.literal("browser_video_health"),
-    session_id: z.string().max(128).optional(),
+    session_id: z.string().max(255).optional(),
     state: z.enum(["transitioning", "lost", "recovering", "recovered", "unrecoverable"]),
     attempt: z.number().int().min(0).max(16).optional(),
     max_attempts: z.number().int().min(0).max(16).optional(),
@@ -17649,7 +17649,7 @@ export const ReplayErrorPayload = z
 export const BrowserInputOfferFrame = z
   .object({
     type: z.literal("browser_input_offer"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     input_epoch: z.number().int().min(1).max(9007199254740991),
     control_epoch: z.number().int().min(0).max(9007199254740991),
     offer_id: z.number().int().min(1).max(9007199254740991),
@@ -17661,7 +17661,7 @@ export const BrowserInputOfferFrame = z
 export const BrowserInputAnswerFrame = z
   .object({
     type: z.literal("browser_input_answer"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     input_epoch: z.number().int().min(1).max(9007199254740991),
     control_epoch: z.number().int().min(0).max(9007199254740991),
     offer_id: z.number().int().min(1).max(9007199254740991),
@@ -17672,7 +17672,7 @@ export const BrowserInputAnswerFrame = z
 export const BrowserInputStateFrame = z
   .object({
     type: z.literal("browser_input_state"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     input_epoch: z.number().int().min(1).max(9007199254740991),
     control_epoch: z.number().int().min(0).max(9007199254740991),
     offer_id: z.number().int().min(1).max(9007199254740991),
@@ -17684,7 +17684,7 @@ export const BrowserInputStateFrame = z
 export const BrowserInputControlAckFrame = z
   .object({
     type: z.literal("browser_input_control_ack"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     input_epoch: z.number().int().min(0).max(9007199254740991),
     control_epoch: z.number().int().min(0).max(9007199254740991),
     ok: z.boolean(),
@@ -17697,7 +17697,7 @@ export const BrowserInputControlAckFrame = z
 export const SessionSnapshotFrame = z
   .object({
     type: z.literal("session_snapshot"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     seq: z.number().int().min(1),
     boot_id: z.string().optional(),
     reason: z.enum(["cursor_ahead", "retention_exceeded", "unknown_position", "boot_mismatch"]).optional(),
@@ -17707,7 +17707,7 @@ export const SessionSnapshotFrame = z
 export const CatchUpCompleteFrame = z
   .object({
     type: z.literal("catch_up_complete"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     seq: z.number().int().min(1),
     boot_id: z.string().optional(),
     mode: z.enum(["incremental", "snapshot"]),
@@ -17717,7 +17717,7 @@ export const CatchUpCompleteFrame = z
 export const UserMessageFrame = z
   .object({
     type: z.literal("user_message"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     id: z.string().min(1),
     client_message_id: z.string().min(1).max(128).optional(),
     content: z.string().max(5242880),

@@ -13,5 +13,5 @@ properties:
     const: browser_detach
   session_id:
     type: string
-    maxLength: 128
+    maxLength: 255
     description: Optional session id to detach from (defaults to the attached one).

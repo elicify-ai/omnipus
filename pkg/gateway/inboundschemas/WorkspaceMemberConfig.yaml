@@ -5,7 +5,7 @@ properties:
   main_session_id:
     type: string
     readOnly: true
-    maxLength: 128
+    maxLength: 255
     description: >
       The member's server-computed main session id (format decided later).
       Omitted for members who are not eligible for a main (workers, other

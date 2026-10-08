@@ -3200,7 +3200,7 @@ paths:
         schema:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         description: Session ID that produced the tool result.
       - name: ref
         in: path

@@ -1773,7 +1773,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         agent_id:
           type: string
           minLength: 1
@@ -1860,7 +1860,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         scope:
           type: string
           enum:
@@ -1883,7 +1883,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         instruction:
           type: string
           minLength: 1
@@ -1934,7 +1934,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         since_seq:
           type: integer
           format: int64
@@ -2060,7 +2060,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         client_message_id:
           type: string
           minLength: 1
@@ -2098,7 +2098,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         content:
           type: string
           maxLength: 65536
@@ -2677,7 +2677,7 @@ components:
           const: error
         session_id:
           type: string
-          maxLength: 128
+          maxLength: 255
           description: 'Session this error relates to. Optional: global errors (auth, connection) are not tied to a specific
             session.
 
@@ -2751,7 +2751,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         tool:
           type: string
           minLength: 1
@@ -3146,7 +3146,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         tool:
           type: string
           minLength: 1
@@ -3847,7 +3847,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         tool_call_id:
           type: string
           minLength: 1
@@ -3960,7 +3960,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         turn_id:
           type: string
           minLength: 1
@@ -4048,7 +4048,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         turn_id:
           type: string
           minLength: 1
@@ -4106,7 +4106,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         turn_id:
           type: string
           minLength: 1
@@ -4158,7 +4158,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         entry_id:
           type: string
           minLength: 1
@@ -5292,7 +5292,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         agent_id:
           type: string
           minLength: 1
@@ -5464,7 +5464,7 @@ components:
           const: browser_detach
         session_id:
           type: string
-          maxLength: 128
+          maxLength: 255
     BrowserStatusFrame:
       title: BrowserStatusFrame
       description: 'Server → client. Lifecycle / control status for the live browser connection. state=controlling means this
@@ -5584,7 +5584,7 @@ components:
           const: browser_tab_action
         session_id:
           type: string
-          maxLength: 128
+          maxLength: 255
         agent_id:
           type: string
           maxLength: 128
@@ -5626,7 +5626,7 @@ components:
           const: browser_tabs
         session_id:
           type: string
-          maxLength: 128
+          maxLength: 255
         active_index:
           type: integer
           minimum: 0
@@ -5691,7 +5691,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
           description: The client's chat session id. Exactly as in BrowserAttachFrame, it RESOLVES the browsing context under
             ADR-075 FR-017 — the gateway reads this session's own workspace_id server-side and targets that workspace's browser
             and its single capture session. It is still echoed back on browser_webrtc_answer / browser_webrtc_state so the
@@ -5746,7 +5746,7 @@ components:
           const: browser_webrtc_answer
         session_id:
           type: string
-          maxLength: 128
+          maxLength: 255
           description: Echoes the session_id from the triggering browser_webrtc_offer, for client-side correlation only.
         sdp:
           type: string
@@ -5801,7 +5801,7 @@ components:
           const: browser_webrtc_state
         session_id:
           type: string
-          maxLength: 128
+          maxLength: 255
           description: Echoes the session_id from the triggering browser_webrtc_offer / browser_attach, for client-side correlation
             only.
         available:
@@ -5905,7 +5905,7 @@ components:
           const: browser_video_health
         session_id:
           type: string
-          maxLength: 128
+          maxLength: 255
           description: Echoes the chat session_id this viewer attached with, for client-side correlation only.
         state:
           type: string
@@ -7113,7 +7113,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         input_epoch:
           type: integer
           minimum: 1
@@ -7154,7 +7154,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         input_epoch:
           type: integer
           minimum: 1
@@ -7191,7 +7191,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         input_epoch:
           type: integer
           minimum: 1
@@ -7233,7 +7233,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         input_epoch:
           type: integer
           minimum: 0
@@ -7277,7 +7277,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         seq:
           type: integer
           format: int64
@@ -7320,7 +7320,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         seq:
           type: integer
           format: int64
@@ -7356,7 +7356,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         id:
           type: string
           minLength: 1

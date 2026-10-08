@@ -49,7 +49,7 @@ properties:
   session_id:
     type: string
     minLength: 1
-    maxLength: 128
+    maxLength: 255
     description: >
       If present, continue this existing session. If omitted, the server mints
       a new session and responds with a session_started frame.
