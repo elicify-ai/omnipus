@@ -316,6 +316,7 @@ func (al *AgentLoop) killTreeBackgroundShells(sessionID string, hooksFor func(st
 	if err != nil {
 		res.Report.Unreachable = append(res.Report.Unreachable, steer.UnreachableSession{
 			ID: sessionID, Reason: "background shells of the helper tree could not be listed: " + err.Error(),
+			HelperTreeUnlisted: true,
 		})
 	}
 	ids := make([]string, 0, 1+len(descendants))

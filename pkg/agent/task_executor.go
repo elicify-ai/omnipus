@@ -665,6 +665,13 @@ func (te *TaskExecutor) executeTask(
 	// event, live running slot or execution goroutine is created. A setup
 	// error aborts before worker execution and is recorded as Failed.
 	taskSessionID, sessErr := te.createTaskSessionSync(t)
+	// The run owns one execution from here to its release: a person's Stop
+	// finds that barrier (task_execution_disposition.go). Admitting it is part
+	// of provisioning the run, so a refusal fails the dispatch the same way.
+	var execution *executionDisposition
+	if sessErr == nil && te.ownsTaskBarrier() {
+		execution, sessErr = te.admitTaskRun(ctx, taskSessionID)
+	}
 	if sessErr != nil {
 		release()
 		// failTaskBeforeDispatch persists the Failed disposition visibly,
@@ -687,7 +694,10 @@ func (te *TaskExecutor) executeTask(
 
 	te.emitStatusChanged(t, task.StatusInProgress)
 
-	taskCtx, cancel := context.WithCancel(ctx)
+	taskCtx, cancel := context.WithCancel(withTaskExecution(ctx, execution))
+	if execution != nil {
+		release = te.finishTaskRun(execution, taskID, release)
+	}
 	te.mu.Lock()
 	te.running[taskID] = &taskSlot{cancel: cancel, reserved: false}
 	te.mu.Unlock()
@@ -1400,8 +1410,11 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 }
 
 // dispatchLaunchedTask enters the existing task orchestration after the
-// shared steer admission gate has accepted a task-origin session.
-func (te *TaskExecutor) dispatchLaunchedTask(rec *session.LifecycleRecord, release func()) error {
+// shared steer admission gate has accepted a task-origin session. execution is
+// the steered owner the launcher attached to that reservation: the run's turns
+// bind to it so a Stop finds the run's barrier, and release (which the caller
+// builds to finish it) fires when the run goroutine ends.
+func (te *TaskExecutor) dispatchLaunchedTask(rec *session.LifecycleRecord, execution *executionDisposition, release func()) error {
 	if rec == nil || rec.Origin == nil || rec.Origin.TaskID == "" {
 		return fmt.Errorf("task_executor: dispatched task session has no task origin")
 	}
@@ -1419,7 +1432,7 @@ func (te *TaskExecutor) dispatchLaunchedTask(rec *session.LifecycleRecord, relea
 		te.wg.Done()
 		return fmt.Errorf("task_executor: task %q already running", t.ID)
 	}
-	taskCtx, cancel := context.WithCancel(context.Background())
+	taskCtx, cancel := context.WithCancel(withTaskExecution(context.Background(), execution))
 	te.running[t.ID] = &taskSlot{cancel: cancel}
 	te.mu.Unlock()
 
@@ -2046,7 +2059,7 @@ func (al *AgentLoop) processTaskDirect(
 		return al.processTaskDirectExternalCLI(taskCtx, ag, prompt, sessionKey, taskChatID, delegationDepth)
 	}
 
-	return al.runAgentLoop(taskCtx, ag, processOptions{
+	resp, runErr := al.runAgentLoop(taskCtx, ag, processOptions{
 		SessionKey:             sessionKey,
 		Channel:                "webchat",
 		ChatID:                 taskChatID,
@@ -2060,6 +2073,11 @@ func (al *AgentLoop) processTaskDirect(
 		InitialDelegationDepth: delegationDepth,
 		IsTaskRun:              true,
 		RunningTaskID:          tools.ToolRunningTaskID(taskCtx),
+		// The run's execution owner, so this turn is admitted under it and a
+		// Stop finds its barrier (task_execution_disposition.go). Nil for a
+		// turn that is not a dispatched task run's own (board task, plan
+		// supervision turn).
+		executionDisposition: taskExecutionFor(taskCtx, taskChatID),
 		// D-08/FR-057: propagate the unattended marker a headless dispatcher
 		// stamped on ctx (see this function's own doc comment) onto the turn's
 		// own opts — this is what loop_run_turn_tools.go's AutoDenyAsk branch
@@ -2081,6 +2099,15 @@ func (al *AgentLoop) processTaskDirect(
 		// was the gap.
 		WorkspaceID: tools.ToolWorkspaceID(taskCtx),
 	})
+	// A Stop accepted while the run had no turn in flight is met by the next
+	// turn's admission as a cancelled dispatch. For a run that owns an
+	// execution that refusal IS the Stop: report it as the stopped turn it is,
+	// so the run loop ends the task "Stopped" instead of reading a broken run
+	// and restarting the task in a fresh session.
+	if runErr != nil && errors.Is(runErr, steer.ErrDispatchCancelled) && taskExecutionFor(taskCtx, taskChatID) != nil {
+		return resp, fmt.Errorf("%w: %w", ErrTurnCanceled, runErr)
+	}
+	return resp, runErr
 }
 
 // ExecuteBoardTask dispatches a GTD board task to the agent loop in a background
