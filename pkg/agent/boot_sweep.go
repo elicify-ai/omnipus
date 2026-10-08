@@ -157,7 +157,9 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 		}
 		switch class {
 		case steer.ClassOrdinaryRoot:
-			// Existing root boot recovery remains authoritative.
+			if err := r.recoverOrdinaryRoot(id, notice); err != nil {
+				refusals = append(refusals, err)
+			}
 		case steer.ClassSteered:
 			if err := r.recoverSteered(ctx, id, notice); err != nil {
 				refusals = append(refusals, err)
@@ -643,7 +645,8 @@ func (r *SteerBootRecovery) finishFromFinal(rec *session.LifecycleRecord, messag
 }
 
 // failInterrupted lands D8.3's automatic restart stop on a record the
-// restart interrupted mid-flight (queued or running). Correction C3 applies
+// restart interrupted mid-flight (queued/running, or a standing root whose
+// needs_input prompt was lost with the process). Correction C3 applies
 // to this landing like to any other: the fence-less transition is appended
 // to the control ledger IN THE SAME lock hold that writes the stop note —
 // allocated the next monotonic stop sequence, identifying the interrupted
@@ -659,10 +662,16 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 		writingBootSeq = r.BootEpoch.Current()
 	}
 	err := r.Lifecycle.Mutate(rec.SessionID, func(current *session.LifecycleRecord) error {
+		if current == nil {
+			bootRestartStopDebug(rec, "missing_record")
+			return session.ErrLifecycleNotFound
+		}
 		if current.Terminal() || (current.Stop != nil && current.Stop.Generation == current.Generation) {
-			return nil
+			bootRestartStopDebug(current, "terminal_or_current_stop_fence")
+			return errRestartStopUnchanged
 		}
 		if current.State == session.LifecycleStopped {
+			bootRestartStopDebug(current, "already_stopped")
 			// Already-stopped arm (ADR-20260928 D8, founder decision
 			// 2026-10-04): the record's run ended BEFORE the restart, so the
 			// restart interrupted nothing. The record stays stopped exactly
@@ -674,9 +683,19 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 			// its real one (D8.5). recoverSteered's D8 guard already keeps
 			// stopped records away from this call; the arm is the same rule
 			// restated at the writer, for any future caller.
-			return nil
+			return errRestartStopUnchanged
+		}
+		if rec.SteeredBy == nil {
+			allowed, guardErr := r.ordinaryRestartStopAllowedLocked(rec, current)
+			if guardErr != nil {
+				return guardErr
+			}
+			if !allowed {
+				return errRestartStopUnchanged
+			}
 		}
 		if writingBootSeq == 0 {
+			bootRestartStopDebug(current, "missing_writing_epoch")
 			return fmt.Errorf("steer: boot: restart stop for %q refused: missing current writing boot epoch", current.SessionID)
 		}
 		// Mid-flight arm (D8.3/F0929-3): the restart interrupted a LIVE
@@ -704,6 +723,7 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 		}
 		seq, ledgerErr := r.Lifecycle.RecordFencelessLandedStopLocked(current.SessionID, landed)
 		if ledgerErr != nil {
+			bootRestartStopDebug(current, "restart_ledger_refused")
 			return fmt.Errorf("steer: boot: restart stop for %q not landed: its transition could not be ledgered: %w",
 				current.SessionID, ledgerErr)
 		}
@@ -719,6 +739,12 @@ func (r *SteerBootRecovery) failInterrupted(rec *session.LifecycleRecord) error 
 		current.NeedsInput = nil
 		return nil
 	})
+	if errors.Is(err, errRestartStopUnchanged) {
+		return nil
+	}
+	if err != nil {
+		bootRestartStopDebug(rec, "restart_record_write_refused")
+	}
 	return err
 }
 
@@ -966,15 +992,14 @@ func (pe *PlanEngine) runBootSweep(ctx context.Context) BootSweepResult {
 // resolved.
 const DefaultLifecycleRetentionDays = 90
 
-// standingRootExemptFromSweep reports whether rec is a root the boot sweep
-// must leave alone (ADR-093 D3). A root has no SteeredBy edge. Its origin is
-// absent, or one of the standing kinds (chat, channel, heartbeat, scheduled):
-// the root stays usable on its CURRENT generation — the sweep must not mark
-// it failed(interrupted), and revival is only ever for a record a later Stop
-// or a terminal transition has ALREADY put into stopped/terminal state
-// (inboundRevivable's predicate), never something this sweep produces. A task
-// root never matches — persistLocked rejects origin kind task without a task
-// id — and is swept exactly as before.
+// standingRootExemptFromSweep keeps standing conversations out of the plan
+// engine's failed(interrupted) sweep (ADR-093 D3). A root has no SteeredBy edge;
+// its origin is absent or chat/channel/heartbeat/scheduled. SteerBootRecovery,
+// not this sweep, produces ledger-backed stopped(restart) for an admitted
+// prior-boot ordinary execution; idle roots have no run to interrupt. A later
+// normal trigger may resume that restart stop on the same generation, while
+// an operator Stop stays binding until explicit human resumption. Task roots
+// never match and plan-owned roots remain the plan engine's responsibility.
 func standingRootExemptFromSweep(rec session.LifecycleRecord) bool {
 	if rec.SteeredBy != nil {
 		return false
@@ -1641,20 +1666,5 @@ func (r *SteerBootRecovery) acceptedStopPending(rec *session.LifecycleRecord) (b
 	if err != nil {
 		return false, err
 	}
-	for _, intent := range intents {
-		target := intent.Selection.Effect.Target
-		if target.Generation != rec.Generation {
-			continue
-		}
-		if !target.Selected() {
-			if rec.ExecutionID == nil {
-				return true, nil
-			}
-			continue
-		}
-		if rec.ExecutionID != nil && rec.ExecutionID.RunID == target.RunID && rec.ExecutionID.BootSeq == target.BootSeq {
-			return true, nil
-		}
-	}
-	return false, nil
+	return acceptedStopSelectsExecution(rec, intents), nil
 }

@@ -430,7 +430,7 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 		// Sub-agent control plane ADR D4/MAJ-009: lifecycle_state/stop_note,
 		// absent when this session has no LifecycleRecord — same producer
 		// listSessions/getSession use (computeSessionLifecycle, rest_sessions.go).
-		s.LifecycleState, s.StopNote = computeSessionLifecycle(lifecycleStore, m.ID)
+		s.LifecycleState, s.StopNote = computeSessionLifecycle(lifecycleStore, m.ID, a.agentLoop.CurrentBootEpoch())
 		genSessions = append(genSessions, s)
 	}
 	jsonOK(w, genSessions)

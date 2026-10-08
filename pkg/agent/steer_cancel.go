@@ -659,14 +659,31 @@ func clearUnattendedForHuman(rec *session.LifecycleRecord, by steer.Principal) {
 // TestRevive_NewGeneration_OldMarkerInert / TestStopRevive_OrderUnderLock,
 // which qa-lead owns migrating.
 func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, by steer.Principal) (int, error) {
+	return c.reviveWithExecution(ctx, sessionID, by, nil, nil)
+}
+
+// reviveWithExecution reuses the same revival mutation for ordinary admission.
+// A supplied identity is written with the revived state, so process death cannot
+// leave a live revived record that boot mistakes for an idle, unstamped root.
+// The public steering Revive supplies neither snapshot nor identity. by is the
+// reviving principal; a human principal clears the unattended posture (#891).
+func (c *SteerCanceller) reviveWithExecution(ctx context.Context, sessionID string, by steer.Principal, selected *session.LifecycleRecord, execution *session.ExecutionIdentity) (int, error) {
 	if c == nil || c.Lifecycle == nil {
 		return 0, session.ErrLifecycleNotFound
+	}
+	if execution != nil && (selected == nil || selected.SessionID != sessionID || execution.RunID == "" || execution.BootSeq == 0) {
+		return 0, fmt.Errorf("steer: ordinary revival requires a selected record and nonzero execution identity")
 	}
 	var generation int
 	var revived bool
 	err := c.Lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
 		if rec == nil {
 			return session.ErrLifecycleNotFound
+		}
+		if selected != nil && (rec.Generation != selected.Generation ||
+			(rec.ExecutionID == nil) != (selected.ExecutionID == nil) ||
+			(selected.ExecutionID != nil && *rec.ExecutionID != *selected.ExecutionID)) {
+			return steer.ErrStaleGeneration
 		}
 		generation = rec.Generation
 		if rec.Terminal() {
@@ -682,12 +699,11 @@ func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, by steer.
 			// acknowledges or retires it" (D2). persistLocked would reject the
 			// carried tuple anyway — its generation no longer matches.
 			rec.FinalDelivery = nil
-			// The prior execution's identity is not carried either: G+1 has
-			// no current execution until its own admission stamps one
-			// (execution_identity.go) — a new admission never reuses the old
-			// run's identity slot. The prior stop-effect metadata does not
-			// ride into the minted generation either.
-			rec.ExecutionID = nil
+			// The prior identity is never carried into G+1. Public steering
+			// revival clears it for its later admission; ordinary admission
+			// supplies its fresh identity in this same state transition.
+			// Prior stop-effect metadata does not ride into G+1 either.
+			rec.ExecutionID = copyRevivalExecution(execution)
 			rec.StopEffect = nil
 			generation = rec.Generation
 			clearUnattendedForHuman(rec, by)
@@ -702,6 +718,9 @@ func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, by steer.
 		// newer RESUME supersedes it (D5) and the cancelled turn's later
 		// completion lands on a cleared record.
 		if !rec.Stopped() {
+			if execution != nil {
+				return steer.ErrStaleGeneration
+			}
 			return nil
 		}
 		// D2 CRIT-001 clears the note and the stop-effect metadata — for a
@@ -739,9 +758,10 @@ func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, by steer.
 		rec.StopEffect = nil
 		rec.NeedsInput = nil
 		rec.FailedReason = ""
-		// Same-generation resume: the stopped-out run's identity is history.
-		// The resuming admission stamps its own before dispatching.
-		rec.ExecutionID = nil
+		// Same-generation continuation: the stopped-out identity is history.
+		// Ordinary admission stamps here with the state in one persist;
+		// public steering revival still leaves its later admission unstamped.
+		rec.ExecutionID = copyRevivalExecution(execution)
 		clearUnattendedForHuman(rec, by)
 		revived = true
 		return nil

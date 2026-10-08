@@ -1401,7 +1401,7 @@ func TestLaunch_SnapshotIsSeededOnceAcrossARevival(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
-	if aerr := al.appendSteeredInstruction(res.SessionID, testDefaultAgentID, "carry on"); aerr != nil {
+	if aerr := al.appendSteeredInstruction(res.SessionID, testDefaultAgentID, "carry on", false); aerr != nil {
 		t.Fatalf("appendSteeredInstruction: %v", aerr)
 	}
 	count := 0

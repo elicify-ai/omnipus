@@ -14,11 +14,13 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"runtime/debug"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // revivedTurnHandoffBudget bounds how long a revived ordinary-root turn
@@ -67,6 +69,13 @@ type revivalFailure struct {
 // must not tell the user to send another message).
 func (al *AgentLoop) markRevivalFailure(sessionID string, cause error) {
 	if al == nil || sessionID == "" || cause == nil {
+		return
+	}
+	if errors.Is(cause, steer.ErrStaleGeneration) {
+		// Another execution won the selection race; no revival/store write
+		// failed. Drop older diagnostic memory rather than poison a later
+		// stopped-parent refusal with the revival-failed sentinel.
+		al.clearRevivalFailure(sessionID)
 		return
 	}
 	al.revivalFailures.Store(sessionID, revivalFailure{at: time.Now(), cause: cause})

@@ -4,6 +4,7 @@
 import type { StoreApi } from 'zustand'
 import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
+import { isGoalRunning } from '@/lib/goalActivity'
 import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
@@ -16,7 +17,7 @@ import type { CancelFrame } from '@/lib/api/generated/asyncapi-types'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { logDiagnostic } from '@/lib/telemetry'
 import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
-import { EMPTY_BUCKET, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
+import { EMPTY_BUCKET, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
 import { getPendingFirstSend, startOrdinaryFirstSend } from '../first-send'
@@ -125,6 +126,8 @@ function performResendMessage(
       m.status = 'done'
       m.deliveryStatus = 'sending'
     }
+    // A new answer was requested for this question: it is no longer unanswered.
+    if (draft.unansweredLastUserMessageId === messageId) draft.unansweredLastUserMessageId = null
   }) as Partial<SessionChatState>)
 
   const { connection, isConnected } = useConnectionStore.getState()
@@ -804,6 +807,10 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         ? (get().sessionsById[sessionId]?.isStreaming ?? false)
         : get().isStreaming
 
+      // G1: between a goal's turns nothing streams but the goal keeper will resume
+      // the session, so an active goal counts as stoppable. No goal, nothing sent.
+      const goalRunning = isGoalRunning(targetSid ? get().sessionsById[targetSid]?.goalStatus : null)
+
       // FR-21 / T21–T25: always mark the last assistant message as interrupted
       // when the user explicitly invokes cancel (stop button, Escape, /cancel,
       // or the browser panel's "Take over" for its pinned session). Scoped to
@@ -815,6 +822,9 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // Playwright (or a real user) clicks it would silently do nothing because
       // isStreaming flips to false between render and click.
       get().markLastMessageInterrupted(sessionId)
+      // A plain Stop supersedes any pending redirect: its turn_canceled is a
+      // stop, and must keep "(interrupted)".
+      if (targetSid) pendingRedirectSids.delete(targetSid)
 
       // W2: a cancel that cannot even reach a transport is reported — to the
       // caller (return false, so the Stop window is never armed for a click
@@ -852,7 +862,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // the completed-turn no-op gate exactly as before — sending cancel for
       // a completed turn is a no-op on the server but wastes a round-trip
       // and may confuse the audit log.
-      if (targetIsStreaming || scope === 'tree') {
+      if (targetIsStreaming || goalRunning || scope === 'tree') {
         // ADR-20260928 MAJ-002: `scope` rides the generated CancelFrame
         // verbatim. Omitted (every pre-existing call path) goes out WITHOUT
         // the key — the wire default is `session`, a single-session stop the
@@ -919,6 +929,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // outstanding cancel — stale entries here would otherwise persist across
       // reconnects and could misattribute an unrelated later frame.
       pendingCancelAckSids.clear()
+      pendingRedirectSids.clear()
       clearCatchUpSideChannelsOnDisconnect()
       // S6: a socket drop means no more frames — done, error, or otherwise —
       // are coming on THIS connection for any outstanding replay either. A

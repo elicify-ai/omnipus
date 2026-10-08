@@ -548,18 +548,22 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 }
 
 // reviveInactiveInbound applies ADR-093 D4 when msg's session is terminal or
-// stopped for its current generation. handled is true when the message was
-// taken onto a new generation and must not also be enqueued. A blank id, a
+// stopped for its current generation. handled is true when the instruction is
+// owned by a continuation and must not also be enqueued. A blank id, a
 // missing store, an unreadable record, or a live record is not handled: the
 // caller enqueues as before. When ReviveStoppedSession declines, handled is
 // false and the caller enqueues too.
 //
-// An ordinary root is revived and then run as a fresh inbound turn (MAJ-003:
-// never a steered redispatch, never the steered instruction write). Damaged
+// An ordinary root continues as a fresh inbound turn, whose canonical admission
+// revives and stamps atomically after handoff (MAJ-003: never steered redispatch
+// or a steered instruction write). Damaged
 // and legacy rows (nil classify error, not an ordinary root) keep the
 // pre-ADR-093 revive-and-redispatch; a classify ERROR — including unreadable
 // metadata — fails the enqueue and does NOT revive.
 func (al *AgentLoop) reviveInactiveInbound(route routing.ResolvedRoute, msg bus.InboundMessage) (bool, error) {
+	if !reviveInboundIsHumanTurn(msg) {
+		return false, nil
+	}
 	sessionID := strings.TrimSpace(msg.SessionID)
 	if sessionID == "" {
 		return false, nil
@@ -598,19 +602,12 @@ func (al *AgentLoop) reviveInactiveInbound(route routing.ResolvedRoute, msg bus.
 	}
 	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}
 	if class == steer.ClassOrdinaryRoot {
-		// ADR-093 D4 + MIN-001: the revival itself is synchronous (the message
-		// must not be queued while the record is still terminal), but the TURN
-		// is not run inline — enqueueSteeringFromMessage is called from Run's
-		// dispatch loop, and an inline processMessage would block the pump for
-		// a whole turn (gate review F1) and return the turn's error as an
-		// "enqueue rejected" signal that session_worker's fallback answers by
-		// queuing the SAME message again (silent-failure-hunter #1: two runs,
-		// one per turn). runRevivedOrdinaryTurn owns the message from here:
-		// exactly one run, published like every other inbound turn (CC-1),
-		// under the Run-scoped context (CC-2), failures error-level.
-		if rerr := al.reviveRecordForHumanTurn(al.inboundRunContext(), sessionID, by); rerr != nil {
-			return false, fmt.Errorf("enqueueSteeringFromMessage: revive ordinary root %q: %w", sessionID, rerr)
-		}
+		// The detached ordinary turn owns this instruction from here, not the
+		// dying turn's steering queue. After handoff its processMessage entry
+		// performs the canonical atomic revival+execution stamp. Pre-reviving
+		// here would persist a live nil-identity root before that admission.
+		// Keep execution asynchronous so the pump is not blocked and a turn
+		// error is not mistaken for an enqueue refusal that runs the text twice.
 		// The handoff wait inside runRevivedOrdinaryTurn looks the replaced
 		// turn up in activeTurnStates under the key runTurn registers it
 		// under — resolveScopeKey's output, the same expression processMessage
@@ -620,7 +617,9 @@ func (al *AgentLoop) reviveInactiveInbound(route routing.ResolvedRoute, msg bus.
 		// turn overlapped the turn it replaces while that turn was still
 		// appending its final history writes (rev2 review, gate CC-2's
 		// overlap half).
-		al.runRevivedOrdinaryTurn(msg, resolveScopeKey(route, msg.SessionKey))
+		if !al.runRevivedOrdinaryTurn(msg, resolveScopeKey(route, msg.SessionKey)) {
+			return false, fmt.Errorf("enqueueSteeringFromMessage: ordinary root %q continuation refused after intake closed: %w", sessionID, context.Canceled)
+		}
 		return true, nil
 	}
 	revived, rerr := al.ReviveStoppedSession(context.Background(), sessionID, by, msg.Content)
@@ -649,6 +648,24 @@ func (al *AgentLoop) reviveInactiveInbound(route routing.ResolvedRoute, msg bus.
 // (pkg/tools/delegate_followup.go), so the reconstructed turn actually sees
 // it.
 func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error) {
+	return al.reviveStoppedSession(ctx, sessionID, by, instruction, false)
+}
+
+// ReviveStoppedSessionAsRedirect is ReviveStoppedSession for a redirect: the
+// instruction is stored under the "redirect-" entry id. The delegate tool's
+// redirect of a stopped helper reaches it through the tools-side steerRedirecter.
+func (al *AgentLoop) ReviveStoppedSessionAsRedirect(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error) {
+	return al.reviveStoppedSession(ctx, sessionID, by, instruction, true)
+}
+
+// reviveStoppedSession is ReviveStoppedSession's body. asRedirect is true only
+// for the /stop-redirect delivery (RedirectSteeredSession's waiter and the
+// stopped-helper branch of RedirectSessionTurn): the instruction is then
+// stored under the same "redirect-<uuid>" transcript id the ordinary-chat
+// redirect writes (stop_redirect_root.go::continueOrdinaryAfterStop), which
+// is what the SPA keys on to drop the "(interrupted)" marker of the redirected
+// turn after reload. Follow-ups, answers and steer completions pass false.
+func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string, by steer.Principal, instruction string, asRedirect bool) (bool, error) {
 	if al == nil {
 		return false, fmt.Errorf("steer: revive %q: no AgentLoop wired", sessionID)
 	}
@@ -697,7 +714,7 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 	//     upward as a real result. Failing the revive is strictly better than
 	//     running the wrong instruction.
 	if trimmed := strings.TrimSpace(instruction); trimmed != "" {
-		if aerr := al.appendSteeredInstruction(sessionID, rec.AgentID, trimmed); aerr != nil {
+		if aerr := al.appendSteeredInstruction(sessionID, rec.AgentID, trimmed, asRedirect); aerr != nil {
 			return false, fmt.Errorf("steer: revive %q: %w", sessionID, aerr)
 		}
 	}
@@ -761,14 +778,22 @@ func (al *AgentLoop) ReviveStoppedSession(ctx context.Context, sessionID string,
 // write the reconstructed turn actually reads AND the one that can report.
 // The entry id is fresh per call (a repeat revive is a new instruction, never
 // a duplicate of the last one).
-func (al *AgentLoop) appendSteeredInstruction(sessionID, agentID, instruction string) error {
+//
+// asRedirect selects the entry id shape: "redirect-<uuid>" for a /stop-redirect
+// instruction (the convention the SPA's clearRedirectedTurnMarkers reads),
+// "<sid>-instruction-<uuid>" for every other revival.
+func (al *AgentLoop) appendSteeredInstruction(sessionID, agentID, instruction string, asRedirect bool) error {
 	store := al.ResolveSessionStore(sessionID)
 	if store == nil {
 		return fmt.Errorf("record the new instruction for %q: no session store owns this session", sessionID)
 	}
 	store.AddMessage(sessionID, "user", instruction)
+	entryID := sessionID + "-instruction-" + uuid.NewString()
+	if asRedirect {
+		entryID = "redirect-" + uuid.NewString()
+	}
 	if err := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
-		ID:      sessionID + "-instruction-" + uuid.NewString(),
+		ID:      entryID,
 		Role:    "user",
 		AgentID: agentID,
 		Content: instruction,

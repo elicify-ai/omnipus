@@ -51,9 +51,10 @@ func jsonSessionDetail(
 	messages []session.TranscriptEntry,
 	agentRemoved bool,
 	ls *session.LifecycleStore,
+	currentBootSeq ...uint64,
 ) {
 	genSession := unifiedMetaToGenSession(meta)
-	genSession.LifecycleState, genSession.StopNote = computeSessionLifecycle(ls, meta.ID)
+	genSession.LifecycleState, genSession.StopNote = computeSessionLifecycle(ls, meta.ID, currentBootSeq...)
 	if messages == nil {
 		messages = []session.TranscriptEntry{}
 	}
@@ -356,7 +357,7 @@ func computeSessionProtected(homePath string, m *session.UnifiedMeta) *bool {
 // LifecycleRecord (the common case for an ordinary chat session), exactly
 // matching Session.yaml's "absent for a session with no lifecycle record"
 // contract. Never panics or errors on either degenerate input.
-func computeSessionLifecycle(ls *session.LifecycleStore, id string) (*gen.SessionLifecycleState, *stopNoteEntry) {
+func computeSessionLifecycle(ls *session.LifecycleStore, id string, currentBootSeq ...uint64) (*gen.SessionLifecycleState, *stopNoteEntry) {
 	if ls == nil || id == "" {
 		return nil, nil
 	}
@@ -367,7 +368,7 @@ func computeSessionLifecycle(ls *session.LifecycleStore, id string) (*gen.Sessio
 		}
 		return nil, nil
 	}
-	state := gen.SessionLifecycleState(session.LifecycleRecordToDisplay(rec))
+	state := gen.SessionLifecycleState(session.LifecycleRecordToDisplay(rec, currentBootSeq...))
 	var note *stopNoteEntry
 	// Session.yaml::stop_note: the note of the session's CURRENT stop — the
 	// record is stopped, or carries its current-generation Stop in flight.
@@ -501,7 +502,7 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 		// Sub-agent control plane ADR D4/MAJ-009: lifecycle_state/stop_note,
 		// absent when this session has no LifecycleRecord (the common case
 		// for an ordinary chat session).
-		s.LifecycleState, s.StopNote = computeSessionLifecycle(lifecycleStore, m.ID)
+		s.LifecycleState, s.StopNote = computeSessionLifecycle(lifecycleStore, m.ID, a.agentLoop.CurrentBootEpoch())
 		genSessions = append(genSessions, s)
 	}
 
@@ -566,7 +567,7 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 	// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize to
 	// the same JSON layout defined in SessionDetail.yaml and Session.yaml/Message.yaml.
 	// Using jsonSessionDetail avoids an import cycle while staying lint-compliant.
-	jsonSessionDetail(w, meta, messages, agentRemoved, a.agentLoop.GetSessionLifecycleStore())
+	jsonSessionDetail(w, meta, messages, agentRemoved, a.agentLoop.GetSessionLifecycleStore(), a.agentLoop.CurrentBootEpoch())
 }
 
 func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id string) {
@@ -681,7 +682,7 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 	s := unifiedMetaToGenSession(meta)
-	s.LifecycleState, s.StopNote = computeSessionLifecycle(a.agentLoop.GetSessionLifecycleStore(), meta.ID)
+	s.LifecycleState, s.StopNote = computeSessionLifecycle(a.agentLoop.GetSessionLifecycleStore(), meta.ID, a.agentLoop.CurrentBootEpoch())
 	jsonOK(w, s)
 }
 
@@ -963,7 +964,7 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 	// are minted by the delegate/task paths, not this handler) — this call
 	// degrades to both fields absent in that common case, same as every
 	// other producer of gen.Session.
-	s.LifecycleState, s.StopNote = computeSessionLifecycle(a.agentLoop.GetSessionLifecycleStore(), meta.ID)
+	s.LifecycleState, s.StopNote = computeSessionLifecycle(a.agentLoop.GetSessionLifecycleStore(), meta.ID, a.agentLoop.CurrentBootEpoch())
 	jsonCreated(w, s)
 }
 
