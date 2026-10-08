@@ -367,10 +367,17 @@ describe('useSlashMenu — keyboard navigation', () => {
     const appendMessage = vi.fn()
     const { result } = renderHook(() => useSlashMenu(baseParams({ appendMessage })))
     act(() => result.current.onInputChange('/'))
-    // Move highlight off "/resume" and "/workspace" (both touch the ui store)
-    // onto "/help", whose handler appends a local message.
-    act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
-    act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    // Highlight /help by its command label, not a fixed ArrowDown count.
+    // /help's handler appends a local message and does not touch the ui store
+    // the way /resume and /workspace do. The server command table (founder X3)
+    // decides list order — /new sits ahead of /help — so two ArrowDown presses
+    // are not an oracle for "/help".
+    const helpIndex = result.current.slashItems.findIndex((i) => i.key === '/help')
+    expect(helpIndex, 'fixture lists /help').toBeGreaterThanOrEqual(0)
+    for (let step = 0; step < helpIndex; step++) {
+      act(() => result.current.handleKeyDown({ key: 'ArrowDown', preventDefault: vi.fn() } as unknown as React.KeyboardEvent))
+    }
+    expect(result.current.slashHighlight).toBe(helpIndex)
     expect(result.current.slashItems[result.current.slashHighlight].key).toBe('/help')
 
     const shiftEnter = { key: 'Enter', shiftKey: true, preventDefault: vi.fn() } as unknown as React.KeyboardEvent
@@ -1070,11 +1077,16 @@ describe('useSlashMenu — onHoverItem', () => {
     act(() => result.current.onInputChange('/'))
     expect(result.current.slashHighlight).toBe(0)
 
-    // Index 4 in the unified list is "/agents" (resume, workspace, help,
-    // model, agents). /new is no longer listed, so the old index 5 is /skills.
-    act(() => result.current.onHoverItem(4))
-    expect(result.current.slashHighlight).toBe(4)
-    expect(result.current.slashItems[4].key).toBe('/agents')
+    // Hover the /agents row by command label. A hard-coded index is not the
+    // oracle: the server command table (founder X3) inserts /new, so the old
+    // index 4 is /model. The assertions stay on the named row: highlight
+    // equals the index that was hovered, that row is /agents, and Enter
+    // selects it (agent selector opens).
+    const agentsIndex = result.current.slashItems.findIndex((i) => i.key === '/agents')
+    expect(agentsIndex, 'fixture lists /agents').toBeGreaterThanOrEqual(0)
+    act(() => result.current.onHoverItem(agentsIndex))
+    expect(result.current.slashHighlight).toBe(agentsIndex)
+    expect(result.current.slashItems[result.current.slashHighlight].key).toBe('/agents')
 
     // Prove the hover-set index is the SAME one keyboard selection acts on —
     // not just a display-only value that Enter ignores.
