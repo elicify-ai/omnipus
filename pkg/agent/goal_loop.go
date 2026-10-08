@@ -374,6 +374,15 @@ func (al *AgentLoop) emitGoalStatusFrameWithCriteriaAndDoD(
 	sessionID, goalID, condition string, round, maxRounds int, reason, state, definition string,
 	criteria, dod []task.AcceptanceCriterion,
 ) {
+	// A person's Stop pauses the goal keeper while the record stays `active`
+	// (keeperPausedByStop). That pause is announced as the contract's typed
+	// `waiting_on_user` pause (GoalStatusFrame.yaml: "needs_input/paused for any
+	// other reason") so the client never has to infer a Stop itself: every
+	// `active` frame — the stopped turn's own completion, a reattach snapshot —
+	// is reported as waiting_on_user for as long as the pause holds.
+	if state == goalPillActive && al.goalKeeperPausedByStop(sessionID) {
+		state = goalPillWaitingOnUser
+	}
 	active, capN := al.activeLoopsSnapshot("goal")
 	al.EmitGoalStatusChanged(GoalStatusChangedPayload{
 		SessionID:    sessionID,
