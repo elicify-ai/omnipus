@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -191,6 +192,61 @@ func TestSessionCoreU1_AdminHasDefaultWorkspaceMainOnly(t *testing.T) {
 	}
 }
 
+// FR-002/C-MAIN: the gateway BOOT must EAGERLY create Admin's main in the
+// default workspace — not merely leave it to a lazy GET. This drives the REAL
+// boot (gateway_boot.go::buildRESTAPI →
+// ensureDefaultWorkspaceAdminMain) on a fresh home, then reads the sessions LIST
+// — a non-creating read (rest_sessions.go::listSessions never calls
+// resolveMainSessionForRead, so nothing is minted) — because a per-id GET would
+// lazily CREATE the main and mask a boot that no longer does (C1 CHECK survivor
+// m17: the lightweight Admin test passed when the eager boot call was removed).
+func TestSessionCoreU1_BootEagerlyCreatesAdminMainBeforeAnyLookup(t *testing.T) {
+	gw := testutil.StartTestGateway(t, testutil.WithAllowEmpty())
+
+	// The default workspace the boot ensured.
+	workspaces, err := listWorkspaceFiles(gw.HomeDir())
+	require.NoError(t, err)
+	var wsID string
+	for _, w := range workspaces {
+		if w.IsDefault {
+			wsID = w.ID
+		}
+	}
+	require.NotEmpty(t, wsID, "boot must ensure a default workspace for Admin's main to live in")
+
+	// Exactly Admin's main must ALREADY be stored — read through the
+	// non-creating list surface, so only an eager boot creation can explain it.
+	// On a fresh home no other main exists: boot creates Admin's, and never a
+	// member's (members' mains come from a membership write).
+	req, err := gw.NewRequest(http.MethodGet, "/api/v1/sessions", nil)
+	require.NoError(t, err)
+	resp, err := gw.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var page struct {
+		Sessions []map[string]any `json:"sessions"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&page))
+
+	adminMainID := u1MainID(wsID, "admin")
+	var rows []string
+	for _, s := range page.Sessions {
+		id, _ := s["id"].(string)
+		rows = append(rows, id)
+	}
+	require.Contains(t, rows, adminMainID,
+		"boot must eagerly create Admin's main (%s) in the default workspace before any lookup; listed: %v", adminMainID, rows)
+	for _, s := range page.Sessions {
+		if s["id"] != adminMainID {
+			continue
+		}
+		assert.Equal(t, "main", s["type"], "C-MAIN: Session.type=main")
+		assert.Equal(t, "admin", s["agent_id"], "Admin owns the main")
+		assert.Equal(t, wsID, s["workspace_id"], "Admin's main lives in the default workspace")
+	}
+}
+
 // BDD-01.1 concurrency: many concurrent writers racing the same workspace and
 // several workspaces for the same agent end with exactly one stored main per
 // pair. Race-safety is judged by CI's -race leg.
@@ -311,6 +367,15 @@ func TestSessionCoreU1_ComputedIDOverTheByteCapIsRefused(t *testing.T) {
 	assert.GreaterOrEqual(t, w.Code, http.StatusBadRequest, "a 256-byte computed id must be a visible client error, got %d: %s", w.Code, w.Body.String())
 	assert.Less(t, w.Code, http.StatusInternalServerError, "and not a server fault: %s", w.Body.String())
 
+	// BDD-01.4: the refusal must NAME the cap cause, not just refuse. C1 CHECK
+	// survivor m16: the test passed even when the refusal lost its 255-byte
+	// explanation. The error is the computed-id length — 256 bytes over the
+	// 255-byte limit (13 + 128 + 1 + 114).
+	body := w.Body.String()
+	assert.Contains(t, body, "255", "the refusal must name the 255-byte cap; got %s", body)
+	assert.Contains(t, body, "byte", "the refusal must name the byte cause; got %s", body)
+	assert.Contains(t, body, "limit", "the refusal must state the limit it exceeded; got %s", body)
+
 	overID := u1MainID(longWS, overAgent)
 	assert.Empty(t, u1Prefixed(env.storedSessions(t), overID), "no directory is created for the over-cap pair")
 	// Oracle derivation: the prefix "main-session-<workspace>+" also matches the
@@ -332,6 +397,18 @@ func TestSessionCoreU1_ComputedIDOverTheByteCapIsRefused(t *testing.T) {
 	assert.Equal(t, http.StatusOK, code, "the healthy main keeps working")
 	assert.Equal(t, []string{u1MainID(longWS, "jim")}, u1Sorted(env.storedOfType(t, "main")),
 		"only the healthy pair has a main; the over-cap pair stored nothing")
+
+	// Store-level proof that NOTHING was created for the over-cap pair beyond the
+	// control main: the only persisted session directory is the healthy control.
+	// C1 CHECK survivor m15: the test passed when the refusal secretly minted a
+	// random chat identity for the refused agent — a chat is not type "main", so
+	// a main-only check missed it.
+	assert.Equal(t, []string{u1MainID(longWS, "jim")}, u1MetaBearingDirs(t, env),
+		"the refusal stores NOTHING beyond the control main: no new session directory, no replacement identity")
+	for name, rec := range env.storedSessions(t) {
+		assert.NotEqual(t, overAgent, rec.doc["agent_id"],
+			"no session of ANY type may be minted for the over-cap agent (dir %q)", name)
+	}
 }
 
 // Id-format ruling (Q1=B): the "+" join keeps two distinct (workspace, agent)

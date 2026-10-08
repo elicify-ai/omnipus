@@ -14,6 +14,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,30 +22,79 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/elicify-ai/omnipus/pkg/session"
 )
+
+// u1SeedStoredMain writes a VALID main-type session record directly to the
+// store under id, carrying agentID/workspaceID verbatim. It is the fixture seam
+// for BDD-01.4's "stored main whose owner/workspace contradicts its computed
+// pair": the record must PASS GetOrCreateMainSession's type guard (type ==
+// "main") so the OWNER / WORKSPACE guard is the check under test. A
+// scheduled-type fixture (GetOrCreateScheduledSession) is refused on its TYPE
+// first, which let the owner/workspace guards be deleted with the test still
+// green (C1 CHECK survivors m22/m23, 2026-10-08).
+func u1SeedStoredMain(t *testing.T, env *u1Env, id, agentID, workspaceID string) {
+	t.Helper()
+	dir := filepath.Join(env.store(t).BaseDir(), id)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	doc := map[string]any{
+		"id":           id,
+		"agent_id":     agentID,
+		"status":       "active",
+		"created_at":   "2026-01-01T00:00:00Z",
+		"updated_at":   "2026-01-01T00:00:00Z",
+		"channel":      "main",
+		"partitions":   []string{},
+		"type":         "main",
+		"workspace_id": workspaceID,
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "meta.json"), raw, 0o600))
+}
 
 func TestSessionCoreU1_CorruptStoredMainIsRefusedAndNeverGuessed(t *testing.T) {
 	cases := []struct {
 		name string
-		seed func(t *testing.T, env *u1Env, id string)
+		// seed lays down the bad record at id (a computed main id for (ws, mia)).
+		seed func(t *testing.T, env *u1Env, ws, id string)
+		// wantMains is the exact persisted main set after the PUT: the healthy
+		// control plus, when the fixture is a parseable main-type record, the
+		// pre-existing bad record itself (which must survive untouched).
+		// DRIVEN FROM SPEC (BDD-01.4): no replacement identity may be minted, so
+		// no THIRD main may ever appear.
+		wantMains func(ws string) []string
 	}{
-		{"stored pair has the wrong owner", func(t *testing.T, env *u1Env, id string) {
-			_, err := env.store(t).GetOrCreateScheduledSession(id, "jim") // exact-ID create, owner jim
-			require.NoError(t, err)
-		}},
-		{"stored pair has the wrong workspace", func(t *testing.T, env *u1Env, id string) {
-			_, err := env.store(t).GetOrCreateScheduledSession(id, "mia")
-			require.NoError(t, err)
-			other := "some-other-workspace"
-			require.NoError(t, env.store(t).SetMeta(id, session.MetaPatch{WorkspaceID: &other}))
-		}},
-		{"metadata unreadable", func(t *testing.T, env *u1Env, id string) {
-			dir := filepath.Join(env.store(t).BaseDir(), id)
-			require.NoError(t, os.MkdirAll(dir, 0o700))
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "meta.json"), []byte("{not json"), 0o600))
-		}},
+		{
+			"stored main has the wrong owner",
+			func(t *testing.T, env *u1Env, ws, id string) {
+				// Main-type record (passes the type guard) whose stored agent_id
+				// disagrees with the computed pair (ws, mia): the pair's OWNER
+				// guard is the check this fixture must reach.
+				u1SeedStoredMain(t, env, id, "jim", ws)
+			},
+			func(ws string) []string { return []string{u1MainID(ws, "jim"), u1MainID(ws, "mia")} },
+		},
+		{
+			"stored main has the wrong workspace",
+			func(t *testing.T, env *u1Env, ws, id string) {
+				// Main-type record (passes the type guard, agent matches) whose
+				// stored workspace_id disagrees with the computed pair: the
+				// WORKSPACE guard is the check this fixture must reach.
+				u1SeedStoredMain(t, env, id, "mia", "some-other-workspace")
+			},
+			func(ws string) []string { return []string{u1MainID(ws, "jim"), u1MainID(ws, "mia")} },
+		},
+		{
+			"metadata unreadable",
+			func(t *testing.T, env *u1Env, _, id string) {
+				dir := filepath.Join(env.store(t).BaseDir(), id)
+				require.NoError(t, os.MkdirAll(dir, 0o700))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "meta.json"), []byte("{not json"), 0o600))
+			},
+			// The unparseable record is not a main on disk, so only the control
+			// is counted.
+			func(ws string) []string { return []string{u1MainID(ws, "jim")} },
+		},
 	}
 	for i, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -58,28 +108,30 @@ func TestSessionCoreU1_CorruptStoredMainIsRefusedAndNeverGuessed(t *testing.T) {
 			require.Equal(t, http.StatusOK, code, "Jim (healthy) has a main")
 
 			badID := u1MainID(ws, "mia")
-			c.seed(t, env, badID)
+			c.seed(t, env, ws, badID)
 			rawBefore, err := os.ReadFile(filepath.Join(env.store(t).BaseDir(), badID, "meta.json"))
 			require.NoError(t, err)
 
 			_ = env.putTeam(t, ws, "jim", "mia") // outcome (refuse vs accept) is an open question; effects are asserted
 
-			if sess, status := env.getSession(t, badID); status == http.StatusOK {
-				isValidMiaMain := sess["type"] == "main" && sess["agent_id"] == "mia" && sess["workspace_id"] == ws
-				assert.False(t, isValidMiaMain, "a corrupt/mismatched record must never be served as Mia's main: %v", sess)
-				assert.NotEqual(t, http.StatusOK, status, "BDD-01.4: lookup of a mismatched/corrupt stored main is a visible refusal")
-			}
+			// BDD-01.4: a stored main that contradicts its computed pair is a
+			// visible refusal — it is NEVER served as Mia's main. Deleting the
+			// owner guard (m22) or the workspace guard (m23) in
+			// GetOrCreateMainSession makes this status 200 (the mismatched record
+			// is adopted and returned) and fails here.
+			sess, status := env.getSession(t, badID)
+			assert.NotEqual(t, http.StatusOK, status,
+				"BDD-01.4: lookup of a mismatched/corrupt stored main is a visible refusal; got %v", sess)
 
 			rawAfter, err := os.ReadFile(filepath.Join(env.store(t).BaseDir(), badID, "meta.json"))
 			require.NoError(t, err)
 			assert.Equal(t, string(rawBefore), string(rawAfter), "bad record is not repaired or rewritten")
 
-			for name, rec := range env.storedOfType(t, "main") {
-				if name == u1MainID(ws, "jim") {
-					continue
-				}
-				assert.Failf(t, "guessed/replacement identity", "unexpected stored main %q (%v)", name, rec.doc)
-			}
+			// No replacement identity is minted: the persisted main set is exactly
+			// the control plus the pre-existing bad record.
+			assert.Equal(t, c.wantMains(ws), u1Sorted(env.storedOfType(t, "main")),
+				"no guessed/replacement identity: only the control and the pre-existing bad record")
+
 			if mc := u1MemberConfig(env.getWorkspace(t, ws), "mia"); mc != nil {
 				assert.Empty(t, mc["main_session_id"], "no main address exposed for the refused pair")
 			}

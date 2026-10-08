@@ -94,6 +94,39 @@ func u1MainCount(ids map[string]map[string]any) int {
 	return n
 }
 
+// u1SeedStoredMainRecord writes a VALID main-type session record directly to
+// the store's on-disk layout under id, carrying agentID/workspaceID verbatim.
+// It is the fixture seam for BDD-01.4's "stored main whose owner/workspace
+// contradicts its computed pair": the record must PASS GetOrCreateMainSession's
+// type guard (type == "main") so the OWNER / WORKSPACE guard is the check under
+// test. A scheduled-type fixture (GetOrCreateScheduledSession) is refused on its
+// TYPE first, which let the owner/workspace guards be deleted with the test
+// still green (C1 CHECK survivors m22/m23, 2026-10-08).
+//
+// The document is the minimal meta.json identity group
+// (unified_meta_files.go::u5IdentityFile). It is written straight to disk AFTER
+// the store is constructed, so the store's first read of this id — the one that
+// runs the guard — sees the record, exactly as a tampered/legacy record would.
+func u1SeedStoredMainRecord(t *testing.T, store *UnifiedStore, id, agentID, workspaceID string) {
+	t.Helper()
+	dir := filepath.Join(store.BaseDir(), id)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	doc := map[string]any{
+		"id":           id,
+		"agent_id":     agentID,
+		"status":       "active",
+		"created_at":   "2026-01-01T00:00:00Z",
+		"updated_at":   "2026-01-01T00:00:00Z",
+		"channel":      "main",
+		"partitions":   []string{},
+		"type":         "main",
+		"workspace_id": workspaceID,
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "meta.json"), raw, 0o600))
+}
+
 // longID builds a string of exactly n chars that matches the existing
 // workspace/agent ID pattern ^[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*$ with a <=128 cap
 // (pkg/gateway/rest_workspaces.go::validWorkspaceID, pkg/agentstore/state.go::ValidateAgentID).
@@ -297,18 +330,28 @@ func TestSessionCoreU1_InvalidPairComponentsAreRefusedWithoutStoring(t *testing.
 func TestSessionCoreU1_StoredIDWithWrongOwnerIsRefusedNotAdopted(t *testing.T) {
 	store := newTestStore(t)
 	const id = "main-session-W1+mia"
-	seeded, err := store.GetOrCreateScheduledSession(id, "jim") // existing seam: exact-ID create, owner jim
-	require.NoError(t, err)
-	require.Equal(t, "jim", seeded.AgentID, "fixture: wrong-owner record")
+	// Fixture derivation (BDD-01.4): a VALID main-type record whose stored
+	// agent_id ("jim") disagrees with the computed pair (W1, mia). It must pass
+	// the type guard so the pair's OWNER guard is the check under test — a
+	// scheduled-type fixture would be refused on its type first and let the
+	// owner guard be deleted with this test still green (C1 CHECK survivor m22).
+	u1SeedStoredMainRecord(t, store, id, "jim", "W1")
+	rawBefore, rerr := os.ReadFile(filepath.Join(store.BaseDir(), id, "meta.json"))
+	require.NoError(t, rerr)
 
 	meta, err := u1GetOrCreateMain(t, store, "W1", "mia")
-	require.Error(t, err, "mismatched stored pair must be refused")
+	require.Error(t, err, "a stored main whose owner contradicts the pair must be refused")
 	assert.Nil(t, meta)
 
 	ids := u1StoredIdentities(t, store)
 	assert.Equal(t, 1, len(ids), "no replacement identity; got %v", keys(ids))
-	assert.Equal(t, "jim", ids[id]["agent_id"], "wrong-owner record must not be rewritten")
-	assert.NotEqual(t, "main", ids[id]["type"], "record must not be silently promoted to main")
+	assert.Equal(t, "main", ids[id]["type"], "the stored record keeps its own type")
+	assert.Equal(t, "jim", ids[id]["agent_id"], "the wrong-owner record must not be rewritten")
+
+	rawAfter, rerr := os.ReadFile(filepath.Join(store.BaseDir(), id, "meta.json"))
+	require.NoError(t, rerr)
+	assert.Equal(t, string(rawBefore), string(rawAfter),
+		"the refused record is left byte-for-byte (not adopted, repaired or replaced)")
 }
 
 // BDD-01.4: unreadable/corrupt metadata is refused and left byte-for-byte.

@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -245,6 +246,24 @@ func (e *u1Env) storedOfType(t *testing.T, typ string) map[string]u1Stored {
 			out[name] = rec
 		}
 	}
+	return out
+}
+
+// u1MetaBearingDirs returns the sorted names of every store directory that
+// carries a parseable session record (meta.json), across the shared and
+// per-agent stores. It excludes the store's own non-session directories (e.g.
+// ".context", which has no meta.json) — so it is the exact set of PERSISTED
+// SESSION IDENTITIES of ANY type. Used to prove a refusal stored nothing: an
+// unexpected entry means a directory or replacement identity was minted.
+func u1MetaBearingDirs(t *testing.T, env *u1Env) []string {
+	t.Helper()
+	var out []string
+	for name, rec := range env.storedSessions(t) {
+		if rec.doc != nil {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
 	return out
 }
 
