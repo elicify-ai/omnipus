@@ -45,19 +45,21 @@ function rollupStatusColorVar(status: RollupItem['status']): string {
   }
 }
 
+type RollupAgent = Pick<Agent, 'id'> & Partial<Pick<Agent, 'name' | 'color' | 'icon'>>
+
 interface RollupBadgeProps {
   rollup: RollupItem[]
-  agents: Agent[]
+  agents: RollupAgent[]
   plain?: boolean
 }
 
 /** Resolve agent data by id from the agents cache */
-function agentById(agents: Agent[], agentId: string): Agent | undefined {
+function agentById(agents: RollupAgent[], agentId: string): RollupAgent | undefined {
   return agents.find((a) => a.id === agentId)
 }
 
 /** Single avatar chip for one rollup item */
-function RollupAvatar({ item, agent }: { item: RollupItem; agent: Agent | undefined }) {
+function RollupAvatar({ item, agent }: { item: RollupItem; agent: RollupAgent | undefined }) {
   const isLive = item.status === 'in_progress'
   const color = agent?.color ?? rollupStatusColorVar(item.status)
   const Icon = getIconComponent(agent?.icon)

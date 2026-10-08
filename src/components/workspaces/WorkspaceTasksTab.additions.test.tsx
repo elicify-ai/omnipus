@@ -40,25 +40,25 @@ it('T11 keeps every List column present in one table-only horizontal scroller wi
   expect(screen.queryByRole('button', { name: /Tags and Updated columns/ })).not.toBeInTheDocument()
 })
 
-it('T12 starts the Plans flat Accordion collapsed, keeps header controls visible, and shows tiles on one click', async () => {
+it('T20 starts Plans open when populated, keeps compact header controls visible, and folds on demand', async () => {
   const user = userEvent.setup()
   const mounted = renderLayout(<WorkspaceTasksTab workspaceId="ws-layout" />)
   await screen.findByText('Ray report')
   const trigger = screen.getByRole('button', { name: 'Plans' })
-  expect(trigger).toHaveAttribute('aria-expanded', 'false')
-  expect(screen.getByRole('checkbox', { name: 'Show done plans' })).toBeVisible()
-  expect(screen.getByRole('button', { name: 'New Plan' })).toBeVisible()
-  expect(screen.queryByTestId('all-tasks-tile')).not.toBeInTheDocument()
-  await user.click(trigger)
   expect(trigger).toHaveAttribute('aria-expanded', 'true')
+  expect(screen.getByRole('checkbox', { name: 'Unhide done plans' })).toBeVisible()
+  expect(screen.getByRole('button', { name: 'New Plan' })).toBeVisible()
   expect(screen.getByTestId('all-tasks-tile')).toBeVisible()
   expect(screen.getByTestId('plan-filter-tile-plan-layout')).toBeVisible()
   await user.click(trigger)
   expect(trigger).toHaveAttribute('aria-expanded', 'false')
   expect(screen.queryByTestId('all-tasks-tile')).not.toBeInTheDocument()
+  await user.click(trigger)
+  expect(trigger).toHaveAttribute('aria-expanded', 'true')
+  expect(screen.getByTestId('all-tasks-tile')).toBeVisible()
   mounted.unmount()
   renderLayout(<WorkspaceTasksTab workspaceId="ws-layout" />)
-  expect(screen.getByRole('button', { name: 'Plans' })).toHaveAttribute('aria-expanded', 'false')
+  expect(screen.getByRole('button', { name: 'Plans' })).toHaveAttribute('aria-expanded', 'true')
 })
 
 it('T13 reserves fixed two-line Board/Graph title slots and one-line List ellipsis without splitting normal words', async () => {

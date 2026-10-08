@@ -135,11 +135,10 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
         <div className="flex min-w-0 flex-wrap items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           <span className="inline-flex items-center gap-[var(--space-1)]" style={{ color: visual.color }}>
             {task.status === 'in_progress' ? <RunningIndicator /> : <span aria-hidden="true">●</span>}<span>{visual.label}</span>
-            {(agentName || todos.length > 0 || (task.tags?.length ?? 0) > 0) && <span aria-hidden="true" className="text-[var(--color-muted)]">·</span>}
+            {(agentName || todos.length > 0) && <span aria-hidden="true" className="text-[var(--color-muted)]">·</span>}
           </span>
-          {agentName && <span className="inline-flex min-w-0 items-center gap-[var(--space-1)]"><span className="min-w-0 break-normal wrap-break-word">{agentName}</span>{(todos.length > 0 || (task.tags?.length ?? 0) > 0) && <span aria-hidden="true">·</span>}</span>}
-          {todos.length > 0 && <span className="inline-flex items-center gap-[var(--space-1)]"><CheckSquare size={11} aria-hidden="true" /><span>{doneTodos}/{todos.length}</span>{Boolean(task.tags?.length) && <span aria-hidden="true">·</span>}</span>}
-          {(task.tags ?? []).map((tag, index) => <span key={tag} className="inline-flex min-w-0 max-w-full gap-[var(--space-1)]"><WordBoundaryText text={tag} className="break-normal wrap-break-word" />{index < (task.tags?.length ?? 0) - 1 && <span aria-hidden="true">·</span>}</span>)}
+          {agentName && <span className="inline-flex min-w-0 items-center gap-[var(--space-1)]"><span className="min-w-0 break-normal wrap-break-word">{agentName}</span>{todos.length > 0 && <span aria-hidden="true">·</span>}</span>}
+          {todos.length > 0 && <span className="inline-flex items-center gap-[var(--space-1)]"><CheckSquare size={11} aria-hidden="true" /><span>{doneTodos}/{todos.length}</span></span>}
         </div>
 
         {/* ADR-053 FE-2 §7 (D7) — plan-member DAG signals. The join member

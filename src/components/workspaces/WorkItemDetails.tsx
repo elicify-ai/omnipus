@@ -7,11 +7,14 @@ import { WordBoundaryText } from '@/components/ui/word-boundary-text'
 import { taskDisplayLabel } from '@/lib/statusColors'
 import { planDisplayLabel } from '@/lib/planStateColors'
 import type { Agent, Plan, Task } from '@/lib/api'
+import { TaskActivityChip } from './TaskActivityChip'
+import { RollupBadge } from './RollupBadge'
+import { goalLoopStatusLabel } from './taskExecution'
 
 // Domain composition, not a new primitive: both entities use the catalogued
 // Popover/IconButton. Keep the info action isolated from task open/drag and
 // plan selection, including clicks on the SVG and portalled content.
-function WorkItemDetails({ title, kind, children, onOpen }: { title: string; kind: 'Task' | 'Plan'; children: ReactNode; onOpen?: () => void }) {
+function WorkItemDetails({ title, kind, children, onOpen, notes }: { title: string; kind: 'Task' | 'Plan'; children: ReactNode; onOpen?: () => void; notes?: ReactNode }) {
   const [open, setOpen] = useState(false)
   const closeTimer = useRef<number | undefined>(undefined)
   const keyboardFocus = useRef(false)
@@ -55,6 +58,7 @@ function WorkItemDetails({ title, kind, children, onOpen }: { title: string; kin
         className="z-[100] w-max max-w-[min(28rem,calc(100vw-var(--space-4)))] max-h-[var(--radix-popover-content-available-height)] overflow-y-auto text-[length:var(--type-body-compact-size)]">
         <WordBoundaryText as="h3" text={title} className="whitespace-normal break-normal wrap-break-word font-headline font-bold" />
         <dl className="mt-[var(--space-2)] grid grid-cols-[auto_minmax(0,1fr)] gap-x-[var(--space-3)] gap-y-[var(--space-1)] [&>dt]:text-[var(--color-muted)] [&>dd]:min-w-0 [&>dd]:break-normal [&>dd]:wrap-break-word">{children}</dl>
+        {notes}
         {onOpen && <Button variant="ghost" className="mt-[var(--space-2)] h-auto p-0 text-[var(--color-accent)]" onClick={() => { dismiss(); infoRef.current?.focus(); onOpen() }}>Open task</Button>}
       </PopoverContent>
     </Popover>
@@ -66,10 +70,18 @@ function UpdatedTime({ value }: { value: string }) {
   return <time dateTime={value}>{Number.isNaN(date.getTime()) ? 'Unavailable' : date.toLocaleString()}</time>
 }
 
-export function TaskDetailsPopover({ task, plans = [], agents = [], onOpenTask }: { task: Task; plans?: Plan[]; agents?: (Pick<Agent, 'id'> & Partial<Pick<Agent, 'name'>>)[]; onOpenTask: () => void }) {
+export function TaskDetailsPopover({ task, plans = [], agents = [], onOpenTask }: { task: Task; plans?: Plan[]; agents?: (Pick<Agent, 'id'> & Partial<Pick<Agent, 'name' | 'icon' | 'color'>>)[]; onOpenTask: () => void }) {
   const agent = task.agent_name ?? agents.find((value) => value.id === task.agent_id)?.name ?? task.agent_id ?? 'Unassigned'
   const plan = plans.find((value) => value.id === task.plan_id)?.title ?? task.plan_id ?? 'Unplanned'
-  return <WorkItemDetails title={task.title} kind="Task" onOpen={onOpenTask}>
+  const owningPlan = plans.find((value) => value.id === task.plan_id)
+  const loopLabel = goalLoopStatusLabel(task, owningPlan?.state === 'running' && Boolean(owningPlan.paused_reason))
+  const rollup = task.rollup ?? []
+  return <WorkItemDetails title={task.title} kind="Task" onOpen={onOpenTask} notes={<div className="mt-[var(--space-2)] space-y-[var(--space-1)] break-normal wrap-break-word">
+    {task.assignee_warning && <p data-testid="task-assignee-warning" className="text-[color:var(--color-warning)]">{task.assignee_warning.message}</p>}
+    {loopLabel && <p>{loopLabel}</p>}
+    {rollup.length > 0 && <RollupBadge rollup={rollup} agents={agents} plain />}
+    <TaskActivityChip task={task} variant="panel" plain />
+  </div>}>
     <dt>Status</dt><dd>{taskDisplayLabel(task)}</dd>
     <dt>Agent</dt><dd>{agent}</dd>
     <dt>Tags</dt><dd className="flex flex-wrap gap-[var(--space-1)]">{task.tags?.length ? task.tags.map((tag, index) => <span key={tag} className="inline-flex min-w-0 max-w-full items-center gap-[var(--space-1)]"><WordBoundaryText text={tag} className="break-normal wrap-break-word" />{index < task.tags!.length - 1 && <span aria-hidden="true">·</span>}</span>) : 'None'}</dd>

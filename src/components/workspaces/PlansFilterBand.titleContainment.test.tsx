@@ -153,7 +153,8 @@ function renderBand(overrides: Partial<React.ComponentProps<typeof PlansFilterBa
       <PlansFilterBand {...props} />
     </QueryClientProvider>,
   )
-  fireEvent.click(screen.getByRole('button', { name: 'Plans' }))
+  const fold = screen.getByRole('button', { name: 'Plans' })
+  if (fold.getAttribute('aria-expanded') === 'false') fireEvent.click(fold)
   return mounted
 }
 

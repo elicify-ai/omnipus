@@ -53,12 +53,12 @@ it('A keeps Board at the dock ceiling after parent hydration on both initial and
   } finally { mounted.unmount(); unsubscribe() }
 })
 
-it('B checking Show done expands the collapsed band and makes completed plans visible immediately', async () => {
+it('T20/T23 Unhide done plans starts unchecked in the open band and reveals completed plans immediately', async () => {
   const user = userEvent.setup()
   renderLayout(<PlansFilterBand plans={[layoutPlan({ state: 'done', title: 'Completed plan' })]} tasks={[]} agents={[layoutAgent()]} selectedPlanId={null} onSelectPlan={vi.fn()} onNewPlan={vi.fn()} onEditPlan={vi.fn()} onClearPlan={vi.fn()} showNewPlanTile={false} />)
-  expect(screen.getByRole('button', { name: 'Plans' })).toHaveAttribute('aria-expanded', 'false')
+  expect(screen.getByRole('button', { name: 'Plans' })).toHaveAttribute('aria-expanded', 'true')
   expect(screen.queryByRole('button', { name: 'Completed plan' })).not.toBeInTheDocument()
-  await user.click(screen.getByRole('checkbox', { name: 'Show done plans' }))
+  await user.click(screen.getByRole('checkbox', { name: 'Unhide done plans' }))
   expect(screen.getByRole('button', { name: 'Plans' })).toHaveAttribute('aria-expanded', 'true')
   expect(await screen.findByRole('button', { name: 'Completed plan' })).toBeVisible()
 })

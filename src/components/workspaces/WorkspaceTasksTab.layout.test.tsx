@@ -85,16 +85,17 @@ describe('Tasks panel layout', () => {
     }
   })
 
-  it('T2 places the Show done checkbox in the Plans header and toggles only completed tiles', async () => {
+  it('T23 places Unhide done plans beneath the tiles and still toggles only completed plans', async () => {
     const user = userEvent.setup()
     vi.mocked(fetchPlans).mockResolvedValue([layoutPlan(), layoutPlan({ id: 'done-plan', title: 'Completed launch', state: 'done' })])
     await renderTab()
-    const check = screen.getByRole('checkbox', { name: 'Show done plans' })
+    const check = screen.getByRole('checkbox', { name: 'Unhide done plans' })
     const header = screen.getByRole('heading', { name: 'Plans' }).parentElement!
-    expect(header).toContainElement(check)
+    expect(header).not.toContainElement(check)
+    expect(screen.getByTestId('plans-done-filter')).toContainElement(check)
     expect(within(header).getByRole('button', { name: 'New Plan' })).toBeVisible()
-    expect(within(header).getByText('Show done (1)')).toBeVisible()
-    await user.click(screen.getByRole('button', { name: 'Plans' })) // T12: expand before testing tile behavior.
+    expect(screen.getByText('Unhide done plans')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Plans' })).toHaveAttribute('aria-expanded', 'true')
     const strip = screen.getByTestId('all-tasks-tile').parentElement
     expect(header.nextElementSibling, 'the Accordion content directly follows the header').toContainElement(strip)
     expect(header.nextElementSibling).toHaveAttribute('role', 'region')
@@ -191,7 +192,7 @@ describe('Tasks panel layout', () => {
   it('T9 gives the plan strip and status headers the darker panel surface without filling empty columns', async () => {
     vi.mocked(fetchTasks).mockResolvedValue([layoutTask()])
     await renderTab()
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Plans' }))
+    expect(screen.getByRole('button', { name: 'Plans' })).toHaveAttribute('aria-expanded', 'true')
     const strip = screen.getByTestId('all-tasks-tile').parentElement!
     expect(strip).toHaveClass('bg-[var(--color-surface-1)]')
     const inbox = screen.getByRole('group', { name: 'Inbox column' })

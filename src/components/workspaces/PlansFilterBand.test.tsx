@@ -147,7 +147,8 @@ function renderBand(overrides: Partial<React.ComponentProps<typeof PlansFilterBa
       <PlansFilterBand {...props} />
     </QueryClientProvider>,
   )
-  fireEvent.click(screen.getByRole('button', { name: 'Plans' })) // T12: retained tile tests run expanded.
+  const fold = screen.getByRole('button', { name: 'Plans' })
+  if (fold.getAttribute('aria-expanded') === 'false') fireEvent.click(fold) // T20: plans already start open.
   return { onSelectPlan, onNewPlan, onEditPlan, onClearPlan, ...utils }
 }
 

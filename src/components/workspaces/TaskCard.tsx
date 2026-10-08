@@ -1,12 +1,13 @@
 import { useId } from 'react'
 import { cn } from '@/lib/utils'
 import type { Task, Agent, Plan } from '@/lib/api'
-import { CheckSquare, WarningCircle } from '@phosphor-icons/react'
-import { RollupBadge } from './RollupBadge'
+import { CheckSquare, HandPalm, WarningCircle } from '@phosphor-icons/react'
+import { useToolApprovalStore } from '@/store/toolApproval'
+import { taskAwaitingApproval } from './TaskActivityChip'
 import { TaskChildren } from './TaskChildren'
 import { TaskActionButton } from './TaskActionButton'
-import { TaskActivityChip } from './TaskActivityChip'
 import { PriorityBadge } from './PriorityBadge'
+import { TaskElapsedTime } from './TaskElapsedTime'
 import { RunningIndicator } from '@/components/ui/RunningIndicator'
 import { TaskDetailsPopover } from './WorkItemDetails'
 import { WordBoundaryText } from '@/components/ui/word-boundary-text'
@@ -14,92 +15,12 @@ import { taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
 import type { BoardAltitude } from '@/store/workspacesStore'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
 
-// ── Task-attempt status affordance (ADR-049 FR-090, SD-C12; two-level model)
-// ─────────
-//
-// "attempt N of M" is sourced from the real, server-set `Task.attempt_count`
-// wire field (contract C17) against `Task.effective_max_attempts` — the TASK
-// ATTEMPT limit the server actually enforces for this task (the task's own
-// max_attempts, else the global task-attempt default; founder decision
-// 2026-09-14) — never fabricated. Task attempts are the OUTER limit: how many
-// fresh runs a task gets. The INNER limit — goal tries within one run — is a
-// separate budget, rendered beside it as "try N of M" from `Task.judge_rounds`
-// against `Task.goal_max_rounds`, both read by the server off the task's goal
-// record (issue #710). The two are never mixed: "attempt 1 of 3 · try 5 of 20".
-//
-// The "paused" suffix is likewise grounded in real data: a task's owning Plan
-// (looked up via `Task.plan_id` in the `plans` prop) reporting
-// `state === 'running' && paused_reason` — NOT a fake/always-false flag.
-// Standalone (non-plan) judge-unavailable pauses are only knowable live via
-// the `task_status_changed`/`goal_status` WS frames; this card renders the
-// plan-derived pause honestly and simply omits the "paused" suffix when no
-// such data is available, rather than inventing a state.
-//
-// Fallback denominator ONLY for a response that omits
-// `effective_max_attempts` (and has no `max_attempts`). MUST track
-// pkg/config/planning.go's `DefaultTaskMaxAttempts` (3) — the shipped task
-// attempt limit. A stale value here renders a healthy task as already past a
-// ceiling it has not reached.
-export const DEFAULT_TASK_MAX_ATTEMPTS = 3
+// Keep the existing helper API stable; execution diagnostics now live in info
+// details instead of adding extra rows to the founder's five-row Board card.
+export { DEFAULT_TASK_MAX_ATTEMPTS, goalLoopStatusLabel } from './taskExecution'
 
-// `Task.attempt_count` counts runs already failed and consumed — the sole
-// writer, `consumeTaskAttempt` (pkg/agent/task_run_loop.go), increments and
-// persists it only once a run's outcome is known, AFTER that run finished.
-// While `status === 'in_progress'`, a new run is already executing that this
-// count doesn't reflect yet. Displaying the raw, not-yet-caught-up count for
-// the whole duration of that run reads as a stuck counter (live UAT:
-// "attempt 1/3" for the entirety of run 2). `status` omitted/anything else
-// terminal (done/failed) or otherwise not actively running renders the plain
-// used-up count, which is the correct reading once no run is in flight.
-export function goalLoopStatusLabel(
-  task: Pick<Task, 'attempt_count' | 'effective_max_attempts' | 'max_attempts' | 'status'> &
-    Partial<Pick<Task, 'judge_rounds' | 'goal_max_rounds'>>,
-  paused: boolean,
-): string | null {
-  const running = task.status === 'in_progress'
-  const attemptsUsed = task.attempt_count ?? 0
-  const triesLimit = task.goal_max_rounds ?? 0
-  const triesUsed = task.judge_rounds ?? 0
-  const showTries = triesLimit > 0 && triesUsed > 0
-  const parts: string[] = []
-  // A running task is always on some attempt, so once its tries are shown its
-  // attempt is shown too ("attempt 1 of 3 · try 5 of 20").
-  if (attemptsUsed > 0 || (running && showTries)) {
-    const max = task.effective_max_attempts ?? task.max_attempts ?? DEFAULT_TASK_MAX_ATTEMPTS
-    parts.push(`attempt ${running ? attemptsUsed + 1 : attemptsUsed} of ${max}`)
-  }
-  if (showTries) {
-    // Same in-flight rule as attempts: a running goal is on the try after the
-    // ones already used, never past its own limit.
-    const current = running ? Math.min(triesUsed + 1, triesLimit) : triesUsed
-    parts.push(`try ${current} of ${triesLimit}`)
-  }
-  if (parts.length === 0) return null
-  return `${parts.join(' · ')}${paused ? ' · paused' : ''}`
-}
-
-// Priority badge (P1 red, P2 orange, P3 yellow, P4 blue, P5 muted) is
-// `PriorityBadge` (./PriorityBadge.tsx) — a component with a literal,
-// per-priority `className` the design-system static scanners can read,
-// instead of a `className` string built from data. `PRIORITY_BADGE` (the
-// label-only lookup) lives there too now.
-
-/**
- * dnd-kit drag wiring for a single card — all three fields come from one
- * `useDraggable` call, so they are all-or-nothing in practice; grouping them
- * into one optional prop (rather than three independently-optional props)
- * makes that invariant explicit at the type level instead of by convention.
- *
- * `listeners` is narrowed to the non-undefined `SyntheticListenerMap` (dnd-kit's
- * own `DraggableSyntheticListeners = SyntheticListenerMap | undefined`) — a
- * `TaskCardDrag` with `drag` present but `listeners` undefined would be
- * representable otherwise, and that combination is exactly the "Space to
- * move" aria-label promising a dead key: dnd-kit's `useDraggable` returns
- * `listeners: undefined` only while `disabled: true` (never set here), but
- * the type itself doesn't rule it out. BoardView's DraggableTaskCard collapses
- * both optionality levels before constructing this prop (see `drag={listeners
- * ? {...} : undefined}` there) so a real, non-undefined `TaskCardDrag` always
- * carries real, non-undefined listeners.
+/** Every field comes from the same useDraggable call: either the whole card
+ * is wired, or it is a non-draggable card. Nested controls never activate it.
  */
 export interface TaskCardDrag {
   attributes: DraggableAttributes
@@ -109,209 +30,89 @@ export interface TaskCardDrag {
 
 interface TaskCardProps {
   task: Task
-  /**
-   * Plans in this workspace (ADR-049) — used only to look up the owning
-   * Plan's `paused_reason` for the goal-loop "paused" chip via `task.plan_id`.
-   * When absent, the paused suffix simply never renders (no fake state).
-   */
   plans?: Plan[]
-  /**
-   * Agents cache — required for delegation roll-up avatar rendering.
-   * When absent, roll-up avatars fall back to Robot icon + status colour.
-   */
   agents?: Agent[]
-  /**
-   * Board altitude. 'top-level' (default) = children collapsed;
-   * 'show-all' = children expanded inline under this card.
-   */
   altitude?: BoardAltitude
   onClick: () => void
   onChildClick?: (child: Task) => void
-  /**
-   * dnd-kit drag wiring — supplied only by BoardView's DraggableTaskCard,
-   * whose own wrapper `<div>` is a plain, non-interactive measurement node
-   * (see BoardView.tsx). Applying these to THIS component's own root keeps
-   * each card a single tab stop (WCAG 4.1.2) instead of nesting a second
-   * focusable/role="button" element around it.
-   */
   drag?: TaskCardDrag
-  /**
-   * Render the ADR-052 §6.8 ▶/■ action button (`TaskActionButton`). Default
-   * true. BoardView's `DragOverlay` sets this false on its purely-visual
-   * drag-ghost clone — an interactive-looking action button following the
-   * cursor mid-drag would be confusing, and the ghost is `aria-hidden`
-   * anyway (never keyboard/pointer reachable).
-   */
+  /** The purely visual drag clone exposes no action or info controls. */
   showActions?: boolean
-  /** The drag overlay is visual-only and must not expose details controls. */
   showDetails?: boolean
 }
 
-export function TaskCard({
-  task,
-  plans = [],
-  agents = [],
-  altitude = 'top-level',
-  onClick,
-  onChildClick,
-  drag,
-  showActions = true,
-  showDetails = true,
-}: TaskCardProps) {
+export function TaskCard({ task, plans = [], agents = [], altitude = 'top-level', onClick, onChildClick, drag, showActions = true, showDetails = true }: TaskCardProps) {
   const priority = task.priority ?? 3
-  // FR-022/SP-41 with founder decisions PI1/PI2/PI3 (2026-10-05):
-  // running tasks share the animated arrow, without a token count.
   const running = task.status === 'in_progress'
-  const tags = task.tags ?? []
-  const visibleTags = tags.slice(0, 3)
-  const overflowTagCount = tags.length - visibleTags.length
-  const owningPlan = task.plan_id ? plans.find((p) => p.id === task.plan_id) : undefined
-  const planPaused = owningPlan?.state === 'running' && !!owningPlan.paused_reason
-  const goalLoopLabel = goalLoopStatusLabel(task, planPaused)
+  const queue = useToolApprovalStore((state) => state.queue)
+  const approval = taskAwaitingApproval(task, queue)
+  const showsExecutionTime = running || task.status === 'done' || task.status === 'failed'
+  const agentName = task.agent_name ?? agents.find((agent) => agent.id === task.agent_id)?.name ?? task.agent_id ?? 'Unassigned'
   const todos = task.todos ?? []
-  const doneTodos = todos.filter((t) => t.status === 'completed').length
-  const rollup = task.rollup ?? []
-  const hasRollup = rollup.length > 0
-  const showChildren = altitude === 'show-all'
+  const doneTodos = todos.filter((todo) => todo.status === 'completed').length
   const isDraggable = Boolean(drag)
-
-  // dnd-kit hands back its pointer/keyboard activators typed as bare
-  // `Function`s (DraggableSyntheticListeners = Record<string, Function>);
-  // narrow them to the real per-event signature so they can be invoked and
-  // composed with this card's own onKeyDown below. The KeyboardSensor's
-  // onKeyDown activator lifts the card on Space — it must keep firing
-  // alongside (not instead of) TaskCard's own Enter-to-open handling.
-  const dragKeyDown = drag?.listeners.onKeyDown as
-    | ((event: React.KeyboardEvent<HTMLDivElement>) => void)
-    | undefined
-  const dragPointerDown = drag?.listeners.onPointerDown as
-    | ((event: React.PointerEvent<HTMLDivElement>) => void)
-    | undefined
-
-  // "Enter to open, Space to move" used to be baked into aria-label, which
-  // REPLACED the accessible name entirely (name = title + key metadata comes
-  // from the card's own visible content — priority badge, title, checklist
-  // count, agent/milestone tags — when aria-label is absent) and duplicated
-  // dnd-kit's own drag instructions (`drag.attributes['aria-describedby']`,
-  // wired to BOARD_SCREEN_READER_INSTRUCTIONS in BoardView, which already
-  // explains the Space-to-lift gesture). Moving it into aria-describedby
-  // instead keeps the name = content, and combines with dnd-kit's own
-  // description id (rather than replacing it) so neither hint is lost.
+  const dragKeyDown = drag?.listeners.onKeyDown as ((event: React.KeyboardEvent<HTMLDivElement>) => void) | undefined
+  const dragPointerDown = drag?.listeners.onPointerDown as ((event: React.PointerEvent<HTMLDivElement>) => void) | undefined
   const enterSpaceHintId = useId()
-  const describedBy = isDraggable
-    ? [drag?.attributes['aria-describedby'], enterSpaceHintId].filter(Boolean).join(' ')
-    : undefined
+  const describedBy = isDraggable ? [drag?.attributes['aria-describedby'], enterSpaceHintId].filter(Boolean).join(' ') : undefined
 
-  return (
-    <div
-      ref={drag?.activatorRef}
-      role="button"
-      tabIndex={0}
-      aria-disabled={drag?.attributes['aria-disabled']}
-      aria-pressed={drag?.attributes['aria-pressed']}
-      aria-roledescription={drag?.attributes['aria-roledescription']}
-      aria-describedby={describedBy}
-      onClick={onClick}
-      onPointerDown={dragPointerDown}
-      onKeyDown={(e) => {
-        // Ignore keydowns that bubbled up from a nested interactive control
-        // (a subtask row button in TaskChildren, or its error-state Retry
-        // button) — this card's own Enter/Space handling only applies when
-        // the CARD ITSELF is the event target, otherwise preventDefault()
-        // below cancels the nested control's own native Enter-activation and
-        // hijacks the keypress into opening THIS (parent) card instead.
-        if (e.target !== e.currentTarget) return
-        dragKeyDown?.(e)
-        // Space is reserved for dnd-kit's keyboard-drag lift when the card IS
-        // draggable (see BoardView's KeyboardSensor `keyboardCodes` override)
-        // — Enter opens the task there. When there's no drag context at all
-        // (e.g. ExecutionView's read-only cards), Space has no other job, so
-        // a role="button" that ignores it would break WCAG 4.1.2 — let it
-        // open the task too.
-        if (e.key === 'Enter' || (!isDraggable && e.key === ' ')) {
-          e.preventDefault()
-          onClick()
-        }
-      }}
-      className={cn(
-        'group relative min-h-[var(--tasks-board-card-height,auto)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] cursor-pointer',
-        'transition-colors hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
-        hasRollup ? 'border-[var(--color-accent)]/30' : undefined,
-      )}
-    >
-      {isDraggable && (
-        <span id={enterSpaceHintId} className="sr-only">
-          Enter to open, Space to move.
-        </span>
-      )}
-
-      <div data-task-card-content={showDetails ? 'item' : 'visual'} className="flex min-w-0 flex-col gap-[var(--space-1)] p-[var(--space-2)]">
-      {/* Info and eligible actions are always visible, isolated from open/drag. */}
-      <div className="flex min-w-0 items-start gap-[var(--space-1)]">
+  return <div
+    ref={drag?.activatorRef}
+    role="button"
+    tabIndex={0}
+    aria-label={`${task.title}, status ${taskDisplayLabel(task)}`}
+    aria-disabled={drag?.attributes['aria-disabled']}
+    aria-pressed={drag?.attributes['aria-pressed']}
+    aria-roledescription={drag?.attributes['aria-roledescription']}
+    aria-describedby={describedBy}
+    onClick={onClick}
+    onPointerDown={dragPointerDown}
+    onKeyDown={(event) => {
+      // A nested info/action/subtask has its own native keyboard activation.
+      if (event.target !== event.currentTarget) return
+      dragKeyDown?.(event)
+      // Draggable cards reserve Space for lift; all cards open on Enter.
+      if (event.key === 'Enter' || (!isDraggable && event.key === ' ')) {
+        event.preventDefault()
+        onClick()
+      }
+    }}
+    className={cn(
+      'group relative min-h-[var(--tasks-board-card-height,auto)] rounded-lg border border-l-[length:var(--space-1)] border-[var(--color-border)] bg-[var(--color-surface-1)] cursor-pointer',
+      'transition-colors hover:bg-[var(--color-surface-2)]/40',
+    )}
+    style={{ borderLeftColor: taskDisplayColor(task) }}
+  >
+    {isDraggable && <span id={enterSpaceHintId} className="sr-only">Enter to open, Space to move.</span>}
+    <div data-task-card-content={showDetails ? 'item' : 'visual'} className="flex min-w-0 flex-col gap-[var(--space-1)] p-[var(--space-2)]">
+      {/* T24: controls only. The title never competes with their width. */}
+      <div data-task-card-row="controls" className="flex min-w-0 items-center justify-between gap-[var(--space-1)]">
         <PriorityBadge priority={priority} className="shrink-0 bg-transparent p-0 text-[length:var(--type-caption-size)] font-bold leading-tight" />
-        <WordBoundaryText as="p" text={task.title} className="h-[calc(var(--type-body-compact-size)*var(--type-body-compact-line-height)*2)] min-w-0 max-w-full flex-1 line-clamp-2 whitespace-normal break-normal wrap-break-word hyphens-none text-[length:var(--type-body-compact-size)] font-medium leading-[var(--type-body-compact-line-height)] text-[var(--color-secondary)]" />
-        {showDetails && <TaskDetailsPopover task={task} plans={plans} agents={agents} onOpenTask={onClick} />}
-        {showActions && <TaskActionButton task={task} />}
-      </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-        <span className="inline-flex items-center gap-[var(--space-1)]" style={{ color: taskDisplayColor(task) }}>
-          {running ? <RunningIndicator /> : <span aria-hidden="true">●</span>}
-          <span>{taskDisplayLabel(task)}</span>
-          {(task.agent_name || task.agent_id || todos.length > 0 || tags.length > 0) && <span aria-hidden="true" className="text-[var(--color-muted)]">·</span>}
-        </span>
-        {(task.agent_name || task.agent_id) && <span className="inline-flex min-w-0 max-w-full items-center gap-[var(--space-1)]"><span className="min-w-0 break-normal wrap-break-word">{task.agent_name ?? task.agent_id}</span>{(todos.length > 0 || tags.length > 0) && <span aria-hidden="true">·</span>}</span>}
-        {todos.length > 0 && <span className="inline-flex items-center gap-[var(--space-1)]"><CheckSquare size={11} aria-hidden="true" /><span>{doneTodos}/{todos.length}</span>{tags.length > 0 && <span aria-hidden="true">·</span>}</span>}
-        {visibleTags.map((tag, index) => <span key={tag} className="inline-flex min-w-0 max-w-full items-center gap-[var(--space-1)]"><WordBoundaryText text={tag} className="break-normal wrap-break-word" />{(index < visibleTags.length - 1 || overflowTagCount > 0) && <span aria-hidden="true">·</span>}</span>)}
-        {overflowTagCount > 0 && <span>+{overflowTagCount}</span>}
-      </div>
-
-      {/* Delegation roll-up badge (only on parent cards with active sub-agent runs) */}
-      {hasRollup && (
-        <RollupBadge rollup={rollup} agents={agents} plain />
-      )}
-
-      {/* Founder decision 2026-09-15: the server's Task.assignee_warning — the
-          assigned agent cannot finish this task as configured. The text names
-          the fix; starting the task anyway ends it failed at once. */}
-      {task.assignee_warning && (
-        <p
-          data-testid="task-assignee-warning"
-          className="mt-[var(--space-2)] flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] leading-snug text-[color:var(--color-warning)]"
-        >
-          <WarningCircle size={11} weight="bold" className="mt-[var(--border-width-hairline)] flex-shrink-0" aria-hidden="true" />
-          <span className="min-w-0 wrap-anywhere">{task.assignee_warning.message}</span>
-        </p>
-      )}
-
-      {/* Goal-loop status affordance (FR-090) — "attempt N of M · try T of L"
-          (+"· paused" when the owning plan reports paused_reason while running). */}
-      {goalLoopLabel && (
-        <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)]">
-          <span
-            className={cn(
-              'text-[length:var(--type-caption-size)]',
-              planPaused
-                ? 'text-[color:var(--color-warning)]'
-                : 'text-[var(--color-muted)]',
-            )}
-          >
-            {goalLoopLabel}
-          </span>
+        <div className="flex shrink-0 items-center gap-[var(--space-1)]">
+          {approval && <span data-testid="task-approval-alert" role="img" aria-label={`Waiting for your approval to use ${approval.toolName}`} className="inline-flex text-[color:var(--color-warning)]"><HandPalm size={13} aria-hidden="true" /></span>}
+          {task.assignee_warning && <span data-testid="task-assignee-alert" role="img" aria-label={task.assignee_warning.message} className="inline-flex text-[color:var(--color-warning)]"><WarningCircle size={13} aria-hidden="true" /></span>}
+          {showDetails && <TaskDetailsPopover task={task} plans={plans} agents={agents} onOpenTask={onClick} />}
+          {showActions && <TaskActionButton task={task} />}
         </div>
-      )}
-
-      {/* "In progress · last activity 5 s ago" (founder decision 2026-09-14) —
-          renders only while in progress with server-reported activity. */}
-      <TaskActivityChip task={task} plain />
-
-      {/* Nested children — only when altitude = 'show-all' */}
-      {showChildren && (
-        <TaskChildren
-          parentTaskId={task.id}
-          onChildClick={onChildClick ?? onClick}
-        />
-      )}
       </div>
+      {/* T25: one full-width, fixed two-line title slot, below the controls. */}
+      <WordBoundaryText as="p" text={task.title} className="h-[calc(var(--type-body-compact-size)*var(--type-body-compact-line-height)*2)] w-full min-w-0 max-w-full line-clamp-2 whitespace-normal break-normal wrap-break-word hyphens-none text-[length:var(--type-body-compact-size)] font-medium leading-[var(--type-body-compact-line-height)] text-[var(--color-secondary)]" />
+      {/* T26: one execution line; truncating a long agent keeps separators
+          between values, never stranded at a line edge. Full name is in info. */}
+      <div data-testid="task-execution-row" className="flex min-w-0 items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+        <span className="min-w-0 flex-1 truncate">{agentName}</span>
+        {showsExecutionTime && <>
+          <span aria-hidden="true" className="shrink-0">·</span>
+          {running && <RunningIndicator className="shrink-0" />}
+          <TaskElapsedTime key={task.started_at ?? 'execution'} task={task} live={showDetails} />
+        </>}
+      </div>
+      {todos.length > 0 && <div data-testid="task-checklist-row" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+        <CheckSquare size={11} aria-hidden="true" /><span>{doneTodos}/{todos.length}</span>
+      </div>}
+      {/* This existing optional altitude is not used by the Tasks panel's
+          top-level Board; preserve explicit child expansion for its callers. */}
+      {altitude === 'show-all' && <TaskChildren parentTaskId={task.id} onChildClick={onChildClick ?? onClick} />}
     </div>
-  )
+  </div>
 }

@@ -225,7 +225,8 @@ function renderBand(plans: Plan[]) {
     </QueryClientProvider>,
   )
   // T12 collapses Plans on open; placement assertions exercise the real expanded tiles.
-  fireEvent.click(within(mounted.container).getByRole('button', { name: 'Plans' }))
+  const fold = within(mounted.container).getByRole('button', { name: 'Plans' })
+  if (fold.getAttribute('aria-expanded') === 'false') fireEvent.click(fold)
   return mounted
 }
 

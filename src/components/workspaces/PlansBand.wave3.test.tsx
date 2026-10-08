@@ -116,7 +116,8 @@ function renderBand(plans: Plan[], tasks: BandProps['tasks'] = []) {
         />
       </QueryClientProvider>,
     )
-  fireEvent.click(mounted.getByRole('button', { name: 'Plans' })) // T12: preserve completed-plan/overflow oracles.
+  const fold = mounted.getByRole('button', { name: 'Plans' })
+  if (fold.getAttribute('aria-expanded') === 'false') fireEvent.click(fold) // T20 default, unchanged completed-plan/overflow oracles.
   return { mounted, rerenderWith, onSelectPlan }
 }
 
@@ -144,20 +145,20 @@ describe('Plans band — SP-36: done plans hidden by default behind a "Show done
     expect(mounted.queryByTestId('plan-filter-tile-plan-done')).not.toBeInTheDocument()
   })
 
-  it('the "Show done" control is a checkbox, starts unchecked, and carries its count', () => {
+  it('T23 Unhide done plans is a checkbox, starts unchecked, and uses the exact new label', () => {
     const done = makePlan({ id: 'plan-done', title: 'Finished plan', state: 'done' })
     const { mounted } = renderBand([done])
-    const toggle = mounted.getByRole('checkbox', { name: 'Show done plans' })
+    const toggle = mounted.getByRole('checkbox', { name: 'Unhide done plans' })
     expect(toggle.getAttribute('aria-checked')).toBe('false')
-    // The hidden state is visible: the label names how many are hidden.
-    expect(mounted.getByText('Show done (1)')).toBeInTheDocument()
+    // T23 replaces the old counted header label, not the hiding/checked-state contract.
+    expect(mounted.getByText('Unhide done plans')).toBeInTheDocument()
   })
 
   it('turning the toggle on reveals done plans alongside the live ones', () => {
     const done = makePlan({ id: 'plan-done', title: 'Finished plan', state: 'done' })
     const draft = makePlan({ id: 'plan-draft', title: 'Active plan', state: 'draft' })
     const { mounted } = renderBand([draft, done])
-    const toggle = mounted.getByRole('checkbox', { name: 'Show done plans' })
+    const toggle = mounted.getByRole('checkbox', { name: 'Unhide done plans' })
 
     fireEvent.click(toggle)
     expect(toggle.getAttribute('aria-checked')).toBe('true')
@@ -168,7 +169,7 @@ describe('Plans band — SP-36: done plans hidden by default behind a "Show done
   it('turning the toggle back off hides done plans again (state round-trip)', () => {
     const done = makePlan({ id: 'plan-done', title: 'Finished plan', state: 'done' })
     const { mounted } = renderBand([done])
-    const toggle = mounted.getByRole('checkbox', { name: 'Show done plans' })
+    const toggle = mounted.getByRole('checkbox', { name: 'Unhide done plans' })
 
     // Intermediate assertion pins the hidden start state — the click below
     // must prove a transition, not a static condition.
@@ -204,7 +205,7 @@ describe('Plans band — SP-36: done plans hidden by default behind a "Show done
 
   it('the checkbox does not render at all when nothing is done (a bare "Show done (0)" would be noise)', () => {
     const { mounted } = renderBand([makePlan({ title: 'Active plan', state: 'draft' })])
-    expect(mounted.queryByRole('checkbox', { name: 'Show done plans' })).not.toBeInTheDocument()
+    expect(mounted.queryByRole('checkbox', { name: 'Unhide done plans' })).not.toBeInTheDocument()
   })
 })
 

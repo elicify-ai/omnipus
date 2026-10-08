@@ -1,7 +1,7 @@
 // T7's single regression lives in ui so design-system-components.json records
 // its executed unit check for both published composites. It mounts the real Tasks consumer.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { screen, within } from '@testing-library/react'
+import { fireEvent, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { WorkspaceTasksTab } from '../workspaces/WorkspaceTasksTab'
 import { useUiStore } from '@/store/ui'
@@ -29,7 +29,7 @@ describe('Tasks panel layout', () => {
     const user = userEvent.setup()
     renderLayout(<WorkspaceTasksTab workspaceId="ws-layout" />)
     await screen.findByText('Ray report')
-    await user.click(screen.getByRole('button', { name: 'Plans' })) // T12 only changes the tile setup.
+    expect(screen.getByRole('button', { name: 'Plans' })).toHaveAttribute('aria-expanded', 'true') // T20 existing plans start open.
     const group = screen.getByRole('radiogroup', { name: 'Task view' })
     expect(group).toHaveAttribute('data-slot', 'view-switch')
     for (const id of ['tasks-agent-filter', 'tasks-tag-filter']) expect(screen.getByTestId(id)).toHaveAttribute('data-slot', 'filter-menu')
@@ -37,7 +37,10 @@ describe('Tasks panel layout', () => {
     expect(board).toHaveClass('border-0', 'bg-transparent', 'text-[var(--color-accent)]')
     const card = screen.getByText('Ray report').closest('[role="button"]')!
     expect(within(card as HTMLElement).getByText('Ray').tagName).toBe('SPAN')
-    expect(within(card as HTMLElement).getByText('docs').tagName).toBe('SPAN')
+    expect(within(card as HTMLElement).queryByText('docs')).not.toBeInTheDocument() // T26: tags only in info/List.
+    fireEvent.pointerEnter(within(card as HTMLElement).getByRole('button', { name: 'Task details: Ray report' }), { pointerType: 'mouse' })
+    expect(within(screen.getByRole('dialog', { name: 'Task details' })).getByText('docs')).toBeVisible()
+    await user.keyboard('{Escape}')
     expect(within(screen.getByTestId('plan-filter-tile-plan-layout')).getByText('Ray').tagName).toBe('SPAN')
     expect(card.querySelector('.rounded-full.border')).toBeNull()
     board.focus()

@@ -38,7 +38,8 @@ it('T3 wraps titles at word boundaries, contains long URLs, and reserves measure
         <section aria-label="Graph titles"><GraphView tasks={[layoutTask({ title })]} agents={[]} onTaskClick={vi.fn()} /></section>
       </>)
       const plan = within(screen.getByRole('region', { name: 'Plan titles' }))
-      fireEvent.click(plan.getByRole('button', { name: 'Plans' }))
+      const fold = plan.getByRole('button', { name: 'Plans' })
+      if (fold.getAttribute('aria-expanded') === 'false') fireEvent.click(fold)
       expect(getComputedStyle(plan.getByRole('button', { name: title })).whiteSpace).toBe('normal')
       const titles = [
         plan.getByText(title),
@@ -61,7 +62,7 @@ it('T3 wraps titles at word boundaries, contains long URLs, and reserves measure
       expect(titles[2]).toHaveClass('truncate')
       expect(titles[2].textContent).toBe(title)
       expect(titles[1].closest('[role="button"]'), 'T15 title and info/actions share the task card without replacing its main action').toHaveAttribute('role', 'button')
-      expect(titles[1]).toHaveClass('flex-1', 'max-w-full', 'min-w-0')
+      expect(titles[1]).toHaveClass('w-full', 'max-w-full', 'min-w-0') // T25 returns the full card width.
       expect(titles[1]).not.toHaveClass('pr-[var(--space-4)]')
       expect(screen.queryByRole('tooltip'), 'full titles do not depend on a clipped overlay').not.toBeInTheDocument()
       mounted.unmount()
