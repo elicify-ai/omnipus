@@ -2238,7 +2238,7 @@ func TestAppendSteeredInstruction_RevivedTurnRunsTheNewInstructionNotTheOldOne(t
 	const replacement = "stop, do this instead: summarise the release notes"
 	childID, _ := launchSteeredChild(t, al, parentID, "call-revive-instruction", original)
 
-	if err := al.appendSteeredInstruction(childID, testDefaultAgentID, replacement); err != nil {
+	if err := al.appendSteeredInstruction(childID, testDefaultAgentID, replacement, false); err != nil {
 		t.Fatalf("appendSteeredInstruction: %v", err)
 	}
 
@@ -2268,7 +2268,7 @@ func TestAppendSteeredInstruction_ReportsAnInstructionThatCannotLand(t *testing.
 
 	// No session of this id exists in any store, so there is nowhere for the
 	// instruction to land.
-	err := al.appendSteeredInstruction("01JAAAAAAAAAAAAAAAAAAAAAAA", testDefaultAgentID, "do this instead")
+	err := al.appendSteeredInstruction("01JAAAAAAAAAAAAAAAAAAAAAAA", testDefaultAgentID, "do this instead", false)
 
 	if err == nil {
 		t.Fatal("appending an instruction that cannot land reported success — the caller will dispatch and re-run the old instruction")

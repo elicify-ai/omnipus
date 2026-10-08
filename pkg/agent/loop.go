@@ -133,10 +133,6 @@ type AgentLoop struct {
 	// Turn tracking
 	turnSeq        atomic.Uint64
 	activeRequests activeRequestTracker
-	// delegatedRateLimitSleep is a per-loop test seam. Production leaves it
-	// nil and callProvider uses sleepWithContext; tests can record the exact
-	// retry delays without a wall-clock assertion or process-global mutation.
-	delegatedRateLimitSleep func(context.Context, time.Duration) error
 
 	// mediaRefsDropped counts media refs that could not be resolved (unknown ref
 	// or file missing on disk). Observable via GetMediaRefsDropped for tests and
@@ -1837,6 +1833,13 @@ func (al *AgentLoop) runAgentLoop(
 		}
 	}
 
+	// A user message saved after a Stop lifts the goal keeper's Stop-pause as
+	// its turn STARTS, so the client is told the goal is active again while the
+	// turn runs (not only once it ends). Cheap no-op unless a pause is held.
+	if (opts.UserInitiated || opts.IsTaskRun) && opts.TranscriptStore != nil && opts.TranscriptSessionID != "" {
+		al.liftGoalKeeperStopPauseIfNewTurn(opts.TranscriptStore, opts.TranscriptSessionID)
+	}
+
 	ts, admissionErr := al.newTurnStateForAdmission(agent, opts)
 	if admissionErr != nil {
 		return "", admissionErr
@@ -2339,13 +2342,7 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 	}
 	llm := typedExitError(code, cause)
 
-	if code == CodeTurnTimedOut && ts.parentTurnState != nil {
-		// The delegation coordinator owns live publication after it settles
-		// timer ownership. Keep the child's private terminal record here.
-		ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
-	} else {
-		al.emitTurnErrorFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm)
-	}
+	al.emitTurnErrorFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm)
 	level("agent", "Turn exited: "+string(code), map[string]any{
 		"agent_id":  ts.agent.ID,
 		"iteration": iteration,

@@ -179,9 +179,7 @@ type streamedBytesKey struct{}
 // StreamedBytesCheck reports how many bytes of the CURRENT attempt have
 // already been streamed to the user (0 = none). The chain consults it before
 // deciding an in-place retry (C-10): once bytes have flowed, a retry would
-// duplicate visible AND persisted content — the same defensive boundary the
-// delegated single-provider retry applies (pkg/agent
-// loop_provider_retry.go::callProvider). The caller's fn must count the
+// duplicate visible AND persisted content. The caller's fn must count the
 // current attempt only (the agent loop resets it per attempt); chains whose
 // closure never streams (multi-candidate) leave the check absent or at 0 and
 // the guard stays inert.

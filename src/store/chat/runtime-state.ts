@@ -29,6 +29,16 @@ export const sawReplayMessageThisTurn: Record<string, boolean> = {}
 // misattribute to whatever session happens to be foreground — see F-S3 below.
 export const pendingCancelAckSids = new Set<string>()
 
+// Founder ruling 2026-10-07 (UAT row S7): a /stop-redirect turn is a redirect,
+// not an interruption. Session ids this client has sent a `redirect` frame for
+// and not yet seen the server's answer to (the next typed `error` frame for the
+// session — turn_canceled when the redirect stopped the turn, anything else
+// when it was refused). The turn_canceled frame itself carries no cause, so the
+// sender's own knowledge is what lets the live view finalise the streaming
+// bubble as a normal answer (partial text kept, no "(interrupted)") instead of
+// treating it as an error. Cleared on socket drop with pendingCancelAckSids.
+export const pendingRedirectSids = new Set<string>()
+
 // #823 catch-up redesign, Opus review round 2 item 7 (LOW): applySeqGate's
 // gap branch (frames.ts) sends `attach_session{S, cursor}` to recover from a
 // sequence gap. Without a guard, EVERY subsequent gapped frame that arrives

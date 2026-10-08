@@ -113,8 +113,6 @@ describe('oldPresetCompat: a persisted complete policy map round-trips unchanged
         agentType="Main"
         tools={allAllowCfg}
         onChange={onChange}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )
@@ -158,8 +156,6 @@ describe('oldPresetCompat: a persisted complete policy map round-trips unchanged
         agentType="Main"
         tools={mixedCfg}
         onChange={onChange}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )
@@ -201,8 +197,6 @@ describe('oldPresetCompat: a persisted complete policy map round-trips unchanged
         agentType="Main"
         tools={mostlyDenyCfg}
         onChange={onChange}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )
@@ -243,8 +237,6 @@ describe('oldPresetCompat: a persisted complete policy map round-trips unchanged
         agentType="Main"
         tools={customCfg}
         onChange={onChange}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )
@@ -289,8 +281,6 @@ describe('oldPresetCompat: a persisted complete policy map round-trips unchanged
         agentType="Main"
         tools={incompleteCfg}
         onChange={onChange}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )

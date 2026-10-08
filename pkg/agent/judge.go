@@ -719,7 +719,7 @@ func summarizeVerdict(v *task.JudgeVerdict, couldNotVerifyIDs []string) string {
 //
 // "ask" now also runs, but ONLY when it would run exactly the way the D1
 // Auto submode already lets an ordinary interactive bash call run
-// unprompted: God Mode active, or Auto-approve active for this agent
+// unprompted: God Mode active, or Auto-approve on
 // (mirrors ShellPermissionGate.liveMode's own decision, loop_policy.go) —
 // never a live approval card, preserving D2 rule 2's actual invariant ("no
 // interactive approver mid-loop"), just extended to the mechanism ADR-092
@@ -731,9 +731,9 @@ func summarizeVerdict(v *task.JudgeVerdict, couldNotVerifyIDs []string) string {
 // Shared by runMachineCheck (below) and TaskAssigneeCannotFinish's own
 // pre-run check-runner gate (task_assignee_readiness.go) — the two must
 // never disagree (TestTaskReadiness_CheckRunnerPolicyMatchesTheJudge).
-func (al *AgentLoop) machineCheckAskPolicyAcceptable(agentID, policy string) bool {
+func (al *AgentLoop) machineCheckAskPolicyAcceptable(policy string) bool {
 	return policy == string(config.ToolPolicyAsk) &&
-		(GodModeActive(al.GetConfig()) || al.autoApproveActive(agentID, "", false))
+		(GodModeActive(al.GetConfig()) || al.autoApproveActive(""))
 }
 
 // runMachineCheck dispatches ONE kind:check criterion through the assignee
@@ -778,7 +778,7 @@ func (al *AgentLoop) runMachineCheck(
 	}
 
 	policy := tools.EffectiveToolPolicy(agentInst.LoadToolPolicy(), tools.ScopeCore, agentInst.AgentType, "bash")
-	if policy != string(config.ToolPolicyAllow) && !al.machineCheckAskPolicyAcceptable(assigneeAgentID, policy) {
+	if policy != string(config.ToolPolicyAllow) && !al.machineCheckAskPolicyAcceptable(policy) {
 		// G-3/FR-116/MAJ-13: bash is policy-denied for this agent → the
 		// mechanism could not run under the agent's OWN policy (never a
 		// privileged bypass, Constraint #6) → unable_to_verify, re-run, never

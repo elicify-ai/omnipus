@@ -20,7 +20,7 @@
  *   - Row 29 (RG-4): each of EventKindLLMRetry's seven other reasons
  *     (streaming_reset, timeout, context_limit, empty_response,
  *     orphan-tool-markup repair, truncated tool call, truncation continue)
- *     AND the delegated path's rate_limit retries produce NO provider_retry
+ *     AND the rate_limit reason (formerly the delegated path's) produce NO provider_retry
  *     frame — §13 keeps the delegated attempt semantics (1..2 of 2) visibly
  *     separate from C-8's root semantics (2..3 of 3).
  *
@@ -370,7 +370,7 @@ func TestSentinel_ProviderBodyAppearsOnlyInDetail_Scan1And3(t *testing.T) {
 // ── Row 29 (RG-4): the seven other reasons + delegated rate_limit ───────────
 //
 // Each EventKindLLMRetry reason stays unforwarded; the delegated path's
-// rate_limit retries stay unannounced (§13: delegated policy unchanged).
+// rate_limit reason stays unannounced (the delegated retry loop was deleted, #857).
 // Green today BY DESIGN — EventKindLLMRetry has no hubSyncTap arm — and the
 // positive control is Test A's compile-red provider_retry arm: once GREEN
 // adds the forwarding, this test is what keeps the other reasons dark.
@@ -386,7 +386,7 @@ func TestLLMRetry_OtherReasonsAndDelegatedRateLimit_NeverForwarded(t *testing.T)
 		"orphan_tool_markup",  // orphan-tool-markup repair
 		"tool_call_truncated", // truncated tool call
 		"truncation_continue", // truncation continue
-		"rate_limit",          // delegated path (loop_provider_retry.go) — stays unforwarded
+		"rate_limit",          // former delegated-path reason (retry deleted, #857) — stays unforwarded
 	}
 	for _, reason := range reasons {
 		h.hubSyncTap(agent.Event{

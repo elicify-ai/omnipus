@@ -211,12 +211,6 @@ func (ts *turnState) Finish(isHardAbort bool) {
 		}
 	})
 
-	// If this is a graceful finish (not hard abort), signal to children
-	if !isHardAbort && ts.parentTurnState == nil {
-		// This is a root turn finishing gracefully
-		ts.parentEnded.Store(true)
-	}
-
 	// Cancel the turn context
 	if ts.cancelFunc != nil {
 		ts.cancelFunc()
@@ -274,14 +268,6 @@ func (ts *turnState) Finished() chan struct{} {
 		ts.finishedChan = make(chan struct{})
 	}
 	return ts.finishedChan
-}
-
-// IsParentEnded checks if the parent turn has ended
-func (ts *turnState) IsParentEnded() bool {
-	if ts.parentTurnState == nil {
-		return false
-	}
-	return ts.parentTurnState.isFinished.Load()
 }
 
 // IsAlive returns true when the turn has not yet finished. This is the

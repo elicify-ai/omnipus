@@ -96,10 +96,11 @@ func TestDelegateTool_SteerAndRespond_InFlightStopFence_VisibleRetryErrorNoReviv
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			const sessionID = "child-inflight-fence"
-			tool, lc, _, _ := newADR053TestTool(t)
+			tool, lc, inbox, _ := newADR053TestTool(t)
 			frs := &fakeReviverSink{}
 			tool.SetSteeringSink(frs)
 			seedFencedChild(t, lc, sessionID)
+			seedOpenQuestion(t, inbox, "parent-1", sessionID, "corr-fence")
 
 			ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 			result := tool.Execute(ctx, tc.args(sessionID))

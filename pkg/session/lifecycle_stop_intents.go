@@ -29,6 +29,17 @@ func (s *LifecycleStore) UnfinishedStopIntents(sessionID string) ([]UnfinishedSt
 	mu := s.Lock(sessionID)
 	mu.Lock()
 	defer mu.Unlock()
+	return s.UnfinishedStopIntentsLocked(sessionID)
+}
+
+// UnfinishedStopIntentsLocked reads the same accepted controls without taking
+// the record lock again. The caller MUST hold Lock(sessionID), for example in
+// a Mutate callback, so a restart landing can recheck human Stop acceptance
+// atomically with its execution identity and the ledger-backed stop write.
+func (s *LifecycleStore) UnfinishedStopIntentsLocked(sessionID string) ([]UnfinishedStopIntent, error) {
+	if err := validateLifecycleSessionID(sessionID); err != nil {
+		return nil, err
+	}
 	lines, err := s.readControlLedgerLocked(sessionID)
 	if err != nil || len(lines) == 0 {
 		return nil, err

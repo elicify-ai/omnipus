@@ -215,6 +215,7 @@ func TestBuildMessages_ReplaysWindowNotEvicted(t *testing.T) {
 	}
 
 	msgs := cb.BuildMessages(
+		0,
 		windowHistory,
 		"What else?",
 		nil,
@@ -285,6 +286,7 @@ func TestBuildMessages_NoEviction_FullWindow(t *testing.T) {
 	}
 
 	msgs := cb.BuildMessages(
+		0,
 		history,
 		"How are you?",
 		nil,
@@ -365,6 +367,7 @@ func TestBuildMessages_SpanPlacedAfterBreadcrumbBeforeWindow(t *testing.T) {
 	}
 
 	msgs := cb.BuildMessages(
+		0,
 		windowHistory,
 		"Current question",
 		nil,
@@ -724,6 +727,7 @@ func TestBuildMessages_SpanOrphanToolCallDropped(t *testing.T) {
 	}
 
 	msgs := cb.BuildMessages(
+		0,
 		windowHistory,
 		"Please try again",
 		nil,

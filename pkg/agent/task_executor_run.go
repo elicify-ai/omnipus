@@ -668,8 +668,18 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 		// D-08/FR-057: mirrors processTaskDirect's identical field — see its
 		// doc comment (task_executor.go) for the full contract.
 		AutoDenyAsk: tools.ToolAutoDenyAsk(ctx),
+		// The run's execution owner (task_execution_disposition.go): this
+		// turn is registered below under the run's identity so a Stop finds
+		// its barrier and interrupts the external process.
+		executionDisposition: taskExecutionFor(ctx, taskChatID),
 	}
 	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, sessionKey))
+	if d := opts.executionDisposition; d != nil {
+		ts.generation = d.claim.Generation
+		if identityErr := ts.setExecutionIdentity(d.claim.RunID, d.claim.BootSeq); identityErr != nil {
+			return "", fmt.Errorf("processTaskDirect: external-cli dispatch: %w", identityErr)
+		}
+	}
 	ts.depth = delegationDepth
 	ts.al = al // FIX 5: back-ref for hard-abort cascade (mirrors the pre-ADR-091 subturn.go, since deleted)
 

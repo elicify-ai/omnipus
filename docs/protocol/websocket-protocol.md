@@ -69,7 +69,7 @@ Sends a user chat message to the agent for the given session.
 | content | string | yes | The user's message text |
 | session_id | string | no | Include to continue an existing session; omit to start a new session. |
 | agent_id | string | no | The agent to handle the message. If omitted, uses the active session's agent. |
-| auto_approve | boolean or null | no | Auto-approve choice for a **new** session only: `true` turns Auto on for that chat, even if the agent/global default is off; `false` turns it off; `null` or omission leaves it following the agent/global default. Ignored when `session_id` is present; use `session_mode_update` to change an existing session. |
+| auto_approve | boolean or null | no | Auto-approve choice for a **new** session only: `true` turns Auto on for that chat, even if the global default is off; `false` turns it off; `null` or omission leaves it following the global default. Ignored when `session_id` is present; use `session_mode_update` to change an existing session. |
 
 To start a new chat with Auto off from its first tool call, carry the choice on the first `message` and omit `session_id`:
 
@@ -92,7 +92,7 @@ The gateway records this choice before dispatching the new session's first turn.
 
 ### `session_mode_update`
 
-**Direction**: Client → server. Set or clear the Auto-approve choice for an existing session. This per-chat choice may turn Auto on even when the resolved agent/global default is off, because a human is making the choice in that chat. It does not change the global or per-agent configuration or the tool's `allow`/`ask`/`deny` policy.
+**Direction**: Client → server. Set or clear the Auto-approve choice for an existing session. This per-chat choice may turn Auto on even when the global default is off, because a human is making the choice in that chat. It does not change the global configuration or the tool's `allow`/`ask`/`deny` policy.
 
 ```json
 {
@@ -106,7 +106,7 @@ The gateway records this choice before dispatching the new session's first turn.
 |-------|------|----------|-------------|
 | type | string | yes | Always `"session_mode_update"` |
 | session_id | string | yes | Non-empty ID of an existing session known to the gateway |
-| auto_approve | boolean or null | yes | `true` turns Auto on for this chat; `false` turns it off; `null` clears the choice so the chat follows the current agent/global default and future changes to it. Omission is invalid. |
+| auto_approve | boolean or null | yes | `true` turns Auto on for this chat; `false` turns it off; `null` clears the choice so the chat follows the current global default and future changes to it. Omission is invalid. |
 
 A valid request receives `session_mode_updated` with the resolved per-session setting. A malformed request or unknown session receives an `error` frame instead. The per-chat choice is held in the session-mode store, not written to `config.json`, and does not survive a server restart.
 
@@ -199,7 +199,7 @@ These frames are sent by the backend to the frontend over the WebSocket connecti
 |-------|------|----------|-------------|
 | type | string | yes | Always `"session_mode_updated"` |
 | session_id | string | yes | Non-empty ID of the session whose setting was updated |
-| auto_approve_effective | boolean | yes | Resolved Auto-approve setting for **this session** after applying or clearing the choice. Unlike the gateway-wide default in `SandboxStatus.auto_approve_effective`, this value includes the agent and per-chat settings. It is not a kernel-enforcement signal; tool-specific Auto checks can still require a prompt. |
+| auto_approve_effective | boolean | yes | Resolved Auto-approve setting for **this session** after applying or clearing the choice. Unlike the gateway-wide default in `SandboxStatus.auto_approve_effective`, this value includes the per-chat modifier. It is not a kernel-enforcement signal; tool-specific Auto checks can still require a prompt. |
 
 **Schema**: `contracts/asyncapi.yaml::SessionModeUpdatedFrame`
 **Producer**: `pkg/gateway/ws_session_mode.go::handleSessionModeUpdateFrame`
