@@ -4987,6 +4987,55 @@
       "syntax": "RunningIndicator#className",
       "reason": "Category: caller pass-through — migration plan §5. RunningIndicator's own destructured prop `className` is forwarded unmodified to the root span's className via clsx('…', className) in src/components/ui/RunningIndicator.tsx — no transformation, conditional replacement, or non-forwarding read. Same registered category as AutoSaveIndicator#className; new-domain-component registration mirroring src/components/chat/composer/TokenCounter.tsx's className prop.",
       "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.tsx",
+      "syntax": "AgentIcon#dom-style.color<-color",
+      "reason": "Category: user-authored colours — identity palette ink. AgentIcon writes dom-style.color directly from its color prop, a generated AgentColor union. The prop is read unchanged (no lookup, no mix). Ink stays currentColor and fully opaque. Mask cutouts are not paint attributes.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.stories.tsx",
+      "syntax": "renderAgentIcon#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — story ink is the last generated AgentColor option (Grey), not a handwritten hex. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "syntax": "Swatch#dom-style.backgroundColor<-hex",
+      "reason": "Category: user-authored colours — a palette swatch fills itself from its own hex argument, one of the ten generated AgentColor options. The argument is read unchanged.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "syntax": "IdentityPreview#svg-attribute.color<-color",
+      "reason": "Category: user-authored colours — the live identity preview forwards its color argument unchanged to AgentIcon. The value is a palette hex chosen in the same form.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/CreateAgentModal.tsx",
+      "syntax": "identityOnCreate#dom-style.color<-payload.color",
+      "reason": "Category: user-authored colours — create sends payload.color only after it has been checked against the generated AgentColor options. The field is the wire color, read unchanged.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/CreateAgentWizard.tsx",
+      "syntax": "initialPayload#dom-style.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — a new agent's untouched colour is Grey, the last generated AgentColor option, which is also the server default.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/wizard/Step1Identity.tsx",
+      "syntax": "Step1Identity#svg-attribute.color<-payload.color",
+      "reason": "Category: user-authored colours — the create step forwards the form's color field unchanged into the live preview. The field is a palette hex.",
+      "owner": "user-authored colours exception registry"
     }
   ],
   "reviewedBoundaries": [

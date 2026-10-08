@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "component": "AgentIcon",
+  "exports": ["AgentIcon", "AgentIconProps"],
+  "category": "composite",
+  "source": "src/components/ui/agent-icon.tsx",
+  "documentation": "docs/internal/design/components/agent-icon.md",
+  "owner": "design-system",
+  "themes": ["dark"],
+  "variants": ["mark-omnipus", "mark-robot", "mark-man", "mark-woman"],
+  "sizes": ["18", "26", "40", "48"],
+  "states": ["none", "thinking", "working", "waiting", "reduced-motion"],
+  "stories": [{
+    "file": "src/components/ui/agent-icon.stories.tsx",
+    "exports": [
+      "Omnipus",
+      "Robot",
+      "Man",
+      "Woman",
+      "RoleBadge",
+      "Size18",
+      "Size26",
+      "Size40",
+      "Size48",
+      "MotionNone",
+      "Thinking",
+      "Working",
+      "Waiting",
+      "ReducedMotion"
+    ]
+  }],
+  "checks": [
+    {
+      "id": "agent-icon-unit",
+      "kind": "unit",
+      "file": "src/components/ui/agent-icon.test.tsx",
+      "test": "draws the supplied figure and does not substitute Omnipus",
+      "applicable": true
+    },
+    {
+      "id": "agent-icon-interaction-not-applicable",
+      "kind": "interaction",
+      "applicable": false,
+      "reason": "AgentIcon is a presentational mark. It has no click, toggle, or other interaction of its own."
+    },
+    {
+      "id": "agent-icon-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AgentIcon [check:agent-icon-axe] axe",
+      "story": "Omnipus",
+      "applicable": true
+    },
+    {
+      "id": "agent-icon-keyboard-not-applicable",
+      "kind": "keyboard",
+      "applicable": false,
+      "reason": "The mark is not focusable and has no keyboard operation."
+    },
+    {
+      "id": "agent-icon-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AgentIcon [check:agent-icon-browser] browser",
+      "story": "Omnipus",
+      "applicable": true
+    },
+    {
+      "id": "agent-icon-pointer-not-applicable",
+      "kind": "pointer",
+      "applicable": false,
+      "reason": "The mark is not a hit target. Sizes below the touch minimum are icons, not controls."
+    },
+    {
+      "id": "agent-icon-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AgentIcon [check:agent-icon-reduced-motion] reduced-motion",
+      "story": "Thinking",
+      "applicable": true
+    },
+    {
+      "id": "agent-icon-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AgentIcon [check:agent-icon-forced-colors] forced-colors",
+      "story": "Omnipus",
+      "applicable": true
+    },
+    {
+      "id": "agent-icon-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AgentIcon [check:agent-icon-root-size] root-size",
+      "story": "Omnipus",
+      "applicable": true
+    },
+    {
+      "id": "agent-icon-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AgentIcon [check:agent-icon-zoom] zoom",
+      "story": "Omnipus",
+      "applicable": true
+    },
+    {
+      "id": "agent-icon-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AgentIcon [check:agent-icon-reflow] reflow",
+      "story": "Omnipus",
+      "applicable": true
+    }
+  ]
+}
