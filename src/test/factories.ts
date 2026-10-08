@@ -42,6 +42,11 @@ export function makeAgent(overrides: Partial<Agent> = {}): Agent {
     memory_enabled: true,
     ...overrides,
     revision: overrides.revision ?? '0'.repeat(64),
+    // Navigation contract: figure and role are required. After the spread so a
+    // Partial override cannot leave them undefined. Defaults are the contract
+    // examples (AgentFigure Omnipus, AgentRole general).
+    figure: overrides.figure ?? 'Omnipus',
+    role: overrides.role ?? 'general',
     editable_fields: overrides.editable_fields ?? [
       'name', 'description', 'model', 'provider', 'fallback_models', 'model_params',
       'soul', 'memory_enabled', 'voice', 'max_tool_iterations',

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -92,6 +92,8 @@ function makeAgent(): Agent {
     max_tool_iterations_source: 'global',
     max_tool_iterations_override_ignored: false,
     memory_enabled: true,
+    figure: 'Omnipus',
+    role: 'general',
     revision: '0'.repeat(64),
   }
 }
@@ -221,6 +223,26 @@ describe('Sessions view — hierarchy, fold, shell count, tokens', () => {
     expect(await screen.findByText(/parent chat unavailable/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /open/i })).toBeInTheDocument()
     expect(screen.getByText('Lost helper')).toBeInTheDocument()
+  })
+
+  it('does not call a helper parent unavailable when the session fetch is partial', async () => {
+    // SPEC FR-032 / DEP-ACT: an incomplete enumeration is partial or unknown,
+    // never a confirmed missing parent. "parent chat unavailable" is only for
+    // a complete fetch whose parent is really absent (BDD-08.2). FE-3 attaches
+    // partialErrors and incomplete onto the Session[] that fetchSessions
+    // returns (origin/work/nav-wave1-fe3 src/lib/api/sessions.ts
+    // SessionListResult). The helper stays Openable.
+    const rows = [
+      makeSession({ id: 'orphan', title: 'Lost helper', type: 'delegate', parent_session_id: 'gone-parent' }),
+    ]
+    const partial = rows as typeof rows & { partialErrors: string[]; incomplete: boolean }
+    partial.partialErrors = ['agent-store-failed']
+    partial.incomplete = true
+    vi.mocked(fetchSessions).mockResolvedValue(partial)
+    renderModal()
+    expect(await screen.findByText('Lost helper')).toBeInTheDocument()
+    expect(screen.queryByText(/parent chat unavailable/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /open/i })).toBeInTheDocument()
   })
 
   it('folds nine consecutive identical helpers and keeps each original Open', async () => {
