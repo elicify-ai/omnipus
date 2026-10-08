@@ -11,6 +11,7 @@ async function loadIdentity() {
   } catch (err) {
     throw new Error(
       `BLOCKED: src/lib/agentIdentity.ts is not implemented — required by the spec locked identity vocabulary and ARCH-DECISIONS 3.5. ${err}`,
+      { cause: err },
     )
   }
 }
