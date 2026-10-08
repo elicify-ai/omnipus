@@ -696,7 +696,11 @@ func (t *DelegateTool) cloneCorrectiveSessionIdentity(sourceID, newID string, re
 	if rec != nil && rec.SteeredBy != nil && rec.SteeredBy.SteeringSessionID != "" {
 		parentID = rec.SteeredBy.SteeringSessionID
 	}
-	if _, err := store.CreateSessionWithID(newID, parentID, source.Type, source.Channel, source.ActiveAgentID); err != nil {
+	// The corrective session's owner is the source's IMMUTABLE AgentID, not its
+	// ActiveAgentID: the latter is the retired handover owner (session-core U1,
+	// DEL-11) and is now empty on any session that was never switched, so
+	// passing it would mint a corrective session with no owner at all.
+	if _, err := store.CreateSessionWithID(newID, parentID, source.Type, source.Channel, source.AgentID); err != nil {
 		return err
 	}
 	title, owner, workspace, instanceID, taskID := source.Title, source.Owner, source.WorkspaceID, source.InstanceID, source.TaskID

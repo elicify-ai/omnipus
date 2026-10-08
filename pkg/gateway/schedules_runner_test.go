@@ -315,18 +315,42 @@ func TestRunner_DisabledOwner_NoFallback(t *testing.T) {
 	assert.Empty(t, exec.calls, "disabled owner must not run, and must not fall back")
 }
 
-// TestRunner_SessionMode_Main uses the reserved per-owner session id.
+// TestRunner_SessionMode_Main resolves the pair's COMPUTED main session.
+//
+// session-core U1 / DEL-01 replaced the reserved per-owner `sched-main-<owner>`
+// id with the computed `main-session-<workspace>+<agent>`: the workspace is
+// what makes the pair well defined, so the job must carry one (a heartbeat job
+// carries it in its name by construction).
 func TestRunner_SessionMode_Main(t *testing.T) {
 	cfg := baseConfig()
 	r := newRunnerOnly(t, cfg, map[string]bool{"mia": true})
 
 	job := &cron.CronJob{
-		ID: "j5", AgentID: "mia", SessionMode: cron.SessionModeMain,
-		Payload: cron.CronPayload{Message: "remind"},
+		ID: "j5", Name: heartbeatJobName("ws1", "mia"), AgentID: "mia",
+		SessionMode: cron.SessionModeMain,
+		Payload:     cron.CronPayload{Kind: heartbeatJobKind, Message: "remind"},
 	}
 	sid, err := r.RunScheduled(context.Background(), job)
 	require.NoError(t, err)
-	assert.Equal(t, "sched-main-mia", sid)
+	assert.Equal(t, "main-session-ws1+mia", sid, "main mode resolves the computed main, not the retired per-owner id")
+	assert.NotEqual(t, "sched-main-mia", sid)
+}
+
+// TestRunner_SessionMode_MainWithoutWorkspaceRefuses pins the refusal: a
+// main-mode job that carries no workspace has no pair, so it must fail
+// visibly rather than fabricate a workspace or fall back to a second naming
+// scheme.
+func TestRunner_SessionMode_MainWithoutWorkspaceRefuses(t *testing.T) {
+	cfg := baseConfig()
+	r := newRunnerOnly(t, cfg, map[string]bool{"mia": true})
+
+	job := &cron.CronJob{
+		ID: "j5b", Name: "plain", AgentID: "mia", SessionMode: cron.SessionModeMain,
+		Payload: cron.CronPayload{Message: "remind"},
+	}
+	sid, err := r.RunScheduled(context.Background(), job)
+	assert.Error(t, err, "a main-mode job with no workspace must refuse visibly")
+	assert.Empty(t, sid)
 }
 
 // TestRunner_Failure_NotifiesAndAlerts asserts a failed run creates a

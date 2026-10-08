@@ -54,6 +54,10 @@ func jsonSessionDetail(
 	currentBootSeq ...uint64,
 ) {
 	genSession := unifiedMetaToGenSession(meta)
+	// C-MAIN: `protected` is computed here as well as in listSessions — the
+	// detail response is the surface the SPA's delete affordance keys on, so
+	// the two must not disagree about a main.
+	genSession.Protected = computeSessionProtected(meta)
 	genSession.LifecycleState, genSession.StopNote = computeSessionLifecycle(ls, meta.ID, currentBootSeq...)
 	if messages == nil {
 		messages = []session.TranscriptEntry{}
@@ -289,57 +293,19 @@ func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
 }
 
 // computeSessionProtected derives the computed `protected` flag for a session
-// (FR-021/028). A session is protected when:
-//   - its type is "heartbeat", AND
-//   - the workspace it belongs to still has member_configs[agentID].heartbeat.enabled=true
-//     with session_id == this session's ID
+// (session-core U1 / C-MAIN). A main session is protected unconditionally: it
+// is the standing identity of its (workspace, agent) pair, pinned at the top
+// of the Session panel with its delete refused, whether or not the member's
+// heartbeat is enabled — protection is a property of the IDENTITY, not of any
+// configuration toggle (FR-002).
 //
-// For any other session type, returns nil (absent on the wire — field is omitted).
-// Disk reads are bounded: we only load the one workspace identified by session.WorkspaceID.
-func computeSessionProtected(homePath string, m *session.UnifiedMeta) *bool {
-	if m == nil || m.Type != session.SessionTypeHeartbeat || m.WorkspaceID == "" {
+// For any other session type, returns nil (absent on the wire — field is
+// omitted).
+func computeSessionProtected(m *session.UnifiedMeta) *bool {
+	if m == nil || m.Type != session.SessionTypeMain {
 		return nil
 	}
-	ws, err := readWorkspaceFile(homePath, m.WorkspaceID)
-	if err != nil {
-		// MEDIUM-2: distinguish workspace-not-found (deleted) from I/O / corruption.
-		// - Workspace deleted: correct, the session is no longer protected.
-		// - Any other error (corrupt JSON, I/O): fail CLOSED so a transient read
-		//   error never silently unprotects an active heartbeat session.
-		if errors.Is(err, errWorkspaceNotFound) {
-			slog.Debug("computeSessionProtected: workspace not found (deleted)",
-				"workspace_id", m.WorkspaceID, "session_id", m.ID)
-			f := false
-			return &f
-		}
-		slog.Warn("computeSessionProtected: workspace load error (fail closed)",
-			"workspace_id", m.WorkspaceID, "session_id", m.ID, "error", err)
-		t := true
-		return &t
-	}
-	// FIX-4b: require the agent still be on the workspace's CoreTeam. A stale
-	// member_config entry for an off-team agent must not keep its session protected.
-	inCoreTeam := false
-	for _, id := range ws.CoreTeam {
-		if id == m.AgentID {
-			inCoreTeam = true
-			break
-		}
-	}
-	if !inCoreTeam {
-		slog.Debug("computeSessionProtected: agent not in CoreTeam (stale entry)",
-			"workspace_id", m.WorkspaceID, "agent_id", m.AgentID, "session_id", m.ID)
-		f := false
-		return &f
-	}
-	mc, hasMC := ws.MemberConfigs[m.AgentID]
-	if !hasMC || mc.Heartbeat == nil {
-		f := false
-		return &f
-	}
-	// Protected only when the heartbeat is enabled AND the stored session_id
-	// matches this session (not a replaced/rotated session).
-	protected := mc.Heartbeat.Enabled && mc.Heartbeat.SessionID == m.ID
+	protected := true
 	return &protected
 }
 
@@ -469,6 +435,12 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 		if m.Type == session.SessionTypeVerifier && !includeVerifier {
 			continue
 		}
+		// FR-003: a main is listed only while its pair is entitled to it.
+		// Membership removal hides it here (the stored identity is retained,
+		// not deleted — see mainSessionVisible).
+		if !a.mainSessionVisible(m) {
+			continue
+		}
 		filtered = append(filtered, m)
 	}
 
@@ -482,9 +454,9 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	genSessions := make([]gen.Session, 0, len(filtered))
 	for _, m := range filtered {
 		s := unifiedMetaToGenSession(m)
-		// FR-021/028: compute the `protected` flag for heartbeat sessions.
-		// Non-heartbeat sessions get nil (field omitted from the wire response).
-		s.Protected = computeSessionProtected(a.homePath, m)
+		// C-MAIN: compute the `protected` flag. Only a main is protected;
+		// every other session gets nil (field omitted from the wire response).
+		s.Protected = computeSessionProtected(m)
 		// FR-091/FR-097: child_count is resolved from whichever store's
 		// in-memory parent index owns this session — O(1) per row, no disk
 		// read, regardless of listing mode (roots-only, parent_session_id, or
@@ -521,6 +493,14 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) {
+	// session-core U1 / BDD-01.4: a main id resolves through its pair's
+	// eligibility, and any refusal (wrong owner, wrong workspace, unreadable
+	// metadata, non-member, Admin outside the default workspace) is a visible
+	// 404 — never a served mismatched record and never a guessed replacement.
+	if !a.resolveMainSessionForRead(id) {
+		jsonErr(w, http.StatusNotFound, "session not found")
+		return
+	}
 	store := a.resolveSessionStore(id)
 	if store == nil {
 		jsonErr(w, http.StatusNotFound, "session not found")
@@ -691,21 +671,23 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 
-	// FR-014 / US-7: reject deletion of an active heartbeat session with 409.
-	// Load the meta to check the session type before attempting the delete so
-	// we don't make a half-deletion attempt and then fail. The workspace load
-	// is bounded by the session's WorkspaceID (no full scan).
+	// FR-014 / US-7 / C-MAIN: reject deletion of a protected MAIN session with
+	// 409. A main is the standing identity of its (workspace, agent) pair, so
+	// the SPA hides its delete control and this guard refuses it — the stored
+	// identity is retained until normal retention (FR-003). Load the meta
+	// before attempting the delete so we don't make a half-deletion attempt
+	// and then fail.
 	meta, metaErr := store.GetMeta(id)
 	if metaErr != nil {
 		// MEDIUM-1: fail CLOSED on meta-read error — a session whose metadata
-		// cannot be read must not be silently deleted past the heartbeat guard.
+		// cannot be read must not be silently deleted past the protection guard.
 		slog.Error("rest: delete session: could not read session meta",
 			"session_id", id, "error", metaErr)
 		jsonErr(w, http.StatusInternalServerError, "could not verify session protection")
 		return
 	}
-	if meta != nil && meta.Type == session.SessionTypeHeartbeat {
-		if isProtected := computeSessionProtected(a.homePath, meta); isProtected != nil && *isProtected {
+	if meta != nil {
+		if isProtected := computeSessionProtected(meta); isProtected != nil && *isProtected {
 			// C-1 (FR-014): audit the blocked delete before returning 409.
 			if a.auditor != nil {
 				if err := a.auditor.Log(&audit.Entry{
@@ -716,7 +698,7 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 						"session_id":   id,
 						"workspace_id": meta.WorkspaceID,
 						"agent_id":     meta.AgentID,
-						"reason":       "heartbeat enabled",
+						"reason":       "main session is protected",
 					},
 				}); err != nil {
 					slog.Warn("audit write failed", "event", "session.delete.blocked",
@@ -724,8 +706,8 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 				}
 			}
 			jsonErr(w, http.StatusConflict,
-				"cannot delete a protected heartbeat session while its heartbeat is enabled; "+
-					"disable the heartbeat in the workspace settings first")
+				"cannot delete a protected main session: it is the standing session of this "+
+					"workspace member and is kept until normal retention")
 			return
 		}
 	}

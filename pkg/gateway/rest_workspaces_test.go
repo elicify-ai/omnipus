@@ -1554,7 +1554,7 @@ func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T
 	assert.False(t, ws.SetupPending,
 		"the boot default workspace must never be setup_pending — it never runs the setup interview")
 
-	wire := workspaceToWire(home, ws, 0)
+	wire := workspaceToWireFrom(home, ws, 0, nil, nil)
 	assert.Nil(t, wire.SetupPending, "the wire response must not report setup_pending for the default workspace")
 }
 

@@ -133,8 +133,14 @@ func TestDelegateTool_Resume_3PDispatchesNewCorrectiveSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new external corrective session has no durable identity: %v", err)
 	}
-	if meta.ParentSessionID != parentID || meta.ActiveAgentID != "claude-code" || meta.WorkspaceID != "ws-1" {
+	// The corrective session's owner is the IMMUTABLE AgentID (session-core U1,
+	// DEL-11 deleted the handover-owner semantics of ActiveAgentID): the child
+	// must carry the source's owning agent, and must carry no handover owner.
+	if meta.ParentSessionID != parentID || meta.AgentID != "claude-code" || meta.WorkspaceID != "ws-1" {
 		t.Fatalf("new external corrective identity = %+v; want copied parent, agent, and workspace", meta)
+	}
+	if meta.ActiveAgentID != "" {
+		t.Fatalf("a freshly created corrective session must record no handover owner; got %q", meta.ActiveAgentID)
 	}
 	rec, err := lc.Load(launcher.sessionID)
 	if err != nil {

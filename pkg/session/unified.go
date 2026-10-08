@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"os"
@@ -25,6 +26,15 @@ const (
 	SessionTypeChat    UnifiedSessionType = "chat"
 	SessionTypeTask    UnifiedSessionType = "task"
 	SessionTypeChannel UnifiedSessionType = "channel"
+	// SessionTypeMain classifies the ONE standing session of an eligible
+	// (workspace, agent) pair (session-core U1, FR-002/C-MAIN). Its id is
+	// COMPUTED, not minted — see MainSessionID (main_session.go). It replaces
+	// the retired heartbeat-only standing session: a main exists for every
+	// eligible member whether or not that member's heartbeat is enabled, and
+	// for Admin in the default workspace only. Server-created only: "main" is
+	// deliberately absent from SessionCreateRequest's create-time enum, so a
+	// REST client can never POST /sessions into this type.
+	SessionTypeMain UnifiedSessionType = "main"
 	// SessionTypeScheduled classifies sessions created by a fired schedule
 	// (issue #264, FR-005). isolated/continue scheduled runs use this type so
 	// the SPA can badge them and group them separately from human chat/task/
@@ -70,7 +80,7 @@ const (
 // validation/listing site accepts them.
 func IsValidSessionType(t UnifiedSessionType) bool {
 	switch t {
-	case SessionTypeChat, SessionTypeTask, SessionTypeChannel, SessionTypeScheduled, SessionTypeHeartbeat, SessionTypeVerifier, SessionTypeDelegate:
+	case SessionTypeChat, SessionTypeTask, SessionTypeChannel, SessionTypeMain, SessionTypeScheduled, SessionTypeHeartbeat, SessionTypeVerifier, SessionTypeDelegate:
 		return true
 	default:
 		return false
@@ -616,20 +626,38 @@ func (us *UnifiedStore) createSessionLocked(
 	creatingAgentID string,
 ) (*UnifiedMeta, error) {
 	now := time.Now().UTC()
+	// NOTE (session-core U1, DEL-11): a freshly created session records NO
+	// ActiveAgentID. The field is the mutable HANDOVER owner — the agent a
+	// session has been switched to — and the spec deletes the concept: a
+	// session's owner is its immutable AgentID. Seeding it here (as this
+	// literal once did, ActiveAgentID = creatingAgentID) both persisted a
+	// redundant second owner on every meta.json and made a session look
+	// handed-over the moment it was created. It stays empty until something
+	// genuinely switches the session's active agent (UnifiedStore.SwitchAgent,
+	// still present until the switch_agent teardown unit deletes it).
 	meta := &UnifiedMeta{
 		SessionMeta: SessionMeta{
-			ID:            sessionID,
-			AgentID:       creatingAgentID,
-			AgentIDs:      []string{creatingAgentID},
-			ActiveAgentID: creatingAgentID,
-			Status:        StatusActive,
-			Channel:       channel,
-			CreatedAt:     now,
-			UpdatedAt:     now,
+			ID:        sessionID,
+			AgentID:   creatingAgentID,
+			AgentIDs:  []string{creatingAgentID},
+			Status:    StatusActive,
+			Channel:   channel,
+			CreatedAt: now,
+			UpdatedAt: now,
 		},
 		Type: sessionType,
 	}
+	return us.persistNewSessionLocked(sessionID, meta)
+}
 
+// persistNewSessionLocked materialises an already-built session meta: the
+// directory, meta.json and the empty transcript. Split out of
+// createSessionLocked so a caller that must stamp identity fields present
+// only in its own context — GetOrCreateMainSession's workspace_id — can do so
+// in the SAME single write instead of create-then-patch, which would leave a
+// window in which a main exists without its workspace tag. Caller must hold
+// sessionID's shard.
+func (us *UnifiedStore) persistNewSessionLocked(sessionID string, meta *UnifiedMeta) (*UnifiedMeta, error) {
 	sessionDir := filepath.Join(us.baseDir, sessionID)
 	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
 		return nil, fmt.Errorf("unified_store: create session dir: %w", err)
@@ -650,7 +678,7 @@ func (us *UnifiedStore) createSessionLocked(
 		}
 	}
 
-	slog.Debug("unified_store: created session", "id", sessionID, "type", sessionType, "agent", creatingAgentID)
+	slog.Debug("unified_store: created session", "id", sessionID, "type", meta.Type, "agent", meta.AgentID)
 	return meta, nil
 }
 
@@ -662,38 +690,81 @@ func (us *UnifiedStore) NewScheduledSession(ownerAgentID string) (*UnifiedMeta, 
 	return us.NewSession(SessionTypeScheduled, "scheduled", ownerAgentID)
 }
 
-// NewHeartbeatSession eagerly creates the standing session for a workspace-
-// scoped heartbeat (FR-010, A1/F-02, A2). It stamps:
-//   - Type = SessionTypeHeartbeat
-//   - WorkspaceID = workspaceID
-//   - AgentID = agentID (also AgentIDs and ActiveAgentID)
+// GetOrCreateMainSession returns the one standing main session for a
+// (workspaceID, agentID) pair, creating it in the same call if it does not
+// exist yet (session-core U1, FR-002/C-MAIN). It replaces the retired
+// heartbeat-only standing session (NewHeartbeatSession, DEL-01): the main is
+// pinned and protected whether or not the member's heartbeat is enabled, so
+// creation is a property of ELIGIBLE MEMBERSHIP, not of an enable toggle.
 //
-// The caller (gateway workspace handler) stores the returned session's ID at
-// member_configs[agentID].heartbeat.session_id so the cron reconciler can
-// inject it into the JobSpec.SessionID field and continue the same session
-// across every heartbeat run (FR-007b).
+// The id is computed, never minted — MainSessionID(workspaceID, agentID),
+// which refuses an over-long or ill-formed pair with a visible error and
+// stores nothing. Callers that must know eligibility (is this agent a member
+// of this workspace? is this Admin in the default workspace?) decide that
+// BEFORE calling: this method's only contract is the identity itself.
 //
-// Unlike NewScheduledSession, this variant accepts an explicit workspaceID so
-// the session carries the correct workspace tag for the delete-guard lookup
-// (FR-014) and the SPA's Session panel grouping (FR-021).
-func (us *UnifiedStore) NewHeartbeatSession(workspaceID, agentID string) (*UnifiedMeta, error) {
-	meta, err := us.NewSession(SessionTypeHeartbeat, "heartbeat", agentID)
+// Stored-pair validation (BDD-01.4). When the computed id already has a
+// stored record, the record must match the pair exactly — type main, the same
+// agent, the same workspace. Anything else (a mismatched owner, a mismatched
+// workspace, a record of another type) is a REFUSAL: it is returned as an
+// error and left byte-for-byte untouched. It is never adopted, rewritten or
+// "repaired", because adopting it would hand Mia's main to whoever the record
+// actually belongs to.
+//
+// A read error on the computed id is likewise the refusal, NEVER a cache miss.
+// This is the specific bug this method must not reproduce: the older
+// GetOrCreateScheduledSession fall-through mints a brand-new session whenever
+// readMetaLocked returns ANY error, so corrupt or unreadable metadata silently
+// produced a second session under the same (or a fresh) id. Here only the
+// genuinely-absent case creates: errors.Is(err, fs.ErrNotExist). A corrupt
+// meta.json is an error the caller sees.
+func (us *UnifiedStore) GetOrCreateMainSession(workspaceID, agentID string) (*UnifiedMeta, error) {
+	sessionID, err := MainSessionID(workspaceID, agentID)
 	if err != nil {
-		return nil, fmt.Errorf("session: new heartbeat session (workspace=%s agent=%s): %w", workspaceID, agentID, err)
+		return nil, err
 	}
-	// Stamp the workspace_id onto the meta so the delete-guard can load the
-	// right workspace without scanning all workspaces (A2/G-01).
-	if err := us.SetMeta(meta.ID, MetaPatch{WorkspaceID: &workspaceID}); err != nil {
-		// MEDIUM-C: SetMeta failed — best-effort delete the half-initialized session
-		// so a transient failure does not leave an orphaned session directory.
-		if delErr := us.DeleteSession(meta.ID); delErr != nil {
-			slog.Warn("session: cleanup of partial heartbeat session failed",
-				"session_id", meta.ID, "workspace_id", workspaceID, "agent_id", agentID, "error", delErr)
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
+
+	meta, readErr := us.readMetaLocked(sessionID)
+	if readErr != nil {
+		if !errors.Is(readErr, fs.ErrNotExist) {
+			return nil, fmt.Errorf(
+				"main session %q: refusing to reuse or replace an unreadable stored identity: %w",
+				sessionID, readErr)
 		}
-		return nil, fmt.Errorf("session: stamp workspace_id on heartbeat session %s: %w", meta.ID, err)
+		return us.createMainSessionLocked(sessionID, workspaceID, agentID)
 	}
-	meta.WorkspaceID = workspaceID
-	return meta, nil
+	if meta.Type != SessionTypeMain || meta.AgentID != agentID || meta.WorkspaceID != workspaceID {
+		return nil, fmt.Errorf(
+			"main session %q: stored identity does not match the pair (workspace=%q agent=%q type=%q); refusing to adopt or replace it",
+			sessionID, meta.WorkspaceID, meta.AgentID, meta.Type)
+	}
+	return meta.Clone(), nil
+}
+
+// createMainSessionLocked materialises the main session for an already-validated
+// pair under its computed id. Caller must hold sessionID's shard.
+func (us *UnifiedStore) createMainSessionLocked(sessionID, workspaceID, agentID string) (*UnifiedMeta, error) {
+	now := time.Now().UTC()
+	meta := &UnifiedMeta{
+		SessionMeta: SessionMeta{
+			ID:          sessionID,
+			AgentID:     agentID,
+			AgentIDs:    []string{agentID},
+			Status:      StatusActive,
+			Channel:     "main",
+			WorkspaceID: workspaceID,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		Type: SessionTypeMain,
+	}
+	created, err := us.persistNewSessionLocked(sessionID, meta)
+	if err != nil {
+		return nil, fmt.Errorf("session: create main session (workspace=%s agent=%s): %w", workspaceID, agentID, err)
+	}
+	return created, nil
 }
 
 // NewVerifierSession mints a fresh, isolated session of SessionTypeVerifier

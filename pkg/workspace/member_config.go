@@ -15,15 +15,17 @@ const MaxHeartbeatBodyBytes = 16384
 // reconciler creates a job keyed `heartbeat:<ws>:<agent>` that fires the
 // agent in this workspace at the configured cadence using Body as the prompt.
 //
-// SessionID is set eagerly by the workspace handler when the heartbeat is
-// enabled (FR-010): a standing session is created and its id stored here so
-// the cron job can continue it (via JobSpec.SessionID) rather than minting a
-// fresh session each run.
+// It carries NO session address (session-core U1, DEL-01): a heartbeat runs in
+// the member's main session, which is COMPUTED from the (workspace, agent)
+// pair (pkg/session/main_session.go::MainSessionID) rather than stored beside
+// the configuration. The retired SessionID field was the eager standing
+// session's address; with the heartbeat-only session gone, configuration and
+// identity no longer need to be kept in sync by hand, and no disable path has
+// a session to release.
 type MemberHeartbeat struct {
 	Enabled         bool   `json:"enabled,omitempty"`
 	IntervalMinutes int    `json:"interval_minutes,omitempty"`
 	Body            string `json:"body,omitempty"`
-	SessionID       string `json:"session_id,omitempty"` // eager standing session id
 }
 
 // MemberConfig is the per-member configuration stored on a Workspace record

@@ -65,6 +65,13 @@ func (us *UnifiedStore) SetMeta(sessionID string, patch MetaPatch) error {
 		identityTouched = true
 	}
 	if patch.WorkspaceID != nil {
+		// session-core U1 / C-MAIN: a main's identity is immutable — its
+		// computed id IS the (workspace, agent) pair, so re-pointing the
+		// workspace tag would leave the id naming a pair the record no longer
+		// matches. Refuse rather than write a self-contradicting main.
+		if meta.Type == SessionTypeMain && *patch.WorkspaceID != meta.WorkspaceID {
+			return fmt.Errorf("unified_store: session %q is a main; workspace_id is immutable", sessionID)
+		}
 		meta.WorkspaceID = *patch.WorkspaceID
 		identityTouched = true
 	}

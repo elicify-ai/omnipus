@@ -32,7 +32,12 @@ func TestSessionTypeScheduled_IsValid(t *testing.T) {
 
 // TestGetOrCreateScheduledSession_Creates verifies that the first call with a
 // fresh id creates a session with the EXACT supplied id, Type=scheduled, and
-// ActiveAgentID == AgentID == ownerAgentID.
+// AgentID == ownerAgentID.
+//
+// session-core U1 / DEL-11: a freshly created session carries NO ActiveAgentID
+// — that field is the retired HANDOVER owner, and the spec deletes the concept
+// (a session's owner is its immutable AgentID). The assertion below therefore
+// pins the field's ABSENCE, not a backfilled copy of the owner.
 func TestGetOrCreateScheduledSession_Creates(t *testing.T) {
 	store := newTestStore(t)
 
@@ -44,7 +49,7 @@ func TestGetOrCreateScheduledSession_Creates(t *testing.T) {
 	assert.Equal(t, id, meta.ID, "must use the exact supplied id")
 	assert.Equal(t, SessionTypeScheduled, meta.Type)
 	assert.Equal(t, "mia", meta.AgentID)
-	assert.Equal(t, "mia", meta.ActiveAgentID)
+	assert.Empty(t, meta.ActiveAgentID, "a fresh session records no handover owner (DEL-11)")
 	assert.Equal(t, []string{"mia"}, meta.AgentIDs)
 
 	// The meta is readable back through the public reader.
@@ -106,6 +111,8 @@ func TestNewScheduledSession_FreshIsolated(t *testing.T) {
 	assert.NotEqual(t, a.ID, b.ID, "each isolated run gets a distinct session id")
 	assert.Equal(t, SessionTypeScheduled, a.Type)
 	assert.Equal(t, SessionTypeScheduled, b.Type)
-	assert.Equal(t, "mia", a.ActiveAgentID)
-	assert.Equal(t, "mia", b.ActiveAgentID)
+	assert.Equal(t, "mia", a.AgentID)
+	assert.Equal(t, "mia", b.AgentID)
+	assert.Empty(t, a.ActiveAgentID, "a fresh session records no handover owner (DEL-11)")
+	assert.Empty(t, b.ActiveAgentID, "a fresh session records no handover owner (DEL-11)")
 }

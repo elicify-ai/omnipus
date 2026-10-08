@@ -215,14 +215,20 @@ type SessionMeta struct {
 	LoopLastActivityAt string `json:"loop_last_activity_at,omitempty"`
 }
 
-// PostLoad backfills v2 multi-agent fields from the legacy AgentID field.
+// PostLoad backfills the participants list from the single owner field.
 // Call after every JSON unmarshal of SessionMeta.
+//
+// session-core U1 / DEL-11: this no longer backfills ActiveAgentID from
+// AgentID. That backfill was the last reader-side step that manufactured a
+// handover owner for a session that never had one — every read of a session
+// whose metadata carried no active_agent_id (which is now every freshly
+// created session) invented one equal to its owner, so the retired
+// handover-owner concept kept leaking back onto the wire and onto disk on the
+// next write. A session's owner is its immutable AgentID; ActiveAgentID stays
+// empty until something genuinely switches the session's active agent.
 func (m *SessionMeta) PostLoad() {
 	if len(m.AgentIDs) == 0 && m.AgentID != "" {
 		m.AgentIDs = []string{m.AgentID}
-	}
-	if m.ActiveAgentID == "" && m.AgentID != "" {
-		m.ActiveAgentID = m.AgentID
 	}
 }
 

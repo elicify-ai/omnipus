@@ -120,7 +120,10 @@ func (h *d2bRoot) seedState(t *testing.T, state session.LifecycleState) {
 	rec := &session.LifecycleRecord{
 		SessionID: h.id, Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, OwnerScopeID: meta.Owner,
-		WorkspaceID: meta.WorkspaceID, AgentID: meta.ActiveAgentID,
+		// session-core U1 / DEL-11: the record's acting agent is the session's
+		// IMMUTABLE owner; ActiveAgentID (the retired handover owner) is empty
+		// on any session that was never switched.
+		WorkspaceID: meta.WorkspaceID, AgentID: meta.AgentID,
 		Origin: &session.Origin{Kind: session.OriginKindChat},
 	}
 	ls := h.al.GetSessionLifecycleStore()

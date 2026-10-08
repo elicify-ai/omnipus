@@ -564,8 +564,16 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 		return meta.ID, nil
 
 	case cron.SessionModeMain:
-		id := "sched-main-" + owner
-		meta, err := store.GetOrCreateScheduledSession(id, owner)
+		// session-core U1 / DEL-01: the standing main is the pair's COMPUTED
+		// session (main-session-<workspace>+<agent>), not a per-agent
+		// `sched-main-<owner>` id. The workspace is what makes the pair — and
+		// therefore the main — well defined; a job that carries none has no
+		// main to resolve and must refuse visibly rather than fall back to a
+		// second naming scheme.
+		if workspaceID == "" {
+			return "", fmt.Errorf("main session mode: the job carries no workspace, so no main can be resolved")
+		}
+		meta, err := store.GetOrCreateMainSession(workspaceID, owner)
 		if err != nil {
 			return "", fmt.Errorf("main session create: %w", err)
 		}
