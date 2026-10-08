@@ -810,18 +810,11 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // G1: between a goal's turns nothing streams but the goal keeper will resume
       // the session, so an active goal counts as stoppable. No goal, nothing sent.
       const goalRunning = isGoalRunning(targetSid ? get().sessionsById[targetSid]?.goalStatus : null)
-
-      // FR-21 / T21–T25: always mark the last assistant message as interrupted
-      // when the user explicitly invokes cancel (stop button, Escape, /cancel,
-      // or the browser panel's "Take over" for its pinned session). Scoped to
-      // `sessionId` when the caller passed one, else defaults to the active
-      // session (existing behaviour, unchanged). We do this BEFORE the
-      // isStreaming guard so that a stop-button click that races a done frame
-      // still produces the (interrupted) label. Without this, a turn that
-      // completes in <100ms after the stop button appears but before
-      // Playwright (or a real user) clicks it would silently do nothing because
-      // isStreaming flips to false between render and click.
-      get().markLastMessageInterrupted(sessionId)
+      // A Stop marks the answer interrupted only when a turn is open to interrupt.
+      // An idle gap (goal running, nothing streaming) sends the cancel but leaves
+      // the finished answer untouched; an idle chat with no goal sends nothing and
+      // marks nothing (the caller, useCancelState, shows no "Stopping..." for it).
+      if (targetIsStreaming) get().markLastMessageInterrupted(sessionId)
       // A plain Stop supersedes any pending redirect: its turn_canceled is a
       // stop, and must keep "(interrupted)".
       if (targetSid) pendingRedirectSids.delete(targetSid)

@@ -377,6 +377,18 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
     expect(screen.queryByText(/couldn't be finished/i)).not.toBeInTheDocument()
   })
 
+  it('F1: Generate again while offline leaves a visible failed/retry state on the question, never a blank chat', async () => {
+    feed(unansweredAttach())
+    await mount()
+    const button = await within(await screen.findByTestId('restart-interrupted-notice')).findByRole('button', { name: /Generate again/ })
+    act(() => { useConnectionStore.getState().setConnected(false) })
+    await act(async () => { fireEvent.click(button) })
+    expect(sender.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'message' }))
+    expect(screen.getByText('Write the long report')).toBeInTheDocument()
+    expect(await screen.findByTestId('user-message-retry')).toBeInTheDocument()
+    expect(useChatStore.getState().messages.find((m) => m.id === 'u-1')?.deliveryStatus).toBe('failed')
+  })
+
   it('F1: a new message (not Generate again) also leaves no Generate again control', async () => {
     feed(unansweredAttach())
     await mount()
