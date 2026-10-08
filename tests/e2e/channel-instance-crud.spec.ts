@@ -721,6 +721,9 @@ test(
       {
         id: 'mia',
         name: 'Mia',
+        // W1-5: the generated Agent schema requires both identity fields.
+        figure: 'Omnipus',
+        role: 'general',
         type: 'core',
         locked: true,
         status: 'active',
