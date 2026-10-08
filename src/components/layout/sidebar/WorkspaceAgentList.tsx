@@ -231,12 +231,12 @@ function WorkspaceBlock({
             </Button>
           </div>
         )}
-        {rows.map((row) => (
+        {isExpanded && rows.map((row) => (
           <AgentMainRow
             key={row.agentId}
             row={row}
             workspace={project}
-            showHalo={isExpanded && signals[row.mainSessionId] === 'on'}
+            showHalo={signals[row.mainSessionId] === 'on'}
             motion={motion}
             sessions={sessions}
             selectSession={selectSession}

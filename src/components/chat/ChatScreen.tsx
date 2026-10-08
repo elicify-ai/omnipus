@@ -2073,8 +2073,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     inputEnabled,
     composerRuntime,
     appendMessage,
-    // /new and /clear are not client commands (FR-007), so this is not
-    // reached from the palette. Kept because the hook's parameter is required.
+    // The server runs /new and /clear. The hook still requires this parameter.
     startNewSession,
     // /stop is one Stop-button activation; /cancel stays immediate tree.
     activateStop: cancelState.cancelUnconditional,
@@ -2637,8 +2636,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             // would misleadingly suggest Enter/Send still route through here
             // while a turn is running.
             // Send-path interception: if the typed text is exactly a client-delivery
-            // slash command (e.g. "/help", "/model", "/cancel" — not "/new"
-            // or "/clear", FR-007), handle it
+            // local slash command (for example "/help", "/model", or
+            // "/cancel"). /new and /clear are sent to the server.
             // locally and prevent it from reaching the backend. This converges the
             // typed+Enter path with the palette selection path.
             if (slashMenu.interceptClientCommand()) {
@@ -3041,7 +3040,7 @@ function WelcomeState({ hasAgent }: { hasAgent: boolean }) {
           <p className="text-[var(--color-muted)] text-[length:var(--type-body-compact-size)]">
             {hasAgent
               ? 'Your agent is ready. Start a conversation below.'
-              : 'Select an agent in the session bar to get started.'}
+              : 'Select an agent in the sidebar list to get started.'}
           </p>
         </div>
       </div>
