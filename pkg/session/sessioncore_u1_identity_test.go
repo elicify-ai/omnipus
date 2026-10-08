@@ -5,8 +5,11 @@
 // RED pack, session-core U1 (main session identity), pkg/session slice.
 //
 // Spec: docs/internal/specs/session-core-spec.md (FR-002, FR-003; DEL-01,
-// DEL-07, DEL-11; C-MAIN; BDD-01.1, BDD-12.3). ADR D1:
+// DEL-11; C-MAIN; BDD-01.1, BDD-12.3). ADR D1:
 // docs/internal/architecture/ADR-20261006-session-core-with-an-agent-address-book.md.
+// DEL-07 (the switch_agent/handover teardown) is U8's, not U1's — team-lead
+// ruling 2026-10-08 — so this slice keeps UnifiedStore.SwitchAgent and it is
+// absent from the must-be-gone list below.
 // Every expected literal below is taken from the spec, never read off the
 // implementation. Tests that drive only EXISTING symbols live here; tests that
 // need a symbol the spec does not name live in
@@ -73,9 +76,10 @@ func TestSessionCoreU1_GetMetaDoesNotBackfillActiveAgentID(t *testing.T) {
 	assert.False(t, has, "DEL-11: reader must not synthesise active_agent_id; got %s", string(b))
 }
 
-// DEL-07 / DEL-01 (source-proof class "K"): the handover method and the
-// heartbeat-only identity constructor are deleted from UnifiedStore. Observed
-// by reflection so the test compiles before and after deletion.
+// DEL-01 (source-proof class "K"): the heartbeat-only identity constructor is
+// deleted from UnifiedStore. Observed by reflection so the test compiles before
+// and after deletion. DEL-07's handover-method deletion (UnifiedStore.SwitchAgent)
+// is U8's scope, not U1's — see the relocation note in the test body.
 func TestSessionCoreU1_RetiredStoreMethodsAreGone(t *testing.T) {
 	typ := reflect.TypeOf(&UnifiedStore{})
 
@@ -83,13 +87,16 @@ func TestSessionCoreU1_RetiredStoreMethodsAreGone(t *testing.T) {
 	_, ok := typ.MethodByName("NewSession")
 	require.True(t, ok, "instrument check: reflection must see NewSession")
 
+	// SwitchAgent is deliberately NOT listed here: the `switch_agent` tool/method
+	// teardown is U8's (team-lead ruling 2026-10-08), so U1 keeps
+	// UnifiedStore.SwitchAgent. This is a scope relocation, not a weakened
+	// assertion — NewHeartbeatSession below stays the U1 deletion proof.
 	for _, name := range []string{
-		"SwitchAgent",         // DEL-07: pkg/session/unified_write.go::SwitchAgent
 		"NewHeartbeatSession", // DEL-01: heartbeat-only identity matured into the computed main
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, present := typ.MethodByName(name)
-			assert.False(t, present, "%s must be deleted (spec DEL-07 / DEL-01)", name)
+			assert.False(t, present, "%s must be deleted (spec DEL-01)", name)
 		})
 	}
 }

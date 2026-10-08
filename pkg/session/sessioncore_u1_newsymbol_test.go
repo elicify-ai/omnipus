@@ -4,9 +4,12 @@
 
 // RED pack, session-core U1: the ONE place that depends on a symbol the spec
 // does not name. The spec requires an eager create-or-reuse of
-// `main-session-<workspaceid>-<agentid>` (FR-002, E-MAIN says the existing
+// `main-session-<workspaceid>+<agentid>` (FR-002, E-MAIN says the existing
 // NewHeartbeatSession / GetOrCreateScheduledSession path "matures") but names
-// no Go method. This file assumes
+// no Go method. The "+" join and the 255-byte computed-id cap are the founder
+// ruling Q1=B (2026-10-08); the spec's pre-ruling text still shows a hyphen, so
+// this file and the pkg/gateway U1 half assert the ruled "+" format. This file
+// assumes
 //
 //	func (us *UnifiedStore) GetOrCreateMainSession(workspaceID, agentID string) (*UnifiedMeta, error)
 //
@@ -139,7 +142,7 @@ func TestSessionCoreU1_ConcurrentLookupsStoreExactlyOneMainPerPair(t *testing.T)
 	for r := range results {
 		require.NoError(t, r.err, "lookup for %v", r.pair)
 		require.NotNil(t, r.meta)
-		want := "main-session-" + r.pair[0] + "-" + r.pair[1]
+		want := "main-session-" + r.pair[0] + "+" + r.pair[1]
 		assert.Equal(t, want, r.meta.ID, "spec FR-002 literal ID")
 		assert.Equal(t, UnifiedSessionType("main"), r.meta.Type)
 		assert.Equal(t, r.pair[1], r.meta.AgentID)
@@ -149,7 +152,7 @@ func TestSessionCoreU1_ConcurrentLookupsStoreExactlyOneMainPerPair(t *testing.T)
 	ids := u1StoredIdentities(t, store)
 	// 3 pairs + the probe pair above + 1 extra chat; the probe is a 4th pair.
 	assert.Equal(t, 4, u1MainCount(ids), "exactly one stored main per pair (3 pairs + probe); got %d dirs: %v", len(ids), keys(ids))
-	for _, want := range []string{"main-session-W1-mia", "main-session-W2-mia", "main-session-W1-jim"} {
+	for _, want := range []string{"main-session-W1+mia", "main-session-W2+mia", "main-session-W1+jim"} {
 		_, ok := ids[want]
 		assert.True(t, ok, "stored identity %s must exist", want)
 	}
@@ -165,23 +168,91 @@ func keys(m map[string]map[string]any) []string {
 	return k
 }
 
-// BDD-01.1 longest valid pair: IDs derive from existing bounds (<=128 each),
-// not UUID/128 assumptions. The computed ID is then 13+128+1+128 = 270 chars.
-// FINDING for team-lead: 270 exceeds the 255-byte file-name limit of common
-// filesystems, and the store uses the ID as the directory name; the spec gives
-// no mapping for that case (see report question). Expected literal below is the
-// spec's; if the design later maps long IDs differently, this test changes with
-// the spec, not with the implementation.
+// BDD-01.1 longest VALID pair under the ruled 255-byte computed-id cap (founder
+// Q1=B, 2026-10-08). The computed id is
+//
+//	13 ("main-session-") + len(workspace) + 1 ("+") + len(agent)
+//
+// so a 255-byte id needs len(workspace) + len(agent) = 241. Each part is still
+// bounded by its own validator (<=128: pkg/gateway/rest_workspaces.go::
+// validWorkspaceID, pkg/agentstore/state.go::ValidateAgentID), so the longest
+// pair keeps the workspace at its own 128 bound and the agent at the rest, 113:
+// 13 + 128 + 1 + 113 = 255, exactly at the cap. It is NOT two 128s
+// (13 + 128 + 1 + 128 = 270, over the cap and refused — see the 256-byte case
+// below). The expected literal derives from the ruling and the caps, never read
+// off the implementation.
 func TestSessionCoreU1_LongestValidPairGetsTheLiteralComputedID(t *testing.T) {
-	ws := u1LongID("w", 128)
-	ag := u1LongID("a", 128)
+	ws := u1LongID("w", 128) // 128 chars: max valid workspace ID length
+	ag := u1LongID("a", 113) // 113 chars: the remainder of the 241-char budget
 	require.Len(t, ws, 128, "boundary: max valid workspace ID length")
-	require.Len(t, ag, 128, "boundary: max valid agent ID length")
+	require.Len(t, ag, 113, "derivation: 241 - 128 = 113 for a 255-byte id")
+	require.Len(t, "main-session-"+ws+"+"+ag, 255,
+		"derivation: 13 + 128 + 1 + 113 = 255, exactly at the byte cap")
 
 	store := newTestStore(t)
 	meta, err := u1GetOrCreateMain(t, store, ws, ag)
-	require.NoError(t, err, "longest valid pair must be accepted (spec: bounds derive from existing validators)")
-	assert.Equal(t, "main-session-"+ws+"-"+ag, meta.ID)
+	require.NoError(t, err, "longest valid pair must be accepted (255-byte id is within the cap)")
+	assert.Equal(t, "main-session-"+ws+"+"+ag, meta.ID)
+}
+
+// FR-002 / BDD-01.4 boundary (max+1): a pair whose computed id is 256 bytes
+// (13 + len(workspace) + 1 + len(agent) = 256 → parts sum = 242, e.g. 128 + 114)
+// must be REFUSED with a visible error. Each part is still legal under its own
+// 128 cap, so the refusal can only be about the computed-id length: nothing may
+// be stored — no directory, no replacement id, no main for the pair.
+func TestSessionCoreU1_ComputedIDOverTheByteCapIsRefused(t *testing.T) {
+	ws := u1LongID("w", 128) // 128 chars: legal on its own
+	ag := u1LongID("a", 114) // 114 chars: legal on its own (<=128), over only in the id
+	require.Len(t, ws, 128, "precondition: 128-char workspace ID is valid")
+	require.Len(t, ag, 114, "precondition: 114-char agent ID is valid on its own")
+	require.Len(t, "main-session-"+ws+"+"+ag, 256,
+		"derivation: 13 + 128 + 1 + 114 = 256, one byte over the cap")
+
+	store := newTestStore(t)
+	// Positive control: a healthy pair stores a main, so the refusal below is
+	// not vacuous (the store can both accept and refuse).
+	_, cerr := u1GetOrCreateMain(t, store, "W1", "mia")
+	require.NoError(t, cerr, "control: the healthy pair is accepted")
+
+	meta, err := u1GetOrCreateMain(t, store, ws, ag)
+	require.Error(t, err, "a 256-byte computed id must be refused with a visible error")
+	assert.Nil(t, meta)
+
+	ids := u1StoredIdentities(t, store)
+	assert.Equal(t, 1, len(ids), "only the healthy main is stored; the over-cap pair stored nothing: %v", keys(ids))
+	assert.Equal(t, 1, u1MainCount(ids), "exactly one main (the control), none for the over-cap pair")
+	_, controlStored := ids["main-session-W1+mia"]
+	assert.True(t, controlStored, "the control main is untouched by the refusal")
+	for name := range ids {
+		assert.NotContains(t, name, ws, "no identity may be minted for the over-cap pair: %s", name)
+	}
+	entries, rerr := os.ReadDir(store.BaseDir())
+	require.NoError(t, rerr)
+	assert.Equal(t, 1, len(entries), "the over-cap pair must not create a directory")
+}
+
+// Id-format ruling (Q1=B): the "+" join keeps two distinct (workspace, agent)
+// pairs distinct. Under a hyphen join both pairs below stringify to
+// "main-session-a-b-c"; the "+" join yields "main-session-a-b+c" and
+// "main-session-a+b-c", so both mains coexist.
+func TestSessionCoreU1_DistinctPairsNeverCollideOnOneID(t *testing.T) {
+	store := newTestStore(t)
+
+	m1, err := u1GetOrCreateMain(t, store, "a-b", "c")
+	require.NoError(t, err, "pair (a-b, c) must be accepted")
+	m2, err := u1GetOrCreateMain(t, store, "a", "b-c")
+	require.NoError(t, err, "pair (a, b-c) must be accepted")
+
+	require.NotEqual(t, m1.ID, m2.ID, "distinct pairs must not share one id (a hyphen join would collide)")
+	assert.Equal(t, "main-session-a-b+c", m1.ID)
+	assert.Equal(t, "main-session-a+b-c", m2.ID)
+
+	ids := u1StoredIdentities(t, store)
+	assert.Equal(t, 2, u1MainCount(ids), "exactly two distinct mains, one per pair; got %v", keys(ids))
+	_, ok1 := ids["main-session-a-b+c"]
+	_, ok2 := ids["main-session-a+b-c"]
+	assert.True(t, ok1, "pair (a-b, c) has its own stored main")
+	assert.True(t, ok2, "pair (a, b-c) has its own stored main")
 }
 
 // FR-002 / BDD-01.4: invalid pair components are refused with an error and
@@ -212,7 +283,7 @@ func TestSessionCoreU1_InvalidPairComponentsAreRefusedWithoutStoring(t *testing.
 // repaired; no replacement identity appears.
 func TestSessionCoreU1_StoredIDWithWrongOwnerIsRefusedNotAdopted(t *testing.T) {
 	store := newTestStore(t)
-	const id = "main-session-W1-mia"
+	const id = "main-session-W1+mia"
 	seeded, err := store.GetOrCreateScheduledSession(id, "jim") // existing seam: exact-ID create, owner jim
 	require.NoError(t, err)
 	require.Equal(t, "jim", seeded.AgentID, "fixture: wrong-owner record")
@@ -230,7 +301,7 @@ func TestSessionCoreU1_StoredIDWithWrongOwnerIsRefusedNotAdopted(t *testing.T) {
 // BDD-01.4: unreadable/corrupt metadata is refused and left byte-for-byte.
 func TestSessionCoreU1_CorruptStoredMetadataIsRefusedNotRepaired(t *testing.T) {
 	store := newTestStore(t)
-	dir := filepath.Join(store.BaseDir(), "main-session-W1-mia")
+	dir := filepath.Join(store.BaseDir(), "main-session-W1+mia")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	corrupt := []byte("{not json")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "meta.json"), corrupt, 0o600))
