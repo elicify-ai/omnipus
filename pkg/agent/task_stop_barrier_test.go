@@ -471,3 +471,31 @@ func TestTaskRunNeverEndsStuckWorking(t *testing.T) {
 		})
 	}
 }
+
+// TestBoardTaskRunStop_IsNotRefused: ExecuteBoardTask runs a board task's turn
+// through processTaskDirect with no task-run owner. Its session has no
+// lifecycle record (nothing mints one), so the one Stop takes the plain
+// no-record path; a person's Stop must still interrupt the live turn and not be
+// refused with the barrier error.
+func TestBoardTaskRunStop_IsNotRefused(t *testing.T) {
+	f := newTaskStopFixture(t, taskFrontExecute, false, "a board answer that never arrives")
+	meta, err := f.al.GetAgentStore(taskStopWorkerID).NewSession(session.SessionTypeTask, "system", taskStopWorkerID)
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	f.al.ExecuteBoardTask(taskStopWorkerID, "board-task-1", meta.ID, "do the board work", func(_ string, runErr error) { done <- runErr })
+	r1AwaitProvider(t, f.provider, 0)
+	f.sessionID = meta.ID
+
+	res, err := f.al.StopSession(context.Background(), StopRequest{
+		SessionID: meta.ID, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "person"},
+		HooksFor: func(string) CancelHooks { return CancelHooks{} },
+	})
+	require.NoError(t, err)
+	require.NoError(t, res.RootErr, "a Stop on a board-task run must not be refused")
+	require.True(t, res.Fired, "the live turn must be interrupted")
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the board task's turn was not interrupted by the Stop")
+	}
+}
