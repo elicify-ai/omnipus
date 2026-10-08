@@ -5057,6 +5057,48 @@
       "syntax": "Step1Identity#svg-attribute.color<-payload.color",
       "reason": "Category: user-authored colours — the create step forwards the form's color field unchanged into the live preview. The field is a palette hex.",
       "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconAzure#svg-attribute.color<-AgentColor.options[0]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Azure, the first generated AgentColor option, from the named function iconAzure. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconCyan#svg-attribute.color<-AgentColor.options[2]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Cyan, generated AgentColor option 2, from the named function iconCyan. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconViolet#svg-attribute.color<-AgentColor.options[4]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Violet, generated AgentColor option 4, from the named function iconViolet. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconOrange#svg-attribute.color<-AgentColor.options[8]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Orange, generated AgentColor option 8, from the named function iconOrange. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconGrey#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Grey, the last generated AgentColor option, from the named function iconGrey. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentProfile.wave1.test.tsx",
+      "syntax": "lockedMia#dom-style.color<-AgentColor.options[0]",
+      "reason": "Category: user-authored colours — the locked built-in fixture sets Mia's colour to Azure, the first generated AgentColor option, inside the named function lockedMia. The index is a numeric literal. The field is the wire color.",
+      "owner": "user-authored colours exception registry"
     }
   ],
   "reviewedBoundaries": [

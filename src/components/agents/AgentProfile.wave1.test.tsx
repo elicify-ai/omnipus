@@ -7,7 +7,7 @@ import { render, screen, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
 import type { Agent } from '@/lib/api'
-import { AZURE } from '@/test/agentPalette'
+import { AgentColor } from '@/lib/api/generated/schemas'
 
 class ResizeObserverStub {
   observe() {}
@@ -49,42 +49,46 @@ import { fetchAgent, fetchSkills, fetchProviders } from '@/lib/api'
 const locked = (name: string) => ({ name, editable: false, reason: 'Built-in identity is fixed.' })
 const open = (name: string) => ({ name, editable: true })
 
-const mia = {
-  revision: '0'.repeat(64),
-  id: 'mia',
-  name: 'Mia',
-  type: 'core',
-  locked: true,
-  needs_model: false,
-  status: 'active',
-  model: 'claude-opus-4-6',
-  description: 'Core agent',
-  soul: '',
-  timeout_seconds: 60,
-  max_tool_iterations: 20,
-  max_tool_iterations_source: 'global',
-  max_tool_iterations_override_ignored: false,
-  memory_enabled: true,
-  color: AZURE,
-  icon: 'lightbulb',
-  figure: 'Omnipus',
-  role: 'general',
-  editable_fields: [
-    locked('name'),
-    locked('description'),
-    locked('color'),
-    locked('icon'),
-    locked('figure'),
-    locked('role'),
-    locked('soul'),
-    locked('executor'),
-    open('model'),
-    open('provider'),
-  ],
-} as Agent
+// The colour field has to be written inside a named function. A module-level
+// object, and an anonymous callback, both leave the palette read unsupported.
+function lockedMia(): Agent {
+  return {
+    revision: '0'.repeat(64),
+    id: 'mia',
+    name: 'Mia',
+    type: 'core',
+    locked: true,
+    needs_model: false,
+    status: 'active',
+    model: 'claude-opus-4-6',
+    description: 'Core agent',
+    soul: '',
+    timeout_seconds: 60,
+    max_tool_iterations: 20,
+    max_tool_iterations_source: 'global',
+    max_tool_iterations_override_ignored: false,
+    memory_enabled: true,
+    color: AgentColor.options[0],
+    icon: 'lightbulb',
+    figure: 'Omnipus',
+    role: 'general',
+    editable_fields: [
+      locked('name'),
+      locked('description'),
+      locked('color'),
+      locked('icon'),
+      locked('figure'),
+      locked('role'),
+      locked('soul'),
+      locked('executor'),
+      open('model'),
+      open('provider'),
+    ],
+  } as Agent
+}
 
 beforeEach(() => {
-  vi.mocked(fetchAgent).mockReset().mockResolvedValue(mia)
+  vi.mocked(fetchAgent).mockReset().mockResolvedValue(lockedMia())
   vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
   vi.mocked(fetchProviders).mockReset().mockResolvedValue([])
 })

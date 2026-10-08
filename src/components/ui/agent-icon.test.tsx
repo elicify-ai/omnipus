@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import type { ComponentType } from 'react'
-import { AZURE, CYAN, GREY, ORANGE, VIOLET } from '@/test/agentPalette'
+import { AgentColor } from '@/lib/api/generated/schemas'
 
 // Runtime import so Vitest collects these tests before the component exists.
 // ARCH-DECISIONS 3.1 requires src/components/ui/agent-icon.tsx.
@@ -35,6 +35,52 @@ const FIGURES = [
 
 const SIZES = [18, 26, 40, 48] as const
 
+// The colour attribute has to live in a named function, and the numeric
+// literal has to be written in this file. The `it` callbacks below are
+// anonymous, and an anonymous callback that writes
+// `color={AgentColor.options[0]}` is still ts-colors/unsupported. A call
+// into src/test/agentPalette.ts prints against the wrong file. Indices are
+// that module's spec order: Azure 0, Cyan 2, Violet 4, Orange 8, Grey 9.
+type Mark = {
+  figure: (typeof FIGURES)[number]['figure']
+  role: 'developer' | 'security' | 'writer' | 'general' | 'researcher'
+  size: (typeof SIZES)[number]
+  motion?: 'none' | 'working' | 'thinking' | 'waiting'
+  reducedMotion?: boolean
+  name?: string
+}
+
+function markFields(props: Mark) {
+  return {
+    figure: props.figure,
+    role: props.role,
+    size: props.size,
+    motion: props.motion,
+    reducedMotion: props.reducedMotion,
+    ...(props.name !== undefined ? { decorative: false as const, name: props.name } : {}),
+  }
+}
+
+function iconAzure(AgentIcon: ComponentType<Record<string, unknown>>, props: Mark) {
+  return <AgentIcon {...markFields(props)} color={AgentColor.options[0]} />
+}
+
+function iconOrange(AgentIcon: ComponentType<Record<string, unknown>>, props: Mark) {
+  return <AgentIcon {...markFields(props)} color={AgentColor.options[8]} />
+}
+
+function iconGrey(AgentIcon: ComponentType<Record<string, unknown>>, props: Mark) {
+  return <AgentIcon {...markFields(props)} color={AgentColor.options[9]} />
+}
+
+function iconCyan(AgentIcon: ComponentType<Record<string, unknown>>, props: Mark) {
+  return <AgentIcon {...markFields(props)} color={AgentColor.options[2]} />
+}
+
+function iconViolet(AgentIcon: ComponentType<Record<string, unknown>>, props: Mark) {
+  return <AgentIcon {...markFields(props)} color={AgentColor.options[4]} />
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
 })
@@ -50,7 +96,7 @@ describe('AgentIcon', () => {
     const AgentIcon = await loadAgentIcon()
     for (const row of FIGURES) {
       const { container, unmount } = render(
-        <AgentIcon figure={row.figure} role="developer" color={AZURE} size={40} />,
+        iconAzure(AgentIcon, { figure: row.figure, role: 'developer', size: 40 }),
       )
       expect(container.querySelector('[data-art]')?.getAttribute('data-art')).toBe(row.art)
       if (row.figure !== 'Omnipus') {
@@ -65,7 +111,7 @@ describe('AgentIcon', () => {
     const AgentIcon = await loadAgentIcon()
     for (const size of SIZES) {
       const { container, unmount } = render(
-        <AgentIcon figure="Woman" role="developer" color={AZURE} size={size} />,
+        iconAzure(AgentIcon, { figure: 'Woman', role: 'developer', size }),
       )
       const badge = container.querySelector('[data-role="developer"]')
       expect(badge, `badge at ${size}px`).not.toBeNull()
@@ -81,7 +127,7 @@ describe('AgentIcon', () => {
   it('keeps ink opacity at 1 while a separate glow layer carries thinking motion', async () => {
     const AgentIcon = await loadAgentIcon()
     const { container } = render(
-      <AgentIcon figure="Robot" role="security" color={ORANGE} size={48} motion="thinking" reducedMotion={false} />,
+      iconOrange(AgentIcon, { figure: 'Robot', role: 'security', size: 48, motion: 'thinking', reducedMotion: false }),
     )
     const ink = inkOf(container)
     const glow = container.querySelector('[data-glow]')
@@ -98,7 +144,7 @@ describe('AgentIcon', () => {
     async (motion) => {
       const AgentIcon = await loadAgentIcon()
       const { container } = render(
-        <AgentIcon figure="Man" role="writer" color={GREY} size={26} motion={motion} reducedMotion={false} />,
+        iconGrey(AgentIcon, { figure: 'Man', role: 'writer', size: 26, motion, reducedMotion: false }),
       )
       const ink = inkOf(container)
       expect(ink).toHaveStyle({ opacity: '1' })
@@ -113,14 +159,7 @@ describe('AgentIcon', () => {
   it('reduced motion removes animation loops and leaves the ink opaque', async () => {
     const AgentIcon = await loadAgentIcon()
     const { container } = render(
-      <AgentIcon
-        figure="Omnipus"
-        role="general"
-        color={CYAN}
-        size={18}
-        motion="thinking"
-        reducedMotion
-      />,
+      iconCyan(AgentIcon, { figure: 'Omnipus', role: 'general', size: 18, motion: 'thinking', reducedMotion: true }),
     )
     const ink = inkOf(container)
     expect(ink).toHaveStyle({ opacity: '1' })
@@ -133,14 +172,14 @@ describe('AgentIcon', () => {
   it('hides a decorative mark and names a non-decorative mark with the agent name', async () => {
     const AgentIcon = await loadAgentIcon()
     const decorative = render(
-      <AgentIcon figure="Robot" role="developer" color={AZURE} size={26} />,
+      iconAzure(AgentIcon, { figure: 'Robot', role: 'developer', size: 26 }),
     )
     expect(decorative.container.querySelector('[aria-hidden="true"]')).not.toBeNull()
     expect(decorative.queryByRole('img')).toBeNull()
     decorative.unmount()
 
     render(
-      <AgentIcon figure="Robot" role="developer" color={AZURE} size={26} decorative={false} name="Mia" />,
+      iconAzure(AgentIcon, { figure: 'Robot', role: 'developer', size: 26, name: 'Mia' }),
     )
     expect(screen.getByRole('img', { name: 'Mia' })).toBeInTheDocument()
     expect(screen.queryByRole('img', { name: 'Developer' })).toBeNull()
@@ -150,7 +189,7 @@ describe('AgentIcon', () => {
   it('does not fetch an agent', async () => {
     const AgentIcon = await loadAgentIcon()
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no network'))
-    render(<AgentIcon figure="Woman" role="researcher" color={VIOLET} size={40} motion="working" />)
+    render(iconViolet(AgentIcon, { figure: 'Woman', role: 'researcher', size: 40, motion: 'working' }))
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
