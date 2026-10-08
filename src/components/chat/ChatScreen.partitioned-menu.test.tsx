@@ -190,8 +190,13 @@ describe('Partitioned slash menu — section headers', () => {
     act(() => { fireEvent.change(input, { target: { value: '/' } }) })
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
 
-    // Commands section. /clear is no longer listed (FR-007).
-    expect(screen.queryByText('/clear')).not.toBeInTheDocument()
+    // Founder X3: every command returned by the server is listed, including
+    // /clear. Exact option order also guards against unrelated/invented rows.
+    expect(screen.getByText('/clear')).toBeInTheDocument()
+    expect(screen.getAllByRole('option').map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual([
+      '/resume', '/workspace', '/clear', '/help', '/model', '/agents', '/cancel',
+      '/code-review', '/data-analysis', '/web-research',
+    ])
     expect(screen.getByText('/help')).toBeInTheDocument()
     expect(screen.getByText('/cancel')).toBeInTheDocument()
     // Skills section

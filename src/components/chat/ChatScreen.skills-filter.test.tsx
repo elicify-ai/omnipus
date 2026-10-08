@@ -212,8 +212,13 @@ describe('Skills filter mode (D9)', () => {
     act(() => { fireEvent.change(input, { target: { value: '/' } }) })
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
 
-    // Commands present. /clear is no longer listed (FR-007).
-    expect(screen.queryByText('/clear')).not.toBeInTheDocument()
+    // Founder X3: the server fixture includes /clear, so the full menu lists
+    // it. Preserve exact commands-then-skills order and reject extra rows.
+    expect(screen.getByText('/clear')).toBeInTheDocument()
+    expect(screen.getAllByRole('option').map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual([
+      '/resume', '/workspace', '/clear', '/help', '/model', '/agents', '/cancel',
+      '/code-review', '/data-analysis', '/web-research',
+    ])
     expect(screen.getByText('/help')).toBeInTheDocument()
     expect(screen.getByText('/cancel')).toBeInTheDocument()
     // Skills present

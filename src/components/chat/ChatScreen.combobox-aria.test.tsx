@@ -228,11 +228,10 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
     expect(input).not.toHaveAttribute('aria-activedescendant')
   })
 
-  // F3 (test hardening, gate 6): the fixture has 4 listed commands (the two
-  // synthetic client-only entries /resume + /workspace, then help/cancel;
-  // /clear is no longer listed) then 2 skills sorted alphabetically (Code
-  // Review, Web Research) — 6 rows total, indices 0-5, with the
-  // commands→skills SECTION boundary falling between index 3 and index 4.
+  // Founder X3: the fixture's clear/help/cancel rows are all listed after the
+  // two existing local search actions /resume + /workspace, followed by two
+  // alphabetically sorted skills. Thus 2 + 3 + 2 = 7 options, indices 0-6;
+  // the commands→skills SECTION boundary falls between indices 4 and 5.
   // Session-search enhancement: "/workspace" is a second synthetic
   // client-only command (useSlashMenu.ts's allCommands), inserted
   // immediately after "/resume" — shifts every subsequent index by one from
@@ -243,7 +242,10 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
     act(() => { fireEvent.change(input, { target: { value: '/' } }) })
 
     const initialOptions = screen.getAllByRole('option')
-    expect(initialOptions).toHaveLength(6)
+    expect(initialOptions).toHaveLength(7)
+    expect(initialOptions.map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual([
+      '/resume', '/workspace', '/clear', '/help', '/cancel', '/code-review', '/web-research',
+    ])
     // Option ids must be unique — a duplicate id would make getElementById
     // resolve to the WRONG row (the first match) without any test noticing,
     // silently invalidating every activedescendant assertion below.
@@ -266,15 +268,17 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
     // Index 0 (initial highlight) — a command row.
     expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/resume')
 
-    // Step through indices 1-3 — still inside the Commands section.
+    // Step through indices 1-4 — still inside the Commands section.
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 1: /workspace
-    assertActivedescendantMatchesSelectedRow()
-    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 2: /help
-    assertActivedescendantMatchesSelectedRow()
-    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 3: /cancel — last Commands row
+    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/workspace')
+    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 2: /clear
+    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/clear')
+    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 3: /help
+    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/help')
+    act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 4: /cancel — last Commands row
     expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/cancel')
 
-    // Cross the section boundary: index 3 (Commands) -> index 4 (Skills).
+    // Cross the section boundary: index 4 (Commands) -> index 5 (Skills).
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
     expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/code-review')
 
