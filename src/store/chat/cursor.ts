@@ -226,6 +226,8 @@ export function applySnapshotHistoryWipe(bucket: SessionChatState): SessionChatS
     // An explicitly recovered first send stays visible while history is rebuilt.
     // Its received status keeps it in history order, not in the unsent tail.
     recoveredFirstSend: bucket.recoveredFirstSend ? { ...bucket.recoveredFirstSend, reconciled: false } : undefined,
+    restartInterruptedBootId: bucket.restartInterruptedBootId,
+    restartNoticeDismissed: bucket.restartNoticeDismissed,
     // Item 3 follow-up (orchestrator, Lane A confirmed the gateway side is
     // correct): the client sets isReplaying:true BEFORE session_snapshot
     // ever arrives (attachToSession). Without preserving it here, this

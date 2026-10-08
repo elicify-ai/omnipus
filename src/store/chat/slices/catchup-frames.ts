@@ -94,6 +94,7 @@ export function handleCatchUpFrame({ frame, targetSid, get, set, withBucket }: C
         delete replayErrorRetryTimers[targetSid]
       }
       withBucket(targetSid, (b) => produce(b, (draft) => {
+        const bootChanged = completeFrame.boot_id !== draft.cursor?.bootId
         draft.cursor = cursorFromTerminalFrame(completeFrame, draft.cursor?.bootId)
         draft.awaitingCatchUp = false
         draft.isReplaying = false
@@ -190,6 +191,14 @@ export function handleCatchUpFrame({ frame, targetSid, get, set, withBucket }: C
           draft.unansweredLastUserMessageId = lastMsg?.role === 'user' ? lastMsg.id : null
         } else {
           draft.unansweredLastUserMessageId = null
+        }
+        // The held-open tab has its own confirmed restart signal. Do not race
+        // an optional/stale REST lifecycle to choose between two status lines.
+        // A same-boot rebuild after continuation must not undo dismissal.
+        if (draft.snapshotWasBootMismatch && bootChanged && completeFrame.boot_id && completeFrame.boot_id !== draft.restartInterruptedBootId && !draft.activeTurnId &&
+          (draft.unansweredLastUserMessageId != null || draft.messageOrder.some((id) => draft.messagesById[id]?.confirmedUnfinished))) {
+          draft.restartInterruptedBootId = completeFrame.boot_id
+          draft.restartNoticeDismissed = false
         }
         draft.snapshotWasBootMismatch = undefined
       }))

@@ -45,6 +45,7 @@ const originalOptions = queryClient.getDefaultOptions()
 let savedLifecycle: WireSession['lifecycle_state']
 let stopCause: 'restart' | 'stop' | undefined
 let listFails = false
+let listGate: Promise<void> | undefined
 
 function wireRow(lifecycle: WireSession['lifecycle_state']): WireSession {
   const restartStop = lifecycle === 'interrupted' || stopCause === 'restart'
@@ -67,9 +68,11 @@ beforeEach(() => {
   savedLifecycle = 'interrupted'
   stopCause = undefined
   listFails = false
+  listGate = undefined
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(String(input), 'http://localhost')
     if (url.pathname !== '/api/v1/sessions') throw new Error(`Unexpected HTTP request: ${url}`)
+    if (listGate) await listGate
     if (listFails) return new Response('boom', { status: 500 })
     const body: SessionPage = { sessions: [wireRow(savedLifecycle)] }
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
@@ -294,17 +297,89 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
     expect(screen.queryByText(/working/i)).not.toBeInTheDocument()
   })
 
-  it('degraded live tab: list unavailable falls back to the boot-mismatch wording, still never Working', async () => {
+  it('degraded live tab: a confirmed boot mismatch still shows Interrupted alone when the list is unavailable', async () => {
     listFails = true
     await mount()
     act(() => {
       useChatStore.getState().sendMessage('Write the long report', { clientMessageId: 'u-1' })
       useChatStore.getState().handleFrame({ type: 'token', session_id: SID, turn_id: 't-1', message_id: 'a-1', content: 'Partial text before the kill' })
     })
-    feed(freshTabAttach('boot_mismatch'))
-    expect((await screen.findAllByText(/couldn't be finished/i)).length).toBeGreaterThan(0)
-    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+    feed(freshTabAttach('boot_mismatch').map((frame) => frame.type === 'replay_message' && frame.role === 'user'
+      ? { ...frame, id: 'srv-u-1', client_message_id: 'u-1' } : frame))
+    expect(await screen.findByTestId('restart-interrupted-notice')).toHaveTextContent('Interrupted')
+    expect(screen.getAllByTestId('restart-interrupted-notice')).toHaveLength(1)
+    expect(screen.queryByTestId('assistant-connection-status')).not.toBeInTheDocument()
+    expect(screen.queryByText(/couldn't be finished/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Generate again/ })).not.toBeInTheDocument()
     expect(screen.queryByText(/working/i)).not.toBeInTheDocument()
+  })
+
+  // Release scenario h / F1: a held-open tab knows the boot cut its answer off
+  // from the completed attach, even before (or without) the optional REST lifecycle.
+  it.each(['pending', 'absent', 'failed'] as const)('F1 ordering: %s lifecycle list cannot replace Interrupted with the legacy status', async (list) => {
+    savedLifecycle = 'working'
+    await mount()
+    await waitFor(() => expect(queryClient.getQueryState(['sessions'])?.status).toBe('success'))
+    act(() => {
+      useChatStore.getState().sendMessage('Write the long report', { clientMessageId: 'u-1' })
+      useChatStore.getState().handleFrame({ type: 'token', session_id: SID, turn_id: 't-1', message_id: 'a-1', content: 'First real token', seq: 5 })
+    })
+    let release = () => {}
+    if (list === 'pending') listGate = new Promise<void>((resolve) => { release = resolve })
+    savedLifecycle = list === 'absent' ? undefined : 'interrupted'
+    listFails = list === 'failed'
+    try {
+      feed(unansweredAttach())
+      const notice = await screen.findByTestId('restart-interrupted-notice')
+      expect(notice).toHaveTextContent('Interrupted · The restart cut this answer off. Send a message to continue.')
+      expect(screen.getAllByTestId('restart-interrupted-notice')).toHaveLength(1)
+      expect(within(notice).getByRole('button', { name: 'Generate again' })).toBeInTheDocument()
+      expect(screen.getAllByRole('button', { name: /Generate again/ })).toHaveLength(1)
+      expect(screen.queryByTestId('assistant-connection-status')).not.toBeInTheDocument()
+      expect(screen.queryByText(/couldn't be finished/i)).not.toBeInTheDocument()
+      release()
+      await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
+      expect(screen.getByTestId('restart-interrupted-notice')).toBeInTheDocument()
+      expect(screen.queryByTestId('assistant-connection-status')).not.toBeInTheDocument()
+      await act(async () => { fireEvent.click(within(notice).getByRole('button', { name: 'Generate again' })) })
+      feed(answerFrames)
+      await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
+      expect(screen.getByText('Fresh answer')).toBeInTheDocument()
+      expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Generate again/ })).not.toBeInTheDocument()
+      expect(screen.queryByTestId('assistant-connection-status')).not.toBeInTheDocument()
+    } finally { release() }
+  })
+
+  it('F1 ordering: a saved partial answer also uses Interrupted before the lifecycle list resolves', async () => {
+    savedLifecycle = 'working'
+    await mount()
+    await waitFor(() => expect(queryClient.getQueryState(['sessions'])?.status).toBe('success'))
+    act(() => {
+      useChatStore.getState().sendMessage('Write the long report', { clientMessageId: 'u-1' })
+      useChatStore.getState().handleFrame({ type: 'token', session_id: SID, turn_id: 't-1', message_id: 'a-1', content: 'Partial text before the kill', seq: 5 })
+    })
+    let release!: () => void
+    listGate = new Promise<void>((resolve) => { release = resolve })
+    try {
+      feed(freshTabAttach('boot_mismatch').map((frame) => frame.type === 'replay_message' && frame.role === 'user'
+        ? { ...frame, id: 'srv-u-1', client_message_id: 'u-1' } : frame))
+      expect(await screen.findByTestId('restart-interrupted-notice')).toHaveTextContent('Interrupted')
+      expect(screen.getByText('Partial text before the kill')).toBeInTheDocument()
+      expect(screen.queryByTestId('assistant-connection-status')).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /Generate again/ })).not.toBeInTheDocument()
+    } finally { release() }
+  })
+
+  it.each(['boot_mismatch', 'retention_exceeded'] as const)('F1 control: %s does not mark a completed answer Interrupted without a cut-off turn', async (reason) => {
+    savedLifecycle = undefined
+    feed(freshTabAttach().map((frame) => frame.type === 'session_snapshot' ? { ...frame, reason } : frame))
+    await mount()
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
+    expect(screen.getByText('Partial text before the kill')).toBeInTheDocument()
+    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('assistant-connection-status')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Generate again/ })).not.toBeInTheDocument()
   })
 
   // Oracle: pkg/gateway/i1_restart_rest_projection_test.go cases human_stop and genuine_failure.
@@ -363,6 +438,26 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
     expect(screen.getAllByRole('button', { name: /Generate again/ })).toHaveLength(1)
   })
 
+  it.each(['session_snapshot', 'resetSessionForReplay'] as const)('F1 ordering: same-boot %s after continuation cannot revive the notice; a later boot can', async (how) => {
+    savedLifecycle = undefined
+    feed(unansweredAttach())
+    await mount()
+    const notice = await screen.findByTestId('restart-interrupted-notice')
+    await act(async () => { fireEvent.click(within(notice).getByRole('button', { name: 'Generate again' })) })
+    feed(answerFrames)
+    await waitFor(() => expect(queryClient.isFetching({ queryKey: ['sessions'] })).toBe(0))
+    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+    if (how === 'resetSessionForReplay') act(() => { useChatStore.getState().resetSessionForReplay(SID) })
+    feed(unansweredAttach())
+    expect(useChatStore.getState().sessionsById[SID]?.restartNoticeDismissed).toBe(true)
+    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+    feed(unansweredAttach().map((frame) => frame.type === 'session_snapshot' || frame.type === 'catch_up_complete'
+      ? { ...frame, boot_id: 'boot-3' } : frame))
+    expect(await screen.findByTestId('restart-interrupted-notice')).toHaveTextContent('Interrupted')
+    expect(screen.getAllByRole('button', { name: 'Generate again' })).toHaveLength(1)
+    expect(screen.queryByTestId('assistant-connection-status')).not.toBeInTheDocument()
+  })
+
   it('F1: after Generate again and Done, no notice, no Generate again, no "couldn\'t be finished" remains (list still says interrupted)', async () => {
     feed(unansweredAttach())
     await mount()
@@ -412,7 +507,7 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
     expect(screen.queryByText(/couldn't be finished/i)).not.toBeInTheDocument()
   })
 
-  it('without a restart-interrupted saved state the same unanswered question still offers Generate again (same line, no restart state)', async () => {
+  it('F1 ordering: a boot-mismatch unanswered question uses Interrupted even when the REST list still says done', async () => {
     savedLifecycle = 'done'
     feed([
       { type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-2', reason: 'boot_mismatch' },
@@ -422,7 +517,11 @@ describe('I1 — a restart-cut chat reads Interrupted in the chat body, never Wo
     ])
     await mount()
     await waitFor(() => expect(queryClient.getQueryState(['sessions'])?.status).toBe('success'))
-    expect(screen.getByText(/Generate again/)).toBeInTheDocument()
-    expect(screen.queryByTestId('restart-interrupted-notice')).not.toBeInTheDocument()
+    const notice = screen.getByTestId('restart-interrupted-notice')
+    expect(notice).toHaveTextContent('Interrupted')
+    expect(within(notice).getByRole('button', { name: 'Generate again' })).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /Generate again/ })).toHaveLength(1)
+    expect(screen.queryByTestId('assistant-connection-status')).not.toBeInTheDocument()
+    expect(screen.queryByText(/couldn't be finished/i)).not.toBeInTheDocument()
   })
 })

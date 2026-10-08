@@ -39,10 +39,10 @@ function useSavedLifecycle(sessionId: string | null) {
  * a failed refetch keeping old data — cannot bring it back until the saved value
  * is seen at something else.
  *
- * Degraded: while the list is loading, errored or lacks the row the saved value
- * is unknown, so this is false — no notice, and the older boot-mismatch
- * "couldn't be finished" statuses behave exactly as before. It never reports
- * Working for a chat it knows nothing about.
+ * A held-open tab also knows a restart cut its answer off once its boot-mismatch
+ * catch-up completes. That per-chat signal chooses the same single notice even
+ * while REST is pending, missing the optional lifecycle, or failed. Fresh tabs
+ * still need the saved lifecycle; unknown_position alone proves no interruption.
  */
 export function useRestartInterrupted(): boolean {
   const sessionId = useSessionStore((s) => s.activeSessionId)
@@ -50,8 +50,9 @@ export function useRestartInterrupted(): boolean {
   const running = useChatStore((s) =>
     s.isStreaming || (sessionId != null && s.sessionsById[sessionId]?.activeTurnId != null),
   )
+  const observed = useChatStore((s) => (sessionId != null && !!s.sessionsById[sessionId]?.restartInterruptedBootId))
   const dismissed = useChatStore((s) => (sessionId != null && !!s.sessionsById[sessionId]?.restartNoticeDismissed))
-  return saved === 'interrupted' && !running && !dismissed
+  return (observed || saved === 'interrupted') && !running && !dismissed
 }
 
 /** Ends the notice at the user's own action before the new turn's first frame arrives. */
@@ -74,9 +75,10 @@ export function useRestartNoticeDismissal(): void {
   const running = useChatStore((s) =>
     s.isStreaming || (sessionId != null && s.sessionsById[sessionId]?.activeTurnId != null),
   )
+  const observed = useChatStore((s) => (sessionId != null && !!s.sessionsById[sessionId]?.restartInterruptedBootId))
   useEffect(() => {
     if (!sessionId) return
-    if (running && saved === 'interrupted') setDismissed(sessionId, true)
-    else if (saved !== undefined && saved !== 'interrupted') setDismissed(sessionId, false)
-  }, [sessionId, saved, running])
+    if (running && (observed || saved === 'interrupted')) setDismissed(sessionId, true)
+    else if (!observed && saved !== undefined && saved !== 'interrupted') setDismissed(sessionId, false)
+  }, [sessionId, saved, running, observed])
 }
