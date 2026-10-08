@@ -186,9 +186,11 @@ type CronService struct {
 	store     *CronStore
 	mu        sync.RWMutex
 	running   bool
-	stopChan  chan struct{}
-	wakeChan  chan struct{}
-	gronx     *gronx.Gronx
+	// runWindowUsed prevents a physical-boot restore on a service reused after Stop.
+	runWindowUsed bool
+	stopChan      chan struct{}
+	wakeChan      chan struct{}
+	gronx         *gronx.Gronx
 
 	// clock is the injected time source (W-5). Defaults to realClock.
 	clock Clock
@@ -346,7 +348,10 @@ func (cs *CronService) clockNowUnsafeMS() int64 {
 // times, and initializes the stop/wake channels + lane context. The caller must
 // hold cs.mu. It returns started=true only on a stopped→running transition (so
 // Start knows to launch the runLoop exactly once).
-func (cs *CronService) initRunStateUnsafe() (started bool, err error) {
+func (cs *CronService) initRunStateUnsafe(physicalBoot bool) (started bool, err error) {
+	if physicalBoot && cs.runWindowUsed {
+		return false, fmt.Errorf("cron: physical-boot restore requires an unused service instance")
+	}
 	if cs.running {
 		return false, nil
 	}
@@ -355,6 +360,13 @@ func (cs *CronService) initRunStateUnsafe() (started bool, err error) {
 		return false, fmt.Errorf("failed to load store: %w", err)
 	}
 	cs.migrateOwnersUnsafe()
+	if physicalBoot {
+		// The prior process has no live lane. Preserve all schedule/history data;
+		// normal Start/reload deliberately retain the same-process overlap flag.
+		for i := range cs.store.Jobs {
+			cs.store.Jobs[i].State.Running = false
+		}
+	}
 
 	cs.recomputeNextRuns()
 	if err := cs.saveStoreUnsafe(); err != nil {
@@ -370,12 +382,24 @@ func (cs *CronService) initRunStateUnsafe() (started bool, err error) {
 		cs.laneCtx, cs.laneCancel = context.WithCancel(context.Background())
 	}
 	cs.running = true
+	cs.runWindowUsed = true
 	return true, nil
 }
 
 func (cs *CronService) Start() error {
+	return cs.startRunWindow(false)
+}
+
+// StartAfterPhysicalBoot restores only the dead prior process's running flags.
+// Gateway physical boot is its sole production caller. Reload and Stop/Start use
+// Start, so an old lane still unwinding after a bounded drain remains protected.
+func (cs *CronService) StartAfterPhysicalBoot() error {
+	return cs.startRunWindow(true)
+}
+
+func (cs *CronService) startRunWindow(physicalBoot bool) error {
 	cs.mu.Lock()
-	started, err := cs.initRunStateUnsafe()
+	started, err := cs.initRunStateUnsafe(physicalBoot)
 	stop := cs.stopChan
 	cs.mu.Unlock()
 	if err != nil {
@@ -395,7 +419,7 @@ func (cs *CronService) Start() error {
 func (cs *CronService) startNoLoop() error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-	_, err := cs.initRunStateUnsafe()
+	_, err := cs.initRunStateUnsafe(false)
 	return err
 }
 

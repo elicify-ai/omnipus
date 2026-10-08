@@ -385,7 +385,7 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 	if stg.err != nil {
 		return nil, true, fmt.Errorf("error setting up cron service: %w", stg.err)
 	}
-	if stg.err = stg.runningServices.CronService.Start(); stg.err != nil {
+	if stg.err = stg.runningServices.CronService.StartAfterPhysicalBoot(); stg.err != nil {
 		return nil, true, fmt.Errorf("error starting cron service: %w", stg.err)
 	}
 	fmt.Println("✓ Cron service started")
