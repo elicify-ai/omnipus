@@ -34,6 +34,7 @@ import { renderHistoricalToolCall } from './tools/HistoricalToolCallBlock'
 import { classifySetGoalCall } from './tools/SetGoalToolUI'
 import { formatErrorDetail } from '@/lib/llm-error'
 import { FeedKindLabel } from './FeedKindLabel'
+import { UnavailableChatNotice } from './UnavailableChatNotice'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { ProviderRetryIndicator } from './ProviderRetryIndicator'
 import { ProviderFallbackNoteLine } from './ProviderFallbackNoteLine'
@@ -1977,8 +1978,10 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // the card, never the chat box; Cancel (always present on the card)
   // unlocks. Terminal cards (answered/cancelled) release the lock.
   const askLocked = useChatStore((s) => s.pendingAsk?.status === 'pending')
+  const chatUnavailable = useSessionStore((s) => s.workspaceEntry?.status === 'unavailable')
 
   const inputEnabled =
+    !chatUnavailable &&
     !agentRemoved &&
     !isReplaying &&
     !askLocked &&
@@ -2005,7 +2008,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // path to diverge from paste, so gating the button/drag-drop on
   // isStreaming was just an inconsistent affordance (paste allowed it, the
   // button forbade the identical action) rather than a real safety gate.
-  const attachDisabled = !isConnected || isReplaying || reconnectPhase === 'gave_up' || agentRemoved
+  const attachDisabled = !isConnected || isReplaying || reconnectPhase === 'gave_up' || agentRemoved || chatUnavailable
 
   // The 3 previously-tangled composer concerns (slash/skill palette, file
   // upload incl. harmful-file confirm, stop/cancel state machine) each own
@@ -2369,6 +2372,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       onDragLeave={attachDisabled ? undefined : fileUpload.onDragLeave}
       onDrop={attachDisabled ? undefined : fileUpload.onDrop}
     >
+      <UnavailableChatNotice />
       {/* SR gap (gate 4 MODERATE): the "Commands unavailable" error row
           inside the listbox below is deliberately `role="presentation"` —
           excluded from the listbox's accessible option children (see that
