@@ -133,10 +133,6 @@ type AgentLoop struct {
 	// Turn tracking
 	turnSeq        atomic.Uint64
 	activeRequests activeRequestTracker
-	// delegatedRateLimitSleep is a per-loop test seam. Production leaves it
-	// nil and callProvider uses sleepWithContext; tests can record the exact
-	// retry delays without a wall-clock assertion or process-global mutation.
-	delegatedRateLimitSleep func(context.Context, time.Duration) error
 
 	// mediaRefsDropped counts media refs that could not be resolved (unknown ref
 	// or file missing on disk). Observable via GetMediaRefsDropped for tests and
@@ -2339,13 +2335,7 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 	}
 	llm := typedExitError(code, cause)
 
-	if code == CodeTurnTimedOut && ts.parentTurnState != nil {
-		// The delegation coordinator owns live publication after it settles
-		// timer ownership. Keep the child's private terminal record here.
-		ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
-	} else {
-		al.emitTurnErrorFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm)
-	}
+	al.emitTurnErrorFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm)
 	level("agent", "Turn exited: "+string(code), map[string]any{
 		"agent_id":  ts.agent.ID,
 		"iteration": iteration,

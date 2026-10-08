@@ -95,7 +95,7 @@ func launchSessionType(kind steer.OriginKind) session.UnifiedSessionType {
 // step leaves no session and no lifecycle record; the caller receives an
 // error naming the failed write via errors.Is against the returned
 // steer.Err* sentinel.
-func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (steer.LaunchResult, error) {
+func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (steer.LaunchResult, error) {
 	if req.Label == "" && req.Task == "" {
 		return steer.LaunchResult{}, steer.ErrTitleRequired
 	}
@@ -191,7 +191,11 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 	if req.SteeringSessionID == "" {
 		return l.launchOrdinaryRoot(sessions, lifecycle, req, title, sessionType)
 	}
-	result, err := l.launchSteered(sessions, lifecycle, req, title, sessionType)
+	// #891: the launching tool's ctx carries AutoDenyAsk when the parent runs
+	// unattended (task/trigger/headless). The child's turn is rebuilt later from
+	// its lifecycle record on a detached context, so the posture is persisted
+	// ON that record, in the launch's own write (reconstructSteeredTurn reads it).
+	result, err := l.launchSteered(sessions, lifecycle, req, title, sessionType, tools.ToolAutoDenyAsk(ctx))
 	if err == nil {
 		l.inheritDelegatePermissions(lifecycle, req.SteeringSessionID, result.SessionID)
 		l.publishSteeredLaunch(req, result)
@@ -380,6 +384,7 @@ func (l *SteerLauncher) launchSteered(
 	req steer.LaunchRequest,
 	title string,
 	sessionType session.UnifiedSessionType,
+	unattended bool,
 ) (steer.LaunchResult, error) {
 	if req.WorkspaceID != "" || req.Owner != "" {
 		return steer.LaunchResult{}, fmt.Errorf(
@@ -516,6 +521,7 @@ func (l *SteerLauncher) launchSteered(
 				ParentAgentID:  parentAgentID,
 				Origin:         &origin,
 				SteeredBy:      steeredBy,
+				Unattended:     unattended,
 			}, nil
 		},
 	)

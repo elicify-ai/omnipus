@@ -81,7 +81,7 @@ func TestCWSlideR1_PartialNewestGroupCannotDisappearIntoSuccessfulSend(t *testin
 	flow := rr.rq.prepareLLMRequest()
 	var sendErr error
 	if flow == agentLoopRunTurnRequestNext {
-		_, sendErr = rr.rq.ri.rf.rt.callProvider(rr.rq.ri.rf.callMessages, nil)
+		_, sendErr = rr.rq.ri.rf.rt.callProviderOnce(rr.rq.ri.rf.callMessages, nil)
 		t.Logf("partial-group provider-boundary result: %v", sendErr)
 	}
 	// An incomplete LIVE step must be retained pending its result or rejected

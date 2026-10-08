@@ -375,6 +375,18 @@ func (s *MessageInboxStore) retentionMax() int {
 	return DefaultInboxAckedRetentionMax
 }
 
+// AckedRetention reports how many acked message entries compaction always
+// leaves in an inbox (the effective retention cap). A compaction that purged
+// anything therefore leaves at least this many acked messages behind — the
+// footprint boot final-delivery recovery uses as evidence that an absent
+// message was compacted away rather than lost.
+func (s *MessageInboxStore) AckedRetention() int {
+	if s == nil {
+		return 0
+	}
+	return s.retentionMax()
+}
+
 // compactionTrigger returns the effective compaction trigger threshold,
 // falling back to the default for an unset/invalid override.
 func (s *MessageInboxStore) compactionTrigger() int {

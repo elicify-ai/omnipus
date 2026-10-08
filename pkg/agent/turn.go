@@ -275,13 +275,10 @@ type turnState struct {
 	parentSpawnCallID string
 
 	// Additional SubTurn fields
-	ctx             context.Context    // Context for this turn
-	cancelFunc      context.CancelFunc // Cancel function for this turn's context
-	critical        bool               // Whether this SubTurn should continue after parent ends
-	parentTurnState *turnState         // Reference to parent turnState
-	parentEnded     atomic.Bool        // Whether parent has ended
-	closeOnce       sync.Once          // Ensures pendingResults channel is closed once
-	finishedChan    chan struct{}      // Closed when turn finishes
+	ctx          context.Context    // Context for this turn
+	cancelFunc   context.CancelFunc // Cancel function for this turn's context
+	closeOnce    sync.Once          // Ensures pendingResults channel is closed once
+	finishedChan chan struct{}      // Closed when turn finishes
 
 	lastUsage *providers.UsageInfo // Last LLM usage info
 

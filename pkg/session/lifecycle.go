@@ -243,6 +243,17 @@ type LifecycleRecord struct {
 	// ExecutionIdentity's own doc comment for the tuple's shape.
 	ExecutionID *ExecutionIdentity `json:"execution_id,omitempty"`
 
+	// Unattended is the durable "no human audience" posture of a steered
+	// session: set once at launch when the launching tool's context carried
+	// AutoDenyAsk (a task/trigger/headless parent), and read whenever the
+	// session's turn is rebuilt from this record — first dispatch, a wake, a
+	// restart — so every ask-policy call in it is auto-denied instead of
+	// pending an approval nobody can answer (#891).
+	//
+	// not-wire-format: internal steered-launch bookkeeping, omitted from the
+	// wire SessionLifecycleRecord (it is not session status).
+	Unattended bool `json:"unattended,omitempty"`
+
 	// FinalDelivery is the protected terminal/outbox commit tuple (ADR-20260928
 	// sub-agent control plane, D2 CRIT-001): the one outcome/publication
 	// commit writes done/failed AND this unpublished final-delivery entry in
