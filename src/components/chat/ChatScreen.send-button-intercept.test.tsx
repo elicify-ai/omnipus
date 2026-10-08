@@ -266,7 +266,7 @@ describe('Send-button click — client-command interception (bugfixes3 deferred 
     expect(messages).toHaveLength(1)
     expect(messages[0].role).toBe('system')
     expect(messages[0].content).toContain('/help')
-    expect(messages[0].content).not.toContain('/clear')
+    expect(messages[0].content).toContain('/clear')
     expect(messages[0].content).not.toContain('/new')
     expect(messages[0].content).not.toContain('switch agents')
   })

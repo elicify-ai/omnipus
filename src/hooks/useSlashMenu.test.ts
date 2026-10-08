@@ -226,10 +226,11 @@ describe('useSlashMenu — gating', () => {
     // client-only entry, inserted immediately after "/resume" in
     // useSlashMenu's allCommands (both web-client-only synthetic commands
     // sit together ahead of every backend-served command).
+    // Founder X3: the server returned /new, so it is listed. clear is only an
+    // alias on that row, not a second server command, so it is not its own key.
     expect(result.current.slashItems.map((i) => i.key)).toEqual([
-      '/resume', '/workspace', '/help', '/model', '/agents', '/skills', '/cancel', '/handoff', 'code-review', 'web-research',
+      '/resume', '/workspace', '/new', '/help', '/model', '/agents', '/skills', '/cancel', '/handoff', 'code-review', 'web-research',
     ])
-    expect(result.current.slashItems.map((i) => i.key)).not.toContain('/new')
     expect(result.current.slashItems.map((i) => i.key)).not.toContain('/clear')
   })
 })
@@ -319,13 +320,12 @@ describe('useSlashMenu — prefix filtering', () => {
     expect(result.current.shouldShowSlash).toBe(false)
   })
 
-  it('does not list /new or its /clear alias', () => {
-    // FR-007: the SPA no longer lists /new or the backend alias /clear.
+  it('lists the server /new command and does not invent a /clear row from its alias', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
-    act(() => result.current.onInputChange('/cl'))
-    expect(result.current.slashItems).toHaveLength(0)
     act(() => result.current.onInputChange('/new'))
-    expect(result.current.slashItems.map((i) => i.key)).not.toContain('/new')
+    expect(result.current.slashItems.map((i) => i.key)).toContain('/new')
+    expect(result.current.slashItems.map((i) => i.key)).not.toContain('/clear')
+    act(() => result.current.onInputChange('/cl'))
     expect(result.current.slashItems.map((i) => i.key)).not.toContain('/clear')
   })
 })
@@ -401,13 +401,25 @@ describe('useSlashMenu — keyboard navigation', () => {
 })
 
 describe('useSlashMenu — client command dispatch', () => {
-  it('/new is not listed and does not start a session', () => {
+  it('lists /new, and selecting it sends the server command without starting a session', () => {
+    let text = ''
     const startNewSession = vi.fn()
-    const { result } = renderHook(() => useSlashMenu(baseParams({ startNewSession })))
+    const composerRuntime = {
+      getState: () => ({ text }),
+      setText: vi.fn((value: string) => { text = value }),
+      addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
+      send: vi.fn(),
+    } as unknown as ComposerRuntime
+    const { result } = renderHook(() => useSlashMenu(baseParams({ startNewSession, composerRuntime })))
     act(() => result.current.onInputChange('/'))
-    expect(result.current.slashItems.find((i) => i.key === '/new')).toBeUndefined()
+    const item = result.current.slashItems.find((i) => i.key === '/new')
+    expect(item, 'the server returned /new').toBeDefined()
     expect(result.current.slashItems.find((i) => i.key === '/clear')).toBeUndefined()
+    act(() => item!.onSelect())
     expect(startNewSession).not.toHaveBeenCalled()
+    expect(composerRuntime.send).toHaveBeenCalledTimes(1)
+    expect(text.trim()).toBe('/new')
   })
 
   it('/help appends a system message built from the command list', () => {
@@ -420,7 +432,7 @@ describe('useSlashMenu — client command dispatch', () => {
     const msg = appendMessage.mock.calls[0][0]
     expect(msg.role).toBe('system')
     expect(msg.content).toContain('/help')
-    expect(msg.content).not.toContain('/new')
+    expect(msg.content).toContain('/new')
     expect(msg.content).not.toContain('/clear')
     expect(msg.content).not.toContain('switch agents')
   })
