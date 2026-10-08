@@ -228,7 +228,20 @@ func TestSessionCoreU1_ComputedIDOverTheByteCapIsRefused(t *testing.T) {
 	}
 	entries, rerr := os.ReadDir(store.BaseDir())
 	require.NoError(t, rerr)
-	assert.Equal(t, 1, len(entries), "the over-cap pair must not create a directory")
+	// Oracle derivation: BaseDir() also holds the store's own ".context/"
+	// directory — NewUnifiedStoreWithHome seeds it (unified.go) and the list
+	// path skips it explicitly (unified_list.go: `entry.Name() == ".context"`),
+	// so it is the store's internal context backend, not a session. Count
+	// SESSION directories only (exclude dot-entries): exactly the one healthy
+	// control main, and no directory for the over-cap id.
+	var sessionDirs []string
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			sessionDirs = append(sessionDirs, e.Name())
+		}
+	}
+	assert.Equal(t, []string{"main-session-W1+mia"}, sessionDirs,
+		"only the healthy control main is stored; the over-cap pair must not create a directory")
 }
 
 // Id-format ruling (Q1=B): the "+" join keeps two distinct (workspace, agent)
@@ -314,7 +327,19 @@ func TestSessionCoreU1_CorruptStoredMetadataIsRefusedNotRepaired(t *testing.T) {
 	require.NoError(t, rerr)
 	assert.Equal(t, corrupt, after, "corrupt record must not be overwritten (no guessing)")
 	entries, _ := os.ReadDir(store.BaseDir())
-	assert.Equal(t, 1, len(entries), "no replacement directory may appear")
+	// Oracle derivation: BaseDir() also holds the store's own ".context/"
+	// directory (NewUnifiedStoreWithHome in unified.go; unified_list.go skips it
+	// when listing — not a session). Count session directories only (exclude
+	// dot-entries): exactly the one corrupt main's directory, and no replacement
+	// directory for the pair.
+	var sessionDirs []string
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			sessionDirs = append(sessionDirs, e.Name())
+		}
+	}
+	assert.Equal(t, []string{"main-session-W1+mia"}, sessionDirs,
+		"only the corrupt main's directory remains; no replacement directory may appear")
 }
 
 // C-MAIN: Session.agent_id / workspace_id are immutable. Existing public seam:

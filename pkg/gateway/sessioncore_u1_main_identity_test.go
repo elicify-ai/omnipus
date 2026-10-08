@@ -313,8 +313,16 @@ func TestSessionCoreU1_ComputedIDOverTheByteCapIsRefused(t *testing.T) {
 
 	overID := u1MainID(longWS, overAgent)
 	assert.Empty(t, u1Prefixed(env.storedSessions(t), overID), "no directory is created for the over-cap pair")
-	assert.Empty(t, u1Prefixed(env.storedSessions(t), "main-session-"+longWS+"+"),
-		"no replacement identity is minted for the over-cap pair")
+	// Oracle derivation: the prefix "main-session-<workspace>+" also matches the
+	// healthy Jim control, which legitimately exists on this workspace, so it is
+	// not a valid refusal oracle. The over-cap PAIR is identified by its agent id
+	// alone — the workspace id is shared with Jim — so a replacement identity for
+	// the pair would have to reference the over-cap agent id. Assert none does,
+	// under any stored name.
+	for name := range env.storedSessions(t) {
+		assert.NotContains(t, name, overAgent,
+			"no replacement identity for the over-cap pair may be minted: %s", name)
+	}
 	assert.Nil(t, u1Row(env.listSessions(t, ""), overID), "the over-cap main is never listed")
 	if mc := u1MemberConfig(env.getWorkspace(t, longWS), overAgent); mc != nil {
 		assert.Empty(t, mc["main_session_id"], "no main address is exposed for the over-cap pair")
@@ -349,7 +357,16 @@ func TestSessionCoreU1_DistinctPairsNeverCollideOnOneID(t *testing.T) {
 	stored := u1Sorted(env.storedOfType(t, "main"))
 	assert.Contains(t, stored, id1, "pair (a-b, c) has its own main")
 	assert.Contains(t, stored, id2, "pair (a, b-c) has its own main")
-	assert.Len(t, stored, 2, "exactly two distinct mains, one per pair")
+	assert.NotContains(t, stored, "main-session-a-b-c",
+		"the would-be-collided hyphen-join id must not exist (the + join keeps the pairs distinct)")
+	// Oracle derivation: Jim is a member of BOTH workspaces — each putTeam above
+	// sets core_team with "jim" — and ensureMainsForTeam (main_session.go) mints a
+	// main for EVERY eligible member, so each workspace also gets Jim's main. Four
+	// mains total: the two pairs under test plus main-session-a-b+jim and
+	// main-session-a+jim.
+	assert.Contains(t, stored, u1MainID("a-b", "jim"), "Jim is a member of a-b, so he has a main there")
+	assert.Contains(t, stored, u1MainID("a", "jim"), "Jim is a member of a, so he has a main there")
+	assert.Len(t, stored, 4, "the two pairs' mains plus Jim's main in each workspace (2 + 2)")
 	_, c1 := env.getSession(t, id1)
 	assert.Equal(t, http.StatusOK, c1, "pair (a-b, c) main is reachable")
 	_, c2 := env.getSession(t, id2)
