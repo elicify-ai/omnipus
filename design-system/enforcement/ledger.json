@@ -2544,6 +2544,27 @@
     },
     {
       "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/AgentStatusIndicator.tsx",
+      "syntax": "AgentStatusIndicator#svg-attribute.color<-color",
+      "reason": "Identity ink. The chat indicator passes the responding agent's palette colour into AgentIcon, which paints it as currentColor on the figure. The hex is governed identity data (ADR-20261007, design-system rule 6), not chrome. The component does not choose a colour.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/ChatScreen.tsx",
+      "syntax": "ResolvedAgentMark#svg-attribute.color<-agent?.color",
+      "reason": "Identity ink on the live reply mark. ResolvedAgentMark reads the responding agent's color and passes it to AgentIcon. Governed identity data, not a design-system chrome colour.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/ChatScreen.tsx",
+      "syntax": "VirtualAssistantMessageRow#svg-attribute.color<-agent?.color",
+      "reason": "Identity ink on the plain and replay reply mark. The row passes the message's own agent color into AgentIcon. Governed identity data, not a design-system chrome colour.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
       "path": "src/components/chat/MediaActionToolbar.tsx",
       "syntax": "MediaActionToolbar#className",
       "reason": "Category: caller pass-through — migration plan §5 founder decision 2026-09-19. Source: dist/design-system-baseline/cli-lanes/fanout/L6/registry-draft.json. Registrable once scripts/design-system/codemod-classname-passthrough.mjs's template-join transform is applied to MediaActionToolbar.tsx (verified dist/design-system-baseline/cli-lanes/fanout/L6/validate-e2e.log): before, ts-colors/unsupported \"className\"; after, ts-colors/extension-boundary \"MediaActionToolbar#className\". The shipped codemod wraps `containerClasses` in its own template shell to reproduce pre-rewrite scanning depth with zero new findings.",
