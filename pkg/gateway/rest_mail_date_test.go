@@ -28,7 +28,7 @@ func TestWireDateIsNullable(t *testing.T) {
 	if !ok {
 		t.Fatalf("generated MailMessageSummary has no Date field")
 	}
-	if field.Type.Kind() != reflect.Ptr {
+	if field.Type.Kind() != reflect.Pointer {
 		t.Fatalf("wire date is %s, want a nullable pointer (*time.Time) — the W0 amendment was to land atomically with the consumer PRs (US-6.AC-4; finding F5): consumers shipped without it", field.Type)
 	}
 }
