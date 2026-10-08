@@ -703,8 +703,7 @@ func TestTaskRunStop_RetriedAttemptInNewSessionIsStoppable(t *testing.T) {
 				err = f.te.ExecuteTask(context.Background(), f.task.ID, nil)
 			}
 			require.NoError(t, err)
-			first := awaitProviderCall(t, p.entered, 0)
-			_ = first
+			awaitProviderCall(t, p.entered, 0)
 			awaitProviderCall(t, p.entered, 1) // the second attempt is live
 			got, err := f.al.taskStore.Get(f.task.ID)
 			require.NoError(t, err)
@@ -785,4 +784,45 @@ func TestKillTreeBackgroundShells_ListingFailureIsMarkedAsAnUnlistedTree(t *test
 	require.Len(t, res.Report.Unreachable, 1, "the listing failure must still be reported")
 	require.Equal(t, "root-session", res.Report.Unreachable[0].ID)
 	require.True(t, res.Report.Unreachable[0].HelperTreeUnlisted, "and marked as an unlisted tree, not a failed Stop of the root")
+}
+
+// TestTaskRunAdmissionRefusals_OtherThanAStopAreNotReportedAsStopped: only a
+// cancelled dispatch (the Stop's fence) is read as the stopped turn. A terminal
+// record or a stale generation is a different refusal and must reach the run
+// loop as itself, never as "Stopped:".
+func TestTaskRunAdmissionRefusals_OtherThanAStopAreNotReportedAsStopped(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		break_ func(t *testing.T, f *taskStopFixture, sessionID string)
+		want   error
+	}{
+		{"terminal_record", func(t *testing.T, f *taskStopFixture, sid string) {
+			require.NoError(t, session.TransitionSession(f.al.GetSessionLifecycleStore(), nil, sid, session.LifecycleFailed, "ended elsewhere", nil))
+		}, steer.ErrTerminal},
+		{"stale_generation", func(t *testing.T, f *taskStopFixture, sid string) {
+			require.NoError(t, f.al.GetSessionLifecycleStore().Mutate(sid, func(rec *session.LifecycleRecord) error {
+				rec.Generation++
+				return nil
+			}))
+		}, steer.ErrStaleGeneration},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newTaskStopFixture(t, taskFrontExecute, false, "must never be called")
+			sessionID, err := f.te.createTaskSessionSync(f.task)
+			require.NoError(t, err)
+			owner, err := f.te.admitTaskRun(context.Background(), sessionID)
+			require.NoError(t, err)
+			require.NotNil(t, owner)
+			tc.break_(t, f, sessionID)
+
+			_, runErr := f.al.processTaskDirect(withTaskExecution(context.Background(), owner),
+				taskStopWorkerID, "work", taskTurnSessionKey(taskStopWorkerID, f.task.ID), sessionID)
+
+			require.Error(t, runErr)
+			require.ErrorIs(t, runErr, tc.want, "the refusal must reach the run loop as itself")
+			require.NotErrorIs(t, runErr, ErrTurnCanceled, "a refusal that is not a Stop must not read as the stopped turn")
+			require.NotEqual(t, CodeTurnCanceled, TranslateTurnError(runErr).Code)
+			require.Empty(t, f.provider.Requests())
+		})
+	}
 }
