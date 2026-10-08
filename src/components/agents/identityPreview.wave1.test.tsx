@@ -71,6 +71,20 @@ describe('create wizard identity preview', () => {
     const preview = document.querySelector('[data-art]')
     expect(preview?.getAttribute('data-art')).toBe('woman')
     expect(document.querySelector('[data-role="writer"]')).not.toBeNull()
+    for (const swatch of PALETTE) {
+      fireEvent.click(screen.getByRole('button', { name: swatch.name }))
+      const mark = document.querySelector('[data-testid="agent-icon"]')
+      expect(mark, `${swatch.name} preview mark`).not.toBeNull()
+      // Independently derive CSS RGB from the spec's literal hex table,
+      // never from the picker state or AgentIcon's supplied props.
+      const channels = [1, 3, 5].map((offset) => Number.parseInt(swatch.hex.slice(offset, offset + 2), 16))
+      expect(getComputedStyle(mark as Element).color, `${swatch.name} painted preview ink`).toBe(`rgb(${channels.join(', ')})`)
+      expect(mark?.querySelector('[data-ink] svg')).toHaveAttribute('fill', 'currentColor')
+      expect(mark?.querySelector('[data-ink]')).toHaveStyle({ opacity: '1' })
+      expect(mark?.querySelector('[data-art="woman"]')).not.toBeNull()
+      expect(mark?.querySelector('[data-role="writer"]')).not.toBeNull()
+      expect(onSubmit, `${swatch.name} is an unsaved draft`).not.toHaveBeenCalled()
+    }
     expect(screen.queryByLabelText(/upload/i)).not.toBeInTheDocument()
     expect(document.querySelector('input[type="file"]')).toBeNull()
     expect(onSubmit).not.toHaveBeenCalled()
