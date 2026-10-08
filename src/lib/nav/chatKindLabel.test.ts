@@ -22,10 +22,12 @@ const seam = vi.hoisted(() => ({
       : ''
     return seam.mains.has(id)
   }),
-  mainSessionIdOfMember: vi.fn((_member: unknown): string | undefined => undefined),
-  sessionAttention: vi.fn((_session: unknown): 'unknown' => 'unknown'),
-  attachAckFields: vi.fn((_bound: unknown) => ({})),
-  attentionBoundOfFrame: vi.fn((_frame: unknown): number | undefined => undefined),
+  // Preserve seam signature parity for the forwarding mocks; these default
+  // operations must remain unavailable regardless of their arguments.
+  mainSessionIdOfMember: vi.fn((_member: unknown): string | undefined => { void _member; return undefined }),
+  sessionAttention: vi.fn((_session: unknown): 'unknown' => { void _session; return 'unknown' }),
+  attachAckFields: vi.fn((_bound: unknown) => { void _bound; return {} }),
+  attentionBoundOfFrame: vi.fn((_frame: unknown): number | undefined => { void _frame; return undefined }),
 }))
 
 vi.mock('@/lib/nav/sessionCoreSeam', () => ({

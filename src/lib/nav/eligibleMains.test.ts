@@ -55,9 +55,11 @@ const seam = vi.hoisted(() => {
         : ''
       return mainSessionIds.has(id)
     }),
-    sessionAttention: vi.fn((_session: unknown): 'on' | 'off' | 'unknown' => 'unknown'),
-    attachAckFields: vi.fn((_bound: unknown) => ({})),
-    attentionBoundOfFrame: vi.fn((_frame: unknown): number | undefined => undefined),
+    // Retain seam argument signatures for the forwarding mocks below; these
+    // unavailable defaults deliberately ignore the supplied values.
+    sessionAttention: vi.fn((_session: unknown): 'on' | 'off' | 'unknown' => { void _session; return 'unknown' }),
+    attachAckFields: vi.fn((_bound: unknown) => { void _bound; return {} }),
+    attentionBoundOfFrame: vi.fn((_frame: unknown): number | undefined => { void _frame; return undefined }),
   }
 })
 

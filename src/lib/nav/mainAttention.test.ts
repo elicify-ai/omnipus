@@ -63,7 +63,9 @@ const seam = vi.hoisted(() => {
         : ''
       return mains.has(id)
     }),
-    mainSessionIdOfMember: vi.fn((_member: unknown): string | undefined => undefined),
+    // The forwarding mock retains the seam argument; this unavailable
+    // default must not manufacture a main ID from any member value.
+    mainSessionIdOfMember: vi.fn((_member: unknown): string | undefined => { void _member; return undefined }),
     attentionBoundOfFrame: vi.fn((frame: unknown): number | undefined => {
       if (!frame || typeof frame !== 'object' || !('attention_bound' in frame)) return undefined
       const value = (frame as { attention_bound: unknown }).attention_bound
