@@ -19,6 +19,7 @@ import {
 import { GraphIcon, Info } from '@phosphor-icons/react'
 import type { Task, Plan } from '@/lib/api'
 import { ZoomPill, useZoomableViewKeyboard } from '@/components/ui/zoomable-view'
+import { ErrorState } from '@/components/ui/error-state'
 import {
   contentExceedsFrame,
   useZoomableCanvasPill,
@@ -230,16 +231,35 @@ function GraphViewInner({
   const { fitView, getNodesBounds, getNodes, getViewport, setViewport } = useReactFlow<TaskGraphNode>()
   const nodesInitialized = useNodesInitialized()
   const framingGeneration = useRef(0)
+  const [framingFailed, setFramingFailed] = useState(false)
   const frameAtTop = useCallback(() => {
     const generation = ++framingGeneration.current
-    void fitView(GRAPH_FIT_VIEW_OPTIONS).then((fitted) => {
-      if (!fitted || generation !== framingGeneration.current) return
+    setFramingFailed(false)
+    const alignAtTop = () => {
       const bounds = getNodesBounds(getNodes())
       const { zoom } = getViewport()
       // --space-3 = 16px: opening at the top/left keeps the first card whole,
       // even when the legibility floor makes the DAG larger than the frame.
-      void setViewport({ zoom, x: 16 - bounds.x * zoom, y: 16 - bounds.y * zoom })
-    })
+      return setViewport({ zoom, x: 16 - bounds.x * zoom, y: 16 - bounds.y * zoom })
+    }
+    const frame = async () => {
+      let framed = false
+      try {
+        const fitted = await fitView(GRAPH_FIT_VIEW_OPTIONS)
+        if (generation !== framingGeneration.current) return
+        if (fitted) framed = await alignAtTop()
+      } catch {
+        framed = false
+      }
+      if (generation !== framingGeneration.current) return
+      if (!framed) {
+        // One independent fallback bypasses fitView and keeps the usable zoom.
+        // Never loop or reset the canvas after failure; expose Retry instead.
+        try { framed = await alignAtTop() } catch { framed = false }
+      }
+      if (generation === framingGeneration.current) setFramingFailed(!framed)
+    }
+    void frame()
   }, [fitView, getNodesBounds, getNodes, getViewport, setViewport])
   useEffect(() => () => { framingGeneration.current++ }, [])
 
@@ -488,6 +508,7 @@ function GraphViewInner({
   return (
     <div className="absolute inset-0 flex flex-col" onKeyDown={handleCanvasKeyDown}>
       {layout.unlinked.length > 0 && <GraphUnlinkedNotice count={layout.unlinked.length} />}
+      {framingFailed && <ErrorState message="Couldn't open at the top" onRetry={frameAtTop} className="shrink-0 flex-row flex-wrap gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)]" />}
       <div ref={canvasRef} className="relative min-h-0 min-w-0 flex-1" data-testid="task-graph-viewport">
       <ReactFlow
         className="sovereign-flow"

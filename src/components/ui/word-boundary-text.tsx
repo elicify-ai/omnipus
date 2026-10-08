@@ -34,7 +34,9 @@ export function WordBoundaryText({ text, as: Tag = 'span', className, title }: W
       if (alive) setFits((previous) => previous.size === next.size && [...next].every((index) => previous.has(index)) ? previous : next)
     }
     measure()
-    void document.fonts?.ready.then(measure)
+    // Font readiness is an optional geometry improvement, not a prerequisite:
+    // a failed readiness promise still measures the available fallback font.
+    void document.fonts?.ready.then(measure).catch(measure)
     if (typeof ResizeObserver === 'undefined') return () => { alive = false }
     const observer = new ResizeObserver(measure)
     observer.observe(owner)

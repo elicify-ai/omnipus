@@ -2,6 +2,15 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { expect, it } from 'vitest'
 
+it('documents bounded Graph framing recovery and exact-title fallback-font recovery', () => {
+  const tasks = readFileSync(resolve(process.cwd(), 'docs/tasks.md'), 'utf8')
+  const plans = readFileSync(resolve(process.cwd(), 'docs/plans.md'), 'utf8')
+  expect(tasks).toMatch(/font-loading check fails[^.\n]*fallback font[^.\n]*without changing[^.\n]*text/i)
+  expect(plans).toMatch(/tries once more at the current zoom/i)
+  expect(plans).toMatch(/map stays usable[^.\n]*Couldn't open at the top[^.\n]*Retry/i)
+  expect(plans).toMatch(/still pan, zoom and open tasks/i)
+})
+
 it('T15–T19 document corrected info-hover task/plan details, equal Board height, plain metadata and always-visible actions', () => {
   const tasks = readFileSync(resolve(process.cwd(), 'docs/tasks.md'), 'utf8')
   const plans = readFileSync(resolve(process.cwd(), 'docs/plans.md'), 'utf8')

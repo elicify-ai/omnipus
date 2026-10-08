@@ -177,6 +177,96 @@ describe('GraphView — top framing and asynchronous fit races (round-1 E)', () 
     expect(framingBoundary.setViewport).toHaveBeenCalledExactlyOnceWith({ zoom: 0.8, x: 16 - (-40 * 0.8), y: 16 - (75 * 0.8) })
   })
 
+  it.each(['rejection', 'throw', 'false'] as const)('recovers a fit %s with one top-anchor fallback at the current usable zoom', async (failure) => {
+    controlFraming()
+    framingBoundary.fitView.mockImplementation(() => {
+      if (failure === 'throw') throw new Error('fit unavailable')
+      return failure === 'rejection' ? Promise.reject(new Error('fit unavailable')) : Promise.resolve(false)
+    })
+    renderGraph(<GraphView tasks={[makeTask({ id: 'a' })]} agents={[]} onTaskClick={vi.fn()} />)
+    await waitFor(() => expect(framingBoundary.setViewport).toHaveBeenCalledExactlyOnceWith({ zoom: 0.8, x: 48, y: -44 }))
+    expect(framingBoundary.fitView).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('recovers an exception while reading the fitted bounds with one fresh measurement', async () => {
+    const pending = controlFraming()
+    renderGraph(<GraphView tasks={[makeTask({ id: 'a' })]} agents={[]} onTaskClick={vi.fn()} />)
+    await waitFor(() => expect(pending).toHaveLength(1))
+    framingBoundary.getNodesBounds.mockImplementationOnce(() => { throw new Error('bounds unavailable') })
+    await act(async () => pending[0](true))
+    expect(framingBoundary.setViewport).toHaveBeenCalledExactlyOnceWith({ zoom: 0.8, x: 48, y: -44 })
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it.each(['rejection', 'false'] as const)('recovers a top-anchor viewport %s once rather than losing its promise', async (failure) => {
+    const pending = controlFraming()
+    if (failure === 'rejection') framingBoundary.setViewport.mockRejectedValueOnce(new Error('viewport unavailable'))
+    else framingBoundary.setViewport.mockResolvedValueOnce(false)
+    renderGraph(<GraphView tasks={[makeTask({ id: 'a' })]} agents={[]} onTaskClick={vi.fn()} />)
+    await waitFor(() => expect(pending).toHaveLength(1))
+    await act(async () => pending[0](true))
+    expect(framingBoundary.setViewport).toHaveBeenCalledTimes(2)
+    expect(framingBoundary.setViewport).toHaveBeenLastCalledWith({ zoom: 0.8, x: 48, y: -44 })
+    expect(framingBoundary.fitView).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('keeps the graph and zoom controls usable after both framing attempts fail, exposes Retry and clears the notice after recovery', async () => {
+    controlFraming()
+    framingBoundary.fitView.mockResolvedValue(false)
+    framingBoundary.setViewport.mockResolvedValue(false)
+    const onTaskClick = vi.fn()
+    const { container } = renderGraph(<GraphView tasks={[makeTask({ id: 'a', title: 'Still usable' })]} agents={[]} onTaskClick={onTaskClick} />)
+    const viewport = container.querySelector<HTMLElement>('.react-flow__viewport')!
+    const originalTransform = viewport.style.transform
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent("Couldn't open at the top"))
+    expect(framingBoundary.fitView).toHaveBeenCalledTimes(1)
+    expect(framingBoundary.setViewport).toHaveBeenCalledTimes(1)
+    expect(viewport.style.transform).toBe(originalTransform)
+    fireEvent.click(screen.getByTestId('task-node-a'))
+    expect(onTaskClick).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: 'a' }))
+    const user = userEvent.setup()
+    const before = screen.getByTestId('zoomable-view-percent').textContent
+    await user.click(screen.getByTestId('zoomable-view-zoom-in'))
+    expect(screen.getByTestId('zoomable-view-percent').textContent).not.toBe(before)
+    framingBoundary.fitView.mockResolvedValue(true)
+    framingBoundary.setViewport.mockResolvedValue(true)
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(framingBoundary.setViewport).toHaveBeenCalledTimes(2))
+    expect(framingBoundary.fitView).toHaveBeenCalledTimes(2)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('shows the bounded Retry notice when the fit and its fallback both reject', async () => {
+    controlFraming()
+    framingBoundary.fitView.mockRejectedValue(new Error('fit unavailable'))
+    framingBoundary.setViewport.mockRejectedValue(new Error('fallback unavailable'))
+    renderGraph(<GraphView tasks={[makeTask({ id: 'a' })]} agents={[]} onTaskClick={vi.fn()} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument())
+    expect(framingBoundary.fitView).toHaveBeenCalledTimes(1)
+    expect(framingBoundary.setViewport).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not recover a stale failed fit or report its error after a newer frame or unmount', async () => {
+    const pending = controlFraming()
+    const tasks = [makeTask({ id: 'a', plan_id: 'plan-1' }), makeTask({ id: 'b' })]
+    const { rerender, unmount, client } = renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={vi.fn()} />)
+    await waitFor(() => expect(pending).toHaveLength(1))
+    rerender(<QueryClientProvider client={client}><GraphView tasks={tasks} agents={[]} onTaskClick={vi.fn()} planId="plan-1" /></QueryClientProvider>)
+    await waitFor(() => expect(pending).toHaveLength(2))
+    await act(async () => pending[1](true))
+    await act(async () => pending[0](false))
+    expect(framingBoundary.setViewport).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('alert')).toBeNull()
+    rerender(<QueryClientProvider client={client}><GraphView tasks={tasks} agents={[]} onTaskClick={vi.fn()} /></QueryClientProvider>)
+    await waitFor(() => expect(pending).toHaveLength(3))
+    unmount()
+    await act(async () => pending[2](false))
+    expect(framingBoundary.setViewport).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   it('E rejects a stale opening fit after a newer plan-scope fit and rejects a pending fit after unmount', async () => {
     const pending = controlFraming()
     const tasks = [makeTask({ id: 'a', plan_id: 'plan-1' }), makeTask({ id: 'b' })]

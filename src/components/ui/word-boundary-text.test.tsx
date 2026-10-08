@@ -2,7 +2,29 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { act, render } from '@testing-library/react'
 import { WordBoundaryText } from './word-boundary-text'
 
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
+const originalFonts = Object.getOwnPropertyDescriptor(document, 'fonts')
+afterEach(() => {
+  vi.restoreAllMocks(); vi.unstubAllGlobals()
+  if (originalFonts) Object.defineProperty(document, 'fonts', originalFonts)
+  else Reflect.deleteProperty(document, 'fonts')
+})
+
+it('remeasures available fallback-font geometry when font readiness rejects, preserving exact text', async () => {
+  let width = 100
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(() => width)
+  const measureText = vi.fn(() => ({ width: 80 }))
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ measureText } as unknown as CanvasRenderingContext2D)
+  let rejectFont!: (error: Error) => void
+  const ready = new Promise<FontFaceSet>((_resolve, reject) => { rejectFont = reject })
+  Object.defineProperty(document, 'fonts', { configurable: true, value: { ready } })
+  const mounted = render(<WordBoundaryText text="verification" />)
+  expect(mounted.container.querySelector('[data-word-boundary]')).toHaveTextContent('verification')
+  width = 60
+  await act(async () => { rejectFont(new Error('font readiness unavailable')); await Promise.resolve() })
+  expect(measureText).toHaveBeenCalledTimes(2)
+  expect(mounted.container.querySelector('[data-word-boundary]')).toBeNull()
+  expect(mounted.container.textContent).toBe('verification')
+})
 
 it('preserves exact text and keeps only words that fit the measured owner width atomic across resizes', () => {
   let width = 100
