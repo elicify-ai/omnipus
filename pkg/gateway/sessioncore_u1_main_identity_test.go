@@ -374,9 +374,28 @@ func TestSessionCoreU1_ComputedIDOverTheByteCapIsRefused(t *testing.T) {
 	_, code := env.getSession(t, u1MainID(longWS, "jim"))
 	require.Equal(t, http.StatusOK, code, "positive companion: Jim's main exists")
 
+	// C2 re-CHECK survivor M27: the meta-bearing helpers above (storedSessions /
+	// u1MetaBearingDirs) admit ONLY directories that carry a parseable meta.json,
+	// so a replacement identity the refusal leaves behind as a RAW directory —
+	// one with no metadata at all — is invisible to them and the "nothing was
+	// stored" assertions stayed green while a stray directory existed. Snapshot
+	// the RAW store listing (every session-store directory, metadata or not; the
+	// helper excludes only the store's own ".context" backend) immediately BEFORE
+	// the refusal, so any directory of ANY name the refusal adds is caught.
+	rawBefore := env.u1RawDirNames(t)
+
 	w := env.putTeam(t, longWS, "jim", overAgent)
 	assert.GreaterOrEqual(t, w.Code, http.StatusBadRequest, "a 256-byte computed id must be a visible client error, got %d: %s", w.Code, w.Body.String())
 	assert.Less(t, w.Code, http.StatusInternalServerError, "and not a server fault: %s", w.Body.String())
+
+	// M27 repair: the refusal must add NOT ONE raw directory — the raw directory
+	// multiset after the refusal equals the multiset before it. This is the
+	// metadata-independent form of "stores nothing": a replacement directory with
+	// no meta.json (the C2-injected "c2-raw-replacement") now fails here, where
+	// the meta-bearing check below could not see it.
+	rawAfter := env.u1RawDirNames(t)
+	assert.Equal(t, rawBefore, rawAfter,
+		"the over-cap refusal must add no raw store directory, with or without metadata; before=%v after=%v", rawBefore, rawAfter)
 
 	// BDD-01.4: the refusal must NAME the cap cause, not just refuse. C1 CHECK
 	// survivor m16: the test passed even when the refusal lost its 255-byte
