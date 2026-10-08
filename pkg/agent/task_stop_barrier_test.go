@@ -28,6 +28,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -537,6 +538,107 @@ func TestTaskRunStop_AcceptedBetweenTurns_EndsStoppedNotRestarted(t *testing.T) 
 			got, err := f.al.taskStore.Get(f.task.ID)
 			require.NoError(t, err)
 			require.Equal(t, 0, got.AttemptCount, "a Stop spends no attempt")
+		})
+	}
+}
+
+// stopBarrierClaimingWorker makes one goal_claim(met) call and then closes the
+// turn with text, like a worker that finished.
+type stopBarrierClaimingWorker struct{}
+
+func (p *stopBarrierClaimingWorker) Chat(_ context.Context, msgs []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+	return cleanClaimTurn(msgs), nil
+}
+
+func (*stopBarrierClaimingWorker) GetDefaultModel() string { return "claiming-worker" }
+
+// blockingJudgeProvider is the Judge's model: it blocks inside the verdict call
+// until released or cancelled, then upholds the claim.
+type blockingJudgeProvider struct {
+	inner   *b6ScriptedJudge
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (p *blockingJudgeProvider) Chat(ctx context.Context, msgs []providers.Message, defs []providers.ToolDefinition, model string, opts map[string]any) (*providers.LLMResponse, error) {
+	p.once.Do(func() { close(p.entered) })
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-p.release:
+	}
+	return p.inner.Chat(ctx, msgs, defs, model, opts)
+}
+
+func (*blockingJudgeProvider) GetDefaultModel() string { return "blocking-judge" }
+
+// TestTaskExecutionFor_BindsOnlyTheTaskRunsOwnSession pins the guard that keeps
+// the Judge's adjudication turn (another session, same context) off the task
+// run's barrier.
+func TestTaskExecutionFor_BindsOnlyTheTaskRunsOwnSession(t *testing.T) {
+	d := newExecutionDisposition(executionClaim{SessionID: "task-session", Generation: 1, RunID: "run", BootSeq: 1})
+	ctx := withTaskExecution(context.Background(), d)
+	require.Same(t, d, taskExecutionFor(ctx, "task-session"), "the task's own session binds")
+	require.Nil(t, taskExecutionFor(ctx, "judge-session"), "another session's turn under the same context must not bind")
+	require.Nil(t, taskExecutionFor(ctx, ""), "an unnamed session never binds")
+	require.Nil(t, taskExecutionFor(context.Background(), "task-session"), "no owner on the context binds nothing")
+}
+
+// TestTaskRunStop_WhileTheJudgeDeliberates: the worker claims the goal met and
+// the Judge is mid-verdict. A person's Stop then must still land `stopped`
+// and the run must end once the Judge answers; the verdict call is not the
+// task run's turn.
+func TestTaskRunStop_WhileTheJudgeDeliberates(t *testing.T) {
+	for _, front := range []taskStopFront{taskFrontExecute, taskFrontLauncher} {
+		t.Run(string(front), func(t *testing.T) {
+			f := newTaskStopFixture(t, front, false, "unused")
+			worker := &stopBarrierClaimingWorker{}
+			judge := &blockingJudgeProvider{inner: &b6ScriptedJudge{metFromCall: 1, reason: "ok"}, entered: make(chan struct{}), release: make(chan struct{})}
+			workerInst, ok := f.al.GetRegistry().GetAgent(taskStopWorkerID)
+			require.True(t, ok)
+			workerInst.Provider = worker
+			judgeInst, ok := f.al.GetRegistry().GetAgent(string(coreagent.IDJudge))
+			require.True(t, ok)
+			judgeInst.Provider = judge
+			t.Cleanup(func() {
+				select {
+				case <-judge.release:
+				default:
+					close(judge.release)
+				}
+			})
+			criteria := []task.AcceptanceCriterion{proseCriterion("c1", "the work is complete")}
+			_, err := f.al.taskStore.Update(f.task.ID, task.Patch{Criteria: &criteria})
+			require.NoError(t, err)
+
+			if front == taskFrontLauncher {
+				inProgress := task.StatusInProgress
+				_, err = f.al.taskStore.Update(f.task.ID, task.Patch{Status: &inProgress})
+				require.NoError(t, err)
+				_, err = f.te.StartTaskNow(context.Background(), f.task.ID)
+			} else {
+				err = f.te.ExecuteTask(context.Background(), f.task.ID, nil)
+			}
+			require.NoError(t, err)
+			select {
+			case <-judge.entered:
+			case <-time.After(15 * time.Second):
+				t.Fatal("the Judge never started deliberating")
+			}
+			got, err := f.al.taskStore.Get(f.task.ID)
+			require.NoError(t, err)
+			f.sessionID = got.SessionID
+
+			res := f.pressStop(t)
+
+			require.Empty(t, res.RootErr, "a Stop while judging must not be refused")
+			require.Empty(t, res.Report.Unreachable)
+			// The verdict call is not a turn of the task run, so the Stop does
+			// not abort it; once the Judge answers, the run ends and lands.
+			close(judge.release)
+			f.awaitRunJoined(t)
+			f.requireLifecycleStopped(t)
 		})
 	}
 }
