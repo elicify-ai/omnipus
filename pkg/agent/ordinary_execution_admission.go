@@ -124,7 +124,7 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 	if revival != nil && (rec.Terminal() || (rec.State == session.LifecycleStopped &&
 		(revival.Kind == steer.PrincipalKindHuman ||
 			(revival.Kind == scheduledRevivalPrincipal.Kind && revival.ID == scheduledRevivalPrincipal.ID && restartStoppedStandingRoot(rec))))) {
-		if reviveErr := al.reviveOrdinaryRecordWithExecution(ctx, rec, identity); reviveErr != nil {
+		if reviveErr := al.reviveOrdinaryRecordWithExecution(ctx, rec, identity, *revival); reviveErr != nil {
 			return ordinaryExecutionPreparation{}, fmt.Errorf("ordinary admission: explicit revival failed: %w", reviveErr)
 		}
 		rec, err = store.Load(sessionID)

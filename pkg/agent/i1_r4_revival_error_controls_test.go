@@ -77,7 +77,7 @@ func TestI1R4RealStorageRefusalRemainsRevivalFailure(t *testing.T) {
 		}
 	})
 	refused := h.al.reviveOrdinaryRecordWithExecution(context.Background(), selected,
-		session.ExecutionIdentity{RunID: "storage-refused-revival", BootSeq: h.al.bootEpochFor()})
+		session.ExecutionIdentity{RunID: "storage-refused-revival", BootSeq: h.al.bootEpochFor()}, steer.Principal{})
 	var pathErr *os.PathError
 	require.ErrorAs(t, refused, &pathErr)
 	assert.False(t, errors.Is(refused, steer.ErrStaleGeneration), "filesystem failure cannot become a lost selection")

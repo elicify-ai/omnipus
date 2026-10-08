@@ -27,7 +27,7 @@ func TestI1R3StaleRevivalHasHonestAttribution(t *testing.T) {
 		return nil
 	}))
 	before := h.journal(t)
-	err = h.al.reviveOrdinaryRecordWithExecution(context.Background(), selected, session.ExecutionIdentity{RunID: "losing-attempt", BootSeq: boot})
+	err = h.al.reviveOrdinaryRecordWithExecution(context.Background(), selected, session.ExecutionIdentity{RunID: "losing-attempt", BootSeq: boot}, steer.Principal{})
 	require.ErrorIs(t, err, steer.ErrStaleGeneration)
 	assert.Equal(t, before, h.journal(t), "stale snapshot cannot overwrite the newer owner")
 	_, remembered := h.al.lastRevivalFailure(h.id)
