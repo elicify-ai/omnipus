@@ -32,7 +32,7 @@ func TestSessionCoreU1_ScheduledMainModeResolvesToTheComputedMain(t *testing.T) 
 	}
 	sid, err := r.pickSession(job, "mia")
 	require.NoError(t, err)
-	assert.Equal(t, "main-session-W1-mia", sid, "DEL-01: the computed main, spec literal")
+	assert.Equal(t, "main-session-W1+mia", sid, "DEL-01: the computed main, founder-ruled literal")
 	assert.NotEqual(t, "sched-main-mia", sid)
 
 	meta, err := exec.store.GetMeta(sid)
