@@ -7,7 +7,7 @@
 // VirtualAssistantMessageRow, including a streaming row.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, within } from '@testing-library/react'
+import { render, within, waitFor } from '@testing-library/react'
 import * as React from 'react'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -143,6 +143,7 @@ function streamingPair(sid: string, agentId: string): ChatMessage[] {
       status: 'streaming',
       isStreaming: true,
       agentId,
+      turnId: `${sid}_turn`,
     },
   ]
 }
@@ -166,6 +167,23 @@ function assistantBubble(container: HTMLElement): HTMLElement {
   return bubble as HTMLElement
 }
 
+function expectNameOnly(bubble: HTMLElement, name: string) {
+  const label = within(bubble).getByTestId('agent-label')
+  expect(label.textContent).toBe(name)
+  // FR-022 semantic boundary, not a blacklist of a retired avatar's class.
+  expect(label.querySelectorAll('svg, img, picture, canvas, [role="img"], [data-art], [data-ink], [data-figure], [data-avatar]')).toHaveLength(0)
+  expect(label.childElementCount).toBe(0)
+  expect(['', 'none']).toContain(getComputedStyle(label).backgroundImage)
+}
+
+function expectMarkMotion(bubble: HTMLElement, motion: 'thinking' | 'working' | 'waiting' | 'none') {
+  const mark = bubble.querySelector('[data-testid="agent-icon"]')
+  expect(mark, `real ${motion} phase mark`).not.toBeNull()
+  expect(mark).toHaveAttribute('data-motion', motion)
+  if (motion === 'none') expect(mark?.querySelector('[data-glow]')).toBeNull()
+  else expect(mark?.querySelector('[data-glow]')).not.toBeNull()
+}
+
 describe('live inline indicator', () => {
   beforeEach(() => {
     vi.stubGlobal('ResizeObserver', ResizeObserverStub)
@@ -173,6 +191,8 @@ describe('live inline indicator', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
     vi.stubGlobal('ResizeObserver', ResizeObserverStub)
   })
@@ -188,6 +208,8 @@ describe('live inline indicator', () => {
     expect(mark?.getAttribute('data-art')).toBe('octopus')
     expect(mark?.querySelector('svg')?.getAttribute('width')).toBe('48')
     expect(mark?.querySelector('[data-ink]')?.getAttribute('style') ?? '').not.toMatch(/opacity:\s*0/)
+    expectNameOnly(bubble, 'Mia')
+    expectMarkMotion(bubble, 'thinking')
   })
 
   it('names a guest reply as that guest and does not switch the chat owner', async () => {
@@ -198,6 +220,8 @@ describe('live inline indicator', () => {
     expect(useSessionStore.getState().activeAgentId).toBe('agent-1')
     expect(bubble.querySelector('.w-7')).toBeNull()
     expect(bubble.querySelector('[data-art]')?.getAttribute('data-art')).toBe('man')
+    expectNameOnly(bubble, 'Jim')
+    expectMarkMotion(bubble, 'thinking')
   })
 
   it('keeps the existing hidden-command label while the phase is Working', async () => {
@@ -226,6 +250,41 @@ describe('live inline indicator', () => {
     expect(within(bubble).getByText(description)).toBeInTheDocument()
     expect(bubble.textContent).not.toContain('go test')
     expect(bubble.querySelector('.animate-bounce')).toBeNull()
+    expectMarkMotion(bubble, 'working')
+    expectNameOnly(bubble, 'Mia')
+  })
+
+  it('derives Working from the real active-session tool reducer, with decision and disconnect precedence', async () => {
+    const sid = 'correlated-tools'
+    seedMessages(sid, streamingPair(sid, 'agent-jim'), { streaming: true, replaying: false })
+    const description = 'Checking the release notes'
+    act(() => useChatStore.getState().startToolCall('tc-correlated', 'bash', {
+      action: 'run', run_in_background: true, description, command: 'git status',
+    }))
+    expect(useChatStore.getState().sessionsById[sid]?.toolCalls['tc-correlated'].status).toBe('running')
+    const bubble = assistantBubble(await mount())
+    expect(await within(bubble).findByText(description)).toBeInTheDocument()
+    expectMarkMotion(bubble, 'working')
+    expectNameOnly(bubble, 'Jim')
+    act(() => useToolApprovalStore.setState({ queue: [{
+      approvalId: 'correlated-approval', toolCallId: 'tc-correlated', toolName: 'bash',
+      args: { command: 'git status' }, agentId: 'agent-jim', sessionId: sid,
+      turnId: `${sid}_turn`, expiresAt: Date.now() + 60_000,
+    }], resolvedIds: [] }))
+    expect(within(bubble).getByText('Waiting for your approval — bash')).toBeInTheDocument()
+    expectMarkMotion(bubble, 'waiting')
+    act(() => useConnectionStore.setState({ isConnected: false, reconnectPhase: 'reconnecting' }))
+    expect(within(bubble).getByText('Unavailable/reconnecting')).toBeInTheDocument()
+    expectMarkMotion(bubble, 'none')
+    act(() => {
+      useConnectionStore.setState({ isConnected: true, reconnectPhase: null })
+      useToolApprovalStore.setState({ queue: [], resolvedIds: ['correlated-approval'] })
+      useChatStore.getState().resolveToolCall('tc-correlated', 'clean', 'success')
+    })
+    expect(within(bubble).getByText('Thinking…')).toBeInTheDocument()
+    expectMarkMotion(bubble, 'thinking')
+    expect(within(bubble).queryByText(description)).not.toBeInTheDocument()
+    expect(useSessionStore.getState().activeAgentId).toBe('agent-1')
   })
 
   it('shows Waiting from a pending approval, not the thinking dots', async () => {
@@ -248,6 +307,7 @@ describe('live inline indicator', () => {
     expect(within(bubble).getByText(/waiting for your approval/i)).toBeInTheDocument()
     expect(bubble.textContent).toContain('bash')
     expect(bubble.querySelector('.animate-bounce')).toBeNull()
+    expectMarkMotion(bubble, 'waiting')
   })
 
   it('shows a static Unavailable/reconnecting phrase when the gateway is reconnecting', async () => {
@@ -256,9 +316,14 @@ describe('live inline indicator', () => {
     const bubble = assistantBubble(await mount())
     expect(within(bubble).getByText('Unavailable/reconnecting')).toBeInTheDocument()
     expect(bubble.querySelector('.animate-bounce')).toBeNull()
+    expectMarkMotion(bubble, 'none')
   })
 
   it('draws no animation loop when reduced motion is on, and keeps the Thinking phrase', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    // Force a different phrase if a forbidden rotation interval runs.
+    let randomBeat = 0
+    vi.spyOn(Math, 'random').mockImplementation(() => (++randomBeat % 2 ? 0.1 : 0.3))
     vi.stubGlobal('matchMedia', (query: string) => ({
       matches: query.includes('prefers-reduced-motion'),
       media: query,
@@ -274,6 +339,27 @@ describe('live inline indicator', () => {
     expect(within(bubble).getByText('Thinking…')).toBeInTheDocument()
     expect(bubble.querySelector('.animate-bounce')).toBeNull()
     expect(bubble.querySelector('[data-art]')?.getAttribute('data-art')).toBe('octopus')
+    expectMarkMotion(bubble, 'none')
+    for (let beat = 0; beat < 4; beat++) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+      expect(within(bubble).getByText('Thinking…')).toBeInTheDocument()
+      expect(within(bubble).queryByText('Working on it…')).not.toBeInTheDocument()
+      expect(within(bubble).queryByText('Analyzing…')).not.toBeInTheDocument()
+      expectMarkMotion(bubble, 'none')
+    }
+  })
+
+  it('actually advances the normal-motion phrase clock while the reduced-motion clock stays still', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    let randomBeat = 0
+    vi.spyOn(Math, 'random').mockImplementation(() => (++randomBeat % 2 ? 0.1 : 0.3))
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: false, media: query, addEventListener() {}, removeEventListener() {} }))
+    seedMessages('clock-control', streamingPair('clock-control', 'agent-1'), { streaming: true, replaying: false })
+    const bubble = assistantBubble(await mount())
+    expect(within(bubble).getByText('Thinking…')).toBeInTheDocument()
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+    expect(within(bubble).getByText('Working on it…')).toBeInTheDocument()
+    expect(within(bubble).queryByText('Thinking…')).not.toBeInTheDocument()
   })
 })
 
@@ -303,6 +389,7 @@ describe('plain, replay, and idle bubbles', () => {
     expect(await within(bubble).findByText('Jim')).toBeInTheDocument()
     expect(bubble.textContent).toContain('Launch notes')
     expect(bubble.querySelector('.w-7')).toBeNull()
+    expectNameOnly(bubble, 'Jim')
     expect(useSessionStore.getState().activeAgentId).toBe('agent-1')
   })
 
@@ -320,6 +407,7 @@ describe('plain, replay, and idle bubbles', () => {
     expect(await within(bubble).findByText('Jim')).toBeInTheDocument()
     expect(bubble.textContent).toContain('Helper result')
     expect(bubble.querySelector('.w-7')).toBeNull()
+    expectNameOnly(bubble, 'Jim')
   })
 
   it('shows Idle for a resolved chat and does not keep a thinking indicator on the reply', async () => {
@@ -337,5 +425,34 @@ describe('plain, replay, and idle bubbles', () => {
     expect(bubble.textContent).toContain('The answer')
     expect(bubble.querySelector('.animate-bounce')).toBeNull()
     expect(within(bubble).getByText('Idle')).toBeInTheDocument()
+    expectNameOnly(bubble, 'Mia')
+  })
+
+  it('keeps virtualized historical and separate live guest labels name-only with real viewport measurement', async () => {
+    const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+    const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 800 })
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => 800 })
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    const sid = 'virtual-names'
+    const messages: ChatMessage[] = [
+      { id: 'virtual-history', role: 'assistant', content: 'Historical guest answer', timestamp: '2026-10-08T09:00:00Z', status: 'done', agentId: 'agent-jim' },
+      ...streamingPair(sid, 'agent-1'),
+    ]
+    seedMessages(sid, messages, { streaming: true, replaying: false })
+    try {
+      const container = await mount()
+      await waitFor(() => expect(container.querySelector('[data-message-id="virtual-history"]')).not.toBeNull())
+      const historical = container.querySelector('[data-message-id="virtual-history"]') as HTMLElement
+      expect(historical.closest('[data-index]')).not.toBeNull()
+      expectNameOnly(historical, 'Jim')
+      const live = container.querySelector(`[data-message-id="${sid}_assistant"]`) as HTMLElement
+      expectNameOnly(live, 'Mia')
+      expectMarkMotion(live, 'thinking')
+      expect(useSessionStore.getState().activeAgentId).toBe('agent-1')
+    } finally {
+      if (height) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', height)
+      if (width) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', width)
+    }
   })
 })

@@ -13,6 +13,7 @@ async function loadAgentIcon(): Promise<ComponentType<Record<string, unknown>>> 
   } catch (err) {
     throw new Error(
       `BLOCKED: src/components/ui/agent-icon.tsx is not implemented — required by FR-015 and ARCH-DECISIONS 3.1. ${err}`,
+      { cause: err },
     )
   }
 }
@@ -91,6 +92,28 @@ function inkOf(container: HTMLElement): HTMLElement {
   return ink as HTMLElement
 }
 
+function expectOpaqueAncestors(element: Element) {
+  let effectiveOpacity = 1
+  for (let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement) {
+    const computed = getComputedStyle(ancestor).opacity
+    const opacity = computed === '' ? 1 : Number(computed)
+    expect(opacity, `${ancestor.tagName} must not fade identity ink`).toBe(1)
+    effectiveOpacity *= opacity
+  }
+  expect(effectiveOpacity, 'composited figure/badge opacity').toBe(1)
+}
+
+function selectedAnimationSeconds(element: Element): number {
+  // Read the animation selected by the rendered component, not its source
+  // text or a copied class name. Actual frame values are browser-tested.
+  const selected = Array.from(element.classList).find((token) => token.startsWith('animate-['))
+  expect(selected, 'rendered looping animation').toBeDefined()
+  const value = selected!.slice('animate-['.length, -1)
+  const duration = value.split('_').find((part) => /^\d+(?:\.\d+)?m?s$/.test(part))
+  expect(duration, 'selected animation duration').toBeDefined()
+  return duration!.endsWith('ms') ? Number.parseFloat(duration!) / 1000 : Number.parseFloat(duration!)
+}
+
 describe('AgentIcon', () => {
   it('draws the supplied figure and does not substitute Omnipus', async () => {
     const AgentIcon = await loadAgentIcon()
@@ -137,6 +160,12 @@ describe('AgentIcon', () => {
     expect(ink.className).not.toMatch(/opacity/)
     expect(ink.parentElement?.className ?? '').not.toMatch(/opacity/)
     expect(container.querySelector('[data-ink]')).toHaveStyle({ opacity: '1' })
+    expectOpaqueAncestors(ink)
+    const badge = ink.querySelector('[data-role="security"]')
+    expect(badge).not.toBeNull()
+    expectOpaqueAncestors(badge!)
+    expect(selectedAnimationSeconds(ink)).toBe(2.6)
+    expect(selectedAnimationSeconds(glow!)).toBe(2.6)
   })
 
   it.each(['none', 'working', 'thinking', 'waiting'] as const)(
@@ -148,6 +177,17 @@ describe('AgentIcon', () => {
       )
       const ink = inkOf(container)
       expect(ink).toHaveStyle({ opacity: '1' })
+      expectOpaqueAncestors(ink)
+      const badge = ink.querySelector('[data-role="writer"]')
+      expect(badge).not.toBeNull()
+      expectOpaqueAncestors(badge!)
+      if (motion !== 'none') {
+        // Independent motion oracles: ARCH decision 3.2, spec Safeguards.
+        const duration = { working: 1.6, thinking: 2.6, waiting: 3.4 }[motion]
+        expect(selectedAnimationSeconds(ink)).toBe(duration)
+        expect(selectedAnimationSeconds(container.querySelector('[data-glow]')!)).toBe(duration)
+        if (motion === 'working') expect(selectedAnimationSeconds(container.querySelector('[data-agent-icon-sheen]')!)).toBe(2.4)
+      }
       if (motion === 'none') {
         expect(container.querySelector('[data-glow]')).toBeNull()
       } else {
@@ -155,6 +195,14 @@ describe('AgentIcon', () => {
       }
     },
   )
+
+  it.each([undefined, false])('selects the same 2.6-second Thinking breath and glow with reducedMotion=%s', async (reducedMotion) => {
+    const AgentIcon = await loadAgentIcon()
+    const { container } = render(iconOrange(AgentIcon, { figure: 'Robot', role: 'security', size: 48, motion: 'thinking', reducedMotion }))
+    expect(selectedAnimationSeconds(inkOf(container))).toBe(2.6)
+    expect(selectedAnimationSeconds(container.querySelector('[data-glow]')!)).toBe(2.6)
+    expectOpaqueAncestors(inkOf(container))
+  })
 
   it('reduced motion removes animation loops and leaves the ink opaque', async () => {
     const AgentIcon = await loadAgentIcon()

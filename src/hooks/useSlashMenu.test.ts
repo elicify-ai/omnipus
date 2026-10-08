@@ -457,6 +457,39 @@ describe('useSlashMenu — client command dispatch', () => {
   // /sessions must leave the panel in its original 'sessions' behavior
   // (unchanged per spec); /workspace must switch it into 'workspaces' mode
   // (openWorkspaceSwitcher, ui store) rather than reusing openSearchModal.
+  it.each(['ready', 'error', 'loading'] as const)('does not resolve typed /resume to Sessions when commands are %s', (state) => {
+    // FR-007 / ARCH decision 5: no retired alias. The existing loading
+    // readiness gate holds *unknown* slash text, then sends it normally;
+    // that temporary hold must never become a Sessions dispatch.
+    commandsQueryIsError = state === 'error'
+    commandsQueryIsLoading = state === 'loading'
+    const composerRuntime = makeComposerRuntime('/resume')
+    const params = baseParams({ composerRuntime })
+    const { result, rerender } = renderHook(() => useSlashMenu(params))
+    act(() => result.current.onInputChange('/resume'))
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+    expect(intercepted).toBe(state === 'loading')
+    expect(useUiStore.getState().searchModalOpen).toBe(false)
+    expect(composerRuntime.setText).not.toHaveBeenCalled()
+    expect(params.appendMessage).not.toHaveBeenCalled()
+    expect(params.startNewSession).not.toHaveBeenCalled()
+    expect(result.current.slashItems.map((item) => item.key)).not.toContain('/resume')
+    if (state === 'loading') {
+      expect(composerRuntime.send).not.toHaveBeenCalled()
+      commandsQueryIsLoading = false
+      rerender()
+      expect(composerRuntime.send).toHaveBeenCalledTimes(1)
+      expect(composerRuntime.getState().text).toBe('/resume')
+      expect(composerRuntime.setText).not.toHaveBeenCalled()
+      expect(useUiStore.getState().searchModalOpen).toBe(false)
+      act(() => { intercepted = result.current.interceptClientCommand() })
+      expect(intercepted).toBe(false)
+    } else {
+      expect(composerRuntime.send).not.toHaveBeenCalled()
+    }
+  })
+
   it('/sessions opens the search modal in sessions mode (unchanged)', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
     act(() => result.current.onInputChange('/'))

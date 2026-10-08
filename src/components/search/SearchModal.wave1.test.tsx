@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from 'vitest'
+import { render, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -45,7 +45,39 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-import { fetchAgents, fetchSessions, fetchWorkspaces } from '@/lib/api'
+import { fetchAgents, fetchSessions, fetchWorkspaces, readSessionFetchCoverage } from '@/lib/api'
+import type { Session as WireSession, SessionPage } from '@/lib/api/generated/openapi-types'
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+function sessionRow(id: string): HTMLElement {
+  const row = document.getElementById(`search-result-${id}`)
+  expect(row, `original session row ${id}`).not.toBeNull()
+  return row as HTMLElement
+}
+
+function expectNestedAfter(childId: string, parentId: string) {
+  const parent = sessionRow(parentId)
+  const child = sessionRow(childId)
+  // FR-030: a helper must be indented below its real parent, not a root
+  // merely painted adjacent to another matching title.
+  expect(parent.compareDocumentPosition(child) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+  const indent = child.parentElement?.parentElement
+  expect(indent?.className, `nested helper ${childId}`).toContain('pl-')
+  expect(parent.parentElement?.parentElement?.className, `root parent ${parentId}`).not.toContain('pl-')
+}
+
+function wireSession(overrides: Partial<WireSession>): WireSession {
+  return {
+    id: 'wire-control', agent_id: 'agent-1', title: 'Control chat', type: 'chat',
+    status: 'active', channel: 'webchat', partitions: [], workspace_id: 'ws-1',
+    created_at: '2026-07-16T09:00:00Z', updated_at: '2026-07-16T11:00:00Z',
+    stats: { tokens_in: 0, tokens_out: 0, tokens_total: 0, cost: 0, tool_calls: 0, message_count: 0 },
+    ...overrides,
+  }
+}
 
 function makeSession(overrides: Partial<WaveSession> = {}): WaveSession {
   return {
@@ -206,13 +238,21 @@ describe('Sessions view — hierarchy, fold, shell count, tokens', () => {
     const user = userEvent.setup()
     vi.mocked(fetchSessions).mockResolvedValue([
       makeSession({ id: 'parent', title: 'Launch notes' }),
-      makeSession({ id: 'child', title: 'unique-helper-needle', type: 'delegate', parent_session_id: 'parent' }),
+      makeSession({ id: 'child', title: 'unique-helper-needle', type: 'delegate', parent_session_id: 'parent', execution: 'running' }),
+      makeSession({ id: 'control', title: 'Unrelated control' }),
     ])
     renderModal()
     const box = await screen.findByRole('textbox')
+    expect(await screen.findByText('Unrelated control')).toBeInTheDocument()
     await user.type(box, 'unique-helper-needle')
+    await waitFor(() => expect(screen.queryByText('Unrelated control')).not.toBeInTheDocument())
     expect(await screen.findByText('unique-helper-needle')).toBeInTheDocument()
     expect(screen.getByText('Launch notes')).toBeInTheDocument()
+    expectNestedAfter('child', 'parent')
+    await user.click(screen.getByRole('button', { name: 'Running' }))
+    expect(screen.getByText('Launch notes')).toBeInTheDocument()
+    expectNestedAfter('child', 'parent')
+    expect(screen.queryByText(/parent chat unavailable/i)).not.toBeInTheDocument()
   })
 
   it('shows a missing parent as parent chat unavailable and still offers Open', async () => {
@@ -223,6 +263,9 @@ describe('Sessions view — hierarchy, fold, shell count, tokens', () => {
     expect(await screen.findByText(/parent chat unavailable/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /open/i })).toBeInTheDocument()
     expect(screen.getByText('Lost helper')).toBeInTheDocument()
+    await userEvent.click(within(sessionRow('orphan')).getByRole('button', { name: 'Open Lost helper' }))
+    expect(mockSelectSession).toHaveBeenCalledTimes(1)
+    expect(mockSelectSession).toHaveBeenCalledWith(expect.objectContaining({ id: 'orphan', parent_session_id: 'gone-parent' }))
   })
 
   it('does not call a helper parent unavailable when the session fetch is partial', async () => {
@@ -243,6 +286,45 @@ describe('Sessions view — hierarchy, fold, shell count, tokens', () => {
     expect(await screen.findByText('Lost helper')).toBeInTheDocument()
     expect(screen.queryByText(/parent chat unavailable/i)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /open/i })).toBeInTheDocument()
+  })
+
+  it('propagates partial HTTP pages through real fetchSessions and repairs hierarchy on Retry', async () => {
+    const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
+    const orphan = wireSession({ id: 'orphan', title: 'Partly loaded helper', type: 'delegate', parent_session_id: 'unloaded-parent' })
+    const control = wireSession({ id: 'control', title: 'Other page' })
+    let recovered = false
+    const requests: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost')
+      expect(url.pathname).toBe('/api/v1/sessions')
+      expect(url.searchParams.get('flat')).toBe('true')
+      requests.push(url.searchParams.get('offset') ?? 'first')
+      const page: SessionPage = recovered
+        ? { sessions: [wireSession({ id: 'unloaded-parent', title: 'Recovered parent' }), orphan] }
+        : url.searchParams.has('offset')
+          ? { sessions: [control], partial_errors: ['agent-store-failed'] }
+          : { sessions: [orphan], next_cursor: '1' }
+      return new Response(JSON.stringify(page), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }))
+    // Do not manufacture coverage flags: the real pagination aggregator must
+    // derive them from the server envelope (ARCH decision 4 / FR-032).
+    vi.mocked(fetchSessions).mockImplementation(actual.fetchSessions)
+    const result = await fetchSessions(undefined, undefined, { flat: true })
+    expect(result.map((row) => row.id)).toEqual(['orphan', 'control'])
+    expect(readSessionFetchCoverage(result)).toEqual({ partialErrors: ['agent-store-failed'], incomplete: true })
+    expect(requests).toEqual(['first', '1'])
+    renderModal()
+    expect(await screen.findByText('Partly loaded helper')).toBeInTheDocument()
+    expect(screen.getByText('Session list is incomplete (1 source error). Missing parents are not marked unavailable.')).toBeInTheDocument()
+    expect(screen.getByTestId('session-unplaced')).toHaveTextContent(/partial list/i)
+    expect(screen.queryByText(/^parent chat unavailable$/i)).not.toBeInTheDocument()
+    expect(within(sessionRow('orphan')).getByRole('button', { name: 'Open Partly loaded helper' })).toBeInTheDocument()
+    recovered = true
+    await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('Recovered parent')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText(/Session list is incomplete/)).not.toBeInTheDocument())
+    expectNestedAfter('orphan', 'unloaded-parent')
+    expect(screen.queryByTestId('session-unplaced')).not.toBeInTheDocument()
   })
 
   it('folds nine consecutive identical helpers and keeps each original Open', async () => {
@@ -266,6 +348,18 @@ describe('Sessions view — hierarchy, fold, shell count, tokens', () => {
     await user.click(summary)
     expect(screen.getAllByRole('button', { name: /^Open / }).length).toBeGreaterThanOrEqual(9)
     expect(screen.getByText('Failed')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Open Same helper' })).toHaveLength(10)
+    for (const helper of helpers) {
+      const row = within(sessionRow(helper.id))
+      expect(row.getByTestId(`session-status-${helper.id}`)).toHaveTextContent(helper.id === 'h0' ? 'Failed' : 'Done')
+      await user.click(row.getByRole('button', { name: 'Open Same helper' }))
+      expect(mockSelectSession).toHaveBeenLastCalledWith(expect.objectContaining({
+        id: helper.id, parent_session_id: 'p', lifecycle_state: helper.lifecycle_state,
+      }))
+    }
+    await user.click(within(sessionRow('qh')).getByRole('button', { name: 'Open Same helper' }))
+    expect(mockSelectSession).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'qh', parent_session_id: 'q' }))
+    expect(mockSelectSession).toHaveBeenCalledTimes(10)
   })
 
   it('puts the background-command sentence on the owning row only', async () => {
@@ -289,6 +383,57 @@ describe('Sessions view — hierarchy, fold, shell count, tokens', () => {
     const row = document.getElementById('search-result-z')
     expect(row).not.toBeNull()
     expect(row!.textContent).toMatch(/(^|\D)0(\D|$)/)
+  })
+
+  it.each(['removal', 'same-length replacement'] as const)('clears a highlighted session after %s until explicit new navigation', async (change) => {
+    const alpha = makeSession({ id: 'alpha', title: 'Alpha chat' })
+    const beta = makeSession({ id: 'beta', title: 'Beta chat' })
+    vi.mocked(fetchSessions).mockResolvedValue([alpha, beta])
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={client}><SearchModal /></QueryClientProvider>)
+    await screen.findByText('Beta chat')
+    const box = screen.getByRole('textbox', { name: 'Search sessions' })
+    box.focus()
+    await userEvent.keyboard('{ArrowDown}')
+    expect(sessionRow('beta').textContent).toContain('↵')
+    act(() => client.setQueryData(['sessions', 'flat'], change === 'removal'
+      ? [alpha]
+      : [alpha, makeSession({ id: 'gamma', title: 'Gamma chat' })]))
+    await waitFor(() => expect(screen.queryByText('Beta chat')).not.toBeInTheDocument())
+    expect(box).toHaveFocus()
+    expect(screen.getByTestId('sessions-activation-live').textContent?.trim()).toBe('Highlighted session is unavailable.')
+    await userEvent.keyboard('{Enter}')
+    expect(mockSelectSession).not.toHaveBeenCalled()
+    expect(sessionRow('alpha').textContent).not.toContain('↵')
+    await userEvent.keyboard('{ArrowDown}{Enter}')
+    expect(mockSelectSession).toHaveBeenCalledTimes(1)
+    expect(mockSelectSession).toHaveBeenCalledWith(expect.objectContaining({ id: 'alpha' }))
+  })
+
+  it('clears a highlighted helper when its fold collapses, without substituting a sibling or summary', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession({ id: 'parent', title: 'Parent chat' }),
+      ...Array.from({ length: 9 }, (_, i) => makeSession({ id: `h${i}`, title: 'Same helper', type: 'delegate', parent_session_id: 'parent' })),
+    ])
+    renderModal()
+    const summary = await screen.findByRole('button', { name: /9 similar helper runs/i })
+    await user.click(summary)
+    const box = screen.getByRole('textbox', { name: 'Search sessions' })
+    box.focus()
+    // Parent -> expand-only summary -> original first helper.
+    await user.keyboard('{ArrowDown}{ArrowDown}')
+    expect(sessionRow('h0').textContent).toContain('↵')
+    await user.click(summary)
+    expect(screen.queryByText('Same helper')).not.toBeInTheDocument()
+    expect(box).toHaveFocus()
+    expect(screen.getByTestId('sessions-activation-live').textContent?.trim()).toBe('Highlighted session is unavailable.')
+    await user.keyboard('{Enter}')
+    expect(mockSelectSession).not.toHaveBeenCalled()
+    expect(summary).toHaveAttribute('aria-expanded', 'false')
+    await user.keyboard('{ArrowDown}{Enter}')
+    expect(mockSelectSession).toHaveBeenCalledTimes(1)
+    expect(mockSelectSession).toHaveBeenCalledWith(expect.objectContaining({ id: 'parent' }))
   })
 
   it('activates the highlighted session after a reorder, not the row that slid into that index', async () => {
