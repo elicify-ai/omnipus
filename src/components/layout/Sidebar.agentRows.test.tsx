@@ -12,9 +12,9 @@
  */
 import React from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, act, fireEvent, within } from '@testing-library/react'
+import { render, screen, act, fireEvent, within, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import type { Session, Workspace, WorkspaceMemberConfig } from '@/lib/api'
+import type { Agent, Session, Workspace, WorkspaceMemberConfig } from '@/lib/api'
 import { makeAgent } from '@/test/factories'
 import { queryClient } from '@/lib/queryClient'
 import { workspacesQueryKeys } from '@/lib/api'
@@ -132,7 +132,8 @@ const seam = vi.hoisted(() => {
       return attention.get(id) ?? 'unknown'
     },
     attachAckFields: () => ({}),
-    attentionBoundOfFrame: (_frame: unknown) => undefined,
+    // Preserve the seam forwarding signature without inventing a read bound.
+    attentionBoundOfFrame: (_frame: unknown) => { void _frame; return undefined },
   }
 })
 
@@ -189,8 +190,7 @@ function chatSession(partial: Pick<Session, 'id' | 'agent_id' | 'title' | 'updat
   }
 }
 
-function renderSidebar() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+function renderSidebar(client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   return render(
     <QueryClientProvider client={client}>
       <Sidebar />
@@ -390,6 +390,141 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
     fireEvent.click(expand)
     expect(await screen.findByRole('button', { name: 'Retry' })).toBeTruthy()
     expect(screen.queryByText('No sessions yet')).toBeNull()
+  })
+})
+
+// FR-011 / BDD-01.4: keep the shell, QueryClient, roster derivation, cache,
+// attention projection and Retry handlers real. Only network replies and the
+// unpublished main/attention seam are fixtures. The singleton matters: row
+// actions invalidate this same client, not a disconnected provider cache.
+function renderRefreshableSidebar() {
+  vi.restoreAllMocks()
+  const defaults = queryClient.getDefaultOptions()
+  queryClient.clear()
+  queryClient.setDefaultOptions({
+    ...defaults,
+    queries: { ...defaults.queries, retry: false },
+  })
+  act(() => { useWorkspacesStore.setState({ activeWorkspaceId: 'product-launch' }) })
+  const view = renderSidebar(queryClient)
+  return {
+    restore: () => {
+      view.unmount()
+      queryClient.clear()
+      queryClient.setDefaultOptions(defaults)
+    },
+  }
+}
+
+async function cachedProductRows() {
+  const group = await screen.findByRole('group', { name: 'Product launch' })
+  await waitFor(() => {
+    expect(queryClient.getQueryState(['agents'])).toMatchObject({ status: 'success', fetchStatus: 'idle' })
+    expect(queryClient.getQueryState(['sessions'])).toMatchObject({ status: 'success', fetchStatus: 'idle' })
+    expect(within(group).getAllByRole('group').map((row) => row.getAttribute('aria-label'))).toEqual(['Mia', 'Jim'])
+  })
+  // Known attention and real rows deliberately avoid the unrelated
+  // unknown-attention/missing-main error branches masking the stale-cache gap.
+  expect(screen.queryByRole('status', { name: 'Attention unavailable' })).toBeNull()
+  expect(screen.queryByRole('status', { name: 'Main chat unavailable' })).toBeNull()
+  expect(within(group).queryByRole('button', { name: 'Retry' })).toBeNull()
+  return group
+}
+
+async function failCachedRosterRefresh() {
+  vi.mocked(fetchAgents).mockClear()
+  vi.mocked(fetchAgents).mockRejectedValue(new Error('roster refresh failed'))
+  await act(async () => {
+    await queryClient.invalidateQueries({ queryKey: ['agents'] })
+  })
+  await waitFor(() => {
+    expect(fetchAgents).toHaveBeenCalledTimes(1)
+    expect(queryClient.getQueryState(['agents'])).toMatchObject({ status: 'error', fetchStatus: 'idle' })
+    expect(queryClient.getQueryState(['agents'])?.error).toEqual(new Error('roster refresh failed'))
+  })
+  expect(queryClient.getQueryData<Agent[]>(['agents'])?.map((agent) => agent.id)).toEqual([
+    'mia', 'jim', 'admin', 'native-worker', 'judge',
+  ])
+}
+
+// The spec fixes the notice's meaning, not its wording or placement: the
+// retained team must be visibly identified as stale/out-of-date/cached, with
+// a Retry action. The shared roster may use a shell-wide or workspace notice.
+const STALE_TEAM_NOTICE = /stale|out[- ]of[- ]date|cached/i
+
+describe('Sidebar stale cached-roster failure and recovery (FR-011, BDD-01.4)', () => {
+  it('BDD-01.4 a failed background refresh retains cached main rows with a visible stale warning and Retry', async () => {
+    const shell = renderRefreshableSidebar()
+    try {
+      const group = await cachedProductRows()
+      await failCachedRosterRefresh()
+
+      expect(within(group).getAllByRole('group').map((row) => row.getAttribute('aria-label'))).toEqual(['Mia', 'Jim'])
+      expect(screen.queryByText('No sessions yet')).toBeNull()
+      expect(await screen.findByText(STALE_TEAM_NOTICE)).toBeVisible()
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
+    } finally {
+      shell.restore()
+    }
+  })
+
+  it('BDD-01.4 Retry keeps the stale warning on failure or a pending refresh and clears it only after the real roster recovers', async () => {
+    const shell = renderRefreshableSidebar()
+    try {
+      const group = await cachedProductRows()
+      await failCachedRosterRefresh()
+      // Independently prove Retry is reachable, not just that stale copy exists.
+      const retry = await screen.findByRole('button', { name: 'Retry' })
+      expect(await screen.findByText(STALE_TEAM_NOTICE)).toBeVisible()
+
+      // A failed supported Retry must not convert cached rows into success.
+      fireEvent.click(retry)
+      await waitFor(() => {
+        expect(fetchAgents).toHaveBeenCalledTimes(2)
+        expect(queryClient.getQueryState(['agents'])).toMatchObject({ status: 'error', fetchStatus: 'idle' })
+      })
+      expect(await screen.findByText(STALE_TEAM_NOTICE)).toBeVisible()
+      expect(within(group).getAllByRole('group').map((row) => row.getAttribute('aria-label'))).toEqual(['Mia', 'Jim'])
+
+      // Hold the recovered network response to prove clicking Retry alone
+      // cannot clear the warning. No timers or fabricated component state.
+      let resolveRoster!: (agents: Agent[]) => void
+      const recoveredRoster = new Promise<Agent[]>((resolve) => { resolveRoster = resolve })
+      vi.mocked(fetchAgents).mockReturnValue(recoveredRoster)
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+      await waitFor(() => {
+        expect(fetchAgents).toHaveBeenCalledTimes(3)
+        expect(queryClient.getQueryState(['agents'])?.fetchStatus).toBe('fetching')
+      })
+      expect(await screen.findByText(STALE_TEAM_NOTICE)).toBeVisible()
+      expect(within(group).getAllByRole('group').map((row) => row.getAttribute('aria-label'))).toEqual(['Mia', 'Jim'])
+
+      await act(async () => {
+        resolveRoster([
+          makeAgent({ id: 'mia', name: 'Mia recovered', type: 'core' }),
+          makeAgent({ id: 'jim', name: 'Jim', type: 'core' }),
+          makeAgent({ id: 'admin', name: 'Admin', type: 'core' }),
+        ])
+        await recoveredRoster
+      })
+      await waitFor(() => {
+        expect(queryClient.getQueryState(['agents'])).toMatchObject({ status: 'success', fetchStatus: 'idle' })
+        expect(within(group).getAllByRole('group').map((row) => row.getAttribute('aria-label'))).toEqual(['Mia recovered', 'Jim'])
+        expect(screen.queryByText(STALE_TEAM_NOTICE)).toBeNull()
+        expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+      })
+      // Authoritative renamed Mia replaces the cached label, not her main ID;
+      // membership is unchanged, so Jim must not disappear during recovery.
+      expect(within(group).queryByRole('button', { name: 'Mia' })).toBeNull()
+      expect(within(group).getByRole('button', { name: 'Jim' })).toBeInTheDocument()
+      fireEvent.click(within(group).getByRole('button', { name: 'Mia recovered' }))
+      expect(mockSelectSession).toHaveBeenCalledTimes(1)
+      expect(mockSelectSession).toHaveBeenCalledWith(expect.objectContaining({
+        id: 'seam-opaque-mia', agent_id: 'mia', workspace_id: 'product-launch',
+      }))
+    } finally {
+      shell.restore()
+    }
   })
 })
 
