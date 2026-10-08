@@ -40,7 +40,7 @@ const meta = {
   },
   parameters: {
     designSystem: {
-      motionTargets: ['[data-agent-icon-ink]', '[data-agent-icon-glow]'],
+      motionTargets: ['[data-ink]', '[data-glow]'],
       forcedColorTargets: ['[data-testid="agent-icon"]'],
       forcedColors: {
         differences: [{
