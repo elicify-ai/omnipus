@@ -105,6 +105,12 @@ function applyEntry(
       useUiStore.getState().addToast({
         message: 'Could not restore your last conversation. Retry to try again.',
         variant: 'warning',
+        action: {
+          label: 'Retry',
+          onClick: () => {
+            void runWorkspaceEntry(workspaceId)
+          },
+        },
       })
     }
     return

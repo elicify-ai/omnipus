@@ -1,5 +1,6 @@
 // The workspace chevron names agents, not sessions. Show when folded, Hide when open.
 
+import type { ReactNode } from 'react'
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import type { Workspace } from '@/lib/api'
@@ -8,7 +9,7 @@ import { WorkspaceAgentList } from './WorkspaceAgentList'
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => vi.fn(),
   useLocation: () => ({ pathname: '/' }),
-  Link: ({ children }: { children: React.ReactNode }) => children,
+  Link: ({ children }: { children: ReactNode }) => children,
 }))
 
 if (typeof window !== 'undefined' && !window.matchMedia) {

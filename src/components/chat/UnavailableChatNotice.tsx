@@ -19,16 +19,18 @@ export function UnavailableChatNotice() {
       className="flex min-h-8 items-center justify-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
     >
       <span>This chat is unavailable right now</span>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => {
-          if (workspaceId) void runWorkspaceEntry(workspaceId)
-        }}
-        className="h-8 px-[var(--space-2)] text-[var(--color-secondary)]"
-      >
-        Retry
-      </Button>
+      {workspaceId && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            void runWorkspaceEntry(workspaceId)
+          }}
+          className="h-8 px-[var(--space-2)] text-[var(--color-secondary)]"
+        >
+          Retry
+        </Button>
+      )}
     </div>
   )
 }
