@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
+	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -38,20 +40,99 @@ type delegateToolExecuteRespond struct {
 	rec           *session.LifecycleRecord
 	by            steer.Principal
 	instruction   string
+	answers       delegateCorrelationStore
+	reserved      bool
 }
 
 func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
 	dt := &delegateToolExecuteRespond{t: t, ctx: ctx, args: args, cb: cb}
+	// The answer slot is reserved atomically inside validateAndLoad; every exit
+	// that did not deliver must give it back so the question stays open for a retry.
+	delivered := false
+	defer func() {
+		if dt.reserved && !delivered {
+			dt.answers.ReleaseAnswer(dt.rec.SteeringSessionID(), dt.sessionID, dt.correlationID)
+		}
+	}()
 
 	if r0, stop := dt.validateAndLoad(); stop {
 		return r0
 	}
 
+	var result *ToolResult
 	if r0, stop := dt.dispatchThirdParty(); stop {
-		return r0
+		result = r0
+	} else {
+		result = dt.deliverNative()
 	}
+	if result.IsError {
+		return result
+	}
+	// Delivered: from here the slot is never released, only recorded.
+	delivered = true
+	if err := dt.answers.RecordAnswer(dt.rec.SteeringSessionID(), dt.sessionID, dt.correlationID); err != nil {
+		slog.Error("delegate: respond: the answer was delivered but could not be recorded as answered",
+			"session_id", dt.sessionID, "correlation_id", dt.correlationID, "error", err)
+		// Not an error result: the child HAS the answer, and an error would
+		// invite a retry that sends it twice. The slot stays reserved in
+		// memory, so a repeat respond in this process is refused too.
+		return NewToolResult(result.ForLLM + fmt.Sprintf(
+			"\nThe answer WAS delivered — do not send it again; use delegate(action=\"steer\", session_id=%q, text=...) for any follow-up. "+
+				"It could not be recorded as answered (%v), so after a restart this question may still show as open.",
+			dt.sessionID, err))
+	}
+	return result
+}
 
-	return dt.deliverNative()
+// delegateCorrelationStore is the part of the durable inbox respond needs to
+// resolve a correlation_id against the child's questions and to record the
+// answer (founder decision 2026-10-07, #1213: reverses ADR-20261004's
+// "correlation_id is address metadata, never a check" for respond).
+type delegateCorrelationStore interface {
+	ReserveAnswer(ownerKey, childSessionID, correlationID string) (session.CorrelationLookup, error)
+	ReleaseAnswer(ownerKey, childSessionID, correlationID string)
+	RecordAnswer(ownerKey, childSessionID, correlationID string) error
+}
+
+// checkCorrelation refuses a correlation_id that is not an open question of
+// this child, telling the caller how to correct the call.
+func (dt *delegateToolExecuteRespond) checkCorrelation() *ToolResult {
+	if dt.t.inbox == nil {
+		return ErrorResult("delegate: respond: no message inbox configured to verify correlation_id")
+	}
+	store, ok := dt.t.inbox.(delegateCorrelationStore)
+	if !ok {
+		return ErrorResult("delegate: respond: the message inbox cannot verify correlation_id, so the answer was not delivered")
+	}
+	lookup, err := store.ReserveAnswer(dt.rec.SteeringSessionID(), dt.sessionID, dt.correlationID)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("delegate: respond: resolve correlation_id: %v", err)).WithError(err)
+	}
+	dt.answers = store
+	switch lookup.State {
+	case session.CorrelationOpen:
+		dt.reserved = true
+		return nil
+	case session.CorrelationAnswering:
+		return ErrorResult(fmt.Sprintf(
+			"delegate: respond: already_answered: an answer to correlation_id %q of session %s is being delivered, or was just delivered. "+
+				`Do not send it again; for a follow-up use delegate(action="steer", session_id=%q, text=...).`,
+			dt.correlationID, dt.sessionID, dt.sessionID))
+	case session.CorrelationAnswered:
+		return ErrorResult(fmt.Sprintf(
+			"delegate: respond: already_answered: correlation_id %q of session %s was already answered at %s. "+
+				`To follow up, send an ordinary message with delegate(action="steer", session_id=%q, text=...).`,
+			dt.correlationID, dt.sessionID, lookup.AnsweredAt.UTC().Format(time.RFC3339), dt.sessionID))
+	default:
+		open := "It has no open questions."
+		if len(lookup.OpenIDs) > 0 {
+			open = "Its open question correlation_ids: " + strings.Join(lookup.OpenIDs, ", ") + "."
+		}
+		return ErrorResult(fmt.Sprintf(
+			"delegate: respond: unknown_correlation_id: %q is not an open question of session %s. %s "+
+				`Answer one of those questions by its id, or send an ordinary message with delegate(action="steer", session_id=%q, text=...).`,
+			dt.correlationID, dt.sessionID, open, dt.sessionID))
+	}
 }
 
 // validateAndLoad validates the respond request and loads the target record.
@@ -90,6 +171,9 @@ func (dt *delegateToolExecuteRespond) validateAndLoad() (*ToolResult, bool) {
 		return ErrorResult(fmt.Sprintf("delegate: respond: %v", verr)), true
 	}
 	dt.by = by
+	if refusal := dt.checkCorrelation(); refusal != nil {
+		return refusal, true
+	}
 	dt.instruction = respondAnswerInstruction(dt.correlationID, dt.text)
 	if cerr := dt.t.checkSteerCaps(dt.sessionID, dt.text); cerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: respond: %v", cerr)).WithError(cerr), true

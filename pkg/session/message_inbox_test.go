@@ -835,3 +835,59 @@ func TestMessageInboxStore_RateWindows_SweepsQuiescentKeys(t *testing.T) {
 			got, s.rateWindows)
 	}
 }
+
+// TestMessageInboxStore_Correlation_LookupRecordAndCompaction: an answered
+// question stays answered (and an unanswered one stays open) across a
+// compaction, and an unknown id resolves as unknown with the open ids listed.
+func TestMessageInboxStore_Correlation_LookupRecordAndCompaction(t *testing.T) {
+	s := newTestInboxStore(t)
+	s.ChildSendRatePerMinute = 100000
+	s.AckedRetentionMax = 3
+	s.CompactionAckedTrigger = 5
+	const owner, child = "owner-corr", "child-corr"
+
+	for _, id := range []string{"qA", "qB"} {
+		if _, err := s.Append(owner, questionMsg(t, child, id)); err != nil {
+			t.Fatalf("Append %s: %v", id, err)
+		}
+	}
+	got, err := s.LookupCorrelation(owner, child, "qA-corr")
+	if err != nil || got.State != CorrelationOpen || len(got.OpenIDs) != 2 {
+		t.Fatalf("before answer: %+v err=%v, want open with 2 open ids", got, err)
+	}
+	if err := s.RecordAnswer(owner, child, "qA-corr"); err != nil {
+		t.Fatalf("RecordAnswer: %v", err)
+	}
+	if err := s.RecordAnswer(owner, child, "qA-corr"); err != nil {
+		t.Fatalf("RecordAnswer repeat must be idempotent: %v", err)
+	}
+
+	// Push enough acked traffic through to compact the file.
+	var ids []string
+	for i := 0; i < 10; i++ {
+		id := "p-" + strconv.Itoa(i)
+		ids = append(ids, id)
+		if _, err := s.Append(owner, progressMsg(t, child, id)); err != nil {
+			t.Fatalf("Append %s: %v", id, err)
+		}
+	}
+	if _, err := s.AckDetailed(owner, ids); err != nil {
+		t.Fatalf("AckDetailed: %v", err)
+	}
+
+	a, _ := s.LookupCorrelation(owner, child, "qA-corr")
+	if a.State != CorrelationAnswered || a.AnsweredAt.IsZero() {
+		t.Fatalf("answered question after compaction = %+v, want answered with a time", a)
+	}
+	if len(a.OpenIDs) != 1 || a.OpenIDs[0] != "qB-corr" {
+		t.Fatalf("open ids after compaction = %v, want [qB-corr]", a.OpenIDs)
+	}
+	u, _ := s.LookupCorrelation(owner, child, "nope")
+	if u.State != CorrelationUnknown {
+		t.Fatalf("never-issued id = %+v, want unknown", u)
+	}
+	other, _ := s.LookupCorrelation(owner, "other-child", "qA-corr")
+	if other.State != CorrelationUnknown {
+		t.Fatalf("another child's lookup of the same id = %+v, want unknown (ids are per child)", other)
+	}
+}

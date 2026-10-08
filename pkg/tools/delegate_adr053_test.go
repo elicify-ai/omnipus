@@ -299,7 +299,8 @@ func TestDelegateTool_Steer_RejectsExternalCLI(t *testing.T) {
 // steering queue (applied at the child's next tool boundary), never stops the
 // child's live turn, never parks it, and never dispatches a second session.
 func TestDelegateTool_Respond_WorkingChild_QueuesWithoutStopping(t *testing.T) {
-	tool, lc, _, steer := newADR053TestTool(t)
+	tool, lc, inbox, steer := newADR053TestTool(t)
+	seedOpenQuestion(t, inbox, "parent-1", "child-z", "corr-1")
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 
 	if err := lc.Persist(&session.LifecycleRecord{
@@ -336,12 +337,15 @@ func TestDelegateTool_Respond_WorkingChild_QueuesWithoutStopping(t *testing.T) {
 	}
 }
 
-// TestDelegateTool_Respond_UnmatchedCorrelation_IsStillOrdinary pins the other
-// half of the ordinary-message rule: respond's correlation_id is address
-// metadata (it frames the answer text), never an authority check. An answer
-// whose correlation id matches nothing must still be delivered — there is no
-// parked question to verify it against any more.
-func TestDelegateTool_Respond_UnmatchedCorrelation_IsStillOrdinary(t *testing.T) {
+// TestDelegateTool_Respond_UnmatchedCorrelation_IsRefused is the founder
+// decision of 2026-10-07 (#1213), which REVERSES the ADR-20261004 rule this
+// test used to pin ("correlation_id is address metadata, never a check; an
+// unmatched id must still be delivered"). respond now resolves the id against
+// the child's open questions and refuses an unknown one — the old behaviour
+// told a parent it had unblocked a child when it had not. The refusal text and
+// the already-answered case are covered in delegate_respond_correlation_test.go.
+// FLAGGED FOR qa-lead CHECK: expectation changed by founder decision.
+func TestDelegateTool_Respond_UnmatchedCorrelation_IsRefused(t *testing.T) {
 	tool, lc, _, steer := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
@@ -354,12 +358,11 @@ func TestDelegateTool_Respond_UnmatchedCorrelation_IsStillOrdinary(t *testing.T)
 	result := tool.Execute(ctx, map[string]any{
 		"action": "respond", "session_id": "child-w", "correlation_id": "corr-WRONG", "text": "x",
 	})
-	if result.IsError {
-		t.Fatalf("respond with an unmatched correlation_id must still deliver (no authority gate on an ordinary message), got: %s", result.ForLLM)
+	if !result.IsError || !strings.Contains(result.ForLLM, "unknown_correlation_id") {
+		t.Fatalf("respond with an unmatched correlation_id must be refused as unknown_correlation_id, got: %s", result.ForLLM)
 	}
-	msg, _ := steer.last()
-	if msg.Content != "x" {
-		t.Errorf("steering sink content = %q, want the answer text", msg.Content)
+	if msg, _ := steer.last(); msg.Content != "" {
+		t.Errorf("a refused respond delivered %q", msg.Content)
 	}
 }
 
@@ -881,12 +884,13 @@ func TestDelegateTool_StopAll_DeniedWhenLifecycleUnconfigured(t *testing.T) {
 	}
 }
 
-// TestDelegateTool_Respond_DoesNotConsultTheInbox pins the ADR-20261004
-// ordinary-message rule from the negative side: an answer is delivered through
-// the steering queue with NO inbox read, so a broken inbox cannot block or
-// fail it. (The old MAJOR-2 fail-closed Drain check fed the deleted
-// question-authority gate; with no gate there is nothing left to fail closed.)
-func TestDelegateTool_Respond_DoesNotConsultTheInbox(t *testing.T) {
+// TestDelegateTool_Respond_RefusesWhenTheInboxCannotVerify: since the founder
+// decision of 2026-10-07 (#1213) respond resolves correlation_id against the
+// inbox, so an inbox that cannot do so (here a fake lacking the lookup) makes
+// respond fail closed and visibly — it never delivers an unverifiable answer.
+// This REPLACES the old DoesNotConsultTheInbox expectation; FLAGGED FOR
+// qa-lead CHECK.
+func TestDelegateTool_Respond_RefusesWhenTheInboxCannotVerify(t *testing.T) {
 	tool, lc, _, steer := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
@@ -896,28 +900,27 @@ func TestDelegateTool_Respond_DoesNotConsultTheInbox(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
-	// Swap in an inbox whose Drain always errors — if respond still consulted
-	// the inbox (any residual authority/ack check), this answer could not land.
 	tool.SetMessageInbox(failingDrainInbox{})
 
 	result := tool.Execute(ctx, map[string]any{
 		"action": "respond", "session_id": "child-drain-err", "correlation_id": "corr-1", "text": "x",
 	})
-	if result.IsError {
-		t.Fatalf("respond must deliver as an ordinary message without consulting the inbox, got: %s", result.ForLLM)
+	if !result.IsError || !strings.Contains(result.ForLLM, "cannot verify correlation_id") {
+		t.Fatalf("respond must fail closed when the inbox cannot verify, got: %s", result.ForLLM)
 	}
-	msg, _ := steer.last()
-	if msg.Content != "x" {
-		t.Errorf("steering sink content = %q, want the answer text", msg.Content)
+	if msg, _ := steer.last(); msg.Content != "" {
+		t.Errorf("an unverifiable answer was delivered: %q", msg.Content)
 	}
 }
 
-// TestDelegateTool_Respond_HasNoQuestionAuthorityGate pins the owner-side
-// consequence of locked decision 6: there is no owner-only question and no
-// authority state to verify an answer against. A respond succeeds with a
-// completely EMPTY parent inbox — nothing parked, nothing pending, nothing to
-// ack — where the old flow refused an owner_required answer outright.
-func TestDelegateTool_Respond_HasNoQuestionAuthorityGate(t *testing.T) {
+// TestDelegateTool_Respond_OpenQuestionNeedsNoOwnerAuthority keeps the part
+// of ADR-20261004 locked decision 6 that stands: there is no owner-only
+// question and no authority state — an open question is answered by any
+// authorized caller and the helper is left untouched (running, same
+// generation). Only the correlation_id check is new (founder 2026-10-07,
+// #1213). Replaces HasNoQuestionAuthorityGate, whose empty-inbox success is
+// now refused; FLAGGED FOR qa-lead CHECK.
+func TestDelegateTool_Respond_OpenQuestionNeedsNoOwnerAuthority(t *testing.T) {
 	tool, lc, inbox, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
@@ -927,20 +930,13 @@ func TestDelegateTool_Respond_HasNoQuestionAuthorityGate(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
-	// The parent inbox is deliberately empty: no question, no ack state.
-	msgs, _, _, err := inbox.Drain("parent-1", "child-owner", "", 10)
-	if err != nil {
-		t.Fatalf("Drain: %v", err)
-	}
-	if len(msgs) != 0 {
-		t.Fatalf("precondition: expected an empty parent inbox, got %d messages", len(msgs))
-	}
+	seedOpenQuestion(t, inbox, "parent-1", "child-owner", "corr-owner")
 
 	result := tool.Execute(ctx, map[string]any{
 		"action": "respond", "session_id": "child-owner", "correlation_id": "corr-owner", "text": "x",
 	})
 	if result.IsError {
-		t.Fatalf("respond must not be gated on any question state, got: %s", result.ForLLM)
+		t.Fatalf("respond to an open question must not be gated on any authority state, got: %s", result.ForLLM)
 	}
 	rec, err := lc.Load("child-owner")
 	if err != nil {
@@ -958,7 +954,8 @@ func TestDelegateTool_Respond_HasNoQuestionAuthorityGate(t *testing.T) {
 // corrective re-dispatch (ADR D2 line 207; D8 line 418 retains 3P successors;
 // ADR-20261004 keeps D5's corrective shape for a 3P answer).
 func TestDelegateTool_Respond_3P_OriginalNotLeftRunning(t *testing.T) {
-	tool, lc, _, _ := newADR053TestTool(t)
+	tool, lc, inbox, _ := newADR053TestTool(t)
+	seedOpenQuestion(t, inbox, "parent-1", "child-3p-resp", "corr-3p")
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 
 	if err := lc.Persist(&session.LifecycleRecord{

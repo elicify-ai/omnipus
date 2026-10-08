@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,12 +150,12 @@ func TestW6Question_OrdinaryMessage_AnswerRevivesStoppedChildWhileParentStaysSto
 		t.Fatalf("stopped resume must admit a fresh execution in this boot: stopped=%+v resumed=%+v", stoppedChild.ExecutionID, resumed.ExecutionID)
 	}
 
-	// A second respond now addresses a WORKING helper: another ordinary
-	// message into its steering queue — non-error, no second transcript copy,
-	// no second revive.
+	// A second respond to the SAME question is refused (founder decision
+	// 2026-10-07, #1213: a question is answered once; a follow-up is an
+	// ordinary steer) — no second transcript copy, no second revive.
 	second := delegate.Execute(parentCtx, w6RespondArgs(child.SessionID, corr, w6SelfOKAnswer))
-	if second.IsError {
-		t.Fatalf("a respond to a working helper is an ordinary message and must succeed, got: %s", second.ForLLM)
+	if !second.IsError || !strings.Contains(second.ForLLM, "already_answered") {
+		t.Fatalf("a second respond to an answered question must be refused as already_answered, got: %s", second.ForLLM)
 	}
 	if got := w6CountTranscript(t, al.GetSessionStore(), child.SessionID, want); got != 1 {
 		t.Fatalf("the second (ordinary) respond must not write a second transcript copy: copies=%d", got)

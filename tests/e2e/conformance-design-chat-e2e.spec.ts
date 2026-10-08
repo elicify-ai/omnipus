@@ -244,9 +244,17 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
   // steer loop needs to get past to ask again.
   const askUserQuestionCard = page.locator('[data-testid="ask-user-question-card"]')
   const askUserCancel = page.locator('[data-testid="ask-user-cancel"]')
-  const dismissPendingAsk = async (): Promise<void> => {
+  // Every dismissal is recorded as a `blocker-dismissed` annotation (visible in
+  // the Playwright report), not only logged: a blocker that reappeared on every
+  // try would otherwise be cancelled silently and the run would still pass. The
+  // count is deliberately not asserted — the tolerance is the point.
+  const dismissPendingAsk = async (where: string): Promise<void> => {
     if (!(await askUserQuestionCard.isVisible({ timeout: 1_000 }).catch(() => false))) return
-    console.log('t0: AskUserQuestion card is blocking the composer — cancelling it to steer past it')
+    console.log(`t0: AskUserQuestion card is blocking the composer — cancelling it to steer past it (${where})`)
+    test.info().annotations.push({
+      type: 'blocker-dismissed',
+      description: `AskUserQuestion card cancelled — ${where}`,
+    })
     await askUserCancel.click().catch(() => {
       /* card may resolve itself between the check and the click */
     })
@@ -271,9 +279,13 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
   // in-page wait is overlay-proof (the pill mounts in the DOM under the
   // overlay; presence, not visibility, is what waitForFunction checks).
   const toolApprovalDialog = page.locator('[data-testid="dialog-overlay"]')
-  const denyToolApproval = async (): Promise<void> => {
+  const denyToolApproval = async (where: string): Promise<void> => {
     if (!(await toolApprovalDialog.isVisible({ timeout: 1_000 }).catch(() => false))) return
-    console.log('t0: tool-approval modal is blocking the composer — denying it (no network calls needed)')
+    console.log(`t0: tool-approval modal is blocking the composer — denying it (no network calls needed) (${where})`)
+    test.info().annotations.push({
+      type: 'blocker-dismissed',
+      description: `tool-approval modal denied — ${where}`,
+    })
     await page
       .getByRole('button', { name: 'Deny', exact: true })
       .click()
@@ -353,8 +365,8 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
     // comment above for why one can be sitting here blocking the composer.
     // The tool-approval modal (run 4's blocker) is likewise answered before
     // the typing: denyToolApproval above.
-    await dismissPendingAsk()
-    await denyToolApproval()
+    await dismissPendingAsk(`steer ${attempt}/${STEER_ATTEMPTS}, before typing`)
+    await denyToolApproval(`steer ${attempt}/${STEER_ATTEMPTS}, before typing`)
 
     // Start the done-pill wait BEFORE the typing. GoalPillTray.tsx removes a
     // terminal pill 4s after it paints (TERMINAL_PILL_DISPLAY_MS) — see
@@ -378,16 +390,48 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
     // deliberately — a per-key "/goal …" WOULD open the palette and make
     // Enter select a palette row instead of sending.
     const bubblesBefore = await claimUserBubbles.count()
-    await input.click()
-    await input.pressSequentially(steerText)
-    // LOUD GUARD: a tool-approval modal that appeared mid-typing takes focus
-    // and swallows keystrokes (release run 36305587114: ~380 chars lost).
-    // Never send a truncated steer — fail here, naming the cause, instead of
-    // sending garbage or waiting out the done-pill budget.
+    // BLOCKER MID-TYPING (CI run 37696589829, attempt 1): the dismiss/deny
+    // checks above run ONCE, but the worker's turn is still live and the typing
+    // takes seconds. The model raised an AskUserQuestion card (screenshot:
+    // "MIA NEEDS YOUR INPUT", "chat input is locked while questions are
+    // pending") part-way through, which disables the composer and leaves a
+    // truncated steer in it. That is the same blocker the pre-typing checks
+    // clear, arriving inside the typing window — so when the composer does not
+    // hold the full steer AND a blocker is on screen, clear the blocker, wipe
+    // the partial text and type again. No blocker, or still a mismatch after
+    // the tries: fall through to the strict guard below, which fails loudly.
+    const STEER_TYPE_TRIES = 3
+    for (let typing = 1; typing <= STEER_TYPE_TRIES; typing++) {
+      if (typing > 1) {
+        console.log(`t0: a blocker interrupted the typing — retyping the steer (try ${typing}/${STEER_TYPE_TRIES})`)
+        test.info().annotations.push({
+          type: 'blocker-dismissed',
+          description: `steer ${attempt}/${STEER_ATTEMPTS}: typing interrupted, retyping (try ${typing}/${STEER_TYPE_TRIES})`,
+        })
+        await dismissPendingAsk(`steer ${attempt}/${STEER_ATTEMPTS}, typing try ${typing}/${STEER_TYPE_TRIES}`)
+        await denyToolApproval(`steer ${attempt}/${STEER_ATTEMPTS}, typing try ${typing}/${STEER_TYPE_TRIES}`)
+      }
+      await input.click()
+      await input.press('ControlOrMeta+a')
+      await input.press('Delete')
+      // A card landing mid-typing can fail the keystrokes themselves; the
+      // value check right after decides, so the failure is not lost here.
+      await input.pressSequentially(steerText).catch(() => {})
+      if ((await input.inputValue().catch(() => '')) === steerText) break
+      const blocked =
+        (await askUserQuestionCard.isVisible({ timeout: 1_000 }).catch(() => false)) ||
+        (await toolApprovalDialog.isVisible({ timeout: 1_000 }).catch(() => false))
+      if (!blocked) break
+    }
+    // LOUD GUARD: a blocker that took focus mid-typing swallows keystrokes
+    // (release run 36305587114: ~380 chars lost; run 37696589829: an
+    // AskUserQuestion card). Never send a truncated steer — fail here, naming
+    // the cause, instead of sending garbage or waiting out the done-pill budget.
     await expect(
       input,
       `t0: composer text differs from the typed steer before Enter on attempt ${attempt}/${STEER_ATTEMPTS} — ` +
-        'a tool-approval modal (ADR-092 network_preflight) most likely took focus mid-typing and swallowed keystrokes.',
+        'a blocker (an AskUserQuestion card or the ADR-092 network_preflight tool-approval modal) most likely ' +
+        'took focus mid-typing and swallowed keystrokes, and retyping did not clear it.',
     ).toHaveValue(steerText)
     await input.press('Enter')
 

@@ -704,12 +704,13 @@ func (l *SteerLauncher) writeChildMetaAndHistory(
 	}
 
 	if req.Task != "" {
-		sessions.AddMessage(childID, "user", req.Task)
+		firstMessage := firstMessageWithSnapshot(req)
+		sessions.AddMessage(childID, "user", firstMessage)
 		taskEntry := session.TranscriptEntry{
 			ID:        childID + "-task",
 			Role:      "user",
 			AgentID:   req.TargetAgentID,
-			Content:   req.Task,
+			Content:   firstMessage,
 			Timestamp: time.Now().UTC(),
 		}
 		if appendErr := sessions.AppendTranscriptStrict(childID, taskEntry); appendErr != nil {
@@ -717,6 +718,34 @@ func (l *SteerLauncher) writeChildMetaAndHistory(
 		}
 	}
 	return nil
+}
+
+// firstMessageWithSnapshot is the child's first user message: the task text,
+// followed — only when the parent passed a delegate snapshot — by a labelled
+// "Curated context" section carrying its notes and references (issue #1212:
+// the snapshot was validated and then dropped, so the child never saw it).
+func firstMessageWithSnapshot(req steer.LaunchRequest) string {
+	notes := strings.TrimSpace(req.ContextNotes)
+	if notes == "" && len(req.ContextReferences) == 0 {
+		return req.Task
+	}
+	var b strings.Builder
+	b.WriteString(req.Task)
+	b.WriteString("\n\n## Curated context from the parent\n")
+	if notes != "" {
+		b.WriteString("\nNotes:\n")
+		b.WriteString(notes)
+		b.WriteString("\n")
+	}
+	if len(req.ContextReferences) > 0 {
+		b.WriteString("\nReferences:\n")
+		for _, ref := range req.ContextReferences {
+			b.WriteString("- ")
+			b.WriteString(ref)
+			b.WriteString("\n")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // walkVerifiedRoot resolves the cascade root for a new child steered by
