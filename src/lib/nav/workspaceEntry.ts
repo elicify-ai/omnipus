@@ -6,7 +6,19 @@
  * committed chat and does not fall back. Entry never acknowledges.
  */
 import type { Session, WorkspaceMemberConfig } from '@/lib/api'
+import type { WorkspaceEntryView } from '@/store/session/workspaceEntryFlow'
 import { mainSessionIdOfMember } from './sessionCoreSeam'
+
+/** A loading or failed target is not a committed send destination (FR-004). */
+export function workspaceEntryBlocksSend(state: {
+  workspaceEntry: WorkspaceEntryView | null
+  resolvingSessionForWorkspace: Record<string, boolean>
+}, workspaceId: string | null): boolean {
+  const entry = state.workspaceEntry
+  return !!(workspaceId && state.resolvingSessionForWorkspace?.[workspaceId])
+    || entry?.status === 'failed-attempt'
+    || !!(entry && 'sendEnabled' in entry && entry.sendEnabled === false)
+}
 
 export type EntryKind = 'workspace-name' | 'cold-reload' | 'login' | 'modal-switch'
 

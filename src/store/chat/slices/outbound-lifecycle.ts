@@ -8,6 +8,7 @@ import { isGoalRunning } from '@/lib/goalActivity'
 import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
 // Runtime (value) schema from the self-contained ws-schemas.ts, not
 // schemas.ts — the latter also carries the REST Zodios `makeApi([...])`
 // call, which references every REST schema and defeats tree-shaking
@@ -304,8 +305,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
     },
 
     sendMessage: (content, opts) => {
-      const entry = useSessionStore.getState().workspaceEntry
-      if (entry?.status === 'failed-attempt' || (entry && 'sendEnabled' in entry && entry.sendEnabled === false)) return
+      if (workspaceEntryBlocksSend(useSessionStore.getState(), useWorkspacesStore.getState().activeWorkspaceId)) return
       const mediaRefs = opts?.mediaRefs ?? []
       const attachments = opts?.attachments ?? []
       const { clientMessageId, queuedAt, queuedMessage } = beginSend(content, opts)

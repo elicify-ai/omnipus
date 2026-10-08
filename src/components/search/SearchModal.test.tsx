@@ -647,6 +647,32 @@ describe('SearchModal — workspace-switch arrow', () => {
     expect(send).toHaveBeenNthCalledWith(1, { type: 'attach_session', session_id: target.id })
   })
 
+  it('does not send or queue into the retained source chat while the target restore is still loading', async () => {
+    const user = userEvent.setup()
+    const send = vi.fn<WsConnection['send']>().mockReturnValue(true)
+    const target = { id: 's-1', type: 'chat' as const, title: 'Session One', agentId: 'agent-1' }
+    act(() => {
+      useConnectionStore.setState({ connection: { send } as unknown as WsConnection, isConnected: true })
+      useWorkspacesStore.setState({ activeWorkspaceId: 'source-workspace' })
+      useSessionStore.setState({ activeSessionId: 'source-chat', activeAgentId: 'source-owner' })
+      useSessionStore.getState().setWorkspaceSessionDescriptor('ws-1', target)
+    })
+    renderModal()
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+    let resolveListing!: (sessions: Session[]) => void
+    vi.mocked(fetchSessions).mockReturnValueOnce(new Promise<Session[]>((resolve) => { resolveListing = resolve }))
+    await user.click(screen.getByTestId('workspace-switch-arrow'))
+    expect(useSessionStore.getState().resolvingSessionForWorkspace['ws-1']).toBe(true)
+    act(() => useChatStore.getState().sendMessage('Must not cross workspaces before validation', { clientMessageId: 'loading-restore-send' }))
+    // Soft assertion still fails the case, but lets the controlled promise
+    // settle so the red run does not leave a dangling shared restore job.
+    expect.soft(send).not.toHaveBeenCalled()
+    expect(useChatStore.getState().outboundQueue).toStrictEqual([])
+    await act(async () => { resolveListing([makeSession()]) })
+    expect(useSessionStore.getState().activeSessionId).toBe(target.id)
+    expect(send.mock.calls.map(([frame]) => frame)).toStrictEqual([{ type: 'attach_session', session_id: target.id }])
+  })
+
   it('keeps sending blocked after a rejected target attach and rechecks that target on Retry', async () => {
     const user = userEvent.setup()
     const send = vi.fn<WsConnection['send']>().mockReturnValueOnce(false).mockReturnValue(true)

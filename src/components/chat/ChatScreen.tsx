@@ -59,6 +59,8 @@ import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
 import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall, shouldRenderJudgeVerdictInThread, shouldRenderContextWindowNoticeInThread } from '@/lib/toolVisibility'
@@ -1976,12 +1978,10 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // window (isConnected:false with reconnectPhase still null — "Connecting to
   // gateway..."), leaves the composer disabled; see tests/e2e/chat.spec.ts "(f)
   // queue-on-disconnect" and ChatScreen.outbound-queue.test.tsx for regression coverage.
-  // askuserquestion-tool-spec v3 US-1 S1: the composer is LOCKED while an
-  // AskUserQuestion card is pending — free-form answering happens through
-  // the card, never the chat box; Cancel (always present on the card)
-  // unlocks. Terminal cards (answered/cancelled) release the lock.
+  // AskUserQuestion v3 US-1 S1: pending locks free-form answers to the card; its Cancel remains available, and answered/cancelled states release the lock.
   const askLocked = useChatStore((s) => s.pendingAsk?.status === 'pending')
-  const chatUnavailable = useSessionStore((s) => s.workspaceEntry?.status === 'unavailable' || s.workspaceEntry?.status === 'failed-attempt')
+  const entryWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId)
+  const chatUnavailable = useSessionStore((state) => workspaceEntryBlocksSend(state, entryWorkspaceId))
 
   const inputEnabled =
     !chatUnavailable &&

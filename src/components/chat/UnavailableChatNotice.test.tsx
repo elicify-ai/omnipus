@@ -103,6 +103,7 @@ function resetStores() {
       activeAgentId: null,
       activeAgentType: null,
       workspaceEntry: null,
+      resolvingSessionForWorkspace: {},
     })
     useWorkspacesStore.setState({ activeWorkspaceId: 'ws-product' })
   })
@@ -146,6 +147,17 @@ describe('unavailable workspace chat', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     expect(runWorkspaceEntry).toHaveBeenCalledTimes(1)
     expect(runWorkspaceEntry).toHaveBeenCalledWith('ws-product')
+    expect(useSessionStore.getState().activeSessionId).toBe('retained-source-chat')
+  })
+
+  it('disables the composer while validating the target workspace without changing the retained chat', () => {
+    act(() => useSessionStore.setState({
+      activeSessionId: 'retained-source-chat', activeAgentId: 'mia',
+      resolvingSessionForWorkspace: { 'ws-product': true },
+    }))
+    render(<OmnipusComposer />)
+    expect(screen.getByTestId('composer-input')).toBeDisabled()
+    expect(screen.getByTestId('chat-send')).toBeDisabled()
     expect(useSessionStore.getState().activeSessionId).toBe('retained-source-chat')
   })
 
