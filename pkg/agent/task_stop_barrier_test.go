@@ -642,3 +642,129 @@ func TestTaskRunStop_WhileTheJudgeDeliberates(t *testing.T) {
 		})
 	}
 }
+
+// failThenBlockProvider fails its first call (a broken try) and blocks every
+// later call until released or cancelled.
+type failThenBlockProvider struct {
+	mu      sync.Mutex
+	calls   int
+	entered chan int
+	release chan struct{}
+}
+
+func (p *failThenBlockProvider) Chat(ctx context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	index := p.calls
+	p.calls++
+	p.mu.Unlock()
+	p.entered <- index
+	if index == 0 {
+		return nil, errors.New("upstream model failed")
+	}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-p.release:
+		return nil, errors.New("released")
+	}
+}
+
+func (*failThenBlockProvider) GetDefaultModel() string { return "fail-then-block" }
+
+// TestTaskRunStop_RetriedAttemptInNewSessionIsStoppable: a broken first try
+// restarts the task as a second attempt in a NEW session. That attempt gets its
+// own admission, so a person's Stop on it lands; the task is not started over
+// again.
+func TestTaskRunStop_RetriedAttemptInNewSessionIsStoppable(t *testing.T) {
+	for _, front := range []taskStopFront{taskFrontExecute, taskFrontLauncher} {
+		t.Run(string(front), func(t *testing.T) {
+			f := newTaskStopFixture(t, front, false, "unused")
+			p := &failThenBlockProvider{entered: make(chan int, 8), release: make(chan struct{})}
+			inst, ok := f.al.GetRegistry().GetAgent(taskStopWorkerID)
+			require.True(t, ok)
+			inst.Provider = p
+			t.Cleanup(func() {
+				select {
+				case <-p.release:
+				default:
+					close(p.release)
+				}
+			})
+			two := 2
+			twoP := &two
+			_, err := f.al.taskStore.Update(f.task.ID, task.Patch{MaxAttempts: &twoP})
+			require.NoError(t, err)
+			if front == taskFrontLauncher {
+				inProgress := task.StatusInProgress
+				_, err = f.al.taskStore.Update(f.task.ID, task.Patch{Status: &inProgress})
+				require.NoError(t, err)
+				_, err = f.te.StartTaskNow(context.Background(), f.task.ID)
+			} else {
+				err = f.te.ExecuteTask(context.Background(), f.task.ID, nil)
+			}
+			require.NoError(t, err)
+			first := awaitProviderCall(t, p.entered, 0)
+			_ = first
+			awaitProviderCall(t, p.entered, 1) // the second attempt is live
+			got, err := f.al.taskStore.Get(f.task.ID)
+			require.NoError(t, err)
+			require.NotEmpty(t, got.SessionID)
+			f.sessionID = got.SessionID
+			firstSession := ""
+			records, err := f.al.GetSessionLifecycleStore().List(session.LifecycleFilter{})
+			require.NoError(t, err)
+			for _, rec := range records {
+				if rec.Origin != nil && rec.Origin.TaskID == f.task.ID && rec.SessionID != f.sessionID {
+					firstSession = rec.SessionID
+				}
+			}
+			require.NotEmpty(t, firstSession, "the retried attempt must run in a new session")
+
+			res := f.pressStop(t)
+
+			requireStopReachedOnly(t, res, f.sessionID)
+			f.awaitRunJoined(t)
+			f.requireLifecycleStopped(t)
+			final, err := f.al.taskStore.Get(f.task.ID)
+			require.NoError(t, err)
+			require.True(t, strings.HasPrefix(final.Result, "Stopped"), "the task ends Stopped, got %q", final.Result)
+			require.Len(t, p.entered, 0, "no third call: the Stop does not start the task over")
+		})
+	}
+}
+
+func awaitProviderCall(t *testing.T, entered <-chan int, want int) int {
+	t.Helper()
+	select {
+	case got := <-entered:
+		require.Equal(t, want, got)
+		return got
+	case <-time.After(20 * time.Second):
+		t.Fatalf("provider call %d never happened", want)
+		return -1
+	}
+}
+
+// TestExecuteTask_AdmissionRefusalReleasesTheDispatchSlot: when the run's
+// execution cannot be admitted (here: no boot epoch was ever minted, so no
+// run identity can be stamped), ExecuteTask fails the task visibly, starts
+// no worker, and gives its dispatch slot back.
+func TestExecuteTask_AdmissionRefusalReleasesTheDispatchSlot(t *testing.T) {
+	f := newTaskStopFixture(t, taskFrontExecute, false, "must never be called")
+	emptyEpochs := session.NewBootEpochStore(filepath.Join(t.TempDir(), "never_minted"))
+	require.Zero(t, emptyEpochs.Current(), "SETUP: the replacement store must have no epoch")
+	f.al.SetBootEpochStore(emptyEpochs)
+
+	err := f.te.ExecuteTask(context.Background(), f.task.ID, nil)
+
+	require.Error(t, err, "a refused admission must be reported to the dispatcher")
+	require.Zero(t, f.te.dispatchSema.InFlight(), "the refused dispatch must give its slot back")
+	f.te.mu.Lock()
+	running := len(f.te.running)
+	f.te.mu.Unlock()
+	require.Zero(t, running, "no run may be registered for a refused dispatch")
+	got, getErr := f.al.taskStore.Get(f.task.ID)
+	require.NoError(t, getErr)
+	require.Equal(t, task.StatusFailed, got.Status, "the refused task is failed visibly, not left in_progress")
+	require.Empty(t, f.provider.Requests(), "no worker call for a refused dispatch")
+}
