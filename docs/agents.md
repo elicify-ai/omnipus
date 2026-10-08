@@ -83,7 +83,7 @@ The role choices are grouped like this:
 | People (4) | People and HR; Tutor; Knowledge and library; Translator |
 | Personal (3) | General assistant; Personal assistant; Office assistant |
 
-The create form shows the full mark live as you change these choices. The preview is a draft: it is saved only when creation succeeds. In the edit slide-over, **Basics** offers the same Figure, Role, and Colour choices and saves changes automatically. Its small header icon changes colour, but does not preview the selected figure and badge. Check the save indicator before treating an edit as saved. There is no agent-picture or GIF upload; this does not affect attaching files to a chat.
+The create form shows the full mark live as you change these choices. The preview is a draft: it is saved only when creation succeeds. In the edit slide-over, **Basics** offers the same Figure, Role, and Colour choices and saves changes automatically. Its header mark previews the selected figure, role badge, and colour immediately, before the save completes. Check the save indicator before treating an edit as saved. There is no agent-picture or GIF upload; this does not affect attaching files to a chat.
 
 ### Built-in identity is locked
 
@@ -99,7 +99,7 @@ Open a built-in agent's card, then **Basics**: the figure, role, and colour choi
 | Researcher | Omnipus | General assistant | Violet |
 | General Purpose | Omnipus | General assistant | Grey |
 
-Legacy icon names, such as Mia's `lightbulb`, remain stored for older displays. The identity editor no longer has a legacy-icon picker; editing other settings does not clear those names.
+Legacy icon names, such as Mia's `lightbulb`, remain stored for older displays and appear as a read-only label above the profile's sections. The identity editor no longer has a legacy-icon picker; editing other settings does not clear those names.
 
 ### Existing agents on upgrade
 

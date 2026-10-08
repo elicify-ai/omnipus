@@ -1,9 +1,10 @@
 // BDD-06.2. A built-in agent's figure, role and colour are visible and locked.
-// The legacy icon slug stays on screen. There is no upload control.
+// W1-6 / FR-020 replaces the legacy icon picker with figure/role/colour.
+// The stored legacy slug is still shown once above both identity layouts.
 // Other fields the server already marks editable (model) stay editable.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
 import type { Agent } from '@/lib/api'
@@ -44,7 +45,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-import { fetchAgent, fetchSkills, fetchProviders } from '@/lib/api'
+import { fetchAgent, fetchSkills, fetchProviders, updateAgent } from '@/lib/api'
 
 const locked = (name: string) => ({ name, editable: false, reason: 'Built-in identity is fixed.' })
 const open = (name: string) => ({ name, editable: true })
@@ -91,6 +92,7 @@ beforeEach(() => {
   vi.mocked(fetchAgent).mockReset().mockResolvedValue(lockedMia())
   vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
   vi.mocked(fetchProviders).mockReset().mockResolvedValue([])
+  vi.mocked(updateAgent).mockReset().mockResolvedValue(lockedMia())
 })
 
 // Tailwind `sm` breakpoint. The desktop tab strip is `hidden sm:block`;
@@ -113,8 +115,56 @@ function visibleIdentityLayout(): HTMLElement {
   return node
 }
 
+function renderProfile(agentId: string) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(<QueryClientProvider client={client}><AgentProfile agentId={agentId} /></QueryClientProvider>)
+}
+
+function headerMark(name: string): HTMLElement {
+  const header = screen.getByRole('heading', { name }).parentElement
+  if (!header) throw new Error('Profile heading has no header container')
+  return within(header).getByTestId('agent-icon')
+}
+
+// W1-6 / FR-020 / BDD-06.1: the edit header previews draft figure, role,
+// and ink immediately; previewing is not evidence that persistence succeeded.
+describe('edit header live identity preview', () => {
+  it('renders the saved built-in figure, role and colour in the header', async () => {
+    renderProfile('mia')
+    await screen.findByRole('heading', { name: 'Mia' })
+    await waitFor(() => expect(headerMark('Mia')).toHaveAttribute('data-figure', 'Omnipus'))
+    expect(headerMark('Mia').querySelector('[data-role]')).toHaveAttribute('data-role', 'general')
+    expect(headerMark('Mia')).toHaveStyle({ color: '#3B82F6' })
+    expect(updateAgent).not.toHaveBeenCalled()
+  })
+
+  it('previews the selected figure, role and colour before the save completes', async () => {
+    const custom: Agent = {
+      ...lockedMia(), id: 'custom', name: 'Custom Mia', type: 'Main', locked: false,
+      editable_fields: [open('figure'), open('role'), open('color')],
+    }
+    vi.mocked(fetchAgent).mockResolvedValue(custom)
+    // Process-edge mock: the server never confirms this draft during the test.
+    vi.mocked(updateAgent).mockImplementation(() => new Promise<Agent>(() => {}))
+    renderProfile('custom')
+    await screen.findByRole('heading', { name: 'Custom Mia' })
+    const layout = visibleIdentityLayout()
+    fireEvent.click(within(layout).getByRole('button', { name: 'Woman' }))
+    fireEvent.click(within(layout).getByRole('button', { name: 'Writer' }))
+    fireEvent.click(within(layout).getByRole('button', { name: 'Violet' }))
+    const preview = headerMark('Custom Mia')
+    expect(preview).toHaveAttribute('data-figure', 'Woman')
+    expect(preview.querySelector('[data-role]')).toHaveAttribute('data-role', 'writer')
+    expect(preview).toHaveStyle({ color: '#A78BFA' })
+    expect(within(layout).getByRole('button', { name: 'Woman' })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(layout).getByRole('button', { name: 'Writer' })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(layout).getByRole('button', { name: 'Violet' })).toHaveAttribute('aria-pressed', 'true')
+    expect(updateAgent).not.toHaveBeenCalled()
+  })
+})
+
 describe('built-in identity stays locked', () => {
-  it('shows the figure, role and colour as locked choices and keeps the icon slug', async () => {
+  it('shows selected figure, role and colour as locked choices and keeps the stored icon slug', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(
       <QueryClientProvider client={client}>
@@ -135,7 +185,12 @@ describe('built-in identity stays locked', () => {
     expect(role).toBeDisabled()
     const colour = within(layout).getByRole('button', { name: 'Azure' })
     expect(colour).toBeDisabled()
-    expect(within(layout).getByText('lightbulb')).toBeInTheDocument()
+    expect(figure).toHaveAttribute('aria-pressed', 'true')
+    expect(role).toHaveAttribute('aria-pressed', 'true')
+    expect(colour).toHaveAttribute('aria-pressed', 'true')
+    // The slug lives once above both layouts, not inside either one.
+    expect(screen.getByText('lightbulb')).toBeInTheDocument()
+    expect(within(layout).queryByLabelText('Icon')).toBeNull()
     expect(document.querySelector('input[type="file"]')).toBeNull()
   })
 })

@@ -5011,9 +5011,16 @@
     },
     {
       "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentProfile.tsx",
+      "syntax": "AgentProfile#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — W1-6 edit-header identity preview forwards the draft colour unchanged to AgentIcon. If the optional response colour is absent, the preview alone uses generated AgentColor option 9 (Grey); it does not write that fallback into the draft or claim the edit is saved. Figure and role use the same selected draft as the visible pickers.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
       "path": "src/components/ui/agent-icon.tsx",
       "syntax": "AgentIcon#dom-style.color<-color",
-      "reason": "Category: user-authored colours — identity palette ink. AgentIcon writes dom-style.color directly from its color prop, a generated AgentColor union. The prop is read unchanged (no lookup, no mix). Ink stays currentColor and fully opaque. Mask cutouts are not paint attributes.",
+      "reason": "Category: user-authored colours — identity palette ink. AgentIcon writes dom-style.color directly from its color prop, the pure kit's AgentIconColor palette union. lib/agentIdentity.ts checks exact bidirectional conformance to generated AgentColor without pulling application contracts into the package. The prop is read unchanged (no lookup, no mix). Ink stays currentColor and fully opaque. Mask cutouts are not paint attributes.",
       "owner": "user-authored colours exception registry"
     },
     {

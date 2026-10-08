@@ -40,7 +40,9 @@ import {
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { ExecutorSelector } from './ExecutorSelector'
-import { BehaviorFields, AvatarColorPicker, FigurePicker, RolePicker, AvatarHeader, UploadMdButton } from './AgentFormFields'
+import { BehaviorFields, AvatarColorPicker, FigurePicker, RolePicker, UploadMdButton } from './AgentFormFields'
+import { AgentIcon } from '@/components/ui/agent-icon'
+import { AgentColor } from '@/lib/api/generated/schemas'
 import { CliPathValidationHint } from './CliPathValidationHint'
 import { CommandPreview } from './CommandPreview'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -71,7 +73,7 @@ import { isProviderUsable } from '@/lib/providerStatus'
 import { formatTokens } from '@/lib/formatTokens'
 import { logDiagnostic } from '@/lib/telemetry'
 import { useUiStore } from '@/store/ui'
-import type { AgentFigure, AgentRole, FallbackModel } from '@/lib/api/generated/openapi-types'
+import type { AgentColor as AgentColorValue, AgentFigure, AgentRole, FallbackModel } from '@/lib/api/generated/openapi-types'
 import { type IconName } from '@/lib/agentIcons'
 import { agentKindFlags } from '@/lib/agentKind'
 import { cliValidationBlocked, useCliPathValidation } from '@/hooks/useCliPathValidation'
@@ -1468,10 +1470,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   />
                 </div>
               )}
-              {/* Operator decision 2026-07-03: color/icon become visible
-                  READ-ONLY for locked core agents (previously hidden
-                  entirely) — a static swatch/icon+label, not the
-                  interactive picker (which has no readOnly mode). */}
+              {/* W1-6 / FR-020: figure, role, and colour choices stay visible
+                  for built-ins, locked by the server's field descriptors.
+                  The header previews the same local draft as these pickers. */}
               <div className="space-y-[var(--space-1)]">
                 <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Figure</p>
                 <FigurePicker
@@ -2460,13 +2461,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       onOpenAutoFocus={handleOpenAutoFocus}
       contentRef={sheetContentRef}
     >
-      {/* Title row locked to 44px chrome; badges/description sit below so the
-          open panel aligns with the workspace top bar (flat shell chrome). */}
+      {/* Compact live identity header; badges and description remain below. */}
       <SheetHeader className="px-[var(--space-4)] sm:px-[var(--space-5)] pr-[var(--space-7)]">
         <div className="flex items-center gap-[var(--space-2)] min-w-0">
-          <AvatarHeader
-            color={selectedColor}
-            className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 [&>svg]:!w-3.5 [&>svg]:!h-3.5"
+          <AgentIcon figure={selectedFigure} role={selectedRole} size={26}
+            color={(selectedColor ?? AgentColor.options[9]) as AgentColorValue}
           />
           <h1 className="font-headline text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] truncate">
             {agent.name}

@@ -116,14 +116,17 @@ export function SessionRow({ session, isActive, isHighlighted, onSelect, onRenam
         isHighlighted && 'bg-[var(--color-surface-2)]',
       )}
     >
-      <Button variant="ghost" onClick={onSelect} aria-label={`Open ${title}`} className={cn('h-auto min-w-0 flex-1 justify-start p-0 text-left hover:bg-transparent pointer-coarse:min-h-[var(--target-touch-minimum)]', COARSE_TARGET)}>
-        <div className={cn('truncate text-[length:var(--type-body-compact-size)] font-medium flex items-center gap-[var(--space-1)]', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]')}>
-          <span className="truncate">{title}</span>
+      <Button variant="ghost" onClick={onSelect} aria-label={`Open ${title}`} className={cn('h-auto min-w-0 flex-1 flex-col items-start justify-start gap-[var(--space-0)] p-0 text-left hover:bg-transparent pointer-coarse:min-h-[var(--target-touch-minimum)]', COARSE_TARGET)}>
+        {/* Keep metadata below the title. Button's default inline row otherwise
+            lets fixed metadata squeeze same-prefix titles to a few characters.
+            Phone titles wrap; desktop retains its compact single-line title. */}
+        <div className={cn('w-full min-w-0 text-[length:var(--type-body-compact-size)] font-medium flex items-start gap-[var(--space-1)]', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]')}>
+          <span data-testid={`session-title-${session.id}`} className="min-w-0 flex-1 whitespace-normal break-words sm:truncate">{title}</span>
           {isHighlighted && (
             <span className="shrink-0 rounded border border-[var(--color-border)] px-[var(--space-1)] text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-muted)]" aria-hidden="true">↵</span>
           )}
         </div>
-        <div className="mt-[var(--space-0-5)] flex flex-wrap items-center gap-x-[var(--space-1)] gap-y-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+        <div data-testid={`session-metadata-${session.id}`} className="mt-[var(--space-0-5)] w-full flex flex-wrap items-center gap-x-[var(--space-1)] gap-y-[var(--space-0-5)] whitespace-normal text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           <Badge variant={TONE_VARIANT[status.tone]} data-testid={`session-status-${session.id}`}>{status.text}</Badge>
           <Badge variant="outline" data-testid={`session-kind-${session.id}`}>{kind}</Badge>
           <span>Started {formatRelative(session.created_at) || '—'}</span>
