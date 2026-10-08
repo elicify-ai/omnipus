@@ -21,7 +21,6 @@ import {
   Stop,
   Copy,
   Check,
-  ListChecks,
   Plus,
   File,
   Lightning,
@@ -34,6 +33,7 @@ import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { renderHistoricalToolCall } from './tools/HistoricalToolCallBlock'
 import { classifySetGoalCall } from './tools/SetGoalToolUI'
 import { formatErrorDetail } from '@/lib/llm-error'
+import { FeedKindLabel } from './FeedKindLabel'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { ProviderRetryIndicator } from './ProviderRetryIndicator'
 import { ProviderFallbackNoteLine } from './ProviderFallbackNoteLine'
@@ -3060,8 +3060,6 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const loopStatus = useChatStore((s) => s.loopStatus ?? null)
   const setMessages = useChatStore((s) => s.setMessages)
   const mergeJudgeVerdictHistory = useChatStore((s) => s.mergeJudgeVerdictHistory)
-  const attachedSessionType = useSessionStore((s) => s.attachedSessionType)
-  const attachedTaskTitle = useSessionStore((s) => s.attachedTaskTitle)
   // For the ARIA live region: track the last assistant message id for screen reader announcements.
   // Select the pre-derived single id from the store (companion to `messagesById`)
   // rather than subscribing to the whole `messages` array + reversing/scanning it per
@@ -3233,15 +3231,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
         </div>
       )}
 
-      {/* Task session banner — shown when viewing a task execution transcript */}
-      {attachedSessionType === 'task' && (
-        <div className="px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-surface-2)] border-b border-[var(--color-border)] flex items-center gap-[var(--space-2)]">
-          <ListChecks size={14} className="text-[var(--color-accent)] shrink-0" />
-          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] flex-1 truncate">
-            Task: {attachedTaskTitle ?? 'Task Execution'}
-          </span>
-        </div>
-      )}
+      {/* Above-feed kind. FeedKindLabel also keeps the old Task: line when no descriptor matches. */}
+      <FeedKindLabel />
 
       {/* History fetch error */}
       {historyError ? (
