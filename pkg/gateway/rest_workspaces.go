@@ -457,9 +457,6 @@ func workspaceToWireFrom(home string, w storedWorkspace, taskCount int, graph *w
 					iv := hb.IntervalMinutes
 					hbWire.IntervalMinutes = &iv
 				}
-				if hb.SessionID != "" {
-					hbWire.SessionId = &hb.SessionID
-				}
 				entry.Heartbeat = hbWire
 			}
 			wireMC[agentID] = entry

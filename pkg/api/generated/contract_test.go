@@ -644,7 +644,7 @@ func TestContract_Session_NilPartitionsRejected(t *testing.T) {
 		UpdatedAt:  time.Date(2026, 5, 17, 10, 1, 0, 0, time.UTC),
 		Channel:    "webchat",
 		Partitions: nil, // THE BUG: nil slice → JSON null → schema violation
-		Type:       &sessionType,
+		Type:       sessionType,
 		// Stats left as its zero value — this test asserts the partitions:null
 		// rejection; the Stats shape is irrelevant here (and is exercised by the
 		// dedicated stats tests).

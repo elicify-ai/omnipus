@@ -389,6 +389,15 @@ func agentCreateVariantName(wireType string) string {
 }
 
 // normalizeVariant decodes the selected wire variant into shared create fields.
+// agentColorString copies a wire colour enum into the string the config record stores.
+func agentColorString(c *gen.AgentColor) *string {
+	if c == nil {
+		return nil
+	}
+	s := string(*c)
+	return &s
+}
+
 func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType, variantName string) (*executorRequestInput, bool) {
 	// Normalize the chosen variant into variant-agnostic locals. Each branch
 	// strictly decodes raw into the NAMED generated struct via
@@ -413,7 +422,7 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.description = vreq.Description
 		pap.model = vreq.Model
 		pap.provider = vreq.Provider
-		pap.color = vreq.Color
+		pap.color = agentColorString(vreq.Color)
 		pap.icon = vreq.Icon
 		pap.cra.soul = vreq.Soul
 		pap.skills = vreq.Skills
@@ -433,7 +442,7 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.description = vreq.Description
 		pap.model = vreq.Model
 		pap.provider = vreq.Provider
-		pap.color = vreq.Color
+		pap.color = agentColorString(vreq.Color)
 		pap.icon = vreq.Icon
 		pap.cra.soul = vreq.Soul
 		pap.skills = vreq.Skills
@@ -453,7 +462,7 @@ func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType
 		pap.description = vreq.Description
 		pap.model = vreq.Model
 		pap.provider = vreq.Provider
-		pap.color = vreq.Color
+		pap.color = agentColorString(vreq.Color)
 		pap.icon = vreq.Icon
 		pap.cra.soul = vreq.Soul
 		pap.maxToolIterations = vreq.MaxToolIterations
@@ -849,7 +858,8 @@ func (cra *restAPICreateAgent) publishResponse() {
 		ag.Description = &cra.ac.Description
 	}
 	if cra.ac.Color != "" {
-		ag.Color = &cra.ac.Color
+		c := gen.AgentColor(cra.ac.Color)
+		ag.Color = &c
 	}
 	if cra.ac.Icon != "" {
 		ag.Icon = &cra.ac.Icon

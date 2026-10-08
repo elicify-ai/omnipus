@@ -2,5 +2,15 @@ type: object
 description: Per-member config inside a workspace (keyed by agentId).
 additionalProperties: false
 properties:
+  main_session_id:
+    type: string
+    readOnly: true
+    maxLength: 128
+    description: >
+      The member's server-computed main session id (format decided later).
+      Omitted for members who are not eligible for a main (workers, other
+      system agents, and Admin, who is not a workspace member). Server-owned
+      and read-only.
+    example: "550e8400-e29b-41d4-a716-446655440000"
   heartbeat:
     $ref: ./WorkspaceMemberHeartbeat.yaml

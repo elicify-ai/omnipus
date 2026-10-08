@@ -137,6 +137,8 @@ export interface AttachSessionFrame {
   session_id: string;
   since_seq?: number;
   boot_id?: string;
+  ack_attention?: boolean;
+  attention_bound?: number;
 }
 
 export interface DevicePairingResponseFrame {
@@ -639,6 +641,7 @@ export interface SessionStateFrame {
   pending_approvals: Array<SessionStatePendingApproval>;
   pending_asks?: Array<AskUserQuestionCard>;
   session_id?: string;
+  attention_bound?: number;
   auto_approve_modifier?: boolean | null;
   active_turn?: SessionStateActiveTurn;
   boot_id?: string;

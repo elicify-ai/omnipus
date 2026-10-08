@@ -647,23 +647,21 @@ func FixtureOnboardingCompleteResponse_Edge() OnboardingCompleteResponse {
 
 func FixtureSession_Populated() Session {
 	agentId := "jim"
-	activeAgentId := "jim"
 	model := "claude-sonnet-4-6"
 	sessionType := SessionType("chat")
 	partitions := []string{"2026-05-16.jsonl", "2026-05-17.jsonl"}
 	return Session{
-		Id:            "550e8400-e29b-41d4-a716-446655440000",
-		AgentId:       "jim",
-		ActiveAgentId: &activeAgentId,
-		AgentIds:      &[]string{agentId},
-		Title:         "My test session",
-		Status:        "active",
-		CreatedAt:     time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC),
-		UpdatedAt:     time.Date(2026, 5, 17, 10, 0, 0, 0, time.UTC),
-		Channel:       "webchat",
-		Partitions:    partitions,
-		Model:         &model,
-		Type:          &sessionType,
+		Id:         "550e8400-e29b-41d4-a716-446655440000",
+		AgentId:    "jim",
+		AgentIds:   &[]string{agentId},
+		Title:      "My test session",
+		Status:     "active",
+		CreatedAt:  time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:  time.Date(2026, 5, 17, 10, 0, 0, 0, time.UTC),
+		Channel:    "webchat",
+		Partitions: partitions,
+		Model:      &model,
+		Type:       sessionType,
 		Stats: struct {
 			ByModel *map[string]struct {
 				CacheRead  *int `json:"cache_read,omitempty"`
@@ -710,7 +708,7 @@ func FixtureSession_Edge() Session {
 		UpdatedAt:  time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC),
 		Channel:    "telegram",
 		Partitions: []string{},
-		Type:       &sessionType,
+		Type:       sessionType,
 		Stats: struct {
 			ByModel *map[string]struct {
 				CacheRead  *int `json:"cache_read,omitempty"`
@@ -734,7 +732,7 @@ func FixtureSession_Edge() Session {
 // Agent
 
 func FixtureAgent_Populated() Agent {
-	color := "#D4AF37"
+	color := AgentColorHash3B82F6
 	icon := "Robot"
 	model := "claude-sonnet-4-6"
 	warning := strPtr("Config reload failed after update")
@@ -743,6 +741,8 @@ func FixtureAgent_Populated() Agent {
 		Id:                "jim",
 		Name:              "Jim",
 		Type:              AgentTypeCore,
+		Figure:            AgentFigureRobot,
+		Role:              AgentRoleGeneral,
 		Locked:            true,
 		Status:            AgentStatusIdle,
 		Soul:              "You are Jim, a helpful assistant.",
@@ -768,6 +768,8 @@ func FixtureAgent_Edge() Agent {
 		Id:             "custom-" + repeatStr("y", 36),
 		Name:           "Unicode Agent 🤖",
 		Type:           AgentTypeMain,
+		Figure:         AgentFigureOmnipus,
+		Role:           AgentRoleGeneral,
 		Locked:         false,
 		Status:         AgentStatusDraft,
 		Soul:           "",
@@ -2457,7 +2459,7 @@ func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 //     variant at all.
 
 func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
-	color := "#D4AF37"
+	color := AgentColorHash3B82F6
 	icon := "Robot"
 	model := "claude-sonnet-4-6"
 	deny := AgentCreateRequestMainToolsCfgBuiltinPoliciesDeny
@@ -2523,7 +2525,7 @@ func FixtureAgentCreateRequestMain_InvalidType() AgentCreateRequestMain {
 }
 
 func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
-	color := "#4287f5"
+	color := AgentColorHash38BDF8
 	icon := "Robot"
 	model := "claude-sonnet-4-6"
 	description := "Native delegation-only research worker"
@@ -2576,7 +2578,7 @@ func FixtureAgentCreateRequestSubagent_InvalidType() AgentCreateRequestSubagent 
 // allows: type/name/description/model/provider/color/icon/rate_limits/soul/
 // executor/timeout_seconds. executor is REQUIRED.
 func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3p {
-	color := "#f542a7"
+	color := AgentColorHashF472B6
 	icon := "Terminal"
 	model := "claude-sonnet-4-6"
 	provider := "anthropic"
@@ -2666,7 +2668,7 @@ func FixtureAgentCreateRequestSubagent3p_ForbiddenFieldJSON() []byte {
 // Traces to: contracts/components/schemas/AgentUpdateRequest.yaml
 
 func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
-	color := "#D4AF37"
+	color := AgentColorHash3B82F6
 	icon := "Robot"
 	model := "gpt-4o"
 	name := "Renamed Agent"

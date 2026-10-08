@@ -1112,7 +1112,7 @@ func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRe
 	// runtime behavior driven by pkg/agent/loop.go: webchat skips). The
 	// global config-level agents.defaults.tool_feedback stays.
 	if rp.ru.req.Color != nil {
-		agentRec.Color = *rp.ru.req.Color
+		agentRec.Color = string(*rp.ru.req.Color)
 	}
 	if rp.ru.req.Icon != nil {
 		agentRec.Icon = *rp.ru.req.Icon

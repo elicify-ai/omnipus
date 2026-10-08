@@ -9634,7 +9634,7 @@ const (
 	SessionTypeChannel   SessionType = "channel"
 	SessionTypeChat      SessionType = "chat"
 	SessionTypeDelegate  SessionType = "delegate"
-	SessionTypeHeartbeat SessionType = "heartbeat"
+	SessionTypeMain      SessionType = "main"
 	SessionTypeScheduled SessionType = "scheduled"
 	SessionTypeTask      SessionType = "task"
 	SessionTypeVerifier  SessionType = "verifier"
@@ -9649,7 +9649,7 @@ func (e SessionType) Valid() bool {
 		return true
 	case SessionTypeDelegate:
 		return true
-	case SessionTypeHeartbeat:
+	case SessionTypeMain:
 		return true
 	case SessionTypeScheduled:
 		return true
@@ -10375,7 +10375,7 @@ const (
 	SessionDetailSessionTypeChannel   SessionDetailSessionType = "channel"
 	SessionDetailSessionTypeChat      SessionDetailSessionType = "chat"
 	SessionDetailSessionTypeDelegate  SessionDetailSessionType = "delegate"
-	SessionDetailSessionTypeHeartbeat SessionDetailSessionType = "heartbeat"
+	SessionDetailSessionTypeMain      SessionDetailSessionType = "main"
 	SessionDetailSessionTypeScheduled SessionDetailSessionType = "scheduled"
 	SessionDetailSessionTypeTask      SessionDetailSessionType = "task"
 	SessionDetailSessionTypeVerifier  SessionDetailSessionType = "verifier"
@@ -10390,7 +10390,7 @@ func (e SessionDetailSessionType) Valid() bool {
 		return true
 	case SessionDetailSessionTypeDelegate:
 		return true
-	case SessionDetailSessionTypeHeartbeat:
+	case SessionDetailSessionTypeMain:
 		return true
 	case SessionDetailSessionTypeScheduled:
 		return true
@@ -13600,6 +13600,7 @@ const (
 	ListSessionsParamsTypeChannel   ListSessionsParamsType = "channel"
 	ListSessionsParamsTypeChat      ListSessionsParamsType = "chat"
 	ListSessionsParamsTypeDelegate  ListSessionsParamsType = "delegate"
+	ListSessionsParamsTypeMain      ListSessionsParamsType = "main"
 	ListSessionsParamsTypeScheduled ListSessionsParamsType = "scheduled"
 	ListSessionsParamsTypeTask      ListSessionsParamsType = "task"
 	ListSessionsParamsTypeVerifier  ListSessionsParamsType = "verifier"
@@ -13613,6 +13614,8 @@ func (e ListSessionsParamsType) Valid() bool {
 	case ListSessionsParamsTypeChat:
 		return true
 	case ListSessionsParamsTypeDelegate:
+		return true
+	case ListSessionsParamsTypeMain:
 		return true
 	case ListSessionsParamsTypeScheduled:
 		return true
@@ -23987,9 +23990,6 @@ type SearchProviderCheckResponseStatus string
 
 // Session Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost.
 type Session struct {
-	// ActiveAgentId The agent ID currently handling this session (multi-agent sessions only).
-	ActiveAgentId *string `json:"active_agent_id,omitempty"`
-
 	// AgentId ID of the primary agent that owns this session.
 	AgentId string `json:"agent_id"`
 
@@ -24014,7 +24014,7 @@ type Session struct {
 	// Execution Set only when this session's lifecycle record state is queued or running. Omitted for every other state, and when the session has no lifecycle record. `lifecycle_state: working` remains the collapsed display value and is not changed. The Sessions Running filter uses this field, not `lifecycle_state`.
 	Execution *SessionExecution `json:"execution,omitempty"`
 
-	// Id Unique session identifier (UUID).
+	// Id Unique session identifier. A main session's id is the server-computed main session id (format decided later). Other sessions keep their existing ids.
 	Id string `json:"id"`
 
 	// LastCompactionSummary Summary of the last context compaction pass (present only when compaction has occurred).
@@ -24026,13 +24026,16 @@ type Session struct {
 	// Model LLM model name used in this session (may be empty for legacy sessions).
 	Model *string `json:"model,omitempty"`
 
+	// NeedsAttention Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session. This change only publishes the field. What sets the value, and the rule that a read failure is unknown rather than false, arrives in a later unit.
+	NeedsAttention *bool `json:"needs_attention,omitempty"`
+
 	// ParentSessionId ADR-057 FR-008/FR-091. The direct parent's session id, present only on a subordinate ("delegate") session created by a delegation. Absent (never empty-string) on a root session. A session whose parent_session_id names an id that no longer resolves is still surfaced as a root by GET /api/v1/sessions rather than being silently dropped (FR-091, BDD-106).
 	ParentSessionId *string `json:"parent_session_id,omitempty"`
 
 	// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
 	Partitions []string `json:"partitions"`
 
-	// Protected Computed field: true while the heartbeat member whose session_id matches this session's id has heartbeat.enabled = true in its workspace member_configs. NOT a stored flag — derived server-side from member_configs on each GET /sessions response. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409. (FR-021, FR-028, A2/G-01)
+	// Protected Computed, not stored. True for a main session whether or not that member's heartbeat is enabled. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409.
 	Protected *bool `json:"protected,omitempty"`
 
 	// Provider Provider identifier (e.g. "anthropic", "openai") for this session.
@@ -24110,8 +24113,8 @@ type Session struct {
 	// Title Human-readable session title. May be auto-generated or user-renamed.
 	Title string `json:"title"`
 
-	// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
-	Type *SessionType `json:"type,omitempty"`
+	// Type Session classification. Required on a stored session; a missing type is invalid and is not defaulted to "chat". "main" is the one standing session for an eligible (workspace, agent) pair, and for Admin in the default workspace. Its id is the server-computed main session id (format decided later). Server-created only: "main" is absent from SessionCreateRequest's create-time enum, so a client cannot POST /sessions into this type. "scheduled" tags a session created by a fired schedule run (issue #264, FR-005). "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"main"/"verifier", it is server-minted only and absent from the client-create enum.
+	Type SessionType `json:"type"`
 
 	// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
 	UpdatedAt time.Time `json:"updated_at"`
@@ -24132,7 +24135,7 @@ type SessionStatus string
 // SessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
 type SessionStopNoteCause string
 
-// SessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
+// SessionType Session classification. Required on a stored session; a missing type is invalid and is not defaulted to "chat". "main" is the one standing session for an eligible (workspace, agent) pair, and for Admin in the default workspace. Its id is the server-computed main session id (format decided later). Server-created only: "main" is absent from SessionCreateRequest's create-time enum, so a client cannot POST /sessions into this type. "scheduled" tags a session created by a fired schedule run (issue #264, FR-005). "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"main"/"verifier", it is server-minted only and absent from the client-create enum.
 type SessionType string
 
 // SessionCreateRequest Body for POST /sessions. Creates a new session for an agent.
@@ -24140,7 +24143,7 @@ type SessionCreateRequest struct {
 	// AgentId Agent ID that will own this session. Defaults to "main" when omitted. Must reference an existing agent (400 if not found).
 	AgentId *string `json:"agent_id,omitempty"`
 
-	// Type Session type. Defaults to "chat" when omitted.
+	// Type Session type. Defaults to "chat" when omitted. "main" is absent.
 	Type *SessionCreateRequestType `json:"type,omitempty"`
 
 	// WorkspaceId The workspace this session belongs to. Optional; omit it for a session that belongs to no workspace (the global/inbox chat), which is NOT the same as a default — an absent value stays absent and is never guessed at.
@@ -24149,7 +24152,7 @@ type SessionCreateRequest struct {
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
-// SessionCreateRequestType Session type. Defaults to "chat" when omitted.
+// SessionCreateRequestType Session type. Defaults to "chat" when omitted. "main" is absent.
 type SessionCreateRequestType string
 
 // SessionDetail Full session detail as returned by GET /sessions/{id}. Contains the session metadata plus the complete ordered transcript.
@@ -24532,9 +24535,6 @@ type SessionDetail struct {
 
 	// Session Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost.
 	Session struct {
-		// ActiveAgentId The agent ID currently handling this session (multi-agent sessions only).
-		ActiveAgentId *string `json:"active_agent_id,omitempty"`
-
 		// AgentId ID of the primary agent that owns this session.
 		AgentId string `json:"agent_id"`
 
@@ -24559,7 +24559,7 @@ type SessionDetail struct {
 		// Execution Set only when this session's lifecycle record state is queued or running. Omitted for every other state, and when the session has no lifecycle record. `lifecycle_state: working` remains the collapsed display value and is not changed. The Sessions Running filter uses this field, not `lifecycle_state`.
 		Execution *SessionDetailSessionExecution `json:"execution,omitempty"`
 
-		// Id Unique session identifier (UUID).
+		// Id Unique session identifier. A main session's id is the server-computed main session id (format decided later). Other sessions keep their existing ids.
 		Id string `json:"id"`
 
 		// LastCompactionSummary Summary of the last context compaction pass (present only when compaction has occurred).
@@ -24571,13 +24571,16 @@ type SessionDetail struct {
 		// Model LLM model name used in this session (may be empty for legacy sessions).
 		Model *string `json:"model,omitempty"`
 
+		// NeedsAttention Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session. This change only publishes the field. What sets the value, and the rule that a read failure is unknown rather than false, arrives in a later unit.
+		NeedsAttention *bool `json:"needs_attention,omitempty"`
+
 		// ParentSessionId ADR-057 FR-008/FR-091. The direct parent's session id, present only on a subordinate ("delegate") session created by a delegation. Absent (never empty-string) on a root session. A session whose parent_session_id names an id that no longer resolves is still surfaced as a root by GET /api/v1/sessions rather than being silently dropped (FR-091, BDD-106).
 		ParentSessionId *string `json:"parent_session_id,omitempty"`
 
 		// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
 		Partitions []string `json:"partitions"`
 
-		// Protected Computed field: true while the heartbeat member whose session_id matches this session's id has heartbeat.enabled = true in its workspace member_configs. NOT a stored flag — derived server-side from member_configs on each GET /sessions response. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409. (FR-021, FR-028, A2/G-01)
+		// Protected Computed, not stored. True for a main session whether or not that member's heartbeat is enabled. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409.
 		Protected *bool `json:"protected,omitempty"`
 
 		// Provider Provider identifier (e.g. "anthropic", "openai") for this session.
@@ -24655,8 +24658,8 @@ type SessionDetail struct {
 		// Title Human-readable session title. May be auto-generated or user-renamed.
 		Title string `json:"title"`
 
-		// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
-		Type *SessionDetailSessionType `json:"type,omitempty"`
+		// Type Session classification. Required on a stored session; a missing type is invalid and is not defaulted to "chat". "main" is the one standing session for an eligible (workspace, agent) pair, and for Admin in the default workspace. Its id is the server-computed main session id (format decided later). Server-created only: "main" is absent from SessionCreateRequest's create-time enum, so a client cannot POST /sessions into this type. "scheduled" tags a session created by a fired schedule run (issue #264, FR-005). "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"main"/"verifier", it is server-minted only and absent from the client-create enum.
+		Type SessionDetailSessionType `json:"type"`
 
 		// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
 		UpdatedAt time.Time `json:"updated_at"`
@@ -24750,7 +24753,7 @@ type SessionDetailSessionStatus string
 // SessionDetailSessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`).
 type SessionDetailSessionStopNoteCause string
 
-// SessionDetailSessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
+// SessionDetailSessionType Session classification. Required on a stored session; a missing type is invalid and is not defaulted to "chat". "main" is the one standing session for an eligible (workspace, agent) pair, and for Admin in the default workspace. Its id is the server-computed main session id (format decided later). Server-created only: "main" is absent from SessionCreateRequest's create-time enum, so a client cannot POST /sessions into this type. "scheduled" tags a session created by a fired schedule run (issue #264, FR-005). "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"main"/"verifier", it is server-minted only and absent from the client-create enum.
 type SessionDetailSessionType string
 
 // SessionLifecycleRecord The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
@@ -28422,6 +28425,9 @@ type WorkspaceInstructionsResponse struct {
 type WorkspaceMemberConfig struct {
 	// Heartbeat Heartbeat settings for this (workspace, agent) pair.
 	Heartbeat *WorkspaceMemberHeartbeat `json:"heartbeat,omitempty"`
+
+	// MainSessionId The member's server-computed main session id (format decided later). Omitted for members who are not eligible for a main (workers, other system agents, and Admin, who is not a workspace member). Server-owned and read-only.
+	MainSessionId *string `json:"main_session_id,omitempty"`
 }
 
 // WorkspaceMemberHeartbeat Heartbeat settings for this (workspace, agent) pair.
@@ -28434,9 +28440,6 @@ type WorkspaceMemberHeartbeat struct {
 
 	// IntervalMinutes Interval in minutes between heartbeat passes. Minimum 5.
 	IntervalMinutes *int `json:"interval_minutes,omitempty"`
-
-	// SessionId Eager standing session id created when the heartbeat is enabled (FR-010). Stamped with workspace_id + agent + type="heartbeat". Stored here so the cron job can continue the pre-created session rather than starting a fresh one. Set server-side at enable time; read-only from the client's perspective.
-	SessionId *string `json:"session_id,omitempty"`
 }
 
 // WorkspaceMountCreateRequest Request body for POST /workspaces/{id}/mounts (FR-7.1, ADR-063 D4). Creates a new named write-grant on a real local folder. See WorkspaceMount.yaml for the exact shape rules `name` and `host_path` must satisfy.

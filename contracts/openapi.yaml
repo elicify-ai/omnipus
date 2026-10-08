@@ -2880,6 +2880,7 @@ paths:
           - task
           - channel
           - scheduled
+          - main
           - verifier
           - delegate
         example: chat

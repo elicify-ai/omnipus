@@ -89,18 +89,16 @@ type ProviderValidation = {
 };
 type Session = {
   id: string;
-  type?:
-    | (
-        | "chat"
-        | "task"
-        | "channel"
-        | "scheduled"
-        | "heartbeat"
-        | "verifier"
-        | "delegate"
-      )
-    | undefined;
+  type:
+    | "chat"
+    | "task"
+    | "channel"
+    | "scheduled"
+    | "main"
+    | "verifier"
+    | "delegate";
   protected?: boolean | undefined;
+  needs_attention?: boolean | undefined;
   agent_id: string;
   title: string;
   status: "active" | "archived" | "failed" | "interrupted";
@@ -136,7 +134,6 @@ type Session = {
   partitions: Array<string>;
   last_compaction_summary?: string | undefined;
   agent_ids?: Array<string> | undefined;
-  active_agent_id?: string | undefined;
   compaction_summaries?: {} | undefined;
   parent_session_id?: string | undefined;
   child_count?: number | undefined;
@@ -2498,13 +2495,13 @@ type WorkspaceDelegationEdge = {
   depth?: number | undefined;
 };
 type WorkspaceMemberConfig = Partial<{
+  main_session_id: string;
   heartbeat: WorkspaceMemberHeartbeat;
 }>;
 type WorkspaceMemberHeartbeat = Partial<{
   enabled: boolean;
   interval_minutes: number;
   body: string;
-  session_id: string;
 }>;
 type MemorySettings = Partial<{
   auto_recap_enabled: boolean;
@@ -3403,18 +3400,17 @@ export const SessionStats: z.ZodType<SessionStats> = z
   .passthrough();
 export const Session: z.ZodType<Session> = z.object({
   id: z.string(),
-  type: z
-    .enum([
-      "chat",
-      "task",
-      "channel",
-      "scheduled",
-      "heartbeat",
-      "verifier",
-      "delegate",
-    ])
-    .optional(),
+  type: z.enum([
+    "chat",
+    "task",
+    "channel",
+    "scheduled",
+    "main",
+    "verifier",
+    "delegate",
+  ]),
   protected: z.boolean().optional(),
+  needs_attention: z.boolean().optional(),
   agent_id: z.string(),
   title: z.string(),
   status: z.enum(["active", "archived", "failed", "interrupted"]),
@@ -3456,7 +3452,6 @@ export const Session: z.ZodType<Session> = z.object({
   partitions: z.array(z.string()).max(3650),
   last_compaction_summary: z.string().optional(),
   agent_ids: z.array(z.string()).optional(),
-  active_agent_id: z.string().optional(),
   compaction_summaries: z.record(z.string()).optional(),
   parent_session_id: z.string().optional(),
   child_count: z.number().int().gte(0).optional(),
@@ -5433,11 +5428,13 @@ export const WorkspaceMemberHeartbeat: z.ZodType<WorkspaceMemberHeartbeat> = z
     enabled: z.boolean(),
     interval_minutes: z.number().int().gte(5),
     body: z.string().max(16384),
-    session_id: z.string(),
   })
   .partial();
 export const WorkspaceMemberConfig: z.ZodType<WorkspaceMemberConfig> = z
-  .object({ heartbeat: WorkspaceMemberHeartbeat })
+  .object({
+    main_session_id: z.string().max(128),
+    heartbeat: WorkspaceMemberHeartbeat,
+  })
   .partial();
 export const Workspace: z.ZodType<Workspace> = z
   .object({
@@ -13162,6 +13159,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
             "task",
             "channel",
             "scheduled",
+            "main",
             "verifier",
             "delegate",
           ])
@@ -16493,6 +16491,8 @@ export const AttachSessionFrame = z
     session_id: z.string().min(1).max(128),
     since_seq: z.number().int().min(1).optional(),
     boot_id: z.string().optional(),
+    ack_attention: z.boolean().optional(),
+    attention_bound: z.number().int().optional(),
   })
   .strict();
 
@@ -17102,6 +17102,7 @@ export const SessionStateFrame = z
     pending_approvals: z.array(SessionStatePendingApproval).max(1000),
     pending_asks: z.array(AskUserQuestionCard).max(64).optional(),
     session_id: z.string().optional(),
+    attention_bound: z.number().int().optional(),
     auto_approve_modifier: z.boolean().nullable().optional(),
     active_turn: SessionStateActiveTurn.optional(),
     boot_id: z.string().optional(),

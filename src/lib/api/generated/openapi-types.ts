@@ -4395,21 +4395,26 @@ export interface components {
         /** @description Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost. */
         Session: {
             /**
-             * @description Unique session identifier (UUID).
+             * @description Unique session identifier. A main session's id is the server-computed main session id (format decided later). Other sessions keep their existing ids.
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             id: string;
             /**
-             * @description Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
+             * @description Session classification. Required on a stored session; a missing type is invalid and is not defaulted to "chat". "main" is the one standing session for an eligible (workspace, agent) pair, and for Admin in the default workspace. Its id is the server-computed main session id (format decided later). Server-created only: "main" is absent from SessionCreateRequest's create-time enum, so a client cannot POST /sessions into this type. "scheduled" tags a session created by a fired schedule run (issue #264, FR-005). "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"main"/"verifier", it is server-minted only and absent from the client-create enum.
              * @example chat
              * @enum {string}
              */
-            type?: "chat" | "task" | "channel" | "scheduled" | "heartbeat" | "verifier" | "delegate";
+            type: "chat" | "task" | "channel" | "scheduled" | "main" | "verifier" | "delegate";
             /**
-             * @description Computed field: true while the heartbeat member whose session_id matches this session's id has heartbeat.enabled = true in its workspace member_configs. NOT a stored flag — derived server-side from member_configs on each GET /sessions response. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409. (FR-021, FR-028, A2/G-01)
+             * @description Computed, not stored. True for a main session whether or not that member's heartbeat is enabled. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409.
              * @example false
              */
             protected?: boolean;
+            /**
+             * @description Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session. This change only publishes the field. What sets the value, and the rule that a read failure is unknown rather than false, arrives in a later unit.
+             * @example false
+             */
+            readonly needs_attention?: boolean;
             /**
              * @description ID of the primary agent that owns this session.
              * @example jim
@@ -4503,11 +4508,6 @@ export interface components {
              *     ]
              */
             agent_ids?: string[];
-            /**
-             * @description The agent ID currently handling this session (multi-agent sessions only).
-             * @example jim
-             */
-            active_agent_id?: string;
             /** @description Per-agent compaction summaries (multi-agent sessions only). */
             compaction_summaries?: {
                 [key: string]: string;
@@ -4604,7 +4604,7 @@ export interface components {
              */
             agent_id?: string;
             /**
-             * @description Session type. Defaults to "chat" when omitted.
+             * @description Session type. Defaults to "chat" when omitted. "main" is absent.
              * @example chat
              * @enum {string}
              */
@@ -14847,6 +14847,11 @@ export interface components {
         };
         /** @description Per-member config inside a workspace (keyed by agentId). */
         WorkspaceMemberConfig: {
+            /**
+             * @description The member's server-computed main session id (format decided later). Omitted for members who are not eligible for a main (workers, other system agents, and Admin, who is not a workspace member). Server-owned and read-only.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            readonly main_session_id?: string;
             heartbeat?: components["schemas"]["WorkspaceMemberHeartbeat"];
         };
         /** @description Heartbeat settings for this (workspace, agent) pair. */
@@ -14866,11 +14871,6 @@ export interface components {
              * @example Every 30 minutes, check the project board for new high-priority tasks.
              */
             body?: string;
-            /**
-             * @description Eager standing session id created when the heartbeat is enabled (FR-010). Stamped with workspace_id + agent + type="heartbeat". Stored here so the cron job can continue the pre-created session rather than starting a fresh one. Set server-side at enable time; read-only from the client's perspective.
-             * @example 550e8400-e29b-41d4-a716-446655440000
-             */
-            readonly session_id?: string;
         };
         /** @description Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields. */
         MemorySettings: {
@@ -18533,7 +18533,7 @@ export interface operations {
                  * @description Filter by session type.
                  * @example chat
                  */
-                type?: "chat" | "task" | "channel" | "scheduled" | "verifier" | "delegate";
+                type?: "chat" | "task" | "channel" | "scheduled" | "main" | "verifier" | "delegate";
                 /**
                  * @description When true, includes sessions of type "verifier" in the response (ADR-052 FR-036). Defaults to false so verifier-role adjudication sessions stay hidden from the general session list (Sidebar, SearchModal); UsageScreen passes true to surface verifier LLM spend.
                  * @example false

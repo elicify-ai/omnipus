@@ -264,9 +264,6 @@ func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
 	if m.LastCompactionSummary != "" {
 		s.LastCompactionSummary = &m.LastCompactionSummary
 	}
-	if m.ActiveAgentID != "" {
-		s.ActiveAgentId = &m.ActiveAgentID
-	}
 	// ADR-057 FR-008/FR-091: present only on a subordinate (delegated child)
 	// session; absent (never empty-string) on a root. A session whose
 	// ParentSessionID names an id that no longer resolves is still surfaced
@@ -287,8 +284,7 @@ func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
 		}
 		s.CompactionSummaries = &cs
 	}
-	sessionType := gen.SessionType(m.Type)
-	s.Type = &sessionType
+	s.Type = gen.SessionType(m.Type)
 	return s
 }
 

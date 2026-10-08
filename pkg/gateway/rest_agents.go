@@ -713,7 +713,8 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 			ag.Description = &ac.Description
 		}
 		if ac.Color != "" {
-			ag.Color = &ac.Color
+			c := gen.AgentColor(ac.Color)
+			ag.Color = &c
 		}
 		if ac.Icon != "" {
 			ag.Icon = &ac.Icon
@@ -793,7 +794,8 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 				ag.Description = &ac.Description
 			}
 			if ac.Color != "" {
-				ag.Color = &ac.Color
+				c := gen.AgentColor(ac.Color)
+				ag.Color = &c
 			}
 			if ac.Icon != "" {
 				ag.Icon = &ac.Icon

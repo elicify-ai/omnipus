@@ -1949,6 +1949,24 @@ components:
             #823 review finding 7. The gateway boot ID the SPA last saw for this
             session. A mismatch forces a snapshot (reason boot_mismatch) regardless of
             since_seq.
+        ack_attention:
+          type: boolean
+          default: false
+          description: >
+            Optional. True means this attach is an acknowledgement of what was
+            shown. It does not choose the bound. Defaults to false. A failed,
+            background, or reconnect attach does not write the seen mark. Field
+            only; the write arrives in a later unit. Keep in sync by hand with
+            contracts/components/schemas/AttachSessionFrame.yaml.
+        attention_bound:
+          type: integer
+          format: int64
+          description: >
+            Optional integer on the acknowledging attach. The saved
+            outcome/entry order, not a new counter. Absent means do not write
+            the seen mark and do not substitute the current order. Field only.
+            Keep in sync by hand with
+            contracts/components/schemas/AttachSessionFrame.yaml.
     DevicePairingResponseFrame:
       title: DevicePairingResponseFrame
       description: Client → server device pairing decision.
@@ -4816,6 +4834,16 @@ components:
             ADR-082 (review CR3) — the transcript session this snapshot
             describes; absent on the connection-open emit. Keep in sync by
             hand with components/schemas/SessionStateFrame.yaml.
+        attention_bound:
+          type: integer
+          format: int64
+          description: >
+            Optional. The saved outcome/entry order for this main, echoed so a
+            later acknowledgement can name the same number. Not a new counter.
+            This frame is part of both the incremental catch-up and the full
+            snapshot. Omitted when this emit is not an attach of a main. Field
+            only. Keep in sync by hand with
+            components/schemas/SessionStateFrame.yaml.
         auto_approve_modifier:
           type: boolean
           nullable: true
