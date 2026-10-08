@@ -925,13 +925,12 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 
 	// D6/D7: a stopped session (landed, or with its current-generation Stop
 	// in flight) does no compute until it is explicitly resumed. The wake
-	// is neither consumed nor acknowledged: its inbox entry stays pending
-	// for that resume. Steered records are also refused by the admission
-	// reservation below; this covers the ordinary root a Stop all landed on.
+	// is neither consumed nor acknowledged: an inbox-backed report stays
+	// pending. Goal follow-ups may have no inbox row, so their unretained
+	// content must be operator-visible without logging the body. Steered
+	// records are also refused by the admission reservation below.
 	if rec.SteeredBy == nil && (rec.State == session.LifecycleStopped || lifecycleInFlightStopFence(rec)) {
-		logger.InfoCF("agent", "steer: wake held — the session is stopped until it is resumed",
-			map[string]any{"session_id": sessionID, "message_id": messageID})
-		return "", nil
+		return "", al.logStoppedSystemWake(msg)
 	}
 
 	ts, err := al.reconstructSteeredTurn(rec, &steer.WakeInput{MessageID: messageID, Generation: generation})
@@ -1146,9 +1145,10 @@ func (al *AgentLoop) finishOrdinaryWakeExecution(msg bus.InboundMessage, d *exec
 	}
 }
 
-// handbackRevivalPrincipal starts the next round of a finished ordinary
-// root that a helper's hand-back wakes. It never resumes a stopped root:
-// only a person does that.
+// handbackRevivalPrincipal starts the next round of a finished ordinary root.
+// It never continues a stopped root, including stopped(restart): that authority
+// belongs to a human message or a normal scheduled/heartbeat trigger. Replayed
+// helper reports stay in the inbox for that next turn, not boot-time compute.
 var handbackRevivalPrincipal = steer.Principal{Kind: steer.PrincipalKindAgent, ID: "handback"}
 
 // extractPeer extracts the routing peer from the inbound message's structured Peer field.

@@ -430,7 +430,7 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 		// Sub-agent control plane ADR D4/MAJ-009: lifecycle_state/stop_note,
 		// absent when this session has no LifecycleRecord — same producer
 		// listSessions/getSession use (computeSessionLifecycle, rest_sessions.go).
-		attachSessionRuntimeFields(&s, lifecycleStore, m.ID)
+		attachSessionRuntimeFields(&s, lifecycleStore, m.ID, a.agentLoop.CurrentBootEpoch())
 		genSessions = append(genSessions, s)
 	}
 	jsonOK(w, genSessions)
@@ -616,14 +616,6 @@ func applyAgentOverrides(ag *gen.Agent, defaults *config.AgentDefaults, ac *conf
 	if v := strings.TrimSpace(ac.Voice); v != "" {
 		ag.Voice = &v
 	}
-	// auto_approve_disabled (ADR-092 D1): echo the persisted per-agent
-	// override of the global Auto-approve default. Off-only by construction
-	// (see AutoApproveDisabled's own doc comment on config.go) — always
-	// echo the actual stored value (false is a meaningful "inherits the
-	// global default", not merely "unset"), matching memory_enabled's
-	// pattern above rather than voice's non-empty-string gate.
-	autoApproveDisabled := ac.AutoApproveDisabled
-	ag.AutoApproveDisabled = &autoApproveDisabled
 	// fallback_models: P-F2 — this was persisted correctly (createAgent/updateAgent
 	// both write ac.FallbackModels to config.json) but never echoed back on ANY
 	// response path (list/get/update all built gen.Agent without ever touching
@@ -687,10 +679,7 @@ func buildAgentDefaults(cfg *config.Config) gen.Agent {
 }
 
 func applyAgentEditableFields(agent *gen.Agent, cfg config.AgentConfig) {
-	// The operator view: operator-only safety switches (ADR-092
-	// auto_approve_disabled) are editable here, unlike in the sysagent
-	// read tool's agent view.
-	descriptors := agentmutation.OperatorFieldDescriptors(cfg)
+	descriptors := agentmutation.FieldDescriptors(cfg)
 	wire := make([]gen.AgentFieldDescriptor, 0, len(descriptors))
 	for _, descriptor := range descriptors {
 		row := gen.AgentFieldDescriptor{Editable: descriptor.Editable, Name: descriptor.Name}

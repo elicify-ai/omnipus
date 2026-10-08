@@ -75,7 +75,7 @@ const COMMON_EDITABLE_FIELDS = editable(
   'name', 'description', 'color', 'icon', 'default', 'model', 'provider',
   'fallback_models', 'model_params', 'soul', 'memory_enabled', 'voice',
   'max_tool_iterations', 'context_window_override', 'skills',
-  'tool_policy_changes', 'executor', 'auto_approve_disabled',
+  'tool_policy_changes', 'executor',
 )
 const BUILTIN_EDITABLE_FIELDS = COMMON_EDITABLE_FIELDS.map((field) =>
   ['name', 'description', 'color', 'icon', 'soul', 'executor'].includes(field.name)

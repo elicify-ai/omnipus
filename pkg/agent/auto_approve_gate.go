@@ -13,21 +13,19 @@ import (
 	"context"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
-	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// autoApproveActive reports whether Auto-approve is in force for agentID's
-// calls in sessionID. All of the following must hold:
+// autoApproveActive reports whether Auto-approve is in force for calls in
+// sessionID. Both of the following must hold:
 //
 //   - a config is loaded and God Mode is off (God Mode floors the ceiling at
 //     allow and has no Auto machinery of its own);
-//   - a delegated turn's own agent does not carry AutoApproveDisabled — a
-//     delegate's own off-switch always wins over anything inherited from the
-//     parent's chat, including a per-chat modifier set on its session;
-//   - ResolveAutoApprove is on: the global default, then the agent's own
-//     off-switch, then the chat's per-session modifier.
+//   - SessionAutoApprove is on: the chat's per-session modifier when set,
+//     otherwise the global default. A delegated turn runs in its own session
+//     that inherited its parent's modifier (inheritSessionPermissions), so a
+//     helper of an auto-approve chat is auto-approved exactly as its parent.
 //
 // [2026-09-24, founder decision] Auto no longer requires an enforcing kernel
 // sandbox (ADR-092 D1/J13, revised). It applies to every tool, bash
@@ -39,7 +37,7 @@ import (
 // time is still recorded on the tool.auto_approved audit row
 // (emitToolAutoApprovedAudit below) so an operator can find every
 // auto-approval that ran unconfined.
-func (al *AgentLoop) autoApproveActive(agentID, sessionID string, delegated bool) bool {
+func (al *AgentLoop) autoApproveActive(sessionID string) bool {
 	if al == nil {
 		return false
 	}
@@ -47,38 +45,16 @@ func (al *AgentLoop) autoApproveActive(agentID, sessionID string, delegated bool
 	if cfg == nil || GodModeActive(cfg) {
 		return false
 	}
-	if delegated && agentAutoApproveDisabledIn(cfg, agentID) {
-		return false
-	}
-	return al.SessionAutoApprove(agentID, sessionID)
+	return al.SessionAutoApprove(sessionID)
 }
 
-// autoApproveActiveFor is autoApproveActive for the calling turn: its own
-// agent, its own acting session, and whether it is a delegated sub-turn.
+// autoApproveActiveFor is autoApproveActive for the calling turn's own
+// acting session.
 func (al *AgentLoop) autoApproveActiveFor(ts *turnState) bool {
 	if ts == nil {
 		return false
 	}
-	return al.autoApproveActive(ts.agentID, ts.transcriptSessionID, ts.isDelegated())
-}
-
-// isDelegated reports whether ts is a sub-turn spawned by another turn.
-func (ts *turnState) isDelegated() bool {
-	return ts != nil && (ts.depth > 0 || ts.parentTurnID != "" || ts.parentTurnState != nil)
-}
-
-// agentAutoApproveDisabledIn reports whether agentID's own config entry in
-// cfg carries AutoApproveDisabled=true.
-func agentAutoApproveDisabledIn(cfg *config.Config, agentID string) bool {
-	if cfg == nil {
-		return false
-	}
-	for i := range cfg.Agents.List {
-		if cfg.Agents.List[i].ID == agentID {
-			return cfg.Agents.List[i].AutoApproveDisabled
-		}
-	}
-	return false
+	return al.autoApproveActive(ts.transcriptSessionID)
 }
 
 // autoApproveFor returns the Auto verdict for one call whose effective

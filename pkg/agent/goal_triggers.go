@@ -561,6 +561,9 @@ func (al *AgentLoop) pauseGoalKeeperForStop(sessionID, cancellerChannel string) 
 	}
 	logger.InfoCF("agent", "goal: Stop paused the goal keeper for this session until the user sends a new message (the goal stays active)",
 		map[string]any{"component": "goal", "session_id": sessionID, "canceller_channel": cancellerChannel})
+	// Announce the pause: the server tells the client (waiting_on_user) rather
+	// than the client inferring a Stop. No-op for a session with no active goal.
+	al.EmitGoalStatusRehydrate(sessionID)
 }
 
 // liftGoalKeeperStopPauseIfNewTurn lifts sessionID's Stop-pause when the
@@ -599,6 +602,8 @@ func (al *AgentLoop) liftGoalKeeperStopPauseIfNewTurn(store *session.UnifiedStor
 	if cur, ok := s.keeperPausedByStop[sessionID]; ok && cur.Equal(pausedAt) {
 		delete(s.keeperPausedByStop, sessionID)
 		s.mu.Unlock()
+		// The pause is over: announce the goal's true state (active) again.
+		al.EmitGoalStatusRehydrate(sessionID)
 		return true
 	}
 	s.mu.Unlock()

@@ -134,8 +134,7 @@ properties:
       and NOT resolved for any agent or chat (this endpoint has no agent or
       session context). Auto actually takes effect for a call when the tool
       resolves to "ask", the resolved Auto-approve for that chat is on (this
-      default, turned off by the agent's auto_approve_disabled, then
-      overridden either way by the chat's own modifier —
+      default, overridden either way by the chat's own modifier —
       SessionModeUpdatedFrame / SessionStateFrame.auto_approve_modifier), and
       god_mode_active is false. [2026-09-24, founder decision] Auto no longer
       also requires kernel_sandbox_active — it now means exactly what the

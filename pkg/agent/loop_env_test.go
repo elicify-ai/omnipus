@@ -60,7 +60,7 @@ func TestWireDelegationInjectors_AdvertisesEffectiveDepthNotRawUncapped(t *testi
 
 	_, cb := wireTestLoopWithGraphAndMaxDepth(t, "jim", 0)
 
-	got := cb.buildDynamicContext("", "", "", "", "")
+	got := cb.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(got, "max chain depth: 3") {
 		t.Fatalf("expected the effective backstop default (3) to be advertised, got:\n%s", got)
 	}
@@ -84,7 +84,7 @@ func TestWireDelegationInjectors_AdvertisesExplicitGlobalDepth(t *testing.T) {
 
 	_, cb := wireTestLoopWithGraphAndMaxDepth(t, "jim", 7)
 
-	got := cb.buildDynamicContext("", "", "", "", "")
+	got := cb.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(got, "max chain depth: 7") {
 		t.Fatalf("expected the explicit global cap (7) to be advertised, got:\n%s", got)
 	}

@@ -830,11 +830,7 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 		// child fail with an ownership error indistinguishable from a real
 		// cross-tenant attempt. Zero/unset is ignored by the setter, which
 		// keeps its own default.
-		configuredDepthCap, depthErr := rw.cfg.Performance.EffectiveMaxDelegationDepth()
-		if depthErr != nil {
-			configuredDepthCap = 0
-		}
-		delegateTool.SetOwnershipWalkMaxDepth(resolveEffectiveDelegationDepth(nil, configuredDepthCap))
+		delegateTool.SetOwnershipWalkMaxDepth(delegationDepthBound(rw.cfg.Performance, "ownership walk bound"))
 
 		agent.Tools.RegisterReplacing(delegateTool)
 	}
@@ -900,11 +896,7 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 		// single limit surface as every other reader — resolveEffectiveDelegationDepth
 		// over performance.max_delegation_depth, with the safety-backstop default
 		// when the key is unset — never a separate hardcoded constant.
-		configuredDepthCap, depthErr := rw.cfg.Performance.EffectiveMaxDelegationDepth()
-		if depthErr != nil {
-			configuredDepthCap = 0
-		}
-		taskCreate.SetMaxDelegationDepth(resolveEffectiveDelegationDepth(nil, configuredDepthCap))
+		taskCreate.SetMaxDelegationDepth(delegationDepthBound(rw.cfg.Performance, "task recursion bound"))
 		// Founder decision 2026-09-15: refuse assigning a task to an agent
 		// that cannot finish it (task_assignee_readiness.go).
 		taskCreate.SetAssigneeReadinessChecker(rw.rs.al.TaskAssigneeCannotFinish)

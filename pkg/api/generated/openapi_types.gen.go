@@ -14124,10 +14124,7 @@ type ActivityEventsResponseEventsType string
 type Agent struct {
 	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
 	ActivationStatus *AgentActivationStatus `json:"activation_status,omitempty"`
-
-	// AutoApproveDisabled ADR-092 per-agent override of the global Auto-approve default (SandboxConfig.auto_approve). Off-only, by construction: this field can only ever mean "force Auto off for this agent's ask-policy tool calls" — there is no value meaning "force it on," so a per-agent write can never loosen past the global default (tighten-only, matching every scope except the per-chat session modifier, SessionModeUpdateFrame). false (the default) means this agent inherits the global default unchanged. Distinct from `tools_cfg.builtin.policies`, which is unchanged by ADR-092 and still governs the ordinary allow/deny/ask value per tool — this field only ever narrows what "ask" DOES for this agent's tools, never which tools are allow/deny/ask.
-	AutoApproveDisabled *bool     `json:"auto_approve_disabled,omitempty"`
-	ChangedFields       *[]string `json:"changed_fields,omitempty"`
+	ChangedFields    *[]string              `json:"changed_fields,omitempty"`
 
 	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write.
 	Color *AgentColor `json:"color,omitempty"`
@@ -14345,9 +14342,6 @@ type AgentCreateRequest struct {
 
 // AgentCreateRequestMain Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice is Main-only; executor is absent (Main never has one).
 type AgentCreateRequestMain struct {
-	// AutoApproveDisabled Initial per-agent override forcing Auto-approve off (ADR-092) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
-	AutoApproveDisabled *bool `json:"auto_approve_disabled,omitempty"`
-
 	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write.
 	Color *AgentColor `json:"color,omitempty"`
 
@@ -14441,9 +14435,6 @@ type AgentCreateRequestMainType string
 
 // AgentCreateRequestSubagent Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
 type AgentCreateRequestSubagent struct {
-	// AutoApproveDisabled Initial per-agent override forcing Auto-approve off (ADR-092) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
-	AutoApproveDisabled *bool `json:"auto_approve_disabled,omitempty"`
-
 	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write.
 	Color *AgentColor `json:"color,omitempty"`
 
@@ -14897,9 +14888,6 @@ type AgentToolsUpdateRequestConfigBuiltinPolicies string
 
 // AgentUpdateRequest Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected.
 type AgentUpdateRequest struct {
-	// AutoApproveDisabled Force Auto-approve off for this agent (ADR-092), overriding the global default (SandboxConfig.auto_approve) for every tool this agent resolves to "ask". Off-only: true disables Auto for this agent; false (or omitting the field, which leaves the stored value unchanged) does not loosen past the global default — there is no value here that turns Auto on when the global default has it off. Distinct from `tool_policy_changes`, which is unchanged and still governs allow/deny/ask per tool.
-	AutoApproveDisabled *bool `json:"auto_approve_disabled,omitempty"`
-
 	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write.
 	Color *AgentColor `json:"color,omitempty"`
 
@@ -23497,7 +23485,7 @@ type SandboxConfig struct {
 	AppliedMode *string `json:"applied_mode,omitempty"`
 
 	// AutoApprove ADR-092's global default for Auto-approve (fresh-install default: true). Auto is NOT a tool-policy value — every tool, including bash, keeps the ordinary three-value policy ("allow" runs unprompted with none of this machinery, "deny" makes the tool invisible to the agent, "ask" is where Auto applies). For every tool currently resolved to "ask", Auto-approve ON auto-approves the cases the pre-flight/rule matcher can positively clear (ADR-092 D3/D7/D8) and still prompts for everything else; Auto-approve OFF means an "ask" tool always prompts. Auto never touches an "allow" or "deny" tool. [2026-09-24, founder decision] Auto no longer additionally requires an enforcing kernel sandbox: it applies to bash and every other tool whether or not a kernel sandbox is confining spawned children (see SandboxStatus.kernel_sandbox_active, now purely informational for this purpose). Without a kernel sandbox, the D7/D8 pre-flights and the surviving text-based guards are the only checks on what a bash command touches — a disguised command can slip past a text-based check where a kernel boundary would have caught it; this is the accepted, founder-approved risk, not an oversight.
-	// This is the GLOBAL default only. Two narrower scopes layer on top, neither stored here: a per-agent setting (Agent.auto_approve_disabled) that may only turn Auto OFF for that agent, and a per-chat session modifier (SessionModeUpdateFrame, asyncapi.yaml) that may turn Auto ON OR OFF for that one chat — deliberately allowed to loosen, since a human is present in that session; every other scope in this contract is tighten-only.
+	// This is the GLOBAL default only. One narrower scope layers on top, not stored here: a per-chat session modifier (SessionModeUpdateFrame, asyncapi.yaml) that may turn Auto ON OR OFF for that one chat — deliberately allowed to loosen, since a human is present in that session; every other scope in this contract is tighten-only.
 	// Deliberately named `auto_approve`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide. Hot-reloaded, like the rest of this handler's fields — no restart required.
 	AutoApprove *bool `json:"auto_approve,omitempty"`
 
@@ -23555,7 +23543,7 @@ type SandboxConfigUpdate struct {
 	AllowedPaths *[]string `json:"allowed_paths,omitempty"`
 
 	// AutoApprove Set the ADR-092 global default for Auto-approve. Auto is a SEPARATE setting from tool policy — it only has meaning for a tool currently resolved to "ask" (see SandboxConfig.auto_approve for the full behavioural description) and applies to every such tool, not only bash. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
-	// Per-agent and per-chat Auto settings are NOT set here: a per-agent override is `auto_approve_disabled` on PUT /agents/{id} (AgentUpdateRequest) — off-only, tighten-only. A chat's session modifier is the session_mode_update WS frame (asyncapi.yaml, SessionModeUpdateFrame) — the one place in this contract allowed to LOOSEN (turn Auto on for that chat even when the agent or this global default has it off), because a human is present in that session. The per-agent field is tighten-only relative to this global default; this global default has no scope above it to tighten against.
+	// The per-chat Auto setting is NOT set here: a chat's session modifier is the session_mode_update WS frame (asyncapi.yaml, SessionModeUpdateFrame) — the one place in this contract allowed to LOOSEN (turn Auto on for that chat even when this global default has it off), because a human is present in that session.
 	AutoApprove *bool `json:"auto_approve,omitempty"`
 
 	// FilesystemModel Switch the ADR-062 filesystem model. "confined" restricts reads and execution to enumerated paths; "open" leaves both unrestricted apart from the secret set. Neither model changes what may be WRITTEN.
@@ -23596,7 +23584,7 @@ type SandboxStatus struct {
 	// AuditOnly True when the sandbox is in permissive (audit-only) mode — policy violations are logged but not blocked.
 	AuditOnly *bool `json:"audit_only,omitempty"`
 
-	// AutoApproveEffective The gateway-wide Auto-approve DEFAULT: exactly the live SandboxConfig.auto_approve value, reported here so the chat-header badge needs no second request. It is NOT combined with kernel_sandbox_active and NOT resolved for any agent or chat (this endpoint has no agent or session context). Auto actually takes effect for a call when the tool resolves to "ask", the resolved Auto-approve for that chat is on (this default, turned off by the agent's auto_approve_disabled, then overridden either way by the chat's own modifier — SessionModeUpdatedFrame / SessionStateFrame.auto_approve_modifier), and god_mode_active is false. [2026-09-24, founder decision] Auto no longer also requires kernel_sandbox_active — it now means exactly what the agent loop's autoApproveActive predicate computes (God Mode off, Auto resolved on), independent of kernel enforcement. Badge reading, before the per-agent and per-chat layers are folded in: god_mode_active=true shows "God Mode" whatever the other two fields say; else auto_approve_effective=false shows "Ask"; else kernel_sandbox_active= true shows "Auto"; else kernel_sandbox_active=false shows "Auto — no sandbox" with a warning tooltip (Auto is on and DOES clear "ask" calls for every tool except the shell; a shell command now asks first unless it is read-only or fully covered by an operator allow rule — there is no kernel confining what a disguised command can reach either way). There is no more "Auto → Ask" degraded state: Auto never silently becomes Ask for lack of a kernel sandbox. Always present from this gateway.
+	// AutoApproveEffective The gateway-wide Auto-approve DEFAULT: exactly the live SandboxConfig.auto_approve value, reported here so the chat-header badge needs no second request. It is NOT combined with kernel_sandbox_active and NOT resolved for any agent or chat (this endpoint has no agent or session context). Auto actually takes effect for a call when the tool resolves to "ask", the resolved Auto-approve for that chat is on (this default, overridden either way by the chat's own modifier — SessionModeUpdatedFrame / SessionStateFrame.auto_approve_modifier), and god_mode_active is false. [2026-09-24, founder decision] Auto no longer also requires kernel_sandbox_active — it now means exactly what the agent loop's autoApproveActive predicate computes (God Mode off, Auto resolved on), independent of kernel enforcement. Badge reading, before the per-agent and per-chat layers are folded in: god_mode_active=true shows "God Mode" whatever the other two fields say; else auto_approve_effective=false shows "Ask"; else kernel_sandbox_active= true shows "Auto"; else kernel_sandbox_active=false shows "Auto — no sandbox" with a warning tooltip (Auto is on and DOES clear "ask" calls for every tool except the shell; a shell command now asks first unless it is read-only or fully covered by an operator allow rule — there is no kernel confining what a disguised command can reach either way). There is no more "Auto → Ask" degraded state: Auto never silently becomes Ask for lack of a kernel sandbox. Always present from this gateway.
 	AutoApproveEffective *bool `json:"auto_approve_effective,omitempty"`
 
 	// Available Whether the backend is available on this platform.

@@ -680,7 +680,7 @@ func cwRangeDataOnly(t *testing.T) {
 					{Role: "tool", ToolCallID: "current-recall", Content: res.ForLLM},
 				}
 				cb := NewContextBuilder(t.TempDir())
-				req := cb.BuildMessages(live, "CURRENT follow-up", nil, "", "", "", "", "", "", nil)
+				req := cb.BuildMessages(0, live, "CURRENT follow-up", nil, "", "", "", "", "", "", nil)
 				if len(req) != 5 || !reflect.DeepEqual(req[1:4], live) {
 					t.Fatalf("historical JSONL must be inside the one current result, not live messages: %+v", req)
 				}

@@ -234,6 +234,26 @@ func ResolveEffectivePolicy(cfg *ToolPolicyCfg, toolName string) string {
 	return string(resolveEffectivePolicyWith(cfg, toolName, agentWildcards, globalWildcards))
 }
 
+// ResolveEffectivePolicyIfCovered is ResolveEffectivePolicy for callers that
+// must distinguish "resolved to a verdict" from "no coverage". When neither the
+// global nor the agent layer has an exact or wildcard entry for toolName (and
+// god mode is off), ResolveEffectivePolicy would fail closed to "deny" and log
+// an Error; this returns ("", false) instead and logs nothing, so a pre-flight
+// check can leave an uncovered tool to the runtime filter rather than invent a
+// refusal from missing data. Whenever any layer covers the tool, the verdict is
+// exactly ResolveEffectivePolicy's (wildcards and god mode included).
+func ResolveEffectivePolicyIfCovered(cfg *ToolPolicyCfg, toolName string) (string, bool) {
+	if cfg == nil {
+		return "", false
+	}
+	if !cfg.GodMode &&
+		resolveFromMap(toolName, cfg.GlobalPolicies, buildWildcardIndex(cfg.GlobalPolicies)) == "" &&
+		resolveFromMap(toolName, cfg.Policies, buildWildcardIndex(cfg.Policies)) == "" {
+		return "", false
+	}
+	return ResolveEffectivePolicy(cfg, toolName), true
+}
+
 // effectiveToolPolicyWith is the unified single-tool resolver: it produces the
 // FULL per-tool verdict ("allow"/"ask"/"deny") for one (tool, scope, agentType)
 // in this exact order:

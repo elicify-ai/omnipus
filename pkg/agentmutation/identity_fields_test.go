@@ -19,41 +19,41 @@ func TestIdentityFields_LockedOnBuiltInsAndHiddenEditableOnCustom(t *testing.T) 
 	external := externalAgent("codex")
 
 	t.Run("ordinary built-in rejects figure and role", func(t *testing.T) {
-		assertProtected(t, ValidateOperatorFields(ordinary, []string{"figure"}))
+		assertProtected(t, ValidateFields(ordinary, []string{"figure"}))
 		assertProtected(t, ValidateFields(ordinary, []string{"role"}))
-		assertNotEditable(t, OperatorFieldDescriptors(ordinary), "figure")
-		assertNotEditable(t, OperatorFieldDescriptors(ordinary), "role")
+		assertNotEditable(t, FieldDescriptors(ordinary), "figure")
+		assertNotEditable(t, FieldDescriptors(ordinary), "role")
 	})
 
 	t.Run("hidden agents reject figure and role", func(t *testing.T) {
-		assertProtected(t, ValidateOperatorFields(hidden, []string{"figure", "role"}))
-		assertProtected(t, ValidateOperatorFields(hiddenSupervisor, []string{"figure"}))
+		assertProtected(t, ValidateFields(hidden, []string{"figure", "role"}))
+		assertProtected(t, ValidateFields(hiddenSupervisor, []string{"figure"}))
 		assertNotEditable(t, FieldDescriptors(hidden), "role")
 	})
 
 	t.Run("custom agent may edit figure and role", func(t *testing.T) {
-		if err := ValidateOperatorFields(custom, []string{"figure", "role", "color"}); err != nil {
+		if err := ValidateFields(custom, []string{"figure", "role", "color"}); err != nil {
 			t.Fatalf("operator write of figure/role/color on a custom agent: %v", err)
 		}
 		if err := ValidateFields(custom, []string{"figure", "role"}); err != nil {
 			t.Fatalf("agent-path write of figure/role on a custom agent: %v", err)
 		}
-		assertEditable(t, OperatorFieldDescriptors(custom), "figure")
-		assertEditable(t, OperatorFieldDescriptors(custom), "role")
+		assertEditable(t, FieldDescriptors(custom), "figure")
+		assertEditable(t, FieldDescriptors(custom), "role")
 	})
 
 	t.Run("external worker may edit figure and role like colour", func(t *testing.T) {
-		if err := ValidateOperatorFields(external, []string{"figure", "role", "color"}); err != nil {
+		if err := ValidateFields(external, []string{"figure", "role", "color"}); err != nil {
 			t.Fatalf("external worker figure/role/color: %v", err)
 		}
 	})
 
 	t.Run("icon stays protected on a built-in", func(t *testing.T) {
-		assertProtected(t, ValidateOperatorFields(ordinary, []string{"icon"}))
+		assertProtected(t, ValidateFields(ordinary, []string{"icon"}))
 	})
 
 	t.Run("figure is not confused with an unknown field", func(t *testing.T) {
-		err := ValidateOperatorFields(custom, []string{"figure"})
+		err := ValidateFields(custom, []string{"figure"})
 		var fe *FieldError
 		if errors.As(err, &fe) && fe.Code == InvalidInput {
 			t.Fatalf("figure is a known field, got INVALID_INPUT: %v", err)
@@ -83,4 +83,13 @@ func assertNotEditable(t *testing.T, descriptors []FieldDescriptor, name string)
 	if d == nil || d.Editable || d.Reason == "" {
 		t.Fatalf("descriptor %#v for %s want present, not editable, with a reason", d, name)
 	}
+}
+
+func descriptorFor(descriptors []FieldDescriptor, name string) *FieldDescriptor {
+	for i := range descriptors {
+		if descriptors[i].Name == name {
+			return &descriptors[i]
+		}
+	}
+	return nil
 }
