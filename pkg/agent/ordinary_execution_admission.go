@@ -93,6 +93,11 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 	gate := al.steerAdmission()
 	gate.entryMu.Lock()
 	defer gate.entryMu.Unlock()
+	// Waiting for a predecessor or this lock can outlive the caller. A dead
+	// context cannot own a revival/admission or consume a pending parent report.
+	if err := ctx.Err(); err != nil {
+		return ordinaryExecutionPreparation{}, err
+	}
 	if al.activeTurnForCancel(sessionID, CancelScope{SessionID: sessionID, TurnOnly: true}) != nil {
 		return ordinaryExecutionPreparation{}, refuseOrdinaryAdmission(fmt.Errorf("ordinary admission: %w: an execution is already registered", steer.ErrStaleGeneration))
 	}
