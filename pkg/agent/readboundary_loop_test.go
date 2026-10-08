@@ -296,18 +296,6 @@ func TestReadBoundary_AutoPolicyMatrix(t *testing.T) {
 		})
 	}
 
-	t.Run("DS-2 row 11 agent marked Never auto-approve (S-3.7)", func(t *testing.T) {
-		lt := newRBLoopTurn(t, "ask", true, func(c *config.Config) { c.Agents.List[0].AutoApproveDisabled = true }, nil,
-			func(env rbLoopEnv) *testutil.ScenarioProvider {
-				return testutil.NewScenario().WithToolCalls(rbThreeCalls(t, env, rbOutEXT, "n")).WithText("done")
-			})
-		lt.run(t, "rb-never-auto")
-		audited := lt.readAudit()
-		for _, tool := range rbReadTools {
-			rbAssertOutcome(t, lt, audited, tool, rbOutEXT, "n-"+tool, rbCardThenRuns, "DS-2 row 11")
-		}
-	})
-
 	t.Run("DS-2 row 12 chat Auto-approve toggled off (S-3.7)", func(t *testing.T) {
 		// The per-chat toggle is set off at the first card of the turn (an
 		// ask-list stub, delete_task) — ADR-092 rule C: the chat's choice

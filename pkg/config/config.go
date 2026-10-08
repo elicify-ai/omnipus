@@ -391,6 +391,26 @@ func (p PerformanceConfig) EffectiveMaxDelegationDepth() (int, error) {
 	return p.MaxDelegationDepth, nil
 }
 
+// DelegationDepthConfigKey is the operator-facing name of the depth limit,
+// carried as config_key on every invalid-limit log.
+const DelegationDepthConfigKey = "performance.max_delegation_depth"
+
+// ConfiguredMaxDelegationDepth is THE single reader every consumer of
+// performance.max_delegation_depth uses (delegation block, gate, launcher
+// budget, bound setters, and the workspace edge validators). An invalid
+// (negative) value is never swallowed into the unset/backstop default: it logs
+// ERROR with config_key and the caller's site, and returns valid=false so each
+// caller fails closed in its own terms.
+func ConfiguredMaxDelegationDepth(p PerformanceConfig, site string) (limit int, valid bool) {
+	limit, err := p.EffectiveMaxDelegationDepth()
+	if err != nil {
+		logger.ErrorCF("config", "invalid performance.max_delegation_depth — failing closed",
+			map[string]any{"config_key": DelegationDepthConfigKey, "site": site, "error": err.Error()})
+		return 0, false
+	}
+	return limit, true
+}
+
 // EffectiveDelegationTimeoutMinutes returns DelegationTimeoutMinutes, or an
 // error when it is negative. 0 (unset) is not an error.
 func (p PerformanceConfig) EffectiveDelegationTimeoutMinutes() (int, error) {
@@ -668,17 +688,6 @@ type AgentConfig struct {
 	// Tools, when non-nil, overrides scope-based tool visibility for this agent.
 	// Nil means all tools allowed by the agent's type are available.
 	Tools *AgentToolsCfg `json:"tools,omitempty"`
-	// AutoApproveDisabled is the per-agent tighten-only override for
-	// ADR-092 D1's Auto shell-permission mode (sandbox.AutoApprove is the
-	// global default). false (default) means this agent follows the global
-	// default; true forces this agent's shell calls into Ask (every
-	// command prompts) even when the global default is Auto. There is
-	// deliberately no way to set this false when the global default is
-	// already false/Auto-disabled-by-policy — server-side tighten-only
-	// enforcement (FR-003) rejects any write that would loosen a single
-	// agent past the global default, mirroring the existing per-agent
-	// bash tool-policy override.
-	AutoApproveDisabled bool `json:"auto_approve_disabled,omitempty"`
 	// CreatedAt is the timestamp this agent record was created. Set once and
 	// never modified thereafter. Added by ADR-054 D2 (docs/internal/architecture/
 	// ADR-054-entity-config-separation.md) — the per-entity store's List()

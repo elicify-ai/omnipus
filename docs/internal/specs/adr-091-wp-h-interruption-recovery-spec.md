@@ -25,7 +25,6 @@ turn:
 
 | `file::symbol` | Reads it to decide |
 |---|---|
-| `pkg/agent/loop_provider_retry.go::shouldRetryDelegatedRateLimit` | whether to retry a provider rate limit |
 | `pkg/agent/turn_exit.go::IsParentEnded` | whether to exit because the parent turn finished |
 
 That field's only production writer was `pkg/agent/subturn.go:2057`
@@ -51,8 +50,7 @@ durable edge in the first place.
 
 | `file::symbol` | Role after this change |
 |---|---|
-| `pkg/agent/loop_provider_retry.go::shouldRetryDelegatedRateLimit` | **re-gate** on the durable edge |
-| `pkg/agent/loop_provider_retry.go` retry loop (~L39) | unchanged in shape; becomes reachable |
+| the delegated-only provider retry loop | **deleted (#857)** — superseded by the fallback chain's in-place rate-limit retry (`pkg/providers/fallback.go::FallbackChain.Execute`, which every turn, steered children included, already runs) |
 | `pkg/agent/turn_exit.go::IsParentEnded` | **delete** |
 | `pkg/agent/loop_run_turn.go` (~L1182) parent-ended branch | **delete** |
 | `pkg/agent/turn.go::turnState.parentTurnState` | **delete** once both readers are gone |

@@ -23,7 +23,7 @@ import (
 // page reload on the server (SessionModeStore holds it until the session
 // ends), so the session_state snapshot a reconnecting SPA receives must
 // carry it — otherwise the composer switch and badge fall back to the
-// agent x global value while the server still applies the chat's own.
+// global default while the server still applies the chat's own.
 
 // readSessionStateModifier reads one session_state frame from ch and returns
 // the raw auto_approve_modifier member: (value, present). A JSON null is
@@ -79,7 +79,7 @@ func TestSessionStateFrame_CarriesPerChatAutoApproveModifier(t *testing.T) {
 	}
 
 	// No modifier set: the snapshot says so (null/absent), the chat follows
-	// the agent x global resolution.
+	// the global default.
 	mod, present, sid := emit(meta.ID)
 	require.NotNil(t, sid)
 	assert.Nil(t, mod, "no per-chat modifier set: auto_approve_modifier must be null/absent (present=%v)", present)

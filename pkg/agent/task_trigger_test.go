@@ -29,8 +29,67 @@ type triggerFakeClock struct {
 }
 
 func newTriggerFakeClock() *triggerFakeClock {
-	// Start 24h in the future so cron runLoop timer sleeps a long time.
-	return &triggerFakeClock{t: time.Now().Add(24 * time.Hour)}
+	return &triggerFakeClock{t: triggerFakeClockStart(time.Now())}
+}
+
+// triggerFakeClockStart is the fake clock's start for a real wall-clock `wall`:
+// 24h ahead so the cron runLoop timer sleeps a long time, but never later than
+// 22:00 UTC of the NEXT calendar day.
+//
+// Why the cap: run records are day-filed by the REAL wall clock
+// (task.Store.RecordSkippedOccurrence / appendRunRecord use time.Now), while
+// Store.RunsInRange floors its day-file scan at the queried occurrence's UTC
+// day minus one. Occurrences here are armed on the fake clock, a day ahead of
+// real time. Within a few minutes of 00:00 UTC, real+24h+1min lands two
+// calendar days ahead, the record's day file falls below that floor, and
+// RunsInRange reports 0 runs (CI run 37703450387, which ran 23:52-23:59 UTC).
+// The cap keeps every occurrence the tests arm within one calendar day of the
+// real clock at any time of day.
+func triggerFakeClockStart(wall time.Time) time.Time {
+	start := wall.Add(24 * time.Hour)
+	y, m, d := wall.UTC().Date()
+	limit := time.Date(y, m, d+1, 22, 0, 0, 0, time.UTC)
+	if start.After(limit) {
+		return limit
+	}
+	return start
+}
+
+// TestTriggerFakeClockStart_KeepsOccurrencesWithinRunsInRangeFloor pins the
+// instrument invariant the overlap-guard tests rely on: for every real time of
+// day (notably the minutes before 00:00 UTC), an occurrence armed a few minutes
+// after the fake clock's start must sit on the real clock's UTC day or the next
+// one, so that day(occurrence)-1 <= day(real) — the day file the real-clock
+// run record lands in is then never below RunsInRange's scan floor.
+func TestTriggerFakeClockStart_KeepsOccurrencesWithinRunsInRangeFloor(t *testing.T) {
+	day := func(ts time.Time) time.Time {
+		y, m, d := ts.UTC().Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+	}
+	for _, hhmmss := range []string{"00:00:30", "12:00:00", "21:59:59", "23:55:00", "23:58:50", "23:59:59"} {
+		wall, err := time.Parse("2006-01-02 15:04:05", "2026-10-07 "+hhmmss)
+		if err != nil {
+			t.Fatalf("parse %q: %v", hhmmss, err)
+		}
+		start := triggerFakeClockStart(wall)
+		if ahead := start.Sub(wall); ahead < 20*time.Hour {
+			t.Errorf("real=%s: fake clock only %v ahead; the cron timer needs a long sleep", hhmmss, ahead)
+		}
+		occurrence := start.Add(10 * time.Minute) // dtstart (+1m) plus the tests' Advance(2m), with slack
+		floor := day(occurrence).AddDate(0, 0, -1)
+		if day(wall).Before(floor) {
+			t.Errorf("real=%s: occurrence %s is on day %s, floor %s is after the real day %s — "+
+				"RunsInRange would miss the record", hhmmss, occurrence.Format(time.RFC3339),
+				day(occurrence).Format("2006-01-02"), floor.Format("2006-01-02"), day(wall).Format("2006-01-02"))
+		}
+	}
+	// Negative control: the uncapped real+24h start DOES violate the invariant
+	// just before midnight, so the loop above could have failed.
+	late, _ := time.Parse("2006-01-02 15:04:05", "2026-10-07 23:58:50")
+	occ := late.Add(24*time.Hour + 10*time.Minute)
+	if !day(late).Before(day(occ).AddDate(0, 0, -1)) {
+		t.Fatalf("negative control broken: uncapped start no longer violates the floor at 23:58:50")
+	}
 }
 
 func (c *triggerFakeClock) Now() time.Time {

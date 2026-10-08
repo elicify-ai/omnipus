@@ -58,6 +58,12 @@ func (al *AgentLoop) wireEnvProviders(cfg *config.Config, registry *AgentRegistr
 	wireProjectShelfResolvers(al, registry)
 }
 
+// delegationFailClosedBlock is the "## Delegation" text rendered whenever the
+// injector cannot establish what the gate would allow (unreadable graph or
+// limit, unresolvable workspace, registry invariant break): the agent is told
+// plainly it cannot delegate rather than receiving no block at all.
+const delegationFailClosedBlock = "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
+
 // wireDelegationInjectors installs a delegation-context callback on every
 // agent's ContextBuilder in registry. The callback is invoked on each turn from
 // buildDynamicContext (the UN-CACHED path), receives the turn's workspaceID, and
@@ -87,23 +93,23 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 
 		// Capture by value so the closure refers to this specific agentID string.
 		id := agentID
-		agentInst.ContextBuilder.WithDelegationInjector(func(workspaceID string) string {
+		agentInst.ContextBuilder.WithDelegationInjector(func(workspaceID string, currentDepth int) string {
 			// DW-001: read the CURRENT live registry — not the one captured at wire time.
 			// After a hot-reload, al.registry is the new value.
 			liveRegistry := al.GetRegistry()
 			if liveRegistry == nil {
-				logger.WarnCF("agent.env",
+				logger.ErrorCF("agent.env",
 					"wireDelegationInjectors: registry is nil in delegation injector — invariant break",
 					map[string]any{"error_id": "DW-001", "agent_id": id})
-				return ""
+				return delegationFailClosedBlock
 			}
 			// DW-002: the agent must still be present in the live registry.
 			_, exists := liveRegistry.GetAgent(id)
 			if !exists {
-				logger.WarnCF("agent.env",
+				logger.ErrorCF("agent.env",
 					"wireDelegationInjectors: agent not found in live registry — invariant break",
 					map[string]any{"error_id": "DW-002", "agent_id": id})
-				return ""
+				return delegationFailClosedBlock
 			}
 
 			// Resolve the effective workspace, mirroring resolveEffectiveWorkspaceID
@@ -120,7 +126,7 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 						"wireDelegationInjectors: cannot resolve default workspace — rendering fail-closed delegation block",
 						map[string]any{"agent_id": id, "error": errString(err)},
 					)
-					return "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
+					return delegationFailClosedBlock
 				}
 				wsID = def
 			}
@@ -134,7 +140,7 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 					"wireDelegationInjectors: workspace delegation graph unreadable — rendering fail-closed delegation block",
 					map[string]any{"agent_id": id, "workspace_id": wsID, "error": err.Error()},
 				)
-				return "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
+				return delegationFailClosedBlock
 			}
 
 			// Filter to outgoing edges from this agent.
@@ -148,9 +154,11 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 			// one exists for a specific target) is enforced separately when the
 			// target session is launched and does not change
 			// this general-roster footer.
-			configuredDepthCap, depthErr := liveCfg.Performance.EffectiveMaxDelegationDepth()
-			if depthErr != nil {
-				configuredDepthCap = 0
+			// An invalid limit cannot be advertised truthfully: fail closed (the
+			// gate denies on the same error — buildDelegationDenyChecker).
+			configuredDepthCap, depthOK := configuredDelegationDepth(liveCfg.Performance, "delegation block (agent "+id+")")
+			if !depthOK {
+				return delegationFailClosedBlock
 			}
 			globalDepthCap := resolveEffectiveDelegationDepth(nil, configuredDepthCap)
 
@@ -190,10 +198,13 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 					Label: label,
 					Modes: modes,
 					Depth: e.Depth,
+					// The gate's cap for this edge, from the RAW configured
+					// ceiling (see delegationTarget.DepthCap).
+					DepthCap: resolveEffectiveDelegationDepth(e.Depth, configuredDepthCap),
 				})
 			}
 
-			return buildDelegationContext(targets, globalDepthCap)
+			return buildDelegationContext(targets, globalDepthCap, currentDepth)
 		})
 	}
 }

@@ -221,6 +221,10 @@ func TestDelegateCancel_QueuedSubagentIsDroppedAndNeverStarts(t *testing.T) {
 	if metaErr != nil {
 		t.Fatalf("GetMeta(queued): %v", metaErr)
 	}
+	// Not load-bearing on its own (#1161): the session starts active, so this
+	// cannot fail if the landing is deleted — the after.State == stopped and
+	// "never started a turn" assertions above are the load-bearing proof. It
+	// still fails if a landing starts mirroring a distinct status.
 	if meta.Status != session.StatusActive {
 		t.Errorf("transcript meta status = %q, want %q — a stopped helper stays coarse-active", meta.Status, session.StatusActive)
 	}

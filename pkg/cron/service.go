@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -186,9 +187,11 @@ type CronService struct {
 	store     *CronStore
 	mu        sync.RWMutex
 	running   bool
-	stopChan  chan struct{}
-	wakeChan  chan struct{}
-	gronx     *gronx.Gronx
+	// runWindowUsed prevents a physical-boot restore on a service reused after Stop.
+	runWindowUsed bool
+	stopChan      chan struct{}
+	wakeChan      chan struct{}
+	gronx         *gronx.Gronx
 
 	// clock is the injected time source (W-5). Defaults to realClock.
 	clock Clock
@@ -237,7 +240,7 @@ func NewCronService(storePath string) *CronService {
 	cs := &CronService{
 		storePath:         storePath,
 		gronx:             gronx.New(),
-		wakeChan:          make(chan struct{}),
+		wakeChan:          make(chan struct{}, 1),
 		clock:             realClock{},
 		maxConcurrentRuns: defaultMaxConcurrentRuns,
 		retryBackoffMs:    append([]int64(nil), defaultRetryBackoffMs...),
@@ -346,7 +349,10 @@ func (cs *CronService) clockNowUnsafeMS() int64 {
 // times, and initializes the stop/wake channels + lane context. The caller must
 // hold cs.mu. It returns started=true only on a stopped→running transition (so
 // Start knows to launch the runLoop exactly once).
-func (cs *CronService) initRunStateUnsafe() (started bool, err error) {
+func (cs *CronService) initRunStateUnsafe(physicalBoot bool) (started bool, err error) {
+	if physicalBoot && cs.runWindowUsed {
+		return false, fmt.Errorf("cron: physical-boot restore requires an unused service instance")
+	}
 	if cs.running {
 		return false, nil
 	}
@@ -355,6 +361,13 @@ func (cs *CronService) initRunStateUnsafe() (started bool, err error) {
 		return false, fmt.Errorf("failed to load store: %w", err)
 	}
 	cs.migrateOwnersUnsafe()
+	if physicalBoot {
+		// The prior process has no live lane. Preserve all schedule/history data;
+		// normal Start/reload deliberately retain the same-process overlap flag.
+		for i := range cs.store.Jobs {
+			cs.store.Jobs[i].State.Running = false
+		}
+	}
 
 	cs.recomputeNextRuns()
 	if err := cs.saveStoreUnsafe(); err != nil {
@@ -363,19 +376,31 @@ func (cs *CronService) initRunStateUnsafe() (started bool, err error) {
 
 	cs.stopChan = make(chan struct{})
 	if cs.wakeChan == nil {
-		cs.wakeChan = make(chan struct{})
+		cs.wakeChan = make(chan struct{}, 1)
 	}
 	// Fresh lane context for this run window (a prior Stop canceled the old one).
 	if cs.laneCtx == nil || cs.laneCtx.Err() != nil {
 		cs.laneCtx, cs.laneCancel = context.WithCancel(context.Background())
 	}
 	cs.running = true
+	cs.runWindowUsed = true
 	return true, nil
 }
 
 func (cs *CronService) Start() error {
+	return cs.startRunWindow(false)
+}
+
+// StartAfterPhysicalBoot restores only the dead prior process's running flags.
+// Gateway physical boot is its sole production caller. Reload and Stop/Start use
+// Start, so an old lane still unwinding after a bounded drain remains protected.
+func (cs *CronService) StartAfterPhysicalBoot() error {
+	return cs.startRunWindow(true)
+}
+
+func (cs *CronService) startRunWindow(physicalBoot bool) error {
 	cs.mu.Lock()
-	started, err := cs.initRunStateUnsafe()
+	started, err := cs.initRunStateUnsafe(physicalBoot)
 	stop := cs.stopChan
 	cs.mu.Unlock()
 	if err != nil {
@@ -395,7 +420,7 @@ func (cs *CronService) Start() error {
 func (cs *CronService) startNoLoop() error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-	_, err := cs.initRunStateUnsafe()
+	_, err := cs.initRunStateUnsafe(false)
 	return err
 }
 
@@ -536,7 +561,7 @@ func (cs *CronService) RunDueJobs(now time.Time) {
 	}
 
 	if err := cs.saveStoreUnsafe(); err != nil {
-		log.Printf("[cron] failed to save store: %v", err)
+		slog.Error("cron failed to save store", "job_ids", dueJobIDs, "error", err)
 	}
 
 	cs.mu.Unlock()
@@ -608,7 +633,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 				cs.rescheduleSkippedUnsafe(job)
 				onSkip := cs.onSkip
 				cs.mu.Unlock()
-				log.Printf("[cron] ⤳ job '%s' (id: %s) skipped — previous run still in progress", job.Name, jobID)
+				slog.Warn("cron job skipped: previous run still in progress", "job_id", jobID, "reason", "overlap")
 				if onSkip != nil {
 					onSkip(jobID, "overlap")
 				}
@@ -621,7 +646,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 				cs.rescheduleSkippedUnsafe(job)
 				onSkip := cs.onSkip
 				cs.mu.Unlock()
-				log.Printf("[cron] ⚠ job '%s' (id: %s) skipped — no owning agent", job.Name, jobID)
+				slog.Warn("cron job skipped: no owning agent", "job_id", jobID, "reason", "owner-missing")
 				if onSkip != nil {
 					onSkip(jobID, "owner-missing")
 				}
@@ -635,7 +660,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	}
 	if callbackJob != nil {
 		if err := cs.saveStoreUnsafe(); err != nil {
-			log.Printf("[cron] failed to save store: %v", err)
+			slog.Error("cron failed to save store", "job_id", jobID, "error", err)
 		}
 	}
 	cs.mu.Unlock()
@@ -674,6 +699,8 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	// deferred reset that ALWAYS runs, so even an early return (job vanished)
 	// or a panic in the state-update code below leaves no stuck Running=true.
 	cs.mu.Lock()
+	// Completion can happen while runLoop is recalculating its timer.
+	defer cs.notify()
 	defer cs.mu.Unlock()
 	defer cs.clearRunningUnsafe(jobID)
 
@@ -754,7 +781,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	}
 
 	if err := cs.saveStoreUnsafe(); err != nil {
-		log.Printf("[cron] failed to save store: %v", err)
+		slog.Error("cron failed to save store", "job_id", jobID, "error", err)
 	}
 }
 
@@ -788,7 +815,7 @@ func (cs *CronService) clearRunningUnsafe(jobID string) {
 			if cs.store.Jobs[i].State.Running {
 				cs.store.Jobs[i].State.Running = false
 				if err := cs.saveStoreUnsafe(); err != nil {
-					log.Printf("[cron] failed to persist Running reset: %v", err)
+					slog.Error("cron failed to persist Running reset", "job_id", jobID, "error", err)
 				}
 			}
 			return
@@ -806,8 +833,9 @@ func (cs *CronService) rescheduleSkippedUnsafe(job *CronJob) {
 	}
 	job.State.NextRunAtMS = cs.computeNextRun(&job.Schedule, cs.clockNowUnsafeMS())
 	if err := cs.saveStoreUnsafe(); err != nil {
-		log.Printf("[cron] failed to persist skip-reschedule: %v", err)
+		slog.Error("cron failed to persist skip-reschedule", "job_id", job.ID, "error", err)
 	}
+	cs.notify()
 }
 
 // scheduleNextRunUnsafe computes and assigns the job's next fire after a run,
@@ -915,17 +943,17 @@ func (cs *CronService) migrateOwnersUnsafe() {
 	if cs.defaultAgentID == "" || cs.store == nil {
 		return
 	}
-	changed := false
+	var migratedJobIDs []string
 	for i := range cs.store.Jobs {
 		if cs.store.Jobs[i].AgentID == "" {
 			cs.store.Jobs[i].AgentID = cs.defaultAgentID
-			changed = true
+			migratedJobIDs = append(migratedJobIDs, cs.store.Jobs[i].ID)
 		}
 	}
-	if changed {
+	if len(migratedJobIDs) > 0 {
 		log.Printf("[cron] migration: backfilled owner-less jobs with default agent %q", cs.defaultAgentID)
 		if err := cs.saveStoreUnsafe(); err != nil {
-			log.Printf("[cron] failed to persist owner migration: %v", err)
+			slog.Error("cron failed to persist owner migration", "job_ids", migratedJobIDs, "error", err)
 		}
 	}
 }
@@ -1245,7 +1273,7 @@ func (cs *CronService) removeJobUnsafe(jobID string) bool {
 
 	if removed {
 		if err := cs.saveStoreUnsafe(); err != nil {
-			log.Printf("[cron] failed to save store after remove: %v", err)
+			slog.Error("cron failed to save store after remove", "job_id", jobID, "error", err)
 		}
 	}
 
@@ -1271,7 +1299,7 @@ func (cs *CronService) EnableJob(jobID string, enabled bool) *CronJob {
 			}
 
 			if err := cs.saveStoreUnsafe(); err != nil {
-				log.Printf("[cron] failed to save store after enable: %v", err)
+				slog.Error("cron failed to save store after enable", "job_id", jobID, "error", err)
 			}
 
 			cs.notify()

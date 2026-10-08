@@ -29,11 +29,20 @@ import (
 //     0 ⇒ this edge grants NO onward delegation,
 //     >0 ⇒ per-edge onward-delegation cap.
 //     Mirrors the DEPTH INVARIANT in workspace.DelegationEdge.
+//   - DepthCap: the effective onward-delegation cap the gate applies to this
+//     edge — resolveEffectiveDelegationDepth(Depth, <configured global cap>),
+//     computed by wireDelegationInjectors from the RAW configured ceiling (the
+//     footer's globalDepthCap is already backstop-resolved and must not be
+//     re-used here: it would clamp a larger per-edge cap to the backstop when
+//     no global ceiling is configured, hiding a target the gate allows).
+//     0 = unresolved (direct callers/tests): falls back to
+//     resolveEffectiveDelegationDepth(Depth, globalDepthCap).
 type delegationTarget struct {
-	ID    string
-	Label string
-	Modes []config.DelegationMode
-	Depth *int
+	ID       string
+	Label    string
+	Modes    []config.DelegationMode
+	Depth    *int
+	DepthCap int
 }
 
 // buildDelegationContext renders the per-turn "## Delegation" system-prompt block.
@@ -44,6 +53,11 @@ type delegationTarget struct {
 // production caller (wireDelegationInjectors) always pre-resolves this via
 // resolveEffectiveDelegationDepth, so a live turn's prompt never actually
 // renders "uncapped").
+//
+// currentDepth is the turn's delegation-chain depth (the value the gate reads
+// via currentDelegationDepth). A target whose effective depth cap the chain has
+// already reached is withheld, so the block never advertises a delegation the
+// gate would deny with DenyDepth (#459).
 //
 // Advertisement == enforcement by construction: both read the graph, so the
 // modes and targets shown to the agent are exactly what the gate allows.
@@ -56,7 +70,7 @@ type delegationTarget struct {
 // 2026-08): an earlier version of this comment carried its own copy of the
 // schema, and it drifted (task_id/action=run|status only) once the tool grew
 // session_id and seven more actions. A single source of truth cannot drift.
-func buildDelegationContext(targets []delegationTarget, globalDepthCap int) string {
+func buildDelegationContext(targets []delegationTarget, globalDepthCap, currentDepth int) string {
 	// No targets → cannot delegate.
 	if len(targets) == 0 {
 		return "## Delegation\nYou cannot delegate to other agents in this workspace — complete the task yourself. Do not call list_agents or search memory to look for delegation targets; there are none configured for you here."
@@ -72,10 +86,31 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap int) stri
 	// If every target has an empty label (unresolvable), fall through to the
 	// cannot-delegate guard.
 	renderedCount := 0
+	// depthCut counts targets withheld because the chain is at its depth cap.
+	depthCut := 0
 
 	for _, tgt := range targets {
 		// Empty label means the target was unresolvable — skip silently.
 		if tgt.Label == "" {
+			continue
+		}
+
+		// An edge whose own Depth is <= 0 grants NO delegation through it: the
+		// gate (enforceEdgeModeAndDepth) denies it unconditionally, so it is
+		// never advertised (advertisement ⊆ enforcement).
+		if tgt.Depth != nil && *tgt.Depth <= 0 {
+			continue
+		}
+
+		// Runtime-depth axis of advertisement ⊆ enforcement (#459): the gate
+		// (enforceEdgeModeAndDepth) denies once the chain depth reaches the
+		// effective cap, so a target at or past that cap is not advertised.
+		depthCap := tgt.DepthCap
+		if depthCap <= 0 {
+			depthCap = resolveEffectiveDelegationDepth(tgt.Depth, globalDepthCap)
+		}
+		if currentDepth >= depthCap {
+			depthCut++
 			continue
 		}
 
@@ -124,17 +159,17 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap int) stri
 				tgt.ID,
 			)
 		}
-		// Per-target note when the edge forbids onward delegation (Depth <= 0,
-		// mirroring the DEPTH INVARIANT in enforceEdgeModeAndDepth).
-		if tgt.Depth != nil && *tgt.Depth <= 0 {
-			sb.WriteString("\n  _(this target cannot delegate onward)_")
-		}
-
 		renderedCount++
 	}
 
 	// All-targets-skipped guard.
 	if renderedCount == 0 {
+		if depthCut > 0 {
+			return fmt.Sprintf(
+				"## Delegation\nYou are at the maximum delegation depth for this chain (depth %d) — no further delegation is possible; complete the task yourself.",
+				currentDepth,
+			)
+		}
 		return "## Delegation\nYou cannot delegate to other agents in this workspace — complete the task yourself. Do not call list_agents or search memory to look for delegation targets; there are none configured for you here."
 	}
 

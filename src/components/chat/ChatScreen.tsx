@@ -52,6 +52,7 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useChatStore } from '@/store/chat'
+import { pendingRedirectSids } from '@/store/chat/runtime-state'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
@@ -70,6 +71,7 @@ import {
 import { DelegationEventLineList, DelegationInlineProvider, DelegationLiveTail, DelegationToolGroup, useClaimedCallIds } from './DelegationEventLine'
 import { useChatDelegationEvents } from './useChatDelegationEvents'
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
+import { isGoalRunning } from '@/lib/goalActivity'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
 import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
@@ -89,6 +91,7 @@ import {
   AssistantMessageConnectionStatus,
   UnansweredUserMessageStatus,
   ChatConnectionNotice,
+  RestartInterruptedNotice,
   UserMessageDeliveryStatus,
 } from './ConnectionStatus'
 
@@ -2043,6 +2046,8 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   }, [searchModalOpenForFocus, focusChatInput])
 
   const cancelState = useCancelState(isStreaming, cancelStream)
+  // G1: Stop stays reachable in the idle gap between goal turns (see goalActivity.ts).
+  const goalRunning = useChatStore((s) => isGoalRunning(s.goalStatus))
   const fileUpload = useFileUpload(composerRuntime)
   // D9: the /stop-redirect transport — send the dedicated generated
   // RedirectFrame over the WS, with a VISIBLE error when it cannot be sent
@@ -2065,6 +2070,14 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         message: 'Could not send the redirect — connection dropped. This chat\'s turn was NOT stopped; run /stop-redirect again.',
         variant: 'error',
       })
+      return
+    }
+    // The server's turn_canceled answer carries no cause; remember this send
+    // so the live view finalises the partial as a redirected turn (no
+    // "(interrupted)"), see runtime-state.ts::pendingRedirectSids.
+    // Only a chat with a streaming turn has anything for the redirect to stop.
+    if (useChatStore.getState().sessionsById[frame.session_id]?.isStreaming) {
+      pendingRedirectSids.add(frame.session_id)
     }
   }, [])
   const slashMenu = useSlashMenu({
@@ -2310,7 +2323,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     // first activation already ended the turn locally (isStreaming false,
     // label reset). Higher-priority surfaces keep precedence: the
     // menu-close branch above runs first and stops propagation.
-    if (e.key === 'Escape' && (isStreaming || cancelState.stopLabel === 'stopping' || cancelState.stopAllArmed)) {
+    if (e.key === 'Escape' && (isStreaming || goalRunning || cancelState.stopLabel === 'stopping' || cancelState.stopAllArmed)) {
       e.preventDefault()
       cancelState.cancelIfStreaming()
       return
@@ -2789,7 +2802,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           {/* The same Stop button confirms a second activation for all 3 s,
               including after streaming and the 1 s stopping label reset.
               No separate Stop-all control (founder 2026-10-06). */}
-          {isStreaming || cancelState.stopLabel === 'stopping' || cancelState.stopAllArmed ? (
+          {isStreaming || goalRunning || cancelState.stopLabel === 'stopping' || cancelState.stopAllArmed ? (
             // tabIndex={6}: this button replaces Send in the exact same ring
             // slot mid-stream (see the composer tab-ring map in
             // ChatControls.tsx) — it must keep Send's slot, not default to 0,
@@ -3265,6 +3278,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           )}
 
           <ChatConnectionNotice />
+          <RestartInterruptedNotice />
 
           {/* Rate-limit indicator — shown above composer. Tool-approval requests
               (including `bash`) are handled by the global ToolApprovalModal

@@ -93,6 +93,10 @@ type InboxEntryKind string
 const (
 	InboxEntryMessage InboxEntryKind = "message"
 	InboxEntryAck     InboxEntryKind = "ack"
+	// InboxEntryAnswer records that a parent answered one of a child's
+	// open correlation ids (delegate respond). It is separate from an ack:
+	// an ack is a delivery cursor, an answer is the parent's reply.
+	InboxEntryAnswer InboxEntryKind = "answer"
 )
 
 // InboxEntry is one line of an owner key's durable inbox file.
@@ -125,7 +129,17 @@ type InboxEntry struct {
 	Seq       int64                     `json:"seq,omitempty"`
 	Message   *generated.SessionMessage `json:"message,omitempty"`
 	AckedIDs  []string                  `json:"acked_message_ids,omitempty"`
+	Answer    *InboxAnswer              `json:"answer,omitempty"`
 	CreatedAt time.Time                 `json:"created_at"`
+}
+
+// InboxAnswer is the durable record that correlationID, raised by
+// childSessionID, was answered.
+//
+// not-wire-format: internal disk record.
+type InboxAnswer struct {
+	SessionID     string `json:"session_id"`
+	CorrelationID string `json:"correlation_id"`
 }
 
 // envelopePeek extracts the common SessionMessage envelope fields without
@@ -283,6 +297,12 @@ type MessageInboxStore struct {
 	dir  string
 	lock *lifecycleStripedLock
 
+	// answerReserved holds the (owner, child, correlation) triples whose
+	// answer is being delivered right now (ReserveAnswer) or was delivered
+	// but could not be recorded durably. In-memory by design: it only has to
+	// make check-and-answer atomic inside this process.
+	answerReserved sync.Map
+
 	// Caps — overridable by the caller wiring the real config (session_messaging
 	// section, FR-195); default to the ADR §Contract Surface values.
 	ChildSendRatePerMinute int
@@ -373,6 +393,18 @@ func (s *MessageInboxStore) retentionMax() int {
 		return s.AckedRetentionMax
 	}
 	return DefaultInboxAckedRetentionMax
+}
+
+// AckedRetention reports how many acked message entries compaction always
+// leaves in an inbox (the effective retention cap). A compaction that purged
+// anything therefore leaves at least this many acked messages behind — the
+// footprint boot final-delivery recovery uses as evidence that an absent
+// message was compacted away rather than lost.
+func (s *MessageInboxStore) AckedRetention() int {
+	if s == nil {
+		return 0
+	}
+	return s.retentionMax()
 }
 
 // compactionTrigger returns the effective compaction trigger threshold,
@@ -857,7 +889,28 @@ func (s *MessageInboxStore) compactLocked(ownerKey string, entries []InboxEntry,
 	// consolidation below).
 	compacted := make([]InboxEntry, 0, len(entries))
 	var retainedAckedIDs []string
+	// An answer entry is kept exactly while the question it answers is
+	// retained — dropping it earlier would reopen a retained question.
+	retainedQuestion := map[string]bool{}
 	for _, e := range entries {
+		if e.Kind != InboxEntryMessage || e.Message == nil {
+			continue
+		}
+		p, _, perr := peekEnvelope(*e.Message)
+		if perr != nil || (acked[p.MessageID] && !keepAcked[p.MessageID]) {
+			continue
+		}
+		if p.CorrelationID != "" && answerableKind(p.Kind) {
+			retainedQuestion[p.SessionID+"\x00"+p.CorrelationID] = true
+		}
+	}
+	for _, e := range entries {
+		if e.Kind == InboxEntryAnswer && e.Answer != nil {
+			if retainedQuestion[e.Answer.SessionID+"\x00"+e.Answer.CorrelationID] {
+				compacted = append(compacted, e)
+			}
+			continue
+		}
 		if e.Kind != InboxEntryMessage || e.Message == nil {
 			continue
 		}
@@ -973,6 +1026,146 @@ func (s *MessageInboxStore) Drain(ownerKey, childSessionID, sinceCursor string, 
 	// the loop scans nothing new (an empty/fully-behind-cursor file), so the
 	// cursor does not move backwards.
 	return candidates, strconv.FormatInt(lastScannedSeq, 10), false, nil
+}
+
+// CorrelationState is where a correlation id stands for one child.
+type CorrelationState string
+
+const (
+	CorrelationUnknown  CorrelationState = "unknown"
+	CorrelationOpen     CorrelationState = "open"
+	CorrelationAnswered CorrelationState = "answered"
+	// CorrelationAnswering: an answer is being delivered right now (or was
+	// delivered and not yet durably recorded) — a second answer must not go out.
+	CorrelationAnswering CorrelationState = "answering"
+)
+
+// CorrelationLookup is LookupCorrelation's result. AnsweredAt is set only for
+// CorrelationAnswered; OpenIDs lists every still-open correlation id the child
+// has raised (oldest first), so a refusal can tell the caller what to use.
+type CorrelationLookup struct {
+	State      CorrelationState
+	AnsweredAt time.Time
+	OpenIDs    []string
+}
+
+// answerableKind is a message kind a parent can answer by correlation id.
+func answerableKind(kind string) bool { return kind == "question" || kind == "blocker" }
+
+// LookupCorrelation resolves correlationID against the question/blocker
+// messages childSessionID has raised under ownerKey and the answers recorded
+// for them.
+func (s *MessageInboxStore) LookupCorrelation(ownerKey, childSessionID, correlationID string) (CorrelationLookup, error) {
+	if strings.TrimSpace(ownerKey) == "" {
+		return CorrelationLookup{}, ErrInboxEmptyOwnerKey
+	}
+	mu := s.lock.Get(ownerKey)
+	mu.Lock()
+	defer mu.Unlock()
+	return s.lookupCorrelationLocked(ownerKey, childSessionID, correlationID)
+}
+
+func answerKey(ownerKey, childSessionID, correlationID string) string {
+	return ownerKey + "\x00" + childSessionID + "\x00" + correlationID
+}
+
+// lookupCorrelationLocked is LookupCorrelation's body; the caller holds
+// ownerKey's lock.
+func (s *MessageInboxStore) lookupCorrelationLocked(ownerKey, childSessionID, correlationID string) (CorrelationLookup, error) {
+	entries, err := s.readEntries(ownerKey)
+	if err != nil {
+		return CorrelationLookup{}, err
+	}
+	answeredAt := map[string]time.Time{}
+	for _, e := range entries {
+		if e.Kind == InboxEntryAnswer && e.Answer != nil && e.Answer.SessionID == childSessionID {
+			answeredAt[e.Answer.CorrelationID] = e.CreatedAt
+		}
+	}
+	res := CorrelationLookup{State: CorrelationUnknown}
+	for _, e := range entries {
+		if e.Kind != InboxEntryMessage || e.Message == nil {
+			continue
+		}
+		p, _, perr := peekEnvelope(*e.Message)
+		if perr != nil || p.SessionID != childSessionID || p.CorrelationID == "" || !answerableKind(p.Kind) {
+			continue
+		}
+		at, answered := answeredAt[p.CorrelationID]
+		if !answered {
+			res.OpenIDs = append(res.OpenIDs, p.CorrelationID)
+		}
+		if p.CorrelationID == correlationID {
+			switch {
+			case answered:
+				res.State, res.AnsweredAt = CorrelationAnswered, at
+			default:
+				res.State = CorrelationOpen
+				if _, busy := s.answerReserved.Load(answerKey(ownerKey, childSessionID, correlationID)); busy {
+					res.State = CorrelationAnswering
+				}
+			}
+		}
+	}
+	return res, nil
+}
+
+// ReserveAnswer is the atomic check-and-claim a respond takes BEFORE it
+// delivers: under the owner lock it resolves correlationID and, when the
+// question is open and not already being answered, reserves it, so two
+// concurrent answers cannot both deliver. The caller must then either
+// RecordAnswer (delivered) or ReleaseAnswer (delivery failed). State is
+// CorrelationOpen exactly when the reservation was taken.
+func (s *MessageInboxStore) ReserveAnswer(ownerKey, childSessionID, correlationID string) (CorrelationLookup, error) {
+	if strings.TrimSpace(ownerKey) == "" {
+		return CorrelationLookup{}, ErrInboxEmptyOwnerKey
+	}
+	mu := s.lock.Get(ownerKey)
+	mu.Lock()
+	defer mu.Unlock()
+	res, err := s.lookupCorrelationLocked(ownerKey, childSessionID, correlationID)
+	if err != nil || res.State != CorrelationOpen {
+		return res, err
+	}
+	s.answerReserved.Store(answerKey(ownerKey, childSessionID, correlationID), struct{}{})
+	return res, nil
+}
+
+// ReleaseAnswer drops a reservation whose delivery failed, leaving the
+// question open for a retry.
+func (s *MessageInboxStore) ReleaseAnswer(ownerKey, childSessionID, correlationID string) {
+	s.answerReserved.Delete(answerKey(ownerKey, childSessionID, correlationID))
+}
+
+// RecordAnswer durably records that correlationID of childSessionID was
+// answered. Idempotent: a second record for the same id appends nothing.
+func (s *MessageInboxStore) RecordAnswer(ownerKey, childSessionID, correlationID string) error {
+	if strings.TrimSpace(ownerKey) == "" {
+		return ErrInboxEmptyOwnerKey
+	}
+	mu := s.lock.Get(ownerKey)
+	mu.Lock()
+	defer mu.Unlock()
+	entries, err := s.readEntries(ownerKey)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Kind == InboxEntryAnswer && e.Answer != nil &&
+			e.Answer.SessionID == childSessionID && e.Answer.CorrelationID == correlationID {
+			s.answerReserved.Delete(answerKey(ownerKey, childSessionID, correlationID))
+			return nil
+		}
+	}
+	entry := InboxEntry{
+		Kind: InboxEntryAnswer, Seq: nextSeqAfter(entries), CreatedAt: s.now().UTC(),
+		Answer: &InboxAnswer{SessionID: childSessionID, CorrelationID: correlationID},
+	}
+	if err := fileutil.AppendJSONL(s.path(ownerKey), entry); err != nil {
+		return fmt.Errorf("session: inbox: record answer: %w", err)
+	}
+	s.answerReserved.Delete(answerKey(ownerKey, childSessionID, correlationID))
+	return nil
 }
 
 // Entries returns the owner key's raw durable inbox entries in write order —

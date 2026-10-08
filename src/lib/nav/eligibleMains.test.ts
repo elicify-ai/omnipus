@@ -284,7 +284,9 @@ describe('eligibleMainAgents (T-01, N01, N02, N10)', () => {
       roster: [{ agent: makeAgent({ id: 'native-worker', name: 'Native worker', type: 'Subagent' }), member: workerMember }],
     }, expected, 'BDD-01.2 workers absent; a successful roster is not BDD-01.4 empty-team failure')
   })
+})
 
+describe('eligibleMainAgents failure and missing-ID states (T-01, N01, N10)', () => {
   it('BDD-01.4 no cache and a failed roster is Retry, never a seam id or a session id', async () => {
     const miaMember = member()
     seam.mains.set(miaMember, 'seam-opaque-mia')

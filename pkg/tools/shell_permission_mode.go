@@ -111,8 +111,8 @@ const (
 // package boundary note above). Implemented by pkg/agent's
 // ShellPermissionGate (loop_policy.go), whose liveMode resolves: God Mode
 // active -> God; bash's own tool policy not resolving to "ask" -> Ask;
-// "ask" + Auto-approve (cfg.Sandbox.AutoApprove, the agent's
-// AutoApproveDisabled, and the chat's SessionModeStore modifier) off -> Ask;
+// "ask" + Auto-approve (cfg.Sandbox.AutoApprove and the chat's SessionModeStore
+// modifier) off -> Ask;
 // "ask" + Auto-approve on -> Auto. Auto is a switch that only matters once
 // bash's tool policy has already resolved to "ask" — it is not a third mode
 // selected independently of Ask/God.

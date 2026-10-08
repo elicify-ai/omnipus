@@ -41,7 +41,7 @@ func TestReminder_WithinByteBudget(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 	cb := NewContextBuilder(tmpDir)
 
-	dynamic := cb.buildDynamicContext("", "test", "chat1", "user1", "Alice")
+	dynamic := cb.buildDynamicContext(0, "", "test", "chat1", "user1", "Alice")
 	assert.Contains(t, dynamic, skillReminderNote,
 		"the dynamic context block actually emitted per-request must contain the reminder verbatim")
 }
@@ -67,7 +67,7 @@ func TestTurnAssembly_MenuInsideCacheBoundaryReminderOutside(t *testing.T) {
 
 	cb := NewContextBuilder(tmpDir).WithSkillAllowlist([]string{"release-notes"})
 
-	msgs := cb.BuildMessages(nil, "hello", nil, "", "test", "chat1", "user1", "Alice", "", nil)
+	msgs := cb.BuildMessages(0, nil, "hello", nil, "", "test", "chat1", "user1", "Alice", "", nil)
 	require.NotEmpty(t, msgs)
 	require.Equal(t, "system", msgs[0].Role)
 	require.Len(t, msgs[0].SystemParts, 2, "static + dynamic blocks only — no active skills, no breadcrumb, on this turn")
@@ -109,7 +109,7 @@ func TestTurnAssembly_NoSkillBodiesWhenNoneActive(t *testing.T) {
 
 	cb := NewContextBuilder(tmpDir).WithSkillAllowlist([]string{"release-notes"})
 
-	msgs := cb.BuildMessages(nil, "hello", nil, "", "test", "chat1", "user1", "Alice", "", nil)
+	msgs := cb.BuildMessages(0, nil, "hello", nil, "", "test", "chat1", "user1", "Alice", "", nil)
 	require.NotEmpty(t, msgs)
 	require.Equal(t, "system", msgs[0].Role)
 
@@ -140,13 +140,13 @@ func TestTurnAssembly_LoadedSkillPresentThisTurnOnly(t *testing.T) {
 
 	cb := NewContextBuilder(tmpDir).WithSkillAllowlist([]string{"release-notes"})
 
-	activatedMsgs := cb.BuildMessages(nil, "draft the notes", nil, "", "test", "chat1", "user1", "Alice", "", nil, "release-notes")
+	activatedMsgs := cb.BuildMessages(0, nil, "draft the notes", nil, "", "test", "chat1", "user1", "Alice", "", nil, "release-notes")
 	require.NotEmpty(t, activatedMsgs)
 	assert.Contains(t, activatedMsgs[0].Content, "# Active Skills")
 	assert.Contains(t, activatedMsgs[0].Content, "SKILL-BODY-MARKER",
 		"the loaded skill's body must be present on the turn that activated it")
 
-	laterMsgs := cb.BuildMessages(nil, "what else can you do", nil, "", "test", "chat1", "user1", "Alice", "", nil)
+	laterMsgs := cb.BuildMessages(0, nil, "what else can you do", nil, "", "test", "chat1", "user1", "Alice", "", nil)
 	require.NotEmpty(t, laterMsgs)
 	assert.NotContains(t, laterMsgs[0].Content, "# Active Skills",
 		"a later turn with no activeSkills must carry no Active Skills block")
