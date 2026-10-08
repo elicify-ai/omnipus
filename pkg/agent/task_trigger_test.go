@@ -32,7 +32,7 @@ func newTriggerFakeClock() *triggerFakeClock {
 	return &triggerFakeClock{t: triggerFakeClockStart(time.Now())}
 }
 
-// triggerFakeClockStart is the fake clock's start for a real wall-clock `real`:
+// triggerFakeClockStart is the fake clock's start for a real wall-clock `wall`:
 // 24h ahead so the cron runLoop timer sleeps a long time, but never later than
 // 22:00 UTC of the NEXT calendar day.
 //
@@ -45,9 +45,9 @@ func newTriggerFakeClock() *triggerFakeClock {
 // RunsInRange reports 0 runs (CI run 37703450387, which ran 23:52-23:59 UTC).
 // The cap keeps every occurrence the tests arm within one calendar day of the
 // real clock at any time of day.
-func triggerFakeClockStart(real time.Time) time.Time {
-	start := real.Add(24 * time.Hour)
-	y, m, d := real.UTC().Date()
+func triggerFakeClockStart(wall time.Time) time.Time {
+	start := wall.Add(24 * time.Hour)
+	y, m, d := wall.UTC().Date()
 	limit := time.Date(y, m, d+1, 22, 0, 0, 0, time.UTC)
 	if start.After(limit) {
 		return limit
@@ -67,20 +67,20 @@ func TestTriggerFakeClockStart_KeepsOccurrencesWithinRunsInRangeFloor(t *testing
 		return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 	}
 	for _, hhmmss := range []string{"00:00:30", "12:00:00", "21:59:59", "23:55:00", "23:58:50", "23:59:59"} {
-		real, err := time.Parse("2006-01-02 15:04:05", "2026-10-07 "+hhmmss)
+		wall, err := time.Parse("2006-01-02 15:04:05", "2026-10-07 "+hhmmss)
 		if err != nil {
 			t.Fatalf("parse %q: %v", hhmmss, err)
 		}
-		start := triggerFakeClockStart(real)
-		if ahead := start.Sub(real); ahead < 20*time.Hour {
+		start := triggerFakeClockStart(wall)
+		if ahead := start.Sub(wall); ahead < 20*time.Hour {
 			t.Errorf("real=%s: fake clock only %v ahead; the cron timer needs a long sleep", hhmmss, ahead)
 		}
 		occurrence := start.Add(10 * time.Minute) // dtstart (+1m) plus the tests' Advance(2m), with slack
 		floor := day(occurrence).AddDate(0, 0, -1)
-		if day(real).Before(floor) {
+		if day(wall).Before(floor) {
 			t.Errorf("real=%s: occurrence %s is on day %s, floor %s is after the real day %s — "+
 				"RunsInRange would miss the record", hhmmss, occurrence.Format(time.RFC3339),
-				day(occurrence).Format("2006-01-02"), floor.Format("2006-01-02"), day(real).Format("2006-01-02"))
+				day(occurrence).Format("2006-01-02"), floor.Format("2006-01-02"), day(wall).Format("2006-01-02"))
 		}
 	}
 	// Negative control: the uncapped real+24h start DOES violate the invariant
