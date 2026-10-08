@@ -77,20 +77,23 @@ The chat is a conversation with the workspace's agents. Replies stream in; each 
 
 ### Who is replying
 
-A finished reply shows the agent's name above the text and nothing else beside it — no portrait. That is true for a live reply, an older message, a replay of history, and a guest agent answering inside someone else's chat. The name is the agent who wrote that reply, not whoever is selected in the box now.
+Replies in the web app's chat show the agent's name above the text without a portrait, including streaming replies, saved history, and another agent's replies in the same chat. When the reply records its author, the name follows that author rather than the current agent selection. Older replies without a recorded author fall back to the chat's current agent. If an agent's details cannot be found, its stored ID can appear instead of a name.
 
-While a reply is still coming in, a mark sits in the conversation itself (the agent's figure and role badge, plus a short phrase). It is not a second line on the message box.
+During a live reply, an inline mark replaces the old bouncing-dot indicator. It combines the agent's figure and role badge with a short status phrase, inside the conversation, not on the message box. The name remains above the reply. While agent details are loading or unavailable, the phrase can appear without the figure.
 
 | What is happening | What you see |
 |---|---|
-| The agent is composing, and no tool is running | The mark breathes, and the phrase rotates through the existing thinking lines, starting with **Thinking…**. |
-| A background command is actually running | The mark works, and the phrase is that command's own short label when it has one (never the raw command). |
-| A tool needs your approval | **Waiting for your approval**, with the tool's name. The mark waits. |
-| The agent asked you a question | **Waiting for your input**. If a question and an approval are both open, the phrase stays **Waiting for your input**. |
-| The connection to the app dropped, or it is reconnecting | **Unavailable/reconnecting**. The mark stays still. |
-| The chat is settled: nothing is running, nothing is waiting, and you are connected | **Idle**, next to the name of the latest reply. No animation. |
+| A reply is running with no more specific status phrase | The mark breathes and rotates through thinking phrases, starting with **Thinking…**. A visible tool card can show its own progress at the same time. |
+| The agent is setting up a goal whose record is still empty | **Framing your goal**, or **Setting acceptance criteria** while that step runs. This phrase takes priority over a background-command label. |
+| A background-command tool call is running and its card is hidden in the chat | The mark pulses, with the call's short description or a label such as **Running git…**, rather than its command line. It follows that tool call, not the whole lifetime of a background process. |
+| A tool needs your approval | **Waiting for your approval**, with the tool's name. The mark uses its waiting motion. |
+| The agent asked you a question | **Waiting for your input**. If a question and an approval are both pending, this phrase wins. |
+| The connection dropped or is reconnecting | **Unavailable/reconnecting** where the reply's status is shown. The mark stays still. |
+| The latest reply has settled, you are connected, and no approval or question is pending | **Idle** can appear next to that reply's name once history has finished loading. This describes the reply, not whether helpers or background commands have finished. |
 
-If your system asks for reduced motion, the mark stays still and the thinking phrase does not rotate. The name and the current phrase remain. The ink of the mark stays solid; only a glow behind it moves, and that glow stops with reduced motion.
+**Limits of the inline mark:** it needs an assistant reply to display against. A question or approval can still need attention when no inline mark is visible. In loaded history, a running reply that already has visible content does not show the Thinking or Working mark. Queued work has no inline **Queued** mark; check **Sessions** or Activity instead. For background processes that outlast their tool call, use the Sessions command count and the Activity panel.
+
+The mark's figure and badge stay fully opaque. With normal motion they gently change size, and a separate glow animates behind them; Working also has a moving highlight. If your system requests reduced motion, these loops stop and the thinking phrase stops rotating. The name and current phrase remain visible.
 
 A failure or refusal routed to an existing chat appears in that conversation, including when no reply has started. It does not turn into an app-wide connection banner when you open another conversation or start a new chat. Connection and routing-protocol failures remain separate app-wide problems.
 
@@ -144,32 +147,39 @@ When the current first message has no known chat ID, `/new` shows **“Delivery 
 
 ## Sessions
 
-Type `/sessions` in the message box and press Enter to open **Sessions**. It is the same list as the sidebar search. The command is `/sessions` only.
+Type `/sessions` in the web chat's message box and press Enter to open **Sessions**, or select it from the slash-command menu. It opens the same view as the sidebar's magnifier. `/resume` has been removed and is not an alias for `/sessions`.
 
-The view is titled **Sessions**. **All** lists every session. **Running** lists only sessions that are executing right now. A session that is queued is not running: under **All** its status says **Queued**, and **Running** hides it.
+The view is titled **Sessions** and offers two status filters:
 
-Each row shows the session title, then a status word, a kind, when it started, when it was last active, and its token count when that count is known. A stored count of zero is shown as 0. A missing count is left blank rather than shown as zero.
+| Filter | What it includes |
+|---|---|
+| **All** | The available sessions across workspaces, including queued and ended work. Search, date, and workspace filters can narrow the list. Internal verifier sessions are not included. |
+| **Running** | Sessions the server records as executing now, plus their parent rows so helpers stay in context. A queued session does not match Running by itself, though a non-running parent can remain above a matching helper. |
+
+Search matches a session's title, workspace, or agent name. The date-range control filters by when the session was last active, not when it started.
+
+Each real session row shows its title, status, kind, when it started, and when it was last active. Its token count appears when known and the screen is wide enough. A stored zero is shown as 0; a missing count is not invented.
 
 | Status | When you see it |
 |---|---|
-| **Working** | The session is executing. |
+| **Working** | The server's lifecycle record says it is working, and it is not queued. |
 | **Waiting** | It is waiting for an answer. |
 | **Queued** | It is queued, not executing. |
-| **Done** | It finished, or the chat is archived. |
+| **Done** | Its lifecycle record says it finished. If no lifecycle status is available, an archived chat also shows Done. |
 | **Failed** | It failed. |
-| **Stopped** | It was stopped. The cause is included when Omnipus has one, for example **Stopped · timeout**. |
-| **Interrupted** | A restart cut the turn off. |
-| **Unavailable** | Omnipus has no status record for this session. An active chat without that record is not shown as Working. |
+| **Stopped** | It was stopped. The cause is included when known, for example **Stopped · timeout**. |
+| **Interrupted** | A server restart cut the turn off. |
+| **Unavailable** | No usable lifecycle or queued status is available, and the chat is not archived. An active chat without that information is not labelled Working. |
 
-Kind is the session's real type: **Chat**, **Task**, **Helper**, **Scheduled**, **Channel**, **Heartbeat**, or **Verifier**. A helper is a session started under another chat.
+Kind is the session's real type: **Chat**, **Task**, **Helper**, **Scheduled**, **Channel**, or **Heartbeat**. A Helper is a delegated session with its own parent chat.
 
-Helpers stay under that chat in **All**, **Running**, and search, even when the chat itself would not match. If the list is complete and the parent chat is not in it, the helper sits under a row that says **parent chat unavailable**. You can still open the helper. Omnipus does not invent a title for the missing chat. If the list is incomplete, those helpers are not marked unavailable. A notice says the list is incomplete, and **Retry** loads it again.
+Helpers stay under their real parent in **All**, **Running**, and search, even when the parent itself does not match. If a complete list has no record of the parent, the helpers appear under **parent chat unavailable**. This is an expandable heading, not a chat you can open; the helpers beneath it can still be opened. Omnipus does not invent a title for the missing parent. If the list is incomplete, the heading instead says **Parent not in this partial list**: a missing page is not proof that a parent is unavailable. An incomplete-list notice offers **Retry** to load the list again.
 
-Identical helper runs in a row under the same chat fold into **N similar helper runs**. Expand that row to see each original run, with its own status and **Open**. The same title under a different chat stays separate.
+Consecutive helpers with the same title under the same parent fold into **N similar helper runs**. This means similar labels, not a guarantee that their instructions or results are identical. Expand the heading to see each original session, with its own status and selectable title. Runs under different parents never fold together.
 
-When a chat itself owns background commands, its row says **N background commands running** (or **1 background command running**). A checked count of zero, or an unknown count, shows no sentence. The count is not a total of commands owned by helpers.
+When a session itself owns running background commands, its row says **N background commands running** (or **1 background command running**). Zero or an unknown count shows no sentence. The count belongs to that session only, not its helpers. Background commands do not get synthetic session rows: open the owning chat and inspect its Activity panel.
 
-Arrow keys move the highlight. Enter, or **Open** on a row, attaches that chat and opens its Activity panel. A folded row expands instead of opening. If that session disappears, the highlight clears and focus returns to the search field. Enter does not open a different session in its place.
+With focus in the search field, **Up** and **Down** move the highlight, and **Enter** opens the highlighted session. You can also select a real row's title — its Open action. Once that chat is attached, its Activity panel opens. Folded and missing-parent headings expand or collapse instead of attaching a chat. If an update removes the highlighted target, the highlight clears and focus returns to the search field; Enter does not silently open another session in its place. A connection failure while opening a workspace chat shows an error instead of pretending the switch succeeded.
 
 ## Panels beside chat
 
