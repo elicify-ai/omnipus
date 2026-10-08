@@ -75,6 +75,23 @@ The hamburger means **Show sidebar** only; there is no second hamburger for pane
 
 The chat is a conversation with the workspace's agents. Replies stream in; each tool an agent uses appears as a card you can expand or collapse ([tools](tools.md) explains what agents can do). When an agent wants to do something sensitive, an approval dialog asks you to approve it once, deny it, or always allow it — [security](security.md) covers the rules behind it. Each active [goal](goals.md) shows as its own small pill under the message box.
 
+### Who is replying
+
+A finished reply shows the agent's name above the text and nothing else beside it — no portrait. That is true for a live reply, an older message, a replay of history, and a guest agent answering inside someone else's chat. The name is the agent who wrote that reply, not whoever is selected in the box now.
+
+While a reply is still coming in, a mark sits in the conversation itself (the agent's figure and role badge, plus a short phrase). It is not a second line on the message box.
+
+| What is happening | What you see |
+|---|---|
+| The agent is composing, and no tool is running | The mark breathes, and the phrase rotates through the existing thinking lines, starting with **Thinking…**. |
+| A background command is actually running | The mark works, and the phrase is that command's own short label when it has one (never the raw command). |
+| A tool needs your approval | **Waiting for your approval**, with the tool's name. The mark waits. |
+| The agent asked you a question | **Waiting for your input**. If a question and an approval are both open, the phrase stays **Waiting for your input**. |
+| The connection to the app dropped, or it is reconnecting | **Unavailable/reconnecting**. The mark stays still. |
+| The chat is settled: nothing is running, nothing is waiting, and you are connected | **Idle**, next to the name of the latest reply. No animation. |
+
+If your system asks for reduced motion, the mark stays still and the thinking phrase does not rotate. The name and the current phrase remain. The ink of the mark stays solid; only a glow behind it moves, and that glow stops with reduced motion.
+
 A failure or refusal routed to an existing chat appears in that conversation, including when no reply has started. It does not turn into an app-wide connection banner when you open another conversation or start a new chat. Connection and routing-protocol failures remain separate app-wide problems.
 
 **Open browser** at the top of the chat shows the agent's [live browser](browser.md). Library is in the sidebar, and opens every workspace's files. When an agent builds something reviewable, like a small site, the chat links to it ([previews](previews.md)).
