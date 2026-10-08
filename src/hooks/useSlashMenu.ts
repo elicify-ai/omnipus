@@ -175,7 +175,8 @@ export interface UseSlashMenuResult {
    * client-delivery slash command, runs it locally and returns true — caller must
    * preventDefault() so the message never reaches the backend. Makes typing
    * the command and pressing Enter behave identically to selecting it
-   * from the palette. `/new` and `/clear` are not client commands here (FR-007).
+   * from the palette. `/new` and `/clear` are server commands: this returns
+   * false for them so the text is sent, and it never starts a chat.
    *
    * ALSO returns true — WITHOUT running anything — for any "/"-prefixed text
    * submitted while the command list's first fetch is still in flight. The
@@ -297,9 +298,9 @@ function rankByFilter<T>(items: T[], filter: string, getRank: (item: T, lowerFil
 // closed over are now passed explicitly as `deps`.
 // runClientCommand — shared handler for client-delivery slash commands.
 // Called both from palette selection (executeSlashCommand) and from the
-// send-path interception so that typing "/new"+Enter (or its legacy
-// alias "/clear"+Enter) converges with selecting /new from the palette —
-// both run client-side, never reaching the backend.
+// send-path interception so that typing a local command and pressing Enter
+// converges with selecting it from the palette. `/new` and `/clear` are not
+// local commands: the server table decides, and both paths send them.
 //
 // `argument` carries the text after an argument-bearing client command's
 // label (D9 "/stop-redirect <instruction>"), already trimmed of the
@@ -309,16 +310,14 @@ function rankByFilter<T>(items: T[], filter: string, getRank: (item: T, lowerFil
 // Returns true when the command was handled (caller must NOT send the
 // text), false when the name is not a known client command (caller
 // should fall through to inserting as text — Issue 3 fallback).
-// FR-007: the SPA no longer lists or runs /new or /clear. Matching is by the
-// command name and by any alias, so a backend row named "new" with alias
-// "clear" drops out of the palette, /help, and alias lookup together. The
-// skill-chip gate in ChatScreen stays a generic walk of whatever the server
-// still returns; this filter is only the slash menu's own list.
-const RETIRED_SPA_COMMAND_NAMES = new Set(['new', 'clear'])
+// The server command table owns /new and /clear, including a row whose
+// alias is the other name. The SPA lists whatever the server returns and
+// sends those two; it does not run them and does not hide them.
+const SERVER_RUN_COMMAND_NAMES = new Set(['new', 'clear'])
 
-function isRetiredSpaCommand(command: SlashCommand): boolean {
-  if (RETIRED_SPA_COMMAND_NAMES.has(command.name.toLowerCase())) return true
-  return (command.aliases ?? []).some((alias) => RETIRED_SPA_COMMAND_NAMES.has(alias.toLowerCase()))
+function isServerRunCommand(command: SlashCommand): boolean {
+  if (SERVER_RUN_COMMAND_NAMES.has(command.name.toLowerCase())) return true
+  return (command.aliases ?? []).some((alias) => SERVER_RUN_COMMAND_NAMES.has(alias.toLowerCase()))
 }
 
 interface ClientCommandDeps {
@@ -334,13 +333,12 @@ interface ClientCommandDeps {
 
 function runClientSlashCommand(name: string, argument: string, deps: ClientCommandDeps): boolean {
   const { allCommands, appendMessage, activateStop, cancelIfStreaming, sendRedirectFrame, composerRuntime, setInputValue, setSlashOpen } = deps
-  // /new and /clear are not handled. The backend still serves them until U1
-  // (DEP-CUT). The SPA does not list them, does not resolve their aliases,
-  // and does not start a chat when they are typed.
+  // /new and /clear are not handled here. Selecting or typing them sends the
+  // server command. This function never starts a chat for those names.
 
   if (name === 'help') {
-    // US-4/AC-2: build the help text from the fetched command list, after
-    // retired /new and /clear have been filtered out. No tip about "@".
+    // US-4/AC-2: help text is the command list the server returned, plus the
+    // web-only entries. No tip about "@". /new and /clear appear only then.
     const helpLines = allCommands
       .map((c) => `- \`${c.label}\` — ${c.description}`)
       .join('\n')
@@ -618,7 +616,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       delivery: 'client',
       available_while_streaming: true,
     },
-    ...commands.filter((command) => !isRetiredSpaCommand(command)),
+    ...commands,
   ]
 
   // Skills query: always enabled when input is enabled (not gated on
@@ -865,6 +863,15 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
       return
     }
 
+    // /new and /clear belong to the server table. Selecting one sends that
+    // label; it does not run locally and does not start a chat.
+    if (isServerRunCommand(def)) {
+      composerRuntime.setText(def.label)
+      setInputValue(def.label)
+      composerRuntime.send()
+      return
+    }
+
     // An argument-bearing command completes into the composer instead of
     // running: agent-delivery commands always need their text sent as a
     // message, and — since D9 — a client-delivery command that DECLARES an
@@ -920,8 +927,8 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // Send-path interception: before AssistantUI's onNew fires, check if the
   // trimmed input is exactly a client-delivery slash command. If it is, run
   // it locally and prevent the message from reaching the backend. `/new` and
-  // `/clear` are filtered out of the command list first, so typing them does
-  // not run a client command (FR-007).
+  // `/clear` are server commands, so typing them is not a local command and
+  // the text is sent.
   //
   // Deliberately NOT wrapped in useCallback: it (transitively, via
   // runClientCommand) closes over appendMessage/startNewSession/
@@ -950,7 +957,11 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     const exact = allCommands.find(
       (c) => c.delivery === 'client' && (c.label.toLowerCase() === trimmedLower || c.aliases?.some((a) => a.toLowerCase() === typedNameLower)),
     )
-    if (exact) return { command: exact, argument: '' }
+    if (exact) {
+      // Server-owned /new and /clear are ordinary messages, not local commands.
+      if (isServerRunCommand(exact)) return null
+      return { command: exact, argument: '' }
+    }
     // D9: an argument-bearing client command — the command's label followed
     // by whitespace, the remainder being the instruction ("/stop-redirect
     // focus on the failing tests"). Matched only against the canonical
@@ -961,7 +972,7 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     // followed by text ("/new foo", "/cancel foo") is NOT a command match;
     // it stays whatever it always was (the readiness gate / not-a-command).
     const withArg = allCommands.find((c) => {
-      if (c.delivery !== 'client' || !c.argument_hint) return false
+      if (c.delivery !== 'client' || !c.argument_hint || isServerRunCommand(c)) return false
       const labelLower = c.label.toLowerCase()
       if (!trimmedLower.startsWith(labelLower)) return false
       const rest = trimmed.slice(c.label.length)
