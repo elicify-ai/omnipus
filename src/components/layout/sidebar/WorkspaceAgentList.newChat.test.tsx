@@ -104,12 +104,19 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   }
 }
 
-const project = {
+const project: Workspace = {
   id: WS,
   name: 'Product launch',
   is_default: false,
+  status: 'active',
+  pinned: false,
+  pin_order: 0,
+  task_count: 0,
+  revision: '0'.repeat(64),
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
   member_configs: { mia: miaMember, jim: jimMember },
-} as Workspace
+}
 
 const mia = makeAgent({ id: 'mia', name: 'Mia', type: 'Main' })
 const jim = makeAgent({ id: 'jim', name: 'Jim', type: 'Main' })
@@ -139,8 +146,16 @@ function pointers() {
   }
 }
 
+function pendingBucket() {
+  return useChatStore.getState().sessionsById.__pending
+}
+
+// D8 (fef5e42d0): Start a new chat removes the pending bucket synchronously.
+// getMessages requires a bucket, so a missing one is absence, not an empty list
+// the helper may invent by reading undefined.
 function pendingUsers() {
-  const bucket = useChatStore.getState().sessionsById.__pending
+  const bucket = pendingBucket()
+  if (bucket == null) return []
   return getMessages(bucket)
     .filter((message) => message.role === 'user')
     .map(({ id, content }) => ({ id, content }))
@@ -260,6 +275,8 @@ describe('WorkspaceAgentList + New chat (FR-005, BDD-03.1, BDD-E02, N09)', () =>
     fireEvent.click(within(dialog).getByRole('button', { name: /^Start a new chat$/ }))
 
     const pending = useChatStore.getState().pendingFirstSend
+    expect(pendingBucket(), 'D8: Start a new chat removes the pending bucket').toBeUndefined()
+    expect(pendingUsers(), 'the abandoned id is gone from pending').toEqual([])
     expect({
       clientMessageId: pending?.clientMessageId ?? null,
       text: pending?.payload.content ?? null,
