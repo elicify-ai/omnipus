@@ -129,6 +129,26 @@ describe('unavailable workspace chat', () => {
     expect(runWorkspaceEntry).toHaveBeenCalledWith('ws-product')
   })
 
+  it('failed restore keeps the old chat visible but disables composer and retries the target workspace', () => {
+    act(() => useSessionStore.setState({
+      activeSessionId: 'retained-source-chat',
+      activeAgentId: 'mia',
+      workspaceEntry: {
+        status: 'failed-attempt', committed: { sessionId: 'retained-source-chat', agentId: 'mia' },
+        attempted: { sessionId: 'target-chat', sendEnabled: false },
+        acknowledged: false, retry: true, fellBack: false,
+      },
+    }))
+    render(<OmnipusComposer />)
+    expect(screen.getByText('Could not restore your last conversation. Retry to try again.')).toBeInTheDocument()
+    expect(screen.getByTestId('composer-input')).toBeDisabled()
+    expect(screen.getByTestId('chat-send')).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(runWorkspaceEntry).toHaveBeenCalledTimes(1)
+    expect(runWorkspaceEntry).toHaveBeenCalledWith('ws-product')
+    expect(useSessionStore.getState().activeSessionId).toBe('retained-source-chat')
+  })
+
   it('says nothing and leaves send enabled when a chat is available', () => {
     render(<OmnipusComposer />)
     expect(screen.queryByText('This chat is unavailable right now')).toBeNull()

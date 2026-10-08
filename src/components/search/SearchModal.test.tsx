@@ -148,7 +148,7 @@ beforeEach(() => {
     // searchModalMode explicitly reset to 'sessions' here — the two-modes
     // describe block below flips it to 'workspaces' for its own tests, and
     // without this reset that would leak into whichever test runs next.
-    useUiStore.setState({ searchModalOpen: true, searchModalWorkspaceFilter: null, searchModalMode: 'sessions', closeSearchModal: realCloseSearchModal })
+    useUiStore.setState({ searchModalOpen: true, searchModalWorkspaceFilter: null, searchModalMode: 'sessions', closeSearchModal: realCloseSearchModal, toasts: [] })
     useSessionStore.setState(useSessionStore.getInitialState(), true)
     useChatStore.setState(useChatStore.getInitialState(), true)
     useConnectionStore.setState(useConnectionStore.getInitialState(), true)
@@ -601,9 +601,11 @@ describe('SearchModal — workspace-switch arrow', () => {
 
   it('keeps the committed chat and both remembered pointers when target-workspace restore fails', async () => {
     const user = userEvent.setup()
+    const send = vi.fn<WsConnection['send']>().mockReturnValue(true)
     const source = { id: 'source-chat', type: 'chat' as const, title: 'Source chat', agentId: 'source-owner' }
     const target = { id: 's-1', type: 'chat' as const, title: 'Session One', agentId: 'agent-1' }
     act(() => {
+      useConnectionStore.setState({ connection: { send } as unknown as WsConnection, isConnected: true })
       useWorkspacesStore.setState({ activeWorkspaceId: 'source-workspace' })
       useSessionStore.setState({ activeSessionId: source.id, activeAgentId: source.agentId })
       useSessionStore.getState().setWorkspaceSessionDescriptor('source-workspace', source)
@@ -633,6 +635,49 @@ describe('SearchModal — workspace-switch arrow', () => {
     })
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: 'ws-1' } })
     expect(useUiStore.getState().searchModalOpen).toBe(false)
+    act(() => useChatStore.getState().sendMessage('Must not send to the retained source chat', { clientMessageId: 'failed-restore-send' }))
+    expect(send, 'FR-004: failed entry must not emit source-session frames stamped with the target workspace').not.toHaveBeenCalled()
+    expect(useChatStore.getState().outboundQueue, 'FR-004: unresolved sends cannot be queued for later misdelivery').toStrictEqual([])
+    vi.mocked(fetchSessions).mockResolvedValueOnce([makeSession()])
+    const retry = useUiStore.getState().toasts.find((toast) => toast.message === 'Could not restore your last conversation. Retry to try again.')?.action
+    expect(retry?.label).toBe('Retry')
+    act(() => retry!.onClick())
+    await waitFor(() => expect(useSessionStore.getState().activeSessionId).toBe(target.id))
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenNthCalledWith(1, { type: 'attach_session', session_id: target.id })
+  })
+
+  it('keeps sending blocked after a rejected target attach and rechecks that target on Retry', async () => {
+    const user = userEvent.setup()
+    const send = vi.fn<WsConnection['send']>().mockReturnValueOnce(false).mockReturnValue(true)
+    const source = { id: 'source-chat', type: 'chat' as const, title: 'Source chat', agentId: 'source-owner' }
+    const target = { id: 's-1', type: 'chat' as const, title: 'Session One', agentId: 'agent-1' }
+    act(() => {
+      useConnectionStore.setState({ connection: { send } as unknown as WsConnection, isConnected: true })
+      useWorkspacesStore.setState({ activeWorkspaceId: 'source-workspace' })
+      useSessionStore.setState({ activeSessionId: source.id, activeAgentId: source.agentId })
+      useSessionStore.getState().setWorkspaceSessionDescriptor('source-workspace', source)
+      useSessionStore.getState().setWorkspaceSessionDescriptor('ws-1', target)
+    })
+    renderModal()
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+    await user.click(screen.getByTestId('workspace-switch-arrow'))
+    await waitFor(() => expect(useSessionStore.getState().workspaceEntry?.status).toBe('failed-attempt'))
+    expect(useSessionStore.getState().activeSessionId).toBe(source.id)
+    expect(useSessionStore.getState().activeAgentId).toBe(source.agentId)
+    expect(useSessionStore.getState().sessionByWorkspace).toStrictEqual({ 'source-workspace': source, 'ws-1': target })
+    act(() => useChatStore.getState().sendMessage('Must not send after rejected attach'))
+    expect(send.mock.calls.map(([frame]) => frame)).toStrictEqual([{ type: 'attach_session', session_id: target.id }])
+    // The actual composer Retry invokes this entry action, verified in
+    // UnavailableChatNotice.test.tsx. A reconnect-only retry would attach A.
+    await act(async () => useSessionStore.getState().enterWorkspaceChat('ws-1'))
+    expect(useSessionStore.getState().activeSessionId).toBe(target.id)
+    expect(useSessionStore.getState().activeAgentId).toBe(target.agentId)
+    expect(useSessionStore.getState().workspaceEntry).toStrictEqual({ status: 'exact', acknowledged: false })
+    expect(send.mock.calls.map(([frame]) => frame)).toStrictEqual([
+      { type: 'attach_session', session_id: target.id },
+      { type: 'attach_session', session_id: target.id },
+    ])
   })
 
   it('is a no-op switch on the ALREADY-active workspace — navigates and closes but does not detach the live session', async () => {

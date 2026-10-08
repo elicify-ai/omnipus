@@ -1981,7 +1981,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   // the card, never the chat box; Cancel (always present on the card)
   // unlocks. Terminal cards (answered/cancelled) release the lock.
   const askLocked = useChatStore((s) => s.pendingAsk?.status === 'pending')
-  const chatUnavailable = useSessionStore((s) => s.workspaceEntry?.status === 'unavailable')
+  const chatUnavailable = useSessionStore((s) => s.workspaceEntry?.status === 'unavailable' || s.workspaceEntry?.status === 'failed-attempt')
 
   const inputEnabled =
     !chatUnavailable &&

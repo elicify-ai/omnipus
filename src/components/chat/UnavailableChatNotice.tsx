@@ -1,6 +1,6 @@
 /**
- * Shown in the composer when workspace entry has no main or welcome chat.
- * Same status-line shape as the connection notice: one sentence and Retry.
+ * Shown when workspace entry is unavailable or a restore failed.
+ * Retains the committed chat with send off; Retry rechecks the target workspace.
  */
 import { Button } from '@/components/ui/button'
 import { useSessionStore } from '@/store/session'
@@ -8,9 +8,9 @@ import { runWorkspaceEntry } from '@/store/session/workspaceEntryFlow'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 
 export function UnavailableChatNotice() {
-  const unavailable = useSessionStore((state) => state.workspaceEntry?.status === 'unavailable')
+  const status = useSessionStore((state) => state.workspaceEntry?.status)
   const workspaceId = useWorkspacesStore((state) => state.activeWorkspaceId)
-  if (!unavailable) return null
+  if (status !== 'unavailable' && status !== 'failed-attempt') return null
   return (
     <div
       role="status"
@@ -18,7 +18,7 @@ export function UnavailableChatNotice() {
       data-testid="unavailable-chat-notice"
       className="flex min-h-8 items-center justify-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
     >
-      <span>This chat is unavailable right now</span>
+      <span>{status === 'failed-attempt' ? 'Could not restore your last conversation. Retry to try again.' : 'This chat is unavailable right now'}</span>
       {workspaceId && (
         <Button
           variant="ghost"
