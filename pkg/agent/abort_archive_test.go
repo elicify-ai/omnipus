@@ -171,7 +171,6 @@ func TestAbortPath_HardAbort_PreservesEvictedArchive(t *testing.T) {
 		initialWindow:        &start,
 		sessionKey:           sk,
 		session:              agent.Sessions,
-		initialArchiveLen:    initialArchiveLen,
 		initialHistoryLength: len(windowAfterEvict),
 		cancelFunc:           cancel,
 	}
@@ -187,20 +186,24 @@ func TestAbortPath_HardAbort_PreservesEvictedArchive(t *testing.T) {
 	err := al.HardAbort(sk)
 	require.NoError(t, err, "HardAbort must not error on an evicted session")
 
-	// --- Phase 5: assert archive invariants.
-	// The archive must be back to initialArchiveLen (appended tail removed).
+	// --- Phase 5: assert the FR-006 non-destructive abort invariants.
+	// The archive is append-only: HardAbort must NOT delete the aborted bytes.
 	afterAbortArchiveLen := archiveLineCountFromAgent(t, al, sk)
-	assert.Equal(t, initialArchiveLen, afterAbortArchiveLen,
-		"SC-001/SC-010: HardAbort must roll back only the appended tail, not the evicted prefix")
+	assert.Equal(t, afterAppendArchiveLen, afterAbortArchiveLen,
+		"FR-006: HardAbort must never rewrite retained archive bytes — the aborted span stays on disk")
 
-	// The in-turn sentinel messages must be gone from the archive.
+	// The aborted-turn sentinels are STILL in the on-disk archive (recall can
+	// read them), but must NOT appear in the live model window.
 	afterAbortArchive := archiveLinesFromAgent(t, al, sk)
+	sentinelInArchive := false
 	for _, line := range afterAbortArchive {
 		if strings.Contains(line.Content, "ABORT_TEST_SENTINEL") {
-			t.Errorf("HardAbort rollback left an in-turn sentinel in the archive: role=%s content=%q",
-				line.Role, line.Content)
+			sentinelInArchive = true
+			break
 		}
 	}
+	assert.True(t, sentinelInArchive,
+		"FR-006: the aborted span's bytes must be preserved in the archive (append-only)")
 
 	// SC-011: ReadArchive must still return the evicted prefix.
 	if afterAbortArchiveLen < evictedCount {
@@ -217,15 +220,16 @@ func TestAbortPath_HardAbort_PreservesEvictedArchive(t *testing.T) {
 	assert.True(t, evictedFound,
 		"SC-011: evicted turns must be present in archive after HardAbort (archive prefix intact)")
 
-	// The live window (GetHistory) must NOT contain the aborted turn's messages,
-	// AND must have the same size as the pre-turn window (round-2 fix: Skip must
-	// be restored to the turn-start value, not left at the mid-turn-eviction value).
+	// The live window (GetHistory) must NOT contain the aborted turn's messages —
+	// the aborted span is a retained-but-excluded effect (FR-006) — AND must have
+	// the same size as the pre-turn window (Skip restored to the turn-start value,
+	// not left at the mid-turn-eviction value).
 	liveWindow := agent.Sessions.GetHistory(sk)
 	assert.Equal(t, len(windowAfterEvict), len(liveWindow),
 		"round-2 fix: live window must be the same size as at turn start (Skip restored to turn-start value)")
 	for _, m := range liveWindow {
 		if strings.Contains(m.Content, "ABORT_TEST_SENTINEL") {
-			t.Errorf("HardAbort rollback left an in-turn sentinel in the live window: role=%s content=%q",
+			t.Errorf("FR-006: the aborted span must be excluded from the live model window: role=%s content=%q",
 				m.Role, m.Content)
 		}
 	}
@@ -330,7 +334,6 @@ func TestAbortPath_RestoreSession_PreservesEvictedArchive(t *testing.T) {
 		agent:                agent,
 		initialWindow:        &start,
 		sessionKey:           sk,
-		initialArchiveLen:    initialArchiveLen,
 		initialHistoryLength: len(windowAfterEvict),
 	}
 
@@ -338,19 +341,24 @@ func TestAbortPath_RestoreSession_PreservesEvictedArchive(t *testing.T) {
 	err := ts.restoreSession(agent)
 	require.NoError(t, err, "restoreSession must not error on an evicted session")
 
-	// --- Phase 5: assert archive invariants.
+	// --- Phase 5: assert the FR-006 non-destructive abort invariants.
+	// The archive is append-only: restoreSession must NOT delete the aborted bytes.
 	afterRestoreArchiveLen := archiveLineCountFromAgent(t, al, sk)
-	assert.Equal(t, initialArchiveLen, afterRestoreArchiveLen,
-		"SC-001/SC-010: restoreSession must roll back only the appended tail, not the evicted prefix")
+	assert.Equal(t, afterAppendArchiveLen, afterRestoreArchiveLen,
+		"FR-006: restoreSession must never rewrite retained archive bytes — the aborted span stays on disk")
 
-	// The in-turn sentinel messages must be gone.
+	// The aborted-turn sentinels are STILL on disk but must be excluded from the
+	// live model window.
 	afterRestoreArchive := archiveLinesFromAgent(t, al, sk)
+	sentinelInArchive := false
 	for _, line := range afterRestoreArchive {
 		if strings.Contains(line.Content, "RESTORE_TEST_SENTINEL") {
-			t.Errorf("restoreSession rollback left an in-turn sentinel in the archive: role=%s content=%q",
-				line.Role, line.Content)
+			sentinelInArchive = true
+			break
 		}
 	}
+	assert.True(t, sentinelInArchive,
+		"FR-006: the aborted span's bytes must be preserved in the archive (append-only)")
 
 	// SC-011: evicted prefix must still be present.
 	if afterRestoreArchiveLen < evictedCount {
@@ -367,15 +375,16 @@ func TestAbortPath_RestoreSession_PreservesEvictedArchive(t *testing.T) {
 	assert.True(t, evictedFound,
 		"SC-011: evicted turns must be present in archive after restoreSession (archive prefix intact)")
 
-	// The live window must not contain the aborted turn's messages AND must have
-	// the same number of messages as before the turn started (round-2 fix: Skip
-	// must be restored to the turn-start value, not left advanced by mid-turn evictions).
+	// The live window must not contain the aborted turn's messages — the aborted
+	// span is a retained-but-excluded effect (FR-006) — AND must have the same
+	// number of messages as before the turn started (Skip restored to the
+	// turn-start value, not left advanced by mid-turn evictions).
 	liveWindow := agent.Sessions.GetHistory(sk)
 	assert.Equal(t, len(windowAfterEvict), len(liveWindow),
 		"round-2 fix: live window must be the same size as at turn start (Skip restored to turn-start value)")
 	for _, m := range liveWindow {
 		if strings.Contains(m.Content, "RESTORE_TEST_SENTINEL") {
-			t.Errorf("restoreSession left in-turn sentinel in the live window: role=%s content=%q",
+			t.Errorf("FR-006: the aborted span must be excluded from the live model window: role=%s content=%q",
 				m.Role, m.Content)
 		}
 	}
@@ -695,18 +704,18 @@ func TestRollbackAppended_MidTurnEviction_RestoreSession(t *testing.T) {
 		agent:                agent,
 		initialWindow:        &start,
 		sessionKey:           sk,
-		initialArchiveLen:    initialArchiveLen,
 		initialHistoryLength: initialHistoryLength,
 	}
 	err := ts.restoreSession(agent)
 	require.NoError(t, err, "restoreSession must not error")
 
-	// Phase 6: assert pre-turn live window is fully restored.
-	// Archive back to 12.
-	assert.Equal(t, initialArchiveLen, archiveLineCountFromAgent(t, al, sk),
-		"SC-001: restoreSession must restore archive to 12 lines")
+	// Phase 6: assert the FR-006 non-destructive abort invariants.
+	// Archive is append-only: bytes preserved (15 lines), NOT shrunk to 12.
+	assert.Equal(t, 15, archiveLineCountFromAgent(t, al, sk),
+		"FR-006: restoreSession must never rewrite retained archive bytes (15 lines stay on disk)")
 
-	// GetHistory must return the 8 pre-turn messages.
+	// GetHistory must return the 8 pre-turn messages (Skip restored to 4, and the
+	// 3 appended lines excluded as a retained-but-excluded span).
 	liveWindow := agent.Sessions.GetHistory(sk)
 	assert.Equal(
 		t,
@@ -715,22 +724,22 @@ func TestRollbackAppended_MidTurnEviction_RestoreSession(t *testing.T) {
 		"SC-010/round-2 fix: restoreSession must restore the pre-turn live window (8 messages), not leave Skip advanced to 8",
 	)
 
-	// No sentinels in the live window or archive.
+	// The aborted span is excluded from the live window but retained on disk.
 	for _, m := range liveWindow {
 		if strings.Contains(m.Content, "RS_SENTINEL") {
-			t.Errorf(
-				"in-turn sentinel found in live window after restoreSession: role=%s content=%q",
-				m.Role,
-				m.Content,
-			)
+			t.Errorf("FR-006: aborted span must be excluded from the live window after restoreSession: role=%s content=%q",
+				m.Role, m.Content)
 		}
 	}
+	rsInArchive := false
 	for _, line := range archiveLinesFromAgent(t, al, sk) {
 		if strings.Contains(line.Content, "RS_SENTINEL") {
-			t.Errorf("in-turn sentinel found in archive after restoreSession: role=%s content=%q",
-				line.Role, line.Content)
+			rsInArchive = true
+			break
 		}
 	}
+	assert.True(t, rsInArchive,
+		"FR-006: the aborted span's bytes must be preserved in the archive after restoreSession")
 
 	// Verify the fixture's pre-turn Skip is 4 (12 archive lines - 8 visible).
 	// restoreSession restores that value from the captured window snapshot.

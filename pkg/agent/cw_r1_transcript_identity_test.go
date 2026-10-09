@@ -153,7 +153,8 @@ func TestCWIdentity_RepeatedUpdatesAbortToOriginalAndKeepAddress(t *testing.T) {
 			initialSet := h.store.Projection(h.key).Entries.Clone()
 			initialSkip := len(archived) - len(h.store.GetHistory(h.key))
 			ts := h.turn("abort")
-			require.Equal(t, h.archiveLines, ts.initialArchiveLen, "rollback snapshots the actual turn-start archive")
+			require.NotNil(t, ts.initialWindow, "rollback snapshots the actual turn-start window")
+			require.Equal(t, h.archiveLines, ts.initialWindow.Count, "rollback snapshots the actual turn-start archive")
 			require.Equal(t, initialSet, ts.initialEmptiedSet, "rollback snapshots the actual turn-start projection set")
 
 			// First real pass: genuine D5 budget pressure empties `older` in
@@ -187,9 +188,14 @@ func TestCWIdentity_RepeatedUpdatesAbortToOriginalAndKeepAddress(t *testing.T) {
 			h.addArchive(t, providers.Message{Role: "user", Content: "discard this aborted tail"})
 
 			require.NoError(t, ts.restoreSession(h.agent))
-			h.archiveLines-- // exactly the one explicit tail write above is rolled back
-			require.Equal(t, archived, h.archive(t), "abort restores the original full archive, not a projected version")
-			require.Equal(t, initialSkip, len(h.archive(t))-len(h.store.GetHistory(h.key)), "abort restores turn-start Skip")
+			// FR-006: the aborted tail's bytes stay on disk (append-only). The
+			// archive helper asserts Len == h.archiveLines, so NOT decrementing it
+			// here is the byte-preservation proof; the appended line is a
+			// retained-but-excluded span that the window omits.
+			require.Equal(t, archived, h.archive(t)[:len(archived)],
+				"abort preserves the original archive bytes, not a projected/truncated version")
+			require.Equal(t, len(archived)-initialSkip, len(h.store.GetHistory(h.key)),
+				"abort restores the turn-start window (the aborted span is excluded)")
 			require.Equal(t, initialSet, h.store.Projection(h.key).Entries, "abort restores the original projection set")
 			require.Equal(t, before, h.transcript(t), "abort must restore original text and content_state, not the intermediate first write")
 			require.Empty(t, ts.emptiedTranscriptPrev, "undo is consumed exactly once")

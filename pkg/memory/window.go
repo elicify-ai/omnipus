@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"time"
 	"unicode/utf8"
 
@@ -38,10 +39,26 @@ func (w WindowState) Clone() WindowState {
 	return out
 }
 
+// ArchiveSpan is a half-open [Start, End) range of physical archive-line
+// indices that is RETAINED on disk but excluded from the model view by an
+// append-only rollback effect (session-core FR-006 / DEL-12). The bytes stay
+// in the archive (recall/ReadArchive still returns them); only the window a
+// provider request is built from omits them. Because the archive is strictly
+// append-only and never renumbered, a span address stays exact for the
+// session's whole lifetime — which is why spans are never re-derived or
+// shifted.
+type ArchiveSpan struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
 // WindowSnapshot binds archive identities and metadata under one session lock.
+// Retracted lists the retained-but-excluded spans (FR-006); an empty slice
+// means the whole archive is in the view.
 type WindowSnapshot struct {
-	State   WindowState
-	Archive []ArchivedMessage
+	State     WindowState
+	Archive   []ArchivedMessage
+	Retracted []ArchiveSpan
 }
 
 func windowState(meta sessionMeta) WindowState {
@@ -95,14 +112,31 @@ func applyWindow(meta *sessionMeta, state WindowState) {
 	meta.UpdatedAt = time.Now()
 }
 
+// retractedAt reports whether physical archive line i lies inside a
+// retained-but-excluded span (FR-006). Spans are few (at most one per aborted
+// turn) and disjoint, so a linear scan is the right shape here.
+func retractedAt(spans []ArchiveSpan, i int) bool {
+	for _, s := range spans {
+		if i >= s.Start && i < s.End {
+			return true
+		}
+	}
+	return false
+}
+
 func WindowHistory(snap WindowSnapshot) ([]providers.Message, []int) {
 	out := make([]providers.Message, 0, len(snap.Archive)-min(snap.State.Skip, len(snap.Archive))+1)
 	lines := make([]int, 0, cap(out))
-	if a := snap.State.AnchorLine; a != nil && *a >= 0 && *a < snap.State.Skip && *a < len(snap.Archive) {
+	if a := snap.State.AnchorLine; a != nil && *a >= 0 && *a < snap.State.Skip && *a < len(snap.Archive) && !retractedAt(snap.Retracted, *a) {
 		out = append(out, snap.Archive[*a].Message)
 		lines = append(lines, *a)
 	}
 	for i := max(0, snap.State.Skip); i < len(snap.Archive); i++ {
+		// FR-006: a retracted span keeps its bytes in the archive but is
+		// excluded from every provider request built from this window.
+		if retractedAt(snap.Retracted, i) {
+			continue
+		}
 		out = append(out, snap.Archive[i].Message)
 		lines = append(lines, i)
 	}
@@ -151,7 +185,8 @@ func (s *JSONLStore) snapshotWindowLocked(ctx context.Context, key string) (Wind
 			return WindowSnapshot{}, err
 		}
 	}
-	return WindowSnapshot{State: windowState(meta), Archive: archive}, nil
+	return WindowSnapshot{State: windowState(meta), Archive: archive,
+		Retracted: append([]ArchiveSpan(nil), meta.Retracted...)}, nil
 }
 
 // AppendWindowMessage returns the actual appended identity and metadata under
@@ -258,8 +293,18 @@ func validateWindowMetadata(after WindowState, archive []ArchivedMessage) error 
 	return nil
 }
 
-// RollbackWindow is RollbackAppended's exact-snapshot path. Even without an
-// append it restores the actual cursor, anchor and source limits in one write.
+// RollbackWindow restores the session's view/window metadata to the given
+// snapshot and, when the turn appended content the snapshot predates, records
+// the appended span as a RETAINED-BUT-EXCLUDED effect (session-core FR-006 /
+// DEL-12). It NEVER rewrites the archive: the appended bytes stay on disk and
+// remain reachable via ReadArchive/recall; they are merely excluded from every
+// later provider request built from WindowHistory.
+//
+// Because the archive is append-only and never renumbered, a later valid
+// append lands physically AFTER the excluded span and is visible again — the
+// aborted span never resurrects, and it never blocks new content. This
+// replaced a whole-file rewrite (rewriteJSONL) that physically deleted the
+// aborted span, the destructive undo FR-006 forbids.
 func (s *JSONLStore) RollbackWindow(ctx context.Context, key string, start WindowState) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -284,12 +329,38 @@ func (s *JSONLStore) RollbackWindow(ctx context.Context, key string, start Windo
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Exclude [start.Count, len(archive)) from the view without deleting it.
+	meta.Retracted = retractSpan(meta.Retracted, start.Count, len(archive))
+	// Restore the exact turn-start cursor/anchor/projection, then re-sync Count
+	// to the physical line count (the archive did not shrink, so meta.Count
+	// stays equal to len(archive) exactly as the reader contract requires).
 	applyWindow(&meta, start)
-	if err := s.writeMeta(key, meta); err != nil {
-		return err
+	meta.Count = len(archive)
+	return s.writeMeta(key, meta)
+}
+
+// retractSpan adds the half-open span [start,end) to the retained-but-excluded
+// set, coalescing it with any span it abuts or overlaps. The result stays
+// sorted by Start and disjoint. An empty span (end <= start) is a no-op.
+func retractSpan(spans []ArchiveSpan, start, end int) []ArchiveSpan {
+	if end <= start {
+		return spans
 	}
-	if len(archive) == start.Count {
-		return nil
+	if start < 0 {
+		start = 0
 	}
-	return s.rewriteJSONL(key, archive[:start.Count])
+	out := append([]ArchiveSpan(nil), spans...)
+	out = append(out, ArchiveSpan{Start: start, End: end})
+	sort.Slice(out, func(i, j int) bool { return out[i].Start < out[j].Start })
+	merged := out[:0]
+	for _, s := range out {
+		if len(merged) > 0 && s.Start <= merged[len(merged)-1].End {
+			if s.End > merged[len(merged)-1].End {
+				merged[len(merged)-1].End = s.End
+			}
+			continue
+		}
+		merged = append(merged, s)
+	}
+	return merged
 }

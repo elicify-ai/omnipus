@@ -66,6 +66,12 @@ type sessionMeta struct {
 	Projection []projectionEntry `json:"projection,omitempty"`
 	Hydrated   bool              `json:"hydrated,omitempty"`
 	AnchorLine *int              `json:"anchor_archive_line,omitempty"`
+	// Retracted lists physical archive-line spans that are RETAINED on disk
+	// but excluded from the model view by an append-only rollback effect
+	// (FR-006 / DEL-12). Never re-derived: the archive is append-only and its
+	// line indices never shift, so a span address stays exact. Cleared only
+	// when the archive is emptied (SetHistory) or physically compacted.
+	Retracted []ArchiveSpan `json:"retracted,omitempty"`
 }
 
 // JSONLStore implements Store using append-only JSONL files.
@@ -336,7 +342,7 @@ func (s *JSONLStore) GetHistory(
 		return nil, err
 	}
 
-	msgs, _ := WindowHistory(WindowSnapshot{State: windowState(meta), Archive: archived})
+	msgs, _ := WindowHistory(WindowSnapshot{State: windowState(meta), Archive: archived, Retracted: meta.Retracted})
 	return msgs, nil
 }
 
@@ -619,9 +625,11 @@ func (s *JSONLStore) SetHistory(
 		meta.CreatedAt = now
 	}
 	// Skip is deliberately left as-is (FR-047). Any projection entry on an
-	// empty archive addresses a line that does not exist — clear it.
+	// empty archive addresses a line that does not exist — clear it. An
+	// excluded (retracted) span likewise cannot survive an archive rewrite.
 	meta.Count = len(history)
 	meta.Projection = nil
+	meta.Retracted = nil
 	meta.UpdatedAt = now
 
 	// Write meta BEFORE writing the JSONL file. If we crash between the two
@@ -763,6 +771,9 @@ func (s *JSONLStore) Compact(
 	// losing data. The next Compact or TruncateHistory corrects this.
 	meta.Skip = 0
 	meta.Count = len(active)
+	// A physical rewrite renumbers every line, so retained-but-excluded spans
+	// no longer address anything — clear them with the bytes they referred to.
+	meta.Retracted = nil
 	meta.UpdatedAt = time.Now()
 
 	err = s.writeMeta(sessionKey, meta)

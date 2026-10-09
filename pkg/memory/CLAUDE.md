@@ -19,21 +19,27 @@ the recall archive (FR-005). Test-only; there is no production caller. An
 agent "reclaiming disk" through Compact permanently deletes every evicted
 turn that recall depends on. Same warning on `store.go::StoreWriter`.
 
-## SetHistory is hydration-only; RollbackAppended is the only undo
+## SetHistory is hydration-only; the undo paths are RollbackWindow (abort) and RollbackAppended (truncation)
 
 - `SetHistory` refuses any archive with ≥1 line
   (`projection.go::ErrArchiveNotEmpty`) and never touches Skip.
 - That refusal is load-bearing: a first-fill caller treats
   `errors.Is(err, ErrArchiveNotEmpty)` as its already-imported signal (the
   deleted `migration.go::MigrateFromJSON` relied on exactly this).
-- `jsonl.go::RollbackAppended` is the ONLY correct way to undo turn
-  appends — a SetHistory-based rollback would reset Skip to 0,
-  permanently deleting evicted turns (SC-001).
-- `RollbackAppended` restores state even when it rewrites no bytes:
-  pkg/agent's `windowTrim` can advance Skip mid-turn, and a no-op file
-  must still undo that. This is pkg/memory's only relationship to
-  windowTrim — the function itself lives in pkg/agent; see that package's
-  CLAUDE.md.
+- `window.go::RollbackWindow` is the abort-path undo (session-core FR-006 /
+  DEL-12). It restores turn-start window metadata (Skip/count/anchor/source
+  limits) and records the aborted span as a RETAINED-BUT-EXCLUDED effect
+  (`sessionMeta.Retracted`). It NEVER rewrites the archive: the bytes stay
+  on disk for recall, and `WindowHistory` omits the span from the model view.
+  Because the archive is append-only, a later valid append lands above the
+  span and is visible again.
+- `jsonl.go::RollbackAppended` is a SEPARATE physical-truncation primitive
+  (rewrite to the first `targetLines` lines + Skip restore in one write). It
+  restores state even when it rewrites no bytes (pkg/agent's `windowTrim` can
+  advance Skip mid-turn, and a no-op file must still undo that). pkg/agent's
+  abort path does NOT call it — it uses RollbackWindow.
+- A SetHistory-based rollback would reset Skip to 0, permanently deleting
+  evicted turns (SC-001) — so neither undo path may use it.
 
 ## Durability contract
 

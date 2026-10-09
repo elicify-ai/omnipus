@@ -109,9 +109,16 @@ func TestCWSlideR1_AbortRestoresActualStartingSnapshot(t *testing.T) {
 			}
 			require.Equal(t, 2, advances, "fixture made multiple actual post-snapshot Skip advances")
 			require.NoError(t, ts.restoreSession(h.agent), "real abort restore returns visibly on storage failure")
-			require.Equal(t, startMeta, h.meta(t), "abort restores actual Skip/count/anchor and ALL exact projection fields; snapshot never refreshed")
+			// FR-006: abort restores the WINDOW metadata (Skip/anchor/projection)
+			// exactly; it never rewrites retained bytes, so `count` stays at the
+			// physical line count and any this-turn append is recorded as a
+			// retained-but-excluded span (never a truncation).
+			require.Equal(t, startMeta["skip"], h.meta(t)["skip"], "abort restores actual Skip")
+			require.Equal(t, startMeta["anchor_archive_line"], h.meta(t)["anchor_archive_line"], "abort restores the anchor")
+			require.Equal(t, startMeta["projection"], h.meta(t)["projection"], "abort restores ALL exact projection fields; snapshot never refreshed")
 			require.Equal(t, startSkip, cwR1Skip(t, h), "anchored slice length is NOT the Skip oracle")
-			require.Equal(t, startArchive, h.archive(t), "undo only appends from this turn, never pre-turn archive evidence")
+			require.Equal(t, startArchive, h.archive(t)[:len(startArchive)],
+				"FR-006: undo only appends from this turn, never pre-turn archive evidence — retained bytes are preserved")
 			restored := h.al.assembleMessages(context.Background(), h.turn(initial.userMessage), h.agent.Sessions.GetHistory(h.key), "", nil, nil)
 			h.agent.ContextWindow = 80_000 // Start projection is exact, not re-derived from the current admission clamp.
 			startRequest := h.al.assembleMessages(context.Background(), initial, startWindow, "", nil, nil)

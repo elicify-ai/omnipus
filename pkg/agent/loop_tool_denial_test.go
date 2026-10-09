@@ -1124,8 +1124,9 @@ func TestRunTurn_ToolDenialBudgetAbort_AuditsNewEventNotOldOne(t *testing.T) {
 	// (2) No message the turn produced anywhere names the old retired event
 	// slug either — checked on the turn's own returned error text, NOT via
 	// Sessions.GetHistory. abortTurn calls ts.restoreSession before
-	// returning (turn.go's restoreSession truncates the session archive back
-	// to its pre-turn length via RollbackAppended), so for a turn's first
+	// returning (turn.go's restoreSession restores the turn-start window via
+	// RollbackWindow, which since FR-006 excludes — never truncates — the
+	// aborted turn's appended span), so for a turn's first
 	// message ever — exactly this test's shape — GetHistory legitimately
 	// returns empty after an abort: that is documented, intentional
 	// rollback behaviour (undoing a turn that never completed), not a
