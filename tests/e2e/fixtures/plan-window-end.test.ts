@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { planWindowEndVerdict, type PlanPollSample } from './plan-window-end'
+import { planObservationStop, planWindowEndVerdict, type PlanPollSample } from './plan-window-end'
 
 // Oracles come from the product, not from this helper:
 //   - pkg/agent/plan_engine.go::planJudgeRoundTimeout = 10 minutes bounds one
@@ -109,5 +109,60 @@ describe('planWindowEndVerdict', () => {
 
   it('no polls at all is a wedge', () => {
     expect(planWindowEndVerdict([], 0).kind).toBe('wedged')
+  })
+})
+
+describe('planObservationStop', () => {
+  // CI run 37872726548 (job 113634525526), the FIRST failing attempt: still in
+  // ROUND 1 at the old fixed 540 s close — approved 02:19:50, judging from
+  // 02:20:52, and still state="running" phase="judging" with no plan_correct
+  // call when the 540 s window ended. Round 1 is 600 s of product allowance,
+  // so at 540 s the plan is healthy, not wedged.
+  const round1AtOldDeadline: PlanPollSample[] = [
+    s('2026-10-09T02:19:50.000Z', 'approved', 'idle', 0),
+    s('2026-10-09T02:20:22.000Z', 'running', 'idle', 0),
+    s('2026-10-09T02:20:52.000Z', 'running', 'judging', 0),
+    { atMs: t('2026-10-09T02:28:50.000Z'), state: 'running', phase: 'judging', judgeRounds: 0 },
+  ]
+  const oldFixedDeadline = t('2026-10-09T02:28:50.000Z')
+
+  it('regression, CI run 37872726548: a healthy round-1 still judging at the old 540 s deadline keeps waiting', () => {
+    // The whole point of the rewrite: this trace used to fail the assertion at
+    // the fixed deadline. It must instead return stop:false so the loop waits
+    // the round out.
+    expect(planWindowEndVerdict(round1AtOldDeadline, oldFixedDeadline).kind).toBe('in_round')
+    expect(planObservationStop(round1AtOldDeadline, oldFixedDeadline, false, false)).toEqual({ stop: false })
+  })
+
+  it('a documented terminus stops the loop', () => {
+    expect(planObservationStop([s('2026-09-23T06:00:00Z', 'failed', 'judging', 4)], t('2026-09-23T06:00:00Z'), false, false)).toEqual({
+      stop: true,
+      reason: 'terminus',
+    })
+  })
+
+  it('hold seen AND a correction landed stops the loop, even mid-round', () => {
+    const samples = [s('2026-09-23T06:00:00Z', 'running', 'judging', 1)]
+    expect(planObservationStop(samples, t('2026-09-23T06:00:00Z'), true, true)).toEqual({
+      stop: true,
+      reason: 'hold_and_correction',
+    })
+  })
+
+  it('hold seen but NO correction yet keeps waiting', () => {
+    const samples = [s('2026-09-23T06:00:00Z', 'running', 'awaiting_supervision', 1)]
+    expect(planObservationStop(samples, t('2026-09-23T06:00:00Z'), true, false)).toEqual({ stop: false })
+  })
+
+  it('correction landed but NO hold seen keeps waiting (the hold is mandatory)', () => {
+    const samples = [s('2026-09-23T06:00:00Z', 'running', 'judging', 1)]
+    expect(planObservationStop(samples, t('2026-09-23T06:00:00Z'), false, true)).toEqual({ stop: false })
+  })
+
+  it('a phase held past the product round bound stops the loop as a wedge', () => {
+    const since = t('2026-09-23T06:00:00.000Z')
+    const samples = [s('2026-09-23T06:00:00.000Z', 'running', 'judging', 1)]
+    const past = since + ROUND_BOUND_MS + 1
+    expect(planObservationStop(samples, past, false, false)).toEqual({ stop: true, reason: 'wedged' })
   })
 })

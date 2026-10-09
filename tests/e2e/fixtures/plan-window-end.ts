@@ -91,3 +91,39 @@ export function planWindowEndVerdict(samples: readonly PlanPollSample[], nowMs: 
   }
   return { kind: 'in_round', phase: last.phase, sinceMs, deadlineMs }
 }
+
+/** Why the observation loop stopped (see planObservationStop). */
+export type PlanObservationStop =
+  | { stop: true; reason: 'terminus' }
+  | { stop: true; reason: 'hold_and_correction' }
+  | { stop: true; reason: 'wedged' }
+  | { stop: false }
+
+/**
+ * The observation loop's stop decision — pure, so the loop's control flow can
+ * be unit-tested against recorded poll traces exactly as its wedge verdict is
+ * (plan-window-end.test.ts). The loop stops on a PLAN CONDITION, never on a
+ * wall clock:
+ *   - a documented terminus (done/failed); or
+ *   - the hold has been seen AND a correction has landed — the two things a
+ *     plan-correction E2E proves, so nothing is left to wait for; or
+ *   - a wedge (planWindowEndVerdict): a phase held longer than the product
+ *     allows, which the caller then reports by name rather than as a bare
+ *     elapsed-time timeout.
+ *
+ * A plan still inside an active round that the product permits (the CI case
+ * that motivated this helper: judging at the old fixed-deadline close) returns
+ * stop:false — the loop keeps waiting instead of racing a fixed budget.
+ */
+export function planObservationStop(
+  samples: readonly PlanPollSample[],
+  nowMs: number,
+  reachedHold: boolean,
+  correctionLanded: boolean,
+): PlanObservationStop {
+  const last = samples[samples.length - 1]
+  if (last && (last.state === 'done' || last.state === 'failed')) return { stop: true, reason: 'terminus' }
+  if (reachedHold && correctionLanded) return { stop: true, reason: 'hold_and_correction' }
+  if (planWindowEndVerdict(samples, nowMs).kind === 'wedged') return { stop: true, reason: 'wedged' }
+  return { stop: false }
+}

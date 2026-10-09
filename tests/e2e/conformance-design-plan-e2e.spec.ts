@@ -37,7 +37,12 @@ import {
   requireApiKey,
   startFreshChatWithJim,
 } from './fixtures/conformance-helpers'
-import { planWindowEndVerdict, type PlanPollSample } from './fixtures/plan-window-end'
+import {
+  ACTIVE_ROUND_BOUND_MS,
+  planObservationStop,
+  planWindowEndVerdict,
+  type PlanPollSample,
+} from './fixtures/plan-window-end'
 import { blockedMarker } from './fixtures/stub-external-cli'
 
 // ── Conformance_t2_PlanLifecycleE2E ──────────────────────────────────────────
@@ -441,10 +446,11 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
 }) => {
   requireApiKey()
 
-  // 540s observation window + up to 660s for a judge round still in
-  // flight when it closes (see the no-wedge check at the end) + setup and
-  // transcript reads.
-  test.setTimeout(1_320_000)
+  // Condition-driven observation (see the loop below): a backstop of two
+  // judge rounds (2 * ACTIVE_ROUND_BOUND_MS = 1,320s), + up to
+  // ACTIVE_ROUND_BOUND_MS (660s) for a judge round still in flight when it
+  // closes (see the no-wedge check at the end) + setup and transcript reads.
+  test.setTimeout(2_100_000)
   await startFreshChatWithJim(page)
 
   // Setup: per-test Main agent (chat-target owner + member assignee) in its
@@ -550,42 +556,49 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
 
   const HOLD_PHASE = 'awaiting_supervision'
 
-  // --- Observe the plan from approval, over its full round budget ---------
-  // ONE window, starting at approval, covers what used to be two steps with
-  // two deadlines:
+  // --- Observe the plan from approval: wait on the CONDITION --------------
+  // ONE observation covers what used to be two steps with two fixed
+  // deadlines:
   //   - the plan MUST reach the hold at least once — still mandatory, and
-  //     asserted first once the window closes; and
-  //   - the REAL correction mechanism, observed over the plan's full round
-  //     budget. Same session/transcript plumbing as
+  //     asserted first once observation ends; and
+  //   - the REAL correction mechanism (PlanSupervisor's committed plan_correct
+  //     calls). Same session/transcript plumbing as
   //     Conformance_t3_PlanningReplanningE2E — a NEW session may be minted
   //     each time the plan opens a fresh park, so every session id ever
   //     observed is tracked and all of them are inspected at the end.
   //
-  // WHY THE FIRST HOLD NO LONGER HAS ITS OWN 120s DEADLINE: nothing on the
-  // path to it has a bound that short. Both members end within seconds of
-  // approval; the plan engine then needs up to two 30s ticks
-  // (defaultPlanEngineTickInterval) to admit the plan and to start its first
-  // judge round; and the Judge must then reach a verdict — a real model turn,
-  // because this DoD is prose by design (it is what steers PlanSupervisor to
-  // targeted_retry, so a deterministic check cannot stand in for it). The
-  // product bounds that turn only at DefaultJudgeTimeoutSeconds (420s). In
-  // release/v0.1.1 CI run 34938204261 (job 104280897259) the failing attempt
-  // was approved 07:03:21, running 07:03:52 and judging 07:04:22, and its
-  // Judge was still on its eighth step when the 120s deadline stopped the plan
-  // at 07:05:22; in the passing retry the first verdict took ~47s and a later
-  // round ~2 minutes. That deadline measured model latency, not a product
-  // property. The total budget from approval is unchanged — the old 120s
-  // first-hold deadline plus the old 420s observation window is this window's
-  // 540s — and the plan is polled at the old 1.5s cadence until the first hold
-  // is seen.
-  const observeWindowMs = 540_000
+  // WAIT ON THE CONDITION, NOT A WALL CLOCK. This DoD is prose BY DESIGN (it
+  // is what steers PlanSupervisor to targeted_retry, so a deterministic check
+  // cannot stand in for it), so the plan judge's round-1 verdict is a real
+  // Judge LLM turn. The product bounds ONE PLAN JUDGE ROUND at
+  // planJudgeRoundTimeout (pkg/agent/plan_engine.go, 10 min); the 420s
+  // judgeTurnTimeout (DefaultJudgeTimeoutSeconds) bounds a single TURN inside
+  // that round, and a round may run more than one turn (FR-055), so 420s is
+  // NOT the product's round bound. A fixed sub-round deadline therefore races
+  // the Judge: release/v0.1.1 CI run 37872726548 (job 113634525526) closed its
+  // old fixed 540s window with the plan still state="running" phase="judging"
+  // and no plan_correct call yet — one slow-but-alive round the product
+  // explicitly permits — and then passed on retry in 3.7m, so the plan was
+  // moving, never wedged.
+  //
+  // The loop below therefore ends on a PLAN CONDITION, and the product's own
+  // per-phase allowance (planWindowEndVerdict's ACTIVE_ROUND_BOUND_MS = one
+  // round + two engine ticks) is the instrument that turns "still working"
+  // into an explicit, named wedge the moment it stops being true. The wall
+  // clock is only a backstop.
   const seenSessionIds = new Set<string>()
   let reachedHoldOnce = false
+  let correctionLanded = false
   let finalPlanState = ''
   let finalPlanPhase = ''
   // Every poll, kept for the no-wedge verdict at the end.
   const samples: PlanPollSample[] = []
-  type PlanPoll = { state: string; plan_phase?: string; judge_rounds?: number; supervision?: { session_id?: string } }
+  type PlanPoll = {
+    state: string
+    plan_phase?: string
+    judge_rounds?: number
+    supervision?: { session_id?: string; correction_rounds?: number }
+  }
   const recordPoll = (body: PlanPoll) => {
     samples.push({
       atMs: Date.now(),
@@ -594,7 +607,13 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
       judgeRounds: body.judge_rounds ?? 0,
     })
   }
-  const observeDeadline = Date.now() + observeWindowMs
+  // BACKSTOP ONLY — the loop ends on a plan condition, not this clock. Sized
+  // to the two rounds this scenario can legitimately need (one to produce the
+  // first verdict, one for the correction cycle), each with its two admission
+  // ticks; the per-phase wedge verdict below stops the loop far earlier
+  // whenever the plan is genuinely stuck.
+  const observeBackstopMs = 2 * ACTIVE_ROUND_BOUND_MS
+  const observeDeadline = Date.now() + observeBackstopMs
   while (Date.now() < observeDeadline) {
     const poll = await apiFetch<PlanPoll>(page, 'GET', `/api/v1/plans/${planId}`)
     if (!poll.ok) throw new Error(`t3b: GET /plans/{id} poll (observe) failed ${poll.status}: ${poll.raw}`)
@@ -604,9 +623,24 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
     if (finalPlanPhase === HOLD_PHASE) reachedHoldOnce = true
     const sid = poll.body.supervision?.session_id
     if (sid) seenSessionIds.add(sid)
-    if (finalPlanState === 'done' || finalPlanState === 'failed') break
+    // correction_rounds is the cumulative count of APPLIED corrections
+    // (Plan.yaml) — a plan_correct call that landed. F2: a plan leaves the
+    // supervision-eligible phase set on every applied correction, so the test
+    // cannot read this > 0 unless a real correction was committed, which the
+    // transcript read below then finds by name.
+    if ((poll.body.supervision?.correction_rounds ?? 0) > 0) correctionLanded = true
+    // Exit on a plan condition — never on a bare clock. planObservationStop
+    // (unit-tested in fixtures/plan-window-end.test.ts) returns true only for:
+    // a documented terminus, the hold seen AND a correction landed, or a wedge
+    // (a phase held longer than the product allows — reported by name below).
+    // A plan still inside a round the product permits keeps the loop waiting.
+    if (planObservationStop(samples, Date.now(), reachedHoldOnce, correctionLanded).stop) break
     await page.waitForTimeout(reachedHoldOnce ? 4_000 : 1_500)
   }
+  // The last poll may have landed a hair before an applied correction's
+  // transcript write; a short settle before reading it costs nothing and
+  // removes that race.
+  if (reachedHoldOnce && correctionLanded) await page.waitForTimeout(2_000)
 
   // Collect every plan_correct call (any status) across every adjudication
   // session this plan ever used.
@@ -624,13 +658,15 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
   // MANDATORY, checked first: the plan reached the hold at least once. With
   // m2 ending Failed "Blocked: <transient cause>" on its first try, a round-1
   // unmet verdict — and the awaiting_supervision hold it triggers — is
-  // expected reliably; never reaching it inside the whole window means the
-  // unmet verdict or the hold path is broken.
+  // expected reliably; never reaching it means the unmet verdict or the hold
+  // path is broken. The failure names the wedge verdict (which phase stalled,
+  // for how long) rather than a bare elapsed-time timeout, so a real stall and
+  // a merely slow round are told apart in the report.
   expect(
     reachedHoldOnce,
-    `t3b: plan ${planId} never reached plan_phase=awaiting_supervision within ${observeWindowMs / 1000}s of ` +
-      'approval — m2 (its stub worker ends every run Blocked at once) makes a round-1 unmet verdict expected ' +
-      `reliably. ${diagnostic}`,
+    `t3b: plan ${planId} never reached plan_phase=awaiting_supervision — m2 (its stub worker ends every run ` +
+      'Blocked at once) makes a round-1 unmet verdict expected reliably. Wedge verdict: ' +
+      `${JSON.stringify(planWindowEndVerdict(samples, Date.now()))}. ${diagnostic}`,
   ).toBe(true)
 
   // MANDATORY: the mechanism actually committed at least one correction.
@@ -697,10 +733,10 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
   // This used to be a single poll at the instant the window closed that
   // accepted only done/failed/awaiting_supervision. This plan can never be
   // met (m2 fails every run), so it cycles judge -> hold -> correction until
-  // plan_judge_max_rounds runs out, and how many cycles fit in 540s is model
-  // latency. A close that landed mid-judge-round therefore failed a plan that
-  // was moving normally: release/v0.1.1 CI run 35823380746 (job
-  // 107060080905) closed 61s into round 4's judge turn, after rounds of
+  // plan_judge_max_rounds runs out, and how many cycles fit in any fixed
+  // window is model latency. A close that landed mid-judge-round therefore
+  // failed a plan that was moving normally: release/v0.1.1 CI run 35823380746
+  // (job 107060080905) closed 61s into round 4's judge turn, after rounds of
   // 18/40/64s and a 4.5-minute supervision turn — and passed on retry. Every
   // recent run on that branch spent the full window, so each one was a coin
   // toss on which phase the last poll landed in.
