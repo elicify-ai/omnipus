@@ -441,21 +441,25 @@ func HasSystemAllowsInConstructorSeed(agentID string) bool {
 // proposals; Planner can ask Researcher and fork itself; General Purpose can
 // fork itself.
 //
-// SELF-EDGE (settled design, 2026-10-09): EVERY agent is seeded a self-edge by
-// default — it may fork a NEW session running the same agent exactly like any
+// SELF-EDGE (settled design, 2026-10-09): EVERY agent gets a self-edge
+// CANDIDATE — it may fork a NEW session running the same agent exactly like any
 // other target, seeded as an ordinary, visible, workspace edge a person can
-// remove in the policy editor. The ONLY exclusions are the hidden System Agents
-// (the Judge and the Plan Supervisor — the "plans coordinator"), expressed in
-// CONFIG terms via the roster predicate IsSystemAgentID, never as a hardcoded
-// name list: they are engine-owned adjudicators that are never chat or
-// delegation targets, so no self-edge is seeded for them.
+// remove in the policy editor. This function does NOT decide which ids actually
+// receive a self-row: the OPERATOR exclusion data
+// (config.workspace_seed_defaults.self_edge.exclude_agent_ids, shipped as
+// judge/plansupervisor and resolved by config.SelfEdgeExcludeAgentIDSet) is the
+// only exclusion every seed WRITER applies, so the hidden System Agents ship
+// without a self-row while an operator who empties the list gives them one.
+// There is NO IsSystemAgentID (or any other Go identity) predicate on this seed
+// path — the exclusion is DATA, never code (session-core FR-015).
 //
 // A newly created custom agent has no compiled-in case here and lands in the
 // default arm, so it too receives a self-edge — "every new agent at creation
 // time". The edge is only materialized into a workspace graph for an agent that
-// is actually present in config and on that workspace's team (the gateway's
-// defaultWorkspaceDelegationEdges and the update_workspace seed path both filter
-// on that).
+// is actually present in config, on that workspace's team, AND not in the
+// operator's exclusion list (the gateway's defaultWorkspaceDelegationEdges,
+// update_workspace's seedDelegationEdgesForNewMembers and create_agent's join
+// all apply those filters).
 //
 // Task/background are agent delegation modes. Workspace creation translates
 // background into the graph's direct mode; this return value is not a graph.
@@ -488,12 +492,13 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 			Modes: []config.DelegationMode{config.DelegationModeTask, config.DelegationModeBackground},
 		}
 	default:
-		// Every other agent (Mia, Ava, Admin, Researcher, and every custom agent
-		// created later) gets a SINGLE self-edge by default. The System Agents are
-		// the one exclusion, via the config-level roster predicate.
-		if IsSystemAgentID(id) {
-			return nil
-		}
+		// Every other agent (Mia, Ava, Admin, Researcher, the hidden System
+		// Agents, and every custom agent created later) gets a SINGLE self-edge
+		// CANDIDATE. Which ids actually receive the row is decided by the WRITERS
+		// from the operator's exclusion data (config.workspace_seed_defaults.
+		// self_edge.exclude_agent_ids) — never here by an identity predicate: a
+		// System Agent ships without a self-row only because the shipped list
+		// names it, and an operator who empties the list gives them one.
 		return &config.DelegationPolicy{To: []config.AgentRef{ref(id)}}
 	}
 }

@@ -816,22 +816,33 @@ func (l *SteerLauncher) walkVerifiedRoot(steeringSessionID string, steererRec *s
 // turn — resolveEffectiveWorkspaceID (loop_delegation.go), which falls back to
 // the is_default workspace when the turn is unbound — never a skip, and never
 // the steering session's own recorded workspace. The budget must never be
-// WIDENED between the gate and the launch, so once a governing workspace is
-// resolved, every failure to verify the caller→target edge FAILS CLOSED (the
-// launch is refused with steer.ErrInvalidEdge) rather than silently
-// substituting the global-derived budget:
+// WIDENED between the gate and the launch, so for a graph-gated launch every
+// failure to locate and verify the caller→target edge FAILS CLOSED (the launch
+// is refused with steer.ErrInvalidEdge) rather than silently substituting the
+// global-derived budget:
 //
+//   - the governing workspace cannot be RESOLVED at all — neither a bound
+//     workspace nor an is_default workspace to consult (e.g. the default the
+//     gate resolved is gone or unreadable by the time this second resolution
+//     runs); or
 //   - the workspace's delegation graph is unreadable; or
 //   - originKind is OriginKindDelegate and no caller→target edge exists.
 //
-// A task self-reassignment (originKind == OriginKindTask) is deliberately NOT
-// graph-gated — assigning a task to oneself needs no edge — so for that origin
-// a missing edge falls back to the global-derived cap exactly as before.
+// The ONE exception is a task SELF-reassignment — originKind == OriginKindTask
+// AND the target equals the steering session's own agent (the task's owner
+// reassigning the task to itself). That needs no delegation edge, exactly as
+// the task-tool gate treats it (buildDelegationDenyCheckerForTaskReassignment
+// returns nil for this case without consulting the graph), so it is never
+// graph-gated here and retains the global/inherited task budget. NOTHING ELSE
+// is exempt: every delegate launch, and any task-origin launch to a DIFFERENT
+// agent, stays fail-closed.
 //
-// When NO workspace can be resolved at all, the gate resolves the identical
-// way and would itself have denied, so no launch reaches here on an unbound
-// turn with no default workspace in practice; with nothing to read the
-// global-derived cap stands (unchanged behaviour).
+// (The missing-edge case is deliberately narrower than the two above: a
+// delegate launch with no caller→target edge refuses, but a task-origin launch
+// to another agent keeps its pre-existing lenient missing-edge fall-back —
+// there the task-tool gate, not this budget read, is the authority for the
+// edge. An UNREADABLE graph still refuses for that task-origin case, because
+// nothing was verified at all.)
 func (l *SteerLauncher) startingRemainingDepth(
 	ctx context.Context,
 	steererRec *session.LifecycleRecord,
@@ -851,41 +862,63 @@ func (l *SteerLauncher) startingRemainingDepth(
 	}
 	depthCap := resolveEffectiveDelegationDepth(nil, globalMaxDepth)
 
+	// A task self-reassignment is not delegation — no new instance spawns, so
+	// no edge is required. Every other launch IS graph-gated and fails closed.
+	taskSelfExempt := originKind == steer.OriginKindTask && targetAgentID == steererRec.AgentID
+
+	// A launch with an EMPTY caller identity cannot be matched against a
+	// caller→target edge at all. It is reachable only when the operator has
+	// explicitly turned OFF tools.delegate.require_parent_agent_id — the
+	// fail-closed guard in launchSteered refuses an empty identity otherwise —
+	// so the operator's override stands and the graph gate does not apply. This
+	// keeps the documented kill-switch behaviour: with the requirement off, a
+	// degraded/identity-less launch still runs on the global/inherited budget.
+	// (It is NOT a general exemption: an IDENTIFIED caller is always gated.)
+	callerIdentified := steererRec.AgentID != ""
+	graphGated := callerIdentified && !taskSelfExempt
+
 	// Resolve the governing workspace EXACTLY as the gate did. An unbound turn
 	// resolves to the is_default workspace rather than skipping the graph read,
 	// so the gate's authorization and this budget are never computed against
 	// two different graphs.
 	wsID, denial := resolveEffectiveWorkspaceID(ctx, targetAgentID)
-	if denial == nil {
+	if denial != nil {
+		// FAIL CLOSED: no governing workspace to read is a closed graph.
+		// Substituting the global-derived budget here would silently WIDEN
+		// authority exactly when the caller→target edge cannot be verified.
+		if graphGated {
+			return 0, fmt.Errorf("steer: launch: %w: %s", steer.ErrInvalidEdge, denial.Reason)
+		}
+	} else {
 		edges, err := workspace.ReadDelegation(omnipusHome(), wsID)
 		if err != nil {
-			// FAIL CLOSED: an unreadable graph is a closed graph. Substituting
-			// the global-derived budget here would silently WIDEN authority
-			// exactly when the caller→target edge cannot be verified.
-			return 0, fmt.Errorf("steer: launch: %w: workspace %q delegation graph unreadable: %w",
-				steer.ErrInvalidEdge, wsID, err)
-		}
-
-		matched := false
-		for i := range edges {
-			edge := &edges[i]
-			if edge.FromAgent != steererRec.AgentID || edge.ToAgent != targetAgentID {
-				continue
+			// FAIL CLOSED: an unreadable graph is a closed graph.
+			if graphGated {
+				return 0, fmt.Errorf("steer: launch: %w: workspace %q delegation graph unreadable: %w",
+					steer.ErrInvalidEdge, wsID, err)
 			}
-			matched = true
-			if edge.Depth != nil && *edge.Depth <= 0 {
-				return 0, nil
+		} else {
+			matched := false
+			for i := range edges {
+				edge := &edges[i]
+				if edge.FromAgent != steererRec.AgentID || edge.ToAgent != targetAgentID {
+					continue
+				}
+				matched = true
+				if edge.Depth != nil && *edge.Depth <= 0 {
+					return 0, nil
+				}
+				depthCap = resolveEffectiveDelegationDepth(edge.Depth, globalMaxDepth)
+				break
 			}
-			depthCap = resolveEffectiveDelegationDepth(edge.Depth, globalMaxDepth)
-			break
-		}
-		// A Delegate launch reached the launcher only because the gate found a
-		// caller→target edge; a missing edge here means the graph changed
-		// between the gate and this read. Fail closed rather than widen to the
-		// global cap.
-		if !matched && originKind == steer.OriginKindDelegate {
-			return 0, fmt.Errorf("steer: launch: %w: no delegation edge %s→%s in workspace %q",
-				steer.ErrInvalidEdge, steererRec.AgentID, targetAgentID, wsID)
+			// A Delegate launch reached the launcher only because the gate found
+			// a caller→target edge; a missing edge here means the graph changed
+			// between the gate and this read. Fail closed rather than widen to
+			// the global cap.
+			if !matched && originKind == steer.OriginKindDelegate {
+				return 0, fmt.Errorf("steer: launch: %w: no delegation edge %s→%s in workspace %q",
+					steer.ErrInvalidEdge, steererRec.AgentID, targetAgentID, wsID)
+			}
 		}
 	}
 

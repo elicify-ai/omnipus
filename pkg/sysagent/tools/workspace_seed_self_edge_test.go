@@ -44,7 +44,9 @@ func TestSeedDelegationEdgesForNewMembers_SeedsNewMemberSelfRow(t *testing.T) {
 			added := []string{tc.id}
 			present := map[string]bool{tc.id: true}
 
-			got := seedDelegationEdgesForNewMembers(newTeam, added, nil, 3, present)
+			// U5A-FIX-R1: the final `nil` is the operator self-edge exclusion
+			// set; nil = no exclusions (the ids under test are never excluded).
+			got := seedDelegationEdgesForNewMembers(newTeam, added, nil, 3, present, nil)
 
 			e, ok := findSelfEdge(got, tc.id)
 			if !ok {
@@ -78,7 +80,8 @@ func TestSeedDelegationEdgesForNewMembers_DoesNotResurrectRemovedSelfRow(t *test
 	added := []string{"newbie"}
 	present := map[string]bool{"mia": true, "newbie": true}
 
-	got := seedDelegationEdgesForNewMembers(newTeam, added, nil, 3, present)
+	// U5A-FIX-R1: final `nil` = the operator self-edge exclusion set (none here).
+	got := seedDelegationEdgesForNewMembers(newTeam, added, nil, 3, present, nil)
 
 	// Lifetime: removed stays removed while mia's membership continues.
 	if e, ok := findSelfEdge(got, "mia"); ok {

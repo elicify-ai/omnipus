@@ -572,9 +572,12 @@ func buildWorkspaceDelegationEdges(
 			depth = &d
 		}
 
-		// Single shared authority for the per-edge invariants (non-empty, no
-		// self-edge, endpoints ∈ team, modes ⊆ {direct,task}, depth in
-		// [0, ceiling]). Validate returns the canonical wire messages verbatim, so
+		// Single shared authority for the per-edge invariants (non-empty
+		// endpoints, endpoints ∈ team, modes ⊆ {direct,task}, depth in
+		// [0, ceiling]); a same-agent row (from_agent == to_agent) is an
+		// ORDINARY edge for any member — session-core FR-014 deleted the former
+		// self-edge prohibition, so no self-edge check remains here. Validate
+		// returns the canonical wire messages verbatim, so
 		// the 400 body is byte-identical to the previous inline checks. The
 		// whole-graph acyclicity check stays below (it is graph-level, not
 		// per-edge). Build the candidate stored edge and validate it.

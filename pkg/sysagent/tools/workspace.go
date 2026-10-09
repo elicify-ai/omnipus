@@ -353,7 +353,7 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 	if len(w.CoreTeam) > 0 {
 		ceiling := workspaceDelegationDepthCeiling(t.deps)
 		configPresent := configAgentPresenceSet(t.deps)
-		seeded = seedDelegationEdgesForNewMembers(w.CoreTeam, w.CoreTeam, nil, ceiling, configPresent)
+		seeded = seedDelegationEdgesForNewMembers(w.CoreTeam, w.CoreTeam, nil, ceiling, configPresent, selfEdgeExcludedAgentIDs(t.deps))
 	}
 	if delegationPresent {
 		seeded = explicitDelegation
@@ -527,7 +527,7 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 			}
 			ceiling := workspaceDelegationDepthCeiling(t.deps)
 			configPresent := configAgentPresenceSet(t.deps)
-			seeded := seedDelegationEdgesForNewMembers(w.CoreTeam, added, existing, ceiling, configPresent)
+			seeded := seedDelegationEdgesForNewMembers(w.CoreTeam, added, existing, ceiling, configPresent, selfEdgeExcludedAgentIDs(t.deps))
 			if len(seeded) > 0 {
 				pendingDelegation = append(append([]workspacepkg.DelegationEdge(nil), existing...), seeded...)
 				delegationSeedNote = seededEdgesSummary(seeded, added)
@@ -903,6 +903,7 @@ func seedDelegationEdgesForNewMembers(
 	existing []workspacepkg.DelegationEdge,
 	ceiling int,
 	configPresent map[string]bool,
+	excluded map[string]bool,
 ) []workspacepkg.DelegationEdge {
 	if len(added) == 0 || len(newTeam) == 0 {
 		return nil
@@ -930,17 +931,21 @@ func seedDelegationEdgesForNewMembers(
 	// resurrected (deletion is authoritative), and SelfEdgeSeedRows also skips
 	// any id already self-edged in `existing`.
 	//
-	// No operator exclusion list is threaded here: this writer's contract takes
-	// the roster presence map, not config, and the seed exclusion names only the
-	// hidden system agents, which `ExcludedFromWorkspaceTeams` already bars from
-	// team membership — so an excluded id can never appear in `added`.
+	// `excluded` is the OPERATOR seed data
+	// (config.workspace_seed_defaults.self_edge.exclude_agent_ids, resolved by
+	// the caller via selfEdgeExcludedAgentIDs and passed in as a set so this
+	// package need not import config). The exclusion is DATA, never a Go
+	// identity predicate: an operator adding an ordinary id such as `mia` takes
+	// effect here with no code change, and an explicit empty list excludes
+	// nobody. It is NOT limited to the hidden system agents — the shipped
+	// default merely happens to name them.
 	var introduced []string
 	for _, id := range newTeam {
 		if configPresent[id] && addedSet[id] {
 			introduced = append(introduced, id)
 		}
 	}
-	out = append(out, workspacepkg.SelfEdgeSeedRows(introduced, existing, nil, ceiling)...)
+	out = append(out, workspacepkg.SelfEdgeSeedRows(introduced, existing, excluded, ceiling)...)
 	for _, e := range out {
 		present[e.FromAgent+"\x00"+e.ToAgent] = true
 	}
@@ -1063,6 +1068,28 @@ func configAgentPresenceSet(d *Deps) map[string]bool {
 		present[cfg.Agents.List[i].ID] = true
 	}
 	return present
+}
+
+// selfEdgeExcludedAgentIDs resolves the operator's self-edge seed exclusion
+// set (config.workspace_seed_defaults.self_edge.exclude_agent_ids) for the
+// sysagent seed writers. It is the ONE resolver the workspace create/update
+// producers and create_agent's membership join read, so every writer honours
+// the same operator data — never a Go identity predicate.
+//
+// A missing/nil live config (deps not wired, or a nil *Config) is treated as
+// "unset", which resolves to the SHIPPED default list (the hidden system agents
+// judge/plansupervisor) rather than an empty set: an empty set would mean
+// "exclude nobody" and seed the very agents the shipped default bars. An
+// explicit operator `[]` is a present-but-empty list and DOES exclude nobody —
+// that distinction lives in config.SelfEdgeExcludeAgentIDSet, which this defers
+// to.
+func selfEdgeExcludedAgentIDs(d *Deps) map[string]bool {
+	if d != nil && d.GetCfg != nil {
+		return d.GetCfg().SelfEdgeExcludeAgentIDSet()
+	}
+	// nil *Config resolves to the shipped default (SelfEdgeExcludeAgentIDSet is
+	// nil-receiver-safe).
+	return (*config.Config)(nil).SelfEdgeExcludeAgentIDSet()
 }
 
 // workspaceDelegationDepthCeilingFallback mirrors the gateway fallback used

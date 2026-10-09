@@ -515,11 +515,26 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 	// present, since a join attempt can also fail (logged, non-fatal).
 	ac.joinedWorkspace = false
 	if wsID := tools.ToolWorkspaceID(ac.ctx); wsID != "" {
-		if err := ac.t.joinWorkspaceTeam(wsID, ac.finalID); err != nil {
+		joined, joinErr := ac.t.joinWorkspaceTeam(wsID, ac.finalID)
+		ac.joinedWorkspace = joined
+		switch {
+		case joinErr == nil:
+			// Fully joined: the membership landed AND the self-row was seeded.
+		case joined:
+			// U5A-FIX-R1 / N3: the membership landed, but the self-row seed did
+			// not. The agent IS a workspace member, so returning the normal
+			// "metadata_only" success would both misdescribe its state and hide
+			// a missing required authorization row. Return the truthful
+			// partial-failure result naming what landed and how to recover.
+			slog.Error("sysagent: create_agent: joined workspace but could not seed the self-delegation row",
+				"agent_id", ac.finalID, "workspace_id", wsID, "error", joinErr)
+			return createJoinSeedPartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args), wsID, joinErr), true
+		default:
+			// The membership itself did not land, so the agent is genuinely
+			// metadata-only (a member of no team). Best-effort: keep creation
+			// succeeding, exactly as before.
 			slog.Warn("sysagent: create_agent: could not add new agent to workspace core_team",
-				"agent_id", ac.finalID, "workspace_id", wsID, "error", err)
-		} else {
-			ac.joinedWorkspace = true
+				"agent_id", ac.finalID, "workspace_id", wsID, "error", joinErr)
 		}
 	}
 	return nil, false
@@ -663,6 +678,39 @@ func createHeartbeatPartialResult(id, revision string, fields []string, err erro
 	}))
 }
 
+// createJoinSeedPartialResult is the U5A-FIX-R1 / N3 truthful partial-failure
+// result for a creation-in-context whose MEMBERSHIP landed but whose ordinary
+// self-delegation row could not be seeded. It follows the same shape as the
+// other create_agent partial results (createHomePartialResult /
+// createHeartbeatPartialResult): the entity and (here) the workspace membership
+// are already durably written, so this is a partial success that must NOT be
+// dressed up as the ordinary "metadata_only" success — that status would say
+// the agent belongs to no team when it is in fact a member, and would hide the
+// missing row.
+//
+// The suggestion names a recovery that actually re-seeds: the self-row is a
+// normal, editable Team-tab row, so the operator can add it directly (or remove
+// and re-add the agent on the team). Re-running update_workspace with an
+// UNCHANGED team does NOT recover it — that tool only seeds for NEWLY added
+// members — so it is deliberately not offered as the fix.
+func createJoinSeedPartialResult(id, revision string, fields []string, wsID string, err error) *tools.ToolResult {
+	return tools.ErrorResult(successJSON(map[string]any{
+		"id":                 id,
+		"code":               "SAVE_FAILED",
+		"message":            fmt.Sprintf("agent %q was saved and added to workspace %q, but its self-delegation row could not be written. Read the workspace's Team tab before retrying.", id, wsID),
+		"persistence_status": agentstore.PersistencePartial,
+		"activation_status":  agentstore.ActivationNotAttempted,
+		"revision":           revision,
+		"changed_fields":     fields,
+		"error_stage":        "seed_self_edge",
+		"workspace_id":       wsID,
+		"joined_workspace":   true,
+		"self_edge_seeded":   false,
+		"detail":             err.Error(),
+		"suggestion":         "Open the workspace's Team tab and add this agent's self-delegation row (or remove and re-add the agent on the team), then confirm the row is present.",
+	}))
+}
+
 // joinWorkspaceTeam appends agentID to workspace wsID's CoreTeam (deduped)
 // and persists the change, then seeds agentID's ordinary self-delegation row.
 // Used exclusively by create_agent's creation-in-context join (ADR-046 P1,
@@ -684,50 +732,99 @@ func createHeartbeatPartialResult(id, revision string, fields []string, err erro
 // workspace.FindForAgentPreferring keys off (CoreTeam membership) for
 // execution/work-dir purposes; the two can diverge, exactly as pkg/agent/loop.go's
 // runTurn documents for its own mirrored resolution.
-func (t *AgentCreateTool) joinWorkspaceTeam(wsID, agentID string) error {
+func (t *AgentCreateTool) joinWorkspaceTeam(wsID, agentID string) (joined bool, seedErr error) {
+	// U5A-FIX-R1 / N1: the authoritative membership read-and-decision and the
+	// self-row seed publication run in ONE workspace critical section
+	// (workspacepkg.LockID + the authoritative re-read below). The membership
+	// write used to be unlocked: a concurrent explicit delegation graph PUT
+	// (which holds LockID and replaces the whole edge set) could land after the
+	// membership became visible but before the seed acquired its own lock, and
+	// the late implicit seed then re-added the self-row the operator had just
+	// excluded — reversing a successful explicit policy decision. Holding one
+	// lock across both phases means a competing writer lands wholly before or
+	// wholly after this join, never between.
+	unlock := workspacepkg.LockID(wsID)
+	defer unlock()
+
 	w, err := readWorkspaceFromDisk(t.deps.Home, wsID)
 	if err != nil {
-		return fmt.Errorf("read workspace %s: %w", wsID, err)
+		return false, fmt.Errorf("read workspace %s: %w", wsID, err)
 	}
-	member := false
-	for _, id := range w.CoreTeam {
-		if id == agentID {
-			member = true
-			break
-		}
-	}
-	if !member {
+	if !teamContains(w.CoreTeam, agentID) {
 		w.CoreTeam = append(w.CoreTeam, agentID)
 		w.UpdatedAt = nowISO()
 		if err := writeEntity(workspacesDir(t.deps.Home), wsID, w); err != nil {
-			return fmt.Errorf("write workspace %s: %w", wsID, err)
+			return false, fmt.Errorf("write workspace %s: %w", wsID, err)
 		}
 	}
-	// Seed the new agent's ordinary self-row. A read/write failure is returned
-	// (the caller logs it and reports metadata_only) so a join that did not
-	// actually produce the configured row is never reported as a full,
-	// configured success.
-	if err := t.seedSelfEdgeForJoinedAgent(wsID, agentID); err != nil {
-		return err
+
+	// Deterministic test seam (always nil in production): fires with LockID
+	// held, AFTER the membership write and BEFORE the authoritative re-read, so
+	// a test can land a competing membership/graph edit at exactly this point.
+	if joinWorkspaceMembershipTestHook != nil {
+		joinWorkspaceMembershipTestHook(wsID, agentID)
 	}
-	return nil
+
+	// Re-read the AUTHORITATIVE membership (fresh from disk) and seed ONLY when
+	// the agent is genuinely on the team. A member that is no longer on the team
+	// (a competing removal that landed) gets no self-row: seeding one would
+	// invent a delegation row for a non-member. The re-read is what turns "this
+	// call appended a member" into "the member is actually on the team now".
+	fresh, readErr := readWorkspaceFromDisk(t.deps.Home, wsID)
+	if readErr != nil {
+		// The membership write above already landed; only the confirm failed.
+		return true, fmt.Errorf("re-read workspace %s membership: %w", wsID, readErr)
+	}
+	if !teamContains(fresh.CoreTeam, agentID) {
+		return false, nil
+	}
+
+	// Seed the new agent's ordinary self-row. A failure here means the agent IS
+	// a workspace member but its required self-row was not written — the caller
+	// reports the truthful partial result (never a metadata_only success).
+	if err := t.seedSelfEdgeLocked(wsID, agentID); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
-// seedSelfEdgeForJoinedAgent writes agentID's ordinary self-delegation row into
+// teamContains reports whether agentID is a (non-empty) entry of team.
+func teamContains(team []string, agentID string) bool {
+	for _, id := range team {
+		if id == agentID {
+			return true
+		}
+	}
+	return false
+}
+
+// joinWorkspaceMembershipTestHook is a test-only synchronization seam fired by
+// joinWorkspaceTeam while it holds workspacepkg.LockID(wsID), after the
+// membership write and before the seed's authoritative membership re-read. It
+// lets a test land a competing membership/graph edit at exactly that point
+// deterministically (no sleeps), proving the join is one critical section and
+// that the seed never fires for a member that is no longer on the team. Always
+// nil in production; never set outside a _test.go file.
+var joinWorkspaceMembershipTestHook func(wsID, agentID string)
+
+// seedSelfEdgeLocked writes agentID's ordinary self-delegation row into
 // workspace wsID's delegation store, preserving every existing edge. It uses
 // the shared workspace.SelfEdgeSeedRows computation, so the row is identical to
-// the install-seed and team-growth rows. Idempotent: an agent already carrying
-// a self-row is left untouched. LockID(wsID) serializes the load-modify-write
-// as SaveDelegation requires.
-func (t *AgentCreateTool) seedSelfEdgeForJoinedAgent(wsID, agentID string) error {
-	unlock := workspacepkg.LockID(wsID)
-	defer unlock()
+// the install-seed and team-growth rows, and it threads the OPERATOR exclusion
+// data (config.workspace_seed_defaults.self_edge.exclude_agent_ids) through
+// selfEdgeExcludedAgentIDs — the exclusion is config DATA, never a Go identity
+// predicate. Idempotent: an agent already carrying a self-row is left untouched.
+//
+// The caller MUST already hold workspacepkg.LockID(wsID) (joinWorkspaceTeam
+// does, for its whole membership-plus-seed span): the lock pool is not
+// reentrant, so this must NOT acquire it again.
+func (t *AgentCreateTool) seedSelfEdgeLocked(wsID, agentID string) error {
 	existing, ok := workspacepkg.LoadDelegation(t.deps.Home, wsID)
 	if !ok {
 		return fmt.Errorf("workspace %s delegation record is unreadable — refusing to seed a self-row over it", wsID)
 	}
 	rows := workspacepkg.SelfEdgeSeedRows(
-		[]string{agentID}, existing, nil, workspaceDelegationDepthCeiling(t.deps))
+		[]string{agentID}, existing, selfEdgeExcludedAgentIDs(t.deps), workspaceDelegationDepthCeiling(t.deps))
 	if len(rows) == 0 {
 		return nil
 	}
