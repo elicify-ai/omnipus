@@ -53,31 +53,25 @@ func TestNewHTTPClient_NoProxy(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	// The client now always carries an explicit transport with HTTP/2 KEPT but
-	// configured with health-check pings (ReadIdleTimeout) so stale pooled
+	// configured with health-check pings (SendPingTimeout) so stale pooled
 	// connections are detected and not reused mid-stream — the fix for intermittent
 	// "http2: response body closed" resets on streaming LLM responses.
 	tr, ok := client.Transport.(*http.Transport)
 	if !ok {
 		t.Fatalf("expected *http.Transport, got %T", client.Transport)
 	}
-	// http2.ConfigureTransports installs the "h2" ALPN handler — proof h2 is on.
-	if tr.TLSNextProto == nil {
-		t.Fatal("expected TLSNextProto to be configured for HTTP/2")
+	// HTTP/2 is enabled via transport.Protocols — the modern replacement for the
+	// now-deprecated http2.ConfigureTransports — so Protocols must include HTTP2.
+	if tr.Protocols == nil || !tr.Protocols.HTTP2() {
+		t.Fatal("expected HTTP/2 enabled via transport.Protocols")
 	}
-	if _, ok := tr.TLSNextProto["h2"]; !ok {
-		t.Errorf("expected an 'h2' TLSNextProto handler (HTTP/2 enabled), got keys %v", keysOf(tr.TLSNextProto))
+	// The ping health-check config must be carried on the transport.
+	if tr.HTTP2 == nil || tr.HTTP2.SendPingTimeout != 15*time.Second {
+		t.Fatalf("expected HTTP/2 SendPingTimeout=15s, got %+v", tr.HTTP2)
 	}
 	if tr.IdleConnTimeout != 30*time.Second {
 		t.Errorf("expected IdleConnTimeout=30s, got %v", tr.IdleConnTimeout)
 	}
-}
-
-func keysOf[V any](m map[string]V) []string {
-	ks := make([]string, 0, len(m))
-	for k := range m {
-		ks = append(ks, k)
-	}
-	return ks
 }
 
 func TestNewHTTPClient_InvalidProxy(t *testing.T) {

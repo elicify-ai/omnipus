@@ -22,8 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/net/http2"
-
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
@@ -226,13 +224,18 @@ func NewHTTPClient(proxy string) (*http.Client, error) {
 	// Age stale pooled connections out quickly (default is 90s).
 	transport.IdleConnTimeout = 30 * time.Second
 
-	// Configure the HTTP/2 transport with health-check pings: if a pooled
-	// connection is idle for ReadIdleTimeout, send a PING; if no PONG arrives
-	// within PingTimeout, mark the connection dead so it is not reused mid-stream.
-	// This eliminates the "http2: response body closed" resets on reused conns.
-	if h2t, err := http2.ConfigureTransports(transport); err == nil && h2t != nil {
-		h2t.ReadIdleTimeout = 15 * time.Second
-		h2t.PingTimeout = 5 * time.Second
+	// Enable HTTP/1.1 and HTTP/2 explicitly — the modern replacement for the
+	// deprecated http2.ConfigureTransports — and configure HTTP/2 with
+	// health-check pings: if no frame is received on a pooled connection for
+	// SendPingTimeout, send a PING; if no PONG arrives within PingTimeout, mark
+	// the connection dead so it is not reused mid-stream. This eliminates the
+	// "http2: response body closed" resets on reused conns.
+	transport.Protocols = new(http.Protocols)
+	transport.Protocols.SetHTTP1(true)
+	transport.Protocols.SetHTTP2(true)
+	transport.HTTP2 = &http.HTTP2Config{
+		SendPingTimeout: 15 * time.Second,
+		PingTimeout:     5 * time.Second,
 	}
 
 	return &http.Client{
