@@ -884,9 +884,9 @@ describe('getUnknownFrameTypeCount / resetUnknownFrameTypeCount', () => {
 // 2. The set is non-empty (the spec has at least one client→server frame).
 // 3. Every entry in the set passes Zod validation as a valid WsFrame — this
 //    ensures the discriminators are actual frame type strings in the spec and
-//    not stale residue from a removed frame type.
-// 4. session_close is present (regression guard: it was missing from the
-//    hand-maintained set that this constant replaces).
+//    not stale residue from a removed frame type (e.g. `session_close`, retired
+//    from contracts/asyncapi.yaml by DEL-08 / DEL-F20).
+// 4. session_close is absent (removal guard: DEL-08 / DEL-F20 deleted it).
 
 describe('ClientFrameTypes — contract test', () => {
   it('ClientFrameTypes exported from ws.ts matches the generated constant', () => {
@@ -898,8 +898,10 @@ describe('ClientFrameTypes — contract test', () => {
     expect(ClientFrameTypes.length).toBeGreaterThan(0)
   })
 
-  it('ClientFrameTypes includes session_close (regression guard for the missing entry)', () => {
-    expect(ClientFrameTypes).toContain('session_close')
+  it('ClientFrameTypes no longer includes session_close (DEL-08 / DEL-F20 removed it from the spec)', () => {
+    // Removal guard: session_close was deleted from contracts/asyncapi.yaml, so
+    // the generated set must never contain it again.
+    expect(ClientFrameTypes).not.toContain('session_close')
   })
 
   it('ClientFrameTypes includes auth, message, cancel', () => {
@@ -922,7 +924,6 @@ describe('ClientFrameTypes — contract test', () => {
       'ping',
       'attach_session',
       'device_pairing_response',
-      'session_close',
       'whatsapp_pairing_subscribe',
       // ADR-038 — live interactive browser panel client→server frames.
       'browser_attach',
@@ -952,11 +953,14 @@ describe('ClientFrameTypes — contract test', () => {
     expect(new Set(ClientFrameTypes)).toEqual(expectedTypes)
   })
 
-  it('session_close frame sent from server is rejected by _parseServerFrame (direction filter)', () => {
-    // A session_close frame originates from the client. If the server somehow
-    // echoes it back, the direction filter in _parseServerFrame must drop it.
-    // This uses WsConnection.onmessage to exercise the production code path.
+  it('session_close frame from the server is rejected — no longer a spec frame (DEL-08 / DEL-F20)', () => {
+    // DEL-08 / DEL-F20 deleted the explicit session-close frame from
+    // contracts/asyncapi.yaml, so `session_close` is now neither a
+    // client-direction discriminator nor a known server frame. A server-sent
+    // `session_close` therefore falls to the forward-compat path
+    // (_unknownFrameTypeCount) and is never forwarded to the consumer.
     resetDroppedFrameCount()
+    resetUnknownFrameTypeCount()
     const onFrame = vi.fn()
     const conn = new WsConnection({
       onFrames: (frames) => { for (const frame of frames) onFrame(frame) },
@@ -965,17 +969,15 @@ describe('ClientFrameTypes — contract test', () => {
       onError: vi.fn(),
     })
     conn.connect()
-    // Trigger onopen so the socket is in the OPEN state
-    const ws = (global as { __ws_instances?: { onopen?: () => void }[] }).__ws_instances?.at(-1)
-    if (ws?.onopen) ws.onopen()
+    lastWsInstance.onopen?.()
 
-    // Send a session_close frame as if it came from the server (spoofed direction).
-    const spoofedClose = JSON.stringify({ type: 'session_close' })
-    const wsInstance = (conn as unknown as { ws: { onmessage?: (e: { data: string }) => void } | null }).ws
-    wsInstance?.onmessage?.({ data: spoofedClose })
+    lastWsInstance.onmessage?.({ data: JSON.stringify({ type: 'session_close' }) })
 
     expect(onFrame).not.toHaveBeenCalled()
-    expect(getDroppedFrameCount()).toBeGreaterThan(0)
+    // Removed frame → classified as unknown (spec drift), not as a dropped
+    // client-direction frame.
+    expect(getUnknownFrameTypeCount()).toBe(1)
+    expect(getDroppedFrameCount()).toBe(0)
 
     conn.disconnect()
   })
@@ -1022,23 +1024,23 @@ describe('WsConnection.send — OPEN-socket throw treated as failed send (#253)'
   })
 })
 
-// ── Parametrized direction-filter: all 7 client frame types ───────────────────
+// ── Parametrized direction-filter: client frame types ──────────────────────────
 //
 // Traces to: fix-Y — pr-test-analyzer gap: parametrized direction-filter coverage
-// for all client→server frame types.
+// for client→server frame types.
 //
 // Every ClientFrameType, when spoofed as a server→client frame, must be
 // rejected by _parseServerFrame's direction filter and increment the dropped
 // frame counter. This prevents spoofing attacks where a server sends a frame
 // whose type belongs to the client-only set.
 
-describe('WsConnection direction-filter — all client frame types rejected when spoofed', () => {
+describe('WsConnection direction-filter — spoofed client frame types are rejected', () => {
   beforeEach(() => {
     resetDroppedFrameCount()
     resetUnknownFrameTypeCount()
   })
 
-  // The 7 client frame types with minimal valid payloads that would otherwise
+  // The client frame types with minimal valid payloads that would otherwise
   // satisfy their Zod schemas (ensuring rejection is from direction filter, not
   // schema validation).
   const clientFramePayloads: Array<{ type: string; payload: Record<string, unknown> }> = [
@@ -1056,14 +1058,13 @@ describe('WsConnection direction-filter — all client frame types rejected when
         accept: true,
       },
     },
-    { type: 'session_close', payload: { type: 'session_close', session_id: 's1' } },
   ]
 
   it.each(clientFramePayloads)(
     '$type — spoofed server→client direction is rejected, dropped counter increments',
     ({ type: frameType, payload }) => {
-      // Traces to: fix-Y — direction filter must reject all 7 client frame types
-      // when spoofed as server-originated frames.
+      // Traces to: fix-Y — the direction filter must reject these client frame
+      // types when spoofed as server-originated frames.
       const cbs = makeCallbacks()
       const conn = new WsConnection(cbs)
       conn.connect()
