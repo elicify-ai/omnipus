@@ -277,8 +277,8 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 //
 // Reads the child's own record rather than threading a second value through
 // LaunchResult: ParentAgentID is exactly the value launchSteered resolved
-// and persisted under the parent's own record lock (steererMeta.
-// ActiveAgentID at launch time), so this reads the committed truth instead
+// and persisted under the parent's own record lock (steererMeta.AgentID, the
+// immutable owner, at launch time), so this reads the committed truth instead
 // of re-resolving a possibly-stale copy. Best-effort, matching
 // publishSteeredLaunch's own lifecycle.Load immediately below it: a read
 // failure here leaves the child on the global Auto default
@@ -504,7 +504,15 @@ func (l *SteerLauncher) launchSteered(
 				return nil, fmt.Errorf("steer: launch: %w: resolve steering session %q: %w",
 					steer.ErrInvalidEdge, req.SteeringSessionID, metaErr)
 			}
-			parentAgentID := strings.TrimSpace(steererMeta.ActiveAgentID)
+			// The delegating agent is the steering session's IMMUTABLE owner,
+			// AgentID — not ActiveAgentID. session-core U1 / DEL-11 deleted the
+			// mutable handover owner from session creation (see
+			// createSessionLocked's DEL-11 note), so ActiveAgentID is empty on
+			// any session that was never switched and this read made the edge
+			// look like it had no delegating agent. Mirrors
+			// pkg/tools/delegate_followup.go::cloneCorrectiveSessionIdentity,
+			// which migrated the identical read the same way.
+			parentAgentID := strings.TrimSpace(steererMeta.AgentID)
 			if parentAgentID == "" && l.al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID() {
 				return nil, fmt.Errorf("steer: launch: %w: delegating agent identity is empty", steer.ErrInvalidEdge)
 			}
@@ -550,7 +558,7 @@ func (l *SteerLauncher) launchSteered(
 				return nil, err
 			}
 			var goalErr error
-			goalID, goalErr = l.createLaunchGoal(req, childID, title, steererMeta.ActiveAgentID)
+			goalID, goalErr = l.createLaunchGoal(req, childID, title, parentAgentID)
 			if goalErr != nil {
 				_ = sessions.DeleteSession(childID)
 				return nil, goalErr
