@@ -697,7 +697,9 @@ describe('F3 runtime question precedence and session isolation', () => {
         expect(observedTransitions).toBe(1)
         expect(useChatStore.getState().pendingAsk).toBeNull()
         expect(useChatStore.getState().sessionsById[previousSid]?.pendingAsk?.status).toBe('pending')
-        expectRuntimePhase(assistantBubble(view.container), text, motion)
+        // The real runtime commits the next session's reply asynchronously.
+        // Keep the same exact phase assertions; use the default DOM wait.
+        await waitFor(() => expectRuntimePhase(assistantBubble(view.container), text, motion))
       } finally {
         unsubscribe()
       }
