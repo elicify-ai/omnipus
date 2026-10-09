@@ -27,6 +27,7 @@
 import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, waitForConnected, startNewChat, assistantMessages } from './fixtures/selectors'
+import { endTurnDeterministically, trackServerFrames } from './helpers/endTurn'
 
 const stopButton = (page: import('@playwright/test').Page) =>
   page.locator('[data-testid="stop-btn"]')
@@ -45,59 +46,16 @@ const askUserQuestionCard = (page: import('@playwright/test').Page) =>
  * (e.g. AskUserQuestionCard's own `data-testid="ask-user-cancel"` button),
  * so it is deliberately NOT included in this page-wide sweep.
  */
-/**
- * Ends the current turn without racing a live model's wall-clock: click Stop
- * if it is still showing, then wait for the TURN to actually be over — zero
- * assistant messages left in the streaming state. buildMessageStatus
- * (src/lib/omnipus-runtime.ts) emits data-status="running" exactly while a
- * turn streams, so "no running message" is the turn's own completion signal,
- * bounded here at 30s — the flake this helper replaces (CI 34123445336) was a
- * 120s wait for a real goal turn that legitimately does file writes and
- * several tool calls.
- *
- * NOT "Stop becomes hidden": while the session carries an ACTIVE goal, Stop
- * stays mounted BY DESIGN even with no turn in flight
- * (src/lib/goalActivity.ts::isGoalRunning — the goal keeper resumes the goal
- * between turns, so Stop must remain reachable to pause it; ChatScreen.tsx's
- * composer render condition includes goalRunning). On this very spec's
- * /goal flow that is the NORMAL state the moment a goal exists: CI
- * 37943454247 failed because the model was mid-turn at the click (the goal
- * stayed active, the keeper re-delivered), and the forced repro of it
- * (omnipus-investigations/flake-goalwork-stop-20261009) failed the same wait
- * with the click landing in the keeper's idle gap — gateway log
- * "ws: cancel — no active turn or already canceled" — where no cancel could
- * ever hide the button. Waiting for toBeHidden there waits on the GOAL's
- * lifecycle, not the turn's, which is unbounded by construction.
- *
- * A genuinely stuck turn (streaming message that never leaves the running
- * state) starves the wait and throws below — the stuck-turn detection the
- * old toBeHidden provided is preserved.
- */
-async function endTurnDeterministically(page: import('@playwright/test').Page) {
-  const stop = page.locator('[data-testid="stop-btn"]')
-  if (!(await stop.isVisible().catch(() => false))) return
-  await stop.click().catch(() => {
-    /* already settled between the check and the click — nothing to stop */
-  })
-  try {
-    await expect(
-      page.locator('[data-testid="assistant-message"][data-status="running"]'),
-    ).toHaveCount(0, { timeout: 30_000 })
-  } catch {
-    throw new Error(
-      'endTurnDeterministically: a turn was still streaming 30s after Stop — ' +
-        'no assistant message ever left data-status="running". The cancel was ' +
-        'not honored (stuck turn), or the turn outlived its bound.',
-    )
-  }
-}
-
 async function assertNoGoalConfirmRow(page: import('@playwright/test').Page) {
   await expect(page.getByRole('button', { name: /^Confirm$/i })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /^Amend$/i })).toHaveCount(0)
 }
 
 test.beforeEach(async ({ page }) => {
+  // Frame tracking must attach BEFORE goto: the SPA connects during the
+  // load, and Playwright only reports websockets opened after the listener
+  // attaches (see helpers/endTurn.ts::trackServerFrames).
+  trackServerFrames(page)
   await page.goto('/')
 })
 
