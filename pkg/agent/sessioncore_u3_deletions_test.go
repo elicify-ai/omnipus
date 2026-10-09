@@ -54,6 +54,17 @@ func TestSessionCoreU3_CompetingIntakeDeclarationsAreGone(t *testing.T) {
 		"manualSteeringScope", // DEL-04: the manual fallback queue
 		"SteeringOneAtATime",  // DEL-04: the one-at-a-time steer mode
 		"workerInboxCap",      // DEL-03: the competing worker inbox
+
+		// DEL-04's remaining removals (CHECK M4: the proof named only four
+		// names). Each is an exact top-level declaration name; the surviving
+		// *ForScope sibling (dequeueSteeringMessagesForScope) is a DIFFERENT
+		// name and must not be caught by this list.
+		"SteeringAll",             // DEL-04: the "all" dequeue mode constant
+		"getMode",                 // DEL-04: user-selectable dequeue-mode accessor
+		"setMode",                 // DEL-04: user-selectable dequeue-mode setter
+		"SteeringMode",            // DEL-04: AgentLoop.SteeringMode() accessor
+		"SetSteeringMode",         // DEL-04: AgentLoop.SetSteeringMode() setter
+		"dequeueSteeringMessages", // DEL-04: the retired whole-queue dequeue
 	} {
 		require.False(t, decls[gone],
 			"%s must be deleted — FR-009 keeps ONE steering FIFO/runner and removes the competing worker inbox/manual queue/steer modes (DEL-03/04)", gone)

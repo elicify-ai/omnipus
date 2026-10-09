@@ -57,25 +57,34 @@ func TestSetConfig_RefusesGlobalToolIterationLimit(t *testing.T) {
 // Positive control: agents.defaults stays writable, as a leaf and as a
 // section that does not touch the protected fields — and such a section
 // write keeps the global.
+//
+// CHECK M3: this used `steering_mode` as the writable probe key, but that
+// field is being deleted (DEL-04 — the user-selectable dequeue modes are
+// removed). Retargeted to `temperature`, a stable, unprotected agents.defaults
+// setting, preserving the test's intent: an unrelated key stays writable and
+// such a write leaves the protected global untouched.
 func TestSetConfig_AgentsDefaultsStillWritable(t *testing.T) {
 	deps, cfg := newTestDeps(t)
 	cfg.Agents.Defaults.MaxToolIterations = 300
 	tool := systools.NewConfigSetTool(deps)
 
 	res := tool.Execute(context.Background(), map[string]any{
-		"key": "agents.defaults.steering_mode", "value": "all",
+		"key": "agents.defaults.temperature", "value": 0.5,
 	})
 	if res.IsError {
 		t.Fatalf("leaf write refused: %s", res.ForLLM)
 	}
+	if tp := cfg.Agents.Defaults.Temperature; tp == nil || *tp != 0.5 {
+		t.Fatalf("leaf write did not land: temperature = %v, want 0.5", tp)
+	}
 	res = tool.Execute(context.Background(), map[string]any{
-		"key": "agents.defaults", "value": map[string]any{"steering_mode": "one-at-a-time"},
+		"key": "agents.defaults", "value": map[string]any{"temperature": 0.25},
 	})
 	if res.IsError {
 		t.Fatalf("section write without the protected fields refused: %s", res.ForLLM)
 	}
-	if cfg.Agents.Defaults.SteeringMode != "one-at-a-time" {
-		t.Errorf("steering_mode = %q, want one-at-a-time", cfg.Agents.Defaults.SteeringMode)
+	if tp := cfg.Agents.Defaults.Temperature; tp == nil || *tp != 0.25 {
+		t.Errorf("section write did not land: temperature = %v, want 0.25", tp)
 	}
 	if cfg.Agents.Defaults.MaxToolIterations != 300 {
 		t.Errorf("section write changed the global to %d, want 300", cfg.Agents.Defaults.MaxToolIterations)

@@ -68,6 +68,33 @@ func TestSessionCoreU3_AggregateBodySettingExistsAndDefaultsTo1048576(t *testing
 		"C-LIMIT: an unset steer_aggregate_body must resolve to the spec default 1,048,576 bytes")
 }
 
+// TestSessionCoreU3_AggregateBodyResolverHonoursExplicitOverride closes the
+// oracle gap CHECK found in TestSessionCoreU3_AggregateBodySettingExistsAnd-
+// DefaultsTo1048576: that test only ever resolved the ZERO config, so a resolver
+// mutated to ignore the field and always return the default still passed. This
+// drives a DISTINCT explicit value end-to-end through the wire key and the
+// resolver, and pins the min/zero/negative fallbacks.
+func TestSessionCoreU3_AggregateBodyResolverHonoursExplicitOverride(t *testing.T) {
+	// (1) An explicit operator value must be honoured by the resolver — the
+	// value chosen (2 MiB) is deliberately distinct from the 1,048,576 default,
+	// so "resolver returned the default" cannot pass this assertion.
+	var explicit SessionMessagingConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"steer_aggregate_body":2097152}`), &explicit),
+		"C-LIMIT: an explicit steer_aggregate_body must decode into the config")
+	assert.Equal(t, 2097152, explicit.EffectiveSteerAggregateBody(),
+		"C-LIMIT: the resolver must return an explicit steer_aggregate_body, never the default")
+
+	// (2) Boundary: the smallest positive value (min) is honoured verbatim.
+	assert.Equal(t, 1, (SessionMessagingConfig{SteerAggregateBody: 1}).EffectiveSteerAggregateBody(),
+		"C-LIMIT: steer_aggregate_body=1 (the min positive) must be honoured, not defaulted")
+
+	// (3) Fallback: zero (unset) and negative both resolve to the spec default.
+	assert.Equal(t, 1048576, (SessionMessagingConfig{}).EffectiveSteerAggregateBody(),
+		"C-LIMIT: an unset (zero) steer_aggregate_body must resolve to the 1,048,576 default")
+	assert.Equal(t, 1048576, (SessionMessagingConfig{SteerAggregateBody: -1}).EffectiveSteerAggregateBody(),
+		"C-LIMIT: a negative steer_aggregate_body must resolve to the 1,048,576 default")
+}
+
 // intFieldByJSONTag returns the int value of the field whose json tag name is
 // (tag). A non-int or absent field reports ok=false.
 func intFieldByJSONTag(v reflect.Value, tag string) (int, bool) {
