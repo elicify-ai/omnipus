@@ -705,6 +705,15 @@ func NewAgentLoop(
 ) (*AgentLoop, error) {
 	nal := &newAgentLoop{cfg: cfg, msgBus: msgBus, provider: provider}
 
+	// CONV saved-chat cutover boot step (architect Q10/Q11): convert any
+	// pre-cutover saved chat in the shared archive BEFORE registry/per-agent
+	// store construction, and refuse boot on a conversion failure rather than
+	// serving over an incomplete conversion. See
+	// newAgentLoop.initializeConvertedSessions.
+	if err := nal.initializeConvertedSessions(); err != nil {
+		return nil, err
+	}
+
 	nal.initializeCore()
 
 	if r0, stop, r1 := nal.initializeAudit(); stop {

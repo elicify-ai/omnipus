@@ -1,7 +1,6 @@
 package session
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -974,19 +973,4 @@ func readUnifiedMeta(sessionDir string) (*UnifiedMeta, error) {
 	}
 	meta.PostLoad()
 	return meta, nil
-}
-
-// writeUnifiedMetaDirect atomically writes meta.json to sessionDir with an OS
-// flock for cross-process defense-in-depth. This is a package-level helper used
-// during migration (called before the store is fully constructed). Normal writes
-// go through UnifiedStore.writeMetaLocked which also holds the in-process mutex.
-func writeUnifiedMetaDirect(sessionDir string, meta *UnifiedMeta) error {
-	data, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return fmt.Errorf("unified_store: marshal meta: %w", err)
-	}
-	metaPath := filepath.Join(sessionDir, "meta.json")
-	return fileutil.WithFlock(sessionFileLockPath(metaPath), func() error {
-		return fileutil.WriteFileAtomic(metaPath, data, 0o600)
-	})
 }
