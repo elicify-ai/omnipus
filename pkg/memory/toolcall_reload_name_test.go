@@ -53,12 +53,14 @@ func TestReload_DropsFlattenedToolCallName(t *testing.T) {
 			Function: &providers.FunctionCall{Name: toolName, Arguments: toolArgs},
 		}},
 	}
-	if err := store.AddFullMessage(ctx, sessionKey, assistant); err != nil {
+	err = store.AddFullMessage(ctx, sessionKey, assistant)
+	if err != nil {
 		t.Fatalf("AddFullMessage(assistant): %v", err)
 	}
-	if err := store.AddFullMessage(ctx, sessionKey, providers.Message{
+	err = store.AddFullMessage(ctx, sessionKey, providers.Message{
 		Role: "tool", ToolCallID: toolCallID, Content: toolResult,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("AddFullMessage(tool result): %v", err)
 	}
 
