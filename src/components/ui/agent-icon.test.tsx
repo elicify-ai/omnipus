@@ -474,6 +474,13 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
       // content), never unrelated siblings or another SVG (F-2).
       const clone = elementChildren[0].cloneNode(true) as Element
       clone.querySelectorAll('[data-initial], [data-role]').forEach((node) => node.remove())
+      // The badge-cutout mask and empty letter group are the ONLY remaining
+      // structure. A tag allowlist alone admits a second <text>STRAY</text>
+      // (or another otherwise-approved shape) inside the one SVG wrapper.
+      expect(
+        Array.from(clone.querySelectorAll('*'), (el) => el.tagName.toLowerCase()),
+        'only the badge-cutout mask and empty letter group remain',
+      ).toEqual(['defs', 'mask', 'rect', 'circle', 'g'])
       clone.querySelectorAll('*').forEach((el) => {
         expect(allowed.has(el.tagName.toLowerCase()), `unexpected element <${el.tagName.toLowerCase()}>`).toBe(true)
       })

@@ -53,11 +53,11 @@ const BADGES = {
 
 /** Inner SVG (no outer <svg>) for one figure and role. Mask ids are rewritten so two marks on one page do not collide. */
 export function agentIconInner(art: AgentIconArtKey, role: AgentIconRole, maskId: string): string {
-  const figure = FIGURES[art]
-  const badge = BADGES[role]
-  if (!figure || !badge) {
+  if (!Object.hasOwn(FIGURES, art) || !Object.hasOwn(BADGES, role)) {
     throw new Error(`AgentIcon has no art for ${art}/${role}`)
   }
+  const figure = FIGURES[art]
+  const badge = BADGES[role]
   return (figure + badge).split('MASK_ID').join(maskId)
 }
 
@@ -94,10 +94,10 @@ const MONOGRAM_MASK =
  * do not collide. ARCH-RULING monogram D2b.
  */
 export function monogramInner(role: AgentIconRole, maskId: string, escapedInitial: string): string {
-  const badge = BADGES[role]
-  if (!badge) {
+  if (!Object.hasOwn(BADGES, role)) {
     throw new Error(`AgentIcon has no badge for ${role}`)
   }
+  const badge = BADGES[role]
   const ink =
     `${MONOGRAM_MASK}<g mask="url(#MASK_ID)">` +
     `<text data-initial="${escapedInitial}" class="font-headline" x="128" y="128" dy="0.35em" ` +

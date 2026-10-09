@@ -24,6 +24,31 @@ const AgentStatusIndicator = TypedIndicator as unknown as (
 ) => React.ReactElement
 
 describe('AgentStatusIndicator Monogram', () => {
+  // I2: only Monogram needs a name to draw its figure. Existing figures must
+  // not disappear when an upstream caller has no usable name.
+  it.each(
+    (['Robot', 'Man', 'Woman', 'Omnipus'] as const).flatMap((figure) =>
+      [undefined, '', '   '].map((name) => ({ figure, name })),
+    ),
+  )('draws non-Monogram $figure with name=$name and keeps the phrase (I2)', ({ figure, name }) => {
+    const { container } = render(
+      <AgentStatusIndicator
+        phase="thinking"
+        label="Thinking…"
+        figure={figure}
+        role="general"
+        color="#3B82F6"
+        name={name}
+      />,
+    )
+    const mark = container.querySelector('[data-testid="agent-icon"]')
+    expect(mark).toHaveAttribute('data-figure', figure)
+    expect(mark).toHaveAttribute('aria-hidden', 'true')
+    expect(mark?.querySelector('svg')).toHaveAttribute('width', '48')
+    expect(container.querySelector('[data-initial]')).toBeNull()
+    expect(container.textContent).toBe('Thinking…')
+  })
+
   it('draws the Monogram initial from the agent name and keeps the phrase (AC-16)', () => {
     const { container } = render(
       <AgentStatusIndicator

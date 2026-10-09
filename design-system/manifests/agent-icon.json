@@ -67,6 +67,14 @@
       "applicable": true
     },
     {
+      "id": "agent-icon-monogram-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AgentIcon [check:agent-icon-monogram-browser] browser",
+      "story": "Monogram",
+      "applicable": true
+    },
+    {
       "id": "agent-icon-pointer-not-applicable",
       "kind": "pointer",
       "applicable": false,
