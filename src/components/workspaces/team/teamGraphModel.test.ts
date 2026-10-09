@@ -166,6 +166,17 @@ describe('buildTeamGraphModel', () => {
     expect(e2.depth).toBe(2)
   })
 
+  it('renders a self-edge into the edge model (from === to, id "mia->mia")', () => {
+    // The seeded self-edge must reach the render model like any other edge —
+    // no filter drops it, so it is visible (and selectable/removable) on the
+    // canvas.
+    const s2 = state({ members: ['mia'], edges: [{ from: 'mia', to: 'mia', modes: ['direct'] }] })
+    const { edges } = buildTeamGraphModel(s2, AGENTS)
+    expect(edges).toHaveLength(1)
+    expect(edges[0]).toMatchObject({ id: teamEdgeId('mia', 'mia'), from: 'mia', to: 'mia' })
+    expect(edges[0].unknownEndpoint).toBe(false)
+  })
+
   it('carries the edit state defaultDepth through to the render model', () => {
     const { defaultDepth } = buildTeamGraphModel(s, AGENTS)
     expect(defaultDepth).toBe(WS_DEFAULT_DEPTH)
@@ -301,13 +312,26 @@ describe('validateConnection', () => {
     edges: [{ from: 'mia', to: 'jim', modes: ['direct'] }],
   })
 
-  it('rejects self-edges for roles other than Jim and General Purpose', () => {
-    expect(validateConnection('mia', 'mia', s, WORKER_IDS)).toBe('self-edge')
+  it('accepts a self-edge like any other edge — no identity allowlist (U5a ruling)', () => {
+    // A self-edge is an ORDINARY edge: any team member may self-delegate. The
+    // old "only Jim and General Purpose" gate is deleted; the judge /
+    // plans-coordinator exclusion lives in config, not in this validator.
+    expect(validateConnection('mia', 'mia', s, WORKER_IDS)).toBeNull()
+    expect(validateConnection('jim', 'jim', s, WORKER_IDS)).toBeNull()
+    expect(validateConnection('planner', 'planner', s, WORKER_IDS)).toBeNull()
   })
-  it('allows explicit Jim and General Purpose self-edges', () => {
-    const eligible = { ...s, members: [...s.members, 'worker'] }
-    expect(validateConnection('jim', 'jim', eligible, WORKER_IDS)).toBeNull()
-    expect(validateConnection('worker', 'worker', eligible, WORKER_IDS)).toBeNull()
+  it('does NOT misreport a new self-edge as a cycle (a node trivially reaches itself)', () => {
+    // hasPath(s, s) is trivially true, so the cycle check must skip a
+    // self-edge — else the very first self-edge would be rejected as 'cycle'.
+    const noSelfEdge = state({ members: ['mia'], edges: [] })
+    expect(validateConnection('mia', 'mia', noSelfEdge, WORKER_IDS)).toBeNull()
+  })
+  it('still rejects a DUPLICATE self-edge (an ordinary edge duplicated is a duplicate)', () => {
+    const withSelfEdge = state({
+      members: ['mia'],
+      edges: [{ from: 'mia', to: 'mia', modes: ['direct'] }],
+    })
+    expect(validateConnection('mia', 'mia', withSelfEdge, WORKER_IDS)).toBe('duplicate')
   })
   it('ALLOWS a worker as a delegation source (bounded delegation, not tier-gated)', () => {
     // The backend unlocked onward delegation for any agent and bounds depth
@@ -345,8 +369,8 @@ describe('validateConnection', () => {
 
 // ── rejectionMessageForFailedConnection — live-UAT regression ──
 // React Flow only calls `onConnect` when `isValidConnection` passed, so a
-// rejected drag (self-edge in particular) never reaches a handler wired to
-// `onConnect` — it's silently swallowed with zero feedback. The fix wires
+// rejected drag (a duplicate or non-member, say) never reaches a handler wired
+// to `onConnect` — it's silently swallowed with zero feedback. The fix wires
 // `onConnectEnd` (which React Flow ALWAYS fires) to this helper instead.
 
 describe('rejectionMessageForFailedConnection', () => {
@@ -355,12 +379,12 @@ describe('rejectionMessageForFailedConnection', () => {
     edges: [{ from: 'mia', to: 'jim', modes: ['direct'] }],
   })
 
-  it('surfaces the self-edge message for a rejected self-drag (mia -> mia)', () => {
-    // This is the exact drag the bug report reproduces: a handle dragged back
-    // onto its own node.
-    expect(rejectionMessageForFailedConnection('mia', 'mia', false, s, WORKER_IDS)).toBe(
-      REJECTION_MESSAGE['self-edge'],
-    )
+  it('returns null for a self-drag — a self-edge is now valid, not a rejection (U5a ruling)', () => {
+    // Under U5a a self-edge is an ORDINARY valid edge, so a self-drag has no
+    // rejection reason to surface. The helper must not invent one — the
+    // 'self-edge' rejection code and its "only Jim and General Purpose"
+    // message were removed with the old model.
+    expect(rejectionMessageForFailedConnection('mia', 'mia', false, s, WORKER_IDS)).toBeNull()
   })
 
   it('surfaces the duplicate-edge message for a rejected re-drag of an existing edge', () => {
@@ -442,6 +466,14 @@ describe('addEdge', () => {
     })
     expect(addEdge(s, 'mia', 'jim', WORKER_IDS)).toBe(s)
   })
+  it('adds a SELF-edge via the ordinary path (the seeded edge shape is re-creatable)', () => {
+    const s: TeamEditState = state({ members: ['mia', 'jim'], edges: [] })
+    const next = addEdge(s, 'mia', 'mia', WORKER_IDS)
+    expect(next.edges).toHaveLength(1)
+    expect(next.edges[0]).toMatchObject({ from: 'mia', to: 'mia' })
+    expect(next.edges[0].modes).toEqual(['direct', 'task'])
+    expect(next.edges[0].depth).toBe(WS_DEFAULT_DEPTH)
+  })
 })
 
 describe('removeEdge', () => {
@@ -451,6 +483,20 @@ describe('removeEdge', () => {
       edges: [{ from: 'mia', to: 'jim', modes: ['direct'] }],
     })
     expect(removeEdge(s, 'mia', 'jim').edges).toEqual([])
+  })
+  it('drops a SELF-edge — the seeded edge is removable through the ordinary path (U5a ruling)', () => {
+    // Point 4 of the U5a ruling: the operator removes the seeded self-edge in
+    // the policy editor. Removal is identity-agnostic — removeEdge drops the
+    // (mia, mia) edge exactly like any other.
+    const s: TeamEditState = state({
+      members: ['mia', 'jim'],
+      edges: [
+        { from: 'mia', to: 'mia', modes: ['direct', 'task'], depth: 3 },
+        { from: 'mia', to: 'jim', modes: ['direct'] },
+      ],
+    })
+    const next = removeEdge(s, 'mia', 'mia')
+    expect(next.edges).toEqual([{ from: 'mia', to: 'jim', modes: ['direct'] }])
   })
 })
 
