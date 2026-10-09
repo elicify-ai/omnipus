@@ -386,7 +386,7 @@ func validateSessionID(id string) error {
 // (e.g., <home>/agents/<id>/sessions), use NewUnifiedStoreWithHome so that
 // upload files are found at the correct <home>/uploads/<sessionID> path.
 func NewUnifiedStore(baseDir string) (*UnifiedStore, error) {
-	return NewUnifiedStoreWithHome(baseDir, filepath.Dir(filepath.Clean(baseDir)))
+	return newUnifiedStore(baseDir, filepath.Dir(filepath.Clean(baseDir)), false)
 }
 
 // NewUnifiedStoreWithHome creates a UnifiedStore rooted at baseDir whose
@@ -396,7 +396,21 @@ func NewUnifiedStore(baseDir string) (*UnifiedStore, error) {
 // per-agent stores at <home>/agents/<id>/sessions). The homePath ensures that
 // cascade-deletes on DeleteSession, ClearAll, and RetentionSweep always remove
 // files from the correct location regardless of the store's baseDir depth.
+//
+// This is the BOOT constructor (pkg/agent's initSessionStore and the shared
+// store both use it): it runs the one-time CONV saved-chat cutover
+// (unified_conv.go) BEFORE loadMetaCacheLocked, so the session cache/list/
+// attach never observe a pre-cutover saved chat. The bare NewUnifiedStore
+// convenience wrapper over an arbitrary directory is NOT a boot path and does
+// not run the cutover.
 func NewUnifiedStoreWithHome(baseDir, homePath string) (*UnifiedStore, error) {
+	return newUnifiedStore(baseDir, homePath, true)
+}
+
+// newUnifiedStore is the shared constructor body; runCutover selects the
+// one-time CONV saved-chat cutover (see NewUnifiedStoreWithHome). It is false
+// for the convenience/test constructor, which has no boot semantics.
+func newUnifiedStore(baseDir, homePath string, runCutover bool) (*UnifiedStore, error) {
 	if err := os.MkdirAll(baseDir, 0o700); err != nil {
 		return nil, fmt.Errorf("unified_store: create base dir %q: %w", baseDir, err)
 	}
@@ -419,7 +433,15 @@ func NewUnifiedStoreWithHome(baseDir, homePath string) (*UnifiedStore, error) {
 		dirtyStats:    make(map[string]struct{}),
 	}
 
-	us.migrateLegacy()
+	if runCutover {
+		if convErr := us.convergeSavedChats(); convErr != nil {
+			// Visible cutover failure (spec CONV / Failure): do not start
+			// ordinary session-serving over an incomplete conversion. Tear the
+			// backend down so a refused boot leaks no resources.
+			_ = store.Close()
+			return nil, convErr
+		}
+	}
 	us.loadMetaCacheLocked()
 	// ADR-057 U6 W24 (FR-063): every store gets a running periodic flusher
 	// from construction — a fresh install with no operator override still
@@ -432,7 +454,7 @@ func NewUnifiedStoreWithHome(baseDir, homePath string) (*UnifiedStore, error) {
 }
 
 // loadMetaCacheLocked scans baseDir once and populates metaCache with every
-// session's metadata. Called from the constructor, after migrateLegacy, so
+// session's metadata. Called from the constructor, after the CONV cutover, so
 // this moves the O(N) directory scan + per-session disk read from every
 // future ListSessions call to a single one-time cost at store construction.
 //
@@ -515,58 +537,6 @@ func (us *UnifiedStore) uploadsRoot() string {
 	}
 	// Fallback: derive from baseDir (correct only for stores directly under home).
 	return filepath.Join(filepath.Dir(filepath.Clean(us.baseDir)), "uploads")
-}
-
-// migrateLegacy scans for old flat JSONL files and wraps each in a session directory.
-func (us *UnifiedStore) migrateLegacy() {
-	entries, err := os.ReadDir(us.baseDir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		name := strings.TrimSuffix(e.Name(), ".jsonl")
-		sessionDir := filepath.Join(us.baseDir, name)
-		if mkErr := os.MkdirAll(sessionDir, 0o700); mkErr != nil {
-			slog.Warn("unified_store: migrate: could not create dir", "name", name, "error", mkErr)
-			continue
-		}
-		src := filepath.Join(us.baseDir, e.Name())
-		dst := filepath.Join(sessionDir, "context.jsonl")
-		if _, statErr := os.Stat(dst); statErr == nil {
-			// Already migrated.
-			continue
-		}
-		data, readErr := os.ReadFile(src)
-		if readErr != nil {
-			slog.Warn("unified_store: migrate: could not read file", "path", src, "error", readErr)
-			continue
-		}
-		if writeErr := fileutil.WriteFileAtomic(dst, data, 0o600); writeErr != nil {
-			slog.Warn("unified_store: migrate: could not write context.jsonl", "path", dst, "error", writeErr)
-			continue
-		}
-		now := time.Now().UTC()
-		meta := &UnifiedMeta{
-			SessionMeta: SessionMeta{
-				ID:        name,
-				Status:    StatusActive,
-				CreatedAt: now,
-				UpdatedAt: now,
-			},
-			Type: SessionTypeChat,
-		}
-		if writeMetaErr := writeUnifiedMetaDirect(sessionDir, meta); writeMetaErr != nil {
-			slog.Warn("unified_store: migrate: could not write meta.json", "name", name, "error", writeMetaErr)
-			continue
-		}
-		if removeErr := os.Remove(src); removeErr != nil {
-			slog.Warn("unified_store: migrate: could not remove legacy file", "path", src, "error", removeErr)
-		}
-		slog.Info("unified_store: migrated legacy session", "id", name)
-	}
 }
 
 // NewSession creates a new session directory with meta.json and empty files.
@@ -975,7 +945,7 @@ func (us *UnifiedStore) Close() error {
 // must not) also accept a pre-split fused meta.json carrying embedded
 // Stats/Goal*/Loop* fields — greenfield permits this (ADR-057 v4 operator
 // decision 1: no migration, no back-compat; ADR-086 D-F restates it for
-// this addition) and migrateLegacy's own freshly migrated sessions carry
+// this addition) and CONV's own freshly converted saved chats carry
 // zero-valued Stats/Loop/PendingAsk anyway, so composing them from the
 // files that exist yields the identical zero result a fused reader would
 // have.

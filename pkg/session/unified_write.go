@@ -242,10 +242,11 @@ func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
 // an empty loop.json/pending_ask.json it never touched).
 //
 // Caller must hold sessionID's shard (see lockSession) — was: caller must
-// hold us.mu. (writeUnifiedMetaDirect, used only by migrateLegacy before the
-// cache exists, is a SEPARATE, unmodified function — FR-060 forbids
-// changing it or providing a reader for its pre-split fused output; nothing
-// in this dispatcher touches it.)
+// hold us.mu. (writeUnifiedMetaDirect — a standalone writer that composes a
+// whole UnifiedMeta and is no longer called from the constructor — is a
+// SEPARATE, unmodified function; FR-060 forbids changing it or providing a
+// reader for its pre-split fused output, and nothing in this dispatcher
+// touches it.)
 func (us *UnifiedStore) writeMetaLocked(sessionID string, meta *UnifiedMeta) error {
 	prev, prevErr := us.readMetaLocked(sessionID)
 
