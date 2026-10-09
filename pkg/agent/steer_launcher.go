@@ -219,7 +219,7 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 	// unattended (task/trigger/headless). The child's turn is rebuilt later from
 	// its lifecycle record on a detached context, so the posture is persisted
 	// ON that record, in the launch's own write (reconstructSteeredTurn reads it).
-	result, err := l.launchSteered(sessions, lifecycle, req, title, sessionType, tools.ToolAutoDenyAsk(ctx))
+	result, err := l.launchSteered(ctx, sessions, lifecycle, req, title, sessionType, tools.ToolAutoDenyAsk(ctx))
 	if err == nil {
 		l.inheritDelegatePermissions(lifecycle, req.SteeringSessionID, result.SessionID)
 		l.publishSteeredLaunch(req, result)
@@ -403,6 +403,7 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 // records are loaded before the callback because lifecycle shard locks are
 // not re-entrant; the callback revalidates the direct edge before publishing.
 func (l *SteerLauncher) launchSteered(
+	ctx context.Context,
 	sessions *session.UnifiedStore,
 	lifecycle *session.LifecycleStore,
 	req steer.LaunchRequest,
@@ -496,7 +497,10 @@ func (l *SteerLauncher) launchSteered(
 				initializeOrdinaryRootRecord(parentRec, steererMeta)
 			}
 
-			remainingDepth := l.startingRemainingDepth(parentRec, req.TargetAgentID, parentDepth)
+			remainingDepth, depthErr := l.startingRemainingDepth(ctx, parentRec, req.TargetAgentID, parentDepth, req.Origin.Kind)
+			if depthErr != nil {
+				return nil, depthErr
+			}
 			if remainingDepth <= 0 {
 				return nil, steer.ErrDepthExceeded
 			}
@@ -807,38 +811,89 @@ func (l *SteerLauncher) walkVerifiedRoot(steeringSessionID string, steererRec *s
 // use the shared precedence function; an inherited budget can only tighten
 // that result. parentDepth is verified by the ancestor walk before the parent
 // record lock is taken.
-func (l *SteerLauncher) startingRemainingDepth(steererRec *session.LifecycleRecord, targetAgentID string, parentDepth int) int {
+//
+// The graph consulted is the SAME one the delegation gate resolved for this
+// turn — resolveEffectiveWorkspaceID (loop_delegation.go), which falls back to
+// the is_default workspace when the turn is unbound — never a skip, and never
+// the steering session's own recorded workspace. The budget must never be
+// WIDENED between the gate and the launch, so once a governing workspace is
+// resolved, every failure to verify the caller→target edge FAILS CLOSED (the
+// launch is refused with steer.ErrInvalidEdge) rather than silently
+// substituting the global-derived budget:
+//
+//   - the workspace's delegation graph is unreadable; or
+//   - originKind is OriginKindDelegate and no caller→target edge exists.
+//
+// A task self-reassignment (originKind == OriginKindTask) is deliberately NOT
+// graph-gated — assigning a task to oneself needs no edge — so for that origin
+// a missing edge falls back to the global-derived cap exactly as before.
+//
+// When NO workspace can be resolved at all, the gate resolves the identical
+// way and would itself have denied, so no launch reaches here on an unbound
+// turn with no default workspace in practice; with nothing to read the
+// global-derived cap stands (unchanged behaviour).
+func (l *SteerLauncher) startingRemainingDepth(
+	ctx context.Context,
+	steererRec *session.LifecycleRecord,
+	targetAgentID string,
+	parentDepth int,
+	originKind steer.OriginKind,
+) (int, error) {
 	globalMaxDepth := 0
 	if cfg := l.al.GetConfig(); cfg != nil {
 		configured, depthOK := configuredDelegationDepth(cfg.Performance, "launch depth budget")
 		if !depthOK {
 			// No delegation budget on an invalid limit, matching the gate's
 			// denial (and the Depth <= 0 edge case below).
-			return 0
+			return 0, nil
 		}
 		globalMaxDepth = configured
 	}
 	depthCap := resolveEffectiveDelegationDepth(nil, globalMaxDepth)
-	if steererRec.WorkspaceID != "" && steererRec.AgentID != "" && targetAgentID != "" {
-		if edges, err := workspace.ReadDelegation(omnipusHome(), steererRec.WorkspaceID); err == nil {
-			for i := range edges {
-				edge := &edges[i]
-				if edge.FromAgent != steererRec.AgentID || edge.ToAgent != targetAgentID {
-					continue
-				}
-				if edge.Depth != nil && *edge.Depth <= 0 {
-					return 0
-				}
-				depthCap = resolveEffectiveDelegationDepth(edge.Depth, globalMaxDepth)
-				break
+
+	// Resolve the governing workspace EXACTLY as the gate did. An unbound turn
+	// resolves to the is_default workspace rather than skipping the graph read,
+	// so the gate's authorization and this budget are never computed against
+	// two different graphs.
+	wsID, denial := resolveEffectiveWorkspaceID(ctx, targetAgentID)
+	if denial == nil {
+		edges, err := workspace.ReadDelegation(omnipusHome(), wsID)
+		if err != nil {
+			// FAIL CLOSED: an unreadable graph is a closed graph. Substituting
+			// the global-derived budget here would silently WIDEN authority
+			// exactly when the caller→target edge cannot be verified.
+			return 0, fmt.Errorf("steer: launch: %w: workspace %q delegation graph unreadable: %w",
+				steer.ErrInvalidEdge, wsID, err)
+		}
+
+		matched := false
+		for i := range edges {
+			edge := &edges[i]
+			if edge.FromAgent != steererRec.AgentID || edge.ToAgent != targetAgentID {
+				continue
 			}
+			matched = true
+			if edge.Depth != nil && *edge.Depth <= 0 {
+				return 0, nil
+			}
+			depthCap = resolveEffectiveDelegationDepth(edge.Depth, globalMaxDepth)
+			break
+		}
+		// A Delegate launch reached the launcher only because the gate found a
+		// caller→target edge; a missing edge here means the graph changed
+		// between the gate and this read. Fail closed rather than widen to the
+		// global cap.
+		if !matched && originKind == steer.OriginKindDelegate {
+			return 0, fmt.Errorf("steer: launch: %w: no delegation edge %s→%s in workspace %q",
+				steer.ErrInvalidEdge, steererRec.AgentID, targetAgentID, wsID)
 		}
 	}
+
 	available := depthCap - parentDepth
 	if steererRec.SteeredBy != nil && steererRec.SteeredBy.Authorization.RemainingDepth < available {
 		available = steererRec.SteeredBy.Authorization.RemainingDepth
 	}
-	return available
+	return available, nil
 }
 
 // Dispatch implements steer.SessionLauncher (I-2/I-3): a thin delegate onto
