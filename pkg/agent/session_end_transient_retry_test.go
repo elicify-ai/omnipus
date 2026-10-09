@@ -21,6 +21,13 @@
 //  2. Stub after exhaustion: provider always fails transiently → stub is written
 //     after all retries and fallback candidates are tried.
 //  3. Non-transient no-retry: auth error → single attempt, no retry, stub written.
+//
+// session-core U12 port: these tests originally drove the recap via
+// CloseSession(sid, "explicit"). FR-036 / DEL-08 retired the explicit trigger
+// (recap now fires only for idle/bootstrap/joined), so they are ported to the
+// still-valid "idle" trigger with every assertion unchanged — spec
+// "Regression protection": port safety assertions to the canonical
+// replacement, never weaken them.
 
 package agent
 
@@ -172,7 +179,7 @@ func TestRunRecap_TransientRetry_SucceedsAfterRetries(t *testing.T) {
 	}
 
 	al, sessionID, ag := buildRecapTestLoop(t, provider)
-	al.CloseSession(sessionID, "explicit")
+	al.CloseSession(sessionID, "idle")
 
 	data := pollLastSession(t, ag, false)
 	content := string(data)
@@ -214,7 +221,7 @@ func TestRunRecap_TransientRetry_SucceedsAfterOneRetry(t *testing.T) {
 	}
 
 	al, sessionID, ag := buildRecapTestLoop(t, provider)
-	al.CloseSession(sessionID, "explicit")
+	al.CloseSession(sessionID, "idle")
 
 	data := pollLastSession(t, ag, false)
 	if strings.Contains(string(data), "Fallback reason:") {
@@ -252,7 +259,7 @@ func TestRunRecap_TransientRetry_StubAfterExhaustion(t *testing.T) {
 	}
 
 	al, sessionID, ag := buildRecapTestLoop(t, alwaysTransient)
-	al.CloseSession(sessionID, "explicit")
+	al.CloseSession(sessionID, "idle")
 
 	data := pollLastSession(t, ag, true)
 	if data == nil {
@@ -290,7 +297,7 @@ func TestRunRecap_NonTransientError_NoRetry(t *testing.T) {
 	}
 
 	al, sessionID, ag := buildRecapTestLoop(t, authErr)
-	al.CloseSession(sessionID, "explicit")
+	al.CloseSession(sessionID, "idle")
 
 	data := pollLastSession(t, ag, true)
 	if data == nil {
@@ -335,7 +342,7 @@ func TestRunRecap_GOAWAYTransient_SucceedsAfterRetry(t *testing.T) {
 	}
 
 	al, sessionID, ag := buildRecapTestLoop(t, provider)
-	al.CloseSession(sessionID, "explicit")
+	al.CloseSession(sessionID, "idle")
 
 	data := pollLastSession(t, ag, false)
 	if strings.Contains(string(data), "Fallback reason:") {

@@ -11,6 +11,13 @@
 // degraded recap — last-session.md receives the non-empty fallback recap
 // (status line + carry-forward of recent user turns) and the retro is recorded
 // with Fallback=true and the reason "empty_recap" in its recap body.
+//
+// session-core U12 port: this test originally drove the recap via
+// CloseSession(sid, "explicit"). FR-036 / DEL-08 retired the explicit trigger
+// (recap now fires only for idle/bootstrap/joined), so it is ported to the
+// still-valid "idle" trigger with every assertion unchanged — spec
+// "Regression protection": port safety assertions to the canonical
+// replacement, never weaken them.
 
 package agent
 
@@ -34,7 +41,7 @@ func TestPersistResponse_EmptyRecap_FallsBackToHeuristic(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			provider := &recapTransientProvider{successBody: tc.body}
 			al, sessionID, ag := buildRecapTestLoop(t, provider)
-			al.CloseSession(sessionID, "explicit")
+			al.CloseSession(sessionID, "idle")
 
 			memory := ag.ContextBuilder.Memory()
 			if memory == nil {

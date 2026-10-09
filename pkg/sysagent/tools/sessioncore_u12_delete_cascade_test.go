@@ -10,30 +10,35 @@
 // last. Failure leaves visible agent with honest partly-deleted result; same
 // Delete idempotently retries."
 //
-// Oracle: when the FINAL record removal fails, the owned-data cleanup (sessions/
-// tasks) must ALREADY have run — because cleanup precedes the record removal.
-// Today the entity record is deleted FIRST (agentDeleteToolExecute.deleteAndCascade),
-// so a record-delete failure aborts before any cleanup and the session survives.
-// The existing TestAgentDelete_StoreDeleteFailure_NoDestructiveCascade pins that
-// old (now-inverted) order; this test pins the FR-037 order.
+// Oracle: when the FINAL record-removal step (store.DeleteState) fails, the
+// owned-data cleanup (sessions/tasks) must ALREADY have run — because cleanup
+// precedes the record removal — the result must be the honest PARTLY-DELETED
+// result (partly_deleted=true, error_stage="record_delete", sessions_deleted=1),
+// and the record must stay VISIBLE so the same Delete retries.
+//
+// The record-removal failure is injected by breakAgentRecordDelete (see
+// agent_delete_recordfailure_helper_test.go for the mechanism and why the
+// RED-D pack's original injection — replacing the entity file with a
+// non-empty directory — is defective).
 
 package systools_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
-	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
-
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
 
 // FR-037/C-DELETE/BDD-11.3: cleanup-first, record-last. When the record delete
-// (the last step) fails, owned data has already been cleaned.
+// (the last step) fails, owned data has already been cleaned, the result is the
+// honest partly-deleted one, and the record stays visible for retry.
 func TestSessionCoreU12_DeleteCleansOwnedDataBeforeRemovingRecord(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 
@@ -56,20 +61,10 @@ func TestSessionCoreU12_DeleteCleansOwnedDataBeforeRemovingRecord(t *testing.T) 
 		t.Fatalf("test setup: close session store: %v", err)
 	}
 
-	// Force the FINAL record removal to fail: replace the entity JSON file with
-	// a non-empty directory so os.Remove fails with ENOTEMPTY regardless of uid
-	// (the same technique the existing entity-first test uses).
+	// Read the revision BEFORE breaking the record delete: currentAgentRevision
+	// goes through store.ReadState, which takes the very lock the rig breaks.
 	revision := currentAgentRevision(t, deps, "victim")
-	entityPath := filepath.Join(home, "entities", "agents", "victim.json")
-	if err := os.Remove(entityPath); err != nil {
-		t.Fatalf("test setup: remove entity file: %v", err)
-	}
-	if err := os.MkdirAll(entityPath, 0o700); err != nil {
-		t.Fatalf("test setup: mkdir in place of entity file: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(entityPath, "blocker.txt"), []byte("x"), 0o600); err != nil {
-		t.Fatalf("test setup: seed blocker file: %v", err)
-	}
+	breakAgentRecordDelete(t, home, "victim")
 
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
 		"id":       "victim",
@@ -79,21 +74,37 @@ func TestSessionCoreU12_DeleteCleansOwnedDataBeforeRemovingRecord(t *testing.T) 
 	if !result.IsError {
 		t.Fatalf("expected an error when the final record removal fails, got success: %s", result.ForLLM)
 	}
+	m := parseError(t, result.ForLLM)
+	errBlock, _ := m["error"].(map[string]any)
+	if errBlock["code"] != "SAVE_FAILED" {
+		t.Errorf("error code = %v, want SAVE_FAILED", errBlock["code"])
+	}
+
+	// The failure must be the honest PARTLY-DELETED result, not a bare error:
+	// the record delete is the failed stage, and the cascade counts are reported.
+	if pd, _ := m["partly_deleted"].(bool); !pd {
+		t.Errorf("partly_deleted = %v, want true (the record delete is the failed step)", m["partly_deleted"])
+	}
+	if stage, _ := m["error_stage"].(string); stage != "record_delete" {
+		t.Errorf("error_stage = %v, want %q (only the final record delete may fail here)", m["error_stage"], "record_delete")
+	}
 
 	// FR-037 cleanup-first: the solely-owned session must ALREADY be removed,
-	// because cleanup ran before the (failed) record removal. Today it survives.
+	// because cleanup ran before the (failed) record removal.
+	if n, _ := m["sessions_deleted"].(float64); n != 1 {
+		t.Errorf("sessions_deleted = %v, want 1 (cleanup must run before the record delete)", m["sessions_deleted"])
+	}
 	sessionDir := filepath.Join(home, "sessions", sessionID)
-	if _, err := os.Stat(sessionDir); err == nil {
-		t.Fatalf(
-			"FR-037/C-DELETE: owned session %s must be cleaned BEFORE the record removal; it survived a failed record delete — the cascade is still entity-first",
-			sessionID,
+	if _, err := os.Stat(sessionDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf(
+			"FR-037/C-DELETE: owned session %s must be cleaned BEFORE the record removal; it survived a failed record delete (err=%v)",
+			sessionID, err,
 		)
 	}
 
 	// And the agent record must remain VISIBLE (partly-deleted), so the same
-	// Delete can retry after restart. The entity path is present (as the blocker
-	// dir); assert the store still lists it.
+	// Delete can retry.
 	if _, err := store.Get("victim"); err != nil {
-		t.Fatalf("FR-037: a partly-deleted agent must remain visible for retry; Get(victim) = %v", err)
+		t.Errorf("FR-037: a partly-deleted agent must remain visible for retry; Get(victim) = %v", err)
 	}
 }
