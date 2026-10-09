@@ -26,39 +26,44 @@ import { test } from './fixtures/plan-cleanup'
 import { chatInput, assistantMessages, userMessages } from './fixtures/selectors'
 import { requireApiKey, startFreshChatWithAgent, startFreshChatWithJim } from './fixtures/conformance-helpers'
 
-// ── Blocker-interruption error boundary (the t0 catches) ─────────────────────
+// ── Transient-timeout error boundary ─────────────────────────────────────────
 //
-// A blocker — an AskUserQuestion card or the ADR-092 network_preflight
-// tool-approval modal — can land ON TOP OF a DOM interaction that is already in
-// flight: mid-typing, mid-read, or between a probe and its use. Playwright
-// retries the action until its timeout and then rejects with exactly ONE error
-// class for that situation: an actionability timeout, `TimeoutError` (the
-// target was detached, not stable or not enabled, or an overlay intercepted
-// pointer events). That is the transient case these helpers recover from — and
-// it is the ONLY one they recover from.
+// Every wait and DOM action in t0 has ONE legitimate transient failure — a
+// timeout — and every OTHER failure is real. A blocker landing on top of an
+// in-flight interaction (an AskUserQuestion card, or the ADR-092
+// network_preflight tool-approval modal) is the main producer of that
+// transient: Playwright retries the action and then rejects with an
+// actionability timeout, `TimeoutError` (the target was detached, not stable or
+// not enabled, or an overlay intercepted pointer events). The done-pill wait
+// produces the same error class a different way — its budget elapsing with the
+// pill never mounting — and a click whose target vanished between the check and
+// the click produces it too. `TimeoutError` is therefore the transient case,
+// and it is the ONLY case these helpers recover from.
 //
 // Every OTHER rejection — a `strict mode violation` (the locator matched more
 // than one element), `Target page, context or browser has been closed`, an
-// invalid selector, a JS error thrown inside the page — is a REAL failure and
-// is re-thrown here with its cause and stack intact, so the run fails on the
-// real error instead of a generic symptom far downstream. Before this, a bare
-// `.catch(() => false)` (or `=> ''`, or `=> {}`) turned a throwing probe into a
-// silent "not visible" / "empty value" / "typed nothing", making a genuine
-// break indistinguishable from a benign absence.
+// invalid selector, a JS error thrown inside the page, a navigation — is a REAL
+// failure and is re-thrown here with its cause and stack intact, so the run
+// fails on the real error instead of a generic symptom far downstream. Before
+// this, a bare `.catch(() => false)` (or `=> ''`, or `=> {}`, or the pass-
+// decider's `.then(() => true, () => false)`) turned a throwing probe or wait
+// into a silent "not visible" / "empty value" / "typed nothing" / "the done
+// pill never appeared" — a genuine break indistinguishable from a benign
+// absence, reported as the wrong symptom.
 //
 // Classification verified against the installed playwright-core 1.61.1:
-// isVisible / inputValue / pressSequentially reject with name === "TimeoutError"
-// for an actionability interruption, but name === "Error" for a strict-mode
-// violation or a closed page — so the error NAME alone separates the transient
-// class from every real one, with no brittle message matching.
-const isBlockerInterruption = (err: unknown): boolean =>
+// isVisible / inputValue / pressSequentially / click / waitForFunction all
+// reject with name === "TimeoutError" for a timeout, but name === "Error" for a
+// strict-mode violation or a closed page — so the error NAME alone separates
+// the transient class from every real one, with no brittle message matching.
+const isTransientTimeout = (err: unknown): boolean =>
   err instanceof Error && err.name === 'TimeoutError'
 
-// Run one Playwright action and, IF and ONLY IF it fails with the transient
-// blocker interruption, return `fallback`; otherwise let the rejection
-// propagate untouched. `what` names the action in the recovery log so a
-// swallowed transient is still visible in the report rather than silent.
-async function absorbBlockerInterruption<T>(
+// Run one Playwright action or wait and, IF and ONLY IF it fails with the
+// transient timeout, return `fallback`; otherwise let the rejection propagate
+// untouched. `what` names the action in the recovery log so a swallowed
+// transient is still visible in the report rather than silent.
+async function absorbTransientTimeout<T>(
   action: () => Promise<T>,
   fallback: T,
   what: string,
@@ -66,9 +71,9 @@ async function absorbBlockerInterruption<T>(
   try {
     return await action()
   } catch (err) {
-    if (!isBlockerInterruption(err)) throw err
+    if (!isTransientTimeout(err)) throw err
     console.log(
-      `${what} was interrupted by a blocker — recovering with the fallback ` +
+      `${what} timed out — recovering with the fallback ` +
         `(${(err as Error).message.split('\n')[0]})`,
     )
     return fallback
@@ -258,17 +263,26 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
   // real done pill decides pass/fail. Ask-card handling is not folded in
   // here — a card cannot hide the pill (backend-driven paint), and the
   // composer-facing dismissal stays where the composer is used (loop top).
+  //
+  // The result is routed through absorbTransientTimeout so that "not seen"
+  // means ONLY the wait's own budget elapsing (a TimeoutError). A closed page,
+  // a navigation, or a bug in the predicate used to be collapsed to `false` by
+  // the `.then(() => true, () => false)` this replaces — reporting a PRODUCT
+  // symptom ("the done pill never appeared") when the truth was that the page
+  // or the harness had died. Those now re-throw with their cause.
   const waitForDone = (budgetMs: number): Promise<boolean> =>
-    page
-      .waitForFunction(
-        () => document.querySelector('[data-testid="goal-pill-done"]') !== null,
-        undefined,
-        { timeout: budgetMs },
-      )
-      .then(
-        () => true,
-        () => false,
-      )
+    absorbTransientTimeout(
+      async () => {
+        await page.waitForFunction(
+          () => document.querySelector('[data-testid="goal-pill-done"]') !== null,
+          undefined,
+          { timeout: budgetMs },
+        )
+        return true
+      },
+      false,
+      'waiting for the done pill',
+    )
 
   // "please continue" with nothing actually in progress is exactly the vague
   // prose door goal-work-first.spec.ts documents as model-dependent (holdout
@@ -298,7 +312,7 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
   // try would otherwise be cancelled silently and the run would still pass. The
   // count is deliberately not asserted — the tolerance is the point.
   const dismissPendingAsk = async (where: string): Promise<void> => {
-    const cardVisible = await absorbBlockerInterruption(
+    const cardVisible = await absorbTransientTimeout(
       () => askUserQuestionCard.isVisible({ timeout: 1_000 }),
       false,
       'the AskUserQuestion-card visibility probe',
@@ -309,9 +323,14 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
       type: 'blocker-dismissed',
       description: `AskUserQuestion card cancelled — ${where}`,
     })
-    await askUserCancel.click().catch(() => {
-      /* card may resolve itself between the check and the click */
-    })
+    // The card may resolve itself between the visibility check above and this
+    // click: a transient timeout (target gone) is recovered; a real failure
+    // (a closed page) re-throws.
+    await absorbTransientTimeout(
+      () => askUserCancel.click(),
+      undefined,
+      'cancelling the AskUserQuestion card',
+    )
     await expect(input, 'composer must unlock once the pending question is cancelled').toBeEnabled({
       timeout: 15_000,
     })
@@ -334,7 +353,7 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
   // overlay; presence, not visibility, is what waitForFunction checks).
   const toolApprovalDialog = page.locator('[data-testid="dialog-overlay"]')
   const denyToolApproval = async (where: string): Promise<void> => {
-    const modalVisible = await absorbBlockerInterruption(
+    const modalVisible = await absorbTransientTimeout(
       () => toolApprovalDialog.isVisible({ timeout: 1_000 }),
       false,
       'the tool-approval-modal visibility probe',
@@ -345,12 +364,13 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
       type: 'blocker-dismissed',
       description: `tool-approval modal denied — ${where}`,
     })
-    await page
-      .getByRole('button', { name: 'Deny', exact: true })
-      .click()
-      .catch(() => {
-        /* modal may resolve itself between the check and the click */
-      })
+    // The modal may resolve itself between the check above and this click: a
+    // transient timeout is recovered; a real failure (a closed page) re-throws.
+    await absorbTransientTimeout(
+      () => page.getByRole('button', { name: 'Deny', exact: true }).click(),
+      undefined,
+      'denying the tool-approval modal',
+    )
   }
 
   // FAST PATH: the worker may have claimed during its own turn. A model that
@@ -476,13 +496,13 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
       // A card landing mid-typing can fail the keystrokes themselves; the
       // value check right after decides, so the failure is not lost here — and
       // only the transient interruption is absorbed (a real failure re-throws).
-      await absorbBlockerInterruption(
+      await absorbTransientTimeout(
         () => input.pressSequentially(steerText),
         undefined,
         'typing the steer',
       )
       if (
-        (await absorbBlockerInterruption(
+        (await absorbTransientTimeout(
           () => input.inputValue(),
           '',
           'reading the composer value',
@@ -490,12 +510,12 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
       )
         break
       const blocked =
-        (await absorbBlockerInterruption(
+        (await absorbTransientTimeout(
           () => askUserQuestionCard.isVisible({ timeout: 1_000 }),
           false,
           'the AskUserQuestion-card visibility probe (mid-typing)',
         )) ||
-        (await absorbBlockerInterruption(
+        (await absorbTransientTimeout(
           () => toolApprovalDialog.isVisible({ timeout: 1_000 }),
           false,
           'the tool-approval-modal visibility probe (mid-typing)',
@@ -549,7 +569,7 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
   // The active pill should be gone or replaced — at minimum the count of
   // active-pill instances must have dropped, OR the done pill must be the
   // dominant visible state.
-  const activeStillVisible = await absorbBlockerInterruption(
+  const activeStillVisible = await absorbTransientTimeout(
     () => activePill.isVisible({ timeout: 1_000 }),
     false,
     'the active-pill visibility probe',
@@ -558,7 +578,7 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
     // Acceptable ONLY if the done pill is also present — multiple pills
     // per goal-id (FE-1) can coexist briefly during the active→done flip.
     expect(
-      await absorbBlockerInterruption(
+      await absorbTransientTimeout(
         () => donePill.isVisible({ timeout: 1_000 }),
         false,
         'the done-pill visibility probe',
@@ -714,17 +734,20 @@ test('Conformance_g7_RoundTripE2E: blocking question + respond routes warm, hand
   ).toBe(true)
 })
 
-// ── absorbBlockerInterruption — regression guard ─────────────────────────────
+// ── absorbTransientTimeout — regression guard ─────────────────────────────
 //
-// Pins the boundary the t0 catches now rely on: absorbBlockerInterruption must
-// recover from the ONE error class a blocker produces — an actionability
-// TimeoutError — and re-throw EVERY other class, so a non-transient failure is
-// never downgraded to a silent "not visible" / "empty value" / "typed nothing".
-// It drives real Playwright rejections (no mocks), so the classification is
-// checked against the installed Playwright, not against an assumed one. It
-// needs no gateway or API key: a pure error-classification check.
+// Pins the boundary the t0 waits and actions now rely on:
+// absorbTransientTimeout must recover from the ONE transient error class — a
+// TimeoutError (a blocker landing mid-action, the done-pill wait's budget
+// elapsing, or a target that vanished before a click) — and re-throw EVERY
+// other class, so a non-transient failure is never downgraded to a silent
+// "not visible" / "empty value" / "typed nothing" / "the done pill never
+// appeared". It drives real Playwright rejections (no mocks), so the
+// classification is checked against the installed Playwright, not against an
+// assumed one. It needs no gateway or API key: a pure error-classification
+// check.
 
-test('absorbBlockerInterruption: recovers from an actionability TimeoutError only; a strict-mode violation and a closed page both surface', async ({
+test('absorbTransientTimeout: recovers from a TimeoutError only; a strict-mode violation and a closed page both surface', async ({
   page,
   context,
 }) => {
@@ -745,7 +768,7 @@ test('absorbBlockerInterruption: recovers from an actionability TimeoutError onl
   await page.setContent('<input id="probe" value="hi">')
   const probe = page.locator('#probe')
   await page.evaluate(() => document.getElementById('probe')?.remove())
-  const absorbed = await absorbBlockerInterruption(
+  const absorbed = await absorbTransientTimeout(
     () => probe.inputValue({ timeout: 1_000 }),
     'FALLBACK',
     'regression probe',
@@ -755,12 +778,26 @@ test('absorbBlockerInterruption: recovers from an actionability TimeoutError onl
     'a transient blocker interruption (an actionability TimeoutError) must fall back, not fail',
   ).toBe('FALLBACK')
 
-  // 2. RE-THROW — a strict-mode violation is a real failure, not a blocker
-  //    interruption. The old `.catch(() => false)` swallowed it into "not
-  //    visible"; it must now surface.
+  // 2. RECOVER (the pass-decider's shape) — page.waitForFunction rejecting on
+  //    its OWN budget elapsing is the same transient TimeoutError, so it must
+  //    fall back, not surface as a real failure. This is exactly what
+  //    waitForDone depends on: only the wait timing out means "not seen".
+  const waited = await absorbTransientTimeout(
+    async () => {
+      await page.waitForFunction(() => false, undefined, { timeout: 1_000 })
+      return 'WAIT_RESOLVED'
+    },
+    'WAIT_FALLBACK',
+    'regression probe (wait)',
+  )
+  expect(waited, "a wait's own budget elapsing must fall back, not fail").toBe('WAIT_FALLBACK')
+
+  // 3. RE-THROW — a strict-mode violation is a real failure, not a transient
+  //    timeout. The old `.catch(() => false)` swallowed it into "not visible";
+  //    it must now surface.
   await page.setContent('<div class="dup"></div><div class="dup"></div>')
   const strictErr = await captureRejection(
-    absorbBlockerInterruption(
+    absorbTransientTimeout(
       () => page.locator('.dup').isVisible({ timeout: 1_000 }),
       false,
       'regression probe',
@@ -772,15 +809,49 @@ test('absorbBlockerInterruption: recovers from an actionability TimeoutError onl
     'the surfaced cause must name the strict-mode violation',
   ).toMatch(/strict mode violation/)
 
-  // 3. RE-THROW — a closed page is the other class the old catch hid; it must
+  // 4. RE-THROW — a closed page is the other class the old catch hid; it must
   //    surface too.
   const doomed = await context.newPage()
   await doomed.setContent('<div id="gone"></div>')
   const gone = doomed.locator('#gone')
   await doomed.close()
   const closedErr = await captureRejection(
-    absorbBlockerInterruption(() => gone.isVisible({ timeout: 1_000 }), false, 'regression probe'),
+    absorbTransientTimeout(() => gone.isVisible({ timeout: 1_000 }), false, 'regression probe'),
   )
   expect(closedErr, 'a closed page must be re-thrown, not swallowed').not.toBeNull()
   expect(closedErr?.message ?? '', 'the surfaced cause must name the closed page').toMatch(/closed/i)
+
+  // 5. RECOVER (a click) — a click whose target vanished between the check and
+  //    the click rejects with the same transient TimeoutError; it must fall
+  //    back, not fail. This is the dismiss / deny click shape.
+  await page.setContent('<button id="cancel">x</button>')
+  const vanish = page.locator('#cancel')
+  await page.evaluate(() => document.getElementById('cancel')?.remove())
+  const clicked = await absorbTransientTimeout(
+    async () => {
+      await vanish.click({ timeout: 1_000 })
+      return 'CLICK_RESOLVED'
+    },
+    'CLICK_FALLBACK',
+    'regression probe (click)',
+  )
+  expect(clicked, 'a vanished click target must fall back, not fail').toBe('CLICK_FALLBACK')
+
+  // 6. RE-THROW (the pass-decider's danger) — a waitForFunction on a closed
+  //    page must surface, NOT collapse to "the done pill never appeared".
+  const deadPage = await context.newPage()
+  await deadPage.setContent('<div id="quiet"></div>')
+  await deadPage.close()
+  const deadErr = await captureRejection(
+    absorbTransientTimeout(
+      async () => {
+        await deadPage.waitForFunction(() => false, undefined, { timeout: 5_000 })
+        return 'DEAD_RESOLVED'
+      },
+      'DEAD_FALLBACK',
+      'regression probe (wait, closed)',
+    ),
+  )
+  expect(deadErr, 'a wait on a closed page must be re-thrown, not swallowed').not.toBeNull()
+  expect(deadErr?.message ?? '', 'the surfaced cause must name the closed page').toMatch(/closed/i)
 })
