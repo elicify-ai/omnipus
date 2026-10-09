@@ -1,0 +1,31 @@
+=== RUN   TestSessionCoreConv_PreCutoverSavedChatIsNormalizedAndContinuable
+    sessioncore_conv_behaviour_test.go:64: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-conv-20261009/pkg/session/sessioncore_conv_behaviour_test.go:64
+        	Error:      	Not equal: 
+        	            	expected: ""
+        	            	actual  : "jim"
+        	            	
+        	            	Diff:
+        	            	--- Expected
+        	            	+++ Actual
+        	            	@@ -1 +1 @@
+        	            	-
+        	            	+jim
+        	Test:       	TestSessionCoreConv_PreCutoverSavedChatIsNormalizedAndContinuable
+        	Messages:   	CONV Identity: the retired active_agent_id must be dropped, not adopted as owner
+    sessioncore_conv_behaviour_test.go:73: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-conv-20261009/pkg/session/sessioncore_conv_behaviour_test.go:73
+        	Error:      	Not equal: 
+        	            	expected: string("chat")
+        	            	actual  : <nil>(<nil>)
+        	Test:       	TestSessionCoreConv_PreCutoverSavedChatIsNormalizedAndContinuable
+        	Messages:   	CONV Identity: the missing type must be WRITTEN once as chat; DEL-11 then deletes the runtime fallback
+    sessioncore_conv_behaviour_test.go:76: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-conv-20261009/pkg/session/sessioncore_conv_behaviour_test.go:76
+        	Error:      	Should be false
+        	Test:       	TestSessionCoreConv_PreCutoverSavedChatIsNormalizedAndContinuable
+        	Messages:   	CONV Identity: active_agent_id must be dropped from the converted metadata; got map[active_agent_id:jim agent_id:mia channel:webchat created_at:2026-01-02T03:04:05Z id:chat-legacy-0001 partitions:[] status:active title:Old saved chat updated_at:2026-01-03T03:04:05Z]
+--- FAIL: TestSessionCoreConv_PreCutoverSavedChatIsNormalizedAndContinuable (0.08s)
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/session	2.032s
+FAIL
