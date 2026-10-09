@@ -161,6 +161,23 @@ describe('unavailable workspace chat', () => {
     expect(useSessionStore.getState().activeSessionId).toBe('retained-source-chat')
   })
 
+  it('New chat after a failed restore removes the stale notice and re-enables the message box', () => {
+    act(() => useSessionStore.setState({
+      activeSessionId: 'retained-source-chat', activeAgentId: 'mia',
+      workspaceEntry: {
+        status: 'failed-attempt', committed: { sessionId: 'retained-source-chat', agentId: 'mia' },
+        attempted: { sessionId: 'target-chat', sendEnabled: false },
+        acknowledged: false, retry: true, fellBack: false,
+      },
+    }))
+    render(<OmnipusComposer />)
+    expect(screen.getByTestId('composer-input')).toBeDisabled()
+    act(() => useSessionStore.getState().startNewSession('mia'))
+    expect(screen.queryByTestId('unavailable-chat-notice')).toBeNull()
+    expect(screen.getByTestId('composer-input')).not.toBeDisabled()
+    expect(screen.getByTestId('chat-send')).not.toBeDisabled()
+  })
+
   it('says nothing and leaves send enabled when a chat is available', () => {
     render(<OmnipusComposer />)
     expect(screen.queryByText('This chat is unavailable right now')).toBeNull()

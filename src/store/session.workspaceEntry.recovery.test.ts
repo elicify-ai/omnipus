@@ -86,7 +86,7 @@ function retainSourceAndRememberTarget() {
   useSessionStore.getState().setActiveSession(SOURCE, 'jim')
   useChatStore.getState().appendMessage({
     id: 'source-message', role: 'user', content: 'Source history',
-    timestamp: '2026-10-08T11:00:00Z',
+    timestamp: '2026-10-08T11:00:00Z', status: 'error', deliveryStatus: 'failed',
   })
   useSessionStore.getState().setWorkspaceSessionDescriptor(TARGET_WS, {
     id: TARGET, type: 'chat', title: 'Target conversation', agentId: 'mia',
@@ -253,6 +253,52 @@ describe('workspace-entry recovery — gate round 2', () => {
       expect(useUiStore.getState().toasts[0]?.action?.label).toBe('Retry')
     },
   )
+
+  it('a tab hidden during input loading defers the attach until focus instead of inventing a restore failure', async () => {
+    retainSourceAndRememberTarget()
+    const send = connect()
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false)
+    let resolveSessions!: (sessions: Session[]) => void
+    vi.mocked(fetchSessions).mockImplementationOnce(() => new Promise((resolve) => { resolveSessions = resolve }))
+    const entry = useSessionStore.getState().enterWorkspaceChat(TARGET_WS)
+    hidden.mockReturnValue(true)
+    resolveSessions([targetSession()])
+    await settleInputPromises()
+
+    expect(useSessionStore.getState().workspaceEntry).toBeNull()
+    expect(useSessionStore.getState().activeSessionId).toBe(SOURCE)
+    expect(workspaceEntryBlocksSend(useSessionStore.getState(), TARGET_WS)).toBe(true)
+    expect(send).not.toHaveBeenCalled()
+    hidden.mockReturnValue(false)
+    document.dispatchEvent(new Event('visibilitychange'))
+    await entry
+    expect(useSessionStore.getState().workspaceEntry).toEqual({ status: 'exact', acknowledged: false })
+    expect(useSessionStore.getState().activeSessionId).toBe(TARGET)
+    expect(send).toHaveBeenCalledExactlyOnceWith({ type: 'attach_session', session_id: TARGET })
+  })
+
+  it('New chat supersedes an in-flight network restore; its late response cannot replace the fresh pending send', async () => {
+    retainSourceAndRememberTarget()
+    const send = connect()
+    let resolveSessions!: (sessions: Session[]) => void
+    vi.mocked(fetchSessions).mockImplementationOnce(() => new Promise((resolve) => { resolveSessions = resolve }))
+    const entry = useSessionStore.getState().enterWorkspaceChat(TARGET_WS)
+    beginPairExtra(TARGET_WS, 'mia', vi.fn(), vi.fn())
+    useChatStore.getState().sendMessage('Fresh chat wins', { clientMessageId: 'winning-send' })
+    resolveSessions([targetSession()])
+    await entry
+
+    expect(useSessionStore.getState().activeSessionId).toBe('__pending')
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
+    expect(useSessionStore.getState().workspaceEntry).toBeNull()
+    expect(useChatStore.getState().pendingFirstSend?.clientMessageId).toBe('winning-send')
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(messageFrames(send)).toEqual([expect.objectContaining({
+      type: 'message', content: 'Fresh chat wins', client_message_id: 'winning-send',
+      agent_id: 'mia', metadata: { workspace_id: TARGET_WS },
+    })])
+    expect(messageFrames(send)[0].session_id).toBeUndefined()
+  })
 
   it('a hidden entry waits without a restore failure or send; focus commits the validated target without acknowledging', async () => {
     retainSourceAndRememberTarget()

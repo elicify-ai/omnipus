@@ -20,10 +20,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchSessions: vi.fn(),
+    fetchWorkspace: vi.fn(),
   }
 })
 
-import { fetchSessions } from '@/lib/api'
+import { fetchSessions, fetchWorkspace } from '@/lib/api'
 import { useSessionStore, registerChatResetForReplay, registerChatClearPendingAutoApprove } from './session'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -44,6 +45,7 @@ function resetAll() {
     attachedTaskTitle: null,
     sessionByWorkspace: {},
     resolvingSessionForWorkspace: {},
+    workspaceEntry: null,
   })
   useWorkspacesStore.setState({
     activeWorkspaceId: null,
@@ -59,6 +61,13 @@ function resetAll() {
     liteMode: false,
   })
   vi.mocked(fetchSessions).mockReset()
+  // Entry reads BOTH network inputs. A missing workspace mock used to be
+  // swallowed as "no main"; the transport-failure fix must not hide it.
+  vi.mocked(fetchWorkspace).mockReset().mockImplementation(async (id) => ({
+    id, name: id, revision: 'rev-1', status: 'active', pinned: false,
+    pin_order: 0, task_count: 0, member_configs: {},
+    created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+  }))
   // Cross-context session-bleed fix: sessionByWorkspace is now mirrored into
   // localStorage (keyed `omnipus.sessionByWorkspace.v1`) so a real reload can
   // tell "this browser has been here before" apart from "brand-new context".

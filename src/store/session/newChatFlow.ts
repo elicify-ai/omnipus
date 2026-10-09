@@ -8,6 +8,7 @@
 import type { AgentKind } from '@/lib/api'
 import { decideNewChat } from '@/lib/nav/extraChatGuard'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { supersedeNavigationIntent } from '@/store/session/workspaceEntryFlow'
 import {
   abandonRegisteredPendingFirstSend,
   clearPendingAutoApproveOnSessionChange,
@@ -85,9 +86,16 @@ export function runStartNewSession(
     return
   }
 
+  // A deliberately new chat wins over a failed or still-loading restore.
+  // Do not clear these gates on prompt/decline: that would reopen the old target.
+  supersedeNavigationIntent()
   clearPendingAutoApproveOnSessionChange()
   abandonRegisteredPendingFirstSend()
-  useSessionStore.setState({ newChatPrompt: null })
+  useSessionStore.setState({
+    newChatPrompt: null,
+    workspaceEntry: null,
+    resolvingSessionForWorkspace: {},
+  })
   const hint = agentHintOf(agentOrChoice)
   // A new extra keeps the pair's owner. It does not clear the saved pointer
   // and it does not replace the main pointer the sidebar row uses.

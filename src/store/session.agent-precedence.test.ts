@@ -27,10 +27,10 @@ import { useUiStore } from './ui'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchSessions: vi.fn() }
+  return { ...actual, fetchSessions: vi.fn(), fetchWorkspace: vi.fn() }
 })
 
-import { fetchSessions } from '@/lib/api'
+import { fetchSessions, fetchWorkspace } from '@/lib/api'
 
 const WS_A = 'ws-alpha'
 const WS_B = 'ws-beta'
@@ -63,10 +63,19 @@ function resetStores() {
       attachedSessionType: null,
       attachedTaskTitle: null,
       sessionByWorkspace: {},
+      workspaceEntry: null,
+      resolvingSessionForWorkspace: {},
     })
     useWorkspacesStore.setState({ activeWorkspaceId: WS_A })
     useUiStore.setState({ toasts: [] })
     vi.mocked(fetchSessions).mockReset()
+    // The entry gate now reports a rejected workspace input instead of
+    // swallowing it. Supply the network boundary this owner test needs.
+    vi.mocked(fetchWorkspace).mockReset().mockImplementation(async (id) => ({
+      id, name: id, revision: 'rev-1', status: 'active', pinned: false,
+      pin_order: 0, task_count: 0, member_configs: {},
+      created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+    }))
   })
 }
 

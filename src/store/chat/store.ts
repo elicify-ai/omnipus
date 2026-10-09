@@ -4,6 +4,9 @@ import { create } from 'zustand'
 import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
 import { useSessionStore } from '@/store/session'
+import { useWorkspacesStore } from '@/store/workspacesStore'
+import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
+import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 import type { Message } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
 import { findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from './messages'
@@ -277,6 +280,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
   function maybeDrainNext(): void {
     const { pendingDrainQueue, isStreaming } = get()
     if (pendingDrainQueue.length === 0 || isStreaming || firstSendBlocksQueue(get())) return
+    // Gate BEFORE the pop: sendMessage may refuse an unresolved destination.
+    if (blockSendForWorkspaceEntry('drain')) return
     const [next, ...rest] = pendingDrainQueue
     set({ pendingDrainQueue: rest })
     drainQueuedMessage(get, next)
@@ -777,6 +782,19 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     ...createFrameSlice({ set, get, getActiveSid, bucketToForeground, withBucket, deleteBucket, resolveKickoffAttempt, abandonPendingKickoffInternal, syncForeground, armRateLimitClear, maybeDrainNext, runtime: chatRuntime }),
   }
+})
+
+// An entry gate can park the drain after reconnect/turn completion has already
+// happened. Resume when it opens, after the session action's coherent tuple is
+// committed (never synchronously in the middle of setActiveSession/new chat).
+useSessionStore.subscribe((state, previous) => {
+  const workspaceId = useWorkspacesStore.getState().activeWorkspaceId
+  if (!workspaceEntryBlocksSend(previous, workspaceId) || workspaceEntryBlocksSend(state, workspaceId)) return
+  queueMicrotask(() => {
+    if (useWorkspacesStore.getState().activeWorkspaceId !== workspaceId) return
+    if (workspaceEntryBlocksSend(useSessionStore.getState(), workspaceId)) return
+    useChatStore.getState().drainOutboundQueue()
+  })
 })
 
 // Expose syncForeground so setActiveSession can call it after switching sessions.

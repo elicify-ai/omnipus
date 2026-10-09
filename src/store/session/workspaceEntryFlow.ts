@@ -8,6 +8,7 @@
  * wins; a late resolution must not split the tuple.
  */
 import { fetchSessions, fetchWorkspace } from '@/lib/api'
+import { logDiagnostic } from '@/lib/telemetry'
 import type { Session, WorkspaceMemberConfig } from '@/lib/api'
 import { resolveWorkspaceEntry, type EntryResult, type FailedAttempt, type PointerVerdict, type WelcomeEntry } from '@/lib/nav/workspaceEntry'
 import { useUiStore } from '@/store/ui'
@@ -22,10 +23,30 @@ export type WorkspaceEntryView =
 
 let navigationIntent = 0
 const inFlight = new Map<string, Promise<void>>()
+const visibilityWaiters = new Set<() => void>()
 
 export function supersedeNavigationIntent(): number {
   navigationIntent += 1
+  // Release superseded hidden entries so their listeners/in-flight jobs end.
+  for (const finish of visibilityWaiters) finish()
   return navigationIntent
+}
+
+/** Hidden prefetch is deferred, not an attach failure (FR-013). */
+function waitForEntryVisibility(token: number): Promise<void> {
+  if (typeof document === 'undefined' || !document.hidden || !navigationIntentCurrent(token)) {
+    return Promise.resolve()
+  }
+  return new Promise((resolve) => {
+    const finish = () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      visibilityWaiters.delete(finish)
+      resolve()
+    }
+    const onVisibilityChange = () => { if (!document.hidden) finish() }
+    visibilityWaiters.add(finish)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+  })
 }
 
 export function navigationIntentCurrent(token: number): boolean {
@@ -67,7 +88,18 @@ async function loadInputs(workspaceId: string): Promise<{
     fetchSessions(),
     fetchWorkspace(workspaceId),
   ])
-  const transportFailed = sessionsResult.status !== 'fulfilled' || !Array.isArray(sessionsResult.value)
+  const transportFailed = sessionsResult.status !== 'fulfilled'
+    || !Array.isArray(sessionsResult.value)
+    || workspaceResult.status === 'rejected'
+  for (const [resource, result] of [['sessions', sessionsResult], ['workspace', workspaceResult]] as const) {
+    if (result.status !== 'rejected') continue
+    const fields = {
+      workspaceId, resource,
+      errorName: result.reason instanceof Error ? result.reason.name : 'UnknownError',
+    }
+    console.warn('[session] workspace entry input failed', fields)
+    logDiagnostic('sessionWorkspaceEntryLoadFailed', fields)
+  }
   const sessions = sessionsResult.status === 'fulfilled' && Array.isArray(sessionsResult.value)
     ? sessionsResult.value
     : []
@@ -179,7 +211,15 @@ async function execute(workspaceId: string): Promise<void> {
     resolvingSessionForWorkspace: { ...current.resolvingSessionForWorkspace, [workspaceId]: true },
   }))
   try {
+    while (typeof document !== 'undefined' && document.hidden && navigationIntentCurrent(token)) {
+      await waitForEntryVisibility(token)
+    }
+    if (!navigationIntentCurrent(token)) return
     const loaded = await loadInputs(workspaceId)
+    // The tab may have become hidden while the network requests were in flight.
+    while (typeof document !== 'undefined' && document.hidden && navigationIntentCurrent(token)) {
+      await waitForEntryVisibility(token)
+    }
     if (!navigationIntentCurrent(token)) return
     if (useSessionStore.getState().sessionByWorkspace[workspaceId] !== descriptorAtStart) return
     const result = resolveWorkspaceEntry({
