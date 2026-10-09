@@ -25,29 +25,6 @@ func (wh *wsHandlerReadLoop) wsSessionError(message string) wsHandlerReadLoopFlo
 	return wsHandlerReadLoopContinue
 }
 
-// handleSessionCloseFrame is FR-023's explicit session close request.
-func (wh *wsHandlerReadLoop) handleSessionCloseFrame(data []byte) wsHandlerReadLoopFlow {
-	var f generated.SessionCloseFrame
-	if err := json.Unmarshal(data, &f); err != nil {
-		slog.Warn("ws: malformed session_close frame", "error", err)
-		return wsHandlerReadLoopContinue
-	}
-	if f.SessionId == "" {
-		return wh.wsSessionError("session_close requires session_id")
-	}
-	if err := validation.EntityID(f.SessionId); err != nil {
-		return wh.wsSessionError("invalid session_id")
-	}
-	wh.h.agentLoop.CloseSession(f.SessionId, "explicit")
-	sid := f.SessionId
-	sendConnGenFrame(wh.wc, string(generated.WsFrameTypeSessionCloseAck), generated.SessionCloseAckFrame{
-		Type:      string(generated.WsFrameTypeSessionCloseAck),
-		SessionId: f.SessionId,
-		Id:        &sid,
-	})
-	return wsHandlerReadLoopNext
-}
-
 // applySessionModeChoice sets sessionID's ADR-092 per-chat Auto-approve
 // modifier — or clears it when autoApprove is nil — and audits the mode
 // change. Shared by handleSessionModeUpdateFrame below (a live chat's
