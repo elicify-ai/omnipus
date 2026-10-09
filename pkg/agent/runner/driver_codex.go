@@ -85,6 +85,16 @@ type CodexDriver struct {
 	// so a resumed run keeps its original cap (#904 D4). Zero until the
 	// first Run, so a Resume with no prior Run is refused (FR-004).
 	runMaxTurns int
+	// nativeID is the codex thread id announced on the most recent Run's
+	// stream (thread.started thread_id). Resume passes it to
+	// `codex exec resume <id>` so the prior native conversation is actually
+	// continued; an empty id makes Resume refuse visibly instead of starting
+	// fresh (FR-043).
+	nativeID string
+	// lastOpts is the RunOptions of the most recent Run, reused by Resume so a
+	// resumed conversation preserves its runtime/workspace/model/caps (FR-043).
+	// Zero value until the first Run.
+	lastOpts RunOptions
 }
 
 // NewCodexDriver creates a driver for the codex CLI.
@@ -106,6 +116,12 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 		return nil, fmt.Errorf("codex driver: Run called while a run is already active")
 	}
 	d.runMaxTurns = opts.MaxTurns
+	d.lastOpts = opts
+	if opts.resumeNativeID == "" {
+		// A fresh run begins a new native conversation; drop any id captured
+		// from a previous run until this run's stream announces its own.
+		d.nativeID = ""
+	}
 
 	// Resolve the CLI binary: opts.CLIPath (ExecutorConfig.cli_path) wins; else
 	// the default name resolved via $PATH (MAJ-5).
@@ -274,26 +290,49 @@ func (d *CodexDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent
 // never exec ...`). --sandbox, by contrast, IS accepted as an exec-subcommand
 // flag and is placed after `exec` alongside the other exec flags.
 func (d *CodexDriver) buildArgs(opts RunOptions) []string {
-	// --ask-for-approval must come before the "exec" subcommand (see doc above).
-	args := []string{
-		"--ask-for-approval", "never", "exec", "--json", "--sandbox", "workspace-write",
-		"--skip-git-repo-check", "--color", "never",
-	}
-	if model := strings.TrimSpace(opts.Model); model != "" {
-		args = append(args, "-m", model)
-	}
-	if opts.WorkDir != "" {
-		args = append(args, "-C", opts.WorkDir)
-	}
+	model := strings.TrimSpace(opts.Model)
 	// Append operator-supplied extra args (ExecutorConfig.cli_args, MAJ-5) before
 	// the trailing "-" so the stdin sentinel stays last. ADR-032 fix M-1: a
 	// flag that could re-enable a full sandbox bypass (--sandbox
 	// danger-full-access) or reintroduce an unanswerable approval gate
 	// (--ask-for-approval) is stripped first — see argsafety.go. This filter
 	// applies to opts.CLIArgs ONLY; the driver's own --sandbox workspace-write
-	// / --ask-for-approval never flags above are never touched.
+	// / --ask-for-approval never flags are never touched.
 	kept, dropped := filterDangerousCLIArgs("codex", opts.CLIArgs)
 	logDroppedCLIArgs("runner/codex", "codex", opts.RunID, dropped)
+
+	// Native-conversation resume (FR-043): `codex exec resume <id>` continues
+	// the thread the CLI announced on the prior stream (opts.resumeNativeID).
+	// NOTE: the resume subcommand accepts a DIFFERENT flag set than a fresh
+	// `codex exec` — verified against the installed CLI, it REJECTS --sandbox,
+	// --color and -C with "unexpected argument" (usage error). Only --json,
+	// --skip-git-repo-check and -m apply; the working directory reaches the
+	// child via cmd.Dir in Run(). The global --ask-for-approval still precedes
+	// the `exec` subcommand.
+	if id := strings.TrimSpace(opts.resumeNativeID); id != "" {
+		args := []string{
+			"--ask-for-approval", "never", "exec", "resume", id,
+			"--json", "--skip-git-repo-check",
+		}
+		if model != "" {
+			args = append(args, "-m", model)
+		}
+		args = append(args, kept...)
+		args = append(args, "-") // read prompt from stdin
+		return args
+	}
+
+	// --ask-for-approval must come before the "exec" subcommand (see doc above).
+	args := []string{
+		"--ask-for-approval", "never", "exec", "--json", "--sandbox", "workspace-write",
+		"--skip-git-repo-check", "--color", "never",
+	}
+	if model != "" {
+		args = append(args, "-m", model)
+	}
+	if opts.WorkDir != "" {
+		args = append(args, "-C", opts.WorkDir)
+	}
 	args = append(args, kept...)
 	args = append(args, "-") // read prompt from stdin
 	return args
@@ -327,8 +366,16 @@ func (d *CodexDriver) parseLine(
 			Err:   &ErrorEvent{Message: fmt.Sprintf("malformed JSON: %s", raw), Fatal: false},
 		}, true
 	}
+	// Capture codex's own thread id (announced on thread.started) so Resume can
+	// continue THIS native thread via `codex exec resume <id>` (FR-043).
+	storeNativeID(&d.mu, &d.nativeID, ev.ThreadID)
 
 	switch ev.Type {
+	case "thread.started":
+		// Session bootstrap event — carries thread_id (captured above); no
+		// RunEvent is emitted for it.
+		return RunEvent{}, false
+
 	case "item.completed":
 		if ev.Item == nil {
 			return RunEvent{}, false
@@ -474,20 +521,46 @@ func (d *CodexDriver) Cancel() {
 	}
 }
 
-// Input is best-effort for codex (no mid-run stdin injection in --json mode).
+// Input attempts to deliver a live steering instruction to a running codex
+// conversation. `codex exec --json` exposes no mid-run stdin injection channel,
+// so a live instruction cannot be delivered in-process — delivery is by
+// interrupt plus native-conversation resume (FR-043). Input therefore NEVER
+// silently discards the text: with no live conversation it refuses visibly, and
+// with a live run it returns a visible error directing the caller to interrupt
+// and resume (BDD-05.6, DEL-20).
 func (d *CodexDriver) Input(_ string) error {
-	return nil
+	d.mu.Lock()
+	live := d.eventCh != nil
+	d.mu.Unlock()
+	if !live {
+		return fmt.Errorf("codex driver: no live conversation to steer — instruction not delivered (FR-043)")
+	}
+	return fmt.Errorf("codex driver: cannot inject a live instruction into a running `codex exec` process (no mid-run stdin channel); interrupt and resume the native conversation instead (FR-043)")
 }
 
-// Resume for codex: codex exec does not have native --resume support in all
-// versions; start a fresh run with the given runID as a label.
+// Resume continues the codex native thread captured on the prior Run via
+// `codex exec resume <id>` (FR-043). It reuses the prior Run's RunOptions
+// (runtime/workspace/model/caps) so the resumed conversation preserves them, and
+// does NOT re-send the original prompt. When no native thread id was captured
+// it refuses VISIBLY rather than starting a fresh conversation (BDD-05.6); with
+// no prior Run at all it defers to Run's ErrMaxTurnsRequired (no hidden default,
+// FR-004).
 func (d *CodexDriver) Resume(ctx context.Context, runID string) (<-chan RunEvent, error) {
-	// Reuse the prior Run's turn cap (#904 D4). With no prior Run it is 0 and
-	// Run refuses it with ErrMaxTurnsRequired — no hidden default (FR-004).
 	d.mu.Lock()
+	last := d.lastOpts
 	maxTurns := d.runMaxTurns
+	nativeID := d.nativeID
 	d.mu.Unlock()
-	return d.Run(ctx, RunOptions{RunID: runID, MaxTurns: maxTurns})
+
+	opts := last
+	opts.RunID = runID
+	opts.Input = "" // resume continues the conversation; do not replay the original prompt
+	opts.resumeNativeID = nativeID
+
+	if nativeID == "" && maxTurns > 0 {
+		return nil, fmt.Errorf("codex driver: cannot resume — no native conversation id was captured from the prior run; refusing rather than starting a fresh conversation (FR-043)")
+	}
+	return d.Run(ctx, opts)
 }
 
 // Test validates the codex CLI is present.
