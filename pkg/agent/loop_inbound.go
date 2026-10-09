@@ -1109,7 +1109,9 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	// across re-entries", not just the first dispatch.
 	runCtx, cancel := steeredTurnRunContext(ctx, rec)
 	defer cancel()
-	result, err := al.runTurn(runCtx, ts)
+	// Same body dispatch as the first-run path: an external-CLI target is
+	// driven through the shared runner on a wake too, never the native loop.
+	result, err := al.runSteeredTurnBody(runCtx, rec, ts)
 	ts, result, err = al.drainSteeredTurn(runCtx, rec, ts, result, err)
 	al.disposeSteeredTurnResult(ts, rec, generation, result, err)
 	rootExecution.recordTurnOutcome(err)
