@@ -23,7 +23,7 @@ this restates.
   multiple Go suites in parallel. One at a time allows repeats: a red run, the green run
   after the fix, an isolated re-run, and a mutation probe each run this same command
   serially, never two running at once.
-- Toolchain minimum: Go 1.26.6 (`go.mod`) — a 1.22 compiler cannot build this.
+- Toolchain minimum: Go 1.26.9 (`go.mod`) — a 1.22 compiler cannot build this.
 - Fresh worktree / new clone: stub the SPA embed before building `pkg/gateway`
   (`CLAUDE.md` gives the exact `mkdir`/`echo`/`touch` sequence) — the resulting compile
   error looks like a code defect and is not one.

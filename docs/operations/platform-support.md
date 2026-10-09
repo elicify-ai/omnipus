@@ -4,7 +4,7 @@ Omnipus is a single static Go binary. Most Go cross-compile targets will build, 
 
 Omnipus supports three operating systems: **Linux, macOS, and Windows**. What "supported" means differs per platform, and the differences are stated below rather than averaged away. The BSD family (FreeBSD, OpenBSD, NetBSD) is **not supported**: no CI leg builds it, no release artifact ships for it, and nothing is tested there. A binary you cross-compile for a BSD target yourself is untested and unsupported.
 
-The minimum supported Go toolchain is `go 1.26.6` (`go.mod:3`). All listed platforms build with `CGO_ENABLED=0` and the standard release build tags `goolm,stdjson`.
+The minimum supported Go toolchain is `go 1.26.9` (`go.mod:3`). All listed platforms build with `CGO_ENABLED=0` and the standard release build tags `goolm,stdjson`.
 
 ## Officially supported in v0.1 (CI-tested)
 

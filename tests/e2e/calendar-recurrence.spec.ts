@@ -274,7 +274,11 @@ async function navigateToBoard(page: import('@playwright/test').Page): Promise<v
   const inboxColumn = page.locator('[aria-label="Inbox column"]');
   const loadError = page.getByText('Failed to load workspace');
   for (let attempt = 0; attempt < 3; attempt++) {
-    await page.goto(`/#/workspaces/${workspaceId}/board`);
+    // T5 deliberately falls back in a narrow dock. Use the real fullscreen
+    // Tasks surface so this test continues to exercise actual Board exclusion.
+    await page.goto(`/#/panel/tasks?workspace=${workspaceId}`);
+    await expect(page.getByTestId('fullscreen-panel')).toBeVisible();
+    await page.getByRole('radio', { name: 'Board', exact: true }).click();
     await Promise.race([
       expect(inboxColumn).toBeVisible({ timeout: 15_000 }).catch(() => {}),
       expect(loadError).toBeVisible({ timeout: 15_000 }).catch(() => {}),

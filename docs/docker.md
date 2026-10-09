@@ -77,7 +77,7 @@ docker build -t omnipus:heavy -f docker/Dockerfile.heavy .
 
 Run it from the repository root, not from `docker/` — the build context must include the whole tree.
 
-Three stages: `node:24-alpine` builds the SPA into `dist/spa/`; `golang:1.26.6-alpine` copies that output into `pkg/gateway/spa/` (satisfying the `//go:embed all:spa` directive) and builds the binary; `node:24-bookworm-slim` is the runtime, which adds Chrome-for-Testing, Python 3, `uv`/`uvx`, `git`, `jq` and the shared libraries Chrome links against.
+Three stages: `node:24-alpine` builds the SPA into `dist/spa/`; `golang:1.26.9-alpine` copies that output into `pkg/gateway/spa/` (satisfying the `//go:embed all:spa` directive) and builds the binary; `node:24-bookworm-slim` is the runtime, which adds Chrome-for-Testing, Python 3, `uv`/`uvx`, `git`, `jq` and the shared libraries Chrome links against.
 
 Both builder stages are pinned to the **build** platform and cross-compile, so a multi-architecture build does not run `npm ci` and `go build` under emulation:
 

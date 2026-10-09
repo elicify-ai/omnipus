@@ -2,7 +2,7 @@
  * TaskActivityChip.test.tsx
  *
  * Founder decision 2026-09-14 (UAT E-15c): a running task shows how long ago
- * its run last did anything — "In progress · last activity 5 s ago" — so long
+ * its run last did anything — "Last activity 5 s ago" — so long
  * work is visible and a real hang stands out, without any fixed time limit.
  * Expected strings below are written from that decision, not read back from
  * the implementation.
@@ -13,6 +13,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen } from '@testing-library/react'
+import { showTaskInfo } from './tasksLayoutFixtures'
 import { TaskCard } from './TaskCard'
 import { TaskActivityChip, TASK_ACTIVITY_STALE_MS, formatActivityAge, taskActivity } from './TaskActivityChip'
 import type { Task } from '@/lib/api'
@@ -102,22 +103,24 @@ describe('TaskCard last-activity chip', () => {
   it('renders the fresh label and keeps its age current while the card stays open', () => {
     render(<TaskCard task={makeTask({ last_activity_at: secondsAgo(5) })} onClick={() => {}} showActions={false} />)
 
+    showTaskInfo('Reconcile invoices')
     const chip = screen.getByTestId('task-last-activity')
-    expect(chip).toHaveTextContent('In progress · last activity 5 s ago')
+    expect(chip).toHaveTextContent('Last activity 5 s ago')
     expect(chip).toHaveAttribute('data-stale', 'false')
 
     act(() => {
       vi.advanceTimersByTime(10_000)
     })
-    expect(screen.getByTestId('task-last-activity')).toHaveTextContent('In progress · last activity 15 s ago')
+    expect(screen.getByTestId('task-last-activity')).toHaveTextContent('Last activity 15 s ago')
   })
 
   it('marks a run with no activity for 12 minutes as stale', () => {
     render(
       <TaskCard task={makeTask({ last_activity_at: secondsAgo(12 * 60) })} onClick={() => {}} showActions={false} />,
     )
+    showTaskInfo('Reconcile invoices')
     const chip = screen.getByTestId('task-last-activity')
-    expect(chip).toHaveTextContent('In progress · last activity 12 min ago')
+    expect(chip).toHaveTextContent('Last activity 12 min ago')
     expect(chip).toHaveAttribute('data-stale', 'true')
   })
 
