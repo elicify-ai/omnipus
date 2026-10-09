@@ -6,7 +6,7 @@
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error"]);
 
 export const AuthFrame = z
   .object({
@@ -732,15 +732,6 @@ export const CancelStageFrame = z
   })
   .strict();
 
-export const SessionCloseAckFrame = z
-  .object({
-    type: z.literal("session_close_ack"),
-    session_id: z.string().min(1),
-    id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
-  })
-  .strict();
-
 export const SessionModeUpdateFrame = z
   .object({
     type: z.literal("session_mode_update"),
@@ -775,13 +766,6 @@ export const WhatsAppPairingFrame = z
     status: z.enum(["waiting", "code", "linked", "timeout", "error"]),
     qr: z.string().optional(),
     message: z.string().optional(),
-  })
-  .strict();
-
-export const SessionCloseFrame = z
-  .object({
-    type: z.literal("session_close"),
-    session_id: z.string().min(1),
   })
   .strict();
 
@@ -1393,12 +1377,10 @@ export const WsFrame = z.discriminatedUnion("type", [
   SystemOverloadFrame,
   ReplayWarningFrame,
   CancelStageFrame,
-  SessionCloseAckFrame,
   SessionModeUpdateFrame,
   SessionModeUpdatedFrame,
   DevicePairingRequestFrame,
   WhatsAppPairingFrame,
-  SessionCloseFrame,
   WhatsAppPairingSubscribeFrame,
   NotificationFrame,
   BrowserAttachFrame,

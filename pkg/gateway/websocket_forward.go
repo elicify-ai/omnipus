@@ -26,15 +26,14 @@ import (
 
 // ADR-057 FR-089 — W5 audit classification artefact (U11's half).
 //
-// generated.SESSION_SCOPED_FRAME_TYPES has 19 members. 13 were classified by
+// generated.SESSION_SCOPED_FRAME_TYPES has 18 members. 12 were classified by
 // the spec itself (adr-057-session-unification-spec.md, BDD-16/BDD-98/BDD-99):
 // class (a) both-ids — token, done, tool_call_start, tool_call_result,
 // tool_approval_required, media; class (b) producing_session_id-absent —
-// replay_message, session_started, session_close_ack, subagent_start,
-// subagent_end; class (c) documented pre-existing gap — rate_limit,
-// replay_done. The remaining 6 were left "class not yet assigned by the W5
-// audit" on their generated types pending this classification, verified
-// 2026-08 against this tree:
+// replay_message, session_started, subagent_start, subagent_end; class (c)
+// documented pre-existing gap — rate_limit, replay_done. The remaining 6 were
+// left "class not yet assigned by the W5 audit" on their generated types
+// pending this classification, verified 2026-08 against this tree:
 //
 //   - agent_switched → class (a). Built at this file's ToolExecEnd case
 //     (below, evtSID := p.SessionID from agent.ToolExecEndPayload) immediately
