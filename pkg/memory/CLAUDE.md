@@ -23,8 +23,9 @@ turn that recall depends on. Same warning on `store.go::StoreWriter`.
 
 - `SetHistory` refuses any archive with ≥1 line
   (`projection.go::ErrArchiveNotEmpty`) and never touches Skip.
-- That refusal is load-bearing: `migration.go::MigrateFromJSON` treats
-  `errors.Is(err, ErrArchiveNotEmpty)` as its already-imported signal.
+- That refusal is load-bearing: a first-fill caller treats
+  `errors.Is(err, ErrArchiveNotEmpty)` as its already-imported signal (the
+  deleted `migration.go::MigrateFromJSON` relied on exactly this).
 - `jsonl.go::RollbackAppended` is the ONLY correct way to undo turn
   appends — a SetHistory-based rollback would reset Skip to 0,
   permanently deleting evicted turns (SC-001).
@@ -58,9 +59,11 @@ Pre-`capped_failure` entries read back as `ProjectionCapped`; legacy
 archive lines unmarshal with `TS == 0`, meaning "unknown/earlier", never
 an error.
 
-## migration.go has a live caller
+## migration.go was deleted (session-core DEL-09)
 
-`pkg/agent/instance.go`'s startup path calls `MigrateFromJSON` (legacy
-single-file `sessions/*.json` snapshots → JSONL, one atomic SetHistory,
-sources renamed `.json.migrated`). Not dead code under the greenfield
-ruling — deleting it breaks first boot on installs carrying legacy files.
+`migration.go` and its `MigrateFromJSON` general importer are gone. CONV
+(`pkg/session/unified_conv.go`, the one-time saved-chat cutover) is now the
+sole legacy reader; the `pkg/agent/instance.go` startup path no longer calls
+`MigrateFromJSON`. `SetHistory` still refuses a non-empty archive exactly as
+the deleted importer relied on, and that refusal remains load-bearing for any
+other first-fill caller.

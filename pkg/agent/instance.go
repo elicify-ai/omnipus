@@ -2,7 +2,6 @@ package agent
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -1388,14 +1387,6 @@ func initSessionStore(dir, agentID, homePath string) session.SessionStore {
 			logger.ErrorCF("agent", "JSONL store fallback also failed; using SessionManager",
 				map[string]any{"error": storeErr.Error()})
 			return session.NewSessionManager(dir)
-		}
-		if n, merr := memory.MigrateFromJSON(context.Background(), dir, store); merr != nil {
-			logger.ErrorCF("agent", "Memory migration failed; falling back to SessionManager",
-				map[string]any{"error": merr.Error()})
-			store.Close()
-			return session.NewSessionManager(dir)
-		} else if n > 0 {
-			logger.InfoCF("agent", "Memory migrated to JSONL", map[string]any{"sessions_migrated": n})
 		}
 		return session.NewJSONLBackend(store)
 	}
