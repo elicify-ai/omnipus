@@ -43,9 +43,11 @@ func TestSessionList_LifecycleReadFailuresArePartial(t *testing.T) {
 			assert.NotContains(t, rec.Body.String(), f.ls.Dir(), "no local path may leak")
 			assert.NotContains(t, rec.Body.String(), "scan ", "no syscall details may leak")
 			assert.NotContains(t, rec.Body.String(), "contains no readable", "no journal parser details may leak")
-			rows := decodeObject(t, rec.Body.Bytes())["sessions"].([]any)
+			rows, ok := decodeObject(t, rec.Body.Bytes())["sessions"].([]any)
+			require.True(t, ok, "sessions must remain a JSON array")
 			for _, rawRow := range rows {
-				row := rawRow.(map[string]any)
+				row, ok := rawRow.(map[string]any)
+				require.True(t, ok, "each session row must remain a JSON object")
 				if row["id"] == healthy {
 					assert.Equal(t, "working", row["lifecycle_state"])
 					assert.Equal(t, "running", row["execution"])
