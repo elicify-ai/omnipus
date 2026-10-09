@@ -1,0 +1,5 @@
+--- FAIL: TestSessionCoreU12_DeleteCleansOwnedDataBeforeRemovingRecord (0.15s)
+    sessioncore_u12_delete_cascade_test.go:87: FR-037/C-DELETE: owned session session_01M4F62M8W8WDT5VN29Z4CTN74 must be cleaned BEFORE the record removal; it survived a failed record delete — the cascade is still entity-first
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/sysagent/tools	3.005s
+FAIL
