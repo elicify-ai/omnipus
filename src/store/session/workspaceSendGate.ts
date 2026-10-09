@@ -16,16 +16,24 @@ export function blockSendForWorkspaceEntry(operation: 'send' | 'drain' | 'resend
   const fields = { operation, workspaceId, entryStatus, resolving, sessionId: state.activeSessionId }
   console.warn('[chat] workspace entry blocks send', fields)
   logDiagnostic('chatWorkspaceEntrySendBlocked', fields)
-  useUiStore.getState().addToast({
-    message: resolving
-      ? 'Restoring your conversation…'
-      : entryStatus === 'failed-attempt'
-        ? 'Could not restore your last conversation. Retry to try again.'
-        : 'This chat is unavailable right now',
-    variant: 'warning',
-    ...(!resolving && workspaceId ? {
-      action: { label: 'Retry', onClick: () => { void runWorkspaceEntry(workspaceId) } },
-    } : {}),
-  })
+  const message = resolving
+    ? 'Restoring your conversation…'
+    : entryStatus === 'failed-attempt'
+      ? 'Could not restore your last conversation. Retry to try again.'
+      : 'This chat is unavailable right now'
+  const action = !resolving && workspaceId
+    ? { label: 'Retry', onClick: () => { void runWorkspaceEntry(workspaceId) } }
+    : undefined
+  const ui = useUiStore.getState()
+  const visibleWarning = ui.toasts.find((toast) => toast.variant === 'warning' && toast.message === message)
+  if (visibleWarning) {
+    // Keep one visible warning and its dismissal timer. If the workspace has
+    // changed, Retry must check the latest blocked destination, not the old one.
+    useUiStore.setState((current) => ({
+      toasts: current.toasts.map((toast) => toast.id === visibleWarning.id ? { ...toast, action } : toast),
+    }))
+  } else {
+    ui.addToast({ message, variant: 'warning', ...(action ? { action } : {}) })
+  }
   return true
 }

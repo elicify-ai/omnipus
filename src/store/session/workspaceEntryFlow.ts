@@ -101,9 +101,14 @@ async function loadInputs(workspaceId: string): Promise<{
     fetchSessions(),
     fetchWorkspace(workspaceId),
   ])
-  const transportFailed = sessionsResult.status !== 'fulfilled'
-    || !Array.isArray(sessionsResult.value)
-    || workspaceResult.status === 'rejected'
+  const sessions = sessionsResult.status === 'fulfilled' && Array.isArray(sessionsResult.value)
+    ? sessionsResult.value
+    : []
+  const sessionsFailed = sessionsResult.status !== 'fulfilled' || !Array.isArray(sessionsResult.value)
+  // Exact restore needs only the visible session and its immutable owner.
+  // Workspace details are required only to resolve the welcome/unavailable path.
+  const exactAvailable = classifyPointer(sessions, workspaceId, rememberedId(workspaceId), sessionsFailed) === 'visible'
+  const transportFailed = sessionsFailed || (workspaceResult.status === 'rejected' && !exactAvailable)
   for (const [resource, result] of [['sessions', sessionsResult], ['workspace', workspaceResult]] as const) {
     if (result.status !== 'rejected') continue
     const fields = {
@@ -113,9 +118,6 @@ async function loadInputs(workspaceId: string): Promise<{
     console.warn('[session] workspace entry input failed', fields)
     logDiagnostic('sessionWorkspaceEntryLoadFailed', fields)
   }
-  const sessions = sessionsResult.status === 'fulfilled' && Array.isArray(sessionsResult.value)
-    ? sessionsResult.value
-    : []
   const workspace = workspaceResult.status === 'fulfilled' ? workspaceResult.value : null
   const member = workspace?.member_configs?.ava ?? {}
   return { sessions, transportFailed, member }

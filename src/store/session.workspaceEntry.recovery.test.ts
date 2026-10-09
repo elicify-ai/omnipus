@@ -12,6 +12,8 @@ import { fetchSessions, fetchWorkspace } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
 import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
 import { beginPairExtra } from '@/components/layout/sidebar/pairExtra'
+import { runWorkspaceEntry } from '@/store/session/workspaceEntryFlow'
+import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 import { useChatStore } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
@@ -126,6 +128,77 @@ afterEach(() => {
 })
 
 describe('workspace-entry recovery — gate round 2', () => {
+  it.each([
+    ['failed-attempt', 'Could not restore your last conversation. Retry to try again.'],
+    ['unavailable', 'This chat is unavailable right now'],
+    ['resolving', 'Restoring your conversation…'],
+  ] as const)('repeated blocked send/drain/resend attempts keep one %s warning until dismissal', (status, message) => {
+    useSessionStore.setState({
+      workspaceEntry: status === 'failed-attempt' ? failed : status === 'unavailable' ? unavailable : null,
+      resolvingSessionForWorkspace: status === 'resolving' ? { [TARGET_WS]: true } : {},
+    })
+    useUiStore.getState().addToast({ message: 'A different warning', variant: 'warning' })
+    const unrelated = useUiStore.getState().toasts[0]
+
+    expect(blockSendForWorkspaceEntry('send')).toBe(true)
+    expect(useUiStore.getState().toasts).toHaveLength(2)
+    const warning = useUiStore.getState().toasts[1]
+    expect(warning.message).toBe(message)
+    expect(warning.variant).toBe('warning')
+    expect(warning.action?.label).toBe(status === 'resolving' ? undefined : 'Retry')
+
+    for (const operation of ['drain', 'resend'] as const) {
+      expect(blockSendForWorkspaceEntry(operation)).toBe(true)
+      // Dispatch oracle: another blocked attempt must not append a duplicate.
+      expect(useUiStore.getState().toasts.map((toast) => toast.id)).toEqual([unrelated.id, warning.id])
+      expect(useUiStore.getState().toasts[1].action?.label).toBe(status === 'resolving' ? undefined : 'Retry')
+    }
+
+    useUiStore.getState().removeToast(warning.id)
+    expect(blockSendForWorkspaceEntry('send')).toBe(true)
+    const shownAgain = useUiStore.getState().toasts
+    expect(shownAgain).toHaveLength(2)
+    expect(shownAgain[0]).toEqual(unrelated)
+    expect(shownAgain[1].id).not.toBe(warning.id)
+    expect(shownAgain[1].message).toBe(message)
+  })
+
+  it('blocked attempts reuse the existing failed-restore warning and its Retry still recovers the target', async () => {
+    retainSourceAndRememberTarget()
+    connect()
+    vi.mocked(fetchSessions).mockRejectedValueOnce(new Error('Session list offline'))
+    await useSessionStore.getState().enterWorkspaceChat(TARGET_WS)
+    expect(useUiStore.getState().toasts).toHaveLength(1)
+    const warning = useUiStore.getState().toasts[0]
+    expect(warning.message).toBe('Could not restore your last conversation. Retry to try again.')
+
+    expect(blockSendForWorkspaceEntry('drain')).toBe(true)
+    expect(blockSendForWorkspaceEntry('send')).toBe(true)
+    expect(useUiStore.getState().toasts.map((toast) => toast.id)).toEqual([warning.id])
+    const retry = useUiStore.getState().toasts[0].action
+    expect(retry?.label).toBe('Retry')
+    retry!.onClick()
+    await useSessionStore.getState().enterWorkspaceChat(TARGET_WS)
+    expect(useSessionStore.getState().activeSessionId).toBe(TARGET)
+    expect(workspaceEntryBlocksSend(useSessionStore.getState(), TARGET_WS)).toBe(false)
+  })
+
+  it('a reused identical warning keeps one toast and retargets Retry to the latest blocked workspace', async () => {
+    useSessionStore.setState({ workspaceEntry: failed })
+    expect(blockSendForWorkspaceEntry('send')).toBe(true)
+    const warning = useUiStore.getState().toasts[0]
+    const nextWorkspace = 'next-workspace'
+    useWorkspacesStore.setState({ activeWorkspaceId: nextWorkspace })
+
+    expect(blockSendForWorkspaceEntry('drain')).toBe(true)
+    expect(useUiStore.getState().toasts.map((toast) => toast.id)).toEqual([warning.id])
+    const retry = useUiStore.getState().toasts[0].action
+    expect(retry?.label).toBe('Retry')
+    retry!.onClick()
+    await runWorkspaceEntry(nextWorkspace)
+    expect(fetchWorkspace).toHaveBeenCalledExactlyOnceWith(nextWorkspace)
+  })
+
   it('New chat clears a failed entry and sends a fresh extra for the selected pair, never the source chat', () => {
     retainSourceAndRememberTarget()
     const send = connect()
@@ -198,12 +271,47 @@ describe('workspace-entry recovery — gate round 2', () => {
     },
   )
 
-  it.each(['absent', 'remembered'] as const)(
+  it('a workspace-details failure stays logged but a visible remembered chat restores exactly and can send', async () => {
+    retainSourceAndRememberTarget()
+    const send = connect()
+    vi.mocked(fetchWorkspace).mockRejectedValueOnce(new Error('Workspace details offline'))
+
+    await useSessionStore.getState().enterWorkspaceChat(TARGET_WS)
+
+    expect(useSessionStore.getState().activeSessionId).toBe(TARGET)
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
+    expect(useSessionStore.getState().workspaceEntry).toEqual({ status: 'exact', acknowledged: false })
+    expect(useSessionStore.getState().resolvingSessionForWorkspace).toEqual({})
+    expect(useSessionStore.getState().sessionByWorkspace[TARGET_WS]?.id).toBe(TARGET)
+    expect(useSessionStore.getState().sessionByWorkspace[SOURCE_WS]?.id).toBe(SOURCE)
+    expect(useUiStore.getState().toasts).toEqual([])
+    expect(logDiagnostic).toHaveBeenCalledWith('sessionWorkspaceEntryLoadFailed', {
+      workspaceId: TARGET_WS, resource: 'workspace', errorName: 'Error',
+    })
+    expect(send).toHaveBeenCalledExactlyOnceWith({ type: 'attach_session', session_id: TARGET })
+    expect(workspaceEntryBlocksSend(useSessionStore.getState(), TARGET_WS)).toBe(false)
+
+    useChatStore.getState().sendMessage('Exact restore remains usable', { clientMessageId: 'exact-restored-send' })
+    expect(messageFrames(send)).toEqual([expect.objectContaining({
+      type: 'message', session_id: TARGET, agent_id: 'mia',
+      content: 'Exact restore remains usable', client_message_id: 'exact-restored-send',
+      metadata: { workspace_id: TARGET_WS },
+    })])
+  })
+
+  // Third-item ruling: workspace data is needed only when the remembered chat
+  // cannot resolve exactly. Retain the honest transport-failure/recovery oracle
+  // for absent, deleted and wrong-workspace pointers, not a visible exact chat.
+  it.each(['absent', 'deleted', 'wrong-workspace'] as const)(
     'a rejected workspace fetch with an %s pointer reports transport failure, retains source and recovers through Retry',
     async (pointer) => {
       retainSourceAndRememberTarget()
       if (pointer === 'absent') useSessionStore.setState({ sessionByWorkspace: {} })
       if (pointer === 'absent') localStorage.clear()
+      if (pointer === 'deleted') vi.mocked(fetchSessions).mockResolvedValue([])
+      if (pointer === 'wrong-workspace') {
+        vi.mocked(fetchSessions).mockResolvedValue([{ ...targetSession(), workspace_id: SOURCE_WS }])
+      }
       const member: WorkspaceMemberConfig = {}
       seam.mains.set(member, AVA)
       vi.mocked(fetchWorkspace).mockRejectedValueOnce(new Error('Workspace request offline'))
@@ -226,6 +334,7 @@ describe('workspace-entry recovery — gate round 2', () => {
       expect(toast?.action?.label).toBe('Retry')
 
       vi.mocked(fetchWorkspace).mockResolvedValue(targetWorkspace(member))
+      vi.mocked(fetchSessions).mockResolvedValue([targetSession()])
       toast.action?.onClick()
       await useSessionStore.getState().enterWorkspaceChat(TARGET_WS)
       expect(useSessionStore.getState().activeSessionId).toBe(pointer === 'absent' ? AVA : TARGET)

@@ -255,6 +255,28 @@ beforeEach(() => {
 })
 
 describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
+  it('uses the wireframe workspace-group margins and a single inner indent', async () => {
+    renderSidebar()
+    const collapsedGroup = await screen.findByRole('group', { name: 'Product launch' })
+    // Wireframe .ws-agents[hidden] consumes no group spacing when folded.
+    expect(collapsedGroup.className).toBe('')
+    await expandAgents('Product launch')
+    const group = screen.getByRole('group', { name: 'Product launch' })
+    // Wireframe .ws-agents: margin 4px 8px 8px 24px; padding-left 12px.
+    // This runner does not apply Tailwind, so pin the registered declarations,
+    // not a claimed browser measurement. The agent button keeps its own inset.
+    expect(group).toHaveClass(
+      'mt-[var(--space-1)]', 'mr-[var(--space-2)]', 'mb-[var(--space-2)]',
+      'ml-[var(--space-4)]', 'pl-[var(--space-2-5)]', 'border-l',
+    )
+    expect(group).not.toHaveClass('pb-[var(--space-1)]')
+    for (const name of ['Mia', 'Jim']) {
+      const row = within(group).getByRole('group', { name })
+      expect(row).not.toHaveClass('pl-[var(--space-2-5)]')
+      expect(row).not.toHaveClass('pr-[var(--space-2)]')
+    }
+  })
+
   it('N01 clicking Mia in Product launch opens her seam main, not the newer extra', async () => {
     renderSidebar()
     // FR-003 / BDD-01.1: the click is the Product launch pair. Mia is also a

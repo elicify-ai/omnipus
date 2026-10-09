@@ -231,9 +231,13 @@ function WorkspaceBlock({
           </span>
         )}
       </div>
-      <div role="group" aria-label={project.name} className="pb-[var(--space-1)] ml-[var(--space-3)] border-l border-[var(--color-border)]">
+      <div
+        role="group"
+        aria-label={project.name}
+        className={isExpanded ? 'mt-[var(--space-1)] mr-[var(--space-2)] mb-[var(--space-2)] ml-[var(--space-4)] pl-[var(--space-2-5)] border-l border-[var(--color-border)]' : undefined}
+      >
         {isExpanded && rosterFailed && (
-          <div className="flex items-center gap-[var(--space-2)] pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)]">
+          <div className="flex items-center gap-[var(--space-2)] pr-[var(--space-3)] py-[var(--space-1)]">
             <span className="flex-1 text-[length:var(--type-caption-size)] text-[var(--color-error)]">Could not load team</span>
             <Button
               variant="ghost"
@@ -334,7 +338,7 @@ function AgentMainRow({
   }
 
   return (
-    <div role="group" aria-label={row.name} data-selected={selected} className="pl-[var(--space-2-5)] pr-[var(--space-2)]">
+    <div role="group" aria-label={row.name} data-selected={selected}>
       <div
         data-selected={selected}
         className="sidebar-agent-row flex items-center rounded-[var(--radius-medium)] hover:bg-[var(--color-surface-2)]"
