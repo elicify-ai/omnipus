@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
@@ -103,6 +104,24 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 			return ErrorResult(fmt.Sprintf("task %q not found", taskID))
 		}
 		return ErrorResult(fmt.Sprintf("run_task failed: could not load task: %v", err))
+	}
+
+	// FR-048/BDD-08.6: a task living in a workspace OTHER than the caller's
+	// current one is NOT the caller's to run. Execution happens only inside the
+	// workspace a task belongs to, under that workspace's own delegation policy
+	// and by its own team's local pickup — a foreign delivery (create_task with
+	// an explicit foreign workspace_id) lands as not-started Inbox work and
+	// must never be dispatched from the delivering side. Refused here, BEFORE
+	// any status write or dispatch: the caller sees created/not-started
+	// guidance, not a launched run. A caller whose turn carries no workspace
+	// (the pre-merge behaviour) is unaffected, as are tasks with no workspace.
+	if ownWS := strings.TrimSpace(ToolWorkspaceID(ctx)); ownWS != "" &&
+		existing.WorkspaceID != "" && existing.WorkspaceID != ownWS {
+		return ErrorResult(fmt.Sprintf(
+			"task %q is in workspace %q, not your current workspace %q — a task delivered to another "+
+				"workspace is created-and-not-started work its own team picks up locally; it cannot be "+
+				"run, started or re-run from here (FR-048)",
+			taskID, existing.WorkspaceID, ownWS))
 	}
 
 	// G4/A3: in-plan tasks are rejected AT THE TOOL BOUNDARY — the plan

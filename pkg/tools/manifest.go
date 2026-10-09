@@ -166,20 +166,19 @@ var administrativeToolNames = map[string]struct{}{
 	// state. Classifying it here narrows only ToolSearch's speculative
 	// cross-category promotion; it is NOT a policy mechanism (the tool's
 	// policy is the ordinary two-level ask) and does not make it Admin-only.
-	"environment_setup":        {},
-	"delete_agent":             {},
-	"delete_task":              {},
-	"delete_task_in_workspace": {},
-	"delete_workspace":         {},
-	"remove_mcp_server":        {},
-	"remove_skill":             {},
-	"disable_channel":          {},
-	"enable_channel":           {},
-	"add_mcp_server":           {},
-	"configure_channel":        {},
-	"configure_provider":       {},
-	"set_config":               {},
-	"stop_plan":                {},
+	"environment_setup":  {},
+	"delete_agent":       {},
+	"delete_task":        {},
+	"delete_workspace":   {},
+	"remove_mcp_server":  {},
+	"remove_skill":       {},
+	"disable_channel":    {},
+	"enable_channel":     {},
+	"add_mcp_server":     {},
+	"configure_channel":  {},
+	"configure_provider": {},
+	"set_config":         {},
+	"stop_plan":          {},
 }
 
 // administrativeExemptNames carries a one-line reason for every static tool

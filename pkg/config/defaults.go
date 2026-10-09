@@ -416,27 +416,23 @@ func defaultToolPoliciesSysagent() map[string]string {
 		"remove_mcp_server": "ask",
 		// list_mcp_servers is read-only and reports name/transport/enabled/
 		// command/url only — never args or env — so it leaks no credential.
-		"list_mcp_servers":         "allow",
-		"create_skill":             "allow",
-		"edit_skill":               "allow",
-		"create_task_in_workspace": "allow",
-		"update_task_in_workspace": "allow",
-		"delete_task_in_workspace": "ask", // irreversible delete
-		"list_tasks_in_workspace":  "allow",
-		"remove_skill":             "allow", // Ava confirms the combined proposal once.
-		"list_skills":              "allow",
-		"enable_channel":           "allow",
-		"configure_channel":        "allow",
-		"disable_channel":          "allow", // reversible, not a delete
-		"list_channels":            "allow",
-		"test_channel":             "allow",
-		"get_config":               "allow",
-		"set_config":               "allow",
-		"get_agent":                "allow",
-		"get_agent_tools":          "allow",
-		"create_agent":             "allow",
-		"update_agent":             "allow",
-		"delete_agent":             "allow", // Ava confirms the combined proposal once.
+		"list_mcp_servers":  "allow",
+		"create_skill":      "allow",
+		"edit_skill":        "allow",
+		"remove_skill":      "allow", // Ava confirms the combined proposal once.
+		"list_skills":       "allow",
+		"enable_channel":    "allow",
+		"configure_channel": "allow",
+		"disable_channel":   "allow", // reversible, not a delete
+		"list_channels":     "allow",
+		"test_channel":      "allow",
+		"get_config":        "allow",
+		"set_config":        "allow",
+		"get_agent":         "allow",
+		"get_agent_tools":   "allow",
+		"create_agent":      "allow",
+		"update_agent":      "allow",
+		"delete_agent":      "allow", // Ava confirms the combined proposal once.
 	}
 }
 

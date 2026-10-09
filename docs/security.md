@@ -173,7 +173,7 @@ For reading, this now matches the shell. Under Auto-approve, the shell command `
 | Widening file access | `request_mount` |
 | Installing and publishing | `install_skill`, `environment_setup`, `serve_web` |
 | Email | `send_email`, `reply` |
-| Deleting | `delete_task`, `delete_task_in_workspace`, `delete_workspace`, `delete_agent` |
+| Deleting | `delete_task`, `delete_workspace`, `delete_agent` |
 | Browser scripts and uploads | `browser_evaluate`, `browser_upload_file` |
 | Settings and diagnostics | `set_config`, `run_doctor` |
 | Providers | `configure_provider`, `test_provider` |

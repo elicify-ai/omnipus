@@ -1431,30 +1431,11 @@ func (rc *runContextWithOptions) wireSystemTools() {
 				rc.runningServices.restAPIRef.emitAgentCreated(agentID)
 			}
 		},
-		SkillsLoader:    rc.sysSkillsLoader,
-		RegistryManager: rc.sysRegistryManager,
-		SkillInstaller:  rc.sysSkillInstaller,
-		SkillWriter:     rc.sysSkillWriter,
-		// §4 behavioral-parity gap: the cross-workspace task tools
-		// (create/update/delete_task_in_workspace) must enforce the SAME FR-6.2
-		// delegation policy the same-workspace create_task/update_task tools
-		// enforce. The resolver loads the calling agent's config from the live
-		// config and builds the task-mode gate dynamically (the sysagent tools are
-		// registered once on a central registry, so a per-agent checker can't be
-		// bound at construction). MUST be wired in production — leaving it nil
-		// fails OPEN.
-		DelegationDeny: rc.agentLoop.NewSysagentDelegationDeny(),
-		// D2 rule 5 (FR-017/052, review r1 major M5): create_task_in_workspace
-		// parity with the plain create_task tool's own bash-policy checker —
-		// MUST be wired in production, leaving it nil fails CLOSED (unlike
-		// DelegationDeny above) per systools.Deps.ResolveBashPolicy's doc
-		// comment.
-		ResolveBashPolicy: rc.agentLoop.NewSysagentBashPolicyResolver(),
+		SkillsLoader:      rc.sysSkillsLoader,
+		RegistryManager:   rc.sysRegistryManager,
+		SkillInstaller:    rc.sysSkillInstaller,
+		SkillWriter:       rc.sysSkillWriter,
 		ResolveToolPolicy: rc.agentLoop.ResolveRegisteredToolPolicy,
-		// Founder decision 2026-09-15: create/update_task_in_workspace refuse an
-		// assignee that cannot finish the task — the same answer as the plain
-		// task tools and the task run's pre-run check.
-		AssigneeCannotFinish: rc.agentLoop.TaskAssigneeCannotFinish,
 		// ADR-057 U9 changed ListAllSessions' signature to
 		// (limit, offset int, parentSessionID string, flat bool), so it can no
 		// longer be assigned here as a bare method value — this field's type
