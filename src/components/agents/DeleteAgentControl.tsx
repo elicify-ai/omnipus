@@ -129,7 +129,7 @@ export function DeleteAgentControl({ agentId, agentName, revision }: DeleteAgent
         description={
           isFinal
             ? 'Final confirmation. This cannot be undone.'
-            : 'This permanently deletes this agent and all of its chats, memory and related data. You will be asked to confirm once more.'
+            : 'This permanently deletes this agent and all of its chats, memory and related data. This cannot be undone. You will be asked to confirm once more.'
         }
         confirmLabel={mutation.isPending ? 'Deleting…' : isFinal ? 'Delete permanently' : 'Continue'}
         destructive

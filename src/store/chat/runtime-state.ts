@@ -107,7 +107,7 @@ export const SESSION_SCOPED_FRAME_TYPES = new Set([
   'subagent_start', 'subagent_end', 'replay_message', 'replay_done',
   'agent_switched', 'task_status_changed',
   'tool_approval_required', 'rate_limit', 'media', 'session_started',
-  'system_overload', 'session_close_ack', 'cancel_stage',
+  'system_overload', 'cancel_stage',
   'message_status',
   // ADR-092: SessionModeUpdatedFrame.session_id is required (min length 1) —
   // same "drop in production when missing" contract as cancel_stage above.

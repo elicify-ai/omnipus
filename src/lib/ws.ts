@@ -53,7 +53,6 @@ import type {
   ReplayWarningFrame,
   ReplayWarningStats,
   CancelStageFrame,
-  SessionCloseAckFrame,
   DevicePairingRequestFrame,
   // Client → server frames
   AuthFrame,
@@ -62,7 +61,6 @@ import type {
   PingFrame,
   AttachSessionFrame,
   DevicePairingResponseFrame,
-  SessionCloseFrame,
 } from '@/lib/api/generated/asyncapi-types'
 
 // Re-export canonical names from generated file
@@ -98,7 +96,6 @@ export type {
   ReplayWarningFrame,
   ReplayWarningStats,
   CancelStageFrame,
-  SessionCloseAckFrame,
   DevicePairingRequestFrame,
   AuthFrame,
   MessageFrame,
@@ -106,7 +103,6 @@ export type {
   PingFrame,
   AttachSessionFrame,
   DevicePairingResponseFrame,
-  SessionCloseFrame,
 }
 
 // ── WsXxx legacy aliases (active callers only) ───────────────────────────────
