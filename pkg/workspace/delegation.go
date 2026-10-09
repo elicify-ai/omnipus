@@ -164,7 +164,10 @@ func (e *DelegationEdge) UnmarshalJSON(data []byte) error {
 //   - from_agent and to_agent are both non-empty (after trimming)
 //   - both endpoints are members of team (the workspace team set — core_team ∪
 //     existing-edge endpoints). A nil team treats EVERY endpoint as off-team
-//     (deny-by-default): callers MUST pass the real team set.
+//     (deny-by-default): callers MUST pass the real team set. A same-agent row
+//     (from_agent == to_agent) is an ORDINARY row and passes this check like any
+//     other — session-core C-DELEGATE (FR-014) deletes the former identity-
+//     specific self-edge rule (jim/worker only); there is no self-ID predicate.
 //   - every mode (when Modes is non-empty) ∈ {direct, task}
 //   - Depth, when non-nil, is >= 0 and <= ceiling
 //
@@ -325,6 +328,9 @@ func ReadDelegation(home, workspaceID string) ([]DelegationEdge, error) {
 // someone outside the workspace. Shape validation only stops a corrupt or
 // hand-edited store injecting a structurally impossible edge; it is a
 // data-integrity guard, not the authorization boundary.
+//
+// A same-agent row is structurally valid and passes here like any other edge:
+// session-core C-DELEGATE (FR-014) deleted the identity-specific self-edge rule.
 //
 // The depth CEILING is intentionally not checked here for the same reason: an
 // edge whose depth exceeds a ceiling that has since been lowered is stale

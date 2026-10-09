@@ -53,14 +53,18 @@ func TestCheckRevisionLockedRejectsMalformedAndStaleWithoutChangingState(t *test
 	require.Equal(t, state, current)
 }
 
-func TestDelegationSelfEdgesAreOrdinaryEdgesForAnyAgent(t *testing.T) {
-	// Settled design (2026-10-09): a self-edge is an ORDINARY edge. It is
-	// authorized by existing in the graph, not by a name on a list, so
-	// ValidateShape accepts one for ANY agent (including a custom agent). The
-	// former Jim/General-Purpose-only restriction and PermittedSelfDelegationID
-	// were deleted.
-	for _, id := range []string{"jim", "worker", "mia", "ava", "admin", "custom"} {
-		require.NoError(t, (DelegationEdge{FromAgent: id, ToAgent: id}).ValidateShape(),
-			"a self-edge for %q must be a valid ordinary edge", id)
+// TestDelegationSelfEdgeShapeAcceptedForAnyAgent pins the session-core
+// C-DELEGATE FR-014 amendment at the shape layer: a same-agent row is an
+// ORDINARY, structurally valid edge for ANY id — the former jim/worker-only
+// restriction is deleted, not widened. Shape validation has no roster, so it
+// accepts every non-empty same-agent row; the negative control proves the
+// check still rejects a genuinely malformed edge (so this is not a
+// vacuous accept-all).
+func TestDelegationSelfEdgeShapeAcceptedForAnyAgent(t *testing.T) {
+	for _, id := range []string{"jim", "worker", "mia", "ava", "admin", "planner", "researcher", "custom"} {
+		require.NoErrorf(t, DelegationEdge{FromAgent: id, ToAgent: id}.ValidateShape(),
+			"same-agent row for %q must be accepted", id)
 	}
+	// Negative control: an empty-endpoint edge is still rejected.
+	require.Error(t, DelegationEdge{FromAgent: "", ToAgent: ""}.ValidateShape())
 }

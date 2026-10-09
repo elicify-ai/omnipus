@@ -921,6 +921,30 @@ func seedDelegationEdgesForNewMembers(
 	}
 
 	var out []workspacepkg.DelegationEdge
+
+	// Ordinary self-rows for every NEWLY introduced member (session-core
+	// C-DELEGATE FR-014/015): the same shared workspace-graph computation the
+	// install seed and create_agent's join use, so an agent added later gets the
+	// identical ordinary {id→id} row. Only members in `added` are introduced —
+	// a continuing member whose self-row an operator removed is never
+	// resurrected (deletion is authoritative), and SelfEdgeSeedRows also skips
+	// any id already self-edged in `existing`.
+	//
+	// No operator exclusion list is threaded here: this writer's contract takes
+	// the roster presence map, not config, and the seed exclusion names only the
+	// hidden system agents, which `ExcludedFromWorkspaceTeams` already bars from
+	// team membership — so an excluded id can never appear in `added`.
+	var introduced []string
+	for _, id := range newTeam {
+		if configPresent[id] && addedSet[id] {
+			introduced = append(introduced, id)
+		}
+	}
+	out = append(out, workspacepkg.SelfEdgeSeedRows(introduced, existing, nil, ceiling)...)
+	for _, e := range out {
+		present[e.FromAgent+"\x00"+e.ToAgent] = true
+	}
+
 	for _, from := range newTeam {
 		if !configPresent[from] {
 			continue
@@ -940,10 +964,9 @@ func seedDelegationEdgesForNewMembers(
 			modes = append(modes, wm)
 		}
 		for _, ref := range dp.To {
-			// A self-edge (ref.ID == from) is kept as an ordinary edge — it is how
-			// self-delegation is authorized. No identity allowlist gates it any more
-			// (PermittedSelfDelegationID was deleted).
-			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" {
+			// Self refs are supplied generically above; skip so a policy self ref
+			// does not duplicate the ordinary self-row.
+			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || ref.ID == from {
 				continue
 			}
 			to := ref.ID

@@ -153,6 +153,11 @@ func TestDelegationEdge_ValidateShape_FirstViolationWins(t *testing.T) {
 			wantErr: "delegation edge from_agent and to_agent must not be empty",
 		},
 		{
+			name:    "invalid mode beats negative depth on a same-agent row",
+			edge:    DelegationEdge{FromAgent: "mia", ToAgent: "mia", Modes: []DelegationMode{"banana"}, Depth: new(-1)},
+			wantErr: "delegation edge mode banana is invalid (valid: direct, task)",
+		},
+		{
 			name:    "invalid mode beats negative depth",
 			edge:    DelegationEdge{FromAgent: "mia", ToAgent: "jim", Modes: []DelegationMode{"banana"}, Depth: new(-1)},
 			wantErr: "delegation edge mode banana is invalid (valid: direct, task)",
@@ -170,6 +175,10 @@ func TestDelegationEdge_ValidateShape_FirstViolationWins(t *testing.T) {
 		{
 			name: "every field populated and valid is accepted",
 			edge: DelegationEdge{FromAgent: "mia", ToAgent: "jim", Modes: []DelegationMode{ModeDirect, ModeTask}, Depth: new(0)},
+		},
+		{
+			name: "same-agent row with valid modes and depth is accepted",
+			edge: DelegationEdge{FromAgent: "mia", ToAgent: "mia", Modes: []DelegationMode{ModeDirect, ModeTask}, Depth: new(3)},
 		},
 	})
 }

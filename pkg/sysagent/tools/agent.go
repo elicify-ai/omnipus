@@ -664,11 +664,19 @@ func createHeartbeatPartialResult(id, revision string, fields []string, err erro
 }
 
 // joinWorkspaceTeam appends agentID to workspace wsID's CoreTeam (deduped)
-// and persists the change. Used exclusively by create_agent's
-// creation-in-context join (ADR-046 P1, US-3 AS-2): a custom agent created
-// from within a workspace's turn context joins THAT workspace's team only —
-// never any other, and never seeds a Delegation[] trust edge (FR-038:
-// expanding a workspace team must not create or imply delegation trust).
+// and persists the change, then seeds agentID's ordinary self-delegation row.
+// Used exclusively by create_agent's creation-in-context join (ADR-046 P1,
+// US-3 AS-2): a custom agent created from within a workspace's turn context
+// joins THAT workspace's team only — never any other.
+//
+// session-core C-DELEGATE (FR-014/015, BDD-05.7): an authorized
+// creation-with-membership seeds the new agent's ordinary {id→id} self-row
+// IMMEDIATELY, through the same shared workspace-graph computation the install
+// seed and the team-growth writer use. This is not the retired "expanding a
+// team implies delegation trust" grant — it is the single, removable self-row
+// the operator data list governs, and no other agent's trust changes. A join
+// that must not seed (metadata-only creation with no membership) never reaches
+// here.
 //
 // wsID here is the caller's tools.ToolWorkspaceID(ctx) — the channel-bound
 // turn workspace id that memory routing uses — which is a different,
@@ -681,15 +689,51 @@ func (t *AgentCreateTool) joinWorkspaceTeam(wsID, agentID string) error {
 	if err != nil {
 		return fmt.Errorf("read workspace %s: %w", wsID, err)
 	}
+	member := false
 	for _, id := range w.CoreTeam {
 		if id == agentID {
-			return nil // already a member
+			member = true
+			break
 		}
 	}
-	w.CoreTeam = append(w.CoreTeam, agentID)
-	w.UpdatedAt = nowISO()
-	if err := writeEntity(workspacesDir(t.deps.Home), wsID, w); err != nil {
-		return fmt.Errorf("write workspace %s: %w", wsID, err)
+	if !member {
+		w.CoreTeam = append(w.CoreTeam, agentID)
+		w.UpdatedAt = nowISO()
+		if err := writeEntity(workspacesDir(t.deps.Home), wsID, w); err != nil {
+			return fmt.Errorf("write workspace %s: %w", wsID, err)
+		}
+	}
+	// Seed the new agent's ordinary self-row. A read/write failure is returned
+	// (the caller logs it and reports metadata_only) so a join that did not
+	// actually produce the configured row is never reported as a full,
+	// configured success.
+	if err := t.seedSelfEdgeForJoinedAgent(wsID, agentID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// seedSelfEdgeForJoinedAgent writes agentID's ordinary self-delegation row into
+// workspace wsID's delegation store, preserving every existing edge. It uses
+// the shared workspace.SelfEdgeSeedRows computation, so the row is identical to
+// the install-seed and team-growth rows. Idempotent: an agent already carrying
+// a self-row is left untouched. LockID(wsID) serializes the load-modify-write
+// as SaveDelegation requires.
+func (t *AgentCreateTool) seedSelfEdgeForJoinedAgent(wsID, agentID string) error {
+	unlock := workspacepkg.LockID(wsID)
+	defer unlock()
+	existing, ok := workspacepkg.LoadDelegation(t.deps.Home, wsID)
+	if !ok {
+		return fmt.Errorf("workspace %s delegation record is unreadable — refusing to seed a self-row over it", wsID)
+	}
+	rows := workspacepkg.SelfEdgeSeedRows(
+		[]string{agentID}, existing, nil, workspaceDelegationDepthCeiling(t.deps))
+	if len(rows) == 0 {
+		return nil
+	}
+	merged := append(append([]workspacepkg.DelegationEdge(nil), existing...), rows...)
+	if err := saveWorkspaceDelegation(t.deps.Home, wsID, merged); err != nil {
+		return fmt.Errorf("seed self-row for %s in workspace %s: %w", agentID, wsID, err)
 	}
 	return nil
 }

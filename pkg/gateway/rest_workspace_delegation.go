@@ -160,10 +160,11 @@ func (a *restAPI) handleWorkspaceDelegationGet(w http.ResponseWriter, _ *http.Re
 //   - every from_agent / to_agent must be a member of the workspace team
 //     (core_team ∪ existing-edge endpoints) — an edge write may NOT silently
 //     expand the team with an off-team agent
-//   - self-edges are ORDINARY edges (any agent may hold one; the shipped default
-//     seeds one self-edge per agent, except the hidden System Agents) — they are
-//     not part of the acyclicity check
-//   - excluding self-edges, the graph must be acyclic
+//   - a same-agent row (from_agent == to_agent) is an ORDINARY edge for any
+//     member (session-core FR-014); the shipped default seeds one self-edge per
+//     agent, except the hidden System Agents
+//   - self-edges are excluded from the acyclicity check, which below rejects
+//     only multi-hop cycles
 //   - modes ⊆ {direct, task}
 //   - depth must be >= 0 and <= the global subturn depth ceiling
 //
@@ -314,6 +315,22 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 	}
 	ceiling := delegationDepthCeiling(cfg)
 	var edges []storedDelegationEdge
+
+	// Ordinary self-rows for every agent on the fresh roster, minus the
+	// operator's exclusion data (config.workspace_seed_defaults.self_edge.
+	// exclude_agent_ids). session-core C-DELEGATE (FR-014/015, BDD-05.7): the
+	// self-edge pre-seed is default CONFIG DATA consumed by the shared
+	// workspace-graph computation — NOT a Go identity predicate. A fresh
+	// workspace introduces its entire roster, so `introduced` is every listed
+	// agent; existing is nil. seedEdgesForTeam below then narrows the result to
+	// the workspace's actual team, so an off-team agent (Admin, the hidden
+	// system agents) never reaches the store.
+	introduced := make([]string, 0, len(cfg.Agents.List))
+	for i := range cfg.Agents.List {
+		introduced = append(introduced, cfg.Agents.List[i].ID)
+	}
+	edges = append(edges, workspace.SelfEdgeSeedRows(introduced, nil, cfg.SelfEdgeExcludeAgentIDSet(), ceiling)...)
+
 	// TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed deliberately replays
 	// this exact loop independently (not via a shared helper) so it can catch a
 	// regression in THIS transformation logic; sharing a helper would make that test
@@ -342,11 +359,11 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 			modes = append(modes, wm)
 		}
 		for _, ref := range dp.To {
-			// A self-edge (ref.ID == ac.ID) is kept: it is an ordinary edge and is
-			// how self-delegation is authorized. No identity allowlist gates it any
-			// more (PermittedSelfDelegationID was deleted) — the config seed decides
-			// WHICH agents get a self-edge, and a person can remove it in the editor.
-			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" {
+			// Self refs are supplied generically by workspace.SelfEdgeSeedRows
+			// above (for every ordinary agent, not just the built-ins whose
+			// policy happens to name themselves); a policy self ref would only
+			// duplicate that row. Cross-agent refs are expanded here.
+			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || ref.ID == ac.ID {
 				continue
 			}
 			edges = append(edges, storedDelegationEdge{
@@ -578,7 +595,8 @@ func buildWorkspaceDelegationEdges(
 	// Rebuild adjacency from the deduplicated edge set, then reject cycles.
 	// A self-edge is a legal ORDINARY edge, not a cycle: skip every diagonal row
 	// so the DFS below still rejects a real multi-hop loop (A→B→A) but never
-	// trips on A→A. The skip is structural — no identity allowlist.
+	// trips on A→A. The skip is structural — no identity allowlist. Otherwise
+	// every seeded self-row would look like a cycle.
 	for _, e := range out {
 		if e.FromAgent == e.ToAgent {
 			continue

@@ -146,6 +146,17 @@ type Config struct {
 	// wireExcludedConfigFields) and never crosses the wire.
 	SeededToolPolicyUpdates []string `json:"seeded_tool_policy_updates,omitempty" yaml:"-"`
 
+	// WorkspaceSeedDefaults holds the operator-facing, CONFIG-FILE-ONLY defaults
+	// for the workspace delegation seed (session-core C-DELEGATE, FR-014/015,
+	// BDD-05.7) — today, the self-delegation self-row exclusion list. It has no
+	// wire type and no gateway/SPA exposure: the GET path strips it
+	// (pkg/gateway/rest_config.go's wireExcludedConfigFields) and the generic
+	// PUT refuses it (blockedPaths). A nil pointer means "unset — apply the
+	// shipped default"; a present block with a nil ExcludeAgentIDs means the
+	// same; a present [] means "no exclusions". See
+	// workspace_seed_defaults.go for the resolver every seed writer reads.
+	WorkspaceSeedDefaults *WorkspaceSeedDefaultsConfig `json:"workspace_seed_defaults,omitempty" yaml:"-"`
+
 	// UnknownFields preserves JSON keys not recognized by this version of Omnipus.
 	// They are re-emitted verbatim during SaveConfig for round-trip safety (FR-004).
 	// Never serialized by json.Marshal or yaml.Marshal — only written back by MarshalJSON.

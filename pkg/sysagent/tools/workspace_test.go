@@ -538,13 +538,11 @@ func TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 
 	id := workspaceID(t, result.ForLLM)
 	edges := delegationEdgesFromDisk(t, home, id)
-	// Ratified Jim→Ava delegation joins Jim→Worker, plus a self-edge for EVERY
-	// on-team agent (settled design): ava→ava, jim→jim, worker→worker.
+	// Ratified Jim→Ava delegation joins Jim→Worker, and every member of the
+	// freshly-created team gets its ordinary self-row (session-core FR-014/015):
+	// ava, jim and worker each carry {id→id}.
 	if len(edges) != 5 {
 		t.Fatalf("expected exactly 5 seeded edges, got %d: %v", len(edges), edges)
-	}
-	if findEdge(edges, "ava", "ava") == nil {
-		t.Error("expected Ava self edge (every on-team agent seeds one)")
 	}
 	jimAva := findEdge(edges, "jim", "ava")
 	if jimAva == nil {
@@ -555,6 +553,9 @@ func TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 	}
 	if findEdge(edges, "jim", "ray") != nil {
 		t.Error("jim→ray must be dropped — ray is not on the team")
+	}
+	if findEdge(edges, "ava", "ava") == nil {
+		t.Error("expected Ava self edge (every freshly-created team member is seeded)")
 	}
 	if findEdge(edges, "jim", "jim") == nil {
 		t.Error("expected Jim self edge")
