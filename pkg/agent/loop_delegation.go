@@ -327,6 +327,60 @@ func enforceEdgeModeAndDepth(
 	return nil
 }
 
+// delegationGateDeps carries the OPTIONAL collaborators a delegation deny
+// checker consults. It is passed as the single trailing variadic argument so
+// every pre-existing call site — production and test — that supplies no deps
+// keeps compiling unchanged (the same compatibility rationale the former bare
+// `agentExists ...func(id string) bool` variadic carried).
+//
+// Both fields are optional and independently absent. When a field is nil its
+// collaborator is simply not consulted, exactly as an omitted variadic was
+// before: the graph gate is the authority and these only add a message
+// distinction (AgentExists) or a caller-eligibility refusal
+// (CallerIsExternalCLI).
+type delegationGateDeps struct {
+	// AgentExists is a read-only registry existence probe, consulted ONLY to
+	// distinguish the no-edge denial's MESSAGE — an existing target that has no
+	// trust edge vs. a genuinely nonexistent agent. It NEVER affects the
+	// allow/deny OUTCOME (see findDelegationEdge's own doc comment).
+	AgentExists func(id string) bool
+
+	// CallerIsExternalCLI reports whether the CALLING agent runs as an
+	// external CLI worker (claude-code / codex / opencode). When supplied and
+	// true for the caller, the gate REFUSES the delegation outright (FR-016:
+	// an external CLI worker MUST never create Omnipus helpers). It is
+	// supplied ONLY on the helper-creation (delegate) wiring — the task-tool
+	// checkers pass no resolver, because reassigning a task to its owner is
+	// not creating a helper. Backed by the registry's dispatch-kind resolver
+	// (AgentRegistry.IsExternalCLI → runner.ResolveDispatch), never an
+	// identity allowlist.
+	CallerIsExternalCLI func(agentID string) bool
+}
+
+// firstDelegationGateDeps returns the single deps value a caller supplied, or
+// the zero value (every collaborator absent) when none was passed.
+func firstDelegationGateDeps(deps []delegationGateDeps) delegationGateDeps {
+	if len(deps) > 0 {
+		return deps[0]
+	}
+	return delegationGateDeps{}
+}
+
+// externalCLICallerResolver returns the delegationGateDeps.CallerIsExternalCLI
+// resolver the delegate wiring installs: a live read of the loop's registry
+// dispatch kind (the single authority for an agent's external-CLI status —
+// AgentRegistry.IsExternalCLI). Read per call so a hot reload that changes an
+// agent's executor is honored without rebuilding the checker, matching the
+// gate's own per-call graph read. A nil registry (degraded boot) resolves to
+// false — the same "cannot classify ⇒ not external-CLI" posture
+// AgentRegistry.IsExternalCLI itself takes for an unknown id.
+func externalCLICallerResolver(al *AgentLoop) func(agentID string) bool {
+	return func(agentID string) bool {
+		reg := al.GetRegistry()
+		return reg != nil && reg.IsExternalCLI(agentID)
+	}
+}
+
 // buildDelegationDenyChecker returns the per-workspace, graph-authoritative
 // delegation gate for a targeted delegation tool (delegate with async=true =
 // "background", create_task / update_task = "task"). The per-workspace
@@ -336,6 +390,13 @@ func enforceEdgeModeAndDepth(
 //
 // It enforces, in order, returning the first violation (nil = allowed):
 //
+//  0. caller eligibility — when a CallerIsExternalCLI resolver is supplied (the
+//     delegate helper-creation wiring always supplies one) and it reports the
+//     CALLING agent as an external CLI worker, the delegation is refused
+//     outright (FR-016: an external CLI worker MUST never create Omnipus
+//     helpers), regardless of target or graph. This bans the external CLI
+//     CALLER only; an external CLI agent remains a perfectly valid delegation
+//     TARGET (the graph edge below still authorizes it for a native caller).
 //  1. trust set — an edge caller→target MUST exist in the effective workspace's
 //     delegation graph. No edge ⇒ DENY (trust_set). The workspace is the one
 //     bound to the turn, defaulting to the is_default workspace when none is
@@ -391,17 +452,19 @@ func enforceEdgeModeAndDepth(
 // performance supplies the process-wide depth cap. There is no per-agent
 // delegation policy to read; the per-workspace graph is the sole authority.
 //
-// agentExists is an optional trailing arg (variadic, same rationale as
-// findDelegationEdge's own doc comment) forwarded to findDelegationEdge
-// purely to distinguish the no-edge denial's message — message-only, never
-// affects the allow/deny decision itself.
+// deps is the optional trailing collaborators bundle (see delegationGateDeps):
+// AgentExists is forwarded to findDelegationEdge purely to distinguish the
+// no-edge denial's MESSAGE (message-only, never affects the allow/deny
+// decision); CallerIsExternalCLI, when supplied, adds the FR-016
+// caller-eligibility refusal described as step 0 above.
 func buildDelegationDenyChecker(
 	currentAgentID string,
 	performance config.PerformanceConfig,
 	mode config.DelegationMode,
 	selfAssignmentExempt bool,
-	agentExists ...func(id string) bool,
+	deps ...delegationGateDeps,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
+	d := firstDelegationGateDeps(deps)
 	globalDepthCap, depthOK := configuredDelegationDepth(performance, "delegation gate (agent "+currentAgentID+")")
 	if !depthOK {
 		// An invalid depth limit fails CLOSED, like an unreadable graph: the
@@ -417,6 +480,32 @@ func buildDelegationDenyChecker(
 	}
 
 	return func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
+		// FR-016: an external CLI worker MUST never create Omnipus helpers. This
+		// is a property of the CALLER, checked before anything else and
+		// independent of the target: an external CLI agent may itself be a valid
+		// delegation TARGET (founder ruling 2026-10-09), but it may not be the
+		// delegating party. The resolver is supplied only by the delegate
+		// (helper-creation) wiring; the task-tool checkers pass none, because
+		// reassigning a task is not creating a helper.
+		if d.CallerIsExternalCLI != nil && d.CallerIsExternalCLI(currentAgentID) {
+			logger.WarnCF("agent", "delegation denied: external CLI worker may not create helpers (FR-016)", map[string]any{
+				"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
+			})
+			return &tools.DelegationDenial{
+				Reason: fmt.Sprintf(
+					"agent %q runs as an external CLI worker and cannot create Omnipus helpers (FR-016)",
+					currentAgentID,
+				),
+				// The wire DelegationFailure.policy enum is trust_set | mode |
+				// depth (asyncapi.yaml) with no dedicated eligibility axis, so
+				// this caller-capability refusal reuses trust_set — the "caller
+				// has no permitted delegation capability" bucket — rather than
+				// inventing an untyped value DelegationDeniedResult would coerce
+				// back to trust_set anyway.
+				Policy:        tools.DenyTrustSet,
+				TargetAgentID: targetAgentID,
+			}
+		}
 		// Delegation ALWAYS requires an explicit target (settled design): there
 		// is no default target and no implicit caller substitution, so an empty
 		// target is refused here rather than resolved to the caller. The delegate
@@ -442,7 +531,11 @@ func buildDelegationDenyChecker(
 		// running the same agent and is gated exactly like any other delegation.
 		// There is no identity allowlist (PermittedSelfDelegationID was deleted);
 		// a self-edge authorizes iff it EXISTS in the workspace graph.
-		edge, denial := findDelegationEdge(ctx, currentAgentID, targetAgentID, mode, agentExists...)
+		var existsArg []func(id string) bool
+		if d.AgentExists != nil {
+			existsArg = []func(id string) bool{d.AgentExists}
+		}
+		edge, denial := findDelegationEdge(ctx, currentAgentID, targetAgentID, mode, existsArg...)
 		if denial != nil {
 			return denial
 		}
@@ -453,20 +546,21 @@ func buildDelegationDenyChecker(
 // buildDelegationDenyCheckerForDelegate is the wiring-site constructor for the
 // `delegate` tool's direct gate. Self-targeting creates a new session and is
 // permitted; depth and concurrency remain the recursion bounds.
-// agentExists is an optional trailing arg (variadic — see findDelegationEdge's
-// own doc comment for why): a read-only existence probe against the live
-// agent registry, consulted only to distinguish "target agent doesn't exist"
-// from "target agent exists but has no trust edge" in the denial MESSAGE —
-// it never affects the allow/deny outcome. Omit it only in tests that don't
-// care about the distinction; every production wiring site passes a real
-// checker (see registerSharedTools / NewSysagentDelegationDeny).
+//
+// deps is an optional trailing bundle (see delegationGateDeps). A production
+// delegate wiring supplies AgentExists (a read-only existence probe against
+// the live agent registry, consulted only to distinguish "target agent doesn't
+// exist" from "target agent exists but has no trust edge" in the denial
+// MESSAGE — it never affects the allow/deny outcome) AND CallerIsExternalCLI
+// (the FR-016 caller-eligibility resolver). Omitting a field only removes that
+// collaborator; tests that don't care about either pass none.
 func buildDelegationDenyCheckerForDelegate(
 	currentAgentID string,
 	performance config.PerformanceConfig,
 	mode config.DelegationMode,
-	agentExists ...func(id string) bool,
+	deps ...delegationGateDeps,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-	return buildDelegationDenyChecker(currentAgentID, performance, mode, false, agentExists...)
+	return buildDelegationDenyChecker(currentAgentID, performance, mode, false, deps...)
 }
 
 // buildDelegationDenyCheckerForTaskReassignment is the wiring-site constructor for the
@@ -477,16 +571,16 @@ func buildDelegationDenyCheckerForDelegate(
 // create_task_in_workspace / update_task_in_workspace path that once shared this
 // constructor was retired by DEL-23.)
 //
-// agentExists: see buildDelegationDenyCheckerForDelegate's doc comment — same
-// optional-trailing-arg, message-only distinction, same "pass a real checker
-// in production" expectation.
+// deps: see buildDelegationDenyCheckerForDelegate's doc comment — same optional
+// bundle. CallerIsExternalCLI is deliberately NOT supplied on this path:
+// reassigning a task is not creating a helper, so FR-016 does not apply.
 func buildDelegationDenyCheckerForTaskReassignment(
 	currentAgentID string,
 	performance config.PerformanceConfig,
 	mode config.DelegationMode,
-	agentExists ...func(id string) bool,
+	deps ...delegationGateDeps,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-	return buildDelegationDenyChecker(currentAgentID, performance, mode, true, agentExists...)
+	return buildDelegationDenyChecker(currentAgentID, performance, mode, true, deps...)
 }
 
 // NewSysagentDelegationDeny and NewSysagentBashPolicyResolver were DELETED with

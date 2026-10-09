@@ -94,7 +94,7 @@ func TestDelegationDenyChecker_DistinguishesNotFoundFromNotTrusted(t *testing.T)
 	agentExists := func(id string) bool { return registered[id] }
 
 	check := buildDelegationDenyCheckerForDelegate(
-		"mia", config.PerformanceConfig{}, config.DelegationModeBackground, agentExists,
+		"mia", config.PerformanceConfig{}, config.DelegationModeBackground, delegationGateDeps{AgentExists: agentExists},
 	)
 
 	// Case 1: target EXISTS but has no trust edge from mia — "not trusted".
