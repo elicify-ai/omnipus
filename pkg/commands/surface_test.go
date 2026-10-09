@@ -149,11 +149,6 @@ func TestRegistry_AliasResolution(t *testing.T) {
 	pairs := []struct{ canonical, alias string }{
 		{"tasks", "subagents"},
 		{"config", "reload"},
-		// /clear -> /new (renamed); "clear" survives as a hidden back-compat
-		// alias for CLI/channel muscle memory (pkg/commands/cmd_clear.go).
-		// Regression coverage: if the Aliases line is ever dropped from
-		// clearCommand(), Lookup("clear") stops resolving and this fails.
-		{"new", "clear"},
 	}
 	for _, p := range pairs {
 		canonDef, okCanon := reg.Lookup(p.canonical)
@@ -204,15 +199,16 @@ func TestCancelHasNoAliasesInBuiltins(t *testing.T) {
 // that feeds it. The full mapper is tested in pkg/gateway/rest_commands_test.go.
 
 // TestHelpFormatter_SurfaceFilter tests the surface filtering and hidden exclusion (TDD #8, US-5/AS-2).
-// Updated for D1 (skill removed), D7/D9 (agents+skills now on web), and the
-// memory commands (remember/recall/retrospective, all-surface + agent-delivery).
+// Updated for D1 (skill removed), D7/D9 (agents+skills now on web), the memory
+// commands (remember/recall/retrospective, all-surface + agent-delivery), and
+// U10a (2026-10-09, /new + /agents removed entirely — FR-031).
 func TestHelpFormatter_SurfaceFilter(t *testing.T) {
 	defs := BuiltinDefinitions()
 
-	// Web surface: new, help, model, cancel, agents, skills, remember, recall,
-	// retrospective = 9 commands.
+	// Web surface canonical commands: help, model, cancel, stop, stop-redirect,
+	// skills, remember, recall, retrospective, goal, loop = 11.
 	webHelp := formatHelpMessage(defs, SurfaceWeb)
-	for _, name := range []string{"new", "help", "model", "cancel", "agents", "skills", "remember", "recall", "retrospective"} {
+	for _, name := range []string{"help", "model", "cancel", "stop", "stop-redirect", "skills", "remember", "recall", "retrospective", "goal", "loop"} {
 		if !containsWord(webHelp, "/"+name) {
 			t.Errorf("web help must contain /%s, got:\n%s", name, webHelp)
 		}
@@ -223,23 +219,24 @@ func TestHelpFormatter_SurfaceFilter(t *testing.T) {
 			t.Errorf("web help must NOT contain /%s (CLI/Channel only), got:\n%s", name, webHelp)
 		}
 	}
-	// Removed and hidden/deprecated commands must not appear as their own command entry.
-	// We check "/<name> -" (the help-line format used by formatHelpMessage) to avoid
-	// false substring matches (e.g. "/skill" inside "/skills - List installed skills").
-	for _, name := range []string{"show", "list", "switch", "check", "start", "subagents", "reload", "use", "skill"} {
+	// Removed, hidden/deprecated and alias commands must not appear as their own
+	// command entry. We check "/<name> -" (the help-line format used by
+	// formatHelpMessage) to avoid false substring matches (e.g. "/skill" inside
+	// "/skills - List installed skills").
+	for _, name := range []string{"new", "clear", "agents", "show", "list", "switch", "check", "start", "channel", "resume", "subagents", "reload", "use", "skill"} {
 		if containsWord(webHelp, "/"+name+" -") {
 			t.Errorf("web help must NOT contain /%s as a command entry (removed/hidden), got:\n%s", name, webHelp)
 		}
 	}
 
-	// CLI surface: should show all 13 canonical commands.
+	// CLI surface: should show all 15 canonical commands.
 	cliHelp := formatHelpMessage(defs, SurfaceCLI)
 	allCanonical := []string{
-		"new",
 		"help",
 		"model",
 		"cancel",
-		"agents",
+		"stop",
+		"stop-redirect",
 		"tasks",
 		"skills",
 		"channels",
@@ -248,6 +245,8 @@ func TestHelpFormatter_SurfaceFilter(t *testing.T) {
 		"remember",
 		"recall",
 		"retrospective",
+		"goal",
+		"loop",
 	}
 	for _, name := range allCanonical {
 		if !containsWord(cliHelp, "/"+name) {
@@ -272,13 +271,13 @@ func TestChannelRegistrationFilter(t *testing.T) {
 		channelDefs = append(channelDefs, def)
 	}
 
-	// The channel set must include all 13 canonical commands.
+	// The channel set must include all 15 canonical commands.
 	wantInChannel := []string{
-		"new",
 		"help",
 		"model",
 		"cancel",
-		"agents",
+		"stop",
+		"stop-redirect",
 		"tasks",
 		"skills",
 		"channels",
@@ -287,6 +286,8 @@ func TestChannelRegistrationFilter(t *testing.T) {
 		"remember",
 		"recall",
 		"retrospective",
+		"goal",
+		"loop",
 	}
 	names := make(map[string]bool, len(channelDefs))
 	for _, d := range channelDefs {
@@ -299,9 +300,9 @@ func TestChannelRegistrationFilter(t *testing.T) {
 	}
 
 	// Removed commands must be excluded.
-	for _, banned := range []string{"skill", "use"} {
+	for _, banned := range []string{"skill", "use", "new", "clear", "agents", "show", "list", "switch", "check", "start"} {
 		if names[banned] {
-			t.Errorf("removed command %q must not appear in channel registration (D1)", banned)
+			t.Errorf("removed command %q must not appear in channel registration (D1/U10a)", banned)
 		}
 	}
 
@@ -331,15 +332,11 @@ func containsSubstring(s, sub string) bool {
 }
 
 // TestBuiltinDefinitions_CountsAndSurfaces verifies the complete set.
-// Updated for D1 (skill removed: 11→10 canonical), D7/D9 (agents+skills gain
-// SurfaceWeb: 5→6 web), the memory commands (remember/recall/retrospective,
-// all-surface: 10→13 canonical, 6→9 web), and ADR-049 D6's /goal + /loop
-// commands (both all-surface [Web, CLI, Channel], non-hidden, DeliveryAgent:
-// 13→15 canonical, 9→11 web, 13→15 CLI — review r1 comment/golden-count fix;
-// this test was left stale when /goal and /loop were registered), and
-// ADR-20260928 sub-agent control plane D9 ("/stop and /stop-redirect added
-// as their own commands ... the exact-set assertion updated in the same
-// change"; both all-surface, non-hidden): 15→17 canonical, 11→13 web, 15→17 CLI.
+// Updated for D1 (skill removed), D7/D9 (agents+skills surfaced on web), the
+// memory commands, ADR-049's /goal + /loop, ADR-20260928 D9's /stop +
+// /stop-redirect, and U10a (2026-10-09) which removed /new, /agents, /clear,
+// /start, /show, /list, /switch and /check — leaving 15 canonical commands and
+// ZERO hidden/deprecated commands (all deprecated multiplexers are gone).
 func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 	defs := BuiltinDefinitions()
 
@@ -353,58 +350,56 @@ func TestBuiltinDefinitions_CountsAndSurfaces(t *testing.T) {
 		}
 	}
 
-	// 17 canonical (skill removed D1; remember/recall/retrospective + goal/loop
-	// added; stop + stop-redirect added by D9) + 5 hidden/deprecated = 22 total.
-	if canonical != 17 {
-		t.Errorf("expected 17 canonical commands (skill removed D1, memory + goal/loop commands added, stop + stop-redirect added by ADR-20260928 D9), got %d",
+	// 15 canonical (help/model/cancel/stop/stop-redirect/tasks/skills/channels/
+	// status/config/remember/recall/retrospective/goal/loop) + 0 hidden = 15.
+	if canonical != 15 {
+		t.Errorf("expected 15 canonical commands (U10a removed new+agents and all deprecated multiplexers), got %d",
 			canonical)
 	}
-	if hidden != 5 {
-		t.Errorf(
-			"expected 5 hidden/deprecated commands, got %d (start+show+list+switch+check)",
-			hidden,
-		)
+	if hidden != 0 {
+		t.Errorf("expected 0 hidden/deprecated commands (U10a removed start+show+list+switch+check), got %d",
+			hidden)
 	}
 
-	// Web surface: new, help, model, cancel, agents, skills, remember, recall,
-	// retrospective, goal, loop, stop, stop-redirect = 13 (D7/D9 added
-	// agents+skills; memory commands and goal/loop are all-surface; ADR-20260928
-	// D9 adds stop + stop-redirect on every surface).
+	// Web surface: help, model, cancel, stop, stop-redirect, skills, remember,
+	// recall, retrospective, goal, loop = 11 (tasks/channels/status/config are
+	// CLI/Channel only).
 	webCount := 0
 	for _, d := range defs {
 		if !d.Hidden && d.AllowsSurface(SurfaceWeb) {
 			webCount++
 		}
 	}
-	if webCount != 13 {
-		t.Errorf("expected 13 web-surface canonical commands (D7/D9 + memory + goal/loop + stop/stop-redirect added), got %d",
+	if webCount != 11 {
+		t.Errorf("expected 11 web-surface canonical commands (U10a removed new+agents), got %d",
 			webCount)
 	}
 
-	// CLI/Channel surface: all 17 canonical
+	// CLI/Channel surface: all 15 canonical.
 	cliCount := 0
 	for _, d := range defs {
 		if !d.Hidden && d.AllowsSurface(SurfaceCLI) {
 			cliCount++
 		}
 	}
-	if cliCount != 17 {
+	if cliCount != 15 {
 		t.Errorf(
-			"expected 17 CLI-surface canonical commands (skill removed D1, memory + goal/loop + stop/stop-redirect commands added), got %d",
+			"expected 15 CLI-surface canonical commands (U10a removed new+agents and deprecated multiplexers), got %d",
 			cliCount,
 		)
 	}
 }
 
 // TestDeliveryFields verifies delivery modes for the canonical commands.
-// Updated for D1 (skill removed), D7 (agents=client), D9 (skills=client), and
-// the memory commands (remember/recall/retrospective=agent-delivery, nil Handler).
+// Updated for D1 (skill removed), D9 (skills=client), the memory commands
+// (remember/recall/retrospective=agent-delivery, nil Handler), and U10a
+// (2026-10-09: /new, /agents and /clear removed from the table entirely).
 func TestDeliveryFields(t *testing.T) {
 	defs := BuiltinDefinitions()
 	reg := NewRegistry(defs)
 
 	// Client-delivered commands (web SPA handles them locally).
-	clientCmds := []string{"new", "help", "model", "cancel", "stop", "stop-redirect", "agents", "skills"}
+	clientCmds := []string{"help", "model", "cancel", "stop", "stop-redirect", "skills"}
 	for _, name := range clientCmds {
 		def, ok := reg.Lookup(name)
 		if !ok {

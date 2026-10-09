@@ -77,13 +77,10 @@ func parseCommandsResponse(t *testing.T, w *httptest.ResponseRecorder) []gen.Sla
 	return cmds
 }
 
-// TestHandleListCommands_Web verifies surface=web returns exactly 13 commands.
-// Post ADR-026: /skill+/use removed; /skills and /agents gained the web surface.
-// The three memory commands (remember/recall/retrospective) are all-surface
-// (agent-delivery), bringing the web count to 9; ADR-049's /goal and /loop
-// (also all-surface, agent-delivery) bring it to 11; ADR-20260928 (sub-agent
-// control plane) D9 adds /stop and /stop-redirect as their own all-surface
-// client-delivered commands, bringing it to 13.
+// TestHandleListCommands_Web verifies surface=web returns exactly 11 commands.
+// Post ADR-026 /skill+/use removed; ADR-049 added /goal, /loop; ADR-20260928 D9
+// added /stop, /stop-redirect; U10a (2026-10-09) removed /new and /agents from
+// the table entirely (FR-031), leaving 11 web-surface commands.
 func TestHandleListCommands_Web(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "web", true)
@@ -93,18 +90,16 @@ func TestHandleListCommands_Web(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 13 {
-		t.Errorf("web: expected 13 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 11 {
+		t.Errorf("web: expected 11 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 
 	wantNames := map[string]bool{
-		"new":           true,
 		"help":          true,
 		"model":         true,
 		"cancel":        true,
 		"stop":          true, // ADR-20260928 D9
 		"stop-redirect": true, // ADR-20260928 D9
-		"agents":        true,
 		"skills":        true,
 		"remember":      true,
 		"recall":        true,
@@ -123,11 +118,8 @@ func TestHandleListCommands_Web(t *testing.T) {
 	}
 }
 
-// TestHandleListCommands_CLI verifies surface=cli returns all 17 canonical commands.
-// Post ADR-026: /skill (singular) removed, so the canonical set was 10 (was 11);
-// the memory commands (remember/recall/retrospective) bring it to 13, and
-// ADR-049's /goal and /loop bring it to 15, and ADR-20260928 D9's /stop and
-// /stop-redirect bring it to 17.
+// TestHandleListCommands_CLI verifies surface=cli returns all 15 canonical commands.
+// U10a (2026-10-09) removed /new and /agents from the table entirely (FR-031).
 func TestHandleListCommands_CLI(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "cli", true)
@@ -137,18 +129,16 @@ func TestHandleListCommands_CLI(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 17 {
-		t.Errorf("cli: expected 17 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 15 {
+		t.Errorf("cli: expected 15 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 
 	allCanonical := []string{
-		"new",
 		"help",
 		"model",
 		"cancel",
 		"stop",          // ADR-20260928 D9
 		"stop-redirect", // ADR-20260928 D9
-		"agents",
 		"tasks",
 		"skills",
 		"channels",
@@ -171,7 +161,7 @@ func TestHandleListCommands_CLI(t *testing.T) {
 	}
 }
 
-// TestHandleListCommands_Channel verifies surface=channel returns all 17 commands.
+// TestHandleListCommands_Channel verifies surface=channel returns all 15 commands.
 func TestHandleListCommands_Channel(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "channel", true)
@@ -181,8 +171,8 @@ func TestHandleListCommands_Channel(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 17 {
-		t.Errorf("channel: expected 17 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 15 {
+		t.Errorf("channel: expected 15 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 }
 
@@ -197,9 +187,9 @@ func TestHandleListCommands_DefaultSurface(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 13 {
+	if len(cmds) != 11 {
 		t.Errorf(
-			"default surface (web): expected 13 commands, got %d: %v",
+			"default surface (web): expected 11 commands, got %d: %v",
 			len(cmds),
 			commandNames(cmds),
 		)
@@ -216,9 +206,9 @@ func TestHandleListCommands_UnknownSurface(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 13 {
+	if len(cmds) != 11 {
 		t.Errorf(
-			"unknown surface should default to web (13 cmds), got %d: %v",
+			"unknown surface should default to web (11 cmds), got %d: %v",
 			len(cmds),
 			commandNames(cmds),
 		)
@@ -267,13 +257,11 @@ func TestHandleListCommands_DeliveryFields(t *testing.T) {
 	cmds := parseCommandsResponse(t, w)
 
 	clientCmds := map[string]bool{
-		"new":           true,
 		"help":          true,
 		"model":         true,
 		"cancel":        true,
 		"stop":          true, // ADR-20260928 D9
 		"stop-redirect": true, // ADR-20260928 D9
-		"agents":        true,
 		"skills":        true,
 	}
 	agentCmds := map[string]bool{
@@ -462,95 +450,6 @@ func TestHandleListCommands_DeliveryValidEnum(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// TestClearHandler_CLI exercises the /clear handler with Channel="cli" and a
-// Runtime providing ClearHistory. Verifies OutcomeHandled and the expected reply.
-// This covers the CLI/channel /clear branch (rt.ClearHistory) which was untested.
-func TestClearHandler_CLI(t *testing.T) {
-	cleared := false
-
-	rt := &commands.Runtime{
-		ClearHistory: func() error {
-			cleared = true
-			return nil
-		},
-	}
-
-	var reply string
-	req := commands.Request{
-		Channel:  "cli",
-		SenderID: "user_cli",
-		Text:     "/clear",
-		Reply: func(text string) error {
-			reply = text
-			return nil
-		},
-	}
-
-	// Invoke the handler directly (same path as the executor for CLI).
-	defs := commands.BuiltinDefinitions()
-	var clearDef *commands.Definition
-	for i := range defs {
-		if defs[i].Name == "new" {
-			d := defs[i]
-			clearDef = &d
-			break
-		}
-	}
-	if clearDef == nil {
-		t.Fatal("clear definition not found in BuiltinDefinitions()")
-	}
-	if clearDef.Handler == nil {
-		t.Fatal("clear handler must not be nil")
-	}
-
-	if err := clearDef.Handler(t.Context(), req, rt); err != nil {
-		t.Fatalf("handler returned unexpected error: %v", err)
-	}
-
-	if !cleared {
-		t.Error("ClearHistory must have been called")
-	}
-	if reply != "Chat history cleared!" {
-		t.Errorf("reply = %q, want %q", reply, "Chat history cleared!")
-	}
-}
-
-// TestClearHandler_NilRuntime exercises the nil-Runtime path of /clear.
-// When rt==nil, the handler must reply with the unavailable message and not panic.
-func TestClearHandler_NilRuntime(t *testing.T) {
-	var reply string
-	req := commands.Request{
-		Channel:  "cli",
-		SenderID: "user_cli",
-		Text:     "/clear",
-		Reply: func(text string) error {
-			reply = text
-			return nil
-		},
-	}
-
-	defs := commands.BuiltinDefinitions()
-	var clearDef *commands.Definition
-	for i := range defs {
-		if defs[i].Name == "new" {
-			d := defs[i]
-			clearDef = &d
-			break
-		}
-	}
-	if clearDef == nil {
-		t.Fatal("clear definition not found")
-	}
-
-	if err := clearDef.Handler(t.Context(), req, nil); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// Reply must be the standard unavailable message, not a panic.
-	if reply == "" {
-		t.Error("reply must not be empty when Runtime is nil")
 	}
 }
 
