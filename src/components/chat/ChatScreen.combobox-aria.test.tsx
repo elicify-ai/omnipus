@@ -108,8 +108,8 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
   // the '@'-mode ARIA pass below exercises actual listbox/option rows instead
   // of an empty (unrenderable) menu.
   const mockAgents = [
-    { id: 'ag-alpha', name: 'Alpha', type: 'Main', locked: false, status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50 },
-    { id: 'ag-bravo', name: 'Bravo', type: 'Main', locked: false, status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50 },
+    { figure: 'Omnipus', role: 'general', id: 'ag-alpha', name: 'Alpha', type: 'Main', locked: false, status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50 },
+    { figure: 'Omnipus', role: 'general', id: 'ag-bravo', name: 'Bravo', type: 'Main', locked: false, status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50 },
   ]
   return {
     ...actual,

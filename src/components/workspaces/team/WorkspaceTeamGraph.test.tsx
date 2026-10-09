@@ -17,6 +17,7 @@ import {
   type TeamEditState,
 } from './teamGraphModel'
 import type { Agent } from '@/lib/api'
+import { makeAgent } from '@/test/factories'
 
 // AgentDelegatePicker itself is unit-tested (candidate filtering, selection,
 // empty state) in AgentDelegatePicker.test.tsx against explicit props. Here
@@ -81,21 +82,19 @@ beforeAll(() => {
 })
 
 function agent(id: string, over: Partial<Agent> = {}): Agent {
-  return {
+  return makeAgent({
     id,
     name: id.charAt(0).toUpperCase() + id.slice(1),
     type: 'Main',
     locked: false,
     status: 'active',
     soul: '',
-    heartbeat: '',
-    instructions: '',
     timeout_seconds: 60,
     max_tool_iterations: 10,
-    heartbeat_enabled: false,
-    heartbeat_interval: 0,
+    figure: 'Omnipus',
+    role: 'general',
     ...over,
-  } as Agent
+  })
 }
 
 const AGENTS: Agent[] = [
