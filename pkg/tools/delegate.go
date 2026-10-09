@@ -614,8 +614,9 @@ func (t *DelegateTool) Description() string {
 		"action=\"redirect\" replaces the child's current turn with the new instruction — text is " +
 		"required (NOT available for an external CLI child; use stop_all or resume). " +
 		"action=\"peek\" reads a child's latest checkpoint/progress without side effects. " +
-		"Optionally provide agent_id to target a specific agent from your delegation " +
-		"allowlist; omit it to run a generic subagent under your own agent."
+		"action=\"run\" requires agent_id — the specific agent to delegate to, which must be in " +
+		"your delegation allowlist. There is no default target and no implicit substitution of " +
+		"your own id: a caller delegating to itself passes its own agent_id explicitly."
 }
 
 func (t *DelegateTool) Scope() ToolScope { return ScopeCore }
@@ -679,8 +680,10 @@ func (t *DelegateTool) Parameters() map[string]any {
 			},
 			"agent_id": map[string]any{
 				"type": "string",
-				"description": "Optional: the id of a specific agent to delegate to (must be in your " +
-					"delegation allowlist). Omit to run a generic subagent under your own agent.",
+				"description": "Required for action=\"run\": the id of the specific agent to delegate " +
+					"to (must be in your delegation allowlist). There is no default target and no " +
+					"implicit substitution — a caller delegating to itself passes its own agent_id " +
+					"explicitly.",
 			},
 			"action": map[string]any{
 				"type": "string",
