@@ -152,6 +152,15 @@ properties:
       type="context_window_notice" diagnostics (ADR-066 MAJ-CW-009).
       Retains the original turn identity in REST history, live delivery and replay.
     example: "turn-T3"
+  goal_id:
+    type: string
+    description: >
+      session-core FR-039 / C-GOAL. The goal the entry's producing turn was
+      dispatched under (from session.TranscriptEntry.GoalID). REST history, live
+      delivery and replay retain the SAME association so the SPA joins each
+      message to its own exact keyed goal criteria. Absent means UNKNOWN
+      association; a later goal's frame must never rebind an earlier message.
+    example: "goal_01J3ZQK8N2H8VXNRP5T7C9M4WU"
   canceled_by_user:
     type: string
     description: >

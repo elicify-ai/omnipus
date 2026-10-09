@@ -170,6 +170,7 @@ export interface TokenFrame {
   agent_id?: string;
   turn_id?: string;
   message_id?: string;
+  goal_id?: string;
   replace?: boolean;
   seq?: number;
 }
@@ -195,6 +196,7 @@ export interface DoneFrame {
   stats?: DoneStats;
   turn_id?: string;
   message_id?: string;
+  goal_id?: string;
   seq?: number;
 }
 
@@ -411,6 +413,7 @@ export interface ReplayMessageFrame {
   agent_id?: string;
   model?: string;
   turn_id?: string;
+  goal_id?: string;
   truncated?: boolean;
   truncation_reason?: "cancelled" | "max_output_tokens";
   client_message_id?: string;

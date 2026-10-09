@@ -75,6 +75,14 @@ properties:
       replay stream (async delegation can interleave other agents'/turns' frames
       in between). Omitted for legacy entries written before turn-id stamping
       landed.
+  goal_id:
+    type: string
+    description: >
+      session-core FR-039 / C-GOAL. The goal the replayed entry's producing turn
+      was dispatched under (from TranscriptEntry.GoalID). Live, history, REST and
+      replay must retain the SAME association so the SPA joins each bubble to its
+      own exact keyed goal criteria. Absent means UNKNOWN association; a later
+      goal's frame must never rebind an earlier replayed message.
   truncated:
     type: boolean
     description: >

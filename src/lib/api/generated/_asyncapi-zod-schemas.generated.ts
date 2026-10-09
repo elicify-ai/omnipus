@@ -115,6 +115,7 @@ export const TokenFrame = z
     agent_id: z.string().optional(),
     turn_id: z.string().optional(),
     message_id: z.string().optional(),
+    goal_id: z.string().optional(),
     replace: z.boolean().optional(),
     seq: z.number().int().min(1).optional(),
   })
@@ -143,6 +144,7 @@ export const DoneFrame = z
     stats: DoneStats.optional(),
     turn_id: z.string().optional(),
     message_id: z.string().optional(),
+    goal_id: z.string().optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -405,6 +407,7 @@ export const ReplayMessageFrame = z
     agent_id: z.string().optional(),
     model: z.string().max(256).optional(),
     turn_id: z.string().optional(),
+    goal_id: z.string().optional(),
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
     client_message_id: z.string().optional(),
