@@ -37,8 +37,6 @@ import { fetchAgents } from '@/lib/api'
 import { useRunningActivity } from './useRunningActivity'
 import type { ActivityItem, AgentActivityItem } from './useRunningActivity'
 
-const SESSION_ID = 'uf2-attribution-test'
-
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
 }
