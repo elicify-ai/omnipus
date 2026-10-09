@@ -146,19 +146,15 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	// de-windowed, so the next turn's model window cannot see a failed turn's
 	// partial output. That removal is the canonical append-undo
 	// (RollbackAppended, ADR-066 FR-020): it truncates the archive to the
-	// turn-start length and restores meta.Skip and the turn-start projection set
-	// in one write. RollbackWindow can no longer do this — session-core FR-006
-	// makes it a window-metadata-only restore that never rewrites retained bytes
-	// (contract: pkg/memory/window.go::RollbackWindow).
+	// snapshot's record count and restores meta.Skip + the turn-start projection
+	// set in one write. RollbackWindow can no longer do this — session-core
+	// FR-006 makes it a window-metadata-only restore that never rewrites
+	// retained bytes (contract: pkg/memory/window.go::RollbackWindow).
 	//
-	// targetSkip is the turn-start Skip: initialArchiveLen records were on disk
-	// when the turn began, initialHistoryLength of them were in the live window
-	// (turn.go captures both).
-	targetSkip := ts.initialArchiveLen - ts.initialHistoryLength
-	if targetSkip < 0 {
-		targetSkip = 0
-	}
-	agent.Sessions.RollbackAppended(ts.sessionKey, ts.initialArchiveLen, targetSkip, ts.initialEmptiedSet)
+	// start.Count / start.Skip are the turn-start archive length and Skip from
+	// the captured window snapshot — exactly the truncation target the previous
+	// RollbackWindow used.
+	agent.Sessions.RollbackAppended(ts.sessionKey, start.Count, start.Skip, ts.initialEmptiedSet)
 	// Restore the exact turn-start window metadata (cursor, anchor and source
 	// limits) captured in the snapshot.
 	if err := store.RollbackWindow(context.Background(), ts.sessionKey, start.Clone()); err != nil {
@@ -172,8 +168,8 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	if err != nil {
 		return fmt.Errorf("context rollback: verify archive after rollback: %w", err)
 	}
-	if len(archived) != ts.initialArchiveLen {
-		return fmt.Errorf("context rollback: archive holds %d records after rollback, expected %d", len(archived), ts.initialArchiveLen)
+	if len(archived) != start.Count {
+		return fmt.Errorf("context rollback: archive holds %d records after rollback, expected %d", len(archived), start.Count)
 	}
 	if err := ts.revertEmptiedTranscript(); err != nil {
 		return err
