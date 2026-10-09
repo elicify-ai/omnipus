@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, within, waitFor } from '@testing-library/react'
 import * as React from 'react'
 import { act } from 'react'
+import { flushSync } from 'react-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AssistantRuntimeProvider, useMessagePartText } from '@assistant-ui/react'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
@@ -19,7 +20,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { useOmnipusRuntime } from '@/lib/omnipus-runtime'
 import { useToolApprovalStore } from '@/store/toolApproval'
-import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
+import type { AskUserQuestionCard, GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
 
 class ResizeObserverStub {
   observe() {}
@@ -458,6 +459,250 @@ describe('live inline indicator', () => {
     expect(within(bubble).getByText('Working on it…')).toBeInTheDocument()
     expect(within(bubble).queryByText('Thinking…')).not.toBeInTheDocument()
   })
+})
+
+// F3: drive the real runtime with generated frames, never seed pendingAsk,
+// approvals, tool calls, or a precomputed reply phase. Copy/motion oracles:
+// the dispatch cases (a)–(d) and docs/using-omnipus-ui.md, "Who is replying".
+function openRuntimeReply(sid: string) {
+  useSessionStore.getState().setActiveSession(sid, 'agent-1')
+  useChatStore.getState().resetSession()
+  // TokenFrame permits empty content: the reply exists before its first text.
+  useChatStore.getState().handleFrame({
+    type: 'token', session_id: sid, content: '', agent_id: 'agent-1',
+    turn_id: `${sid}_turn`, message_id: `${sid}_assistant`,
+  })
+}
+
+function receiveRuntimeQuestion(sid: string, status: AskUserQuestionCard['status'] = 'pending') {
+  const card: AskUserQuestionCard = {
+    card_id: `${sid}_question`, session_id: sid, agent_id: 'agent-1', status,
+    created_at: '2026-10-10T09:00:00Z',
+    questions: [{
+      header: 'Scope', question: 'Which release notes should I check?',
+      options: [{ label: 'Current release' }, { label: 'Next release' }],
+    }],
+    ...(status === 'answered' ? { answers: [{
+      header: 'Scope', question: 'Which release notes should I check?',
+      selected: ['Current release'], auto_default: false,
+    }] } : {}),
+  }
+  useChatStore.getState().handleFrame({ type: 'ask_user_question', card })
+}
+
+function receiveRuntimeApproval(sid: string) {
+  useChatStore.getState().handleFrame({
+    type: 'tool_approval_required', approval_id: `${sid}_approval`,
+    tool_call_id: `${sid}_tool`, tool_name: 'bash', args: { command: 'git status' },
+    agent_id: 'agent-1', session_id: sid, turn_id: `${sid}_turn`,
+    // Keep the network fixture live during the test; expiry is not under test.
+    expires_in_ms: 60_000,
+  })
+}
+
+function receiveRuntimeTool(sid: string) {
+  useChatStore.getState().handleFrame({
+    type: 'tool_call_start', session_id: sid, call_id: `${sid}_tool`,
+    tool: 'bash', params: { action: 'run', command: 'git status' }, agent_id: 'agent-1',
+  })
+}
+
+function expectRuntimePhase(bubble: HTMLElement, text: string, motion: 'thinking' | 'working' | 'waiting') {
+  const phrase = within(bubble).getByText(text, { exact: true })
+  expect(phrase.textContent, `exact ${motion} phrase`).toBe(text)
+  expect(bubble.querySelectorAll('[data-testid="agent-icon"]')).toHaveLength(1)
+  expectMarkMotion(bubble, motion)
+  if (motion !== 'waiting') {
+    expect(within(bubble).queryByText('Waiting for your input', { exact: true })).not.toBeInTheDocument()
+    expect(within(bubble).queryByText('Waiting for your approval — bash', { exact: true })).not.toBeInTheDocument()
+  }
+}
+
+describe('F3 runtime question precedence and session isolation', () => {
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    // Reset fixtures, not scenario state. Every decision and reply below is
+    // created by its real public action or inbound frame reducer.
+    useSessionStore.setState(useSessionStore.getInitialState())
+    useChatStore.setState(useChatStore.getInitialState())
+    useToolApprovalStore.setState(useToolApprovalStore.getInitialState())
+    useConnectionStore.setState({
+      connection: null, isConnected: true, connectionError: null,
+      reconnectPhase: null, reconnectAttempt: 0,
+    })
+    useChatPreferencesStore.getState().setVerboseChatEnabled(false)
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+  })
+
+  it.each(['answered', 'cancelled'] as const)(
+    'F3 question-only restores Thinking after the question is %s',
+    async (status) => {
+      const sid = `question-only-${status}`
+      act(() => openRuntimeReply(sid))
+      const bubble = assistantBubble(await mount())
+      expect(await within(bubble).findByText('Mia')).toBeInTheDocument()
+      expectRuntimePhase(bubble, 'Thinking…', 'thinking')
+      act(() => receiveRuntimeQuestion(sid))
+      expect(useChatStore.getState().pendingAsk?.status).toBe('pending')
+      expectRuntimePhase(bubble, 'Waiting for your input', 'waiting')
+      act(() => receiveRuntimeQuestion(sid, status))
+      expect(useChatStore.getState().pendingAsk?.status).toBe(status)
+      expectRuntimePhase(bubble, 'Thinking…', 'thinking')
+    },
+  )
+
+  it.each(['answered', 'cancelled'] as const)(
+    'F3 matching question overrides a running tool and restores Working when %s',
+    async (status) => {
+      const sid = `tool-before-question-${status}`
+      act(() => {
+        openRuntimeReply(sid)
+        receiveRuntimeTool(sid)
+      })
+      const bubble = assistantBubble(await mount())
+      expect(await within(bubble).findByText('Mia')).toBeInTheDocument()
+      expectRuntimePhase(bubble, 'Working on it…', 'working')
+      act(() => receiveRuntimeQuestion(sid))
+      expectRuntimePhase(bubble, 'Waiting for your input', 'waiting')
+      expect(within(bubble).queryByText('Working on it…', { exact: true })).not.toBeInTheDocument()
+      expect(useChatStore.getState().sessionsById[sid]?.toolCalls[`${sid}_tool`].status).toBe('running')
+      act(() => receiveRuntimeQuestion(sid, status))
+      expectRuntimePhase(bubble, 'Working on it…', 'working')
+      act(() => useChatStore.getState().resolveToolCall(`${sid}_tool`, 'clean', 'success'))
+      expectRuntimePhase(bubble, 'Thinking…', 'thinking')
+    },
+  )
+
+  it.each(['answered', 'cancelled'] as const)(
+    'F3 question-before-tool keeps Waiting until the question is %s',
+    async (status) => {
+      const sid = `question-before-tool-${status}`
+      act(() => openRuntimeReply(sid))
+      const bubble = assistantBubble(await mount())
+      expect(await within(bubble).findByText('Mia')).toBeInTheDocument()
+      act(() => receiveRuntimeQuestion(sid))
+      expectRuntimePhase(bubble, 'Waiting for your input', 'waiting')
+      act(() => receiveRuntimeTool(sid))
+      expectRuntimePhase(bubble, 'Waiting for your input', 'waiting')
+      expect(within(bubble).queryByText('Working on it…', { exact: true })).not.toBeInTheDocument()
+      expect(useChatStore.getState().sessionsById[sid]?.toolCalls[`${sid}_tool`].status).toBe('running')
+      act(() => receiveRuntimeQuestion(sid, status))
+      expectRuntimePhase(bubble, 'Working on it…', 'working')
+    },
+  )
+
+  it.each(['answered', 'cancelled'] as const)(
+    'F3 question plus approval shows exactly input copy and restores approval when %s',
+    async (status) => {
+      const sid = `question-plus-approval-${status}`
+      act(() => {
+        openRuntimeReply(sid)
+        receiveRuntimeTool(sid)
+      })
+      const bubble = assistantBubble(await mount())
+      expect(await within(bubble).findByText('Mia')).toBeInTheDocument()
+      expectRuntimePhase(bubble, 'Working on it…', 'working')
+      act(() => receiveRuntimeApproval(sid))
+      expectRuntimePhase(bubble, 'Waiting for your approval — bash', 'waiting')
+      act(() => receiveRuntimeQuestion(sid))
+      expectRuntimePhase(bubble, 'Waiting for your input', 'waiting')
+      expect(within(bubble).queryByText('Waiting for your approval — bash', { exact: true })).not.toBeInTheDocument()
+      act(() => receiveRuntimeQuestion(sid, status))
+      expectRuntimePhase(bubble, 'Waiting for your approval — bash', 'waiting')
+      expect(within(bubble).queryByText('Waiting for your input', { exact: true })).not.toBeInTheDocument()
+      act(() => useChatStore.getState().handleFrame({
+        type: 'tool_approval_resolved', session_id: sid,
+        approval_id: `${sid}_approval`, state: 'approved',
+      }))
+      expectRuntimePhase(bubble, 'Working on it…', 'working')
+      act(() => useChatStore.getState().resolveToolCall(`${sid}_tool`, 'clean', 'success'))
+      expectRuntimePhase(bubble, 'Thinking…', 'thinking')
+    },
+  )
+
+  it.each(['thinking', 'working'] as const)(
+    'F3 foreign-session question and approval cannot change this %s reply',
+    async (motion) => {
+      const sid = `foreign-decision-${motion}`
+      const otherSid = `${sid}-other`
+      const text = motion === 'working' ? 'Working on it…' : 'Thinking…'
+      act(() => {
+        openRuntimeReply(sid)
+        if (motion === 'working') receiveRuntimeTool(sid)
+      })
+      const bubble = assistantBubble(await mount())
+      expect(await within(bubble).findByText('Mia')).toBeInTheDocument()
+      expectRuntimePhase(bubble, text, motion)
+      // Exercise foreign question only, approval only, then both. These
+      // frames must still reach the foreign bucket/queue, not be discarded.
+      act(() => receiveRuntimeQuestion(otherSid))
+      expect(useChatStore.getState().sessionsById[otherSid]?.pendingAsk?.status).toBe('pending')
+      expect(useChatStore.getState().pendingAsk).toBeNull()
+      expectRuntimePhase(bubble, text, motion)
+      act(() => {
+        receiveRuntimeQuestion(otherSid, 'cancelled')
+        receiveRuntimeApproval(otherSid)
+      })
+      expect(useToolApprovalStore.getState().queue.map((item) => item.sessionId)).toEqual([otherSid])
+      expectRuntimePhase(bubble, text, motion)
+      act(() => receiveRuntimeQuestion(otherSid))
+      expectRuntimePhase(bubble, text, motion)
+      // Matching-session positive control: prove this same render can wait.
+      act(() => receiveRuntimeQuestion(sid))
+      expectRuntimePhase(bubble, 'Waiting for your input', 'waiting')
+      act(() => receiveRuntimeQuestion(sid, 'answered'))
+      expectRuntimePhase(bubble, text, motion)
+    },
+  )
+
+  it.each(['thinking', 'working'] as const)(
+    'F3 session-identity guard rejects the previous question during a real %s session switch',
+    async (motion) => {
+      const sid = `session-switch-${motion}`
+      const previousSid = `${sid}-previous`
+      const text = motion === 'working' ? 'Working on it…' : 'Thinking…'
+      act(() => {
+        openRuntimeReply(sid)
+        if (motion === 'working') receiveRuntimeTool(sid)
+        openRuntimeReply(previousSid)
+        if (motion === 'working') receiveRuntimeTool(previousSid)
+        receiveRuntimeApproval(previousSid)
+        receiveRuntimeQuestion(previousSid)
+      })
+      let view!: ReturnType<typeof render>
+      await act(async () => {
+        view = render(<Providers><ChatScreen /></Providers>)
+      })
+      const bubble = assistantBubble(view.container)
+      expect(await within(bubble).findByText('Mia')).toBeInTheDocument()
+      expectRuntimePhase(bubble, 'Waiting for your input', 'waiting')
+      let observedTransitions = 0
+      // setActiveSession publishes its identity BEFORE copying chat's
+      // foreground bucket. Observe a synchronous render at that genuine
+      // notification boundary; never construct a mismatched pendingAsk.
+      const unsubscribe = useSessionStore.subscribe((state, previous) => {
+        if (state.activeSessionId !== sid || previous.activeSessionId !== previousSid) return
+        observedTransitions++
+        expect(useChatStore.getState().pendingAsk?.session_id).toBe(previousSid)
+        flushSync(() => view.rerender(<Providers><ChatScreen /></Providers>))
+        expectRuntimePhase(assistantBubble(view.container), text, motion)
+      })
+      try {
+        act(() => useSessionStore.getState().setActiveSession(sid, 'agent-1'))
+        expect(observedTransitions).toBe(1)
+        expect(useChatStore.getState().pendingAsk).toBeNull()
+        expect(useChatStore.getState().sessionsById[previousSid]?.pendingAsk?.status).toBe('pending')
+        expectRuntimePhase(assistantBubble(view.container), text, motion)
+      } finally {
+        unsubscribe()
+      }
+    },
+  )
 })
 
 describe('plain, replay, and idle bubbles', () => {
