@@ -242,11 +242,10 @@ func (us *UnifiedStore) SwitchAgent(sessionID, newAgentID string) error {
 // an empty loop.json/pending_ask.json it never touched).
 //
 // Caller must hold sessionID's shard (see lockSession) — was: caller must
-// hold us.mu. (writeUnifiedMetaDirect — a standalone writer that composes a
-// whole UnifiedMeta and is no longer called from the constructor — is a
-// SEPARATE, unmodified function; FR-060 forbids changing it or providing a
-// reader for its pre-split fused output, and nothing in this dispatcher
-// touches it.)
+// hold us.mu. (The DEL-09 generic helper writeUnifiedMetaDirect is deleted;
+// CONV publishes the current-format identity group through its own
+// convWriteIdentityFile, and no reader exists for the pre-split fused shape
+// it once wrote. Nothing in this dispatcher touches either.)
 func (us *UnifiedStore) writeMetaLocked(sessionID string, meta *UnifiedMeta) error {
 	prev, prevErr := us.readMetaLocked(sessionID)
 
