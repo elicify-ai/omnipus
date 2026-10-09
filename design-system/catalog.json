@@ -873,7 +873,14 @@
     {
       "source": "src/lib/agentIconArt.ts",
       "classification": "foundations",
-      "exports": ["agentIconInner"],
+      "exports": ["agentFigureInner", "agentBadgePath"],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/lib/agentBadgeIcons.ts",
+      "classification": "foundations",
+      "exports": ["REUSED_AGENT_BADGES"],
       "publicExports": [],
       "publicTypes": []
     },
