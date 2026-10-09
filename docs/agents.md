@@ -63,6 +63,12 @@ You create one of three types. The create buttons sit in the section headers of 
 
 To change an agent, open its card. The edit slide-over saves as you type. Its tabs are **Basics**, **Personality**, **Tools**, **Skills**, and **Advanced**; an external worker shows **Runtime** instead of Tools and Skills. **Delete agent** asks you to confirm.
 
+## How to delete an agent
+
+**Delete agent** asks you to confirm twice: the first step explains that the agent and its chats, memory and related data are removed permanently, the second is the final confirmation. Dismissing either step deletes nothing. A locked core agent, a System Agent, and an agent that owns an active plan cannot be deleted — set another agent as the default, or stop/reassign the plan, first.
+
+Deletion cleans the agent's own data first — its chats, its task assignments, and its references in workspaces — and removes the agent record last. If any part of that cleanup fails, the agent stays in the list and the message says it is only partly deleted; press **Delete agent** again to finish. Nothing is lost by retrying.
+
 ## How to lower one agent's tool-call limit
 
 Every agent may make at most a set number of tool calls in one turn. The global limit lives in Settings, Performance; see [settings](settings.md#tool-calls-per-turn). One agent can have its own lower limit, for example a worker you want to keep on a short leash. An agent's own limit can equal or be lower than the global limit, never higher.
