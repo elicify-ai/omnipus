@@ -249,7 +249,7 @@ func TestTaskReassignmentDelegationGate_SelfAllowedNonSelfGated(t *testing.T) {
 	al, _ := wireTestLoopWithGraph(t, callerID)
 	gate := buildDelegationDenyCheckerForTaskReassignment(
 		callerID, config.PerformanceConfig{}, config.DelegationModeTask,
-		agentExistsChecker(al.GetRegistry()),
+		delegationGateDeps{AgentExists: agentExistsChecker(al.GetRegistry())},
 	)
 
 	// Empty target: REFUSED — the omitted-target path was removed (settled
