@@ -2145,13 +2145,6 @@ components:
         duration_ms:
           type: number
           minimum: 0
-        tokens_dropped:
-          type: number
-          minimum: 0
-          deprecated: true
-          description: >-
-            Deprecated (#823 catch-up redesign, Q5): the gateway never drops frames under
-            backpressure now (WS close 4008 + reconnect instead). Never set.
         frames_emitted:
           type: number
           minimum: 0

@@ -214,7 +214,6 @@ func FixtureDoneFrame_Populated() DoneFrame {
 	tokens := float64(1234)
 	cost := float64(0.00412)
 	durationMs := float64(3720)
-	tokensDropped := float64(2)
 	framesEmitted := float64(47)
 	orphanCount := float64(0)
 	dupCount := float64(0)
@@ -233,7 +232,6 @@ func FixtureDoneFrame_Populated() DoneFrame {
 			Tokens:                   &tokens,
 			Cost:                     &cost,
 			DurationMs:               &durationMs,
-			TokensDropped:            &tokensDropped,
 			FramesEmitted:            &framesEmitted,
 			OrphanCount:              &orphanCount,
 			DuplicateToolCallIdCount: &dupCount,

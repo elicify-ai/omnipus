@@ -240,8 +240,7 @@ Signals that a streaming response has completed. The partial buffer is finalized
   "stats": {
     "tokens": 342,
     "cost": 0.0021,
-    "duration_ms": 4120,
-    "tokens_dropped": 0
+    "duration_ms": 4120
   }
 }
 ```
@@ -253,7 +252,6 @@ Signals that a streaming response has completed. The partial buffer is finalized
 | stats.tokens | number | no | Total tokens consumed (prompt + completion) |
 | stats.cost | number | no | Estimated cost in USD |
 | stats.duration_ms | number | no | Wall-clock duration of the turn in milliseconds |
-| stats.tokens_dropped | number | no | Tokens pruned during tool result compression |
 
 **Producer**: Agent loop turn completion in `pkg/agent/`
 **Consumer**: Chat message component — removes cursor, renders markdown, shows stats below message

@@ -764,7 +764,6 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	rae.cm.RegisterHTTPHandler("/api/v1/mcp-servers/", rae.a.withAuth(rae.a.HandleMCPServers))
 	rae.cm.RegisterHTTPHandler("/api/v1/storage/stats", rae.a.withAuth(rae.a.HandleStorageStats))
 	rae.cm.RegisterHTTPHandler("/api/v1/tools", rae.a.withAuth(rae.a.HandleToolsRegistry))
-	rae.cm.RegisterHTTPHandler("/api/v1/tools/builtin", rae.a.withAuth(rae.a.HandleBuiltinToolsDeprecated))
 	rae.cm.RegisterHTTPHandler("/api/v1/tools/mcp", rae.a.withAuth(rae.a.HandleMCPTools))
 	rae.cm.RegisterHTTPHandler("/api/v1/tool-approvals/", rae.a.withAuth(rae.a.HandleToolApprovals))
 	rae.cm.RegisterHTTPHandler("/api/v1/channels", rae.a.withAuth(rae.a.HandleChannels))

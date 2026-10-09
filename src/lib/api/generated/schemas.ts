@@ -2953,7 +2953,6 @@ type DelegateRunAction = {
 type DelegateStatusAction = {
   action: "status";
   session_id: string;
-  task_id?: string | undefined;
 };
 type DelegateInboxAction = {
   action: "inbox";
@@ -7444,7 +7443,6 @@ export const DelegateRunAction = z.object({
 export const DelegateStatusAction = z.object({
   action: z.literal("status"),
   session_id: z.string().min(1),
-  task_id: z.string().optional(),
 }) satisfies z.ZodType<DelegateStatusAction>;
 export const DelegateInboxAction = z.object({
   action: z.literal("inbox"),
@@ -16544,7 +16542,6 @@ export const DoneStats = z
     tokens: z.number().min(0).optional(),
     cost: z.number().min(0).optional(),
     duration_ms: z.number().min(0).optional(),
-    tokens_dropped: z.number().min(0).optional(),
     frames_emitted: z.number().min(0).optional(),
     orphan_count: z.number().min(0).optional(),
     duplicate_tool_call_id_count: z.number().min(0).optional(),

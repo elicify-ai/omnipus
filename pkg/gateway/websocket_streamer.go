@@ -93,15 +93,11 @@ func (h *WSHandler) GetStreamer(_ context.Context, channel, chatID, sessionID st
 	if channel != "webchat" {
 		return nil, false
 	}
+	// A missing session id REFUSES (DEL-25): the producing caller (the agent
+	// loop) supplies an explicit sessionID, and there is no chatID-binding
+	// guess — a guessed binding could stream a turn into the currently viewed
+	// replacement chat.
 	sid := sessionID
-	if sid == "" {
-		// Backward-compat fallback for a caller that hasn't yet threaded a
-		// session id through explicitly — resolve from this chatID's own
-		// current binding.
-		h.mu.Lock()
-		sid = h.sessionIDs[chatID]
-		h.mu.Unlock()
-	}
 	if sid == "" {
 		return nil, false
 	}
@@ -694,7 +690,7 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 // publishDone publishes this turn's single done frame through the session
 // hub (numbered, journaled, delivered byte-identically to every bound tab —
 // BE-DESIGN.md §5: done no longer varies per connection now that nothing is
-// ever dropped, so DoneStats.TokensDropped is never set). A shadow stream (a
+// ever dropped). A shadow stream (a
 // delegated child, or a non-owning concurrent turn) publishes nothing: its
 // text was never shown live, and a done would close the OWNING turn's bubble.
 func (wsf *wsStreamerFinalize) publishDone() {
