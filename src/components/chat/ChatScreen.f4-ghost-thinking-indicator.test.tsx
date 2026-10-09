@@ -43,7 +43,7 @@
  * after mounting and checks Thinking -> Working -> Thinking.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, assert, vi, beforeEach, afterEach } from 'vitest'
 import { render, act, screen, within } from '@testing-library/react'
 import * as React from 'react'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
@@ -186,6 +186,7 @@ function startToolSearch(callId: string, messageId: string): void {
     status: 'running',
   })
   expect(bucket.toolCallOrder, 'start frame must register this call exactly once').toEqual([callId])
+  assert.isDefined(bucket.toolCallOwnerMessageId, 'real start frame must register tool call ownership')
   expect(bucket.toolCallOwnerMessageId[callId], 'running call must belong to the seeded reply').toBe(messageId)
   expect(bucket.messageOrder, 'start frame must not create a different reply').toEqual([messageId])
   expect(bucket.messagesById[messageId].content).toBe('')
