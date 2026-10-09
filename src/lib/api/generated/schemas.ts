@@ -175,6 +175,7 @@ type Message = {
         | "context_window_notice"
       )
     | undefined;
+  view_membership?: ("chat" | "model" | "both") | undefined;
   role?: ("user" | "assistant" | "system") | undefined;
   content?: string | undefined;
   summary?: string | undefined;
@@ -3567,6 +3568,7 @@ export const Message: z.ZodType<Message> = z.object({
       "context_window_notice",
     ])
     .optional(),
+  view_membership: z.enum(["chat", "model", "both"]).optional(),
   role: z.enum(["user", "assistant", "system"]).optional(),
   content: z.string().optional(),
   summary: z.string().optional(),
@@ -4881,7 +4883,6 @@ export const SkillMarketplaceStatus = z.object({
   registries: z.array(z.object({ name: z.string(), enabled: z.boolean() })),
 });
 export const SkillInstallRequest = z.union([z.unknown(), z.unknown()]);
-export const SseChatRequest = z.object({ message: z.string() });
 export const ActivityEvent: z.ZodType<ActivityEvent> = z
   .object({
     id: z.string(),
@@ -8913,34 +8914,6 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Channel ID not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
-    path: "/chat",
-    alias: "postChat",
-    description: `Sends a user message to the agent and streams the response via Server-Sent Events. The connection stays open until the agent finishes responding or the client disconnects.
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: z.object({ message: z.string() }),
-      },
-    ],
-    response: z.void(),
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
     ],

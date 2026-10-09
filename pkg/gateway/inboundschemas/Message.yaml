@@ -50,6 +50,23 @@ properties:
       payload as ContextWindowNoticeFrame.notice with the original entry id,
       timestamp, agent_id and turn_id.
     example: "message"
+  view_membership:
+    type: string
+    enum:
+      - chat
+      - model
+      - both
+    description: >
+      C-ARCHIVE (session-core FR-004): which view(s) of the single append-only
+      archive this entry belongs to — "chat" (rendered in the conversation),
+      "model" (part of the model context window), or "both". One authoritative
+      content entry format carries both views, so the same persisted entry backs
+      the chat rendering and the model history; there is no separate
+      model-content store. Optional and additive: entries written before this
+      field existed carry no value, and the server treats absent as unknown
+      rather than re-deriving a view. The reader projects this archive onto the
+      chat/model views; it is a per-entry classification, never a second store.
+    example: "both"
   role:
     type: string
     enum:

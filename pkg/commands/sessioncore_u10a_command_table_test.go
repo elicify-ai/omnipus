@@ -148,3 +148,43 @@ func TestSessionCoreU10a_NewRetiredFromServerCommandTable(t *testing.T) {
 		}
 	}
 }
+
+// TestSessionCoreU10a_UnknownCommandPassthroughReportsParsedName restores the
+// name-extraction assertion the U10a cut lost with the deleted
+// show_list_handlers_test.go::TestShowListHandlers_ChannelPolicy.
+//
+// U10A-CHECK-ADJUDICATION.md ruled that test MIXED: its `/show channel` half was
+// a justified retirement (of a removed command) but its `/foo` passthrough pair
+// asserted LIVE behaviour — `Outcome == OutcomePassthrough` AND
+// `Command == "foo"` (the command name extracted from unknown text). The
+// outcome half is re-covered by builtin_test.go::TestBuiltinNoSkillOrUseCommand;
+// the `Command` name-extraction half is NOT re-covered anywhere — the
+// replacement deliberately leaves the Command field unasserted. This re-homes
+// the lost oracle.
+//
+// Oracle (executor contract, not observed output):
+//   - executor.go::Execute — a well-formed slash command that is not in the
+//     table is passed through, and the returned ExecuteResult reports the
+//     parsed command name in its Command field (the `!found` branch).
+//   - request.go::parseCommandName — accepts "/name" and normalizes the name
+//     to lowercase, so "/foo" parses to "foo".
+//   - FR-031 — typed/server execution agrees with the table: an unknown name is
+//     not handled by the command table, it passes through as ordinary text.
+func TestSessionCoreU10a_UnknownCommandPassthroughReportsParsedName(t *testing.T) {
+	const unknown = "foo"
+
+	reg := NewRegistry(BuiltinDefinitions())
+	if def, found := reg.Lookup(unknown); found {
+		t.Fatalf("test precondition broken: %q must be unknown, but the table resolves it to /%s", unknown, def.Name)
+	}
+
+	ex := NewExecutor(reg, nil)
+	res := ex.Execute(context.Background(), Request{Channel: "webchat", Text: "/" + unknown})
+
+	if res.Outcome != OutcomePassthrough {
+		t.Errorf("executor /%s outcome=%v, want %v (unknown command must pass through — FR-031)", unknown, res.Outcome, OutcomePassthrough)
+	}
+	if res.Command != unknown {
+		t.Errorf("executor /%s Command=%q, want %q — the passthrough result must report the parsed command name (U10a restore; executor.go::Execute)", unknown, res.Command, unknown)
+	}
+}

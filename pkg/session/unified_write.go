@@ -574,32 +574,43 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 	if err := validateSessionID(sessionID); err != nil {
 		return nil, err
 	}
-	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
-	data, err := os.ReadFile(transcriptPath)
+	// FR-005: the archive is UTC day-partitioned. Read every partition in
+	// chronological order (rolled day files, then the current transcript.jsonl)
+	// so a multi-day session returns its full ordered history in one call.
+	paths, err := us.transcriptPartitionPaths(sessionID)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return []TranscriptEntry{}, nil
-		}
-		return nil, fmt.Errorf("unified_store: read transcript: %w", err)
+		// Never silently drop retained history: fall back to the current file
+		// and make the loss visible.
+		warnOnStrayDayPartition(sessionID, err)
+		paths = []string{filepath.Join(us.baseDir, sessionID, transcriptFileName)}
 	}
-	var entries []TranscriptEntry
-	for _, line := range bytes.Split(data, []byte{'\n'}) {
-		line = bytes.TrimSpace(line)
-		if len(line) == 0 {
-			continue
-		}
-		var entry TranscriptEntry
-		if err := json.Unmarshal(line, &entry); err != nil {
-			if isContextWindowNoticeLine(line) {
-				return nil, fmt.Errorf("unified_store: read transcript: invalid context_window_notice: %w", err)
+	entries := []TranscriptEntry{}
+	for _, transcriptPath := range paths {
+		data, err := os.ReadFile(transcriptPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
 			}
-			slog.Warn("unified_store: skipping malformed transcript line", "session_id", sessionID, "error", err)
-			continue
-		}
-		if err := validateContextWindowNotice(sessionID, entry); err != nil {
 			return nil, fmt.Errorf("unified_store: read transcript: %w", err)
 		}
-		entries = append(entries, entry)
+		for _, line := range bytes.Split(data, []byte{'\n'}) {
+			line = bytes.TrimSpace(line)
+			if len(line) == 0 {
+				continue
+			}
+			var entry TranscriptEntry
+			if err := json.Unmarshal(line, &entry); err != nil {
+				if isContextWindowNoticeLine(line) {
+					return nil, fmt.Errorf("unified_store: read transcript: invalid context_window_notice: %w", err)
+				}
+				slog.Warn("unified_store: skipping malformed transcript line", "session_id", sessionID, "error", err)
+				continue
+			}
+			if err := validateContextWindowNotice(sessionID, entry); err != nil {
+				return nil, fmt.Errorf("unified_store: read transcript: %w", err)
+			}
+			entries = append(entries, entry)
+		}
 	}
 	return us.filterUnpairedProvenanceLines(sessionID, entries), nil
 }
