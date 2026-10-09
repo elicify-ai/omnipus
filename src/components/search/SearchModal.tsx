@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { ErrorState } from '@/components/ui/error-state'
 import { IconButton } from '@/components/ui/icon-button'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { MagnifyingGlass, Calendar, X } from '@phosphor-icons/react'
@@ -135,21 +136,26 @@ export function SearchModal() {
     }
   }, [open, mode])
 
-  const { data: sessions = [], isLoading: sLoading, isError: sessionsError } = useQuery({
+  const { data: sessions = [], isLoading: sLoading, isError: sessionsError, refetch: retrySessions } = useQuery({
     queryKey: ['sessions', 'flat'],
     queryFn: () => fetchSessions(undefined, undefined, { flat: true }),
     enabled: open,
   })
-  const { data: workspaces = [], isLoading: wLoading, isError: workspacesError } = useQuery({
+  const { data: workspaces = [], isLoading: wLoading, isError: workspacesError, refetch: retryWorkspaces } = useQuery({
     queryKey: workspacesQueryKeys.list({ status: 'active' }),
     queryFn: () => fetchWorkspaces({ status: 'active' }),
     enabled: open,
   })
-  const { data: agents = [], isError: agentsError } = useQuery({
+  const { data: agentData, isError: agentsError, refetch: retryAgents } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
     enabled: open,
   })
+  const agents = agentData ?? []
+  const agentNamesUnavailable = agentsError && agentData === undefined
+  const failedRequests = sessionsError && workspacesError
+    ? 'sessions and workspaces'
+    : sessionsError ? 'sessions' : 'workspaces'
   const coverage = readSessionFetchCoverage(sessions)
   const requestActivityPanel = useUiStore((s) => s.requestActivityPanel)
   const selectSession = useSelectSession({
@@ -449,6 +455,13 @@ export function SearchModal() {
         </DialogHeader>
         <p role="status" aria-live="polite" className="sr-only" data-testid="sessions-activation-live">{announcement}</p>
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-[var(--space-2)]">
+          {mode === 'sessions' && agentNamesUnavailable && !loading && !sessionsError && !workspacesError && (
+            <ErrorState
+              message="Agent-name search is unavailable because agents could not be loaded. Title and workspace search still work."
+              className="mx-[var(--space-3)] mb-[var(--space-2)] px-[var(--space-2)] py-[var(--space-2)]"
+              onRetry={() => { void retryAgents() }}
+            />
+          )}
           {mode === 'sessions' && coverage.incomplete && !loading && !sessionsError && (
             <div role="status" data-testid="sessions-partial" className="mx-[var(--space-3)] mb-[var(--space-2)] rounded-md border border-[var(--color-border)] px-[var(--space-2)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
               <p>{partialListMessage(coverage.partialErrors.length)}</p>
@@ -458,7 +471,14 @@ export function SearchModal() {
             </div>
           )}
           {sessionsError || workspacesError ? (
-            <div className="px-[var(--space-2-5)] py-[var(--space-6)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Could not load sessions — try again</div>
+            <ErrorState
+              message={`Could not load ${failedRequests} — try again`}
+              className="px-[var(--space-2-5)] py-[var(--space-6)] text-center"
+              onRetry={() => {
+                if (sessionsError) void retrySessions()
+                if (workspacesError) void retryWorkspaces()
+              }}
+            />
           ) : loading ? (
             <div className="px-[var(--space-2-5)] py-[var(--space-6)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
               {mode === 'workspaces' ? 'Loading workspaces...' : 'Loading sessions...'}

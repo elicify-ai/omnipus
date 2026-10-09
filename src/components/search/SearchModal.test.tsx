@@ -593,7 +593,7 @@ describe('SearchModal — error states', () => {
     renderModal()
 
     await waitFor(() =>
-      expect(screen.getByText('Could not load sessions — try again')).toBeInTheDocument(),
+      expect(screen.getByText('Could not load workspaces — try again')).toBeInTheDocument(),
     )
     expect(screen.queryByText('Unfiled')).not.toBeInTheDocument()
     // The known-bad denominator must not be used to render a (misleading) list.
