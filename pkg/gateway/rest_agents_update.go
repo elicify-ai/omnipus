@@ -55,6 +55,7 @@ type restAPIUpdateAgentFlow struct {
 	cfg                 *config.Config
 	foundIdx            int
 	rawBody             []byte
+	presence            rawJSONFields
 	foundAgent          config.AgentConfig
 	toolsCoverageMutate func(*config.Config)
 	workspace           string
@@ -152,10 +153,9 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	// this raw-body-sniff pattern for exactly this failure mode; ADR-037
 	// follows the same precedent rather than accepting the silent drop). Read
 	// +restore r.Body so the normal decode below is unaffected.
-	var readErr error
-	uf.rawBody, readErr = io.ReadAll(io.LimitReader(uf.r.Body, 1<<20))
-	if readErr != nil {
-		jsonErr(uf.w, http.StatusBadRequest, "could not read request body")
+	var readOK bool
+	uf.rawBody, readOK = readAgentWriteBody(uf.w, uf.r)
+	if !readOK {
 		return true
 	}
 	uf.r.Body = io.NopCloser(bytes.NewReader(uf.rawBody))
@@ -212,7 +212,12 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	}
 
 	validateEnabled := uf.cfg.Gateway.ValidateInbound
-	if !decodeAndValidate(uf.w, uf.r, "AgentUpdateRequest", &uf.ru.req, validateEnabled) {
+	if validateEnabled && !validateAgentIdentitySchema(uf.w, "AgentUpdateRequest", uf.rawBody, false) {
+		return true
+	}
+	// Validate a normalized copy above, but decode the original request so
+	// duplicate-key ordering and raw null/omission semantics do not change.
+	if !decodeAndValidate(uf.w, uf.r, "AgentUpdateRequest", &uf.ru.req, false) {
 		return true
 	}
 	if uf.ru.req.Revision == "" {
@@ -223,21 +228,23 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 		jsonErr(uf.w, http.StatusBadRequest, err.Error())
 		return true
 	}
-	var presence map[string]json.RawMessage
-	if err := json.Unmarshal(uf.rawBody, &presence); err == nil {
-		if _, supplied := presence["updated_at"]; supplied {
-			writeJSON(uf.w, http.StatusBadRequest, gen.ErrorResponse{
-				Error: "updated_at is read-only; use revision for configuration updates",
-				Code:  strPtr("invalid_input"),
-				Field: strPtr("updated_at"),
-			})
+	var fieldsOK bool
+	uf.presence, fieldsOK = readAgentUpdateFields(uf.w, uf.rawBody)
+	if !fieldsOK {
+		return true
+	}
+	if uf.presence.has("updated_at") {
+		writeJSON(uf.w, http.StatusBadRequest, gen.ErrorResponse{
+			Error: "updated_at is read-only; use revision for configuration updates",
+			Code:  strPtr("invalid_input"),
+			Field: strPtr("updated_at"),
+		})
+		return true
+	}
+	for _, field := range []string{"skills", "mcp_servers", "tool_policy_changes", "soul"} {
+		if uf.presence.hasNull(field) {
+			jsonErr(uf.w, http.StatusBadRequest, field+" must not be null")
 			return true
-		}
-		for _, field := range []string{"skills", "mcp_servers", "tool_policy_changes", "soul"} {
-			if raw, ok := presence[field]; ok && string(bytes.TrimSpace(raw)) == "null" {
-				jsonErr(uf.w, http.StatusBadRequest, field+" must not be null")
-				return true
-			}
 		}
 	}
 	if !validateAgentUpdateShape(uf.w, uf.rawBody) {
@@ -272,15 +279,9 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 			return true
 		}
 	} else {
-		var windowPeek map[string]json.RawMessage
-		if json.Unmarshal(uf.rawBody, &windowPeek) == nil {
-			if v, present := windowPeek["context_window_override"]; present &&
-				string(bytes.TrimSpace(v)) == "null" {
-				uf.ru.clearsContextWindowOverride = true
-			}
-		}
+		uf.ru.clearsContextWindowOverride = uf.presence.hasNull("context_window_override")
 	}
-	if !acceptAgentIdentityWrite(uf.w, &uf.ru.req, presence) {
+	if !acceptAgentIdentityWrite(uf.w, &uf.ru.req, uf.presence) {
 		return true
 	}
 	return uf.validateMaxToolIterations()
@@ -290,12 +291,12 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 // null or not in the closed set, before any field is persisted. The raw-body
 // presence map distinguishes null from omission, which the generated pointers
 // cannot. Colour letter-case is normalized; omitted fields are left alone.
-func acceptAgentIdentityWrite(w http.ResponseWriter, req *gen.AgentUpdateRequest, presence map[string]json.RawMessage) bool {
+func acceptAgentIdentityWrite(w http.ResponseWriter, req *gen.AgentUpdateRequest, presence rawJSONFields) bool {
 	figureValid := true
 	if req.Figure != nil {
 		_, figureValid = coreagent.CanonicalFigure(string(*req.Figure))
 	}
-	if !figureValid || bytes.Equal(bytes.TrimSpace(presence["figure"]), []byte("null")) {
+	if !figureValid || presence.hasNull("figure") {
 		jsonErr(w, http.StatusBadRequest, "figure must be Robot, Man, Woman, or Omnipus")
 		return false
 	}
@@ -303,7 +304,7 @@ func acceptAgentIdentityWrite(w http.ResponseWriter, req *gen.AgentUpdateRequest
 	if req.Role != nil {
 		_, roleValid = coreagent.CanonicalRole(string(*req.Role))
 	}
-	if !roleValid || bytes.Equal(bytes.TrimSpace(presence["role"]), []byte("null")) {
+	if !roleValid || presence.hasNull("role") {
 		jsonErr(w, http.StatusBadRequest, "role must be one of the curated role slugs")
 		return false
 	}
@@ -311,7 +312,7 @@ func acceptAgentIdentityWrite(w http.ResponseWriter, req *gen.AgentUpdateRequest
 	if req.Color != nil {
 		canon, colorValid = coreagent.CanonicalColor(string(*req.Color))
 	}
-	if !colorValid || bytes.Equal(bytes.TrimSpace(presence["color"]), []byte("null")) {
+	if !colorValid || presence.hasNull("color") {
 		jsonErr(w, http.StatusBadRequest, "color must be one of the ten identity colours")
 		return false
 	}
@@ -331,13 +332,7 @@ func acceptAgentIdentityWrite(w http.ResponseWriter, req *gen.AgentUpdateRequest
 func (uf *restAPIUpdateAgentFlow) validateMaxToolIterations() bool {
 	uf.ru.clearsMaxToolIterations = false
 	if uf.ru.req.MaxToolIterations == nil {
-		var peek map[string]json.RawMessage
-		if json.Unmarshal(uf.rawBody, &peek) == nil {
-			if v, present := peek["max_tool_iterations"]; present &&
-				string(bytes.TrimSpace(v)) == "null" {
-				uf.ru.clearsMaxToolIterations = true
-			}
-		}
+		uf.ru.clearsMaxToolIterations = uf.presence.hasNull("max_tool_iterations")
 		return false
 	}
 	if err := config.ValidateAgentMaxToolIterations(*uf.ru.req.MaxToolIterations, &uf.cfg.Agents.Defaults); err != nil {
