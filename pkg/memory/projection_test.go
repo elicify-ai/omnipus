@@ -141,13 +141,15 @@ func TestSessionMeta_ProjectionStateCompositeKey(t *testing.T) {
 	}
 }
 
-// TestRollbackAppended_RestoresTurnStartEmptiedSet — spec test 16 (B-24,
-// US-6.AC5): on abort the archive length, Skip AND the emptied-set return to
-// their turn-start values in one write; entries whose archive_line ≥ the
-// turn-start archive length are dropped, and a mid-turn empty of a
-// pre-turn line is undone (restored to whatever the turn-start set said —
-// here, capped).
-func TestRollbackAppended_RestoresTurnStartEmptiedSet(t *testing.T) {
+// TestRollbackWindow_RestoresTurnStartProjectionSet — spec test 16 (B-24,
+// US-6.AC5), ported to the non-destructive primitive (FR-006 / DEL-12): on
+// abort the Skip AND the projection set return to their turn-start values in
+// one write, while the appended archive bytes are RETAINED (never truncated).
+//
+// A mid-turn empty of a pre-turn line is undone by restoring the WHOLE
+// turn-start projection set; entries whose archive_line ≥ the turn-start
+// archive length go with it.
+func TestRollbackWindow_RestoresTurnStartProjectionSet(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 	const key = "rollback-emptied"
@@ -161,17 +163,13 @@ func TestRollbackAppended_RestoresTurnStartEmptiedSet(t *testing.T) {
 	if err := store.TruncateHistory(ctx, key, 3); err != nil {
 		t.Fatalf("TruncateHistory: %v", err)
 	}
-
-	// Capture the turn-start triple exactly as newTurnState will.
-	turnStartLines := 4
-	turnStartSkip := 1
-	pm, err := store.GetProjection(ctx, key)
+	snap, err := store.SnapshotWindow(ctx, key)
 	if err != nil {
-		t.Fatalf("GetProjection: %v", err)
+		t.Fatalf("SnapshotWindow: %v", err)
 	}
-	turnStartSet := pm.Entries.Clone()
-	if len(turnStartSet) != 2 {
-		t.Fatalf("turn-start set = %v, want 2 entries", turnStartSet)
+	start := snap.State.Clone()
+	if start.Count != 4 || start.Skip != 1 || len(start.Projection.Entries) != 2 {
+		t.Fatalf("turn-start snapshot = %+v, want Count=4 Skip=1 and 2 projection entries", start)
 	}
 
 	// Mid-turn: append lines 4 and 5, cap line 4, empty line 5, AND empty the
@@ -191,60 +189,57 @@ func TestRollbackAppended_RestoresTurnStartEmptiedSet(t *testing.T) {
 	if meta.Skip != 4 {
 		t.Fatalf("mid-turn skip = %d, want 4 (the intermediate state the rollback must not keep)", meta.Skip)
 	}
-	// The mid-turn prune removed lines 1..3's entries; mutate turnStartSet's
-	// caller copy afterwards to prove the store does not alias it.
 
-	// Abort → rollback to the turn-start triple.
-	if err = store.RollbackAppended(ctx, key, turnStartLines, turnStartSkip, turnStartSet); err != nil {
-		t.Fatalf("RollbackAppended: %v", err)
+	// Abort → rollback to the turn-start window snapshot (FR-006).
+	if err = store.RollbackWindow(ctx, key, start); err != nil {
+		t.Fatalf("RollbackWindow: %v", err)
 	}
-	turnStartSet[ProjectionKey{ToolCallID: "zzz", ArchiveLine: 0}] = ProjectionEmptied // caller-side mutation after the call
 
 	meta, err = store.readMeta(key)
 	if err != nil {
 		t.Fatalf("readMeta: %v", err)
 	}
-	if meta.Count != 4 || meta.Skip != 1 {
-		t.Errorf("after rollback count/skip = %d/%d, want 4/1", meta.Count, meta.Skip)
+	if meta.Skip != 1 {
+		t.Errorf("after rollback Skip = %d, want 1", meta.Skip)
 	}
-	if n := countFileLines(t, store.jsonlPath(key)); n != 4 {
-		t.Errorf("archive lines = %d, want 4", n)
+	// FR-006: the archive is NOT truncated — it keeps all 6 lines; Count
+	// re-syncs to the physical length while Skip returns to turn start.
+	if n := countFileLines(t, store.jsonlPath(key)); n != 6 {
+		t.Errorf("FR-006: archive lines = %d, want 6 (retained, not truncated)", n)
 	}
-	pm, err = store.GetProjection(ctx, key)
+	pm, err := store.GetProjection(ctx, key)
 	if err != nil {
 		t.Fatalf("GetProjection: %v", err)
 	}
 	assertProjectionEqual(t, "after rollback", pm.Entries, ProjectionSet{
 		{ToolCallID: "c1", ArchiveLine: 1}: ProjectionEmptied, // turn-start state kept
 		{ToolCallID: "c2", ArchiveLine: 2}: ProjectionCapped,  // mid-turn empty undone
-		// c3 (emptied mid-turn, not in the turn-start set) is gone.
-		// c4/c5 (archive_line ≥ 4) are dropped.
+		// c3 (emptied mid-turn, not in the turn-start set) is gone; c4/c5
+		// (archive_line ≥ the turn-start count) go with the restored set.
 	})
 
-	// Rollback is idempotent: a second call with the same triple changes
-	// nothing (US-6.AC5 "never an intermediate state").
-	if err = store.RollbackAppended(ctx, key, turnStartLines, turnStartSkip, pm.Entries); err != nil {
-		t.Fatalf("RollbackAppended(2nd): %v", err)
-	}
-	pm2, err := store.GetProjection(ctx, key)
+	// The model view excludes the appended span (lines 4, 5) while ReadArchive
+	// still returns every retained byte.
+	archived, err := store.ReadArchive(ctx, key)
 	if err != nil {
-		t.Fatalf("GetProjection: %v", err)
+		t.Fatalf("ReadArchive: %v", err)
 	}
-	assertProjectionEqual(t, "after 2nd rollback", pm2.Entries, pm.Entries)
-
-	// A nil turn-start set means "nothing was emptied at turn start": every
-	// emptied entry goes, capped pre-turn entries stay.
-	mustSetProjection(t, store, key, "c1", 1, ProjectionEmptied)
-	if err = store.RollbackAppended(ctx, key, turnStartLines, turnStartSkip, nil); err != nil {
-		t.Fatalf("RollbackAppended(nil set): %v", err)
+	if len(archived) != 6 {
+		t.Fatalf("FR-006: ReadArchive = %d messages, want 6 retained", len(archived))
 	}
-	pm, err = store.GetProjection(ctx, key)
+	snapAfter, err := store.SnapshotWindow(ctx, key)
 	if err != nil {
-		t.Fatalf("GetProjection: %v", err)
+		t.Fatalf("SnapshotWindow after rollback: %v", err)
 	}
-	assertProjectionEqual(t, "after nil-set rollback", pm.Entries, ProjectionSet{
-		{ToolCallID: "c2", ArchiveLine: 2}: ProjectionCapped,
-	})
+	history, lines := WindowHistory(snapAfter)
+	if len(history) == 0 {
+		t.Error("model view is empty after rollback; expected the retained turn-start window")
+	}
+	for _, l := range lines {
+		if l >= start.Count {
+			t.Errorf("FR-006: model view leaked aborted archive line %d (>= turn-start Count %d)", l, start.Count)
+		}
+	}
 }
 
 // TestSetHistory_RefusesNonEmptyArchive — spec test 57 (B-53c, US-15.AC5,

@@ -84,20 +84,6 @@ func (b *JSONLBackend) TruncateHistory(key string, keepLast int) {
 	}
 }
 
-// RollbackAppended implements SessionStore — truncates the on-disk archive to
-// targetArchiveLen lines, restores meta.Skip = min(targetSkip, targetArchiveLen)
-// and restores the projection state to the turn-start emptiedSet, in one meta
-// write (ADR-066 FR-020). The Skip restore fixes the mid-turn eviction bug: if
-// windowTrim advanced Skip during a live turn and the turn then aborts,
-// restoring Skip to targetSkip ensures GetHistory returns the exact pre-turn
-// live window (SC-001, SC-010); the projection restore does the same for
-// mid-turn empties.
-func (b *JSONLBackend) RollbackAppended(key string, targetArchiveLen, targetSkip int, emptiedSet memory.ProjectionSet) {
-	if err := b.store.RollbackAppended(context.Background(), key, targetArchiveLen, targetSkip, emptiedSet); err != nil {
-		slog.Error("session: rollback appended", "key", key, "error", err)
-	}
-}
-
 // Projection implements SessionStore.
 func (b *JSONLBackend) Projection(key string) memory.ProjectionMeta {
 	pm, err := b.store.GetProjection(context.Background(), key)

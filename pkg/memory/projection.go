@@ -147,33 +147,3 @@ func projectionFromEntries(entries []projectionEntry) ProjectionSet {
 	}
 	return out
 }
-
-// rollbackProjection computes the post-abort set (FR-020, US-6.AC5):
-//
-//   - every entry (current or turn-start) with archive_line ≥ targetLines
-//     is dropped — those lines no longer exist;
-//   - current `capped` / `capped_failure` entries below targetLines are
-//     kept — capping happens at append time, so a capped pre-turn line was
-//     capped at turn start too;
-//   - turn-start entries below targetLines are restored verbatim and win
-//     over the current state, undoing every mid-turn empty of a pre-turn
-//     line;
-//   - current `emptied` entries below targetLines that are absent from the
-//     turn-start set were emptied during the aborted turn and go.
-//
-// Callers pass the whole turn-start set (both states) so a capped→emptied
-// transition during the turn rolls back to capped, not to full.
-func rollbackProjection(current, turnStart ProjectionSet, targetLines int) ProjectionSet {
-	out := make(ProjectionSet, len(turnStart))
-	for k, v := range current {
-		if k.ArchiveLine < targetLines && (v == ProjectionCapped || v == ProjectionCappedFailure) {
-			out[k] = v
-		}
-	}
-	for k, v := range turnStart {
-		if k.ArchiveLine < targetLines {
-			out[k] = v
-		}
-	}
-	return out
-}

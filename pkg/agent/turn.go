@@ -207,13 +207,9 @@ type turnState struct {
 	cancelling atomic.Bool
 
 	// initialEmptiedSet is the session's WHOLE projection set
-	// ((tool_call_id, archive_line) → capped | emptied) as of turn start —
-	// the third member of the turn-start restore triple beside
-	// initialArchiveLen and initialHistoryLength (ADR-066 FR-020). Captured
-	// once in newTurnState and never moved during the turn; restoreSession
-	// and HardAbort hand it to RollbackAppended so an aborted turn's
-	// emptying is undone together with its archive tail and its Skip
-	// advance. nil when the store had nothing projected (or no store).
+	// ((tool_call_id, archive_line) → capped | emptied) as of turn start.
+	// Captured once in newTurnState and never moved during the turn. nil when
+	// the store had nothing projected (or no store).
 	initialEmptiedSet memory.ProjectionSet
 	// Captured once from the atomic store, including the actual cursor/anchor.
 	initialWindow  *memory.WindowState
@@ -239,7 +235,6 @@ type turnState struct {
 	finishedByHardAbort  atomic.Bool
 	session              session.SessionStore // Session store reference
 	initialHistoryLength int                  // Snapshot of window (GetHistory) length at turn start
-	initialArchiveLen    int                  // Snapshot of archive (ReadArchive) line count at turn start — for Skip-preserving rollback
 
 	// injectedRecallSpan is the recall span whose messages are currently
 	// present in this turn's in-memory message slice (ADR-066 D5.4,
@@ -874,7 +869,6 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 					ts.initialWindow = &start
 					history, _ := memory.WindowHistory(snap)
 					ts.initialHistoryLength = len(history)
-					ts.initialArchiveLen = start.Count
 					ts.initialEmptiedSet = start.Projection.Entries.Clone()
 				}
 			}

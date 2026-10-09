@@ -19,19 +19,24 @@ the recall archive (FR-005). Test-only; there is no production caller. An
 agent "reclaiming disk" through Compact permanently deletes every evicted
 turn that recall depends on. Same warning on `store.go::StoreWriter`.
 
-## SetHistory is hydration-only; RollbackAppended is the only undo
+## SetHistory is hydration-only; RollbackWindow is the only undo
 
 - `SetHistory` refuses any archive with ≥1 line
   (`projection.go::ErrArchiveNotEmpty`) and never touches Skip.
 - That refusal is load-bearing: a first-fill caller treats
   `errors.Is(err, ErrArchiveNotEmpty)` as its already-imported signal (the
   deleted `migration.go::MigrateFromJSON` relied on exactly this).
-- `jsonl.go::RollbackAppended` is the ONLY correct way to undo turn
-  appends — a SetHistory-based rollback would reset Skip to 0,
-  permanently deleting evicted turns (SC-001).
-- `RollbackAppended` restores state even when it rewrites no bytes:
-  pkg/agent's `windowTrim` can advance Skip mid-turn, and a no-op file
-  must still undo that. This is pkg/memory's only relationship to
+- `window.go::RollbackWindow` is the SOLE rollback primitive (session-core
+  FR-006 / DEL-12). It is non-destructive: it restores the turn-start
+  cursor/anchor/projection AND records the appended span in
+  `sessionMeta.Retracted`, a RETAINED-but-EXCLUDED effect. The archive never
+  shrinks — the aborted bytes stay on disk for recall while `WindowHistory`
+  omits them from every provider request. A SetHistory-based rollback would
+  instead reset Skip to 0, permanently deleting evicted turns (SC-001), and
+  the old truncating primitive is gone.
+- `RollbackWindow` restores state even when it excludes no bytes (nothing was
+  appended): pkg/agent's `windowTrim` can advance Skip mid-turn, and a no-op
+  rollback must still undo that. This is pkg/memory's only relationship to
   windowTrim — the function itself lives in pkg/agent; see that package's
   CLAUDE.md.
 
@@ -42,7 +47,7 @@ turn that recall depends on. Same warning on `store.go::StoreWriter`.
 - Meta writes and full rewrites go through `fileutil.WriteFileAtomic`
   (temp + fsync + rename).
 - Crash ordering: meta is written BEFORE file rewrites in
-  RollbackAppended/SetHistory/Compact, so the failure direction is always
+  SetHistory/Compact, so the failure direction is always
   "too many messages", never data loss; Skip paths reconcile
   `meta.Count` against the real line count (`countLines`).
 - Malformed lines (partial crash writes) are logged and skipped, never

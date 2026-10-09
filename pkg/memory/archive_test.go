@@ -335,100 +335,131 @@ func TestArchivedMessage_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestRollbackAppended verifies that RollbackAppended truncates the archive to
-// the requested line count AND restores meta.Skip to the supplied targetSkip
-// (SC-001, SC-010 — mid-turn eviction fix).
+// TestRollbackWindow_NonDestructive verifies session-core FR-006 / DEL-12:
+// RollbackWindow restores the turn-start Skip WITHOUT truncating the archive.
+// The bytes appended during the turn are RETAINED (append-only); they are
+// merely excluded from the model view WindowHistory builds.
 //
 // BDD: Given a session with 10 messages where Skip=3 (first 3 evicted),
 //
-//	When 4 more messages are appended and then rolled back via
-//	RollbackAppended(targetLines=10, targetSkip=3),
-//	Then the archive has 10 lines (not 14), and Skip is restored to 3.
-func TestRollbackAppended(t *testing.T) {
+//	And 4 more messages appended during a turn,
+//	When the rollback restores the turn-start window snapshot (Count=10, Skip=3),
+//	Then the archive KEEPS all 14 lines (bytes preserved),
+//	And Skip is restored to 3, and the model view excludes the 4 appended lines.
+func TestRollbackWindow_NonDestructive(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
-	const key = "rollback-test"
+	const key = "rollback-window-nondestructive"
 	const initial = 10
 	const extra = 4
 
-	// Add initial messages.
 	for i := 0; i < initial; i++ {
 		if err := store.AddMessage(ctx, key, "user", fmt.Sprintf("msg%d", i)); err != nil {
 			t.Fatalf("AddMessage %d: %v", i, err)
 		}
 	}
-
-	// Advance Skip (simulate eviction).
 	const skipCount = 3
 	if err := store.TruncateHistory(ctx, key, initial-skipCount); err != nil {
 		t.Fatalf("TruncateHistory: %v", err)
 	}
-
-	// Read meta to confirm Skip.
-	meta, err := store.readMeta(key)
+	snap, err := store.SnapshotWindow(ctx, key)
 	if err != nil {
-		t.Fatalf("readMeta before rollback: %v", err)
+		t.Fatalf("SnapshotWindow: %v", err)
 	}
-	if meta.Skip != skipCount {
-		t.Fatalf("pre-rollback Skip = %d, want %d", meta.Skip, skipCount)
+	start := snap.State.Clone()
+	if start.Count != initial || start.Skip != skipCount {
+		t.Fatalf("turn-start snapshot Count=%d Skip=%d, want %d/%d", start.Count, start.Skip, initial, skipCount)
 	}
+	windowAtStart, _ := WindowHistory(snap)
 
-	// Append extra messages (simulating a turn's writes).
 	for i := 0; i < extra; i++ {
 		if err = store.AddMessage(ctx, key, "assistant", fmt.Sprintf("extra%d", i)); err != nil {
 			t.Fatalf("AddMessage extra %d: %v", i, err)
 		}
 	}
-
-	// Confirm archive has initial+extra lines.
 	path := store.jsonlPath(key)
-	beforeRollback := countFileLines(t, path)
-	if beforeRollback != initial+extra {
-		t.Fatalf("before rollback: expected %d lines, got %d", initial+extra, beforeRollback)
+	if n := countFileLines(t, path); n != initial+extra {
+		t.Fatalf("before rollback: expected %d lines, got %d", initial+extra, n)
 	}
 
-	// Roll back to initial line count, restoring Skip to the turn-start value
-	// (targetSkip = initialArchiveLen - initialHistoryLength = 10 - 7 = 3).
-	if err = store.RollbackAppended(ctx, key, initial, skipCount, nil); err != nil {
-		t.Fatalf("RollbackAppended: %v", err)
+	if err = store.RollbackWindow(ctx, key, start); err != nil {
+		t.Fatalf("RollbackWindow: %v", err)
 	}
 
-	// After rollback: archive must have exactly initial lines.
-	afterLines := countFileLines(t, path)
-	if afterLines != initial {
-		t.Fatalf("after rollback: expected %d lines, got %d", initial, afterLines)
+	// FR-006: the archive keeps every byte (append-only) — no truncation.
+	if n := countFileLines(t, path); n != initial+extra {
+		t.Fatalf("FR-006: after rollback expected %d retained lines, got %d", initial+extra, n)
 	}
-
-	// Skip must be restored to skipCount (the turn-start value).
 	metaAfter, err := store.readMeta(key)
 	if err != nil {
 		t.Fatalf("readMeta after rollback: %v", err)
 	}
 	if metaAfter.Skip != skipCount {
-		t.Errorf("after rollback: Skip = %d, want %d (must be restored to turn-start value)", metaAfter.Skip, skipCount)
+		t.Errorf("after rollback: Skip = %d, want %d (turn-start value)", metaAfter.Skip, skipCount)
 	}
-
-	// ReadArchive must return the first initial messages.
+	// ReadArchive still returns every retained byte, including the aborted span.
 	archived, err := store.ReadArchive(ctx, key)
 	if err != nil {
 		t.Fatalf("ReadArchive after rollback: %v", err)
 	}
-	if len(archived) != initial {
-		t.Fatalf("ReadArchive after rollback: expected %d messages, got %d", initial, len(archived))
+	if len(archived) != initial+extra {
+		t.Fatalf("FR-006: ReadArchive after rollback: expected %d retained messages, got %d", initial+extra, len(archived))
 	}
-	// The evicted messages (index < Skip) must still be accessible.
 	if archived[0].Content != "msg0" {
-		t.Errorf("archived[0].Content = %q, want %q", archived[0].Content, "msg0")
+		t.Errorf("archived[0].Content = %q, want %q (evicted prefix retained)", archived[0].Content, "msg0")
+	}
+	// The model view (GetHistory's WindowHistory) excludes the aborted span and
+	// matches the turn-start window.
+	snapAfter, err := store.SnapshotWindow(ctx, key)
+	if err != nil {
+		t.Fatalf("SnapshotWindow after rollback: %v", err)
+	}
+	windowAfter, linesAfter := WindowHistory(snapAfter)
+	if len(windowAfter) != len(windowAtStart) {
+		t.Errorf("model window after rollback = %d messages, want %d (turn-start window)", len(windowAfter), len(windowAtStart))
+	}
+	for _, l := range linesAfter {
+		if l >= initial {
+			t.Errorf("FR-006: aborted span leaked into the model view: archive line %d >= turn-start count %d", l, initial)
+		}
+	}
+
+	// A LATER valid append lands physically after the excluded span and must be
+	// visible again: the aborted span never resurrects and never blocks new
+	// content (FR-006).
+	if err = store.AddMessage(ctx, key, "user", "later-valid-append"); err != nil {
+		t.Fatalf("AddMessage later: %v", err)
+	}
+	snapLater, err := store.SnapshotWindow(ctx, key)
+	if err != nil {
+		t.Fatalf("SnapshotWindow after later append: %v", err)
+	}
+	windowLater, linesLater := WindowHistory(snapLater)
+	foundLater := false
+	for i, l := range linesLater {
+		if windowLater[i].Content == "later-valid-append" {
+			foundLater = true
+		}
+		if l >= initial && l < initial+extra {
+			t.Errorf("FR-006: the aborted span must stay excluded after a later append; leaked line %d", l)
+		}
+	}
+	if !foundLater {
+		t.Error("FR-006: a later valid append must be visible in the model view")
+	}
+	if len(windowLater) != len(windowAtStart)+1 {
+		t.Errorf("later-append window = %d messages, want %d (turn-start window + the one later append)", len(windowLater), len(windowAtStart)+1)
 	}
 }
 
-// TestRollbackAppended_NoopWhenTargetGeCount verifies that RollbackAppended
-// does not rewrite the JSONL file when targetLines >= the current line count,
-// but still updates Skip when targetSkip differs from the current Skip.
-func TestRollbackAppended_NoopWhenTargetGeCount(t *testing.T) {
+// TestRollbackWindow_NoSpanWhenNothingAppended verifies session-core FR-006:
+// when nothing was appended since the snapshot (target Count == archive
+// length), RollbackWindow records no excluded span and leaves the archive
+// byte-for-byte untouched.
+func TestRollbackWindow_NoSpanWhenNothingAppended(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
-	const key = "rollback-noop"
+	const key = "rollback-window-nospan"
 	const n = 5
 
 	for i := 0; i < n; i++ {
@@ -436,25 +467,26 @@ func TestRollbackAppended_NoopWhenTargetGeCount(t *testing.T) {
 			t.Fatalf("AddMessage %d: %v", i, err)
 		}
 	}
+	snap, err := store.SnapshotWindow(ctx, key)
+	if err != nil {
+		t.Fatalf("SnapshotWindow: %v", err)
+	}
+	start := snap.State.Clone()
 	path := store.jsonlPath(key)
 	before := countFileLines(t, path)
 
-	// Calling with target == current count, targetSkip=0: file unchanged.
-	if err := store.RollbackAppended(ctx, key, n, 0, nil); err != nil {
-		t.Fatalf("RollbackAppended noop: %v", err)
+	if err := store.RollbackWindow(ctx, key, start); err != nil {
+		t.Fatalf("RollbackWindow: %v", err)
 	}
-	after := countFileLines(t, path)
-	if after != before {
-		t.Errorf("no-op case: expected %d lines, got %d", before, after)
+	if after := countFileLines(t, path); after != before {
+		t.Errorf("no-op rollback: expected %d lines, got %d", before, after)
 	}
-
-	// Calling with target > count is also a no-op for the file.
-	if err := store.RollbackAppended(ctx, key, n+100, 0, nil); err != nil {
-		t.Fatalf("RollbackAppended noop (>count): %v", err)
+	metaAfter, err := store.readMeta(key)
+	if err != nil {
+		t.Fatalf("readMeta: %v", err)
 	}
-	after2 := countFileLines(t, path)
-	if after2 != before {
-		t.Errorf("target>count case: expected %d lines, got %d", before, after2)
+	if len(metaAfter.Retracted) != 0 {
+		t.Errorf("no-op rollback must record no excluded span, got %+v", metaAfter.Retracted)
 	}
 }
 

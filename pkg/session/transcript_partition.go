@@ -1,9 +1,13 @@
 // transcript_partition.go: UTC day partitioning of the one append-only
 // chat/model transcript archive (session-core U2, FR-004/FR-005).
 //
-// The archive is ONE logical append-only transcript split into UTC day files
-// so a window read can be bounded to the days it needs (FR-005). The layout,
-// all inside a session directory:
+// PARTIAL — FR-005 bounded reads are not yet delivered. The archive is ONE
+// logical append-only transcript split into UTC day files, which is the
+// LAYOUT FR-005 needs; but the model window still decodes from line zero
+// (pkg/memory/window.go::snapshotWindowLocked / AppendWindowMessage), so a
+// window read is NOT yet bounded to the days it needs. This comment must be
+// updated to an accurate "bounded read" claim only once that lands. The
+// layout, all inside a session directory:
 //
 //	transcript.jsonl        the CURRENT (most recent) day's file — the live,
 //	                        hot file every existing reader/writer already
