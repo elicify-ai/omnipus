@@ -86,9 +86,14 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   // when lifecycle_state is 'stopped'. The stopped sidebar row shows its
   // cause alongside the Stopped label.
   stop_note?: WireSessionShape['stop_note']
-  // Wave 1 Sessions. Set only when the lifecycle record is queued or running.
-  // Omitted otherwise. The Running filter uses this, never lifecycle_state
-  // (working collapses queued and running).
+  // Wave 1 Sessions. Projected queued/running classification, not a raw
+  // lifecycle-record export. Present only when the same loaded lifecycle record's
+  // canonical current-boot projection produces lifecycle_state: working:
+  // queued for a queued record, running for a running record. Omitted for any
+  // other projected display state, including Interrupted after a prior-boot root
+  // execution, and when no usable lifecycle record is available.
+  // lifecycle_state is authoritative. The Sessions Running filter matches running;
+  // queued does not match. A nonmatching parent may remain as hierarchy context.
   execution?: WireSessionShape['execution']
   // How many background shell commands this session itself owns. Omitted when
   // the process table is unavailable (unknown, not zero). Zero means checked
