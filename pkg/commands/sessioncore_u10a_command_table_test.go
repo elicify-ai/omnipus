@@ -124,3 +124,27 @@ func TestSessionCoreU10a_CanonicalSurvivorsPresent(t *testing.T) {
 		}
 	}
 }
+
+// TestSessionCoreU10a_NewRetiredFromServerCommandTable states the founder
+// ruling of 2026-10-09 on its own: "/new is RETIRED — the server must not
+// expose it as a web command; starting an extra chat is the local 'New chat'
+// action." RED on the pre-cut code, where the table still defines /new (with a
+// /clear alias). The /clear replacement's own semantics are asserted at the
+// mechanism level (pkg/memory clear-mechanism test), not by table presence
+// (X3 interim).
+func TestSessionCoreU10a_NewRetiredFromServerCommandTable(t *testing.T) {
+	reg := NewRegistry(BuiltinDefinitions())
+	if def, found := reg.Lookup("new"); found {
+		t.Errorf("/new must be retired from the server command table (founder 2026-10-09): still resolves to /%s", def.Name)
+	}
+	for _, def := range BuiltinDefinitions() {
+		if def.Name == "new" {
+			t.Errorf("BuiltinDefinitions still defines a server /new command (founder 2026-10-09: retired)")
+		}
+		for _, a := range def.Aliases {
+			if a == "new" {
+				t.Errorf("/new must not survive as an alias on /%s (retired, no hidden alias)", def.Name)
+			}
+		}
+	}
+}
