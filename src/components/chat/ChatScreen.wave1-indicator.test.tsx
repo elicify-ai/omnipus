@@ -19,6 +19,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { useOmnipusRuntime } from '@/lib/omnipus-runtime'
 import { useToolApprovalStore } from '@/store/toolApproval'
+import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
 
 class ResizeObserverStub {
   observe() {}
@@ -341,11 +342,15 @@ describe('live inline indicator', () => {
   it('preserves the goal phrase without letting it override a real Working phase', async () => {
     const sid = 'goal-tool-phase'
     seedMessages(sid, streamingPair(sid, 'agent-jim'), { streaming: true, replaying: false })
-    act(() => useChatStore.setState({ goalStatus: {
+    const goalStatus: GoalStatusFrame = {
       type: 'goal_status', session_id: sid, goal_id: 'goal-tool-phase',
       condition: 'Ship the release notes', round: 0, max_rounds: 20,
       latest_reason: '', active_loops: 1, cap: 16, state: 'active',
-    } }))
+    }
+    act(() => useChatStore.setState((s) => ({
+      goalStatus,
+      sessionsById: { ...s.sessionsById, [sid]: { ...s.sessionsById[sid], goalStatus } },
+    })))
     const bubble = assistantBubble(await mount())
     expect(within(bubble).getByText('Framing your goal')).toBeInTheDocument()
     expectMarkMotion(bubble, 'thinking')
@@ -477,6 +482,7 @@ describe('plain, replay, and idle bubbles', () => {
       messages[1].tool_calls = [call]
       seedMessages(sid, messages, { streaming: true, replaying: false })
       const bubble = assistantBubble(await mount())
+      expect(await within(bubble).findByText('Jim')).toBeInTheDocument()
       expect(within(bubble).getByText('Working on it…')).toBeInTheDocument()
       expectMarkMotion(bubble, 'working')
       expectNameOnly(bubble, 'Jim')

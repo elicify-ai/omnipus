@@ -122,12 +122,14 @@ function waitingCopy(approvalTool: string | null, questionPending: boolean): str
 
 /**
  * Precedence follows the spec indicator table, limited to inputs that exist
- * today: disconnect, a pending approval, a pending question card, a hidden
- * running tool's existing label, a goal phrase, a model turn, then idle.
+ * today: disconnect, a pending approval, a pending question card, a correlated
+ * running tool, a model turn, then idle. Goal/tool labels only choose the copy.
  * Queued work has no accepted input on this screen and is not invented here.
  */
 export function useReplySlotPhase(input: {
   streaming: boolean
+  /** A running tool correlated to this reply, independent of card visibility. */
+  hasRunningTool: boolean
   toolLabel: string | null
   goalLabel: string | null
   /** Last settled assistant row. Idle is not painted on older rows. */
@@ -160,10 +162,12 @@ export function useReplySlotPhase(input: {
     return { kind: 'waiting', text: waitingCopy(approvalTool, questionPending) }
   }
 
-  // Goal copy wins over a tool label, matching the previous indicator.
-  if (input.streaming && input.goalLabel) return { kind: 'thinking', text: input.goalLabel }
-  if (input.streaming && input.toolLabel) return { kind: 'working', text: input.toolLabel }
-  if (input.streaming) return { kind: 'thinking', text: null }
+  // Execution chooses the phase; goal copy still wins over the hidden-tool
+  // label. Without specific copy, keep the existing working phrase stable.
+  if (input.streaming && input.hasRunningTool) {
+    return { kind: 'working', text: input.goalLabel ?? input.toolLabel ?? 'Working on it…' }
+  }
+  if (input.streaming) return { kind: 'thinking', text: input.goalLabel }
   if (input.idleEligible && !isReplaying && isConnected) return { kind: 'idle' }
   return { kind: 'none' }
 }
