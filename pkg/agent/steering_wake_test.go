@@ -21,7 +21,7 @@ func TestSteeringDrain_WritesConsumedMarkerForWake(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	al := &AgentLoop{
-		steering:           newSteeringQueue(SteeringOneAtATime),
+		steering:           newSteeringQueue(),
 		sharedSessionStore: store,
 	}
 

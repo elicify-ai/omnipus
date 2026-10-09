@@ -145,6 +145,7 @@ func DefaultConfig() *Config {
 
 			SteerRatePerMinute: DefaultSMSteerRatePerMinute,
 			SteerBody:          DefaultSMSteerBodyBytes,
+			SteerAggregateBody: DefaultSMSteerAggregateBodyBytes,
 
 			NeedsInputTTL: duration(DefaultSMNeedsInputTTL),
 

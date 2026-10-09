@@ -19,10 +19,6 @@ import (
 )
 
 const (
-	// workerInboxCap is the buffered capacity of a session worker's inbox.
-	// A depth of 8 covers rapid-fire follow-ups without blocking the dispatcher.
-	workerInboxCap = 8
-
 	// continueDrainMaxRetries bounds processTurn's drain-loop retry of a
 	// failing al.Continue call before giving up and abandoning the queued
 	// steering messages (design note "Recommended design"). The mixed
@@ -129,8 +125,13 @@ func newSessionWorker(scope string, parent *AgentLoop, admissionRelease func()) 
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &sessionWorker{
-		scope:            scope,
-		inbox:            make(chan bus.InboundMessage, workerInboxCap),
+		scope: scope,
+		// FR-009 / DEL-03: the worker's own bounded inbox cap (formerly the
+		// separate workerInboxCap=8) is deleted; its buffer shares the ONE
+		// ordinary waiting-item bound (MaxQueueSize, 200) so the worker cannot
+		// hold a second, competing capacity. The deeper unification of this
+		// inbox into the steering FIFO is a follow-up (see the U3 report).
+		inbox:            make(chan bus.InboundMessage, MaxQueueSize),
 		ctx:              ctx,
 		cancel:           cancel,
 		done:             make(chan struct{}),

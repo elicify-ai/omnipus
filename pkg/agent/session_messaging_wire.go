@@ -229,6 +229,17 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			// (arch-M2): the live closure re-reads config per call, mirroring
 			// the async consumer's per-event read.
 			dt.SetSessionMessagingEnabled(al.sessionMessagingEnabledLive())
+			// FR-011/#1216: wire the live session_messaging.steer_rate/steer_body
+			// limits into the tool that actually enforces them. Before this,
+			// SetSteerCaps had no production caller at all, so an operator's
+			// steer_body/steer_rate edit governed nothing but the saved/displayed
+			// config — the tool kept enforcing its constructor defaults for the
+			// life of the process. This function runs at boot AND on every hot
+			// reload (see its callers), so a config edit now changes the real
+			// admission boundary on the next steer/respond.
+			if cfg := al.GetConfig(); cfg != nil {
+				dt.SetSteerCaps(cfg.SessionMessaging.EffectiveSteerRatePerMinute(), cfg.SessionMessaging.EffectiveSteerBodyBytes())
+			}
 		}
 	}
 

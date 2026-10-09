@@ -25,99 +25,38 @@ import (
 
 // --- steeringQueue unit tests ---
 
-func TestSteeringQueue_PushDequeue_OneAtATime(t *testing.T) {
-	sq := newSteeringQueue(SteeringOneAtATime)
+// FR-009 / DEL-04: the ordinary FIFO has one dequeue shape. The deleted
+// one-at-a-time mode and its per-poll drain are gone, so this covers the
+// surviving all-at-once scope drain (ordered, then empty).
+func TestSteeringQueue_PushDequeue_AllAtOnce(t *testing.T) {
+	sq := newSteeringQueue()
 
-	sq.push(providers.Message{Role: "user", Content: "msg1"})
-	sq.push(providers.Message{Role: "user", Content: "msg2"})
-	sq.push(providers.Message{Role: "user", Content: "msg3"})
-
+	for _, c := range []string{"msg1", "msg2", "msg3"} {
+		if err := sq.pushScope("test-scope", providers.Message{Role: "user", Content: c}); err != nil {
+			t.Fatalf("push %q: %v", c, err)
+		}
+	}
 	if sq.len() != 3 {
 		t.Fatalf("expected 3 messages, got %d", sq.len())
 	}
 
-	msgs := sq.dequeue()
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message in one-at-a-time mode, got %d", len(msgs))
-	}
-	if msgs[0].Content != "msg1" {
-		t.Fatalf("expected 'msg1', got %q", msgs[0].Content)
-	}
-	if sq.len() != 2 {
-		t.Fatalf("expected 2 remaining, got %d", sq.len())
-	}
-
-	msgs = sq.dequeue()
-	if len(msgs) != 1 || msgs[0].Content != "msg2" {
-		t.Fatalf("expected 'msg2', got %v", msgs)
-	}
-
-	msgs = sq.dequeue()
-	if len(msgs) != 1 || msgs[0].Content != "msg3" {
-		t.Fatalf("expected 'msg3', got %v", msgs)
-	}
-
-	msgs = sq.dequeue()
-	if msgs != nil {
-		t.Fatalf("expected nil from empty queue, got %v", msgs)
-	}
-}
-
-func TestSteeringQueue_PushDequeue_All(t *testing.T) {
-	sq := newSteeringQueue(SteeringAll)
-
-	sq.push(providers.Message{Role: "user", Content: "msg1"})
-	sq.push(providers.Message{Role: "user", Content: "msg2"})
-	sq.push(providers.Message{Role: "user", Content: "msg3"})
-
-	msgs := sq.dequeue()
+	msgs := sq.dequeueScope("test-scope")
 	if len(msgs) != 3 {
-		t.Fatalf("expected 3 messages in all mode, got %d", len(msgs))
+		t.Fatalf("expected 3 messages drained at once, got %d", len(msgs))
 	}
 	if msgs[0].Content != "msg1" || msgs[1].Content != "msg2" || msgs[2].Content != "msg3" {
 		t.Fatalf("unexpected messages: %v", msgs)
 	}
-
 	if sq.len() != 0 {
 		t.Fatalf("expected 0 remaining, got %d", sq.len())
 	}
-
-	msgs = sq.dequeue()
-	if msgs != nil {
+	if msgs = sq.dequeueScope("test-scope"); msgs != nil {
 		t.Fatalf("expected nil from empty queue, got %v", msgs)
 	}
 }
 
-func TestSteeringQueue_EmptyDequeue(t *testing.T) {
-	sq := newSteeringQueue(SteeringOneAtATime)
-	if msgs := sq.dequeue(); msgs != nil {
-		t.Fatalf("expected nil, got %v", msgs)
-	}
-}
-
-func TestSteeringQueue_SetMode(t *testing.T) {
-	sq := newSteeringQueue(SteeringOneAtATime)
-	if sq.getMode() != SteeringOneAtATime {
-		t.Fatalf("expected one-at-a-time, got %v", sq.getMode())
-	}
-
-	sq.setMode(SteeringAll)
-	if sq.getMode() != SteeringAll {
-		t.Fatalf("expected all, got %v", sq.getMode())
-	}
-
-	// Push two messages and verify all-mode drains them
-	sq.push(providers.Message{Role: "user", Content: "a"})
-	sq.push(providers.Message{Role: "user", Content: "b"})
-
-	msgs := sq.dequeue()
-	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages after mode switch, got %d", len(msgs))
-	}
-}
-
 func TestSteeringQueue_ConcurrentAccess(t *testing.T) {
-	sq := newSteeringQueue(SteeringOneAtATime)
+	sq := newSteeringQueue()
 
 	var wg sync.WaitGroup
 	const n = MaxQueueSize
@@ -127,7 +66,7 @@ func TestSteeringQueue_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			sq.push(providers.Message{Role: "user", Content: fmt.Sprintf("msg%d", i)})
+			sq.pushScope("test-scope", providers.Message{Role: "user", Content: fmt.Sprintf("msg%d", i)})
 		}(i)
 	}
 	wg.Wait()
@@ -143,7 +82,7 @@ func TestSteeringQueue_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if msgs := sq.dequeue(); len(msgs) > 0 {
+			if msgs := sq.dequeueScope("test-scope"); len(msgs) > 0 {
 				mu.Lock()
 				drained += len(msgs)
 				mu.Unlock()
@@ -158,12 +97,12 @@ func TestSteeringQueue_ConcurrentAccess(t *testing.T) {
 }
 
 func TestSteeringQueue_Overflow(t *testing.T) {
-	sq := newSteeringQueue(SteeringOneAtATime)
+	sq := newSteeringQueue()
 
 	// Ordinary steer messages share the inbox retention-tail bound. Fill the
 	// queue to that exact capacity before checking both admission classes.
 	for i := 0; i < 200; i++ {
-		err := sq.push(providers.Message{Role: "user", Content: fmt.Sprintf("msg%d", i)})
+		err := sq.pushScope("test-scope", providers.Message{Role: "user", Content: fmt.Sprintf("msg%d", i)})
 		if err != nil {
 			t.Fatalf("unexpected error pushing message %d: %v", i, err)
 		}
@@ -175,7 +114,7 @@ func TestSteeringQueue_Overflow(t *testing.T) {
 	}
 
 	// Attempt to push one more message, which MUST fail
-	err := sq.push(providers.Message{Role: "user", Content: "overflow_msg"})
+	err := sq.pushScope("test-scope", providers.Message{Role: "user", Content: "overflow_msg"})
 
 	// Assert the error happened and is the exact one we expect
 	if err == nil {
@@ -189,7 +128,7 @@ func TestSteeringQueue_Overflow(t *testing.T) {
 
 	// A completion wake is control flow, not producer traffic: it must remain
 	// admissible after the ordinary-message memory bound is reached.
-	wakeErr := sq.pushItemScope(manualSteeringScope, steeringQueueItem{
+	wakeErr := sq.pushItemScope("test-scope", steeringQueueItem{
 		message: providers.Message{Role: "user", Content: "child completed"},
 		wake:    &steeringWake{messageID: "wake-after-full"},
 	})
@@ -198,26 +137,6 @@ func TestSteeringQueue_Overflow(t *testing.T) {
 	}
 	if sq.len() != 201 {
 		t.Fatalf("queue length after wake = %d, want 201", sq.len())
-	}
-}
-
-func TestParseSteeringMode(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected SteeringMode
-	}{
-		{"", SteeringOneAtATime},
-		{"one-at-a-time", SteeringOneAtATime},
-		{"all", SteeringAll},
-		{"unknown", SteeringOneAtATime},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			if got := parseSteeringMode(tt.input); got != tt.expected {
-				t.Fatalf("parseSteeringMode(%q) = %v, want %v", tt.input, got, tt.expected)
-			}
-		})
 	}
 }
 
@@ -243,71 +162,9 @@ func TestAgentLoop_Steer_Enqueues(t *testing.T) {
 		t.Fatalf("expected 1 steering message, got %d", al.steering.len())
 	}
 
-	msgs, _ := al.dequeueSteeringMessages()
+	msgs, _ := al.dequeueSteeringMessagesForScope("")
 	if len(msgs) != 1 || msgs[0].Content != "interrupt me" {
 		t.Fatalf("unexpected dequeued message: %v", msgs)
-	}
-}
-
-func TestAgentLoop_SteeringMode_GetSet(t *testing.T) {
-	al, cfg, msgBus, provider, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-
-	if cfg == nil {
-		t.Fatal("expected config to be initialized")
-	}
-	if msgBus == nil {
-		t.Fatal("expected message bus to be initialized")
-	}
-	if provider == nil {
-		t.Fatal("expected provider to be initialized")
-	}
-
-	if al.SteeringMode() != SteeringOneAtATime {
-		t.Fatalf("expected default mode one-at-a-time, got %v", al.SteeringMode())
-	}
-
-	al.SetSteeringMode(SteeringAll)
-	if al.SteeringMode() != SteeringAll {
-		t.Fatalf("expected all mode, got %v", al.SteeringMode())
-	}
-}
-
-func TestAgentLoop_SteeringMode_ConfiguredFromConfig(t *testing.T) {
-	tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDirOuter)
-	// Nested one level below the freshly-made outer container so
-	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
-	// session/task store at) is THIS test's own private tmpDirOuter,
-	// never the shared OS temp root — see loop_test.go's
-	// newTestAgentLoop doc comment for the leak this closes.
-	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
-		t.Fatalf("Failed to create nested home dir: %v", err)
-	}
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "test-model"},
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-				SteeringMode:      "all",
-			},
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	provider := &mockProvider{}
-	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-
-	if al.SteeringMode() != SteeringAll {
-		t.Fatalf("expected 'all' mode from config, got %v", al.SteeringMode())
 	}
 }
 

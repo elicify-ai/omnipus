@@ -156,7 +156,6 @@ func TestAcceptedSteeredInstructionQ2_AgentInputCannotMintOrAlterHumanProvenance
 func TestAcceptedSteeredInstructionQ2_OrdinaryRootWithoutLifecycleRemainsNonSteered(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 	al, _ := newSteerAL(t)
-	al.SetSteeringMode(SteeringAll)
 	rootID := newTestSteeringSession(t, al, "ws-q2-ordinary-control")
 	classifier := NewSteerRecordClassifier(al.GetSessionLifecycleStore(), al.GetSessionStore())
 	class, err := classifier.Classify(context.Background(), rootID)

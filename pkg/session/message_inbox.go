@@ -49,8 +49,8 @@ const (
 	DefaultChildSendMaxDepth      = 5              // session_messaging.child_send_depth
 	DefaultInboxUnackedMax        = 200            // session_messaging.inbox_unacked_max
 	DefaultInboxPerTypeCeiling    = 20             // session_messaging.inbox_per_type_ceiling (D15)
-	DefaultSteerRatePerMinute     = 6              // session_messaging.steer_rate
-	DefaultSteerBodyBytes         = 16 * 1024      // session_messaging.steer_body
+	DefaultSteerRatePerMinute     = 60             // session_messaging.steer_rate (C-LIMIT: 60/min/sender+target)
+	DefaultSteerBodyBytes         = 65536          // session_messaging.steer_body (C-LIMIT: 65,536 UTF-8 bytes/item)
 	DefaultNeedsInputTTL          = 24 * time.Hour // session_messaging.needs_input_ttl (INV-5/G-6)
 	DefaultNeedsInputEscalationT1 = 12 * time.Hour // half-TTL escalation point (T1, G-6)
 
