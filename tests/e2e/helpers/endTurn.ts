@@ -11,12 +11,24 @@ import type { components } from '@/lib/api/generated/openapi-types'
 export const END_TURN_BOUND_MS = 30_000
 
 export interface ServerFrameLog {
-  /** Accepted cancel answers: done / error:turn_canceled / cancel_stage:… */
+  /**
+   * Accepted cancel answers, scoped to the root session (see rootSessionId):
+   * done / cancel_stage scoped by session_id; error:turn_canceled scoped when
+   * it carries a session_id and accepted unscoped when it does not (error is
+   * a GLOBAL frame type — src/store/chat/runtime-state.ts::
+   * CANCEL_ACK_FRAME_TYPES); goal_status:waiting_on_user (the keeper-pause
+   * announcement the server emits when a Stop pauses a goal's keeper).
+   */
   readonly answers: string[]
   /** Every server frame's type since tracking began — diagnostics only. */
   readonly allTypes: string[]
-  /** Session id of the most recent frame that carried one (the Stop target). */
-  lastSessionId: string | null
+  /**
+   * The ROOT session id, taken from `session_started` frames ONLY (review
+   * finding F on c6b3bed29/afb08e377: lastSessionId-from-any-frame let a
+   * helper/sub-agent frame redirect the REST check to another session's
+   * terminal record). Frames from other sessions never count as answers.
+   */
+  rootSessionId: string | null
 }
 
 const logsByPage = new WeakMap<Page, ServerFrameLog>()
@@ -31,7 +43,7 @@ const logsByPage = new WeakMap<Page, ServerFrameLog>()
  * sets up; call sites of that helper stay unchanged.
  */
 export function trackServerFrames(page: Page): void {
-  const log: ServerFrameLog = { answers: [], allTypes: [], lastSessionId: null }
+  const log: ServerFrameLog = { answers: [], allTypes: [], rootSessionId: null }
   page.on('websocket', (socket) => {
     socket.on('framereceived', ({ payload }) => {
       let frame: { type?: string; code?: string; stage?: string; session_id?: string; state?: string }
@@ -42,10 +54,22 @@ export function trackServerFrames(page: Page): void {
       }
       if (!frame || typeof frame !== 'object' || typeof frame.type !== 'string') return
       log.allTypes.push(frame.type)
-      if (typeof frame.session_id === 'string' && frame.session_id) log.lastSessionId = frame.session_id
+      if (frame.type === 'session_started' && typeof frame.session_id === 'string' && frame.session_id) {
+        log.rootSessionId = frame.session_id
+      }
+      const sid = typeof frame.session_id === 'string' ? frame.session_id : undefined
+      const scopedToRoot = log.rootSessionId !== null && sid === log.rootSessionId
+      // error is a global frame type: accept it without a session_id (the
+      // store does the same — CANCEL_ACK_FRAME_TYPES), require a match when
+      // it carries one.
+      const globalError = frame.type === 'error' && sid === undefined
+      if (!scopedToRoot && !globalError) return
       if (frame.type === 'done') log.answers.push('done')
       if (frame.type === 'error' && frame.code === 'turn_canceled') log.answers.push('error:turn_canceled')
       if (frame.type === 'cancel_stage') log.answers.push(`cancel_stage:${frame.stage ?? '?'}`)
+      if (frame.type === 'goal_status' && frame.state === 'waiting_on_user') {
+        log.answers.push('goal_status:waiting_on_user')
+      }
     })
   })
   logsByPage.set(page, log)
@@ -53,7 +77,7 @@ export function trackServerFrames(page: Page): void {
 
 /**
  * Shared endTurnDeterministically — click Stop if it is showing, then wait
- * for the SERVER to say the turn is over. Used by goal-work-first.spec.ts,
+ * for the SERVER to say THIS turn is over. Used by goal-work-first.spec.ts,
  * goal-card-position.spec.ts and browser-control-handover.spec.ts (this
  * replaces their three byte-similar local copies; the goal-work-first one
  * failed CI 37943454247 and passed only on retry). Requires a prior
@@ -74,42 +98,58 @@ export function trackServerFrames(page: Page): void {
  * a client-state wait is vacuous exactly when the cancel is lost. Review
  * finding F1 on c6b3bed29.
  *
- * The server-derived answer — resolved by EITHER of two independent
- * signals, because no single wire frame covers every cancel branch:
+ * The server-derived answer (review round 3 on afb08e377 — findings D/F/H):
+ * the wait settles only on evidence about THIS turn, never on a stale
+ * record, and never on another session's state:
  *
- *   1. A cancel-answer frame on the session's websocket: `done`, `error`
- *      with code "turn_canceled" (contracts ErrorFrame code enum; the same
- *      frame type the store treats as its cancel ack,
- *      src/store/chat/runtime-state.ts::CANCEL_ACK_FRAME_TYPES), or
- *      `cancel_stage` (sent on the armed / cascade / background-kill
- *      branches — pkg/gateway/websocket_cancel.go::handleCancelWithScope).
- *   2. The session's OWN lifecycle state over REST: GET /api/v1/sessions/
- *      {id} exposes `lifecycle_state`, populated from the session's
- *      authoritative LifecycleRecord (pkg/gateway/rest_sessions.go::
- *      computeSessionLifecycle; the record is written at turn start and
- *      turn end). "working" means the server still has the turn
- *      queued/running; any other value (or the record's absence on a
- *      session that never ran) means the server is not working the turn.
- *      This arm covers the plain idle-gap branch, where the gateway
- *      legitimately sends NO frame at all (verified: the no-active-turn
- *      branch only answers on the armed/cascade/background-kill paths).
+ *   1. A scoped cancel-answer frame since the click — `done` or
+ *      `cancel_stage` carrying THIS session's id, `error` with code
+ *      "turn_canceled" (scoped when it carries a session_id; accepted
+ *      unscoped because error is a global frame type), or
+ *      `goal_status:waiting_on_user` for this session (the server's own
+ *      keeper-pause announcement, pkg/agent/goal_triggers.go::
+ *      pauseGoalKeeperForStop → EmitGoalStatusRehydrate).
+ *   2. The session's lifecycle over REST leaving "working" AFTER "working"
+ *      was observed post-click. GET /api/v1/sessions/{id} exposes
+ *      `lifecycle_state` from the session's authoritative LifecycleRecord
+ *      (pkg/gateway/rest_sessions.go::computeSessionLifecycle; the record
+ *      is written at turn start and turn end). A pre-click non-working
+ *      state is the PREVIOUS turn's record and is deliberately NOT
+ *      accepted (finding D: it satisfied the wait in 53ms against an
+ *      ignored cancel). Consequence, accepted deliberately: a Stop that
+ *      lands after the turn already finished settles only via a scoped
+ *      frame answer — the four call sites all click mid-turn (each waits
+ *      for streaming to start first), so the raced case is rare and a
+ *      false FAIL is preferred over a vacuous PASS. An ABSENT record also
+ *      never settles the wait (fail closed): without a lifecycle record
+ *      the REST arm cannot confirm anything about this turn, and only a
+ *      scoped frame answer can.
+ *      The wire exposes no generation/run id on Session (only
+ *      lifecycle_state + stop_note), so the "generation changed" variant
+ *      of this arm is not implementable from the wire; "working observed
+ *      post-click, then non-working" is the implemented form.
+ *
+ * `waiting_for_answer` counts as ended only under arm 2's working-then-
+ * terminal rule: a turn the server observed running and that then parked
+ * on the user IS over, so proceeding to the next phase is safe. A
+ * pre-click `waiting_for_answer` is a parked record like any other stale
+ * terminal state and never settles the wait on its own (finding 6).
  *
  * W3 bound: a Stop pauses the goal keeper for that session until a user
  * message arrives after it (pkg/agent/goal_triggers.go::
  * pauseGoalKeeperForStop — "Stop paused the goal keeper … (the goal stays
  * active)"), so no freshly re-delivered goal turn can legitimately stretch
- * the wait inside this bound; 30s without a frame AND with the server still
- * reporting "working" is a lost/ignored cancel. The specs that share this
- * helper send their next user message AFTER the helper returns, which is
- * what lifts the pause again.
- *
- * A genuinely lost cancel (the frame never reaches the gateway) keeps the
- * lifecycle record at "working" with no answer frame — the poll starves and
- * throws below with the observed frames and the last observed server state.
+ * the wait inside this bound; 30s without a scoped frame and with no
+ * working→terminal transition is a lost/ignored cancel. The specs that
+ * share this helper send their next user message AFTER the helper returns,
+ * which is what lifts the pause again.
  */
 export async function endTurnDeterministically(page: Page): Promise<void> {
   const stop = page.locator('[data-testid="stop-btn"]')
-  if (!(await stop.isVisible().catch(() => false))) return
+  // No catch: isVisible() returns false for a missing element (nothing to
+  // end — the ordinary already-settled path) and throws only on real page
+  // errors, which must surface (review R2-4).
+  if (!(await stop.isVisible())) return
   const log = logsByPage.get(page)
   if (!log) {
     throw new Error(
@@ -119,41 +159,67 @@ export async function endTurnDeterministically(page: Page): Promise<void> {
     )
   }
 
-  await stop.click().catch(() => {
-    /* already settled between the check and the click — nothing to stop */
-  })
+  // Snapshots BEFORE the click (review finding H: a cancel_stage-only answer
+  // landing during the click used to be swallowed into the "before" count
+  // and the wait timed out in 3/3 scripted runs).
   const answersBeforeClick = log.answers.length
   const allTypesBeforeClick = log.allTypes.length
+  const readLifecycle = async (): Promise<{ state?: string; note: string }> => {
+    const sid = log.rootSessionId
+    if (!sid) return { note: 'no root session id pinned yet (no session_started frame)' }
+    let res: import('@playwright/test').APIResponse
+    try {
+      res = await page.request.get(`/api/v1/sessions/${sid}`, { failOnStatusCode: false })
+    } catch (error) {
+      return { note: `sessions REST error: ${String(error)}` }
+    }
+    if (res.status() !== 200) return { note: `sessions REST status ${res.status()}` }
+    const body = (await res.json().catch(() => null)) as components['schemas']['SessionDetail'] | null
+    if (!body?.session) return { note: 'sessions REST body had no session object' }
+    const lifecycle = body.session.lifecycle_state
+    return { state: lifecycle, note: `lifecycle_state=${lifecycle ?? 'absent (no lifecycle record)'}` }
+  }
+  const before = await readLifecycle()
 
-  let lastObserved = 'poll never ran'
+  try {
+    await stop.click({ timeout: 5_000 })
+  } catch (err) {
+    // The only tolerated failure is the turn settling between the
+    // visibility check and the click — the button genuinely left the DOM.
+    // Everything else (overlay intercepts, detached-while-clicking with the
+    // element re-mounted, page closure) surfaces (review R2-4).
+    if ((await stop.count()) === 0) {
+      // already settled — nothing to stop
+    } else {
+      throw new Error(
+        `endTurnDeterministically: the Stop click failed while the button was still mounted ` +
+          `(pre-click server state: ${before.note}).`,
+        { cause: err },
+      )
+    }
+  }
+
+  // "working at least once" includes the pre-click read: a pre-click
+  // 'working' record is THIS turn, admitted — its later departure is this
+  // turn's end. Only a pre-click NON-working record is a stale previous
+  // turn and is disregarded (review finding D).
+  let workingSeen = before.state === 'working'
+  let lastObserved = before.note
   const serverSettled = async (): Promise<boolean> => {
     if (log.answers.length > answersBeforeClick) {
       lastObserved = `cancel-answer frame: ${log.answers[log.answers.length - 1]}`
       return true
     }
-    const sid = log.lastSessionId
-    if (!sid) {
-      lastObserved = 'no session id captured from any frame yet'
+    const read = await readLifecycle()
+    lastObserved = read.note
+    if (read.state === 'working') {
+      // THIS turn observed running server-side; its later departure is the
+      // end signal (review finding D).
+      workingSeen = true
       return false
     }
-    const res = await page.request
-      .get(`/api/v1/sessions/${sid}`, { failOnStatusCode: false })
-      .catch((error: unknown) => {
-        lastObserved = `sessions REST error: ${String(error)}`
-        return null
-      })
-    if (!res || res.status() !== 200) {
-      lastObserved = `sessions REST status ${res ? res.status() : 'error'}`
-      return false
-    }
-    const body = (await res.json().catch(() => null)) as components['schemas']['SessionDetail'] | null
-    if (!body?.session) {
-      lastObserved = 'sessions REST body had no session object'
-      return false
-    }
-    const lifecycle = body.session.lifecycle_state
-    lastObserved = `server lifecycle_state=${lifecycle ?? 'absent (no lifecycle record)'}`
-    return lifecycle !== undefined && lifecycle !== 'working'
+    if (read.state === undefined) return false // fail closed: no record, no confirmation
+    return workingSeen
   }
 
   try {
@@ -164,10 +230,11 @@ export async function endTurnDeterministically(page: Page): Promise<void> {
     const answersSince = log.answers.slice(answersBeforeClick)
     const trafficSince = log.allTypes.slice(allTypesBeforeClick)
     throw new Error(
-      `endTurnDeterministically: the server never settled the turn within ${END_TURN_BOUND_MS}ms of Stop — ` +
-        `${lastObserved}. Cancel-answer frames since the click: ` +
-        `${answersSince.length === 0 ? 'none' : answersSince.join(', ')}; all server frame types since the click: ` +
-        `${trafficSince.length === 0 ? 'none' : trafficSince.join(', ')}. The cancel was lost or ignored; ` +
+      `endTurnDeterministically: the server never settled THIS turn within ${END_TURN_BOUND_MS}ms of Stop — ` +
+        `${lastObserved}; working observed post-click: ${workingSeen ? 'yes' : 'no'}. Cancel-answer frames ` +
+        `since the click: ${answersSince.length === 0 ? 'none' : answersSince.join(', ')}; all server frame ` +
+        `types since the click: ${trafficSince.length === 0 ? 'none' : trafficSince.join(', ')}. ` +
+        'The cancel was lost or ignored (or the click landed outside any server-observed turn); ' +
         'the turn may still be running.',
       { cause: err },
     )
