@@ -123,3 +123,32 @@ describe('create wizard identity preview', () => {
     expect(mark?.querySelector('[data-role="writer"]')).not.toBeNull()
   })
 })
+
+// The 5th figure, Monogram, in the create wizard. Oracles are the picker
+// buttons and the preview's data-initial seam (ARCH-RULING-monogram D2b/D3).
+describe('create wizard Monogram figure', () => {
+  it('offers exactly the five figure choices in order (AC-13)', () => {
+    render(<CreateAgentWizard initialType="Main" onSubmit={vi.fn()} onClose={vi.fn()} connectedProviders={[]} />)
+    const figureWords = ['Robot', 'Man', 'Woman', 'Omnipus', 'Monogram']
+    const figureButtons = screen
+      .getAllByRole('button')
+      .filter((button) => figureWords.includes((button.textContent ?? '').trim()))
+    expect(figureButtons.map((button) => (button.textContent ?? '').trim())).toEqual(figureWords)
+    for (const figure of figureWords) {
+      expect(screen.getByRole('button', { name: figure })).toBeEnabled()
+    }
+  })
+
+  it('shows the Monogram initial in the preview and tracks the name as typed (AC-14)', () => {
+    render(<CreateAgentWizard initialType="Main" onSubmit={vi.fn()} onClose={vi.fn()} connectedProviders={[]} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Monogram' }))
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'Research Assistant' } })
+    const mark = document.querySelector('[data-testid="agent-icon"]')
+    expect(mark).not.toBeNull()
+    expect(mark).toHaveAttribute('data-figure', 'Monogram')
+    expect(document.querySelector('[data-initial]')?.getAttribute('data-initial')).toBe('R')
+    // The preview initial tracks the name as it is typed.
+    fireEvent.change(screen.getByTestId('wizard-name'), { target: { value: 'Zeta' } })
+    expect(document.querySelector('[data-initial]')?.getAttribute('data-initial')).toBe('Z')
+  })
+})

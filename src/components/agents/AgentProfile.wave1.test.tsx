@@ -262,3 +262,24 @@ describe('built-in identity stays locked', () => {
     expect(document.querySelector('input[type="file"]')).toBeNull()
   })
 })
+
+// The 5th figure, Monogram, in the slide-over header. The header mark draws the
+// agent's name initial. ARCH-RULING-monogram AC-15 / D3.
+describe('Monogram identity header', () => {
+  it('shows the Monogram initial beside the title (AC-15)', async () => {
+    const monogram: Agent = {
+      ...lockedMia(),
+      id: 'monogram-agent',
+      name: 'Daniel',
+      // Monogram joins AgentFigure when the contract regenerates (AC-17); the
+      // cast is only here because the generated union still predates it.
+      figure: 'Monogram' as unknown as Agent['figure'],
+    }
+    vi.mocked(fetchAgent).mockResolvedValue(monogram)
+    renderProfile('monogram-agent')
+    await screen.findByRole('heading', { name: 'Daniel' })
+    const mark = headerMark('Daniel')
+    await waitFor(() => expect(mark).toHaveAttribute('data-figure', 'Monogram'))
+    expect(mark.querySelector('[data-initial]')?.getAttribute('data-initial')).toBe('D')
+  })
+})
