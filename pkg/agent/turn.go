@@ -92,6 +92,13 @@ type turnState struct {
 	turnID     string
 	agentID    string
 	sessionKey string
+	// goalID is the goal this turn was dispatched under (session-core FR-039 /
+	// C-GOAL), captured ONCE at turn start from the session's active goal
+	// record (newTurnState) and thereafter immutable — so every message/frame
+	// this turn produces carries the SAME association, and a goal activated
+	// later can never rebind an earlier turn's output. Empty means the turn ran
+	// under no proven goal (UNKNOWN association → neutral indicator).
+	goalID string
 	// generation is the session's LifecycleRecord.Generation at the moment
 	// this turn was registered (ADR-091 I-3 reconstruction /
 	// I-6 revival). Zero for a turnState built outside reconstruction (a
@@ -207,13 +214,9 @@ type turnState struct {
 	cancelling atomic.Bool
 
 	// initialEmptiedSet is the session's WHOLE projection set
-	// ((tool_call_id, archive_line) → capped | emptied) as of turn start —
-	// the third member of the turn-start restore triple beside
-	// initialArchiveLen and initialHistoryLength (ADR-066 FR-020). Captured
-	// once in newTurnState and never moved during the turn; restoreSession
-	// and HardAbort hand it to RollbackAppended so an aborted turn's
-	// emptying is undone together with its archive tail and its Skip
-	// advance. nil when the store had nothing projected (or no store).
+	// ((tool_call_id, archive_line) → capped | emptied) as of turn start.
+	// Captured once in newTurnState and never moved during the turn. nil when
+	// the store had nothing projected (or no store).
 	initialEmptiedSet memory.ProjectionSet
 	// Captured once from the atomic store, including the actual cursor/anchor.
 	initialWindow  *memory.WindowState
@@ -239,7 +242,6 @@ type turnState struct {
 	finishedByHardAbort  atomic.Bool
 	session              session.SessionStore // Session store reference
 	initialHistoryLength int                  // Snapshot of window (GetHistory) length at turn start
-	initialArchiveLen    int                  // Snapshot of archive (ReadArchive) line count at turn start — for Skip-preserving rollback
 
 	// injectedRecallSpan is the recall span whose messages are currently
 	// present in this turn's in-memory message slice (ADR-066 D5.4,
@@ -874,7 +876,6 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 					ts.initialWindow = &start
 					history, _ := memory.WindowHistory(snap)
 					ts.initialHistoryLength = len(history)
-					ts.initialArchiveLen = start.Count
 					ts.initialEmptiedSet = start.Projection.Entries.Clone()
 				}
 			}
@@ -884,6 +885,24 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 	// Bind transcript store for persisting tool calls
 	ts.transcriptSessionID = opts.TranscriptSessionID
 	ts.transcriptStore = opts.TranscriptStore
+
+	// Capture the goal this turn is dispatched under (session-core FR-039 /
+	// C-GOAL), ONCE, before any message/frame of the turn is produced. Keyed by
+	// the transcript session id — the same lookup every goal reader in this
+	// package shares (activeGoalForSession). A read failure leaves goalID empty
+	// (UNKNOWN, neutral), never a guessed value: an unreadable goal store must
+	// not silently attach a wrong goal, and the indicator degrades to its
+	// generic state rather than mislabeling the bubble. Guarded exactly like
+	// goalTurnRecordState (goal_loop_forcing.go) so a turn that already declines
+	// the goal-store read (no transcript store wired) pays nothing here.
+	if opts.TranscriptStore != nil && ts.transcriptSessionID != "" {
+		if g, gerr := activeGoalForSession(ts.transcriptSessionID); gerr != nil {
+			logger.DebugCF("agent", "goal: could not resolve the active goal to stamp onto this turn; leaving it unknown",
+				map[string]any{"component": "goal", "session_id": ts.transcriptSessionID, "error": gerr.Error()})
+		} else if g != nil {
+			ts.goalID = g.GoalID
+		}
+	}
 
 	// ADR-057 FR-011: default routingSessionID to this turn's own session
 	// id. Correct as-is for every root turn (byte-identical to today's

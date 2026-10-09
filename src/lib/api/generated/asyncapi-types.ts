@@ -14,7 +14,6 @@ export type WsFrameType =
   | "ping"
   | "attach_session"
   | "device_pairing_response"
-  | "session_close"
   | "session_started"
   | "message_status"
   | "token"
@@ -45,7 +44,6 @@ export type WsFrameType =
   | "replay_warning"
   | "cancel_stage"
   | "pong"
-  | "session_close_ack"
   | "session_mode_update"
   | "session_mode_updated"
   | "device_pairing_request"
@@ -172,6 +170,7 @@ export interface TokenFrame {
   agent_id?: string;
   turn_id?: string;
   message_id?: string;
+  goal_id?: string;
   replace?: boolean;
   seq?: number;
 }
@@ -197,6 +196,7 @@ export interface DoneFrame {
   stats?: DoneStats;
   turn_id?: string;
   message_id?: string;
+  goal_id?: string;
   seq?: number;
 }
 
@@ -413,6 +413,7 @@ export interface ReplayMessageFrame {
   agent_id?: string;
   model?: string;
   turn_id?: string;
+  goal_id?: string;
   truncated?: boolean;
   truncation_reason?: "cancelled" | "max_output_tokens";
   client_message_id?: string;
@@ -680,13 +681,6 @@ export interface CancelStageFrame {
   seq?: number;
 }
 
-export interface SessionCloseAckFrame {
-  type: "session_close_ack";
-  session_id: string;
-  id?: string;
-  producing_session_id?: string;
-}
-
 export interface SessionModeUpdateFrame {
   type: "session_mode_update";
   session_id: string;
@@ -714,11 +708,6 @@ export interface WhatsAppPairingFrame {
   status: "waiting" | "code" | "linked" | "timeout" | "error";
   qr?: string;
   message?: string;
-}
-
-export interface SessionCloseFrame {
-  type: "session_close";
-  session_id: string;
 }
 
 export interface WhatsAppPairingSubscribeFrame {
@@ -1223,12 +1212,10 @@ export type WsFrame =
   | SystemOverloadFrame
   | ReplayWarningFrame
   | CancelStageFrame
-  | SessionCloseAckFrame
   | SessionModeUpdateFrame
   | SessionModeUpdatedFrame
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame
-  | SessionCloseFrame
   | WhatsAppPairingSubscribeFrame
   | NotificationFrame
   | BrowserAttachFrame
@@ -1278,7 +1265,6 @@ export type ClientFrame =
   | DevicePairingResponseFrame
   | AskUserAnswerFrame
   | SessionModeUpdateFrame
-  | SessionCloseFrame
   | WhatsAppPairingSubscribeFrame
   | BrowserAttachFrame
   | BrowserInputFrame
@@ -1293,7 +1279,7 @@ export type ClientFrame =
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "session_close", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer", "mail_panel_observer"] as const
+export const ClientFrameTypes = ["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer", "mail_panel_observer"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
@@ -1330,7 +1316,6 @@ export type ServerFrame =
   | SystemOverloadFrame
   | ReplayWarningFrame
   | CancelStageFrame
-  | SessionCloseAckFrame
   | SessionModeUpdatedFrame
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame

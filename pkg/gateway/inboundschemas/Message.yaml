@@ -1,8 +1,16 @@
 type: object
 description: >
-  A single transcript entry (session.TranscriptEntry on the Go side).
-  Maps to the Message interface in src/lib/api.ts. The SPA reads this
-  from GET /sessions/{id}/messages.
+  The public CHAT PROJECTION of one entry of a session's single
+  append-only archive, served by GET /sessions/{id}/messages and mapped
+  to the Message interface in src/lib/api.ts. This is a projection of the
+  canonical disk archive (session.TranscriptEntry on the Go side), never
+  the raw private persistence record: the archive's private model payload
+  (model_message), its body-free same-session consumption reference
+  (type=model_ref / model_ref), its trusted source/return-route
+  provenance, and its partition/encoded-byte/entry-id marks are disk-only
+  and MUST NOT appear here (session-core C-ARCHIVE / U2; FR-004/FR-005).
+  Entries that belong to the model view only (view_membership="model")
+  are excluded from this projection entirely.
 required:
   - id
   - timestamp
@@ -52,6 +60,7 @@ properties:
     example: "message"
   view_membership:
     type: string
+    readOnly: true
     enum:
       - chat
       - model
@@ -59,13 +68,14 @@ properties:
     description: >
       C-ARCHIVE (session-core FR-004): which view(s) of the single append-only
       archive this entry belongs to — "chat" (rendered in the conversation),
-      "model" (part of the model context window), or "both". One authoritative
-      content entry format carries both views, so the same persisted entry backs
-      the chat rendering and the model history; there is no separate
-      model-content store. Optional and additive: entries written before this
-      field existed carry no value, and the server treats absent as unknown
-      rather than re-deriving a view. The reader projects this archive onto the
-      chat/model views; it is a per-entry classification, never a second store.
+      "model" (part of the model context window), or "both". Server-owned
+      (readOnly): the server writes it and emits the entry's effective
+      chat/both membership for included entries; clients never send it. An
+      entry classified "model" is not part of the chat projection and is not
+      returned here. Optional and additive: entries written before this field
+      existed carry no value, and the server treats absent as unknown rather
+      than re-deriving a view. This is a per-entry classification on the one
+      archive, never by itself a second store.
     example: "both"
   role:
     type: string
@@ -151,6 +161,15 @@ properties:
       type="context_window_notice" diagnostics (ADR-066 MAJ-CW-009).
       Retains the original turn identity in REST history, live delivery and replay.
     example: "turn-T3"
+  goal_id:
+    type: string
+    description: >
+      session-core FR-039 / C-GOAL. The goal the entry's producing turn was
+      dispatched under (from session.TranscriptEntry.GoalID). REST history, live
+      delivery and replay retain the SAME association so the SPA joins each
+      message to its own exact keyed goal criteria. Absent means UNKNOWN
+      association; a later goal's frame must never rebind an earlier message.
+    example: "goal_01J3ZQK8N2H8VXNRP5T7C9M4WU"
   canceled_by_user:
     type: string
     description: >

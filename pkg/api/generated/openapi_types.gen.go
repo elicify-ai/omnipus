@@ -20628,7 +20628,7 @@ type MemorySettings struct {
 	SessionDays *int `json:"session_days,omitempty"`
 }
 
-// Message A single transcript entry (session.TranscriptEntry on the Go side). Maps to the Message interface in src/lib/api.ts. The SPA reads this from GET /sessions/{id}/messages.
+// Message The public CHAT PROJECTION of one entry of a session's single append-only archive, served by GET /sessions/{id}/messages and mapped to the Message interface in src/lib/api.ts. This is a projection of the canonical disk archive (session.TranscriptEntry on the Go side), never the raw private persistence record: the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance, and its partition/encoded-byte/entry-id marks are disk-only and MUST NOT appear here (session-core C-ARCHIVE / U2; FR-004/FR-005). Entries that belong to the model view only (view_membership="model") are excluded from this projection entirely.
 type Message struct {
 	// AgentId ID of the agent that produced this entry (FR-002). Always present.
 	AgentId string `json:"agent_id"`
@@ -20674,6 +20674,9 @@ type Message struct {
 
 	// DescendantsCanceled IDs of descendant turns that were canceled in cascade — present only on type="turn_canceled" entries (FR-6a).
 	DescendantsCanceled *[]string `json:"descendants_canceled,omitempty"`
+
+	// GoalId session-core FR-039 / C-GOAL. The goal the entry's producing turn was dispatched under (from session.TranscriptEntry.GoalID). REST history, live delivery and replay retain the SAME association so the SPA joins each message to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier message.
+	GoalId *string `json:"goal_id,omitempty"`
 
 	// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
 	GoalOutcome *struct {
@@ -20909,7 +20912,7 @@ type Message struct {
 		// ParentToolCallId Parent tool call ID for nested subagent tool invocations.
 		ParentToolCallId *string `json:"parent_tool_call_id,omitempty"`
 
-		// Result Return value from the tool. Shape is tool-specific.
+		// Result Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
 		Result *map[string]interface{} `json:"result,omitempty"`
 
 		// Status Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
@@ -21000,7 +21003,7 @@ type Message struct {
 		TaskId *string `json:"task_id,omitempty"`
 	} `json:"verdict,omitempty"`
 
-	// ViewMembership C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". One authoritative content entry format carries both views, so the same persisted entry backs the chat rendering and the model history; there is no separate model-content store. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. The reader projects this archive onto the chat/model views; it is a per-entry classification, never a second store.
+	// ViewMembership C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". Server-owned (readOnly): the server writes it and emits the entry's effective chat/both membership for included entries; clients never send it. An entry classified "model" is not part of the chat projection and is not returned here. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. This is a per-entry classification on the one archive, never by itself a second store.
 	ViewMembership *MessageViewMembership `json:"view_membership,omitempty"`
 }
 
@@ -21076,7 +21079,7 @@ type MessageVerdictPerCriterionProvenance string
 // MessageVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type MessageVerdictScope string
 
-// MessageViewMembership C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". One authoritative content entry format carries both views, so the same persisted entry backs the chat rendering and the model history; there is no separate model-content store. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. The reader projects this archive onto the chat/model views; it is a per-entry classification, never a second store.
+// MessageViewMembership C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". Server-owned (readOnly): the server writes it and emits the entry's effective chat/both membership for included entries; clients never send it. An entry classified "model" is not part of the chat projection and is not returned here. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. This is a per-entry classification on the one archive, never by itself a second store.
 type MessageViewMembership string
 
 // MessageParentArtifact `message_parent` child tool call, `kind: artifact` (ADR-053 §5.1). Payload-only — see `MessageParentProgress` for the request/record split rationale.
@@ -24252,6 +24255,9 @@ type SessionDetail struct {
 		// DescendantsCanceled IDs of descendant turns that were canceled in cascade — present only on type="turn_canceled" entries (FR-6a).
 		DescendantsCanceled *[]string `json:"descendants_canceled,omitempty"`
 
+		// GoalId session-core FR-039 / C-GOAL. The goal the entry's producing turn was dispatched under (from session.TranscriptEntry.GoalID). REST history, live delivery and replay retain the SAME association so the SPA joins each message to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier message.
+		GoalId *string `json:"goal_id,omitempty"`
+
 		// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
 		GoalOutcome *struct {
 			// CriteriaTotal Number of criteria the deciding Judge verdict evaluated (`per_criterion` length). OPTIONAL — present only when a verdict exists. With `ending: met` every one of them was confirmed.
@@ -24486,7 +24492,7 @@ type SessionDetail struct {
 			// ParentToolCallId Parent tool call ID for nested subagent tool invocations.
 			ParentToolCallId *string `json:"parent_tool_call_id,omitempty"`
 
-			// Result Return value from the tool. Shape is tool-specific.
+			// Result Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
 			Result *map[string]interface{} `json:"result,omitempty"`
 
 			// Status Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
@@ -24577,7 +24583,7 @@ type SessionDetail struct {
 			TaskId *string `json:"task_id,omitempty"`
 		} `json:"verdict,omitempty"`
 
-		// ViewMembership C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". One authoritative content entry format carries both views, so the same persisted entry backs the chat rendering and the model history; there is no separate model-content store. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. The reader projects this archive onto the chat/model views; it is a per-entry classification, never a second store.
+		// ViewMembership C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". Server-owned (readOnly): the server writes it and emits the entry's effective chat/both membership for included entries; clients never send it. An entry classified "model" is not part of the chat projection and is not returned here. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. This is a per-entry classification on the one archive, never by itself a second store.
 		ViewMembership *SessionDetailMessagesViewMembership `json:"view_membership,omitempty"`
 	} `json:"messages"`
 
@@ -24789,7 +24795,7 @@ type SessionDetailMessagesVerdictPerCriterionProvenance string
 // SessionDetailMessagesVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type SessionDetailMessagesVerdictScope string
 
-// SessionDetailMessagesViewMembership C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". One authoritative content entry format carries both views, so the same persisted entry backs the chat rendering and the model history; there is no separate model-content store. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. The reader projects this archive onto the chat/model views; it is a per-entry classification, never a second store.
+// SessionDetailMessagesViewMembership C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". Server-owned (readOnly): the server writes it and emits the entry's effective chat/both membership for included entries; clients never send it. An entry classified "model" is not part of the chat projection and is not returned here. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. This is a per-entry classification on the one archive, never by itself a second store.
 type SessionDetailMessagesViewMembership string
 
 // SessionDetailSessionExecution Set only when this session's lifecycle record state is queued or running. Omitted for every other state, and when the session has no lifecycle record. `lifecycle_state: working` remains the collapsed display value and is not changed. The Sessions Running filter uses this field, not `lifecycle_state`.
@@ -26972,7 +26978,7 @@ type ToolApprovalResponseScope string
 // ToolApprovalResponseStatus Result status. Always "ok" when the action was accepted.
 type ToolApprovalResponseStatus string
 
-// ToolCall A single tool invocation recorded in a transcript entry. Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts.
+// ToolCall The DISPLAY/STATUS projection of a single tool invocation in a transcript entry — the {id, tool, status, parameters, result} form the SPA renders. This is NOT providers.ToolCall (the provider wire shape on the Go side): it carries no provider call identity beyond `id`, no thought signature and no raw function-argument string, and it must never be used in place of the provider call shape (session-core C-ARCHIVE / U2; FR-004). Maps to session.ToolCall on the Go side and the ToolCall interface in src/lib/api.ts.
 type ToolCall struct {
 	// ContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
 	ContentState *ToolCallContentState `json:"content_state,omitempty"`
@@ -26993,7 +26999,7 @@ type ToolCall struct {
 	// ParentToolCallId Parent tool call ID for nested subagent tool invocations.
 	ParentToolCallId *string `json:"parent_tool_call_id,omitempty"`
 
-	// Result Return value from the tool. Shape is tool-specific.
+	// Result Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
 	Result *map[string]interface{} `json:"result,omitempty"`
 
 	// Status Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.

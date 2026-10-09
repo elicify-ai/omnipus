@@ -130,7 +130,7 @@ func (ts *turnState) appendToolCallTranscript(tc session.ToolCall, archiveLine .
 	entry := session.TranscriptEntry{
 		ID: string(tc.ID), Type: session.EntryTypeToolCall,
 		AgentID: ts.resolveActiveAgentID(), Timestamp: time.Now().UTC(),
-		ToolCalls: []session.ToolCall{tc}, TurnID: ts.turnID,
+		ToolCalls: []session.ToolCall{tc}, TurnID: ts.turnID, GoalID: ts.goalID,
 	}
 	if recordLine == nil {
 		return ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry)
@@ -193,6 +193,10 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 		// ever exercised by tests that hand-seed TurnID directly. See
 		// appendAssistantTranscript's identical fix for the full rationale.
 		TurnID: ts.turnID,
+		// GoalID (session-core FR-039 / C-GOAL): the goal this producing turn
+		// was dispatched under, so the persisted entry joins to its exact keyed
+		// goal criteria live/replay/REST alike. Empty = unknown association.
+		GoalID: ts.goalID,
 		// ParentSpawnCallID: DOCUMENTED to be non-empty only when ts is a
 		// CHILD delegation sub-turn — pre-ADR-091, the deleted spawnSubTurn
 		// stamped childTS.parentSpawnCallID before any turn processing ran.
@@ -319,7 +323,10 @@ func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bo
 		// match a real entry either, silently disabling the Truncated flag
 		// for every real cancel. Both were only ever exercised by tests that
 		// hand-seed TurnID directly on the entry.
-		TurnID:           ts.turnID,
+		TurnID: ts.turnID,
+		// GoalID (session-core FR-039 / C-GOAL): the goal this producing turn
+		// was dispatched under. Empty = unknown association.
+		GoalID:           ts.goalID,
 		Timestamp:        time.Now().UTC(),
 		Tokens:           int(turnTokens),
 		Cost:             turnCost,
@@ -595,6 +602,7 @@ func (ts *turnState) persistErrorTranscript(kind, stage string, llm LLMError, co
 		AgentID:        ts.resolveActiveAgentID(),
 		Content:        content,
 		Timestamp:      time.Now().UTC(),
+		GoalID:         ts.goalID,
 		ErrorCode:      string(llm.Code),
 		ErrorRetryable: llm.Retryable,
 		// MAJ-104/C-14: the persisted entry carries the provider_message

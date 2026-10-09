@@ -985,6 +985,15 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 		turnIDCopy := entry.TurnID
 		sr.msgFrame.TurnId = &turnIDCopy
 	}
+	// session-core FR-039 / C-GOAL: surface the producing turn's goal id on the
+	// replayed entry — the SAME association the live frames and the REST
+	// history carry — so the SPA joins the bubble to its own exact keyed goal
+	// criteria after reload instead of the latest-goal scalar. Empty for
+	// entries written under no proven goal (unknown association).
+	if entry.GoalID != "" {
+		goalIDCopy := entry.GoalID
+		sr.msgFrame.GoalId = &goalIDCopy
+	}
 	// Phase 1B (FR-013/FR-014): surface per-turn model. Populated from
 	// TranscriptEntry.Model on every assistant message written via
 	// pkg/agent/turn.go since Phase 1B landed. Empty for legacy turns;

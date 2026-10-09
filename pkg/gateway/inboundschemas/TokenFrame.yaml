@@ -44,6 +44,15 @@ properties:
       token belongs to, stable across a reconnect/catch-up. The same id is stamped on the
       persisted transcript entry, so a replayed or projected version of this message and
       its live tokens converge on one bubble instead of duplicating it.
+  goal_id:
+    type: string
+    description: >-
+      session-core FR-039 / C-GOAL. The goal this producing turn was dispatched under
+      (captured at turn start from the session's active goal record) and stamped onto
+      every token of the turn. Lets the SPA join the bubble to the EXACT keyed goal
+      criteria (goalPills[goal_id]) instead of the latest-goal scalar. Absent means
+      UNKNOWN association (the turn ran under no proven goal); a later goal's frame must
+      never rebind this bubble.
   replace:
     type: boolean
     description: >

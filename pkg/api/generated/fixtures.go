@@ -584,21 +584,6 @@ func FixtureReplayWarningFrame_ZeroValue() ReplayWarningFrame {
 	return ReplayWarningFrame{}
 }
 
-// SessionCloseAckFrame
-
-func FixtureSessionCloseAckFrame_Populated() SessionCloseAckFrame {
-	id := "close-ack-1"
-	return SessionCloseAckFrame{
-		Type:      "session_close_ack",
-		SessionId: "sess-1",
-		Id:        &id,
-	}
-}
-
-func FixtureSessionCloseAckFrame_ZeroValue() SessionCloseAckFrame {
-	return SessionCloseAckFrame{}
-}
-
 // DevicePairingRequestFrame
 
 func FixtureDevicePairingRequestFrame_Populated() DevicePairingRequestFrame {
@@ -969,7 +954,7 @@ func FixturePingFrame_Edge() PingFrame {
 
 // ── REST response type fixtures ─────────────────────────────────────────────
 //
-// Covers Task, SessionCloseFrame, and related types.
+// Covers Task and related types.
 
 // ── Task ─────────────────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/Task.yaml
@@ -1601,30 +1586,6 @@ func FixtureStorageStats_NilWarningsAllowed() StorageStats {
 		MemoryEntryCount:   0,
 		OldestSessionDate:  &oldest,
 		Warnings:           nil, // optional — nil is valid
-	}
-}
-
-// ── SessionCloseFrame ─────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/SessionCloseFrame.yaml
-
-func FixtureSessionCloseFrame_Populated() SessionCloseFrame {
-	return SessionCloseFrame{
-		Type:      "session_close",
-		SessionId: "sess-550e8400-e29b-41d4-a716-446655440003",
-	}
-}
-
-// FixtureSessionCloseFrame_ZeroValue — Go zero values.
-// Expected: FAIL because type="" (const: session_close), session_id="" (minLength: 1).
-func FixtureSessionCloseFrame_ZeroValue() SessionCloseFrame {
-	return SessionCloseFrame{}
-}
-
-// FixtureSessionCloseFrame_Edge — long session_id (valid).
-func FixtureSessionCloseFrame_Edge() SessionCloseFrame {
-	return SessionCloseFrame{
-		Type:      "session_close",
-		SessionId: "sess-" + repeatStr("c", 60),
 	}
 }
 

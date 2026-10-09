@@ -3,6 +3,13 @@ description: >
   Server → client. One replayed turn entry emitted during a session replay
   (attach_session). Each entry corresponds to a user, assistant, or system
   transcript entry. The SPA reconstructs the conversation from these frames.
+  This is a CHAT PROJECTION of the session's single append-only archive, not
+  a provider-message or raw-storage type (session-core C-ARCHIVE / U2;
+  FR-004/FR-005): the archive's private model payload (model_message), its
+  body-free same-session consumption reference (type=model_ref / model_ref),
+  its trusted source/return-route provenance and its disk/byte/view marks
+  are disk-only and are never emitted on this frame, and entries that belong
+  to the model view only are not replayed.
 type: object
 required:
   - type
@@ -75,6 +82,14 @@ properties:
       replay stream (async delegation can interleave other agents'/turns' frames
       in between). Omitted for legacy entries written before turn-id stamping
       landed.
+  goal_id:
+    type: string
+    description: >
+      session-core FR-039 / C-GOAL. The goal the replayed entry's producing turn
+      was dispatched under (from TranscriptEntry.GoalID). Live, history, REST and
+      replay must retain the SAME association so the SPA joins each bubble to its
+      own exact keyed goal criteria. Absent means UNKNOWN association; a later
+      goal's frame must never rebind an earlier replayed message.
   truncated:
     type: boolean
     description: >

@@ -8,10 +8,6 @@ import { generateId } from '@/lib/constants'
 import { useUiStore } from '@/store/ui'
 import { queryClient } from '@/lib/queryClient'
 import type {
-  WsReplayMessageFrame,
-  WsRateLimitFrame,
-} from '@/lib/ws'
-import type {
   WhatsAppPairingFrame,
   KnowledgeIndexProgressFrame,
   NotificationFrame,
@@ -21,6 +17,8 @@ import type {
   PlanStatusFrame,
   AskUserQuestionFrame,
   SessionStateFrame,
+  ReplayMessageFrame,
+  RateLimitFrame,
   BrowserHandoverNoticeFrame,
   GoalOutcomeFrame,
   ContextWindowNoticeFrame,
@@ -481,7 +479,7 @@ function handleTurnCanceledReplayEntry({
   targetSid,
   withBucket,
 }: {
-  replayFrame: WsReplayMessageFrame
+  replayFrame: ReplayMessageFrame
   targetSid: string
   withBucket: ReplayAndStatusFrameContext['withBucket']
 }): void {
@@ -570,7 +568,7 @@ function handleReplayMessageFrame({
 }): void {
   if (!targetSid) return
   sawReplayMessageThisTurn[targetSid] = true
-  const replayFrame = frame as WsReplayMessageFrame
+  const replayFrame = frame as ReplayMessageFrame
   // FR-16 / Fix 5c: turn_canceled entries are metadata-only and must
   // never render as their own chat bubble. ReplayMessageFrame carries
   // no status/truncated field, so — unlike a fresh REST cold-load,
@@ -987,7 +985,7 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
           // rate_limit get filed under whatever session happened to be
           // active).
           if (!targetSid) break
-          const rlFrame = frame as WsRateLimitFrame
+          const rlFrame = frame as RateLimitFrame
           const event: RateLimitEventData = {
             scope: rlFrame.scope,
             resource: rlFrame.resource,
@@ -1005,12 +1003,12 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
           // SESSION_SCOPED_FRAME_TYPES above) — targetSid is already
           // resolved/dropped per the routing rules at the top of handleFrame.
           //
-          // PER-GOAL-ID pill map (FE-1): the frame carries `goal_id` (optional
-          // — the §6 compat shim may omit it for a single-goal session). Key
-          // the pill map by goal_id (falling back to '_default' when absent) so
-          // a session with 2 goals shows 2 pills. Also maintain the legacy
-          // single `goalStatus` (latest frame across all goals) for back-compat
-          // with GoalIndicator's loop-only rendering path. The tray/pill
+          // PER-GOAL-ID pill map (FE-1): the frame carries `goal_id`. Key the
+          // pill map by exactly that goal_id so a session with 2 goals shows 2
+          // pills (DEL-F41: no `'_default'` fallback — an absent goal_id files
+          // nothing). Also maintain the legacy single `goalStatus` (latest
+          // frame across all goals) for back-compat with GoalIndicator's
+          // loop-only rendering path AND Stop's isGoalRunning. The tray/pill
           // components still decide whether/how to RENDER each state — no
           // special-casing of that kind here (GoalPillTray owns the "keep a
           // terminal pill visible briefly, then stop showing it" behaviour).
@@ -1029,18 +1027,17 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
           // now?) — the render policy the comment above still refers to is
           // untouched.
           //
-          // ADR-088 D5 store hygiene: an EMPTY-goal_id frame (the '_default'
-          // key) was root cause #2 of the 2026-09-07 UX trace — the deleted
-          // `queued` emission carried no `goal_id`, landed on '_default', and
-          // was never overwritten once the later keyed `active` frame arrived
-          // under a different key, so the stale card rendered forever. The
-          // `queued` emission itself is gone (ADR-088 D9), but a keyed frame
-          // arriving for this session still evicts any lingering '_default'
-          // pill defensively — harmless once no frame is ever emitted with an
-          // empty goal_id, cheap insurance against any stale/legacy one.
+          // DEL-F41 (FR-039): an EMPTY-goal_id frame is an UNKNOWN
+          // association and files NO pill at all — the invented `'_default'`
+          // compatibility key is removed outright. The old `'_default'`
+          // eviction dance (ADR-088 D5) existed only to evict that compat
+          // entry once a keyed frame arrived; with the entry never minted,
+          // there is nothing to evict. An unknown goal can never be matched
+          // to the exact keyed criteria the thinking/error indicators read,
+          // so it stays neutral.
           //
           // ADR-088 code-review round 1, Finding 1 (HIGH): the pill for
-          // `pillKey` is no longer stored verbatim — it goes through
+          // the goal's own key is no longer stored verbatim — it goes through
           // `mergeGoalPillFrame` so a routine, criteria-less progress frame
           // cannot clobber a record a prior `set_goal` write already
           // authored. `goalStatus` (the legacy single latest-frame selector,
@@ -1050,23 +1047,30 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
           // doc comment for the merge rule.
           if (!targetSid) break
           const goalFrame = frame as GoalStatusFrame
-          const pillKey = goalFrame.goal_id && goalFrame.goal_id.length > 0 ? goalFrame.goal_id : '_default'
+          // DEL-F41 (FR-039): the pill key is the frame's OWN goal_id and
+          // nothing else — an unknown association (a frame carrying no
+          // goal_id at all) mints NO `_default` compatibility key.
+          const goalId = goalFrame.goal_id && goalFrame.goal_id.length > 0 ? goalFrame.goal_id : null
           withBucket(targetSid, (b) => {
-            const storedPill = b.goalPills?.[pillKey]
-            const mergedPill = mergeGoalPillFrame(storedPill, goalFrame)
-            const merged = { ...(b.goalPills ?? {}), [pillKey]: mergedPill }
-            if (pillKey !== '_default') {
-              delete merged['_default']
-            }
             // Operator-reported UX fix (2026-09-08): the goal-ack line — see
             // buildGoalAckInsertion's doc comment above for the full design
             // (why this frame, why idempotent-by-goal_id, and the durability
             // tradeoff vs. a persisted transcript anchor). Applied in the
-            // SAME withBucket pass as the pill-map update above (one set()
+            // SAME withBucket pass as the pill-map update below (one set()
             // call) rather than a second withBucket, so a reattach that
             // fires both the pill update and the first-ever ack insertion
             // renders as one atomic state transition, not two.
             const ackInsertion = buildGoalAckInsertion(b, goalFrame)
+            // Unknown association: no keyed pill (DEL-F41). The legacy scalar
+            // `goalStatus` is still written verbatim — KEEP (FR-039): Stop's
+            // isGoalRunning reads it — but `goalPills` (the exact-keyed join
+            // the thinking/error indicators read) gets no entry.
+            if (!goalId) {
+              return { goalStatus: goalFrame, ...ackInsertion }
+            }
+            const storedPill = b.goalPills?.[goalId]
+            const mergedPill = mergeGoalPillFrame(storedPill, goalFrame)
+            const merged = { ...(b.goalPills ?? {}), [goalId]: mergedPill }
             return {
               goalStatus: goalFrame,
               goalPills: evictGoalPillsOverCap(merged),

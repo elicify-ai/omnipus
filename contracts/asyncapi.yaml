@@ -49,8 +49,6 @@ channels:
         $ref: '#/components/messages/AttachSessionFrame'
       DevicePairingResponseFrame:
         $ref: '#/components/messages/DevicePairingResponseFrame'
-      SessionCloseFrame:
-        $ref: '#/components/messages/SessionCloseFrame'
       WhatsAppPairingSubscribeFrame:
         $ref: '#/components/messages/WhatsAppPairingSubscribeFrame'
       SessionStartedFrame:
@@ -115,8 +113,6 @@ channels:
         $ref: '#/components/messages/CancelStageFrame'
       PongFrame:
         $ref: '#/components/messages/PongFrame'
-      SessionCloseAckFrame:
-        $ref: '#/components/messages/SessionCloseAckFrame'
       SessionModeUpdateFrame:
         $ref: '#/components/messages/SessionModeUpdateFrame'
       SessionModeUpdatedFrame:
@@ -302,16 +298,6 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/DevicePairingResponseFrame'
-  sendSessionClose:
-    action: send
-    channel:
-      $ref: '#/channels/chat'
-    summary: 'Explicit session close request. The server unregisters the session, fires CloseSession on the agent loop, and
-      responds with session_close_ack.
-
-      '
-    messages:
-    - $ref: '#/channels/chat/messages/SessionCloseFrame'
   sendWhatsAppPairingSubscribe:
     action: send
     channel:
@@ -664,15 +650,6 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/PongFrame'
-  receiveSessionCloseAck:
-    action: receive
-    channel:
-      $ref: '#/channels/chat'
-    summary: 'Acknowledgement of a session_close client request. The server confirms the session has been closed.
-
-      '
-    messages:
-    - $ref: '#/channels/chat/messages/SessionCloseAckFrame'
   sendSessionModeUpdate:
     action: send
     channel:
@@ -1076,13 +1053,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/DevicePairingResponseFrame'
-    SessionCloseFrame:
-      name: SessionCloseFrame
-      title: session_close
-      summary: Explicit session close request (client → server).
-      contentType: application/json
-      payload:
-        $ref: '#/components/schemas/SessionCloseFrame'
     WhatsAppPairingSubscribeFrame:
       name: WhatsAppPairingSubscribeFrame
       title: whatsapp_pairing_subscribe
@@ -1330,13 +1300,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/PongFrame'
-    SessionCloseAckFrame:
-      name: SessionCloseAckFrame
-      title: session_close_ack
-      summary: Session close acknowledged (server → client).
-      contentType: application/json
-      payload:
-        $ref: '#/components/schemas/SessionCloseAckFrame'
     SessionModeUpdateFrame:
       name: SessionModeUpdateFrame
       title: session_mode_update
@@ -1639,7 +1602,6 @@ components:
       - ping
       - attach_session
       - device_pairing_response
-      - session_close
       - session_started
       - message_status
       - token
@@ -1670,7 +1632,6 @@ components:
       - replay_warning
       - cancel_stage
       - pong
-      - session_close_ack
       - session_mode_update
       - session_mode_updated
       - device_pairing_request
@@ -2114,6 +2075,15 @@ components:
           description: >-
             #823 catch-up redesign. Identifies the specific assistant message (bubble)
             this token belongs to, stable across reconnect/catch-up.
+        goal_id:
+          type: string
+          description: >-
+            session-core FR-039 / C-GOAL. The goal this producing turn was dispatched
+            under (captured at turn start from the session's active goal record) and
+            stamped onto every token of the turn. Lets the SPA join the bubble to the
+            EXACT keyed goal criteria (goalPills[goal_id]) instead of the latest-goal
+            scalar. Absent means UNKNOWN association (the turn ran under no proven
+            goal); a later goal's frame must never rebind this bubble.
         replace:
           type: boolean
           description: >-
@@ -2207,6 +2177,13 @@ components:
           type: string
           description: >-
             #823 catch-up redesign. The id of the turn's last assistant message.
+        goal_id:
+          type: string
+          description: >-
+            session-core FR-039 / C-GOAL. The goal this producing turn was dispatched
+            under (captured at turn start), spread onto the done frame so a no-stream
+            turn's bubble (created from this frame's message_id, not from tokens) still
+            joins to the exact keyed goal criteria. Absent means UNKNOWN association.
         seq:
           type: integer
           format: int64
@@ -3657,6 +3634,13 @@ components:
         Server → client replayed transcript entry. Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
         ADR-057 W5 audit (FR-089) — emitted by the gateway replay path.
+        A CHAT PROJECTION of the session's single append-only archive, not a
+        provider-message or raw-storage type (session-core C-ARCHIVE / U2;
+        FR-004/FR-005): the archive's private model payload (model_message),
+        its body-free same-session consumption reference (type=model_ref /
+        model_ref), its trusted source/return-route provenance and its
+        disk/byte/view marks are disk-only and are never emitted on this
+        frame, and entries that belong to the model view only are not replayed.
       type: object
       required:
       - type
@@ -3701,6 +3685,14 @@ components:
             entries. Lets the client match a replayed turn_canceled entry to the specific preceding assistant message it cancels,
             without relying on stream adjacency (async delegation can interleave other agents'/turns' frames in between).
             Omitted for legacy entries written before turn-id stamping landed.
+        goal_id:
+          type: string
+          description: >
+            session-core FR-039 / C-GOAL. The goal the replayed entry's producing turn
+            was dispatched under (from TranscriptEntry.GoalID). Live, history, REST and
+            replay must retain the SAME association so the SPA joins each bubble to its
+            own exact keyed goal criteria. Absent means UNKNOWN association; a later
+            goal's frame must never rebind an earlier replayed message.
         truncated:
           type: boolean
           description: >
@@ -5000,32 +4992,6 @@ components:
             Per-session sequence number of this frame (#823 catch-up redesign). Optional:
             absent on an unsequenced copy. Keep in sync by hand with
             contracts/components/schemas/CancelStageFrame.yaml.
-    SessionCloseAckFrame:
-      title: SessionCloseAckFrame
-      description: >
-        Server → client session close acknowledged. Session-scoped
-        (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
-        ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output.
-      type: object
-      required:
-      - type
-      - session_id
-      additionalProperties: false
-      properties:
-        type:
-          type: string
-          const: session_close_ack
-        session_id:
-          type: string
-          minLength: 1
-        id:
-          type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (b) (FR-089): absent for this frame type.
     SessionModeUpdateFrame:
       title: SessionModeUpdateFrame
       description: >
@@ -5087,8 +5053,7 @@ components:
         the existing, session-scoped ErrorFrame instead. Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
         ADR-057 W5 audit (FR-089) — a chat-lifecycle/settings frame, not
-        turn output, so producing_session_id is absent (FR-013), matching
-        SessionCloseAckFrame's own precedent.
+        turn output, so producing_session_id is absent (FR-013).
       type: object
       required:
       - type
@@ -5169,21 +5134,6 @@ components:
           type: string
         message:
           type: string
-    SessionCloseFrame:
-      title: SessionCloseFrame
-      description: Client → server explicit session close request.
-      type: object
-      required:
-      - type
-      - session_id
-      additionalProperties: false
-      properties:
-        type:
-          type: string
-          const: session_close
-        session_id:
-          type: string
-          minLength: 1
     WhatsAppPairingSubscribeFrame:
       title: WhatsAppPairingSubscribeFrame
       description: 'Client → server. Registers or clears this connection''s interest in a channel''s whatsapp_pairing frames

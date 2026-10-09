@@ -326,7 +326,7 @@ func TestRunTurn_AbortRestoresTurnStartTriple(t *testing.T) {
 		TranscriptSessionID: h.sessionID,
 		TranscriptStore:     h.store,
 	}, turnEventScope{turnID: "turn-b"})
-	require.Equal(t, len(archiveA), ts.initialArchiveLen)
+	require.Equal(t, len(archiveA), ts.initialWindow.Count)
 	require.Equal(t, setA, ts.initialEmptiedSet, "captured once at turn start")
 
 	appendInTurnMessages(h.al, h.sessionKey, []providers.Message{
@@ -402,7 +402,7 @@ func TestRunTurn_AbortRestoresTurnStartTriple(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, changes, 1)
 	assert.Equal(t, "call-4", changes[0].key.ToolCallID)
-	assert.Less(t, changes[0].key.ArchiveLine, ts.initialArchiveLen, "an earlier turn's line")
+	assert.Less(t, changes[0].key.ArchiveLine, ts.initialWindow.Count, "an earlier turn's line")
 	assert.Equal(t, memory.ProjectionEmptied, changes[0].state)
 	mid := h.agent.Sessions.Projection(h.sessionKey).Entries
 	require.Len(t, mid, 1, "intermediate state: turn A's zero (slid) + the one emptied now")
@@ -421,8 +421,14 @@ func TestRunTurn_AbortRestoresTurnStartTriple(t *testing.T) {
 
 	archiveAfter, err := h.agent.Sessions.ReadArchive(context.Background(), h.sessionKey)
 	require.NoError(t, err)
-	assert.Len(t, archiveAfter, len(archiveA), "archive length back to turn start")
-	assert.Equal(t, skipA, len(archiveAfter)-len(h.agent.Sessions.GetHistory(h.sessionKey)), "Skip back to turn start")
+	// FR-006: the abort is non-destructive — turn B's appended bytes are
+	// RETAINED (append-only archive); only the model view excludes them.
+	assert.Len(t, archiveAfter, len(archiveA)+7, "FR-006: abort preserves the appended bytes")
+	cwAfter, ok := h.agent.Sessions.(session.ContextWindowStore)
+	require.True(t, ok)
+	snapAfter, err := cwAfter.SnapshotWindow(context.Background(), h.sessionKey)
+	require.NoError(t, err)
+	assert.Equal(t, ts.initialWindow.Skip, snapAfter.State.Skip, "Skip back to the turn-start value")
 	assert.Equal(t, setA, h.agent.Sessions.Projection(h.sessionKey).Entries,
 		"projection set back to the TURN-START set, not the intermediate one")
 	assert.Equal(t, setA, ts.initialEmptiedSet, "the captured triple never moved")

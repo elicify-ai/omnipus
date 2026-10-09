@@ -102,7 +102,7 @@ afterEach(() => {
 /** Wires a real WsConnection to the real store exactly like WsLifecycle does. */
 function wireProductionCallbacks(): WsConnection {
   const conn = new WsConnection({
-    onFrame: () => {},
+    onFrames: () => {},
     onConnected: () => {
       useConnectionStore.getState().setConnected(true)
       useConnectionStore.getState().setConnectionError(null)

@@ -195,6 +195,29 @@ func (ts *turnState) stampStreamerMessageID(streamer bus.Streamer) {
 	}
 }
 
+// stampStreamerGoalID stamps this turn's captured goal id (session-core
+// FR-039 / C-GOAL) onto a freshly-obtained streamer, before any token can flow
+// through it. Mirrors stampStreamerTurnID exactly.
+//
+// Without this, the live TokenFrame/DoneFrame and the assistant entry
+// wsStreamer.Finalize persists carry no goal_id, so the SPA cannot join the
+// bubble to its own exact keyed goal criteria and falls back to the
+// latest-goal scalar the spec forbids (FR-039). The value is captured ONCE at
+// turn start (turnState.goalID) and never changes, so a later goal's frame can
+// never rebind this turn's output. An empty goalID stamps nothing (UNKNOWN
+// association), unlike SetTurnID/SetMessageID this is a legitimate common
+// value (`no proven goal`), so the empty case is left to the setter's own
+// no-op rather than treated as an error.
+//
+// Uses a type-assertion to an inline interface so bus.Streamer needs no new
+// method — non-webchat streamers (telegram, wecom, sse) are untouched; only
+// wsStreamer implements SetGoalID.
+func (ts *turnState) stampStreamerGoalID(streamer bus.Streamer) {
+	if gid, ok := streamer.(interface{ SetGoalID(goalID string) }); ok {
+		gid.SetGoalID(ts.goalID)
+	}
+}
+
 // streamerStatsSetter is an optional interface a Streamer may implement to
 // receive turn-end stats (tokens, cost, duration) before Finalize is called.
 // The ws streamer uses this to populate the "done" frame so the chat UI shows

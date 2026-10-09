@@ -51,7 +51,7 @@ type StoreWriter interface {
 	// D5.5, FR-047). It MUST return an error wrapping ErrArchiveNotEmpty when
 	// the archive already has ≥ 1 line, and MUST NOT touch Skip. It is for
 	// first-time transcript hydration only; it is never a rollback or a
-	// rewrite mechanism (see RollbackAppended).
+	// rewrite mechanism (see RollbackWindow).
 	SetHistory(ctx context.Context, sessionKey string, history []providers.Message) error
 
 	// SetProjectionState records capped | emptied for one
@@ -63,29 +63,6 @@ type StoreWriter interface {
 	// rebuilt from the UI transcript, so recall by id cannot return the
 	// original result bytes.
 	MarkHydrated(ctx context.Context, sessionKey string) error
-
-	// RollbackAppended truncates the JSONL file to targetLines physical lines,
-	// setting meta.Count = targetLines, restoring meta.Skip = min(targetSkip,
-	// targetLines), and restoring the projection state to emptiedSet — the
-	// turn-start triple (ADR-066 FR-020, US-6.AC5), written atomically. The
-	// Skip restore is the fix for the mid-turn eviction bug: if windowTrim
-	// advanced Skip during a turn and the turn then aborts, RollbackAppended
-	// MUST restore Skip to its turn-start value so that GetHistory returns
-	// the exact pre-turn live window (SC-001, SC-010). The projection restore
-	// is the same fix for mid-turn empties: a retried turn starts from the
-	// un-emptied window.
-	//
-	// Callers compute: targetSkip = initialArchiveLen - initialHistoryLength
-	// (the Skip value at turn start, before any mid-turn evictions), and pass
-	// the WHOLE projection set captured at turn start (both states) as
-	// emptiedSet. Entries with archive_line ≥ targetLines are dropped; the
-	// exact merge is documented on JSONLStore.RollbackAppended. A nil set
-	// means "nothing was emptied at turn start".
-	//
-	// If targetLines >= current Count the file is untouched, but Skip and the
-	// projection state are still restored. targetSkip is always clamped:
-	// meta.Skip = min(targetSkip, targetLines) so Skip never exceeds Count.
-	RollbackAppended(ctx context.Context, sessionKey string, targetLines, targetSkip int, emptiedSet ProjectionSet) error
 
 	// Compact reclaims storage by physically removing logically truncated
 	// data. Backends that do not accumulate dead data may return nil.

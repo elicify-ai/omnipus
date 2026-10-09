@@ -300,44 +300,6 @@ func (sm *SessionManager) Close() error {
 	return nil
 }
 
-// RollbackAppended implements SessionStore for the in-memory backend.
-// SessionManager has no append-only JSONL archive and no Skip concept, so
-// this truncates to the first targetArchiveLen messages and restores the
-// in-memory projection state to emptiedSet (entries at index ≥
-// targetArchiveLen dropped). targetSkip is accepted for interface
-// compatibility but has no effect (no Skip windowing here).
-// In practice this is never reached for agent-loop abort paths because those
-// paths require an archive-backed store — but it must satisfy the interface.
-func (sm *SessionManager) RollbackAppended(key string, targetArchiveLen, _ int, emptiedSet memory.ProjectionSet) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	if targetArchiveLen < 0 {
-		targetArchiveLen = 0
-	}
-	restored := make(memory.ProjectionSet, len(emptiedSet))
-	for k, v := range emptiedSet {
-		if k.ArchiveLine < targetArchiveLen {
-			restored[k] = v
-		}
-	}
-	pm := sm.projectionLocked(key)
-	pm.Entries = restored
-
-	session, ok := sm.sessions[key]
-	if !ok {
-		return
-	}
-	if targetArchiveLen >= len(session.Messages) {
-		return
-	}
-	// Truncate to the first targetArchiveLen messages.
-	msgs := make([]providers.Message, targetArchiveLen)
-	copy(msgs, session.Messages[:targetArchiveLen])
-	session.Messages = msgs
-	session.Updated = time.Now()
-}
-
 // projectionLocked returns the (lazily created) projection record for key.
 // Caller holds sm.mu.
 func (sm *SessionManager) projectionLocked(key string) *memory.ProjectionMeta {

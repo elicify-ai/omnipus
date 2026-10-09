@@ -537,6 +537,8 @@ type DevicePairingResponseFrame struct {
 
 // DoneFrame — Server → client turn complete. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
 type DoneFrame struct {
+	// session-core FR-039 / C-GOAL. The goal this producing turn was dispatched under (captured at turn start), spread onto the done frame so a no-stream turn's bubble (created from this frame's message_id, not from tokens) still joins to the exact keyed goal criteria. Absent means UNKNOWN association.
+	GoalId *string `json:"goal_id,omitempty"`
 	// #823 catch-up redesign. The id of the turn's last assistant message.
 	MessageId *string `json:"message_id,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign), published only after the turn's transcript entry is durably persisted. Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/DoneFrame.yaml.
@@ -1018,13 +1020,15 @@ type ReplayErrorPayload struct {
 	LlmError LLMErrorReplay `json:"llm_error"`
 }
 
-// ReplayMessageFrame — Server → client replayed transcript entry. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the gateway replay path.
+// ReplayMessageFrame — Server → client replayed transcript entry. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the gateway replay path. A CHAT PROJECTION of the session's single append-only archive, not a provider-message or raw-storage type (session-core C-ARCHIVE / U2; FR-004/FR-005): the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance and its disk/byte/view marks are disk-only and are never emitted on this frame, and entries that belong to the model view only are not replayed.
 type ReplayMessageFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	// #823 catch-up redesign §4.7. Present on a replayed user entry persisted with a client-supplied id. Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
 	ClientMessageId *string `json:"client_message_id,omitempty"`
 	Content         string  `json:"content"`
-	Id              *string `json:"id,omitempty"`
+	// session-core FR-039 / C-GOAL. The goal the replayed entry's producing turn was dispatched under (from TranscriptEntry.GoalID). Live, history, REST and replay must retain the SAME association so the SPA joins each bubble to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier replayed message.
+	GoalId *string `json:"goal_id,omitempty"`
+	Id     *string `json:"id,omitempty"`
 	// Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014). Omitted for legacy entries written before per-turn model recording landed.
 	Model     *string `json:"model,omitempty"`
 	Role      string  `json:"role"`
@@ -1054,21 +1058,6 @@ type ReplayWarningStats struct {
 	DuplicateToolCallIdCount *int `json:"duplicate_tool_call_id_count,omitempty"`
 }
 
-// SessionCloseAckFrame — Server → client session close acknowledged. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output.
-type SessionCloseAckFrame struct {
-	Id *string `json:"id,omitempty"`
-	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Type               string  `json:"type"`
-}
-
-// SessionCloseFrame — Client → server explicit session close request.
-type SessionCloseFrame struct {
-	SessionId string `json:"session_id"`
-	Type      string `json:"type"`
-}
-
 // SessionModeUpdateFrame — Client → server. Set or clear this session's ADR-092 per-chat Auto-approve modifier — new, session-keyed state (pkg/agent/sessionmode.go), structurally like ApprovalGrantStore, never written into config.json and never a chat_id key on any policy map (Hard Constraint #6). Auto is NOT a tool-policy value — it only has meaning for a tool currently resolved to "ask", and applies to every such tool, not only bash (see SandboxConfig.auto_approve for the full behavioural description). THE ONE EXCEPTION TO TIGHTEN-ONLY in this contract: unlike the global default (SandboxConfig.auto_approve), this frame may LOOSEN — turn Auto ON for this one chat even when the global default has it off — because a human is present in this session to accept that risk. It may also tighten (turn Auto off). Turning Auto on for a chat is deliberately a human-only action: the agent-facing `set_config` tool must never be able to send this frame or reach an equivalent effect (enforced server-side; this frame's shape — a session-scoped WS write, not a config.json path — structurally keeps it outside `set_config`'s reach in the first place). Inherits to a delegated subagent session exactly as approval grants do (ApprovalGrantStore.InheritFrom); clears with the session on restart.
 type SessionModeUpdateFrame struct {
 	// true — turn Auto-approve ON for this chat (may loosen past the global default). false — turn Auto-approve OFF for this chat (tightens, same as every other scope). null — clear this session's modifier; the chat reverts to whatever the global default currently resolves to, and will track future changes to that default rather than staying pinned.
@@ -1077,7 +1066,7 @@ type SessionModeUpdateFrame struct {
 	Type        string `json:"type"`
 }
 
-// SessionModeUpdatedFrame — Server → client. Acknowledges a session_mode_update request with the session's resulting resolved Auto-approve state. A request is always acknowledged here — this is the one frame allowed to loosen, so there is no "rejected for looseness" case the way there is for the global/per-agent scopes; a malformed request still gets the existing, session-scoped ErrorFrame instead. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle/settings frame, not turn output, so producing_session_id is absent (FR-013), matching SessionCloseAckFrame's own precedent.
+// SessionModeUpdatedFrame — Server → client. Acknowledges a session_mode_update request with the session's resulting resolved Auto-approve state. A request is always acknowledged here — this is the one frame allowed to loosen, so there is no "rejected for looseness" case the way there is for the global/per-agent scopes; a malformed request still gets the existing, session-scoped ErrorFrame instead. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle/settings frame, not turn output, so producing_session_id is absent (FR-013).
 type SessionModeUpdatedFrame struct {
 	// The resolved Auto-approve state for THIS session after applying (or clearing) the modifier — the true per-session resolution that SandboxStatus.auto_approve_effective cannot provide (that field is the gateway-wide default only, with no session or agent context). [2026-09-24, founder decision] true here means Auto is genuinely active for this session's "ask" tool calls, whether or not a kernel sandbox is enforcing — combine with SandboxStatus.kernel_sandbox_active only to decide the badge's "Auto" vs "Auto — no sandbox" (warning) rendering, not to predict whether calls still prompt: they do not.
 	AutoApproveEffective bool   `json:"auto_approve_effective"`
@@ -1259,6 +1248,8 @@ type TaskStatusChangedFrame struct {
 type TokenFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	Content string  `json:"content"`
+	// session-core FR-039 / C-GOAL. The goal this producing turn was dispatched under (captured at turn start from the session's active goal record) and stamped onto every token of the turn. Lets the SPA join the bubble to the EXACT keyed goal criteria (goalPills[goal_id]) instead of the latest-goal scalar. Absent means UNKNOWN association (the turn ran under no proven goal); a later goal's frame must never rebind this bubble.
+	GoalId *string `json:"goal_id,omitempty"`
 	// #823 catch-up redesign. Identifies the specific assistant message (bubble) this token belongs to, stable across reconnect/catch-up.
 	MessageId *string `json:"message_id,omitempty"`
 	// Set only on a catch-up token: REPLACES the open bubble's content for this session instead of appending, making catch-up idempotent.
@@ -1448,7 +1439,6 @@ const (
 	WsFrameTypePing                     WsFrameType = "ping"
 	WsFrameTypeAttachSession            WsFrameType = "attach_session"
 	WsFrameTypeDevicePairingResponse    WsFrameType = "device_pairing_response"
-	WsFrameTypeSessionClose             WsFrameType = "session_close"
 	WsFrameTypeSessionStarted           WsFrameType = "session_started"
 	WsFrameTypeMessageStatus            WsFrameType = "message_status"
 	WsFrameTypeToken                    WsFrameType = "token"
@@ -1479,7 +1469,6 @@ const (
 	WsFrameTypeReplayWarning            WsFrameType = "replay_warning"
 	WsFrameTypeCancelStage              WsFrameType = "cancel_stage"
 	WsFrameTypePong                     WsFrameType = "pong"
-	WsFrameTypeSessionCloseAck          WsFrameType = "session_close_ack"
 	WsFrameTypeSessionModeUpdate        WsFrameType = "session_mode_update"
 	WsFrameTypeSessionModeUpdated       WsFrameType = "session_mode_updated"
 	WsFrameTypeDevicePairingRequest     WsFrameType = "device_pairing_request"

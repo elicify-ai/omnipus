@@ -503,6 +503,19 @@ function deriveGoalAwareThinkingLabel(runningToolNames: string[], goalRecordEmpt
   return runningToolNames.includes('set_goal') ? 'Setting acceptance criteria' : 'Framing your goal'
 }
 
+/**
+ * Reads a producing message's goal association off an AssistantUI message
+ * (FR-039) — carried in `metadata.custom.goalId` by `convertMessage`
+ * (src/lib/omnipus-runtime.ts). Returns undefined for anything that is not a
+ * non-empty string, so an unknown/malformed value stays NEUTRAL.
+ */
+function messageGoalIdFromAssistantUi(message: {
+  metadata?: { custom?: { goalId?: unknown } }
+}): string | undefined {
+  const value = message.metadata?.custom?.goalId
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
 /** Extracts the tool names of currently-`running` tool-call parts from a
  * LIVE AssistantUI message's `content` array — the same shape
  * deriveHiddenRunningToolLabel scans, but collecting every running name
@@ -602,14 +615,18 @@ function InlineThinkingIndicator() {
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   // Operator-reported UX fix, 2026-09-08: goal-aware override, checked
   // BEFORE the hidden-tool label — see deriveGoalAwareThinkingLabel's doc
-  // comment. goalStatus is the foreground session's latest goal_status
-  // frame (same field GoalIndicator already reads), so this needs no extra
-  // subscription setup.
-  const goalStatus = useChatStore((s) => s.goalStatus)
+  // comment. FR-039 (DEL-F39–40): the override joins the PRODUCING message's
+  // own goal_id (carried on the AssistantUI message's metadata.custom) to the
+  // exact keyed criteria in `goalPills` — never the session's latest-goal
+  // scalar. Subscribing to `goalPills` keeps the label reactive when a
+  // `goal_status` frame changes the record. An unknown association (no
+  // goalId) is neutral.
+  const goalPills = useChatStore((s) => s.goalPills)
+  const goalId = messageGoalIdFromAssistantUi(message)
 
   if (!isRunning) return null
 
-  const goalRecordEmpty = isGoalRecordEmpty(goalStatus)
+  const goalRecordEmpty = isGoalRecordEmpty(goalId, goalPills)
   const goalLabel = goalRecordEmpty
     ? deriveGoalAwareThinkingLabel(runningToolNamesFromLiveContent(message.content, storeToolCalls), true)
     : null
@@ -661,8 +678,13 @@ function FallbackToolUI(props: {
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   // Operator-reported UX fix, 2026-09-08: see GoalSetupFailureLine.tsx's
-  // file doc comment. goalStatus drives isGoalRecordEmpty below.
-  const goalStatus = useChatStore((s) => s.goalStatus)
+  // file doc comment. FR-039: the failure line is gated on the PRODUCING
+  // message's own goal_id (the AssistantUI message this tool part belongs
+  // to) joined to the exact keyed criteria in `goalPills` — never the
+  // session's latest-goal scalar.
+  const message = useMessage()
+  const goalPills = useChatStore((s) => s.goalPills)
+  const goalId = messageGoalIdFromAssistantUi(message)
   const liveCall = storeToolCalls[props.toolCallId]
   const isError = props.isError ?? liveCall?.status === 'error'
 
@@ -677,7 +699,7 @@ function FallbackToolUI(props: {
     isError &&
     !verboseChatEnabled &&
     props.toolName !== 'set_goal' &&
-    isGoalRecordEmpty(goalStatus) &&
+    isGoalRecordEmpty(goalId, goalPills) &&
     shouldRenderToolCall(props.toolName, props.args as Record<string, unknown> | undefined, false, true)
   ) {
     return (
@@ -1140,8 +1162,13 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // Operator-reported UX fix, 2026-09-08: goal-aware thinking-indicator
   // label + goal-setup failure line (replay/historical path) — see
   // deriveGoalAwareThinkingLabel's and GoalSetupFailureLine's doc comments.
-  const goalStatus = useChatStore((s) => s.goalStatus)
-  const goalRecordEmpty = isGoalRecordEmpty(goalStatus)
+  // FR-039 (DEL-F39–40): the row joins this message's OWN goal_id
+  // (`message.goalId`) to the exact keyed criteria in `goalPills` — never the
+  // session's latest-goal scalar. Subscribing to `goalPills` keeps the row
+  // reactive when a `goal_status` frame changes the record. An unknown
+  // association (no goalId) is neutral.
+  const goalPills = useChatStore((s) => s.goalPills)
+  const goalRecordEmpty = isGoalRecordEmpty(message.goalId, goalPills)
 
   const messageAgentId = message.agentId ?? activeAgentId
   const agent = agents.find((a) => a.id === messageAgentId)

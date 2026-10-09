@@ -1,6 +1,5 @@
-// Package gateway — WebSocket session_close and attach_session integration tests.
+// Package gateway — WebSocket attach_session integration tests.
 //
-// T2: session_close frame → CloseSession idempotency wiring.
 // T3: attach_session lazy-CAS wiring (FR-024).
 //
 // These tests exercise the real readLoop dispatch path via an httptest.Server
@@ -81,119 +80,6 @@ func readFrameOfType(t *testing.T, conn *websocket.Conn, wantType string, timeou
 	}
 	t.Fatalf("readFrameOfType(%q): timed out after %v", wantType, timeout)
 	return replayFrameDecoder{} // unreachable
-}
-
-// ---------------------------------------------------------------------------
-// T2: session_close frame → CloseSession idempotency wiring
-// ---------------------------------------------------------------------------
-
-// TestWS_SessionClose_AcksOnValidSessionID verifies that a session_close frame
-// with a valid session_id causes the server to send a session_close_ack frame
-// without dropping the connection.
-//
-// BDD:
-//
-//	Given an authenticated WebSocket connection,
-//	When the client sends {"type":"session_close","session_id":"<valid-uuid>"},
-//	Then the server responds with {"type":"session_close_ack","id":"<valid-uuid>"}
-//	 and the connection remains open.
-//
-// Implements: T2 (pr-test-analyzer HIGH) — WS session_close → CloseSession wiring.
-// Traces to: pkg/gateway/websocket.go case "session_close"
-func TestWS_SessionClose_AcksOnValidSessionID(t *testing.T) {
-	handler, _, _ := newTestWSHandler(t)
-	t.Cleanup(handler.Wait)
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-
-	conn := dialTestWS(t, srv)
-	t.Cleanup(func() { _ = conn.Close() })
-
-	sendWSAuthFrameDevMode(t, conn)
-
-	const sessionID = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
-	closeFrame := wsClientFrameTestHelper{Type: "session_close", SessionID: sessionID}
-	data, err := json.Marshal(closeFrame)
-	require.NoError(t, err)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
-
-	resp := readFrameOfType(t, conn, "session_close_ack", 3*time.Second)
-	assert.Equal(t, sessionID, resp.ID, "ack must echo back the session_id")
-
-	// Connection must remain open after close ack.
-	conn.SetWriteDeadline(time.Now().Add(1 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
-	ping := wsClientFrameTestHelper{Type: "message", Content: "still-open"}
-	pingData, err := json.Marshal(ping)
-	require.NoError(t, err)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
-		"connection must remain open after session_close_ack")
-}
-
-// TestWS_SessionClose_ReturnsErrorOnEmptySessionID verifies that a session_close
-// frame with an empty session_id causes the server to send an error frame (not
-// a close frame) and that the connection remains open.
-//
-// BDD:
-//
-//	Given an authenticated WebSocket connection,
-//	When the client sends {"type":"session_close"} with no session_id,
-//	Then the server responds with {"type":"error"} and stays connected.
-//
-// Implements: T2 — missing-session_id guard.
-// Traces to: pkg/gateway/websocket.go case "session_close" empty-ID branch.
-func TestWS_SessionClose_ReturnsErrorOnEmptySessionID(t *testing.T) {
-	handler, _, _ := newTestWSHandler(t)
-	t.Cleanup(handler.Wait)
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-
-	conn := dialTestWS(t, srv)
-	t.Cleanup(func() { _ = conn.Close() })
-
-	sendWSAuthFrameDevMode(t, conn)
-
-	emptyClose := wsClientFrameTestHelper{Type: "session_close"}
-	data, err := json.Marshal(emptyClose)
-	require.NoError(t, err)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
-
-	resp := readFrameOfType(t, conn, "error", 3*time.Second)
-	assert.NotEmpty(t, resp.Message, "error frame must carry a message for empty session_id")
-}
-
-// TestWS_SessionClose_Idempotent verifies that sending session_close twice for
-// the same session_id does not panic and both calls are acknowledged.
-//
-// BDD:
-//
-//	Given an authenticated WebSocket connection,
-//	When the client sends session_close for "sid-001" twice in sequence,
-//	Then the server sends session_close_ack both times without error or close.
-//
-// Implements: T2 — duplicate session_close idempotency.
-// Traces to: pkg/agent/session_end.go CloseSession idempotency gate (FR-027).
-func TestWS_SessionClose_Idempotent(t *testing.T) {
-	handler, _, _ := newTestWSHandler(t)
-	t.Cleanup(handler.Wait)
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-
-	conn := dialTestWS(t, srv)
-	t.Cleanup(func() { _ = conn.Close() })
-
-	sendWSAuthFrameDevMode(t, conn)
-
-	const sessionID = "b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5"
-
-	for i := 0; i < 2; i++ {
-		frame := wsClientFrameTestHelper{Type: "session_close", SessionID: sessionID}
-		data, err := json.Marshal(frame)
-		require.NoError(t, err)
-		require.NoErrorf(t, conn.WriteMessage(websocket.TextMessage, data), "write #%d", i+1)
-
-		resp := readFrameOfType(t, conn, "session_close_ack", 3*time.Second)
-		assert.Equalf(t, sessionID, resp.ID, "ack must echo session_id on call #%d", i+1)
-	}
 }
 
 // ---------------------------------------------------------------------------

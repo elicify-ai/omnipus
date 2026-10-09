@@ -1,7 +1,7 @@
 // types.ts: Chat, attachment, subagent-span, rate-limit, and per-session state contracts
 
 import type { Message, ToolCall, AgentKind } from '@/lib/api'
-import type { WsReceiveFrame, WsConnection } from '@/lib/ws'
+import type { WsConnection } from '@/lib/ws'
 import type {
   GoalStatusFrame,
   LoopStatusFrame,
@@ -10,6 +10,7 @@ import type {
   SubagentStateFrame,
   MessageFrame,
   CancelFrame,
+  ServerFrame,
   LLMError as GeneratedLLMError,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
@@ -188,6 +189,15 @@ export type ChatMessage = Message & {
   spans?: SubagentSpan[]
   /** Agent that produced this message (assistant messages only). */
   agentId?: string
+  /**
+   * Goal association (FR-039): the `goal_id` of the goal this message's
+   * producing run/turn belongs to, stamped by the producer (the camelCase twin
+   * of the wire `goal_id`, matching the `turnId`/`agentId` convention above).
+   * The thinking/error indicators join on THIS exact id — `goalPills[goalId]`
+   * via `isGoalRecordEmpty` — never the session's "latest goal" scalar. Absent
+   * means an UNKNOWN association, which the indicators treat as neutral.
+   */
+  goalId?: string
   /**
    * Turn-correlation id (Fix 5c; wire field ReplayMessageFrame.turn_id, sourced
    * from TranscriptEntry.TurnID), stamped on assistant messages hydrated via WS
@@ -642,12 +652,14 @@ export interface SessionChatState {
   goalStatus?: GoalStatusFrame | null
   /**
    * ADR-053 FE-1 / US-14: per-goal-id pill-state map. Each active goal in the
-   * session gets its own entry (keyed by `GoalStatusFrame.goal_id`, falling
-   * back to `'_default'` when the frame omits one), so a session carrying 2
-   * goals renders 2 pills + 2 timers. The bottom-right `GoalPillTray` reads
+   * session gets its own entry, keyed by exactly `GoalStatusFrame.goal_id`
+   * (DEL-F41 — no `'_default'` fallback: a frame omitting `goal_id` is an
+   * unknown association and files nothing), so a session carrying 2 goals
+   * renders 2 pills + 2 timers. The bottom-right `GoalPillTray` reads
    * this map; the legacy single `goalStatus` (above) is still maintained as a
    * derived "latest frame" for back-compat with any reader that hasn't
-   * migrated yet. Optional for the same fixture-compat reason as
+   * migrated yet — Stop's `isGoalRunning` is the live such reader. Optional
+   * for the same fixture-compat reason as
    * `toolCallOwnerMessageId` above — pre-existing test fixtures construct a
    * `SessionChatState`-shaped bucket by hand; every read site falls back to
    * `{}` and every write site initializes it.
@@ -1197,7 +1209,7 @@ export interface ChatStore {
   // assistant message as 'done' so AssistantUI stops rendering it as running.
   clearStreamingState: () => void
 
-  handleFrame: (frame: WsReceiveFrame) => void
+  handleFrame: (frame: ServerFrame) => void
 }
 
 export const finishedTurnIdsBySession: Record<string, string[]> = {}

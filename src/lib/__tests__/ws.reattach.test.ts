@@ -76,7 +76,7 @@ function makeCallbacks(conn: { current: WsConnection | null }, setConnectionErro
   // Mirrors OmnipusRuntimeProvider.tsx's WsLifecycle: onConnected re-attaches
   // the active session on every open, first connect and every reconnect alike.
   return {
-    onFrame: vi.fn(),
+    onFrames: vi.fn(),
     onConnected: vi.fn(() => {
       if (conn.current) reattachActiveSession(conn.current, setConnectionError)
     }),
