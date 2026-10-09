@@ -18,6 +18,7 @@ import {
 } from '@xyflow/react'
 import { GraphIcon, Info } from '@phosphor-icons/react'
 import type { Task, Plan } from '@/lib/api'
+import { logError } from '@/lib/telemetry'
 import { ZoomPill, useZoomableViewKeyboard } from '@/components/ui/zoomable-view'
 import { ErrorState } from '@/components/ui/error-state'
 import {
@@ -248,14 +249,20 @@ function GraphViewInner({
         const fitted = await fitView(GRAPH_FIT_VIEW_OPTIONS)
         if (generation !== framingGeneration.current) return
         if (fitted) framed = await alignAtTop()
-      } catch {
+      } catch (err) {
+        logError({ event: 'graphFrameFailed', phase: 'fit', message: String(err) })
         framed = false
       }
       if (generation !== framingGeneration.current) return
       if (!framed) {
         // One independent fallback bypasses fitView and keeps the usable zoom.
         // Never loop or reset the canvas after failure; expose Retry instead.
-        try { framed = await alignAtTop() } catch { framed = false }
+        try {
+          framed = await alignAtTop()
+        } catch (err) {
+          logError({ event: 'graphFrameFailed', phase: 'fallback', message: String(err) })
+          framed = false
+        }
       }
       if (generation === framingGeneration.current) setFramingFailed(!framed)
     }
