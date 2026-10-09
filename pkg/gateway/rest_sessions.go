@@ -55,7 +55,11 @@ func jsonSessionDetail(
 	currentBootSeq ...uint64,
 ) {
 	genSession := unifiedMetaToGenSession(meta)
-	attachSessionRuntimeFields(&genSession, ls, meta.ID, currentBootSeq...)
+	if err := attachSessionRuntimeFields(&genSession, ls, meta.ID, currentBootSeq...); err != nil {
+		slog.Warn("rest: session detail: lifecycle read failed", "session_id", meta.ID, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "session lifecycle unavailable")
+		return
+	}
 	if messages == nil {
 		messages = []session.TranscriptEntry{}
 	}
@@ -357,17 +361,18 @@ func computeSessionProtected(homePath string, m *session.UnifiedMeta) *bool {
 // wired; most webchat-only installs never mint one) or when id has no
 // LifecycleRecord (the common case for an ordinary chat session), exactly
 // matching Session.yaml's "absent for a session with no lifecycle record"
-// contract. Never panics or errors on either degenerate input.
-func computeSessionLifecycle(ls *session.LifecycleStore, id string, currentBootSeq ...uint64) (*gen.SessionLifecycleState, *stopNoteEntry, *gen.SessionExecution) {
+// contract. Unexpected read failures also omit the fields, but return an error
+// so each response builder can surface degradation instead of hiding it.
+func computeSessionLifecycle(ls *session.LifecycleStore, id string, currentBootSeq ...uint64) (*gen.SessionLifecycleState, *stopNoteEntry, *gen.SessionExecution, error) {
 	if ls == nil || id == "" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	rec, err := ls.Load(id)
 	if err != nil {
-		if !errors.Is(err, session.ErrLifecycleNotFound) {
-			slog.Warn("rest: compute session lifecycle: load failed", "session_id", id, "error", err)
+		if errors.Is(err, session.ErrLifecycleNotFound) {
+			return nil, nil, nil, nil
 		}
-		return nil, nil, nil
+		return nil, nil, nil, fmt.Errorf("read session lifecycle %q: %w", id, err)
 	}
 	state := gen.SessionLifecycleState(session.LifecycleRecordToDisplay(rec, currentBootSeq...))
 	var note *stopNoteEntry
@@ -398,7 +403,7 @@ func computeSessionLifecycle(ls *session.LifecycleStore, id string, currentBootS
 			execution = &v
 		}
 	}
-	return &state, note, execution
+	return &state, note, execution, nil
 }
 
 // attachSessionRuntimeFields sets lifecycle_state, stop_note, execution, and
@@ -406,13 +411,16 @@ func computeSessionLifecycle(ls *session.LifecycleStore, id string, currentBootS
 // execution preserves queued/running only when the same record projects to
 // working in the current boot; every other projected display omits it.
 // background_command_count is omitted when no process table is wired; a wired
-// table sends 0 when this session owns no running background command.
-func attachSessionRuntimeFields(s *gen.Session, ls *session.LifecycleStore, id string, currentBootSeq ...uint64) {
-	s.LifecycleState, s.StopNote, s.Execution = computeSessionLifecycle(ls, id, currentBootSeq...)
+// table sends 0 when this session owns no running background command. A genuine
+// lifecycle read failure is returned; missing records remain a non-error.
+func attachSessionRuntimeFields(s *gen.Session, ls *session.LifecycleStore, id string, currentBootSeq ...uint64) error {
+	var err error
+	s.LifecycleState, s.StopNote, s.Execution, err = computeSessionLifecycle(ls, id, currentBootSeq...)
 	if sm := tools.GetSharedSessionManager(); sm != nil {
 		n := sm.CountRunningBackgroundCommands(id)
 		s.BackgroundCommandCount = &n
 	}
+	return err
 }
 
 // u18DefaultSessionPageLimit is the page size GET /api/v1/sessions uses when
@@ -480,8 +488,10 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	page, partialErrs := a.agentLoop.ListAllSessions(limit, offset, parentSessionID, flat)
+	degradation := make([]string, 0, len(partialErrs))
 	for _, pe := range partialErrs {
 		slog.Warn("rest: list sessions: partial error", "error", pe)
+		degradation = append(degradation, sanitizePartialError(pe))
 	}
 
 	// Apply the orthogonal agent_id/type/include_verifier filters over this
@@ -530,7 +540,12 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 		// Sub-agent control plane ADR D4/MAJ-009: lifecycle_state/stop_note,
 		// absent when this session has no LifecycleRecord (the common case
 		// for an ordinary chat session).
-		attachSessionRuntimeFields(&s, lifecycleStore, m.ID, a.agentLoop.CurrentBootEpoch())
+		if err := attachSessionRuntimeFields(&s, lifecycleStore, m.ID, a.agentLoop.CurrentBootEpoch()); err != nil {
+			slog.Warn("rest: list sessions: lifecycle read failed", "session_id", m.ID, "error", err)
+			// Keep the row and omit only its unreadable lifecycle fields. This
+			// fixed token exposes no journal path or underlying error details.
+			degradation = append(degradation, "session="+m.ID+": lifecycle_read_unavailable")
+		}
 		genSessions = append(genSessions, s)
 	}
 
@@ -539,15 +554,10 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 		nc := strconv.Itoa(page.NextOffset)
 		resp.NextCursor = &nc
 	}
-	if len(partialErrs) > 0 {
-		// FR-098(c): a store that errored mid-merge still yields a valid page
-		// plus next_cursor — partial_errors composes with paging rather than
-		// halting it.
-		sanitized := make([]string, len(partialErrs))
-		for i, pe := range partialErrs {
-			sanitized[i] = sanitizePartialError(pe)
-		}
-		resp.PartialErrors = &sanitized
+	if len(degradation) > 0 {
+		// FR-098(c), NAV-WAVE1 SF-2: store enumeration and lifecycle-read
+		// failures share the page's degradation channel, not its cursor.
+		resp.PartialErrors = &degradation
 	}
 	jsonOK(w, resp)
 }
@@ -710,7 +720,11 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 	s := unifiedMetaToGenSession(meta)
-	attachSessionRuntimeFields(&s, a.agentLoop.GetSessionLifecycleStore(), meta.ID, a.agentLoop.CurrentBootEpoch())
+	if err := attachSessionRuntimeFields(&s, a.agentLoop.GetSessionLifecycleStore(), meta.ID, a.agentLoop.CurrentBootEpoch()); err != nil {
+		slog.Warn("rest: rename session: lifecycle read failed", "session_id", meta.ID, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "session lifecycle unavailable")
+		return
+	}
 	jsonOK(w, s)
 }
 
@@ -992,7 +1006,11 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 	// are minted by the delegate/task paths, not this handler) — this call
 	// degrades to both fields absent in that common case, same as every
 	// other producer of gen.Session.
-	attachSessionRuntimeFields(&s, a.agentLoop.GetSessionLifecycleStore(), meta.ID, a.agentLoop.CurrentBootEpoch())
+	if err := attachSessionRuntimeFields(&s, a.agentLoop.GetSessionLifecycleStore(), meta.ID, a.agentLoop.CurrentBootEpoch()); err != nil {
+		slog.Warn("rest: create session: lifecycle read failed", "session_id", meta.ID, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "session lifecycle unavailable")
+		return
+	}
 	jsonCreated(w, s)
 }
 

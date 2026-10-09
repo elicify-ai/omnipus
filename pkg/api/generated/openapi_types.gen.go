@@ -25330,12 +25330,12 @@ type SessionMessageSteerDirection string
 // SessionMessageSteerKind defines model for SessionMessageSteer.Kind.
 type SessionMessageSteerKind string
 
-// SessionPage Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098). `sessions` is this page's rows: root sessions by default, that node's direct children when parent_session_id is supplied, or every session (roots and subordinates) when flat=true (FR-104). `partial_errors` composes with paging: a page whose merge hit a failing legacy per-agent store still returns its healthy rows, still returns next_cursor, and populates partial_errors — a failing store contributes zero rows and does not halt the page or invalidate the cursor (FR-098).
+// SessionPage Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098). `sessions` is this page's rows: root sessions by default, that node's direct children when parent_session_id is supplied, or every session (roots and subordinates) when flat=true (FR-104). `partial_errors` composes with paging: a page whose merge hit a failing legacy per-agent store still returns its healthy rows, still returns next_cursor, and populates partial_errors — a failing store contributes zero rows and does not halt the page or invalidate the cursor (FR-098). This is also the page's general degradation channel: an unexpected per-session lifecycle-journal read failure keeps the row, omits lifecycle_state, stop_note, and execution (never null), and appends a sanitized session-scoped token. A missing lifecycle record is normal and contributes no token.
 type SessionPage struct {
 	// NextCursor Opaque pagination cursor for the next page. Absent when this is the last page.
 	NextCursor *string `json:"next_cursor,omitempty"`
 
-	// PartialErrors Opaque error tokens (agent ID + sanitized reason) from any store that failed during this page's merge. Present only when at least one store failed.
+	// PartialErrors General page-degradation channel. Distinguishable opaque tokens: agent=<id>: session_list_failed for a store enumeration failure; session=<id>: lifecycle_read_unavailable for an unexpected per-session lifecycle-journal read failure. No filesystem paths or underlying error details are exposed. An unreadable journal keeps its session row but omits lifecycle_state, stop_note, and execution, never sending null or inventing a state. A missing lifecycle record (ErrLifecycleNotFound) is normal, not degradation. Present only when at least one degradation occurred; omitted when empty. Rows and next_cursor remain valid, so clients can warn that the list or runtime state is incomplete and offer Retry.
 	PartialErrors *[]string `json:"partial_errors,omitempty"`
 	Sessions      []Session `json:"sessions"`
 }

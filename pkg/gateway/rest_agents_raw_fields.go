@@ -83,6 +83,18 @@ func (fields rawJSONFields) hasNull(name string) bool {
 	return false
 }
 
+// valuesFor retains all values under every decoder-recognised spelling of
+// name, so nested validation cannot lose a rejected value to a duplicate parent.
+func (fields rawJSONFields) valuesFor(name string) []json.RawMessage {
+	var matches []json.RawMessage
+	for key, values := range fields {
+		if strings.EqualFold(key, name) {
+			matches = append(matches, values...)
+		}
+	}
+	return matches
+}
+
 func (fields rawJSONFields) has(name string) bool {
 	for key := range fields {
 		if strings.EqualFold(key, name) {
