@@ -167,6 +167,10 @@ The view is titled **Sessions** and offers two status filters:
 
 Search matches a session's title, workspace, or agent name. The date-range control filters by when the session was last active, not when it started.
 
+If agent details cannot be loaded and no saved agent list is available in the open app, Sessions warns that **agent-name search is unavailable**. Title and workspace search still work, but a search by agent name alone can show no matches. Select the notice's **Retry** to load agent details again; your search stays in place, and agent-name matches return when that request succeeds.
+
+If the required session or workspace list cannot be loaded, the error names what failed: **Could not load sessions**, **Could not load workspaces**, or **Could not load sessions and workspaces**. Select **Retry** in that view to retry the failed requests. The list returns when they succeed; another failure keeps a visible error and Retry available.
+
 Each real session row shows its title above its status, kind, when it started, and when it was last active. On a phone, the title wraps rather than being squeezed beside the metadata, so chats with the same opening words remain distinguishable. Its token count appears when known and the screen is wide enough. A stored zero is shown as 0; a missing count is not invented.
 
 | Status | When you see it |

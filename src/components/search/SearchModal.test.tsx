@@ -496,13 +496,104 @@ describe('SearchModal — focus-reveal affordance', () => {
   })
 })
 
+// Gate round 2 SF-3/SF-4: expectations derive from the failure brief.
+// Keep the screen, filtering, QueryClient, and design-system controls real.
+describe('SearchModal — search lookup failures and Retry', () => {
+  it('qualifies unavailable agent-name search, keeps title search usable, and restores name matches on Retry', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchAgents).mockRejectedValue(new Error('agents down'))
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession(),
+      makeSession({ id: 's-control', title: 'Other conversation' }),
+    ])
+    renderModal()
+    expect(await screen.findByText('Other conversation')).toBeInTheDocument()
+    const limitation = 'Agent-name search is unavailable because agents could not be loaded. Title and workspace search still work.'
+    const notice = await screen.findByRole('alert')
+    expect(within(notice).getByText(limitation)).toBeInTheDocument()
+    expect(within(notice).getByRole('button', { name: 'Retry' })).toBeInTheDocument()
+
+    const input = screen.getByRole('textbox', { name: 'Search sessions' })
+    await user.type(input, 'Session One')
+    await waitFor(() => expect(screen.queryByText('Other conversation')).not.toBeInTheDocument())
+    expect(screen.getByText('Session One')).toBeInTheDocument()
+    expect(screen.getByText(limitation)).toBeInTheDocument()
+
+    await user.clear(input)
+    await user.type(input, 'Mia')
+    expect(await screen.findByText('No sessions found for "Mia".')).toBeInTheDocument()
+    expect(screen.getByText(limitation)).toBeInTheDocument()
+    vi.mocked(fetchAgents).mockResolvedValue([makeAgent()])
+    await user.click(within(notice).getByRole('button', { name: 'Retry' }))
+
+    expect(await screen.findByText('Session One')).toBeInTheDocument()
+    expect(screen.getAllByTestId('session-row').map((row) => row.dataset.sessionId).sort()).toEqual(['s-1', 's-control'])
+    expect(input).toHaveValue('Mia')
+    expect(screen.queryByText(limitation)).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(vi.mocked(fetchAgents)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(fetchSessions)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(fetchWorkspaces)).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps cached agent-name search usable when only the agent refresh fails', async () => {
+    const user = userEvent.setup()
+    const client = makeClient()
+    client.setQueryData(['agents'], [makeAgent(), makeAgent({ id: 'other-agent', name: 'Jim' })])
+    vi.mocked(fetchAgents).mockRejectedValue(new Error('agents refresh down'))
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession(),
+      makeSession({ id: 's-control', title: 'Other conversation', agent_id: 'other-agent', active_agent_id: 'other-agent' }),
+    ])
+    render(<QueryClientProvider client={client}><SearchModal /></QueryClientProvider>)
+    expect(await screen.findByText('Other conversation')).toBeInTheDocument()
+    await waitFor(() => expect(client.getQueryState(['agents'])?.status).toBe('error'))
+
+    await user.type(screen.getByRole('textbox', { name: 'Search sessions' }), 'Mia')
+    await waitFor(() => expect(screen.queryByText('Other conversation')).not.toBeInTheDocument())
+    expect(screen.getAllByTestId('session-row').map((row) => row.dataset.sessionId)).toEqual(['s-1'])
+    expect(screen.getByText('Session One')).toBeInTheDocument()
+    expect(screen.queryByText(/Agent-name search is unavailable/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(vi.mocked(fetchAgents)).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    { operation: 'sessions', failSessions: true, failWorkspaces: false, message: 'Could not load sessions — try again' },
+    { operation: 'workspaces', failSessions: false, failWorkspaces: true, message: 'Could not load workspaces — try again' },
+    { operation: 'sessions and workspaces', failSessions: true, failWorkspaces: true, message: 'Could not load sessions and workspaces — try again' },
+  ])('names $operation when required loading fails and recovers through its in-view Retry', async ({ failSessions, failWorkspaces, message }) => {
+    const user = userEvent.setup()
+    if (failSessions) vi.mocked(fetchSessions).mockRejectedValue(new Error('sessions down'))
+    if (failWorkspaces) vi.mocked(fetchWorkspaces).mockRejectedValue(new Error('workspaces down'))
+    renderModal()
+    expect(await screen.findByText(message)).toBeInTheDocument()
+    expect(screen.queryByText('Unfiled')).not.toBeInTheDocument()
+    expect(screen.queryByText('Session One')).not.toBeInTheDocument()
+    expect(screen.queryByText('No sessions found.')).not.toBeInTheDocument()
+
+    vi.mocked(fetchSessions).mockResolvedValue([makeSession()])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([makeWorkspace()])
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText('Session One')).toBeInTheDocument()
+    expect(screen.getByText('Alpha Workspace')).toBeInTheDocument()
+    expect(screen.queryByText(message)).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(vi.mocked(fetchSessions)).toHaveBeenCalledTimes(failSessions ? 2 : 1)
+    expect(vi.mocked(fetchSessions)).toHaveBeenLastCalledWith(undefined, undefined, { flat: true })
+    expect(vi.mocked(fetchWorkspaces)).toHaveBeenCalledTimes(failWorkspaces ? 2 : 1)
+    expect(vi.mocked(fetchWorkspaces)).toHaveBeenLastCalledWith({ status: 'active' })
+    expect(vi.mocked(fetchAgents)).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('SearchModal — error states', () => {
   it('shows the error state (not "Unfiled" grouping) when the workspaces fetch fails', async () => {
     vi.mocked(fetchWorkspaces).mockReset().mockRejectedValue(new Error('workspaces down'))
     renderModal()
 
     await waitFor(() =>
-      expect(screen.getByText('Could not load sessions — try again')).toBeInTheDocument(),
+      expect(screen.getByText('Could not load workspaces — try again')).toBeInTheDocument(),
     )
     expect(screen.queryByText('Unfiled')).not.toBeInTheDocument()
     // The known-bad denominator must not be used to render a (misleading) list.
