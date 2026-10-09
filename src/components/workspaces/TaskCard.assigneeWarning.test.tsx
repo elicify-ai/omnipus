@@ -12,6 +12,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { showTaskInfo } from './tasksLayoutFixtures'
 import { TaskCard } from './TaskCard'
 import type { Task } from '@/lib/api'
 
@@ -46,6 +47,8 @@ describe('TaskCard assignee warning', () => {
         showActions={false}
       />,
     )
+    expect(screen.getByRole('img', { name: WARNING })).toBeVisible() // T24 alert is always visible.
+    showTaskInfo('Reconcile invoices')
     expect(screen.getByTestId('task-assignee-warning')).toHaveTextContent(WARNING)
   })
 

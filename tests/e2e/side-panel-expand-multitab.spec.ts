@@ -406,7 +406,7 @@ test.describe('native docking controls — SP-33/37/39', () => {
     })
   }
 
-  test('SP-33 Board changes actual column geometry with PANEL resize at one constant wide window', async ({ page }, info) => {
+  test('T5 Board becomes the real List below its six-column minimum and returns on PANEL resize at one constant wide window', async ({ page }, info) => {
     // 2400px is a test INPUT, not a product breakpoint: it gives the resize
     // ceiling room above the spec's ≈970px full-board content width. At the
     // original 1600px window the ceiling is narrower than a full board.
@@ -427,18 +427,41 @@ test.describe('native docking controls — SP-33/37/39', () => {
       expect(Math.abs(wide[i].y - wide[0].y)).toBeLessThanOrEqual(1)
       if (i > 0) expect(wide[i].x).toBeGreaterThan(wide[i - 1].x)
     }
+    const boardWidths = await groups.first().evaluate((lane) => {
+      const row = lane.parentElement!
+      return { client: row.clientWidth, scroll: row.scrollWidth }
+    })
+    expect(boardWidths.client).toBeGreaterThan(0)
+    expect(boardWidths.scroll, 'F: Board has no horizontal overflow').toBeLessThanOrEqual(boardWidths.client + 1)
     await separator.press('Home')
     await expect(separator).toHaveAttribute('aria-valuenow', '320')
-    const narrow = await groups.evaluateAll((els) => els.map((el) => ({ x: el.getBoundingClientRect().x, y: el.getBoundingClientRect().y, width: el.getBoundingClientRect().width, height: el.getBoundingClientRect().height })))
-    for (let i = 0; i < narrow.length; i += 1) {
-      expect(narrow[i].width).toBeGreaterThan(0)
-      expect(narrow[i].height).toBeGreaterThan(0)
-      expect(Math.abs(narrow[i].x - narrow[0].x), labels[i]).toBeLessThanOrEqual(1)
-      if (i > 0) expect(narrow[i].y, labels[i]).toBeGreaterThan(narrow[i - 1].y)
-    }
+    // T5 retires the stacked Board. The same selected Board choice must show
+    // the REAL eight-column List (T15 adds Details) and return automatically, not mutate choice.
+    await expect(groups).toHaveCount(0)
+    await expect(page.getByRole('radio', { name: 'Board', exact: true })).toHaveAttribute('aria-checked', 'true')
+    await expect(page.getByText('Board needs more room — showing list', { exact: true })).toBeVisible()
+    const table = page.getByTestId('side-panel').getByRole('table')
+    await expect(table).toBeVisible()
+    const listWidths = await table.evaluate((element) => {
+      const viewport = element.parentElement!
+      return { client: viewport.clientWidth, scroll: viewport.scrollWidth, overflowX: getComputedStyle(viewport).overflowX }
+    })
+    expect(listWidths.client).toBeGreaterThan(0)
+    expect(listWidths.overflowX).toBe('auto')
+    expect(listWidths.scroll, 'F: narrow List retains columns through its own horizontal scrolling').toBeGreaterThan(listWidths.client)
+    await expect(table.getByRole('columnheader')).toHaveCount(8)
+    expect(await table.getByRole('columnheader').evaluateAll((headers) => headers.map((header) => header.textContent?.replace(/[↑↓]/g, '').trim()))).toEqual(['Pri', 'Title', 'Status', 'Details', 'Actions', 'Tags', 'Agent', 'Updated'])
     const snapshot = await recordNativeDock(page, 'tasks', info)
     expect(snapshot.viewport).toEqual({ width: 2400, height: 1000 })
     expect(dockViolations(snapshot)).toEqual([])
+    await assertSameNativeChat(page, baseline, 'tasks')
+    await separator.press('End')
+    await expect(groups).toHaveCount(labels.length)
+    expect(await groups.evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')))).toEqual(labels)
+    await expect(page.getByText('Board needs more room — showing list', { exact: true })).toHaveCount(0)
+    await expect(table).toHaveCount(0)
+    await expect(page.getByRole('radio', { name: 'Board', exact: true })).toHaveAttribute('aria-checked', 'true')
+    expect(dockViolations(await readDockSnapshot(page, 'tasks'))).toEqual([])
     await assertSameNativeChat(page, baseline, 'tasks')
   })
 })

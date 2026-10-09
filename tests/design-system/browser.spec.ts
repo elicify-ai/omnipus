@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
@@ -547,6 +547,45 @@ for (const manifest of manifests) {
       } else if (check.kind === 'forced-colors') {
         expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches), `forced colors unsupported in ${testInfo.project.name}; record as a coverage gap`).toBe(true)
         await assertForcedColorsContract(page, metadata.forcedColors)
+        if (manifest.component === 'ViewSwitch') {
+          const board = page.getByRole('radio', { name: 'Board', exact: true })
+          const list = page.getByRole('radio', { name: 'List', exact: true })
+          const decoration = (target: Locator) => target.evaluate((element) => getComputedStyle(element).textDecorationLine)
+          await expect.poll(() => decoration(board), 'the selected view needs a visible cue beyond label contrast').toBe('underline')
+          await expect.poll(() => decoration(list)).toBe('none')
+          for (const target of [board, list]) {
+            await expect(target, 'each view must keep ButtonText on hover in forced colors').toHaveClass(/(?:^|\s)forced-colors:hover:text-\[ButtonText\](?:\s|$)/)
+            await expect(target, 'each view must keep ButtonFace on hover in forced colors').toHaveClass(/(?:^|\s)forced-colors:hover:bg-\[ButtonFace\](?:\s|$)/)
+          }
+          // Coarse-pointer projects cannot hover; they still verify both utilities above.
+          if (await page.evaluate(() => matchMedia('(hover: hover)').matches)) {
+            const expectedHoverColors = await page.evaluate(() => {
+              const probe = document.createElement('span')
+              probe.style.color = 'ButtonText'
+              probe.style.backgroundColor = 'ButtonFace'
+              probe.style.forcedColorAdjust = 'none'
+              document.body.append(probe)
+              const style = getComputedStyle(probe)
+              const colors = { color: style.color, background: style.backgroundColor }
+              probe.remove()
+              return colors
+            })
+            for (const target of [board, list]) {
+              await target.hover()
+              await expect.poll(() => target.evaluate((element) => {
+                const style = getComputedStyle(element)
+                return { color: style.color, background: style.backgroundColor }
+              }), 'selected and unselected hovered views must use the ButtonText/ButtonFace pair').toEqual(expectedHoverColors)
+            }
+          }
+          await board.focus()
+          await board.press('ArrowRight')
+          await expect(list).toBeFocused()
+          await expect(list).toHaveAttribute('aria-checked', 'true')
+          await expect(board).toHaveAttribute('aria-checked', 'false')
+          await expect.poll(() => decoration(list), 'the selection cue must follow keyboard selection').toBe('underline')
+          await expect.poll(() => decoration(board)).toBe('none')
+        }
       } else if (check.kind === 'root-size') {
         for (const [input, expected] of [[10, 12], [12, 12], [14, 14], [20, 20], [22, 20]]) {
           await page.evaluate((size) => { document.documentElement.style.setProperty('--user-font-size', `${size}px`) }, input)
