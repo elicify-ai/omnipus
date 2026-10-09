@@ -79,7 +79,7 @@ The chat is a conversation with the workspace's agents. Replies stream in; each 
 
 Replies in the web app's chat show the agent's name above the text without a portrait, including streaming replies, saved history, and another agent's replies in the same chat. When the reply records its author, the name follows that author rather than the current agent selection. Older replies without a recorded author fall back to the chat's current agent. If an agent's details cannot be found, its stored ID can appear instead of a name.
 
-During a live reply, an inline mark replaces the old bouncing-dot indicator. It combines the agent's figure and role badge with a short status phrase, inside the conversation, not on the message box. The name remains above the reply. While agent details are loading or unavailable, the phrase can appear without the figure.
+During a live reply, an inline mark replaces the old bouncing-dot indicator. It combines the agent's figure and role badge with a short status phrase, inside the conversation, not on the message box. The name remains above the reply. While agent details are loading or unavailable, the phrase can appear without the figure. The same running-tool rule applies when the chat uses its simpler message-list fallback: a tool belonging to this reply selects Working until its call finishes; a tool in another reply does not.
 
 | What is happening | What you see |
 |---|---|
