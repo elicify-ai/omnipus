@@ -1943,26 +1943,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/chat": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Send a chat message via SSE
-         * @description Sends a user message to the agent and streams the response via Server-Sent Events. The connection stays open until the agent finishes responding or the client disconnects.
-         */
-        post: operations["postChat"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/activity": {
         parameters: {
             query?: never;
@@ -14270,17 +14250,6 @@ export interface components {
             }[];
         };
         /**
-         * SseChatRequest
-         * @description Request body for POST /api/v1/chat (SSE streaming endpoint). Sends a user message to the agent and streams the response via Server-Sent Events.
-         */
-        SseChatRequest: {
-            /**
-             * @description The user message to send to the agent. Must not be empty.
-             * @example Hello, what can you help me with today?
-             */
-            message: string;
-        };
-        /**
          * ToolApprovalActionRequest
          * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `cancel` is retained in the enum with no corresponding UI button — see its own description.
          */
@@ -22223,32 +22192,6 @@ export interface operations {
             409: components["responses"]["409Conflict"];
         };
     };
-    postChat: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SseChatRequest"];
-            };
-        };
-        responses: {
-            /** @description SSE stream of agent response frames. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/event-stream": string;
-                };
-            };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-        };
-    };
     getActivity: {
         parameters: {
             query?: never;
@@ -26900,7 +26843,6 @@ export type AppStatePatchRequest = components["schemas"]["AppStatePatchRequest"]
 export type SkillInstallRequest = components["schemas"]["SkillInstallRequest"];
 export type SkillSearchResult = components["schemas"]["SkillSearchResult"];
 export type SkillMarketplaceStatus = components["schemas"]["SkillMarketplaceStatus"];
-export type SseChatRequest = components["schemas"]["SseChatRequest"];
 export type ToolApprovalActionRequest = components["schemas"]["ToolApprovalActionRequest"];
 export type CredentialSetRequest = components["schemas"]["CredentialSetRequest"];
 export type CredentialRotateRequest = components["schemas"]["CredentialRotateRequest"];
