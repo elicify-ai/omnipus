@@ -27,7 +27,8 @@ export const INITIAL_GZIP_BUDGET_BYTES = 25 * 1024
 // the observed Lane A (+436,023 bytes) and sidebar-with-Lane-A (+437,825 bytes)
 // growth. The frozen baseline, provenance checks, and initial-gzip ceiling stay
 // unchanged; the unfinished panel still requires its own build and measurement.
-export const TOTAL_RAW_BUDGET_BYTES = 430 * 1024
+// Founder 2026-10-09 option C: shared allowance for the restart-status fix and navigation Wave 1; gzip, Storybook exclusion and provenance checks unchanged.
+export const TOTAL_RAW_BUDGET_BYTES = 482 * 1024
 
 export function compareProductionBundles(baseline, candidate, provenance = null) {
   const initialGzipDelta = candidate.initial.gzipBytes - baseline.initial.gzipBytes
