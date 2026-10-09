@@ -186,3 +186,32 @@ func TestArchiveBackend_ScanEvictedArchive(t *testing.T) {
 	require.Equal(t, 2, skip)
 	require.Equal(t, []int{0, 1}, idxs)
 }
+
+// A tool result appended through the SessionStore write surface (which carries
+// no producing-assistant identity) is joined to its assistant occurrence from
+// the archive itself, so the archive's tool_result_for rule is satisfied.
+func TestArchiveBackend_ToolResultJoinsItsAssistantOccurrence(t *testing.T) {
+	b := newTestBackend(t)
+	const key = "sess-1"
+	ctx := context.Background()
+	asst := providers.Message{Role: "assistant", Content: "calling", ToolCalls: []providers.ToolCall{{
+		ID: "call_0", Type: "function", Function: &providers.FunctionCall{Name: "read", Arguments: "{}"},
+	}}}
+	require.NoError(t, b.appendMessage(key, asst))
+	require.NoError(t, b.appendMessage(key, providers.Message{Role: "tool", ToolCallID: "call_0", Content: "result"}))
+
+	all, err := b.ReadArchive(ctx, key)
+	require.NoError(t, err)
+	require.Len(t, all, 2, "both the assistant call and its result are archived")
+	require.Equal(t, "call_0", all[1].Message.ToolCallID)
+}
+
+// An ORPHAN tool result (no matching assistant call) is refused visibly rather
+// than stored — the archive forbids an unjoined result.
+func TestArchiveBackend_OrphanToolResultIsRefused(t *testing.T) {
+	b := newTestBackend(t)
+	const key = "sess-1"
+	err := b.appendMessage(key, providers.Message{Role: "tool", ToolCallID: "call_missing", Content: "orphan"})
+	require.Error(t, err, "an orphan tool result must be refused")
+	require.Empty(t, b.GetHistory(key), "nothing was written for the refused orphan")
+}

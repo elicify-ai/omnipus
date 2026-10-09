@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
-	"github.com/elicify-ai/omnipus/pkg/memory"
 )
 
 // UnifiedSessionType classifies what created a session.
@@ -219,7 +218,7 @@ type UnifiedStore struct {
 	sessionLocks u4SessionStripedLock
 	baseDir      string // {workspace}/sessions/
 	homePath     string // ~/.omnipus/ — uploads cascade-delete root (home-rooted per rest.go:4352)
-	backend      *memory.JSONLStore
+	backend      *archiveBackend
 
 	// cacheMu is the FR-048(b) narrow lock guarding metaCache,
 	// cacheLoadFailures and the FR-097 parent index ONLY — see this struct's
@@ -414,18 +413,17 @@ func newUnifiedStore(baseDir, homePath string, runCutover bool) (*UnifiedStore, 
 		return nil, fmt.Errorf("unified_store: create base dir %q: %w", baseDir, err)
 	}
 
-	// The JSONL backend for context.jsonl lives in a sub-directory so its
-	// flat .jsonl files don't collide with session sub-directories.
-	contextDir := filepath.Join(baseDir, ".context")
-	store, err := memory.NewJSONLStore(contextDir)
-	if err != nil {
-		return nil, fmt.Errorf("unified_store: init context backend: %w", err)
-	}
+	// Session-core C-ARCHIVE / U2 Decision D (DEL-12): the ONE content authority
+	// is the addressed day archive, not a separate .context model JSONL backend.
+	// The constructor creates no .context directory and instantiates no
+	// model-content JSONLStore; every model-content operation is served by the
+	// archive-backed store below.
+	backend := newArchiveBackend(baseDir)
 
 	us := &UnifiedStore{
 		baseDir:       baseDir,
 		homePath:      homePath,
-		backend:       store,
+		backend:       backend,
 		metaCache:     make(map[string]*UnifiedMeta),
 		parentIndex:   make(map[string]map[string]struct{}),
 		childToParent: make(map[string]string),
@@ -437,7 +435,7 @@ func newUnifiedStore(baseDir, homePath string, runCutover bool) (*UnifiedStore, 
 			// Visible cutover failure (spec CONV / Failure): do not start
 			// ordinary session-serving over an incomplete conversion. Tear the
 			// backend down so a refused boot leaks no resources.
-			_ = store.Close()
+			_ = backend.Close()
 			return nil, convErr
 		}
 	}

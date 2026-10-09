@@ -614,66 +614,46 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 	return us.filterUnpairedProvenanceLines(sessionID, entries), nil
 }
 
-// AddMessage implements SessionStore — appends a simple role/content message to context.jsonl.
+// AddMessage implements SessionStore — appends a simple role/content message to
+// the addressed archive (session-core Decision D; the .context backend is gone).
 func (us *UnifiedStore) AddMessage(sessionKey, role, content string) {
-	if err := us.backend.AddMessage(context.Background(), sessionKey, role, content); err != nil {
-		slog.Error("unified_store: add message", "key", sessionKey, "error", err)
-	}
+	us.backend.AddMessage(sessionKey, role, content)
 }
 
-// AddFullMessage implements SessionStore — appends a complete message to context.jsonl.
+// AddFullMessage implements SessionStore — appends a complete message to the
+// addressed archive.
 func (us *UnifiedStore) AddFullMessage(sessionKey string, msg providers.Message) {
-	if err := us.backend.AddFullMessage(context.Background(), sessionKey, msg); err != nil {
-		slog.Error("unified_store: add full message", "key", sessionKey, "error", err)
-	}
+	us.backend.AddFullMessage(sessionKey, msg)
 }
 
-// GetHistory implements SessionStore — returns message history from context.jsonl.
+// GetHistory implements SessionStore — returns the live model window.
 func (us *UnifiedStore) GetHistory(sessionKey string) []providers.Message {
-	msgs, err := us.backend.GetHistory(context.Background(), sessionKey)
-	if err != nil {
-		slog.Error("unified_store: get history", "key", sessionKey, "error", err)
-		return []providers.Message{}
-	}
-	return msgs
+	return us.backend.GetHistory(sessionKey)
 }
 
-// SetHistory implements SessionStore.
+// SetHistory implements SessionStore (first-fill only, FR-047).
 func (us *UnifiedStore) SetHistory(sessionKey string, history []providers.Message) {
-	if err := us.backend.SetHistory(context.Background(), sessionKey, history); err != nil {
-		slog.Error("unified_store: set history", "key", sessionKey, "error", err)
-	}
+	us.backend.SetHistory(sessionKey, history)
 }
 
 // TruncateHistory implements SessionStore.
 func (us *UnifiedStore) TruncateHistory(sessionKey string, keepLast int) {
-	if err := us.backend.TruncateHistory(context.Background(), sessionKey, keepLast); err != nil {
-		slog.Error("unified_store: truncate history", "key", sessionKey, "error", err)
-	}
+	us.backend.TruncateHistory(sessionKey, keepLast)
 }
 
 // Projection implements SessionStore.
 func (us *UnifiedStore) Projection(sessionKey string) memory.ProjectionMeta {
-	pm, err := us.backend.GetProjection(context.Background(), sessionKey)
-	if err != nil {
-		slog.Error("unified_store: get projection", "key", sessionKey, "error", err)
-		return memory.ProjectionMeta{Entries: memory.ProjectionSet{}}
-	}
-	return pm
+	return us.backend.Projection(sessionKey)
 }
 
 // SetProjectionState implements SessionStore.
 func (us *UnifiedStore) SetProjectionState(sessionKey string, pk memory.ProjectionKey, state memory.ProjectionState) {
-	if err := us.backend.SetProjectionState(context.Background(), sessionKey, pk, state); err != nil {
-		slog.Error("unified_store: set projection state", "key", sessionKey, "error", err)
-	}
+	us.backend.SetProjectionState(sessionKey, pk, state)
 }
 
 // MarkHydrated implements SessionStore.
 func (us *UnifiedStore) MarkHydrated(sessionKey string) {
-	if err := us.backend.MarkHydrated(context.Background(), sessionKey); err != nil {
-		slog.Error("unified_store: mark hydrated", "key", sessionKey, "error", err)
-	}
+	us.backend.MarkHydrated(sessionKey)
 }
 
 // ReadArchive implements SessionStore — returns the full archived log for

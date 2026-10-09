@@ -199,14 +199,8 @@ func (b *archiveBackend) SetHistory(key string, history []providers.Message) {
 		slog.Error("archive_backend: set history: write meta", "key", key, "error", err)
 		return
 	}
-	store, err := b.store(key)
-	if err != nil {
-		b.mu.Unlock()
-		slog.Error("archive_backend: set history: store", "key", key, "error", err)
-		return
-	}
 	for _, m := range history {
-		if err := appendPayload(store, m); err != nil {
+		if err := b.appendOneLocked(key, m); err != nil {
 			b.mu.Unlock()
 			slog.Error("archive_backend: set history: append", "key", key, "error", err)
 			return
@@ -466,19 +460,35 @@ func (b *archiveBackend) ScanEvictedArchive(ctx context.Context, key string, fn 
 func (b *archiveBackend) appendMessage(key string, msg providers.Message) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	store, err := b.store(key)
-	if err != nil {
-		return err
-	}
 	meta, err := b.loadMetaLocked(key)
 	if err != nil {
 		return err
 	}
-	if err := appendPayload(store, msg); err != nil {
+	if err := b.appendOneLocked(key, msg); err != nil {
 		return err
 	}
 	meta.Count++
 	return b.saveMetaLocked(key, meta)
+}
+
+// appendOneLocked appends one payload, resolving the producing assistant call
+// for a role "tool" message from the archive itself (the SessionStore write
+// interface does not carry that identity): a tool result carries tool_result_for
+// naming the assistant entry that issued its call. b.mu must be held.
+func (b *archiveBackend) appendOneLocked(key string, msg providers.Message) error {
+	store, err := b.store(key)
+	if err != nil {
+		return err
+	}
+	var callIdx map[string]string
+	if msg.Role == "tool" {
+		lines, err := b.payloadLinesLocked(key)
+		if err != nil {
+			return err
+		}
+		callIdx = assistantCallIndex(lines)
+	}
+	return appendPayload(store, msg, callIdx)
 }
 
 // snapshotLocked builds the JSONL-shaped window snapshot from the archive.
@@ -582,8 +592,11 @@ func (b *archiveBackend) saveMetaLocked(key string, m archiveBackendMeta) error 
 	return nil
 }
 
-// appendPayload writes one model message as a validated payload envelope.
-func appendPayload(store *ArchiveDayStore, msg providers.Message) error {
+// appendPayload writes one model message as a validated payload envelope. For a
+// role "tool" message it fills tool_result_for from callIdx (the producing
+// assistant entry id keyed by call id); an unmatched result is refused visibly
+// rather than stored as an orphan the archive forbids.
+func appendPayload(store *ArchiveDayStore, msg providers.Message, callIdx map[string]string) error {
 	mp, err := EncodeModelPayload(msg)
 	if err != nil {
 		return err
@@ -601,8 +614,35 @@ func appendPayload(store *ArchiveDayStore, msg providers.Message) error {
 		ModelMessage: &mp,
 		Source:       &EntrySource{Kind: sourceKindForRole(msg.Role)},
 	}
+	if msg.Role == "tool" {
+		assistantID := callIdx[msg.ToolCallID]
+		if msg.ToolCallID == "" || assistantID == "" {
+			return fmt.Errorf("archive_backend: tool result %q has no matching assistant tool call", msg.ToolCallID)
+		}
+		rec.ToolResultFor = &ToolResultFor{AssistantEntryID: assistantID, ToolCallID: msg.ToolCallID}
+	}
 	_, err = store.Append(rec)
 	return err
+}
+
+// assistantCallIndex maps a tool call id to the entry id of the assistant
+// payload that issued it, from the archive itself. The most recent assistant
+// wins, which is the correct producer for a tool result that immediately
+// follows its call (providers reuse ids such as call_0 every turn).
+func assistantCallIndex(lines []payloadLine) map[string]string {
+	idx := make(map[string]string)
+	for _, l := range lines {
+		mp := l.rec.ModelMessage
+		if mp == nil || len(mp.ToolCalls) == 0 {
+			continue
+		}
+		for _, tc := range mp.ToolCalls {
+			if tc.ID != "" {
+				idx[tc.ID] = l.rec.ID
+			}
+		}
+	}
+	return idx
 }
 
 func newArchivePayloadID() (string, error) {
