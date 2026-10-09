@@ -53,6 +53,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useChatStore } from '@/store/chat'
 import { findFirstSendMessage, getPendingFirstSend } from '@/store/chat/first-send'
 import { pendingRedirectSids } from '@/store/chat/runtime-state'
+import { stampToolCallOffset } from '@/store/chat/session'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
 import type { RedirectFrame } from '@/lib/api/generated/asyncapi-types'
@@ -1111,6 +1112,11 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const toolCalls = useChatStore((s) => s.toolCalls)
+  const toolCallOrder = useChatStore((s) => s.toolCallOrder)
+  const textAtToolCallStart = useChatStore((s) => s.textAtToolCallStart)
+  const toolCallOwners = useChatStore((s) =>
+    activeSessionId ? s.sessionsById[activeSessionId]?.toolCallOwnerMessageId : undefined,
+  )
   // Fix 2 (user-approved 2026-07-16): same thread-gating rule as the live
   // path's SubagentSpansRenderer, applied here for the historical/virtualized
   // render tree. This component is React.memo'd, so the selector MUST be
@@ -1142,31 +1148,33 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // Render media attachments.
   const mediaItems = message.media ?? []
 
-  // Build tool-call parts from the message's stored tool_calls list.
-  // In lite mode, tool calls start collapsed (expanded=false by default in GenericToolCall).
-  const positionedToolCalls = (message.tool_calls ?? []) as PositionedToolCall[]
+  // PlainMessageList receives raw messages, bypassing the AssistantUI live
+  // projection. Pending calls live separately until turn-end bake: project
+  // only this reply's calls, without mutating the stored message. Unowned
+  // legacy calls follow the runtime adapter's last-assistant fallback.
+  const positionedToolCalls = useMemo(() => {
+    const calls = new Map<string, PositionedToolCall>()
+    for (const call of (message.tool_calls ?? []) as PositionedToolCall[]) {
+      const live = toolCalls[call.id]
+      calls.set(call.id, live
+        ? stampToolCallOffset(call.id, live, textAtToolCallStart, call.textOffset)
+        : call)
+    }
+    for (const id of toolCallOrder) {
+      if (calls.has(id)) continue
+      const call = toolCalls[id]
+      const owner = toolCallOwners?.[id]
+      if (call && (owner === message.id || (owner === undefined && isLastAssistant))) {
+        calls.set(id, stampToolCallOffset(id, call, textAtToolCallStart, undefined))
+      }
+    }
+    return [...calls.values()]
+  }, [message.id, message.tool_calls, toolCalls, toolCallOrder, textAtToolCallStart, toolCallOwners, isLastAssistant])
 
-  // Perf (gate 5 MEDIUM): memoized on the message's OWN content/tool_calls
-  // fields (not the derived `positionedToolCalls`, which gets a brand-new
-  // `[]` identity every render whenever message.tool_calls is undefined —
-  // keying on that would defeat the memo, recomputing every render exactly
-  // like before). splitMessageParts does real work (a sort + a content
-  // slice per positioned call) that was previously re-run inline in JSX on
-  // every render of this row, including renders triggered by state this
-  // row doesn't even display (e.g. liteMode toggling on OTHER rows, before
-  // the React.memo above cut most of those). This memo is still valuable
-  // even with the row memoized: message.content mutates in place many
-  // times per second while a turn is streaming (each `token` frame), so
-  // this row itself legitimately re-renders often — the memo just stops
-  // re-running the split when a re-render was triggered by something OTHER
-  // than a content/tool_calls change (e.g. liteMode).
+  // Live results must invalidate the split even without a message bake.
   const messageParts = useMemo(
     () => splitMessageParts(message.content ?? '', positionedToolCalls),
-     
-    // message's raw fields (stable references unless the message actually
-    // changed), not the freshly-allocated `positionedToolCalls` derived
-    // above — see comment.
-    [message.content, message.tool_calls],
+    [message.content, positionedToolCalls],
   )
   const inlineByCall = splitAnchoredDelegationEvents(delegationEvents, message.id, {
     spans: message.spans,
@@ -1198,20 +1206,9 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // (ActivityPanel.tsx, fed by useRunningActivity.ts reading message.spans
   // directly) is where a delegation's status lives now.
   const hasContent = !!message.content?.trim().length
-  // F4 (second review wave on branch fix/615-617-618-hardening): `tc` here
-  // is a baked PositionedToolCall, which — like every other #617-era call
-  // site in this file — carries BOTH a `.status` and a (frequently empty)
-  // `.error` string. `!!tc.error` alone is exactly the signal #617
-  // established is empty for an ordinary failure (pkg/gateway/websocket.go
-  // deliberately leaves `Result.Error` unset when `Result` still holds the
-  // text). This call's two siblings already moved off that proxy — the live
-  // path below passes `!!part.isError`, and the actual render for this same
-  // `tc` uses `tc.status === 'error'` — but this one was left on it, so a
-  // failed tool call with status:'error' and no `error` string (e.g. a
-  // failed ToolSearch) computed isError:false here while the row itself
-  // (whose own visibility gate reads `tc.status === 'error'` directly)
-  // still rendered — producing a ghost ThinkingIndicator ABOVE the visible
-  // failed row (see hasVisibleToolCalls/showEmptyPlaceholder below).
+  // F4: ordinary failures can carry status:'error' with no error string.
+  // Visibility must use the same resolved outcome as the tool renderer,
+  // otherwise a failed ToolSearch shares its row with a ghost Thinking mark.
   const visibleToolCalls = positionedToolCalls.filter((tc) =>
     wouldToolCallBeVisible(tc.tool, tc.params, tc.result, tc.status === 'error' || !!tc.error, verboseChatEnabled),
   )
