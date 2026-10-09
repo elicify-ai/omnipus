@@ -179,7 +179,7 @@ Each real session row shows its title above its status, kind, when it started, a
 | **Interrupted** | A server restart cut the turn off. This takes priority over an old queued or running record. |
 | **Unavailable** | No usable lifecycle or queued status is available, and the chat is not archived. An active chat without that information is not labelled Working. |
 
-The server classifies queued or running work only while that same session's current lifecycle display is **Working**. After a restart, an interrupted main conversation is not itself running or queued, even if its old record still says so. It may remain in **Running** as parent context for a genuinely running helper. As explained [above](#if-the-gateway-restarts-during-a-reply), the Interrupted label alone does not prove that recovery saved a stop.
+The server classifies queued or running work only while that same session's current lifecycle display is **Working**. After a restart, an interrupted main conversation is not itself running or queued, even if its old record still says so. It may remain in **Running** as parent context for a genuinely running helper. **Interrupted** is not a permanent label: once that conversation is actually resumed or re-adopted with a fresh execution in the current gateway process, running work shows **Working** and matches **Running** again. The gateway being back online alone does not restart the old execution. As explained [above](#if-the-gateway-restarts-during-a-reply), the Interrupted label alone does not prove that recovery saved a stop.
 
 Kind is the session's real type: **Chat**, **Task**, **Helper**, **Scheduled**, **Channel**, or **Heartbeat**. A Helper is a delegated session with its own parent chat.
 

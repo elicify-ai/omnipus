@@ -107,6 +107,12 @@ properties:
       five). The canonical current-boot lifecycle projection is restart-aware:
       a prior-boot root with raw `queued` or `running` state can display
       `interrupted` without a recovery write; this suppresses `execution`.
+      Interrupted describes the session's current interruption, not permanent
+      history: once the session is re-adopted or explicitly resumed with a fresh
+      current-boot execution identity, its current record determines the display.
+      A resumed `running` record projects to `working` and publishes
+      `execution: running`, rather than retaining a stale Interrupted display.
+      Gateway availability alone does not mean an old execution has resumed.
       A genuinely failed record still maps to `failed`. A stopped helper has
       `status: active`, `lifecycle_state: stopped`.
     example: "working"
