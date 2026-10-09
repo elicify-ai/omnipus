@@ -52,7 +52,7 @@ func (nal *newAgentLoop) initializeCore() {
 		eventBus:                eventBus,
 		fallback:                fallbackChain,
 		cmdRegistry:             commands.NewRegistry(commands.BuiltinDefinitions()),
-		steering:                newSteeringQueue(parseSteeringMode(nal.cfg.Agents.Defaults.SteeringMode)),
+		steering:                newSteeringQueue(),
 		contextBuilderRegistry:  NewContextBuilderRegistry(),
 		loadedTools:             make(map[string]map[string]bool),
 		pendingSearchPromotions: make(map[string]map[string]int),

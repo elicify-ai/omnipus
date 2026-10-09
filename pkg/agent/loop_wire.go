@@ -843,7 +843,14 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 	// gateway's later SetSessionMessagingStores call re-runs this wiring
 	// with the real stores, mirroring SetPlanStore's late-binding
 	// discipline exactly. Safe on hot-reload (idempotent re-wire).
-	rw.rs.al.wireSessionMessagingForAgent(agent)
+	//
+	// rw.cfg is the config being registered against THIS pass. On a hot reload
+	// (ReloadProviderAndConfig) that is the NEW config — registerSharedTools runs
+	// before al.cfg is swapped, so the wiring must NOT read al.GetConfig() here
+	// or it would apply the previous session_messaging.steer_rate/steer_body
+	// (F1, U3 CHECK). rw.cfg is non-nil (registerSharedTools is only ever called
+	// with a validated config).
+	rw.rs.al.wireSessionMessagingForAgent(agent, rw.cfg)
 }
 
 // registerTaskAndPlanTools registers task and plan tools.

@@ -42,6 +42,7 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -84,7 +85,7 @@ func (al *AgentLoop) SetSessionMessagingStores(inbox *session.MessageInboxStore,
 		if !ok || inst == nil {
 			continue
 		}
-		al.wireSessionMessagingForAgent(inst)
+		al.wireSessionMessagingForAgent(inst, al.GetConfig())
 	}
 	logger.InfoCF("agent", "Session-messaging stores installed + tool surface re-wired",
 		map[string]any{"inbox_nil": inbox == nil, "lifecycle_nil": lifecycle == nil})
@@ -127,6 +128,20 @@ func (s delegateSteeringSink) EnqueueSteeringMessageWithStatus(scope, agentID st
 // discipline). Called by SetSessionMessagingStores (post-boot re-wire) AND by
 // registerSharedTools (per-agent registration, including hot reloads).
 //
+// cfg is the config this pass must wire against. It is a PARAMETER, not a
+// read of al.GetConfig(), because ReloadProviderAndConfig runs
+// registerSharedTools BEFORE it swaps al.cfg (loop_config.go — the new
+// registry and the new config are swapped together under al.mu, deliberately,
+// so readers never see a mismatched pair). A reload therefore reaches this
+// function while al.GetConfig() still returns the PREVIOUS config; reading it
+// here would wire the rebuilt delegate tool with the OLD
+// session_messaging.steer_rate/steer_body, applying an operator's edit only
+// on the NEXT reload cycle. Callers that run OUTSIDE a reload
+// (SetSessionMessagingStores, SetSteerAudienceDeps, SetSteerSessionLauncher —
+// all post-boot, al.cfg already live) pass al.GetConfig(); the reload path
+// (registerSharedTools) passes the cfg it is registering against (rw.cfg),
+// which IS the new config.
+//
 // This wires ONLY the existing substrate hooks — it does not change tool
 // logic. The delegate tool keeps its own action handlers; message_parent
 // keeps its own kind switch. We inject: the inbox + lifecycle stores, the
@@ -136,7 +151,7 @@ func (s delegateSteeringSink) EnqueueSteeringMessageWithStatus(scope, agentID st
 // below for why), the waker (the process-wide asyncNotifier, which implements
 // tools.MessageParentWaker), and the content-egress filter (the config's
 // SensitiveDataReplacer, N-10).
-func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
+func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance, cfg *config.Config) {
 	if agent == nil || agent.Tools == nil {
 		return
 	}
@@ -229,6 +244,25 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			// (arch-M2): the live closure re-reads config per call, mirroring
 			// the async consumer's per-event read.
 			dt.SetSessionMessagingEnabled(al.sessionMessagingEnabledLive())
+			// FR-011/#1216: wire the live session_messaging.steer_rate/steer_body
+			// limits into the tool that actually enforces them. Before this,
+			// SetSteerCaps had no production caller at all, so an operator's
+			// steer_body/steer_rate edit governed nothing but the saved/displayed
+			// config — the tool kept enforcing its constructor defaults for the
+			// life of the process. This function runs at boot AND on every hot
+			// reload (see its callers), so a config edit now changes the real
+			// admission boundary on the next steer/respond.
+			//
+			// cfg is the caller-supplied wiring config, NOT al.GetConfig(): on a
+			// hot reload registerSharedTools runs before the atomic cfg swap, so
+			// al.GetConfig() is still the PREVIOUS config here and reading it
+			// applied an operator's steer_rate/steer_body edit one cycle late (the
+			// rebuilt tool admitted traffic the new bound meant to refuse, and
+			// refused valid traffic it had just widened). See this function's own
+			// doc comment.
+			if cfg != nil {
+				dt.SetSteerCaps(cfg.SessionMessaging.EffectiveSteerRatePerMinute(), cfg.SessionMessaging.EffectiveSteerBodyBytes())
+			}
 		}
 	}
 

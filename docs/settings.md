@@ -217,6 +217,15 @@ Leave the field blank and live available memory governs each new turn, reported 
 
 `performance.delegation_timeout_minutes` caps how long a delegated session may run across its whole life — a follow-up that wakes the child does not restart the clock. The default is **30 minutes**. A delegating agent can override that for one call with `timeout_seconds`; leaving that at zero uses the default.
 
+### Steer, respond and redirect message size
+
+When one agent sends a message into another's turn — `delegate` with `action: steer`, `respond`, or `redirect` — the message is bounded by two keys in the `session_messaging` block of `config.json`:
+
+- `steer_body` — the largest message body, in bytes. Default **65,536**.
+- `steer_rate` — how many steer, respond or redirect messages one agent may send to the same target per minute. Default **60**.
+
+Both are read from the live config, so editing `config.json` and letting it reload changes the real limit without a restart. A message beyond either bound is refused with a named error — it is never silently trimmed. Report messages a child sends up to its parent use their own separate ceilings and are not affected by these two keys.
+
 ### Safety stops that are not settings
 
 Three protections are fixed in the code on purpose. They guard against malformed data — a corrupted or looping parent chain, a gap in the live stream — not against any normal amount of use, and there is no setting for them:

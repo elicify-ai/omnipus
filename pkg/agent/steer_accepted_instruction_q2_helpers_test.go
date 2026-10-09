@@ -35,7 +35,6 @@ func newQ2ConsumerFixture(t *testing.T) q2ConsumerFixture {
 	t.Helper()
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
 	al, _ := newSteerAL(t)
-	al.SetSteeringMode(SteeringAll)
 	parentID := newTestSteeringSession(t, al, "ws-q2-consumer")
 	child, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
 		SteeringSessionID: parentID, TargetAgentID: testDefaultAgentID,

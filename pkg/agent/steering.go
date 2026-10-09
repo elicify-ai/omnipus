@@ -19,33 +19,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// SteeringMode controls how queued steering messages are dequeued.
-type SteeringMode string
-
 const (
-	// SteeringOneAtATime dequeues only the first queued message per poll.
-	SteeringOneAtATime SteeringMode = "one-at-a-time"
-	// SteeringAll drains the entire queue in a single poll.
-	SteeringAll SteeringMode = "all"
 	// MaxQueueSize bounds ordinary steer messages against a runaway producer.
 	// It matches the durable inbox's 200-entry retention tail so anything
 	// admitted here remains recoverable there. Upward completion wakes are
 	// control flow and deliberately bypass this cap.
 	MaxQueueSize = 200
-	// manualSteeringScope is the legacy fallback queue used when no active
-	// turn/session scope is available.
-	manualSteeringScope = "__manual__"
 )
-
-// parseSteeringMode normalizes a config string into a SteeringMode.
-func parseSteeringMode(s string) SteeringMode {
-	switch s {
-	case "all":
-		return SteeringAll
-	default:
-		return SteeringOneAtATime
-	}
-}
 
 // steeringQueue is a thread-safe queue of user messages that can be injected
 // into a running agent loop to interrupt it between tool calls.
@@ -54,7 +34,6 @@ type steeringQueue struct {
 	queues            map[string][]steeringQueueItem
 	closedGenerations map[string]int
 	terminalizing     map[string]*steeringTerminalTransition
-	mode              SteeringMode
 }
 
 type steeringTerminalTransition struct {
@@ -93,28 +72,25 @@ type steeringWake struct {
 	agentID             string
 }
 
-func newSteeringQueue(mode SteeringMode) *steeringQueue {
+// newSteeringQueue builds the ordinary steering FIFO. It has one dequeue
+// shape (all-at-once, FR-009); the user-selectable mode and its constructor
+// argument were deleted by DEL-04.
+func newSteeringQueue() *steeringQueue {
 	return &steeringQueue{
 		queues:            make(map[string][]steeringQueueItem),
 		closedGenerations: make(map[string]int),
 		terminalizing:     make(map[string]*steeringTerminalTransition),
-		mode:              mode,
 	}
 }
 
 var errSteeringScopeClosed = errors.New("steering session finished; use follow_up to continue it")
 
+// normalizeSteeringScope trims a resolved session/routing scope. FR-009 /
+// DEL-04 deleted the manual/unscoped fallback: every live caller passes a
+// resolved session address, so a blank scope simply stays blank (it is never
+// substituted with a shared fallback bucket).
 func normalizeSteeringScope(scope string) string {
-	scope = strings.TrimSpace(scope)
-	if scope == "" {
-		return manualSteeringScope
-	}
-	return scope
-}
-
-// push enqueues a steering message in the legacy fallback scope.
-func (sq *steeringQueue) push(msg providers.Message) error {
-	return sq.pushScope(manualSteeringScope, msg)
+	return strings.TrimSpace(scope)
 }
 
 // pushScope enqueues a steering message for the provided scope.
@@ -354,14 +330,8 @@ func (sq *steeringQueue) reopenScopeForGeneration(scope string, generation int) 
 	}
 }
 
-// dequeue removes and returns pending steering messages from the legacy
-// fallback scope according to the configured mode.
-func (sq *steeringQueue) dequeue() []providers.Message {
-	return sq.dequeueScope(manualSteeringScope)
-}
-
 // dequeueScope removes and returns pending steering messages for the provided
-// scope according to the configured mode.
+// scope. The whole queue is returned (FR-009 / DEL-04: always all-at-once).
 func (sq *steeringQueue) dequeueScope(scope string) []providers.Message {
 	sq.mu.Lock()
 	defer sq.mu.Unlock()
@@ -378,23 +348,11 @@ func (sq *steeringQueue) dequeueItemsLocked(scope string) []steeringQueueItem {
 	if len(queue) == 0 {
 		return nil
 	}
-
-	switch sq.mode {
-	case SteeringAll:
-		items := append([]steeringQueueItem(nil), queue...)
-		delete(sq.queues, scope)
-		return items
-	default:
-		item := queue[0]
-		queue[0] = steeringQueueItem{} // Clear reference for GC
-		queue = queue[1:]
-		if len(queue) == 0 {
-			delete(sq.queues, scope)
-		} else {
-			sq.queues[scope] = queue
-		}
-		return []steeringQueueItem{item}
-	}
+	// FR-009 / DEL-04: the one FIFO always drains the whole scope at a safe
+	// boundary, so the deleted one-at-a-time branch is gone.
+	items := append([]steeringQueueItem(nil), queue...)
+	delete(sq.queues, scope)
+	return items
 }
 
 func (sq *steeringQueue) dequeueItemsScope(scope string) (string, []steeringQueueItem) {
@@ -407,14 +365,10 @@ func (sq *steeringQueue) dequeueItemsScope(scope string) (string, []steeringQueu
 func (sq *steeringQueue) dequeueItemsScopeWithFallback(scope string) (string, []steeringQueueItem) {
 	sq.mu.Lock()
 	defer sq.mu.Unlock()
-
-	scope = strings.TrimSpace(scope)
-	if scope != "" {
-		if items := sq.dequeueItemsLocked(scope); len(items) > 0 {
-			return scope, items
-		}
-	}
-	return manualSteeringScope, sq.dequeueItemsLocked(manualSteeringScope)
+	// FR-009 / DEL-04: the manual fallback scope is deleted, so this now
+	// dequeues only the caller's own resolved scope (never a shared bucket).
+	scope = normalizeSteeringScope(scope)
+	return scope, sq.dequeueItemsLocked(scope)
 }
 
 func (sq *steeringQueue) prependItemsScope(scope string, items []steeringQueueItem) {
@@ -478,20 +432,6 @@ func (sq *steeringQueue) lenScope(scope string) int {
 	sq.mu.Lock()
 	defer sq.mu.Unlock()
 	return len(sq.queues[normalizeSteeringScope(scope)])
-}
-
-// setMode updates the steering mode.
-func (sq *steeringQueue) setMode(mode SteeringMode) {
-	sq.mu.Lock()
-	defer sq.mu.Unlock()
-	sq.mode = mode
-}
-
-// getMode returns the current steering mode.
-func (sq *steeringQueue) getMode() SteeringMode {
-	sq.mu.Lock()
-	defer sq.mu.Unlock()
-	return sq.mode
 }
 
 // Steer enqueues a user message to be injected into the currently running
@@ -1023,7 +963,7 @@ func (al *AgentLoop) enqueueSteeringItemWithStatus(scope, agentID string, item s
 			meta.AgentID = agentID
 		}
 		normalizedScope := normalizeSteeringScope(scope)
-		if normalizedScope != manualSteeringScope {
+		if normalizedScope != "" {
 			meta.SessionKey = normalizedScope
 		}
 		if meta.AgentID == "" {
@@ -1047,35 +987,6 @@ func (al *AgentLoop) enqueueSteeringItemWithStatus(scope, agentID string, item s
 	)
 
 	return status, nil
-}
-
-// SteeringMode returns the current steering mode.
-func (al *AgentLoop) SteeringMode() SteeringMode {
-	if al.steering == nil {
-		return SteeringOneAtATime
-	}
-	return al.steering.getMode()
-}
-
-// SetSteeringMode updates the steering mode.
-func (al *AgentLoop) SetSteeringMode(mode SteeringMode) {
-	if al.steering == nil {
-		return
-	}
-	al.steering.setMode(mode)
-}
-
-// dequeueSteeringMessages is the internal method called by the agent loop
-// to poll for steering messages in the legacy fallback scope. The second
-// return value is the parallel correlation-id slice consumeDequeuedSteering
-// produces (issue #870) — index i's id belongs to index i's message.
-func (al *AgentLoop) dequeueSteeringMessages() ([]providers.Message, []string) {
-	if al.steering == nil {
-		return nil, nil
-	}
-	scope, items := al.steering.dequeueItemsScope(manualSteeringScope)
-	msgs, correlationIDs, _ := al.consumeDequeuedSteering(scope, items)
-	return msgs, correlationIDs
 }
 
 func (al *AgentLoop) dequeueSteeringMessagesForScope(scope string) ([]providers.Message, []string) {

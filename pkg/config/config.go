@@ -996,7 +996,6 @@ type AgentDefaults struct {
 	// in config.json is ignored (greenfield rule: no migration, no rejection).
 	MaxMediaSize   int                `json:"max_media_size,omitempty"        env:"OMNIPUS_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
 	Routing        *RoutingConfig     `json:"routing,omitempty"`
-	SteeringMode   string             `json:"steering_mode,omitempty"         env:"OMNIPUS_AGENTS_DEFAULTS_STEERING_MODE"` // "one-at-a-time" (default) or "all"
 	ToolFeedback   ToolFeedbackConfig `json:"tool_feedback,omitempty"`
 	SplitOnMarker  bool               `json:"split_on_marker"                 env:"OMNIPUS_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
 	TimeoutSeconds int                `json:"timeout_seconds"                 env:"OMNIPUS_AGENTS_DEFAULTS_TIMEOUT_SECONDS"` // per-turn timeout in seconds; 0 = disabled

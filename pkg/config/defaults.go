@@ -145,6 +145,7 @@ func DefaultConfig() *Config {
 
 			SteerRatePerMinute: DefaultSMSteerRatePerMinute,
 			SteerBody:          DefaultSMSteerBodyBytes,
+			SteerAggregateBody: DefaultSMSteerAggregateBodyBytes,
 
 			NeedsInputTTL: duration(DefaultSMNeedsInputTTL),
 
@@ -1131,7 +1132,6 @@ func defaultAgentsConfig(workspacePath string) AgentsConfig {
 			MaxTokens:         32768,
 			Temperature:       nil, // nil means use provider default
 			MaxToolIterations: DefaultMaxToolIterations,
-			SteeringMode:      "one-at-a-time",
 			ToolFeedback: ToolFeedbackConfig{
 				Enabled:       false,
 				MaxArgsLength: 300,
