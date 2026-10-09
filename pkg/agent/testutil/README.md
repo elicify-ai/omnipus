@@ -27,9 +27,10 @@ cross-test-binary collision behind CI run 37943454247). It:
 3. Writes a minimal `config.json` seeded with a real OpenRouter+glm provider entry.
 4. Seeds `OPENROUTER_API_KEY` from env into `credentials.json` so boot succeeds.
 5. Polls `GET /health` until it returns 200 **and** the `gateway.port` identity
-   file exists in the gateway home — the file is written only after the
-   gateway's own bind succeeded, so a foreign server that somehow answers
-   `/health` on the port can never be mistaken for our readiness — then
+   file in the gateway home names exactly the port being booted — the file is
+   written only after the gateway's own bind succeeded, so a foreign server
+   that somehow answers `/health` on the port can never be mistaken for our
+   readiness, and a stale file from an earlier attempt is rejected too — then
    returns to the caller. A boot error of `address already in use` retries on
    a fresh port (max 5 attempts).
 6. Registers `t.Cleanup(gw.Close)` — cancels the context and waits up to 10 s

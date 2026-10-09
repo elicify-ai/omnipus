@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -276,28 +277,36 @@ func pollUntilReady(cfg pollConfig) pollResult {
 // answered /health 200 on the port, the harness accepted the stranger as our
 // readiness, and the test ran against the wrong server.
 //
-// The window below ends strictly beneath every platform's ephemeral floor, so
-// the KERNEL can never assign a window port to anyone: no outbound connect and
-// no other process's listen(":0") draw can ever land here. The only remaining
-// contenders are processes that deliberately bind a specific port in the
-// window — another harness process drawing the same random number (1/12768 per
-// overlapping boot) or an unrelated service squatting there. Both are handled:
-// the draw skips occupied ports, bootUntilReady refuses to boot onto a port
-// that already has a listener (the squatter check), and the EADDRINUSE retry
-// is still the last resort. Random draw over the whole window (rather than
-// per-process regions) keeps the code simple: with random draws, two processes
-// share a region only in the probabilistic sense that matters, and region
-// bookkeeping would add nothing a random draw does not already give.
+// The window below ends strictly beneath every platform's DEFAULT ephemeral
+// floor, so the KERNEL can never assign a window port to anyone: no outbound
+// connect and no other process's listen(":0") draw can ever land here. This
+// assumes stock OS settings — a host whose dynamic-port floor has been LOWERED
+// (Linux net.ipv4.ip_local_port_range tuned down, Windows dynamicport range
+// resized via netsh) can overlap the window and hand window ports to other
+// processes again; the squatter check in bootUntilReady, the EADDRINUSE retry
+// and the gateway.port identity check are the backstops for that case. The
+// remaining contenders on default settings are processes that deliberately
+// bind a specific port in the window — another harness process drawing the
+// same random number (1/12768 per overlapping boot) or an unrelated service
+// squatting there. All handled: the draw skips occupied ports, bootUntilReady
+// refuses to boot onto a port that already has a listener (the squatter
+// check), and the EADDRINUSE retry is still the last resort. Random draw over
+// the whole window (rather than per-process regions) keeps the code simple:
+// with random draws, two processes share a region only in the probabilistic
+// sense that matters, and region bookkeeping would add nothing a random draw
+// does not already give.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const (
 	// portRangeLo/portRangeHi bound the harness's private port window:
 	// [20000, 32768) — 12,768 ports, ending just below the LOWEST supported
-	// platform's ephemeral floor (Linux 32768). These are registered-range
-	// ports, so an unrelated service may legitimately squat one (e.g. MongoDB
-	// on 27017); the draw, the squatter check and the EADDRINUSE retry all
-	// tolerate that. CI runners are clean machines; dev machines rarely run
-	// anything in this range.
+	// platform's DEFAULT ephemeral floor (Linux 32768; the floor is a sysctl
+	// on Linux and a netsh setting on Windows, so a tuned-down host can
+	// overlap this window — see the block above for the backstops). These are
+	// registered-range ports, so an unrelated service may legitimately squat
+	// one (e.g. MongoDB on 27017); the draw, the squatter check and the
+	// EADDRINUSE retry all tolerate that. CI runners are clean machines; dev
+	// machines rarely run anything in this range.
 	portRangeLo = 20000
 	portRangeHi = 32768
 
@@ -357,11 +366,35 @@ func portAlreadyListening(port int) bool {
 // gatewayPortFileName must match the file gateway_boot.go::registerProcess
 // writes into the agent home after the shared HTTP server's bind succeeds.
 // The harness's readiness probe requires it as the identity proof that the
-// /health responder is OUR gateway (see the probe in bootUntilReady). If the
+// /health responder is OUR gateway (see gatewayPortIdentityError). If the
 // production file name ever changes, the probe degrades visibly: /health
 // answers but readiness is never granted, and the failure message names the
 // missing file.
 const gatewayPortFileName = "gateway.port"
+
+// gatewayPortIdentityError is the readiness probe's identity proof: the
+// /health responder is accepted as OUR gateway only when homeDir's
+// gateway.port file exists AND names exactly port — the file is written by
+// the gateway itself (gateway_boot.go::registerProcess) only after ITS OWN
+// bind succeeded, and it must name the port we asked this attempt to boot on.
+// A 200 /health from a server that won the port behind our back (CI
+// 37943454247) has written nothing into our home, and a stale file from an
+// earlier attempt names a different port — both are rejected here, keeping
+// the probe polling until bootErr lands and the EADDRINUSE retry takes over.
+func gatewayPortIdentityError(homeDir string, port int) error {
+	raw, err := os.ReadFile(filepath.Join(homeDir, gatewayPortFileName))
+	if err != nil {
+		return fmt.Errorf("health answered but %s is not readable yet "+
+			"(our boot still completing, or a foreign server answering on this port): %w",
+			gatewayPortFileName, err)
+	}
+	if strings.TrimSpace(string(raw)) != strconv.Itoa(port) {
+		return fmt.Errorf("health answered but %s names port %q, want %d — "+
+			"stale identity file from an earlier attempt, or a foreign server "+
+			"answering on this port", gatewayPortFileName, strings.TrimSpace(string(raw)), port)
+	}
+	return nil
+}
 
 // portAllocator is the port-selection function bootUntilReady calls once per
 // boot attempt. A package var only so tests can force a specific draw (the
@@ -384,8 +417,9 @@ type startTestGateway struct {
 // a port from the harness's private below-ephemeral window (see the port
 // allocation block above allocatePrivateWindowPort) and returns a TestGateway
 // once OUR gateway — not a stranger on the same port — answers /health 200:
-// readiness additionally requires the gateway.port identity file that the
-// gateway writes into its home only after its own bind succeeded.
+// readiness additionally requires the gateway.port identity file naming this
+// exact port, which the gateway writes into its home only after its own bind
+// succeeded (gatewayPortIdentityError).
 //
 // It requires RegisterGatewayRunner to have been called first (typically from
 // a TestMain in the test package that imports pkg/gateway). If it has not
@@ -403,9 +437,9 @@ type startTestGateway struct {
 //   - Seeds OPENROUTER_API_KEY (from env, or a stub if env is empty) into
 //     credentials.json so credentials.InjectFromConfig succeeds at boot.
 //   - Runs the gateway in a goroutine; captures boot errors.
-//   - Polls GET /health until 200 AND the gateway.port identity file exists
-//     (budget: the health* constants in bootUntilReady), retrying on a fresh
-//     port when the bind race is lost with EADDRINUSE.
+//   - Polls GET /health until 200 AND the gateway.port identity file names
+//     this port (budget: the health* constants in bootUntilReady), retrying
+//     on a fresh port when the bind race is lost with EADDRINUSE.
 //   - Registers t.Cleanup to call Close, which cancels ctx and waits up to 10 s.
 //
 // Tests that exercise LLM behavior require OPENROUTER_API_KEY in the env;
@@ -634,18 +668,16 @@ func (sg *startTestGateway) bootUntilReady() {
 					return probeOutcome{err: fmt.Errorf("health endpoint returned status %d", resp.StatusCode)}
 				}
 				// IDENTITY CHECK — a 200 /health on this port is necessary but
-				// not sufficient. The gateway writes <home>/gateway.port only
-				// after ITS OWN bind succeeded (gateway_boot.go::registerProcess,
-				// after StartAll bound the shared HTTP server). While the file
-				// is absent, a 200 may be a foreign server that won the port —
+				// not sufficient. Only our gateway's own successful bind leads
+				// to a gateway.port file in OUR home naming THIS port; see
+				// gatewayPortIdentityError. While it says otherwise, a 200 may
+				// be a foreign server that won the port behind our back —
 				// accepting it stole readiness in CI 37943454247. Keep polling:
 				// if our bind genuinely failed, bootErr lands within the
 				// manager's bind-retry window and the EADDRINUSE retry below
 				// takes over with a fresh port.
-				if _, statErr := os.Stat(filepath.Join(sg.homeDir, gatewayPortFileName)); statErr != nil {
-					return probeOutcome{err: fmt.Errorf("health answered but %s is not written yet "+
-						"(our boot still completing, or a foreign server answering on this port): %w",
-						gatewayPortFileName, statErr)}
+				if identErr := gatewayPortIdentityError(sg.homeDir, port); identErr != nil {
+					return probeOutcome{err: identErr}
 				}
 				return probeOutcome{}
 			},
