@@ -78,9 +78,15 @@ func (a *restAPI) getConfig(w http.ResponseWriter) {
 //     agent's stored tool policy have run on THIS install (e.g. the Worker
 //     goal_claim update, coreagent.ToolPolicyUpdateWorkerGoalClaimAllow) —
 //     the same kind of boot-seed bookkeeping.
+//   - workspace_seed_defaults: the config-file-only workspace delegation seed
+//     block (session-core C-DELEGATE, FR-014/015). No gateway/UI exposure is
+//     commissioned for it; it stays on disk and is edited by hand, so it must
+//     never cross the wire. The matching generic-write refusal lives in
+//     blockedPaths (config.WorkspaceSeedDefaults).
 var wireExcludedConfigFields = []string{
 	"seeded_skill_grants",
 	"seeded_tool_policy_updates",
+	"workspace_seed_defaults",
 }
 
 // sanitizeConfigForWire strips every wireExcludedConfigFields key from a

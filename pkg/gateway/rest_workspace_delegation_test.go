@@ -2,7 +2,7 @@
 //  1. GET on a fresh workspace → 200 with empty edges + computed team.
 //  2. PUT a valid edge set → 200 and GET round-trips it.
 //  3. PUT with an unknown from/to agent → 400.
-//  4. PUT with a self-edge → 400.
+//  4. PUT with a same-agent row → 200 (session-core FR-014: an ordinary row).
 //  5. PUT with a bad mode → 400.
 //  6. PUT with depth above the ceiling → 400.
 //  7. PUT with duplicate (from,to) → last-writer-wins (deduped).
@@ -203,11 +203,15 @@ func TestWorkspaceDelegation_PutUnknownAgent_400(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "ghost")
 }
 
-func TestWorkspaceDelegation_PutSelfEdge_400(t *testing.T) {
+func TestWorkspaceDelegation_PutSelfEdge_Accepted(t *testing.T) {
 	api, id := buildWorkspaceDelegationTestAPI(t)
 	w := putDelegation(t, api, id, `{"edges":[{"from_agent":"ava","to_agent":"ava"}]}`)
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "self-edge")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	// The same-agent row must round-trip, not be silently dropped.
+	d := decodeDelegation(t, w.Body.Bytes())
+	require.Len(t, d.Edges, 1)
+	assert.Equal(t, "ava", d.Edges[0].FromAgent)
+	assert.Equal(t, "ava", d.Edges[0].ToAgent)
 }
 
 func TestWorkspaceDelegation_PutBadMode_400(t *testing.T) {
@@ -333,11 +337,11 @@ func TestDelegationEdgeValidate_RejectionCases(t *testing.T) {
 		wantErr string // substring the rejection message must contain ("" = accept)
 	}{
 		{
-			name: "self-edge for a non-permitted agent",
-			// ADR-090 §3: self-edges are permitted ONLY for jim and worker;
-			// every other agent's self-edge stays rejected.
+			name: "same-agent row for a member is accepted",
+			// session-core FR-014: {from==to} is an ordinary row for ANY team
+			// member — the former jim/worker-only self-edge rule is deleted.
 			edge:    storedDelegationEdge{FromAgent: "ava", ToAgent: "ava"},
-			wantErr: "self-edge",
+			wantErr: "",
 		},
 		{
 			name:    "off-team to_agent",
@@ -419,9 +423,11 @@ func TestDelegationEdgeValidate_MatchesHandlerWireMessages(t *testing.T) {
 	team := map[string]bool{"jim": true, "ava": true}
 	const ceiling = 3
 
-	assert.EqualError(t,
+	// session-core FR-014: a same-agent row for a team member is accepted (the
+	// former "cannot be a self-edge" wire message is gone).
+	assert.NoError(t,
 		storedDelegationEdge{FromAgent: "ava", ToAgent: "ava"}.Validate(team, ceiling),
-		"delegation edge cannot be a self-edge (from_agent == to_agent: ava)")
+		"a same-agent row for a team member must be accepted")
 	assert.EqualError(t,
 		storedDelegationEdge{FromAgent: "jim", ToAgent: "ghost"}.Validate(team, ceiling),
 		"delegation edge to_agent ghost is not a member of the workspace team")
@@ -572,17 +578,21 @@ func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {
 		ws.CoreTeam)
 	assert.NotContains(t, ws.CoreTeam, "admin", "Admin operates outside workspace teams")
 
-	// Edges: full coreAgentDelegation matrix with Worker on-team —
-	// Jim→Ava/Worker/Jim/Planner/Researcher, Worker→Worker, Planner→Researcher.
+	// Edges: the full coreAgentDelegation matrix with Worker on-team —
+	// Jim→Ava/Worker/Planner/Researcher and Planner→Researcher — PLUS one
+	// ordinary self-row per on-team member (session-core C-DELEGATE FR-014/015:
+	// mia/jim/ava/worker/planner/researcher each get {id→id}). Admin is off-team,
+	// so its (produced) self-row is dropped by seedEdgesForTeam.
 	seeded := loadStoredDelegationEdges(t, home, ws.ID)
-	require.Len(t, seeded, 7)
+	require.Len(t, seeded, 11)
 	byPair := make(map[string]storedDelegationEdge, len(seeded))
 	for _, e := range seeded {
 		byPair[e.FromAgent+"->"+e.ToAgent] = e
 	}
 	for _, want := range []string{
-		"jim->ava", "jim->worker", "jim->jim", "jim->planner", "jim->researcher",
-		"worker->worker", "planner->researcher",
+		"mia->mia", "jim->jim", "ava->ava", "worker->worker", "planner->planner", "researcher->researcher",
+		"jim->ava", "jim->worker", "jim->planner", "jim->researcher",
+		"planner->researcher",
 	} {
 		assert.Contains(t, byPair, want, "expected seeded edge %s", want)
 	}
@@ -606,10 +616,14 @@ func TestDefaultWorkspaceSeeder_TeamAndEdges(t *testing.T) {
 		[]workspace.DelegationMode{workspace.ModeDirect, workspace.ModeTask},
 		plannerToResearcher.Modes, "planner->researcher must carry Planner's seeded modes, collapsed to [direct, task]")
 
-	// The two research specialists are leaves: no outgoing edges seeded for them.
+	// The two research specialists are leaves: their ONLY seeded edge is their
+	// own ordinary self-row (session-core FR-014) — no outgoing CROSS edge.
 	for _, e := range seeded {
 		assert.NotEqual(t, "explorer", e.FromAgent, "explorer must not have a seeded outgoing edge")
-		assert.NotEqual(t, "researcher", e.FromAgent, "researcher must not have a seeded outgoing edge")
+		if e.FromAgent == "researcher" {
+			assert.Equal(t, "researcher", e.ToAgent,
+				"researcher's only seeded edge must be its own self-row, got researcher->%s", e.ToAgent)
+		}
 	}
 }
 
@@ -696,7 +710,7 @@ func TestDefaultWorkspaceSeeder_PartialRoster_DropsOnlyMissingAgentEdges(t *test
 
 	// (b) only researcher's edges are dropped — every other edge from the
 	// full-roster matrix (see TestDefaultWorkspaceSeeder_TeamAndEdges) survives
-	// exactly as seeded.
+	// exactly as seeded. Each on-team member also keeps its ordinary self-row.
 	seeded := loadStoredDelegationEdges(t, home, ws.ID)
 	byPair := make(map[string]storedDelegationEdge, len(seeded))
 	for _, e := range seeded {
@@ -705,26 +719,27 @@ func TestDefaultWorkspaceSeeder_PartialRoster_DropsOnlyMissingAgentEdges(t *test
 		assert.NotEqual(t, "researcher", e.ToAgent, "researcher is off-team — must not appear as a to_agent")
 	}
 	for _, want := range []string{
-		"jim->ava", "jim->worker", "jim->jim", "jim->planner", "worker->worker",
+		"mia->mia", "jim->jim", "ava->ava", "worker->worker", "planner->planner",
+		"jim->ava", "jim->worker", "jim->planner",
 	} {
 		assert.Contains(t, byPair, want, "expected surviving seeded edge %s", want)
 	}
-	// The two edges that reference researcher must be gone entirely, not
-	// dangling with an unresolvable endpoint.
+	// The two researcher-referencing edges must be gone entirely, not dangling
+	// with an unresolvable endpoint.
 	assert.NotContains(t, byPair, "jim->researcher")
 	assert.NotContains(t, byPair, "planner->researcher")
-	assert.Len(t, seeded, 5, "7 approved-roster edges minus the 2 that reference the missing researcher")
+	assert.Len(t, seeded, 8, "5 self-rows + 3 Jim cross edges (researcher dropped)")
 }
 
 // TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed verifies the
 // TRANSFORMATION LOOP inside defaultWorkspaceDelegationEdges is correct
 // relative to whatever coreagent.SeedDelegationEdges currently returns: for
-// every agent id coreagent.SeedConfig seeds into a fresh config, the edges
-// defaultWorkspaceDelegationEdges derives match coreagent.SeedDelegationEdges(id)
+// every agent id coreagent.SeedConfig seeds into a fresh config, the CROSS
+// edges defaultWorkspaceDelegationEdges derives match coreagent.SeedDelegationEdges(id)
 // field-for-field (target, modes, depth) — i.e. the per-agent →
-// per-target-edge expansion (mode conversion, depth-pointer copy, permitted
-// self-edge retention, wildcard/remote-a2a filtering, FR-006 self-edge depth
-// pin) does not drop or corrupt data on the way from the seed matrix to the
+// per-target-edge expansion (mode conversion, depth-pointer copy, wildcard/
+// remote-a2a filtering) does not drop or corrupt data on the way from the seed
+// matrix to the
 // workspace graph shape.
 //
 // NOTE (pr-test-analyzer, 7-reviewer-gate follow-up): this is a
@@ -748,6 +763,24 @@ func TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed(t *testing.T) {
 	// independent of defaultWorkspaceDelegationEdges's own implementation, by
 	// replaying the exact same derivation the function's doc comment describes.
 	var want []storedDelegationEdge
+	// Ordinary self-rows: one per listed agent EXCEPT the two hidden type:system
+	// seed records the shipped default excludes — hardcoded here from the spec
+	// (session-core C-DELEGATE ::Seed config data), NOT read from the config
+	// resolver, so the exclusion data and the depth pin are checked independently.
+	shippedExcluded := map[string]bool{"judge": true, "plansupervisor": true}
+	for i := range cfg.Agents.List {
+		id := cfg.Agents.List[i].ID
+		if shippedExcluded[id] {
+			continue
+		}
+		d := 3 // FreshSelfDelegationMaxDepth, ceiling unset
+		want = append(want, storedDelegationEdge{
+			FromAgent: id,
+			ToAgent:   id,
+			Modes:     []workspace.DelegationMode{workspace.ModeDirect, workspace.ModeTask},
+			Depth:     &d,
+		})
+	}
 	// Deliberately replays defaultWorkspaceDelegationEdges's loop independently
 	// (not via a shared helper) so this test can catch a regression in THAT transformation
 	// logic; sharing a helper would make this test tautological (see the doc comment above).
@@ -781,18 +814,13 @@ func TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed(t *testing.T) {
 			depth = &d
 		}
 		for _, ref := range dp.To {
-			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || (ref.ID == ac.ID && !workspace.PermittedSelfDelegationID(ac.ID)) {
+			// Self refs are supplied by the generic self-row block above; the
+			// production loop skips them too.
+			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || ref.ID == ac.ID {
 				continue
 			}
 			var edgeDepth *int
-			if ref.ID == ac.ID && workspace.PermittedSelfDelegationID(ac.ID) {
-				// FR-006: a fresh self-edge pins 3 when the ceiling is
-				// unset (this test uses SeedConfig on an empty config).
-				// Hardcoded from the spec, not via SeededEdgeDepth, so a
-				// helper regression still fails this replay.
-				d := 3
-				edgeDepth = &d
-			} else if depth != nil {
+			if depth != nil {
 				d := *depth
 				edgeDepth = &d
 			}

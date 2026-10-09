@@ -162,10 +162,12 @@ func (e *DelegationEdge) UnmarshalJSON(data []byte) error {
 //
 // Invariants enforced (fail-closed: any violation is a hard error):
 //   - from_agent and to_agent are both non-empty (after trimming)
-//   - self-edges are limited to the built-in Jim and General Purpose identities
 //   - both endpoints are members of team (the workspace team set — core_team ∪
 //     existing-edge endpoints). A nil team treats EVERY endpoint as off-team
-//     (deny-by-default): callers MUST pass the real team set.
+//     (deny-by-default): callers MUST pass the real team set. A same-agent row
+//     (from_agent == to_agent) is an ORDINARY row and passes this check like any
+//     other — session-core C-DELEGATE (FR-014) deletes the former identity-
+//     specific self-edge rule (jim/worker only); there is no self-ID predicate.
 //   - every mode (when Modes is non-empty) ∈ {direct, task}
 //   - Depth, when non-nil, is >= 0 and <= ceiling
 //
@@ -181,9 +183,6 @@ func (e DelegationEdge) Validate(team map[string]bool, ceiling int) error {
 	to := strings.TrimSpace(e.ToAgent)
 	if from == "" || to == "" {
 		return errors.New("delegation edge from_agent and to_agent must not be empty")
-	}
-	if from == to && !PermittedSelfDelegationID(from) {
-		return fmt.Errorf("delegation edge cannot be a self-edge (from_agent == to_agent: %s)", from)
 	}
 	if !team[from] {
 		return fmt.Errorf("delegation edge from_agent %s is not a member of the workspace team", from)
@@ -207,8 +206,17 @@ func (e DelegationEdge) Validate(team map[string]bool, ceiling int) error {
 	return nil
 }
 
-// PermittedSelfDelegationID identifies the two stable built-ins that may fork
-// bounded helpers through an explicit workspace edge.
+// PermittedSelfDelegationID reports whether id is one of the two built-ins whose
+// self-delegation the RUNTIME gate currently admits through an explicit
+// workspace self-edge.
+//
+// This is NOT a validity rule for edges any more — session-core C-DELEGATE
+// (FR-014) deleted the identity-specific self-edge rule from Validate and
+// ValidateShape and from every seed writer, so an ordinary {id→id} row is a
+// first-class edge for ANY member. This predicate survives only as the runtime
+// delegation gate's (pkg/agent/loop_delegation.go) input to be retired with the
+// rest of that gate's self-ID branch (session-core DEL-30); the seed and
+// validation layers must never consult it.
 func PermittedSelfDelegationID(id string) bool {
 	return id == "jim" || id == "worker"
 }
@@ -320,8 +328,8 @@ func ReadDelegation(home, workspaceID string) ([]DelegationEdge, error) {
 }
 
 // ValidateShape checks the invariants of a single edge that hold with NO
-// workspace context — non-empty endpoints, no self-edge, known modes, and a
-// non-negative depth.
+// workspace context — non-empty endpoints, known modes, and a non-negative
+// depth.
 //
 // It exists because the delegation STORE (delegationstore.go) validates edges
 // at load and save time, where the team roster and the depth ceiling are not
@@ -336,6 +344,9 @@ func ReadDelegation(home, workspaceID string) ([]DelegationEdge, error) {
 // hand-edited store injecting a structurally impossible edge; it is a
 // data-integrity guard, not the authorization boundary.
 //
+// A same-agent row is structurally valid and passes here like any other edge:
+// session-core C-DELEGATE (FR-014) deleted the identity-specific self-edge rule.
+//
 // The depth CEILING is intentionally not checked here for the same reason: an
 // edge whose depth exceeds a ceiling that has since been lowered is stale
 // configuration to be re-evaluated against the live ceiling by Validate, not
@@ -345,9 +356,6 @@ func (e DelegationEdge) ValidateShape() error {
 	to := strings.TrimSpace(e.ToAgent)
 	if from == "" || to == "" {
 		return errors.New("delegation edge from_agent and to_agent must not be empty")
-	}
-	if from == to && !PermittedSelfDelegationID(from) {
-		return fmt.Errorf("delegation edge cannot be a self-edge (from_agent == to_agent: %s)", from)
 	}
 	for _, m := range e.Modes {
 		if !m.Valid() {

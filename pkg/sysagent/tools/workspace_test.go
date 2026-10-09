@@ -538,9 +538,11 @@ func TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 
 	id := workspaceID(t, result.ForLLM)
 	edges := delegationEdgesFromDisk(t, home, id)
-	// Ratified Jim→Ava delegation joins Jim→Worker and both self-edges.
-	if len(edges) != 4 {
-		t.Fatalf("expected exactly 4 seeded edges, got %d: %v", len(edges), edges)
+	// Ratified Jim→Ava delegation joins Jim→Worker, and every member of the
+	// freshly-created team gets its ordinary self-row (session-core FR-014/015):
+	// ava, jim and worker each carry {id→id}.
+	if len(edges) != 5 {
+		t.Fatalf("expected exactly 5 seeded edges, got %d: %v", len(edges), edges)
 	}
 	jimAva := findEdge(edges, "jim", "ava")
 	if jimAva == nil {
@@ -551,6 +553,9 @@ func TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 	}
 	if findEdge(edges, "jim", "ray") != nil {
 		t.Error("jim→ray must be dropped — ray is not on the team")
+	}
+	if findEdge(edges, "ava", "ava") == nil {
+		t.Error("expected Ava self edge (every freshly-created team member is seeded)")
 	}
 	if findEdge(edges, "jim", "jim") == nil {
 		t.Error("expected Jim self edge")
@@ -1346,8 +1351,13 @@ func TestWorkspaceUpdate_SeedDoesNotResurrectRemovedEdge(t *testing.T) {
 	if findEdge(edges, "ray", "researcher") != nil {
 		t.Error("ray→researcher must be dropped — researcher is not on the team")
 	}
-	if len(edges) != 0 {
-		t.Errorf("Ray has no approved seed edge in ADR-090; got %d: %v", len(edges), edges)
+	// Ray has no coreagent trust-policy edge, but the newly-added member still
+	// gets its ordinary self-row (session-core FR-014/015) — and only that.
+	if findEdge(edges, "ray", "ray") == nil {
+		t.Error("newly added ray must receive its ordinary self-row")
+	}
+	if len(edges) != 1 {
+		t.Errorf("ray must seed exactly its self-row; got %d: %v", len(edges), edges)
 	}
 }
 
@@ -1578,8 +1588,11 @@ func TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges(t
 	}
 
 	m := parseSuccess(t, res.ForLLM)
-	if note, present := m["delegation_seeded"]; present {
-		t.Errorf("Ray has no approved ADR-090 seed edge; unexpected note %v", note)
+	// ray is newly added: it has no coreagent trust-policy edge, but it still
+	// receives its ordinary self-row (session-core FR-014/015), so a note naming
+	// ray IS expected.
+	if note, present := m["delegation_seeded"]; !present || !strings.Contains(note.(string), "ray") {
+		t.Errorf("newly added ray must seed its ordinary self-row and be named in the note, got %v", note)
 	}
 
 	edges := delegationEdgesFromDisk(t, home, id)
@@ -1590,6 +1603,9 @@ func TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges(t
 	// ray→researcher dropped — researcher is not on the team.
 	if findEdge(edges, "ray", "researcher") != nil {
 		t.Error("ray→researcher must be dropped — researcher is not on the team")
+	}
+	if findEdge(edges, "ray", "ray") == nil {
+		t.Error("newly added ray must receive its ordinary self-row")
 	}
 
 	// Edges referencing the removed member (jim) survive un-GC'd.
@@ -1609,8 +1625,8 @@ func TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges(t
 		t.Errorf("pre-existing ava→worker edge must be left untouched, got modes=%v", modes)
 	}
 
-	if len(edges) != 3 {
-		t.Errorf("expected the 3 pre-existing edges only, got %d: %v", len(edges), edges)
+	if len(edges) != 4 {
+		t.Errorf("expected the 3 pre-existing edges plus ray's self-row, got %d: %v", len(edges), edges)
 	}
 }
 

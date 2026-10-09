@@ -10,10 +10,11 @@ import (
 )
 
 // TestSeededEdgeDepth_SelfPinAndNonSelfCopy is the unit oracle for ADR-090
-// FR-006: "Fresh self-edges explicitly set max_depth 3 (or the lower
-// configured ceiling)." Expected values come from that sentence, not from
-// observed output. The helper must pin only Jim→Jim and Worker→Worker; every
-// other pair copies the policy-wide depth (nil stays inherit).
+// FR-006 as amended by session-core C-DELEGATE (E-DELEGATE-CONFIG): "Fresh
+// self-edges explicitly set max_depth 3 (or the lower configured ceiling)"
+// applies to EVERY self-edge without an ID predicate, not only Jim/Worker;
+// every non-self pair copies the policy-wide depth (nil stays inherit).
+// Expected values come from that sentence, not from observed output.
 func TestSeededEdgeDepth_SelfPinAndNonSelfCopy(t *testing.T) {
 	policyTwo := 2
 	cases := []struct {
@@ -35,7 +36,8 @@ func TestSeededEdgeDepth_SelfPinAndNonSelfCopy(t *testing.T) {
 		{"jim→ava nil stays inherit at ceiling 5", "jim", "ava", nil, 5, true, 0, false},
 		{"jim→worker nil stays inherit at ceiling 2", "jim", "worker", nil, 2, true, 0, false},
 		{"planner policy depth copies verbatim", "planner", "researcher", &policyTwo, 5, false, 2, true},
-		{"non-permitted ava→ava is not pinned", "ava", "ava", nil, 3, true, 0, false},
+		{"non-permitted ava→ava is pinned at 3 (no ID predicate)", "ava", "ava", nil, 3, false, 3, false},
+		{"ava→ava with lowered ceiling 1 clamps to 1", "ava", "ava", nil, 1, false, 1, false},
 		{"non-self with a policy depth is not replaced by the pin", "jim", "ava", &policyTwo, 5, false, 2, true},
 	}
 	for _, tc := range cases {

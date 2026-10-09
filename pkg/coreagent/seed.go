@@ -503,21 +503,23 @@ func SeedDelegationEdges(id CoreAgentID) *config.DelegationPolicy {
 }
 
 // FreshSelfDelegationMaxDepth is the ADR-090 FR-006 pin for a freshly seeded
-// Jim→Jim or Worker→Worker workspace edge: 3, or the lower configured global
-// ceiling. Applied per-edge by SeededEdgeDepth — never as a role-wide
-// DelegationPolicy.Depth, which would also clamp Jim's staff edges.
+// SELF workspace edge (any agent, from == to): 3, or the lower configured
+// global ceiling. Applied per-edge by SeededEdgeDepth — never as a role-wide
+// DelegationPolicy.Depth, which would also clamp an agent's other edges.
 const FreshSelfDelegationMaxDepth = 3
 
 // SeededEdgeDepth returns the depth pointer a freshly seeded workspace edge
-// should carry. Permitted self-edges (Jim, General Purpose) get an explicit
+// should carry. Every SELF-edge (from == to) gets an explicit
 // min(FreshSelfDelegationMaxDepth, ceiling) so a raised global cap cannot
 // deepen a fresh self-chain beyond 3, and a lowered cap cannot cause
-// Validate to drop the edge. Every other pair copies policyDepth (nil stays
-// inherit). ceiling is the already-resolved effective global cap
+// Validate to drop the edge — with no ID predicate: session-core C-DELEGATE
+// (E-DELEGATE-CONFIG) applies the fresh self default to every freshly seeded
+// self-row, not only Jim/Worker. Every non-self pair copies policyDepth (nil
+// stays inherit). ceiling is the already-resolved effective global cap
 // (delegationDepthCeiling / workspaceDelegationDepthCeiling); non-positive
 // is treated as unset and the pin stays 3.
 func SeededEdgeDepth(from, to string, policyDepth *int, ceiling int) *int {
-	if from == to && (from == string(IDJim) || from == string(IDWorker)) {
+	if from == to {
 		d := FreshSelfDelegationMaxDepth
 		if ceiling > 0 && ceiling < d {
 			d = ceiling

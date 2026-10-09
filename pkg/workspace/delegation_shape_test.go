@@ -55,20 +55,19 @@ func TestDelegationEdge_ValidateShape_EndpointsNonEmpty(t *testing.T) {
 	})
 }
 
-// TestDelegationEdge_ValidateShape_NoSelfEdge proves invariant 2: an edge from
-// an agent to itself is rejected. The comparison runs on the TRIMMED values (so
-// "mia" → " mia " is still a self-edge) and the message interpolates the
-// trimmed agent name.
-func TestDelegationEdge_ValidateShape_NoSelfEdge(t *testing.T) {
-	selfEdgeErr := func(agent string) string {
-		return "delegation edge cannot be a self-edge (from_agent == to_agent: " + agent + ")"
-	}
+// TestDelegationEdge_ValidateShape_SameAgentRowAccepted proves invariant 2
+// under the amended session-core C-DELEGATE contract (FR-014): an edge from an
+// agent to itself is an ORDINARY row and passes shape validation like any other
+// edge. The former identity-specific self-edge rule (jim/worker only) is
+// deleted, not merely widened. ValidateShape has no team context, so a same-agent
+// row is structurally valid unconditionally; the membership/ceiling checks in
+// Validate are what gate it at a write.
+func TestDelegationEdge_ValidateShape_SameAgentRowAccepted(t *testing.T) {
 	runShapeCases(t, []shapeCase{
-		{name: "reject: identical endpoints", edge: DelegationEdge{FromAgent: "mia", ToAgent: "mia"}, wantErr: selfEdgeErr("mia")},
+		{name: "accept: identical endpoints", edge: DelegationEdge{FromAgent: "mia", ToAgent: "mia"}},
 		{
-			name:    "reject: self-edge only visible after trimming",
-			edge:    DelegationEdge{FromAgent: "mia", ToAgent: " mia "},
-			wantErr: selfEdgeErr("mia"),
+			name: "accept: same-agent row only visible after trimming",
+			edge: DelegationEdge{FromAgent: "mia", ToAgent: " mia "},
 		},
 		{name: "accept: distinct endpoints", edge: DelegationEdge{FromAgent: "mia", ToAgent: "jim"}},
 	})
@@ -144,25 +143,21 @@ func TestDelegationEdge_ValidateShape_ZeroValue(t *testing.T) {
 
 // TestDelegationEdge_ValidateShape_FirstViolationWins pins the observable
 // check ORDER for edges violating several invariants at once: empty endpoints
-// first, then self-edge, then modes, then depth. The returned message is the
-// only witness to which check fired, so this ordering is behavior the store's
-// WARN logs (load) and refusal error (save) both surface.
+// first, then modes, then depth. (The former self-edge check is gone —
+// session-core FR-014 makes a same-agent row ordinary.) The returned message is
+// the only witness to which check fired, so this ordering is behavior the
+// store's WARN logs (load) and refusal error (save) both surface.
 func TestDelegationEdge_ValidateShape_FirstViolationWins(t *testing.T) {
 	runShapeCases(t, []shapeCase{
 		{
-			name:    "empty endpoints beat self-edge, mode and depth (both-empty is also a self-edge)",
+			name:    "empty endpoints beat mode and depth (both-empty is also a self-edge)",
 			edge:    DelegationEdge{FromAgent: "", ToAgent: "", Modes: []DelegationMode{"banana"}, Depth: new(-1)},
 			wantErr: "delegation edge from_agent and to_agent must not be empty",
 		},
 		{
-			name:    "self-edge beats invalid mode",
-			edge:    DelegationEdge{FromAgent: "mia", ToAgent: "mia", Modes: []DelegationMode{"banana"}},
-			wantErr: "delegation edge cannot be a self-edge (from_agent == to_agent: mia)",
-		},
-		{
-			name:    "self-edge beats negative depth",
-			edge:    DelegationEdge{FromAgent: "mia", ToAgent: "mia", Depth: new(-1)},
-			wantErr: "delegation edge cannot be a self-edge (from_agent == to_agent: mia)",
+			name:    "invalid mode beats negative depth on a same-agent row",
+			edge:    DelegationEdge{FromAgent: "mia", ToAgent: "mia", Modes: []DelegationMode{"banana"}, Depth: new(-1)},
+			wantErr: "delegation edge mode banana is invalid (valid: direct, task)",
 		},
 		{
 			name:    "invalid mode beats negative depth",
@@ -172,6 +167,10 @@ func TestDelegationEdge_ValidateShape_FirstViolationWins(t *testing.T) {
 		{
 			name: "every field populated and valid is accepted",
 			edge: DelegationEdge{FromAgent: "mia", ToAgent: "jim", Modes: []DelegationMode{ModeDirect, ModeTask}, Depth: new(0)},
+		},
+		{
+			name: "same-agent row with valid modes and depth is accepted",
+			edge: DelegationEdge{FromAgent: "mia", ToAgent: "mia", Modes: []DelegationMode{ModeDirect, ModeTask}, Depth: new(3)},
 		},
 	})
 }

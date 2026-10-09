@@ -48,6 +48,15 @@ var blockedPaths = []config.ConfigKey{
 	// one-level merge (preserveProtectedAgentDefaults).
 	config.AgentsDefaultsMaxToolIterations,
 	config.AgentsDefaultsMaxToolIterationsEnvImported,
+	// session-core C-DELEGATE (FR-014/015, BDD-05.7): workspace_seed_defaults is
+	// a CONFIG-FILE-ONLY block — the operator edits config.json by hand and no
+	// gateway/UI write path is commissioned for it. Blocking it here (at any
+	// nesting depth, so {"workspace_seed_defaults":{"self_edge":{...}}} is
+	// caught too) makes the generic PUT refuse BEFORE any mutation, and the GET
+	// strips it via wireExcludedConfigFields. Unrelated keys in the same body
+	// are not written either — updateConfig returns before safeUpdateConfigJSON
+	// runs.
+	config.WorkspaceSeedDefaults,
 }
 
 // matchBlockedPath reports whether body contains any entry in blocked at any

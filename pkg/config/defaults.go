@@ -174,6 +174,15 @@ func DefaultConfig() *Config {
 			ModelName:         "",
 			EchoTranscription: false,
 		},
+		// WorkspaceSeedDefaults (session-core C-DELEGATE, FR-014/015,
+		// BDD-05.7): the config-file-only self-delegation seed exclusion list,
+		// shipped as the two hidden type:system seed records. Seeded explicitly
+		// so a fresh install's config.json is self-documenting and an operator
+		// sees the key they may edit by hand. This is a fresh-install seed, not
+		// a re-enforcement: loadConfig starts from these defaults and overlays
+		// the file, so an operator's persisted values (including an explicit
+		// []) survive every boot — see workspace_seed_defaults.go.
+		WorkspaceSeedDefaults: defaultWorkspaceSeedDefaults(),
 		BuildInfo: BuildInfo{
 			Version:   Version,
 			GitCommit: GitCommit,
