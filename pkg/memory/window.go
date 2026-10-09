@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"time"
 	"unicode/utf8"
 
@@ -38,10 +39,25 @@ func (w WindowState) Clone() WindowState {
 	return out
 }
 
+// ArchiveSpan is a half-open [Start, End) range of physical archive-line
+// indices that is RETAINED on disk but EXCLUDED from the model view by an
+// append-only rollback effect (session-core FR-006 / DEL-12). The bytes stay in
+// the archive — ReadArchive/recall still return them — while every provider
+// request built from WindowHistory omits them. Because the archive is strictly
+// append-only and never renumbered, a span address stays exact for the
+// session's whole lifetime, which is why spans are never re-derived or shifted.
+type ArchiveSpan struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
 // WindowSnapshot binds archive identities and metadata under one session lock.
+// Retracted lists the retained-but-excluded spans (FR-006); an empty slice
+// means the whole archive is in the model view.
 type WindowSnapshot struct {
-	State   WindowState
-	Archive []ArchivedMessage
+	State     WindowState
+	Archive   []ArchivedMessage
+	Retracted []ArchiveSpan
 }
 
 func windowState(meta sessionMeta) WindowState {
@@ -95,14 +111,31 @@ func applyWindow(meta *sessionMeta, state WindowState) {
 	meta.UpdatedAt = time.Now()
 }
 
+// retractedAt reports whether physical archive line i lies inside a
+// retained-but-excluded span (FR-006). Spans are few (at most one per aborted
+// turn) and disjoint, so a linear scan is the right shape here.
+func retractedAt(spans []ArchiveSpan, i int) bool {
+	for _, s := range spans {
+		if i >= s.Start && i < s.End {
+			return true
+		}
+	}
+	return false
+}
+
 func WindowHistory(snap WindowSnapshot) ([]providers.Message, []int) {
 	out := make([]providers.Message, 0, len(snap.Archive)-min(snap.State.Skip, len(snap.Archive))+1)
 	lines := make([]int, 0, cap(out))
-	if a := snap.State.AnchorLine; a != nil && *a >= 0 && *a < snap.State.Skip && *a < len(snap.Archive) {
+	if a := snap.State.AnchorLine; a != nil && *a >= 0 && *a < snap.State.Skip && *a < len(snap.Archive) && !retractedAt(snap.Retracted, *a) {
 		out = append(out, snap.Archive[*a].Message)
 		lines = append(lines, *a)
 	}
 	for i := max(0, snap.State.Skip); i < len(snap.Archive); i++ {
+		// FR-006: a retracted span keeps its bytes in the archive but is
+		// excluded from every provider request built from this window.
+		if retractedAt(snap.Retracted, i) {
+			continue
+		}
 		out = append(out, snap.Archive[i].Message)
 		lines = append(lines, i)
 	}
@@ -151,7 +184,8 @@ func (s *JSONLStore) snapshotWindowLocked(ctx context.Context, key string) (Wind
 			return WindowSnapshot{}, err
 		}
 	}
-	return WindowSnapshot{State: windowState(meta), Archive: archive}, nil
+	return WindowSnapshot{State: windowState(meta), Archive: archive,
+		Retracted: append([]ArchiveSpan(nil), meta.Retracted...)}, nil
 }
 
 // AppendWindowMessage returns the actual appended identity and metadata under
@@ -259,19 +293,25 @@ func validateWindowMetadata(after WindowState, archive []ArchivedMessage) error 
 }
 
 // RollbackWindow restores the session's view/window metadata (cursor, anchor
-// and source limits) to the given snapshot in one metadata write.
+// and source limits) to the given snapshot AND records the appended span the
+// snapshot predates as a RETAINED-BUT-EXCLUDED effect (session-core FR-006 /
+// DEL-12). It NEVER rewrites the archive: the aborted bytes stay on disk and
+// remain reachable via ReadArchive/recall, they are merely excluded from every
+// later provider request built by WindowHistory.
 //
-// session-core FR-006 / DEL-12: a rollback MUST move view/window metadata and
-// NEVER rewrite retained archive bytes. This used to call rewriteJSONL to
-// truncate the archive down to start.Count — a whole-file rewrite that
-// destroyed the retained bytes the recall archive depends on. It no longer
-// touches the JSONL file at all: the archive only ever grows (append-only),
-// and this method restores the cursor state alone.
+// session-core FR-006: a rollback MUST move view/window metadata and never
+// rewrite retained bytes. This used to call rewriteJSONL to truncate the
+// archive down to start.Count — a whole-file rewrite that destroyed the
+// retained bytes the recall archive depends on. It no longer touches the JSONL
+// file at all: the archive only ever grows (append-only).
 //
-// The turn-abort path that must actually remove a failed turn's appended
-// content uses RollbackAppended (pkg/agent turn_exit.go), whose contract is to
-// truncate the appended tail together with the cursor restore; this method is
-// the retained-bytes-safe window-metadata restore.
+// Because the archive is never renumbered, a later valid append lands
+// physically AFTER the excluded span and is visible again — the aborted span
+// never resurrects, and it never blocks new content.
+//
+// This is now the SOLE rollback primitive: the abort path (pkg/agent
+// turn_exit.go::restoreSession) calls it alone. Nothing truncates the archive
+// on a rollback any more.
 func (s *JSONLStore) RollbackWindow(ctx context.Context, key string, start WindowState) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -296,6 +336,38 @@ func (s *JSONLStore) RollbackWindow(ctx context.Context, key string, start Windo
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	// Exclude [start.Count, len(archive)) from the model view without deleting
+	// it, then restore the exact turn-start cursor/anchor/projection. The
+	// archive did not shrink, so meta.Count re-syncs to its physical length —
+	// exactly what the reader contract requires (see snapshotWindowLocked).
+	meta.Retracted = retractSpan(meta.Retracted, start.Count, len(archive))
 	applyWindow(&meta, start)
+	meta.Count = len(archive)
 	return s.writeMeta(key, meta)
+}
+
+// retractSpan adds the half-open span [start,end) to the retained-but-excluded
+// set, coalescing it with any span it abuts or overlaps. The result stays
+// sorted by Start and disjoint. An empty span (end <= start) is a no-op.
+func retractSpan(spans []ArchiveSpan, start, end int) []ArchiveSpan {
+	if end <= start {
+		return spans
+	}
+	if start < 0 {
+		start = 0
+	}
+	out := append([]ArchiveSpan(nil), spans...)
+	out = append(out, ArchiveSpan{Start: start, End: end})
+	sort.Slice(out, func(i, j int) bool { return out[i].Start < out[j].Start })
+	merged := out[:0]
+	for _, s := range out {
+		if len(merged) > 0 && s.Start <= merged[len(merged)-1].End {
+			if s.End > merged[len(merged)-1].End {
+				merged[len(merged)-1].End = s.End
+			}
+			continue
+		}
+		merged = append(merged, s)
+	}
+	return merged
 }

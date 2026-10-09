@@ -96,8 +96,17 @@ func TestContextOverflowPlain_AbortRestoresActualTurnStart(t *testing.T) {
 	require.Equal(t, TurnEndStatusAborted, result.status)
 	restored, err := store.SnapshotWindow(context.Background(), key)
 	require.NoError(t, err)
-	require.Equal(t, start, restored, "B-58: restore actual start, NOT the last intermediate cursor or the post-append count")
-	require.Equal(t, startBytes, plainHistoryArchiveBytes(t, agent, key), "abort removes only this turn's suffix and restores the original archive bytes")
+	// FR-006 / DEL-12: the abort is non-destructive. Skip, the anchor and the
+	// exact projection are restored, but the archive KEEPS the appended bytes
+	// (count re-syncs to the physical length) and the aborted span is recorded
+	// as a retained-but-excluded effect.
+	require.Equal(t, start.State.Skip, restored.State.Skip, "B-58: restore the actual start cursor, NOT the last intermediate one")
+	require.Equal(t, start.State.AnchorLine, restored.State.AnchorLine, "restore the actual start anchor")
+	require.Equal(t, start.State.Projection, restored.State.Projection, "restore the exact start projection")
+	require.Len(t, restored.Retracted, 1, "the aborted append is recorded as a retained-but-excluded span")
+	retainedBytes := plainHistoryArchiveBytes(t, agent, key)
+	require.True(t, strings.HasPrefix(string(retainedBytes), string(startBytes)), "FR-006: abort never rewrites retained archive bytes")
+	require.Greater(t, len(retainedBytes), len(startBytes), "FR-006: the aborted append's bytes are RETAINED, not truncated")
 	require.Equal(t, history, agent.Sessions.GetHistory(key))
 }
 

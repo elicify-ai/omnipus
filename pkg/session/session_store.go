@@ -40,19 +40,6 @@ type SessionWriter interface {
 	SetHistory(key string, history []providers.Message)
 	// TruncateHistory keeps only the last keepLast messages.
 	TruncateHistory(key string, keepLast int)
-	// RollbackAppended truncates the on-disk archive to targetArchiveLen physical
-	// lines and restores meta.Skip = min(targetSkip, targetArchiveLen). The Skip
-	// restore is required to fix the mid-turn eviction bug: if windowTrim advanced
-	// Skip during a live turn and the turn then aborts, the old clamp-forward
-	// (Skip = Count) would shrink the visible window below the pre-turn size.
-	// Callers compute: targetSkip = initialArchiveLen - initialHistoryLength.
-	// If targetArchiveLen >= current archive line count, the file is not rewritten
-	// but Skip is still restored if it has drifted.
-	// emptiedSet is the WHOLE projection set captured at turn start (both
-	// states); it is restored in the same write as Skip (ADR-066 FR-020),
-	// dropping entries whose archive_line ≥ targetArchiveLen. nil means
-	// "nothing was emptied at turn start".
-	RollbackAppended(key string, targetArchiveLen, targetSkip int, emptiedSet memory.ProjectionSet)
 	// SetProjectionState records capped | emptied for one
 	// (tool_call_id, archive_line) (FR-019); re-marking overwrites.
 	SetProjectionState(key string, pk memory.ProjectionKey, state memory.ProjectionState)
