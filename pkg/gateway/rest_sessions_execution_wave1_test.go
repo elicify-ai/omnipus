@@ -11,8 +11,9 @@ import (
 )
 
 // Session.execution and Session.background_command_count.
-// ARCH-DECISIONS Decision 4. execution is the lifecycle record state, and
-// only queued or running; lifecycle_state stays the collapsed display value.
+// ARCH-DECISIONS Decision 4, C2 clarification (2026-10-08). execution preserves
+// queued/running only while that same record's current-boot projection is working;
+// every other lifecycle display omits execution. Reads never rewrite the record.
 // background_command_count counts this session's own running background
 // commands. It is not a roll-up of another session's processes.
 //
@@ -31,9 +32,12 @@ func TestSessionList_Execution_QueuedAndRunningOnly(t *testing.T) {
 		wantLife   string
 		wantExec   string
 		execAbsent bool
+		priorBoot  bool
 	}{
 		{name: "queued emits execution and keeps working", state: session.LifecycleQueued, wantLife: "working", wantExec: "queued"},
 		{name: "running emits execution and keeps working", state: session.LifecycleRunning, wantLife: "working", wantExec: "running"},
+		{name: "prior boot queued root omits execution", state: session.LifecycleQueued, priorBoot: true, wantLife: "interrupted", execAbsent: true},
+		{name: "prior boot running root omits execution", state: session.LifecycleRunning, priorBoot: true, wantLife: "interrupted", execAbsent: true},
 		{name: "needs input omits execution", state: session.LifecycleNeedsInput, wantLife: "waiting_for_answer", execAbsent: true},
 		{name: "completed omits execution", state: session.LifecycleCompleted, wantLife: "done", execAbsent: true},
 		{name: "failed omits execution", state: session.LifecycleFailed, failed: "boom", wantLife: "failed", execAbsent: true},
@@ -41,17 +45,22 @@ func TestSessionList_Execution_QueuedAndRunningOnly(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			api, cleanup := newTestRestAPI(t)
-			defer cleanup()
+			f := newI1R1BootFixture(t)
+			api, ls := f.api, f.ls
 			id := createTestSession(t, api)
-			ls := session.NewLifecycleStore(t.TempDir())
-			api.agentLoop.SetSessionMessagingStores(nil, ls)
 			rec := &session.LifecycleRecord{
 				SessionID:      id,
 				State:          tc.state,
 				Generation:     1,
 				OwnerScopeKind: session.OwnerScopeHuman,
 				FailedReason:   tc.failed,
+			}
+			if tc.state == session.LifecycleQueued || tc.state == session.LifecycleRunning {
+				epoch := f.boot.Current()
+				if tc.priorBoot {
+					epoch = f.oldEpoch
+				}
+				rec.ExecutionID = &session.ExecutionIdentity{RunID: "wave1-execution-" + id, BootSeq: epoch}
 			}
 			if tc.state == session.LifecycleNeedsInput {
 				rec.NeedsInput = &session.NeedsInput{CorrelationID: "corr-wave1"}
@@ -67,12 +76,13 @@ func TestSessionList_Execution_QueuedAndRunningOnly(t *testing.T) {
 				}
 			}
 			require.NoError(t, ls.Persist(rec))
+			before := f.journal(t, id)
 
 			page, code := u18DoListSessions(t, api, "")
 			require.Equal(t, 200, code)
 			row := findSessionRow(page, id)
 			require.NotNil(t, row)
-			assert.Equal(t, tc.wantLife, row["lifecycle_state"], "lifecycle_state stays the collapsed display value")
+			assert.Equal(t, tc.wantLife, row["lifecycle_state"], "lifecycle_state stays the authoritative current-boot display")
 			assertExecution(t, row, tc.execAbsent, tc.wantExec)
 
 			detail, code := doGetSession(t, api, id)
@@ -81,6 +91,7 @@ func TestSessionList_Execution_QueuedAndRunningOnly(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, tc.wantLife, sessionObj["lifecycle_state"])
 			assertExecution(t, sessionObj, tc.execAbsent, tc.wantExec)
+			assert.Equal(t, before, f.journal(t, id), "list/detail projection must not rewrite lifecycle history")
 		})
 	}
 }
