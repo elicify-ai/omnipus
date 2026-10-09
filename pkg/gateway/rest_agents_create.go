@@ -332,16 +332,9 @@ func (pap *restAPICreateAgentPrepareAgent) decodeAndValidateRequest() ([]byte, s
 	}
 	pap.createType = coreagent.ResolveType(gen.AgentType(*typePeek.Type))
 
-	if pap.cra.a.agentLoop.GetConfig().Gateway.ValidateInbound {
-		if errMsg, serverErr := validateBodyAgainstSchema(variantName, raw); errMsg != "" {
-			if serverErr {
-				jsonErr(pap.cra.w, http.StatusInternalServerError, "inbound schema unavailable")
-			} else {
-				jsonErr(pap.cra.w, http.StatusBadRequest,
-					fmt.Sprintf("request body does not match schema %s: %s", variantName, errMsg))
-			}
-			return nil, "", "", true
-		}
+	if pap.cra.a.agentLoop.GetConfig().Gateway.ValidateInbound &&
+		!validateAgentIdentitySchema(pap.cra.w, variantName, raw, true) {
+		return nil, "", "", true
 	}
 	return raw, *typePeek.Type, variantName, false
 }

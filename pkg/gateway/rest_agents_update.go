@@ -212,7 +212,12 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	}
 
 	validateEnabled := uf.cfg.Gateway.ValidateInbound
-	if !decodeAndValidate(uf.w, uf.r, "AgentUpdateRequest", &uf.ru.req, validateEnabled) {
+	if validateEnabled && !validateAgentIdentitySchema(uf.w, "AgentUpdateRequest", uf.rawBody, false) {
+		return true
+	}
+	// Validate a normalized copy above, but decode the original request so
+	// duplicate-key ordering and raw null/omission semantics do not change.
+	if !decodeAndValidate(uf.w, uf.r, "AgentUpdateRequest", &uf.ru.req, false) {
 		return true
 	}
 	if uf.ru.req.Revision == "" {
