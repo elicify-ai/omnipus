@@ -1,9 +1,11 @@
 import { useId } from 'react'
+import { IconContext, type Icon } from '@phosphor-icons/react'
 
 import { FIGURE_ART, type AgentIconColor, type AgentIconFigure, type AgentIconRole } from '@/design-system/agent-identity'
 import { cn } from '@/lib/utils'
 
-import { agentIconInner } from '@/lib/agentIconArt'
+import { agentFigureInner, agentBadgePath } from '@/lib/agentIconArt'
+import { REUSED_AGENT_BADGES } from '@/lib/agentBadgeIcons'
 
 type AgentIconSize = 18 | 26 | 40 | 48
 type AgentIconMotion = 'none' | 'thinking' | 'working' | 'waiting'
@@ -59,12 +61,8 @@ const GLOW_CLASS_FORCED = {
 const SHEEN_CLASS = 'agent-icon-sheen pointer-events-none absolute inset-y-0 left-0 w-1/3 animate-[agent-icon-sheen_2.4s_ease-in-out_infinite] motion-reduce:animate-none'
 const SHEEN_CLASS_FORCED = 'agent-icon-sheen pointer-events-none absolute inset-y-0 left-0 w-1/3 animate-[agent-icon-sheen_2.4s_ease-in-out_infinite]'
 
-function withBadgeRole(markup: string, role: AgentIconRole) {
-  const needle = '<g transform="translate('
-  const index = markup.lastIndexOf(needle)
-  if (index < 0) return markup
-  return `${markup.slice(0, index)}<g data-role="${role}" transform="translate(${markup.slice(index + needle.length)}`
-}
+// The mark never inherits unrelated Phosphor context (colour/mirroring).
+const BADGE_CONTEXT = {}
 
 function maskId(raw: string, suffix: string) {
   const safe = raw.replace(/[^a-zA-Z0-9_-]/g, '')
@@ -85,8 +83,20 @@ export function AgentIcon(props: AgentIconProps) {
 
   const baseId = useId()
   const art = FIGURE_ART[figure].art
-  const inkMarkup = withBadgeRole(agentIconInner(art, role, maskId(baseId, 'i')), role)
-  const glowMarkup = withBadgeRole(agentIconInner(art, role, maskId(baseId, 'g')), role)
+  const inkMarkup = agentFigureInner(art, maskId(baseId, 'i'))
+  const glowMarkup = agentFigureInner(art, maskId(baseId, 'g'))
+  const Badge = (REUSED_AGENT_BADGES as Partial<Record<AgentIconRole, Icon>>)[role]
+  const badgePath = agentBadgePath(role)
+  if (!Badge && !badgePath) throw new Error(`AgentIcon has no art for ${art}/${role}`)
+  const badge = (
+    <g data-role={role} transform="translate(140 140) scale(0.44)">
+      {Badge ? (
+        <IconContext.Provider value={BADGE_CONTEXT}>
+          <Badge weight="bold" size={256} color="inherit" overflow="visible" />
+        </IconContext.Provider>
+      ) : <path d={badgePath} />}
+    </g>
+  )
   const animate = reducedMotion !== true && motion !== 'none'
   const markClass = !animate ? '' : reducedMotion === false ? MARK_CLASS_FORCED[motion] : MARK_CLASS[motion]
   const glowClass = !animate ? '' : reducedMotion === false ? GLOW_CLASS_FORCED[motion] : GLOW_CLASS[motion]
@@ -112,8 +122,10 @@ export function AgentIcon(props: AgentIconProps) {
             height={size}
             viewBox="0 0 256 256"
             fill="currentColor"
-            dangerouslySetInnerHTML={{ __html: glowMarkup }}
-          />
+          >
+            <g dangerouslySetInnerHTML={{ __html: glowMarkup }} />
+            {badge}
+          </svg>
         </span>
       )}
       <span data-ink="" data-art={art} className={cn('relative', markClass)} style={{ opacity: 1 }}>
@@ -123,8 +135,10 @@ export function AgentIcon(props: AgentIconProps) {
           height={size}
           viewBox="0 0 256 256"
           fill="currentColor"
-          dangerouslySetInnerHTML={{ __html: inkMarkup }}
-        />
+        >
+          <g dangerouslySetInnerHTML={{ __html: inkMarkup }} />
+          {badge}
+        </svg>
       </span>
       {animate && motion === 'working' && (
         <span aria-hidden="true" data-agent-icon-sheen="" className={sheenClass} />
