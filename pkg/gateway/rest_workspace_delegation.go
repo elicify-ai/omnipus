@@ -160,8 +160,10 @@ func (a *restAPI) handleWorkspaceDelegationGet(w http.ResponseWriter, _ *http.Re
 //   - every from_agent / to_agent must be a member of the workspace team
 //     (core_team ∪ existing-edge endpoints) — an edge write may NOT silently
 //     expand the team with an off-team agent
-//   - self-edges are allowed only for Jim and General Purpose (worker)
-//   - excluding those permitted self-edges, the graph must be acyclic
+//   - self-edges are ORDINARY edges (any agent may hold one; the shipped default
+//     seeds one self-edge per agent, except the hidden System Agents) — they are
+//     not part of the acyclicity check
+//   - excluding self-edges, the graph must be acyclic
 //   - modes ⊆ {direct, task}
 //   - depth must be >= 0 and <= the global subturn depth ceiling
 //
@@ -274,9 +276,9 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 // workspace directly from coreagent's seeded trust graph (ADR-037, Wave 2).
 // Each core agent ID's coreagent.SeedDelegationEdges result becomes one edge
 // per target, carrying that policy's modes and (for non-self edges) depth.
-// Fresh Jim→Jim and Worker→Worker edges get an explicit max_depth of 3 or
-// the lower configured global ceiling (ADR-090 FR-006) rather than inheriting
-// a raised cap. This keeps a single source of truth: coreagent's seeded trust
+// Fresh self-edges (for ANY agent — the seed gives every agent except the hidden
+// System Agents a self-edge) get an explicit max_depth of 3 or the lower
+// configured global ceiling (ADR-090 FR-006) rather than inheriting a raised cap. This keeps a single source of truth: coreagent's seeded trust
 // graph) is
 // replayed onto the workspace graph so a fresh workspace works out of the box.
 // Remote-a2a refs and wildcard ("*") refs are skipped — they have no concrete
@@ -340,7 +342,11 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 			modes = append(modes, wm)
 		}
 		for _, ref := range dp.To {
-			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || (ref.ID == ac.ID && !workspace.PermittedSelfDelegationID(ac.ID)) {
+			// A self-edge (ref.ID == ac.ID) is kept: it is an ordinary edge and is
+			// how self-delegation is authorized. No identity allowlist gates it any
+			// more (PermittedSelfDelegationID was deleted) — the config seed decides
+			// WHICH agents get a self-edge, and a person can remove it in the editor.
+			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" {
 				continue
 			}
 			edges = append(edges, storedDelegationEdge{
@@ -570,8 +576,11 @@ func buildWorkspaceDelegationEdges(
 	}
 
 	// Rebuild adjacency from the deduplicated edge set, then reject cycles.
+	// A self-edge is a legal ORDINARY edge, not a cycle: skip every diagonal row
+	// so the DFS below still rejects a real multi-hop loop (A→B→A) but never
+	// trips on A→A. The skip is structural — no identity allowlist.
 	for _, e := range out {
-		if e.FromAgent == e.ToAgent && workspace.PermittedSelfDelegationID(e.FromAgent) {
+		if e.FromAgent == e.ToAgent {
 			continue
 		}
 		adj[e.FromAgent] = append(adj[e.FromAgent], e.ToAgent)

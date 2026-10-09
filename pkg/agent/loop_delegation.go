@@ -350,41 +350,43 @@ func enforceEdgeModeAndDepth(
 // all DENY — a delegation check with no readable governing graph never falls
 // open.
 //
-// An empty targetAgentID means "no explicit target" (the LLM omitted agent_id);
-// the trust check is then skipped here — untargeted spawns resolve to the default
-// agent — while mode and depth (against any one of the caller's outgoing edges)
-// still apply.
+// Delegation ALWAYS requires an explicit target. An empty targetAgentID (the
+// LLM omitted agent_id) is REFUSED here — there is no default target and no
+// implicit caller substitution (the retired FR-014 normalization). The delegate
+// tool enforces the same rule at its own argument-validation step; this is
+// defense-in-depth for any other caller.
 //
-// selfAssignmentExempt controls the self-target (target == caller) case.
+// A self-target (target == caller) is an ORDINARY delegation: it is authorized
+// by the same caller→caller edge lookup, mode and depth checks as any other
+// target. A self-edge is an ordinary edge — the identity allowlist
+// (workspace.PermittedSelfDelegationID, literally jim||worker) was deleted, so a
+// self-edge authorizes iff it EXISTS in the workspace graph, exactly like every
+// other edge. Self-delegation forks a NEW session running the same agent; the
+// depth cap and turn admission remain the recursion bounds.
+//
+// selfAssignmentExempt controls the TASK-tool self-target case only.
 //
 // DO NOT call this function directly at a wiring site. Use one of the two
 // intent-named wrappers instead, so the exempt value can never be flipped
-// wrong (a delegate-tool site with exempt=true silently reopens the
-// self-delegation bypass — a security regression; a task-tool site with
-// exempt=false merely denies a legitimate self-reassignment — loud and
-// harmless, but still wrong):
+// wrong (a delegate-tool site with exempt=true would wrongly allow a delegate
+// self-reassignment — a security regression; a task-tool site with exempt=false
+// merely denies a legitimate self-reassignment — loud and harmless, but still
+// wrong):
 //
 //   - buildDelegationDenyCheckerForDelegate         (exempt=false) — the
 //     `delegate` tool's background + await gates. delegate(agent_id=self) spawns
-//     a real sub-turn instance, so it IS delegation and is graph-gated (and, for
-//     self, ALWAYS denied — see below).
+//     a real session, so it IS delegation and is gated by the caller→self edge
+//     exactly like any other target.
 //   - buildDelegationDenyCheckerForTaskReassignment (exempt=true)  — the task
-//     tools: create_task / update_task AND the cross-workspace
-//     create_task_in_workspace / update_task_in_workspace via
-//     NewSysagentDelegationDeny. Reassigning a task to the agent that already
-//     owns it is NOT delegation (no new instance is spawned), so it is allowed
-//     without consulting the graph.
+//     tools: create_task / update_task. Reassigning a task to the agent that
+//     already owns it is NOT delegation (no new instance is spawned), so the
+//     self-target is allowed without consulting the graph.
 //
 // The exempt choice is a property of the CALLER (which tool wired this checker),
 // NOT of `mode`. NEVER derive selfAssignmentExempt from `mode` — the two happen
 // to correlate today (delegate uses background/await, tasks use task), but that
 // is coincidence, not an invariant: a future delegate-in-task-mode would reopen
 // the bypass if someone "simplified" by deriving the flag from the mode.
-//
-// When exempt is false, a self-target is DENIED directly here (defense-in-depth),
-// without relying solely on workspace.DelegationEdge.Validate's self-edge
-// prohibition as the guard, and with a distinct reason so the caught bypass
-// attempt is distinguishable from a routine trust_set denial.
 //
 // performance supplies the process-wide depth cap. There is no per-agent
 // delegation policy to read; the per-workspace graph is the sole authority.
@@ -415,53 +417,36 @@ func buildDelegationDenyChecker(
 	}
 
 	return func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-		if targetAgentID == currentAgentID {
-			// Self-target. For the task tools (exempt=true) this is a no-op
-			// reassignment to the task's existing owner, not delegation — allow.
-			if selfAssignmentExempt {
-				return nil
-			}
-			// Jim and General Purpose may fork bounded helpers only through the
-			// same explicit workspace edge, mode and depth checks as other targets.
-			if workspace.PermittedSelfDelegationID(currentAgentID) {
-				edge, denial := findDelegationEdge(ctx, currentAgentID, targetAgentID, mode, agentExists...)
-				if denial != nil {
-					return denial
-				}
-				return enforceEdgeModeAndDepth(ctx, edge, currentAgentID, targetAgentID, mode, globalDepthCap)
-			}
-			// Every other identity remains denied. Deny directly instead of
-			// falling through to findDelegationEdge and relying on the graph's
-			// self-edge prohibition (DelegationEdge.Validate) as the sole guard. A
-			// distinct reason + log distinguishes this caught self-delegation
-			// bypass attempt from a routine "target not trusted" trust_set denial.
-			logger.WarnCF("agent", "delegation denied: self-delegation is not permitted", map[string]any{
-				"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
-			})
+		// Delegation ALWAYS requires an explicit target (settled design): there
+		// is no default target and no implicit caller substitution, so an empty
+		// target is refused here rather than resolved to the caller. The delegate
+		// tool enforces the same rule at its own argument-validation step; this is
+		// defense-in-depth for any other caller.
+		if targetAgentID == "" {
 			return &tools.DelegationDenial{
-				Reason: fmt.Sprintf(
-					"an agent cannot delegate to itself (%q): self-delegation is never permitted",
-					currentAgentID,
-				),
+				Reason:        "delegation requires an explicit target agent_id",
 				Policy:        tools.DenyTrustSet,
-				TargetAgentID: targetAgentID,
+				TargetAgentID: "",
 			}
 		}
-
-		if targetAgentID != "" {
-			// Targeted delegation: require an authorizing edge, then enforce its
-			// modes + depth.
-			edge, denial := findDelegationEdge(ctx, currentAgentID, targetAgentID, mode, agentExists...)
-			if denial != nil {
-				return denial
-			}
-			return enforceEdgeModeAndDepth(ctx, edge, currentAgentID, targetAgentID, mode, globalDepthCap)
+		// Task tools only: reassigning a task to the agent that already owns it
+		// is not delegation (no new instance is spawned) — allowed WITHOUT
+		// consulting the graph. This is a property of the CALLER (which tool
+		// wired this checker), never of `mode`.
+		if selfAssignmentExempt && targetAgentID == currentAgentID {
+			return nil
 		}
-
-		// Untargeted (agent_id omitted): trust is "can delegate at all" — the
-		// caller must have at least one outgoing edge that permits this mode.
-		// Mode + depth still apply against that edge.
-		return evalUntargetedDelegation(ctx, currentAgentID, mode, globalDepthCap)
+		// Every target — including the caller's own id — is authorized by the
+		// ORDINARY per-workspace edge lookup, then its mode and depth checks. A
+		// self-edge is an ordinary edge: self-delegation forks a NEW session
+		// running the same agent and is gated exactly like any other delegation.
+		// There is no identity allowlist (PermittedSelfDelegationID was deleted);
+		// a self-edge authorizes iff it EXISTS in the workspace graph.
+		edge, denial := findDelegationEdge(ctx, currentAgentID, targetAgentID, mode, agentExists...)
+		if denial != nil {
+			return denial
+		}
+		return enforceEdgeModeAndDepth(ctx, edge, currentAgentID, targetAgentID, mode, globalDepthCap)
 	}
 }
 
@@ -502,74 +487,6 @@ func buildDelegationDenyCheckerForTaskReassignment(
 	agentExists ...func(id string) bool,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
 	return buildDelegationDenyChecker(currentAgentID, performance, mode, true, agentExists...)
-}
-
-// evalUntargetedDelegation gates an untargeted delegation (no explicit target)
-// against the caller's outgoing edges in the effective workspace graph. It allows
-// iff the caller has AT LEAST ONE outgoing edge whose modes permit the current
-// mode (and whose depth cap is not exceeded). FAIL-CLOSED on graph load failure.
-func evalUntargetedDelegation(
-	ctx context.Context,
-	callerAgentID string,
-	mode config.DelegationMode,
-	globalDepthCap int,
-) *tools.DelegationDenial {
-	wsID, denial := resolveEffectiveWorkspaceID(ctx, "")
-	if denial != nil {
-		return denial
-	}
-	edges, err := workspace.ReadDelegation(omnipusHome(), wsID)
-	if err != nil {
-		logger.WarnCF("agent", "delegation denied: workspace delegation graph unreadable", map[string]any{
-			"agent_id": callerAgentID, "workspace_id": wsID, "mode": string(mode), "error": err.Error(),
-		})
-		return &tools.DelegationDenial{
-			Reason: fmt.Sprintf(
-				"delegation cannot be authorized: workspace %q delegation graph is unreadable",
-				wsID,
-			),
-			Policy: tools.DenyTrustSet,
-		}
-	}
-
-	// Find any outgoing edge that permits this mode and whose depth is OK.
-	var firstModeDenial, firstDepthDenial *tools.DelegationDenial
-	for i := range edges {
-		if edges[i].FromAgent != callerAgentID {
-			continue
-		}
-		e := edges[i]
-		if d := enforceEdgeModeAndDepth(ctx, &e, callerAgentID, "", mode, globalDepthCap); d != nil {
-			switch d.Policy {
-			case tools.DenyMode:
-				if firstModeDenial == nil {
-					firstModeDenial = d
-				}
-			case tools.DenyDepth:
-				if firstDepthDenial == nil {
-					firstDepthDenial = d
-				}
-			}
-			continue
-		}
-		return nil // an edge permits this delegation
-	}
-
-	// No edge permitted it. Surface the most specific reason: a mode/depth
-	// denial if an edge existed but was constrained, else trust_set (no edge).
-	if firstModeDenial != nil {
-		return firstModeDenial
-	}
-	if firstDepthDenial != nil {
-		return firstDepthDenial
-	}
-	logger.WarnCF("agent", "delegation denied: caller has no outgoing edge", map[string]any{
-		"agent_id": callerAgentID, "workspace_id": wsID, "mode": string(mode),
-	})
-	return &tools.DelegationDenial{
-		Reason: "this agent has no permitted delegation target in this workspace",
-		Policy: tools.DenyTrustSet,
-	}
 }
 
 // NewSysagentDelegationDeny and NewSysagentBashPolicyResolver were DELETED with

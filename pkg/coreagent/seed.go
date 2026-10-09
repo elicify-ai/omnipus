@@ -437,9 +437,26 @@ func HasSystemAllowsInConstructorSeed(agentID string) bool {
 }
 
 // coreAgentDelegation supplies fresh workspace graph defaults: Jim can assign
-// Planner, Researcher, General Purpose, himself and Ava for configuration proposals;
-// Planner can ask Researcher;
-// General Purpose can create same-role helpers. Other roles have no seeded edges.
+// Planner, Researcher, General Purpose, himself and Ava for configuration
+// proposals; Planner can ask Researcher and fork itself; General Purpose can
+// fork itself.
+//
+// SELF-EDGE (settled design, 2026-10-09): EVERY agent is seeded a self-edge by
+// default — it may fork a NEW session running the same agent exactly like any
+// other target, seeded as an ordinary, visible, workspace edge a person can
+// remove in the policy editor. The ONLY exclusions are the hidden System Agents
+// (the Judge and the Plan Supervisor — the "plans coordinator"), expressed in
+// CONFIG terms via the roster predicate IsSystemAgentID, never as a hardcoded
+// name list: they are engine-owned adjudicators that are never chat or
+// delegation targets, so no self-edge is seeded for them.
+//
+// A newly created custom agent has no compiled-in case here and lands in the
+// default arm, so it too receives a self-edge — "every new agent at creation
+// time". The edge is only materialized into a workspace graph for an agent that
+// is actually present in config and on that workspace's team (the gateway's
+// defaultWorkspaceDelegationEdges and the update_workspace seed path both filter
+// on that).
+//
 // Task/background are agent delegation modes. Workspace creation translates
 // background into the graph's direct mode; this return value is not a graph.
 func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
@@ -456,9 +473,9 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 			},
 		}
 	case IDPlanner:
-		// Planner can gather research before authoring the plan.
+		// Planner can gather research before authoring the plan, and fork itself.
 		return &config.DelegationPolicy{
-			To: []config.AgentRef{ref(IDResearcher)},
+			To: []config.AgentRef{ref(IDPlanner), ref(IDResearcher)},
 			Modes: []config.DelegationMode{
 				config.DelegationModeBackground,
 				config.DelegationModeTask,
@@ -471,8 +488,13 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 			Modes: []config.DelegationMode{config.DelegationModeTask, config.DelegationModeBackground},
 		}
 	default:
-		// Other roles receive no onward delegation by default.
-		return nil
+		// Every other agent (Mia, Ava, Admin, Researcher, and every custom agent
+		// created later) gets a SINGLE self-edge by default. The System Agents are
+		// the one exclusion, via the config-level roster predicate.
+		if IsSystemAgentID(id) {
+			return nil
+		}
+		return &config.DelegationPolicy{To: []config.AgentRef{ref(id)}}
 	}
 }
 
@@ -502,22 +524,23 @@ func SeedDelegationEdges(id CoreAgentID) *config.DelegationPolicy {
 	return coreAgentDelegation(id)
 }
 
-// FreshSelfDelegationMaxDepth is the ADR-090 FR-006 pin for a freshly seeded
-// Jim→Jim or Worker→Worker workspace edge: 3, or the lower configured global
-// ceiling. Applied per-edge by SeededEdgeDepth — never as a role-wide
-// DelegationPolicy.Depth, which would also clamp Jim's staff edges.
+// FreshSelfDelegationMaxDepth is the fresh-self-edge depth pin (ADR-090 FR-006,
+// extended by the settled design so it applies to a self-edge for ANY agent):
+// 3, or the lower configured global ceiling. Applied per-edge by
+// SeededEdgeDepth — never as a role-wide DelegationPolicy.Depth, which would
+// also clamp an agent's non-self edges.
 const FreshSelfDelegationMaxDepth = 3
 
 // SeededEdgeDepth returns the depth pointer a freshly seeded workspace edge
-// should carry. Permitted self-edges (Jim, General Purpose) get an explicit
+// should carry. Every SELF-edge (from == to) gets an explicit
 // min(FreshSelfDelegationMaxDepth, ceiling) so a raised global cap cannot
-// deepen a fresh self-chain beyond 3, and a lowered cap cannot cause
-// Validate to drop the edge. Every other pair copies policyDepth (nil stays
-// inherit). ceiling is the already-resolved effective global cap
-// (delegationDepthCeiling / workspaceDelegationDepthCeiling); non-positive
-// is treated as unset and the pin stays 3.
+// deepen a fresh self-chain beyond 3, and a lowered cap cannot cause Validate
+// to drop the edge. Every other pair copies policyDepth (nil stays inherit).
+// ceiling is the already-resolved effective global cap (delegationDepthCeiling
+// / workspaceDelegationDepthCeiling); non-positive is treated as unset and the
+// pin stays 3.
 func SeededEdgeDepth(from, to string, policyDepth *int, ceiling int) *int {
-	if from == to && (from == string(IDJim) || from == string(IDWorker)) {
+	if from == to {
 		d := FreshSelfDelegationMaxDepth
 		if ceiling > 0 && ceiling < d {
 			d = ceiling

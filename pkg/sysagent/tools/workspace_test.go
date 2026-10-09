@@ -538,9 +538,13 @@ func TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 
 	id := workspaceID(t, result.ForLLM)
 	edges := delegationEdgesFromDisk(t, home, id)
-	// Ratified Jim→Ava delegation joins Jim→Worker and both self-edges.
-	if len(edges) != 4 {
-		t.Fatalf("expected exactly 4 seeded edges, got %d: %v", len(edges), edges)
+	// Ratified Jim→Ava delegation joins Jim→Worker, plus a self-edge for EVERY
+	// on-team agent (settled design): ava→ava, jim→jim, worker→worker.
+	if len(edges) != 5 {
+		t.Fatalf("expected exactly 5 seeded edges, got %d: %v", len(edges), edges)
+	}
+	if findEdge(edges, "ava", "ava") == nil {
+		t.Error("expected Ava self edge (every on-team agent seeds one)")
 	}
 	jimAva := findEdge(edges, "jim", "ava")
 	if jimAva == nil {
@@ -1346,8 +1350,14 @@ func TestWorkspaceUpdate_SeedDoesNotResurrectRemovedEdge(t *testing.T) {
 	if findEdge(edges, "ray", "researcher") != nil {
 		t.Error("ray→researcher must be dropped — researcher is not on the team")
 	}
-	if len(edges) != 0 {
-		t.Errorf("Ray has no approved seed edge in ADR-090; got %d: %v", len(edges), edges)
+	// Settled design: a NEWLY ADDED agent seeds its ordinary self-edge. Ray is
+	// the only added member, so ray→ray is the sole seeded edge; ava/worker's
+	// self-edges are not seeded because neither is newly added.
+	if findEdge(edges, "ray", "ray") == nil {
+		t.Errorf("ray, newly added, must seed its self-edge; got %d: %v", len(edges), edges)
+	}
+	if len(edges) != 1 {
+		t.Errorf("only ray's self-edge should be seeded; got %d: %v", len(edges), edges)
 	}
 }
 
@@ -1578,18 +1588,24 @@ func TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges(t
 	}
 
 	m := parseSuccess(t, res.ForLLM)
-	if note, present := m["delegation_seeded"]; present {
-		t.Errorf("Ray has no approved ADR-090 seed edge; unexpected note %v", note)
+	if note, present := m["delegation_seeded"]; !present {
+		t.Error("Ray was newly added; its self-edge seed must be noted")
+	} else if !strings.Contains(note.(string), "ray") {
+		t.Errorf("delegation_seeded note should mention ray, got %v", note)
 	}
 
 	edges := delegationEdgesFromDisk(t, home, id)
 
 	if findEdge(edges, "ray", "worker") != nil {
-		t.Errorf("ray→worker is not in the approved ADR-090 matrix, got %v", edges)
+		t.Errorf("ray→worker is not in the approved seed matrix, got %v", edges)
 	}
 	// ray→researcher dropped — researcher is not on the team.
 	if findEdge(edges, "ray", "researcher") != nil {
 		t.Error("ray→researcher must be dropped — researcher is not on the team")
+	}
+	// Ray's ordinary self-edge (settled design: every newly-added agent seeds one).
+	if findEdge(edges, "ray", "ray") == nil {
+		t.Errorf("ray, newly added, must seed its self-edge; got %v", edges)
 	}
 
 	// Edges referencing the removed member (jim) survive un-GC'd.
@@ -1609,8 +1625,8 @@ func TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges(t
 		t.Errorf("pre-existing ava→worker edge must be left untouched, got modes=%v", modes)
 	}
 
-	if len(edges) != 3 {
-		t.Errorf("expected the 3 pre-existing edges only, got %d: %v", len(edges), edges)
+	if len(edges) != 4 {
+		t.Errorf("expected the 3 pre-existing edges plus ray's self-edge, got %d: %v", len(edges), edges)
 	}
 }
 
