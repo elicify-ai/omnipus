@@ -74,6 +74,11 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 			rt.ts.stampStreamerProducerAgentID(streamer)
 			rt.ts.stampStreamerTurnID(streamer)
 			rt.ts.stampStreamerParentSpawnCallID(streamer)
+			// session-core FR-039 / C-GOAL: stamp the turn's captured goal id
+			// so the live TokenFrame/DoneFrame and the persisted entry join to
+			// the EXACT keyed goal criteria. Empty (no proven goal) is a valid
+			// no-op — see stampStreamerGoalID's doc comment.
+			rt.ts.stampStreamerGoalID(streamer)
 			// #823: mint (or, for an ADR-087 D6 auto-continue round, reuse)
 			// this round's message id BEFORE any token can flow — mirrors the
 			// three stamps immediately above. nextRoundMessageID must run

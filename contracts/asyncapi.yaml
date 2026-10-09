@@ -2075,6 +2075,15 @@ components:
           description: >-
             #823 catch-up redesign. Identifies the specific assistant message (bubble)
             this token belongs to, stable across reconnect/catch-up.
+        goal_id:
+          type: string
+          description: >-
+            session-core FR-039 / C-GOAL. The goal this producing turn was dispatched
+            under (captured at turn start from the session's active goal record) and
+            stamped onto every token of the turn. Lets the SPA join the bubble to the
+            EXACT keyed goal criteria (goalPills[goal_id]) instead of the latest-goal
+            scalar. Absent means UNKNOWN association (the turn ran under no proven
+            goal); a later goal's frame must never rebind this bubble.
         replace:
           type: boolean
           description: >-
@@ -2168,6 +2177,13 @@ components:
           type: string
           description: >-
             #823 catch-up redesign. The id of the turn's last assistant message.
+        goal_id:
+          type: string
+          description: >-
+            session-core FR-039 / C-GOAL. The goal this producing turn was dispatched
+            under (captured at turn start), spread onto the done frame so a no-stream
+            turn's bubble (created from this frame's message_id, not from tokens) still
+            joins to the exact keyed goal criteria. Absent means UNKNOWN association.
         seq:
           type: integer
           format: int64
@@ -3662,6 +3678,14 @@ components:
             entries. Lets the client match a replayed turn_canceled entry to the specific preceding assistant message it cancels,
             without relying on stream adjacency (async delegation can interleave other agents'/turns' frames in between).
             Omitted for legacy entries written before turn-id stamping landed.
+        goal_id:
+          type: string
+          description: >
+            session-core FR-039 / C-GOAL. The goal the replayed entry's producing turn
+            was dispatched under (from TranscriptEntry.GoalID). Live, history, REST and
+            replay must retain the SAME association so the SPA joins each bubble to its
+            own exact keyed goal criteria. Absent means UNKNOWN association; a later
+            goal's frame must never rebind an earlier replayed message.
         truncated:
           type: boolean
           description: >

@@ -92,6 +92,13 @@ type turnState struct {
 	turnID     string
 	agentID    string
 	sessionKey string
+	// goalID is the goal this turn was dispatched under (session-core FR-039 /
+	// C-GOAL), captured ONCE at turn start from the session's active goal
+	// record (newTurnState) and thereafter immutable — so every message/frame
+	// this turn produces carries the SAME association, and a goal activated
+	// later can never rebind an earlier turn's output. Empty means the turn ran
+	// under no proven goal (UNKNOWN association → neutral indicator).
+	goalID string
 	// generation is the session's LifecycleRecord.Generation at the moment
 	// this turn was registered (ADR-091 I-3 reconstruction /
 	// I-6 revival). Zero for a turnState built outside reconstruction (a
@@ -878,6 +885,24 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 	// Bind transcript store for persisting tool calls
 	ts.transcriptSessionID = opts.TranscriptSessionID
 	ts.transcriptStore = opts.TranscriptStore
+
+	// Capture the goal this turn is dispatched under (session-core FR-039 /
+	// C-GOAL), ONCE, before any message/frame of the turn is produced. Keyed by
+	// the transcript session id — the same lookup every goal reader in this
+	// package shares (activeGoalForSession). A read failure leaves goalID empty
+	// (UNKNOWN, neutral), never a guessed value: an unreadable goal store must
+	// not silently attach a wrong goal, and the indicator degrades to its
+	// generic state rather than mislabeling the bubble. Guarded exactly like
+	// goalTurnRecordState (goal_loop_forcing.go) so a turn that already declines
+	// the goal-store read (no transcript store wired) pays nothing here.
+	if opts.TranscriptStore != nil && ts.transcriptSessionID != "" {
+		if g, gerr := activeGoalForSession(ts.transcriptSessionID); gerr != nil {
+			logger.DebugCF("agent", "goal: could not resolve the active goal to stamp onto this turn; leaving it unknown",
+				map[string]any{"component": "goal", "session_id": ts.transcriptSessionID, "error": gerr.Error()})
+		} else if g != nil {
+			ts.goalID = g.GoalID
+		}
+	}
 
 	// ADR-057 FR-011: default routingSessionID to this turn's own session
 	// id. Correct as-is for every root turn (byte-identical to today's

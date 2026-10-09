@@ -371,6 +371,16 @@ type TranscriptEntry struct {
 	// context-window diagnostics.
 	TurnID string `json:"turn_id,omitempty"`
 
+	// GoalID is the goal the producing turn was dispatched under (session-core
+	// FR-039 / C-GOAL), captured once at turn start from the session's active
+	// goal record and stamped onto every entry that turn writes. It is the
+	// EXACT key the SPA joins this message to its keyed goal criteria
+	// (goalPills[goal_id]) — never the latest-goal scalar. Empty means UNKNOWN
+	// association (the turn ran under no proven goal); a later goal's frame must
+	// never rebind an earlier entry. Additive/optional: entries written before
+	// this field existed carry no value.
+	GoalID string `json:"goal_id,omitempty"`
+
 	// Cancel-specific fields — only populated for EntryTypeTurnCancelled entries
 	// (FR-15). All are omitempty so they are invisible on other entry types.
 	CancelledByUser      string   `json:"canceled_by_user,omitempty"`

@@ -4699,6 +4699,11 @@ export interface components {
              */
             turn_id?: string;
             /**
+             * @description session-core FR-039 / C-GOAL. The goal the entry's producing turn was dispatched under (from session.TranscriptEntry.GoalID). REST history, live delivery and replay retain the SAME association so the SPA joins each message to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier message.
+             * @example goal_01J3ZQK8N2H8VXNRP5T7C9M4WU
+             */
+            goal_id?: string;
+            /**
              * @description Username of the actor who triggered the cancel — present only on type="turn_canceled" entries (FR-15).
              * @example admin
              */

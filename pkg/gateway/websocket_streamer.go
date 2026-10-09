@@ -354,6 +354,25 @@ func (s *wsStreamer) SetMessageID(messageID string) {
 	s.statsMu.Unlock()
 }
 
+// SetGoalID stamps the goal the producing turn was dispatched under
+// (session-core FR-039 / C-GOAL) that Update/Finalize will attach to their
+// TokenFrame/DoneFrame's goal_id field and to the assistant transcript entry
+// Finalize persists. Called by the agent loop via the inline
+// `interface{ SetGoalID(goalID string) }` (pkg/agent/turn_stream.go's
+// stampStreamerGoalID), mirroring SetTurnID's pattern exactly.
+//
+// Unlike SetTurnID, an EMPTY goalID is a valid, common value — it means "this
+// turn ran under no proven goal" — so, like SetParentSpawnCallID, this setter
+// does NOT no-op on empty; the client must be able to tell an unknown
+// association from a specific goal. Each wsStreamer instance is single-use for
+// one turn, so clearing back to "" never blanks a previously-stamped value in
+// practice.
+func (s *wsStreamer) SetGoalID(goalID string) {
+	s.statsMu.Lock()
+	s.goalID = goalID
+	s.statsMu.Unlock()
+}
+
 // SetParentSpawnCallID stamps the delegation-nesting correlation that will be
 // attributed to the transcript entry Finalize writes. Called by the agent
 // loop (via the inline SetParentSpawnCallID interface, mirroring SetTurnID
@@ -487,6 +506,9 @@ func (s *wsStreamer) Update(ctx context.Context, content string) error {
 	// producerAgentID for TokenFrame.turn_id/message_id below.
 	turnID := s.turnID
 	messageID := s.messageID
+	// session-core FR-039 / C-GOAL: captured under the same lock as
+	// turn_id/message_id for TokenFrame.goal_id below.
+	goalID := s.goalID
 	// Live-stream ownership gate (see WSHandler.streamOwners' doc comment):
 	// resolved once, lazily, on this streamer's first Update() call, then
 	// reused. A streamer with no turnID (legacy/best-effort caller) or no
@@ -599,6 +621,12 @@ func (s *wsStreamer) Update(ctx context.Context, content string) error {
 	}
 	if messageID != "" {
 		frame.MessageId = &messageID
+	}
+	// session-core FR-039 / C-GOAL: stamp the producing turn's goal so the
+	// bubble joins to its own EXACT keyed goal criteria instead of the
+	// latest-goal scalar. Absent when the turn ran under no proven goal.
+	if goalID != "" {
+		frame.GoalId = &goalID
 	}
 	data, err := json.Marshal(frame)
 	if err != nil {
@@ -736,6 +764,13 @@ func (wsf *wsStreamerFinalize) publishDone() {
 		if wsf.messageID != "" {
 			messageID := wsf.messageID
 			frame.MessageId = &messageID
+		}
+		// session-core FR-039 / C-GOAL: spread the producing turn's goal so a
+		// no-stream turn's bubble (created from this frame's message_id, not
+		// from tokens) still joins to the exact keyed goal criteria.
+		if wsf.s.goalID != "" {
+			goalID := wsf.s.goalID
+			frame.GoalId = &goalID
 		}
 		data, err := json.Marshal(frame)
 		if err != nil {
@@ -936,7 +971,12 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 				// TurnID (FIX 5c/1): stamped via SetTurnID so a mid-stream
 				// cancel's turn_canceled entry can be correlated with THIS
 				// entry on replay.
-				TurnID:    wsf.turnID,
+				TurnID: wsf.turnID,
+				// GoalID (session-core FR-039 / C-GOAL): stamped via SetGoalID
+				// so the persisted entry carries the SAME goal association its
+				// live TokenFrame/DoneFrame did, and replay/REST join it to the
+				// exact keyed goal criteria. Empty = unknown association.
+				GoalID:    wsf.s.goalID,
 				Content:   content,
 				Timestamp: time.Now().UTC(),
 				Tokens:    int(wsf.tokensF),

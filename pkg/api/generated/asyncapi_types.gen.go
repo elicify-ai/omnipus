@@ -537,6 +537,8 @@ type DevicePairingResponseFrame struct {
 
 // DoneFrame — Server → client turn complete. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
 type DoneFrame struct {
+	// session-core FR-039 / C-GOAL. The goal this producing turn was dispatched under (captured at turn start), spread onto the done frame so a no-stream turn's bubble (created from this frame's message_id, not from tokens) still joins to the exact keyed goal criteria. Absent means UNKNOWN association.
+	GoalId *string `json:"goal_id,omitempty"`
 	// #823 catch-up redesign. The id of the turn's last assistant message.
 	MessageId *string `json:"message_id,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign), published only after the turn's transcript entry is durably persisted. Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/DoneFrame.yaml.
@@ -1024,7 +1026,9 @@ type ReplayMessageFrame struct {
 	// #823 catch-up redesign §4.7. Present on a replayed user entry persisted with a client-supplied id. Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
 	ClientMessageId *string `json:"client_message_id,omitempty"`
 	Content         string  `json:"content"`
-	Id              *string `json:"id,omitempty"`
+	// session-core FR-039 / C-GOAL. The goal the replayed entry's producing turn was dispatched under (from TranscriptEntry.GoalID). Live, history, REST and replay must retain the SAME association so the SPA joins each bubble to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier replayed message.
+	GoalId *string `json:"goal_id,omitempty"`
+	Id     *string `json:"id,omitempty"`
 	// Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014). Omitted for legacy entries written before per-turn model recording landed.
 	Model     *string `json:"model,omitempty"`
 	Role      string  `json:"role"`
@@ -1244,6 +1248,8 @@ type TaskStatusChangedFrame struct {
 type TokenFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	Content string  `json:"content"`
+	// session-core FR-039 / C-GOAL. The goal this producing turn was dispatched under (captured at turn start from the session's active goal record) and stamped onto every token of the turn. Lets the SPA join the bubble to the EXACT keyed goal criteria (goalPills[goal_id]) instead of the latest-goal scalar. Absent means UNKNOWN association (the turn ran under no proven goal); a later goal's frame must never rebind this bubble.
+	GoalId *string `json:"goal_id,omitempty"`
 	// #823 catch-up redesign. Identifies the specific assistant message (bubble) this token belongs to, stable across reconnect/catch-up.
 	MessageId *string `json:"message_id,omitempty"`
 	// Set only on a catch-up token: REPLACES the open bubble's content for this session instead of appending, making catch-up idempotent.
