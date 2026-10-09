@@ -8,10 +8,6 @@ import { generateId } from '@/lib/constants'
 import { useUiStore } from '@/store/ui'
 import { queryClient } from '@/lib/queryClient'
 import type {
-  WsReplayMessageFrame,
-  WsRateLimitFrame,
-} from '@/lib/ws'
-import type {
   WhatsAppPairingFrame,
   KnowledgeIndexProgressFrame,
   NotificationFrame,
@@ -21,6 +17,8 @@ import type {
   PlanStatusFrame,
   AskUserQuestionFrame,
   SessionStateFrame,
+  ReplayMessageFrame,
+  RateLimitFrame,
   BrowserHandoverNoticeFrame,
   GoalOutcomeFrame,
   ContextWindowNoticeFrame,
@@ -481,7 +479,7 @@ function handleTurnCanceledReplayEntry({
   targetSid,
   withBucket,
 }: {
-  replayFrame: WsReplayMessageFrame
+  replayFrame: ReplayMessageFrame
   targetSid: string
   withBucket: ReplayAndStatusFrameContext['withBucket']
 }): void {
@@ -570,7 +568,7 @@ function handleReplayMessageFrame({
 }): void {
   if (!targetSid) return
   sawReplayMessageThisTurn[targetSid] = true
-  const replayFrame = frame as WsReplayMessageFrame
+  const replayFrame = frame as ReplayMessageFrame
   // FR-16 / Fix 5c: turn_canceled entries are metadata-only and must
   // never render as their own chat bubble. ReplayMessageFrame carries
   // no status/truncated field, so — unlike a fresh REST cold-load,
@@ -987,7 +985,7 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
           // rate_limit get filed under whatever session happened to be
           // active).
           if (!targetSid) break
-          const rlFrame = frame as WsRateLimitFrame
+          const rlFrame = frame as RateLimitFrame
           const event: RateLimitEventData = {
             scope: rlFrame.scope,
             resource: rlFrame.resource,

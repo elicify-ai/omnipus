@@ -1,7 +1,7 @@
 // types.ts: Chat, attachment, subagent-span, rate-limit, and per-session state contracts
 
 import type { Message, ToolCall, AgentKind } from '@/lib/api'
-import type { WsReceiveFrame, WsConnection } from '@/lib/ws'
+import type { WsConnection } from '@/lib/ws'
 import type {
   GoalStatusFrame,
   LoopStatusFrame,
@@ -10,6 +10,7 @@ import type {
   SubagentStateFrame,
   MessageFrame,
   CancelFrame,
+  ServerFrame,
   LLMError as GeneratedLLMError,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
@@ -1197,7 +1198,7 @@ export interface ChatStore {
   // assistant message as 'done' so AssistantUI stops rendering it as running.
   clearStreamingState: () => void
 
-  handleFrame: (frame: WsReceiveFrame) => void
+  handleFrame: (frame: ServerFrame) => void
 }
 
 export const finishedTurnIdsBySession: Record<string, string[]> = {}

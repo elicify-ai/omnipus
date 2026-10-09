@@ -2,17 +2,15 @@
 //
 // The backend persists two fields on the last assistant transcript entry of
 // an incomplete turn: `truncated` (boolean, "this entry is incomplete") and
-// `truncation_reason` (`'cancelled' | 'max_output_tokens'`, why). Every
-// entry written before `truncation_reason` existed has `truncated: true`
-// with no reason at all — ADR-087 §2.4/D2 pins the legacy default: an
-// absent reason on a `truncated: true` entry means `'cancelled'` (the only
-// way a turn could end incomplete before this ADR was a user cancel;
-// `max_output_tokens` did not exist as a persisted concept until now).
+// `truncation_reason` (`'cancelled' | 'max_output_tokens'`, why). The reason
+// is explicit on the wire (DEL-F36): an absent reason on a `truncated: true`
+// entry is NOT defaulted to `'cancelled'` — no reason is invented for an
+// unexplained truncated entry.
 //
-// `normalizeTruncationReason` is the single place that legacy-default rule
-// is applied, so the cold-load (REST `Message`) and WS-replay
-// (`ReplayMessageFrame`) paths derive the same value from the same wire
-// shape instead of re-implementing the rule twice and risking drift.
+// `normalizeTruncationReason` is the single place that rule is applied, so
+// the cold-load (REST `Message`) and WS-replay (`ReplayMessageFrame`) paths
+// derive the same value from the same wire shape instead of re-implementing
+// the rule twice and risking drift.
 //
 // This module is display/normalization-only — not-wire-format. The wire
 // shapes it reads (`truncated?: boolean`, `truncation_reason?: 'cancelled' |
@@ -22,16 +20,17 @@
 export type TruncationReason = 'cancelled' | 'max_output_tokens'
 
 /**
- * Derive the effective truncation reason from the raw wire fields, applying
- * the ADR-087 D2 legacy default (absent reason on a truncated entry means
- * `'cancelled'`). Returns `undefined` when the entry isn't truncated at all.
+ * Derive the effective truncation reason from the raw wire fields. The reason
+ * is explicit: a `truncated: true` entry with no `truncation_reason` yields
+ * `undefined` (no invented `'cancelled'`). Returns `undefined` when the entry
+ * isn't truncated at all.
  */
 export function normalizeTruncationReason(
   truncated: boolean | undefined,
   reason: TruncationReason | undefined,
 ): TruncationReason | undefined {
   if (!truncated) return undefined
-  return reason ?? 'cancelled'
+  return reason
 }
 
 export interface StatusSuffixInput { // not-wire-format: render-layer pick of ChatMessage fields consumed by getMessageStatusSuffix

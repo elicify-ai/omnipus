@@ -21,20 +21,20 @@ import { useConnectionStore } from './connection'
 import { useChatPreferencesStore } from './chatPreferences'
 import { useUiStore } from './ui'
 import { codeToDisplay } from '@/lib/llm-error'
-import type { WsReceiveFrame } from '@/lib/ws'
+import type { ServerFrame } from '@/lib/ws'
 
 /**
  * Live ErrorFrame with an optional `entry_id` (read defensively by
  * readEntryIdFromFrame for live→replay dedup). The canonical AsyncAPI
  * ErrorFrame schema does not include entry_id today, so this helper
- * constructs the frame and casts it to WsReceiveFrame for handleFrame.
+ * constructs the frame and casts it to ServerFrame for handleFrame.
  */
 function liveErrorFrame(fields: {
   sessionId?: string
   message: string
   entryId?: string
   llmError?: { code: string; message: string; retryable: boolean; detail?: string }
-}): WsReceiveFrame {
+}): ServerFrame {
   return {
     type: 'error',
     ...(fields.sessionId === undefined ? {} : { session_id: fields.sessionId }),
@@ -43,7 +43,7 @@ function liveErrorFrame(fields: {
     ...(fields.llmError === undefined
       ? {}
       : { payload: { llm_error: fields.llmError } }),
-  } as unknown as WsReceiveFrame
+  } as unknown as ServerFrame
 }
 
 const SID = 'llm-error-test-session'
@@ -342,7 +342,7 @@ describe("ADR-051 'replay_error' — typed payload translation + coalesce", () =
             retryable: false,
           },
         },
-      } as unknown as WsReceiveFrame)
+      } as unknown as ServerFrame)
     })
 
     const bubble = bucketMessages()[0]

@@ -312,50 +312,17 @@ function resolveAgent(agentId: string | undefined, agents: Agent[]): ResolvedAge
 }
 
 /**
- * Resolve the agentId to display for a span — there are two sources of
- * truth and they disagree in one real case.
- *
- * For NATIVE (non-external-CLI) delegation to a specific named target
- * agent, the backend used to deliberately leave the WS frame's `agent_id`
- * as the PARENT's id, not the target's (pre-ADR-091, `pkg/agent/subturn.go`
- * — since deleted — only `DispatchKindExternalCLI` got `agent.ID`
- * reassigned; the comment there called native reassignment a larger
- * refactor out of that fix's scope). That made `span.agentId` correct for
- * untargeted delegation and for external-CLI dispatch, but wrong for
- * "delegate to agent X" when X is native — it would show the parent's
- * avatar/name instead of X's.
- *
- * ADR-091 fix lane RX-SUBTURN finding (comment-only; code unchanged):
- * today's backend emitter, `pkg/agent/steer_frames.go`'s
- * `deliverSubagentStart`/`deliverSubagentEnd`, sets
- * `SubagentStartFrame.AgentId`/`SubagentEndFrame.AgentId` from
- * `childRec.AgentID` (the real target agent) for EVERY delegation kind,
- * not just external-CLI — so the gap this workaround exists for may no
- * longer be present on the wire. This function's fallback logic is left
- * unchanged (out of scope for a comment-only lane); flagged for the
- * frontend team to verify whether the workaround below is still needed.
- *
- * Workaround: the originating `delegate` tool call (found via
- * `span.parentCallId`) carries the actual `agent_id` argument the calling
- * agent asked for, unaffected by the backend gap. Prefer that when present;
- * fall back to `span.agentId` when the call can't be found (e.g. scrolled
- * out of the loaded window) or didn't target a specific agent (untargeted
- * delegation — `span.agentId` is already correct there, no fix needed).
- *
- * `toolCallsById` must be keyed from BOTH the live flat `toolCalls` map AND
- * every finalized message's baked `message.tool_calls` (see the caller) —
- * the delegate call that started this span may belong to a turn that has
- * already finished and been baked out of the live map by the time this
- * runs, same root cause as groupBashSessions' doc comment below.
+ * Resolve the agentId to display for a span. The span's own stamped
+ * `agentId` — set by the start/end reducer from
+ * `SubagentStartFrame.AgentId`/`SubagentEndFrame.AgentId` (the real target
+ * agent for EVERY delegation kind, `pkg/agent/steer_frames.go`) — is the
+ * single source of truth (DEL-F26). The former originating-`delegate`-call
+ * `params.agent_id` workaround is removed: it existed only for a
+ * pre-ADR-091 emitter gap that always stamped the parent's id on the wire,
+ * which today's emitter no longer does, so `span.agentId` is correct for
+ * targeted and untargeted delegation alike.
  */
-function resolveSpanAgentId(span: SubagentSpan, toolCallsById: Record<string, ToolCall>): string | undefined {
-  const originatingCall = toolCallsById[span.parentCallId]
-  if (originatingCall?.tool === 'delegate') {
-    const targetAgentId = originatingCall.params?.agent_id
-    if (typeof targetAgentId === 'string' && targetAgentId.length > 0) {
-      return targetAgentId
-    }
-  }
+function resolveSpanAgentId(span: SubagentSpan): string | undefined {
   return span.agentId
 }
 
@@ -547,7 +514,12 @@ function groupBashSessions(orderedCalls: ToolCall[]): Map<string, BashSessionSta
 }
 
 // A delegation bracket can stay open across Stop/Resume (ADR-20260928 D2).
-// Prefer the current lifecycle; span.status is only a legacy fallback.
+// The lifecycle state is the ONLY running signal (DEL-F27): an open
+// `subagent_start` bracket with no `lifecycleState` yet (its `status` is
+// already 'running' from the bracket opening, before the child has actually
+// started — D7 table) must NOT count as running activity, and the former
+// guessed `span.status` fallback is removed. A missing/unknown state maps to
+// 'parked' — pending, not executing.
 function activityStatusForSpan(span: SubagentSpan): ActivityStatus {
   switch (span.lifecycleState) {
     case 'running': return 'running'
@@ -556,7 +528,7 @@ function activityStatusForSpan(span: SubagentSpan): ActivityStatus {
     case 'stopped': return 'parked'
     case 'completed': return 'success'
     case 'failed': return 'error'
-    default: return span.status
+    default: return 'parked'
   }
 }
 
@@ -585,23 +557,18 @@ export function useRunningActivity(): RunningActivity {
   const agentSpans: SubagentSpan[] = useMemo(() => messages.flatMap((m) => m.spans ?? []), [messages])
 
   // All tool calls the active session knows about, live turn plus every
-  // already-finalized (baked) turn — see groupBashSessions' and
-  // resolveSpanAgentId's doc comments for why the live flat `toolCalls` map
-  // alone isn't enough: `chat.ts` bakes a finished turn's tool calls into
-  // that message's own `tool_calls` array and clears the flat map, so
-  // anything keyed only off the live map loses track the instant a turn
-  // completes. Finalized messages are already in chronological order; the
-  // live map (always the newest, in-flight turn) is concatenated/merged last
-  // so it wins on any id collision (there shouldn't be one in practice).
+  // already-finalized (baked) turn — see groupBashSessions' doc comment for
+  // why the live flat `toolCalls` map alone isn't enough: `chat.ts` bakes a
+  // finished turn's tool calls into that message's own `tool_calls` array and
+  // clears the flat map, so anything keyed only off the live map loses track
+  // the instant a turn completes. Finalized messages are already in
+  // chronological order; the live map (always the newest, in-flight turn) is
+  // concatenated/merged last so it wins on any id collision (there shouldn't
+  // be one in practice).
   const allToolCalls = useMemo(
     () => [...messages.flatMap((m) => m.tool_calls ?? []), ...Object.values(toolCalls)],
     [messages, toolCalls],
   )
-  const toolCallsById = useMemo(() => {
-    const byId: Record<string, ToolCall> = {}
-    for (const tc of allToolCalls) byId[tc.id] = tc
-    return byId
-  }, [allToolCalls])
   const bashSessions = useMemo(() => groupBashSessions(allToolCalls), [allToolCalls])
 
   const running: ActivityItem[] = []
@@ -618,7 +585,7 @@ export function useRunningActivity(): RunningActivity {
   let finishedSeq = 0
 
   for (const span of agentSpans) {
-    const effectiveAgentId = resolveSpanAgentId(span, toolCallsById)
+    const effectiveAgentId = resolveSpanAgentId(span)
     const resolved = resolveAgent(effectiveAgentId, agents)
     const status = activityStatusForSpan(span)
     const isSpanRunning = status === 'running'
