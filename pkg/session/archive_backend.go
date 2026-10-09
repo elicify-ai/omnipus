@@ -565,11 +565,11 @@ func (b *archiveBackend) payloadLinesLocked(key string) ([]payloadLine, error) {
 		return nil, err
 	}
 	var out []payloadLine
-	err = store.ScanAll(func(addr ArchiveAddress, rec ArchiveRecord) bool {
+	err = store.ScanAllLines(func(addr ArchiveAddress, raw []byte, rec ArchiveRecord) bool {
 		if rec.ModelMessage == nil {
 			return true // a body-free model_ref placement is not a new line
 		}
-		out = append(out, payloadLine{addr: addr, rec: rec, rawModel: rawModelMessage(rec)})
+		out = append(out, payloadLine{addr: addr, rec: rec, rawModel: literalModelMessage(raw)})
 		return true
 	})
 	if err != nil {
@@ -713,15 +713,15 @@ func sourceKindForRole(role string) string {
 	}
 }
 
-// rawModelMessage extracts the LITERAL stored JSON bytes of a payload's private
-// model_message, preserving its exact encoding (never a re-marshal).
-func rawModelMessage(rec ArchiveRecord) []byte {
-	whole, err := json.Marshal(rec)
-	if err != nil {
-		return nil
-	}
+// literalModelMessage extracts the LITERAL stored JSON bytes of a payload's
+// private model_message from the record's own raw line, so raw-range recall
+// quotes it exactly as saved (spec Decision C raw-range amendment: "extracted
+// from the retained record without rewriting it"). It never re-marshals the
+// record, and it returns the WHOLE envelope's private sibling fields nowhere —
+// only the model_message value is returned.
+func literalModelMessage(rawLine []byte) []byte {
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(whole, &fields); err != nil {
+	if err := json.Unmarshal(rawLine, &fields); err != nil {
 		return nil
 	}
 	raw, ok := fields["model_message"]

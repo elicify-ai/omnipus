@@ -146,25 +146,52 @@ func TestArchiveBackend_ProjectionRoundTripPersists(t *testing.T) {
 	require.True(t, pm.Hydrated)
 }
 
-// The raw-range scan yields the LITERAL model_message JSON and never the
-// private envelope (no source/model_ref/marks leakage).
-func TestArchiveBackend_ScanArchiveRangeExcludesPrivateEnvelope(t *testing.T) {
-	b := newTestBackend(t)
-	const key = "sess-1"
+// Negative control (slice 5b): the raw-range recall boundary yields ONLY the
+// literal model_message JSON — never source, tool_result_for, model_origin,
+// model_ref or any disk mark. The canonical positive control is that the model
+// content and the exact argument string ARE present.
+func TestArchiveBackend_RawRecallExcludesEveryPrivateField(t *testing.T) {
+	base := t.TempDir()
+	us, err := NewUnifiedStore(base)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = us.Close() })
+	const key = "sess-raw"
 	ctx := context.Background()
-	require.NoError(t, b.appendMessage(key, providers.Message{Role: "user", Content: "SECRET-BODY"}))
+	us.AddFullMessage(key, providers.Message{Role: "assistant", Content: "calling",
+		ToolCalls: []providers.ToolCall{{ID: "c", Type: "function",
+			Function: &providers.FunctionCall{Name: "read", Arguments: `{"path":"SECRET_ARG"}`}}}})
+	// The tool result joins its issuing assistant (a private tool_result_for that
+	// must not leak into raw recall).
+	us.AddFullMessage(key, providers.Message{Role: "tool", ToolCallID: "c", Content: "SECRET_RESULT"})
 
-	var sawModel bool
-	err := b.ScanArchiveRange(ctx, key, 0, 0, func(idx int, raw []byte, _ memory.ArchivedMessage) error {
-		require.Equal(t, 0, idx)
-		require.Contains(t, string(raw), "SECRET-BODY", "the literal model_message value is quoted")
-		require.NotContains(t, string(raw), `"source"`, "private source must not leak into raw recall")
-		require.NotContains(t, string(raw), `"model_ref"`, "no model_ref in a raw payload line")
-		sawModel = true
+	seen := 0
+	err = us.ScanArchiveRange(ctx, key, 0, 1, func(idx int, raw []byte, _ memory.ArchivedMessage) error {
+		s := string(raw)
+		for _, priv := range []string{`"source"`, `"model_ref"`, `"tool_result_for"`, `"model_origin"`,
+			`"partition_key"`, `"byte_offset"`, `"view_membership"`} {
+			require.NotContains(t, s, priv, "private field %s leaked into raw recall", priv)
+		}
+		if idx == 0 {
+			require.Contains(t, s, "SECRET_ARG", "the exact argument string is quoted (positive control)")
+		} else {
+			require.Contains(t, s, "SECRET_RESULT")
+		}
+		seen++
 		return nil
 	})
 	require.NoError(t, err)
-	require.True(t, sawModel)
+	require.Equal(t, 2, seen)
+
+	// Byte-exact: the emitted raw value equals the stored model_message literal.
+	rawFile, ferr := os.ReadFile(filepath.Join(base, key, "u2archive", "current.jsonl"))
+	require.NoError(t, ferr)
+	stored := literalModelMessage([]byte(strings.SplitN(string(rawFile), "\n", 2)[0]))
+	var emitted []byte
+	require.NoError(t, us.ScanArchiveRange(ctx, key, 0, 0, func(_ int, raw []byte, _ memory.ArchivedMessage) error {
+		emitted = append([]byte(nil), raw...)
+		return nil
+	}))
+	require.Equal(t, stored, emitted, "raw recall emits the stored model_message literal unchanged")
 }
 
 // ScanEvictedArchive reports the persisted Skip and streams only the prefix.

@@ -32,6 +32,57 @@ func (s *ArchiveDayStore) ScanAll(fn func(ArchiveAddress, ArchiveRecord) bool) e
 	return s.scanAllLocked(fn)
 }
 
+// ScanAllLines is ScanAll plus each record's EXACT raw line bytes (trimmed of
+// surrounding whitespace), so a caller can quote a stored value literally
+// without re-encoding it.
+func (s *ArchiveDayStore) ScanAllLines(fn func(ArchiveAddress, []byte, ArchiveRecord) bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	dir := s.dir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("archive: scan: read dir: %w", err)
+	}
+	var rolled []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".jsonl") || name == archiveCurrentFile {
+			continue
+		}
+		rolled = append(rolled, name)
+	}
+	sort.Strings(rolled)
+	for _, name := range rolled {
+		key := strings.TrimSuffix(name, ".jsonl")
+		cont, err := s.scanPartitionLinesLocked(filepath.Join(dir, name), key, fn)
+		if err != nil {
+			return err
+		}
+		if !cont {
+			return nil
+		}
+	}
+	mark, err := s.readDayMarkLocked()
+	if err != nil {
+		return err
+	}
+	if mark == "" {
+		return nil
+	}
+	cur := filepath.Join(dir, archiveCurrentFile)
+	if _, statErr := os.Stat(cur); statErr == nil {
+		_, err = s.scanPartitionLinesLocked(cur, mark, fn)
+		return err
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return fmt.Errorf("archive: scan: stat current: %w", statErr)
+	}
+	return nil
+}
+
 func (s *ArchiveDayStore) scanAllLocked(fn func(ArchiveAddress, ArchiveRecord) bool) error {
 	dir := s.dir()
 	entries, err := os.ReadDir(dir)
