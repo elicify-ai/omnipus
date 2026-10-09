@@ -437,9 +437,24 @@ func buildParams(
 					blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
 				}
 				for _, tc := range msg.ToolCalls {
-					// Skip tool calls with empty names to avoid API errors
-					if tc.Name == "" {
-						continue
+					// A call reloaded from a .context archive line keeps only
+					// the nested Function fields (Name/Arguments are json:"-"),
+					// so fall back to Function.Name exactly as the sibling
+					// adapters do (anthropic_messages, bedrock — #1081).
+					name := tc.Name
+					if name == "" && tc.Function != nil {
+						name = tc.Function.Name
+					}
+					if strings.TrimSpace(name) == "" {
+						// Failing visibly beats dropping the block: a skipped
+						// tool_use leaves its tool_result orphaned, and the API
+						// rejects an orphaned tool_result with a 400 anyway —
+						// the request cannot succeed either way, so say why here.
+						return anthropic.MessageNewParams{}, fmt.Errorf(
+							"tool call %q has no name (neither the top-level name nor function.name): "+
+								"refusing to build a request whose tool_result would be orphaned",
+							tc.ID,
+						)
 					}
 					// OUTBOUND rebuild: this re-serialises OUR OWN history back
 					// into an Anthropic request, so unlike the inbound decode in
@@ -454,14 +469,14 @@ func buildParams(
 					args := tc.Arguments
 					if args == nil && tc.Function != nil && tc.Function.Arguments != "" {
 						decoded, err := common.DecodeToolCallArguments(
-							json.RawMessage(tc.Function.Arguments), tc.Name,
+							json.RawMessage(tc.Function.Arguments), name,
 						)
 						if err != nil {
 							logger.ErrorCF(
 								"anthropic",
 								"stored tool call arguments will not decode when rebuilding the request; "+
 									"sending an empty arguments block",
-								map[string]any{"tool": tc.Name, "id": tc.ID, "error": err.Error()},
+								map[string]any{"tool": name, "id": tc.ID, "error": err.Error()},
 							)
 						} else {
 							args = decoded
@@ -470,7 +485,7 @@ func buildParams(
 					if args == nil {
 						args = map[string]any{}
 					}
-					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, args, tc.Name))
+					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, args, name))
 				}
 				anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(blocks...))
 			} else {
