@@ -83,7 +83,7 @@ func TestModelPayload_SurvivesDiskJSONRoundTrip(t *testing.T) {
 		t.Fatalf("marshal payload: %v", err)
 	}
 	var onDisk ModelPayload
-	if err := json.Unmarshal(raw, &onDisk); err != nil {
+	if err = json.Unmarshal(raw, &onDisk); err != nil {
 		t.Fatalf("unmarshal payload: %v", err)
 	}
 	dec, err := DecodeModelPayload(onDisk)
