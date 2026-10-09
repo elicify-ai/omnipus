@@ -233,7 +233,7 @@ describe('Sessions view — Running filter and queued', () => {
   })
 })
 
-describe('Sessions view — hierarchy, fold, shell count, tokens', () => {
+describe('Sessions view — hierarchy', () => {
   it('nests a helper under its parent even when only the helper title matches', async () => {
     const user = userEvent.setup()
     vi.mocked(fetchSessions).mockResolvedValue([
@@ -288,6 +288,9 @@ describe('Sessions view — hierarchy, fold, shell count, tokens', () => {
     expect(screen.getByRole('button', { name: /open/i })).toBeInTheDocument()
   })
 
+})
+
+describe('Sessions view — partial HTTP pages and Retry', () => {
   it('propagates partial HTTP pages through real fetchSessions and repairs hierarchy on Retry', async () => {
     const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
     // ARCH decision 4 / C2: current-boot running and queued are distinct;
@@ -390,6 +393,9 @@ describe('Sessions view — hierarchy, fold, shell count, tokens', () => {
     expect(within(sessionRow('control')).queryByText(/background commands/)).not.toBeInTheDocument()
   })
 
+})
+
+describe('Sessions view — fold, shell count, tokens', () => {
   it('folds nine consecutive identical helpers and keeps each original Open', async () => {
     const user = userEvent.setup()
     const parent = makeSession({ id: 'p', title: 'Parent chat' })
@@ -448,6 +454,9 @@ describe('Sessions view — hierarchy, fold, shell count, tokens', () => {
     expect(row!.textContent).toMatch(/(^|\D)0(\D|$)/)
   })
 
+})
+
+describe('Sessions view — highlighted session activation', () => {
   it.each(['removal', 'same-length replacement'] as const)('clears a highlighted session after %s until explicit new navigation', async (change) => {
     const alpha = makeSession({ id: 'alpha', title: 'Alpha chat' })
     const beta = makeSession({ id: 'beta', title: 'Beta chat' })
