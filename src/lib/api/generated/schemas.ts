@@ -175,6 +175,7 @@ type Message = {
         | "context_window_notice"
       )
     | undefined;
+  view_membership?: ("chat" | "model" | "both") | undefined;
   role?: ("user" | "assistant" | "system") | undefined;
   content?: string | undefined;
   summary?: string | undefined;
@@ -3568,6 +3569,7 @@ export const Message: z.ZodType<Message> = z.object({
       "context_window_notice",
     ])
     .optional(),
+  view_membership: z.enum(["chat", "model", "both"]).optional(),
   role: z.enum(["user", "assistant", "system"]).optional(),
   content: z.string().optional(),
   summary: z.string().optional(),
