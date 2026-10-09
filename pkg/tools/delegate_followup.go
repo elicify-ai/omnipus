@@ -123,17 +123,35 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	if verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", verr))
 	}
-	// Not available to external-CLI (3P) sessions: every steering-queue drain
-	// site lives in the native turn engine (pkg/agent/loop.go,
-	// pkg/agent/steering.go) — runExternalCLISubTurn
-	// (pkg/agent/external_dispatch.go) never drains it, so a message queued
-	// here for a 3P child is silently orphaned forever (no live consumer ever
-	// reads it, and there is no "next tool boundary" concept for an external
-	// CLI's own turn loop). Unlike respond/resume, steer has no corrective-
-	// redispatch fallback to degrade to — injecting an instruction mid-turn is
-	// meaningless for a session that isn't running on this engine's turn loop
-	// at all. Mirrors message_parent's identical Is3P posture (D5).
+	// External-CLI (3P) sessions deliver a live instruction by interrupt + real
+	// native-conversation resume (FR-043), not by the native steering queue:
+	// the production steering sink exposes DeliverExternalCLIInstruction, which
+	// lands the instruction in the child's queue AND interrupts its live CLI run
+	// so the post-turn drain re-enters the external-CLI body with resume set —
+	// the new instruction S reaches the SAME native conversation. When the sink
+	// cannot deliver (a fake, or a session with genuinely NO live conversation)
+	// the named not_steerable refusal is kept, so the instruction is never
+	// silently dropped and the "no no-op success" rule (BDD-05.6) holds.
+	// Mirrors message_parent's identical Is3P posture (D5) for the fallback.
 	if rec.Is3P {
+		if deliverer, ok := t.steering.(steerExternalCLIDeliverer); ok {
+			if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
+				return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
+			}
+			requestedCorrelationID, _ := stringArg(args, "correlation_id")
+			resolved, derr := deliverer.DeliverExternalCLIInstruction(
+				ctx, sessionID, rec.AgentID,
+				providers.Message{Role: "user", Content: text}, requestedCorrelationID)
+			if derr != nil {
+				// Truthful visible refusal: no live conversation, or the
+				// interrupt/enqueue failed. Never a silent success.
+				return ErrorResult(fmt.Sprintf("delegate: steer: not_steerable: %v", derr)).WithError(derr)
+			}
+			return NewToolResult(fmt.Sprintf(
+				"Steering message delivered to external CLI session %s by interrupt + native-conversation resume (correlation_id=%s); it will reach the same conversation.",
+				sessionID, resolved,
+			))
+		}
 		return ErrorResult(fmt.Sprintf(
 			"delegate: steer: not_steerable: external command-line session %s runs on an external CLI "+
 				"(claude-code/codex/opencode) with no steering-queue drain in its dispatch path; use "+
@@ -344,6 +362,19 @@ func (t *DelegateTool) steerReviveStopped(ctx context.Context, sessionID string,
 // t.sessionStore below.
 type steerReviver interface {
 	ReviveStoppedSession(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error)
+}
+
+// steerExternalCLIDeliverer is the optional capability that lets a steering
+// sink deliver an instruction to a LIVE external-CLI (3P) child by interrupt +
+// native-conversation resume (FR-043) — the production *agent.AgentLoop
+// implements it; a test fake that cannot deliver simply does not, and keeps
+// executeSteer's named not_steerable refusal. Declared here (not added to
+// DelegateSteeringSink) for the same reason steerReviver stays narrow: only the
+// 3P steer path needs it, and forcing every sink implementer to know about
+// external-CLI resume would couple the interface to a notion that does not
+// exist for the native path.
+type steerExternalCLIDeliverer interface {
+	DeliverExternalCLIInstruction(ctx context.Context, sessionID, agentID string, msg providers.Message, correlationID string) (string, error)
 }
 
 // steerSinkWithEnqueueStatus is satisfied by agent's delegateSteeringSink

@@ -94,6 +94,12 @@ type AgentLoop struct {
 	// set by recall_conversation, read/dropped by windowTrim + assembly.
 	recallSpans      sync.Map // key: sessionKey (string), value: *RecallSpan
 	activeTurnStates sync.Map // key: sessionKey (string), value: *turnState
+	// externalRunSessions holds the live external-CLI driver per child session
+	// (key: the child's transcript session id (string), value: *externalCLIRunSession)
+	// so a follow-up instruction can reach the SAME native CLI conversation via
+	// Resume instead of a fresh Run (FR-043). Lazily created; see
+	// external_run_session.go.
+	externalRunSessions sync.Map
 	// subTurnSpansMu/openSubTurnSpans/subTurnCounter (the sub-turn span
 	// liveness tracker guarded by subTurnSpansMu, and its id counter) were
 	// deleted 2026-09-24 as unreachable ADR-091 leftovers (golangci
