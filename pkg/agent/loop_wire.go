@@ -814,12 +814,18 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 		// FR-6.2: full-policy gate for the background (async=true, the
 		// default) mode — trust set + mode("background") + depth.
 		delegateTool.SetDelegationDenyCheckerBackground(
-			// ForDelegate bakes in exempt=false: delegate(agent_id=self) spawns a
-			// real sub-turn and MUST be graph-gated (and thus denied), never exempted.
-			buildDelegationDenyCheckerForDelegate(
+			// FR-014 (session-core U5a): the delegate gate injects the trusted
+			// caller-eligibility resolver, backed by the live registry's agent
+			// instance + the strict executor resolver, so an eligible native
+			// MAIN/WORKER self-delegation (explicit OR an omitted target
+			// normalized to the caller) is permitted with NO self-edge. ForDelegate
+			// bakes in exempt=false; every non-eligible self and every non-self
+			// target stays fully graph-gated.
+			buildDelegationDenyCheckerForDelegateResolved(
 				currentAgentID,
 				rw.cfg.Performance,
 				config.DelegationModeBackground,
+				nativeSelfDelegationEligible(rw.rs.registry),
 				agentExistsChecker(rw.rs.registry),
 			),
 		)

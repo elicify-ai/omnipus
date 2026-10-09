@@ -211,6 +211,15 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 		return r0
 	}
 
+	// FR-016 (session-core U5a): an external-CLI worker must never create an
+	// Omnipus helper — refused here, before authorization and before any
+	// launch/child-session write, so a graph-permitted edge can never let one
+	// through. Applies to omitted, explicit-self and other-target requests
+	// alike (a helper is any native child session).
+	if r0, stop := dt.refuseExternalCLIHelperCreation(); stop {
+		return r0
+	}
+
 	// Delegation policy gate (FR-6.2): trust set + background mode + depth.
 	// ADR-037: this is now the ONLY gate —
 	// the legacy trust-only allowlistCheck/delegateChecker fallbacks (consulted
@@ -458,6 +467,44 @@ func (dt *delegateToolExecuteRun) validateRequest() (*ToolResult, bool) {
 	}
 	dt.goal = goal
 	return nil, false
+}
+
+// refuseExternalCLIHelperCreation enforces FR-016 (session-core U5a): an
+// external-CLI worker must NEVER create an Omnipus helper. A helper is any
+// Omnipus-native child session, so the prohibition is BLANKET — it applies
+// whether the worker targets itself, omits the target entirely, or names
+// another agent with a graph-permitted edge.
+//
+// It is a property of the CALLER, resolved from the live registry's strict
+// executor resolver (registry.IsExternalCLI → runner.ResolveDispatch), never of
+// the target, and it runs BEFORE authorization and BEFORE any launch or
+// child-session write (ADR-D4 / architect Q2): registration or a graph edge
+// must never be the only thing standing between an external-CLI worker and a
+// native helper.
+func (dt *delegateToolExecuteRun) refuseExternalCLIHelperCreation() (*ToolResult, bool) {
+	if dt.t.getAgentRegistry == nil {
+		return nil, false
+	}
+	registry := dt.t.getAgentRegistry()
+	if registry == nil {
+		return nil, false
+	}
+	callerID := strings.TrimSpace(ToolAgentID(dt.ctx))
+	if callerID == "" || !registry.IsExternalCLI(callerID) {
+		return nil, false
+	}
+	targetAgentID := strings.TrimSpace(dt.agentID)
+	slog.Warn("delegate: external-CLI worker refused helper creation (FR-016)",
+		"caller_id", callerID, "target_agent_id", targetAgentID)
+	return DelegationDeniedResult("delegate", &DelegationDenial{
+		Reason: fmt.Sprintf(
+			"an external-CLI worker (%q) cannot create an Omnipus helper: external-CLI agents run on a separate "+
+				"engine and never delegate to native helper sessions (FR-016)",
+			callerID,
+		),
+		Policy:        DenyTrustSet,
+		TargetAgentID: targetAgentID,
+	}), true
 }
 
 // authorizeDelegation applies the delegation policy and resolves the authorized depth.
