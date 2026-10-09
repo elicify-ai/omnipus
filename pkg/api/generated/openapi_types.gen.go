@@ -25688,12 +25688,6 @@ type SlashCommand struct {
 // SlashCommandDelivery How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /clear, /model) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame (e.g. /skill). Only meaningful for web-surfaced commands; defaults to "agent".
 type SlashCommandDelivery string
 
-// SseChatRequest Request body for POST /api/v1/chat (SSE streaming endpoint). Sends a user message to the agent and streams the response via Server-Sent Events.
-type SseChatRequest struct {
-	// Message The user message to send to the agent. Must not be empty.
-	Message string `json:"message"`
-}
-
 // StorageStats Storage statistics returned by GET /api/v1/storage/stats. Reports session count, workspace disk usage, memory entry count, and any non-fatal warnings encountered while collecting the stats.
 type StorageStats struct {
 	// MemoryEntryCount Total number of memory entries across all agent stores.
@@ -28956,9 +28950,6 @@ type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
 
 // SetChannelRoutingJSONRequestBody defines body for SetChannelRouting for application/json ContentType.
 type SetChannelRoutingJSONRequestBody = ChannelRouting
-
-// PostChatJSONRequestBody defines body for PostChat for application/json ContentType.
-type PostChatJSONRequestBody = SseChatRequest
 
 // SetCredentialJSONRequestBody defines body for SetCredential for application/json ContentType.
 type SetCredentialJSONRequestBody = CredentialSetRequest
