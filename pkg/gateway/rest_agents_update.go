@@ -153,10 +153,9 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	// this raw-body-sniff pattern for exactly this failure mode; ADR-037
 	// follows the same precedent rather than accepting the silent drop). Read
 	// +restore r.Body so the normal decode below is unaffected.
-	var readErr error
-	uf.rawBody, readErr = io.ReadAll(io.LimitReader(uf.r.Body, 1<<20))
-	if readErr != nil {
-		jsonErr(uf.w, http.StatusBadRequest, "could not read request body")
+	var readOK bool
+	uf.rawBody, readOK = readAgentWriteBody(uf.w, uf.r)
+	if !readOK {
 		return true
 	}
 	uf.r.Body = io.NopCloser(bytes.NewReader(uf.rawBody))

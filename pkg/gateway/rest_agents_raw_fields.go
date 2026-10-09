@@ -3,10 +3,29 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
+
+// readAgentWriteBody must observe EOF, not a LimitReader's synthetic EOF at the
+// cap. Reading through MaxBytesReader preserves both overflow and transport
+// errors, including when withAuthAndBodyLimit already installed its own reader.
+func readAgentWriteBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			jsonErr(w, http.StatusRequestEntityTooLarge, "request body too large")
+		} else {
+			jsonErr(w, http.StatusBadRequest, "could not read request body")
+		}
+		return nil, false
+	}
+	return raw, true
+}
 
 // rawJSONFields retains every occurrence, including identical duplicate keys.
 // It is validation metadata, not a wire type or a replacement request decoder.
