@@ -12,18 +12,11 @@
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, waitForConnected, startNewChat, assistantMessages, userMessages } from './fixtures/selectors'
+import { endTurnDeterministically, trackServerFrames } from './helpers/endTurn'
 
 const goalEchoCard = (page: Page) => page.locator('[data-testid="goal-echo-card"]')
 const askCard = (page: Page) => page.locator('[data-testid="ask-user-question-card"]')
 const stopButton = (page: Page) => page.locator('[data-testid="stop-btn"]')
-
-async function endTurnDeterministically(page: Page) {
-  const stop = stopButton(page)
-  if (await stop.isVisible().catch(() => false)) {
-    await stop.click().catch(() => {})
-  }
-  await expect(stop).toBeHidden({ timeout: 30_000 })
-}
 
 /** DOM order: card must precede the LAST user message and follow the FIRST one. */
 async function assertCardBetween(page: Page) {
@@ -40,6 +33,9 @@ async function assertCardBetween(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
+  // BEFORE goto — Playwright only reports websockets opened after the
+  // listener attaches, and the SPA connects during the load.
+  trackServerFrames(page)
   await page.goto('/')
 })
 

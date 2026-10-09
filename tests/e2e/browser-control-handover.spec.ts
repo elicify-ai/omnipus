@@ -55,6 +55,7 @@ import {
   installWebrtcDebug,
   logWebrtcDebug,
 } from './fixtures/webrtc-debug';
+import { endTurnDeterministically, trackServerFrames } from './helpers/endTurn';
 
 const stopButton = (page: Page) => page.locator('[data-testid="stop-btn"]');
 
@@ -109,30 +110,15 @@ async function takeControlFromRenderedVideo(page: Page, testInfo: TestInfo): Pro
   await page.mouse.click(left + media.width * scale * 0.5, top + media.height * scale * 0.9);
 }
 
-/**
- * Ends the current turn without racing a live model's wall-clock — copies
- * goal-work-first.spec.ts's endTurnDeterministically exactly: click Stop if
- * it is still showing, then wait for streaming to be over. This spec's
- * assertions never depend on the turn having fully finished (D-G: a
- * take-control never needs the turn to be over), so this is only cleanup
- * between steps, never a wait for the model's own reply.
- */
-async function endTurnDeterministically(page: Page): Promise<void> {
-  const stop = stopButton(page);
-  if (await stop.isVisible().catch(() => false)) {
-    await stop.click().catch(() => {
-      /* already settled between the check and the click — nothing to stop */
-    });
-  }
-  await expect(stop).toBeHidden({ timeout: 30_000 });
-}
-
 test.beforeEach(async ({ page }) => {
   // Squad J instrumentation — patch RTCPeerConnection so the first oracle
   // failure in this spec can dump pc/track/stats state. Idempotent. Installed
   // BEFORE goto: addInitScript applies "whenever the page is navigated", so an
   // install after the first load would leave that load unwrapped (peers=[]).
   await installWebrtcDebug(page);
+  // BEFORE goto — Playwright only reports websockets opened after the
+  // listener attaches, and the SPA connects during the load.
+  trackServerFrames(page);
   await page.goto('/');
 });
 

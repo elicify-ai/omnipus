@@ -27,6 +27,7 @@
 import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { chatInput, waitForConnected, startNewChat, assistantMessages } from './fixtures/selectors'
+import { endTurnDeterministically, trackServerFrames } from './helpers/endTurn'
 
 const stopButton = (page: import('@playwright/test').Page) =>
   page.locator('[data-testid="stop-btn"]')
@@ -45,29 +46,16 @@ const askUserQuestionCard = (page: import('@playwright/test').Page) =>
  * (e.g. AskUserQuestionCard's own `data-testid="ask-user-cancel"` button),
  * so it is deliberately NOT included in this page-wide sweep.
  */
-/**
- * Ends the current turn without racing a live model's wall-clock: click Stop
- * if it is still showing, then wait for streaming to be over. Both halves are
- * bounded and neither depends on how long the model would have taken — the
- * flake this replaces (CI 34123445336) was a 120s wait for a real goal turn
- * that legitimately does file writes and several tool calls.
- */
-async function endTurnDeterministically(page: import('@playwright/test').Page) {
-  const stop = page.locator('[data-testid="stop-btn"]')
-  if (await stop.isVisible().catch(() => false)) {
-    await stop.click().catch(() => {
-      /* already settled between the check and the click — nothing to stop */
-    })
-  }
-  await expect(stop).toBeHidden({ timeout: 30_000 })
-}
-
 async function assertNoGoalConfirmRow(page: import('@playwright/test').Page) {
   await expect(page.getByRole('button', { name: /^Confirm$/i })).toHaveCount(0)
   await expect(page.getByRole('button', { name: /^Amend$/i })).toHaveCount(0)
 }
 
 test.beforeEach(async ({ page }) => {
+  // Frame tracking must attach BEFORE goto: the SPA connects during the
+  // load, and Playwright only reports websockets opened after the listener
+  // attaches (see helpers/endTurn.ts::trackServerFrames).
+  trackServerFrames(page)
   await page.goto('/')
 })
 
