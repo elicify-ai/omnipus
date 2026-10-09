@@ -1390,6 +1390,12 @@ components:
       $ref: ./components/schemas/VaultSearchViewHit.yaml
     ValidationReport:
       $ref: ./components/schemas/ValidationReport.yaml
+    AgentFigure:
+      $ref: ./components/schemas/AgentFigure.yaml
+    AgentRole:
+      $ref: ./components/schemas/AgentRole.yaml
+    AgentColor:
+      $ref: ./components/schemas/AgentColor.yaml
     Agent:
       $ref: ./components/schemas/Agent.yaml
     AgentModelParams:

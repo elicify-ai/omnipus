@@ -100,6 +100,7 @@ export function WorkspaceAgentList({
           isActive={activeId === project.id}
           isExpanded={expandedIds.has(project.id)}
           rows={mains.result.rows}
+          agents={agents}
           signals={mains.signals}
           onCount={mains.onCount}
           countKnown={!mains.unknown && mains.result.status === 'ready'}
@@ -144,6 +145,7 @@ function WorkspaceBlock({
   isActive,
   isExpanded,
   rows,
+  agents,
   signals,
   onCount,
   countKnown,
@@ -159,6 +161,7 @@ function WorkspaceBlock({
   isActive: boolean
   isExpanded: boolean
   rows: EligibleRow[]
+  agents: Agent[]
   signals: Record<string, 'on' | 'off' | 'unknown'>
   onCount: number
   countKnown: boolean
@@ -252,6 +255,7 @@ function WorkspaceBlock({
           <AgentMainRow
             key={row.agentId}
             row={row}
+            agent={agents.find((agent) => agent.id === row.agentId)}
             workspace={project}
             showHalo={signals[row.mainSessionId] === 'on'}
             motion={motion}
@@ -267,6 +271,7 @@ function WorkspaceBlock({
 
 function AgentMainRow({
   row,
+  agent,
   workspace,
   showHalo,
   motion,
@@ -275,6 +280,7 @@ function AgentMainRow({
   onOverlayClose,
 }: {
   row: EligibleRow
+  agent: Agent | undefined
   workspace: Workspace
   showHalo: boolean
   motion: 'loop' | 'static'
@@ -352,7 +358,7 @@ function AgentMainRow({
             selected ? 'font-semibold' : 'font-[var(--font-weight-regular)]',
           )}
         >
-          <SidebarAgentIcon name={row.name} halo={showHalo} motion={motion} />
+          <SidebarAgentIcon agent={agent} name={row.name} halo={showHalo} motion={motion} />
           <span className="truncate">{row.name}</span>
         </Button>
         <div className="sidebar-agent-actions flex shrink-0 pr-[var(--space-2)]">

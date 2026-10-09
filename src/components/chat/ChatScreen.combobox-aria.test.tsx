@@ -228,13 +228,14 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
     expect(input).not.toHaveAttribute('aria-activedescendant')
   })
 
-  // Founder X3: the fixture's clear/help/cancel rows are all listed after the
-  // two existing local search actions /resume + /workspace, followed by two
-  // alphabetically sorted skills. Thus 2 + 3 + 2 = 7 options, indices 0-6;
-  // the commands→skills SECTION boundary falls between indices 4 and 5.
+  // Ungated preview: retain both parents' assertions below. Wave-2's
+  // pre-rename /resume list oracle and Wave-1's /sessions activation oracle
+  // are intentionally not reconciled here; no passing-test claim is made.
+  // Five commands and two skills span indices 0-6. Cycling ArrowDown across
+  // the commands→skills boundary (4→5) guards a per-section highlight bug.
   // Session-search enhancement: "/workspace" is a second synthetic
   // client-only command (useSlashMenu.ts's allCommands), inserted
-  // immediately after "/resume" — shifts every subsequent index by one from
+  // immediately after "/sessions" — shifts every subsequent index by one from
   // this test's prior fixture.
   it('aria-activedescendant always identifies the DOM element carrying aria-selected="true", stepping ArrowDown across the commands→skills section boundary, and every option id is unique', () => {
     render(<OmnipusComposer />)
@@ -266,7 +267,8 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
     }
 
     // Index 0 (initial highlight) — a command row.
-    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/resume')
+    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/sessions')
+    expect(assertActivedescendantMatchesSelectedRow().textContent).not.toContain('/resume')
 
     // Step through indices 1-4 — still inside the Commands section.
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 1: /workspace
@@ -288,7 +290,8 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
 
     // Wraps back to index 0 (Commands) — the boundary is crossed in both directions.
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
-    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/resume')
+    expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/sessions')
+    expect(assertActivedescendantMatchesSelectedRow().textContent).not.toContain('/resume')
   })
 })
 
@@ -368,4 +371,99 @@ describe('Composer combobox ARIA — menu container and rows (deferred item 2)',
 
     expect(screen.queryByTestId('slash-menu')).not.toBeInTheDocument()
   })
+})
+
+// Ungated preview: unskipped parent assertions retained without changing production.
+describe('Retained Wave-1 preview assertions — no passing-test claim', () => {
+  it('the "@" agent-mention menu carries the identical combobox ARIA contract — role=combobox on the textarea, role=listbox on the menu, role=option rows, and a matching aria-activedescendant', () => {
+      render(<OmnipusComposer />)
+      const input = screen.getByTestId('chat-input')
+
+      act(() => { fireEvent.change(input, { target: { value: '@' } }) })
+
+      expect(input).toHaveAttribute('role', 'combobox')
+      expect(input).toHaveAttribute('aria-expanded', 'true')
+      expect(input).toHaveAttribute('aria-controls', 'composer-slash-menu')
+
+      const menu = screen.getByTestId('slash-menu')
+      expect(menu).toHaveAttribute('role', 'listbox')
+      expect(menu).toHaveAttribute('id', 'composer-slash-menu')
+
+      // Fixture: 2 chat-eligible agents (Alpha, Bravo) — see mockAgents above.
+      const options = screen.getAllByRole('option')
+      expect(options).toHaveLength(2)
+      for (const option of options) {
+        expect(option).toHaveAttribute('tabindex', '-1')
+        expect(option.id).toMatch(/^composer-option-\d+$/)
+      }
+
+      expect(input).toHaveAttribute('aria-activedescendant', 'composer-option-0')
+      expect(document.getElementById('composer-option-0')).toHaveAttribute('aria-selected', 'true')
+      expect(document.getElementById('composer-option-0')?.textContent).toContain('Alpha')
+
+      act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
+      expect(input).toHaveAttribute('aria-activedescendant', 'composer-option-1')
+      expect(document.getElementById('composer-option-1')).toHaveAttribute('aria-selected', 'true')
+      expect(document.getElementById('composer-option-1')?.textContent).toContain('Bravo')
+      // The previously-highlighted row is no longer selected.
+      expect(document.getElementById('composer-option-0')).toHaveAttribute('aria-selected', 'false')
+    })
+})
+
+// Ungated preview: unskipped parent assertions retained without changing production.
+describe('Retained Wave-2 preview assertions — no passing-test claim', () => {
+  it('aria-activedescendant always identifies the DOM element carrying aria-selected="true", stepping ArrowDown across the commands→skills section boundary, and every option id is unique', () => {
+      render(<OmnipusComposer />)
+      const input = screen.getByTestId('chat-input')
+      act(() => { fireEvent.change(input, { target: { value: '/' } }) })
+
+      const initialOptions = screen.getAllByRole('option')
+      expect(initialOptions).toHaveLength(7)
+      expect(initialOptions.map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual([
+        '/resume', '/workspace', '/clear', '/help', '/cancel', '/code-review', '/web-research',
+      ])
+      // Option ids must be unique — a duplicate id would make getElementById
+      // resolve to the WRONG row (the first match) without any test noticing,
+      // silently invalidating every activedescendant assertion below.
+      const ids = initialOptions.map((o) => o.id)
+      expect(new Set(ids).size).toBe(ids.length)
+
+      function assertActivedescendantMatchesSelectedRow() {
+        const activedescendant = input.getAttribute('aria-activedescendant')
+        expect(activedescendant).toBeTruthy()
+        const resolved = document.getElementById(activedescendant!)
+        expect(resolved).not.toBeNull()
+        expect(resolved).toHaveAttribute('role', 'option')
+        expect(resolved).toHaveAttribute('aria-selected', 'true')
+        // Exactly one row selected at a time — activedescendant is never
+        // ambiguous between two simultaneously-"selected" rows.
+        expect(document.querySelectorAll('[role="option"][aria-selected="true"]')).toHaveLength(1)
+        return resolved!
+      }
+
+      // Index 0 (initial highlight) — a command row.
+      expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/resume')
+
+      // Step through indices 1-4 — still inside the Commands section.
+      act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 1: /workspace
+      expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/workspace')
+      act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 2: /clear
+      expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/clear')
+      act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 3: /help
+      expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/help')
+      act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) }) // index 4: /cancel — last Commands row
+      expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/cancel')
+
+      // Cross the section boundary: index 4 (Commands) -> index 5 (Skills).
+      act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
+      expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/code-review')
+
+      // Index 6 — still Skills.
+      act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
+      expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/web-research')
+
+      // Wraps back to index 0 (Commands) — the boundary is crossed in both directions.
+      act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
+      expect(assertActivedescendantMatchesSelectedRow().textContent).toContain('/resume')
+    })
 })

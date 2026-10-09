@@ -196,10 +196,11 @@ describe('Slash menu — commands query error (LOW S8)', () => {
     expect(status).toHaveAttribute('role', 'status')
     expect(status).toHaveTextContent('Commands unavailable')
 
-    // The synthetic client-only /resume command comes from useSlashMenu
+    // The synthetic client-only /sessions command comes from useSlashMenu
     // itself, not the errored backend list, so it still renders alongside
     // the error row.
-    expect(screen.getByText('/resume')).toBeInTheDocument()
+    expect(screen.getByText('/sessions')).toBeInTheDocument()
+    expect(screen.queryByText('/resume')).not.toBeInTheDocument()
 
     // The skills query is independent and still succeeded.
     expect(screen.getByText('/web-research')).toBeInTheDocument()
@@ -209,7 +210,7 @@ describe('Slash menu — commands query error (LOW S8)', () => {
     render(<OmnipusComposer />)
     const input = screen.getByTestId('composer-input')
 
-    // "/zzz" matches neither the synthetic /resume command nor web-research.
+    // "/zzz" matches neither the synthetic /sessions command nor web-research.
     act(() => { fireEvent.change(input, { target: { value: '/zzz' } }) })
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
 

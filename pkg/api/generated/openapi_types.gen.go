@@ -479,6 +479,48 @@ func (e AgentType) Valid() bool {
 	}
 }
 
+// Defines values for AgentColor.
+const (
+	AgentColorHash22D3EE AgentColor = "#22D3EE"
+	AgentColorHash38BDF8 AgentColor = "#38BDF8"
+	AgentColorHash3B82F6 AgentColor = "#3B82F6"
+	AgentColorHash818CF8 AgentColor = "#818CF8"
+	AgentColorHash9CA3AF AgentColor = "#9CA3AF"
+	AgentColorHashA78BFA AgentColor = "#A78BFA"
+	AgentColorHashC084FC AgentColor = "#C084FC"
+	AgentColorHashE879F9 AgentColor = "#E879F9"
+	AgentColorHashF472B6 AgentColor = "#F472B6"
+	AgentColorHashFB923C AgentColor = "#FB923C"
+)
+
+// Valid indicates whether the value is a known member of the AgentColor enum.
+func (e AgentColor) Valid() bool {
+	switch e {
+	case AgentColorHash22D3EE:
+		return true
+	case AgentColorHash38BDF8:
+		return true
+	case AgentColorHash3B82F6:
+		return true
+	case AgentColorHash818CF8:
+		return true
+	case AgentColorHash9CA3AF:
+		return true
+	case AgentColorHashA78BFA:
+		return true
+	case AgentColorHashC084FC:
+		return true
+	case AgentColorHashE879F9:
+		return true
+	case AgentColorHashF472B6:
+		return true
+	case AgentColorHashFB923C:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentCreateRequestMainToolPolicyChangesSet.
 const (
 	AgentCreateRequestMainToolPolicyChangesSetAllow AgentCreateRequestMainToolPolicyChangesSet = "allow"
@@ -623,6 +665,135 @@ const (
 func (e AgentCreateRequestSubagent3pType) Valid() bool {
 	switch e {
 	case AgentCreateRequestSubagent3pTypeSubagent3p:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentFigure.
+const (
+	AgentFigureMan     AgentFigure = "Man"
+	AgentFigureOmnipus AgentFigure = "Omnipus"
+	AgentFigureRobot   AgentFigure = "Robot"
+	AgentFigureWoman   AgentFigure = "Woman"
+)
+
+// Valid indicates whether the value is a known member of the AgentFigure enum.
+func (e AgentFigure) Valid() bool {
+	switch e {
+	case AgentFigureMan:
+		return true
+	case AgentFigureOmnipus:
+		return true
+	case AgentFigureRobot:
+		return true
+	case AgentFigureWoman:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentRole.
+const (
+	AgentRoleAnalyst      AgentRole = "analyst"
+	AgentRoleAudio        AgentRole = "audio"
+	AgentRoleAutomation   AgentRole = "automation"
+	AgentRoleData         AgentRole = "data"
+	AgentRoleDesigner     AgentRole = "designer"
+	AgentRoleDeveloper    AgentRole = "developer"
+	AgentRoleDocuments    AgentRole = "documents"
+	AgentRoleFinance      AgentRole = "finance"
+	AgentRoleGeneral      AgentRole = "general"
+	AgentRoleImage        AgentRole = "image"
+	AgentRoleItops        AgentRole = "itops"
+	AgentRoleKnowledge    AgentRole = "knowledge"
+	AgentRoleLegal        AgentRole = "legal"
+	AgentRoleMarketing    AgentRole = "marketing"
+	AgentRoleOffice       AgentRole = "office"
+	AgentRoleOrchestrator AgentRole = "orchestrator"
+	AgentRolePeople       AgentRole = "people"
+	AgentRolePersonal     AgentRole = "personal"
+	AgentRoleProduct      AgentRole = "product"
+	AgentRoleProject      AgentRole = "project"
+	AgentRoleQuality      AgentRole = "quality"
+	AgentRoleResearcher   AgentRole = "researcher"
+	AgentRoleSales        AgentRole = "sales"
+	AgentRoleScience      AgentRole = "science"
+	AgentRoleSecurity     AgentRole = "security"
+	AgentRoleSocial       AgentRole = "social"
+	AgentRoleSupport      AgentRole = "support"
+	AgentRoleTranslator   AgentRole = "translator"
+	AgentRoleTutor        AgentRole = "tutor"
+	AgentRoleVideo        AgentRole = "video"
+	AgentRoleWriter       AgentRole = "writer"
+)
+
+// Valid indicates whether the value is a known member of the AgentRole enum.
+func (e AgentRole) Valid() bool {
+	switch e {
+	case AgentRoleAnalyst:
+		return true
+	case AgentRoleAudio:
+		return true
+	case AgentRoleAutomation:
+		return true
+	case AgentRoleData:
+		return true
+	case AgentRoleDesigner:
+		return true
+	case AgentRoleDeveloper:
+		return true
+	case AgentRoleDocuments:
+		return true
+	case AgentRoleFinance:
+		return true
+	case AgentRoleGeneral:
+		return true
+	case AgentRoleImage:
+		return true
+	case AgentRoleItops:
+		return true
+	case AgentRoleKnowledge:
+		return true
+	case AgentRoleLegal:
+		return true
+	case AgentRoleMarketing:
+		return true
+	case AgentRoleOffice:
+		return true
+	case AgentRoleOrchestrator:
+		return true
+	case AgentRolePeople:
+		return true
+	case AgentRolePersonal:
+		return true
+	case AgentRoleProduct:
+		return true
+	case AgentRoleProject:
+		return true
+	case AgentRoleQuality:
+		return true
+	case AgentRoleResearcher:
+		return true
+	case AgentRoleSales:
+		return true
+	case AgentRoleScience:
+		return true
+	case AgentRoleSecurity:
+		return true
+	case AgentRoleSocial:
+		return true
+	case AgentRoleSupport:
+		return true
+	case AgentRoleTranslator:
+		return true
+	case AgentRoleTutor:
+		return true
+	case AgentRoleVideo:
+		return true
+	case AgentRoleWriter:
 		return true
 	default:
 		return false
@@ -9359,6 +9530,24 @@ func (e SearchProviderCheckResponseStatus) Valid() bool {
 	}
 }
 
+// Defines values for SessionExecution.
+const (
+	SessionExecutionQueued  SessionExecution = "queued"
+	SessionExecutionRunning SessionExecution = "running"
+)
+
+// Valid indicates whether the value is a known member of the SessionExecution enum.
+func (e SessionExecution) Valid() bool {
+	switch e {
+	case SessionExecutionQueued:
+		return true
+	case SessionExecutionRunning:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionLifecycleState.
 const (
 	SessionLifecycleStateDone             SessionLifecycleState = "done"
@@ -10076,6 +10265,24 @@ func (e SessionDetailMessagesVerdictScope) Valid() bool {
 	case SessionDetailMessagesVerdictScopePlan:
 		return true
 	case SessionDetailMessagesVerdictScopeTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailSessionExecution.
+const (
+	SessionDetailSessionExecutionQueued  SessionDetailSessionExecution = "queued"
+	SessionDetailSessionExecutionRunning SessionDetailSessionExecution = "running"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailSessionExecution enum.
+func (e SessionDetailSessionExecution) Valid() bool {
+	switch e {
+	case SessionDetailSessionExecutionQueued:
+		return true
+	case SessionDetailSessionExecutionRunning:
 		return true
 	default:
 		return false
@@ -13919,8 +14126,8 @@ type Agent struct {
 	ActivationStatus *AgentActivationStatus `json:"activation_status,omitempty"`
 	ChangedFields    *[]string              `json:"changed_fields,omitempty"`
 
-	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
-	Color *string `json:"color,omitempty"`
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Color *AgentColor `json:"color,omitempty"`
 
 	// ContextWindowClamped Read-only (ADR-066 D2): true when an operator override exceeded the model's capability and was clamped down to it (a WARN names the agent). Optional — absent until the resolver lands.
 	ContextWindowClamped *bool `json:"context_window_clamped,omitempty"`
@@ -13973,7 +14180,10 @@ type Agent struct {
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
-	// Icon Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Figure AgentFigure `json:"figure"`
+
+	// Icon Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
 	Icon *string `json:"icon,omitempty"`
 
 	// Id Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").
@@ -14039,6 +14249,9 @@ type Agent struct {
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
+
+	// Role Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Role AgentRole `json:"role"`
 
 	// Skills List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
@@ -14119,6 +14332,9 @@ type AgentToolsCfgBuiltinPolicies string
 // AgentType Agent lifecycle classification. Built-in chat colleagues Mia, Jim, Ava and Admin use core; built-in Planner, Researcher and General Purpose use Subagent on the wire. Hidden Judge and Plan Supervisor use system and are excluded from chat/team/delegation selection. Custom creation accepts Main, Subagent and subagent_3p only. Runtime type is immutable after creation. Hidden instructions and supported model tuning remain editable, while hidden capabilities are fixed. Ordinary built-in capabilities are editable within the global policy ceiling. Use editable_fields for the exact rules.
 type AgentType string
 
+// AgentColor Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+type AgentColor string
+
 // AgentCreateRequest Body for POST /agents. Creates a new agent; a UUID is assigned by the server and the agent starts in "draft" status (no SOUL.md written yet). Discriminated by `type` — each agent type carries EXACTLY the fields the agent-types field matrix allows it; a field sent on the wrong variant is a schema violation (400), never silently persisted. `type` is REQUIRED on every variant (the historical omit-type→Main default is retired).
 type AgentCreateRequest struct {
 	union json.RawMessage
@@ -14126,8 +14342,8 @@ type AgentCreateRequest struct {
 
 // AgentCreateRequestMain Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice is Main-only; executor is absent (Main never has one).
 type AgentCreateRequestMain struct {
-	// Color Hex color code for the agent avatar.
-	Color *string `json:"color,omitempty"`
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Color *AgentColor `json:"color,omitempty"`
 
 	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
 	Description *string `json:"description,omitempty"`
@@ -14136,7 +14352,10 @@ type AgentCreateRequestMain struct {
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
-	// Icon Phosphor icon name for the agent avatar.
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Figure *AgentFigure `json:"figure,omitempty"`
+
+	// Icon Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
 	Icon *string `json:"icon,omitempty"`
 
 	// MaxToolIterations The new agent's own tool-iteration limit (issue #904). Omitted = the agent rides the global limit. Refused (400) if above the current global limit.
@@ -14167,6 +14386,9 @@ type AgentCreateRequestMain struct {
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
+
+	// Role Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Role *AgentRole `json:"role,omitempty"`
 
 	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
@@ -14213,8 +14435,8 @@ type AgentCreateRequestMainType string
 
 // AgentCreateRequestSubagent Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
 type AgentCreateRequestSubagent struct {
-	// Color Hex color code for the agent avatar.
-	Color *string `json:"color,omitempty"`
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Color *AgentColor `json:"color,omitempty"`
 
 	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
 	Description *string `json:"description,omitempty"`
@@ -14223,7 +14445,10 @@ type AgentCreateRequestSubagent struct {
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
-	// Icon Phosphor icon name for the agent avatar.
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Figure *AgentFigure `json:"figure,omitempty"`
+
+	// Icon Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
 	Icon *string `json:"icon,omitempty"`
 
 	// MaxToolIterations The new agent's own tool-iteration limit (issue #904). Omitted = the agent rides the global limit. Refused (400) if above the current global limit.
@@ -14254,6 +14479,9 @@ type AgentCreateRequestSubagent struct {
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
+
+	// Role Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Role *AgentRole `json:"role,omitempty"`
 
 	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
@@ -14297,8 +14525,8 @@ type AgentCreateRequestSubagentType string
 
 // AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
 type AgentCreateRequestSubagent3p struct {
-	// Color Hex color code for the agent avatar.
-	Color *string `json:"color,omitempty"`
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Color *AgentColor `json:"color,omitempty"`
 
 	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
 	Description *string `json:"description,omitempty"`
@@ -14327,7 +14555,10 @@ type AgentCreateRequestSubagent3p struct {
 		Kind *AgentCreateRequestSubagent3pExecutorKind `json:"kind,omitempty"`
 	} `json:"executor"`
 
-	// Icon Phosphor icon name for the agent avatar.
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Figure *AgentFigure `json:"figure,omitempty"`
+
+	// Icon Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
 	Icon *string `json:"icon,omitempty"`
 
 	// MaxToolIterations The new worker's own tool-iteration limit (issue #904, D14), passed to the external CLI as its turn cap. Omitted = the worker rides the global limit. Refused (400) if above the current global limit.
@@ -14357,6 +14588,9 @@ type AgentCreateRequestSubagent3p struct {
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
 
+	// Role Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Role *AgentRole `json:"role,omitempty"`
+
 	// Soul Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
 	Soul string `json:"soul"`
 
@@ -14381,6 +14615,9 @@ type AgentFieldDescriptor struct {
 	// Reason Explanation when the field is protected or unsupported by this runtime.
 	Reason *string `json:"reason,omitempty"`
 }
+
+// AgentFigure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+type AgentFigure string
 
 // AgentMCPBinding defines model for AgentMCPBinding.
 type AgentMCPBinding struct {
@@ -14413,6 +14650,9 @@ type AgentRateLimits struct {
 	// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
 	UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 }
+
+// AgentRole Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+type AgentRole string
 
 // AgentSession Minimal session summary as returned by GET /agents/{id}/sessions. Maps to the AgentSession interface in src/lib/api.ts. This is the same underlying session.UnifiedMeta object, but the SPA consumes it through the AgentSession interface which reads id, title, created_at, and updated_at directly.
 type AgentSession struct {
@@ -14646,10 +14886,10 @@ type AgentToolsUpdateRequestBuiltinPolicies string
 // AgentToolsUpdateRequestConfigBuiltinPolicies defines model for AgentToolsUpdateRequest.Config.Builtin.Policies.
 type AgentToolsUpdateRequestConfigBuiltinPolicies string
 
-// AgentUpdateRequest Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected.
+// AgentUpdateRequest Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected. For figure, role, and color, only omission means unchanged. Explicit null and invalid supplied values are rejected with HTTP 400, and no sibling field, timestamp, or revision is changed.
 type AgentUpdateRequest struct {
-	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
-	Color *string `json:"color,omitempty"`
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Color *AgentColor `json:"color,omitempty"`
 
 	// ContextWindowOverride Per-agent context-window override in tokens (ADR-066 D2 rung 1, D9). Lower-only — clamped to the model's capability on resolution (a WARN names the agent and the clamp). Send null to clear. Every write triggers a registry reload so the next turn uses the new window.
 	ContextWindowOverride *int `json:"context_window_override,omitempty"`
@@ -14688,7 +14928,10 @@ type AgentUpdateRequest struct {
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
-	// Icon Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Figure *AgentFigure `json:"figure,omitempty"`
+
+	// Icon Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
 	Icon *string `json:"icon,omitempty"`
 
 	// MaxToolIterations The agent's own tool-iteration limit (issue #904, tool-iteration-limit spec D9/D10/D14). Omitted = unchanged; null = clear the own value (the agent rides the global limit — "Use global limit"); a number = set the own value, refused (400) if above the current global limit. Allowed on every agent type, including subagent_3p.
@@ -14725,6 +14968,9 @@ type AgentUpdateRequest struct {
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
+
+	// Role Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Role *AgentRole `json:"role,omitempty"`
 
 	// Skills Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills. Rejected 400 on subagent_3p agents (CLI doesn't see Omnipus skills).
 	Skills *[]string `json:"skills,omitempty"`
@@ -23750,6 +23996,9 @@ type Session struct {
 	// AgentIds All agent IDs that have participated in this session (multi-agent sessions). For legacy single-agent sessions this field is absent; callers should fall back to [agent_id] when agent_ids is undefined.
 	AgentIds *[]string `json:"agent_ids,omitempty"`
 
+	// BackgroundCommandCount How many background shell commands this session itself owns right now. Omitted when the process table is not available (unknown, not zero). Zero means the table was checked and this session owns none. Not a roll-up of child sessions.
+	BackgroundCommandCount *int `json:"background_command_count,omitempty"`
+
 	// Channel Channel identifier that initiated this session (e.g. "webchat", "telegram"). Always present (may be empty string for legacy sessions).
 	Channel string `json:"channel"`
 
@@ -23762,13 +24011,16 @@ type Session struct {
 	// CreatedAt RFC3339 timestamp when the session was created.
 	CreatedAt time.Time `json:"created_at"`
 
+	// Execution Projected queued/running classification for the session's current lifecycle display. Present only when the same loaded lifecycle record, evaluated through the canonical current-boot lifecycle projection, produces `lifecycle_state: working`: `queued` for a queued record and `running` for a running record. Omitted for any other projected display state, including Interrupted after a prior-boot root execution, and when no usable lifecycle record is available. Not a raw lifecycle-state export. The Sessions Running filter matches `running`; queued does not match. A nonmatching parent may still be included as hierarchy context.
+	Execution *SessionExecution `json:"execution,omitempty"`
+
 	// Id Unique session identifier (UUID).
 	Id string `json:"id"`
 
 	// LastCompactionSummary Summary of the last context compaction pass (present only when compaction has occurred).
 	LastCompactionSummary *string `json:"last_compaction_summary,omitempty"`
 
-	// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+	// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
 	LifecycleState *SessionLifecycleState `json:"lifecycle_state,omitempty"`
 
 	// Model LLM model name used in this session (may be empty for legacy sessions).
@@ -23868,7 +24120,10 @@ type Session struct {
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
-// SessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+// SessionExecution Projected queued/running classification for the session's current lifecycle display. Present only when the same loaded lifecycle record, evaluated through the canonical current-boot lifecycle projection, produces `lifecycle_state: working`: `queued` for a queued record and `running` for a running record. Omitted for any other projected display state, including Interrupted after a prior-boot root execution, and when no usable lifecycle record is available. Not a raw lifecycle-state export. The Sessions Running filter matches `running`; queued does not match. A nonmatching parent may still be included as hierarchy context.
+type SessionExecution string
+
+// SessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
 type SessionLifecycleState string
 
 // SessionStatus Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
@@ -24286,6 +24541,9 @@ type SessionDetail struct {
 		// AgentIds All agent IDs that have participated in this session (multi-agent sessions). For legacy single-agent sessions this field is absent; callers should fall back to [agent_id] when agent_ids is undefined.
 		AgentIds *[]string `json:"agent_ids,omitempty"`
 
+		// BackgroundCommandCount How many background shell commands this session itself owns right now. Omitted when the process table is not available (unknown, not zero). Zero means the table was checked and this session owns none. Not a roll-up of child sessions.
+		BackgroundCommandCount *int `json:"background_command_count,omitempty"`
+
 		// Channel Channel identifier that initiated this session (e.g. "webchat", "telegram"). Always present (may be empty string for legacy sessions).
 		Channel string `json:"channel"`
 
@@ -24298,13 +24556,16 @@ type SessionDetail struct {
 		// CreatedAt RFC3339 timestamp when the session was created.
 		CreatedAt time.Time `json:"created_at"`
 
+		// Execution Projected queued/running classification for the session's current lifecycle display. Present only when the same loaded lifecycle record, evaluated through the canonical current-boot lifecycle projection, produces `lifecycle_state: working`: `queued` for a queued record and `running` for a running record. Omitted for any other projected display state, including Interrupted after a prior-boot root execution, and when no usable lifecycle record is available. Not a raw lifecycle-state export. The Sessions Running filter matches `running`; queued does not match. A nonmatching parent may still be included as hierarchy context.
+		Execution *SessionDetailSessionExecution `json:"execution,omitempty"`
+
 		// Id Unique session identifier (UUID).
 		Id string `json:"id"`
 
 		// LastCompactionSummary Summary of the last context compaction pass (present only when compaction has occurred).
 		LastCompactionSummary *string `json:"last_compaction_summary,omitempty"`
 
-		// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+		// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
 		LifecycleState *SessionDetailSessionLifecycleState `json:"lifecycle_state,omitempty"`
 
 		// Model LLM model name used in this session (may be empty for legacy sessions).
@@ -24477,7 +24738,10 @@ type SessionDetailMessagesVerdictPerCriterionProvenance string
 // SessionDetailMessagesVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type SessionDetailMessagesVerdictScope string
 
-// SessionDetailSessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+// SessionDetailSessionExecution Projected queued/running classification for the session's current lifecycle display. Present only when the same loaded lifecycle record, evaluated through the canonical current-boot lifecycle projection, produces `lifecycle_state: working`: `queued` for a queued record and `running` for a running record. Omitted for any other projected display state, including Interrupted after a prior-boot root execution, and when no usable lifecycle record is available. Not a raw lifecycle-state export. The Sessions Running filter matches `running`; queued does not match. A nonmatching parent may still be included as hierarchy context.
+type SessionDetailSessionExecution string
+
+// SessionDetailSessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
 type SessionDetailSessionLifecycleState string
 
 // SessionDetailSessionStatus Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.

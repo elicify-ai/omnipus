@@ -56,12 +56,70 @@ You create one of three types. The create buttons sit in the section headers of 
 | Subagent (External) | An external command-line tool | Other agents, through delegation | No |
 
 1. Click **+ New Main** or **+ New Subagent** in its section header. For an external worker, click **+ Add Subagent (External)** and pick the command-line tool from the menu; entries for tools not installed on the host are greyed out.
-2. Fill in **Identity**: name, color, icon, and model. For workers, the description is required — it is what other agents read to decide when to delegate to this one.
+2. Fill in **Identity**: name, figure, **Role** (the job badge), colour, and model. The preview starts with Omnipus, General assistant, and Grey; leaving these choices untouched saves those defaults when you create the agent. There is no agent-picture upload. For workers, the description is required — it is what other agents read to decide when to delegate to this one.
 3. Fill in **Personality**: the soul, the agent's persona prompt, is required for every type.
 4. Main and Subagent have a third step, **Tools**, for tool permissions, skills, and fallback models. An external worker has no Tools step — it brings its own.
 5. Create the agent. Its card appears in its section.
 
 To change an agent, open its card. The edit slide-over saves as you type. Its tabs are **Basics**, **Personality**, **Tools**, **Skills**, and **Advanced**; an external worker shows **Runtime** instead of Tools and Skills. **Delete agent** asks you to confirm.
+
+## How an agent looks
+
+An agent's mark combines a figure, a small job badge, and a colour. The badge is labelled **Role** in the editor.
+
+| Choice | What you pick | Default on a new agent |
+|---|---|---|
+| Figure | Robot, Man, Woman, or Omnipus | Omnipus |
+| Role | One of the 31 badges below | General assistant |
+| Colour | Azure, Sky, Cyan, Indigo, Violet, Purple, Fuchsia, Pink, Orange, or Grey, in that order | Grey |
+
+The role choices are grouped like this:
+
+| Group | Badges |
+|---|---|
+| Create (6) | Writer; Designer; Image creator; Video producer; Audio and voice; Social media |
+| Build (8) | Developer; Data engineer; Data analyst; IT and operations; Automation; Security; Quality and QA; Science and lab |
+| Business (10) | Orchestrator; Project manager; Product manager; Sales; Marketing; Finance; Legal and compliance; Customer support; Documents; Researcher |
+| People (4) | People and HR; Tutor; Knowledge and library; Translator |
+| Personal (3) | General assistant; Personal assistant; Office assistant |
+
+The create form shows the full mark live as you change these choices. The preview is a draft: it is saved only when creation succeeds. In the edit slide-over, **Basics** offers the same Figure, Role, and Colour choices and saves changes automatically. Its header mark previews the selected figure, role badge, and colour immediately, before the save completes. Check the save indicator before treating an edit as saved. There is no agent-picture or GIF upload; this does not affect attaching files to a chat.
+
+When updating an existing agent through the API, omit `figure`, `role`, or `color` to keep its stored value. Sending JSON `null`, an empty string, or another invalid identity value rejects the whole update with HTTP 400: even valid sibling changes are not saved, and the stored fields, display timestamp, and configuration revision stay unchanged. Null does not clear an identity choice or restore a create default. To choose a default again, select it in the editor or send its actual value: `Omnipus`, `general`, or `#9CA3AF`.
+
+### Built-in identity is locked
+
+Open a built-in agent's card, then **Basics**: the figure, role, and colour choices remain visible but cannot be changed. Omnipus restores their fixed values whenever the server starts. The jobs described in the base-agent table above are distinct from these badge choices.
+
+| Built-in agent | Figure | Role badge | Colour |
+|---|---|---|---|
+| Mia | Omnipus | General assistant | Azure |
+| Jim | Omnipus | General assistant | Cyan |
+| Ava | Omnipus | General assistant | Orange |
+| Admin | Omnipus | Security | Pink |
+| Planner | Omnipus | General assistant | Sky |
+| Researcher | Omnipus | General assistant | Violet |
+| General Purpose | Omnipus | General assistant | Grey |
+
+Legacy icon names, such as Mia's `lightbulb`, remain stored for older displays and appear as a read-only label above the profile's sections. The identity editor no longer has a legacy-icon picker; editing other settings does not clear those names.
+
+### Existing agents on upgrade
+
+For agents you created, Omnipus saves the migrated identity when the server starts after upgrade. A valid figure or role already chosen stays. A missing or unrecognised figure becomes Omnipus; a missing or unrecognised role is derived from the old icon name:
+
+| Old icon name | Role badge |
+|---|---|
+| `Code` | Developer |
+| `Chat` | General assistant |
+| `MagnifyingGlass` | Researcher |
+| `PencilSimple` | Writer |
+| `Shield` | Security |
+| A name that already matches a role's stored short name, such as `writer` | That role |
+| Anything else | General assistant |
+
+Icon matching ignores surrounding spaces and letter case, but does not remove hyphens. The old icon name itself is not rewritten.
+
+A colour already in the ten-colour palette stays, with its stored hex code standardised to uppercase. Other valid six-digit hex colours move to the nearest palette hue; nearly grey colours become Grey. Missing or malformed colours also become Grey. Once these choices are saved, later restarts leave them unchanged rather than repeatedly choosing new colours. Built-in agents use their fixed identities instead of this custom-agent migration.
 
 ## How to lower one agent's tool-call limit
 

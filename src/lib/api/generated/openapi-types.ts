@@ -4427,13 +4427,24 @@ export interface components {
              */
             status: "active" | "archived" | "failed" | "interrupted";
             /**
-             * @description Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+             * @description Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
              * @example working
              * @enum {string}
              */
             lifecycle_state?: "working" | "waiting_for_answer" | "done" | "failed" | "stopped" | "interrupted";
             /** @description Present only when `lifecycle_state == stopped` (or the session's current generation last landed `stopped`) — the durable, lasting reason for the stop (who/when/why). Absent for every other `lifecycle_state`, and for a session with no lifecycle record. */
             stop_note?: components["schemas"]["StopNote"];
+            /**
+             * @description Projected queued/running classification for the session's current lifecycle display. Present only when the same loaded lifecycle record, evaluated through the canonical current-boot lifecycle projection, produces `lifecycle_state: working`: `queued` for a queued record and `running` for a running record. Omitted for any other projected display state, including Interrupted after a prior-boot root execution, and when no usable lifecycle record is available. Not a raw lifecycle-state export. The Sessions Running filter matches `running`; queued does not match. A nonmatching parent may still be included as hierarchy context.
+             * @example running
+             * @enum {string}
+             */
+            execution?: "queued" | "running";
+            /**
+             * @description How many background shell commands this session itself owns right now. Omitted when the process table is not available (unknown, not zero). Zero means the table was checked and this session owns none. Not a roll-up of child sessions.
+             * @example 2
+             */
+            background_command_count?: number;
             /**
              * Format: date-time
              * @description RFC3339 timestamp when the session was created.
@@ -8294,6 +8305,24 @@ export interface components {
              */
             types?: string[];
         };
+        /**
+         * @description Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+         * @example Omnipus
+         * @enum {string}
+         */
+        AgentFigure: "Robot" | "Man" | "Woman" | "Omnipus";
+        /**
+         * @description Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+         * @example general
+         * @enum {string}
+         */
+        AgentRole: "writer" | "designer" | "image" | "video" | "audio" | "social" | "developer" | "data" | "analyst" | "itops" | "automation" | "security" | "quality" | "science" | "orchestrator" | "project" | "product" | "sales" | "marketing" | "finance" | "legal" | "support" | "documents" | "researcher" | "people" | "tutor" | "knowledge" | "translator" | "general" | "personal" | "office";
+        /**
+         * @description Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+         * @example #3B82F6
+         * @enum {string}
+         */
+        AgentColor: "#3B82F6" | "#38BDF8" | "#22D3EE" | "#818CF8" | "#A78BFA" | "#C084FC" | "#E879F9" | "#F472B6" | "#FB923C" | "#9CA3AF";
         /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT. */
         Agent: {
             revision: components["schemas"]["ConfigurationRevision"];
@@ -8324,13 +8353,11 @@ export interface components {
              * @example false
              */
             locked: boolean;
+            figure: components["schemas"]["AgentFigure"];
+            role: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
-             * @description Hex color code for agent avatar display (e.g. "#D4AF37").
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
+             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
              * @example Robot
              */
             icon?: string;
@@ -8636,13 +8663,11 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
-             * @description Hex color code for the agent avatar.
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for the agent avatar.
+             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
              * @example ChartBar
              */
             icon?: string;
@@ -8729,13 +8754,11 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
-             * @description Hex color code for the agent avatar.
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for the agent avatar.
+             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
              * @example ChartBar
              */
             icon?: string;
@@ -8814,13 +8837,11 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
-             * @description Hex color code for the agent avatar.
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for the agent avatar.
+             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
              * @example ChartBar
              */
             icon?: string;
@@ -8865,7 +8886,7 @@ export interface components {
              */
             max_tool_iterations?: number;
         };
-        /** @description Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected. */
+        /** @description Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected. For figure, role, and color, only omission means unchanged. Explicit null and invalid supplied values are rejected with HTTP 400, and no sibling field, timestamp, or revision is changed. */
         AgentUpdateRequest: {
             revision: components["schemas"]["ConfigurationRevision"];
             /** @description Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected. */
@@ -8906,13 +8927,11 @@ export interface components {
              * @example 100
              */
             max_tool_iterations?: number | null;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
-             * @description Hex color code for agent avatar display (e.g. "#D4AF37").
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
+             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
              * @example Robot
              */
             icon?: string;
@@ -26695,6 +26714,9 @@ export type VaultSearchNoteHit = components["schemas"]["VaultSearchNoteHit"];
 export type VaultSearchRecordHit = components["schemas"]["VaultSearchRecordHit"];
 export type VaultSearchViewHit = components["schemas"]["VaultSearchViewHit"];
 export type ValidationReport = components["schemas"]["ValidationReport"];
+export type AgentFigure = components["schemas"]["AgentFigure"];
+export type AgentRole = components["schemas"]["AgentRole"];
+export type AgentColor = components["schemas"]["AgentColor"];
 export type Agent = components["schemas"]["Agent"];
 export type AgentModelParams = components["schemas"]["AgentModelParams"];
 export type AgentRateLimits = components["schemas"]["AgentRateLimits"];

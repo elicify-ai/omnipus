@@ -1460,7 +1460,7 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 		"type": "Main",
 		"description": "A researcher",
 		"soul": "Research Bot soul",
-		"color": "#22C55E",
+		"color": "#22D3EE",
 		"icon": "magnifying-glass",
 		"tools_cfg": {
 			"builtin": {
@@ -1496,7 +1496,7 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 	store := agentstore.New(tmpDir)
 	savedAgent, err := store.Get(resp.ID)
 	require.NoError(t, err, "created agent must exist as a real entity-store record")
-	assert.Equal(t, "#22C55E", savedAgent.Color)
+	assert.Equal(t, "#22D3EE", savedAgent.Color)
 	assert.Equal(t, "magnifying-glass", savedAgent.Icon)
 	require.NotNil(t, savedAgent.Tools, "tools config must be persisted")
 	policies := savedAgent.Tools.Builtin.Policies

@@ -119,7 +119,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
 
 const agents: Agent[] = [
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
-  { revision: '0'.repeat(64), id: 'jim', name: 'Jim', type: 'core', locked: true, status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50, max_tool_iterations_source: 'global', max_tool_iterations_override_ignored: false, memory_enabled: true, needs_model: false },
+  { revision: '0'.repeat(64), id: 'jim', name: 'Jim', type: 'core', locked: true, status: 'active', soul: '', timeout_seconds: 300, max_tool_iterations: 50, max_tool_iterations_source: 'global', max_tool_iterations_override_ignored: false, memory_enabled: true, needs_model: false, figure: 'Omnipus', role: 'general' },
 ]
 
 function makeClient() {

@@ -5,6 +5,9 @@ description: >
   and skills are editable. Hidden Judge/Supervisor instructions are editable while
   their identity and capabilities remain fixed. Runtime applicability is validated
   before any mutation. Protected same-value echoes are still rejected.
+  For figure, role, and color, only omission means unchanged. Explicit null and
+  invalid supplied values are rejected with HTTP 400, and no sibling field,
+  timestamp, or revision is changed.
 minProperties: 2
 additionalProperties: false
 required:
@@ -78,16 +81,24 @@ properties:
       own value, refused (400) if above the current global limit. Allowed on
       every agent type, including subagent_3p.
     example: 100
+  figure:
+    $ref: './AgentFigure.yaml'
+    x-go-type: AgentFigure
+  role:
+    $ref: './AgentRole.yaml'
+    x-go-type: AgentRole
   color:
-    type: string
-    pattern: '^#[0-9A-Fa-f]{6}$'
-    description: Hex color code for agent avatar display (e.g. "#D4AF37").
-    example: "#D4AF37"
+    $ref: './AgentColor.yaml'
+    x-go-type: AgentColor
   icon:
     type: string
     maxLength: 50
-    description: Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
-    example: "Robot"
+    description: >
+      Legacy Phosphor catalog name (for example "Robot", "lightbulb").
+      Not the role and not the figure. Identity rendering uses `figure`,
+      `role`, and `color`. Kept so surfaces that still draw a Phosphor
+      icon do not break. Omitted when the agent has none.
+    example: Robot
   fallback_models:
     type: array
     maxItems: 2

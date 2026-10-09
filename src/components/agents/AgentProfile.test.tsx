@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act, within } from '@testing-librar
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
 import type { Agent, Skill } from '@/lib/api'
+import { expectEditableIdentityChoices, expectLockedIdentityColours } from '@/test/agentIdentityAssertions'
 
 // ResizeObserver is required by cmdk (used inside the ModelSelector popover);
 // jsdom does not implement it. Polyfill with a noop for the tests that open
@@ -72,13 +73,13 @@ import { ApiError } from '@/lib/api-error'
 
 const editable = (...names: string[]) => names.map((name) => ({ name, editable: true }))
 const COMMON_EDITABLE_FIELDS = editable(
-  'name', 'description', 'color', 'icon', 'default', 'model', 'provider',
+  'name', 'description', 'color', 'icon', 'figure', 'role', 'default', 'model', 'provider',
   'fallback_models', 'model_params', 'soul', 'memory_enabled', 'voice',
   'max_tool_iterations', 'context_window_override', 'skills',
   'tool_policy_changes', 'executor',
 )
 const BUILTIN_EDITABLE_FIELDS = COMMON_EDITABLE_FIELDS.map((field) =>
-  ['name', 'description', 'color', 'icon', 'soul', 'executor'].includes(field.name)
+  ['name', 'description', 'color', 'icon', 'figure', 'role', 'soul', 'executor'].includes(field.name)
     ? { ...field, editable: false, reason: 'Built-in identity and runtime are fixed.' }
     : field,
 )
@@ -102,6 +103,8 @@ const mockCoreAgent: Agent = {
   stats: { total_sessions: 5, total_tokens: 12000, total_cost: 0.05 },
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
   memory_enabled: true,
+  figure: 'Omnipus',
+  role: 'general',
   editable_fields: COMMON_EDITABLE_FIELDS,
 }
 
@@ -122,6 +125,8 @@ const mockLockedCoreAgent: Agent = {
   max_tool_iterations_override_ignored: false,
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
   memory_enabled: true,
+  figure: 'Omnipus',
+  role: 'general',
   editable_fields: BUILTIN_EDITABLE_FIELDS,
 }
 
@@ -185,6 +190,8 @@ const mockJudgeAgent: Agent = {
   max_tool_iterations_source: 'global',
   max_tool_iterations_override_ignored: false,
   memory_enabled: false,
+  figure: 'Omnipus',
+  role: 'general',
   editable_fields: COMMON_EDITABLE_FIELDS.map((field) => ({
     ...field,
     editable: field.name === 'soul' || ['model', 'provider', 'fallback_models', 'model_params', 'max_tool_iterations', 'context_window_override'].includes(field.name),
@@ -2973,12 +2980,12 @@ describe('AgentProfile — locked core agent identity fields: visible read-only 
     expect(description.value).toBe(mockLockedCoreAgent.description)
   })
 
-  it('shows a static read-only avatar color swatch (not the interactive picker)', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, color: '#D4AF37' })
+  it('shows all ten colour choices disabled, with Azure selected for the locked built-in (W1-6)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, color: '#3B82F6' })
     renderProfile('mia')
     await screen.findByText('Mia')
-    expect((await screen.findAllByTestId('avatar-color-readonly')).length).toBeGreaterThanOrEqual(1)
-    expect(screen.queryByTestId('avatar-color-Forge Gold')).toBeNull()
+    expectLockedIdentityColours(screen.getByRole('tabpanel', { name: 'Basics' }))
+    expect(screen.queryByTestId('avatar-color-readonly')).toBeNull()
   })
 
   it('shows a static read-only avatar icon (not the interactive picker)', async () => {
@@ -3123,19 +3130,17 @@ describe('AgentProfile — Default-agent toggle visibility (field matrix, W2c)',
   })
 })
 
-// Test-coverage gap (test-analyzer): every existing isLocked test asserts
-// the LOCKED (read-only) side. Nothing asserted the unlocked side, so a
-// regression that made `isLocked` accidentally evaluate `true` for every
-// agent (not just locked core ones) would slip through undetected.
+// Unlocked-side guard: custom Main identity choices stay editable rather
+// than accidentally inheriting the built-in locks.
 describe('AgentProfile — unlocked Main agent: interactive identity fields render (isLocked regression guard, W2c)', () => {
-  it('renders the interactive avatar color and icon pickers (not the read-only swatch) for an editable Main agent', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#D4AF37' })
+  it('renders editable figure, role and colour choices instead of the legacy icon picker (W1-6)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#3B82F6', icon: 'Chat' })
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    expect((await screen.findAllByTestId('avatar-color-Forge Gold')).length).toBeGreaterThanOrEqual(1)
-    expect((await screen.findAllByTestId('avatar-icon-trigger')).length).toBeGreaterThanOrEqual(1)
+    expectEditableIdentityChoices(screen.getByRole('tabpanel', { name: 'Basics' }))
+    expect(screen.queryByTestId('avatar-icon-trigger')).toBeNull()
     expect(screen.queryAllByTestId('avatar-color-readonly').length).toBe(0)
-    expect(screen.queryAllByTestId('avatar-icon-readonly').length).toBe(0)
+    expect(screen.getByTestId('avatar-icon-readonly').querySelector('span')?.textContent).toBe('Chat')
   })
 
   it('does NOT disable the description textarea for an editable Main agent', async () => {

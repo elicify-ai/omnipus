@@ -93,6 +93,9 @@ function baseAgent(overrides: Record<string, unknown> = {}) {
     revision: '0'.repeat(64),
     id: 'judge',
     name: 'Judge',
+    // W1-5: required identity on the generated Agent response schema.
+    figure: 'Omnipus',
+    role: 'general',
     type: 'system',
     locked: true,
     status: 'active',

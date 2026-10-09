@@ -285,7 +285,7 @@ export function AppShell() {
       <MediaLightbox />
 
       {/* Cross-workspace session search — store-driven single instance opened
-          from the sidebar search icon and the /resume slash command (step 6). */}
+          from the sidebar search icon and the /sessions slash command (step 6). */}
       <SearchModal />
 
       {/* Global toast notifications */}

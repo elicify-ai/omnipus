@@ -15,6 +15,13 @@ export interface UseSelectSessionOptions {
   /** Called after the session has been attached — closes the sidebar / panel /
    *  modal the caller rendered the session list in. */
   onClose: () => void
+  /**
+   * Called only when this selection will attach the session: after a successful
+   * attach, or when navigating to an unfiled session whose route attaches it.
+   * A failed attach does not call this. Sessions uses it to request that
+   * session's Activity panel.
+   */
+  onSelected?: (session: Session) => void
 }
 
 /**
@@ -68,7 +75,7 @@ export interface UseSelectSessionOptions {
  * `isReplaying=true` and `attachedSessionType`). See W2-1 regression test.
  */
 export function useSelectSession(options: UseSelectSessionOptions) {
-  const { agents, workspaces, onClose } = options
+  const { agents, workspaces, onClose, onSelected } = options
   const navigate = useNavigate()
   const { attachToSession, setActiveAgentType } = useSessionStore()
   const seedSessionTokens = useChatStore((s) => s.seedSessionTokens)
@@ -122,6 +129,7 @@ export function useSelectSession(options: UseSelectSessionOptions) {
         return
       }
       supersedeNavigationIntent()
+      onSelected?.(session)
       onClose()
       void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: knownWorkspaceId } })
       return
@@ -138,6 +146,7 @@ export function useSelectSession(options: UseSelectSessionOptions) {
         return
       }
       supersedeNavigationIntent()
+      onSelected?.(session)
       onClose()
       void navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: knownWorkspaceId } })
       return
@@ -147,6 +156,7 @@ export function useSelectSession(options: UseSelectSessionOptions) {
     // deleted workspace) — do NOT attach here. Navigate to the standalone
     // session view, which owns the single attach on mount (see the module
     // docblock, step 6).
+    onSelected?.(session)
     onClose()
     void navigate({ to: '/sessions/$sessionId', params: { sessionId: session.id } })
   }

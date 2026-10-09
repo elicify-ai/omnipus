@@ -597,6 +597,14 @@ func SeedConfig(cfg *config.Config) bool {
 			a.Description = ca.Description
 			sc.modified = true
 		}
+		if a.Figure != ca.Figure {
+			a.Figure = ca.Figure
+			sc.modified = true
+		}
+		if a.Role != ca.Role {
+			a.Role = ca.Role
+			sc.modified = true
+		}
 		if a.Color != ca.Color {
 			a.Color = ca.Color
 			sc.modified = true
@@ -699,6 +707,8 @@ func SeedConfig(cfg *config.Config) bool {
 			ID:          string(ca.ID),
 			Name:        ca.Name,
 			Description: ca.Description,
+			Figure:      ca.Figure,
+			Role:        ca.Role,
 			Color:       ca.Color,
 			Icon:        ca.Icon,
 			Type:        agentType,
@@ -740,6 +750,11 @@ func SeedConfig(cfg *config.Config) bool {
 	// (SOUL.md, lazily materialized from JudgeDefaultRubric — ADR-052 FR-038)
 	// are operator-editable and therefore preserved across boots.
 	if seedSystemAgents(sc.cfg, sc.existing) {
+		sc.modified = true
+	}
+	// Custom agents only. Built-ins were enforced above and must not
+	// also pass through the one-time icon/hex map.
+	if migrateUnenforcedAgentIdentity(sc.cfg) {
 		sc.modified = true
 	}
 

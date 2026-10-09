@@ -82,9 +82,9 @@ test('public package retains its core controls and excludes application exports'
 })
 
 // Finite package boundary, still independent of what the barrel exports.
-// Architect/coordinator ruling 2026-10-05 admits EXACTLY RunningIndicator
-// as a public composite and formatTokens as its internal pure foundation.
-// No domain, store, screen, folder or wildcard admission is introduced.
+// Architect/coordinator ruling 2026-10-05 admitted RunningIndicator and its
+// exact pure formatter. W1-1 adds AgentIcon and its exact pure identity/art
+// foundations below. No domain, store, screen, folder or wildcard admission.
 const reviewedControls = new Set([
   'accordion', 'alert-dialog', 'avatar', 'badge', 'button', 'calendar', 'card', 'checkbox',
   'command', 'date-picker', 'date-time-picker', 'dialog', 'disclosure-row', 'dropdown-menu',
@@ -96,10 +96,15 @@ const reviewedControls = new Set([
   'RunningIndicator',
   // T7's founder-approved public composites: exact files, never a ui-folder admission.
   'filter-menu', 'view-switch', 'hover-card', 'word-boundary-text',
+  // W1-1: the published, data-supplied AgentIcon is a kit composite.
+  'agent-icon',
 ].map((name) => `src/components/ui/${name}.tsx`))
 const reviewedFoundations = new Set([
   'src/index.ts', 'src/lib/utils.ts', 'src/lib/formatTokens.ts',
   'src/design-system/tokens.ts', 'src/design-system/status.ts',
+  // Exact pure identity foundations only. The application adapter and its
+  // generated wire types remain forbidden even for AgentIcon.
+  'src/design-system/agent-identity.ts', 'src/lib/agentIconArt.ts',
   'src/design-system/use-loading-visibility.ts', 'src/styles/library.css',
   'src/styles/tokens.generated.css', 'src/styles/tokens.theme.generated.css',
 ])
@@ -132,6 +137,36 @@ test('the real public import graph reaches the indicator and its exact pure form
   assert.ok(paths.includes('src/components/ui/RunningIndicator.tsx'), 'public graph must actually reach the indicator')
   assert.ok(paths.includes('src/lib/formatTokens.ts'), 'the optional numeric path uses its pure formatter foundation')
   assertReviewedLibraryPaths(paths)
+})
+
+test('AgentIcon is public and reaches only its exact pure identity/art foundations', () => {
+  const names = exportsOf(entry)
+  assert.ok(names.includes('AgentIcon'))
+  assert.ok(names.includes('AgentIconProps'))
+  const paths = [...localGraph(entry)].map((file) => relative(root, file).replaceAll('\\', '/'))
+  for (const required of ['src/components/ui/agent-icon.tsx', 'src/design-system/agent-identity.ts', 'src/lib/agentIconArt.ts']) {
+    assert.ok(paths.includes(required), `missing AgentIcon dependency: ${required}`)
+  }
+  assertReviewedLibraryPaths(paths)
+  const catalog = JSON.parse(readFileSync(resolve(root, 'design-system/catalog.json'), 'utf8'))
+  for (const foundation of ['src/design-system/agent-identity.ts', 'src/lib/agentIconArt.ts']) {
+    const item = catalog.entries.find((entry) => entry.source === foundation)
+    assert.equal(item?.classification, 'foundations', foundation)
+    assert.deepEqual(item.publicExports, [])
+    assert.deepEqual(item.publicTypes, [])
+  }
+})
+
+test('AgentIcon admission does not admit the application adapter, generated API, or adjacent files', () => {
+  const admitted = ['src/components/ui/agent-icon.tsx', 'src/design-system/agent-identity.ts', 'src/lib/agentIconArt.ts']
+  assert.doesNotThrow(() => assertReviewedLibraryPaths(admitted))
+  for (const forbidden of [
+    'src/lib/agentIdentity.ts', 'src/lib/api/generated/openapi-types.ts',
+    'src/lib/api/generated/schemas.ts', 'src/store/session.ts',
+    'src/components/chat/AgentStatusIndicator.tsx', 'src/design-system/agent-identity-extra.ts',
+  ]) {
+    assert.throws(() => assertReviewedLibraryPaths([...admitted, forbidden]), /application dependencies must remain outside/)
+  }
 })
 
 test('formatTokens is an internal foundation, never a new public application API', () => {

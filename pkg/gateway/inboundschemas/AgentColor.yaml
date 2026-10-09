@@ -1,0 +1,21 @@
+type: string
+nullable: false
+description: >
+  Identity colour. Uppercase canonical hex. The ten values are the whole
+  set; gold, warning yellow, semantic green, semantic red, and Liquid Silver
+  are not in it. Letter-case of a listed hex is normalized to this form on write.
+  JSON null is not an identity value. On PUT, omission retains the stored value;
+  an explicit null or any other invalid supplied value rejects the whole update
+  with HTTP 400 before any write.
+enum:
+  - '#3B82F6'
+  - '#38BDF8'
+  - '#22D3EE'
+  - '#818CF8'
+  - '#A78BFA'
+  - '#C084FC'
+  - '#E879F9'
+  - '#F472B6'
+  - '#FB923C'
+  - '#9CA3AF'
+example: '#3B82F6'

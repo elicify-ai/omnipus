@@ -145,7 +145,7 @@ test('CLI writes reports exclusively, creates parent directories and requires --
   assert.equal(JSON.parse(await readFile(output, 'utf8')).revision, 'forced')
 })
 
-// Oracle: founder-approved repo-wide allowance 2026-10-08/09 (483 KiB): covers Tasks panel + release-train drift + Wave-1
+// Oracle: founder-approved repo-wide allowance 2026-10-08/09 (482 KiB): covers Tasks panel + release-train drift + Wave-1.
 // Source: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/tasks-panel-20261007/brief.md
 // Supersedes founder AB1's 430 KiB (440320-byte) cumulative allowance.
 // Keep these boundary inputs literal: deriving them from the production constant
@@ -191,6 +191,58 @@ test('AB1 rejects the literal 493569-byte total raw delta', () => {
   assert.equal(report.pass, false, 'AB1 rejects 493569 bytes: one byte above the approved cumulative raw allowance')
   assert.equal(report.deltas.totalRawBytes, 493569, 'the failing delta remains the literal one-byte-over boundary')
   assert.equal(report.budgets.totalRawBytes, 493568, 'rejection uses the founder-approved raw allowance')
+  assert.deepEqual(report.checks, {
+    storybookOutputScanClean: true,
+    storybookModuleProvenanceClean: true,
+    provenanceMatchesCandidateAssets: true,
+    initialGzipWithinBudget: true,
+    totalRawWithinBudget: false,
+  }, 'the one-byte-over candidate fails specifically the raw check, not provenance or gzip')
+})
+
+// Preserve Wave-1's parallel literal-boundary assertions as well.
+// Oracle: approved Wave-1 allowance (2026-10-08), 482 KiB = 493568 bytes, inclusive.
+// Source: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/nav-wave1-fe1/docs/internal/design/evidence/nav-wave1-production-budget-20261008.md.
+// This dated approval supersedes AB1's 430 KiB current-policy boundary.
+test('Wave-1 accepts the approved literal 493568-byte total raw delta', () => {
+  const baseline = { initial: { gzipBytes: 100 }, total: { rawBytes: 1_000 } }
+  const candidate = {
+    initial: { gzipBytes: 100 },
+    total: { rawBytes: 1_000 + 493568 },
+    storybook: { clean: true },
+    assets: [{ path: 'assets/app.js', sha256: 'ab1-fixture-hash' }],
+  }
+  const provenance = { clean: true, chunks: [{ file: 'assets/app.js', sha256: 'ab1-fixture-hash', modules: [] }], javascriptAssets: [] }
+
+  const report = compareProductionBundles(baseline, candidate, provenance)
+
+  assert.equal(report.pass, true, 'Wave-1 permits exactly 493568 bytes of cumulative raw growth')
+  assert.equal(report.deltas.totalRawBytes, 493568, 'raw growth is measured against the supplied baseline')
+  assert.equal(report.budgets.totalRawBytes, 493568, 'the raw allowance is the approved literal, not an implementation-derived oracle')
+  assert.deepEqual(report.checks, {
+    storybookOutputScanClean: true,
+    storybookModuleProvenanceClean: true,
+    provenanceMatchesCandidateAssets: true,
+    initialGzipWithinBudget: true,
+    totalRawWithinBudget: true,
+  }, 'the approved raw boundary does not bypass any other production check')
+})
+
+test('Wave-1 rejects the literal 493569-byte total raw delta', () => {
+  const baseline = { initial: { gzipBytes: 100 }, total: { rawBytes: 1_000 } }
+  const candidate = {
+    initial: { gzipBytes: 100 },
+    total: { rawBytes: 1_000 + 493569 },
+    storybook: { clean: true },
+    assets: [{ path: 'assets/app.js', sha256: 'ab1-fixture-hash' }],
+  }
+  const provenance = { clean: true, chunks: [{ file: 'assets/app.js', sha256: 'ab1-fixture-hash', modules: [] }], javascriptAssets: [] }
+
+  const report = compareProductionBundles(baseline, candidate, provenance)
+
+  assert.equal(report.pass, false, 'Wave-1 rejects 493569 bytes: one byte above the approved cumulative raw allowance')
+  assert.equal(report.deltas.totalRawBytes, 493569, 'the failing delta remains the literal one-byte-over boundary')
+  assert.equal(report.budgets.totalRawBytes, 493568, 'rejection uses the approved raw allowance')
   assert.deepEqual(report.checks, {
     storybookOutputScanClean: true,
     storybookModuleProvenanceClean: true,

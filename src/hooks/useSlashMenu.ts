@@ -118,7 +118,7 @@ export interface UseSlashMenuResult {
   slashItems: SlashItem[]
   /**
    * True when `fetchCommands('web')` errored. The palette still renders
-   * (the synthetic client-only `/resume` entry and any skills survive), but
+   * (the synthetic client-only `/sessions` entry and any skills survive), but
    * every backend-served command is silently missing — the caller should
    * surface a "Commands unavailable" row rather than letting the gap pass
    * unnoticed. `shouldShowSlash` accounts for this: it stays true even when
@@ -452,15 +452,15 @@ function runClientSlashCommand(name: string, argument: string, deps: ClientComma
     return true
   }
 
-  if (name === 'resume') {
-    // Web-only: open the cross-workspace session search modal to pick a
-    // session to resume — same single instance the sidebar icon opens.
+  if (name === 'sessions') {
+    // Web-only: open the Sessions view to pick a session — same single
+    // instance the sidebar icon opens. /resume is not an alias (FR-007).
     useUiStore.getState().openSearchModal()
     return true
   }
 
   if (name === 'workspace') {
-    // Web-only: open the SAME SearchModal instance /resume opens, but in
+    // Web-only: open the SAME SearchModal instance /sessions opens, but in
     // its 'workspaces' mode — ALL workspaces listed, ArrowUp/Down walks
     // workspace headers, Enter switches (SearchModal's handleSwitchWorkspace,
     // same as clicking a group header's switch arrow), not a dedicated
@@ -589,10 +589,10 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // Merge frontend-only client commands with the backend-served list so the
   // synthetic entries participate in palette filtering, /help, and the
   // send-path interception identically to a real backend command.
-  // /resume is web-client-only: opens the cross-workspace session search
-  // modal (the same one the sidebar search icon opens) in its default
-  // 'sessions' mode to resume a session.
-  // /workspace is a second web-client-only entry, next to /resume: opens the
+  // /sessions is web-client-only: opens the Sessions view (the same one the
+  // sidebar search icon opens) in its default 'sessions' mode. There is no
+  // /resume alias — a typed /resume does not resolve here.
+  // /workspace is a second web-client-only entry, next to /sessions: opens the
   // SAME SearchModal instance but in its 'workspaces' mode (openWorkspaceSwitcher,
   // ui store) — ALL workspaces listed, session groups collapsed by default,
   // ArrowUp/Down walks workspace headers, Enter switches (SearchModal
@@ -602,9 +602,9 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // client-only name/delivery.
   const allCommands: SlashCommand[] = [
     {
-      name: 'resume',
-      label: '/resume',
-      description: 'Resume a session — search across all workspaces',
+      name: 'sessions',
+      label: '/sessions',
+      description: 'Open Sessions — search across all workspaces',
       delivery: 'client',
       available_while_streaming: true,
     },

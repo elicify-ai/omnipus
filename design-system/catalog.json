@@ -861,6 +861,23 @@
       ]
     },
     {
+      "source": "src/design-system/agent-identity.ts",
+      "classification": "foundations",
+      "exports": [
+        "IDENTITY_GROUP_ORDER", "AgentRoleGroup", "AgentIconRole", "ROLE_VOCABULARY",
+        "FIGURE_ART", "AgentIconFigure", "AGENT_ICON_PALETTE", "AgentIconColor"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/lib/agentIconArt.ts",
+      "classification": "foundations",
+      "exports": ["agentIconInner"],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
       "source": "src/design-system/status.ts",
       "classification": "foundations",
       "exports": [
@@ -916,6 +933,13 @@
       ],
       "publicExports": [],
       "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/agent-icon.tsx",
+      "classification": "composite",
+      "exports": ["AgentIcon", "AgentIconProps"],
+      "publicExports": ["AgentIcon"],
+      "publicTypes": ["AgentIconProps"]
     },
     {
       "source": "src/lib/utils.ts",

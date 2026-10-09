@@ -104,8 +104,17 @@ properties:
       session a gateway restart cut off — the boot sweep) maps to
       `interrupted`, not `failed` (founder ruling 2026-10-06: a session does
       not fail because of a restart; this adds a sixth value to F0929-2's
-      five). A genuinely failed record still maps to `failed`. A stopped
-      helper has `status: active`, `lifecycle_state: stopped`.
+      five). The canonical current-boot lifecycle projection is restart-aware:
+      a prior-boot root with raw `queued` or `running` state can display
+      `interrupted` without a recovery write; this suppresses `execution`.
+      Interrupted describes the session's current interruption, not permanent
+      history: once the session is re-adopted or explicitly resumed with a fresh
+      current-boot execution identity, its current record determines the display.
+      A resumed `running` record projects to `working` and publishes
+      `execution: running`, rather than retaining a stale Interrupted display.
+      Gateway availability alone does not mean an old execution has resumed.
+      A genuinely failed record still maps to `failed`. A stopped helper has
+      `status: active`, `lifecycle_state: stopped`.
     example: "working"
   stop_note:
     $ref: './StopNote.yaml'
@@ -114,6 +123,31 @@ properties:
       current generation last landed `stopped`) — the durable, lasting
       reason for the stop (who/when/why). Absent for every other
       `lifecycle_state`, and for a session with no lifecycle record.
+  execution:
+    type: string
+    enum:
+      - queued
+      - running
+    description: >-
+      Projected queued/running classification for the session's current lifecycle
+      display. Present only when the same loaded lifecycle record, evaluated through
+      the canonical current-boot lifecycle projection, produces `lifecycle_state:
+      working`: `queued` for a queued record and `running` for a running record.
+      Omitted for any other projected display state, including Interrupted after a
+      prior-boot root execution, and when no usable lifecycle record is available.
+      Not a raw lifecycle-state export. The Sessions Running filter matches
+      `running`; queued does not match. A nonmatching parent may still be included
+      as hierarchy context.
+    example: running
+  background_command_count:
+    type: integer
+    minimum: 0
+    description: >
+      How many background shell commands this session itself owns right now.
+      Omitted when the process table is not available (unknown, not zero).
+      Zero means the table was checked and this session owns none.
+      Not a roll-up of child sessions.
+    example: 2
   created_at:
     type: string
     format: date-time
