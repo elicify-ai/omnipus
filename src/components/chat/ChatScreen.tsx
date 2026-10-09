@@ -494,28 +494,35 @@ function deriveGoalAwareThinkingLabel(runningToolNames: string[], goalRecordEmpt
   return runningToolNames.includes('set_goal') ? 'Setting acceptance criteria' : 'Framing your goal'
 }
 
-/** Extracts the tool names of currently-`running` tool-call parts from a
- * LIVE AssistantUI message's `content` array — the same shape
- * deriveHiddenRunningToolLabel scans, but collecting every running name
- * (there's normally at most one) rather than stopping at the first hidden
- * one. Never throws; an unexpected shape yields an empty array. */
+/** One execution discriminator for both the live and plain/replay reply slots.
+ * Visibility and label selection must not change whether a tool is running. */
+function runningToolNamesForReply(
+  calls: readonly Pick<PositionedToolCall, 'tool' | 'status'>[],
+): string[] {
+  return calls.filter((call) => call.status === 'running').map((call) => call.tool)
+}
+
+/** Adapts live AssistantUI parts to the same execution records used by replay.
+ * Status comes from the store record correlated by toolCallId; an unexpected
+ * content shape yields no calls, not a guessed execution phase. */
 function runningToolNamesFromLiveContent(
   content: unknown,
-  storeToolCalls: Record<string, { status?: string }>,
+  storeToolCalls: Record<string, Pick<PositionedToolCall, 'status'>>,
 ): string[] {
   if (!Array.isArray(content)) return []
-  const names: string[] = []
+  const calls: Pick<PositionedToolCall, 'tool' | 'status'>[] = []
   try {
     for (const part of content) {
       const p = part as { type?: string; toolCallId?: string; toolName?: string } | undefined
       if (!p || p.type !== 'tool-call') continue
       if (typeof p.toolCallId !== 'string' || typeof p.toolName !== 'string') continue
-      if (storeToolCalls[p.toolCallId]?.status === 'running') names.push(p.toolName)
+      const call = storeToolCalls[p.toolCallId]
+      if (call) calls.push({ tool: p.toolName, status: call.status })
     }
   } catch {
     return []
   }
-  return names
+  return runningToolNamesForReply(calls)
 }
 
 // Custom text renderer with streaming cursor.
@@ -1221,7 +1228,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // InlineThinkingIndicator, applied to the historical/virtualized "still
   // streaming" placeholder (PlainMessageList renders an in-flight message
   // through THIS row too — see the D-fix comment on hasContent above).
-  const runningToolNames = positionedToolCalls.filter((tc) => tc.status === 'running').map((tc) => tc.tool)
+  const runningToolNames = runningToolNamesForReply(positionedToolCalls)
   const emptyPlaceholderLabel = goalRecordEmpty
     ? deriveGoalAwareThinkingLabel(runningToolNames, true)
     : null
