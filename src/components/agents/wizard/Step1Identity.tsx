@@ -153,7 +153,7 @@ export function Step1Identity({
 
       <div className="space-y-[var(--space-2)]">
         <Label>Preview</Label>
-        <IdentityPreview figure={payload.figure ?? 'Omnipus'} role={payload.role ?? 'general'} color={payload.color} />
+        <IdentityPreview figure={payload.figure ?? 'Omnipus'} role={payload.role ?? 'general'} color={payload.color} name={payload.name} />
       </div>
 
       <div className="space-y-[var(--space-2)]">

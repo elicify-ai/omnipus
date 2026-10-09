@@ -332,8 +332,10 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
     )
     const mark = container.querySelector('[data-figure="Monogram"]') as Element
     // Azure is derived independently from the spec hex #3B82F6, never read off
-    // the component's supplied prop.
-    const channels = [1, 3, 5].map((offset) => Number.parseInt('3B82F6'.slice(offset, offset + 2), 16))
+    // the component's supplied prop. (The literal carries its leading '#' so the
+    // [1,3,5] byte offsets are the RGB channels — without it the oracle computed
+    // rgb(184, 47, 6), which no palette colour equals.)
+    const channels = [1, 3, 5].map((offset) => Number.parseInt('#3B82F6'.slice(offset, offset + 2), 16))
     expect(getComputedStyle(mark).color).toBe(`rgb(${channels.join(', ')})`)
     const letter = container.querySelector('[data-initial]') as Element
     expect(letter.getAttribute('fill')).toBeNull() // inherits currentColor; no fill of its own
@@ -428,7 +430,10 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
     for (const layer of [ink, glow]) {
       expect(layer.querySelectorAll('[data-initial]')).toHaveLength(1)
       // Strip the letter and the badge; only the figure-mask structure may remain.
-      const clone = layer.cloneNode(true) as HTMLElement
+      // Inspect the injected markup's SVG subtree (the ink/glow span's only child
+      // is the <svg> wrapper, which is not itself part of the figure-mask
+      // structure the allowed set enumerates).
+      const clone = layer.querySelector('svg')!.cloneNode(true) as Element
       clone.querySelectorAll('[data-initial], [data-role]').forEach((node) => node.remove())
       clone.querySelectorAll('*').forEach((el) => {
         expect(allowed.has(el.tagName.toLowerCase()), `unexpected element <${el.tagName.toLowerCase()}>`).toBe(true)

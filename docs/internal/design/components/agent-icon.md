@@ -6,13 +6,13 @@ AgentIcon is the shared agent mark: one figure, one role badge, and one palette 
 
 | Input | Meaning |
 |---|---|
-| `figure` | `Robot`, `Man`, `Woman`, or `Omnipus`. Omnipus is the product default. |
+| `figure` | `Robot`, `Man`, `Woman`, `Omnipus`, or `Monogram`. Omnipus is the product default. `Monogram` draws the uppercased first letter or digit of the agent's name in the agent's colour; a first character that is not a letter or digit renders `?`. |
 | `role` | One of the 31 role slugs. The badge is drawn at every size. An unknown slug is a type error, not a fallback glyph. |
 | `color` | One of the ten palette hexes. Ink is fully opaque (`currentColor`). |
 | `size` | `18`, `26`, `40`, or `48` pixels. No other size. |
 | `motion` | `none` (default), `thinking`, `working`, or `waiting`. The icon does not render the state phrase. |
 | `decorative` | Default true: the mark is hidden from assistive technology because the row beside it already names the agent. |
-| `name` | Required when `decorative` is false. It is the agent name, announced as the image name. |
+| `name` | Required for every render. It is the agent name: `Monogram` draws its initial from it, and a non-decorative mark announces it as the image name. |
 | `reducedMotion` | Omitted follows the reduced-motion preference. `true` forces the still mark. `false` forces motion. |
 
 Ink opacity stays 1. Thinking, working, and waiting move a glow layer behind the ink. Reduced motion runs no loop.

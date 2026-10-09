@@ -733,9 +733,9 @@ test('AgentIcon renders commissioned motion frames and opaque >=3:1 ink on both 
     const AgentIcon = componentModule.exports.AgentIcon
     expect(typeof AgentIcon, 'actual bundled AgentIcon').toBe('function')
     const markup = (['thinking', 'working', 'waiting'] as const).map((motion) => renderToStaticMarkup(createElement(AgentIcon!, {
-      figure: 'Robot', role: 'security', size: 48, motion, reducedMotion: false, color: AgentColor.options[8],
+      figure: 'Robot', role: 'security', size: 48, motion, reducedMotion: false, color: AgentColor.options[8], name: 'Mia',
     }))).join('') + renderToStaticMarkup(createElement(AgentIcon!, {
-      figure: 'Robot', role: 'security', size: 48, motion: 'thinking', color: AgentColor.options[8],
+      figure: 'Robot', role: 'security', size: 48, motion: 'thinking', color: AgentColor.options[8], name: 'Mia',
     }))
     const classes = Array.from(markup.matchAll(/class="([^"]*)"/g)).flatMap((match) => match[1].split(/\s+/))
     const source = resolve('src/styles/library.css')

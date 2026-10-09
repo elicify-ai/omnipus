@@ -60,3 +60,47 @@ export function agentIconInner(art: AgentIconArtKey, role: AgentIconRole, maskId
   }
   return (figure + badge).split('MASK_ID').join(maskId)
 }
+
+/**
+ * Escapes user data before it is interpolated into injected SVG markup.
+ * `&` is escaped first so its own entity is never double-escaped. ARCH-RULING
+ * monogram D2b / AC-19: the agent name is user data and must never enter the
+ * markup string raw.
+ */
+export function escapeMarkup(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+// The letter's font comes from `.font-headline` (globals.css) — the brand
+// headline stack (`--font-family-heading`). It is a global class, not a
+// Tailwind utility, so it needs no `@source` line. The mask cutout below is
+// copied verbatim from the figure strings: the same (196,196) r=66 circle that
+// clears the role badge, so a tall/wide letter never collides with it. #fff/#000
+// are silhouette data (see the file header), not paint, and are not recoloured.
+const MONOGRAM_MASK =
+  '<defs><mask id="MASK_ID" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">' +
+  '<rect width="256" height="256" fill="#fff"/>' +
+  '<circle cx="196" cy="196" r="66" fill="#000"/></mask></defs>'
+
+/**
+ * Inner SVG (no outer <svg>) for the Monogram figure: the agent name's initial
+ * inside the shared badge-cutout mask, followed by the role badge — the same
+ * composed shape the four figure strings use. `escapedInitial` must already be
+ * escaped (see `escapeMarkup`). Mask ids are rewritten so two marks on one page
+ * do not collide. ARCH-RULING monogram D2b.
+ */
+export function monogramInner(role: AgentIconRole, maskId: string, escapedInitial: string): string {
+  const badge = BADGES[role]
+  if (!badge) {
+    throw new Error(`AgentIcon has no badge for ${role}`)
+  }
+  const ink =
+    `${MONOGRAM_MASK}<g mask="url(#MASK_ID)">` +
+    `<text data-initial="${escapedInitial}" class="font-headline" x="128" y="128" dy="0.35em" ` +
+    `text-anchor="middle" font-size="132" font-weight="600">${escapedInitial}</text></g>`
+  return (ink + badge).split('MASK_ID').join(maskId)
+}

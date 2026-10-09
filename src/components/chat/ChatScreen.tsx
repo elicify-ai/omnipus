@@ -614,6 +614,7 @@ function ResolvedAgentMark({
       figure={agent?.figure}
       role={agent?.role}
       color={agent?.color}
+      name={agent?.name ?? ''}
     />
   )
 }
@@ -1275,6 +1276,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
               figure={agent?.figure}
               role={agent?.role}
               color={agent?.color}
+              name={agent?.name ?? ''}
             />
           )}
           {/* Media attachments */}
