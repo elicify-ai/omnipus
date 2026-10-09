@@ -28294,7 +28294,7 @@ type Workspace struct {
 		// Modes Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. "direct" = Direct Delegation — the delegate tool dispatches to the target agent, either synchronously (await) or as a background spawn. Which of the two happens is a runtime parameter of the delegate tool call itself, not a trust distinction the edge gates separately — an edge that allows "direct" allows both call patterns. "task" = Task Delegation — task_create-style delegation (a persistent task assigned to another agent).
 		Modes *[]WorkspaceDelegationModes `json:"modes,omitempty"`
 
-		// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. Self-edges (from_agent == to_agent) are rejected.
+		// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. A self-edge (from_agent == to_agent) is an ordinary, fully valid edge — the agent forks a new session running itself, and any agent may hold one. Which agents ship a seeded self-edge is a config-level default, not a graph constraint expressed here.
 		ToAgent string `json:"to_agent"`
 	} `json:"delegation,omitempty"`
 
@@ -28429,14 +28429,14 @@ type WorkspaceDelegationEdge struct {
 	// Modes Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. "direct" = Direct Delegation — the delegate tool dispatches to the target agent, either synchronously (await) or as a background spawn. Which of the two happens is a runtime parameter of the delegate tool call itself, not a trust distinction the edge gates separately — an edge that allows "direct" allows both call patterns. "task" = Task Delegation — task_create-style delegation (a persistent task assigned to another agent).
 	Modes *[]WorkspaceDelegationEdgeModes `json:"modes,omitempty"`
 
-	// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. Self-edges (from_agent == to_agent) are rejected.
+	// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. A self-edge (from_agent == to_agent) is an ordinary, fully valid edge — the agent forks a new session running itself, and any agent may hold one. Which agents ship a seeded self-edge is a config-level default, not a graph constraint expressed here.
 	ToAgent string `json:"to_agent"`
 }
 
 // WorkspaceDelegationEdgeModes defines model for WorkspaceDelegationEdge.Modes.
 type WorkspaceDelegationEdgeModes string
 
-// WorkspaceDelegationUpdateRequest Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's delegation edge set wholesale (full replace, not a merge) so the Team-tab graph editor can persist the exact graph the operator drew. Every from_agent / to_agent must resolve to an eligible member of the candidate team. Only explicit Jim and General Purpose self-edges are permitted, bounded by the global and edge depth. Revision covers both membership and the authoritative graph.
+// WorkspaceDelegationUpdateRequest Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's delegation edge set wholesale (full replace, not a merge) so the Team-tab graph editor can persist the exact graph the operator drew. Every from_agent / to_agent must resolve to an eligible member of the candidate team. A self-edge is an ordinary edge like any other — any agent may hold one — bounded by the global and edge depth. Revision covers both membership and the authoritative graph.
 type WorkspaceDelegationUpdateRequest struct {
 	// Edges The complete set of delegation edges for this workspace. An empty array clears all delegation. Deduplicated by (from_agent, to_agent) at write time.
 	Edges []WorkspaceDelegationEdge `json:"edges"`
@@ -28539,7 +28539,7 @@ type WorkspaceUpdateRequest struct {
 		// Modes Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. "direct" = Direct Delegation — the delegate tool dispatches to the target agent, either synchronously (await) or as a background spawn. Which of the two happens is a runtime parameter of the delegate tool call itself, not a trust distinction the edge gates separately — an edge that allows "direct" allows both call patterns. "task" = Task Delegation — task_create-style delegation (a persistent task assigned to another agent).
 		Modes *[]WorkspaceUpdateRequestDelegationModes `json:"modes,omitempty"`
 
-		// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. Self-edges (from_agent == to_agent) are rejected.
+		// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. A self-edge (from_agent == to_agent) is an ordinary, fully valid edge — the agent forks a new session running itself, and any agent may hold one. Which agents ship a seeded self-edge is a config-level default, not a graph constraint expressed here.
 		ToAgent string `json:"to_agent"`
 	} `json:"delegation,omitempty"`
 	Description *string `json:"description,omitempty"`

@@ -12069,7 +12069,8 @@ paths:
       description: >
         Replaces the workspace's delegation edge set wholesale (full replace).
         Validates that every from_agent / to_agent resolves to a known agent,
-        rejects self-edges, and rejects depths above the global subturn ceiling.
+        rejects multi-hop cycles (a self-edge is an ordinary edge and is
+        permitted), and rejects depths above the global subturn ceiling.
         Returns the updated graph.
       tags:
       - Workspaces
