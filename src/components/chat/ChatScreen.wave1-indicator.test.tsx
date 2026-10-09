@@ -134,7 +134,10 @@ function seedMessages(sid: string, messages: ChatMessage[], flags: { streaming: 
   })
 }
 
-function streamingPair(sid: string, agentId: string): ChatMessage[] {
+function streamingPair(sid: string, agentId: string): [
+  Extract<ChatMessage, { role: 'user' }>,
+  Extract<ChatMessage, { role: 'assistant' }>,
+] {
   return [
     {
       id: `${sid}_user`,
