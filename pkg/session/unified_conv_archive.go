@@ -76,9 +76,12 @@ func convConvertOneLegacyArchive(baseDir, contextDir, base string) error {
 	if metaErr != nil {
 		return fmt.Errorf("conversion: saved chat %q: read legacy meta: %w", base, metaErr)
 	}
-	id := meta.Key
-	if id == "" {
-		// The sanitized filename is the only identity available; refuse rather
+	// The legacy meta's Key is the agent routing key; resolve it to the immutable
+	// owning session id so the converted archive lands beside the chat transcript
+	// (Decision D "Identity").
+	id := owningSessionID(meta.Key)
+	if meta.Key == "" {
+		// The sanitized filename is the only identity available; use it rather
 		// than guess an owner (spec CONV / Identity).
 		id = base
 	}

@@ -44,6 +44,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -83,12 +84,36 @@ func (b *archiveBackend) store(key string) (*ArchiveDayStore, error) {
 	if s, ok := b.stores[key]; ok {
 		return s, nil
 	}
-	s, err := NewArchiveDayStore(b.baseDir, key)
+	s, err := NewArchiveDayStore(b.baseDir, owningSessionID(key))
 	if err != nil {
 		return nil, err
 	}
 	b.stores[key] = s
 	return s, nil
+}
+
+// owningSessionID maps an agent routing key to the immutable owning session id
+// the model content belongs to (ARCHITECT-ANSWER-CUTOVER-SLICE4.md, "Identity";
+// Decision D "no current-agent/active-agent guessing"). The agent routing key
+// "agent:<agentID>:session:<sessionID>" embeds the store-backed owning session
+// id, so the archive then lives at <baseDir>/<sessionID>/u2archive — beside the
+// chat transcript, so a session delete removes both. Any other key (a plain
+// session id, or a chat-scoped key whose owning session is not encoded) is left
+// unchanged.
+func owningSessionID(key string) string {
+	rest, ok := strings.CutPrefix(key, "agent:")
+	if !ok {
+		return key
+	}
+	i := strings.Index(rest, ":session:")
+	if i < 0 {
+		return key
+	}
+	id := rest[i+len(":session:"):]
+	if id == "" {
+		return key
+	}
+	return id
 }
 
 // archiveBackendMeta is the persisted, content-free backend window state.

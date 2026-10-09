@@ -217,3 +217,34 @@ func TestArchiveBackend_OrphanToolResultIsRefused(t *testing.T) {
 	require.Error(t, err, "an orphan tool result must be refused")
 	require.Empty(t, b.GetHistory(key), "nothing was written for the refused orphan")
 }
+
+// The model archive is keyed by the immutable OWNING session id, not the agent
+// routing key (Decision D "Identity"), so it lives beside the chat transcript.
+func TestArchiveBackend_RoutingKeyResolvesToOwningSession(t *testing.T) {
+	b := newTestBackend(t)
+	const routing = "agent:mia:session:sess-owner-1"
+	require.NoError(t, b.appendMessage(routing, userMsg("hi")))
+
+	require.DirExists(t, filepath.Join(b.baseDir, "sess-owner-1", "u2archive"),
+		"the archive lands under the owning session directory")
+	_, err := os.Stat(filepath.Join(b.baseDir, "agent:mia:session:sess-owner-1"))
+	require.True(t, os.IsNotExist(err), "no stray routing-key directory is created")
+	require.Len(t, b.GetHistory(routing), 1, "reads through the routing key resolve to the same store")
+}
+
+// Deleting a session removes its model content too (no private data survives the
+// chat's deletion) — the owning-session keying makes this natural.
+func TestUnifiedStore_DeleteSessionRemovesModelArchive(t *testing.T) {
+	base := t.TempDir()
+	us, err := NewUnifiedStore(base)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = us.Close() })
+	const id = "sess-del"
+	us.AddMessage("agent:mia:session:"+id, "user", "hello")
+	archiveDir := filepath.Join(base, id, "u2archive")
+	require.DirExists(t, archiveDir)
+
+	require.NoError(t, us.DeleteSession(id))
+	_, err = os.Stat(archiveDir)
+	require.True(t, os.IsNotExist(err), "the model archive is removed with the session")
+}
