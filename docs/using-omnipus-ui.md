@@ -162,7 +162,7 @@ The view is titled **Sessions** and offers two status filters:
 | Filter | What it includes |
 |---|---|
 | **All** | The available sessions across workspaces, including queued and ended work. Search, date, and workspace filters can narrow the list. Internal verifier sessions are not included. |
-| **Running** | Sessions the server records as executing now, plus their parent rows so helpers stay in context. A queued session does not match Running by itself, though a non-running parent can remain above a matching helper. |
+| **Running** | Sessions whose current lifecycle display is **Working** and whose server execution classification is running, plus their parent rows so helpers stay in context. Queued and restart-interrupted sessions do not match Running themselves, though a non-running parent can remain above a genuinely running helper. |
 
 Search matches a session's title, workspace, or agent name. The date-range control filters by when the session was last active, not when it started.
 
@@ -176,8 +176,10 @@ Each real session row shows its title above its status, kind, when it started, a
 | **Done** | Its lifecycle record says it finished. If no lifecycle status is available, an archived chat also shows Done. |
 | **Failed** | It failed. |
 | **Stopped** | It was stopped. The cause is included when known, for example **Stopped · timeout**. |
-| **Interrupted** | A server restart cut the turn off. |
+| **Interrupted** | A server restart cut the turn off. This takes priority over an old queued or running record. |
 | **Unavailable** | No usable lifecycle or queued status is available, and the chat is not archived. An active chat without that information is not labelled Working. |
+
+The server classifies queued or running work only while that same session's current lifecycle display is **Working**. After a restart, an interrupted main conversation is not itself running or queued, even if its old record still says so. It may remain in **Running** as parent context for a genuinely running helper. As explained [above](#if-the-gateway-restarts-during-a-reply), the Interrupted label alone does not prove that recovery saved a stop.
 
 Kind is the session's real type: **Chat**, **Task**, **Helper**, **Scheduled**, **Channel**, or **Heartbeat**. A Helper is a delegated session with its own parent chat.
 
