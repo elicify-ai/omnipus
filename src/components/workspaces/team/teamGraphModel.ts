@@ -382,14 +382,25 @@ export function buildTeamGraphModel(
 
 // ── Mutations (immutable) ────────────────────────────────────────────────────
 
-export type ConnectionRejection = 'self-edge' | 'duplicate' | 'not-member' | 'system-target' | 'cycle'
+export type ConnectionRejection = 'duplicate' | 'not-member' | 'system-target' | 'cycle'
 
 /**
  * Validate a candidate edge from → to against the current edit state.
- *   - self-edges only for the two bounded helper identities (jim, worker)
  *   - both endpoints must be team members
  *   - target must not be a System agent (ADR-049 D3/SD-C17)
  *   - no duplicate (from, to) pair
+ *   - no cycle (a self-edge is exempt — see below)
+ *
+ * A SELF-EDGE (from === to) is an ORDINARY edge, valid like any other
+ * (founder ruling DESIGN-RULING-delegation-20261009, U5a): the backend seeds
+ * one for every non-system agent and expresses the judge / plans-coordinator
+ * exclusion in CONFIG, so this validator MUST NOT hard-code an identity
+ * allow/deny for self-delegation — the old "only Jim and General Purpose"
+ * gate went with the rest of that model. The cycle check skips a self-edge
+ * (`from !== to`) because a node trivially reaches itself, and without that
+ * guard every new self-edge would be misreported as a 'cycle'; the duplicate
+ * check above already catches a second identical self-edge, so a self-edge is
+ * bounded exactly like any other edge (membership, modes, depth, policy).
  *
  * Delegation is BOUNDED, not tier-gated: the Sprint-3 backend unlocked onward
  * delegation for any agent (the seed wires Planner, a `Subagent`/worker, →
@@ -415,7 +426,6 @@ export function validateConnection(
   _workerIds?: ReadonlySet<string>,
   isSystemTarget?: boolean,
 ): ConnectionRejection | null {
-  if (from === to && from !== 'jim' && from !== 'worker') return 'self-edge'
   if (!state.members.includes(from) || !state.members.includes(to)) return 'not-member'
   if (isSystemTarget) return 'system-target'
   if (state.edges.some((e) => e.from === from && e.to === to)) return 'duplicate'
@@ -440,7 +450,6 @@ function hasPath(edges: TeamEdgeEdit[], start: string, target: string): boolean 
 
 /** Plain-language, per-repo-copywriting-convention message for each rejection reason. */
 export const REJECTION_MESSAGE: Record<ConnectionRejection, string> = {
-  'self-edge': 'Only Jim and General Purpose can delegate to themselves.',
   duplicate: 'That delegation edge already exists.',
   'not-member': 'Both agents must be on the team first.',
   'system-target': 'System agents cannot be a delegation target.',
@@ -452,11 +461,10 @@ export const REJECTION_MESSAGE: Record<ConnectionRejection, string> = {
  * React Flow `FinalConnectionState`-shaped from/to node ids and validity.
  *
  * React Flow only invokes `onConnect` when `isValidConnection` passed — a
- * rejected drop (self-edge, duplicate, non-member) never reaches `onConnect`
- * at all, so a rejection handler wired there is unreachable dead code. The
- * drag is instead silently swallowed: no edge, no feedback (e.g. dragging a
- * handle back onto its own node produces a silent no-op). The one event
- * React Flow ALWAYS fires, valid or not, is `onConnectEnd` — this helper
+ * rejected drop (duplicate, non-member, cycle, system-target) never reaches
+ * `onConnect` at all, so a rejection handler wired there is unreachable dead
+ * code. The drag is instead silently swallowed: no edge, no feedback. The one
+ * event React Flow ALWAYS fires, valid or not, is `onConnectEnd` — this helper
  * recomputes the same rejection reason from its `FinalConnectionState` so a
  * caller wired to `onConnectEnd` can surface it.
  *

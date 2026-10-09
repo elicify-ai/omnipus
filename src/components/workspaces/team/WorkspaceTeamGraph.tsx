@@ -563,13 +563,14 @@ function WorkspaceTeamGraphInner({
   )
 
   // Bug fix (live-UAT): React Flow only calls `onConnect` when
-  // `isValidConnection` passed — a REJECTED drag (self-edge, duplicate,
-  // non-member) never reaches `handleConnect` above at all, so a self-edge
-  // drop (e.g. jim → jim) produced no edge and zero feedback, and the drop
+  // `isValidConnection` passed — a REJECTED drag (duplicate, non-member,
+  // cycle, system-target) never reaches `handleConnect` above at all, so a
+  // rejected drop produced no edge and zero feedback, and the drop
   // fell through to the node's own click handler (opening its profile panel)
   // with no explanation. `onConnectEnd` is the one connect-lifecycle event
   // React Flow fires unconditionally, valid or not, so it's the only place a
-  // rejected attempt can be observed and surfaced.
+  // rejected attempt can be observed and surfaced. (A self-edge is no longer
+  // among these — it is a valid ordinary edge, so it reaches `handleConnect`.)
   const handleConnectEnd = useCallback<OnConnectEnd>(
     (_event, connectionState) => {
       const message = rejectionMessageForFailedConnection(
