@@ -6545,6 +6545,27 @@ func (e MessageVerdictScope) Valid() bool {
 	}
 }
 
+// Defines values for MessageViewMembership.
+const (
+	MessageViewMembershipBoth  MessageViewMembership = "both"
+	MessageViewMembershipChat  MessageViewMembership = "chat"
+	MessageViewMembershipModel MessageViewMembership = "model"
+)
+
+// Valid indicates whether the value is a known member of the MessageViewMembership enum.
+func (e MessageViewMembership) Valid() bool {
+	switch e {
+	case MessageViewMembershipBoth:
+		return true
+	case MessageViewMembershipChat:
+		return true
+	case MessageViewMembershipModel:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageParentArtifactKind.
 const (
 	MessageParentArtifactKindArtifact MessageParentArtifactKind = "artifact"
@@ -10265,6 +10286,27 @@ func (e SessionDetailMessagesVerdictScope) Valid() bool {
 	case SessionDetailMessagesVerdictScopePlan:
 		return true
 	case SessionDetailMessagesVerdictScopeTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesViewMembership.
+const (
+	SessionDetailMessagesViewMembershipBoth  SessionDetailMessagesViewMembership = "both"
+	SessionDetailMessagesViewMembershipChat  SessionDetailMessagesViewMembership = "chat"
+	SessionDetailMessagesViewMembershipModel SessionDetailMessagesViewMembership = "model"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesViewMembership enum.
+func (e SessionDetailMessagesViewMembership) Valid() bool {
+	switch e {
+	case SessionDetailMessagesViewMembershipBoth:
+		return true
+	case SessionDetailMessagesViewMembershipChat:
+		return true
+	case SessionDetailMessagesViewMembershipModel:
 		return true
 	default:
 		return false
@@ -20957,6 +20999,9 @@ type Message struct {
 		// TaskId Task being judged. Present when `scope == task`.
 		TaskId *string `json:"task_id,omitempty"`
 	} `json:"verdict,omitempty"`
+
+	// ViewMembership C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". One authoritative content entry format carries both views, so the same persisted entry backs the chat rendering and the model history; there is no separate model-content store. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. The reader projects this archive onto the chat/model views; it is a per-entry classification, never a second store.
+	ViewMembership *MessageViewMembership `json:"view_membership,omitempty"`
 }
 
 // MessageAttachmentsType Attachment category. Aligned with MediaPart.type enum.
@@ -21030,6 +21075,9 @@ type MessageVerdictPerCriterionProvenance string
 
 // MessageVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type MessageVerdictScope string
+
+// MessageViewMembership C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". One authoritative content entry format carries both views, so the same persisted entry backs the chat rendering and the model history; there is no separate model-content store. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. The reader projects this archive onto the chat/model views; it is a per-entry classification, never a second store.
+type MessageViewMembership string
 
 // MessageParentArtifact `message_parent` child tool call, `kind: artifact` (ADR-053 §5.1). Payload-only — see `MessageParentProgress` for the request/record split rationale.
 type MessageParentArtifact struct {
@@ -24528,6 +24576,9 @@ type SessionDetail struct {
 			// TaskId Task being judged. Present when `scope == task`.
 			TaskId *string `json:"task_id,omitempty"`
 		} `json:"verdict,omitempty"`
+
+		// ViewMembership C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". One authoritative content entry format carries both views, so the same persisted entry backs the chat rendering and the model history; there is no separate model-content store. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. The reader projects this archive onto the chat/model views; it is a per-entry classification, never a second store.
+		ViewMembership *SessionDetailMessagesViewMembership `json:"view_membership,omitempty"`
 	} `json:"messages"`
 
 	// Session Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost.
@@ -24737,6 +24788,9 @@ type SessionDetailMessagesVerdictPerCriterionProvenance string
 
 // SessionDetailMessagesVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type SessionDetailMessagesVerdictScope string
+
+// SessionDetailMessagesViewMembership C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". One authoritative content entry format carries both views, so the same persisted entry backs the chat rendering and the model history; there is no separate model-content store. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. The reader projects this archive onto the chat/model views; it is a per-entry classification, never a second store.
+type SessionDetailMessagesViewMembership string
 
 // SessionDetailSessionExecution Set only when this session's lifecycle record state is queued or running. Omitted for every other state, and when the session has no lifecycle record. `lifecycle_state: working` remains the collapsed display value and is not changed. The Sessions Running filter uses this field, not `lifecycle_state`.
 type SessionDetailSessionExecution string
@@ -25687,12 +25741,6 @@ type SlashCommand struct {
 
 // SlashCommandDelivery How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /clear, /model) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame (e.g. /skill). Only meaningful for web-surfaced commands; defaults to "agent".
 type SlashCommandDelivery string
-
-// SseChatRequest Request body for POST /api/v1/chat (SSE streaming endpoint). Sends a user message to the agent and streams the response via Server-Sent Events.
-type SseChatRequest struct {
-	// Message The user message to send to the agent. Must not be empty.
-	Message string `json:"message"`
-}
 
 // StorageStats Storage statistics returned by GET /api/v1/storage/stats. Reports session count, workspace disk usage, memory entry count, and any non-fatal warnings encountered while collecting the stats.
 type StorageStats struct {
@@ -28956,9 +29004,6 @@ type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
 
 // SetChannelRoutingJSONRequestBody defines body for SetChannelRouting for application/json ContentType.
 type SetChannelRoutingJSONRequestBody = ChannelRouting
-
-// PostChatJSONRequestBody defines body for PostChat for application/json ContentType.
-type PostChatJSONRequestBody = SseChatRequest
 
 // SetCredentialJSONRequestBody defines body for SetCredential for application/json ContentType.
 type SetCredentialJSONRequestBody = CredentialSetRequest

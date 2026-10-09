@@ -1915,8 +1915,6 @@ components:
       $ref: ./components/schemas/SkillSearchResult.yaml
     SkillMarketplaceStatus:
       $ref: ./components/schemas/SkillMarketplaceStatus.yaml
-    SseChatRequest:
-      $ref: ./components/schemas/SseChatRequest.yaml
     ToolApprovalActionRequest:
       $ref: ./components/schemas/ToolApprovalActionRequest.yaml
     CredentialSetRequest:
@@ -6840,35 +6838,6 @@ paths:
           $ref: '#/components/responses/404NotFound'
         '409':
           $ref: '#/components/responses/409Conflict'
-  /chat:
-    post:
-      operationId: postChat
-      summary: Send a chat message via SSE
-      description: >
-        Sends a user message to the agent and streams the response via
-        Server-Sent Events. The connection stays open until the agent
-        finishes responding or the client disconnects.
-      tags:
-      - Chat
-      security:
-      - BearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SseChatRequest'
-      responses:
-        '200':
-          description: SSE stream of agent response frames.
-          content:
-            text/event-stream:
-              schema:
-                type: string
-        '400':
-          $ref: '#/components/responses/400BadRequest'
-        '401':
-          $ref: '#/components/responses/401Unauthorized'
   /activity:
     get:
       operationId: getActivity
