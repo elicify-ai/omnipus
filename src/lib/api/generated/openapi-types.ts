@@ -4624,6 +4624,12 @@ export interface components {
              */
             type?: "message" | "compaction" | "system" | "tool_call" | "turn_canceled" | "judge_verdict" | "context_window_notice";
             /**
+             * @description C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". One authoritative content entry format carries both views, so the same persisted entry backs the chat rendering and the model history; there is no separate model-content store. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. The reader projects this archive onto the chat/model views; it is a per-entry classification, never a second store.
+             * @example both
+             * @enum {string}
+             */
+            view_membership?: "chat" | "model" | "both";
+            /**
              * @description Author role. Absent on compaction entries.
              * @example assistant
              * @enum {string}
