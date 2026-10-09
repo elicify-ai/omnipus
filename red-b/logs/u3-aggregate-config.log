@@ -1,0 +1,9 @@
+--- FAIL: TestSessionCoreU3_AggregateBodySettingExistsAndDefaultsTo1048576 (0.00s)
+    sessioncore_u3_bounds_test.go:57: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-b-20261009/pkg/config/sessioncore_u3_bounds_test.go:57
+        	Error:      	Should be true
+        	Test:       	TestSessionCoreU3_AggregateBodySettingExistsAndDefaultsTo1048576
+        	Messages:   	FR-010/C-LIMIT: session_messaging must expose the sole new setting steer_aggregate_body; present json keys: [enabled wake_enabled adjudication_enabled child_send_rate child_send_body child_send_depth inbox_unacked_max inbox_per_type_ceiling steer_rate steer_body needs_input_ttl wake_debounce wake_max_per_hour idle_quiet_window attempts_max judge_rounds_max message_retention audit_retention undelivered_retention]
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/config	0.416s
+FAIL
