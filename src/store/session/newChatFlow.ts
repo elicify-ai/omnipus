@@ -8,7 +8,7 @@
 import type { AgentKind } from '@/lib/api'
 import { decideNewChat } from '@/lib/nav/extraChatGuard'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { supersedeNavigationIntent } from '@/store/session/workspaceEntryFlow'
+import { resumeWorkspaceEntryQueue, supersedeNavigationIntent } from '@/store/session/workspaceEntryFlow'
 import {
   abandonRegisteredPendingFirstSend,
   clearPendingAutoApproveOnSessionChange,
@@ -100,4 +100,5 @@ export function runStartNewSession(
   // A new extra keeps the pair's owner. It does not clear the saved pointer
   // and it does not replace the main pointer the sidebar row uses.
   useSessionStore.getState().setActiveSession(null, hint, agentType ?? undefined)
+  resumeWorkspaceEntryQueue()
 }

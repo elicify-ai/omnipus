@@ -10,7 +10,7 @@
 import { fetchSessions, fetchWorkspace } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
 import type { Session, WorkspaceMemberConfig } from '@/lib/api'
-import { resolveWorkspaceEntry, type EntryResult, type FailedAttempt, type PointerVerdict, type WelcomeEntry } from '@/lib/nav/workspaceEntry'
+import { resolveWorkspaceEntry, workspaceEntryBlocksSend, type EntryResult, type FailedAttempt, type PointerVerdict, type WelcomeEntry } from '@/lib/nav/workspaceEntry'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { clearPendingAutoApproveOnSessionChange, readPersistedSessionByWorkspace, useSessionStore } from '@/store/session'
@@ -24,6 +24,19 @@ export type WorkspaceEntryView =
 let navigationIntent = 0
 const inFlight = new Map<string, Promise<void>>()
 const visibilityWaiters = new Set<() => void>()
+let resumeQueuedSends: (() => void) | null = null
+
+/** The chat store registers without introducing a session/chat import cycle. */
+export function registerWorkspaceEntryQueueResume(resume: () => void): void {
+  resumeQueuedSends = resume
+}
+
+/** Called only after the destination tuple and its entry gates are committed. */
+export function resumeWorkspaceEntryQueue(): void {
+  const workspaceId = useWorkspacesStore.getState().activeWorkspaceId
+  if (workspaceEntryBlocksSend(useSessionStore.getState(), workspaceId)) return
+  resumeQueuedSends?.()
+}
 
 export function supersedeNavigationIntent(): number {
   navigationIntent += 1
@@ -234,6 +247,9 @@ async function execute(workspaceId: string): Promise<void> {
     applyEntry(workspaceId, result, loaded.sessions, token)
   } finally {
     clearResolving(workspaceId)
+    if (navigationIntentCurrent(token) && useWorkspacesStore.getState().activeWorkspaceId === workspaceId) {
+      resumeWorkspaceEntryQueue()
+    }
   }
 }
 

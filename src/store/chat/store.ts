@@ -4,9 +4,8 @@ import { create } from 'zustand'
 import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
 import { useSessionStore } from '@/store/session'
-import { useWorkspacesStore } from '@/store/workspacesStore'
-import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
 import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
+import { registerWorkspaceEntryQueueResume } from '@/store/session/workspaceEntryFlow'
 import type { Message } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
 import { findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from './messages'
@@ -784,18 +783,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
   }
 })
 
-// An entry gate can park the drain after reconnect/turn completion has already
-// happened. Resume when it opens, after the session action's coherent tuple is
-// committed (never synchronously in the middle of setActiveSession/new chat).
-useSessionStore.subscribe((state, previous) => {
-  const workspaceId = useWorkspacesStore.getState().activeWorkspaceId
-  if (!workspaceEntryBlocksSend(previous, workspaceId) || workspaceEntryBlocksSend(state, workspaceId)) return
-  queueMicrotask(() => {
-    if (useWorkspacesStore.getState().activeWorkspaceId !== workspaceId) return
-    if (workspaceEntryBlocksSend(useSessionStore.getState(), workspaceId)) return
-    useChatStore.getState().drainOutboundQueue()
-  })
-})
+// Same cycle-break registration as session/chat foreground callbacks. Entry
+// and New chat resume only AFTER their coherent destination is committed.
+registerWorkspaceEntryQueueResume(() => useChatStore.getState().drainOutboundQueue())
 
 // Expose syncForeground so setActiveSession can call it after switching sessions.
 // Avoiding a direct import of the session store here to keep the cycle-break intact.

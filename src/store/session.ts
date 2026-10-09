@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { AgentKind, Session } from '@/lib/api'
 import { isMainSession } from '@/lib/nav/sessionCoreSeam'
+import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
 import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
@@ -8,7 +9,7 @@ import { logDiagnostic } from '@/lib/telemetry'
 import { noteForegroundAttach } from '@/store/session/foregroundAck'
 import { runStartNewSession, type NewChatStartArg } from '@/store/session/newChatFlow'
 import type { NewChatPrompt } from '@/store/session/newChatFlow'
-import { runWorkspaceEntry } from '@/store/session/workspaceEntryFlow'
+import { resumeWorkspaceEntryQueue, runWorkspaceEntry } from '@/store/session/workspaceEntryFlow'
 import type { WorkspaceEntryView } from '@/store/session/workspaceEntryFlow'
 
 // syncChatForeground is imported lazily to avoid the chat ↔ session circular init.
@@ -510,6 +511,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     // A hidden document is a prefetch, not a foreground open (FR-013).
     if (typeof document !== 'undefined' && document.hidden === true) return false
     const { connection } = useConnectionStore.getState()
+    const entryWasBlocked = workspaceEntryBlocksSend(get(), useWorkspacesStore.getState().activeWorkspaceId)
 
     if (connection) {
       // #823 §6.1: send the bucket's cursor; only session_snapshot wipes now (Q3).
@@ -550,6 +552,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       rememberMainPointer(get, set, sessionId)
       noteForegroundAttach(sessionId)
       setChatReplaying(true)
+      if (entryWasBlocked) queueMicrotask(resumeWorkspaceEntryQueue)
       return true
     } else {
       clearPendingAutoApproveOnSessionChange() // unlike failed-send, this branch changes state
@@ -588,6 +591,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       syncForeground()
       rememberMainPointer(get, set, sessionId)
       noteForegroundAttach(sessionId)
+      if (entryWasBlocked) queueMicrotask(resumeWorkspaceEntryQueue)
       return true
     }
   },

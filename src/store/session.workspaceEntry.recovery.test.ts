@@ -234,6 +234,23 @@ describe('workspace-entry recovery — gate round 2', () => {
     },
   )
 
+  it('an explicit successful target attach resumes the parked drain after committing the target tuple', async () => {
+    retainSourceAndRememberTarget()
+    const send = connect()
+    useSessionStore.setState({ workspaceEntry: failed })
+    useChatStore.setState({ pendingDrainQueue: [queued[0]] })
+    const attached = useSessionStore.getState().attachToSession(TARGET, 'chat', 'Target conversation', 'mia')
+    expect(attached).toBe(true)
+    await new Promise<void>((resolve) => queueMicrotask(resolve))
+
+    expect(messageFrames(send)).toEqual([expect.objectContaining({
+      type: 'message', content: queued[0].content, client_message_id: queued[0].id,
+      session_id: TARGET, agent_id: 'mia', metadata: { workspace_id: TARGET_WS },
+    })])
+    expect(useChatStore.getState().pendingDrainQueue).toEqual([])
+    expect(useChatStore.getState().sessionsById[SOURCE].messageOrder).toEqual(['source-message'])
+  })
+
   it.each(['send', 'resend'] as const)(
     '%s respects the failed-entry gate, reports Retry and leaves the original failed bubble intact',
     (operation) => {
@@ -254,6 +271,9 @@ describe('workspace-entry recovery — gate round 2', () => {
     },
   )
 
+})
+
+describe('workspace-entry visibility and supersession — gate round 2', () => {
   it('a tab hidden during input loading defers the attach until focus instead of inventing a restore failure', async () => {
     retainSourceAndRememberTarget()
     const send = connect()
