@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { WsConnection, parseFrameSafe, getDroppedFrameCount, resetDroppedFrameCount, getUnknownFrameTypeCount, resetUnknownFrameTypeCount, ClientFrameTypes } from './ws'
+import { WsConnection, parseFrameSafe, getDroppedFrameCount, resetDroppedFrameCount, getUnknownFrameTypeCount, resetUnknownFrameTypeCount, ClientFrameTypes, type ServerFrame } from './ws'
 import { ClientFrameTypes as ClientFrameTypesFromGenerated } from '@/lib/api/generated/asyncapi-types'
 
 // ── Mock WebSocket ─────────────────────────────────────────────────────────────
@@ -114,8 +114,16 @@ afterEach(() => {
 // ── Helper ─────────────────────────────────────────────────────────────────────
 
 function makeCallbacks() {
+  // The transport delivers via the batch `onFrames` callback (the legacy
+  // single-frame `onFrame` callback is gone — DEL-F19). Keep a per-frame mock
+  // so the existing per-frame assertions read naturally: onFrames fans each
+  // frame out to it.
+  const onFrame = vi.fn()
   return {
-    onFrame: vi.fn(),
+    onFrame,
+    onFrames: (frames: ServerFrame[]) => {
+      for (const frame of frames) onFrame(frame)
+    },
     onConnected: vi.fn(),
     onDisconnected: vi.fn(),
     onError: vi.fn(),
@@ -951,7 +959,7 @@ describe('ClientFrameTypes — contract test', () => {
     resetDroppedFrameCount()
     const onFrame = vi.fn()
     const conn = new WsConnection({
-      onFrame,
+      onFrames: (frames) => { for (const frame of frames) onFrame(frame) },
       onConnected: vi.fn(),
       onDisconnected: vi.fn(),
       onError: vi.fn(),
@@ -1588,8 +1596,10 @@ describe('Phase 2C: frame batching — at most one flush per rAF tick', () => {
     // 100 reach the consumer in order."
     const received: string[] = []
     const conn = new WsConnection({
-      onFrame: (frame) => {
-        if (frame.type === 'token') received.push((frame as { content: string }).content)
+      onFrames: (frames) => {
+        for (const frame of frames) {
+          if (frame.type === 'token') received.push((frame as { content: string }).content)
+        }
       },
       onConnected: vi.fn(),
       onDisconnected: vi.fn(),
@@ -1682,8 +1692,10 @@ describe('Phase 2C: frame batching — at most one flush per rAF tick', () => {
 
     const received: string[] = []
     const conn = new WsConnection({
-      onFrame: (f) => {
-        if (f.type === 'token') received.push((f as { content: string }).content)
+      onFrames: (frames) => {
+        for (const f of frames) {
+          if (f.type === 'token') received.push((f as { content: string }).content)
+        }
       },
       onConnected: vi.fn(),
       onDisconnected: vi.fn(),
@@ -1763,8 +1775,10 @@ describe('Phase 2C: Worker fallback — inline parse when Worker unavailable', (
 
     const received: string[] = []
     const conn = new WsConnection({
-      onFrame: (f) => {
-        if (f.type === 'token') received.push((f as { content: string }).content)
+      onFrames: (frames) => {
+        for (const f of frames) {
+          if (f.type === 'token') received.push((f as { content: string }).content)
+        }
       },
       onConnected: vi.fn(),
       onDisconnected: vi.fn(),
@@ -1883,17 +1897,19 @@ describe('T6: Frame batching ordering — 100 frames in monotonic order', () => 
     conn.disconnect()
   })
 
-  it('100 frames sent in order arrive at onFrame (legacy callback) in the same order', () => {
-    // Same test but using the legacy single-frame onFrame callback.
-    // Confirms ordering is preserved even when the consumer processes one frame at a time.
+  it('100 frames sent in order arrive at onFrames in the same order', () => {
+    // Same test but through the batch callback, confirming ordering is
+    // preserved even when the consumer processes one frame at a time.
     //
-    // Traces to: spa-streaming-refactor.md Phase 2D, T6 (legacy onFrame path)
+    // Traces to: spa-streaming-refactor.md Phase 2D, T6 (batch callback path)
 
     const received: string[] = []
     const conn = new WsConnection({
-      onFrame: (f) => {
-        if (f.type === 'token') {
-          received.push((f as { type: 'token'; content: string; session_id: string }).content)
+      onFrames: (frames) => {
+        for (const f of frames) {
+          if (f.type === 'token') {
+            received.push((f as { type: 'token'; content: string; session_id: string }).content)
+          }
         }
       },
       onConnected: vi.fn(),
@@ -2025,8 +2041,10 @@ describe('WsConnection onclose — pending batch flushed on unintentional close'
     //   Then the consumer still receives the frame (onclose calls _flushBatch)
     const received: string[] = []
     const conn = new WsConnection({
-      onFrame: (f) => {
-        if (f.type === 'token') received.push((f as { content: string }).content)
+      onFrames: (frames) => {
+        for (const f of frames) {
+          if (f.type === 'token') received.push((f as { content: string }).content)
+        }
       },
       onConnected: vi.fn(),
       onDisconnected: vi.fn(),
@@ -2102,7 +2120,7 @@ describe('Worker construction failure — logged loudly', () => {
     vi.stubGlobal('Worker', FailingWorker)
 
     const conn = new WsConnection({
-      onFrame: vi.fn(),
+      onFrames: vi.fn(),
       onConnected: vi.fn(),
       onDisconnected: vi.fn(),
       onError: vi.fn(),

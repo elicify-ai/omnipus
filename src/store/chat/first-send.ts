@@ -35,10 +35,15 @@ export function hasFirstSendReceipt(message: ChatMessage | undefined): boolean {
   return message?.deliveryStatus === 'received' || message?.deliveryStatus === 'working'
 }
 
-/** Bound legacy chats may drain after their turn without claiming a save. */
+/**
+ * A pending first send always blocks the outbound queue until a correlated
+ * receipt (session_started/`message_status`, or recovered catch-up) confirms
+ * it. The former `pending.status !== 'unconfirmed'` exception — which let a
+ * bound-but-unconfirmed chat drain a queued send — is removed (DEL-F23): the
+ * queue waits for a correlated save/recovery, never a legacy ack.
+ */
 export function firstSendBlocksQueue(state: ChatStore): boolean {
-  const pending = getPendingFirstSend(state)
-  return !!pending && (!pending.sessionId || pending.status !== 'unconfirmed')
+  return !!getPendingFirstSend(state)
 }
 
 export function removeFirstSendPlaceholder(bucket: SessionChatState, placeholderId: string): void {
