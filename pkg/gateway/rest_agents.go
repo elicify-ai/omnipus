@@ -22,6 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
 
 // setAgentModelProvider echoes the agent's explicit primary-model provider (O3
@@ -997,6 +998,31 @@ type configurationMutationError struct {
 func (e *configurationMutationError) Error() string { return e.Err.Error() }
 func (e *configurationMutationError) Unwrap() error { return e.Err }
 
+// writeAgentDeletePartial writes the FR-037/C-DELETE partly-deleted failure
+// state for the REST DELETE handler: an owned-data cleanup step failed, so the
+// agent's entity record was deliberately left visible and the same Delete
+// retries idempotently with its current revision. Mirrors the delete_agent
+// tool's partlyDeletedResult (persistence_status: partial) so the SPA's
+// DeleteAgentControl sees the same honest signal on both entry points: a
+// `partial` here always means the record still exists.
+func writeAgentDeletePartial(w http.ResponseWriter, id, errorStage string, warnings []string) {
+	logsafeError("rest: deleteAgent: partly deleted - owned-data cleanup failed",
+		"agent_id", id, "error_stage", errorStage, "warnings", warnings)
+	message := fmt.Sprintf(
+		"agent %q is partly deleted (%s failed); its record remains visible and the same delete retries with its current revision",
+		id, errorStage)
+	if len(warnings) > 0 {
+		message = message + ": " + strings.Join(warnings, "; ")
+	}
+	writeJSON(w, http.StatusInternalServerError, gen.ConfigurationMutationFailureState{
+		PersistenceStatus: gen.ConfigurationMutationFailureStatePersistenceStatusPartial,
+		ActivationStatus:  gen.ConfigurationMutationFailureStateActivationStatusNotAttempted,
+		ChangedFields:     []string{},
+		ErrorStage:        errorStage,
+		Message:           message,
+	})
+}
+
 func writeConfigurationMutationFailure(w http.ResponseWriter, result agentstore.MutationResult) {
 	logsafeError("configuration mutation persistence failed", "stage", result.ErrorStage, "error", result.Message)
 	state := gen.ConfigurationMutationFailureState{
@@ -1217,15 +1243,53 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 			}
 		}
 	}
-	// ADR-054 D2/D6 rule 5/§11 checklist item 2: remove the agent's entity
-	// record (entities/agents/<id>.json) FIRST — via the agent store, not by
-	// splicing config.json's agents.list — before any best-effort directory
-	// cleanup below. Dangling referrers (bindings, mailboxes, workspace
-	// core_team) are surfaced for repair per D6 rule 2, never silently
-	// pruned here.
 	revision := r.URL.Query().Get("revision")
-	deletion, err := agentstore.New(a.homePath).DeleteState(id, revision)
-	if err != nil {
+	// FR-037/C-DELETE: refuse a malformed revision BEFORE any destructive
+	// cleanup, so a bad request never removes owned data (mirrors the
+	// delete_agent tool's agentstore.ValidateRevision precondition).
+	if err := agentstore.ValidateRevision(revision); err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// UAT E-3 / ADR-086 D9: end the active goals this agent was working as an
+	// honest `cleared` transition naming the deleted agent — never leave them
+	// active for the keeper to push at a missing agent (which re-homed them
+	// onto the default agent), and never erase them.
+	//
+	// FR-037/C-DELETE ordering: this MUST run BEFORE the shared cleanup cascade
+	// below, because that cascade deletes the agent's solely-owned sessions and
+	// goal ownership is resolved FROM the session (EndGoalsOfDeletedAgent →
+	// goalWorkingAgentID → session meta). Ending the goals after the sessions
+	// are gone would leave every goal stuck active with no way to name its
+	// owner. Ending them first is idempotent — a retried Delete finds no active
+	// goal left and is a no-op.
+	//
+	// A failure here is logged at Error rather than failing the request; goals
+	// that could not be ended stay active and are named in the error.
+	if ended, gerr := a.agentLoop.EndGoalsOfDeletedAgent(id, deletedName); gerr != nil {
+		logsafeError("rest: deleteAgent: could not end every active goal the deleted agent was working",
+			"agent_id", id, "goals_ended", ended, "error", gerr)
+	} else if ended > 0 {
+		logsafeInfo("rest: deleteAgent: ended the deleted agent's active goals", "agent_id", id, "goals_ended", ended)
+	}
+	// ADR-054 D2/D6 rule 5/§11 checklist item 2 + FR-037/C-DELETE: the agent's
+	// owned data is cleaned FIRST and its entity record (entities/agents/
+	// <id>.json, via the agent store — not by splicing config.json's
+	// agents.list) removed LAST, through the SAME shared cascade the delete_agent
+	// tool runs (pkg/sysagent/tools::RunAgentDeleteCascade) so the two entry
+	// points cannot drift on the order (spec §C-DELETE: "UI/tool/API same
+	// cleanup-first/record-last cascade"). A cleanup failure leaves the record
+	// visible and the same Delete retries idempotently — the honest
+	// partly-deleted result the SPA's DeleteAgentControl consumes. Dangling
+	// referrers (bindings, mailboxes, workspace core_team) are surfaced for
+	// repair per D6 rule 2, never silently pruned here.
+	cascade := systools.RunAgentDeleteCascade(a.homePath, id, revision)
+	if cascade.CleanupFailed {
+		writeAgentDeletePartial(w, id, "cleanup", cascade.Warnings)
+		return
+	}
+	deletion := cascade.Deletion
+	if err := cascade.DeletionErr; err != nil {
 		if errors.Is(err, agentstore.ErrInvalidRevision) {
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
@@ -1245,21 +1309,6 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 	// post-delete reload is rejected and the in-memory roster keeps serving
 	// the agent we just deleted from disk.
 	forgetRosterBaseline(a.homePath)
-	// UAT E-3 / ADR-086 D9: end the active goals this agent was working as an
-	// honest `cleared` transition naming the deleted agent — never leave them
-	// active for the keeper to push at a missing agent (which re-homed them
-	// onto the default agent), and never erase them. Done BEFORE the reload so
-	// no keeper tick can see a live goal whose agent has already left the
-	// registry. The entity delete above already succeeded and cannot be rolled
-	// back, so a failure here is logged at Error rather than failing the
-	// request; goals that could not be ended stay active and are named in the
-	// error.
-	if ended, gerr := a.agentLoop.EndGoalsOfDeletedAgent(id, deletedName); gerr != nil {
-		logsafeError("rest: deleteAgent: could not end every active goal the deleted agent was working",
-			"agent_id", id, "goals_ended", ended, "error", gerr)
-	} else if ended > 0 {
-		logsafeInfo("rest: deleteAgent: ended the deleted agent's active goals", "agent_id", id, "goals_ended", ended)
-	}
 	// Reload the live config so the deleted agent is no longer in memory.
 	// triggerReloadAndWait polls until reload completes (or 5s deadline) so the in-memory config is
 	// updated before the state response is sent back to the caller (prevents a

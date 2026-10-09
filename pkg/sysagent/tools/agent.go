@@ -969,63 +969,113 @@ func (ad *agentDeleteToolExecute) validateAndLoad() (*tools.ToolResult, bool) {
 	return nil, false
 }
 
-// deleteAndCascade performs FR-037/C-DELETE's cleanup-first, record-last
-// cascade: every artifact the agent owns or that dangles off it — its
-// solely-owned sessions (with uploads), its task assignments, and its
-// workspace core_team / delegation-edge references — is cleaned FIRST, and the
-// authoritative agent entity record (with any owned SOUL bytes) is removed
-// LAST. If any cleanup step fails the record is deliberately left in place and
-// the result says the agent is only PARTLY DELETED, so the same Delete can
-// retry idempotently (including after a restart). A failure removing the
-// record itself likewise leaves the record visible and retriable.
+// AgentDeleteCascadeResult is the outcome of RunAgentDeleteCascade, the
+// shared FR-037/C-DELETE cleanup-first / record-last agent delete cascade.
+type AgentDeleteCascadeResult struct {
+	// SessionsDeleted, SessionsPreservedShared, TasksUnassigned,
+	// WorkspacesUpdated and EdgesRemoved are the per-step cleanup counts, so a
+	// caller can report exactly what the cascade did.
+	SessionsDeleted         int
+	SessionsPreservedShared int
+	TasksUnassigned         int
+	WorkspacesUpdated       int
+	EdgesRemoved            int
+	// Warnings collects every per-step cleanup failure so the caller reports
+	// what happened rather than claiming full success.
+	Warnings []string
+	// CleanupFailed is true when at least one owned-data cleanup step failed.
+	// The record was then deliberately left in place (record-last), so Deletion
+	// and DeletionErr are zero-valued and the same Delete retries idempotently.
+	CleanupFailed bool
+	// Deletion is the record-removal result and DeletionErr its error. Only
+	// meaningful when CleanupFailed is false; DeletionErr is nil on success.
+	Deletion    agentstore.MutationResult
+	DeletionErr error
+}
+
+// RunAgentDeleteCascade performs FR-037/C-DELETE's cleanup-first, record-last
+// agent delete cascade — the SAME sequence BOTH the delete_agent tool and the
+// REST DELETE /api/v1/agents/{id} handler run, so the two entry points cannot
+// drift on the order (spec §C-DELETE: "UI/tool/API same cleanup-first/
+// record-last cascade").
 //
-// cascadeWarnings collects every per-step cleanup failure so the partly-deleted
-// result reports exactly what happened rather than claiming full success.
-// Capacity 3: one slot per cascade source (sessions, tasks, workspaces).
-func (ad *agentDeleteToolExecute) deleteAndCascade() (*tools.ToolResult, bool) {
-	ad.cascadeWarnings = make([]string, 0, 3)
+// Every artifact the agent owns or that dangles off it — its solely-owned
+// sessions (with uploads), its task assignments, and its workspace core_team /
+// delegation-edge references — is cleaned FIRST. If any cleanup step fails the
+// record is deliberately left in place (CleanupFailed=true, so the record stays
+// visible) and the caller reports the agent as only PARTLY DELETED, so the same
+// Delete retries idempotently, including after a restart. Only when every
+// cleanup step succeeds is the authoritative agent entity record (with any
+// owned SOUL bytes) removed LAST, via store.DeleteState.
+//
+// omnipusHome is the resolved $OMNIPUS_HOME (see resolveOmnipusHome) and
+// revision the caller's expected record revision. The agent store is built here
+// so both callers pass identical inputs.
+func RunAgentDeleteCascade(omnipusHome, agentID, revision string) AgentDeleteCascadeResult {
+	res := AgentDeleteCascadeResult{Warnings: make([]string, 0, 3)}
 
 	// Step 1a: delete every session in the SHARED session store
 	// ($OMNIPUS_HOME/sessions/) that belongs SOLELY to this agent, together
 	// with its uploads. See cascadeDeleteAgentSessions's doc comment for why a
 	// session shared with another agent is deliberately left untouched rather
 	// than deleted or partially edited.
-	var sessionWarnings []string
-	ad.sessionsDeleted, ad.sessionsPreservedShared, sessionWarnings = cascadeDeleteAgentSessions(ad.omnipusHome, ad.id)
-	ad.cascadeWarnings = append(ad.cascadeWarnings, sessionWarnings...)
+	var w []string
+	res.SessionsDeleted, res.SessionsPreservedShared, w = cascadeDeleteAgentSessions(omnipusHome, agentID)
+	res.Warnings = append(res.Warnings, w...)
 
 	// Step 1b: unassign (never delete) every GTD task currently assigned to
 	// this agent, using the same task.Store.Update primitive (and per-task
 	// locking) the ordinary task-update tools use. See
 	// cascadeUnassignAgentTasks's doc comment for why CreatedByAgentID is
 	// deliberately left untouched.
-	var taskWarnings []string
-	ad.tasksUnassigned, taskWarnings = cascadeUnassignAgentTasks(ad.omnipusHome, ad.id)
-	ad.cascadeWarnings = append(ad.cascadeWarnings, taskWarnings...)
+	res.TasksUnassigned, w = cascadeUnassignAgentTasks(omnipusHome, agentID)
+	res.Warnings = append(res.Warnings, w...)
 
 	// Step 2: cleanup of DANGLING REFERENCES to the agent across every
 	// workspace — core_team membership and delegation-trust edges naming it as
 	// either side.
-	var wsWarnings []string
-	ad.workspacesUpdated, ad.edgesRemoved, wsWarnings = cascadeCleanAgentWorkspaceReferences(ad.omnipusHome, ad.id)
-	ad.cascadeWarnings = append(ad.cascadeWarnings, wsWarnings...)
+	res.WorkspacesUpdated, res.EdgesRemoved, w = cascadeCleanAgentWorkspaceReferences(omnipusHome, agentID)
+	res.Warnings = append(res.Warnings, w...)
 
 	// FR-037: if any owned-data cleanup step failed, STOP — the record must
 	// remain VISIBLE so the same Delete can retry, and the result must say the
 	// agent is only partly deleted rather than claim success.
-	if len(ad.cascadeWarnings) > 0 {
-		return ad.partlyDeletedResult("cleanup"), true
+	if len(res.Warnings) > 0 {
+		res.CleanupFailed = true
+		return res
 	}
 
 	// Step 3 (LAST): remove the authoritative entity record and any SOUL bytes
 	// it owns. Unrelated files in the agent home are deliberately preserved;
 	// DeleteState removes only the entity and applicable SOUL bytes owned by
 	// this resource.
-	var err error
-	ad.deletionResult, err = ad.store.DeleteState(ad.id, ad.revision)
-	if err != nil {
-		if errors.Is(err, agentstore.ErrRevisionConflict) {
-			return tools.ErrorResult(errorJSON("REVISION_CONFLICT", err.Error(), "Read the agent again and retry with its current revision")), true
+	res.Deletion, res.DeletionErr = agentstore.New(omnipusHome).DeleteState(agentID, revision)
+	return res
+}
+
+// deleteAndCascade runs the shared cleanup-first, record-last cascade
+// (RunAgentDeleteCascade) and maps its outcome onto the tool result: a cleanup
+// failure or a failed record removal becomes the honest partly-deleted result
+// (the record stays visible and the same Delete retries with its current
+// revision), a stale revision becomes a REVISION_CONFLICT error, and a clean
+// run returns stop=false so Execute proceeds to reload/respond.
+func (ad *agentDeleteToolExecute) deleteAndCascade() (*tools.ToolResult, bool) {
+	res := RunAgentDeleteCascade(ad.omnipusHome, ad.id, ad.revision)
+	ad.cascadeWarnings = res.Warnings
+	ad.sessionsDeleted = res.SessionsDeleted
+	ad.sessionsPreservedShared = res.SessionsPreservedShared
+	ad.tasksUnassigned = res.TasksUnassigned
+	ad.workspacesUpdated = res.WorkspacesUpdated
+	ad.edgesRemoved = res.EdgesRemoved
+
+	if res.CleanupFailed {
+		return ad.partlyDeletedResult("cleanup"), true
+	}
+
+	ad.deletionResult = res.Deletion
+	if res.DeletionErr != nil {
+		if errors.Is(res.DeletionErr, agentstore.ErrRevisionConflict) {
+			return tools.ErrorResult(errorJSON("REVISION_CONFLICT", res.DeletionErr.Error(), "Read the agent again and retry with its current revision")), true
 		}
 		return ad.partlyDeletedResult("record_delete"), true
 	}
