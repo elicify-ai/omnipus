@@ -32,6 +32,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -55,13 +56,72 @@ import (
 func (al *AgentLoop) runSteeredTurnBody(ctx context.Context, rec *session.LifecycleRecord, ts *turnState) (turnResult, error) {
 	kind, dispatchErr := runner.ResolveDispatch(executorConfigOf(ts.agent))
 	if dispatchErr != nil {
+		// F3: a resolver failure must still run the turn teardown. The native
+		// branch below is torn down by runTurn itself and the external branch by
+		// runExternalCLISteeredTurn's own defers — but this early return used to
+		// install neither, so an admitted turn refused here stayed registered:
+		// Finished() never closed, IsAlive() stayed true, and a claimed cancel's
+		// finish callback never fired.
+		al.finishRefusedSteeredTurnBody(ts)
 		reason := "steer: dispatch: " + dispatchErr.Error()
 		return turnResult{status: TurnEndStatusError, finalContent: reason, turnFailed: true}, dispatchErr
+	}
+	// F4 = Property B: the Is3P classification is FIXED for a child when it is
+	// launched (steer_launcher.go stamps LifecycleRecord.Is3P from the SAME
+	// ResolveDispatch outcome). If the live executor kind now disagrees with that
+	// stamp, the agent's executor config was changed after the worker launched
+	// (the supported native→external update through
+	// pkg/gateway/rest_agents_update.go::restAPIUpdateAgentFlow.validateTarget, or
+	// the reverse). Never silently flip Is3P and never switch runtime under the
+	// worker's feet: refuse VISIBLY, through the same teardown path F3 uses, with
+	// an actionable message telling the person to start a new delegation with the
+	// updated configuration.
+	liveIs3P := kind == runner.DispatchKindExternalCLI
+	if liveIs3P != rec.Is3P {
+		al.finishRefusedSteeredTurnBody(ts)
+		refusal := steeredWorkerRuntimeRefusal(ts.agent.ID, rec.Is3P, liveIs3P)
+		return turnResult{status: TurnEndStatusError, finalContent: refusal.Error(), turnFailed: true}, refusal
 	}
 	if kind != runner.DispatchKindExternalCLI {
 		return al.runTurn(ctx, ts)
 	}
 	return al.runExternalCLISteeredTurn(ctx, rec, ts)
+}
+
+// finishRefusedSteeredTurnBody runs the SAME teardown runExternalCLISteeredTurn's
+// own defers run, for a body that REFUSES before either execution branch installs
+// teardown (a resolver error — F3 — or a fixed-classification mismatch — F4).
+// clearActiveTurn runs FIRST, then Finish, the LIFO order loop.go documents
+// ("clearActiveTurn runs FIRST, then ... Finish"). Without it an admitted turn
+// refused before dispatch stays in al.activeTurnStates for ever: Finished() never
+// closes, IsAlive() stays true, and a claimed cancel's onCancelFinish callback
+// never fires.
+func (al *AgentLoop) finishRefusedSteeredTurnBody(ts *turnState) {
+	al.clearActiveTurn(ts)
+	ts.Finish(ts.hardAbortRequested())
+}
+
+// errSteeredWorkerRuntimeChanged is the base of F4's visible refusal — a worker's
+// runtime changed after it launched, so its fixed classification no longer
+// matches the live executor. Base var (not a fmt literal) so callers and tests
+// can match it with errors.Is.
+var errSteeredWorkerRuntimeChanged = errors.New("steer: dispatch: worker runtime changed after launch")
+
+// steeredWorkerRuntimeRefusal builds F4's ACTIONABLE refusal: it names the
+// worker, both runtimes, and the recovery ("start a new delegation with the
+// updated configuration") — never a bare mismatch report.
+func steeredWorkerRuntimeRefusal(agentID string, recordIs3P, liveIs3P bool) error {
+	return fmt.Errorf(
+		"%w: worker %q was launched as a %s worker, but its agent now resolves to a %s worker; a worker's runtime is fixed when it is launched — start a new delegation with the updated configuration",
+		errSteeredWorkerRuntimeChanged, agentID, runtimeLabel(recordIs3P), runtimeLabel(liveIs3P))
+}
+
+// runtimeLabel is the plain-language name of a worker runtime for F4's refusal.
+func runtimeLabel(is3P bool) string {
+	if is3P {
+		return "external-CLI"
+	}
+	return "native"
 }
 
 // runExternalCLISteeredTurn drives one steered turn through the shared

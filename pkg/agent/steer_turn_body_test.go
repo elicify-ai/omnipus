@@ -28,8 +28,9 @@ import (
 )
 
 const (
-	delegateExtCLIAgentID    = "delegate-ext-worker"
-	delegateRemoteA2AAgentID = "delegate-remote-reserved"
+	delegateExtCLIAgentID       = "delegate-ext-worker"
+	delegateRemoteA2AAgentID    = "delegate-remote-reserved"
+	delegateNativeWorkerAgentID = "delegate-native-worker"
 )
 
 // delegateDispatchProvider is a thread-safe call counter: the turn under test
@@ -77,6 +78,20 @@ func newDelegateDispatchLoop(t *testing.T, provider providers.LLMProvider) *Agen
 					ID: delegateExtCLIAgentID, Name: "External Worker", Home: workerHome,
 					Subagents: &config.SubagentsConfig{
 						Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "claude-code"},
+					},
+				},
+				{
+					// F4 fixture: a WORKER launched with a NATIVE executor — the
+					// pre-update state of the supported native→external executor
+					// change (pkg/gateway/rest_agents_update.go::
+					// restAPIUpdateAgentFlow.validateTarget permits a worker to
+					// change executor.kind). Type=worker so the fixture matches a
+					// real REST-updatable worker entity.
+					ID: delegateNativeWorkerAgentID, Name: "Native Worker", Home: workerHome,
+					Description: "u5b F4 runtime-change fixture (native worker)",
+					Type:        config.AgentTypeWorker,
+					Subagents: &config.SubagentsConfig{
+						Executor: &config.ExecutorConfig{Kind: config.ExecutorKindNative},
 					},
 				},
 				{
