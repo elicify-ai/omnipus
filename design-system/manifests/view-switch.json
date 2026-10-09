@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "component": "ViewSwitch",
+  "exports": ["ViewSwitch"],
+  "category": "composite",
+  "source": "src/components/ui/view-switch.tsx",
+  "documentation": "docs/internal/design/components/view-switch.md",
+  "owner": "design-system",
+  "themes": ["dark"],
+  "variants": ["flat"],
+  "sizes": ["default"],
+  "states": ["unchecked", "checked", "disabled", "focus-visible"],
+  "stories": [{"file": "src/components/ui/view-switch.stories.tsx", "exports": ["Default", "Selection"]}],
+  "checks": [
+    {"id": "view-switch-unit", "kind": "unit", "file": "src/components/ui/tasks-controls.test.tsx", "test": "Tasks panel layout T7 uses shared flat FilterMenu/ViewSwitch and sentence-case List headers; T18 metadata is plain text", "applicable": true},
+    {"id": "view-switch-interaction", "kind": "interaction", "file": "src/components/ui/view-switch.stories.tsx", "test": "Selection", "story": "Selection", "applicable": true},
+    {"id": "view-switch-axe", "kind": "axe", "file": "tests/design-system/browser.spec.ts", "test": "ViewSwitch [check:view-switch-axe] axe", "story": "Default", "applicable": true},
+    {"id": "view-switch-keyboard", "kind": "keyboard", "file": "tests/design-system/browser.spec.ts", "test": "ViewSwitch [check:view-switch-keyboard] keyboard", "story": "Default", "applicable": true},
+    {"id": "view-switch-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "ViewSwitch [check:view-switch-browser] browser", "story": "Default", "applicable": true},
+    {"id": "view-switch-pointer", "kind": "pointer", "file": "tests/design-system/browser.spec.ts", "test": "ViewSwitch [check:view-switch-pointer] pointer", "story": "Default", "applicable": true},
+    {"id": "view-switch-reduced-motion", "kind": "reduced-motion", "file": "tests/design-system/browser.spec.ts", "test": "ViewSwitch [check:view-switch-reduced-motion] reduced-motion", "story": "Default", "applicable": true},
+    {"id": "view-switch-forced-colors", "kind": "forced-colors", "file": "tests/design-system/browser.spec.ts", "test": "ViewSwitch [check:view-switch-forced-colors] forced-colors", "story": "Default", "applicable": true},
+    {"id": "view-switch-root-size", "kind": "root-size", "file": "tests/design-system/browser.spec.ts", "test": "ViewSwitch [check:view-switch-root-size] root-size", "story": "Default", "applicable": true},
+    {"id": "view-switch-zoom", "kind": "zoom", "file": "tests/design-system/browser.spec.ts", "test": "ViewSwitch [check:view-switch-zoom] zoom", "story": "Default", "applicable": true},
+    {"id": "view-switch-reflow", "kind": "reflow", "file": "tests/design-system/browser.spec.ts", "test": "ViewSwitch [check:view-switch-reflow] reflow", "story": "Default", "applicable": true}
+  ]
+}

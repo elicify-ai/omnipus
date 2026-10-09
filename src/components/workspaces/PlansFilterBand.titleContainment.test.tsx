@@ -48,7 +48,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { PlansFilterBand } from './PlansFilterBand'
 import type { Agent, Plan, Task } from '@/lib/api'
@@ -148,11 +148,14 @@ function renderBand(overrides: Partial<React.ComponentProps<typeof PlansFilterBa
     onClearPlan: vi.fn(),
     ...overrides,
   }
-  return render(
+  const mounted = render(
     <QueryClientProvider client={makeClient()}>
       <PlansFilterBand {...props} />
     </QueryClientProvider>,
   )
+  const fold = screen.getByRole('button', { name: 'Plans' })
+  if (fold.getAttribute('aria-expanded') === 'false') fireEvent.click(fold)
+  return mounted
 }
 
 /** Real, compiled Tailwind v4.3.3 output for the two utilities this fix
@@ -162,7 +165,7 @@ function renderBand(overrides: Partial<React.ComponentProps<typeof PlansFilterBa
  * ListView.titleContainment.test.tsx already use for the identical classes. */
 function injectRealTailwindDeclarations() {
   const style = document.createElement('style')
-  style.textContent = '.wrap-anywhere{overflow-wrap:anywhere}.min-w-0{min-width:0px}'
+  style.textContent = '.break-normal{overflow-wrap:normal;word-break:normal}.wrap-break-word{overflow-wrap:break-word}.min-w-0{min-width:0px}'
   document.head.appendChild(style)
   return () => style.remove()
 }
@@ -177,8 +180,9 @@ describe('PlansFilterBand — long unbroken plan title containment (round-2 UAT 
       const titleEl = screen.getByText(longTitle)
       // Full text is preserved in the DOM — only CSS (line-clamp) visually clips it.
       expect(titleEl.textContent).toBe(longTitle)
-      expect(titleEl).toHaveClass('line-clamp-2')
-      expect(titleEl).toHaveClass('wrap-anywhere')
+      expect(titleEl).not.toHaveClass('line-clamp-2')
+      expect(titleEl).toHaveClass('whitespace-normal') // T3 founder steering: full wrapping, no Tooltip extension.
+      expect(titleEl).toHaveClass('wrap-break-word')
       expect(titleEl).toHaveClass('min-w-0')
       // TaskCard-specific row-layout classes must NOT leak in — this span
       // sits in a column flex container, not a row.
@@ -190,14 +194,14 @@ describe('PlansFilterBand — long unbroken plan title containment (round-2 UAT 
       // (verified above), proving the classes take effect through jsdom's
       // real CSSOM.
       const computed = getComputedStyle(titleEl)
-      expect(computed.overflowWrap).toBe('anywhere')
+      expect(computed.overflowWrap).toBe('break-word')
+      expect(computed.wordBreak).toBe('normal')
       expect(computed.minWidth).toBe('0px')
 
-      // The outer tile div (role="group", data-testid) already carries
-      // title={plan.title} — the native tooltip surface for the full string,
-      // mirroring the tooltip assertions in the other two containment tests.
+      // T15/T16 replace native hover titles with an explicit info control.
       const tile = screen.getByTestId('plan-filter-tile-plan-long')
-      expect(tile).toHaveAttribute('title', longTitle)
+      expect(tile).not.toHaveAttribute('title')
+      expect(screen.getByRole('button', { name: `Plan details: ${longTitle}` })).toBeInTheDocument()
     } finally {
       removeStyle()
     }
@@ -208,9 +212,11 @@ describe('PlansFilterBand — long unbroken plan title containment (round-2 UAT 
 
     const titleEl = screen.getByText('Payments revamp')
     expect(titleEl.textContent).toBe('Payments revamp')
-    expect(titleEl).toHaveClass('line-clamp-2', 'wrap-anywhere', 'min-w-0')
+    expect(titleEl).toHaveClass('whitespace-normal', 'wrap-break-word', 'min-w-0')
+    expect(titleEl).not.toHaveClass('line-clamp-2')
 
     const tile = screen.getByTestId('plan-filter-tile-plan-short')
-    expect(tile).toHaveAttribute('title', 'Payments revamp')
+    expect(tile).not.toHaveAttribute('title')
+    expect(screen.getByRole('button', { name: 'Plan details: Payments revamp' })).toBeInTheDocument()
   })
 })

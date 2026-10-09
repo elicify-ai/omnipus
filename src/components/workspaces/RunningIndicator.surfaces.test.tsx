@@ -19,7 +19,7 @@
 // PlansFilterBand do not consume the catalogued RunningIndicator yet.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Agent, Plan, Task } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -217,13 +217,17 @@ function renderTaskSurface(kind: 'board' | 'list' | 'graph', tasks: Task[], plan
 }
 
 function renderBand(plans: Plan[]) {
-  return render(
+  const mounted = render(
     <QueryClientProvider client={makeClient()}>
       <PlansFilterBand plans={plans} tasks={[]} agents={agents} selectedPlanId={null}
         onSelectPlan={vi.fn()} onNewPlan={vi.fn()} onEditPlan={vi.fn()}
         onClearPlan={vi.fn()} showNewPlanTile={false} />
     </QueryClientProvider>,
   )
+  // T12 collapses Plans on open; placement assertions exercise the real expanded tiles.
+  const fold = within(mounted.container).getByRole('button', { name: 'Plans' })
+  if (fold.getAttribute('aria-expanded') === 'false') fireEvent.click(fold)
+  return mounted
 }
 
 // Minimal test-instrument fixtures use the same semantic boundary types,

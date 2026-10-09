@@ -1,48 +1,8 @@
-// BoardView.narrow.test.tsx — wave-3 join pack for side-panel-shell-spec.md
-// Wave 3, SP-32 / SP-33 / SP-34:
-//
-//   SP-32 "Tasks keeps ALL THREE views (Board, List, Graph) narrowed — none
-//          dropped in the panel."
-//   SP-33 "Panel-width container queries (not window width); breakpoints
-//          measured from real content (full Board ≈970px)."
-//   SP-34 "Board narrow = cards stacked by status, single column."
-//
-// Oracle sources: spec §10 Wave 3 table, §13 SP-32..SP-34, wireframe §2F
-// ("Board — stacked cards grouped by status, single column") and §9A ("the
-// layout flips to the stacked narrow treatment exactly at 970px ... Resizing
-// the browser WINDOW instead does nothing here — only this frame's own width
-// does").
-//
-// JOIN STATUS (2026-10-05, work/side-panel-wave3-join-20261005) — the
-// delivered narrow board renegotiated the 8773803cf pack's DOM seams, as
-// that pack's header authorised for GREEN ("the pack is then adjusted
-// deliberately, never silently weakened"). What changed and why, per seam:
-//
-//   1. `data-narrow` seam → NOT delivered. The narrow state is expressed the
-//      way the browser itself decides it: real CSS container queries on the
-//      component's own `@container` root, at the MEASURED breakpoint
-//      `@max-[971px]` (the board's documented 6-column × 162px minimum
-//      derivation — the spec's "≈970px, measured from real content"). jsdom
-//      cannot evaluate container queries either way, so the class MECHANISM
-//      is what a unit test can pin; the pixel flip itself stays a UAT
-//      click-test row (unchanged from the RED pack's own deferred-truth note).
-//   2. `board-narrow-stack` / `board-narrow-group` seams → NOT delivered.
-//      The delivered narrow board does not swap to a separate stack: the six
-//      status columns STAY MOUNTED as role="group" elements and the CONTAINER
-//      QUERY restacks them into the single column, giving each group its own
-//      narrow header band (label + count) while the wide shared header row
-//      yields. The spec's observable content contract — groups in canonical
-//      status order, each holding exactly its own tasks, one card home — is
-//      asserted against those always-mounted groups, so the expectations are
-//      unchanged and only the locators moved.
-//   3. TasksPanel module path → the joined registry (registry.tsx
-//      TasksPanelContent) registers WorkspaceTasksTab as the Tasks panel
-//      content — no separate TasksPanel component exists. SP-32's "all three
-//      views stay available" is asserted against that registered content.
-//
-// Browser-truth deferred to UAT/click-test (jsdom cannot verify it): the
-// flip actually firing at ≈970px of PANEL width while a WINDOW resize does
-// nothing (wireframe §9A demo), and the stacked column's visual layout.
+// T5 supersedes the SP-33/SP-34 stacked Board. The real List fallback and
+// 971/972/973px recovery are covered by WorkspaceTasksTab.layout.test.tsx.
+// Retain the original unrelated coverage: canonical task homes, independent
+// content, container ownership, all three views, and the no-search guard.
+// The superseded layout assertions now pin six equal columns and a shared header.
 
 import { describe, it, expect, vi } from 'vitest'
 import { render, within, fireEvent } from '@testing-library/react'
@@ -161,23 +121,12 @@ describe('BoardView narrow — SP-33 mechanism: panel-width container query, not
     expect(() => assertBoardContainer(mounted)).toThrow(/to have class/)
   })
 
-  it('the narrow flip is expressed at the MEASURED container breakpoint (@max-[971px]) — board, header and groups all carry it', () => {
-    // Oracle: SP-33 — "breakpoints measured from real content (full Board
-    // ≈970px)": 6 status columns × 162px minimum = 972px, so the stacked
-    // treatment fires while the container is ≤971px. The scroller, the
-    // shared header row, the columns row AND every group must all key off
-    // that one measured breakpoint (a second, different number would be an
-    // unmeasured guess — exactly what SP-33 forbids).
+  it('T5 removes the old stacking variants and keeps six equal readable columns', () => {
     const mounted = renderBoard([makeTask({ title: 'Only task' })])
-    const carriers = narrowVariantElements(mounted.container)
-    expect(carriers.length).toBeGreaterThanOrEqual(4)
-    // Every carrier uses the same measured breakpoint — no competing one.
-    const foreignBreakpoints = carriers.flatMap((el) =>
-      Array.from(el.classList)
-        .filter((cls) => cls.startsWith('@max-[') && !cls.startsWith('@max-[971px]'))
-        .map((cls) => cls),
-    )
-    expect(foreignBreakpoints).toEqual([])
+    expect(narrowVariantElements(mounted.container)).toEqual([])
+    const columns = mounted.getAllByRole('group', { name: / column$/ })
+    expect(columns).toHaveLength(6)
+    for (const column of columns) expect(column).toHaveClass('flex-1', 'basis-0', 'min-w-[162px]')
   })
 
   it('no window-breakpoint class drives ANY board layout — the window is irrelevant (SP-33)', () => {
@@ -208,7 +157,7 @@ describe('BoardView narrow — SP-33 mechanism: panel-width container query, not
     expect(toolbar?.closest('[class~="@container"]'), 'SP-33: the toolbar has its own container').not.toBeNull()
     const classes = Array.from(toolbar?.classList ?? [])
     expect(classes.filter((cls) => /^(sm|md|lg|xl|2xl):/.test(cls)), 'SP-33: viewport width cannot drive toolbar layout').toEqual([])
-    expect(classes.some((cls) => /^@/.test(cls) && cls !== '@container'), 'the toolbar uses a container-query layout variant').toBe(true)
+    expect(classes.some((cls) => /^@/.test(cls) && cls !== '@container'), 'T1: the two-row toolbar no longer conditionally stacks').toBe(false)
   })
 })
 
@@ -244,42 +193,36 @@ describe('BoardView narrow — SP-34: cards stacked by status, single column', (
     expect(within(done).queryByText('Live thing')).not.toBeInTheDocument()
   })
 
-  it('each group carries its own narrow header band (status label + live count); the shared wide header yields to it', () => {
-    // Oracle: the narrow board must stay readable as a SINGLE column — each
-    // stacked group is labelled by its status (spec §2F wireframe frame)
-    // with its own count, while the wide board's shared sticky header row
-    // (meaningless above a one-column stack) is the element that stands down.
+  it('T5 keeps one shared header with exact per-status counts and no per-group header', () => {
     const mounted = renderBoard([
       makeTask({ id: 't-a', title: 'Alpha card', status: 'inbox' }),
       makeTask({ id: 't-b', title: 'Beta card', status: 'inbox' }),
     ])
     const inbox = columnGroup(mounted.container, 'Inbox')
-    const header = inbox.firstElementChild as HTMLElement
-    expect(header.className).toContain('hidden')
-    expect(header.className).toContain('@max-[971px]:flex')
-    expect(header.textContent).toContain('Inbox')
-    expect(header.textContent).toContain('2')
-
-    const sharedHeader = Array.from(mounted.container.querySelectorAll('*')).find((el) =>
-      Array.from(el.classList).includes('@max-[971px]:hidden'),
-    )
-    expect(sharedHeader, 'the wide shared header row yields in the narrow stack').toBeDefined()
+    const sharedHeader = inbox.parentElement!.previousElementSibling as HTMLElement
+    expect(sharedHeader).toHaveClass('sticky')
+    expect(Array.from(sharedHeader.children).map((header) => header.textContent)).toEqual([
+      'Inbox2', 'Next0', 'In Progress0', 'Blocked0', 'Done0', 'Failed0',
+    ])
+    for (const name of ['Next', 'In Progress', 'Blocked', 'Done', 'Failed']) {
+      expect(columnGroup(mounted.container, name).children).toHaveLength(0)
+    }
   })
 
-  it('the columns row is the element the container query stacks (flex-col at the measured breakpoint) and each card has exactly ONE home', () => {
+  it('T5 keeps the columns in one horizontal row and each card has exactly ONE home', () => {
     const mounted = renderBoard([
       makeTask({ id: 't-a', title: 'Alpha card', status: 'inbox' }),
       makeTask({ id: 't-b', title: 'Beta card', status: 'failed' }),
     ])
-    const row = Array.from(mounted.container.querySelectorAll('*')).find((el) =>
-      Array.from(el.classList).includes('@max-[971px]:flex-col'),
-    )
-    expect(row, 'the columns row carries the single-column stacking').toBeDefined()
-    expect(within(row as HTMLElement).getByText('Alpha card')).toBeInTheDocument()
-    expect(within(row as HTMLElement).getByText('Beta card')).toBeInTheDocument()
-    // The single column is the only card home: neither title occurs twice.
-    expect(Array.from(mounted.container.querySelectorAll('*')).filter((el) => el.textContent === 'Alpha card')).toHaveLength(1)
-    expect(Array.from(mounted.container.querySelectorAll('*')).filter((el) => el.textContent === 'Beta card')).toHaveLength(1)
+    const row = columnGroup(mounted.container, 'Inbox').parentElement as HTMLElement
+    expect(row).toHaveClass('flex')
+    expect(row).not.toHaveClass('flex-col')
+    expect(within(row).getByText('Alpha card')).toBeInTheDocument()
+    expect(within(row).getByText('Beta card')).toBeInTheDocument()
+    // T15 removes native hover titles; count actual card homes and caption text.
+    const cards = Array.from(row.querySelectorAll('[role="button"]'))
+    expect(cards).toHaveLength(2)
+    expect(cards.map((card) => card.querySelector('p.line-clamp-2')?.textContent)).toEqual(['Alpha card', 'Beta card'])
   })
 })
 

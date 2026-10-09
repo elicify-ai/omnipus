@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { PlansFilterBand } from './PlansFilterBand'
@@ -147,6 +147,8 @@ function renderBand(overrides: Partial<React.ComponentProps<typeof PlansFilterBa
       <PlansFilterBand {...props} />
     </QueryClientProvider>,
   )
+  const fold = screen.getByRole('button', { name: 'Plans' })
+  if (fold.getAttribute('aria-expanded') === 'false') fireEvent.click(fold) // T20: plans already start open.
   return { onSelectPlan, onNewPlan, onEditPlan, onClearPlan, ...utils }
 }
 

@@ -96,6 +96,8 @@ const reviewedControls = new Set([
   'RunningIndicator',
   // W1-1: the published, data-supplied AgentIcon is a kit composite.
   'agent-icon',
+  // T7's founder-approved public composites: exact files, never a ui-folder admission.
+  'filter-menu', 'view-switch', 'hover-card', 'word-boundary-text',
 ].map((name) => `src/components/ui/${name}.tsx`))
 const reviewedFoundations = new Set([
   'src/index.ts', 'src/lib/utils.ts', 'src/lib/formatTokens.ts',
@@ -178,7 +180,7 @@ test('formatTokens is an internal foundation, never a new public application API
 })
 
 test('exact indicator/formatter admission still rejects stores, task domain code and adjacent UI domain components', () => {
-  const admitted = ['src/components/ui/RunningIndicator.tsx', 'src/lib/formatTokens.ts']
+  const admitted = ['src/components/ui/RunningIndicator.tsx', 'src/lib/formatTokens.ts', 'src/components/ui/filter-menu.tsx', 'src/components/ui/view-switch.tsx']
   assert.doesNotThrow(() => assertReviewedLibraryPaths(admitted))
   // The SAME boundary assertion rejects every injected dependency. A blanket
   // ui/lib/store admission would survive none of these negative controls.
@@ -263,7 +265,7 @@ test('public controls use only approved external foundation dependencies', () =>
     'react', 'react-dom', '@phosphor-icons/react', 'react-day-picker', 'cmdk',
     'class-variance-authority', 'clsx', 'tailwind-merge',
     ...['accordion', 'alert-dialog', 'avatar', 'checkbox', 'dialog', 'dropdown-menu',
-      'label', 'popover', 'progress', 'select', 'separator', 'slider', 'slot', 'switch', 'tabs']
+      'label', 'popover', 'hover-card', 'progress', 'select', 'separator', 'slider', 'slot', 'switch', 'tabs']
       .map((name) => `@radix-ui/react-${name}`),
   ])
   const metadata = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))

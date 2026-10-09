@@ -41,7 +41,9 @@ export async function readDockSnapshot(page: Page, panel: DockPanel): Promise<Do
     }
     const toolbar = panelId === 'tasks' ? marker.parentElement?.parentElement : marker
     const detail = panelId === 'tasks'
-      ? Array.from(content.querySelectorAll('h2')).find((el) => el.textContent === 'Plans')?.parentElement
+      // T12 uses the kit Accordion's h3; the always-visible header row is
+      // measured even while its tiles are deliberately collapsed.
+      ? content.querySelector('[aria-label="Plans filter"] h3')?.parentElement
       : content.querySelector<HTMLElement>('[data-testid="calendar-grid"]')
     if (!toolbar || !detail) throw new Error(`BLOCKED: ${panelId} real toolbar/Plans-or-grid not rendered — FR-001`)
     function rect(el: Element) {
