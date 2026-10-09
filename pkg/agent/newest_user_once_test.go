@@ -337,10 +337,16 @@ func TestProcessMessage_NewestUserMessageOnce_LiveWindowAndAfterClear(t *testing
 		t.Fatalf("live window: newest appears %d times, want 1; request=%+v", n, reqs[1])
 	}
 
-	// /clear is answered by the command handler (no provider request).
-	sendWebchat(t, h, "/clear")
+	// The clear mechanism (TruncateHistory through clearSessionWindow) advances
+	// the context window without touching the transcript. The server /clear
+	// COMMAND was retired by U10a (2026-10-09, FR-031) and returns in U10b, so
+	// this test drives the MECHANISM directly; the clear makes no provider
+	// request.
+	if err := clearSessionWindow(h.ag.Sessions, h.key()); err != nil {
+		t.Fatalf("clearSessionWindow: %v", err)
+	}
 	if got := len(rec.snapshot()); got != 2 {
-		t.Fatalf("/clear must not reach the model; provider requests = %d, want 2", got)
+		t.Fatalf("clear must not reach the model; provider requests = %d, want 2", got)
 	}
 	sendWebchat(t, h, "AFTER-CLEAR-MARKER-9087")
 	reqs = rec.snapshot()
