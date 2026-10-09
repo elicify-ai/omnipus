@@ -643,19 +643,19 @@ export async function fetchSessionPage(
     undefined,
     WireSessionPageSchema as ZodType<{ sessions: RawSession[]; next_cursor?: string; partial_errors?: string[] }>,
   )
-  // A non-empty `partial_errors` means one or more agents failed to list
-  // their sessions — `resp.sessions` is a real but INCOMPLETE enumeration,
-  // not a full one. Silently returning it made a partial listing read as
-  // complete everywhere fetchSessions is consulted (worst on UsageScreen's
-  // spend-audit tab, which sums sessions to report cost/usage). Surface it
-  // the same way a schema mismatch does (console.warn + dev toast) rather
-  // than dropping it on the floor.
+  // Partial errors cover both agent session-list failures and unreadable
+  // session lifecycle records. Returned rows remain usable, but the page's
+  // sessions or runtime metadata are incomplete. Keep the tokens intact for
+  // callers and describe their categories only in this developer warning.
   if (resp.partial_errors && resp.partial_errors.length > 0) {
-    console.warn('[api] GET /sessions returned partial_errors — the list is incomplete:', resp.partial_errors)
-    void maybeDevToast(
-      `[api] Session list incomplete: ${resp.partial_errors.length} agent(s) failed to enumerate`,
-      'GET:/sessions:partial_errors',
-    )
+    const categories = [...new Set(resp.partial_errors.map((token) =>
+      token.startsWith('agent=') ? 'agent session list unavailable'
+        : token.startsWith('session=') ? 'session lifecycle unavailable'
+          : 'session data unavailable',
+    ))].join('; ')
+    const warning = `[api] Session list incomplete: ${resp.partial_errors.length} partial error(s) (${categories})`
+    console.warn(warning, resp.partial_errors)
+    void maybeDevToast(warning, 'GET:/sessions:partial_errors')
   }
   return {
     sessions: resp.sessions.map(rawToSession),
