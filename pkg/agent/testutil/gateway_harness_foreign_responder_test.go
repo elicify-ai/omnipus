@@ -57,7 +57,11 @@ func TestStartTestGateway_ForeignHealthResponderIsNotAcceptedAsReady(t *testing.
 	if err != nil {
 		t.Fatalf("squatter listen: %v", err)
 	}
-	squatterPort := squatterLn.Addr().(*net.TCPAddr).Port
+	squatterAddr, ok := squatterLn.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("squatter listener address type %T (want *net.TCPAddr)", squatterLn.Addr())
+	}
+	squatterPort := squatterAddr.Port
 	squatterSrv := &http.Server{Handler: squatterMux}
 	go func() { _ = squatterSrv.Serve(squatterLn) }()
 	t.Cleanup(func() { _ = squatterSrv.Close() })
