@@ -747,6 +747,35 @@ func (sm *SessionManager) Remove(sessionID string) {
 	delete(sm.sessions, sessionID)
 }
 
+// CountRunningBackgroundCommands counts background processes this chat
+// session owns that are still running. A child session's bash is not
+// included: the owner id is the session that started the command.
+// A nil manager returns 0; callers omit the wire field when no manager
+// is wired rather than reporting that 0.
+func (sm *SessionManager) CountRunningBackgroundCommands(ownerSessionID string) int {
+	if sm == nil || ownerSessionID == "" {
+		return 0
+	}
+	sm.mu.RLock()
+	matched := make([]*ProcessSession, 0)
+	for _, s := range sm.sessions {
+		if s != nil && s.Background && s.OwnerSessionID == ownerSessionID {
+			matched = append(matched, s)
+		}
+	}
+	sm.mu.RUnlock()
+	n := 0
+	for _, s := range matched {
+		s.mu.Lock()
+		running := s.Status == StatusRunning
+		s.mu.Unlock()
+		if running {
+			n++
+		}
+	}
+	return n
+}
+
 func (sm *SessionManager) List() []SessionInfo {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()

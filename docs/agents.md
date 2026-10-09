@@ -56,7 +56,7 @@ You create one of three types. The create buttons sit in the section headers of 
 | Subagent (External) | An external command-line tool | Other agents, through delegation | No |
 
 1. Click **+ New Main** or **+ New Subagent** in its section header. For an external worker, click **+ Add Subagent (External)** and pick the command-line tool from the menu; entries for tools not installed on the host are greyed out.
-2. Fill in **Identity**: name, color, icon, and model. For workers, the description is required — it is what other agents read to decide when to delegate to this one.
+2. Fill in **Identity**: name, figure, **Role** (the job badge), colour, and model. The preview starts with Omnipus, General assistant, and Grey; leaving these choices untouched saves those defaults when you create the agent. There is no agent-picture upload. For workers, the description is required — it is what other agents read to decide when to delegate to this one.
 3. Fill in **Personality**: the soul, the agent's persona prompt, is required for every type.
 4. Main and Subagent have a third step, **Tools**, for tool permissions, skills, and fallback models. An external worker has no Tools step — it brings its own.
 5. Create the agent. Its card appears in its section.
@@ -68,6 +68,70 @@ To change an agent, open its card. The edit slide-over saves as you type. Its ta
 **Delete agent** asks you to confirm twice: the first step explains that the agent and its chats, memory and related data are removed permanently, the second is the final confirmation. Dismissing either step deletes nothing. A locked core agent, a System Agent, and an agent that owns an active plan cannot be deleted — set another agent as the default, or stop/reassign the plan, first.
 
 Deletion cleans the agent's own data first — its chats, its task assignments, and its references in workspaces — and removes the agent record last. If any part of that cleanup fails, the agent stays in the list and the message says it is only partly deleted; press **Delete agent** again to finish. Nothing is lost by retrying.
+
+## How an agent looks
+
+An agent's mark combines a figure, a small job badge, and a colour. The badge is labelled **Role** in the editor.
+
+| Choice | What you pick | Default on a new agent |
+|---|---|---|
+| Figure | Robot, Man, Woman, or Omnipus | Omnipus |
+| Role | One of the 31 badges below | General assistant |
+| Colour | Azure, Sky, Cyan, Indigo, Violet, Purple, Fuchsia, Pink, Orange, or Grey, in that order | Grey |
+
+The role choices are grouped like this:
+
+| Group | Badges |
+|---|---|
+| Create (6) | Writer; Designer; Image creator; Video producer; Audio and voice; Social media |
+| Build (8) | Developer; Data engineer; Data analyst; IT and operations; Automation; Security; Quality and QA; Science and lab |
+| Business (10) | Orchestrator; Project manager; Product manager; Sales; Marketing; Finance; Legal and compliance; Customer support; Documents; Researcher |
+| People (4) | People and HR; Tutor; Knowledge and library; Translator |
+| Personal (3) | General assistant; Personal assistant; Office assistant |
+
+The create form shows the full mark live as you change these choices. The preview is a draft: it is saved only when creation succeeds. In the edit slide-over, **Basics** offers the same Figure, Role, and Colour choices and saves changes automatically. Its header mark previews the selected figure, role badge, and colour immediately, before the save completes. Check the save indicator before treating an edit as saved. There is no agent-picture or GIF upload; this does not affect attaching files to a chat.
+
+When creating an agent through the API, omitting `figure`, `role`, or `color`, or sending JSON `null` or an empty string for it, chooses that field's create default: `Omnipus`, `general`, or `#9CA3AF`. This applies to Main agents, native workers, and external workers. A non-empty figure or role must match a listed value exactly; a whitespace-only string is not a default request. A listed palette hex accepts either letter case and is saved and returned uppercase, for example `#fb923c` becomes `#FB923C`. An unlisted colour still rejects the request. These rules are the same with optional inbound schema validation enabled or disabled.
+
+When updating an existing agent through the API, omit `figure`, `role`, or `color` to keep its stored value. Sending JSON `null`, an empty string, or another invalid identity value rejects the whole update with HTTP 400: even valid sibling changes are not saved, and the stored fields, display timestamp, and configuration revision stay unchanged. Null does not clear an identity choice or restore a create default. To choose a default again, select it in the editor or send its actual value: `Omnipus`, `general`, or `#9CA3AF`. Differently capitalised or JSON-escaped field names do not bypass null rejection, and a repeated identity field cannot hide a supplied null. Listed colour hexes accept either letter case on update too and are stored uppercase.
+
+An incomplete or malformed agent create or update is rejected without saving. Request bodies over 1 MiB (1,048,576 bytes) return HTTP 413, even if their first part looks like complete JSON; a complete valid body at that limit is allowed. A rejected create adds no agent. A rejected update leaves the stored fields, display timestamp, and configuration revision unchanged.
+
+On API create requests, `skills`, `mcp_servers`, and `tool_policy_changes` must not be JSON `null`. Within those fields, `mcp_servers[].tools` and `tool_policy_changes.set` or `.remove` must not be `null` either. Differently capitalised or JSON-escaped keys, and repeated keys at either level, cannot hide a supplied null: the whole create is rejected with HTTP 400 and no agent is saved. Empty arrays and maps remain valid where allowed; omitting these optional fields keeps the server's create defaults. This does not change the intentional null-or-empty default rule for `figure`, `role`, and `color` described above.
+
+### Built-in identity is locked
+
+Open a built-in agent's card, then **Basics**: the figure, role, and colour choices remain visible but cannot be changed. Omnipus restores their fixed values whenever the server starts. The jobs described in the base-agent table above are distinct from these badge choices.
+
+| Built-in agent | Figure | Role badge | Colour |
+|---|---|---|---|
+| Mia | Omnipus | General assistant | Azure |
+| Jim | Omnipus | General assistant | Cyan |
+| Ava | Omnipus | General assistant | Orange |
+| Admin | Omnipus | Security | Pink |
+| Planner | Omnipus | General assistant | Sky |
+| Researcher | Omnipus | General assistant | Violet |
+| General Purpose | Omnipus | General assistant | Grey |
+
+Legacy icon names, such as Mia's `lightbulb`, remain stored for older displays and appear as a read-only label above the profile's sections. The identity editor no longer has a legacy-icon picker; editing other settings does not clear those names.
+
+### Existing agents on upgrade
+
+For agents you created, Omnipus saves the migrated identity when the server starts after upgrade. A valid figure or role already chosen stays. A missing or unrecognised figure becomes Omnipus; a missing or unrecognised role is derived from the old icon name:
+
+| Old icon name | Role badge |
+|---|---|
+| `Code` | Developer |
+| `Chat` | General assistant |
+| `MagnifyingGlass` | Researcher |
+| `PencilSimple` | Writer |
+| `Shield` | Security |
+| A name that already matches a role's stored short name, such as `writer` | That role |
+| Anything else | General assistant |
+
+Icon matching ignores surrounding spaces and letter case, but does not remove hyphens. The old icon name itself is not rewritten.
+
+A colour already in the ten-colour palette stays, with its stored hex code standardised to uppercase. Other valid six-digit hex colours move to the nearest palette hue; nearly grey colours become Grey. Missing or malformed colours also become Grey. Once these choices are saved, later restarts leave them unchanged rather than repeatedly choosing new colours. Built-in agents use their fixed identities instead of this custom-agent migration.
 
 ## How to lower one agent's tool-call limit
 

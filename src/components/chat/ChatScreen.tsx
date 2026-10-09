@@ -16,7 +16,6 @@ import {
 import {
   ArrowCounterClockwise,
   User,
-  Robot,
   PaperPlaneRight,
   Stop,
   Copy,
@@ -80,7 +79,15 @@ import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
 import { GoalOutcomeRow } from './GoalOutcomeRow'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
-import type { SlashCommand, Skill, Agent } from '@/lib/api'
+import type { SlashCommand, Skill } from '@/lib/api'
+import {
+  AgentStatusIndicator,
+  IDLE_STATUS_TEXT,
+  feedMarkLabel,
+  showsFeedMark,
+  useReplySlotPhase,
+} from './AgentStatusIndicator'
+import { useChatAgents } from './useChatAgents'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
 import { ComposerMediaLibraryButton, LibraryAttachmentChips } from './ComposerMediaLibrary'
 import { cn, initialOf } from '@/lib/utils'
@@ -328,41 +335,6 @@ function SystemMessage() {
   )
 }
 
-// Animated thinking indicator with rotating status messages. The first
-// shown phrase is always 'Thinking…' (deterministic opening beat); every
-// tick after that picks a random phrase from the pool, never immediately
-// repeating the one just shown. A caller (InlineThinkingIndicator) can
-// override the rotation entirely with a stable, context-specific `label`
-// — e.g. naming the hidden tool currently running — via ThinkingIndicator's
-// `label` prop.
-const THINKING_MESSAGES = [
-  'Thinking…',
-  'Working on it…',
-  'Composing a response…',
-  'Processing your request…',
-  'Analyzing…',
-  'Considering the details…',
-  'Piecing it together…',
-  'Reasoning it through…',
-  'Working through this…',
-  'Gathering my thoughts…',
-  'Figuring out the approach…',
-  'Reviewing the context…',
-  'Drafting a response…',
-  'Making sense of it…',
-  'Weighing the options…',
-]
-
-/** Picks a random phrase from THINKING_MESSAGES that differs from `current` — never an immediate repeat. */
-function pickNextThinkingPhrase(current: string): string {
-  if (THINKING_MESSAGES.length <= 1) return THINKING_MESSAGES[0]
-  let next = current
-  while (next === current) {
-    next = THINKING_MESSAGES[Math.floor(Math.random() * THINKING_MESSAGES.length)]
-  }
-  return next
-}
-
 // ADR-051 — cap on the verbose-only "Technical details" disclosure content
 // in VirtualAssistantMessageRow (historical/replay render path). Mirrors
 // MessageItem.tsx's cap (live render path) so live and replay show the same
@@ -427,8 +399,8 @@ function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): str
 }
 
 // `deriveDelegateThinkingLabel` stays deleted. A hidden `delegate` call
-// (every action, unless verbose chat is on) has no specific thinking label
-// and falls through to the generic rotating pool, same as a status poll.
+// (every action, unless verbose chat is on) has no tool-specific label.
+// Its running status still selects Working, with the generic working copy.
 
 /**
  * Finds the LAST tool-call part in a live message's `content` whose live
@@ -437,12 +409,12 @@ function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): str
  * — only when that call is hidden from the thread per toolVisibility.ts's
  * shouldRenderToolCall — derives a specific, stable label for it.
  *
- * Returns null (generic rotating pool applies) when: the tool is visible
- * (its own chip already shows progress), it's a hidden `delegate` call
- * (no specific label — the event line carries that), it's ToolSearch, or
- * any other hidden tool with no specific-label rule, or nothing is
- * currently running. Defensive: never throws — an unexpected
- * message/part shape falls back to the generic pool via the null return,
+ * Returns null when: the tool is visible (its own chip already shows progress),
+ * it's a hidden `delegate` call (no specific label — the event line carries
+ * that), it's ToolSearch, any other hidden tool with no specific-label rule,
+ * or nothing is currently running. This selects copy only, not the phase:
+ * runningToolNamesFromLiveContent supplies the correlated execution signal. Defensive: never throws — an unexpected
+ * message/part shape supplies no specific copy via the null return,
  * exactly like "nothing found".
  */
 function deriveHiddenRunningToolLabel(
@@ -472,7 +444,26 @@ function deriveHiddenRunningToolLabel(
       if (toolName === 'bash') {
         return deriveBashThinkingLabel(args)
       }
-      return null // ToolSearch, any delegate action, or any other hidden tool with no rule — generic pool.
+      return null // ToolSearch, any delegate action, or another hidden tool without specific copy.
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** Plain/replay twin of deriveHiddenRunningToolLabel. The virtual row has no AssistantUI parts. */
+function derivePositionedHiddenRunningLabel(
+  calls: readonly { tool: string; params?: Record<string, unknown>; status?: string }[],
+  verboseChatEnabled: boolean,
+): string | null {
+  try {
+    for (let i = calls.length - 1; i >= 0; i--) {
+      const call = calls[i]
+      if (!call || call.status !== 'running') continue
+      if (shouldRenderToolCall(call.tool, call.params, verboseChatEnabled, false)) return null
+      if (call.tool === 'bash') return deriveBashThinkingLabel(call.params)
+      return null
     }
     return null
   } catch {
@@ -516,53 +507,35 @@ function messageGoalIdFromAssistantUi(message: {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
-/** Extracts the tool names of currently-`running` tool-call parts from a
- * LIVE AssistantUI message's `content` array — the same shape
- * deriveHiddenRunningToolLabel scans, but collecting every running name
- * (there's normally at most one) rather than stopping at the first hidden
- * one. Never throws; an unexpected shape yields an empty array. */
+/** One execution discriminator for both the live and plain/replay reply slots.
+ * Visibility and label selection must not change whether a tool is running. */
+function runningToolNamesForReply(
+  calls: readonly Pick<PositionedToolCall, 'tool' | 'status'>[],
+): string[] {
+  return calls.filter((call) => call.status === 'running').map((call) => call.tool)
+}
+
+/** Adapts live AssistantUI parts to the same execution records used by replay.
+ * Status comes from the store record correlated by toolCallId; an unexpected
+ * content shape yields no calls, not a guessed execution phase. */
 function runningToolNamesFromLiveContent(
   content: unknown,
-  storeToolCalls: Record<string, { status?: string }>,
+  storeToolCalls: Record<string, Pick<PositionedToolCall, 'status'>>,
 ): string[] {
   if (!Array.isArray(content)) return []
-  const names: string[] = []
+  const calls: Pick<PositionedToolCall, 'tool' | 'status'>[] = []
   try {
     for (const part of content) {
       const p = part as { type?: string; toolCallId?: string; toolName?: string } | undefined
       if (!p || p.type !== 'tool-call') continue
       if (typeof p.toolCallId !== 'string' || typeof p.toolName !== 'string') continue
-      if (storeToolCalls[p.toolCallId]?.status === 'running') names.push(p.toolName)
+      const call = storeToolCalls[p.toolCallId]
+      if (call) calls.push({ tool: p.toolName, status: call.status })
     }
   } catch {
     return []
   }
-  return names
-}
-
-function ThinkingIndicator({ label }: { label?: string | null } = {}) {
-  const [rotatingPhrase, setRotatingPhrase] = useState<string>(THINKING_MESSAGES[0])
-
-  useEffect(() => {
-    if (label) return // a stable context-specific label overrides rotation entirely.
-    const interval = setInterval(() => {
-      setRotatingPhrase((prev) => pickNextThinkingPhrase(prev))
-    }, 2000)
-    return () => clearInterval(interval)
-  }, [label])
-
-  const displayText = label ?? rotatingPhrase
-
-  return (
-    <span className="text-[var(--color-muted)] italic flex items-center gap-[var(--space-2)] py-[var(--space-1)]">
-      <span className="flex gap-[var(--space-1)]">
-        <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '0ms' }} />
-        <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '150ms' }} />
-        <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '300ms' }} />
-      </span>
-      <span className="text-[length:var(--type-utility-xs-size)] transition-opacity duration-300">{displayText}</span>
-    </span>
-  )
+  return runningToolNamesForReply(calls)
 }
 
 // Custom text renderer with streaming cursor.
@@ -594,21 +567,13 @@ function AssistantTextPart() {
   )
 }
 
-// Shows thinking dots inside the assistant message while it is still running.
-// Stays visible the entire turn — including between tool-call steps after some
-// text has streamed — so the user always knows the agent is still working.
-// Uses useMessage() for reactive state (not getState() which is a snapshot).
-//
-// Context-aware: when the current in-progress step is a HIDDEN tool call
-// (ToolSearch, background bash, any delegate action — see toolVisibility.ts)
-// whose tool-call part is present in message.content but rendered invisible,
-// this shows a specific, stable label for it (e.g. "Running the test suite…")
-// instead of the generic rotating pool — see deriveHiddenRunningToolLabel
-// above. Every delegate action is hidden in the non-verbose thread (spec D2);
-// the grey event line is that surface, and a running delegate call has no
-// specific label of its own here. Verbose chat shows every delegate badge,
-// so the call is already visible and this label is not used.
-function InlineThinkingIndicator() {
+// Inline status for the live streaming bubble. Actual correlated tool status
+// selects Working; label rules stay the same (a goal phrase wins over hidden
+// tool copy). Only a model-response phase uses the rotating thinking phrases.
+// The mark replaces the bouncing dots. Not mounted for a settled row —
+// that row draws Idle itself. The mark suspends until the agent record
+// arrives so the figure is in the same paint as the phrase.
+function InlineThinkingIndicator({ agentId }: { agentId: string | null }) {
   const message = useMessage()
   const isRunning = message.status?.type === 'running'
   const storeToolCalls = useChatStore((s) => s.toolCalls)
@@ -623,15 +588,51 @@ function InlineThinkingIndicator() {
   // goalId) is neutral.
   const goalPills = useChatStore((s) => s.goalPills)
   const goalId = messageGoalIdFromAssistantUi(message)
-
-  if (!isRunning) return null
-
   const goalRecordEmpty = isGoalRecordEmpty(goalId, goalPills)
+  const runningToolNames = runningToolNamesFromLiveContent(message.content, storeToolCalls)
   const goalLabel = goalRecordEmpty
-    ? deriveGoalAwareThinkingLabel(runningToolNamesFromLiveContent(message.content, storeToolCalls), true)
+    ? deriveGoalAwareThinkingLabel(runningToolNames, true)
     : null
-  const label = goalLabel ?? deriveHiddenRunningToolLabel(message.content, storeToolCalls, verboseChatEnabled)
-  return <ThinkingIndicator label={label} />
+  const toolLabel = deriveHiddenRunningToolLabel(message.content, storeToolCalls, verboseChatEnabled)
+  const phase = useReplySlotPhase({
+    streaming: isRunning,
+    hasRunningTool: runningToolNames.length > 0,
+    toolLabel,
+    goalLabel,
+    idleEligible: false,
+  })
+
+  if (!showsFeedMark(phase)) return null
+  const label = feedMarkLabel(phase)
+  return (
+    <React.Suspense
+      fallback={<AgentStatusIndicator phase={phase.kind} label={label} />}
+    >
+      <ResolvedAgentMark agentId={agentId} phase={phase.kind} label={label} />
+    </React.Suspense>
+  )
+}
+
+function ResolvedAgentMark({
+  agentId,
+  phase,
+  label,
+}: {
+  agentId: string | null
+  phase: 'thinking' | 'working' | 'waiting' | 'unavailable'
+  label: string | null
+}) {
+  const agents = useChatAgents()
+  const agent = agents.find((item) => item.id === agentId)
+  return (
+    <AgentStatusIndicator
+      phase={phase}
+      label={label}
+      figure={agent?.figure}
+      role={agent?.role}
+      color={agent?.color}
+    />
+  )
 }
 
 // Fallback tool UI for tools without a registered makeAssistantToolUI component.
@@ -911,30 +912,10 @@ function wouldToolCallBeVisible(
 // directly) and in the child's own session, opened via its
 // `childSessionId`.
 
-// Bug 2 (UAT, ADR-040 browser-panel round): renders the agent the CALLER
-// already resolved per-message (`message.agentId ?? activeAgentId`), passed in
-// as `agent`. It must NOT re-derive from the live activeAgentId — otherwise
-// switching the agent picker mid-turn would instantly repaint the currently
-// streaming bubble's avatar to the newly-picked agent while its (correctly
-// per-message-scoped) name label kept the original: a live, user-visible
-// mismatch that only self-corrected on reload. Taking the resolved agent as a
-// prop keeps a single source of truth between the label and the avatar.
-function AssistantMessageAvatar({ agent }: { agent?: Agent }) {
-  return (
-    <div
-      className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[var(--color-secondary)]"
-      style={{ backgroundColor: agent?.color ?? 'var(--color-surface-3)' }}
-      title={agent?.name}
-    >
-      {agent?.icon ? (
-        <IconRenderer icon={agent.icon} size={14} />
-      ) : (
-        <Robot size={14} weight="bold" />
-      )}
-    </div>
-  )
-}
-
+// Bug 2 (UAT, ADR-040): the name label is the per-message agent
+// (`message.agentId ?? activeAgentId`), never the picker selection. The
+// avatar column is gone (names-only bubbles). The label's title keeps that
+// same identity so a mid-turn picker change cannot repaint the row.
 
 // ── Standalone message row components (virtualizer) ──────────────────────────
 // Render ChatMessage from props (no AssistantUI context) for use by the virtualizer.
@@ -1169,6 +1150,13 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // association (no goalId) is neutral.
   const goalPills = useChatStore((s) => s.goalPills)
   const goalRecordEmpty = isGoalRecordEmpty(message.goalId, goalPills)
+  const isLastAssistant = useChatStore((s) => {
+    const list = s.messages
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i]?.role === 'assistant') return list[i]?.id === message.id
+    }
+    return false
+  })
 
   const messageAgentId = message.agentId ?? activeAgentId
   const agent = agents.find((a) => a.id === messageAgentId)
@@ -1267,12 +1255,21 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // InlineThinkingIndicator, applied to the historical/virtualized "still
   // streaming" placeholder (PlainMessageList renders an in-flight message
   // through THIS row too — see the D-fix comment on hasContent above).
+  const runningToolNames = runningToolNamesForReply(positionedToolCalls)
   const emptyPlaceholderLabel = goalRecordEmpty
-    ? deriveGoalAwareThinkingLabel(
-        positionedToolCalls.filter((tc) => tc.status === 'running').map((tc) => tc.tool),
-        true,
-      )
+    ? deriveGoalAwareThinkingLabel(runningToolNames, true)
     : null
+  const positionedToolLabel = derivePositionedHiddenRunningLabel(positionedToolCalls, verboseChatEnabled)
+  const replyPhase = useReplySlotPhase({
+    streaming: !!message.isStreaming,
+    hasRunningTool: runningToolNames.length > 0,
+    toolLabel: positionedToolLabel,
+    goalLabel: emptyPlaceholderLabel,
+    idleEligible: isLastAssistant && !message.isStreaming,
+  })
+  const showMark =
+    showsFeedMark(replyPhase) &&
+    (showEmptyPlaceholder || replyPhase.kind === 'waiting' || replyPhase.kind === 'unavailable')
 
   return (
     <div
@@ -1282,25 +1279,31 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
       data-status="complete"
       className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
-      <div
-        className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[var(--color-secondary)]"
-        style={{ backgroundColor: agent?.color ?? 'var(--color-surface-3)' }}
-        title={agent?.name}
-      >
-        {agent?.icon ? (
-          <IconRenderer icon={agent.icon} size={14} />
-        ) : (
-          <Robot size={14} weight="bold" />
-        )}
-      </div>
       <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
         {agentDisplayName && (
-          <span data-testid="agent-label" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-            {agentDisplayName}
+          <span className="inline-flex items-center gap-[var(--space-2)]">
+            <span
+              data-testid="agent-label"
+              title={agentDisplayName}
+              className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+            >
+              {agentDisplayName}
+            </span>
+            {replyPhase.kind === 'idle' && (
+              <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{IDLE_STATUS_TEXT}</span>
+            )}
           </span>
         )}
         <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
-          {showEmptyPlaceholder && <ThinkingIndicator label={emptyPlaceholderLabel} />}
+          {showMark && showsFeedMark(replyPhase) && (
+            <AgentStatusIndicator
+              phase={replyPhase.kind}
+              label={feedMarkLabel(replyPhase)}
+              figure={agent?.figure}
+              role={agent?.role}
+              color={agent?.color}
+            />
+          )}
           {/* Media attachments */}
           {!showEmptyPlaceholder && mediaItems.length > 0 && (
             <div className="flex flex-col gap-[var(--space-2)] mb-[var(--space-2)]">
@@ -1839,16 +1842,21 @@ function AssistantMessage() {
       data-status={message.status?.type ?? 'complete'}
       className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
-      <AssistantMessageAvatar agent={agent} />
       <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
         {agentDisplayName && (
-          <span data-testid="agent-label" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{agentDisplayName}</span>
+          <span
+            data-testid="agent-label"
+            title={agentDisplayName}
+            className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+          >
+            {agentDisplayName}
+          </span>
         )}
         <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
           {showEmptyPlaceholder ? (
-            // Nothing has streamed in yet — show only the thinking indicator,
+            // Nothing has streamed in yet — show only the status mark,
             // not an empty text bubble + Copy affordance (D-fix).
-            <InlineThinkingIndicator />
+            <InlineThinkingIndicator agentId={messageAgentId ?? null} />
           ) : isTerminalEmpty ? (
             // Terminal-empty variant (D-fix): the turn is over and there is
             // still nothing to show. Render nothing rather than an empty
@@ -1875,12 +1883,12 @@ function AssistantMessage() {
                   },
                 }}
               />
-              {/* Trailing thinking indicator — sits at the bottom of the bubble
+              {/* Trailing status mark — sits at the bottom of the bubble
                   while the turn is running so the user always sees a "still
                   working" cue at the position where the next text/tool will
                   appear. Once a token streams in, the streamed text renders
                   above the indicator and pushes it further down. */}
-              <InlineThinkingIndicator />
+              <InlineThinkingIndicator agentId={messageAgentId ?? null} />
             </>
           )}
         </div>

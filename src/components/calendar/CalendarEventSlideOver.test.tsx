@@ -54,7 +54,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', locked: true, status: 'idle', soul: '' },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true, status: 'idle', soul: '' },
     ]),
     fetchWorkspaceDelegation: vi.fn(),
     createTask: vi.fn(),

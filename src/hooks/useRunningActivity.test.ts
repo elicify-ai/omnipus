@@ -21,6 +21,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import { fetchAgents } from '@/lib/api'
+import { makeAgent } from '@/test/factories'
 import { useRunningActivity, mergeAndCapFinished } from './useRunningActivity'
 import type { ActivityItem, AgentActivityItem, JudgeActivityItem } from './useRunningActivity'
 
@@ -37,8 +38,8 @@ function makeClient() {
 }
 
 const AGENTS: Agent[] = [
-  { id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', color: '#4488ff', icon: 'compass' } as Agent,
-  { id: 'ext-1', name: 'ClaudeCode', type: 'subagent_3p', locked: false, status: 'active' } as Agent,
+  makeAgent({ id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', color: '#3B82F6', icon: 'compass' }),
+  makeAgent({ id: 'ext-1', name: 'ClaudeCode', type: 'subagent_3p', locked: false, status: 'active' }),
 ]
 
 function makeAssistantMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {

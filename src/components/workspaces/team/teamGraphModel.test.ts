@@ -40,12 +40,19 @@ function agent(id: string, over: Partial<Agent> = {}): Agent {
     max_tool_iterations: 10,
     heartbeat_enabled: false,
     heartbeat_interval: 0,
+    figure: 'Omnipus',
+    role: 'general',
+    revision: '0'.repeat(64),
+    needs_model: false,
+    max_tool_iterations_source: 'global',
+    max_tool_iterations_override_ignored: false,
+    memory_enabled: true,
     ...over,
   } as Agent
 }
 
 const AGENTS: Agent[] = [
-  agent('mia', { name: 'Mia', default: true, color: '#d4af37', icon: 'Robot' }),
+  agent('mia', { name: 'Mia', default: true, color: '#3B82F6', icon: 'Robot' }),
   agent('jim', { name: 'Jim' }),
   agent('planner', { name: 'Planner', type: 'Subagent' }),
   agent('explorer', { name: 'Explorer', type: 'Subagent' }),
@@ -208,7 +215,7 @@ describe('buildTeamGraphModel', () => {
 // "looked absent" even though it always verifies work on this workspace.
 
 describe('buildTeamGraphModel — implicit System agent nodes (Judge, ADR-049 D3)', () => {
-  const JUDGE = agent('judge', { name: 'Judge', type: 'system', color: '#888', icon: 'Scales' })
+  const JUDGE = agent('judge', { name: 'Judge', type: 'system', color: '#9CA3AF', icon: 'Scales' })
   const AGENTS_WITH_JUDGE = [...AGENTS, JUDGE]
 
   it('renders the System agent as an implicit node even though it is never in state.members', () => {

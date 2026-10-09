@@ -142,7 +142,7 @@ describe('MailPanel — mark-seen effect fires exactly once per open message', (
     fetchMailMessage.mockReset()
     fetchMailSummary.mockReset()
     markMailSeen.mockReset()
-    fetchAgents.mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockResolvedValue([
       { agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mia@example.test' },
     ])

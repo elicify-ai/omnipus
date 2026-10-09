@@ -39,7 +39,9 @@ import {
 import { DeleteAgentControl } from './DeleteAgentControl'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { ExecutorSelector } from './ExecutorSelector'
-import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader, UploadMdButton } from './AgentFormFields'
+import { BehaviorFields, AvatarColorPicker, FigurePicker, RolePicker, UploadMdButton } from './AgentFormFields'
+import { AgentIcon } from '@/components/ui/agent-icon'
+import { AgentColor } from '@/lib/api/generated/schemas'
 import { CliPathValidationHint } from './CliPathValidationHint'
 import { CommandPreview } from './CommandPreview'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -68,9 +70,8 @@ import { isProviderUsable } from '@/lib/providerStatus'
 import { formatTokens } from '@/lib/formatTokens'
 import { logDiagnostic } from '@/lib/telemetry'
 import { useUiStore } from '@/store/ui'
-import type { FallbackModel } from '@/lib/api/generated/openapi-types'
-import { type IconName, getIconComponent } from '@/lib/agentIcons'
-import { avatarColorName } from '@/lib/constants'
+import type { AgentColor as AgentColorValue, AgentFigure, AgentRole, FallbackModel } from '@/lib/api/generated/openapi-types'
+import { type IconName } from '@/lib/agentIcons'
 import { agentKindFlags } from '@/lib/agentKind'
 import { cliValidationBlocked, useCliPathValidation } from '@/hooks/useCliPathValidation'
 import { useCliDetect } from '@/hooks/useCliDetect'
@@ -126,6 +127,29 @@ function formatWindowTokens(n: number): string {
   return windowFormatter.format(n)
 }
 
+// Tailwind `sm` is 40rem. The profile mounts the desktop tabs and the phone
+// accordion together and hides one with CSS. jsdom does not apply that CSS, so
+// both copies stay in the accessibility tree unless the hidden layout is
+// marked. When matchMedia is missing (unit tests), treat the viewport as
+// desktop — the same default the tabs use.
+const SM_AND_UP = '(min-width: 40rem)'
+
+function useSmAndUp(): boolean {
+  const [matches, setMatches] = useState(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
+    return window.matchMedia(SM_AND_UP).matches
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const media = window.matchMedia(SM_AND_UP)
+    const apply = () => setMatches(media.matches)
+    apply()
+    media.addEventListener('change', apply)
+    return () => media.removeEventListener('change', apply)
+  }, [])
+  return matches
+}
+
 export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const editAgentId = useUiStore((s) => s.editAgentId)
   const closeEditAgentSlideOver = useUiStore((s) => s.closeEditAgentSlideOver)
@@ -136,6 +160,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const editAgentWorkspaceId = useUiStore((s) => s.editAgentWorkspaceId)
   const agentId = agentIdProp ?? editAgentId
   const isOpen = agentId !== null
+  const smAndUp = useSmAndUp()
 
   const queryClient = useQueryClient()
 
@@ -338,6 +363,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [primaryProvider, setPrimaryProvider] = useState('')
   const [selectedColor, setSelectedColor] = useState<string | undefined>(undefined)
   const [selectedIcon, setSelectedIcon] = useState<IconName>('Robot')
+  const [selectedFigure, setSelectedFigure] = useState<AgentFigure>('Omnipus')
+  const [selectedRole, setSelectedRole] = useState<AgentRole>('general')
   // W6-B4 / G3: `default` flag mirrors Agent.default on the wire. At most one
   // agent is default across the roster; the backend enforces that on PUT.
   // The toggle in the Identity strip is the only way to flip it from the
@@ -571,6 +598,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setPrimaryProvider(agent.provider ?? '')
     setSelectedColor(agent.color)
     setSelectedIcon((agent.icon as IconName) ?? 'Robot')
+    setSelectedFigure(agent.figure ?? 'Omnipus')
+    setSelectedRole(agent.role ?? 'general')
     // W6-B4 / G3: hydrate the `default` flag from the agent response. The
     // wire field is a plain boolean; absent = false. The Identity strip
     // shows the current state of this flag and lets the user flip it.
@@ -655,8 +684,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // backend. Build a restricted payload for that tier.
     const isSubagent3p = agent?.type === 'subagent_3p'
     const identity = isSubagent3p
-      ? { name, description, color: selectedColor, icon: selectedIcon }
-      : { name, description, color: selectedColor, icon: selectedIcon, default: isDefault }
+      ? { name, description, color: selectedColor, figure: selectedFigure, role: selectedRole }
+      : { name, description, color: selectedColor, figure: selectedFigure, role: selectedRole, default: isDefault }
     if (isSubagent3p) {
       // #904 D14 supersedes agent-types-field-matrix.md Decisions #1: the
       // own tool-iteration limit is the CLI's turn cap, sent only when the
@@ -744,7 +773,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       executor,
     }
   }, [
-    agent?.type, name, description, model, primaryProvider, selectedColor, selectedIcon, isDefault, fallbackModels,
+    agent?.type, name, description, model, primaryProvider, selectedColor, selectedFigure, selectedRole, isDefault, fallbackModels,
     temperature, maxTokens, soul, memoryEnabled, voice,
     maxToolIterationsEdit, contextWindowOverride,
     agentSkills, executor,
@@ -1385,48 +1414,33 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   />
                 </div>
               )}
-              {/* Operator decision 2026-07-03: color/icon become visible
-                  READ-ONLY for locked core agents (previously hidden
-                  entirely) — a static swatch/icon+label, not the
-                  interactive picker (which has no readOnly mode). */}
+              {/* W1-6 / FR-020: figure, role, and colour choices stay visible
+                  for built-ins, locked by the server's field descriptors.
+                  The header previews the same local draft as these pickers. */}
               <div className="space-y-[var(--space-1)]">
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Avatar color</p>
-                {!isFieldEditable('color') ? (
-                  <div className="flex items-center gap-[var(--space-2)]" data-testid="avatar-color-readonly">
-                    <span
-                      className="w-7 h-7 rounded-full shrink-0 border border-[var(--color-border)]"
-                      style={{ backgroundColor: selectedColor || 'var(--color-surface-3)' }}
-                      aria-hidden="true"
-                    />
-                    <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
-                      {avatarColorName(selectedColor)}
-                    </span>
-                  </div>
-                ) : (
-                  <AvatarColorPicker
-                    value={selectedColor ?? ''}
-                    onChange={(color) => { markDirty(); setSelectedColor(color) }}
-                    testIdPrefix="avatar-color"
-                  />
-                )}
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Figure</p>
+                <FigurePicker
+                  value={selectedFigure}
+                  disabled={!isFieldEditable('figure')}
+                  onChange={(figure) => { markDirty(); setSelectedFigure(figure) }}
+                />
               </div>
               <div className="space-y-[var(--space-1)]">
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Avatar icon</p>
-                {!isFieldEditable('icon') ? (
-                  <div className="flex items-center gap-[var(--space-2)]" data-testid="avatar-icon-readonly">
-                    {(() => {
-                      const ReadOnlyIcon = getIconComponent(selectedIcon)
-                      return <ReadOnlyIcon size={18} className="text-[var(--color-secondary)]" aria-hidden="true" />
-                    })()}
-                    <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">{selectedIcon}</span>
-                  </div>
-                ) : (
-                  <IconPicker
-                    value={selectedIcon}
-                    onChange={(icon) => { markDirty(); setSelectedIcon(icon) }}
-                    triggerTestId="avatar-icon-trigger"
-                  />
-                )}
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Role</p>
+                <RolePicker
+                  value={selectedRole}
+                  disabled={!isFieldEditable('role')}
+                  onChange={(role) => { markDirty(); setSelectedRole(role) }}
+                />
+              </div>
+              <div className="space-y-[var(--space-1)]">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Colour</p>
+                <AvatarColorPicker
+                  value={selectedColor}
+                  disabled={!isFieldEditable('color')}
+                  onChange={(color) => { markDirty(); setSelectedColor(color) }}
+                  testIdPrefix="avatar-color"
+                />
               </div>
             </div>
           </section>
@@ -2391,13 +2405,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       onOpenAutoFocus={handleOpenAutoFocus}
       contentRef={sheetContentRef}
     >
-      {/* Title row locked to 44px chrome; badges/description sit below so the
-          open panel aligns with the workspace top bar (flat shell chrome). */}
+      {/* Compact live identity header; badges and description remain below. */}
       <SheetHeader className="px-[var(--space-4)] sm:px-[var(--space-5)] pr-[var(--space-7)]">
         <div className="flex items-center gap-[var(--space-2)] min-w-0">
-          <AvatarHeader
-            color={selectedColor}
-            className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 [&>svg]:!w-3.5 [&>svg]:!h-3.5"
+          <AgentIcon figure={selectedFigure} role={selectedRole} size={26}
+            color={(selectedColor ?? AgentColor.options[9]) as AgentColorValue}
           />
           <h1 className="font-headline text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] truncate">
             {agent.name}
@@ -2505,7 +2517,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           </div>
         </div>
       )}
-            <Tabs defaultValue="basics" className="hidden sm:block w-full">
+            {/* Legacy Phosphor slug. Kept once, above both layouts, so the
+                desktop tabs and the phone accordion do not each print it.
+                The editor never writes this field. */}
+            <div className="space-y-[var(--space-1)]" data-testid="avatar-icon-readonly">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Avatar icon</p>
+              <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">{selectedIcon}</span>
+            </div>
+            <Tabs defaultValue="basics" className="hidden sm:block w-full" aria-hidden={smAndUp ? undefined : true}>
         {/* Tab order (item 4 reorg): Basics, Personality, Tools (or Runtime
             for external), Skills, Heartbeat, Advanced. Heartbeat moves from
             visually-first to between Skills and Advanced; defaultValue
@@ -2592,7 +2611,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             for native workers; subagent_3p's editor is in Runtime. */}
         <TabsContent value="advanced" className="space-y-[var(--space-4)]">{advancedPanel}</TabsContent>
       </Tabs>
-      <Accordion type="single" collapsible defaultValue="basics" className="block sm:hidden">
+      <Accordion type="single" collapsible defaultValue="basics" className="block sm:hidden" aria-hidden={smAndUp ? true : undefined}>
         <AccordionItem value="basics">
           <AccordionTrigger data-testid="accordion-basics" className="font-headline">Basics</AccordionTrigger>
           <AccordionContent>{basicsPanel}</AccordionContent>

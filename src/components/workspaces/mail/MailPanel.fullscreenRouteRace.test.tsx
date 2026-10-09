@@ -80,7 +80,7 @@ describe('Mail fullscreen search preserves the requested mailbox during startup'
     fetchMailboxes.mockReset().mockImplementation(() => new Promise((resolve) => {
       resolveMailboxRequest = () => resolve(MAILBOXES)
     }))
-    fetchAgents.mockReset().mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockReset().mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailFolders.mockReset().mockResolvedValue({
       folders: [{ slug: 'inbox', display_name: 'Inbox', total: 1, unread_count: 0 }],
     })

@@ -66,8 +66,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([
-      { id: 'agent-mia', name: 'Mia', color: '#111111', icon: null },
-      { id: 'agent-jim', name: 'Jim', color: '#222222', icon: null },
+      { figure: 'Omnipus', role: 'general', id: 'agent-mia', name: 'Mia', color: '#9CA3AF', icon: null },
+      { figure: 'Omnipus', role: 'general', id: 'agent-jim', name: 'Jim', color: '#9CA3AF', icon: null },
     ]),
     fetchSessionMessages: vi.fn().mockResolvedValue([]),
     fetchCommands: vi.fn().mockResolvedValue([]),

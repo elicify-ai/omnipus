@@ -38,7 +38,7 @@ const mockSkills = [
 // files should mean the same thing everywhere, so "max" is a worker in both
 // files, never a chat-eligible agent in either.
 const mockAgents: Agent[] = [
-  makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#111111', description: 'Assistant' }),
+  makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#3B82F6', description: 'Assistant' }),
   makeAgent({ id: 'jim', name: 'Jim', type: 'core', status: 'idle', description: 'Orchestrator' }),
   makeAgent({ id: 'mars', name: 'Mars', type: 'Main', status: 'active', description: 'Ops lead' }),
   makeAgent({ id: 'max', name: 'Max Worker', type: 'Subagent', status: 'active', description: 'Labour agent' }),
@@ -223,12 +223,13 @@ describe('useSlashMenu — gating', () => {
     // filter, so rankByFilter's early-return still preserves this
     // (pre-sorted) order rather than re-ranking by prefix/substring.
     // Session-search enhancement: "/workspace" is a second synthetic
-    // client-only entry, inserted immediately after "/resume" in
+    // client-only entry, inserted immediately after "/sessions" in
     // useSlashMenu's allCommands (both web-client-only synthetic commands
     // sit together ahead of every backend-served command).
     expect(result.current.slashItems.map((i) => i.key)).toEqual([
-      '/resume', '/workspace', '/new', '/help', '/model', '/agents', '/skills', '/cancel', '/handoff', 'code-review', 'web-research',
+      '/sessions', '/workspace', '/new', '/help', '/model', '/agents', '/skills', '/cancel', '/handoff', 'code-review', 'web-research',
     ])
+    expect(result.current.slashItems.map((i) => i.key)).not.toContain('/resume')
   })
 })
 
@@ -238,8 +239,8 @@ describe('useSlashMenu — streaming filter', () => {
     act(() => result.current.onInputChange('/'))
     const commandKeys = result.current.slashItems.filter((i) => i.section === 'commands').map((i) => i.key)
     // "/workspace" is declared with available_while_streaming: true (same as
-    // "/resume" and "/cancel") — session search must stay reachable mid-turn.
-    expect(commandKeys).toEqual(['/resume', '/workspace', '/cancel'])
+    // "/sessions" and "/cancel") — session search must stay reachable mid-turn.
+    expect(commandKeys).toEqual(['/sessions', '/workspace', '/cancel'])
     const skillKeys = result.current.slashItems.filter((i) => i.section === 'skills').map((i) => i.key)
     // Deferred item 3: alphabetical by name (see comment on the "gating" test above).
     expect(skillKeys).toEqual(['code-review', 'web-research'])
@@ -364,7 +365,7 @@ describe('useSlashMenu — keyboard navigation', () => {
     const startNewSession = vi.fn()
     const { result } = renderHook(() => useSlashMenu(baseParams({ startNewSession })))
     act(() => result.current.onInputChange('/'))
-    // Move highlight off "/resume" (index 0, whose onSelect touches the
+    // Move highlight off "/sessions" (index 0, whose onSelect touches the
     // global ui store) past "/workspace" (index 1, session-search
     // enhancement's second synthetic client-only entry — also touches the
     // global ui store) onto "/new" (index 2, whose onSelect calls the
@@ -421,6 +422,9 @@ describe('useSlashMenu — client command dispatch', () => {
     const msg = appendMessage.mock.calls[0][0]
     expect(msg.role).toBe('system')
     expect(msg.content).toContain('/new')
+    // FR-007: /help prints the renamed command and must not keep /resume as an alias.
+    expect(msg.content).toContain('/sessions')
+    expect(msg.content).not.toContain('/resume')
   })
 
   it('/model opens the model selector via the ui store', () => {
@@ -448,15 +452,48 @@ describe('useSlashMenu — client command dispatch', () => {
     expect(cancelIfStreaming).toHaveBeenCalledTimes(1)
   })
 
-  // Session-search TWO MODES: /resume and /workspace open the SAME
+  // Session-search TWO MODES: /sessions and /workspace open the SAME
   // SearchModal instance (searchModalOpen) but in DIFFERENT modes —
-  // /resume must leave the panel in its original 'sessions' behavior
+  // /sessions must leave the panel in its original 'sessions' behavior
   // (unchanged per spec); /workspace must switch it into 'workspaces' mode
   // (openWorkspaceSwitcher, ui store) rather than reusing openSearchModal.
-  it('/resume opens the search modal in sessions mode (unchanged)', () => {
+  it.each(['ready', 'error', 'loading'] as const)('does not resolve typed /resume to Sessions when commands are %s', (state) => {
+    // FR-007 / ARCH decision 5: no retired alias. The existing loading
+    // readiness gate holds *unknown* slash text, then sends it normally;
+    // that temporary hold must never become a Sessions dispatch.
+    commandsQueryIsError = state === 'error'
+    commandsQueryIsLoading = state === 'loading'
+    const composerRuntime = makeComposerRuntime('/resume')
+    const params = baseParams({ composerRuntime })
+    const { result, rerender } = renderHook(() => useSlashMenu(params))
+    act(() => result.current.onInputChange('/resume'))
+    let intercepted = false
+    act(() => { intercepted = result.current.interceptClientCommand() })
+    expect(intercepted).toBe(state === 'loading')
+    expect(useUiStore.getState().searchModalOpen).toBe(false)
+    expect(composerRuntime.setText).not.toHaveBeenCalled()
+    expect(params.appendMessage).not.toHaveBeenCalled()
+    expect(params.startNewSession).not.toHaveBeenCalled()
+    expect(result.current.slashItems.map((item) => item.key)).not.toContain('/resume')
+    if (state === 'loading') {
+      expect(composerRuntime.send).not.toHaveBeenCalled()
+      commandsQueryIsLoading = false
+      rerender()
+      expect(composerRuntime.send).toHaveBeenCalledTimes(1)
+      expect(composerRuntime.getState().text).toBe('/resume')
+      expect(composerRuntime.setText).not.toHaveBeenCalled()
+      expect(useUiStore.getState().searchModalOpen).toBe(false)
+      act(() => { intercepted = result.current.interceptClientCommand() })
+      expect(intercepted).toBe(false)
+    } else {
+      expect(composerRuntime.send).not.toHaveBeenCalled()
+    }
+  })
+
+  it('/sessions opens the search modal in sessions mode (unchanged)', () => {
     const { result } = renderHook(() => useSlashMenu(baseParams()))
     act(() => result.current.onInputChange('/'))
-    const item = result.current.slashItems.find((i) => i.key === '/resume')!
+    const item = result.current.slashItems.find((i) => i.key === '/sessions')!
     act(() => item.onSelect())
     expect(useUiStore.getState().searchModalOpen).toBe(true)
     expect(useUiStore.getState().searchModalMode).toBe('sessions')
@@ -870,9 +907,9 @@ describe('useSlashMenu — interceptClientCommand readiness gate (commands still
     expect(composerRuntime.send).not.toHaveBeenCalled()
   })
 
-  it('a client command that IS already resolvable (the synthetic "/resume") runs immediately, without waiting for the fetch', () => {
+  it('a client command that IS already resolvable (the synthetic "/sessions") runs immediately, without waiting for the fetch', () => {
     commandsQueryIsLoading = true
-    const composerRuntime = makeComposerRuntime('/resume')
+    const composerRuntime = makeComposerRuntime('/sessions')
     const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
 
     let intercepted = false
@@ -1119,7 +1156,7 @@ describe('useSlashMenu — onHoverItem', () => {
     // Index 5 in the unified list is "/agents" (resume, workspace, new, help,
     // model, agents, ...) — shifted by one from "/workspace" (session-search
     // enhancement's second synthetic client-only entry, inserted right after
-    // "/resume").
+    // "/sessions").
     act(() => result.current.onHoverItem(5))
     expect(result.current.slashHighlight).toBe(5)
     expect(result.current.slashItems[5].key).toBe('/agents')
@@ -1206,7 +1243,7 @@ describe('useSlashMenu — commandsError (LOW S8)', () => {
 
   it('keeps the menu open (shouldShowSlash=true) even when the error leaves zero matching items', () => {
     // With the commands query errored, allCommands is just the two synthetic
-    // client-only entries ("/resume", "/workspace") — a prefix that matches
+    // client-only entries ("/sessions", "/workspace") — a prefix that matches
     // neither of those nor any skill leaves slashItems empty. shouldShowSlash
     // must still be true so the caller's "Commands unavailable" row has
     // somewhere to render.
@@ -1224,7 +1261,7 @@ describe('useSlashMenu — commandsError (LOW S8)', () => {
   })
 
   // Documented per the task, not a new behavior: with the commands list
-  // unavailable, only the two synthetic client-only commands ("/resume",
+  // unavailable, only the two synthetic client-only commands ("/sessions",
   // "/workspace") still resolve locally. Any other slash text — even the
   // name of a real backend command — can no longer be matched, so
   // interceptClientCommand correctly returns false and the caller's normal
@@ -1239,19 +1276,19 @@ describe('useSlashMenu — commandsError (LOW S8)', () => {
     expect(intercepted).toBe(false)
   })
 
-  it('the synthetic client-only "/resume" command still intercepts even when the backend commands query errors', () => {
+  it('the synthetic client-only "/sessions" command still intercepts even when the backend commands query errors', () => {
     commandsQueryIsError = true
-    const composerRuntime = makeComposerRuntime('/resume')
+    const composerRuntime = makeComposerRuntime('/sessions')
     const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
     let intercepted = false
     act(() => { intercepted = result.current.interceptClientCommand() })
     expect(intercepted).toBe(true)
     expect(useUiStore.getState().searchModalOpen).toBe(true)
-    // Two-modes contract: /resume must land in 'sessions' mode, unchanged.
+    // Two-modes contract: /sessions must land in 'sessions' mode, unchanged.
     expect(useUiStore.getState().searchModalMode).toBe('sessions')
   })
 
-  // Mirrors the "/resume" case directly above: "/workspace" (session-search
+  // Mirrors the "/sessions" case directly above: "/workspace" (session-search
   // enhancement) is the second synthetic client-only command and must
   // survive the same backend-outage degradation, opening the SAME search
   // modal instance but in its 'workspaces' mode (no workspace preselected).
@@ -1482,7 +1519,7 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
     const item = result.current.slashItems[0]
     expect(item.label).toBe('@Mia')
     expect(item.description).toBe('Assistant')
-    expect(item.agentColor).toBe('#111111')
+    expect(item.agentColor).toBe('#3B82F6')
   })
 
   it('"/" and "@" triggers never mix — "/" still shows commands+skills, unaffected by agent data', () => {

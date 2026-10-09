@@ -30,7 +30,9 @@ import {
 } from '@/components/ui/select'
 import {
   AvatarColorPicker,
-  IconPicker,
+  FigurePicker,
+  IdentityPreview,
+  RolePicker,
 } from '../AgentFormFields'
 import { ModelSelector, type ModelGroup } from '@/components/ui/model-selector'
 import { InheritToggle } from './InheritToggle'
@@ -41,7 +43,6 @@ import { useCliDetect } from '@/hooks/useCliDetect'
 import { buildExecutorPreviewRequest } from '@/hooks/useCommandPreview'
 import { detectEntryFor, resolveCliDetectHint, SUPPORTED_CLIS } from '@/lib/cliDetect'
 import { useModelToProvider } from '@/lib/agents/modelToProvider'
-import type { IconName } from '@/lib/agentIcons'
 import type { ExecutorCommandPreviewRequest, FallbackModel } from '@/lib/api'
 import type { Provider } from '@/lib/api/generated/openapi-types'
 import { X } from '@phosphor-icons/react'
@@ -151,20 +152,26 @@ export function Step1Identity({
       </div>
 
       <div className="space-y-[var(--space-2)]">
-        <Label>Avatar color</Label>
+        <Label>Preview</Label>
+        <IdentityPreview figure={payload.figure ?? 'Omnipus'} role={payload.role ?? 'general'} color={payload.color} />
+      </div>
+
+      <div className="space-y-[var(--space-2)]">
+        <Label>Figure</Label>
+        <FigurePicker value={payload.figure ?? 'Omnipus'} onChange={(figure) => setField('figure', figure)} />
+      </div>
+
+      <div className="space-y-[var(--space-2)]">
+        <Label>Role</Label>
+        <RolePicker value={payload.role ?? 'general'} onChange={(role) => setField('role', role)} />
+      </div>
+
+      <div className="space-y-[var(--space-2)]">
+        <Label>Colour</Label>
         <AvatarColorPicker
           value={payload.color}
           onChange={(c) => setField('color', c)}
           testIdPrefix="wizard-color"
-        />
-      </div>
-
-      <div className="space-y-[var(--space-2)]">
-        <Label>Icon</Label>
-        <IconPicker
-          value={payload.icon as IconName}
-          onChange={(icon) => setField('icon', icon)}
-          triggerTestId="wizard-icon"
         />
       </div>
 
