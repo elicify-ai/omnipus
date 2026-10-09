@@ -134,7 +134,6 @@ export const DoneStats = z
     tokens: z.number().min(0).optional(),
     cost: z.number().min(0).optional(),
     duration_ms: z.number().min(0).optional(),
-    tokens_dropped: z.number().min(0).optional(),
     frames_emitted: z.number().min(0).optional(),
     orphan_count: z.number().min(0).optional(),
     duplicate_tool_call_id_count: z.number().min(0).optional(),

@@ -270,37 +270,6 @@ func TestAgentListStatus_CustomAgentActive(t *testing.T) {
 
 // --- Tool Visibility Endpoints (Issue #41) ---
 
-// TestHandleBuiltinToolsDeprecated_Returns404 verifies GET /api/v1/tools/builtin
-// now returns 404 — the legacy catalog endpoint was removed in the central tool
-// registry redesign (FR-029). Callers must use GET /api/v1/tools instead.
-// Traces to: central tool registry redesign spec — FR-029.
-func TestHandleBuiltinToolsDeprecated_Returns404(t *testing.T) {
-	api, cleanup := newTestRestAPI(t)
-	defer cleanup()
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools/builtin", nil)
-	api.HandleBuiltinToolsDeprecated(w, r)
-
-	require.Equal(t, http.StatusNotFound, w.Code)
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-	assert.Contains(t, body, "error")
-}
-
-// TestHandleBuiltinToolsDeprecated_AnyMethodReturns404 verifies all HTTP methods
-// return 404 on the deprecated endpoint.
-func TestHandleBuiltinToolsDeprecated_AnyMethodReturns404(t *testing.T) {
-	api, cleanup := newTestRestAPI(t)
-	defer cleanup()
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/tools/builtin", nil)
-	api.HandleBuiltinToolsDeprecated(w, r)
-
-	assert.Equal(t, http.StatusNotFound, w.Code)
-}
-
 // TestAgent_MemoryEnabled_DefaultsTrueAndRoundTripsOnPUT proves the
 // ADR-052 FR-039 memory_enabled wire field: (1) an agent with no persisted
 // MemoryEnabled override defaults to true on GET/list (applyAgentOverrides

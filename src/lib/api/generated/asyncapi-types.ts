@@ -180,7 +180,6 @@ export interface DoneStats {
   tokens?: number;
   cost?: number;
   duration_ms?: number;
-  tokens_dropped?: number;
   frames_emitted?: number;
   orphan_count?: number;
   duplicate_tool_call_id_count?: number;

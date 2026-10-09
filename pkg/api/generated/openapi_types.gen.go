@@ -16848,9 +16848,6 @@ type DelegateStatusAction struct {
 
 	// SessionId The child session to query.
 	SessionId string `json:"session_id"`
-
-	// TaskId DEPRECATED compat alias for `session_id` (pre-ADR-053 callers). When both are present, `session_id` wins.
-	TaskId *string `json:"task_id,omitempty"`
 }
 
 // DelegateStatusActionAction defines model for DelegateStatusAction.Action.

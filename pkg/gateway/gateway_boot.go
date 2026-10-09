@@ -676,10 +676,6 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 	}
 	stg.agentLoop.WireTier13Deps(tier13)
 
-	// SSE chat endpoint — kept for backward compatibility; streaming tokens now route through WebSocket.
-	sseHandler := newSSEHandler(stg.msgBus, nil, stg.allowedOrigin, func() *config.Config { return stg.cfg })
-	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/chat", sseHandler)
-
 	// WebSocket chat endpoint — primary transport for bi-directional chat streaming.
 	stg.wsHandler = newWSHandler(stg.msgBus, stg.agentLoop, stg.allowedOrigin)
 	stg.wsHandler.home = stg.homePath

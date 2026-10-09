@@ -17119,11 +17119,6 @@ export interface components {
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             session_id: string;
-            /**
-             * @description DEPRECATED compat alias for `session_id` (pre-ADR-053 callers). When both are present, `session_id` wins.
-             * @example task-456
-             */
-            task_id?: string;
         };
         /**
          * DelegateInboxAction

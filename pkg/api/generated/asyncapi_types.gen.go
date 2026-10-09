@@ -557,8 +557,6 @@ type DoneStats struct {
 	OrphanCount              *float64 `json:"orphan_count,omitempty"`
 	ReplayError              *bool    `json:"replay_error,omitempty"`
 	Tokens                   *float64 `json:"tokens,omitempty"`
-	// Deprecated (#823 catch-up redesign, Q5): the gateway never drops frames under backpressure now (WS close 4008 + reconnect instead). Never set.
-	TokensDropped *float64 `json:"tokens_dropped,omitempty"`
 	// ADR-087 D2 (finding #10). Mirrors Message.truncation_reason for the live done frame, so a turn cut off while the user is still watching renders the notice immediately instead of only after reload/reattach via replay. Only present when true. Absent on a normal turn.
 	Truncated            *bool    `json:"truncated,omitempty"`
 	TruncatedResultCount *float64 `json:"truncated_result_count,omitempty"`
