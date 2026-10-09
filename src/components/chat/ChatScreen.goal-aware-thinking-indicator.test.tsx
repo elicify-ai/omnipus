@@ -5,6 +5,11 @@
 // that file's header comment for why every other ChatScreen test file
 // (which mocks ThreadPrimitive.Messages to null) cannot reach this surface.
 //
+// FR-039 (DEL-F39–40): the override now joins the PRODUCING message's own
+// goal_id to the exact keyed criteria in `goalPills` — never the "latest
+// goal" scalar. Cases key the streaming message's `goalId` and seed
+// `goalPills` accordingly; a message with no key is neutral.
+//
 // BDD:
 //   Given: a goal is active and its record is still empty, no tool call running
 //   Then:  the indicator reads "Framing your goal" (never the generic pool)
@@ -111,14 +116,17 @@ function makeGoalFrame(overrides: Partial<GoalStatusFrame> = {}): GoalStatusFram
 
 /**
  * Seeds a streaming assistant placeholder, optionally with one live tool
- * call, AND a goalStatus frame on both the session bucket and the
+ * call, a keyed `goalPills` map on both the session bucket and the
  * foreground selector (InlineThinkingIndicator reads the foreground field —
- * see chat.ts's bucketToForeground). goalFrame: null means no active goal
- * (control case).
+ * see chat.ts's bucketToForeground), and — when `goalId` is given — that
+ * goal association on the producing message itself (FR-039: the indicator
+ * joins THIS id, carried onto the AssistantUI message via
+ * `metadata.custom.goalId`).
  */
 function seedGoalAwareStreamingAssistant(
   sid: string,
-  goalFrame: GoalStatusFrame | null,
+  goalId: string | null,
+  goalPills: Record<string, GoalStatusFrame>,
   liveCall?: { toolCallId: string; tool: string; params: Record<string, unknown> },
 ): void {
   const userMsg: ChatMessage = {
@@ -135,6 +143,7 @@ function seedGoalAwareStreamingAssistant(
     timestamp: new Date().toISOString(),
     status: 'streaming',
     isStreaming: true,
+    ...(goalId ? { goalId } : {}),
   }
   const allMessages = [userMsg, streamingMsg]
   const bucket = makeBucketMessages(allMessages)
@@ -150,7 +159,9 @@ function seedGoalAwareStreamingAssistant(
       }
     : {}
   const toolCallOrder = liveCall ? [liveCall.toolCallId] : []
-  const frame = goalFrame ? { ...goalFrame, session_id: sid } : null
+  const pills = Object.fromEntries(
+    Object.entries(goalPills).map(([id, f]) => [id, { ...f, session_id: sid }]),
+  )
 
   useChatStore.setState((s) => ({
     ...s,
@@ -171,7 +182,7 @@ function seedGoalAwareStreamingAssistant(
         cancelStage: null,
         lastReceivedEventTime: null,
         trimmedCount: 0,
-        goalStatus: frame,
+        goalPills: pills,
       },
     },
     messages: allMessages,
@@ -181,7 +192,7 @@ function seedGoalAwareStreamingAssistant(
     toolCalls: liveToolCalls,
     toolCallOrder,
     textAtToolCallStart: {},
-    goalStatus: frame,
+    goalPills: pills,
   }))
   useSessionStore.setState({ activeSessionId: sid, activeAgentId: 'agent-1' })
   useConnectionStore.setState({ connection: null, isConnected: true, connectionError: null })
@@ -190,7 +201,9 @@ function seedGoalAwareStreamingAssistant(
 describe('ChatScreen thinking indicator — goal-aware override (operator UX fix, 2026-09-08)', () => {
   it('shows "Framing your goal" while a goal is active with an empty record and nothing is running yet', async () => {
     const sid = 'sess_goal_framing'
-    seedGoalAwareStreamingAssistant(sid, makeGoalFrame())
+    seedGoalAwareStreamingAssistant(sid, 'goal_indicator_test', {
+      goal_indicator_test: makeGoalFrame(),
+    })
 
     let container!: HTMLElement
     await act(async () => {
@@ -208,11 +221,16 @@ describe('ChatScreen thinking indicator — goal-aware override (operator UX fix
 
   it('shows "Setting acceptance criteria" while set_goal is the running step and the record is still empty', async () => {
     const sid = 'sess_goal_setting_criteria'
-    seedGoalAwareStreamingAssistant(sid, makeGoalFrame(), {
-      toolCallId: 'tc_set_goal_1',
-      tool: 'set_goal',
-      params: { mode: 'register', definition: 'Ship the release notes', criteria: [] },
-    })
+    seedGoalAwareStreamingAssistant(
+      sid,
+      'goal_indicator_test',
+      { goal_indicator_test: makeGoalFrame() },
+      {
+        toolCallId: 'tc_set_goal_1',
+        tool: 'set_goal',
+        params: { mode: 'register', definition: 'Ship the release notes', criteria: [] },
+      },
+    )
 
     let container!: HTMLElement
     await act(async () => {
@@ -230,12 +248,11 @@ describe('ChatScreen thinking indicator — goal-aware override (operator UX fix
 
   it('falls back to the generic rotating pool once the goal record is populated (criteria present)', async () => {
     const sid = 'sess_goal_record_populated'
-    seedGoalAwareStreamingAssistant(
-      sid,
-      makeGoalFrame({
+    seedGoalAwareStreamingAssistant(sid, 'goal_indicator_test', {
+      goal_indicator_test: makeGoalFrame({
         criteria: [{ id: 'c1', kind: 'prose', text: 'release notes are published', judgment: 'boolean', status: 'pending', author: { kind: 'agent', id: 'tester' } }],
       }),
-    )
+    })
 
     let container!: HTMLElement
     await act(async () => {
@@ -253,7 +270,30 @@ describe('ChatScreen thinking indicator — goal-aware override (operator UX fix
 
   it('falls back to the generic rotating pool when there is no active goal at all', async () => {
     const sid = 'sess_goal_none'
-    seedGoalAwareStreamingAssistant(sid, null)
+    seedGoalAwareStreamingAssistant(sid, null, {})
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(
+        <Providers>
+          <ChatScreen />
+        </Providers>,
+      )
+      container = result.container
+    })
+
+    const bubble = container.querySelector('[data-testid="assistant-message"]') as HTMLElement
+    expect(within(bubble).getByText(GENERIC_THINKING_RE)).toBeInTheDocument()
+  })
+
+  it('is NEUTRAL for a message with no goal association, even while an OTHER goal is live and record-empty (FR-039)', async () => {
+    // The deleted latest-goal-wins branch would show "Framing your goal" here
+    // because G2 (the only pill) is active and empty. The message belongs to
+    // no goal — unknown is neutral.
+    const sid = 'sess_goal_unknown_assoc'
+    seedGoalAwareStreamingAssistant(sid, null, {
+      goal_other: makeGoalFrame({ goal_id: 'goal_other' }),
+    })
 
     let container!: HTMLElement
     await act(async () => {
