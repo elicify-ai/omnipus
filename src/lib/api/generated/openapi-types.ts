@@ -4605,7 +4605,7 @@ export interface components {
              */
             title: string;
         };
-        /** @description A single transcript entry (session.TranscriptEntry on the Go side). Maps to the Message interface in src/lib/api.ts. The SPA reads this from GET /sessions/{id}/messages. */
+        /** @description The public CHAT PROJECTION of one entry of a session's single append-only archive, served by GET /sessions/{id}/messages and mapped to the Message interface in src/lib/api.ts. This is a projection of the canonical disk archive (session.TranscriptEntry on the Go side), never the raw private persistence record: the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance, and its partition/encoded-byte/entry-id marks are disk-only and MUST NOT appear here (session-core C-ARCHIVE / U2; FR-004/FR-005). Entries that belong to the model view only (view_membership="model") are excluded from this projection entirely. */
         Message: {
             /**
              * @description Unique message identifier.
@@ -4624,11 +4624,11 @@ export interface components {
              */
             type?: "message" | "compaction" | "system" | "tool_call" | "turn_canceled" | "judge_verdict" | "context_window_notice";
             /**
-             * @description C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". Producer-side classification: the writer defaults an unset value to "both" (an ordinary turn lives in both views). Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. Projecting this one archive onto the chat/model view is the FR-004 target and is not yet implemented on the read side; the field is a per-entry classification only, never by itself a second store.
+             * @description C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". Server-owned (readOnly): the server writes it and emits the entry's effective chat/both membership for included entries; clients never send it. An entry classified "model" is not part of the chat projection and is not returned here. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. This is a per-entry classification on the one archive, never by itself a second store.
              * @example both
              * @enum {string}
              */
-            view_membership?: "chat" | "model" | "both";
+            readonly view_membership?: "chat" | "model" | "both";
             /**
              * @description Author role. Absent on compaction entries.
              * @example assistant
@@ -4745,7 +4745,7 @@ export interface components {
             subagent_message?: components["schemas"]["SubagentMessageFrame"];
             subagent_end?: components["schemas"]["SubagentEndFrame"];
         };
-        /** @description A single tool invocation recorded in a transcript entry. Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts. */
+        /** @description The DISPLAY/STATUS projection of a single tool invocation in a transcript entry — the {id, tool, status, parameters, result} form the SPA renders. This is NOT providers.ToolCall (the provider wire shape on the Go side): it carries no provider call identity beyond `id`, no thought signature and no raw function-argument string, and it must never be used in place of the provider call shape (session-core C-ARCHIVE / U2; FR-004). Maps to session.ToolCall on the Go side and the ToolCall interface in src/lib/api.ts. */
         ToolCall: {
             /**
              * @description Unique tool call identifier (ToolCallID type on the Go side).
@@ -4784,7 +4784,7 @@ export interface components {
             parameters?: {
                 [key: string]: unknown;
             };
-            /** @description Return value from the tool. Shape is tool-specific. */
+            /** @description Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006). */
             result?: {
                 [key: string]: unknown;
             };

@@ -1,8 +1,16 @@
 type: object
 description: >
-  A single transcript entry (session.TranscriptEntry on the Go side).
-  Maps to the Message interface in src/lib/api.ts. The SPA reads this
-  from GET /sessions/{id}/messages.
+  The public CHAT PROJECTION of one entry of a session's single
+  append-only archive, served by GET /sessions/{id}/messages and mapped
+  to the Message interface in src/lib/api.ts. This is a projection of the
+  canonical disk archive (session.TranscriptEntry on the Go side), never
+  the raw private persistence record: the archive's private model payload
+  (model_message), its body-free same-session consumption reference
+  (type=model_ref / model_ref), its trusted source/return-route
+  provenance, and its partition/encoded-byte/entry-id marks are disk-only
+  and MUST NOT appear here (session-core C-ARCHIVE / U2; FR-004/FR-005).
+  Entries that belong to the model view only (view_membership="model")
+  are excluded from this projection entirely.
 required:
   - id
   - timestamp
@@ -52,6 +60,7 @@ properties:
     example: "message"
   view_membership:
     type: string
+    readOnly: true
     enum:
       - chat
       - model
@@ -59,14 +68,14 @@ properties:
     description: >
       C-ARCHIVE (session-core FR-004): which view(s) of the single append-only
       archive this entry belongs to — "chat" (rendered in the conversation),
-      "model" (part of the model context window), or "both". Producer-side
-      classification: the writer defaults an unset value to "both" (an ordinary
-      turn lives in both views). Optional and additive: entries written before
-      this field existed carry no value, and the server treats absent as unknown
-      rather than re-deriving a view. Projecting this one archive onto the
-      chat/model view is the FR-004 target and is not yet implemented on the read
-      side; the field is a per-entry classification only, never by itself a
-      second store.
+      "model" (part of the model context window), or "both". Server-owned
+      (readOnly): the server writes it and emits the entry's effective
+      chat/both membership for included entries; clients never send it. An
+      entry classified "model" is not part of the chat projection and is not
+      returned here. Optional and additive: entries written before this field
+      existed carry no value, and the server treats absent as unknown rather
+      than re-deriving a view. This is a per-entry classification on the one
+      archive, never by itself a second store.
     example: "both"
   role:
     type: string

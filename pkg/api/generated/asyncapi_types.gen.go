@@ -1020,7 +1020,7 @@ type ReplayErrorPayload struct {
 	LlmError LLMErrorReplay `json:"llm_error"`
 }
 
-// ReplayMessageFrame — Server → client replayed transcript entry. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the gateway replay path.
+// ReplayMessageFrame — Server → client replayed transcript entry. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the gateway replay path. A CHAT PROJECTION of the session's single append-only archive, not a provider-message or raw-storage type (session-core C-ARCHIVE / U2; FR-004/FR-005): the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance and its disk/byte/view marks are disk-only and are never emitted on this frame, and entries that belong to the model view only are not replayed.
 type ReplayMessageFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	// #823 catch-up redesign §4.7. Present on a replayed user entry persisted with a client-supplied id. Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
