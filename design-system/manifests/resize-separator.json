@@ -58,6 +58,7 @@
    "file": "tests/design-system/browser.spec.ts",
    "test": "ResizeSeparator [check:resize-separator-browser] browser",
    "story": "Default",
+   "requiredTargets": [{ "selector": "[data-testid=\"resize-separator-demo\"]", "attribute": "aria-valuenow", "value": "640" }],
    "applicable": true
   },
   {

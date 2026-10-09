@@ -74,6 +74,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "RunningIndicator [check:running-indicator-browser] browser",
       "story": "SpinnerOnly",
+      "requiredTargets": [{ "selector": "[role=\"status\"]", "attribute": "aria-label", "value": "Running" }],
       "applicable": true
     },
     {

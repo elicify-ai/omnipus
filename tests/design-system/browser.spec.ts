@@ -13,7 +13,8 @@ import { build } from 'esbuild'
 import type { AgentIconProps } from '../../src/components/ui/agent-icon'
 import { AgentColor } from '../../src/lib/api/generated/schemas'
 
-type Check = { id: string; kind: string; file?: string; test?: string; story?: string; applicable: boolean }
+type BrowserAssertion = { selector: string; attribute?: string; property?: string; value?: string; text?: string }
+type Check = { id: string; kind: string; file?: string; test?: string; story?: string; applicable: boolean; requiredTargets?: BrowserAssertion[] }
 type Manifest = { component: string; stories: Array<{ file: string; exports: string[] }>; checks: Check[] }
 type StoryIndex = { entries: Record<string, { id: string; importPath: string; exportName: string; type: string }> }
 type AxeViolation = { id: string; nodes: Array<{ target: unknown[]; html: string; failureSummary?: string }> }
@@ -87,6 +88,24 @@ function assertSuccessfulStoryFinished(finished: StoryFinished | undefined, stor
   const cause = describeStoryFailure(finished, errors)
   expect(finished, `${storyId} play/report lifecycle must finish successfully${cause}`).toMatchObject({ storyId, status: 'success' })
   expect(finished?.reporters?.some((report) => report.status === 'failed') ?? false, `${storyId} must not contain a failed Storybook report${cause}`).toBe(false)
+}
+
+// Assert one drawn outcome (attribute / property / text beyond mere visibility)
+// against the rendered page. Shared by the story's own browserAssertions and the
+// manifest check's independently anchored requiredTargets so both use one oracle.
+async function assertDrawnOutcome(page: Page, assertion: BrowserAssertion, origin: string) {
+  expect(assertion.attribute || assertion.property || assertion.text, `${origin} browser assertion requires an attribute, property or text outcome beyond visibility`).toBeTruthy()
+  const target = page.locator(assertion.selector)
+  await expect(target).toBeVisible()
+  if (assertion.attribute) {
+    if (assertion.value === undefined) await expect(target).toHaveAttribute(assertion.attribute)
+    else await expect(target).toHaveAttribute(assertion.attribute, assertion.value)
+  }
+  if (assertion.property) {
+    expect(assertion.value, `${origin} browser property assertion requires an expected value`).toBeDefined()
+    await expect.poll(() => target.evaluate((element, property) => String((element as unknown as Record<string, unknown>)[property]), assertion.property!)).toBe(assertion.value)
+  }
+  if (assertion.text) await expect(target).toContainText(assertion.text)
 }
 
 const manifestDir = resolve('design-system/manifests')
@@ -646,20 +665,16 @@ for (const manifest of manifests) {
         await assertNoOverflow(page, metadata.reflowExemptions)
       } else {
         expect(metadata.browserAssertions?.length, 'browser checks require parameters.designSystem.browserAssertions').toBeGreaterThan(0)
-        for (const assertion of metadata.browserAssertions ?? []) {
-          expect(assertion.attribute || assertion.property || assertion.text, 'browser assertions require an attribute, property or text outcome beyond visibility').toBeTruthy()
-          const target = page.locator(assertion.selector)
-          await expect(target).toBeVisible()
-          if (assertion.attribute) {
-            if (assertion.value === undefined) await expect(target).toHaveAttribute(assertion.attribute)
-            else await expect(target).toHaveAttribute(assertion.attribute, assertion.value)
-          }
-          if (assertion.property) {
-            expect(assertion.value, 'browser property assertions require an expected value').toBeDefined()
-            await expect.poll(() => target.evaluate((element, property) => String((element as unknown as Record<string, unknown>)[property]), assertion.property!)).toBe(assertion.value)
-          }
-          if (assertion.text) await expect(target).toContainText(assertion.text)
-        }
+        // The opened story's own assertions move with `check.story` (openStory selects
+        // the story from it), so on their own they cannot detect a check pointed at the
+        // wrong story: the wrong story's own valid assertions would satisfy them. The
+        // check's manifest-level `requiredTargets` is an independently anchored drawn
+        // outcome whose source does NOT move with `check.story`, asserted here against
+        // the rendered page. A wrong-story check therefore fails on the drawn attribute
+        // instead of passing on the other story's own equally valid assertions.
+        expect(check.requiredTargets?.length, `${manifest.component}/${check.id} browser check must declare a manifest-level requiredTargets drawn outcome, anchored independently of check.story`).toBeGreaterThan(0)
+        for (const assertion of metadata.browserAssertions ?? []) await assertDrawnOutcome(page, assertion, `${manifest.component}/${check.id} opened story`)
+        for (const assertion of check.requiredTargets ?? []) await assertDrawnOutcome(page, assertion, `${manifest.component}/${check.id} required target`)
         if (manifest.component === 'Button' && check.id === 'button-auxiliary-browser') {
           const nativeMiddleClick = async (selector: string, openTimeoutMs: number) => {
             const link = page.locator(selector)

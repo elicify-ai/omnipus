@@ -64,6 +64,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "AgentIcon [check:agent-icon-browser] browser",
       "story": "Omnipus",
+      "requiredTargets": [{ "selector": "[data-testid=\"agent-icon\"]", "attribute": "aria-label", "value": "Omnipus" }],
       "applicable": true
     },
     {
@@ -72,6 +73,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "AgentIcon [check:agent-icon-monogram-browser] browser",
       "story": "Monogram",
+      "requiredTargets": [{ "selector": "[data-testid=\"agent-icon\"]", "attribute": "data-figure", "value": "Monogram" }, { "selector": "[data-initial]", "attribute": "data-initial", "value": "R" }],
       "applicable": true
     },
     {
