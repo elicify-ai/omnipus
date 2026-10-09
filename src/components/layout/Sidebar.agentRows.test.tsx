@@ -21,6 +21,7 @@ import { workspacesQueryKeys } from '@/lib/api'
 import { useSidebarStore } from '@/store/sidebar'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useSessionStore } from '@/store/session'
 
 let reducedMotion = false
 
@@ -199,10 +200,16 @@ function renderSidebar(client = new QueryClient({ defaultOptions: { queries: { r
 }
 
 async function expandAgents(workspaceName: string) {
-  const hide = screen.queryByRole('button', { name: `Hide ${workspaceName} agents` })
-  if (hide) return
-  const show = await screen.findByRole('button', { name: `Show ${workspaceName} agents` })
-  fireEvent.click(show)
+  // The active workspace arrives expanded with the async list. Wait for
+  // either real disclosure state, then expand only when it is folded.
+  await waitFor(() => {
+    const disclosure = screen.queryByRole('button', { name: `Show ${workspaceName} agents` })
+      ?? screen.queryByRole('button', { name: `Hide ${workspaceName} agents` })
+    expect(disclosure).not.toBeNull()
+  })
+  const show = screen.queryByRole('button', { name: `Show ${workspaceName} agents` })
+  if (show) fireEvent.click(show)
+  expect(screen.getByRole('button', { name: `Hide ${workspaceName} agents` })).toHaveAttribute('aria-expanded', 'true')
 }
 
 beforeEach(() => {
@@ -221,6 +228,7 @@ beforeEach(() => {
   act(() => {
     useSidebarStore.setState({ isOpen: true, isPinned: true })
     useWorkspacesStore.setState({ activeWorkspaceId: null })
+    useSessionStore.setState(useSessionStore.getInitialState(), true)
     useUiStore.setState({
       searchModalOpen: false,
       searchModalWorkspaceFilter: null,
@@ -280,11 +288,58 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
     await expandAgents('Product launch')
     const productGroup = await screen.findByRole('group', { name: 'Product launch' })
     const mia = within(productGroup).getByRole('group', { name: 'Mia' })
-    const past = within(mia).getByRole('button', { name: /^Past sessions$/ })
-    const newer = within(mia).getByRole('button', { name: /^New chat$/ })
+    const past = within(mia).getByRole('button', { name: /^Past sessions with Mia$/ })
+    const newer = within(mia).getByRole('button', { name: /^New chat with Mia$/ })
     expect(past.compareDocumentPosition(newer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(past.contains(newer)).toBe(false)
     expect(newer.contains(past)).toBe(false)
+  })
+
+  it('R22 keeps icon-only labelled actions beside the selected agent, including in an extra chat', async () => {
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: product.id })
+      useSessionStore.setState({ activeSessionId: 'extra-newer', activeAgentId: 'mia' })
+    })
+    renderSidebar()
+    await expandAgents('Product launch')
+    const group = await screen.findByRole('group', { name: 'Product launch' })
+    const row = within(group).getByRole('group', { name: 'Mia' })
+    const main = within(row).getByRole('button', { name: /^Mia$/ })
+    const past = within(row).getByRole('button', { name: /^Past sessions with Mia$/ })
+    const extra = within(row).getByRole('button', { name: /^New chat with Mia$/ })
+
+    expect(row).toHaveAttribute('data-selected', 'true')
+    expect(main).toHaveAttribute('aria-current', 'true')
+    expect(past).toHaveAttribute('title', 'Past sessions with Mia')
+    expect(extra).toHaveAttribute('title', 'New chat with Mia')
+    expect(past.textContent).toBe('')
+    expect(extra.textContent).toBe('')
+    expect(past.querySelector('svg')).not.toBeNull()
+    expect(extra.querySelector('svg')).not.toBeNull()
+    expect(main.contains(past)).toBe(false)
+    expect(main.contains(extra)).toBe(false)
+    expect(main.compareDocumentPosition(past) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(past.compareDocumentPosition(extra) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+  })
+
+  it('R22 selection follows the immutable owner in this workspace, never the same agent in another workspace', async () => {
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: product.id })
+      useSessionStore.setState({ activeSessionId: 'extra-newer', activeAgentId: 'mia' })
+    })
+    renderSidebar()
+    await expandAgents('Product launch')
+    await expandAgents('Default')
+    const productGroup = await screen.findByRole('group', { name: 'Product launch' })
+    const defaultGroup = await screen.findByRole('group', { name: 'Default' })
+    const productMia = within(productGroup).getByRole('group', { name: 'Mia' })
+    const defaultMia = within(defaultGroup).getByRole('group', { name: 'Mia' })
+    expect(productMia).toHaveAttribute('data-selected', 'true')
+    expect(defaultMia).toHaveAttribute('data-selected', 'false')
+
+    act(() => useSessionStore.setState({ activeSessionId: 'seam-opaque-jim', activeAgentId: 'jim' }))
+    expect(productMia).toHaveAttribute('data-selected', 'false')
+    expect(within(productGroup).getByRole('group', { name: 'Jim' })).toHaveAttribute('data-selected', 'true')
   })
 
   it('BDD-03.2 Past sessions opens one modal filtered by this workspace and this agent', async () => {
@@ -292,7 +347,7 @@ describe('Sidebar agent rows (T-01, T-13, T-14)', () => {
     await expandAgents('Product launch')
     const productGroup = await screen.findByRole('group', { name: 'Product launch' })
     const mia = within(productGroup).getByRole('group', { name: 'Mia' })
-    fireEvent.click(within(mia).getByRole('button', { name: /^Past sessions$/ }))
+    fireEvent.click(within(mia).getByRole('button', { name: /^Past sessions with Mia$/ }))
     const modal = useUiStore.getState() as {
       searchModalOpen: boolean
       searchModalWorkspaceFilter: string | null

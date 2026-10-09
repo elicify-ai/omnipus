@@ -230,7 +230,7 @@ function armUnconfirmed(activeAgentId: string) {
 
 function openMiaNewChat() {
   const row = screen.getByRole('group', { name: 'Mia' })
-  fireEvent.click(within(row).getByRole('button', { name: /^New chat$/ }))
+  fireEvent.click(within(row).getByRole('button', { name: /^New chat with Mia$/ }))
   const dialog = screen.getByRole('alertdialog', { name: 'Start a new chat?' })
   expect(within(dialog).getByText(WARNING, { exact: true }).textContent).toBe(WARNING)
   return dialog
@@ -365,7 +365,7 @@ describe('WorkspaceAgentList + New chat (FR-005, BDD-03.1, BDD-E02, N09)', () =>
     renderList()
 
     const row = screen.getByRole('group', { name: 'Mia' })
-    fireEvent.click(within(row).getByRole('button', { name: /^New chat$/ }))
+    fireEvent.click(within(row).getByRole('button', { name: /^New chat with Mia$/ }))
 
     expect(screen.queryByRole('alertdialog'), 'no unconfirmed send means no guard').not.toBeInTheDocument()
     expect({

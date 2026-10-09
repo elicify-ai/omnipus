@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { Buildings, CaretDown, CaretRight, Plus } from '@phosphor-icons/react'
+import { Buildings, CaretDown, CaretRight, ClockCounterClockwise, Plus } from '@phosphor-icons/react'
 import type { Agent, Session, Workspace } from '@/lib/api'
 import { workspacesQueryKeys } from '@/lib/api'
 import { queryClient } from '@/lib/queryClient'
@@ -11,6 +11,9 @@ import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ErrorState } from '@/components/ui/error-state'
 import { IconButton } from '@/components/ui/icon-button'
+import { Tooltip } from '@/components/ui/tooltip'
+import { useSessionStore } from '@/store/session'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
 import { SidebarAgentIcon } from './SidebarAgentIcon'
@@ -24,6 +27,7 @@ import {
 } from './pairExtra'
 import { workspaceMains, type RosterState } from './workspaceRoster'
 import './attention.css'
+import './agent-row.css'
 
 function refreshWorkspaceRoster() {
   void queryClient.invalidateQueries({ queryKey: ['agents'] })
@@ -278,6 +282,11 @@ function AgentMainRow({
   const [promptOpen, setPromptOpen] = useState(false)
   const [abandonTarget, setAbandonTarget] = useState<CapturedPending | null>(null)
   const [unresolved, setUnresolved] = useState(false)
+  const activeWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId)
+  const ownsSelectedChat = useSessionStore((state) => state.activeAgentId === row.agentId)
+  const selected = activeWorkspaceId === workspace.id && ownsSelectedChat
+  const pastLabel = `Past sessions with ${row.name}`
+  const extraLabel = `New chat with ${row.name}`
 
   const openMain = () => {
     const session = sessions.find((candidate) => candidate.id === row.mainSessionId)
@@ -325,32 +334,47 @@ function AgentMainRow({
   }
 
   return (
-    <div role="group" aria-label={row.name} className="py-[var(--space-1)] pl-[var(--space-2-5)] pr-[var(--space-3)]">
-      <div className="flex items-center gap-[var(--space-2)]">
-        <SidebarAgentIcon name={row.name} halo={showHalo} motion={motion} />
+    <div role="group" aria-label={row.name} data-selected={selected} className="pl-[var(--space-2-5)] pr-[var(--space-2)]">
+      <div
+        data-selected={selected}
+        className="sidebar-agent-row flex items-center rounded-[var(--radius-medium)] hover:bg-[var(--color-surface-2)]"
+      >
         <Button
           variant="ghost"
           onClick={openMain}
-          className="h-auto min-w-0 flex-1 justify-start p-0 font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-accent)]"
+          aria-current={selected ? 'true' : undefined}
+          className={cn(
+            'h-auto min-w-0 flex-1 justify-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)]',
+            selected ? 'font-semibold' : 'font-[var(--font-weight-regular)]',
+          )}
         >
+          <SidebarAgentIcon name={row.name} halo={showHalo} motion={motion} />
           <span className="truncate">{row.name}</span>
         </Button>
-      </div>
-      <div className="mt-[var(--space-1)] flex flex-col gap-[var(--space-1)]">
-        <Button
-          variant="ghost"
-          onClick={() => useUiStore.getState().openSearchModal(workspace.id, row.agentId)}
-          className="h-auto w-full justify-start gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-accent)] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]"
-        >
-          Past sessions
-        </Button>
-        <Button
-          variant="ghost"
-          onClick={startExtra}
-          className="h-auto w-full justify-start gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-accent)] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]"
-        >
-          <Plus size={12} aria-hidden="true" /> New chat
-        </Button>
+        <div className="sidebar-agent-actions flex shrink-0 pr-[var(--space-2)]">
+          <Tooltip content={pastLabel} interactive>
+            <IconButton
+              size="sm"
+              aria-label={pastLabel}
+              title={pastLabel}
+              onClick={() => useUiStore.getState().openSearchModal(workspace.id, row.agentId)}
+              className="h-[var(--icon-size-feature)] w-[var(--icon-size-feature)] shrink-0 font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]"
+            >
+              <ClockCounterClockwise size={14} weight="regular" aria-hidden="true" />
+            </IconButton>
+          </Tooltip>
+          <Tooltip content={extraLabel} interactive>
+            <IconButton
+              size="sm"
+              aria-label={extraLabel}
+              title={extraLabel}
+              onClick={startExtra}
+              className="h-[var(--icon-size-feature)] w-[var(--icon-size-feature)] shrink-0 font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]"
+            >
+              <Plus size={14} weight="regular" aria-hidden="true" />
+            </IconButton>
+          </Tooltip>
+        </div>
       </div>
       {unresolved && (
         <p className="py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">
