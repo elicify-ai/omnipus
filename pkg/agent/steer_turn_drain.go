@@ -160,7 +160,10 @@ func (al *AgentLoop) continueSteeredTurn(
 			ts.opts.InitialSteeringCorrelationIDs = steeringCorrelationIDs
 			ts.opts.SkipInitialSteeringPoll = true
 			attempt.turnRan = true
-			attempt.result, attempt.runErr = al.runTurn(ctx, ts)
+			// Same body dispatch as every other steered run site — an
+			// external-CLI target re-drives the CLI for queued instruction
+			// rather than silently falling back to the native loop.
+			attempt.result, attempt.runErr = al.runSteeredTurnBody(ctx, rec, ts)
 			return attempt.result.finalContent, attempt.runErr
 		})
 	return attempt, err
