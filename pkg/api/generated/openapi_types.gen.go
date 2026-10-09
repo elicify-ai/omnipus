@@ -673,16 +673,19 @@ func (e AgentCreateRequestSubagent3pType) Valid() bool {
 
 // Defines values for AgentFigure.
 const (
-	AgentFigureMan     AgentFigure = "Man"
-	AgentFigureOmnipus AgentFigure = "Omnipus"
-	AgentFigureRobot   AgentFigure = "Robot"
-	AgentFigureWoman   AgentFigure = "Woman"
+	AgentFigureMan      AgentFigure = "Man"
+	AgentFigureMonogram AgentFigure = "Monogram"
+	AgentFigureOmnipus  AgentFigure = "Omnipus"
+	AgentFigureRobot    AgentFigure = "Robot"
+	AgentFigureWoman    AgentFigure = "Woman"
 )
 
 // Valid indicates whether the value is a known member of the AgentFigure enum.
 func (e AgentFigure) Valid() bool {
 	switch e {
 	case AgentFigureMan:
+		return true
+	case AgentFigureMonogram:
 		return true
 	case AgentFigureOmnipus:
 		return true
@@ -14180,7 +14183,7 @@ type Agent struct {
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
-	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
 	Figure AgentFigure `json:"figure"`
 
 	// Icon Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
@@ -14353,7 +14356,7 @@ type AgentCreateRequestMain struct {
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
-	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
 	Figure *AgentFigure `json:"figure,omitempty"`
 
 	// Icon Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
@@ -14447,7 +14450,7 @@ type AgentCreateRequestSubagent struct {
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
-	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
 	Figure *AgentFigure `json:"figure,omitempty"`
 
 	// Icon Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
@@ -14558,7 +14561,7 @@ type AgentCreateRequestSubagent3p struct {
 		Kind *AgentCreateRequestSubagent3pExecutorKind `json:"kind,omitempty"`
 	} `json:"executor"`
 
-	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
 	Figure *AgentFigure `json:"figure,omitempty"`
 
 	// Icon Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
@@ -14619,7 +14622,7 @@ type AgentFieldDescriptor struct {
 	Reason *string `json:"reason,omitempty"`
 }
 
-// AgentFigure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+// AgentFigure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
 type AgentFigure string
 
 // AgentMCPBinding defines model for AgentMCPBinding.
@@ -14931,7 +14934,7 @@ type AgentUpdateRequest struct {
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
-	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
 	Figure *AgentFigure `json:"figure,omitempty"`
 
 	// Icon Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.

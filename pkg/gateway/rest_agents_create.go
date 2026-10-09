@@ -565,7 +565,7 @@ func (pap *restAPICreateAgentPrepareAgent) validateCreateFields() (string, strin
 	if pap.figure != nil && string(*pap.figure) != "" {
 		canon, ok := coreagent.CanonicalFigure(string(*pap.figure))
 		if !ok {
-			jsonErr(pap.cra.w, http.StatusBadRequest, "figure must be Robot, Man, Woman, or Omnipus")
+			jsonErr(pap.cra.w, http.StatusBadRequest, "figure must be Robot, Man, Woman, Omnipus, or Monogram")
 			return "", "", "", true
 		}
 		pap.resolvedFigure = canon
