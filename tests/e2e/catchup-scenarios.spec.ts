@@ -541,7 +541,11 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
         await expect(stopButton(page)).toBeVisible()
         crashed = true
         await gw.kill9()
-        await gw.restart({ relogin: false })
+        // Keep the interrupted turn slow, not the completed retry: 300ms per
+        // frame made 800 observed CI frames consume 240s before the reply ended.
+        // At 25ms, the shortest measured 343-frame reply keeps Stop for 8.6s
+        // (>1s polling); a 3,947-delta replay takes ~99s within the same 240s wait.
+        await gw.restart({ relogin: false, env: { OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '25' } })
 
         const notice = page.getByTestId('restart-interrupted-notice')
         const generateAgain = page.getByRole('button', { name: /Generate again/i })
