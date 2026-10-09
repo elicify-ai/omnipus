@@ -399,8 +399,8 @@ function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): str
 }
 
 // `deriveDelegateThinkingLabel` stays deleted. A hidden `delegate` call
-// (every action, unless verbose chat is on) has no specific thinking label
-// and falls through to the generic rotating pool, same as a status poll.
+// (every action, unless verbose chat is on) has no tool-specific label.
+// Its running status still selects Working, with the generic working copy.
 
 /**
  * Finds the LAST tool-call part in a live message's `content` whose live
@@ -409,12 +409,12 @@ function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): str
  * — only when that call is hidden from the thread per toolVisibility.ts's
  * shouldRenderToolCall — derives a specific, stable label for it.
  *
- * Returns null (generic rotating pool applies) when: the tool is visible
- * (its own chip already shows progress), it's a hidden `delegate` call
- * (no specific label — the event line carries that), it's ToolSearch, or
- * any other hidden tool with no specific-label rule, or nothing is
- * currently running. Defensive: never throws — an unexpected
- * message/part shape falls back to the generic pool via the null return,
+ * Returns null when: the tool is visible (its own chip already shows progress),
+ * it's a hidden `delegate` call (no specific label — the event line carries
+ * that), it's ToolSearch, any other hidden tool with no specific-label rule,
+ * or nothing is currently running. This selects copy only, not the phase:
+ * runningToolNamesFromLiveContent supplies the correlated execution signal. Defensive: never throws — an unexpected
+ * message/part shape supplies no specific copy via the null return,
  * exactly like "nothing found".
  */
 function deriveHiddenRunningToolLabel(
@@ -444,7 +444,7 @@ function deriveHiddenRunningToolLabel(
       if (toolName === 'bash') {
         return deriveBashThinkingLabel(args)
       }
-      return null // ToolSearch, any delegate action, or any other hidden tool with no rule — generic pool.
+      return null // ToolSearch, any delegate action, or another hidden tool without specific copy.
     }
     return null
   } catch {
@@ -547,8 +547,9 @@ function AssistantTextPart() {
   )
 }
 
-// Inline status for the live streaming bubble. Same label rules as before
-// (hidden running tool, then the rotating phrases; a goal phrase wins).
+// Inline status for the live streaming bubble. Actual correlated tool status
+// selects Working; label rules stay the same (a goal phrase wins over hidden
+// tool copy). Only a model-response phase uses the rotating thinking phrases.
 // The mark replaces the bouncing dots. Not mounted for a settled row —
 // that row draws Idle itself. The mark suspends until the agent record
 // arrives so the figure is in the same paint as the phrase.
@@ -564,12 +565,14 @@ function InlineThinkingIndicator({ agentId }: { agentId: string | null }) {
   // subscription setup.
   const goalStatus = useChatStore((s) => s.goalStatus)
   const goalRecordEmpty = isGoalRecordEmpty(goalStatus)
+  const runningToolNames = runningToolNamesFromLiveContent(message.content, storeToolCalls)
   const goalLabel = goalRecordEmpty
-    ? deriveGoalAwareThinkingLabel(runningToolNamesFromLiveContent(message.content, storeToolCalls), true)
+    ? deriveGoalAwareThinkingLabel(runningToolNames, true)
     : null
   const toolLabel = deriveHiddenRunningToolLabel(message.content, storeToolCalls, verboseChatEnabled)
   const phase = useReplySlotPhase({
     streaming: isRunning,
+    hasRunningTool: runningToolNames.length > 0,
     toolLabel,
     goalLabel,
     idleEligible: false,
@@ -1218,15 +1221,14 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // InlineThinkingIndicator, applied to the historical/virtualized "still
   // streaming" placeholder (PlainMessageList renders an in-flight message
   // through THIS row too — see the D-fix comment on hasContent above).
+  const runningToolNames = positionedToolCalls.filter((tc) => tc.status === 'running').map((tc) => tc.tool)
   const emptyPlaceholderLabel = goalRecordEmpty
-    ? deriveGoalAwareThinkingLabel(
-        positionedToolCalls.filter((tc) => tc.status === 'running').map((tc) => tc.tool),
-        true,
-      )
+    ? deriveGoalAwareThinkingLabel(runningToolNames, true)
     : null
   const positionedToolLabel = derivePositionedHiddenRunningLabel(positionedToolCalls, verboseChatEnabled)
   const replyPhase = useReplySlotPhase({
     streaming: !!message.isStreaming,
+    hasRunningTool: runningToolNames.length > 0,
     toolLabel: positionedToolLabel,
     goalLabel: emptyPlaceholderLabel,
     idleEligible: isLastAssistant && !message.isStreaming,

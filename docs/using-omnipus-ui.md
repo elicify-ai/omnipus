@@ -83,9 +83,10 @@ During a live reply, an inline mark replaces the old bouncing-dot indicator. It 
 
 | What is happening | What you see |
 |---|---|
-| A reply is running with no more specific status phrase | The mark breathes and rotates through thinking phrases, starting with **Thinking…**. A visible tool card can show its own progress at the same time. |
-| The agent is setting up a goal whose record is still empty | **Framing your goal**, or **Setting acceptance criteria** while that step runs. This phrase takes priority over a background-command label. |
-| A background-command tool call is running and its card is hidden in the chat | The mark pulses, with the call's short description or a label such as **Running git…**, rather than its command line. It follows that tool call, not the whole lifetime of a background process. |
+| A reply is awaiting or generating a response, with no running tool or pending decision | The mark breathes and rotates through thinking phrases, starting with **Thinking…**. |
+| A tool call belonging to this reply is running, whether its card is visible or hidden | The mark uses its Working motion, with a stable **Working on it…** phrase unless more specific copy applies. Showing tool cards with **Verbose chat** does not change the phase. |
+| The agent is setting up a goal whose record is still empty | **Framing your goal**, or **Setting acceptance criteria** while that step runs. This phrase takes priority over a background-command label; the motion still follows whether a tool is actually running. |
+| A background-command tool call is running and its card is hidden in the chat | The Working mark shows the call's short description or a label such as **Running git…**, rather than its command line. It follows that tool call, not the whole lifetime of a background process. |
 | A tool needs your approval | **Waiting for your approval**, with the tool's name. The mark uses its waiting motion. |
 | The agent asked you a question | **Waiting for your input**. If a question and an approval are both pending, this phrase wins. |
 | The connection dropped or is reconnecting | **Unavailable/reconnecting** where the reply's status is shown. The mark stays still. |

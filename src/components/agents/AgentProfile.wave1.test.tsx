@@ -4,10 +4,10 @@
 // Other fields the server already marks editable (model) stay editable.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, within, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, within, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
-import type { Agent } from '@/lib/api'
+import type { Agent, AgentUpdateRequest } from '@/lib/api'
 import { AgentColor } from '@/lib/api/generated/schemas'
 
 class ResizeObserverStub {
@@ -160,6 +160,74 @@ describe('edit header live identity preview', () => {
     expect(within(layout).getByRole('button', { name: 'Writer' })).toHaveAttribute('aria-pressed', 'true')
     expect(within(layout).getByRole('button', { name: 'Violet' })).toHaveAttribute('aria-pressed', 'true')
     expect(updateAgent).not.toHaveBeenCalled()
+  })
+})
+
+describe('successful custom identity edit', () => {
+  it('autosaves the exact identity patch at the reviewed revision and reloads the confirmed identity without clearing icon', async () => {
+    // FR-020 / ARCH decision 1.1: wire figure/role/palette values, not art
+    // keys or display names. The stored legacy icon is not part of this edit.
+    const reviewedRevision = 'a'.repeat(64)
+    let stored: Agent = {
+      ...lockedMia(), id: 'custom-save', name: 'Saved identity', type: 'Main', locked: false,
+      revision: reviewedRevision, updated_at: '2026-10-09T09:00:00Z',
+      editable_fields: [open('figure'), open('role'), open('color')],
+    }
+    vi.mocked(fetchAgent).mockImplementation(async () => structuredClone(stored))
+    // Process-edge fake: persist only the values actually supplied in the
+    // request. Returning a preselected identity would hide a dropped field.
+    vi.mocked(updateAgent).mockImplementation(async (_id, patch) => {
+      const identityPatch: Pick<AgentUpdateRequest, 'figure' | 'role' | 'color' | 'icon'> = patch
+      stored = {
+        ...stored, ...identityPatch,
+        revision: 'b'.repeat(64), updated_at: '2026-10-09T09:00:01Z',
+      }
+      return structuredClone(stored)
+    })
+    const profile = renderProfile('custom-save')
+    await screen.findByRole('heading', { name: 'Saved identity' })
+    const layout = visibleIdentityLayout()
+    expect(within(layout).getByRole('button', { name: 'Omnipus' })).toHaveAttribute('aria-pressed', 'true')
+    expect(updateAgent).not.toHaveBeenCalled()
+    try {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      fireEvent.click(within(layout).getByRole('button', { name: 'Woman' }))
+      fireEvent.click(within(layout).getByRole('button', { name: 'Writer' }))
+      fireEvent.click(within(layout).getByRole('button', { name: 'Violet' }))
+      // Run the profile's real 1500ms debounce, not saveNow or a mocked hook.
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+      expect(updateAgent).toHaveBeenCalledTimes(1)
+      expect(updateAgent).toHaveBeenCalledWith('custom-save', {
+        revision: reviewedRevision, figure: 'Woman', role: 'writer', color: '#A78BFA',
+      })
+      expect(vi.mocked(updateAgent).mock.calls[0][1]).not.toHaveProperty('icon')
+      expect(screen.getByText('Saved just now')).toBeInTheDocument()
+      expect(stored.revision).toBe('b'.repeat(64))
+      expect(stored.icon).toBe('lightbulb')
+      profile.unmount()
+      vi.useRealTimers()
+
+      // A new provider creates a fresh query cache. The identity must come
+      // from a new server read, not the previous header's draft or cache.
+      vi.mocked(fetchAgent).mockClear()
+      renderProfile('custom-save')
+      await screen.findByRole('heading', { name: 'Saved identity' })
+      await waitFor(() => expect(headerMark('Saved identity')).toHaveAttribute('data-figure', 'Woman'))
+      expect(fetchAgent).toHaveBeenCalledTimes(1)
+      expect(fetchAgent).toHaveBeenCalledWith('custom-save')
+      expect(headerMark('Saved identity').querySelector('[data-role]')).toHaveAttribute('data-role', 'writer')
+      expect(headerMark('Saved identity')).toHaveStyle({ color: '#A78BFA' })
+      const reloadedLayout = visibleIdentityLayout()
+      for (const choice of ['Woman', 'Writer', 'Violet']) {
+        expect(within(reloadedLayout).getByRole('button', { name: choice })).toHaveAttribute('aria-pressed', 'true')
+      }
+      expect(screen.getByText('lightbulb')).toBeInTheDocument()
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+      expect(updateAgent).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

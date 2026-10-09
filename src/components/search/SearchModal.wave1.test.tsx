@@ -290,8 +290,24 @@ describe('Sessions view — hierarchy, fold, shell count, tokens', () => {
 
   it('propagates partial HTTP pages through real fetchSessions and repairs hierarchy on Retry', async () => {
     const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
-    const orphan = wireSession({ id: 'orphan', title: 'Partly loaded helper', type: 'delegate', parent_session_id: 'unloaded-parent' })
-    const control = wireSession({ id: 'control', title: 'Other page' })
+    // ARCH decision 4 / C2: current-boot running and queued are distinct;
+    // a prior-boot interrupted root omits execution until actually re-adopted.
+    const orphan = wireSession({
+      id: 'orphan', title: 'Partly loaded helper', type: 'delegate', parent_session_id: 'unloaded-parent',
+      lifecycle_state: 'working', execution: 'running', background_command_count: 2,
+    })
+    const control = wireSession({
+      id: 'control', title: 'Other page', lifecycle_state: 'working', execution: 'queued', background_command_count: 0,
+    })
+    const interrupted = wireSession({
+      id: 'restart-root', title: 'Restarted conversation', status: 'interrupted', lifecycle_state: 'interrupted',
+    })
+    const parent = wireSession({
+      id: 'unloaded-parent', title: 'Recovered parent', status: 'interrupted', lifecycle_state: 'interrupted',
+    })
+    const reAdopted = wireSession({
+      ...interrupted, status: 'active', lifecycle_state: 'working', execution: 'running',
+    })
     let recovered = false
     const requests: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -300,9 +316,9 @@ describe('Sessions view — hierarchy, fold, shell count, tokens', () => {
       expect(url.searchParams.get('flat')).toBe('true')
       requests.push(url.searchParams.get('offset') ?? 'first')
       const page: SessionPage = recovered
-        ? { sessions: [wireSession({ id: 'unloaded-parent', title: 'Recovered parent' }), orphan] }
+        ? { sessions: [parent, orphan, control, reAdopted] }
         : url.searchParams.has('offset')
-          ? { sessions: [control], partial_errors: ['agent-store-failed'] }
+          ? { sessions: [control, interrupted], partial_errors: ['agent-store-failed'] }
           : { sessions: [orphan], next_cursor: '1' }
       return new Response(JSON.stringify(page), { status: 200, headers: { 'Content-Type': 'application/json' } })
     }))
@@ -310,21 +326,68 @@ describe('Sessions view — hierarchy, fold, shell count, tokens', () => {
     // derive them from the server envelope (ARCH decision 4 / FR-032).
     vi.mocked(fetchSessions).mockImplementation(actual.fetchSessions)
     const result = await fetchSessions(undefined, undefined, { flat: true })
-    expect(result.map((row) => row.id)).toEqual(['orphan', 'control'])
+    expect(result.map((row) => row.id)).toEqual(['orphan', 'control', 'restart-root'])
     expect(readSessionFetchCoverage(result)).toEqual({ partialErrors: ['agent-store-failed'], incomplete: true })
     expect(requests).toEqual(['first', '1'])
-    renderModal()
+    // The real generated validator and rawToSession adapter must preserve
+    // known zero versus an omitted/unknown process count, not just the UI text.
+    expect(result.map(({ id, lifecycle_state, execution, background_command_count }) => ({
+      id, lifecycle_state, execution, background_command_count,
+    }))).toEqual([
+      { id: 'orphan', lifecycle_state: 'working', execution: 'running', background_command_count: 2 },
+      { id: 'control', lifecycle_state: 'working', execution: 'queued', background_command_count: 0 },
+      { id: 'restart-root', lifecycle_state: 'interrupted', execution: undefined, background_command_count: undefined },
+    ])
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+    render(<QueryClientProvider client={client}><SearchModal /></QueryClientProvider>)
     expect(await screen.findByText('Partly loaded helper')).toBeInTheDocument()
     expect(screen.getByText('Session list is incomplete (1 source error). Missing parents are not marked unavailable.')).toBeInTheDocument()
     expect(screen.getByTestId('session-unplaced')).toHaveTextContent(/partial list/i)
     expect(screen.queryByText(/^parent chat unavailable$/i)).not.toBeInTheDocument()
     expect(within(sessionRow('orphan')).getByRole('button', { name: 'Open Partly loaded helper' })).toBeInTheDocument()
+    expect(screen.getByTestId('session-status-orphan').textContent).toBe('Working')
+    expect(screen.getByTestId('session-status-control').textContent).toBe('Queued')
+    expect(screen.getByTestId('session-status-restart-root').textContent).toBe('Interrupted')
+    expect(screen.getByTestId('session-background-orphan').textContent).toBe('2 background commands running')
+    expect(within(sessionRow('control')).queryByText(/background commands/)).not.toBeInTheDocument()
+    expect(within(sessionRow('restart-root')).queryByText(/background commands/)).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Running' }))
+    expect(screen.getAllByTestId('session-row').map((row) => row.dataset.sessionId)).toEqual(['orphan'])
+    expect(screen.queryByText('Other page')).not.toBeInTheDocument()
+    expect(screen.queryByText('Restarted conversation')).not.toBeInTheDocument()
+
     recovered = true
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
     expect(await screen.findByText('Recovered parent')).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByText(/Session list is incomplete/)).not.toBeInTheDocument())
     expectNestedAfter('orphan', 'unloaded-parent')
     expect(screen.queryByTestId('session-unplaced')).not.toBeInTheDocument()
+    expect(screen.getAllByTestId('session-row').map((row) => row.dataset.sessionId).sort()).toEqual([
+      'orphan', 'restart-root', 'unloaded-parent',
+    ])
+    // A nonmatching Interrupted parent stays as context for the running
+    // helper. The same re-adopted root now matches Running and loses the old label.
+    expect(screen.getByTestId('session-status-unloaded-parent').textContent).toBe('Interrupted')
+    expect(screen.getByTestId('session-status-orphan').textContent).toBe('Working')
+    expect(screen.getByTestId('session-status-restart-root').textContent).toBe('Working')
+    expect(within(sessionRow('restart-root')).queryByText('Interrupted')).not.toBeInTheDocument()
+    expect(screen.queryByText('Other page')).not.toBeInTheDocument()
+    expect(screen.getByTestId('session-background-orphan').textContent).toBe('2 background commands running')
+    expect(within(sessionRow('unloaded-parent')).queryByText(/background commands/)).not.toBeInTheDocument()
+    const confirmed = client.getQueryData<Session[]>(['sessions', 'flat'])
+    expect(confirmed?.map(({ id, execution, background_command_count }) => ({
+      id, execution, background_command_count,
+    }))).toEqual([
+      { id: 'unloaded-parent', execution: undefined, background_command_count: undefined },
+      { id: 'orphan', execution: 'running', background_command_count: 2 },
+      { id: 'control', execution: 'queued', background_command_count: 0 },
+      { id: 'restart-root', execution: 'running', background_command_count: undefined },
+    ])
+    expect(readSessionFetchCoverage(confirmed)).toEqual({ partialErrors: [], incomplete: false })
+    expect(requests).toEqual(['first', '1', 'first', '1', 'first'])
+    await userEvent.click(screen.getByRole('button', { name: 'All' }))
+    expect(screen.getByTestId('session-status-control').textContent).toBe('Queued')
+    expect(within(sessionRow('control')).queryByText(/background commands/)).not.toBeInTheDocument()
   })
 
   it('folds nine consecutive identical helpers and keeps each original Open', async () => {

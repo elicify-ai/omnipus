@@ -16,8 +16,10 @@ import { useChatStore, makeBucketMessages } from '@/store/chat'
 import type { ChatMessage } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { useOmnipusRuntime } from '@/lib/omnipus-runtime'
 import { useToolApprovalStore } from '@/store/toolApproval'
+import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
 
 class ResizeObserverStub {
   observe() {}
@@ -99,6 +101,9 @@ function seedMessages(sid: string, messages: ChatMessage[], flags: { streaming: 
         toolCalls: {},
         toolCallOrder: [],
         textAtToolCallStart: {},
+        toolCallOwnerMessageId: {},
+        goalStatus: null,
+        goalPills: {},
         sessionTokens: 0,
         sessionCost: 0,
         rateLimitEvent: null,
@@ -115,6 +120,9 @@ function seedMessages(sid: string, messages: ChatMessage[], flags: { streaming: 
     toolCalls: {},
     toolCallOrder: [],
     textAtToolCallStart: {},
+    goalStatus: null,
+    goalPills: {},
+    pendingAsk: null,
   }))
   useSessionStore.setState({ activeSessionId: sid, activeAgentId: 'agent-1' })
   useConnectionStore.setState({
@@ -126,7 +134,10 @@ function seedMessages(sid: string, messages: ChatMessage[], flags: { streaming: 
   })
 }
 
-function streamingPair(sid: string, agentId: string): ChatMessage[] {
+function streamingPair(sid: string, agentId: string): [
+  Extract<ChatMessage, { role: 'user' }>,
+  Extract<ChatMessage, { role: 'assistant' }>,
+] {
   return [
     {
       id: `${sid}_user`,
@@ -188,6 +199,7 @@ describe('live inline indicator', () => {
   beforeEach(() => {
     vi.stubGlobal('ResizeObserver', ResizeObserverStub)
     useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
+    useChatPreferencesStore.getState().setVerboseChatEnabled(false)
   })
 
   afterEach(() => {
@@ -287,6 +299,91 @@ describe('live inline indicator', () => {
     expect(useSessionStore.getState().activeAgentId).toBe('agent-1')
   })
 
+  it.each([
+    { name: 'visible foreground bash', tool: 'bash', params: { action: 'run', command: 'git status' } },
+    { name: 'hidden unlabelled ToolSearch', tool: 'ToolSearch', params: { query: 'select:Read' } },
+    { name: 'hidden unlabelled delegate', tool: 'delegate', params: { action: 'status', call_id: 'earlier-dispatch' } },
+  ])('shows Working for a correlated $name call regardless of card visibility', async ({ tool, params }) => {
+    const sid = `visibility-${tool}`
+    seedMessages(sid, streamingPair(sid, 'agent-jim'), { streaming: true, replaying: false })
+    act(() => useChatStore.getState().startToolCall('tc-phase', tool, params))
+    expect(useChatStore.getState().sessionsById[sid]?.toolCalls['tc-phase'].status).toBe('running')
+    const bubble = assistantBubble(await mount())
+    // W1-7 / Indicator input mapping: a running tool, not a hidden label,
+    // is the Working discriminator. Use the existing working phrase, stable.
+    expect(within(bubble).getByText('Working on it…')).toBeInTheDocument()
+    expect(within(bubble).queryByText('Thinking…')).not.toBeInTheDocument()
+    expectMarkMotion(bubble, 'working')
+    expectNameOnly(bubble, 'Jim')
+    act(() => useChatStore.getState().resolveToolCall('tc-phase', 'complete', 'success'))
+    expect(within(bubble).getByText('Thinking…')).toBeInTheDocument()
+    expect(within(bubble).queryByText('Working on it…')).not.toBeInTheDocument()
+    expectMarkMotion(bubble, 'thinking')
+    expect(useSessionStore.getState().activeAgentId).toBe('agent-1')
+  })
+
+  it('keeps Working when verbose chat reveals the running tool card', async () => {
+    const sid = 'verbosity-phase'
+    const description = 'Checking the release notes'
+    seedMessages(sid, streamingPair(sid, 'agent-jim'), { streaming: true, replaying: false })
+    act(() => useChatStore.getState().startToolCall('tc-verbosity', 'bash', {
+      action: 'run', run_in_background: true, description, command: 'git status',
+    }))
+    const bubble = assistantBubble(await mount())
+    expect(within(bubble).getByText(description)).toBeInTheDocument()
+    expectMarkMotion(bubble, 'working')
+    act(() => useChatPreferencesStore.getState().setVerboseChatEnabled(true))
+    expect(within(bubble).getByText('Working on it…')).toBeInTheDocument()
+    expect(within(bubble).queryByText(description)).not.toBeInTheDocument()
+    expect(within(bubble).queryByText('Thinking…')).not.toBeInTheDocument()
+    expectMarkMotion(bubble, 'working')
+    act(() => useChatPreferencesStore.getState().setVerboseChatEnabled(false))
+    expect(within(bubble).getByText(description)).toBeInTheDocument()
+    expectMarkMotion(bubble, 'working')
+  })
+
+  it('preserves the goal phrase without letting it override a real Working phase', async () => {
+    const sid = 'goal-tool-phase'
+    seedMessages(sid, streamingPair(sid, 'agent-jim'), { streaming: true, replaying: false })
+    const goalStatus: GoalStatusFrame = {
+      type: 'goal_status', session_id: sid, goal_id: 'goal-tool-phase',
+      condition: 'Ship the release notes', round: 0, max_rounds: 20,
+      latest_reason: '', active_loops: 1, cap: 16, state: 'active',
+    }
+    act(() => useChatStore.setState((s) => ({
+      goalStatus,
+      sessionsById: { ...s.sessionsById, [sid]: { ...s.sessionsById[sid], goalStatus } },
+    })))
+    const bubble = assistantBubble(await mount())
+    expect(within(bubble).getByText('Framing your goal')).toBeInTheDocument()
+    expectMarkMotion(bubble, 'thinking')
+    act(() => useChatStore.getState().startToolCall('tc-goal-tool', 'set_goal', { mode: 'register' }))
+    expect(within(bubble).getByText('Setting acceptance criteria')).toBeInTheDocument()
+    expectMarkMotion(bubble, 'working')
+    act(() => useChatStore.getState().resolveToolCall('tc-goal-tool', 'registered', 'success'))
+    expect(within(bubble).getByText('Framing your goal')).toBeInTheDocument()
+    expectMarkMotion(bubble, 'thinking')
+  })
+
+  it('does not borrow Working from a tool owned by another reply', async () => {
+    const sid = 'other-reply-tool'
+    seedMessages(sid, streamingPair(sid, 'agent-jim'), { streaming: true, replaying: false })
+    act(() => {
+      useChatStore.getState().startToolCall('tc-other-reply', 'bash', {
+        action: 'run', run_in_background: true, description: 'Other reply work', command: 'git status',
+      })
+      useChatStore.setState((s) => ({ sessionsById: {
+        ...s.sessionsById,
+        [sid]: { ...s.sessionsById[sid], toolCallOwnerMessageId: { 'tc-other-reply': 'older-assistant' } },
+      } }))
+    })
+    expect(useChatStore.getState().sessionsById[sid]?.toolCalls['tc-other-reply'].status).toBe('running')
+    const bubble = assistantBubble(await mount())
+    expect(within(bubble).getByText('Thinking…')).toBeInTheDocument()
+    expect(within(bubble).queryByText('Other reply work')).not.toBeInTheDocument()
+    expectMarkMotion(bubble, 'thinking')
+  })
+
   it('shows Waiting from a pending approval, not the thinking dots', async () => {
     const sid = 'wait-1'
     seedMessages(sid, streamingPair(sid, 'agent-1'), { streaming: true, replaying: false })
@@ -369,11 +466,37 @@ describe('plain, replay, and idle bubbles', () => {
     // Feature-detect is at render time. Undefined selects PlainMessageList.
     ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = undefined
     useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
+    useChatPreferencesStore.getState().setVerboseChatEnabled(false)
   })
 
   afterEach(() => {
     vi.stubGlobal('ResizeObserver', ResizeObserverStub)
   })
+
+  it.each(['success', 'error', 'cancelled'] as const)(
+    'uses the plain reply’s real hidden tool status and returns to Thinking after %s',
+    async (settledStatus) => {
+      const sid = `plain-tool-${settledStatus}`
+      const messages = streamingPair(sid, 'agent-jim')
+      const call = {
+        id: 'plain-tool', call_id: 'plain-tool', tool: 'delegate',
+        params: { action: 'status', call_id: 'earlier-dispatch' }, status: 'running' as const,
+      }
+      messages[1].tool_calls = [call]
+      seedMessages(sid, messages, { streaming: true, replaying: false })
+      const bubble = assistantBubble(await mount())
+      expect(await within(bubble).findByText('Jim')).toBeInTheDocument()
+      expect(within(bubble).getByText('Working on it…')).toBeInTheDocument()
+      expectMarkMotion(bubble, 'working')
+      expectNameOnly(bubble, 'Jim')
+      act(() => seedMessages(sid, [messages[0], {
+        ...messages[1], tool_calls: [{ ...call, status: settledStatus, result: 'complete' }],
+      }], { streaming: true, replaying: false }))
+      expect(within(bubble).getByText('Thinking…')).toBeInTheDocument()
+      expectMarkMotion(bubble, 'thinking')
+      expect(within(bubble).queryByText('Working on it…')).not.toBeInTheDocument()
+    },
+  )
 
   it('shows a finished plain-path reply as the guest name only', async () => {
     const sid = 'plain-1'
