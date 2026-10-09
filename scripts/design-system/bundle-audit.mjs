@@ -27,8 +27,8 @@ export const INITIAL_GZIP_BUDGET_BYTES = 25 * 1024
 // the observed Lane A (+436,023 bytes) and sidebar-with-Lane-A (+437,825 bytes)
 // growth. The frozen baseline, provenance checks, and initial-gzip ceiling stay
 // unchanged; the unfinished panel still requires its own build and measurement.
-// founder-approved allowance 2026-10-08, Tasks panel T1–T19 (+7183) plus release-train drift 641491cfb (+1948); new ceiling 449451 = 9131 over the original 440320.
-export const TOTAL_RAW_BUDGET_BYTES = 449451
+// founder-approved repo-wide allowance 2026-10-08/09 (483 KiB): covers Tasks panel + release-train drift + Wave-1
+export const TOTAL_RAW_BUDGET_BYTES = 493568
 
 export function compareProductionBundles(baseline, candidate, provenance = null) {
   const initialGzipDelta = candidate.initial.gzipBytes - baseline.initial.gzipBytes

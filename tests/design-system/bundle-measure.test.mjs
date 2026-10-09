@@ -145,18 +145,18 @@ test('CLI writes reports exclusively, creates parent directories and requires --
   assert.equal(JSON.parse(await readFile(output, 'utf8')).revision, 'forced')
 })
 
-// Oracle: founder-approved allowance 2026-10-08, Tasks panel T1–T19 (+7183) plus release-train drift 641491cfb (+1948); new ceiling 449451 = 9131 over the original 440320.
+// Oracle: founder-approved repo-wide allowance 2026-10-08/09 (483 KiB): covers Tasks panel + release-train drift + Wave-1
 // Source: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/tasks-panel-20261007/brief.md
 // Supersedes founder AB1's 430 KiB (440320-byte) cumulative allowance.
 // Keep these boundary inputs literal: deriving them from the production constant
 // would let an unauthorized cap change move both the implementation and its oracle.
 // Synthetic report fixtures use arbitrary 100-byte gzip / 1000-byte raw baselines;
 // they exercise the real comparator, not a claimed production build or measurement.
-test('AB1 accepts the founder-approved literal 449451-byte total raw delta', () => {
+test('AB1 accepts the founder-approved literal 493568-byte total raw delta', () => {
   const baseline = { initial: { gzipBytes: 100 }, total: { rawBytes: 1_000 } }
   const candidate = {
     initial: { gzipBytes: 100 },
-    total: { rawBytes: 1_000 + 449451 },
+    total: { rawBytes: 1_000 + 493568 },
     storybook: { clean: true },
     assets: [{ path: 'assets/app.js', sha256: 'ab1-fixture-hash' }],
   }
@@ -164,9 +164,9 @@ test('AB1 accepts the founder-approved literal 449451-byte total raw delta', () 
 
   const report = compareProductionBundles(baseline, candidate, provenance)
 
-  assert.equal(report.pass, true, 'AB1 permits exactly 449451 bytes of cumulative raw growth')
-  assert.equal(report.deltas.totalRawBytes, 449451, 'raw growth is measured against the supplied baseline')
-  assert.equal(report.budgets.totalRawBytes, 449451, 'the raw allowance is the founder-approved literal, not an implementation-derived oracle')
+  assert.equal(report.pass, true, 'AB1 permits exactly 493568 bytes of cumulative raw growth')
+  assert.equal(report.deltas.totalRawBytes, 493568, 'raw growth is measured against the supplied baseline')
+  assert.equal(report.budgets.totalRawBytes, 493568, 'the raw allowance is the founder-approved literal, not an implementation-derived oracle')
   assert.deepEqual(report.checks, {
     storybookOutputScanClean: true,
     storybookModuleProvenanceClean: true,
@@ -176,11 +176,11 @@ test('AB1 accepts the founder-approved literal 449451-byte total raw delta', () 
   }, 'the approved raw boundary does not bypass any other production check')
 })
 
-test('AB1 rejects the literal 449452-byte total raw delta', () => {
+test('AB1 rejects the literal 493569-byte total raw delta', () => {
   const baseline = { initial: { gzipBytes: 100 }, total: { rawBytes: 1_000 } }
   const candidate = {
     initial: { gzipBytes: 100 },
-    total: { rawBytes: 1_000 + 449452 },
+    total: { rawBytes: 1_000 + 493569 },
     storybook: { clean: true },
     assets: [{ path: 'assets/app.js', sha256: 'ab1-fixture-hash' }],
   }
@@ -188,9 +188,9 @@ test('AB1 rejects the literal 449452-byte total raw delta', () => {
 
   const report = compareProductionBundles(baseline, candidate, provenance)
 
-  assert.equal(report.pass, false, 'AB1 rejects 449452 bytes: one byte above the approved cumulative raw allowance')
-  assert.equal(report.deltas.totalRawBytes, 449452, 'the failing delta remains the literal one-byte-over boundary')
-  assert.equal(report.budgets.totalRawBytes, 449451, 'rejection uses the founder-approved raw allowance')
+  assert.equal(report.pass, false, 'AB1 rejects 493569 bytes: one byte above the approved cumulative raw allowance')
+  assert.equal(report.deltas.totalRawBytes, 493569, 'the failing delta remains the literal one-byte-over boundary')
+  assert.equal(report.budgets.totalRawBytes, 493568, 'rejection uses the founder-approved raw allowance')
   assert.deepEqual(report.checks, {
     storybookOutputScanClean: true,
     storybookModuleProvenanceClean: true,
