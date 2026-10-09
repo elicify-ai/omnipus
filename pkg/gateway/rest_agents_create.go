@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -291,17 +290,16 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 }
 
 func (pap *restAPICreateAgentPrepareAgent) decodeAndValidateRequest() ([]byte, string, string, bool) {
-	raw, err := io.ReadAll(io.LimitReader(pap.cra.r.Body, 1<<20))
-	if err != nil {
-		jsonErr(pap.cra.w, http.StatusBadRequest, "could not read request body")
+	raw, readOK := readAgentWriteBody(pap.cra.w, pap.cra.r)
+	if !readOK {
 		return nil, "", "", true
 	}
 	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		jsonErr(pap.cra.w, http.StatusBadRequest, "request body is required")
 		return nil, "", "", true
 	}
-	var presence map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &presence); err != nil {
+	presence, err := decodeRawJSONFields(raw)
+	if err != nil {
 		jsonErr(pap.cra.w, http.StatusBadRequest, "invalid JSON body")
 		return nil, "", "", true
 	}
@@ -339,32 +337,45 @@ func (pap *restAPICreateAgentPrepareAgent) decodeAndValidateRequest() ([]byte, s
 	return raw, *typePeek.Type, variantName, false
 }
 
-func (pap *restAPICreateAgentPrepareAgent) rejectNullCreateMembers(presence map[string]json.RawMessage) bool {
+func (pap *restAPICreateAgentPrepareAgent) rejectNullCreateMembers(presence rawJSONFields) bool {
+	// Identity null/empty is intentionally a create-default request. Only the
+	// non-identity members below reject null; do not apply PUT's identity guard.
 	for _, field := range []string{"skills", "mcp_servers", "tool_policy_changes"} {
-		if value, supplied := presence[field]; supplied && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		if presence.hasNull(field) {
 			jsonErr(pap.cra.w, http.StatusBadRequest, field+" must not be null")
 			return true
 		}
 	}
-	if rawChanges, supplied := presence["tool_policy_changes"]; supplied {
-		var members map[string]json.RawMessage
-		if json.Unmarshal(rawChanges, &members) == nil {
-			for _, field := range []string{"set", "remove"} {
-				if value, exists := members[field]; exists && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-					jsonErr(pap.cra.w, http.StatusBadRequest, "tool_policy_changes."+field+" must not be null")
-					return true
-				}
+	// Inspect every occurrence of each parent as well as its nested members:
+	// decoding either level into a map would hide null before a duplicate value.
+	for _, rawChanges := range presence.valuesFor("tool_policy_changes") {
+		members, err := decodeRawJSONFields(rawChanges)
+		if err != nil {
+			jsonErr(pap.cra.w, http.StatusBadRequest, "invalid JSON body")
+			return true
+		}
+		for _, field := range []string{"set", "remove"} {
+			if members.hasNull(field) {
+				jsonErr(pap.cra.w, http.StatusBadRequest, "tool_policy_changes."+field+" must not be null")
+				return true
 			}
 		}
 	}
-	if rawServers, supplied := presence["mcp_servers"]; supplied {
-		var servers []map[string]json.RawMessage
-		if json.Unmarshal(rawServers, &servers) == nil {
-			for _, server := range servers {
-				if value, exists := server["tools"]; exists && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-					jsonErr(pap.cra.w, http.StatusBadRequest, "mcp_servers[].tools must not be null")
-					return true
-				}
+	for _, rawServers := range presence.valuesFor("mcp_servers") {
+		var servers []json.RawMessage
+		if err := json.Unmarshal(rawServers, &servers); err != nil {
+			jsonErr(pap.cra.w, http.StatusBadRequest, "invalid JSON body")
+			return true
+		}
+		for _, rawServer := range servers {
+			server, err := decodeRawJSONFields(rawServer)
+			if err != nil {
+				jsonErr(pap.cra.w, http.StatusBadRequest, "invalid JSON body")
+				return true
+			}
+			if server.hasNull("tools") {
+				jsonErr(pap.cra.w, http.StatusBadRequest, "mcp_servers[].tools must not be null")
+				return true
 			}
 		}
 	}

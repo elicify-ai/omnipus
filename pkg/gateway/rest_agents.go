@@ -430,7 +430,11 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 		// Sub-agent control plane ADR D4/MAJ-009: lifecycle_state/stop_note,
 		// absent when this session has no LifecycleRecord — same producer
 		// listSessions/getSession use (computeSessionLifecycle, rest_sessions.go).
-		attachSessionRuntimeFields(&s, lifecycleStore, m.ID, a.agentLoop.CurrentBootEpoch())
+		if err := attachSessionRuntimeFields(&s, lifecycleStore, m.ID, a.agentLoop.CurrentBootEpoch()); err != nil {
+			logsafeError("rest: list agent sessions: lifecycle read failed", "session_id", m.ID, "error", err)
+			jsonErr(w, http.StatusInternalServerError, "session lifecycle unavailable")
+			return
+		}
 		genSessions = append(genSessions, s)
 	}
 	jsonOK(w, genSessions)
