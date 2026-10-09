@@ -49,8 +49,6 @@ channels:
         $ref: '#/components/messages/AttachSessionFrame'
       DevicePairingResponseFrame:
         $ref: '#/components/messages/DevicePairingResponseFrame'
-      SessionCloseFrame:
-        $ref: '#/components/messages/SessionCloseFrame'
       WhatsAppPairingSubscribeFrame:
         $ref: '#/components/messages/WhatsAppPairingSubscribeFrame'
       SessionStartedFrame:
@@ -115,8 +113,6 @@ channels:
         $ref: '#/components/messages/CancelStageFrame'
       PongFrame:
         $ref: '#/components/messages/PongFrame'
-      SessionCloseAckFrame:
-        $ref: '#/components/messages/SessionCloseAckFrame'
       SessionModeUpdateFrame:
         $ref: '#/components/messages/SessionModeUpdateFrame'
       SessionModeUpdatedFrame:
@@ -302,16 +298,6 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/DevicePairingResponseFrame'
-  sendSessionClose:
-    action: send
-    channel:
-      $ref: '#/channels/chat'
-    summary: 'Explicit session close request. The server unregisters the session, fires CloseSession on the agent loop, and
-      responds with session_close_ack.
-
-      '
-    messages:
-    - $ref: '#/channels/chat/messages/SessionCloseFrame'
   sendWhatsAppPairingSubscribe:
     action: send
     channel:
@@ -664,15 +650,6 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/PongFrame'
-  receiveSessionCloseAck:
-    action: receive
-    channel:
-      $ref: '#/channels/chat'
-    summary: 'Acknowledgement of a session_close client request. The server confirms the session has been closed.
-
-      '
-    messages:
-    - $ref: '#/channels/chat/messages/SessionCloseAckFrame'
   sendSessionModeUpdate:
     action: send
     channel:
@@ -1076,13 +1053,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/DevicePairingResponseFrame'
-    SessionCloseFrame:
-      name: SessionCloseFrame
-      title: session_close
-      summary: Explicit session close request (client → server).
-      contentType: application/json
-      payload:
-        $ref: '#/components/schemas/SessionCloseFrame'
     WhatsAppPairingSubscribeFrame:
       name: WhatsAppPairingSubscribeFrame
       title: whatsapp_pairing_subscribe
@@ -1330,13 +1300,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/PongFrame'
-    SessionCloseAckFrame:
-      name: SessionCloseAckFrame
-      title: session_close_ack
-      summary: Session close acknowledged (server → client).
-      contentType: application/json
-      payload:
-        $ref: '#/components/schemas/SessionCloseAckFrame'
     SessionModeUpdateFrame:
       name: SessionModeUpdateFrame
       title: session_mode_update
@@ -1639,7 +1602,6 @@ components:
       - ping
       - attach_session
       - device_pairing_response
-      - session_close
       - session_started
       - message_status
       - token
@@ -1670,7 +1632,6 @@ components:
       - replay_warning
       - cancel_stage
       - pong
-      - session_close_ack
       - session_mode_update
       - session_mode_updated
       - device_pairing_request
@@ -5000,32 +4961,6 @@ components:
             Per-session sequence number of this frame (#823 catch-up redesign). Optional:
             absent on an unsequenced copy. Keep in sync by hand with
             contracts/components/schemas/CancelStageFrame.yaml.
-    SessionCloseAckFrame:
-      title: SessionCloseAckFrame
-      description: >
-        Server → client session close acknowledged. Session-scoped
-        (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
-        ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output.
-      type: object
-      required:
-      - type
-      - session_id
-      additionalProperties: false
-      properties:
-        type:
-          type: string
-          const: session_close_ack
-        session_id:
-          type: string
-          minLength: 1
-        id:
-          type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (b) (FR-089): absent for this frame type.
     SessionModeUpdateFrame:
       title: SessionModeUpdateFrame
       description: >
@@ -5087,8 +5022,7 @@ components:
         the existing, session-scoped ErrorFrame instead. Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
         ADR-057 W5 audit (FR-089) — a chat-lifecycle/settings frame, not
-        turn output, so producing_session_id is absent (FR-013), matching
-        SessionCloseAckFrame's own precedent.
+        turn output, so producing_session_id is absent (FR-013).
       type: object
       required:
       - type
@@ -5169,21 +5103,6 @@ components:
           type: string
         message:
           type: string
-    SessionCloseFrame:
-      title: SessionCloseFrame
-      description: Client → server explicit session close request.
-      type: object
-      required:
-      - type
-      - session_id
-      additionalProperties: false
-      properties:
-        type:
-          type: string
-          const: session_close
-        session_id:
-          type: string
-          minLength: 1
     WhatsAppPairingSubscribeFrame:
       title: WhatsAppPairingSubscribeFrame
       description: 'Client → server. Registers or clears this connection''s interest in a channel''s whatsapp_pairing frames
