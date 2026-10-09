@@ -104,6 +104,15 @@ type ClaudeDriver struct {
 	// so a resumed run keeps its original cap (#904 D4). Zero until the
 	// first Run, so a Resume with no prior Run is refused (FR-004).
 	runMaxTurns int
+	// nativeID is the claude session id announced on the most recent Run's
+	// stream (system/init session_id, or result session_id). Resume passes it
+	// via --resume so the prior native conversation is actually continued; an
+	// empty id makes Resume refuse visibly instead of starting fresh (FR-043).
+	nativeID string
+	// lastOpts is the RunOptions of the most recent Run, reused by Resume so a
+	// resumed conversation preserves its runtime/workspace/model/caps (FR-043).
+	// Zero value until the first Run.
+	lastOpts RunOptions
 }
 
 // NewClaudeDriver creates a driver for the claude CLI.
@@ -132,6 +141,12 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 		return nil, fmt.Errorf("claude driver: Run called while a run is already active")
 	}
 	d.runMaxTurns = opts.MaxTurns
+	d.lastOpts = opts
+	if opts.resumeNativeID == "" {
+		// A fresh run begins a new native conversation; drop any id captured
+		// from a previous run until this run's stream announces its own.
+		d.nativeID = ""
+	}
 
 	// Resolve the CLI binary: opts.CLIPath (ExecutorConfig.cli_path) wins; else
 	// the default name resolved via $PATH (MAJ-5).
@@ -297,11 +312,14 @@ func (d *ClaudeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEven
 // disables Claude Code's own internal sandbox as well as its permission
 // prompts; there is no separate Omnipus confiner for external-CLI workers.
 //
-// --resume is deliberately NOT passed: opts.RunID is a freshly generated
-// dispatch identifier ("subturn-N" / "ext-<nanos>"), never a real prior claude
-// session ID, and `claude --resume <id>` errors when no session with that ID
-// exists. --session-id would need a valid UUID (opts.RunID is not one), so it
-// is also omitted — every run simply starts fresh (ADR-032 fix C).
+// --resume is passed ONLY on a native-conversation resume (FR-043), carrying
+// the claude session id the CLI itself announced on the prior Run's stream
+// (opts.resumeNativeID). opts.RunID is NEVER used for this: it is a freshly
+// generated dispatch identifier ("subturn-N" / "ext-<nanos>"), never a real
+// prior claude session ID, and `claude --resume <id>` errors when no session
+// with that ID exists. A fresh run (opts.resumeNativeID empty) passes no
+// --resume and starts fresh (ADR-032 fix C). --session-id would need a valid
+// UUID the driver does not have, so it is likewise never passed.
 //
 // No positional prompt argument is appended (not even a trailing "-"). A "-"
 // token is NOT a documented stdin sentinel for this CLI — live-tested against
@@ -319,6 +337,12 @@ func (d *ClaudeDriver) buildArgs(opts RunOptions) []string {
 	args := []string{"-p", "--output-format", "stream-json", "--verbose", "--no-chrome"}
 	if model := strings.TrimSpace(opts.Model); model != "" {
 		args = append(args, "--model", model)
+	}
+	// Native-conversation resume (FR-043): continue claude's own prior session
+	// by the id it announced on the previous stream (never opts.RunID — see the
+	// doc comment above). Empty on a fresh run.
+	if id := strings.TrimSpace(opts.resumeNativeID); id != "" {
+		args = append(args, "--resume", id)
 	}
 	// Full permission bypass, unconditional (operator decision, 2026-07-05 —
 	// see the package doc's SECURITY NOTE and issue #488). Without this, a
@@ -392,6 +416,9 @@ func (d *ClaudeDriver) parseLine(
 		// system/init event — extract session_id for resume tracking.
 		if subtype, _ := rawJSONField(raw, "subtype"); subtype == "init" {
 			if sessionID, ok := rawJSONField(raw, "session_id"); ok && sessionID != "" {
+				// Capture the native session id so Resume can continue THIS
+				// conversation via --resume rather than starting fresh (FR-043).
+				storeNativeID(&d.mu, &d.nativeID, sessionID)
 				slog.Info("runner/claude: session init", "run_id", runID, "session_id", sessionID)
 			}
 		}
@@ -526,6 +553,9 @@ func (d *ClaudeDriver) parseResultEvent(raw []byte, runID string) (RunEvent, boo
 		return RunEvent{}, false
 	}
 	if ev.SessionID != "" {
+		// Capture the native session id (also present on the result event) so
+		// Resume continues this conversation (FR-043).
+		storeNativeID(&d.mu, &d.nativeID, ev.SessionID)
 		slog.Info("runner/claude: run complete", "run_id", runID, "session_id", ev.SessionID)
 	}
 	switch ev.Subtype {
@@ -596,25 +626,46 @@ func (d *ClaudeDriver) Cancel() {
 	}
 }
 
-// Input sends additional text to the running agent (best-effort for claude -p).
-// Claude Code's `--print` mode does not support mid-run stdin injection —
-// this is a no-op that returns nil per the interface contract.
+// Input attempts to deliver a live steering instruction to a running claude
+// conversation. `claude -p` exposes no mid-run stdin injection channel, so a
+// live instruction cannot be delivered in-process — delivery is by interrupt
+// plus native-conversation resume (FR-043). Input therefore NEVER silently
+// discards the text: with no live conversation it refuses visibly, and with a
+// live run it returns a visible error directing the caller to interrupt and
+// resume rather than reporting a false success (BDD-05.6, DEL-20).
 func (d *ClaudeDriver) Input(_ string) error {
-	return nil
+	d.mu.Lock()
+	live := d.eventCh != nil
+	d.mu.Unlock()
+	if !live {
+		return fmt.Errorf("claude driver: no live conversation to steer — instruction not delivered (FR-043)")
+	}
+	return fmt.Errorf("claude driver: cannot inject a live instruction into a running `claude -p` process (no mid-run stdin channel); interrupt and resume the native conversation instead (FR-043)")
 }
 
-// Resume starts a NEW claude run under runID, reusing the prior Run's turn
-// cap. It does NOT pass `--resume <runID>`: buildArgs deliberately omits
-// --resume (runID is an Omnipus dispatch identifier, never a claude session
-// ID, and `claude --resume <id>` errors on an unknown session — ADR-032 fix
-// C), so the prior conversation is not continued; the run starts fresh.
+// Resume continues the claude native conversation captured on the prior Run by
+// passing its announced session id via `--resume` (FR-043). It reuses the prior
+// Run's RunOptions (runtime/workspace/model/caps) so the resumed conversation
+// preserves them, and does NOT re-send the original prompt. When no native
+// conversation id was captured it refuses VISIBLY rather than starting a fresh
+// conversation (BDD-05.6); with no prior Run at all it defers to Run's
+// ErrMaxTurnsRequired (no hidden default, FR-004).
 func (d *ClaudeDriver) Resume(ctx context.Context, runID string) (<-chan RunEvent, error) {
-	// Reuse the prior Run's turn cap (#904 D4). With no prior Run it is 0 and
-	// Run refuses it with ErrMaxTurnsRequired — no hidden default (FR-004).
 	d.mu.Lock()
+	last := d.lastOpts
 	maxTurns := d.runMaxTurns
+	nativeID := d.nativeID
 	d.mu.Unlock()
-	return d.Run(ctx, RunOptions{RunID: runID, MaxTurns: maxTurns})
+
+	opts := last
+	opts.RunID = runID
+	opts.Input = "" // resume continues the conversation; do not replay the original prompt
+	opts.resumeNativeID = nativeID
+
+	if nativeID == "" && maxTurns > 0 {
+		return nil, fmt.Errorf("claude driver: cannot resume — no native conversation id was captured from the prior run; refusing rather than starting a fresh conversation (FR-043)")
+	}
+	return d.Run(ctx, opts)
 }
 
 // Test validates the claude CLI is present and can produce version output.

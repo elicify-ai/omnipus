@@ -269,6 +269,19 @@ func detectAndPinVersion(
 	return ver, false
 }
 
+// storeNativeID records the CLI-announced native conversation id used by
+// native-conversation resume (FR-043). An empty id is ignored (some events
+// omit it); a non-empty id overwrites the previous capture. The caller holds
+// no lock; this helper takes mu so the parse goroutine and Resume never race.
+func storeNativeID(mu *sync.Mutex, dst *string, id string) {
+	if id == "" {
+		return
+	}
+	mu.Lock()
+	*dst = id
+	mu.Unlock()
+}
+
 // rawJSONField extracts a string field from raw JSON bytes without full
 // unmarshalling (used in hot paths where only a single discriminator field
 // is needed). Returns ("", false) if the field is absent or not a string.

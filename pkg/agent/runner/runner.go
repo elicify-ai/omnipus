@@ -208,6 +208,14 @@ type RunOptions struct {
 	// "provider/model") is simply omitted so the CLI falls back to its own
 	// configured default rather than being passed a garbage flag value.
 	Model string
+
+	// resumeNativeID carries the CLI's own captured native-conversation id into
+	// a resumed invocation (FR-043). It is deliberately UNEXPORTED: only a
+	// driver's own Resume sets it, from the id it captured during a prior Run's
+	// stream — never a caller, and never the fresh-dispatch RunID (which is an
+	// Omnipus identifier the CLI has never seen). Empty means a fresh run.
+	// This is an in-process field only; no wire type is involved.
+	resumeNativeID string
 }
 
 // ConnectionTestResult holds the outcome of an ExternalAgentRunner.Test call.
@@ -236,11 +244,14 @@ type ConnectionTestResult struct {
 //  2. Permission requests (EventKindPermissionRequest) MUST be routed to the
 //     consent layer; the caller uses Decide to route the verdict back.
 //     Deny-by-default when no consent handler is registered.
-//  3. Runs are resumable: if RunOptions.RunID is set and a prior session exists,
-//     the driver SHOULD resume it.
+//  3. Runs are resumable via native-conversation resume: after a Run whose CLI
+//     stream announced its own session/thread id, Resume continues THAT native
+//     conversation. When no such id was captured, Resume refuses visibly rather
+//     than silently starting a fresh conversation (FR-043, BDD-05.6).
 //  4. Cancel terminates the external process and closes the Events channel.
-//  5. Input sends additional text to a running interactive agent (best-effort;
-//     not all CLIs support mid-run input injection).
+//  5. Input delivers text to a running agent only where that is possible; a
+//     driver that cannot deliver (no live conversation, or no mid-run injection
+//     channel) returns a visible error, never a silent success (FR-043, DEL-20).
 //  6. Test validates the runner configuration without running real work.
 //
 // Implementors: the U2 CLI drivers (claude-code, codex, opencode). The FakeRunner
@@ -265,14 +276,20 @@ type ExternalAgentRunner interface {
 	// After Cancel, the Events channel returned by Run is closed.
 	Cancel()
 
-	// Input sends additional user input text to the running agent (best-effort).
-	// Implementations that do not support mid-run input injection return nil without
-	// error (the input is silently discarded).
+	// Input attempts to deliver additional user input text to a running agent.
+	// A driver that cannot deliver the text — because there is no live
+	// conversation to steer, or because the CLI exposes no mid-run injection
+	// channel (true of all three external CLIs: claude -p, codex exec and
+	// opencode run) — MUST return a visible error. It MUST NOT silently discard
+	// the text and return nil (FR-043, BDD-05.6, DEL-20).
 	Input(text string) error
 
-	// Resume starts (or re-attaches to) an existing run by its stable RunID.
-	// If no prior session with that ID exists, the behavior is driver-defined
-	// (most drivers start a fresh run).
+	// Resume continues the CLI's own native conversation captured from a prior
+	// Run, identified by the session/thread id the CLI announced on that run's
+	// stream. When no such id was captured the driver refuses with a visible error
+	// — it MUST NOT start a fresh conversation and report success (FR-043,
+	// BDD-05.6). runID is the Omnipus dispatch label for the resumed run, never the
+	// CLI's native id.
 	Resume(ctx context.Context, runID string) (<-chan RunEvent, error)
 
 	// Test validates the runner configuration without running real work.
