@@ -11,7 +11,6 @@ import {
   Warning,
   Lock,
   WarningCircle,
-  Trash,
   Brain,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
@@ -37,7 +36,7 @@ import {
   AccordionTrigger,
   AccordionContent,
 } from '@/components/ui/accordion'
-import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { DeleteAgentControl } from './DeleteAgentControl'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { ExecutorSelector } from './ExecutorSelector'
 import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader, UploadMdButton } from './AgentFormFields'
@@ -49,7 +48,6 @@ import {
   fetchWorkspace,
   updateAgent,
   updateWorkspace,
-  deleteAgent,
   fetchProviders,
   fetchActivity,
   fetchSkills,
@@ -66,7 +64,6 @@ import {
   type WorkspaceMemberConfig,
 } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
-import { ConfigurationSaveError } from '@/lib/api/configuration'
 import { isProviderUsable } from '@/lib/providerStatus'
 import { formatTokens } from '@/lib/formatTokens'
 import { logDiagnostic } from '@/lib/telemetry'
@@ -383,10 +380,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // zero-clobber P0.
   const [contextWindowOverride, setContextWindowOverride] = useState<number | null | undefined>(undefined)
   const [contextWindowOverrideDraft, setContextWindowOverrideDraft] = useState('')
-  // Wave 5 / spec §6.1 BDD #15: Edit slide-over footer Delete agent.
-  // Opens an AlertDialog; the confirm mutation invalidates the list and
-  // closes the slide-over. Locked agents do not render the trigger.
-  const [deleteOpen, setDeleteOpen] = useState(false)
   const [toolsCfg, setToolsCfg] = useState<AgentToolsCfg>({
     builtin: { policies: {} },
   })
@@ -1177,55 +1170,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   // UploadButton moved to the shared UploadMdButton in AgentFormFields.tsx
   // (create/edit parity, P3 2026-07-03) — one implementation for both dialogs.
-
-  // Wave 5 / spec §6.1 BDD #15: Delete agent confirmation: the mutation invalidates
-  // the list cache on success, surfaces the API error inline on failure,
-  // and closes the slide-over only on success (so a network blip keeps
-  // the operator on the same page). The button itself is hidden for
-  // locked agents (see SheetFooter below).
-  const deleteAgentMutation = useMutation({
-    mutationFn: (id: string) => {
-      if (!agent?.revision) throw new Error('Agent has no reviewed revision. Reload before deleting.')
-      return deleteAgent(id, agent.revision)
-    },
-    onSuccess: () => {
-      // Drop the deleted agent from the list cache immediately so no
-      // per-id GET refetch fires for a resource that no longer exists.
-      queryClient.setQueryData(['agents'], (prev: unknown) => {
-        if (!Array.isArray(prev)) return prev
-        return prev.filter((a) => (a as { id?: string }).id !== agentId)
-      })
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
-      queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
-      setDeleteOpen(false)
-      closeEditAgentSlideOver()
-      addToast({ message: 'Agent deleted', variant: 'success' })
-    },
-    onError: (err: unknown) => {
-      if (err instanceof ConfigurationSaveError && err.state.persistence_status === 'complete') {
-        // Persistence is authoritative for what the next read will return.
-        // Discard the stale deleted resource even though live activation
-        // failed, then force both views to reconcile with stored state.
-        queryClient.setQueryData(['agents'], (prev: unknown) => {
-          if (!Array.isArray(prev)) return prev
-          return prev.filter((a) => (a as { id?: string }).id !== agentId)
-        })
-        queryClient.invalidateQueries({ queryKey: ['agents'] })
-        queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
-        setDeleteOpen(false)
-        closeEditAgentSlideOver()
-        addToast({ message: `Delete incomplete: ${err.message}`, variant: 'error' })
-        return
-      }
-      const msg = isApiError(err)
-        ? err.userMessage
-        : err instanceof Error
-          ? err.message
-          : 'Delete failed'
-      addToast({ message: `Delete failed: ${msg}`, variant: 'error' })
-      setDeleteOpen(false)
-    },
-  })
 
   // FR-016 / A2/F-09: Heartbeat tab saves to the WORKSPACE — a separate mutation
   // from the agent autosave. The tab opts out of the agent autosave flow entirely.
@@ -2710,36 +2654,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             Changes save automatically and apply everywhere this agent is used.
           </p>
         </div>
-        {!isLocked && (
-          <Button
-            variant="destructive"
-            data-testid="delete-agent-button"
-            onClick={() => setDeleteOpen(true)}
-            className="ml-auto"
-          >
-            <Trash size={13} className="mr-[var(--space-1)]" />
-            Delete agent
-          </Button>
+        {!isLocked && agentId && (
+          <DeleteAgentControl
+            agentId={agentId}
+            agentName={formData.name || agent.name}
+            revision={agent.revision}
+          />
         )}
       </div>
-
-      {/* Wave 5 / spec §6.1 BDD #15: Delete confirmation dialog (catalogued
-          `ConfirmDialog`) so the destructive-confirm flow is identical
-          across the app. The confirm fires the deleteAgentMutation; on
-          success the slide-over closes and the agent is removed from the
-          list cache. */}
-      <ConfirmDialog
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        title={`Delete ${formData.name || agent.name}?`}
-        description="This cannot be undone."
-        confirmLabel={deleteAgentMutation.isPending ? 'Deleting…' : 'Delete'}
-        destructive
-        pending={deleteAgentMutation.isPending}
-        onConfirm={() => {
-          if (agentId) deleteAgentMutation.mutate(agentId)
-        }}
-      />
 
     </ProfileSheet>
   )
