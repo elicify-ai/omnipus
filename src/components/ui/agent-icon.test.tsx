@@ -3,6 +3,24 @@ import { render, screen } from '@testing-library/react'
 import type { ComponentType } from 'react'
 import { AgentColor } from '@/lib/api/generated/schemas'
 
+// F-3 / AC-19: prove RENDERING routes the derived mark through the real
+// escapeMarkup helper, not merely that the helper works in isolation. The mock
+// is transparent — it records each argument and delegates to the real helper,
+// so the helper's behaviour (and the exact-output table below) is unchanged
+// (ARCH-RULING-monogram D2b/MAJ-3: the escape step is mandatory defense-in-depth).
+const escapeCalls = vi.hoisted(() => [] as string[])
+
+vi.mock('@/lib/agentIconArt', async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import('@/lib/agentIconArt')
+  return {
+    ...actual,
+    escapeMarkup: (s: string) => {
+      escapeCalls.push(s)
+      return actual.escapeMarkup(s)
+    },
+  }
+})
+
 // Runtime import so Vitest collects these tests before the component exists.
 // ARCH-DECISIONS 3.1 requires src/components/ui/agent-icon.tsx.
 async function loadAgentIcon(): Promise<ComponentType<Record<string, unknown>>> {
@@ -297,11 +315,17 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
     expect(ink.querySelector('[data-role="developer"]')).not.toBeNull()
     // Position oracle: in EACH layer the letter is a descendant of the element
     // carrying the `mask` attribute, so an unmasked letter appended after the
-    // badge (drawn over it) fails RED.
+    // badge (drawn over it) fails RED. Painted-content oracle (F-1): the node is
+    // an SVG <text> whose rendered text is the derived character — the attribute
+    // alone would stay green if the builder painted the wrong letter.
     for (const layer of [ink, glow]) {
       const masked = layer.querySelector('[mask]')
       expect(masked, 'mask-carrying element per layer').not.toBeNull()
-      expect(masked!.querySelector('[data-initial]'), 'letter inside the masked group').not.toBeNull()
+      const letter = masked!.querySelector('[data-initial]')
+      expect(letter, 'letter inside the masked group').not.toBeNull()
+      expect(letter!.tagName.toLowerCase(), 'letter is an SVG <text>').toBe('text')
+      expect(letter!.getAttribute('data-initial')).toBe('D')
+      expect(letter!.textContent, 'painted letter per layer').toBe('D')
     }
   })
 
@@ -322,7 +346,13 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
   ])('derives the Monogram initial of %j as %j (AC-8)', async (name, expected) => {
     const AgentIcon = await loadAgentIcon()
     const { container } = render(iconAzure(AgentIcon, { figure: 'Monogram', role: 'general', size: 40, name }))
-    expect(container.querySelector('[data-initial]')?.getAttribute('data-initial')).toBe(expected)
+    const letter = container.querySelector('[data-initial]')
+    expect(letter, 'letter node').not.toBeNull()
+    // Attribute AND painted text: a builder that keeps the right data-initial
+    // but paints a different glyph must fail RED (F-1).
+    expect(letter!.tagName.toLowerCase(), 'letter is an SVG <text>').toBe('text')
+    expect(letter!.getAttribute('data-initial')).toBe(expected)
+    expect(letter!.textContent, 'painted initial').toBe(expected)
   })
 
   it('carries the agent colour on the letter through currentColor, with no neutral-grey path (AC-9)', async () => {
@@ -429,17 +459,36 @@ describe('AgentIcon — Monogram (the 5th figure)', () => {
     const allowed = new Set(['defs', 'mask', 'g', 'rect', 'circle', 'text', 'path', 'ellipse'])
     for (const layer of [ink, glow]) {
       expect(layer.querySelectorAll('[data-initial]')).toHaveLength(1)
+      // F-2: the layer's ONLY element child is its one SVG wrapper. A visible
+      // sibling injected into the layer (a stray <span>/<div>/…, or a second svg)
+      // fails here — the corrected test's narrower scan must not hide it.
+      const elementChildren = Array.from(layer.children)
+      expect(elementChildren, 'layer has exactly one element child').toHaveLength(1)
+      expect(elementChildren[0].tagName.toLowerCase(), 'layer child is its svg wrapper').toBe('svg')
+      // Preserve rejection of extra/unapproved/nested SVGs: the wrapper is the
+      // layer's only svg.
+      expect(layer.querySelectorAll('svg'), 'layer has exactly one svg').toHaveLength(1)
       // Strip the letter and the badge; only the figure-mask structure may remain.
-      // Inspect the injected markup's SVG subtree (the ink/glow span's only child
-      // is the <svg> wrapper, which is not itself part of the figure-mask
-      // structure the allowed set enumerates).
-      const clone = layer.querySelector('svg')!.cloneNode(true) as Element
+      // Inspect the injected markup's SVG subtree — EXCLUDING only the identified
+      // outer <svg> wrapper (the layer's sole element child, not figure-mask
+      // content), never unrelated siblings or another SVG (F-2).
+      const clone = elementChildren[0].cloneNode(true) as Element
       clone.querySelectorAll('[data-initial], [data-role]').forEach((node) => node.remove())
       clone.querySelectorAll('*').forEach((el) => {
         expect(allowed.has(el.tagName.toLowerCase()), `unexpected element <${el.tagName.toLowerCase()}>`).toBe(true)
       })
     }
     expect(ink.querySelectorAll('[data-role]')).toHaveLength(1)
+  })
+
+  it('renders the Monogram initial through the real escapeMarkup helper, not merely defining it (AC-19)', async () => {
+    const AgentIcon = await loadAgentIcon()
+    escapeCalls.length = 0
+    render(iconAzure(AgentIcon, { figure: 'Monogram', role: 'general', size: 40, name: 'Daniel' }))
+    // Rendering must route the spec-derived mark ('D' for 'Daniel') through the
+    // mandatory escape step (ARCH-RULING-monogram D2b/MAJ-3). Dropping the call
+    // yields no observation here and fails RED.
+    expect(escapeCalls, 'escapeMarkup called with the derived mark').toEqual(['D'])
   })
 
   it('renders the Monogram letter with the pinned typography (AC-20)', async () => {

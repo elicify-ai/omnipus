@@ -280,6 +280,11 @@ describe('Monogram identity header', () => {
     await screen.findByRole('heading', { name: 'Daniel' })
     const mark = headerMark('Daniel')
     await waitFor(() => expect(mark).toHaveAttribute('data-figure', 'Monogram'))
-    expect(mark.querySelector('[data-initial]')?.getAttribute('data-initial')).toBe('D')
+    const letter = mark.querySelector('[data-initial]')
+    expect(letter, 'header letter node').not.toBeNull()
+    // Attribute AND painted text (F-1): a wrong painted glyph must fail RED.
+    expect(letter!.tagName.toLowerCase(), 'header letter is an SVG <text>').toBe('text')
+    expect(letter!.getAttribute('data-initial')).toBe('D')
+    expect(letter!.textContent, 'painted header initial').toBe('D')
   })
 })

@@ -38,7 +38,12 @@ describe('AgentStatusIndicator Monogram', () => {
     const mark = container.querySelector('[data-testid="agent-icon"]')
     expect(mark).not.toBeNull()
     expect(mark).toHaveAttribute('data-figure', 'Monogram')
-    expect(container.querySelector('[data-initial]')?.getAttribute('data-initial')).toBe('D')
+    const letter = container.querySelector('[data-initial]')
+    expect(letter, 'indicator letter node').not.toBeNull()
+    // Attribute AND painted text (F-1): a wrong painted glyph must fail RED.
+    expect(letter!.tagName.toLowerCase(), 'indicator letter is an SVG <text>').toBe('text')
+    expect(letter!.getAttribute('data-initial')).toBe('D')
+    expect(letter!.textContent, 'painted indicator initial').toBe('D')
     expect(container.textContent).toContain('Thinking…')
   })
 
