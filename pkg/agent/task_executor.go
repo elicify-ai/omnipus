@@ -791,20 +791,21 @@ func (te *TaskExecutor) createTaskSessionSync(t *task.Task) (string, error) {
 		logger.ErrorCF("task_executor", "Could not set task session meta",
 			map[string]any{"task_id": t.ID, "error": setErr.Error()})
 	}
-	if _, updateErr := te.persistTaskSessionBinding(t.ID, taskSessionID); updateErr != nil {
-		return "", updateErr
-	}
-	// FR-118/G-13: mint the durable S2 lifecycle record for this session — see
-	// mintTaskLifecycleRecord's doc comment for why this is the producer that
-	// closes the boot-sweep visibility gap for CheckQueuedTasks,
-	// advanceBlockedTasks, SpawnTriggeredRun, and plan-member dispatch (every
-	// caller of ExecuteTask funnels through this function). A resolver/persist
+	// S1: mint the durable S2 lifecycle record BEFORE binding the session — the
+	// binding becomes the commit point, so a session_id is written on the task
+	// ONLY when its classification was successfully persisted. A resolver/persist
 	// failure is PROPAGATED here (never logged-and-continued), so it flows out
 	// of createTaskSessionSync into executeTask's truthful pre-dispatch failure
 	// path (failTaskBeforeDispatch): the run is refused rather than started on
-	// an unpersisted/mismatched classification.
+	// an unpersisted/mismatched classification. See mintTaskLifecycleRecord's
+	// doc comment for why this producer closes the boot-sweep visibility gap for
+	// CheckQueuedTasks, advanceBlockedTasks, SpawnTriggeredRun, and plan-member
+	// dispatch (every caller of ExecuteTask funnels through this function).
 	if mintErr := te.mintTaskLifecycleRecord(taskSessionID, t); mintErr != nil {
 		return "", mintErr
+	}
+	if _, updateErr := te.persistTaskSessionBinding(t.ID, taskSessionID); updateErr != nil {
+		return "", updateErr
 	}
 	if appendErr := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
 		ID:        t.ID + "-prompt",
@@ -1165,8 +1166,17 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 		return te.startTaskNowViaLauncher(ctx, t)
 	}
 
-	// Idempotency guard: if a session already exists, don't create another one.
+	// Idempotency guard. A bound session is returned ONLY when its durable
+	// classification record exists AND the task is not Failed (S1): a second
+	// StartTaskNow after a failed pre-dispatch setup must return an error and
+	// start nothing, never (sessionID, nil) for a binding whose classification
+	// was never persisted. The launcher path above re-dispatches an existing
+	// binding and errors truthfully when it cannot; this mirrors that for the
+	// non-launcher path.
 	if t.SessionID != "" {
+		if gErr := te.boundSessionRetryable(t); gErr != nil {
+			return "", gErr
+		}
 		return t.SessionID, nil
 	}
 
@@ -1250,24 +1260,25 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 			logger.ErrorCF("task_executor", "StartTaskNow: could not set task session meta",
 				map[string]any{"task_id": taskID, "error": setErr.Error()})
 		}
+		// S1: mint the durable S2 lifecycle record BEFORE binding the session —
+		// the binding is the commit point, so a session_id lands on the task only
+		// once its classification was persisted. See mintTaskLifecycleRecord's
+		// doc comment. StartTaskNow is the SECOND (and only other) task-session
+		// creation chokepoint besides createTaskSessionSync; both call this so
+		// every dispatch path gets a record. A resolver/persist failure is
+		// PROPAGATED through the truthful pre-dispatch failure
+		// (failTaskBeforeDispatch): the run is refused, never started on an
+		// unpersisted/mismatched classification.
+		if mintErr := te.mintTaskLifecycleRecord(taskSessionID, t); mintErr != nil {
+			release()
+			return "", te.failTaskBeforeDispatch(taskID, mintErr)
+		}
 		updated, updateErr := te.persistTaskSessionBinding(taskID, taskSessionID)
 		if updateErr != nil {
 			release()
 			return "", te.failTaskBeforeDispatch(taskID, updateErr)
 		}
 		t = updated
-		// FR-118/G-13: mint the durable S2 lifecycle record for this session —
-		// see mintTaskLifecycleRecord's doc comment. StartTaskNow is the SECOND
-		// (and only other) task-session creation chokepoint besides
-		// createTaskSessionSync; both must call this so every dispatch path
-		// gets a record. A resolver/persist failure is PROPAGATED through the
-		// same truthful pre-dispatch failure the sibling binding failure above
-		// uses (failTaskBeforeDispatch): the run is refused, never started on
-		// an unpersisted/mismatched classification.
-		if mintErr := te.mintTaskLifecycleRecord(taskSessionID, t); mintErr != nil {
-			release()
-			return "", te.failTaskBeforeDispatch(taskID, mintErr)
-		}
 		if err := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
 			ID:        t.ID + "-prompt",
 			Role:      "user",
@@ -2122,6 +2133,18 @@ func (al *AgentLoop) processTaskDirect(
 	if dispatchErr != nil {
 		return "", fmt.Errorf("processTaskDirect: %w: %w", ErrTaskRunNotDispatched, dispatchErr)
 	}
+	// F4 (Property B, task path): every turn of a task-executor run must execute
+	// on the runtime its durable LifecycleRecord.Is3P records, or refuse VISIBLY
+	// before any driver or provider call — the same invariant runSteeredTurnBody
+	// enforces for a steered body, through the same shared verification. Gated on
+	// RunningTaskID so the OTHER processTaskDirect callers (plan engine, verifier
+	// adjudication, board tasks) — which are not minted task-run sessions — are
+	// unchanged. Covers both the promotion path (a queued native task child whose
+	// agent was edited to external-CLI, then promoted) and every later turn of an
+	// existing task run.
+	if invErr := al.enforceTaskRunRuntimeInvariant(taskCtx, taskChatID, dispatchKind == runner.DispatchKindExternalCLI); invErr != nil {
+		return "", invErr
+	}
 	if dispatchKind == runner.DispatchKindExternalCLI {
 		return al.processTaskDirectExternalCLI(taskCtx, ag, prompt, sessionKey, taskChatID, delegationDepth)
 	}
@@ -2175,6 +2198,38 @@ func (al *AgentLoop) processTaskDirect(
 		return resp, fmt.Errorf("%w: %w", ErrTurnCanceled, runErr)
 	}
 	return resp, runErr
+}
+
+// enforceTaskRunRuntimeInvariant is F4's Property-B check for the task path
+// (Q-F4-task): it is a no-op for every processTaskDirect caller that is NOT a
+// task-executor run (RunningTaskID empty — plan engine, verifier adjudication,
+// board tasks), and for a degraded boot with no lifecycle store. For a
+// task-executor run it loads the minted task session's durable record (the
+// taskChatID the turn carries) and refuses via the truthful pre-dispatch
+// failure (ErrTaskRunNotDispatched) when the record is missing or its Is3P no
+// longer matches the live executor kind — so no turn of any task run ever
+// begins on an unpersisted or mismatched classification.
+func (al *AgentLoop) enforceTaskRunRuntimeInvariant(taskCtx context.Context, taskChatID string, liveIs3P bool) error {
+	if tools.ToolRunningTaskID(taskCtx) == "" {
+		return nil
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		// Harness / degraded boot: the durable-lifecycle subsystem is absent, so
+		// there is no recorded classification to compare against (mintTaskLifecycleRecord
+		// treats the same nil store as a documented no-op). Dispatch proceeds as
+		// before the wave.
+		return nil
+	}
+	rec, err := lifecycle.Load(taskChatID)
+	if err != nil || rec == nil {
+		return fmt.Errorf("processTaskDirect: %w: %w: task run session %q",
+			ErrTaskRunNotDispatched, errUnpersistedRuntimeClassification, taskChatID)
+	}
+	if mismatch := verifyRecordedRuntimeClassification(rec, rec.AgentID, liveIs3P); mismatch != nil {
+		return fmt.Errorf("processTaskDirect: %w: %w", ErrTaskRunNotDispatched, mismatch)
+	}
+	return nil
 }
 
 // ExecuteBoardTask dispatches a GTD board task to the agent loop in a background

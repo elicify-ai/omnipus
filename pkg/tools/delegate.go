@@ -601,9 +601,10 @@ func (t *DelegateTool) Description() string {
 		"to address a child; use list_jobs to see everything you have outstanding. " +
 		"action=\"inbox\" drains messages the child has pushed back to you (progress/" +
 		"checkpoint/artifact/blocker/question/handback); action=\"inbox_ack\" acknowledges " +
-		"them. action=\"steer\" injects an instruction at the child's next tool boundary " +
-		"(NOT available for a delegation running on an external CLI, subagent_3p: " +
-		"claude-code/codex/opencode — use respond or resume instead); " +
+		"them. action=\"steer\" injects an instruction into the child: at its next tool boundary for a " +
+		"native worker, or — for a worker running on an external CLI (subagent_3p: claude-code/codex/opencode) " +
+		"— by interrupting the subprocess and continuing the same CLI conversation. With no live CLI " +
+		"conversation the external steer is refused (never a silent fresh conversation). " +
 		"action=\"respond\" replies to one of the child's messages by correlation_id — the text is " +
 		"delivered to the child as an ordinary message, always available for a delegation you started. " +
 		"action=\"stop_all\" stops that child and every helper under it. action=\"redirect\" stops the helper's current turn, " +

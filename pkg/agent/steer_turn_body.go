@@ -77,10 +77,9 @@ func (al *AgentLoop) runSteeredTurnBody(ctx context.Context, rec *session.Lifecy
 	// an actionable message telling the person to start a new delegation with the
 	// updated configuration.
 	liveIs3P := kind == runner.DispatchKindExternalCLI
-	if liveIs3P != rec.Is3P {
+	if mismatch := verifyRecordedRuntimeClassification(rec, ts.agent.ID, liveIs3P); mismatch != nil {
 		al.finishRefusedSteeredTurnBody(ts)
-		refusal := steeredWorkerRuntimeRefusal(ts.agent.ID, rec.Is3P, liveIs3P)
-		return turnResult{status: TurnEndStatusError, finalContent: refusal.Error(), turnFailed: true}, refusal
+		return turnResult{status: TurnEndStatusError, finalContent: mismatch.Error(), turnFailed: true}, mismatch
 	}
 	if kind != runner.DispatchKindExternalCLI {
 		return al.runTurn(ctx, ts)
@@ -107,13 +106,53 @@ func (al *AgentLoop) finishRefusedSteeredTurnBody(ts *turnState) {
 // can match it with errors.Is.
 var errSteeredWorkerRuntimeChanged = errors.New("steer: dispatch: worker runtime changed after launch")
 
+// errUnpersistedRuntimeClassification is the record-missing case of the
+// Property-B invariant (Q2=A: no run begins with an unpersisted classification)
+// — the session has a dispatch but no durable record to verify it against.
+var errUnpersistedRuntimeClassification = errors.New("steer: dispatch: session has no persisted runtime classification")
+
+// delegateRuntimeRecovery is the recovery sentence for a DELEGATE dispatch whose
+// recorded runtime no longer matches the live executor: the fix is a fresh
+// delegation with the updated configuration.
+const delegateRuntimeRecovery = "a worker's runtime is fixed when it is launched — start a new delegation with the updated configuration"
+
+// taskRuntimeRecovery is the recovery sentence for a TASK-executor run whose
+// recorded runtime no longer matches the live executor: a task is restarted by
+// an explicit Rerun, not by a new delegation.
+const taskRuntimeRecovery = "the worker's runtime changed after this run started; Rerun the task to start a new run"
+
+// verifyRecordedRuntimeClassification is F4's Property-B invariant, shared by
+// BOTH dispatch sites that must honor it: the steered body
+// (runSteeredTurnBody) and the task executor (processTaskDirect). Every
+// execution on a session must run the runtime its durable LifecycleRecord.Is3P
+// records, or refuse VISIBLY before any driver/provider call.
+//
+// It returns nil when the record's Is3P equals the live executor kind, and an
+// actionable refusal (naming the worker, both runtimes, and the recovery)
+// otherwise — or when the record is missing entirely (unpersisted
+// classification). recovery is the caller-appropriate next step, because a
+// task restarts by Rerun while a delegation restarts by a new delegation.
+func verifyRecordedRuntimeClassification(rec *session.LifecycleRecord, agentID string, liveIs3P bool) error {
+	if rec == nil {
+		return fmt.Errorf("%w: worker %q", errUnpersistedRuntimeClassification, agentID)
+	}
+	if rec.Is3P == liveIs3P {
+		return nil
+	}
+	recovery := delegateRuntimeRecovery
+	if rec.Origin != nil && rec.Origin.Kind == session.OriginKindTask {
+		recovery = taskRuntimeRecovery
+	}
+	return steeredWorkerRuntimeRefusal(agentID, rec.Is3P, liveIs3P, recovery)
+}
+
 // steeredWorkerRuntimeRefusal builds F4's ACTIONABLE refusal: it names the
-// worker, both runtimes, and the recovery ("start a new delegation with the
-// updated configuration") — never a bare mismatch report.
-func steeredWorkerRuntimeRefusal(agentID string, recordIs3P, liveIs3P bool) error {
+// worker, both runtimes, and the caller-appropriate recovery — never a bare
+// mismatch report.
+func steeredWorkerRuntimeRefusal(agentID string, recordIs3P, liveIs3P bool, recovery string) error {
 	return fmt.Errorf(
-		"%w: worker %q was launched as a %s worker, but its agent now resolves to a %s worker; a worker's runtime is fixed when it is launched — start a new delegation with the updated configuration",
-		errSteeredWorkerRuntimeChanged, agentID, runtimeLabel(recordIs3P), runtimeLabel(liveIs3P))
+		"%w: worker %q was launched as a %s worker, but its agent now resolves to a %s worker; %s",
+		errSteeredWorkerRuntimeChanged, agentID, runtimeLabel(recordIs3P), runtimeLabel(liveIs3P), recovery)
 }
 
 // runtimeLabel is the plain-language name of a worker runtime for F4's refusal.

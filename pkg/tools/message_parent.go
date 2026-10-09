@@ -257,7 +257,9 @@ func (t *MessageParentTool) Description() string {
 		"parent something (an ordinary message — you keep working while you wait for the reply), or " +
 		"\"handback\" to report a final result or a cooperative pause. Every call is delivered at-least-once " +
 		"and deduped by message_id; a rejected call (rate/ceiling/size limit) always returns a clear error, " +
-		"never a silent drop."
+		"never a silent drop. Available only to a native worker: a worker running on an external CLI " +
+		"(subagent_3p) has no message_parent channel — Omnipus hands its completed command-line output " +
+		"back to its parent instead."
 }
 
 func (t *MessageParentTool) Scope() ToolScope       { return ScopeCore }
