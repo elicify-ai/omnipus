@@ -290,7 +290,18 @@ type ExternalAgentRunner interface {
 	// — it MUST NOT start a fresh conversation and report success (FR-043,
 	// BDD-05.6). runID is the Omnipus dispatch label for the resumed run, never the
 	// CLI's native id.
-	Resume(ctx context.Context, runID string) (<-chan RunEvent, error)
+	//
+	// The optional instruction is the new text S to deliver to the resumed
+	// native conversation (FR-043: "the new instruction S reaches that same
+	// conversation"). It reaches the CLI the same way a fresh Run's prompt does
+	// — over the child's stdin, which claude -p / codex exec / opencode run all
+	// consume without a positional prompt — so a delivery resume does NOT
+	// replay the original prompt. It is variadic (rather than a plain string)
+	// so a BARE continuation (`Resume(ctx, runID)`) stays a one-argument call:
+	// existing callers and tests did not have to change. A driver that cannot
+	// deliver the instruction (no live native conversation to resume) refuses
+	// visibly rather than silently dropping it (BDD-05.6, DEL-20).
+	Resume(ctx context.Context, runID string, instruction ...string) (<-chan RunEvent, error)
 
 	// Test validates the runner configuration without running real work.
 	// It checks: (1) the CLI binary is present on PATH; (2) it is authenticated;
@@ -311,4 +322,14 @@ func validateMaxTurns(driver string, maxTurns int) error {
 		return fmt.Errorf("%s driver: %w (got %d)", driver, ErrMaxTurnsRequired, maxTurns)
 	}
 	return nil
+}
+
+// resumeInstruction resolves the optional instruction carried by a variadic
+// Resume call (see ExternalAgentRunner.Resume). Zero args, or an explicitly
+// empty first arg, is a bare continuation — no new instruction is delivered.
+func resumeInstruction(instruction []string) string {
+	if len(instruction) == 0 {
+		return ""
+	}
+	return instruction[0]
 }

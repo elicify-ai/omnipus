@@ -545,7 +545,7 @@ func (d *CodexDriver) Input(_ string) error {
 // it refuses VISIBLY rather than starting a fresh conversation (BDD-05.6); with
 // no prior Run at all it defers to Run's ErrMaxTurnsRequired (no hidden default,
 // FR-004).
-func (d *CodexDriver) Resume(ctx context.Context, runID string) (<-chan RunEvent, error) {
+func (d *CodexDriver) Resume(ctx context.Context, runID string, instruction ...string) (<-chan RunEvent, error) {
 	d.mu.Lock()
 	last := d.lastOpts
 	maxTurns := d.runMaxTurns
@@ -554,7 +554,9 @@ func (d *CodexDriver) Resume(ctx context.Context, runID string) (<-chan RunEvent
 
 	opts := last
 	opts.RunID = runID
-	opts.Input = "" // resume continues the conversation; do not replay the original prompt
+	// A delivery resume carries the new instruction S (stdin); a bare resume
+	// delivers nothing and never replays the original prompt.
+	opts.Input = resumeInstruction(instruction)
 	opts.resumeNativeID = nativeID
 
 	if nativeID == "" && maxTurns > 0 {

@@ -159,6 +159,12 @@ func (al *AgentLoop) continueSteeredTurn(
 			ts.opts.InitialSteeringMessages = steeringMsgs
 			ts.opts.InitialSteeringCorrelationIDs = steeringCorrelationIDs
 			ts.opts.SkipInitialSteeringPoll = true
+			// A queued follow-up instruction delivered on this drain is a
+			// CONTINUATION of the session's existing conversation: for an
+			// external-CLI target the body must Resume the native CLI
+			// conversation (FR-043) rather than start a fresh one. Every other
+			// steered entry path (first dispatch, wake) leaves this false.
+			ts.opts.ExternalCLIResume = true
 			attempt.turnRan = true
 			// Same body dispatch as every other steered run site — an
 			// external-CLI target re-drives the CLI for queued instruction

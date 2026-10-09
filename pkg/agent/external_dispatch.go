@@ -377,16 +377,9 @@ func runExternalCLISubTurn(
 		runID:   ed.runID,
 	}
 
-	// 3. Instantiate the driver for the configured CLI. The factory is a package
-	//    var so in-package tests can inject a fake/stub driver without a real CLI.
-	driver, err := newExternalDriver(cli, consent)
-	if err != nil {
-		return nil, fmt.Errorf("external-cli dispatch: %w", err)
-	}
-
 	ed.prepareRunOptions()
 
-	evCh, err := driver.Run(runCtx, runner.RunOptions{
+	runOpts := runner.RunOptions{
 		RunID:          ed.runID,
 		WorkDir:        workDir,
 		Input:          task,
@@ -400,9 +393,41 @@ func runExternalCLISubTurn(
 		// CLI invocation. Each driver's buildArgs guards so an unmapped/empty
 		// model string is simply omitted rather than passed as garbage.
 		Model: ed.agentModel,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("external-cli dispatch: driver start (%s): %w", cli, err)
+	}
+
+	// 3. Select the driver and how to start it (FR-043). A CONTINUATION that is
+	//    delivering a queued follow-up instruction Resumes the session's
+	//    existing native CLI conversation; every other case Runs fresh. The
+	//    selection lives in external_run_session.go — one place, keyed per
+	//    child session, so the resume reuses the SAME driver (its captured
+	//    native conversation id + preserved RunOptions: runtime/workspace/model/
+	//    caps) rather than starting a fresh conversation. The factory stays a
+	//    package var so in-package tests can inject a fake/stub driver.
+	sess, driver, resume, beginErr := al.beginExternalRun(externalRunSessionKey(ed.childTS), ed.childTS, cli, consent)
+	if beginErr != nil {
+		return nil, fmt.Errorf("external-cli dispatch: %w", beginErr)
+	}
+	defer sess.endRun()
+
+	var (
+		evCh <-chan runner.RunEvent
+		err  error
+	)
+	if resume {
+		evCh, err = driver.Resume(runCtx, ed.runID, task)
+		if err != nil {
+			// FR-043: a delivery that cannot reach the native conversation —
+			// no captured conversation id, a rejected/crashed resume — is a
+			// VISIBLE failure, never a silent fresh conversation. The driver's
+			// own Resume refusal is the truthful cause and is surfaced here
+			// unchanged (BDD-05.6).
+			return nil, fmt.Errorf("external-cli dispatch: resume native conversation (%s): %w", cli, err)
+		}
+	} else {
+		evCh, err = driver.Run(runCtx, runOpts)
+		if err != nil {
+			return nil, fmt.Errorf("external-cli dispatch: driver start (%s): %w", cli, err)
+		}
 	}
 
 	slog.Info("external-cli dispatch: run started",

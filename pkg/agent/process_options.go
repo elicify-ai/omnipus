@@ -41,13 +41,21 @@ type processOptions struct {
 	// providers.Message: that struct is the literal LLM provider request
 	// wire shape, never a receipt-bookkeeping carrier.
 	InitialSteeringCorrelationIDs []string
-	DefaultResponse               string                // Response when LLM returns empty
-	SendResponse                  bool                  // Whether to send response via bus
-	SuppressToolFeedback          bool                  // Whether to suppress inline tool call and result feedback
-	NoHistory                     bool                  // If true, don't load session history (for heartbeat)
-	SkipInitialSteeringPoll       bool                  // If true, skip the steering poll at loop start (used by Continue)
-	TranscriptSessionID           string                // Session ID for transcript tool call recording (empty = disabled)
-	TranscriptStore               *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
+	DefaultResponse               string // Response when LLM returns empty
+	SendResponse                  bool   // Whether to send response via bus
+	SuppressToolFeedback          bool   // Whether to suppress inline tool call and result feedback
+	NoHistory                     bool   // If true, don't load session history (for heartbeat)
+	SkipInitialSteeringPoll       bool   // If true, skip the steering poll at loop start (used by Continue)
+	// ExternalCLIResume marks a turn that must deliver its steering instruction
+	// to an EXISTING native CLI conversation by resume rather than starting a
+	// fresh external-CLI run (FR-043). Set ONLY by the post-turn steering drain
+	// (steer_turn_drain.go::continueSteeredTurn), i.e. exactly when a queued
+	// follow-up instruction is delivered to a session whose external-CLI turn
+	// already ran; every other turn leaves it false (a first dispatch, a task
+	// run, a wake), so an ordinary external-CLI run is unchanged.
+	ExternalCLIResume   bool
+	TranscriptSessionID string                // Session ID for transcript tool call recording (empty = disabled)
+	TranscriptStore     *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
 	// OriginKind identifies the durable execution origin when this turn does
 	// not have a lifecycle record to supply it. The zero value is an ordinary
 	// interactive turn. Publication policy resolves the record first.
