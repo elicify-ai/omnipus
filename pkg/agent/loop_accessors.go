@@ -349,16 +349,17 @@ func (al *AgentLoop) SetPlanStore(store *plan.Store) {
 	}
 
 	// UAT fix (fix/uat-defects-2026-08-22): re-wire the system.* tool surface
-	// (create_task_in_workspace, pkg/sysagent/tools) with the real plan store
-	// too. WireSysagentDeps runs at boot BEFORE this store exists — the
-	// gateway constructs sysAgentDeps and calls WireSysagentDeps well ahead
-	// of plan.New/SetPlanStore (see gateway.go's boot wiring region) — so
-	// every system.* tool instance registered by then was built with a nil
-	// deps.PlanStore. Without this, create_task_in_workspace(plan_id=...)
-	// fails closed with "plan store is not configured" FOREVER, for every
-	// agent, even against a plan that was just created in the very same
-	// workspace by the very same turn (the plain create_task tool above was
-	// already re-wired here; the system.* twin was not).
+	// (pkg/sysagent/tools) with the real plan store too. WireSysagentDeps runs
+	// at boot BEFORE this store exists — the gateway constructs sysAgentDeps
+	// and calls WireSysagentDeps well ahead of plan.New/SetPlanStore (see
+	// gateway.go's boot wiring region) — so every system.* tool instance
+	// registered by then was built with a nil deps.PlanStore. Without this,
+	// any system.* tool that consults deps.PlanStore fails closed — today
+	// delete_agent's active-plan ownership check (agentOwnsActivePlan) — for
+	// every agent, even against a plan that was just created in the very same
+	// workspace by the very same turn. (The original motivating caller was
+	// create_task_in_workspace, retired by DEL-23; the plan-store consumers
+	// that remain still need this re-wire.)
 	//
 	// al.sysagentDeps is read-modify-written under al.mu (mirrors the
 	// al.planStore guard a few lines up in this same function) because the

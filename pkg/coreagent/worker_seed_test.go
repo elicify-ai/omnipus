@@ -208,8 +208,7 @@ func TestWorkerToolPolicyTightensGlobalCeiling(t *testing.T) {
 		"configure_provider", "list_providers", "test_provider", "list_models",
 		"get_config", "set_config", "run_doctor", "get_usage",
 		"create_agent", "update_agent", "delete_agent", "read_agent_metadata",
-		"create_task", "delete_task", "create_task_in_workspace", "update_task_in_workspace",
-		"delete_task_in_workspace", "list_tasks_in_workspace",
+		"create_task", "delete_task",
 		"create_workspace", "update_workspace", "delete_workspace", "list_workspaces", "get_workspace",
 		// inspect_session (fix-wave finding #2): the global ceiling now seeds
 		// "allow" for this tool (defaults.go), so an absent entry here would

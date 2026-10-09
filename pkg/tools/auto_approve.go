@@ -273,15 +273,11 @@ var autoApproveClasses = map[string]AutoApproveClass{
 	"delete_agent":        AutoAsks,
 
 	// System (workspaces)
-	"list_workspaces":          AutoRuns,
-	"get_workspace":            AutoRuns,
-	"create_workspace":         AutoRuns,
-	"update_workspace":         AutoAsks,
-	"delete_workspace":         AutoAsks,
-	"list_tasks_in_workspace":  AutoRuns,
-	"create_task_in_workspace": AutoRuns,
-	"update_task_in_workspace": AutoRuns,
-	"delete_task_in_workspace": AutoAsks,
+	"list_workspaces":  AutoRuns,
+	"get_workspace":    AutoRuns,
+	"create_workspace": AutoRuns,
+	"update_workspace": AutoAsks,
+	"delete_workspace": AutoAsks,
 
 	// System (skills)
 	"list_skills":  AutoRuns,

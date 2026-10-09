@@ -94,6 +94,21 @@ A handoff is allowed only when a trust line for that pair exists in the workspac
 
 The same two agents can be trusted together in one workspace and not in another, because each workspace keeps its own lines. That is deliberate: trust describes a working relationship inside a team, not a property of an agent.
 
+## Sending work to another workspace
+
+An agent can create a task on a DIFFERENT workspace's board by naming that
+workspace explicitly (`workspace_id` on `create_task`). The task is delivered,
+not run: it lands in the target board's **Inbox** as not-started work, and that
+workspace's own team picks it up locally. The sending agent cannot start, run,
+re-run or reassign it from outside — running work is what a workspace's own
+team does, under that workspace's own delegation rules. A task created in the
+agent's own workspace still lands in `next` (ready to run), exactly as before.
+
+The same optional `workspace_id` is accepted by `update_task` and `list_tasks`;
+omitting it means "my own current workspace". Reading a workspace other than
+your own returns only the read-only status and identity of the tasks you
+created or are assigned there — never their content, results or plans.
+
 ## Limits and things to watch
 
 - **No line, no delegation.** Adding an agent to the team does not trust them for handoffs. Draw the line.

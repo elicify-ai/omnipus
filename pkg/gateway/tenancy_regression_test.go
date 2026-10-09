@@ -28,7 +28,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -212,14 +212,14 @@ func TestTenancy_SingleUser_SharedWorkspace_Accessible(t *testing.T) {
 //	Then the written task's owner == "alice".
 //
 // Guards against: Rule-2 session owner stamp being skipped or overwritten.
-// Traces to: pkg/sysagent/tools/task.go TaskCreateTool.Execute Rule-2 — #406
+// Traces to: pkg/tools/task.go TaskCreateTool (canonical after DEL-23) Rule-2 — #406
 func TestTaskCreateTool_Rule2_SessionOwner(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
-	// Seed a default workspace with no owner so Rule-2 (session owner stamp) fires.
-	// The workspace must exist on disk at <home>/workspaces/<id>.json for the tool's
-	// validateID + readWorkspaceFromDisk checks to pass.
+	// Seed a workspace with no owner so Rule-2 (session owner stamp) fires.
+	// The workspace must exist on disk at <home>/workspaces/<id>.json for the
+	// tool's workspace-existence check to pass.
 	wsID := "01JXRULE2SESSIONOWNER00001"
 	wsDir := filepath.Join(home, "workspaces")
 	require.NoError(t, os.MkdirAll(wsDir, 0o700))
@@ -232,14 +232,25 @@ func TestTaskCreateTool_Rule2_SessionOwner(t *testing.T) {
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(wsDir, wsID+".json"), []byte(wsJSON), 0o600))
 
-	tool := systools.NewTaskCreateTool(&systools.Deps{Home: home})
+	// The canonical create_task (DEL-23 merged the sysagent task family into
+	// it): Task.Owner attribution comes from the target workspace's owner,
+	// falling back to the session owner.
+	store := task.New(filepath.Join(home, "tasks"))
+	tool := tools.NewTaskCreateTool(store)
+	tool.SetHome(home)
+	tool.SetDelegationDenyChecker(func(context.Context, string) *tools.DelegationDenial { return nil })
 
 	// Inject session owner "alice" via context (Rule-2).
 	ctx := tools.WithSessionOwner(context.Background(), "alice")
+	ctx = tools.WithAgentID(ctx, "assignee-agent")
 
 	result := tool.Execute(ctx, map[string]any{
-		"name":         "Alice's personal task",
+		"title":        "Alice's personal task",
+		"prompt":       "do it",
+		"agent_id":     "assignee-agent",
 		"workspace_id": wsID,
+		"criteria":     []any{map[string]any{"kind": "prose", "text": "the work is done"}},
+		"dod":          []any{map[string]any{"kind": "prose", "text": "the definition of done is met"}},
 	})
 
 	require.NotNil(t, result, "Execute must return a non-nil ToolResult")
@@ -247,27 +258,19 @@ func TestTaskCreateTool_Rule2_SessionOwner(t *testing.T) {
 
 	// Parse the result to extract the task id.
 	var resp struct {
-		ID string `json:"id"`
+		ID string `json:"task_id"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &resp),
 		"result content must be valid JSON; content=%s", result.ForLLM)
 	require.NotEmpty(t, resp.ID, "created task must have a non-empty id")
 
-	// Read the task from disk and assert owner == "alice".
-	taskPath := filepath.Join(home, "tasks", resp.ID+".json")
-	data, err := os.ReadFile(taskPath)
-	require.NoError(t, err, "task file must exist on disk")
+	got, err := store.Get(resp.ID)
+	require.NoError(t, err, "created task must be readable from the store")
 
-	var diskTask struct {
-		Owner string `json:"owner"`
-		Title string `json:"title"`
-	}
-	require.NoError(t, json.Unmarshal(data, &diskTask))
-
-	assert.Equal(t, "alice", diskTask.Owner,
-		"task owner must equal the session owner (Rule-2); got %q", diskTask.Owner)
-	assert.Equal(t, "Alice's personal task", diskTask.Title,
-		"task title must match the input name")
+	assert.Equal(t, "alice", got.Owner,
+		"task owner must equal the session owner (Rule-2); got %q", got.Owner)
+	assert.Equal(t, "Alice's personal task", got.Title,
+		"task title must match the input title")
 }
 
 // TestTaskCreateTool_Rule2_NoSession_OwnerEmpty asserts that when there is no
@@ -275,7 +278,7 @@ func TestTaskCreateTool_Rule2_SessionOwner(t *testing.T) {
 // (Rule-3: no owner source → empty attribution).
 //
 // Guards against: Rule-2 fabricating an owner when none was provided.
-// Traces to: pkg/sysagent/tools/task.go TaskCreateTool.Execute Rule-3 — #406
+// Traces to: pkg/tools/task.go TaskCreateTool — owner attribution — #406
 func TestTaskCreateTool_Rule2_NoSession_OwnerEmpty(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
@@ -294,32 +297,35 @@ func TestTaskCreateTool_Rule2_NoSession_OwnerEmpty(t *testing.T) {
 	)
 	require.NoError(t, os.WriteFile(filepath.Join(wsDir, wsID+".json"), []byte(wsJSON), 0o600))
 
-	tool := systools.NewTaskCreateTool(&systools.Deps{Home: home})
+	store := task.New(filepath.Join(home, "tasks"))
+	tool := tools.NewTaskCreateTool(store)
+	tool.SetHome(home)
+	tool.SetDelegationDenyChecker(func(context.Context, string) *tools.DelegationDenial { return nil })
 
 	// No session owner injected (plain context).
-	result := tool.Execute(context.Background(), map[string]any{
-		"name":         "Unowned task",
+	ctx := tools.WithAgentID(context.Background(), "assignee-agent")
+	result := tool.Execute(ctx, map[string]any{
+		"title":        "Unowned task",
+		"prompt":       "do it",
+		"agent_id":     "assignee-agent",
 		"workspace_id": wsID,
+		"criteria":     []any{map[string]any{"kind": "prose", "text": "the work is done"}},
+		"dod":          []any{map[string]any{"kind": "prose", "text": "the definition of done is met"}},
 	})
 
 	require.NotNil(t, result)
 	require.False(t, result.IsError, "Execute must succeed; error=%s", result.ForLLM)
 
 	var resp struct {
-		ID string `json:"id"`
+		ID string `json:"task_id"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &resp))
 
-	data, err := os.ReadFile(filepath.Join(home, "tasks", resp.ID+".json"))
+	got, err := store.Get(resp.ID)
 	require.NoError(t, err)
 
-	var diskTask struct {
-		Owner string `json:"owner,omitempty"`
-	}
-	require.NoError(t, json.Unmarshal(data, &diskTask))
-
-	assert.Equal(t, "", diskTask.Owner,
-		"task owner must be empty (Rule-3) when no session owner and no workspace_id; got %q", diskTask.Owner)
+	assert.Equal(t, "", got.Owner,
+		"task owner must be empty (Rule-3) when no session owner and no workspace owner; got %q", got.Owner)
 }
 
 // ── #406 + FR-1.9: multi-user unified task access — owner attribution only ────

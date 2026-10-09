@@ -714,6 +714,15 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Full instructions for the agent",
 			},
+			"workspace_id": map[string]any{
+				"type": "string",
+				"description": "Workspace board to deliver this task to (C-TASK-TOOLS/FR-046). " +
+					"Optional: omit to create on your own current workspace. Supplying a DIFFERENT " +
+					"(foreign) workspace delivers the task to that workspace's board in status `inbox` " +
+					"(not-started) for its team to pick up locally — a foreign create never runs, " +
+					"dispatches, claims or activates anything (FR-048). An empty, unknown or " +
+					"inaccessible workspace is refused; there is no fallback.",
+			},
 			"agent_id": map[string]any{
 				"type":        "string",
 				"description": "ID of the agent to assign the task to",
@@ -909,6 +918,43 @@ func (t *TaskCreateTool) resolveWorkspaceID(ctx context.Context) (string, error)
 	return "", fmt.Errorf("no active workspace bound and no default workspace resolver configured")
 }
 
+// resolveTargetWorkspace resolves where a create_task call should land and
+// whether that target is FOREIGN to the caller's own workspace (C-TASK-TOOLS,
+// FR-046/FR-048).
+//
+// The optional "workspace_id" argument is an explicit destination. Absent —
+// the common case — the target is the caller's own turn workspace (or the
+// default workspace when no turn workspace is bound), exactly as before this
+// merge. When the argument IS present it must name a REAL workspace: an
+// empty, non-string or unknown id is refused with no fallback, because
+// silently landing the task on the caller's own board would tell the caller
+// their explicit delivery succeeded when it did not (C-TASK-TOOLS: "Null/
+// empty/invalid/inaccessible explicit choice refuses; no fallback").
+//
+// A target that differs from the caller's own workspace is foreign: the task
+// is DELIVERED to that board as not-started work (status inbox), never
+// dispatched. It is the caller's own workspace (absent, or equal to own) that
+// keeps the triaged `next` landing the canonical tool has always produced.
+func (t *TaskCreateTool) resolveTargetWorkspace(ctx context.Context, args map[string]any) (id string, foreign bool, err error) {
+	own, err := t.resolveWorkspaceID(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	raw, present := args["workspace_id"]
+	if !present || raw == nil {
+		return own, false, nil
+	}
+	explicit, ok := raw.(string)
+	if !ok || strings.TrimSpace(explicit) == "" {
+		return "", false, fmt.Errorf("workspace_id must be a non-empty workspace id")
+	}
+	explicit = strings.TrimSpace(explicit)
+	if t.home != "" && !workspace.Exists(t.home, explicit) {
+		return "", false, fmt.Errorf("workspace %q does not exist", explicit)
+	}
+	return explicit, explicit != own, nil
+}
+
 // taskCreateToolExecute carries the shared state of Execute across its stages.
 type taskCreateToolExecute struct {
 	t          *TaskCreateTool
@@ -924,6 +970,10 @@ type taskCreateToolExecute struct {
 	due        string
 	dod        []task.AcceptanceCriterion
 	entity     *task.Task
+	// foreign is true when the caller named an explicit workspace_id that is
+	// NOT the caller's own workspace (C-TASK-TOOLS/FR-048): the task is
+	// delivered to that workspace's board as not-started work.
+	foreign bool
 }
 
 func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -1154,14 +1204,42 @@ func (tc *taskCreateToolExecute) prepareContract() (*ToolResult, bool) {
 func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 	parentTaskID, _ := tc.args["parent_task_id"].(string)
 
-	wsID, err := tc.t.resolveWorkspaceID(tc.ctx)
+	wsID, foreign, err := tc.t.resolveTargetWorkspace(tc.ctx, tc.args)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("could not resolve workspace: %v", err)), true
+		return ErrorResult(fmt.Sprintf("task_create failed: %v", err)), true
 	}
+	tc.foreign = foreign
 
-	// A delegated task is ready to be picked up by the executor: it lands in
-	// `next` (triaged & dispatchable) rather than `inbox`. Detail #6: it carries
-	// a parent link and the originating channel for result delivery.
+	// A delegated task on the caller's OWN board is ready to be picked up by
+	// the executor: it lands in `next` (triaged & dispatchable) rather than
+	// `inbox`. Detail #6: it carries a parent link and the originating channel
+	// for result delivery.
+	//
+	// A FOREIGN delivery is the FR-048 case: the task lands on the TARGET
+	// workspace's board as not-started work (`inbox`), with NO run, dispatch,
+	// claim, activated goal, armed trigger or session. The receiving team
+	// chooses local pickup under its own policy — the creator is not the
+	// starter, parent or recipient (FR-048/BDD-08.5).
+	landingStatus := task.StatusNext
+	if foreign {
+		landingStatus = task.StatusInbox
+	}
+	// Owner attribution (DEL-23 "preserve ... owner"): the retired sysagent
+	// create_task_in_workspace stamped Task.Owner from the target workspace's
+	// owner, falling back to the session owner. Task.Owner is server-set,
+	// read-only attribution surfaced on the wire (never an authorization
+	// predicate — that reads CreatedByAgentID/CreatedByAgent), so this is
+	// best-effort: an unreadable workspace record leaves it empty rather than
+	// failing an otherwise valid create.
+	owner := ""
+	if tc.t.home != "" {
+		if st, sErr := workspace.ReadState(tc.t.home, wsID); sErr == nil {
+			owner = st.Workspace.Owner
+		}
+	}
+	if owner == "" {
+		owner = strings.TrimSpace(ToolSessionOwner(tc.ctx))
+	}
 	tc.entity = &task.Task{
 		Title:           tc.title,
 		Prompt:          tc.prompt,
@@ -1169,12 +1247,13 @@ func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 		OriginCallID:    strings.TrimSpace(ToolCallID(tc.ctx)),
 		Action:          task.ActionLLM,
 		AgentID:         tc.agentID,
+		Owner:           owner,
 		CreatedBy:       tc.callerID,
 		Priority:        tc.priority,
 		Due:             tc.due,
 		ParentTaskID:    parentTaskID,
 		WorkspaceID:     wsID,
-		Status:          task.StatusNext,
+		Status:          landingStatus,
 		DelegationDepth: tc.childDepth,
 		Criteria:        tc.criteria,
 	}
@@ -1273,6 +1352,17 @@ func (tc *taskCreateToolExecute) persistAndRespond() *ToolResult {
 		tc.t.onCreate(tc.entity)
 	}
 
+	// C-TASK-TOOLS "Foreign create result": the created/not-started identity
+	// pair (task_id, status=inbox, resolved workspace_id/agent_id) plus
+	// guidance — no run_id/session_id/started claim, because a foreign
+	// delivery starts nothing (FR-048). The own-workspace path keeps its
+	// historical two-field envelope verbatim.
+	if tc.foreign {
+		return NewToolResult(fmt.Sprintf(
+			`{"task_id":%q,"status":%q,"workspace_id":%q,"agent_id":%q,`+
+				`"note":"delivered as not-started work on the target workspace board; its team picks it up locally"}`,
+			tc.entity.ID, tc.entity.Status, tc.entity.WorkspaceID, tc.entity.AgentID))
+	}
 	return NewToolResult(fmt.Sprintf(`{"task_id":%q,"status":%q}`, tc.entity.ID, tc.entity.Status))
 }
 
@@ -1443,6 +1533,15 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "ID of the agent to reassign the task to",
 			},
+			"workspace_id": map[string]any{
+				"type": "string",
+				"description": "Workspace the task is being acted on in (C-TASK-TOOLS/FR-046). Optional: " +
+					"omit to act on a task in your own current workspace. When supplied it must be the " +
+					"task's actual workspace — a task's workspace is immutable here (mirroring the REST " +
+					"PATCH surface), so a mismatched, empty or unknown id is refused rather than acted on. " +
+					"A task living in a workspace other than your current one cannot be reassigned for " +
+					"execution from here (FR-048).",
+			},
 			"blocked_by": map[string]any{
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
@@ -1607,6 +1706,23 @@ func (tu *taskUpdateToolExecute) validateAndLoad() (*ToolResult, bool) {
 		return ErrorResult("you can only update tasks you own or are assigned"), true
 	}
 
+	// C-TASK-TOOLS/FR-046: the optional workspace_id on update_task is a SCOPE
+	// ASSERTION, not a move — a task's workspace is immutable through this
+	// tool, exactly as it is through the REST PATCH surface. When the caller
+	// names one it must be the task's ACTUAL workspace; a mismatched, empty or
+	// non-string id is refused rather than acted on, so a caller can never
+	// mutate a task while believing it belongs to a different board.
+	if raw, present := tu.args["workspace_id"]; present && raw != nil {
+		explicit, ok := raw.(string)
+		if !ok || strings.TrimSpace(explicit) == "" {
+			return ErrorResult("workspace_id must be a non-empty workspace id"), true
+		}
+		if strings.TrimSpace(explicit) != tu.existing.WorkspaceID {
+			return ErrorResult(fmt.Sprintf(
+				"task %q is not in workspace %q", tu.taskID, strings.TrimSpace(explicit))), true
+		}
+	}
+
 	// Operator decision, 2026-09-12: the judged contract freezes for the
 	// duration of a run — the SAME rule the REST PATCH handler enforces, with
 	// the SAME 409-Conflict semantics and the same wording (see
@@ -1719,6 +1835,18 @@ func (tu *taskUpdateToolExecute) buildPatchFields() (*ToolResult, bool) {
 	// policy gate task_create uses (FR-6.2). A no-op reassign (same agent) needs
 	// no gate. Mirrors TaskCreateTool.Execute's denial shape.
 	if agentID, ok := tu.args["agent_id"].(string); ok && agentID != "" && agentID != tu.existing.AgentID {
+		// FR-048/BDD-08.6: a task living in ANOTHER workspace is not this
+		// caller's to assign, re-assign, or otherwise arm for execution — that
+		// is the receiver-local pickup the target workspace's own team owns.
+		// Refused BEFORE any write. A caller whose turn carries no workspace
+		// (the pre-merge behaviour) is unaffected.
+		if ownWS := strings.TrimSpace(ToolWorkspaceID(tu.ctx)); ownWS != "" &&
+			tu.existing.WorkspaceID != "" && tu.existing.WorkspaceID != ownWS {
+			return ErrorResult(fmt.Sprintf(
+				"task %q is in workspace %q, not your current workspace %q — a task delivered to another "+
+					"workspace cannot be assigned for execution from here; its team picks it up locally (FR-048)",
+				tu.taskID, tu.existing.WorkspaceID, ownWS)), true
+		}
 		// FAIL CLOSED, not open, when no checker is wired — same rationale as
 		// TaskCreateTool.Execute above: an unwired deny-checker is a
 		// configuration error, never a permission grant. Do NOT "simplify"

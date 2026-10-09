@@ -485,11 +485,12 @@ func buildDelegationDenyCheckerForDelegate(
 }
 
 // buildDelegationDenyCheckerForTaskReassignment is the wiring-site constructor for the
-// task tools: create_task / update_task and the cross-workspace
-// create_task_in_workspace / update_task_in_workspace (via NewSysagentDelegationDeny).
-// It bakes in selfAssignmentExempt=true: reassigning a task to the agent that already
-// owns it is NOT delegation (no new instance is spawned), so a self-target is allowed
-// without consulting the graph. Non-self targets are still fully graph-gated.
+// task tools: create_task / update_task. It bakes in selfAssignmentExempt=true:
+// reassigning a task to the agent that already owns it is NOT delegation (no new
+// instance is spawned), so a self-target is allowed without consulting the graph.
+// Non-self targets are still fully graph-gated. (The cross-workspace
+// create_task_in_workspace / update_task_in_workspace path that once shared this
+// constructor was retired by DEL-23.)
 //
 // agentExists: see buildDelegationDenyCheckerForDelegate's doc comment — same
 // optional-trailing-arg, message-only distinction, same "pass a real checker
@@ -571,60 +572,9 @@ func evalUntargetedDelegation(
 	}
 }
 
-// NewSysagentDelegationDeny returns a delegation-deny resolver suitable for the
-// systools.Deps.DelegationDeny hook. The sysagent task tools are registered ONCE
-// on a central registry (not per-agent), so they cannot bind a per-agent checker
-// at construction the way the plain task tools do in NewAgentLoop. Instead this
-// resolver builds the per-workspace, graph-authoritative task-mode delegation
-// gate dynamically at Execute time and evaluates the requested target.
-//
-// This closes the §4 behavioral-parity gap: create_task_in_workspace /
-// update_task_in_workspace must enforce the SAME delegation policy the plain
-// create_task / update_task tools enforce. The cross-workspace surface is the
-// PRIVILEGED Orchestrator path, so it must be at least as restrictive — never
-// less — than the same-workspace path.
-//
-// The graph is the authority (workspaces/<id>.json → Delegation[] edges); the
-// per-agent config is no longer consulted. A graph load failure or a missing
-// workspace DENIES (fail-closed) inside buildDelegationDenyChecker.
-func (al *AgentLoop) NewSysagentDelegationDeny() func(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial {
-	return func(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial {
-		// Self-assignment / untargeted is a no-op reassignment, not delegation, and
-		// is allowed before touching the graph. This mirrors the exempt=true
-		// self-target short-circuit inside buildDelegationDenyCheckerForTaskReassignment
-		// (used below) and additionally covers the empty-target case (which the gate
-		// would otherwise route through evalUntargetedDelegation). The cross-workspace
-		// tools always supply a concrete target on a real reassignment.
-		if targetAgentID == "" || targetAgentID == callerAgentID {
-			return nil
-		}
-		var performance config.PerformanceConfig
-		if cfg := al.GetConfig(); cfg != nil {
-			performance = cfg.Performance
-		}
-		// ForTaskReassignment (exempt=true): these are the cross-workspace TASK tools
-		// (create_task_in_workspace / update_task_in_workspace) — a self-target is a
-		// no-op task reassignment, not delegation (also short-circuited above).
-		gate := buildDelegationDenyCheckerForTaskReassignment(
-			callerAgentID, performance, config.DelegationModeTask, agentExistsChecker(al.GetRegistry()),
-		)
-		return gate(ctx, targetAgentID)
-	}
-}
-
-// NewSysagentBashPolicyResolver builds the systools.Deps.ResolveBashPolicy
-// closure (ADR-049 D2 rule 5, FR-017/052, review r1 major M5): resolves an
-// assignee agent's effective "bash" tool policy from the SAME live registry
-// judge.go's runMachineCheck and the plain create_task tool's own
-// bashPolicyChecker use (tools.EffectiveToolPolicy, ScopeCore) — parity
-// between the same-workspace and cross-workspace (create_task_in_workspace)
-// task-creation surfaces.
-func (al *AgentLoop) NewSysagentBashPolicyResolver() func(assigneeAgentID string) (policy string, ok bool) {
-	return func(assigneeAgentID string) (policy string, ok bool) {
-		agentInst, found := al.GetRegistry().GetAgent(assigneeAgentID)
-		if !found || agentInst == nil {
-			return "", false
-		}
-		return tools.EffectiveToolPolicy(agentInst.LoadToolPolicy(), tools.ScopeCore, agentInst.AgentType, "bash"), true
-	}
-}
+// NewSysagentDelegationDeny and NewSysagentBashPolicyResolver were DELETED with
+// the four *_in_workspace task tools (DEL-23): each existed ONLY to feed
+// systools.Deps.DelegationDeny / Deps.ResolveBashPolicy for those tools. The
+// canonical task family (pkg/tools create_task/update_task/list_tasks) enforces
+// the same delegation and bash-policy gates at construction (loop_wire.go), so
+// there is no sysagent-side producer left to build.
