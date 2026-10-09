@@ -201,7 +201,7 @@ func WatchStreamStall(ctx context.Context, closeBody func(), silentFor time.Dura
 // connection the server has since GOAWAY'd/closed. Because tokens have already
 // streamed, the agent loop can't safely inline-retry (would duplicate text), so a
 // single reset aborts the whole turn. The fix is to make h2 connection reuse
-// robust: enable health-check PINGs (ReadIdleTimeout) so a dead connection is
+// robust: enable health-check PINGs (SendPingTimeout) so a dead connection is
 // detected and discarded instead of reused, and shorten the idle window so stale
 // connections age out quickly.
 func NewHTTPClient(proxy string) (*http.Client, error) {

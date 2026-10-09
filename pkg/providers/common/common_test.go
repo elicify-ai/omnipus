@@ -61,13 +61,22 @@ func TestNewHTTPClient_NoProxy(t *testing.T) {
 		t.Fatalf("expected *http.Transport, got %T", client.Transport)
 	}
 	// HTTP/2 is enabled via transport.Protocols — the modern replacement for the
-	// now-deprecated http2.ConfigureTransports — so Protocols must include HTTP2.
+	// now-deprecated http2.ConfigureTransports — and HTTP/1.1 must stay enabled
+	// alongside it, so that providers reached through an HTTP/1.1-only proxy keep
+	// working.
 	if tr.Protocols == nil || !tr.Protocols.HTTP2() {
 		t.Fatal("expected HTTP/2 enabled via transport.Protocols")
 	}
-	// The ping health-check config must be carried on the transport.
+	if tr.Protocols == nil || !tr.Protocols.HTTP1() {
+		t.Fatal("expected HTTP/1.1 to stay enabled via transport.Protocols")
+	}
+	// The ping health-check config must be carried on the transport: the idle
+	// window (SendPingTimeout) and the PONG deadline (PingTimeout).
 	if tr.HTTP2 == nil || tr.HTTP2.SendPingTimeout != 15*time.Second {
 		t.Fatalf("expected HTTP/2 SendPingTimeout=15s, got %+v", tr.HTTP2)
+	}
+	if tr.HTTP2 == nil || tr.HTTP2.PingTimeout != 5*time.Second {
+		t.Fatalf("expected HTTP/2 PingTimeout=5s, got %+v", tr.HTTP2)
 	}
 	if tr.IdleConnTimeout != 30*time.Second {
 		t.Errorf("expected IdleConnTimeout=30s, got %v", tr.IdleConnTimeout)

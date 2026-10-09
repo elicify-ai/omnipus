@@ -1491,9 +1491,19 @@ jobs:
           go-package: ./...
           # The action runs its OWN setup-go with go-version-input:stable and
           # GOTOOLCHAIN=local, so it ignores both the job's Setup Go step and
-          # go.mod's toolchain. Pin it to the patched stdlib (go1.26.9 clears
-          # the 2026-10-08 batch GO-2026-6603..6617). Keep this in sync with
-          # the `go` directive in go.mod.
+          # go.mod's toolchain. Two bumps clear the 2026-10-08 advisory batch and
+          # BOTH are required: go1.26.9 clears the Go-stdlib advisories — GO-2026-
+          # 6604 (os), 6605/6609/6613 (net/http), 6607 (crypto/tls), 6608
+          # (mime/multipart) — while the golang.org/x/net v0.60.0 bump in go.mod
+          # clears GO-2026-6603, 6610, 6611, 6612 and 6617, each of which carries
+          # an x/net range as well as a stdlib one.
+          #
+          # MAINTENANCE HAZARD: this is the ONLY literal Go version in this
+          # workflow — every other Go job reads `go-version-file: go.mod`. A
+          # future stdlib fix that bumps only go.mod would leave this scan
+          # running against an older stdlib than the release ships (a false green
+          # on a security gate). This literal is the one place to keep in sync
+          # with the `go` directive in go.mod.
           go-version-input: '1.26.9'
           # The job's own "Setup Go" step above already restored the Go module
           # cache into $GOMODCACHE. The action bundles its OWN setup-go, which
