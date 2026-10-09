@@ -54,7 +54,7 @@ func NewProvider(apiKey, apiBase string) *Provider {
 func NewProviderWithTimeout(apiKey, apiBase string, timeoutSeconds int) *Provider {
 	baseURL := normalizeBaseURL(apiBase)
 
-	// common.NewHTTPClient configures HTTP/2 health-check pings (ReadIdleTimeout)
+	// common.NewHTTPClient configures HTTP/2 health-check pings (SendPingTimeout)
 	// and a shortened idle-connection window so a pooled connection the server
 	// has since GOAWAY'd/closed is detected and discarded instead of reused
 	// mid-stream (see common.NewHTTPClient doc comment). Building the client by

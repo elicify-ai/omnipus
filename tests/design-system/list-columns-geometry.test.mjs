@@ -1,15 +1,10 @@
-// PANEL-LIST-BROWSER-COLUMNS-2222 — frozen61f TC2 coverage, not a claimed bug fix.
-// Oracles fixed before execution: side-panel-shell-spec.md §10 Wave 3 and §13
-// SP-33/SP-35 require container-width responsiveness, both Tags/Updated columns
-// behind the real overflow control, and no loss of the other columns' function.
-// The dispatch fixes the delivered 648px boundary: "below" means <648, not <=.
-// 720px is the normal dock maximum; 320px is the supported dock floor (SP-17).
-// Selective acceptance reconciliation, 2026-10-06: foreground omnipus-7a,
-// uds:/tmp/cc-socks/10996.sock, reports the question-tool founder answer exactly:
-// "B. Table scrolls sideways". Only deliberate narrow reveal may use horizontal
-// scrolling INSIDE the panel; every header must remain reachable/tappable and
-// Title must never collapse to zero. Default auto-hidden/wide fit stays intact.
-// This recorded scope direction is not a landing yes or an implementation oracle.
+// PANEL-LIST-BROWSER-COLUMNS-2222 — real compiled List geometry and controls.
+// Founder T6/T11 (2026-10-07) supersede hidden Tags/Updated and the reveal toggle:
+// every column remains in the native table/accessibility tree at every width.
+// Scrolling happens INSIDE the table viewport, with aligned header/body cells.
+// Keep the original 649/648/647px SAME-row sweep and 320px dock-floor coverage,
+// plus native sorting, Tags filtering, exact-once Title activation and data
+// conservation. A missing compiled overflow-auto rule must fail the same oracle.
 // Actual ListView/TaskRow, React state, Date, Radix menus and compiled app Tailwind
 // CSS stay real. Only synthetic input props and process edges are controlled.
 // No live app, account, API/provider, persistent browser or E2E setup.
@@ -33,11 +28,8 @@ const FILE = resolve('tests/design-system/list-columns-geometry.test.mjs')
 const RECEIPTS = resolve(process.env.LIST_COLUMNS_GEOMETRY_RECEIPTS ?? 'test-results/list-columns-geometry')
 const FAULT = process.env.LIST_COLUMNS_GEOMETRY_FAULT ?? ''
 const VIEWPORT = { width: 1280, height: 900 }
-const AUTO_LABEL = 'Show or hide Tags and Updated columns'
-const SHOWN_LABEL = 'Hide Tags and Updated columns'
-const HIDDEN_LABEL = 'Show Tags and Updated columns'
 const PRIMARY_TITLE = 'Alpha synthetic task'
-const PRIMARY_ROW = 'tbody tr:has(button[title="Alpha synthetic task"])'
+const PRIMARY_ROW = 'tbody tr:has(button[data-task-open][aria-label="Alpha synthetic task, status Inbox"])'
 const TASKS = [
   { id: 'fixture-alpha', title: PRIMARY_TITLE, priority: 1, status: 'inbox',
     agent_id: 'fixture-mira', tags: ['fixture-tag', 'synthetic-only'],
@@ -56,8 +48,8 @@ const AGENTS = [
 ]
 // Native table positions, identified by the public header labels, not classes.
 const GOVERNED = [
-  { name: 'Tags', column: 4, headerName: 'Tags column — filter' },
-  { name: 'Updated', column: 6, headerName: 'Updated column — sort' },
+  { name: 'Tags', column: 6, headerName: 'Tags column — filter' },
+  { name: 'Updated', column: 8, headerName: 'Updated column — sort' },
 ]
 const CORE = [
   { name: 'Priority', column: 1, headerName: 'Pri column — sort and filter', value: 'P1',
@@ -66,7 +58,7 @@ const CORE = [
     sort: 'ascending', order: [PRIMARY_TITLE, 'Zulu synthetic task'] },
   { name: 'Status', column: 3, headerName: 'Status column — sort and filter', value: 'Inbox',
     sort: 'descending', order: ['Zulu synthetic task', PRIMARY_TITLE] },
-  { name: 'Agent', column: 5, headerName: 'Agent column — sort and filter', value: 'Mira',
+  { name: 'Agent', column: 7, headerName: 'Agent column — sort and filter', value: 'Mira',
     sort: 'ascending', order: [PRIMARY_TITLE, 'Zulu synthetic task'] },
 ]
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
@@ -109,23 +101,18 @@ function fixtureModule() {
   `
 }
 
-function removeNarrowHideRule(css) {
+function removeInternalScrollRule(css) {
   const sheet = postcss.parse(css)
   const removed = []
-  // Exact selector: leave the narrow-probe :block rule and every other utility
-  // untouched. Parse the compiler output rather than guessing brace positions.
+  // Exact compiled utility: no fabricated row/cell styles or viewport changes.
   sheet.walkRules((rule) => {
-    if (rule.selector !== String.raw`.\@max-\[648px\]\:hidden`) return
-    assert.equal(rule.parent.type, 'atrule', 'The responsive rule must live inside its compiled query')
-    assert.equal(rule.parent.name, 'container', 'The responsive boundary must be a container query, not a viewport query')
-    assert.match(rule.parent.params, /^not\s*\(min-width:\s*648px\)$/,
-      'The fault boundary must target only the compiled below-648px container rule')
-    assert.match(rule.toString(), /display:\s*none/,
-      'The removed rule must actually hide columns')
-    removed.push({ query: rule.parent.params, rule: rule.toString() })
+    if (rule.selector !== '.overflow-auto') return
+    assert.match(rule.toString(), /overflow:\s*auto/,
+      'The removed rule must own the native internal table scrolling')
+    removed.push({ rule: rule.toString() })
     rule.remove()
   })
-  assert.equal(removed.length, 1, 'Exactly one narrowly targeted compiled responsive rule must be removed')
+  assert.equal(removed.length, 1, 'Exactly one narrowly targeted compiled scrolling rule must be removed')
   return { css: sheet.toString(), removed }
 }
 
@@ -150,7 +137,7 @@ async function compileFixture() {
   assert.equal(styles.length, 1, 'The actual app Tailwind pipeline must produce its stylesheet')
   stylesheetPath = '/' + styles[0].fileName
   originalCSS = String(styles[0].source)
-  const fault = removeNarrowHideRule(originalCSS)
+  const fault = removeInternalScrollRule(originalCSS)
   assets = new Map(outputs.map((item) => [
     '/' + item.fileName, Buffer.from(item.type === 'chunk' ? item.code : item.source),
   ]))
@@ -183,7 +170,7 @@ async function compileFixture() {
 }
 
 before(async () => {
-  assert.ok(FAULT === '' || FAULT === 'remove-narrow-hidden', 'Unknown CSS fault mode is a setup error, never a skip')
+  assert.ok(FAULT === '' || FAULT === 'remove-internal-scroll', 'Unknown CSS fault mode is a setup error, never a skip')
   sourceContext = {
     unit: 'PANEL-LIST-BROWSER-COLUMNS-2222', fault: FAULT || 'none',
     sourceSHA: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
@@ -269,7 +256,7 @@ async function withPanel(name, run) {
     await resizePanel(page, 720)
     await page.evaluate((selector) => {
       globalThis.__listGeometryOriginalRow = globalThis.document.querySelector(selector)
-      globalThis.__listGeometryInitialUpdated = globalThis.__listGeometryOriginalRow.cells[5].textContent.trim()
+      globalThis.__listGeometryInitialUpdated = globalThis.__listGeometryOriginalRow.cells[7].textContent.trim()
     }, PRIMARY_ROW)
     await run({ page, session, observations })
   } catch (error) {
@@ -353,20 +340,34 @@ async function assertColumns(page, session, visible, label, observations) {
   }
   const data = await page.locator(PRIMARY_ROW).evaluate((row) => ({
     sameRow: row === globalThis.__listGeometryOriginalRow,
-    tags: [...row.cells[3].querySelectorAll('span[title]')].map((tag) => tag.textContent),
-    updated: row.cells[5].textContent.trim(),
+    tags: [...row.cells[5].querySelectorAll('[data-task-tag]')].map((tag) => tag.firstElementChild.textContent),
+    updated: row.cells[7].textContent.trim(),
     initialUpdated: globalThis.__listGeometryInitialUpdated,
-    title: row.querySelector('button[title]').getAttribute('title'),
+    title: row.querySelector('button[data-task-open]').textContent,
     cellCount: row.cells.length,
   }))
   assert.deepEqual({ sameRow: data.sameRow, tags: data.tags, title: data.title, cellCount: data.cellCount },
-    { sameRow: true, tags: TASKS[0].tags, title: PRIMARY_TITLE, cellCount: 7 },
-    `${label}: the SAME synthetic task row retains its DOM data; hidden data is not claimed accessible`)
+    { sameRow: true, tags: TASKS[0].tags, title: PRIMARY_TITLE, cellCount: 8 },
+    `${label}: the SAME synthetic task row retains its accessible DOM data`)
   // Wall-clock-relative wording is intentionally not frozen. The valid
   // synthetic date must render a nonempty relative value, conserved by toggles.
   assert.match(data.updated, /^(?:just now|\d+[mhd] ago)$/,
     `${label}: Updated must retain a nonempty relative-date value, not a missing-date placeholder`)
-  assert.equal(data.updated, data.initialUpdated, `${label}: hiding/revealing must conserve the Updated cell's data`)
+  assert.equal(data.updated, data.initialUpdated, `${label}: scrolling/resizing must conserve the Updated cell's data`)
+  const alignment = await page.locator(PRIMARY_ROW).evaluate((row) => {
+    const headers = row.closest('table').querySelectorAll('thead th')
+    return [...row.cells].map((cell, index) => ({
+      headerLeft: headers[index].getBoundingClientRect().left,
+      cellLeft: cell.getBoundingClientRect().left,
+      headerWidth: headers[index].getBoundingClientRect().width,
+      cellWidth: cell.getBoundingClientRect().width,
+    }))
+  })
+  assert.equal(alignment.length, 8, `${label}: every column has a matching header and cell`)
+  for (const pair of alignment) {
+    assert.ok(Math.abs(pair.headerLeft - pair.cellLeft) <= 1, `${label}: header and body left edges align`)
+    assert.ok(Math.abs(pair.headerWidth - pair.cellWidth) <= 1, `${label}: header and body widths align`)
+  }
 }
 
 async function measureControl(locator) {
@@ -470,7 +471,8 @@ async function proveCoreUsable(page, session, label, observations, revealedNarro
   for (const column of CORE) {
     const selector = `${PRIMARY_ROW} td:nth-child(${column.column})`
     await expect(page.locator(selector)).toHaveCSS('display', 'table-cell')
-    await expect(page.locator(selector)).toHaveText(column.value)
+    if (column.name === 'Status') await expect(page.locator(selector)).toHaveAccessibleName(column.value) // T18 dot is decorative/aria-hidden.
+    else await expect(page.locator(selector)).toHaveText(column.value)
     assert.equal((await accessibleNode(session, selector)).ignored, false, `${label}: ${column.name} data remains accessible`)
     const trigger = page.getByRole('button', { name: column.headerName, exact: true })
     if (revealedNarrow) await scrollControlWithinPanel(page, trigger, `${label}: ${column.name} header`, observations)
@@ -479,7 +481,7 @@ async function proveCoreUsable(page, session, label, observations, revealedNarro
     await expect(menuItem).toBeVisible()
     await menuItem.click()
     await expect(page.locator(`thead th:nth-child(${column.column})`)).toHaveAttribute('aria-sort', column.sort)
-    assert.deepEqual(await page.locator('tbody tr button[title]').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('title'))),
+    assert.deepEqual(await page.locator('tbody tr button[data-task-open]').evaluateAll((buttons) => buttons.map((button) => button.textContent)),
       column.order, `${label}: ${column.name} sorting must operate on the actual synthetic task rows`)
   }
   const title = page.getByRole('button', { name: `${PRIMARY_TITLE}, status Inbox`, exact: true })
@@ -498,102 +500,89 @@ async function proveRevealedHeadersUsable(page, label, observations) {
   const tag = page.getByRole('menuitemcheckbox', { name: TASKS[0].tags[0], exact: true })
   await tag.click()
   await expect(tag).toHaveAttribute('aria-checked', 'true')
-  assert.deepEqual(await page.locator('tbody tr button[title]').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('title'))),
+  assert.deepEqual(await page.locator('tbody tr button[data-task-open]').evaluateAll((buttons) => buttons.map((button) => button.textContent)),
     [PRIMARY_TITLE], `${label}: revealed Tags filter must select the actual matching task, not merely open a menu`)
   await page.getByRole('menuitem', { name: 'Clear filter', exact: true }).click()
   await expect(page.locator('tbody tr')).toHaveCount(2)
-  assert.deepEqual(await page.locator('tbody tr button[title]').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('title'))),
+  assert.deepEqual(await page.locator('tbody tr button[data-task-open]').evaluateAll((buttons) => buttons.map((button) => button.textContent)),
     [PRIMARY_TITLE, 'Zulu synthetic task'], `${label}: clearing the Tags filter restores both actual tasks in the existing Agent order`)
 
   const updated = page.getByRole('button', { name: GOVERNED[1].headerName, exact: true })
   await scrollControlWithinPanel(page, updated, `${label}: Updated header`, observations)
   await realClick(page, updated, `${label}: Updated header`, observations)
   await page.getByRole('menuitem', { name: 'Sort ascending', exact: true }).click()
-  await expect(page.locator('thead th:nth-child(6)')).toHaveAttribute('aria-sort', 'ascending')
-  assert.deepEqual(await page.locator('tbody tr button[title]').evaluateAll((buttons) => buttons.map((button) => button.getAttribute('title'))),
+  await expect(page.locator('thead th:nth-child(8)')).toHaveAttribute('aria-sort', 'ascending')
+  assert.deepEqual(await page.locator('tbody tr button[data-task-open]').evaluateAll((buttons) => buttons.map((button) => button.textContent)),
     ['Zulu synthetic task', PRIMARY_TITLE], `${label}: revealed Updated sorting orders the actual June 19/June 20 fixture dates`)
 }
 
-async function toggleRoundTrip(page, session, width, visibleAuto, observations) {
-  const label = `${width}px auto`
-  await assertColumns(page, session, visibleAuto, label, observations)
-  await proveCoreUsable(page, session, label, observations)
-  const toggle = page.getByRole('button', { name: /Tags and Updated columns/, exact: false })
-  await expect(toggle).toHaveAttribute('aria-label', AUTO_LABEL)
-  await realClick(page, toggle, `${width}px first three-dot click`, observations)
-  await expect(toggle).toHaveAttribute('aria-label', visibleAuto ? HIDDEN_LABEL : SHOWN_LABEL)
-  await assertColumns(page, session, !visibleAuto, `${width}px first click`, observations)
-  const revealedNarrow = !visibleAuto
-  await proveCoreUsable(page, session, `${width}px first click`, observations, revealedNarrow)
-  if (revealedNarrow) {
-    await proveRevealedHeadersUsable(page, `${width}px first click`, observations)
-    await scrollControlWithinPanel(page, toggle, `${width}px second three-dot click`, observations)
-  }
-  await realClick(page, toggle, `${width}px second three-dot click`, observations)
-  await expect(toggle).toHaveAttribute('aria-label', AUTO_LABEL)
-  await assertColumns(page, session, visibleAuto, `${width}px restored auto`, observations)
-  await proveCoreUsable(page, session, `${width}px restored auto`, observations)
+async function exerciseColumns(page, session, width, observations) {
+  const label = `${width}px all columns`
+  await assertColumns(page, session, true, label, observations)
+  await expect(page.getByRole('button', { name: /Tags and Updated columns/ })).toHaveCount(0)
+  await proveCoreUsable(page, session, label, observations, true)
+  await proveRevealedHeadersUsable(page, label, observations)
+  await assertColumns(page, session, true, `${width}px after native scroll/actions`, observations)
 }
 
-test('wide browser positive control: 720px List exposes both headers/cells and all core actions', { concurrency: false }, async () => {
+test('wide browser positive control: 720px List exposes every header/cell and all core actions', { concurrency: false }, async () => {
   await withPanel('wide-positive-control', async ({ page, session, observations }) => {
-    await toggleRoundTrip(page, session, 720, true, observations)
+    await exerciseColumns(page, session, 720, observations)
   })
 })
 
-test('constant 1280px window: SAME task row crosses 649/648/647px with compiled CSS and real toggle round-trips', { concurrency: false }, async () => {
+test('constant 1280px window: SAME task row keeps all columns across 649/648/647px with compiled CSS and native scroll', { concurrency: false }, async () => {
   await withPanel('boundary-same-row', async ({ page, session, observations }) => {
-    for (const [width, visible] of [[649, true], [648, true], [647, false]]) {
+    for (const width of [649, 648, 647]) {
       await resizePanel(page, width)
-      await toggleRoundTrip(page, session, width, visible, observations)
-      await screenshot(page, `boundary-${width}-restored-auto`)
+      await exerciseColumns(page, session, width, observations)
+      await screenshot(page, `boundary-${width}-all-columns`)
     }
     await resizePanel(page, 720)
     await assertColumns(page, session, true, 'narrow-to-wide recovery', observations)
-    await proveCoreUsable(page, session, 'narrow-to-wide recovery', observations)
+    await proveCoreUsable(page, session, 'narrow-to-wide recovery', observations, true)
   })
 })
 
-test('320px dock floor: both headers/cells hide, reveal, reset without losing core-column usability or data', { concurrency: false }, async () => {
+test('320px dock floor: all headers/cells remain reachable by table-only scroll without losing core usability or data', { concurrency: false }, async () => {
   await withPanel('dock-floor-320', async ({ page, session, observations }) => {
     await resizePanel(page, 320)
-    await toggleRoundTrip(page, session, 320, false, observations)
+    await exerciseColumns(page, session, 320, observations)
   })
 })
 
-test('instrument: removing only the compiled narrow-hide rule kills the SAME oracle and restored CSS recovers', { concurrency: false }, async () => {
+test('instrument: removing only the compiled internal-scroll rule kills the SAME oracle and restored CSS recovers', { concurrency: false }, async () => {
   await withPanel('instrument-css-restored', async ({ page, session, observations }) => {
-    await resizePanel(page, 647)
-    await assertColumns(page, session, false, 'instrument baseline', observations)
-    await proveCoreUsable(page, session, 'instrument baseline controls', observations)
+    await resizePanel(page, 320)
+    await assertColumns(page, session, true, 'instrument baseline', observations)
+    await proveCoreUsable(page, session, 'instrument baseline controls', observations, true)
     const pristine = Buffer.from(assets.get(stylesheetPath))
-    const fault = removeNarrowHideRule(originalCSS)
+    const fault = removeInternalScrollRule(originalCSS)
     let rejection
     try {
       assets.set(stylesheetPath, Buffer.from(fault.css))
       await page.reload()
       await expect(page.locator('tbody tr')).toHaveCount(2)
       await page.evaluate(() => globalThis.document.fonts.ready)
-      await resizePanel(page, 647)
+      await resizePanel(page, 320)
       await page.evaluate((selector) => {
         globalThis.__listGeometryOriginalRow = globalThis.document.querySelector(selector)
-        globalThis.__listGeometryInitialUpdated = globalThis.__listGeometryOriginalRow.cells[5].textContent.trim()
+        globalThis.__listGeometryInitialUpdated = globalThis.__listGeometryOriginalRow.cells[7].textContent.trim()
       }, PRIMARY_ROW)
-      await proveCoreUsable(page, session, 'instrument fault controls', observations)
       const mutant = await measureColumns(page, session)
-      // Establish the deliberate fault affected all four intended nodes, not a
-      // crash, different viewport, absent data, probe stub, or fake rectangle.
-      assert.deepEqual(mutant.map((column) => ({ name: column.name, header: column.header.display, cell: column.cell.display })),
-        [{ name: 'Tags', header: 'table-cell', cell: 'table-cell' },
-          { name: 'Updated', header: 'table-cell', cell: 'table-cell' }],
-        'Fault setup control: the removed compiled rule leaves BOTH columns visibly rendered')
+      // The data/accessibility nodes remain real and present. Only their
+      // native horizontal scroll owner is missing, so no crash can fake RED.
+      assertVisibility(mutant, true, 'instrument fault data still rendered')
+      await assertColumns(page, session, true, 'instrument fault data conserved', observations)
       try {
-        assertVisibility(mutant, false, 'instrument fault')
-        assert.fail('The unchanged narrow visibility oracle must reject the deliberate CSS fault')
+        await scrollControlWithinPanel(page,
+          page.getByRole('button', { name: GOVERNED[1].headerName, exact: true }),
+          'instrument fault: Updated header', observations)
+        assert.fail('The unchanged scroll oracle must reject the deliberate CSS fault')
       } catch (error) {
         assert.equal(error.code, 'ERR_ASSERTION', 'Instrument rejection must be an assertion, not a setup error')
-        assert.match(error.message, /^instrument fault: Tags header must have computed display none, got table-cell/,
-          'The SAME oracle must name the actual responsive-rule fault')
+        assert.match(error.message, /real horizontal scroll owner must exist INSIDE the List panel/,
+          'The SAME oracle must name the actual missing-scroll fault')
         rejection = { name: error.name, code: error.code, message: error.message }
       }
       save('fault-probe', { ...sourceContext, kind: 'in-memory compiler-output instrument probe',
@@ -606,15 +595,15 @@ test('instrument: removing only the compiled narrow-hide rule kills the SAME ora
       await page.reload()
       await expect(page.locator('tbody tr')).toHaveCount(2)
       await page.evaluate(() => globalThis.document.fonts.ready)
-      await resizePanel(page, 647)
+      await resizePanel(page, 320)
       await page.evaluate((selector) => {
         globalThis.__listGeometryOriginalRow = globalThis.document.querySelector(selector)
-        globalThis.__listGeometryInitialUpdated = globalThis.__listGeometryOriginalRow.cells[5].textContent.trim()
+        globalThis.__listGeometryInitialUpdated = globalThis.__listGeometryOriginalRow.cells[7].textContent.trim()
       }, PRIMARY_ROW)
     }
     assert.equal(sha256(assets.get(stylesheetPath)), sha256(pristine), 'Restoration must restore the exact compiled stylesheet bytes')
-    await assertColumns(page, session, false, 'instrument restored CSS', observations)
-    await proveCoreUsable(page, session, 'instrument restored controls', observations)
+    await assertColumns(page, session, true, 'instrument restored CSS', observations)
+    await proveCoreUsable(page, session, 'instrument restored controls', observations, true)
     save('fault-probe-restored', { ...sourceContext, compiledCSSSHA256: sha256(pristine), restored: true, rejection })
   })
 })

@@ -370,9 +370,9 @@ describe('ListView — Agent column resolution', () => {
   it('renders "—" in the Agent cell when a task has no agent', () => {
     renderList(<ListView tasks={[makeTask()]} agents={[]} onTaskClick={() => {}} />)
     const row = screen.getByText('Task').closest('tr')!
-    // Agent is the 5th <td> (index 4): Pri, Title, Status, Tags, Agent, Updated.
+    // T15: Details joins Actions before Tags; Agent is the 7th cell.
     const cells = within(row).getAllByRole('cell')
-    expect(within(cells[4]).getByText('—')).toBeInTheDocument()
+    expect(within(cells[6]).getByText('—')).toBeInTheDocument()
   })
 })
 
@@ -419,6 +419,6 @@ describe('ListView — Tags column render', () => {
     renderList(<ListView tasks={[makeTask()]} agents={[]} onTaskClick={() => {}} />)
     const row = screen.getByText('Task').closest('tr')!
     const cells = within(row).getAllByRole('cell')
-    expect(within(cells[3]).getByText('—')).toBeInTheDocument()
+    expect(within(cells[5]).getByText('—')).toBeInTheDocument()
   })
 })

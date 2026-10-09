@@ -1,6 +1,6 @@
 # Tasks
 
-The Tasks panel inside a workspace is where you turn work into cards you can assign, start, and follow to completion. This page covers the Board and List views and the task detail panel.
+The Tasks panel inside a workspace is where you turn work into cards you can assign, start, and follow to completion. This page covers the Board, List and Graph views and the task detail panel.
 
 ## What it is
 
@@ -10,13 +10,27 @@ Every workspace has a **Tasks** control in its top bar, alongside Calendar, Libr
 - **List** — unscheduled user tasks as a table, with per-column sorting and filtering. Unlike the Board, it can include subtasks as rows.
 - **Graph** — top-level plan members and tasks with dependency relationships, drawn as a dependency map. That view belongs to planning; see [plans](plans.md).
 
-Above the views, the Plans band scopes the screen: click a plan tile to see that plan's tasks (the view also jumps to its graph), or **All tasks** to clear the filter.
+Above the views, the compact **Plans** header and **New Plan** stay visible. The band is open by default when plans exist, and collapsed when there are none. Click **Plans** to fold or unfold it. The tile area has compact space above and below it. **Unhide done plans** is an unchecked checkbox at the bottom-left of that area, below **All tasks**; it appears when completed plans exist. Checking it reveals completed tiles. Click a plan tile to see that plan's tasks (the view also jumps to its graph), or **All tasks** to clear the filter.
 
-On the Board, the **Agent** and **Tags** filters narrow further. The List filters per column instead, like a spreadsheet: Priority, Status and Agent sort and filter; Tags filters only; Title and Updated sort only. The list refreshes itself about every 15 seconds, so an agent's changes appear without a reload.
+The **Agent** and **Tags** filters narrow all three views and combine with the selected plan. They remain applied when you switch views. List also offers per-column sorting and filtering, like a spreadsheet: Priority, Status and Agent sort and filter; Tags filters only; Title and Updated sort only. Tasks refresh about every 15 seconds, so an agent's changes appear without a reload.
 
-The toolbar follows the panel's own width, not the browser window. At narrow widths its groups stack, and the heading/view group and filters can wrap. The selector continues to offer Board, List and Graph.
+The heading and **Board / List / Graph** switch share the first toolbar row. The **Agent** and **Tags** filters sit to the left of **New Task** on one row directly underneath. This two-row layout is the same in a docked panel and full screen; long filter labels shorten rather than adding toolbar rows. With your system's high-contrast colours, the selected view is underlined.
 
-The Board stacks its status groups vertically in a narrow panel. In List, Tags and Updated are hidden by default in a narrow panel. Use the three-dot control in the Actions header to reveal them. When the revealed table needs more room, scroll sideways inside the List panel to reach its columns and controls; the whole page does not scroll sideways, and Title keeps its own space. Scroll to the three-dot control and press it again to return to automatic column visibility for the panel's current width.
+**Board** is the default view. Opening the panel on **Board**, or selecting **Board**, widens it to its maximum docked width. Chat stays visible and never shrinks below its minimum width. Selecting **List** or **Graph** restores the previous width. Full-screen Board uses the window's available space.
+
+Board shows all six equal-width status columns without sideways scrolling. If the panel cannot fit six readable columns, Tasks shows List instead with the quiet note **Board needs more room — showing list**. Board remains your selected view. The view automatically returns to Board when the panel has enough room again; it does not turn into a vertical stack of status groups.
+
+List columns are **Pri, Title, Status, Details, Actions, Tags, Agent, Updated**. The narrow Details column contains each task's info icon. The Run/Stop action sits between Status and Tags. All columns stay present. When they need more room, scroll sideways inside the table to reach them; the header and rows stay aligned. No columns are hidden, and the page itself does not scroll sideways.
+
+Task titles use fixed-height slots: **two lines with ellipsis** on Board cards and Graph nodes, **one line with ellipsis** in List. Narrowing the panel does not make a title slot taller. Normal words stay together; a word or URL longer than a whole line breaks only as a last resort. If the font-loading check fails, titles still use the available fallback font without changing their text. Plan tiles still wrap long titles within their width. The Plans strip and Board status headers use a darker surface than the task area.
+
+Hover over a task's **info icon** for its full title, status, agent, tags, plan and last updated time. Keyboard focus on the icon also opens the details panel. Hovering or focusing the rest of the card does not open it. The panel appears above the scroll areas, never clipped by a column, table or graph. You can move from the icon into the panel to read it or use **Open task**. Moving away, **Escape** or a click outside closes it. On touch, tap the info icon to open it and tap outside to close it. The info action never opens or drags the task. Clicking the card or row elsewhere still opens the task; **Open task** inside the details panel does the same.
+
+All Board cards have the same height, set by the tallest card's content within the two-line title limit. That height updates when tasks change or the panel resizes. The first row holds plain coloured priority text, the info icon and eligible actions; it never holds the title. The title has the full card width in its own two-line slot. A coloured left border shows the task's status, using the same colours as Graph; the full status word is in the info panel, not on the Board card.
+
+The execution row shows the assigned agent, a progress animation while running, and elapsed execution time from the existing `started_at` and `completed_at` timestamps. The running duration updates live; Done and Failed keep their final duration. If timestamps are missing or invalid, the duration and its separator are omitted—there is no guessed time or dash. A task without an agent has no leading separator before its duration. A separate checklist row appears only when the task has todos, for example **6/7**.
+
+Task tags are shown in the info panel and List, not on Board cards or Graph nodes. Pending approval and assignee warning icons remain visible in the first row; the info panel names the pending tool or the warning's fix. Attempt/try/paused state, delegation and last-activity information are also available there, without adding card rows. Run/Stop and other eligible task actions are always visible in Board, List and Graph, without hovering. A task in a plan still has no individual Run/Stop action.
 
 ## When you would use it
 
@@ -99,7 +113,7 @@ A task flows from Inbox toward Done; Blocked hangs off to the side until its dep
 
 ## The task detail panel
 
-Click any card or List row and the detail panel slides in. Every field saves as you edit; there is no Save button. From here you can:
+Click or tap a card or List row and the task detail panel slides in. The separate info icon opens a read-only details panel first; **Open task** inside it opens the task detail panel. Every field in the detail panel saves as you edit; there is no Save button. From here you can:
 
 - Change the status, assign a different agent, or move the task to another plan.
 - Edit the goal, priority, tags, dependencies, due date, and checklist.

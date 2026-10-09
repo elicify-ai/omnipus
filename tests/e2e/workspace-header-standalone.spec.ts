@@ -98,13 +98,16 @@ async function screenshot(page: Page, info: TestInfo, name: string) {
   await info.attach(name, { body: await page.screenshot(), contentType: 'image/png' })
 }
 
-test('F1: 1440x900 at 14px, sidebar closed and Tasks open keeps the full labelled row and browser control', async ({ browser }, info) => {
+test('F1: 1440x900 at 14px, sidebar closed and Tasks List open keeps the full labelled row and browser control', async ({ browser }, info) => {
   const { page, errors } = await realPage(browser)
   await openChat(page)
   const header = page.getByTestId('workspace-top-bar')
   await expect(header.getByRole('button', { name: 'Show sidebar', exact: true })).toBeVisible()
   await page.getByTestId('workspace-tab-board').click()
   await expect(page.getByTestId('tasks-heading')).toBeVisible()
+  // T4 expands Board to the dock ceiling. List restores the normal dock width
+  // required by this labelled-header case; all original header oracles remain.
+  await page.getByRole('radio', { name: 'List', exact: true }).click()
   await expect(page.getByTestId('workspace-header-entries')).toHaveAttribute('data-mode', 'full')
   for (const label of ['Tasks', 'Calendar', 'Library', 'Mail', 'Team']) {
     await expect(header.getByRole('button', { name: label, exact: true })).toBeVisible()
