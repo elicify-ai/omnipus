@@ -26,16 +26,19 @@ import (
 
 func TestSessionList_Execution_QueuedAndRunningOnly(t *testing.T) {
 	cases := []struct {
-		name       string
-		state      session.LifecycleState
-		failed     string
-		wantLife   string
-		wantExec   string
-		execAbsent bool
-		priorBoot  bool
+		name        string
+		state       session.LifecycleState
+		failed      string
+		wantLife    string
+		wantExec    string
+		execAbsent  bool
+		priorBoot   bool
+		currentBoot bool
 	}{
 		{name: "queued emits execution and keeps working", state: session.LifecycleQueued, wantLife: "working", wantExec: "queued"},
 		{name: "running emits execution and keeps working", state: session.LifecycleRunning, wantLife: "working", wantExec: "running"},
+		{name: "current boot queued root emits queued", state: session.LifecycleQueued, currentBoot: true, wantLife: "working", wantExec: "queued"},
+		{name: "current boot running root emits running", state: session.LifecycleRunning, currentBoot: true, wantLife: "working", wantExec: "running"},
 		{name: "prior boot queued root omits execution", state: session.LifecycleQueued, priorBoot: true, wantLife: "interrupted", execAbsent: true},
 		{name: "prior boot running root omits execution", state: session.LifecycleRunning, priorBoot: true, wantLife: "interrupted", execAbsent: true},
 		{name: "needs input omits execution", state: session.LifecycleNeedsInput, wantLife: "waiting_for_answer", execAbsent: true},
@@ -55,7 +58,7 @@ func TestSessionList_Execution_QueuedAndRunningOnly(t *testing.T) {
 				OwnerScopeKind: session.OwnerScopeHuman,
 				FailedReason:   tc.failed,
 			}
-			if tc.state == session.LifecycleQueued || tc.state == session.LifecycleRunning {
+			if tc.priorBoot || tc.currentBoot {
 				epoch := f.boot.Current()
 				if tc.priorBoot {
 					epoch = f.oldEpoch
@@ -92,6 +95,42 @@ func TestSessionList_Execution_QueuedAndRunningOnly(t *testing.T) {
 			assert.Equal(t, tc.wantLife, sessionObj["lifecycle_state"])
 			assertExecution(t, sessionObj, tc.execAbsent, tc.wantExec)
 			assert.Equal(t, before, f.journal(t, id), "list/detail projection must not rewrite lifecycle history")
+
+			if tc.priorBoot {
+				t.Run("readopted current boot execution clears interrupted display", func(t *testing.T) {
+					// Production admission replaces the old execution identity before
+					// running (ordinary_execution_admission.go). Model that persisted
+					// signal at this projection boundary, not a gateway-online guess.
+					adopted := &session.ExecutionIdentity{RunID: "wave1-readopted-" + id, BootSeq: f.boot.Current()}
+					require.NoError(t, ls.Mutate(id, func(rec *session.LifecycleRecord) error {
+						rec.ExecutionID = adopted
+						rec.State = session.LifecycleRunning
+						rec.FailedReason = ""
+						rec.StopNote = nil
+						return nil
+					}))
+					live, err := ls.Load(id)
+					require.NoError(t, err)
+					require.Equal(t, adopted, live.ExecutionID, "same session now owns a fresh current-boot execution")
+					require.Equal(t, session.LifecycleRunning, live.State)
+					afterAdoption := f.journal(t, id)
+
+					page, code := u18DoListSessions(t, api, "")
+					require.Equal(t, 200, code)
+					row := findSessionRow(page, id)
+					require.NotNil(t, row)
+					assert.Equal(t, "working", row["lifecycle_state"], "Interrupted must not linger after actual current-boot adoption")
+					assertExecution(t, row, false, "running")
+
+					detail, code := doGetSession(t, api, id)
+					require.Equal(t, 200, code)
+					sessionObj, ok := detail["session"].(map[string]any)
+					require.True(t, ok)
+					assert.Equal(t, "working", sessionObj["lifecycle_state"], "detail must also clear the old Interrupted display")
+					assertExecution(t, sessionObj, false, "running")
+					assert.Equal(t, afterAdoption, f.journal(t, id), "reading the re-adopted session must not rewrite its execution")
+				})
+			}
 		})
 	}
 }

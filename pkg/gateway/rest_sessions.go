@@ -386,20 +386,25 @@ func computeSessionLifecycle(ls *session.LifecycleStore, id string, currentBootS
 		}
 	}
 	var execution *gen.SessionExecution
-	switch rec.State {
-	case session.LifecycleQueued:
-		v := gen.SessionExecutionQueued
-		execution = &v
-	case session.LifecycleRunning:
-		v := gen.SessionExecutionRunning
-		execution = &v
+	// Preserve queued/running only within the same record's projected Working
+	// display; a prior-boot root may be Interrupted without a recovery write.
+	if state == gen.SessionLifecycleStateWorking {
+		switch rec.State {
+		case session.LifecycleQueued:
+			v := gen.SessionExecutionQueued
+			execution = &v
+		case session.LifecycleRunning:
+			v := gen.SessionExecutionRunning
+			execution = &v
+		}
 	}
 	return &state, note, execution
 }
 
 // attachSessionRuntimeFields sets lifecycle_state, stop_note, execution, and
 // background_command_count from the same reads the list and the detail GET use.
-// execution is omitted unless the lifecycle record is queued or running.
+// execution preserves queued/running only when the same record projects to
+// working in the current boot; every other projected display omits it.
 // background_command_count is omitted when no process table is wired; a wired
 // table sends 0 when this session owns no running background command.
 func attachSessionRuntimeFields(s *gen.Session, ls *session.LifecycleStore, id string, currentBootSeq ...uint64) {
