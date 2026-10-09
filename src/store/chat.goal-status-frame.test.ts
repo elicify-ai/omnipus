@@ -184,55 +184,48 @@ describe('chat handleFrame — goalPills bound (regression fix, bc66345f follow-
   })
 })
 
-// ── Regression coverage: ADR-088 D5 store hygiene — '_default' eviction ────
+// ── Regression coverage: DEL-F41 — no invented '_default' pill ─────────────
 //
-// Root cause #2 of the 2026-09-07 UX trace (ADR-088 §"The live evidence"):
-// the deleted `queued` emission carried no `goal_id`, landed on the
-// `'_default'` key, and was never overwritten once a later KEYED `active`
-// frame arrived under a different key — the stale card rendered forever.
-// The `queued` emission itself is gone (ADR-088 D9), but this is the
-// defensive store-hygiene half of the fix (D5): any keyed (non-empty
-// goal_id) frame arriving for a session evicts a lingering `'_default'`
-// pill for that SAME session, so a stale empty-id entry (however it got
-// there — a pre-upgrade session, a legacy client) can never survive
-// alongside a real, keyed goal.
-describe('chat handleFrame — goal_status: \'_default\' eviction on a keyed frame (ADR-088 D5)', () => {
-  it('evicts a lingering \'_default\' pill once a keyed frame arrives for the same session', () => {
+// FR-039 (DEL-F41) removes the `'_default'` compatibility key outright: a
+// `goal_status` frame carrying no `goal_id` is an UNKNOWN association and
+// files NO pill at all (an unknown goal can never be matched to exact keyed
+// criteria). The ADR-088 D5 eviction dance this replaces existed only to
+// evict a lingering `'_default'` entry once a keyed frame arrived — with the
+// entry never minted, there is nothing to evict. The legacy scalar
+// `goalStatus` is still written verbatim (KEEP: Stop's `isGoalRunning`).
+describe('chat handleFrame — goal_status: no invented \'_default\' pill (DEL-F41)', () => {
+  it('files an empty-goal_id frame under no key at all (unknown is neutral)', () => {
     act(() => {
       useSessionStore.setState({ activeSessionId: SID_A })
-      // A stale, empty-goal_id frame lands first (no `goal_id` field at all).
+      // An empty-goal_id frame (no `goal_id` field at all).
       useChatStore.getState().handleFrame(makeFrame({ state: 'active' }))
     })
-    expect(useChatStore.getState().sessionsById[SID_A]?.goalPills?.['_default']).toBeDefined()
-
-    act(() => {
-      // The real, keyed frame for the actual goal arrives next.
-      useChatStore.getState().handleFrame(makeFrame({ goal_id: 'g1', state: 'active', round: 1 }))
-    })
-    const pills = useChatStore.getState().sessionsById[SID_A]?.goalPills ?? {}
-    expect(pills['_default']).toBeUndefined()
-    expect(pills.g1?.round).toBe(1)
+    const bucket = useChatStore.getState().sessionsById[SID_A]
+    expect(bucket?.goalPills?.['_default']).toBeUndefined()
+    expect(Object.keys(bucket?.goalPills ?? {})).toEqual([])
+    // KEEP (FR-039): the scalar goalStatus is still written for Stop.
+    expect(bucket?.goalStatus).toEqual(makeFrame({ state: 'active' }))
   })
 
-  it('does not evict \'_default\' when the incoming frame is itself unkeyed (no-op case)', () => {
+  it('does not create a \'_default\' pill on repeat unkeyed frames either', () => {
     act(() => {
       useSessionStore.setState({ activeSessionId: SID_A })
       useChatStore.getState().handleFrame(makeFrame({ state: 'active', round: 1 }))
       useChatStore.getState().handleFrame(makeFrame({ state: 'active', round: 2 }))
     })
     const pills = useChatStore.getState().sessionsById[SID_A]?.goalPills ?? {}
-    expect(pills['_default']?.round).toBe(2)
+    expect(pills['_default']).toBeUndefined()
+    expect(Object.keys(pills)).toEqual([])
   })
 
-  it('does not disturb a DIFFERENT session\'s \'_default\' pill', () => {
+  it('a keyed frame files under exactly its own goal_id', () => {
     act(() => {
       useSessionStore.setState({ activeSessionId: SID_A })
-      useChatStore.getState().handleFrame(makeFrame({ session_id: SID_B, state: 'active' }))
-      useChatStore.getState().handleFrame(makeFrame({ session_id: SID_A, goal_id: 'g1', state: 'active' }))
+      useChatStore.getState().handleFrame(makeFrame({ goal_id: 'g1', state: 'active', round: 1 }))
     })
-    expect(useChatStore.getState().sessionsById[SID_B]?.goalPills?.['_default']).toBeDefined()
-    expect(useChatStore.getState().sessionsById[SID_A]?.goalPills?.['_default']).toBeUndefined()
-    expect(useChatStore.getState().sessionsById[SID_A]?.goalPills?.g1).toBeDefined()
+    const pills = useChatStore.getState().sessionsById[SID_A]?.goalPills ?? {}
+    expect(Object.keys(pills)).toEqual(['g1'])
+    expect(pills['_default']).toBeUndefined()
   })
 })
 
@@ -355,15 +348,11 @@ describe('chat handleFrame — goal_status: goalPills field-preserving merge (AD
     expect(pill?.criteria).toHaveLength(2)
   })
 
-  it('the \'_default\' eviction behavior is unchanged by the merge (keyed frame still evicts the stale unkeyed pill)', () => {
+  it('an unkeyed frame invents no \'_default\' pill (DEL-F41), and a keyed frame still stores its record', () => {
     act(() => {
       useSessionStore.setState({ activeSessionId: SID_A })
-      // A stale, unkeyed frame lands first (no `goal_id`).
+      // An unkeyed frame lands first (no `goal_id`) — files nothing.
       useChatStore.getState().handleFrame(makeFrame({ state: 'active' }))
-    })
-    expect(useChatStore.getState().sessionsById[SID_A]?.goalPills?.['_default']).toBeDefined()
-
-    act(() => {
       // The real, keyed record frame arrives next.
       useChatStore
         .getState()

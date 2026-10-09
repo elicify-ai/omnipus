@@ -8,8 +8,9 @@
 //
 // Driven entirely by the chat store's per-goal-id `goalPills` map (populated
 // by `case 'goal_status'` in chat.ts — one entry per GoalStatusFrame.goal_id,
-// falling back to '_default'). The latest goal-scoped JudgeVerdict (for the
-// expanded per-criterion view) is read from the global judgeActivity store.
+// no `'_default'` fallback: DEL-F41 files nothing for an unknown association).
+// The latest goal-scoped JudgeVerdict (for the expanded per-criterion view)
+// is read from the global judgeActivity store.
 //
 // 8 of the 9 wire-enum pill states render with distinct colour/icon grammar
 // per the design: active (gold target) / waiting_on_user (amber) /

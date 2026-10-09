@@ -17,9 +17,10 @@
 // BOTH (a) the call would otherwise render visibly at all (respects the
 // existing toolVisibility.ts hidden-tool contract — a failed background
 // bash/delegate call stays hidden exactly as documented there, this
-// component is never reached for those) and (b) isGoalRecordEmpty(goalStatus)
-// is true. Outside that narrow window, general tool-error rendering is
-// completely unchanged.
+// component is never reached for those) and (b) isGoalRecordEmpty(goalId,
+// goalPills) is true — the producing message's OWN goal_id (FR-039), never
+// the session's latest-goal scalar. Outside that narrow window, general
+// tool-error rendering is completely unchanged.
 
 import type { ReactNode } from 'react'
 import { Warning } from '@phosphor-icons/react'
