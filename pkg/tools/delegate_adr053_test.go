@@ -86,7 +86,9 @@ func newADR053TestTool(t *testing.T) (*DelegateTool, *session.LifecycleStore, *s
 // session_id from the generated response payload.
 func runAndExtractSessionID(t *testing.T, tool *DelegateTool, ctx context.Context, task string) string {
 	t.Helper()
-	result := tool.Execute(ctx, map[string]any{"task": task})
+	// Delegation always names an explicit target (settled design); the caller's
+	// own id is the natural target for these launch-path fixtures.
+	result := tool.Execute(ctx, map[string]any{"task": task, "agent_id": ToolAgentID(ctx)})
 	if result.IsError {
 		t.Fatalf("run failed: %s", result.ForLLM)
 	}
@@ -109,6 +111,7 @@ func TestDelegateTool_Run_SnapshotOverCap_Rejected(t *testing.T) {
 	}
 	result := tool.Execute(context.Background(), map[string]any{
 		"task":     "do something",
+		"agent_id": "worker",
 		"snapshot": map[string]any{"references": refs},
 	})
 	if !result.IsError {

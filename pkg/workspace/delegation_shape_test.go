@@ -55,21 +55,17 @@ func TestDelegationEdge_ValidateShape_EndpointsNonEmpty(t *testing.T) {
 	})
 }
 
-// TestDelegationEdge_ValidateShape_NoSelfEdge proves invariant 2: an edge from
-// an agent to itself is rejected. The comparison runs on the TRIMMED values (so
-// "mia" → " mia " is still a self-edge) and the message interpolates the
-// trimmed agent name.
-func TestDelegationEdge_ValidateShape_NoSelfEdge(t *testing.T) {
-	selfEdgeErr := func(agent string) string {
-		return "delegation edge cannot be a self-edge (from_agent == to_agent: " + agent + ")"
-	}
+// TestDelegationEdge_ValidateShape_SelfEdgeAccepted proves the settled design
+// (2026-10-09): a self-edge is an ORDINARY edge — ValidateShape accepts it
+// exactly like any other edge. The former "self-edges are limited to the
+// built-in Jim and General Purpose identities" restriction — and with it
+// workspace.PermittedSelfDelegationID — was deleted; a self-edge is authorized
+// by EXISTING in the graph, exactly like every other edge. The comparison still
+// runs on the TRIMMED values, so "mia" → " mia " is a self-edge too.
+func TestDelegationEdge_ValidateShape_SelfEdgeAccepted(t *testing.T) {
 	runShapeCases(t, []shapeCase{
-		{name: "reject: identical endpoints", edge: DelegationEdge{FromAgent: "mia", ToAgent: "mia"}, wantErr: selfEdgeErr("mia")},
-		{
-			name:    "reject: self-edge only visible after trimming",
-			edge:    DelegationEdge{FromAgent: "mia", ToAgent: " mia "},
-			wantErr: selfEdgeErr("mia"),
-		},
+		{name: "accept: self-edge (identical endpoints)", edge: DelegationEdge{FromAgent: "mia", ToAgent: "mia"}},
+		{name: "accept: self-edge only visible after trimming", edge: DelegationEdge{FromAgent: "mia", ToAgent: " mia "}},
 		{name: "accept: distinct endpoints", edge: DelegationEdge{FromAgent: "mia", ToAgent: "jim"}},
 	})
 }
@@ -144,30 +140,32 @@ func TestDelegationEdge_ValidateShape_ZeroValue(t *testing.T) {
 
 // TestDelegationEdge_ValidateShape_FirstViolationWins pins the observable
 // check ORDER for edges violating several invariants at once: empty endpoints
-// first, then self-edge, then modes, then depth. The returned message is the
-// only witness to which check fired, so this ordering is behavior the store's
-// WARN logs (load) and refusal error (save) both surface.
+// first, then modes, then depth. (The former self-edge check sat between
+// endpoints and modes; it was deleted with the settled design, so a self-edge
+// now fails only through the same mode/depth checks as any other edge.) The
+// returned message is the only witness to which check fired, so this ordering
+// is behavior the store's WARN logs (load) and refusal error (save) both surface.
 func TestDelegationEdge_ValidateShape_FirstViolationWins(t *testing.T) {
 	runShapeCases(t, []shapeCase{
 		{
-			name:    "empty endpoints beat self-edge, mode and depth (both-empty is also a self-edge)",
+			name:    "empty endpoints beat mode and depth (both-empty is also a self-edge)",
 			edge:    DelegationEdge{FromAgent: "", ToAgent: "", Modes: []DelegationMode{"banana"}, Depth: new(-1)},
 			wantErr: "delegation edge from_agent and to_agent must not be empty",
-		},
-		{
-			name:    "self-edge beats invalid mode",
-			edge:    DelegationEdge{FromAgent: "mia", ToAgent: "mia", Modes: []DelegationMode{"banana"}},
-			wantErr: "delegation edge cannot be a self-edge (from_agent == to_agent: mia)",
-		},
-		{
-			name:    "self-edge beats negative depth",
-			edge:    DelegationEdge{FromAgent: "mia", ToAgent: "mia", Depth: new(-1)},
-			wantErr: "delegation edge cannot be a self-edge (from_agent == to_agent: mia)",
 		},
 		{
 			name:    "invalid mode beats negative depth",
 			edge:    DelegationEdge{FromAgent: "mia", ToAgent: "jim", Modes: []DelegationMode{"banana"}, Depth: new(-1)},
 			wantErr: "delegation edge mode banana is invalid (valid: direct, task)",
+		},
+		{
+			name:    "a self-edge is validated like any other edge: its invalid mode is reported",
+			edge:    DelegationEdge{FromAgent: "mia", ToAgent: "mia", Modes: []DelegationMode{"banana"}},
+			wantErr: "delegation edge mode banana is invalid (valid: direct, task)",
+		},
+		{
+			name:    "a self-edge's negative depth is reported like any other edge",
+			edge:    DelegationEdge{FromAgent: "mia", ToAgent: "mia", Depth: new(-1)},
+			wantErr: "delegation edge depth must be >= 0",
 		},
 		{
 			name: "every field populated and valid is accepted",

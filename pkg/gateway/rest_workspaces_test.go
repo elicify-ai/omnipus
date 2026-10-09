@@ -1549,8 +1549,9 @@ func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T
 		"admin must never be auto-seeded onto the default workspace team")
 	bootEdges, storeOK := workspace.LoadDelegation(home, ws.ID)
 	require.True(t, storeOK, "delegation store record must be readable")
-	assert.Len(t, bootEdges, 7, "the boot default workspace must seed the full ADR-090 edge set "+
-		"(jim→planner/researcher/worker/jim/ava, planner→researcher, worker→worker)")
+	assert.Len(t, bootEdges, 11, "the boot default workspace must seed the full edge set: Jim's 5 "+
+		"staff/self edges, Planner→Researcher, and one self-edge for EVERY on-team agent "+
+		"(mia/jim/ava/worker/planner/researcher), settled design 2026-10-09")
 	assert.False(t, ws.SetupPending,
 		"the boot default workspace must never be setup_pending — it never runs the setup interview")
 

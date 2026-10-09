@@ -53,12 +53,14 @@ func TestCheckRevisionLockedRejectsMalformedAndStaleWithoutChangingState(t *test
 	require.Equal(t, state, current)
 }
 
-func TestDelegationSelfEdgesAreLimitedToGeneralPurposeAgents(t *testing.T) {
-	for _, id := range []string{"jim", "worker"} {
-		require.NoError(t, (DelegationEdge{FromAgent: id, ToAgent: id}).ValidateShape())
-	}
-	for _, id := range []string{"ava", "admin", "custom"} {
-		err := (DelegationEdge{FromAgent: id, ToAgent: id}).ValidateShape()
-		require.Error(t, err)
+func TestDelegationSelfEdgesAreOrdinaryEdgesForAnyAgent(t *testing.T) {
+	// Settled design (2026-10-09): a self-edge is an ORDINARY edge. It is
+	// authorized by existing in the graph, not by a name on a list, so
+	// ValidateShape accepts one for ANY agent (including a custom agent). The
+	// former Jim/General-Purpose-only restriction and PermittedSelfDelegationID
+	// were deleted.
+	for _, id := range []string{"jim", "worker", "mia", "ava", "admin", "custom"} {
+		require.NoError(t, (DelegationEdge{FromAgent: id, ToAgent: id}).ValidateShape(),
+			"a self-edge for %q must be a valid ordinary edge", id)
 	}
 }

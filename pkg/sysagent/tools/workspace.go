@@ -841,8 +841,9 @@ func edgeModeCategory(mode config.DelegationMode) workspacepkg.DelegationMode {
 // newTeam with a compiled-in coreagent.SeedDelegationEdges seed, each seeded
 // target becomes a candidate edge, with modes collapsed/deduped via the
 // local edgeModeCategory. Non-self depth is copied from the seed policy;
-// permitted self-edges are pinned by coreagent.SeededEdgeDepth to min(3,
-// ceiling) (ADR-090 FR-006).
+// self-edges (for any agent — the seed gives every agent except the hidden
+// System Agents a self-edge) are pinned by coreagent.SeededEdgeDepth to
+// min(3, ceiling) (ADR-090 FR-006).
 //
 // A candidate edge is included iff ALL of:
 //   - both endpoints are members of newTeam (an edge never reaches outside
@@ -939,7 +940,10 @@ func seedDelegationEdgesForNewMembers(
 			modes = append(modes, wm)
 		}
 		for _, ref := range dp.To {
-			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || (ref.ID == from && !workspacepkg.PermittedSelfDelegationID(from)) {
+			// A self-edge (ref.ID == from) is kept as an ordinary edge — it is how
+			// self-delegation is authorized. No identity allowlist gates it any more
+			// (PermittedSelfDelegationID was deleted).
+			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" {
 				continue
 			}
 			to := ref.ID

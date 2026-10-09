@@ -162,7 +162,6 @@ func (e *DelegationEdge) UnmarshalJSON(data []byte) error {
 //
 // Invariants enforced (fail-closed: any violation is a hard error):
 //   - from_agent and to_agent are both non-empty (after trimming)
-//   - self-edges are limited to the built-in Jim and General Purpose identities
 //   - both endpoints are members of team (the workspace team set — core_team ∪
 //     existing-edge endpoints). A nil team treats EVERY endpoint as off-team
 //     (deny-by-default): callers MUST pass the real team set.
@@ -181,9 +180,6 @@ func (e DelegationEdge) Validate(team map[string]bool, ceiling int) error {
 	to := strings.TrimSpace(e.ToAgent)
 	if from == "" || to == "" {
 		return errors.New("delegation edge from_agent and to_agent must not be empty")
-	}
-	if from == to && !PermittedSelfDelegationID(from) {
-		return fmt.Errorf("delegation edge cannot be a self-edge (from_agent == to_agent: %s)", from)
 	}
 	if !team[from] {
 		return fmt.Errorf("delegation edge from_agent %s is not a member of the workspace team", from)
@@ -205,12 +201,6 @@ func (e DelegationEdge) Validate(team map[string]bool, ceiling int) error {
 		}
 	}
 	return nil
-}
-
-// PermittedSelfDelegationID identifies the two stable built-ins that may fork
-// bounded helpers through an explicit workspace edge.
-func PermittedSelfDelegationID(id string) bool {
-	return id == "jim" || id == "worker"
 }
 
 // TeamSet computes the workspace team-membership set against which a delegation
@@ -320,8 +310,8 @@ func ReadDelegation(home, workspaceID string) ([]DelegationEdge, error) {
 }
 
 // ValidateShape checks the invariants of a single edge that hold with NO
-// workspace context — non-empty endpoints, no self-edge, known modes, and a
-// non-negative depth.
+// workspace context — non-empty endpoints, known modes, and a non-negative
+// depth.
 //
 // It exists because the delegation STORE (delegationstore.go) validates edges
 // at load and save time, where the team roster and the depth ceiling are not
@@ -345,9 +335,6 @@ func (e DelegationEdge) ValidateShape() error {
 	to := strings.TrimSpace(e.ToAgent)
 	if from == "" || to == "" {
 		return errors.New("delegation edge from_agent and to_agent must not be empty")
-	}
-	if from == to && !PermittedSelfDelegationID(from) {
-		return fmt.Errorf("delegation edge cannot be a self-edge (from_agent == to_agent: %s)", from)
 	}
 	for _, m := range e.Modes {
 		if !m.Valid() {
