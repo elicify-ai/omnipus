@@ -26,16 +26,18 @@
 //     launch of a steered session is the ONLY entry permitted to start a FRESH
 //     CLI conversation (Run); every later entry (the post-turn drain
 //     continuation, a revive of a stopped/finished session, a wake) must Resume
-//     the retained native conversation or refuse VISIBLY (errExternalResumeUnavailable)
-//     — never a silent fresh conversation. `started` records "this session key
-//     has run before" so the refusal survives the driver release below.
-//   - When a run exits and the session has no pending continuation
-//     (pendingSteeringCountForScope == 0), the DRIVER is released
-//     (releaseDriverLocked): its retained RunOptions — the last prompt and the
-//     environment snapshot — stop being reachable, bounding retention to the
-//     live episode (N6). The tiny holder itself stays (a mutex, a few booleans,
-//     nil fields), because `started` is what makes a later follow-up refuse
-//     rather than silently relaunch a fresh conversation.
+//     the retained native conversation or refuse VISIBLY
+//     (errExternalResumeUnavailable) — never a silent fresh conversation.
+//     `started` records "this session key has run before" so the refusal
+//     survives the driver release below.
+//   - When the whole steered episode ends (after the run has exited AND its
+//     post-turn drain has emptied the steering scope), the DRIVER is released
+//     (releaseExternalRunIfIdle): its retained RunOptions — the last prompt and
+//     the environment snapshot — stop being reachable, bounding retention to
+//     the live episode (N6). The tiny holder itself stays (a mutex, a few
+//     booleans, nil fields), because `started` is what makes a later follow-up
+//     refuse rather than silently relaunch a fresh conversation. Stop and
+//     session deletion release it too (ForgetExternalRunSession).
 //   - A task-origin session (Origin.Kind == task) keeps its explicit fresh Run
 //     per turn until the U6 CONTINUE / native-identity work lands; it is exempt
 //     from the steered resume-only rule.
@@ -68,9 +70,9 @@ var errExternalWorkspaceChanged = errors.New(
 // the identity of the run it is currently serving, guarded by mu.
 //
 //   - driver is the instance that ran (or is running) the session's external-CLI
-//     turns; it is released (set nil) once the run exited and no continuation
-//     is pending (N6), but `started` is kept so a later follow-up refuses rather
-//     than relaunching a fresh conversation (N5/N7).
+//     turns; it is released (set nil) once the episode ends (N6), but `started`
+//     is kept so a later follow-up refuses rather than relaunching a fresh
+//     conversation (N5/N7).
 //   - started is true once a run has begun on this session key.
 //   - running is true only while a run is in flight, so a steer delivery can
 //     refuse visibly when there is genuinely no live conversation (BDD-05.6).
@@ -148,11 +150,14 @@ func (al *AgentLoop) externalRunSessionIfPresent(sessionKey string) *externalCLI
 	return sess
 }
 
-// externalRunIsTaskSession reports whether sessionKey's durable record names a
-// task origin (OriginKindTask) — the marker that exempts the run from the
-// steered "resume-only" rule (the task path keeps its explicit fresh Run per
-// turn until the U6 CONTINUE work).
-func (al *AgentLoop) externalRunIsTaskSession(sessionKey string) bool {
+// externalRunResumeOnly reports whether sessionKey names a STEERED (delegated,
+// non-task) session — the case N7 governs: only its generation-1 launch
+// dispatch may start a fresh CLI conversation, every later entry (revive, wake,
+// drain) resumes or refuses. A task-origin session is excluded (it keeps its
+// explicit fresh Run per turn until the U6 CONTINUE work); a session with no
+// durable record is not a delegated session and keeps today's fresh-Run
+// behaviour (this is what a bare fixture turnState resolves to).
+func (al *AgentLoop) externalRunResumeOnly(sessionKey string) bool {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil || sessionKey == "" {
 		return false
@@ -161,65 +166,83 @@ func (al *AgentLoop) externalRunIsTaskSession(sessionKey string) bool {
 	if err != nil || rec == nil {
 		return false
 	}
-	return rec.Origin != nil && rec.Origin.Kind == session.OriginKindTask
+	if rec.Origin != nil && rec.Origin.Kind == session.OriginKindTask {
+		return false
+	}
+	return rec.SteeredBy != nil
 }
 
-// beginExternalRun selects the driver for one external-CLI dispatch and marks
-// the session running until finishExternalRun. It returns the driver to call
-// plus whether the caller must Resume (true) or Run (false).
+// beginExternalRun reserves one external-CLI dispatch on the session holder and
+// decides whether the caller must Resume (a retained conversation) or Run
+// (a fresh one). It does NOT instantiate the driver: that happens after the
+// caller's workspace-lock + cancel checks (driverForRun), so a run that is
+// canceled before it can start never pays for a driver instantiation.
 //
 //   - A Resume is selected when the caller requested a continuation
 //     (externalResumeRequested) OR this is a later entry of a steered session
-//     (sess.started, N7) AND a driver is retained. The resume path never creates
-//     a driver: it reuses the one holding the captured native conversation id
-//     and the preserved RunOptions.
-//   - When a resume is required but no driver is retained (N5: the driver was
-//     released, the original dispatch failed before construction, …) it refuses
-//     with errExternalResumeUnavailable — NEVER a fresh fallback.
-//   - A FRESH Run is permitted only for a genuine first launch of a steered
-//     session, or for any entry of a task-origin session (which keeps its
-//     fresh-Run-per-turn behaviour until U6).
+//     (sess.started && resumeOnly, N7) AND a driver is retained. When a resume
+//     is required but no driver is retained (N5: released, or the original
+//     dispatch failed before construction) it refuses with
+//     errExternalResumeUnavailable — NEVER a fresh fallback.
+//   - A FRESH Run is selected otherwise (a genuine first launch; a task-origin
+//     or non-steered session, which keeps its fresh-Run behaviour).
 //
-// isTaskRun is the caller's own determination (it holds the run's context and
-// the durable record); it is passed in rather than re-derived so this function
-// holds no lifecycle lock while sess.mu is held.
+// resumeOnly is the caller's own determination (it holds the durable record):
+// true for a steered (delegated, non-task) session, whose every entry after the
+// first launch must resume-or-refuse.
 func (al *AgentLoop) beginExternalRun(
 	sessionKey string,
 	ts *turnState,
-	cli string,
-	consent runner.ConsentHandler,
 	cancel context.CancelFunc,
-	isTaskRun bool,
-) (sess *externalCLIRunSession, driver runner.ExternalAgentRunner, resume bool, err error) {
+	resumeOnly bool,
+) (sess *externalCLIRunSession, resume bool, err error) {
 	sess = al.externalRunSession(sessionKey)
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 
 	claim := al.tsExecutionClaim(ts, sessionKey)
 	resumeRequested := externalResumeRequested(ts)
-	needsResume := resumeRequested || (sess.started && !isTaskRun)
+	needsResume := resumeRequested || (sess.started && resumeOnly)
 	if needsResume {
 		if sess.driver == nil {
 			// N5/N7: a continuation (or a later steered entry) with no retained
 			// driver must refuse — never start a fresh conversation.
-			return sess, nil, false, errExternalResumeUnavailable
+			return sess, false, errExternalResumeUnavailable
 		}
 		sess.running = true
 		sess.claim = claim
 		sess.cancelRun = cancel
-		return sess, sess.driver, true, nil
+		return sess, true, nil
 	}
-
-	driver, err = newExternalDriver(cli, consent)
-	if err != nil {
-		return nil, nil, false, err
-	}
-	sess.driver = driver
-	sess.started = true
 	sess.running = true
 	sess.claim = claim
 	sess.cancelRun = cancel
-	return sess, driver, false, nil
+	return sess, false, nil
+}
+
+// driverForRun returns the driver to call once the caller's pre-start checks
+// have passed: the retained driver for a Resume, or a freshly created one for a
+// Run (recorded on the holder so a later continuation can Resume it).
+func (s *externalCLIRunSession) driverForRun(
+	cli string,
+	consent runner.ConsentHandler,
+	resume bool,
+) (runner.ExternalAgentRunner, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if resume {
+		if s.driver == nil {
+			return nil, errExternalResumeUnavailable
+		}
+		return s.driver, nil
+	}
+	d, err := newExternalDriver(cli, consent)
+	if err != nil {
+		return nil, err
+	}
+	s.driver = d
+	s.started = true
+	return d, nil
 }
 
 // recordWorkspace remembers the workspace a steered session's CLI conversation
@@ -248,14 +271,17 @@ func (s *externalCLIRunSession) workspaceSnapshot() (workDir, workspaceID string
 	return s.workDir, s.workspaceID
 }
 
-// finishExternalRun ends the session's run: it clears the running flag and, when
-// no continuation is pending, releases the driver (N6). Holding sess.mu across
-// both the steering-queue check and the release makes it atomic with a
+// finishExternalRun ends the session's run: it clears the running flag and the
+// retained cancel func for THIS run. It does not release the driver — a queued
+// continuation may still be pending for the session's post-turn drain, and the
+// release point is the end of the whole episode (releaseExternalRunIfIdle).
+// Holding sess.mu here makes the running-flag transition atomic with a
 // concurrent delivery (which takes sess.mu to check-run/enqueue/cancel): either
-// the delivery enqueues first (the queue is non-empty, so the driver is KEPT for
-// the drain that consumes it), or this runs first (the delivery then sees
-// running=false and refuses — no stranded instruction).
+// the delivery enqueues first (the queue is non-empty, so the drain will consume
+// it), or this runs first (the delivery then sees running=false and refuses — no
+// stranded instruction).
 func (al *AgentLoop) finishExternalRun(sess *externalCLIRunSession, sessionKey string) {
+	_ = sessionKey
 	if sess == nil {
 		return
 	}
@@ -263,15 +289,51 @@ func (al *AgentLoop) finishExternalRun(sess *externalCLIRunSession, sessionKey s
 	defer sess.mu.Unlock()
 	sess.running = false
 	sess.cancelRun = nil
-	if al.pendingSteeringCountForScope(sessionKey) == 0 {
-		sess.releaseDriverLocked()
+}
+
+// releaseExternalRunIfIdle releases sessionKey's retained driver (and with it
+// its RunOptions snapshot: the last prompt and the child environment) once the
+// session's live episode is over — the run has exited AND its post-turn drain
+// has emptied the steering scope (N6). Callers are the episode ends: the steered
+// turn's exit (disposeSteeredTurnResult), Stop, and session deletion. The tiny
+// holder stays with `started` set, so a later follow-up refuses visibly
+// (errExternalResumeUnavailable) rather than silently relaunching a fresh CLI
+// conversation (N5/N7).
+func (al *AgentLoop) releaseExternalRunIfIdle(sessionKey string) {
+	if sessionKey == "" {
+		return
 	}
+	sess := al.externalRunSessionIfPresent(sessionKey)
+	if sess == nil {
+		return
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if sess.running || al.pendingSteeringCountForScope(sessionKey) != 0 {
+		return
+	}
+	sess.releaseDriverLocked()
+}
+
+// ForgetExternalRunSession drops sessionID's retained external-CLI driver and
+// its option/env snapshot, and removes the holder entirely — the session is
+// being deleted, so no continuation can ever follow. Called by the session
+// deletion paths (N6). Idempotent.
+func (al *AgentLoop) ForgetExternalRunSession(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	if sess := al.externalRunSessionIfPresent(sessionID); sess != nil {
+		sess.mu.Lock()
+		sess.releaseDriverLocked()
+		sess.mu.Unlock()
+	}
+	al.externalRunSessions.Delete(sessionID)
 }
 
 // releaseDriverLocked drops the retained driver (and with it its RunOptions
-// snapshot: the last prompt and the child environment) while keeping the
-// session's `started` marker so a later follow-up refuses rather than relaunching
-// a fresh CLI conversation. Caller holds sess.mu.
+// snapshot) while keeping the session's `started` marker so a later follow-up
+// refuses rather than relaunching a fresh CLI conversation. Caller holds sess.mu.
 func (s *externalCLIRunSession) releaseDriverLocked() {
 	s.driver = nil
 	s.claim = executionClaim{}

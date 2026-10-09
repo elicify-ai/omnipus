@@ -1205,6 +1205,12 @@ func steeredTurnRunContext(base context.Context, rec *session.LifecycleRecord) (
 // pathological shape without ever throwing away a caller's accepted
 // instruction.
 func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.LifecycleRecord, gen int, result turnResult, runErr error) {
+	// N6: the whole steered episode is over once this exit path runs (the turn
+	// has exited AND drainSteeredTurn has emptied the steering scope), so release
+	// the retained external-CLI driver — and its RunOptions snapshot — here. A
+	// pending continuation keeps it (releaseExternalRunIfIdle re-checks the
+	// scope), and a follow-up after release refuses visibly (N5/N7).
+	defer al.releaseExternalRunIfIdle(rec.SessionID)
 	// Stop ends the turn, not the session or its goal. In particular, do not
 	// spend the durable marker or write a "session ended" goal outcome here.
 	if ts.stopRequested.Load() || executionStopPending(ts.opts.executionDisposition) {

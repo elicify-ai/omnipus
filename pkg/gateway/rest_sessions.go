@@ -745,6 +745,14 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not delete session: %v", err))
 		return
 	}
+	// N6: the session is gone, so drop any retained external-CLI driver (and its
+	// option/env snapshot) for it and every deleted descendant.
+	if a.agentLoop != nil {
+		a.agentLoop.ForgetExternalRunSession(id)
+		for _, descID := range descendantIDs {
+			a.agentLoop.ForgetExternalRunSession(descID)
+		}
+	}
 
 	// ADR-057 W18b (FR-071): id's OWN <home>/uploads/<id>/ was already
 	// removed by store.DeleteSession above (pre-existing ADR-017 cascade,

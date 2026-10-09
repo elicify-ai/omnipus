@@ -264,9 +264,10 @@ func runExternalCLISubTurn(
 	//    AGENT.md (Project Instructions) and the shared memory room (.omnipus/)
 	//    structurally unreachable — os.Root-confined tools cannot open a path
 	//    outside their root, not merely guarded against.
-	// The actual resolution happens in ed.resolveRunWorkDir below, AFTER the
-	// driver is selected, so a CONTINUATION can prefer the workspace its native
-	// CLI conversation started in (N1). See that call for the full contract.
+	workDir, workWsID, wsErr := resolveTurnWorkDirAndWorkspaceOrRefuse(ctx, ed.agent.ID, ed.agent.Home, ed.childTS.opts.WorkspaceID)
+	if wsErr != nil {
+		return nil, ed.reportWorkspaceRefusal(wsErr)
+	}
 
 	// FIX 1 (cancel propagation, BLOCK finding on the 7-reviewer gate): create
 	// the run's context and register its cancel func on childTS — the SAME
@@ -345,28 +346,37 @@ func runExternalCLISubTurn(
 	//    runtime/workspace/model/caps) rather than starting a fresh conversation.
 	//    The factory stays a package var so in-package tests can inject a
 	//    fake/stub driver. cancel is the run's own cancel func, retained on the
-	//    holder so a steer delivery interrupts THIS run (N2). isTaskRun exempts a
-	//    task-origin session from the steered resume-only rule.
+	//    holder so a steer delivery interrupts THIS run (N2). resumeOnly is true
+	//    for a steered (non-task) session, whose every post-launch entry must
+	//    resume-or-refuse.
 	sessionKey := externalRunSessionKey(ed.childTS)
-	isTaskRun := tools.ToolRunningTaskID(ctx) != ""
-	sess, driver, resume, beginErr := al.beginExternalRun(sessionKey, ed.childTS, cli, consent, cancel, isTaskRun)
+	resumeOnly := al.externalRunResumeOnly(sessionKey)
+	sess, resume, beginErr := al.beginExternalRun(sessionKey, ed.childTS, cancel, resumeOnly)
 	if beginErr != nil {
 		return nil, fmt.Errorf("external-cli dispatch: %w", beginErr)
 	}
 	defer al.finishExternalRun(sess, sessionKey)
 
 	// 1 (continued). A CONTINUATION must run in — and lock — the SAME workspace
-	//    the native CLI conversation started in (N1): resolveRunWorkDir
-	//    re-resolves the preserved workspace and refuses when the agent is no
-	//    longer eligible for it, so this invocation never authorizes one
-	//    workspace while the retained driver executes in another. A first run
-	//    records the workspace it resolved for the continuation's later check.
-	resolvedWorkDir, resolvedWsID, rwErr := ed.resolveRunWorkDir(ctx, sess, resume)
-	if rwErr != nil {
-		return nil, ed.reportWorkspaceRefusal(rwErr)
-	}
-	if !resume {
-		sess.recordWorkspace(resolvedWorkDir, resolvedWsID)
+	//    the native CLI conversation started in (N1): re-resolve the preserved
+	//    workspace and refuse when the agent is no longer eligible for it, so
+	//    this invocation never authorizes one workspace while the retained driver
+	//    executes in another. A first run records the workspace it resolved for
+	//    the continuation's later check.
+	resolvedWorkDir := workDir
+	if resume {
+		preservedWorkDir, preservedWsID := sess.workspaceSnapshot()
+		rw, _, rwErr := resolveTurnWorkDirAndWorkspaceOrRefuse(ctx, ed.agent.ID, ed.agent.Home, preservedWsID)
+		if rwErr != nil {
+			return nil, ed.reportWorkspaceRefusal(rwErr)
+		}
+		if preservedWorkDir == "" || filepath.Clean(rw) != filepath.Clean(preservedWorkDir) {
+			return nil, ed.reportWorkspaceRefusal(fmt.Errorf(
+				"%w: agent %q: start a new delegation", errExternalWorkspaceChanged, ed.agent.ID))
+		}
+		resolvedWorkDir = preservedWorkDir
+	} else {
+		sess.recordWorkspace(workDir, workWsID)
 	}
 
 	// FIX 4 (concurrency, arch #2 warning): serialize external-CLI runs that
@@ -411,6 +421,15 @@ func runExternalCLISubTurn(
 			Err:    cancelErr,
 			ForLLM: fmt.Sprintf("External CLI run (%s) canceled before starting: %v", cli, cancelErr),
 		}, cancelErr
+	}
+
+	// Obtain the driver only now that the pre-start checks have passed: a fresh
+	// Run creates one (recorded for a later continuation to Resume); a Resume
+	// reuses the retained one. A canceled-before-start run therefore never
+	// instantiates a driver (the belt-and-suspenders check above).
+	driver, driverErr := sess.driverForRun(cli, consent, resume)
+	if driverErr != nil {
+		return nil, fmt.Errorf("external-cli dispatch: %w", driverErr)
 	}
 
 	runOpts := runner.RunOptions{
@@ -481,41 +500,6 @@ func runExternalCLISubTurn(
 	for range evCh {
 	}
 	return result, result.Err
-}
-
-// resolveRunWorkDir resolves the working directory one external-CLI run must
-// execute in (N1, FR-043), and the workspace id it belongs to.
-//
-// A FIRST run resolves normally, preferring the turn's own channel-bound
-// workspace. A CONTINUATION of an existing native CLI conversation must run in —
-// and lock — the SAME workspace that conversation started in: it re-resolves
-// preferring sess.workspaceID and refuses when the agent is no longer eligible
-// for it (the resolution fell back to a different workspace), or when the
-// resolved directory is not the preserved one. Preserving conversation
-// configuration must never substitute one workspace's authorization for another's.
-func (ed *runExternalCLISubTurnState) resolveRunWorkDir(
-	ctx context.Context,
-	sess *externalCLIRunSession,
-	resume bool,
-) (string, string, error) {
-	preferWsID := ed.childTS.opts.WorkspaceID
-	preservedWorkDir, preservedWsID := "", ""
-	if resume {
-		preservedWorkDir, preservedWsID = sess.workspaceSnapshot()
-		preferWsID = preservedWsID
-	}
-	workDir, wsID, err := resolveTurnWorkDirAndWorkspaceOrRefuse(ctx, ed.agent.ID, ed.agent.Home, preferWsID)
-	if err != nil {
-		return "", "", err
-	}
-	if resume {
-		if preservedWorkDir == "" || filepath.Clean(workDir) != filepath.Clean(preservedWorkDir) {
-			return "", "", fmt.Errorf("%w: agent %q: start a new delegation",
-				errExternalWorkspaceChanged, ed.agent.ID)
-		}
-		workDir = preservedWorkDir
-	}
-	return workDir, wsID, nil
 }
 
 // prepareRunOptions derives the run limits, model, scrubbed environment, and configured CLI arguments.
