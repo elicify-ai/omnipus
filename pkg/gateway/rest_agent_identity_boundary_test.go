@@ -26,9 +26,10 @@ func TestAgentIdentity_UpdateRejectsCaseFoldedNull(t *testing.T) {
 		{"mixed case figure", `"FiGuRe":null,"role":"writer","color":"#22D3EE"`, "figure must be Robot, Man, Woman, or Omnipus"},
 		{"mixed case role", `"figure":"Woman","RoLe":null,"color":"#22D3EE"`, "role must be one of the curated role slugs"},
 		{"mixed case color", `"figure":"Woman","role":"writer","CoLoR":null`, "color must be one of the ten identity colours"},
-		{"escaped figure", `"FIGURE":null,"role":"writer","color":"#22D3EE"`, "figure must be Robot, Man, Woman, or Omnipus"},
-		{"escaped role", `"figure":"Woman","ROLE":null,"color":"#22D3EE"`, "role must be one of the curated role slugs"},
-		{"escaped color", `"figure":"Woman","role":"writer","COLOR":null`, "color must be one of the ten identity colours"},
+		// U+005C is the JSON escape introducer; preserve it on the wire.
+		{"escaped figure", fmt.Sprintf(`"%cu0046IGURE":null,"role":"writer","color":"#22D3EE"`, 0x5c), "figure must be Robot, Man, Woman, or Omnipus"},
+		{"escaped role", fmt.Sprintf(`"figure":"Woman","%cu0052OLE":null,"color":"#22D3EE"`, 0x5c), "role must be one of the curated role slugs"},
+		{"escaped color", fmt.Sprintf(`"figure":"Woman","role":"writer","%cu0043OLOR":null`, 0x5c), "color must be one of the ten identity colours"},
 		{"duplicate figure null first", `"figure":null,"figure":"Woman","role":"writer","color":"#22D3EE"`, "figure must be Robot, Man, Woman, or Omnipus"},
 		{"duplicate role null first", `"figure":"Woman","role":null,"role":"writer","color":"#22D3EE"`, "role must be one of the curated role slugs"},
 		{"duplicate color null first", `"figure":"Woman","role":"writer","color":null,"color":"#22D3EE"`, "color must be one of the ten identity colours"},
