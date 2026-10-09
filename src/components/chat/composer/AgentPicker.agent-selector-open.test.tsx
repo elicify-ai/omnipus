@@ -23,6 +23,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([
       {
+        figure: 'Omnipus', role: 'general',
         id: 'mia',
         name: 'Mia',
         type: 'core',
@@ -31,6 +32,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
         description: 'Assistant',
       },
       {
+        figure: 'Omnipus', role: 'general',
         id: 'jim',
         name: 'Jim',
         type: 'core',
@@ -146,7 +148,7 @@ describe('AgentPicker — agentSelectorOpen controlled DropdownMenu', () => {
 
   it('agent list is not changed by the controlled open flag', async () => {
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
-      { id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'z-ai/glm-5.2', description: 'Assistant' },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'z-ai/glm-5.2', description: 'Assistant' },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any[])
 

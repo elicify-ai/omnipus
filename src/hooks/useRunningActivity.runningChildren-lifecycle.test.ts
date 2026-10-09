@@ -29,6 +29,7 @@ import React from 'react'
 import { useChatStore } from '@/store/chat'
 import type { ChatMessage, SubagentSpan } from '@/store/chat'
 import type { Agent, ToolCall } from '@/lib/api'
+import { makeAgent } from '@/test/factories'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -49,7 +50,7 @@ function makeClient() {
 }
 
 const AGENTS: Agent[] = [
-  { id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', icon: 'compass' } as Agent,
+  makeAgent({ id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', icon: 'compass' }),
 ]
 
 function makeAssistantMessage(spans: SubagentSpan[]): ChatMessage {

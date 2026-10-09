@@ -126,7 +126,7 @@ function renderPanel(
   mockWorkspaceDetail()
   const client = makeQueryClient()
   client.setQueryData(['agents'], [
-    { id: 'mia', name: 'Mia', type: 'core', locked: true },
+    { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true },
   ])
   client.setQueryData(
     ['workspaces'],
@@ -237,8 +237,8 @@ describe('ConnectorsScreen — multi-mailbox roster (one row per (agent, workspa
       { agent_id: 'jim', enabled: false, configured: false, username: 'jim@example.com', workspace_id: 'ws-1' } as Mailbox,
     ])
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', locked: true } as never,
-      { id: 'jim', name: 'Jim', type: 'core', locked: true } as never,
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true } as never,
+      { figure: 'Omnipus', role: 'general', id: 'jim', name: 'Jim', type: 'core', locked: true } as never,
     ])
     vi.mocked(fetchWorkspaces).mockResolvedValue([{ id: 'ws-1', name: 'My Workspace' } as never])
 
@@ -281,7 +281,7 @@ describe('ConnectorsScreen — multi-mailbox roster (one row per (agent, workspa
         workspace_id: 'ws-1',
       } as Mailbox,
     ])
-    vi.mocked(fetchAgents).mockResolvedValue([{ id: 'mia', name: 'Mia', type: 'core', locked: true } as never])
+    vi.mocked(fetchAgents).mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true } as never])
     vi.mocked(fetchWorkspaces).mockResolvedValue([{ id: 'ws-1', name: 'My Workspace' } as never])
 
     renderConnectorsScreen()
@@ -304,7 +304,7 @@ describe('ConnectorsScreen — multi-mailbox roster (one row per (agent, workspa
     vi.mocked(fetchMailboxes).mockResolvedValue([
       { agent_id: 'mia', enabled: true, configured: true, username: 'mia@example.com', workspace_id: 'ws-1' } as Mailbox,
     ])
-    vi.mocked(fetchAgents).mockResolvedValue([{ id: 'mia', name: 'Mia', type: 'core', locked: true } as never])
+    vi.mocked(fetchAgents).mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true } as never])
     vi.mocked(fetchWorkspaces).mockResolvedValue([{ id: 'ws-1', name: 'My Workspace' } as never])
     vi.mocked(deleteAgentMailbox).mockResolvedValue({ success: true } as never)
 
@@ -343,7 +343,7 @@ describe('ConnectorsScreen — multi-mailbox roster (one row per (agent, workspa
     vi.mocked(fetchMailboxes).mockResolvedValue([
       { agent_id: 'mia', enabled: true, configured: true, username: 'mia@example.com', workspace_id: 'ws-1' } as Mailbox,
     ])
-    vi.mocked(fetchAgents).mockResolvedValue([{ id: 'mia', name: 'Mia', type: 'core', locked: true } as never])
+    vi.mocked(fetchAgents).mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true } as never])
     vi.mocked(fetchWorkspaces).mockResolvedValue([{ id: 'ws-1', name: 'My Workspace' } as never])
     vi.mocked(deleteAgentMailbox).mockResolvedValue({ success: true } as never)
 
@@ -382,7 +382,7 @@ describe('ConnectorsScreen — multi-mailbox roster (one row per (agent, workspa
       { agent_id: 'mia', enabled: true, configured: true, username: 'mia-eu@example.com', workspace_id: 'ws-eu' } as Mailbox,
       { agent_id: 'mia', enabled: true, configured: true, username: 'mia-us@example.com', workspace_id: 'ws-us' } as Mailbox,
     ])
-    vi.mocked(fetchAgents).mockResolvedValue([{ id: 'mia', name: 'Mia', type: 'core', locked: true } as never])
+    vi.mocked(fetchAgents).mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true } as never])
     vi.mocked(fetchWorkspaces).mockResolvedValue([
       { id: 'ws-eu', name: 'EU Workspace' } as never,
       { id: 'ws-us', name: 'US Workspace' } as never,
@@ -408,7 +408,7 @@ describe('ConnectorsScreen — multi-mailbox roster (one row per (agent, workspa
       { agent_id: 'mia', enabled: true, configured: true, username: 'mia-eu@example.com', workspace_id: 'ws-eu' } as Mailbox,
       { agent_id: 'mia', enabled: true, configured: true, username: 'mia-us@example.com', workspace_id: 'ws-us' } as Mailbox,
     ])
-    vi.mocked(fetchAgents).mockResolvedValue([{ id: 'mia', name: 'Mia', type: 'core', locked: true } as never])
+    vi.mocked(fetchAgents).mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true } as never])
     vi.mocked(fetchWorkspaces).mockResolvedValue([
       { id: 'ws-eu', name: 'EU Workspace' } as never,
       { id: 'ws-us', name: 'US Workspace' } as never,
@@ -490,7 +490,7 @@ describe('EmailMailboxPanel — Save calls the (agent, workspace) pair mailbox e
     vi.clearAllMocks()
     ;({ addToast } = mockUiStore())
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', locked: true } as never,
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true } as never,
     ])
     vi.mocked(fetchWorkspaces).mockResolvedValue([
       { id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 } as never,
@@ -793,7 +793,7 @@ describe('EmailMailboxPanel — duplicate-pair guard', () => {
     vi.clearAllMocks()
     mockUiStore()
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', locked: true } as never,
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true } as never,
     ])
     vi.mocked(fetchWorkspaces).mockResolvedValue([
       { id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 } as never,
@@ -925,7 +925,7 @@ describe('EmailMailboxPanel — create-mode reopen starts blank (stale-form fix)
     vi.clearAllMocks()
     mockUiStore()
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', locked: true } as never,
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true } as never,
     ])
     vi.mocked(fetchWorkspaces).mockResolvedValue([
       { id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 } as never,
@@ -937,7 +937,7 @@ describe('EmailMailboxPanel — create-mode reopen starts blank (stale-form fix)
     // create mode (null → null) never re-fired it, so the previous session's
     // typed values — INCLUDING the password — reappeared on screen.
     const client = makeQueryClient()
-    client.setQueryData(['agents'], [{ id: 'mia', name: 'Mia', type: 'core', locked: true }])
+    client.setQueryData(['agents'], [{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true }])
     client.setQueryData(['workspaces'], [{ id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 }])
 
     const { rerender } = render(
@@ -975,8 +975,8 @@ describe('EmailMailboxPanel — ADR-033 core_team scoping', () => {
     vi.clearAllMocks()
     mockUiStore()
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', locked: true } as never,
-      { id: 'ray', name: 'Ray', type: 'core', locked: true } as never,
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true } as never,
+      { figure: 'Omnipus', role: 'general', id: 'ray', name: 'Ray', type: 'core', locked: true } as never,
     ])
     vi.mocked(fetchWorkspaces).mockResolvedValue([
       { id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 } as never,
@@ -988,8 +988,8 @@ describe('EmailMailboxPanel — ADR-033 core_team scoping', () => {
     // ws-1's team contains mia but NOT ray.
     const client = makeQueryClient()
     client.setQueryData(['agents'], [
-      { id: 'mia', name: 'Mia', type: 'core', locked: true },
-      { id: 'ray', name: 'Ray', type: 'core', locked: true },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true },
+      { figure: 'Omnipus', role: 'general', id: 'ray', name: 'Ray', type: 'core', locked: true },
     ])
     client.setQueryData(['workspaces'], [
       { id: 'ws-1', name: 'My Workspace', status: 'active', pinned: false, pin_order: 0 },
