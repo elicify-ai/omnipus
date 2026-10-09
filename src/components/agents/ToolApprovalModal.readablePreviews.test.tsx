@@ -53,7 +53,7 @@ vi.mock('@/lib/authLogout', () => ({
 import * as api from '@/lib/api'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { ToolApprovalModal } from './ToolApprovalModal'
-import type { WsSessionStateFrame } from '@/lib/ws'
+import type { SessionStateFrame } from '@/lib/ws'
 
 beforeEach(() => {
   act(() => {
@@ -374,7 +374,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
       useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
     })
 
-    const frame: WsSessionStateFrame = {
+    const frame: SessionStateFrame = {
       type: 'session_state',
       user_id: 'user-1',
       pending_approvals: [
@@ -423,7 +423,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
       })
     })
 
-    const frame: WsSessionStateFrame = {
+    const frame: SessionStateFrame = {
       type: 'session_state',
       user_id: 'user-1',
       pending_approvals: [
@@ -466,7 +466,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
       useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
     })
 
-    const frame: WsSessionStateFrame = {
+    const frame: SessionStateFrame = {
       type: 'session_state',
       user_id: 'user-1',
       pending_approvals: [

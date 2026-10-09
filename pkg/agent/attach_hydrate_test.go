@@ -775,8 +775,7 @@ func (f *raceyFakeSessionStore) SetHistory(_ string, history []providers.Message
 	f.archive = history
 }
 
-func (f *raceyFakeSessionStore) TruncateHistory(string, int)                             {}
-func (f *raceyFakeSessionStore) RollbackAppended(string, int, int, memory.ProjectionSet) {}
+func (f *raceyFakeSessionStore) TruncateHistory(string, int) {}
 func (f *raceyFakeSessionStore) SetProjectionState(string, memory.ProjectionKey, memory.ProjectionState) {
 }
 func (f *raceyFakeSessionStore) MarkHydrated(string) { f.hydrated = true }

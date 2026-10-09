@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -153,7 +154,7 @@ func TestCWIdentity_RepeatedUpdatesAbortToOriginalAndKeepAddress(t *testing.T) {
 			initialSet := h.store.Projection(h.key).Entries.Clone()
 			initialSkip := len(archived) - len(h.store.GetHistory(h.key))
 			ts := h.turn("abort")
-			require.Equal(t, h.archiveLines, ts.initialArchiveLen, "rollback snapshots the actual turn-start archive")
+			require.Equal(t, h.archiveLines, ts.initialWindow.Count, "rollback snapshots the actual turn-start archive")
 			require.Equal(t, initialSet, ts.initialEmptiedSet, "rollback snapshots the actual turn-start projection set")
 
 			// First real pass: genuine D5 budget pressure empties `older` in
@@ -187,9 +188,15 @@ func TestCWIdentity_RepeatedUpdatesAbortToOriginalAndKeepAddress(t *testing.T) {
 			h.addArchive(t, providers.Message{Role: "user", Content: "discard this aborted tail"})
 
 			require.NoError(t, ts.restoreSession(h.agent))
-			h.archiveLines-- // exactly the one explicit tail write above is rolled back
-			require.Equal(t, archived, h.archive(t), "abort restores the original full archive, not a projected version")
-			require.Equal(t, initialSkip, len(h.archive(t))-len(h.store.GetHistory(h.key)), "abort restores turn-start Skip")
+			// FR-006: the aborted tail's bytes are RETAINED (append-only). The
+			// abort does not rewrite the prefix; only the model view excludes it.
+			require.Len(t, h.archive(t), len(archived)+1,
+				"FR-006: the aborted tail's bytes must stay in the archive")
+			require.Equal(t, archived, h.archive(t)[:len(archived)],
+				"abort must not rewrite the retained prefix")
+			snapAfter, snapErr := h.store.SnapshotWindow(context.Background(), h.key)
+			require.NoError(t, snapErr)
+			require.Equal(t, initialSkip, snapAfter.State.Skip, "abort restores turn-start Skip")
 			require.Equal(t, initialSet, h.store.Projection(h.key).Entries, "abort restores the original projection set")
 			require.Equal(t, before, h.transcript(t), "abort must restore original text and content_state, not the intermediate first write")
 			require.Empty(t, ts.emptiedTranscriptPrev, "undo is consumed exactly once")

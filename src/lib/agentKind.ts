@@ -4,14 +4,13 @@
 //
 // Four kinds: built-in `core` (locked roster), `Main` (chat colleague),
 // `Subagent` (native delegation-only worker), `subagent_3p` (delegation-only
-// worker on an external CLI). The legacy `worker` type is the build-time/seed
-// config constant, not emitted by the gateway; it is treated as a worker
-// defensively (mirroring `isWorker` in src/lib/api.ts) and classified
-// native-vs-external by its executor kind, since the type alone can't tell.
+// worker on an external CLI). Classification is TYPE-based only: the two
+// modern wire enum worker types carry the runner, so neither the legacy
+// `worker` constant nor `executor.kind` is consulted (DEL-F04).
 
 /** Delegation-only labour agent (never a chat target): Subagent or subagent_3p. */
 export function isWorkerType(type: string | null | undefined): boolean {
-  return type === 'Subagent' || type === 'subagent_3p' || type === 'worker'
+  return type === 'Subagent' || type === 'subagent_3p'
 }
 
 /**
@@ -28,15 +27,9 @@ export function isSystemType(type: string | null | undefined): boolean {
 /**
  * Worker that runs on an external CLI (claude-code / codex / opencode).
  *
- * TYPE-STRING-ONLY check — it can only ever be true for `subagent_3p`. A
- * legacy `worker` agent can ALSO be external (executor.kind ===
- * 'external-cli'), but that is not observable from the type string alone,
- * so this helper returns `false` for it. Any caller that holds a full
- * agent object (not just a bare type string) MUST use `agentKindFlags`
- * instead — its `isExternal` correctly consults `executor.kind` for the
- * legacy `worker` case. The one legitimate consumer of this narrower
- * check is `ToolsAndPermissions` (defense-in-depth on the *type* alone,
- * independent of whatever executor state may or may not have hydrated).
+ * TYPE-STRING-ONLY check — it can only ever be true for `subagent_3p`, which
+ * is the only type the modern wire enum encodes as external. Callers holding a
+ * full agent object use `agentKindFlags`, which classifies by the same type.
  */
 export function isExternalType(type: string | null | undefined): boolean {
   return type === 'subagent_3p'
@@ -45,9 +38,9 @@ export function isExternalType(type: string | null | undefined): boolean {
 export interface AgentKindFlags { // not-wire-format: UI-only kind classification derived from an Agent client-side; never serialized or sent over the gateway boundary
   /** Built-in roster agent (Mia/Jim/Ava/Ray) — identity/prompt/skills locked. */
   isLocked: boolean
-  /** Subagent, subagent_3p, or legacy worker — delegation-only, never a chat target. */
+  /** Subagent or subagent_3p — delegation-only, never a chat target. */
   isWorker: boolean
-  /** Runs on an external CLI: subagent_3p, or a legacy worker with an external-cli executor. */
+  /** Runs on an external CLI (subagent_3p). */
   isExternal: boolean
   /** Worker on the Omnipus engine (worker && !external). */
   isNativeWorker: boolean
@@ -57,10 +50,10 @@ export interface AgentKindFlags { // not-wire-format: UI-only kind classificatio
 
 /**
  * Classify an agent for UI gating. Accepts a loose shape (like `isWorker` in
- * src/lib/api.ts) so it works on partial agent objects and on the legacy
- * `worker` type, which the generated Agent enum no longer carries. Legacy
- * `worker` is the only case where the executor is consulted — the modern
- * wire enum encodes the runner in the type.
+ * src/lib/api.ts) so it works on partial agent objects. Classification is
+ * type-based only — the modern wire enum (`Subagent` / `subagent_3p`) encodes
+ * the runner in the type, so `executor.kind` is never consulted and the legacy
+ * `worker` constant is not a recognised kind.
  */
 export function agentKindFlags(agent: {
   type?: string | null
@@ -69,9 +62,7 @@ export function agentKindFlags(agent: {
 }): AgentKindFlags {
   const type = agent.type
   const isWorkerKind = isWorkerType(type)
-  const isExternal =
-    isExternalType(type) ||
-    (type === 'worker' && agent.executor?.kind === 'external-cli')
+  const isExternal = isExternalType(type)
   return {
     isLocked: agent.locked === true,
     isWorker: isWorkerKind,

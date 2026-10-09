@@ -431,8 +431,8 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 // handleCancelFrame is the frame dispatcher's entry point for a `cancel`
 // frame: parse, validate session_id, resolve the session/tree scope, and
 // route to handleCancelWithScope. Kept out of dispatchFrame's own body —
-// same reasoning as stringPtrOrEmpty and handleSessionCloseFrame /
-// handleSessionModeUpdateFrame elsewhere in that switch — so dispatchFrame's
+// same reasoning as stringPtrOrEmpty and handleSessionModeUpdateFrame
+// elsewhere in that switch — so dispatchFrame's
 // grandfathered gocyclo budget (scripts/budgets/gocyclo.txt) doesn't grow;
 // the session-vs-tree scope check (stopAll) was the one that pushed it over.
 func (wh *wsHandlerReadLoop) handleCancelFrame(data []byte) wsHandlerReadLoopFlow {

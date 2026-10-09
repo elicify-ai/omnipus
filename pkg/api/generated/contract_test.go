@@ -529,18 +529,6 @@ func TestContract_ReplayWarningFrame_ZeroValue(t *testing.T) {
 		"zero value has empty required fields")
 }
 
-// ── SessionCloseAckFrame ──────────────────────────────────────────────────────
-// Traces to: contracts/asyncapi.yaml components.schemas.SessionCloseAckFrame
-
-func TestContract_SessionCloseAckFrame_Populated(t *testing.T) {
-	mustPassAsyncAPI(t, "SessionCloseAckFrame", FixtureSessionCloseAckFrame_Populated())
-}
-
-func TestContract_SessionCloseAckFrame_ZeroValue(t *testing.T) {
-	mustFailAsyncAPI(t, "SessionCloseAckFrame", FixtureSessionCloseAckFrame_ZeroValue(),
-		"zero value has empty required type and session_id fields")
-}
-
 // ── DevicePairingRequestFrame ─────────────────────────────────────────────────
 // Traces to: contracts/asyncapi.yaml components.schemas.DevicePairingRequestFrame
 
@@ -721,7 +709,6 @@ func TestContract_AllFrames_TypeFieldPresent(t *testing.T) {
 		{"SystemOverloadFrame", FixtureSystemOverloadFrame_Populated()},
 		{"CancelStageFrame", FixtureCancelStageFrame_Populated()},
 		{"ReplayWarningFrame", FixtureReplayWarningFrame_Populated()},
-		{"SessionCloseAckFrame", FixtureSessionCloseAckFrame_Populated()},
 		{"DevicePairingRequestFrame", FixtureDevicePairingRequestFrame_Populated()},
 	}
 
@@ -1845,42 +1832,6 @@ func TestContract_StorageStats_Differentiation(t *testing.T) {
 		"StorageStats with data vs empty must produce different JSON")
 	mustPassComponent(t, "StorageStats", f1)
 	mustPassComponent(t, "StorageStats", f2)
-}
-
-// ── SessionCloseFrame ─────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/SessionCloseFrame.yaml
-
-func TestContract_SessionCloseFrame_Populated(t *testing.T) {
-	// Both required fields set.
-	// Traces to: SessionCloseFrame.yaml — required: [type, session_id]
-	mustPassAsyncAPI(t, "SessionCloseFrame", FixtureSessionCloseFrame_Populated())
-}
-
-func TestContract_SessionCloseFrame_ZeroValue(t *testing.T) {
-	// type="" (const: session_close), session_id="" (minLength: 1).
-	// Traces to: SessionCloseFrame.yaml — type has const constraint; session_id has minLength
-	mustFailAsyncAPI(t, "SessionCloseFrame", FixtureSessionCloseFrame_ZeroValue(),
-		"zero value has empty type (const) and session_id (minLength: 1)")
-}
-
-func TestContract_SessionCloseFrame_Edge(t *testing.T) {
-	// Long session_id (valid per minLength: 1).
-	// Traces to: SessionCloseFrame.yaml
-	mustPassAsyncAPI(t, "SessionCloseFrame", FixtureSessionCloseFrame_Edge())
-}
-
-func TestContract_SessionCloseFrame_Differentiation(t *testing.T) {
-	// Two SessionCloseFrame fixtures with different session IDs produce different JSON.
-	f1 := FixtureSessionCloseFrame_Populated()
-	f2 := FixtureSessionCloseFrame_Edge()
-	raw1, err := json.Marshal(f1)
-	require.NoError(t, err)
-	raw2, err := json.Marshal(f2)
-	require.NoError(t, err)
-	assert.NotEqual(t, string(raw1), string(raw2),
-		"two different SessionCloseFrame fixtures must produce different JSON")
-	mustPassAsyncAPI(t, "SessionCloseFrame", f1)
-	mustPassAsyncAPI(t, "SessionCloseFrame", f2)
 }
 
 // ── AuditLogToggleRequest ─────────────────────────────────────────────────────

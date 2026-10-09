@@ -53,7 +53,6 @@ import type {
   ReplayWarningFrame,
   ReplayWarningStats,
   CancelStageFrame,
-  SessionCloseAckFrame,
   DevicePairingRequestFrame,
   // Client → server frames
   AuthFrame,
@@ -62,7 +61,6 @@ import type {
   PingFrame,
   AttachSessionFrame,
   DevicePairingResponseFrame,
-  SessionCloseFrame,
 } from '@/lib/api/generated/asyncapi-types'
 
 // Re-export canonical names from generated file
@@ -98,7 +96,6 @@ export type {
   ReplayWarningFrame,
   ReplayWarningStats,
   CancelStageFrame,
-  SessionCloseAckFrame,
   DevicePairingRequestFrame,
   AuthFrame,
   MessageFrame,
@@ -106,29 +103,7 @@ export type {
   PingFrame,
   AttachSessionFrame,
   DevicePairingResponseFrame,
-  SessionCloseFrame,
 }
-
-// ── WsXxx legacy aliases (active callers only) ───────────────────────────────
-//
-// Aliases retained for active callers in src/store/chat.ts,
-// src/store/toolApproval.ts, and src/components/chat/SubagentBlock.tsx.
-// New code should import canonical names from @/lib/api/generated/asyncapi-types.
-//
-// WsExecApprovalRequestFrame was removed with the retired exec-only approval
-// flow (ADR-036 §3.4) — ExecApprovalRequestFrame no longer exists as a wire
-// type; it had no remaining callers (SubagentBlock.tsx / ToolApprovalModal /
-// wsParser.test.ts never actually imported it despite the stale comment here).
-
-export type WsSubagentStartFrame = SubagentStartFrame
-export type WsSubagentEndFrame = SubagentEndFrame
-export type WsReplayMessageFrame = ReplayMessageFrame
-export type WsRateLimitFrame = RateLimitFrame
-export type WsToolApprovalRequiredFrame = ToolApprovalRequiredFrame
-export type WsSessionStateFrame = SessionStateFrame
-
-// WsReceiveFrame: union of all server→client frames.
-export type WsReceiveFrame = ServerFrame
 
 // ── Dropped-frame counter ─────────────────────────────────────────────────────
 //
@@ -396,10 +371,8 @@ function getWsUrl(): string {
 // ── Connection ────────────────────────────────────────────────────────────────
 
 export interface WsConnectionCallbacks { // not-wire-format: SPA-only callback interface passed to WsConnection constructor. Never serialized to or from the gateway — purely internal to the SPA's WebSocket connection manager.
-  /** Batch callback: called at most once per rAF with all validated frames. Preferred over onFrame. */
+  /** Batch callback: called at most once per rAF with all validated server frames. */
   onFrames?: (frames: ServerFrame[]) => void
-  /** Legacy single-frame callback. Used when onFrames is not provided. */
-  onFrame?: (frame: ServerFrame) => void
   onConnected: () => void
   onDisconnected: () => void
   onError: (error: string) => void
@@ -671,13 +644,9 @@ export class WsConnection {
     const batch = this._inboundBatch
     this._inboundBatch = []
 
-    if (this.callbacks.onFrames) {
-      this.callbacks.onFrames(batch)
-    } else if (this.callbacks.onFrame) {
-      for (const frame of batch) {
-        this.callbacks.onFrame(frame)
-      }
-    }
+    // The batch callback is the only delivery path (DEL-F19): the legacy
+    // single-frame fallback has been removed.
+    this.callbacks.onFrames?.(batch)
   }
 
   send(frame: ClientFrame): boolean {

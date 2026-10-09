@@ -28,7 +28,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
 import { useChatStore, getMessages, __resetFinishedTurnIdsForTests } from '../chat'
 import { useSessionStore } from '../session'
-import type { WsSessionStateFrame, WsReplayMessageFrame, TokenFrame, DoneFrame } from '@/lib/ws'
+import type { SessionStateFrame, ReplayMessageFrame, TokenFrame, DoneFrame } from '@/lib/ws'
 
 const SID = 'reconnect-active-turn-session'
 const AGENT_ID = 'agent-jim'
@@ -66,7 +66,7 @@ function resetStores() {
 
 beforeEach(resetStores)
 
-function sessionStateWithActiveTurn(): WsSessionStateFrame {
+function sessionStateWithActiveTurn(): SessionStateFrame {
   return {
     type: 'session_state',
     user_id: 'user-1',
@@ -80,7 +80,7 @@ function sessionStateWithActiveTurn(): WsSessionStateFrame {
   }
 }
 
-function sessionStateWithoutActiveTurn(): WsSessionStateFrame {
+function sessionStateWithoutActiveTurn(): SessionStateFrame {
   return {
     type: 'session_state',
     user_id: 'user-1',
@@ -89,7 +89,7 @@ function sessionStateWithoutActiveTurn(): WsSessionStateFrame {
   }
 }
 
-function replayMessage(index: number): WsReplayMessageFrame {
+function replayMessage(index: number): ReplayMessageFrame {
   return {
     type: 'replay_message',
     session_id: SID,

@@ -11,9 +11,9 @@ import { queryClient } from '@/lib/queryClient'
 import { tasksQueryKeys } from '@/lib/api'
 import type { Agent } from '@/lib/api'
 import type {
-  WsSubagentStartFrame,
-  WsSubagentEndFrame,
-} from '@/lib/ws'
+  SubagentStartFrame,
+  SubagentEndFrame,
+} from '@/lib/api/generated/asyncapi-types'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { logDiagnostic } from '@/lib/telemetry'
@@ -2150,7 +2150,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
 
         case 'subagent_start': {
           if (!targetSid) break
-          const sf = frame as WsSubagentStartFrame
+          const sf = frame as SubagentStartFrame
           withBucket(targetSid, (b) => {
             // Opus F4 — see bucketHasSpan's own doc comment.
             if (bucketHasSpan(b, sf.span_id)) return {}
@@ -2232,7 +2232,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
 
         case 'subagent_end': {
           if (!targetSid) break
-          const ef = frame as WsSubagentEndFrame
+          const ef = frame as SubagentEndFrame
           withBucket(targetSid, (b) => {
             return produce(b, (draft) => {
               // Builds the terminal span record from whichever running span

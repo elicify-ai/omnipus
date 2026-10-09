@@ -59,13 +59,14 @@ properties:
     description: >
       C-ARCHIVE (session-core FR-004): which view(s) of the single append-only
       archive this entry belongs to — "chat" (rendered in the conversation),
-      "model" (part of the model context window), or "both". One authoritative
-      content entry format carries both views, so the same persisted entry backs
-      the chat rendering and the model history; there is no separate
-      model-content store. Optional and additive: entries written before this
-      field existed carry no value, and the server treats absent as unknown
-      rather than re-deriving a view. The reader projects this archive onto the
-      chat/model views; it is a per-entry classification, never a second store.
+      "model" (part of the model context window), or "both". Producer-side
+      classification: the writer defaults an unset value to "both" (an ordinary
+      turn lives in both views). Optional and additive: entries written before
+      this field existed carry no value, and the server treats absent as unknown
+      rather than re-deriving a view. Projecting this one archive onto the
+      chat/model view is the FR-004 target and is not yet implemented on the read
+      side; the field is a per-entry classification only, never by itself a
+      second store.
     example: "both"
   role:
     type: string

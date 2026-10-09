@@ -1351,8 +1351,6 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 		} else {
 			slog.Warn("ws: attach_session with empty session_id", "chat_id", wh.chatID)
 		}
-	case string(generated.WsFrameTypeSessionClose):
-		return wh.handleSessionCloseFrame(data)
 	case string(generated.WsFrameTypeSessionModeUpdate):
 		return wh.handleSessionModeUpdateFrame(data)
 	case string(generated.WsFrameTypePing):
@@ -1455,8 +1453,6 @@ func wsFrameSchemaName(frameType string) string {
 		return "AttachSessionFrame"
 	case string(generated.WsFrameTypeDevicePairingResponse):
 		return "DevicePairingResponseFrame"
-	case string(generated.WsFrameTypeSessionClose):
-		return "SessionCloseFrame"
 	case string(generated.WsFrameTypeSessionModeUpdate):
 		return "SessionModeUpdateFrame"
 	case string(generated.WsFrameTypeWhatsappPairingSubscribe):

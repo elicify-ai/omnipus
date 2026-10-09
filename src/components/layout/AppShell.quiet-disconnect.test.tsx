@@ -124,7 +124,7 @@ MockWebSocket.CLOSED = 3
 /** Wires a real WsConnection to the real store exactly like WsLifecycle does. */
 function wireProductionCallbacks(): WsConnection {
   return new WsConnection({
-    onFrame: () => {},
+    onFrames: () => {},
     onConnected: () => {
       useConnectionStore.getState().setConnected(true)
       useConnectionStore.getState().setConnectionError(null)
