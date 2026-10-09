@@ -97,6 +97,38 @@ type ArchiveRecord struct {
 	// the tool call of a role "tool" payload (Decision A): the producing
 	// assistant entry plus the call id, not tool_call_id alone.
 	ToolResultFor *ToolResultFor `json:"tool_result_for,omitempty"`
+
+	// ModelOrigin is the PRIVATE, per-record provenance marker CONV writes on a
+	// converted record (ARCHITECT-ANSWER-CONV-PROVENANCE.md, CONV-P A). Absent
+	// means the record was written live by EncodeModelPayload from an admitted
+	// providers.Message; ModelOriginConvArchive means CONV copied a saved
+	// provider-message line under the fixed D2 rule; ModelOriginConvRebuilt is
+	// as conv_archive but the source archive was flagged hydrated (built from
+	// the UI transcript), so the original tool-result bytes are not provable.
+	// It is a closed enum: one value fully determines which fields were copied,
+	// mirrored or never present. It is disk-only and never crosses the
+	// gateway/SPA boundary.
+	ModelOrigin string `json:"model_origin,omitempty"`
+}
+
+// ModelOrigin values (CONV-P A). Absent (the empty string) is the live case.
+const (
+	// ModelOriginConvArchive marks a record CONV converted from a saved
+	// provider-message line.
+	ModelOriginConvArchive = "conv_archive"
+	// ModelOriginConvRebuilt marks a converted record whose source archive was
+	// flagged hydrated (the "rebuilt from the UI transcript" fact), so the
+	// original tool-result bytes cannot be claimed.
+	ModelOriginConvRebuilt = "conv_rebuilt"
+)
+
+func validModelOrigin(o string) bool {
+	switch o {
+	case "", ModelOriginConvArchive, ModelOriginConvRebuilt:
+		return true
+	default:
+		return false
+	}
 }
 
 // Validate refuses an envelope that is malformed or that violates the
@@ -145,12 +177,52 @@ func (r ArchiveRecord) Validate() error {
 		if r.ToolResultFor == nil {
 			return fmt.Errorf("archive record %s: a role \"tool\" payload must carry tool_result_for", r.ID)
 		}
-		if r.ToolResultFor.AssistantEntryID == "" || r.ToolResultFor.ToolCallID == "" {
-			return fmt.Errorf("archive record %s: tool_result_for must name the assistant entry and call id", r.ID)
+		if r.ToolResultFor.ToolCallID == "" {
+			return fmt.Errorf("archive record %s: tool_result_for must name the call id", r.ID)
+		}
+		// A LIVE role "tool" result may carry an empty AssistantEntryID when its
+		// producing assistant occurrence is not provable from the archive (the
+		// pre-cutover runtime tolerated an orphan result; the FR-006 rollback
+		// tests append one). A CONVERTED (conv_*) result must name its exact
+		// producing occurrence — CONV refuses an unprovable join (CONV-P A D3(3)).
+		if r.ToolResultFor.AssistantEntryID == "" && r.ModelOrigin != "" {
+			return fmt.Errorf("archive record %s: a %s tool result must name its producing assistant occurrence", r.ID, r.ModelOrigin)
 		}
 		if r.ToolResultFor.ToolCallID != r.ModelMessage.ToolCallID {
 			return fmt.Errorf("archive record %s: tool_result_for call id %q must equal model_message.tool_call_id %q",
 				r.ID, r.ToolResultFor.ToolCallID, r.ModelMessage.ToolCallID)
+		}
+	}
+
+	if err := r.validateModelOrigin(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateModelOrigin enforces the CONV-P A provenance invariant (a write-side
+// gate, not a convention): the marker is a closed enum, it may appear only on a
+// record that carries a model_message, and a conv_* record may never look as if
+// a parsed arguments map or a top-level thought_signature was saved.
+func (r ArchiveRecord) validateModelOrigin() error {
+	if !validModelOrigin(r.ModelOrigin) {
+		return fmt.Errorf("archive record %s: invalid model_origin %q", r.ID, r.ModelOrigin)
+	}
+	if r.ModelOrigin == "" {
+		return nil
+	}
+	if r.ModelMessage == nil {
+		return fmt.Errorf("archive record %s: model_origin %q requires a model_message", r.ID, r.ModelOrigin)
+	}
+	for i, tc := range r.ModelMessage.ToolCalls {
+		if tc.ThoughtSignature != "" {
+			return fmt.Errorf("archive record %s: conv_* tool call %d must not carry a top-level thought_signature", r.ID, i)
+		}
+		if len(tc.Arguments) > 0 {
+			return fmt.Errorf("archive record %s: conv_* tool call %d must not carry a parsed arguments map", r.ID, i)
+		}
+		if tc.Function == nil || tc.Name == "" || tc.Name != tc.Function.Name {
+			return fmt.Errorf("archive record %s: conv_* tool call %d name must mirror a non-empty function.name", r.ID, i)
 		}
 	}
 	return nil

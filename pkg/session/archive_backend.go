@@ -99,6 +99,10 @@ type archiveBackendMeta struct {
 	Retracted  []memory.ArchiveSpan   `json:"retracted,omitempty"`
 	Hydrated   bool                   `json:"hydrated,omitempty"`
 	Projection []archiveProjectionRow `json:"projection,omitempty"`
+	// ConvSourceTorn records that the one-time CONV conversion tolerated a torn
+	// final line (N2=B) and therefore RETAINED the legacy source bytes rather
+	// than retiring them. A later boot must not delete them either.
+	ConvSourceTorn bool `json:"conv_source_torn,omitempty"`
 }
 
 // archiveProjectionRow mirrors memory's unexported projectionEntry so the state
@@ -615,11 +619,13 @@ func appendPayload(store *ArchiveDayStore, msg providers.Message, callIdx map[st
 		Source:       &EntrySource{Kind: sourceKindForRole(msg.Role)},
 	}
 	if msg.Role == "tool" {
-		assistantID := callIdx[msg.ToolCallID]
-		if msg.ToolCallID == "" || assistantID == "" {
-			return fmt.Errorf("archive_backend: tool result %q has no matching assistant tool call", msg.ToolCallID)
+		if msg.ToolCallID == "" {
+			return fmt.Errorf("archive_backend: tool result has no tool_call_id")
 		}
-		rec.ToolResultFor = &ToolResultFor{AssistantEntryID: assistantID, ToolCallID: msg.ToolCallID}
+		// Live orphan results are tolerated: the producing assistant occurrence
+		// is left empty (unproven), matching the pre-cutover runtime. A CONVERTED
+		// record never carries an empty producer (CONV refuses unprovable joins).
+		rec.ToolResultFor = &ToolResultFor{AssistantEntryID: callIdx[msg.ToolCallID], ToolCallID: msg.ToolCallID}
 	}
 	_, err = store.Append(rec)
 	return err

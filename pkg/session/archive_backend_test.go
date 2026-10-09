@@ -206,12 +206,17 @@ func TestArchiveBackend_ToolResultJoinsItsAssistantOccurrence(t *testing.T) {
 	require.Equal(t, "call_0", all[1].Message.ToolCallID)
 }
 
-// An ORPHAN tool result (no matching assistant call) is refused visibly rather
-// than stored — the archive forbids an unjoined result.
-func TestArchiveBackend_OrphanToolResultIsRefused(t *testing.T) {
+// A LIVE orphan tool result (no matching assistant call) is tolerated with an
+// UNPROVEN producer (empty assistant id) — the pre-cutover runtime stored such a
+// result, and the FR-006 rollback tests append one. (A CONVERTED result never
+// carries an empty producer; CONV refuses unprovable joins.)
+func TestArchiveBackend_OrphanToolResultIsStoredWithUnprovenProducer(t *testing.T) {
 	b := newTestBackend(t)
 	const key = "sess-1"
-	err := b.appendMessage(key, providers.Message{Role: "tool", ToolCallID: "call_missing", Content: "orphan"})
-	require.Error(t, err, "an orphan tool result must be refused")
-	require.Empty(t, b.GetHistory(key), "nothing was written for the refused orphan")
+	ctx := context.Background()
+	require.NoError(t, b.appendMessage(key, providers.Message{Role: "tool", ToolCallID: "call_missing", Content: "orphan"}))
+	all, err := b.ReadArchive(ctx, key)
+	require.NoError(t, err)
+	require.Len(t, all, 1, "the live orphan result is stored")
+	require.Equal(t, "call_missing", all[0].Message.ToolCallID)
 }
