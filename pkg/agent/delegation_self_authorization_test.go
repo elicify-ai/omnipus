@@ -149,35 +149,36 @@ func TestDelegationDenyChecker_PlantedRecordCannotWidenAnExistingEdge(t *testing
 	}
 }
 
-func TestDelegationDenyChecker_GeneralPurposeSelfEdgesRequireIdentityModeAndDepth(t *testing.T) {
-	seedWorkspaceGraph(t, testWS, true, []graphEdge{
-		edge("jim", "jim", []string{"direct"}, intPtr(1)),
-		edge("worker", "worker", []string{"task"}, intPtr(2)),
+// FR-014 (session-core U5a) supersedes the rule this test formerly encoded
+// ("a self-edge is required, and its mode/depth gate a self-delegation"). An
+// eligible native caller's self-delegation now needs NO self-edge at all, so
+// this test asserts the FR-014 outcome through the real production wiring (the
+// caller's own delegate tool), with a named un-edged target as the control that
+// keeps a "blanket allow" from passing.
+func TestDelegationDenyChecker_EligibleSelfDelegationNeedsNoSelfEdge(t *testing.T) {
+	// Graph exists but carries NO self-edge for jim (only a non-self edge).
+	dt, spy := u5aDelegateTool(t, "jim", []graphEdge{
+		edge("jim", "ray", []string{"background"}, nil),
 	})
 
-	jimDirect := buildDelegationDenyCheckerForDelegate("jim", config.PerformanceConfig{}, config.DelegationModeBackground)
-	if denial := jimDirect(ctxWS(testWS, 0), "jim"); denial != nil {
-		t.Fatalf("jim explicit self edge denied: %+v", denial)
+	res := dt.Execute(u5aCallerCtx("jim", 0), map[string]any{
+		"task":     "self helper",
+		"agent_id": "jim",
+	})
+	if res == nil || res.IsError {
+		t.Fatalf("FR-014: an eligible caller's self-delegation must be permitted with NO "+
+			"self-edge; got: %+v", res)
 	}
-	if denial := jimDirect(ctxWS(testWS, 1), "jim"); denial == nil {
-		t.Fatal("jim self edge ignored its depth cap")
-	}
-	jimTask := buildDelegationDenyCheckerForDelegate("jim", config.PerformanceConfig{}, config.DelegationModeTask)
-	if denial := jimTask(ctxWS(testWS, 0), "jim"); denial == nil {
-		t.Fatal("jim self edge ignored its mode restriction")
-	}
-
-	workerTask := buildDelegationDenyCheckerForDelegate("worker", config.PerformanceConfig{}, config.DelegationModeTask)
-	if denial := workerTask(ctxWS(testWS, 1), "worker"); denial != nil {
-		t.Fatalf("worker explicit task self edge denied: %+v", denial)
-	}
-	workerDirect := buildDelegationDenyCheckerForDelegate("worker", config.PerformanceConfig{}, config.DelegationMode("await"))
-	if denial := workerDirect(ctxWS(testWS, 0), "worker"); denial == nil {
-		t.Fatal("worker self edge allowed an unlisted mode")
+	if !spy.called {
+		t.Fatal("FR-014: the allowed self-delegation must reach the launcher")
 	}
 
-	mia := buildDelegationDenyCheckerForDelegate("mia", config.PerformanceConfig{}, config.DelegationMode("await"))
-	if denial := mia(ctxWS(testWS, 0), "mia"); denial == nil {
-		t.Fatal("non-general identity self-delegation was allowed")
+	// Control: a NAMED, un-edged non-self target is still refused.
+	ctl := dt.Execute(u5aCallerCtx("jim", 0), map[string]any{
+		"task":     "cross",
+		"agent_id": "ava", // real agent, no jim→ava edge
+	})
+	if ctl == nil || !ctl.IsError {
+		t.Fatalf("control: a named un-edged target must still be denied, got: %+v", ctl)
 	}
 }

@@ -10,26 +10,32 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// Regression coverage for the self-delegation authorization bypass and its
-// intentionally-asymmetric counterpart. The delegate tool launches a distinct session
-// instance, so delegate(agent_id=self) IS delegation and is ALWAYS denied
-// (buildDelegationDenyCheckerForDelegate). The task tools, in contrast, treat a
-// self-target as a no-op reassignment to the task's existing owner and correctly
-// ALLOW it (buildDelegationDenyCheckerForTaskReassignment).
+// Regression coverage for self-delegation and its intentionally-asymmetric
+// counterpart under FR-014 (session-core U5a).
 //
-// This file proves BOTH halves end-to-end, not just at the raw checker level:
-//   - delegate self-target DENIED — in the checker, through DelegateTool.Execute
-//     and through DelegateTool.Execute, with the launcher never reached;
-//   - task self-target ALLOWED — through the real registerSharedTools construction
-//     path (TestTaskCreate_SelfAssignmentAllowedThroughRegisterSharedTools);
-//   - the cross-workspace task gate (NewSysagentDelegationDeny) enforces the same
-//     asymmetry (TestNewSysagentDelegationDeny_SelfAllowedNonSelfGated).
+// FR-014 supersedes the retired ADR-091 rule "delegate(agent_id=self) is ALWAYS
+// denied". An ELIGIBLE native MAIN/WORKER caller may now self-delegate with NO
+// self-edge — the delegate tool launches a distinct session instance, and that
+// is permitted for an eligible caller. The task tools remain as before: a
+// self-target is a no-op reassignment to the task's existing owner and is
+// ALLOWED without consulting the graph (buildDelegationDenyCheckerForTaskReassignment,
+// exempt=true).
+//
+// This file proves both halves end-to-end through the REAL production wiring:
+//   - delegate self-target ALLOWED for an eligible native caller (mia) — via
+//     the caller's own registerSharedTools-built delegate tool, with the
+//     launcher reached (TestDelegateTool_EligibleSelfTargetLaunchesAtExecute);
+//   - a named, un-edged NON-self target is still DENIED before the launcher
+//     runs (TestDelegateTool_UnedgedTargetDeniedBeforeLauncher) — the live
+//     "authorization precedes launch" property, kept on the case that still
+//     refuses;
+//   - task self-target ALLOWED — through the real registerSharedTools
+//     construction path (TestTaskCreate_SelfAssignmentAllowedThroughRegisterSharedTools).
 //
 // create_task has a SECOND refusal — an unresolvable calling agent — which is
 // not a delegation decision at all and must never be mistaken for one. It is
@@ -41,103 +47,88 @@ import (
 // which must stay green.
 
 // spySessionLauncher records whether Launch was invoked. A denied delegation
-// must never reach the session launcher.
+// must never reach the session launcher; an ALLOWED one must reach it exactly
+// once and be observable (called). It returns a well-formed result so an
+// allowed self-delegation can run to completion through DelegateTool.Execute
+// without spawning a real child.
 type spySessionLauncher struct {
 	called bool
+	req    steer.LaunchRequest
 }
 
-func (s *spySessionLauncher) Launch(context.Context, steer.LaunchRequest) (steer.LaunchResult, error) {
+func (s *spySessionLauncher) Launch(_ context.Context, req steer.LaunchRequest) (steer.LaunchResult, error) {
 	s.called = true
-	return steer.LaunchResult{}, nil
+	s.req = req
+	return steer.LaunchResult{SessionID: "spy-child-session", Generation: 1}, nil
 }
 
 func (*spySessionLauncher) Dispatch(context.Context, string, int) (steer.DispatchResult, error) {
-	return steer.DispatchResult{}, nil
+	return steer.DispatchResult{State: steer.DispatchRunning, Generation: 1}, nil
 }
 
-// TestDelegationDenyChecker_SelfTargetDeniedForBackgroundDelegate checks the gate
-// in isolation for the delegate tool's background mode: a self-target
-// with selfAssignmentExempt=false falls through to the graph lookup and is denied
-// with trust_set (no self-edge can exist).
-func TestDelegationDenyChecker_SelfTargetDeniedForBackgroundDelegate(t *testing.T) {
-	// A real, NON-self edge exists (mia→ray); the self-target must still be denied.
-	seedWorkspaceGraph(t, testWS, true, []graphEdge{
-		edge("mia", "ray", []string{"background"}, nil),
-	})
-	check := buildDelegationDenyCheckerForDelegate("mia", config.PerformanceConfig{}, config.DelegationModeBackground)
-
-	denial := check(ctxWS(testWS, 0), "mia") // self-target
-	if denial == nil {
-		t.Fatal("self-targeted background delegate() must be DENIED, got allow (self-delegation bypass)")
-	}
-	if denial.Policy != tools.DenyTrustSet {
-		t.Fatalf("expected trust_set denial for self-delegation (no self-edge can exist), got: %q (%s)",
-			denial.Policy, denial.Reason)
-	}
-}
-
-// newSelfTargetDelegateTool builds a DelegateTool wired EXACTLY as
-// registerSharedTools wires it (the background deny checker uses
-// selfAssignmentExempt=false), for caller "mia".
-func newSelfTargetDelegateTool() (*tools.DelegateTool, *spySessionLauncher) {
-	dt := tools.NewDelegateTool("model", 1000, 0.7)
-	spy := &spySessionLauncher{}
-	dt.SetSessionLauncher(spy)
-	dt.SetDelegationDenyCheckerBackground(
-		buildDelegationDenyCheckerForDelegate("mia", config.PerformanceConfig{}, config.DelegationModeBackground))
-	return dt, spy
-}
-
-// TestDelegateTool_SelfTargetDeniedAtExecute drives an actual DelegateTool.Execute
-// call with agent_id equal to the caller's own id and asserts it is denied
-// end-to-end (not merely that the checker returns non-nil in isolation). The
-// launcher must never run.
-func TestDelegateTool_SelfTargetDeniedAtExecute(t *testing.T) {
-	seedWorkspaceGraph(t, testWS, true, []graphEdge{
+// TestDelegationDenyChecker_EligibleSelfTargetAllowedForBackgroundDelegate pins
+// FR-014 at the gate's own level (via the production wiring's delegate tool):
+// an eligible native caller (mia) self-targeting under the background mode is
+// PERMITTED with no self-edge. The retired ADR-091 rule denied this with
+// trust_set; FR-014 replaces it.
+func TestDelegationDenyChecker_EligibleSelfTargetAllowedForBackgroundDelegate(t *testing.T) {
+	dt, spy := u5aDelegateTool(t, "mia", []graphEdge{
 		edge("mia", "ray", []string{"background"}, nil),
 	})
 
-	dt, spy := newSelfTargetDelegateTool()
-	res := dt.Execute(ctxWS(testWS, 0), map[string]any{
-		"task":     "attempt self-delegation",
+	res := dt.Execute(u5aCallerCtx("mia", 0), map[string]any{
+		"task":     "self helper",
+		"agent_id": "mia", // self-target
+	})
+	if res == nil || res.IsError {
+		t.Fatalf("FR-014: an eligible self-targeted background delegate() must be ALLOWED; got: %+v", res)
+	}
+	if !spy.called {
+		t.Fatal("FR-014: the allowed self-delegation must reach the launcher")
+	}
+}
+
+// TestDelegateTool_EligibleSelfTargetLaunchesAtExecute drives an actual
+// DelegateTool.Execute — the caller's OWN production-wired tool — with
+// agent_id equal to the caller's own id and asserts FR-014 end-to-end: the
+// self-delegation is ALLOWED and reaches the launcher (a helper is started).
+func TestDelegateTool_EligibleSelfTargetLaunchesAtExecute(t *testing.T) {
+	dt, spy := u5aDelegateTool(t, "mia", []graphEdge{
+		edge("mia", "ray", []string{"background"}, nil),
+	})
+
+	res := dt.Execute(u5aCallerCtx("mia", 0), map[string]any{
+		"task":     "self-delegation",
 		"agent_id": "mia", // caller's OWN configured id
 	})
-	if res == nil || !res.IsError {
-		t.Fatalf("self-target delegate() must return an error result, got: %+v", res)
+	if res == nil || res.IsError {
+		t.Fatalf("FR-014: an eligible self-target delegate() must succeed, got: %+v", res)
 	}
-	// The structured DelegationFailure payload must carry the trust_set policy.
-	if !strings.Contains(res.ForLLM, `"error":"delegation_denied"`) ||
-		!strings.Contains(res.ForLLM, `"policy":"trust_set"`) {
-		t.Fatalf("expected a trust_set delegation_denied payload, got ForLLM: %q", res.ForLLM)
-	}
-	if spy.called {
-		t.Fatal("launcher MUST NOT run for a denied self-target delegation")
+	if !spy.called {
+		t.Fatal("FR-014: the allowed self-delegation must reach the launcher")
 	}
 }
 
-// TestDelegateTool_SelfTargetDeniedBeforeLauncher proves that authorization
-// runs before the production launch boundary. A denied self-target must not
-// create a durable session.
-func TestDelegateTool_SelfTargetDeniedBeforeLauncher(t *testing.T) {
-	seedWorkspaceGraph(t, testWS, true, []graphEdge{
+// TestDelegateTool_UnedgedTargetDeniedBeforeLauncher proves authorization still
+// runs before the production launch boundary on the case that still refuses: a
+// NAMED, un-edged non-self target is denied and must not create a durable
+// session. (The eligible self case now reaches the launcher — pinned above —
+// so this test keeps the live "deny precedes launch" property on the refusal
+// path.)
+func TestDelegateTool_UnedgedTargetDeniedBeforeLauncher(t *testing.T) {
+	dt, spy := u5aDelegateTool(t, "mia", []graphEdge{
 		edge("mia", "ray", []string{"background"}, nil),
 	})
 
-	dt := tools.NewDelegateTool("model", 1000, 0.7)
-	spy := &spySessionLauncher{}
-	dt.SetSessionLauncher(spy)
-	dt.SetDelegationDenyCheckerBackground(
-		buildDelegationDenyCheckerForDelegate("mia", config.PerformanceConfig{}, config.DelegationModeBackground))
-
-	res := dt.Execute(ctxWS(testWS, 0), map[string]any{
-		"task":     "attempt self-delegation",
-		"agent_id": "mia",
+	res := dt.Execute(u5aCallerCtx("mia", 0), map[string]any{
+		"task":     "cross delegation",
+		"agent_id": "ava", // real agent, no mia→ava edge
 	})
 	if res == nil || !res.IsError {
-		t.Fatalf("self-target delegate() must be denied, got: %+v", res)
+		t.Fatalf("an un-edged non-self delegate() must be denied, got: %+v", res)
 	}
 	if spy.called {
-		t.Fatal("launcher must not run for a denied self-target delegation")
+		t.Fatal("launcher must not run for a denied delegation")
 	}
 }
 
