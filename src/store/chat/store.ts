@@ -752,9 +752,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
     },
 
     resetSessionForReplay: (sessionId) => {
-      // Clear all transient state so the upcoming replay rebuilds from
-      // scratch. This is the targeted reset for WS reconnect: without it,
-      // replay frames append duplicate bubbles to the existing bucket.
+      // Rebuild transient replay state; restart boot/list-version and
+      // dismissal survive withBucket's shallow merge, so reconnect cannot
+      // revive a notice the user dismissed on this boot.
       sawReplayMessageThisTurn[sessionId] = false
       replayingStartedAt[sessionId] = Date.now()
       // Re-attach refreshes the replay window — cancel any stale

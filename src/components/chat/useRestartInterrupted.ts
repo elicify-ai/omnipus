@@ -6,9 +6,9 @@ import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 
 /**
- * Saved lifecycle (REST `Session.lifecycle_state`) of the active chat, read from
- * the same ['sessions'] list the sidebar renders. Undefined while the list is
- * loading, failed, or has no row for this chat.
+ * Saved lifecycle and successful-read version from the sidebar's shared
+ * ['sessions'] list. The optional lifecycle can be unknown; a failed refetch
+ * can retain older data, which must not clear a newly confirmed restart.
  *
  * Why the saved state and not the WebSocket attach: no WS frame carries the
  * lifecycle, and `session_snapshot.reason === 'boot_mismatch'` is only seen by
@@ -20,14 +20,18 @@ import { useSessionStore } from '@/store/session'
  * main.tsx provides) so the status rows that call this need no provider.
  */
 function useSavedLifecycle(sessionId: string | null) {
-  const { data } = useQuery({
+  const { data, isFetching } = useQuery({
     queryKey: ['sessions'],
     queryFn: () => fetchSessions(),
     staleTime: 15_000,
     enabled: !!sessionId && sessionId !== '__pending',
-    select: (list) => list.find((session) => session.id === sessionId)?.lifecycle_state,
+    select: (list) => list.find((session) => session.id === sessionId),
   }, queryClient)
-  return data
+  return {
+    state: data?.lifecycle_state, stopCause: data?.stop_note?.cause,
+    version: queryClient.getQueryState(['sessions'])?.dataUpdateCount ?? 0,
+    settled: !isFetching,
+  }
 }
 
 /**
@@ -39,10 +43,12 @@ function useSavedLifecycle(sessionId: string | null) {
  * a failed refetch keeping old data — cannot bring it back until the saved value
  * is seen at something else.
  *
- * Degraded: while the list is loading, errored or lacks the row the saved value
- * is unknown, so this is false — no notice, and the older boot-mismatch
- * "couldn't be finished" statuses behave exactly as before. It never reports
- * Working for a chat it knows nothing about.
+ * A held-open tab also knows a restart cut its answer off once its boot-mismatch
+ * catch-up completes. That per-chat signal chooses the same single notice even
+ * while REST is pending, missing the optional lifecycle, or failed. A later
+ * successful list read can clear it when another tab continued the chat. Known
+ * boundary: fresh/reloaded tabs still need the optional saved lifecycle;
+ * unknown_position alone proves no interruption.
  */
 export function useRestartInterrupted(): boolean {
   const sessionId = useSessionStore((s) => s.activeSessionId)
@@ -50,8 +56,9 @@ export function useRestartInterrupted(): boolean {
   const running = useChatStore((s) =>
     s.isStreaming || (sessionId != null && s.sessionsById[sessionId]?.activeTurnId != null),
   )
+  const { observed, progressed } = useObservedRestart(sessionId, saved)
   const dismissed = useChatStore((s) => (sessionId != null && !!s.sessionsById[sessionId]?.restartNoticeDismissed))
-  return saved === 'interrupted' && !running && !dismissed
+  return ((observed && !progressed) || saved.state === 'interrupted') && !running && !dismissed
 }
 
 /** Ends the notice at the user's own action before the new turn's first frame arrives. */
@@ -59,24 +66,40 @@ export function dismissRestartNotice(sessionId: string) {
   setDismissed(sessionId, true)
 }
 
-function setDismissed(sessionId: string, value: boolean) {
+function setDismissed(sessionId: string, value: boolean, clearObserved = false) {
   useChatStore.setState((state) => {
     const bucket = state.sessionsById[sessionId]
-    if (!bucket || !!bucket.restartNoticeDismissed === value) return state
-    return { sessionsById: { ...state.sessionsById, [sessionId]: { ...bucket, restartNoticeDismissed: value } } }
+    if (!bucket || (!!bucket.restartNoticeDismissed === value && (!clearObserved || !bucket.restartInterruptedBootId))) return state
+    return { sessionsById: { ...state.sessionsById, [sessionId]: {
+      ...bucket, restartNoticeDismissed: value,
+      ...(clearObserved ? { restartInterruptedBootId: undefined, restartInterruptedListVersion: undefined } : {}),
+    } } }
   })
 }
 
-/** Single writer of the dismissal (mounted once, by RestartInterruptedNotice). */
+function useObservedRestart(sessionId: string | null, saved: ReturnType<typeof useSavedLifecycle>) {
+  const bootId = useChatStore((s) => sessionId != null ? s.sessionsById[sessionId]?.restartInterruptedBootId : undefined)
+  const currentBootId = useChatStore((s) => sessionId != null ? s.sessionsById[sessionId]?.cursor?.bootId : undefined)
+  const listVersion = useChatStore((s) => sessionId != null ? s.sessionsById[sessionId]?.restartInterruptedListVersion : undefined)
+  const observed = bootId !== undefined && bootId === currentBootId
+  const progressed = observed && saved.settled && saved.version > (listVersion ?? saved.version) &&
+    (saved.state === 'working' || saved.state === 'done' || saved.state === 'failed' ||
+      (saved.state === 'stopped' && saved.stopCause != null && saved.stopCause !== 'restart'))
+  return { observed, progressed, oldBoot: bootId !== undefined && currentBootId !== undefined && bootId !== currentBootId }
+}
+
+/** Mounted once by the notice; local clicks and a new interrupted boot also write dismissal. */
 export function useRestartNoticeDismissal(): void {
   const sessionId = useSessionStore((s) => s.activeSessionId)
   const saved = useSavedLifecycle(sessionId)
   const running = useChatStore((s) =>
     s.isStreaming || (sessionId != null && s.sessionsById[sessionId]?.activeTurnId != null),
   )
+  const { observed, progressed, oldBoot } = useObservedRestart(sessionId, saved)
   useEffect(() => {
     if (!sessionId) return
-    if (running && saved === 'interrupted') setDismissed(sessionId, true)
-    else if (saved !== undefined && saved !== 'interrupted') setDismissed(sessionId, false)
-  }, [sessionId, saved, running])
+    if (oldBoot || progressed) setDismissed(sessionId, false, true)
+    else if (running && (observed || saved.state === 'interrupted')) setDismissed(sessionId, true)
+    else if (!observed && saved.state !== undefined && saved.state !== 'interrupted') setDismissed(sessionId, false)
+  }, [sessionId, saved.state, running, observed, progressed, oldBoot])
 }
