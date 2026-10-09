@@ -602,7 +602,14 @@ func TestAbortPath_MidTurnEviction_HardAbort(t *testing.T) {
 	// Phase 4: append 3 in-turn messages (archive grows to 15).
 	inTurnMsgs := []providers.Message{
 		{Role: "user", Content: "MIDTURN_SENTINEL_USER: will be rolled back"},
-		{Role: "assistant", Content: "MIDTURN_SENTINEL_ASST: will be rolled back"},
+		{
+			Role:    "assistant",
+			Content: "MIDTURN_SENTINEL_ASST: will be rolled back",
+			ToolCalls: []providers.ToolCall{{
+				ID: "tc1", Type: "function",
+				Function: &providers.FunctionCall{Name: "t", Arguments: "{}"},
+			}},
+		},
 		{Role: "tool", Content: "MIDTURN_SENTINEL_TOOL: will be rolled back", ToolCallID: "tc1"},
 	}
 	appendInTurnMessages(al, sk, inTurnMsgs)
@@ -700,7 +707,14 @@ func TestAbortPath_MidTurnEviction_RestoreSession(t *testing.T) {
 	// Phase 4: append 3 in-turn messages (archive grows to 15).
 	inTurnMsgs := []providers.Message{
 		{Role: "user", Content: "RS_SENTINEL_USER: will be restored away"},
-		{Role: "assistant", Content: "RS_SENTINEL_ASST: will be restored away"},
+		{
+			Role:    "assistant",
+			Content: "RS_SENTINEL_ASST: will be restored away",
+			ToolCalls: []providers.ToolCall{{
+				ID: "tc2", Type: "function",
+				Function: &providers.FunctionCall{Name: "t", Arguments: "{}"},
+			}},
+		},
 		{Role: "tool", Content: "RS_SENTINEL_TOOL: will be restored away", ToolCallID: "tc2"},
 	}
 	appendInTurnMessages(al, sk, inTurnMsgs)

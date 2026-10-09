@@ -177,16 +177,8 @@ func (r ArchiveRecord) Validate() error {
 		if r.ToolResultFor == nil {
 			return fmt.Errorf("archive record %s: a role \"tool\" payload must carry tool_result_for", r.ID)
 		}
-		if r.ToolResultFor.ToolCallID == "" {
-			return fmt.Errorf("archive record %s: tool_result_for must name the call id", r.ID)
-		}
-		// A LIVE role "tool" result may carry an empty AssistantEntryID when its
-		// producing assistant occurrence is not provable from the archive (the
-		// pre-cutover runtime tolerated an orphan result; the FR-006 rollback
-		// tests append one). A CONVERTED (conv_*) result must name its exact
-		// producing occurrence — CONV refuses an unprovable join (CONV-P A D3(3)).
-		if r.ToolResultFor.AssistantEntryID == "" && r.ModelOrigin != "" {
-			return fmt.Errorf("archive record %s: a %s tool result must name its producing assistant occurrence", r.ID, r.ModelOrigin)
+		if r.ToolResultFor.AssistantEntryID == "" || r.ToolResultFor.ToolCallID == "" {
+			return fmt.Errorf("archive record %s: tool_result_for must name the issuing assistant occurrence and call id", r.ID)
 		}
 		if r.ToolResultFor.ToolCallID != r.ModelMessage.ToolCallID {
 			return fmt.Errorf("archive record %s: tool_result_for call id %q must equal model_message.tool_call_id %q",
