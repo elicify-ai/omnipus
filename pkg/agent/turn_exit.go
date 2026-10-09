@@ -142,8 +142,38 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 	if !ok {
 		return fmt.Errorf("context rollback: session store does not support atomic context checkpoints")
 	}
+	// The aborted turn's appended content must be physically REMOVED, not merely
+	// de-windowed, so the next turn's model window cannot see a failed turn's
+	// partial output. That removal is the canonical append-undo
+	// (RollbackAppended, ADR-066 FR-020): it truncates the archive to the
+	// turn-start length and restores meta.Skip and the turn-start projection set
+	// in one write. RollbackWindow can no longer do this — session-core FR-006
+	// makes it a window-metadata-only restore that never rewrites retained bytes
+	// (contract: pkg/memory/window.go::RollbackWindow).
+	//
+	// targetSkip is the turn-start Skip: initialArchiveLen records were on disk
+	// when the turn began, initialHistoryLength of them were in the live window
+	// (turn.go captures both).
+	targetSkip := ts.initialArchiveLen - ts.initialHistoryLength
+	if targetSkip < 0 {
+		targetSkip = 0
+	}
+	agent.Sessions.RollbackAppended(ts.sessionKey, ts.initialArchiveLen, targetSkip, ts.initialEmptiedSet)
+	// Restore the exact turn-start window metadata (cursor, anchor and source
+	// limits) captured in the snapshot.
 	if err := store.RollbackWindow(context.Background(), ts.sessionKey, start.Clone()); err != nil {
 		return err
+	}
+	// RollbackAppended is fire-and-forget on the SessionStore seam (it logs its
+	// own I/O failure). Re-read so a failed rollback surfaces as a real error
+	// instead of proceeding as if the turn-start window were restored — the
+	// aborted-turn bytes must never silently survive into the next turn.
+	archived, err := agent.Sessions.ReadArchive(context.Background(), ts.sessionKey)
+	if err != nil {
+		return fmt.Errorf("context rollback: verify archive after rollback: %w", err)
+	}
+	if len(archived) != ts.initialArchiveLen {
+		return fmt.Errorf("context rollback: archive holds %d records after rollback, expected %d", len(archived), ts.initialArchiveLen)
 	}
 	if err := ts.revertEmptiedTranscript(); err != nil {
 		return err

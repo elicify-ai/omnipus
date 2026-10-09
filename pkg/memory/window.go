@@ -258,8 +258,20 @@ func validateWindowMetadata(after WindowState, archive []ArchivedMessage) error 
 	return nil
 }
 
-// RollbackWindow is RollbackAppended's exact-snapshot path. Even without an
-// append it restores the actual cursor, anchor and source limits in one write.
+// RollbackWindow restores the session's view/window metadata (cursor, anchor
+// and source limits) to the given snapshot in one metadata write.
+//
+// session-core FR-006 / DEL-12: a rollback MUST move view/window metadata and
+// NEVER rewrite retained archive bytes. This used to call rewriteJSONL to
+// truncate the archive down to start.Count — a whole-file rewrite that
+// destroyed the retained bytes the recall archive depends on. It no longer
+// touches the JSONL file at all: the archive only ever grows (append-only),
+// and this method restores the cursor state alone.
+//
+// The turn-abort path that must actually remove a failed turn's appended
+// content uses RollbackAppended (pkg/agent turn_exit.go), whose contract is to
+// truncate the appended tail together with the cursor restore; this method is
+// the retained-bytes-safe window-metadata restore.
 func (s *JSONLStore) RollbackWindow(ctx context.Context, key string, start WindowState) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -285,11 +297,5 @@ func (s *JSONLStore) RollbackWindow(ctx context.Context, key string, start Windo
 		return err
 	}
 	applyWindow(&meta, start)
-	if err := s.writeMeta(key, meta); err != nil {
-		return err
-	}
-	if len(archive) == start.Count {
-		return nil
-	}
-	return s.rewriteJSONL(key, archive[:start.Count])
+	return s.writeMeta(key, meta)
 }

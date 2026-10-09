@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
@@ -91,10 +90,23 @@ func (us *UnifiedStore) appendTranscriptLocked(sessionID string, entry Transcrip
 	if err != nil {
 		return -1, fmt.Errorf("unified_store: %s: session %q does not exist: %w", what, sessionID, err)
 	}
-	path := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
+	// C-ARCHIVE (FR-004): every canonical archive entry carries a view
+	// membership. The writer defaults an unset one to "both" (an ordinary turn
+	// lives in the chat render and the model window alike); a caller may set a
+	// more specific view.
+	if entry.ViewMembership == "" {
+		entry.ViewMembership = ViewMembershipBoth
+	}
+	// FR-005: the archive is UTC day-partitioned. This resolves (and, when the
+	// entry's day is newer than the current one, completes) the day rollover,
+	// returning the file to append to. See transcript_partition.go.
+	path, err := us.transcriptPartitionPathLocked(sessionID, entry.Timestamp.UTC().Format(transcriptDayLayout))
+	if err != nil {
+		return -1, fmt.Errorf("unified_store: %s: %w", what, err)
+	}
 	line := -1
 	if indexed {
-		line, err = transcriptLineCount(path)
+		line, err = us.transcriptLineCountPartitions(sessionID)
 		if err != nil {
 			return -1, fmt.Errorf("unified_store: %s: count transcript records: %w", what, err)
 		}

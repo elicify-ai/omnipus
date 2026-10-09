@@ -56,6 +56,15 @@ const (
 	EntryTypeContextWindowNotice EntryType = "context_window_notice"
 )
 
+// ViewMembership values of a TranscriptEntry (session-core FR-004 / contract
+// slice C-ARCHIVE): which view(s) of the single append-only archive an entry
+// belongs to. See TranscriptEntry.ViewMembership.
+const (
+	ViewMembershipChat  = "chat"
+	ViewMembershipModel = "model"
+	ViewMembershipBoth  = "both"
+)
+
 // SessionStatus classifies the lifecycle state of a session.
 type SessionStatus string
 
@@ -279,6 +288,17 @@ type TranscriptEntry struct {
 	Type    EntryType `json:"type,omitempty"` // EntryTypeMessage | EntryTypeCompaction | EntryTypeSystem; empty = message
 	Role    string    `json:"role,omitempty"` // "user" | "assistant" | "system"
 	Content string    `json:"content,omitempty"`
+	// ViewMembership classifies which view(s) of the single append-only archive
+	// this entry belongs to (session-core FR-004 / contract slice C-ARCHIVE):
+	// ViewMembershipChat ("chat" — rendered in the conversation),
+	// ViewMembershipModel ("model" — part of the model context window) or
+	// ViewMembershipBoth ("both"). Every canonical archive entry the store
+	// writes carries exactly one of these; the writer defaults an empty value
+	// to ViewMembershipBoth (an ordinary turn lives in both views). Empty is
+	// tolerated on read for entries written before this field existed — the
+	// reader treats absent as unknown, never re-deriving a view. It is a
+	// per-entry classification on the one archive, never a second store.
+	ViewMembership string `json:"view_membership,omitempty"`
 	// ContextWindowNotice is required when Type is context_window_notice. The
 	// generated payload survives REST history without becoming ordinary Content.
 	ContextWindowNotice *generated.ContextWindowNotice `json:"context_window_notice,omitempty"`
