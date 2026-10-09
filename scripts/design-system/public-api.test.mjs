@@ -105,6 +105,9 @@ const reviewedFoundations = new Set([
   // Exact pure identity foundations only. The application adapter and its
   // generated wire types remain forbidden even for AgentIcon.
   'src/design-system/agent-identity.ts', 'src/lib/agentIconArt.ts',
+  // The deduplicated badge map contains only approved Phosphor components
+  // and the kit's role type; no application adapter, API, store or lookup.
+  'src/lib/agentBadgeIcons.ts',
   'src/design-system/use-loading-visibility.ts', 'src/styles/library.css',
   'src/styles/tokens.generated.css', 'src/styles/tokens.theme.generated.css',
 ])
@@ -144,12 +147,12 @@ test('AgentIcon is public and reaches only its exact pure identity/art foundatio
   assert.ok(names.includes('AgentIcon'))
   assert.ok(names.includes('AgentIconProps'))
   const paths = [...localGraph(entry)].map((file) => relative(root, file).replaceAll('\\', '/'))
-  for (const required of ['src/components/ui/agent-icon.tsx', 'src/design-system/agent-identity.ts', 'src/lib/agentIconArt.ts']) {
+  for (const required of ['src/components/ui/agent-icon.tsx', 'src/design-system/agent-identity.ts', 'src/lib/agentIconArt.ts', 'src/lib/agentBadgeIcons.ts']) {
     assert.ok(paths.includes(required), `missing AgentIcon dependency: ${required}`)
   }
   assertReviewedLibraryPaths(paths)
   const catalog = JSON.parse(readFileSync(resolve(root, 'design-system/catalog.json'), 'utf8'))
-  for (const foundation of ['src/design-system/agent-identity.ts', 'src/lib/agentIconArt.ts']) {
+  for (const foundation of ['src/design-system/agent-identity.ts', 'src/lib/agentIconArt.ts', 'src/lib/agentBadgeIcons.ts']) {
     const item = catalog.entries.find((entry) => entry.source === foundation)
     assert.equal(item?.classification, 'foundations', foundation)
     assert.deepEqual(item.publicExports, [])
@@ -158,12 +161,13 @@ test('AgentIcon is public and reaches only its exact pure identity/art foundatio
 })
 
 test('AgentIcon admission does not admit the application adapter, generated API, or adjacent files', () => {
-  const admitted = ['src/components/ui/agent-icon.tsx', 'src/design-system/agent-identity.ts', 'src/lib/agentIconArt.ts']
+  const admitted = ['src/components/ui/agent-icon.tsx', 'src/design-system/agent-identity.ts', 'src/lib/agentIconArt.ts', 'src/lib/agentBadgeIcons.ts']
   assert.doesNotThrow(() => assertReviewedLibraryPaths(admitted))
   for (const forbidden of [
     'src/lib/agentIdentity.ts', 'src/lib/api/generated/openapi-types.ts',
     'src/lib/api/generated/schemas.ts', 'src/store/session.ts',
     'src/components/chat/AgentStatusIndicator.tsx', 'src/design-system/agent-identity-extra.ts',
+    'src/lib/agentBadgeIcons-extra.ts',
   ]) {
     assert.throws(() => assertReviewedLibraryPaths([...admitted, forbidden]), /application dependencies must remain outside/)
   }
