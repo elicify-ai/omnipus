@@ -670,7 +670,7 @@ export function SearchModal() {
   const bucketByAgent = useCallback((sess: Session[]): AgentGroup[] => {
     const aBuckets = new Map<string, Session[]>()
     for (const s of sess) {
-      const aId = s.active_agent_id ?? s.agent_id ?? 'unknown'
+      const aId = s.agent_id ?? 'unknown'
       const arr = aBuckets.get(aId)
       if (arr) arr.push(s)
       else aBuckets.set(aId, [s])
@@ -729,7 +729,7 @@ export function SearchModal() {
     const filtered = rootSessions.filter((s) => {
       // Workspace pre-filter (from the sidebar "More…" button)
       if (wsFilter && s.workspace_id !== wsFilter) return false
-      if (agentFilter && (s.active_agent_id ?? s.agent_id) !== agentFilter) return false
+      if (agentFilter && s.agent_id !== agentFilter) return false
       if (searchActive && !subtreeMatchIds.has(s.id)) return false
       const u = new Date(s.updated_at).getTime()
       if ((fromT !== null || toT !== null) && (isNaN(u) || (fromT !== null && u < fromT) || (toT !== null && u > toT))) return false

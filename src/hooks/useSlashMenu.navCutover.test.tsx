@@ -114,6 +114,7 @@ function commandKeys(items: { key: string; section: string }[]) {
 }
 
 beforeEach(() => {
+  vi.restoreAllMocks()
   server.commands = server.withClear()
   act(() => {
     useSessionStore.setState({
@@ -136,7 +137,6 @@ describe('slash and mention cutover (FR-007, BDD-07.3, founder X3)', () => {
       inputEnabled: true,
       composerRuntime: composerRuntime as unknown as ComposerRuntime,
       appendMessage: vi.fn(),
-      startNewSession: vi.fn(),
       cancelIfStreaming: vi.fn(),
       sendRedirectFrame: vi.fn(),
       activateStop: vi.fn(),
@@ -155,7 +155,6 @@ describe('slash and mention cutover (FR-007, BDD-07.3, founder X3)', () => {
       inputEnabled: true,
       composerRuntime: runtime('/') as unknown as ComposerRuntime,
       appendMessage: vi.fn(),
-      startNewSession: vi.fn(),
       cancelIfStreaming: vi.fn(),
       sendRedirectFrame: vi.fn(),
       activateStop: vi.fn(),
@@ -174,7 +173,6 @@ describe('slash and mention cutover (FR-007, BDD-07.3, founder X3)', () => {
       inputEnabled: true,
       composerRuntime: runtime('/help') as unknown as ComposerRuntime,
       appendMessage,
-      startNewSession: vi.fn(),
       cancelIfStreaming: vi.fn(),
       sendRedirectFrame: vi.fn(),
       activateStop: vi.fn(),
@@ -195,14 +193,13 @@ describe('slash and mention cutover (FR-007, BDD-07.3, founder X3)', () => {
     (label) => {
       server.commands = label === '/clear' ? server.withClear() : server.withNew()
       const composerRuntime = runtime('')
-      const startNewSession = vi.fn()
+      const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
       const { result } = renderHook(() => useSlashMenu({
         isStreaming: false,
         isReplaying: false,
         inputEnabled: true,
         composerRuntime: composerRuntime as unknown as ComposerRuntime,
         appendMessage: vi.fn(),
-        startNewSession,
         cancelIfStreaming: vi.fn(),
         sendRedirectFrame: vi.fn(),
         activateStop: vi.fn(),
@@ -222,14 +219,13 @@ describe('slash and mention cutover (FR-007, BDD-07.3, founder X3)', () => {
     (typed) => {
       server.commands = [...server.withClear(), ...server.withNew().filter((command) => command.name === 'new')]
       const composerRuntime = runtime(typed)
-      const startNewSession = vi.fn()
+      const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
       const { result } = renderHook(() => useSlashMenu({
         isStreaming: false,
         isReplaying: false,
         inputEnabled: true,
         composerRuntime: composerRuntime as unknown as ComposerRuntime,
         appendMessage: vi.fn(),
-        startNewSession,
         cancelIfStreaming: vi.fn(),
         sendRedirectFrame: vi.fn(),
         activateStop: vi.fn(),
@@ -252,7 +248,6 @@ describe('slash and mention cutover (FR-007, BDD-07.3, founder X3)', () => {
       inputEnabled: true,
       composerRuntime: runtime('@mi') as unknown as ComposerRuntime,
       appendMessage: vi.fn(),
-      startNewSession: vi.fn(),
       cancelIfStreaming: vi.fn(),
       sendRedirectFrame: vi.fn(),
       activateStop: vi.fn(),

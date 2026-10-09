@@ -1954,7 +1954,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const cancelStream = useChatStore((s) => s.cancelStream)
   const appendMessage = useChatStore((s) => s.appendMessage)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
-  const startNewSession = useSessionStore((s) => s.startNewSession)
   const composerRuntime = useComposerRuntime()
 
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
@@ -2086,8 +2085,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
     inputEnabled,
     composerRuntime,
     appendMessage,
-    // The server runs /new and /clear. The hook still requires this parameter.
-    startNewSession,
     // /stop is one Stop-button activation; /cancel stays immediate tree.
     activateStop: cancelState.cancelUnconditional,
     cancelIfStreaming: cancelState.cancelAllTreeScoped,

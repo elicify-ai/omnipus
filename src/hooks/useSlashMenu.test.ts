@@ -139,7 +139,6 @@ function baseParams(overrides: Partial<Parameters<typeof useSlashMenu>[0]> = {})
     inputEnabled: true,
     composerRuntime: makeComposerRuntime(),
     appendMessage: vi.fn(),
-    startNewSession: vi.fn(),
     cancelIfStreaming: vi.fn(),
     sendRedirectFrame: vi.fn(),
     activateStop: vi.fn(),
@@ -191,6 +190,7 @@ afterEach(() => {
   // matches useCancelState.test.ts's convention so a thrown assertion can't
   // leak fake timers into a later test.
   vi.useRealTimers()
+  vi.restoreAllMocks()
 })
 
 describe('useSlashMenu — gating', () => {
@@ -413,7 +413,7 @@ describe('useSlashMenu — keyboard navigation', () => {
 describe('useSlashMenu — client command dispatch', () => {
   it('lists /new, and selecting it sends the server command without starting a session', () => {
     let text = ''
-    const startNewSession = vi.fn()
+    const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
     const composerRuntime = {
       getState: () => ({ text }),
       setText: vi.fn((value: string) => { text = value }),
@@ -421,7 +421,7 @@ describe('useSlashMenu — client command dispatch', () => {
       subscribe: vi.fn(() => vi.fn()),
       send: vi.fn(),
     } as unknown as ComposerRuntime
-    const { result } = renderHook(() => useSlashMenu(baseParams({ startNewSession, composerRuntime })))
+    const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
     act(() => result.current.onInputChange('/'))
     const item = result.current.slashItems.find((i) => i.key === '/new')
     expect(item, 'the server returned /new').toBeDefined()
@@ -706,8 +706,8 @@ describe('useSlashMenu — interceptClientCommand (send-path)', () => {
     'does not intercept %s or start a session',
     (typed) => {
       const composerRuntime = makeComposerRuntime(typed)
-      const startNewSession = vi.fn()
-      const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+      const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
+      const { result } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
 
       let intercepted = false
       act(() => { intercepted = result.current.interceptClientCommand() })
@@ -770,8 +770,8 @@ describe('useSlashMenu — interceptClientCommand readiness gate (commands still
     (typed) => {
       commandsQueryIsLoading = true
       const composerRuntime = makeComposerRuntime(typed)
-      const startNewSession = vi.fn()
-      const { result, rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+      const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
+      const { result, rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
 
       let intercepted = false
       act(() => { intercepted = result.current.interceptClientCommand() })
@@ -796,8 +796,8 @@ describe('useSlashMenu — interceptClientCommand readiness gate (commands still
     // agent-delivery command and belongs on the wire.
     commandsQueryIsLoading = true
     const composerRuntime = makeComposerRuntime('/handoff do the thing')
-    const startNewSession = vi.fn()
-    const { result, rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+    const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
+    const { result, rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
 
     act(() => { result.current.interceptClientCommand() })
     expect(composerRuntime.send).not.toHaveBeenCalled()
@@ -851,8 +851,8 @@ describe('useSlashMenu — interceptClientCommand readiness gate (commands still
   it('nothing is flushed when no submit was held (a plain list load must not send the composer on its own)', () => {
     commandsQueryIsLoading = true
     const composerRuntime = makeComposerRuntime('/new')
-    const startNewSession = vi.fn()
-    const { rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime, startNewSession })))
+    const startNewSession = vi.spyOn(useSessionStore.getState(), 'startNewSession')
+    const { rerender } = renderHook(() => useSlashMenu(baseParams({ composerRuntime })))
 
     commandsQueryIsLoading = false
     act(() => { rerender() })

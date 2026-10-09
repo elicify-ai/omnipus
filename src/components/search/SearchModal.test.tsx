@@ -148,12 +148,34 @@ beforeEach(() => {
     // searchModalMode explicitly reset to 'sessions' here — the two-modes
     // describe block below flips it to 'workspaces' for its own tests, and
     // without this reset that would leak into whichever test runs next.
-    useUiStore.setState({ searchModalOpen: true, searchModalWorkspaceFilter: null, searchModalMode: 'sessions', closeSearchModal: realCloseSearchModal, toasts: [] })
+    useUiStore.setState({ searchModalOpen: true, searchModalWorkspaceFilter: null, searchModalAgentFilter: null, searchModalMode: 'sessions', closeSearchModal: realCloseSearchModal, toasts: [] })
     useSessionStore.setState(useSessionStore.getInitialState(), true)
     useChatStore.setState(useChatStore.getInitialState(), true)
     useConnectionStore.setState(useConnectionStore.getInitialState(), true)
     useWorkspacesStore.setState({ activeWorkspaceId: null })
     localStorage.clear()
+  })
+})
+
+describe('SearchModal — immutable owner identity (FR-009, gate round 2)', () => {
+  it('Past sessions filters and groups by the owner, never the last responder', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([
+      makeAgent({ id: 'mia', name: 'Mia' }), makeAgent({ id: 'jim', name: 'Jim' }),
+    ])
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession({ id: 'mia-owned', title: 'Owned by Mia', agent_id: 'mia', active_agent_id: 'jim' }),
+      makeSession({ id: 'jim-owned', title: 'Owned by Jim', agent_id: 'jim', active_agent_id: 'mia' }),
+    ])
+    act(() => useUiStore.getState().openSearchModal('ws-1', 'mia'))
+    renderModal()
+
+    await waitFor(() => expect(screen.getByText('Owned by Mia')).toBeInTheDocument())
+    expect(screen.queryByText('Owned by Jim')).toBeNull()
+    const ownerGroup = screen.getByRole('button', { name: /^Mia$/ })
+    const panelId = ownerGroup.getAttribute('aria-controls')
+    expect(panelId).toBe('agent-panel-ws-1::mia')
+    expect(within(document.getElementById(panelId!)!).getByText('Owned by Mia')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Jim$/ })).toBeNull()
   })
 })
 

@@ -72,7 +72,6 @@ export interface UseSlashMenuParams {
   inputEnabled: boolean
   composerRuntime: ComposerRuntime
   appendMessage: (message: ChatMessage) => void
-  startNewSession: () => void
   /** `/stop` is one existing Stop/Esc activation, including its 3 s confirmation window. */
   activateStop: () => void
   /**
@@ -931,8 +930,8 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
   // the text is sent.
   //
   // Deliberately NOT wrapped in useCallback: it (transitively, via
-  // runClientCommand) closes over appendMessage/startNewSession/
-  // cancelAllTreeScoped, none of which are guaranteed referentially stable
+  // runClientCommand) closes over appendMessage/cancelAllTreeScoped,
+  // neither of which is guaranteed referentially stable
   // across renders (cancelAllTreeScoped's dependencies rebind whenever
   // isStreaming toggles — see useCancelState). None of this hook's
   // returned functions are consumed by a memoized child or an effect
