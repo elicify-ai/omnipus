@@ -4,7 +4,7 @@
 
 // goal_status_criteria.go — ADR-074 D5.2 / judgment-first FR-011: maps the
 // internal compiled-criteria breakdown (task.AcceptanceCriterion, carried on
-// agent.GoalStatusChangedPayload's `queued` pending-confirm emission) onto
+// agent.GoalStatusChangedPayload's `active` emission after a goal record write) onto
 // generated.GoalStatusFrame's optional `criteria` wire field, so the SPA's
 // goal echo card itemizes exactly what will run. Mirrors the
 // toJudgeVerdictFrame converter pattern: generated types only, inline
@@ -20,8 +20,8 @@ import (
 
 // setGoalStatusCriteria fills f.Criteria from in. A nil/empty in leaves
 // f.Criteria nil — the optional wire field stays absent on every
-// round/lifecycle emission (only the `queued` pending-confirm payload
-// carries a breakdown). The element type is the generated anonymous struct;
+// round/lifecycle emission (only the `active` emission that follows a goal
+// record write carries a breakdown). The element type is the generated anonymous struct;
 // elements are grown zero-valued and assigned field-by-field so the one
 // unavoidable type spelling is confined to the two per-kind payload
 // pointers.
@@ -94,8 +94,8 @@ func setGoalStatusCriteria(f *generated.GoalStatusFrame, in []task.AcceptanceCri
 }
 
 // setGoalStatusDoD fills f.Dod from in — ADR-080 D-DOD's Definition of Done
-// breakdown, DISTINCT from f.Criteria, carried on the SAME `queued`
-// pending-confirm emission so the SPA's confirm card can flag
+// breakdown, DISTINCT from f.Criteria, carried on the SAME `active`
+// emission so the SPA can flag
 // `provenance == inferred` items as "inferred — confirm or drop". The
 // conversion mirrors setGoalStatusCriteria's field-by-field mapping exactly
 // (asyncapi.yaml's inline `dod` items are a hand-synced duplicate of the

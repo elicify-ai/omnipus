@@ -938,7 +938,7 @@ export interface GoalStatusFrame {
   latest_reason: string;
   active_loops: number;
   cap: number;
-  state: "queued" | "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared" | "judge_cas_loss" | "blocked" | "claim_overturned" | "expired";
+  state: "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared" | "judge_cas_loss" | "blocked" | "claim_overturned" | "expired";
   criteria?: Array<{
     id?: string;
     kind: "check" | "prose" | "behavior";
