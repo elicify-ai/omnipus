@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -415,14 +416,6 @@ func toWireTrigger(tr *task.Trigger) *struct {
 		v := *tr.Config.AtMs
 		cfg.AtMs = &v
 	}
-	if tr.Config.EveryMs != nil {
-		v := *tr.Config.EveryMs
-		cfg.EveryMs = &v
-	}
-	if tr.Config.CronExpr != nil {
-		v := *tr.Config.CronExpr
-		cfg.CronExpr = &v
-	}
 	if tr.Config.Rrule != nil {
 		v := *tr.Config.Rrule
 		cfg.Rrule = &v
@@ -441,14 +434,33 @@ func toWireTrigger(tr *task.Trigger) *struct {
 	}{Config: cfg, Type: gen.TaskTriggerType(tr.Type)}
 }
 
+// legacyTimingKeysMessage reports the removed trigger keys (session-core DEL-19
+// / C-TIMING) found in a trigger config's undeclared properties. The wire
+// schema keeps `config` open, so a client that still sends `every_ms` or
+// `cron_expr` is not rejected by decoding; it is refused here, by name, instead
+// of being accepted and silently never firing. Empty means none present.
+func legacyTimingKeysMessage(extra map[string]interface{}) string {
+	var found []string
+	for _, key := range []string{"every_ms", "cron_expr"} {
+		if _, ok := extra[key]; ok {
+			found = append(found, key)
+		}
+	}
+	if len(found) == 0 {
+		return ""
+	}
+	return "trigger config." + strings.Join(found, ", config.") +
+		" is no longer supported; use a recurring trigger with config.rrule"
+}
+
 // buildTrigger constructs an internal trigger from its primitive parts. The
 // three generated request structs (Task/TaskCreateRequest/TaskUpdateRequest) each
 // have their own anonymous trigger type with an identically-shaped config, so
 // the callers decompose them and pass the primitives here.
 func buildTrigger(
 	kind string,
-	atMs, everyMs *int64,
-	cronExpr, rrule *string,
+	atMs *int64,
+	rrule *string,
 	dtstartMs *int64,
 	tz *string,
 ) *task.Trigger {
@@ -456,14 +468,6 @@ func buildTrigger(
 	if atMs != nil {
 		v := *atMs
 		tr.Config.AtMs = &v
-	}
-	if everyMs != nil {
-		v := *everyMs
-		tr.Config.EveryMs = &v
-	}
-	if cronExpr != nil {
-		v := *cronExpr
-		tr.Config.CronExpr = &v
 	}
 	if rrule != nil {
 		v := *rrule

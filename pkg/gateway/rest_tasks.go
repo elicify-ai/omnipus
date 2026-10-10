@@ -461,16 +461,16 @@ func (a *restAPI) HandleTaskOccurrences(w http.ResponseWriter, r *http.Request) 
 	// (pkg/agent/task_trigger.go OnTaskUpserted's early skips). Heartbeat
 	// -surface tasks are always omitted (the heartbeat service owns those
 	// fires). A terminal task is omitted UNLESS its trigger REPEATS
-	// (recurring/every): a per-run done/failed status does not end a
+	// (recurring): a per-run done/failed status does not end a
 	// repeating series (see OnTaskUpserted's doc comment) — the scheduler
-	// re-arms a terminal recurring/every task's next occurrence exactly as it
+	// re-arms a terminal recurring task's next occurrence exactly as it
 	// would a non-terminal one, so the calendar must keep rendering it too.
 	// A truly exhausted RRULE series (COUNT/UNTIL) naturally yields zero
 	// occurrences from buildOccurrenceSets below and is omitted that way, not
 	// by this predicate. A terminal `once`/manual task is still omitted here
 	// (task.Trigger.IsRepeating is false for them) — its single occurrence IS
 	// its whole series — and would be omitted a second time regardless by
-	// buildOccurrenceSets' own trigger-FLAVOR filter (recurring/every only).
+	// buildOccurrenceSets' own trigger-FLAVOR filter (recurring only).
 	eligible := make([]task.Task, 0, len(tasks))
 	for _, t := range tasks {
 		if t.EffectiveSurface() == task.SurfaceHeartbeat {
@@ -482,27 +482,13 @@ func (a *restAPI) HandleTaskOccurrences(w http.ResponseWriter, r *http.Request) 
 		eligible = append(eligible, t)
 	}
 
-	// FR-008a: the every_ms projection anchor is the live armed job's
-	// NextRunAtMS, read from the installed TaskTriggerScheduler. Nil-safe —
-	// a nil scheduler (not yet wired / test scaffolding) makes every
-	// `every`-triggered task omit cleanly rather than erroring the request.
-	sched := agent.GetTaskTriggerScheduler(a.agentLoop)
-	everyAnchor := func(taskID string) (int64, bool) {
-		if sched == nil {
-			return 0, false
-		}
-		return sched.NextRunAtMSForTask(taskID)
-	}
-
 	// ADR-050 RD6, task-run-history-spec.md §3.7: the occurrence-run overlay
-	// dependency is wired in here, sourced from the live store. Unlike
-	// everyAnchor above — a required, non-variadic func(taskID string)
-	// (int64, bool) parameter — runsInRange is buildOccurrenceSets' own
+	// dependency is wired in here, sourced from the live store. runsInRange is buildOccurrenceSets' own
 	// trailing VARIADIC parameter (see its doc comment, task_occurrences.go);
 	// that is what lets this single positional call add the dependency
 	// without breaking the pre-existing task_occurrences_test.go call sites
 	// that predate this feature and pass none.
-	sets, err := buildOccurrenceSets(eligible, fromMs, toMs, tz, everyAnchor, a.taskStore.RunsInRange)
+	sets, err := buildOccurrenceSets(eligible, fromMs, toMs, tz, nil, a.taskStore.RunsInRange)
 	if err != nil {
 		// Range/tz were already validated above, so a non-nil error here
 		// indicates a genuine internal failure rather than bad input.
@@ -928,11 +914,13 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.Trigger != nil {
+		if msg := legacyTimingKeysMessage(req.Trigger.Config.AdditionalProperties); msg != "" {
+			jsonErr(w, http.StatusBadRequest, msg)
+			return
+		}
 		t.Trigger = buildTrigger(
 			string(req.Trigger.Type),
 			req.Trigger.Config.AtMs,
-			req.Trigger.Config.EveryMs,
-			req.Trigger.Config.CronExpr,
 			req.Trigger.Config.Rrule,
 			req.Trigger.Config.DtstartMs,
 			req.Trigger.Config.Tz,
@@ -980,7 +968,7 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	// call site stays in place regardless.
 	a.auditTriggerChange(t.ID, nil, t.Trigger)
 	a.emitTaskStatus(t)
-	// Register the task's time trigger (once/every/recurring) so it actually
+	// Register the task's time trigger (once/recurring) so it actually
 	// fires; a no-op for manual/heartbeat tasks.
 	if a.agentLoop != nil {
 		a.agentLoop.NotifyTaskUpserted(t)
@@ -1190,11 +1178,13 @@ func (tp *taskPatch) buildPatch() bool {
 	// were correctly serialized by the store's per-task lock).
 
 	if tp.req.Trigger != nil {
+		if msg := legacyTimingKeysMessage(tp.req.Trigger.Config.AdditionalProperties); msg != "" {
+			jsonErr(tp.w, http.StatusBadRequest, msg)
+			return true
+		}
 		tr := buildTrigger(
 			string(tp.req.Trigger.Type),
 			tp.req.Trigger.Config.AtMs,
-			tp.req.Trigger.Config.EveryMs,
-			tp.req.Trigger.Config.CronExpr,
 			tp.req.Trigger.Config.Rrule,
 			tp.req.Trigger.Config.DtstartMs,
 			tp.req.Trigger.Config.Tz,
@@ -1958,7 +1948,7 @@ func (a *restAPI) auditTask(event, id string) {
 }
 
 // auditTriggerChange implements FR-022: every save that CHANGES a task's
-// recurrence trigger to a new `recurring` (RRULE or legacy cron_expr) rule
+// recurrence trigger to a new `recurring` (RRULE) rule
 // emits an audit entry recording the task id, the prior trigger, and the
 // new trigger — covering both the US-5.3 legacy→RRULE conversion and an
 // RRULE→RRULE rule change (FR-024's "re-anchor" case) alike, so a change

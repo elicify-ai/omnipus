@@ -100,8 +100,8 @@ type TaskTriggerScheduler struct {
 	// dispatch fires taskID's fresh run. occurrenceMs is the calendar join
 	// key for a per-execution TaskRun record (ADR-050 §3.2,
 	// docs/internal/specs/task-run-history-spec.md §3.2): the specific RRULE
-	// instant this fire realizes, or nil for a non-recurring (once/every/
-	// legacy cron_expr) trigger. RunScheduled is the sole production caller
+	// instant this fire realizes, or nil for a non-recurring (once)
+	// trigger. RunScheduled is the sole production caller
 	// and computes it — see its own doc comment.
 	dispatch func(ctx context.Context, taskID string, occurrenceMs *int64) error
 
@@ -328,7 +328,7 @@ func (s *TaskTriggerScheduler) WaitForLane() {
 
 // Reconcile scans the task store and ensures every triggered, non-heartbeat
 // task that OnTaskUpserted would arm — non-terminal, OR terminal with a
-// repeating (recurring/every) trigger whose series has not exhausted — has a
+// repeating (recurring) trigger whose series has not exhausted — has a
 // registered cron job, and removes stale jobs for tasks that no longer need
 // one. Call once at boot, after Start. For RRULE tasks this is also the
 // documented crash-recovery path for the boot window (Scheduler rule 6):
@@ -379,17 +379,15 @@ func (s *TaskTriggerScheduler) Reconcile() error {
 //     and only occurrence is over
 //   - task surface is heartbeat (the heartbeat service owns those recurring fires;
 //     registering here would cause double-firing)
-//   - trigger is a REPEATING trigger (recurring/every) whose series is already
-//     exhausted (COUNT reached or past UNTIL for an rrule; `every` never
-//     exhausts) — retired silently, no WARN
+//   - trigger is a REPEATING trigger (recurring) whose series is already
+//     exhausted (COUNT reached or past UNTIL for an rrule) — retired silently, no WARN
 //
-// A REPEATING trigger (recurring/every) that is terminal is deliberately NOT
+// A REPEATING trigger (recurring) that is terminal is deliberately NOT
 // removed by the terminal check above — `done`/`failed` reflects only the
 // outcome of the single RUN that just finished, not that the series itself
 // has ended. Bug fixed here: dispatch is asynchronous (SpawnTriggeredRun /
 // ExecuteTask launch `go te.runTask(...)` and return immediately), so
-// RunScheduled's own exit-path re-arm (rearmRrule for RRULE; the cron
-// engine's own computeNextRun self-perpetuation for `every`) always runs and
+// RunScheduled's own exit-path re-arm (rearmRrule) always runs and
 // arms the next occurrence BEFORE that async run finishes. When it later
 // finishes and its terminal status lands — via a task_update tool call or a
 // REST PATCH, both of which call NotifyTaskUpserted → this method — the
@@ -407,13 +405,6 @@ func (s *TaskTriggerScheduler) Reconcile() error {
 // register a fresh one computed from triggerToCronSchedule(t.Trigger,
 // s.now()). That is wrong whenever a live, correctly-armed job already
 // exists for this exact trigger content:
-//   - `every`: the cron engine's own computeNextRun anchors the next fire at
-//     FIRE time (scheduleNextRunUnsafe runs immediately after RunScheduled
-//     returns, which for a fire-and-forget dispatch is effectively
-//     immediately after the fire). Replacing that job at COMPLETION time
-//     (which can be much later than the fire, since the async run is still
-//     in flight) re-anchors NextRunAtMS to completion+everyMs instead —
-//     every cycle drifts later by however long that run took.
 //   - `recurring` (rrule): rearmRrule already re-armed the correct next
 //     occurrence at the fire's exit path, under its own generation guard.
 //     Unconditionally replacing it here on the LATER completion
@@ -425,15 +416,14 @@ func (s *TaskTriggerScheduler) Reconcile() error {
 // triggerGeneration(t.Trigger) EXACTLY (the trigger content is unchanged —
 // this call is a completion notification or an unrelated field edit, not a
 // genuine trigger edit), and it is currently armed (isArmedLocked) — this is
-// a no-op; the already-installed job (whoever armed it: the fire's own
-// exit-path re-arm, or the engine's every-schedule self-perpetuation) is
+// a no-op; the already-installed job (armed by the fire's own
+// exit-path re-arm) is
 // left untouched. Replacement only happens when there is no live armed job
 // for this task (first registration — create, or boot Reconcile of a
 // terminal-repeating task with no job) or the generation changed (a genuine
 // trigger edit, which must re-anchor).
 //
-// Race note: this guard is what makes the fire's own re-arm (rearmRrule, or
-// the engine's every-perpetuation) and this method's LATER call for the same
+// Race note: this guard is what makes the fire's own re-arm (rearmRrule) and this method's LATER call for the same
 // fire's completion agree without a clobber: whichever one runs first installs
 // the armed job; the second one, observing the SAME generation still armed,
 // no-ops instead of redundantly replacing it. A genuine concurrent trigger
@@ -455,7 +445,7 @@ func (s *TaskTriggerScheduler) OnTaskUpserted(t *task.Task) {
 	}
 
 	noTrigger := t.Trigger == nil || t.Trigger.Type == task.TriggerManual
-	// isRepeating: a recurring (rrule or legacy cron_expr) or every trigger's
+	// isRepeating: a recurring (rrule) trigger's
 	// series survives a per-run terminal status — see the doc comment above.
 	// `once` is deliberately excluded: its single occurrence IS its whole
 	// series, so a terminal `once` task is still removed exactly as before.
@@ -496,11 +486,9 @@ func (s *TaskTriggerScheduler) OnTaskUpserted(t *task.Task) {
 	alreadyArmedUnchanged := tracked && current.generation == generation && s.isArmedLocked(t.ID, nowMs)
 	if alreadyArmedUnchanged {
 		// Idempotency guard (see doc comment above): a live job already exists
-		// for this EXACT trigger content, armed and healthy — installed either
-		// by this fire's own exit-path re-arm (rearmRrule) or, for `every`,
-		// the cron engine's own fire-time self-perpetuation. Replacing it here
-		// would re-anchor an `every` job to completion time (drift) or risk
-		// clobbering an RRULE occurrence with one computed from a later "now"
+		// for this EXACT trigger content, armed and healthy — installed
+		// by this fire's own exit-path re-arm (rearmRrule). Replacing it here
+		// would risk clobbering an RRULE occurrence with one computed from a later "now"
 		// (occurrence skip). No-op.
 		s.mu.Unlock()
 		slog.Debug("task_trigger: upsert is a no-op, trigger unchanged and job already armed",
@@ -572,7 +560,7 @@ func (s *TaskTriggerScheduler) OnTaskDeleted(taskID string) {
 // the overlap-guard skip, a dispatch error, and a SpawnReset error alike — also
 // re-arms the next occurrence (Scheduler rule 2): because the fired job is an
 // `at` job the engine deletes on completion (DeleteAfterRun), this re-arm is
-// the SOLE continuation of the series. Legacy (once/every/cron_expr) triggers
+// the SOLE continuation of the series. The once trigger
 // are entirely unaffected — their exits are byte-for-byte unchanged
 // (Scheduler rule 7).
 func (s *TaskTriggerScheduler) RunScheduled(ctx context.Context, job *cron.CronJob) (string, error) {
@@ -629,7 +617,7 @@ func (s *TaskTriggerScheduler) RunScheduled(ctx context.Context, job *cron.CronJ
 	// that is a single ad-hoc fire, not a recurring calendar occurrence, so
 	// it must stay nil (TaskRun.OccurrenceMs's own contract: "null for an
 	// ad-hoc/once/manual run"). Scoped to isRrule for exactly that reason —
-	// legacy (once/every/cron_expr) triggers always dispatch with nil,
+	// a once trigger always dispatches with nil,
 	// unchanged from before this field existed.
 	var occurrenceMs *int64
 	if isRrule && job.Schedule.AtMS != nil {
@@ -711,7 +699,7 @@ func (s *TaskTriggerScheduler) RunScheduled(ctx context.Context, job *cron.CronJ
 	// D-08 (founder decision 2026-09-24, FR-057): this is the Calendar/
 	// task-trigger fire — the cron engine calling back into an unattended
 	// dispatch with no operator ever present, whether the trigger is a plain
-	// `once`/`every` fire or an RRULE recurrence. Stamp the headless marker
+	// `once` fire or an RRULE recurrence. Stamp the headless marker
 	// onto ctx before dispatch so an always-ask tool (e.g. delete_task) is
 	// refused at once (autoDenyHeadlessAsk) instead of opening a live
 	// approval card that only reaches a human "who happens to be online" —
@@ -1018,40 +1006,10 @@ func (s *TaskTriggerScheduler) logUnreadableTasks(unreadableIDs []string, nowMs 
 	}
 }
 
-// NextRunAtMSForTask returns taskID's currently-tracked job's live
-// State.NextRunAtMS — the FR-008a display-projection anchor for a legacy
-// `every` trigger's occurrences (the engine has no stored DTSTART-like
-// anchor for `every` jobs; computeNextRun is `now + interval`,
-// drift-anchored and re-baselined on every fire/restart, so the occurrences
-// endpoint projects forward from whatever this returns "right now"). Read
-// -only: looks up taskToJob then cs.GetJob, mirrors isArmedLocked's shape,
-// never mutates scheduler or cron-engine state.
-//
-// ok is false when: taskID has no tracked job (never registered, or
-// removed by a delete/terminal transition); the tracked job has since gone
-// (a race with removal); or the job's NextRunAtMS is nil (e.g. mid-fire —
-// RunDueJobs clears NextRunAtMS before dispatch, service.go:515-519). All
-// three cases mean "no live anchor to project from right now" — callers
-// (the occurrences endpoint) treat that as "task omitted from this
-// response", not an error.
-func (s *TaskTriggerScheduler) NextRunAtMSForTask(taskID string) (int64, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	tracked, ok := s.taskToJob[taskID]
-	if !ok {
-		return 0, false
-	}
-	job, ok := s.cs.GetJob(tracked.jobID)
-	if !ok || job.State.NextRunAtMS == nil {
-		return 0, false
-	}
-	return *job.State.NextRunAtMS, true
-}
-
 // GetTaskTriggerScheduler returns al's installed task-trigger scheduler (nil
 // before boot wiring or in tests that don't set one). Mirrors the existing
 // agent.GetTaskExecutor accessor pattern (pkg/agent/loop.go) so gateway
-// handlers (the occurrences endpoint's every_ms anchor lookup) can reach the
+// handlers (the occurrences endpoint) can reach the
 // scheduler through one exported, same-package call to AgentLoop's already
 // -locked private accessor (al.taskTriggerScheduler, defined in loop.go)
 // without AgentLoop needing to expose its private field directly. Defined
@@ -1087,7 +1045,7 @@ func triggerGeneration(tr *task.Trigger) string {
 
 // triggerToCronSchedule converts a task.Trigger to a cron.CronSchedule.
 // nowMs is used only by the RRULE path (config.rrule) to compute the next
-// occurrence strictly after now; the once/every/legacy-cron_expr mappings are
+// occurrence strictly after now; the once mapping is
 // pure and ignore it (Scheduler rule 7: byte-for-byte unchanged for legacy
 // triggers).
 //

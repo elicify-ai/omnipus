@@ -34,7 +34,7 @@ type RunKind string
 
 const (
 	// RunKindScheduled marks a run opened by an automatic trigger fire
-	// (once/every/recurring dispatch).
+	// (once/recurring dispatch).
 	RunKindScheduled RunKind = "scheduled"
 	// RunKindManual marks a run opened by a user-initiated Run-now — either a
 	// specific recurring occurrence, or a fresh attempt on a normal task.
@@ -634,7 +634,7 @@ func (s *Store) occurrenceAlreadyHasRunLocked(taskID string, occurrenceMs *int64
 // got to run).
 //
 // occurrenceMs is the calendar join key — nil for a skip on a non-rrule
-// trigger (every/cron_expr), mirroring TaskRun.OccurrenceMs's own "nil for an
+// trigger (once), mirroring TaskRun.OccurrenceMs's own "nil for an
 // ad-hoc/once/manual run" contract; the caller (RunScheduled) only ever has
 // a non-nil occurrenceMs on the RRULE branch.
 //
