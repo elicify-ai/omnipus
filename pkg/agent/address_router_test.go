@@ -283,6 +283,11 @@ func conversationSetup(t *testing.T, f *addrFixture, senderAgent addressing.Pair
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The source chat belongs to the captured owner pair (workspace AND agent).
+	ws := addrWS
+	if err := store.SetMeta(src.ID, session.MetaPatch{WorkspaceID: &ws}); err != nil {
+		t.Fatal(err)
+	}
 	recv, err := store.GetOrCreateMainSession(addrWS, addrReceiver)
 	if err != nil {
 		t.Fatal(err)
@@ -324,8 +329,11 @@ func TestReply_ConversationSourceAppendsGuestAuthoredEntryAndPublishesLive(t *te
 	if len(f.deps.published) != 1 || f.deps.published[0].ID != e.ID {
 		t.Fatalf("live publish = %+v", f.deps.published)
 	}
-	if _, woke := addrDrainInbound(t, f.bus); woke {
-		t.Fatal("a human-origin request must not wake the owner agent's turn")
+	// FR-027 (architect ruling on U8 open point (b)): an answer wakes the
+	// source conversation's owner whoever asked - a human request included.
+	in, woke := addrDrainInbound(t, f.bus)
+	if !woke || in.SessionID != src || in.Metadata["agent_id"] != "ann" || in.UserInitiated {
+		t.Fatalf("a human-origin request's answer must wake its owner once; got %+v woke=%v", in, woke)
 	}
 }
 
@@ -371,6 +379,10 @@ func TestReply_MixedSourcesAddressEachOriginalSenderOnly(t *testing.T) {
 	}
 	webSrc, err := store.NewSession(session.SessionTypeChat, "webchat", "ann")
 	if err != nil {
+		t.Fatal(err)
+	}
+	wsID := addrWS
+	if err := store.SetMeta(webSrc.ID, session.MetaPatch{WorkspaceID: &wsID}); err != nil {
 		t.Fatal(err)
 	}
 	owner := addressing.Pair{WorkspaceID: addrWS, AgentID: "ann"}

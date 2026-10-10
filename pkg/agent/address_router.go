@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -115,6 +116,13 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 	}
 	if err := a.Receiver.Validate(); err != nil {
 		return "", "", fmt.Errorf("%w: %v", ErrPeerRefused, err)
+	}
+	// F1: authorization is read again HERE, after any Ask approval returned and
+	// before the receiver's main, the capture or the entry exist. A membership
+	// or policy change made while approval was pending refuses the request
+	// with nothing written.
+	if err := al.recheckReceiverAdmission(a.Receiver); err != nil {
+		return "", "", err
 	}
 	meta, err := store.GetOrCreateMainSession(a.Receiver.WorkspaceID, a.Receiver.AgentID)
 	if err != nil {
@@ -242,6 +250,43 @@ func (al *AgentLoop) CheckPeerAdmission(ctx context.Context, receiver addressing
 	return al.admitByReceiverPolicy(ctx, receiver, senderSessionID)
 }
 
+// recheckReceiverAdmission re-reads the receiver's CURRENT eligibility and
+// effective send_message policy at the moment of admission. It never asks for
+// approval again: an Ask that was approved stays approved, but a membership
+// removal or a policy that became Deny (or unreadable) since the first check
+// refuses.
+func (al *AgentLoop) recheckReceiverAdmission(receiver addressing.Pair) error {
+	deps := al.loadAddressDeps()
+	if deps == nil {
+		return fmt.Errorf("%w: peer messaging is not available", ErrPeerRefused)
+	}
+	ok, err := deps.PairEligible(receiver.WorkspaceID, receiver.AgentID)
+	if err != nil {
+		return fmt.Errorf("%w: membership could not be read: %v", ErrPeerRefused, err)
+	}
+	if !ok {
+		return fmt.Errorf("%w: %s/%s is no longer an eligible main", ErrPeerRefused, receiver.WorkspaceID, receiver.AgentID)
+	}
+	reg := al.GetRegistry()
+	if reg == nil {
+		return fmt.Errorf("%w: agent registry unavailable", ErrPeerRefused)
+	}
+	inst, found := reg.GetAgent(receiver.AgentID)
+	if !found || inst == nil {
+		return fmt.Errorf("%w: agent %q is not available", ErrPeerRefused, receiver.AgentID)
+	}
+	cfg := inst.LoadToolPolicy()
+	if cfg == nil {
+		return fmt.Errorf("%w: the receiver's tool policy is unreadable", ErrPeerRefused)
+	}
+	switch tools.ResolveEffectivePolicy(cfg, "send_message") {
+	case string(config.ToolPolicyAllow), string(config.ToolPolicyAsk):
+		return nil
+	default:
+		return fmt.Errorf("%w: the receiver's send_message policy denies requests", ErrPeerRefused)
+	}
+}
+
 // admitByReceiverPolicy applies the RECEIVER's existing send_message policy
 // (two-layer resolver) before anything is written: deny refuses, ask uses the
 // existing approval path, allow admits (FR-045, F9).
@@ -341,21 +386,27 @@ func (al *AgentLoop) replyViaConnector(ctx context.Context, c addressing.Capture
 }
 
 // replyIntoConversation appends the answer to the source session, authored by
-// the responder (the guest), and publishes it live. A peer-agent source is
-// then woken through the ordinary intake so it sees the answer.
+// the responder (the guest), publishes it live and wakes the source
+// conversation's OWNER (FR-027: an answer wakes an eligible idle owner once,
+// whoever asked).
 func (al *AgentLoop) replyIntoConversation(c addressing.Capture, responder addressing.Pair, req tools.ReplyRequest) (tools.ReplyReceipt, error) {
 	store := al.GetSessionStore()
 	if store == nil {
 		return tools.ReplyReceipt{}, errors.New("session store unavailable")
 	}
 	// Final binding check for a conversation source: the source session must
-	// still exist and still belong to the captured owner.
+	// still exist and still belong to the captured owner - the FULL pair
+	// (workspace and agent), re-read now. A chat moved to another workspace
+	// with the same agent id is no longer the conversation the request came
+	// from (F3).
 	meta, err := store.GetMeta(c.Source.SessionID)
 	if err != nil || meta == nil {
 		return tools.ReplyReceipt{}, errors.New("the conversation this request came from is no longer available")
 	}
-	if !c.Source.Owner.IsZero() && meta.AgentID != c.Source.Owner.AgentID {
-		return tools.ReplyReceipt{}, errors.New("the conversation this request came from no longer belongs to the agent that sent it")
+	if !c.Source.Owner.IsZero() {
+		if meta.AgentID != c.Source.Owner.AgentID || meta.WorkspaceID != c.Source.Owner.WorkspaceID {
+			return tools.ReplyReceipt{}, errors.New("the conversation this request came from no longer belongs to the agent that sent it")
+		}
 	}
 	entry := session.TranscriptEntry{
 		ID:               uuid.New().String(),
@@ -374,16 +425,56 @@ func (al *AgentLoop) replyIntoConversation(c addressing.Capture, responder addre
 	if deps := al.loadAddressDeps(); deps != nil {
 		deps.PublishGuestReply(c.Source.SessionID, entry)
 	}
-	if !c.Sender.Agent.IsZero() {
-		al.wakeRequestSender(c, entry)
-	}
+	al.wakeSourceOwner(c, meta, entry)
 	return tools.ReplyReceipt{ReplyID: entry.ID, Destination: "the conversation it came from"}, nil
 }
 
-// wakeRequestSender starts (or joins) the requesting agent's turn so it sees
-// the answer. It goes through the ordinary intake, so an already-running turn
-// takes it at its next safe boundary and an idle session starts exactly one.
-func (al *AgentLoop) wakeRequestSender(c addressing.Capture, answer session.TranscriptEntry) {
+// wakeSkippedUnreadable counts answers whose owner wake was skipped because
+// the source session's lifecycle record could not be read. Never guessed idle.
+var wakeSkippedUnreadable atomic.Int64
+
+// wakeSourceOwner starts (or joins) the turn of the conversation OWNER so it
+// sees the answer. The target is the owner re-read by the binding check
+// (meta.AgentID), never the request's sender field. It goes through the
+// ordinary intake: a live turn takes it at its next safe boundary, an idle
+// session starts exactly one (one wake per answer, never retried). It never
+// revives: the inbound is not UserInitiated, and a stopped conversation, a
+// hidden main or an unreadable record gets no wake - the answer is already
+// durable in the source transcript, which is the retention.
+func (al *AgentLoop) wakeSourceOwner(c addressing.Capture, meta *session.UnifiedMeta, answer session.TranscriptEntry) {
+	sessionID := c.Source.SessionID
+	if lc := al.GetSessionLifecycleStore(); lc != nil {
+		rec, err := lc.Load(sessionID)
+		switch {
+		case errors.Is(err, session.ErrLifecycleNotFound):
+			// No record: an ordinary chat that never ran a steered turn.
+		case err != nil:
+			wakeSkippedUnreadable.Add(1)
+			logger.WarnCF("agent", "owner wake skipped: the source session's lifecycle record is unreadable",
+				map[string]any{"request_id": c.RequestID, "session_id": sessionID, "error": err.Error()})
+			return
+		case rec.Stopped():
+			logger.InfoCF("agent", "owner wake skipped: the source conversation is stopped; the answer is retained in its transcript",
+				map[string]any{"request_id": c.RequestID, "session_id": sessionID})
+			return
+		}
+	}
+	workspaceID := c.Source.Owner.WorkspaceID
+	if workspaceID == "" {
+		workspaceID = meta.WorkspaceID
+	}
+	if meta.Type == session.SessionTypeMain {
+		deps := al.loadAddressDeps()
+		if deps == nil {
+			return
+		}
+		eligible, err := deps.PairEligible(workspaceID, meta.AgentID)
+		if err != nil || !eligible {
+			logger.InfoCF("agent", "owner wake skipped: the owner's main is not currently eligible",
+				map[string]any{"request_id": c.RequestID, "session_id": sessionID, "error": fmt.Sprint(err)})
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err := al.bus.PublishInbound(ctx, bus.InboundMessage{
@@ -391,11 +482,11 @@ func (al *AgentLoop) wakeRequestSender(c addressing.Capture, answer session.Tran
 		ChatID:    "answer:" + answer.ID,
 		Sender:    bus.SenderInfo{CanonicalID: "answer:" + answer.ID},
 		Content:   fmt.Sprintf("%s answered request %s (see the answer above).", answer.AgentID, c.RequestID),
-		SessionID: c.Source.SessionID,
-		Metadata:  map[string]string{"agent_id": c.Sender.Agent.AgentID, "workspace_id": c.Sender.Agent.WorkspaceID},
+		SessionID: sessionID,
+		Metadata:  map[string]string{"agent_id": meta.AgentID, "workspace_id": workspaceID},
 	})
 	if err != nil {
-		logger.WarnCF("agent", "could not wake the requesting agent after an answer",
+		logger.WarnCF("agent", "could not wake the conversation owner after an answer",
 			map[string]any{"request_id": c.RequestID, "error": err.Error()})
 	}
 }

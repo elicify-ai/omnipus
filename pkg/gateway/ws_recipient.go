@@ -12,6 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // refuseRecipient runs the WHOLE admission rule for a MessageFrame.recipient
@@ -35,6 +36,12 @@ func (h *WSHandler) refuseRecipient(ctx context.Context, sessionID string, setup
 	}
 	if err := to.Validate(); err != nil {
 		return "the addressed agent is not a valid {workspace_id, agent_id} pair"
+	}
+	// F7: validate the COMPLETE computed address (the main's session id, which
+	// is bounded to 255 bytes) before anything is saved - the components can
+	// each be valid and the joined id still too long.
+	if _, err := session.MainSessionID(to.WorkspaceID, to.AgentID); err != nil {
+		return "the addressed agent's address is too long to be reached"
 	}
 	store := h.resolveSessionStore(sessionID)
 	if store == nil {
@@ -63,7 +70,21 @@ func (h *WSHandler) refuseRecipient(ctx context.Context, sessionID string, setup
 func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 	owner := addressing.Pair{}
 	ownerAgent := hcm.targetAgentID
-	if meta, err := hcm.store.GetMeta(hcm.sessionID); err == nil && meta != nil {
+	meta, metaErr := hcm.store.GetMeta(hcm.sessionID)
+	if metaErr != nil || meta == nil {
+		// The source chat's owner cannot be read, so no capture can name it:
+		// fail closed rather than record an empty owner that skips the
+		// return-time binding check.
+		logsafeWarn("ws: could not read the source chat to bind the request", "session_id", hcm.sessionID, "error", metaErr)
+		sid := hcm.sessionID
+		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:      string(generated.WsFrameTypeError),
+			Message:   "the request could not be delivered to that agent",
+			SessionId: &sid,
+		})
+		return
+	}
+	{
 		ownerAgent = meta.AgentID
 		if meta.WorkspaceID != "" && meta.AgentID != "" {
 			owner = addressing.Pair{WorkspaceID: meta.WorkspaceID, AgentID: meta.AgentID}

@@ -1416,7 +1416,14 @@ func (m *Manager) sendWithRetry(
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 && !m.refuseReturnRoute(m.liveConfig(), msg, "retry") {
+		// F2: the captured route is re-checked immediately before EVERY actual
+		// Send - the first one included, which can follow a failed placeholder
+		// edit that gave a rebind the time to happen.
+		boundary := "send"
+		if attempt > 0 {
+			boundary = "retry"
+		}
+		if !m.refuseReturnRoute(m.liveConfig(), msg, boundary) {
 			return
 		}
 		lastErr = w.ch.Send(ctx, msg)
@@ -1593,10 +1600,7 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 			// refusal, which would have killed outbound messaging on EVERY
 			// channel, permanently, on the first refused send. Skip the
 			// message; keep the loop alive.
-			if !allowAgentOriginatedSend(m.configSnapshot(), msg) {
-				return true
-			}
-			if !m.refuseReturnRoute(m.configSnapshot(), msg, "dispatch") {
+			if !m.authorizeOutbound(msg) {
 				return true
 			}
 			return m.enqueueOutbound(ctx, w, msg)
@@ -1606,6 +1610,21 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 		"Unknown channel for outbound message",
 		"Channel has no active worker, skipping message",
 	)
+}
+
+// authorizeOutbound is the dispatch-time authorization of one outbound message
+// (true = hand it to the worker). A message carrying a captured return route is
+// authorized by checkReturnRoute - the instance must still belong to the owner
+// captured at admission - and NOT by the ordinary ownership check: the author of
+// a captured return is the answering guest, who by design does not own the
+// connector (F6). Every other agent-originated message keeps the ownership
+// check unchanged. bus.ReturnRoute is set only by the server's reply path
+// (pkg/agent replyViaConnector), never by a tool argument.
+func (m *Manager) authorizeOutbound(msg bus.OutboundMessage) bool {
+	if msg.Return != nil {
+		return m.refuseReturnRoute(m.configSnapshot(), msg, "dispatch")
+	}
+	return allowAgentOriginatedSend(m.configSnapshot(), msg)
 }
 
 func (m *Manager) dispatchOutboundMedia(ctx context.Context) {
