@@ -52,6 +52,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// rruleTrigger builds the surviving `recurring` trigger shape (an RFC 5545
+// RRULE with its dtstart and tz siblings). The legacy cron_expr / every_ms
+// forms were deleted by every-del (spec C-TIMING / DEL-19).
+func rruleTrigger() *Trigger {
+	rrule := "FREQ=WEEKLY;BYDAY=MO"
+	dtstart := time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC).UnixMilli()
+	tz := "UTC"
+	return &Trigger{Type: TriggerRecurring, Config: TriggerConfig{Rrule: &rrule, DtstartMs: &dtstart, Tz: &tz}}
+}
+
 // ---- helpers ---------------------------------------------------------------
 
 func mustCreate(t *testing.T, s *Store, tk *Task) {
@@ -1343,8 +1353,7 @@ func TestUpdatePatchAllScalarFields(t *testing.T) {
 	tk := mkTask("original", "ws")
 	mustCreate(t, s, tk)
 
-	cron := "0 9 * * MON"
-	trigger := &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}}
+	trigger := rruleTrigger()
 
 	got, err := s.Update(tk.ID, Patch{
 		Title:         ptr("updated"),
@@ -1395,10 +1404,9 @@ func TestUpdateClearsTrigger(t *testing.T) {
 	// Traces to: store.go line 565 — outer-nil trigger patch clears the field
 	// Trigger: **Trigger where outer=non-nil, inner=nil means "clear".
 	s := newStore(t)
-	cron := "0 9 * * MON"
 	tk := mkTask("t", "ws")
 	tk.AgentID = "agent-1"
-	tk.Trigger = &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}}
+	tk.Trigger = rruleTrigger()
 	mustCreate(t, s, tk)
 
 	var nilTrigger *Trigger
@@ -1432,43 +1440,11 @@ func TestUpdateInvalidSurface(t *testing.T) {
 
 // ---- trigger edge cases ----------------------------------------------------
 
-func TestValidateTriggerRecurringTooFrequent(t *testing.T) {
-	// Traces to: store.go line 338 — validateCronExpr < 60s interval rejected
-	// A 6-field cron "* * * * * *" fires every second (sub-minute) → rejected.
-	tooFrequent := "* * * * * *"
-	tr := &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &tooFrequent}}
-	err := ValidateTrigger(tr)
-	require.Error(t, err, "sub-minute cron must be rejected")
-	assert.True(t, errors.Is(err, ErrValidation))
-}
-
-func TestValidateTriggerRecurringBadCronExpr(t *testing.T) {
-	// Traces to: store.go line 338 — validateCronExpr invalid expression
-	bad := "not a cron"
-	tr := &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &bad}}
-	err := ValidateTrigger(tr)
-	require.Error(t, err, "invalid cron expression must be rejected")
-	assert.True(t, errors.Is(err, ErrValidation))
-}
-
 func TestValidateTriggerManualNoConfig(t *testing.T) {
 	// Traces to: store.go line 329 — manual trigger with no config is valid
 	tr := &Trigger{Type: TriggerManual}
 	err := ValidateTrigger(tr)
 	require.NoError(t, err, "manual trigger with empty config must be valid")
-}
-
-func TestValidateTriggerEveryAtFloor(t *testing.T) {
-	// Traces to: store.go line 319 — every_ms exactly 1000 is valid
-	ms1000 := int64(1000)
-	tr := &Trigger{Type: TriggerEvery, Config: TriggerConfig{EveryMs: &ms1000}}
-	err := ValidateTrigger(tr)
-	require.NoError(t, err, "every_ms=1000 is at the floor, must be valid")
-
-	ms999 := int64(999)
-	tr2 := &Trigger{Type: TriggerEvery, Config: TriggerConfig{EveryMs: &ms999}}
-	err2 := ValidateTrigger(tr2)
-	require.Error(t, err2, "every_ms=999 is below floor, must be rejected")
 }
 
 // ---- ClaimForRun concurrent N-goroutine race -------------------------------
@@ -1599,7 +1575,6 @@ func TestCreatePersistsAllFields(t *testing.T) {
 	// Differentiation + persistence: two tasks with different data → different reads.
 	s := newStore(t)
 
-	cron := "0 9 * * MON"
 	tk1 := &Task{
 		Title:         "Task Alpha",
 		Action:        ActionLLM,
@@ -1613,7 +1588,7 @@ func TestCreatePersistsAllFields(t *testing.T) {
 		Due:           "2026-12-01",
 		SourceChannel: "telegram",
 		SourceChatID:  "chat-1",
-		Trigger:       &Trigger{Type: TriggerRecurring, Config: TriggerConfig{CronExpr: &cron}},
+		Trigger:       rruleTrigger(),
 		Todos:         []Todo{{Text: "alpha todo", Status: TodoPending}},
 	}
 	require.NoError(t, s.Create(tk1))

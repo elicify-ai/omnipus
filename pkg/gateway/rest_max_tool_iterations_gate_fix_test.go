@@ -265,9 +265,9 @@ func TestGateFix_RollbackIncomplete_CarriesCause(t *testing.T) {
 	fixed, _ := cause.(string)
 	require.NotEmpty(t, fixed, "details.cause must be a fixed, non-empty cause class")
 
-	// The fixed text: the product's own fixed write-failure class, not the raw
-	// error. (If developer 2 pins a different literal, this one line changes.)
-	assert.Equal(t, configWriteFailure(errInjectedIO).Error(), fixed,
+	// The fixed text: the product's own rollbackCauseText constant (leak round 6,
+	// REVIEW-mainfix-r6-e14ac89eb T1), never the raw error.
+	assert.Equal(t, rollbackCauseText, fixed,
 		"details.cause must be the fixed cause class, not the raw error text")
 
 	// The leak: the injected storage error text must reach the client NOWHERE.
