@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -492,6 +493,17 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, resp)
 }
 
+// jsonSessionStorageError answers a session-storage failure with one fixed,
+// actionable message. The full cause - which can carry filesystem paths, file
+// names and session ids - goes to the error-level server log only, never to the
+// client.
+func jsonSessionStorageError(w http.ResponseWriter, op, sessionID string, err error) {
+	slog.Error("rest: session storage failure", "op", op, "session_id", sessionID, "error", err)
+	jsonErr(w, http.StatusInternalServerError, fmt.Sprintf(
+		"This session could not be %s because session storage failed. "+
+			"Check disk space and permissions, then retry. Details are in the server log.", op))
+}
+
 func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) {
 	// session-core U1 / BDD-01.4: a main id resolves through its pair's
 	// eligibility, and any refusal (wrong owner, wrong workspace, unreadable
@@ -513,13 +525,16 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 	}
 	meta, err := store.GetMeta(id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, fmt.Sprintf("session not found: %v", err))
+		if errors.Is(err, fs.ErrNotExist) {
+			jsonErr(w, http.StatusNotFound, "session not found")
+			return
+		}
+		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
 	messages, err := store.ReadTranscript(id)
 	if err != nil {
-		slog.Error("rest: could not read transcript", "session_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))
+		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
 	// ADR-057 D1/W11 (FR-034/FR-038): a delegated child owns its own real
@@ -559,8 +574,7 @@ func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id 
 	}
 	messages, err := store.ReadTranscript(id)
 	if err != nil {
-		slog.Error("rest: could not read transcript", "session_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))
+		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
 	// ADR-057 D1/W11 (FR-034/FR-038): see getSession's identical note above —
@@ -652,14 +666,12 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 	if err := store.SetMeta(id, session.MetaPatch{Title: &req.Title}); err != nil {
-		slog.Error("rest: rename session", "session_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not rename session: %v", err))
+		jsonSessionStorageError(w, "renamed", id, err)
 		return
 	}
 	meta, err := store.GetMeta(id)
 	if err != nil {
-		slog.Error("rest: rename session: get meta after update", "session_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read updated session: %v", err))
+		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
 	s := unifiedMetaToGenSession(meta)
@@ -746,8 +758,7 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 	descendantIDs := u11CollectDescendantSessionIDs(a.agentLoop.GetSessionLifecycleStore(), id)
 
 	if err := store.DeleteSession(id); err != nil {
-		slog.Error("rest: delete session", "session_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not delete session: %v", err))
+		jsonSessionStorageError(w, "deleted", id, err)
 		return
 	}
 	// N6: the session is gone, so drop any retained external-CLI driver (and its
@@ -931,8 +942,7 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 
 	meta, err := store.NewSession(sessionType, "webchat", agentID)
 	if err != nil {
-		slog.Error("rest: create session", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create session: %v", err))
+		jsonSessionStorageError(w, "created", "", err)
 		return
 	}
 	if workspaceID != "" {
