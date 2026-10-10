@@ -604,19 +604,28 @@ func (t *DelegateTool) Description() string {
 		"them. action=\"steer\" injects an instruction into the child: at its next tool boundary for a " +
 		"native worker, or — for a worker running on an external CLI (subagent_3p: claude-code/codex/opencode) " +
 		"— by interrupting the subprocess and continuing the same CLI conversation. With no live CLI " +
-		"conversation the external steer is refused (never a silent fresh conversation). " +
-		"action=\"respond\" replies to one of the child's messages by correlation_id — the text is " +
-		"delivered to the child as an ordinary message, always available for a delegation you started. " +
+		"conversation (the run has ended, was stopped, or the gateway restarted) the external steer is " +
+		"refused as not_steerable; it never revives the child and never starts a fresh conversation. " +
+		"action=\"respond\" answers one open question of the child, identified by its correlation_id " +
+		"(an unknown or already-answered id is refused). A native child receives the answer as an " +
+		"ordinary message. For a live external CLI child (subagent_3p) the answer is delivered into its " +
+		"running CLI conversation by interrupting the subprocess; for a stopped or finished one it goes " +
+		"through the same revival as resume. An external CLI child cannot call message_parent, so it " +
+		"cannot raise a question that way. " +
 		"action=\"stop_all\" stops that child and every helper under it. action=\"redirect\" stops the helper's current turn, " +
 		"then resumes it with the new instruction; this does not mark the helper failed or end its goal. " +
 		delegateClearGoalDescription +
 		"action=\"resume\" continues a stopped child on the same conversation, or starts its next " +
-		"round when it is done or failed; optional text adds instructions. For a worker running on an " +
-		"external CLI (subagent_3p) it continues the same CLI conversation only while that conversation " +
-		"is still live; once the worker has finished or been stopped the conversation is gone and resume " +
-		"is refused — start a new delegation instead (resume never creates a new session). " +
+		"round when it is done or failed; optional text adds instructions. On a child that is " +
+		"still running resume does nothing and sends no text (use steer). For a worker running on an external CLI (subagent_3p) " +
+		"resume continues the same CLI conversation only while this gateway still holds it; once the " +
+		"worker's run has ended, was stopped, or the gateway restarted, the conversation is gone and " +
+		"resume is refused — start a new delegation instead. The one exception is an external worker " +
+		"stopped before its CLI run ever started: resume starts its first run. Resume never creates a " +
+		"new session. " +
 		"action=\"redirect\" replaces the child's current turn with the new instruction — text is " +
-		"required (NOT available for an external CLI child; use stop_all, or resume while its CLI conversation is live, otherwise start a new delegation). " +
+		"required (refused as not_steerable for an external CLI child: it has no steerable turn to " +
+		"replace; use steer to instruct a live one, stop_all to stop it, or start a new delegation). " +
 		"action=\"peek\" reads a child's latest checkpoint/progress without side effects. " +
 		"action=\"run\" requires agent_id — the specific agent to delegate to, which must be in " +
 		"your delegation allowlist. There is no default target and no implicit substitution of " +
@@ -694,7 +703,7 @@ func (t *DelegateTool) Parameters() map[string]any {
 				"enum": []string{"run", "status", "inbox", "inbox_ack", "steer", "respond", "stop_all", "clear_goal", "resume", "redirect", "peek"},
 				"description": "\"run\" (default) delegates a new task. \"status\" checks progress. \"inbox\" " +
 					"drains child->parent messages. \"inbox_ack\" acknowledges them. \"steer\" injects an " +
-					"instruction. \"respond\" answers one of the child's messages. \"stop_all\" stops the " +
+					"instruction. \"respond\" answers one of the child's open questions. \"stop_all\" stops the " +
 					"child and every helper under it. \"resume\" continues a stopped child or starts its " +
 					"next round. \"redirect\" replaces the child's current turn with a new instruction. " +
 					"\"peek\" reads latest checkpoint/progress." +
@@ -772,7 +781,7 @@ func (t *DelegateTool) Parameters() map[string]any {
 			},
 			"text": map[string]any{
 				"type":        "string",
-				"description": "Required for action=\"steer\", \"respond\", \"resume\" and \"redirect\": the instruction or answer text.",
+				"description": "Required for action=\"steer\", \"respond\" and \"redirect\": the instruction or answer text. Optional for \"resume\": additional instructions.",
 			},
 			"correlation_id": map[string]any{
 				"type":        "string",

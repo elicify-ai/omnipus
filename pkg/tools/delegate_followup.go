@@ -152,9 +152,9 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		}
 		return ErrorResult(fmt.Sprintf(
 			"delegate: steer: not_steerable: external command-line session %s runs on an external CLI "+
-				"(claude-code/codex/opencode) with no steering-queue drain in its dispatch path; use "+
-				"action=\"respond\" or action=\"resume\" (each continues the same CLI conversation only while it is live; "+
-				"otherwise start a new delegation) instead",
+				"(claude-code/codex/opencode) and this steering sink cannot deliver a live instruction to it; "+
+				"action=\"resume\" revives a stopped or finished one only while this gateway still holds its CLI "+
+				"conversation (otherwise start a new delegation)",
 			sessionID,
 		))
 	}
