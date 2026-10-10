@@ -1,7 +1,6 @@
 import { Scroll, Microphone, UploadSimple } from '@phosphor-icons/react'
 import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
-import { SmartSelect } from '@/components/ui/smart-select'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { VoiceProviderSub } from './voice-provider-sub'
@@ -10,7 +9,7 @@ import { AgentIcon } from '@/components/ui/agent-icon'
 import type { AgentColor as AgentColorValue, AgentFigure, AgentRole } from '@/lib/api/generated/openapi-types'
 import { AgentColor } from '@/lib/api/generated/schemas'
 import { FIGURE_ART, IDENTITY_GROUP_ORDER, ROLE_VOCABULARY } from '@/lib/agentIdentity'
-import { ICON_OPTIONS, getIconComponent, type IconName } from '@/lib/agentIcons'
+import { getIconComponent } from '@/lib/agentIcons'
 
 
 const SWATCH_HEXES = [
@@ -414,43 +413,6 @@ export function IdentityPreview({
   color: string | null | undefined
 }) {
   return <AgentIcon figure={figure} role={role} color={color as AgentColorValue} size={40} />
-}
-
-// ── Avatar icon picker (lifted from AgentProfile.tsx:869-878) ──────────────
-
-export interface IconPickerProps {
-  /** Currently selected icon name. */
-  value: IconName
-  /** Called with the chosen icon name on change. */
-  onChange: (icon: IconName) => void
-  /** Optional testid applied to a wrapping div (SmartSelect trigger inherits). */
-  triggerTestId?: string
-  /** Optional className override. */
-  triggerClassName?: string
-}
-
-/**
- * Avatar icon picker — wraps the `SmartSelect` primitive with the
- * `ICON_OPTIONS` vocabulary from `src/lib/agentIcons.ts`. The select value
- * is the wire-shape `IconName` (e.g. `"lightbulb"`, `"robot"`).
- */
-export function IconPicker({
-  value,
-  onChange,
-  triggerTestId,
-  triggerClassName = 'w-48',
-}: IconPickerProps) {
-  return (
-    <div data-testid={triggerTestId}>
-      <SmartSelect
-        value={value}
-        onValueChange={(v) => onChange(v as IconName)}
-        triggerClassName={triggerClassName}
-        ariaLabel="Icon"
-        items={ICON_OPTIONS.map(({ name: iconName }) => ({ value: iconName, label: iconName }))}
-      />
-    </div>
-  )
 }
 
 // ── Avatar header circle (lifted from AgentProfile.tsx:625-630) ───────────

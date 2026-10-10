@@ -186,9 +186,9 @@ describe('mapToCalendarEvents — aggregated day buckets (test 17)', () => {
     expect(formatIntervalLabel(172_800_000)).toBe('every 2 days')
   })
 
-  it('formatIntervalLabel: sub-minute interval (legacy `every_ms` 1000ms floor, F3) falls back to "sec"', () => {
-    // Reachable for a legacy every_ms:5000 task (1000ms floor) — never for
-    // rrule (60s floor). See the updated doc comment above the function.
+  it('formatIntervalLabel: sub-minute interval falls back to "sec" (defensive branch)', () => {
+    // Defensive only: rrule triggers have a 60s floor and the `every` trigger
+    // is gone (C-TIMING / DEL-19).
     expect(formatIntervalLabel(5_000)).toBe('every 5 sec')
   })
 
@@ -207,7 +207,7 @@ describe('mapToCalendarEvents — aggregated day buckets (test 17)', () => {
 
 describe('mapToCalendarEvents — truncated expansion (test 17)', () => {
   it('truncated:true renders exactly one non-interactive marker on the last covered day', () => {
-    // "Truncated expansion is visibly flagged" — every_ms=60000, 7-day range,
+    // "Truncated expansion is visibly flagged" — a 60s-interval rrule, 7-day range,
     // 500-instant cap hit; response covers only the first ~8 hours.
     const task = makeTask({ id: 'task-4', title: 'Every-minute poll' })
     const lastInstant = new Date(2026, 5, 1, 7, 59, 0).getTime()

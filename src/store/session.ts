@@ -128,17 +128,13 @@ interface SessionStore {
    *
    * Precedence, highest first:
    *
-   *   1. A SERVER-AUTHORITATIVE switch (`applyServerAgentSwitch`, driven by
-   *      the WS `agent_switched` frame). The backend has genuinely handed the
-   *      conversation to another agent; the picker must report reality, so
-   *      this always wins AND resets the source back to `'auto'`.
-   *   2. An EXPLICIT USER SELECTION (`selectAgent`). It outranks any
+   *   1. An EXPLICIT USER SELECTION (`selectAgent`). It outranks any
    *      session-derived agent and stays in force until the user changes it
-   *      again, the server switches agents, or they leave the workspace they
+   *      again, or they leave the workspace they
    *      chose it in (`enterWorkspaceChat` — a different workspace has a
    *      different team roster, so carrying the pick across would point the
    *      composer at an agent that may not even be on the new team).
-   *   3. A SESSION-DERIVED HINT — the `agentId` argument of
+   *   2. A SESSION-DERIVED HINT — the `agentId` argument of
    *      `setActiveSession` / `attachToSession` / `startNewSession` and the
    *      argument of `setActiveAgentType`. These are hints, NOT commands:
    *      they are adopted only when no explicit selection is in force (see
@@ -161,17 +157,6 @@ interface SessionStore {
   newChatPrompt: NewChatPrompt | null
   /** Last workspace-entry decision. `sendEnabled: false` blocks send. */
   workspaceEntry: WorkspaceEntryView | null
-  /**
-   * Rule 1 — apply a SERVER-AUTHORITATIVE agent change (WS `agent_switched`,
-   * e.g. a Mia → Jim handover). Clears any user pin first, because the
-   * backend has already moved the conversation: leaving the picker on the
-   * user's old choice would misreport who is actually answering.
-   */
-  applyServerAgentSwitch: (
-    sessionId: string | null,
-    agentId: string,
-    agentType?: AgentKind | null
-  ) => void
   setActiveSession: (
     sessionId: string | null,
     agentId?: string | null,
@@ -433,17 +418,6 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   mainPointerByPair: {},
   newChatPrompt: null,
   workspaceEntry: null,
-
-  applyServerAgentSwitch: (sessionId, agentId, agentType) => {
-    // Force the answering agent first. setActiveSession keeps an already
-    // attached owner, so a same-session handover would otherwise be ignored.
-    set({
-      activeAgentId: agentId,
-      activeAgentType: agentType ?? get().activeAgentType,
-      ...clearRetiredSelection(),
-    })
-    get().setActiveSession(sessionId, agentId, agentType)
-  },
 
   setActiveSession: (sessionId, agentId, agentType) => {
     // Capture the current session type BEFORE the reset below nulls it out.

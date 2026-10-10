@@ -98,7 +98,7 @@ describe('buildTaskGraph — plan scoping', () => {
     const tasks = [makeTask({ id: 'a', plan_id: 'plan-1', agent_id: 'mia' })]
     // Agent-first navigation spec, Locked identity vocabulary / DS-I I03:
     // legacy identity gold maps to the approved Orange #FB923C.
-    const agents = [makeAgent({ id: 'mia', name: 'Mia', color: '#FB923C', icon: 'Robot' })]
+    const agents = [makeAgent({ id: 'mia', name: 'Mia', color: '#FB923C' })]
     const { nodes } = buildTaskGraph(tasks, agents, { planId: 'plan-1' })
     expect(nodes[0].data.agentName).toBe('Mia')
     expect(nodes[0].data.agentColor).toBe('#FB923C')

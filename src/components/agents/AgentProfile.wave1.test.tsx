@@ -70,14 +70,12 @@ function lockedMia(): Agent {
     max_tool_iterations_override_ignored: false,
     memory_enabled: true,
     color: AgentColor.options[0],
-    icon: 'lightbulb',
     figure: 'Omnipus',
     role: 'general',
     editable_fields: [
       locked('name'),
       locked('description'),
       locked('color'),
-      locked('icon'),
       locked('figure'),
       locked('role'),
       locked('soul'),
@@ -164,9 +162,9 @@ describe('edit header live identity preview', () => {
 })
 
 describe('successful custom identity edit', () => {
-  it('autosaves the exact identity patch at the reviewed revision and reloads the confirmed identity without clearing icon', async () => {
+  it('autosaves the exact identity patch at the reviewed revision and reloads the confirmed identity', async () => {
     // FR-020 / ARCH decision 1.1: wire figure/role/palette values, not art
-    // keys or display names. The stored legacy icon is not part of this edit.
+    // keys or display names.
     const reviewedRevision = 'a'.repeat(64)
     let stored: Agent = {
       ...lockedMia(), id: 'custom-save', name: 'Saved identity', type: 'Main', locked: false,
@@ -177,7 +175,7 @@ describe('successful custom identity edit', () => {
     // Process-edge fake: persist only the values actually supplied in the
     // request. Returning a preselected identity would hide a dropped field.
     vi.mocked(updateAgent).mockImplementation(async (_id, patch) => {
-      const identityPatch: Pick<AgentUpdateRequest, 'figure' | 'role' | 'color' | 'icon'> = patch
+      const identityPatch: Pick<AgentUpdateRequest, 'figure' | 'role' | 'color'> = patch
       stored = {
         ...stored, ...identityPatch,
         revision: 'b'.repeat(64), updated_at: '2026-10-09T09:00:01Z',
@@ -203,7 +201,6 @@ describe('successful custom identity edit', () => {
       expect(vi.mocked(updateAgent).mock.calls[0][1]).not.toHaveProperty('icon')
       expect(screen.getByText('Saved just now')).toBeInTheDocument()
       expect(stored.revision).toBe('b'.repeat(64))
-      expect(stored.icon).toBe('lightbulb')
       profile.unmount()
       vi.useRealTimers()
 
@@ -221,7 +218,6 @@ describe('successful custom identity edit', () => {
       for (const choice of ['Woman', 'Writer', 'Violet']) {
         expect(within(reloadedLayout).getByRole('button', { name: choice })).toHaveAttribute('aria-pressed', 'true')
       }
-      expect(screen.getByText('lightbulb')).toBeInTheDocument()
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
       expect(updateAgent).toHaveBeenCalledTimes(1)
@@ -232,7 +228,7 @@ describe('successful custom identity edit', () => {
 })
 
 describe('built-in identity stays locked', () => {
-  it('shows selected figure, role and colour as locked choices and keeps the stored icon slug', async () => {
+  it('shows selected figure, role and colour as locked choices', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(
       <QueryClientProvider client={client}>
@@ -256,8 +252,6 @@ describe('built-in identity stays locked', () => {
     expect(figure).toHaveAttribute('aria-pressed', 'true')
     expect(role).toHaveAttribute('aria-pressed', 'true')
     expect(colour).toHaveAttribute('aria-pressed', 'true')
-    // The slug lives once above both layouts, not inside either one.
-    expect(screen.getByText('lightbulb')).toBeInTheDocument()
     expect(within(layout).queryByLabelText('Icon')).toBeNull()
     expect(document.querySelector('input[type="file"]')).toBeNull()
   })

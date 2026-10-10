@@ -38,7 +38,7 @@ function makeClient() {
 }
 
 const AGENTS: Agent[] = [
-  makeAgent({ id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', color: '#3B82F6', icon: 'compass' }),
+  makeAgent({ id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', color: '#3B82F6' }),
   makeAgent({ id: 'ext-1', name: 'ClaudeCode', type: 'subagent_3p', locked: false, status: 'active' }),
 ]
 

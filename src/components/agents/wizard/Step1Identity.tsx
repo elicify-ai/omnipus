@@ -1,15 +1,15 @@
 // Step1Identity — wizard step ① (Identity).
 //
-// Per spec §5.3-§5.5: color, icon, name, description, model, fallback
+// Per spec §5.3-§5.5: color, name, description, model, fallback
 // models (item 6 reorg — moved from Step3Tools so the editor sits directly
 // adjacent to the primary model field), plus the subagent_3p executor block
-// (cli_path / env_overrides / cli_args). The color + icon editors are
-// lifted from `AgentFormFields.tsx` (`<AvatarColorPicker>`, `<IconPicker>`),
+// (cli_path / env_overrides / cli_args). The color editor is
+// lifted from `AgentFormFields.tsx` (`<AvatarColorPicker>`),
 // the model picker is `<ModelSelector>` (Main + Subagent), and the
 // subagent_3p executor inputs are free-text per the spec wireframe.
 //
 // W4 + W5 testids emitted per the plan's UI table:
-//   wizard-name, wizard-description, wizard-color, wizard-icon, wizard-model,
+//   wizard-name, wizard-description, wizard-color, wizard-model,
 //   wizard-add-fallback, wizard-fallback-N (item 6),
 //   wizard-cli-chip (locked, only when initialCli is set),
 //   wizard-cli-path, wizard-env-overrides, wizard-cli-args

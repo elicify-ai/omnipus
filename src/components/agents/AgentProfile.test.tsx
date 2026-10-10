@@ -2988,13 +2988,6 @@ describe('AgentProfile — locked core agent identity fields: visible read-only 
     expect(screen.queryByTestId('avatar-color-readonly')).toBeNull()
   })
 
-  it('shows a static read-only avatar icon (not the interactive picker)', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
-    renderProfile('mia')
-    await screen.findByText('Mia')
-    expect((await screen.findAllByTestId('avatar-icon-readonly')).length).toBeGreaterThanOrEqual(1)
-    expect(screen.queryByTestId('avatar-icon-trigger')).toBeNull()
-  })
 })
 
 describe('AgentProfile — locked core agent Sampling/Execution: editable (W2c)', () => {
@@ -3134,13 +3127,12 @@ describe('AgentProfile — Default-agent toggle visibility (field matrix, W2c)',
 // than accidentally inheriting the built-in locks.
 describe('AgentProfile — unlocked Main agent: interactive identity fields render (isLocked regression guard, W2c)', () => {
   it('renders editable figure, role and colour choices instead of the legacy icon picker (W1-6)', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#3B82F6', icon: 'Chat' })
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#3B82F6' })
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
     expectEditableIdentityChoices(screen.getByRole('tabpanel', { name: 'Basics' }))
     expect(screen.queryByTestId('avatar-icon-trigger')).toBeNull()
     expect(screen.queryAllByTestId('avatar-color-readonly').length).toBe(0)
-    expect(screen.getByTestId('avatar-icon-readonly').querySelector('span')?.textContent).toBe('Chat')
   })
 
   it('does NOT disable the description textarea for an editable Main agent', async () => {

@@ -551,7 +551,7 @@ export function SearchModal() {
                         const agentName = agentGroup.agent?.name ?? (agentsError || agentGroup.agentId === 'unknown' ? 'Unknown' : '[removed]')
                         return (
                           <div key={agentKey}>
-                            <AgentHeader agent={agentGroup.agent} name={agentName} isCollapsed={agentCollapsed} onToggle={() => toggleAgent(agentKey)} panelId={`agent-panel-${agentKey}`} />
+                            <AgentHeader name={agentName} isCollapsed={agentCollapsed} onToggle={() => toggleAgent(agentKey)} panelId={`agent-panel-${agentKey}`} />
                             {!agentCollapsed && (
                               <div id={`agent-panel-${agentKey}`} role="region" className="space-y-[var(--space-0-5)] pl-[var(--space-2-5)]">
                                 <SessionOverviewList

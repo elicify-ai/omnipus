@@ -1107,22 +1107,6 @@ describe('TaskDetailPanel — FR-023 defensive guard for a force-fed scheduled t
     expect(fieldRoot.querySelector('[role="combobox"]')).toBeNull()
   })
 
-  it('renders a read-only summary for an every-interval task, derived from every_ms, with no interval input', async () => {
-    renderPanel(makeTask({
-      id: 'task-every-forced',
-      status: 'next',
-      workspace_id: 'ws-test',
-      trigger: { type: 'every', config: { every_ms: 45 * 60_000 } },
-    }))
-
-    expect(await screen.findByText(/repeats every 45 minutes/i)).toBeInTheDocument()
-    expect(await screen.findByText(/edit in workspace calendar/i)).toBeInTheDocument()
-    expect(screen.queryByLabelText(/interval in minutes/i)).toBeNull()
-    const label = await screen.findByText(/^trigger$/i)
-    const fieldRoot = label.parentElement as HTMLElement
-    expect(fieldRoot.querySelector('[role="combobox"]')).toBeNull()
-  })
-
   it('omits the calendar link when the force-fed task has no workspace_id, but still shows the read-only summary', async () => {
     renderPanel(makeTask({
       id: 'task-recurring-no-ws',

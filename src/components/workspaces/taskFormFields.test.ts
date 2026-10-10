@@ -23,23 +23,9 @@ describe('buildTrigger', () => {
     expect(buildTrigger('once', { at_ms: 0 })).toEqual({ type: 'once', config: { at_ms: 0 } })
   })
 
-  it('builds an every trigger carrying every_ms', () => {
-    expect(buildTrigger('every', { every_ms: 3_600_000 })).toEqual({
-      type: 'every',
-      config: { every_ms: 3_600_000 },
-    })
-  })
-
-  it('builds a recurring trigger carrying cron_expr', () => {
-    expect(buildTrigger('recurring', { cron_expr: '0 9 * * MON' })).toEqual({
-      type: 'recurring',
-      config: { cron_expr: '0 9 * * MON' },
-    })
-  })
-
   it('drops undefined / null / empty-string config keys', () => {
     expect(buildTrigger('once', { at_ms: undefined })).toEqual({ type: 'once', config: {} })
-    expect(buildTrigger('recurring', { cron_expr: '' })).toEqual({ type: 'recurring', config: {} })
+    expect(buildTrigger('recurring', {})).toEqual({ type: 'recurring', config: {} })
   })
 })
 
@@ -119,15 +105,8 @@ describe('triggerSummary', () => {
     expect(triggerSummary({ type: 'once', config: {} })).toBe('Once — (time unset)')
   })
 
-  it('describes an every trigger in minutes, and the unset case', () => {
-    expect(triggerSummary({ type: 'every', config: { every_ms: 3_600_000 } })).toBe('Every 60m')
-    expect(triggerSummary({ type: 'every', config: {} })).toBe('Every (interval unset)')
-  })
-
-  it('describes a recurring trigger by cron, and the unset case', () => {
-    expect(triggerSummary({ type: 'recurring', config: { cron_expr: '0 9 * * MON' } })).toBe(
-      'Recurring — 0 9 * * MON',
-    )
-    expect(triggerSummary({ type: 'recurring', config: {} })).toBe('Recurring — (no cron)')
+  it('describes a recurring trigger without surfacing any rule string', () => {
+    expect(triggerSummary({ type: 'recurring', config: { rrule: 'FREQ=WEEKLY;BYDAY=MO', dtstart_ms: 1, tz: 'UTC' } })).toBe('Recurring')
+    expect(triggerSummary({ type: 'recurring', config: {} })).toBe('Recurring')
   })
 })

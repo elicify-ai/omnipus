@@ -113,8 +113,7 @@ function isPaletteColor(value: string): value is AgentColorValue {
   return (AgentColor.options as readonly string[]).includes(value)
 }
 
-/** Figure, role, and colour only. `icon` is never copied: the editor does not
- *  write the legacy Phosphor name. A colour that is not one of the ten is
+/** Figure, role, and colour only. A colour that is not one of the ten is
  *  omitted so the server applies Grey. */
 function identityOnCreate(payload: WizardSubmitPayload): {
   figure?: AgentFigure
