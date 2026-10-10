@@ -383,3 +383,75 @@ describe('frozen pending record (round 4 invariants, spec FR-047 / BDD-13.2 / no
     expect(sent).toEqual([])
   })
 })
+
+describe('final round (R1–R3): the record belongs to exactly one shown open', () => {
+  it('R1: a completion without a number closes the record — a later reconnect never fills it; a fresh open acks its own number', () => {
+    const sid = 'main-ack-r1-boundless'
+    shownForeground(sid, [mainSession(sid)])
+
+    // The shown open completes without any bound on its attach answer.
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+    expect(sent).toEqual([])
+
+    // A reconnect in the SAME generation supplies 9 — the closed record must not take it.
+    useChatStore.getState().handleFrame(stateFrame(sid, 9))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+    expect(sent).toEqual([])
+
+    // A fresh foreground open is a new record: it acknowledges its OWN number.
+    noteForegroundAttach(sid)
+    useChatStore.getState().handleFrame(stateFrame(sid, 12))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+    expect(sent).toEqual([
+      { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 12 },
+    ])
+  })
+
+  it('R2: metadata resolving after the user moved on drops the record — returning to the chat does not resurrect it without a new open', () => {
+    const sid = 'main-ack-r2-dropped'
+    shownForeground(sid, [])
+
+    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+
+    // The user opens a different chat (no new attach for sid), then metadata resolves.
+    useSessionStore.setState({ activeSessionId: 'another-chat' })
+    queryClient.setQueryData(['sessions'], [mainSession(sid)])
+    expect(sent).toEqual([])
+
+    // Returning to the old chat (without a new shown open) must not revive the record.
+    useSessionStore.setState({ activeSessionId: sid })
+    queryClient.setQueryData(['sessions'], [mainSession(sid)])
+    expect(sent).toEqual([])
+  })
+
+  it('R3: a stale completion from an older open never touches the current record — the reopened open acks its own 9 exactly once', () => {
+    const sid = 'main-ack-r3-stale-completion'
+    shownForeground(sid, [mainSession(sid)])
+
+    // Open 1: its answer carries 7 and it completes — acknowledged once.
+    useChatStore.getState().handleFrame(stateFrame(sid, 7))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+    expect(sent).toEqual([
+      { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 7 },
+    ])
+
+    // The user goes elsewhere, then reopens the SAME session (a new record).
+    noteForegroundAttach('chat-b')
+    noteForegroundAttach(sid)
+
+    // A STALE completion from open 1 arrives before the reopened answer does.
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+    expect(sent).toEqual([
+      { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 7 },
+    ])
+
+    // The reopened open's own answer and completion acknowledge 9 exactly once.
+    useChatStore.getState().handleFrame(stateFrame(sid, 9))
+    useChatStore.getState().handleFrame(catchUpComplete(sid))
+    expect(sent).toEqual([
+      { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 7 },
+      { type: 'attach_session', session_id: sid, ack_attention: true, attention_bound: 9 },
+    ])
+  })
+})

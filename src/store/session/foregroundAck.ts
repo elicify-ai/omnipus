@@ -23,6 +23,13 @@
  *     it (a replaced commit drops it with the commit).
  * I5. Unknown metadata or unknown attention ⇒ no send (wait for a cache
  *     event). Never acknowledge on guesses, never invent a session.
+ *
+ * Final refinements (round 5): the bound is captured ONLY from the first
+ * completion of THIS open's attach answer — a completion without a number
+ * closes the record as boundless forever (R1); a permanent guard failure
+ * (user moved on, non-main) DROPS the record instead of pausing it (R2);
+ * a late completion from an OLDER open of the same session never touches
+ * the current record (R3).
  */
 import type { Session, SessionDetail } from '@/lib/api'
 import type { AttachSessionFrame } from '@/lib/api/generated/asyncapi-types'
@@ -40,7 +47,11 @@ import { useSessionStore } from '@/store/session'
 type ShownCommit = {
   sessionId: string
   generation: number
-  /** Frozen at the first completion that observes a bound; never replaced (I2). */
+  /** True once THIS open's attach answer began (its snapshot/session_state was noted). */
+  answerSeen: boolean
+  /** True after the first completion of THIS open — the one capture opportunity (R1). */
+  boundClosed: boolean
+  /** Frozen at that first own completion; null + boundClosed ⇒ this open never acknowledges (R1). */
   bound: number | null
   /** True only after a successful send (I4). */
   sent: boolean
@@ -55,9 +66,15 @@ function documentIsHidden(): boolean {
   return typeof document !== 'undefined' && document.hidden === true
 }
 
-/** Remember the server snapshot whose attention bound the seam may read later. */
+/**
+ * Remember a server frame of THIS open's attach answer. Both the full
+ * snapshot and the session_state mark that the answer began — a completion
+ * that arrives before any answer frame belongs to an OLDER open of the same
+ * session and must never touch the current record (R3).
+ */
 export function noteServerAttentionFrame(sessionId: string, frame: unknown): void {
   snapshotBySession.set(sessionId, frame)
+  if (commit && commit.sessionId === sessionId) commit.answerSeen = true
 }
 
 /**
@@ -80,7 +97,7 @@ function loadedSession(sessionId: string): Session | null {
 /** A successful visible attach becomes the shown commit. It does not acknowledge. */
 export function noteForegroundAttach(sessionId: string): void {
   generation += 1
-  commit = { sessionId, generation, bound: null, sent: false }
+  commit = { sessionId, generation, answerSeen: false, boundClosed: false, bound: null, sent: false }
 }
 
 function sendCaptured(sessionId: string, fields: Record<string, unknown>): boolean {
@@ -124,15 +141,30 @@ export function acknowledgeShownCatchUp(sessionId: string): void {
   if (!current || current.sessionId !== sessionId || current.sent) return
   // Tab visible (I3): a hidden completion is a prefetch, never a send.
   if (documentIsHidden()) return
-  // Still the active chat (I3): the user may have opened a New chat since.
-  if (useSessionStore.getState().activeSessionId !== sessionId) return
+  // R3: no answer frame of THIS open has been noted yet. If an older frame
+  // for this session exists (noted before this open began), this completion
+  // belongs to that OLDER open — ignore it entirely, never touch the record.
+  // If NO frame exists at all, this open completed without any answer: close
+  // it as boundless (R1) — it can never acknowledge.
+  if (!current.answerSeen) {
+    if (snapshotBySession.has(sessionId)) return
+    current.boundClosed = true
+    return
+  }
+  // R2: the user moved to another chat — a permanent guard failure. Drop the
+  // record now; only a NEW foreground open may acknowledge again.
+  if (useSessionStore.getState().activeSessionId !== sessionId) {
+    commit = null
+    return
+  }
 
-  // Freeze the bound ONCE for this shown commit (I1/I2): the first bound any
-  // completion of this commit observes. A later frame never replaces it, and
-  // a commit that has seen no bound yet keeps waiting for one — no bound ⇒
-  // no write, never a substituted number (spec ~L191).
-  if (current.bound === null) {
+  // R1: exactly ONE capture opportunity — the first completion of THIS open.
+  // A completion without a usable number closes the record as boundless: no
+  // later reconnect, completion, or cache event ever fills it. Only a new
+  // foreground open (a new record) can acknowledge its own number.
+  if (!current.boundClosed) {
     current.bound = attentionBoundOfFrame(snapshotBySession.get(sessionId)) ?? null
+    current.boundClosed = true
   }
   if (current.bound === null) return
 
@@ -143,8 +175,11 @@ export function acknowledgeShownCatchUp(sessionId: string): void {
     ensurePendingAckWatcher()
     return
   }
-  // A non-main can never become the shown main — permanent mismatch (I3).
-  if (!isMainSession(session)) return
+  // R2: a non-main is a permanent classification mismatch — drop the record.
+  if (!isMainSession(session)) {
+    commit = null
+    return
+  }
   // Unknown attention waits (I5): a roster refresh may make it known.
   if (sessionAttention(session) === 'unknown') {
     ensurePendingAckWatcher()

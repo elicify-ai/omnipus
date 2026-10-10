@@ -137,4 +137,23 @@ describe('approval frames refresh the session list (U11 N2)', () => {
       { type: 'attach_session', session_id: MAIN_SID, ack_attention: true, attention_bound: 7 },
     ])
   })
+
+  it('approval frames naming the loaded MAIN itself still refresh the roster and send nothing — the frame id is never matched against mains', () => {
+    useSessionStore.setState({ activeSessionId: MAIN_SID })
+    queryClient.setQueryData(['sessions'], [mainSession(MAIN_SID)])
+    noteForegroundAttach(MAIN_SID)
+    useChatStore.getState().handleFrame(stateFrame(MAIN_SID, 7))
+
+    // The approval frames name the MAIN's own session id here.
+    useChatStore.getState().handleFrame(requiredFrame(MAIN_SID))
+    expect(queryClient.getQueryState(['sessions'])?.isInvalidated).toBe(true) // the list still refreshes
+    useChatStore.getState().handleFrame(resolvedFrame(MAIN_SID))
+    expect(sent).toEqual([]) // and nothing is sent because of that id
+
+    // Positive control: only the shown completion acknowledges, with the frozen bound.
+    useChatStore.getState().handleFrame(catchUpComplete(MAIN_SID))
+    expect(sent).toEqual([
+      { type: 'attach_session', session_id: MAIN_SID, ack_attention: true, attention_bound: 7 },
+    ])
+  })
 })
