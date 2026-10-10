@@ -1289,7 +1289,7 @@ describe('ChannelConfigPanel — client-side save validation', () => {
   })
 })
 
-// Workers (type:'worker') are delegation-only labour agents and can't be a
+// Workers (type:'Subagent') are delegation-only labour agents and can't be a
 // channel routing default (the backend 400s). The routing "Default agent" picker
 // must therefore omit them.
 describe('ChannelConfigPanel — routing picker excludes workers', () => {
@@ -1307,7 +1307,7 @@ describe('ChannelConfigPanel — routing picker excludes workers', () => {
     vi.mocked(fetchChannelRouting).mockResolvedValue({ workspace_id: 'sales', default_agent_id: undefined })
     vi.mocked(fetchAgents).mockResolvedValue([
       { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core' },
-      { figure: 'Omnipus', role: 'general', id: 'builder', name: 'Builder Worker', type: 'worker' },
+      { figure: 'Omnipus', role: 'general', id: 'builder', name: 'Builder Worker', type: 'Subagent' },
     ] as never)
     vi.mocked(fetchWorkspaces).mockResolvedValue([{ id: 'sales', name: 'Sales' } as Workspace])
     // core_team includes mia and builder — builder is a worker so it should be excluded
@@ -1325,7 +1325,7 @@ describe('ChannelConfigPanel — routing picker excludes workers', () => {
     client.setQueryData(['channel-routing', 'telegram'], { workspace_id: 'sales' })
     client.setQueryData(['agents'], [
       { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core' },
-      { figure: 'Omnipus', role: 'general', id: 'builder', name: 'Builder Worker', type: 'worker' },
+      { figure: 'Omnipus', role: 'general', id: 'builder', name: 'Builder Worker', type: 'Subagent' },
     ])
     client.setQueryData(['workspaces', { status: 'active' }], [{ id: 'sales', name: 'Sales' }])
     client.setQueryData(['workspaces', 'sales'], { id: 'sales', name: 'Sales', core_team: ['mia', 'builder'] })

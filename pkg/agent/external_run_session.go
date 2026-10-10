@@ -137,8 +137,8 @@ func externalResumeRequested(ts *turnState) bool {
 // externalRunSession returns sessionKey's holder, creating it on first use.
 func (al *AgentLoop) externalRunSession(sessionKey string) *externalCLIRunSession {
 	fresh := &externalCLIRunSession{}
-	any, _ := al.externalRunSessions.LoadOrStore(sessionKey, fresh)
-	sess, ok := any.(*externalCLIRunSession)
+	holder, _ := al.externalRunSessions.LoadOrStore(sessionKey, fresh)
+	sess, ok := holder.(*externalCLIRunSession)
 	if !ok || sess == nil {
 		// externalRunSessions is populated exclusively here with
 		// *externalCLIRunSession values; a different type under the key is a
@@ -153,11 +153,11 @@ func (al *AgentLoop) externalRunSession(sessionKey string) *externalCLIRunSessio
 // (nil when this loop has never dispatched the session), so a delivery can tell
 // "there is genuinely no live conversation" from "there is one".
 func (al *AgentLoop) externalRunSessionIfPresent(sessionKey string) *externalCLIRunSession {
-	any, ok := al.externalRunSessions.Load(sessionKey)
+	holder, ok := al.externalRunSessions.Load(sessionKey)
 	if !ok {
 		return nil
 	}
-	sess, ok := any.(*externalCLIRunSession)
+	sess, ok := holder.(*externalCLIRunSession)
 	if !ok || sess == nil {
 		return nil
 	}
@@ -352,14 +352,14 @@ func (al *AgentLoop) retireExternalReservations(sessionKey string, claim executi
 // the driver until the revived turn begins (NEW-4).
 func (al *AgentLoop) reserveExternalConversation(sessionKey string, rec *session.LifecycleRecord) (*externalConversationReservation, error) {
 	if rec == nil || !rec.Is3P || !rec.ExternalRunStarted {
-		return nil, nil
+		return nil, nil //nolint:nilnil // No external conversation to protect means no reservation, not an error.
 	}
 	resumeOnly, err := al.externalRunResumeOnly(sessionKey)
 	if err != nil {
 		return nil, err
 	}
 	if !resumeOnly {
-		return nil, nil
+		return nil, nil //nolint:nilnil // A first run may still be fresh: no reservation, not an error.
 	}
 	sess := al.externalRunSessionIfPresent(sessionKey)
 	if sess == nil {
@@ -572,24 +572,6 @@ func (s *externalCLIRunSession) releaseDriverLocked() {
 	s.driver = nil
 	s.claim = executionClaim{}
 	s.cancelRun = nil
-}
-
-// isRunning reports whether a run is in flight for this session.
-func (s *externalCLIRunSession) isRunning() bool {
-	if s == nil {
-		return false
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.running
-}
-
-// externalRunLive reports whether sessionKey currently has an external-CLI run
-// in flight on this loop — the live-conversation precondition for delivering a
-// steer by interrupt + resume. A session that merely ran once and ended is NOT
-// live (its instruction would be orphaned with no drain to consume it).
-func (al *AgentLoop) externalRunLive(sessionKey string) bool {
-	return al.externalRunSessionIfPresent(sessionKey).isRunning()
 }
 
 // takeExternalSteerInterrupt reports whether the session's last run was

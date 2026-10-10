@@ -446,7 +446,7 @@ func toWireTrigger(tr *task.Trigger) *struct {
 // schema keeps `config` open, so a client that still sends `every_ms` or
 // `cron_expr` is not rejected by decoding; it is refused here, by name, instead
 // of being accepted and silently never firing. Empty means none present.
-func legacyTimingKeysMessage(extra map[string]interface{}) string {
+func legacyTimingKeysMessage(extra map[string]any) string {
 	var found []string
 	for _, key := range []string{"every_ms", "cron_expr"} {
 		if _, ok := extra[key]; ok {

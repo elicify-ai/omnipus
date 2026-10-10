@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -880,13 +882,21 @@ func (pe *PlanEngine) buildCorrectionApplyFunc(planID string, req CorrectionRequ
 				continue
 			}
 			if existing, err := pe.taskStore.Get(m.ID); err == nil && existing != nil {
-				continue // already created (idempotent replay)
+				// Already created (idempotent replay) - but the pairing may be
+				// the write a crash cut off, so it is made good here too.
+				if err := pe.pairTailMemberGoal(m.ID); err != nil {
+					return err
+				}
+				continue
 			}
 			if m.PlanID == "" {
 				m.PlanID = planID
 			}
 			if err := pe.taskStore.Create(m); err != nil {
 				return fmt.Errorf("create tail member %q: %w", m.ID, err)
+			}
+			if err := pe.pairTailMemberGoal(m.ID); err != nil {
+				return err
 			}
 		}
 		// Wire tail edges (AddDependency is idempotent: returns added=false,
@@ -1061,4 +1071,34 @@ func (pe *PlanEngine) reconstructCorrections() {
 		logger.InfoCF("plan_engine", "correction state reconstructed",
 			map[string]any{"superseded_members": superCount, "plans_with_generations": genCount})
 	}
+}
+
+// pairTailMemberGoal makes sure a plan tail member has the goal record paired
+// with its task. session-core DEL-18 removed the run-start minting of a goal for
+// an unpaired task: creation owns the pairing, and the plan engine is the
+// creator of correction tail members (the create_task tool and REST pair their
+// own). Without a record the member runs with no goal loop and no goal_claim
+// can complete it. It uses the one fresh-creation path,
+// tools.SyncTaskGoalRecord, with the built-in floor Definition of Done a
+// compiled goal carries (a tail member's shape has no DoD of its own) and the
+// live goal try limit. A member that already has a record is left untouched, so
+// replay is idempotent.
+func (pe *PlanEngine) pairTailMemberGoal(taskID string) error {
+	gs := resolveGoalRecordStore()
+	if _, err := gs.GetByOwner(generated.GoalOwnerKindTask, taskID); err == nil {
+		return nil
+	} else if !errors.Is(err, goal.ErrOwnerNotFound) {
+		return fmt.Errorf("look up the paired goal of tail member %q: %w", taskID, err)
+	}
+	// Read the stored task, not the request body: the store has minted the
+	// criterion ids, and the goal must carry those same ids.
+	stored, err := pe.taskStore.Get(taskID)
+	if err != nil {
+		return fmt.Errorf("read tail member %q to pair its goal: %w", taskID, err)
+	}
+	limit := func() int { return goalTryLimit(pe.agentLoop) }
+	if err := tools.SyncTaskGoalRecord(gs, stored, true, newFloorDoD(), true, limit); err != nil {
+		return fmt.Errorf("pair a goal record with tail member %q: %w", taskID, err)
+	}
+	return nil
 }

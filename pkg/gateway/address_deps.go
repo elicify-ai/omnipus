@@ -70,7 +70,7 @@ func (d gatewayAddressDeps) PublishGuestReply(sessionID string, entry session.Tr
 }
 
 var _ interface {
-	PublishUserEntry(string, session.TranscriptEntry)
+	PublishUserEntry(sessionID string, entry session.TranscriptEntry)
 } = gatewayAddressDeps{}
 
 // PublishUserEntry shows a server-written left-side user entry (a peer

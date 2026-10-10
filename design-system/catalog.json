@@ -873,7 +873,7 @@
     {
       "source": "src/lib/agentIconArt.ts",
       "classification": "foundations",
-      "exports": ["agentIconInner", "monogramInner", "escapeMarkup"],
+      "exports": ["agentIconInner", "monogramInner", "roleBadgeInner", "escapeMarkup"],
       "publicExports": [],
       "publicTypes": []
     },

@@ -6372,6 +6372,18 @@
       "lane": 5
     },
     {
+      "source": "src/components/agents/AgentMark.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/agents/DeleteAgentControl.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/agents/RoleBadgeIcon.tsx",
+      "lane": 5
+    },
+    {
       "source": "src/components/agents/AgentFormFields.tsx",
       "lane": 5
     },
@@ -7545,10 +7557,6 @@
     },
     {
       "source": "src/components/shared/ErrorBoundary.tsx",
-      "lane": 7
-    },
-    {
-      "source": "src/components/shared/IconRenderer.tsx",
       "lane": 7
     },
     {

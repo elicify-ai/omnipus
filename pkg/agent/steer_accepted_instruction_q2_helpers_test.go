@@ -128,6 +128,12 @@ func q2ConsumerReadDurable(t *testing.T, store *session.UnifiedStore, sessionID 
 		if uerr := json.Unmarshal(line, &entry); uerr != nil {
 			t.Fatalf("physical transcript line %d is malformed; cannot trust filtered counts: %v", index+1, uerr)
 		}
+		// The one archive holds chat, model and effect records (DEL-12); the
+		// chat projection ReadTranscript returns is the chat records only, so
+		// filter the physical read the same way before comparing.
+		if entry.ViewMembership != session.ViewMembershipChat {
+			continue
+		}
 		physical = append(physical, entry)
 	}
 	reopened, err := session.NewUnifiedStore(store.BaseDir())

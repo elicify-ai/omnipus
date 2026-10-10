@@ -122,10 +122,11 @@ type sessionWorker struct {
 }
 
 // workerInboxBuffer is the inbox channel's buffer: only the hot path, not a
-// capacity. The capacity is MaxQueueSize, counted in enqueue.
+// capacity. The capacity is MaxQueueSize, counted in enqueue (see pushInbox).
 const workerInboxBuffer = 8
 
-// waitingInboxCount is the number of messages waiting to start a turn.
+// waitingInboxCount is the number of messages waiting to start a turn, in
+// the channel and the overflow together.
 func (w *sessionWorker) waitingInboxCount() int {
 	w.inboxMu.Lock()
 	defer w.inboxMu.Unlock()
