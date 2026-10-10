@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,7 +64,7 @@ func sessionCoreU7AbsentFromPackageSources(t *testing.T, symbol, presentControlF
 			continue
 		}
 		data, err := os.ReadFile(f)
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {

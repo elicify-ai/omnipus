@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,14 +106,14 @@ func u15Del16PathAbsent(t *testing.T, repoRelative, presentFile string) {
 	if err := os.Remove(fixture); err != nil {
 		t.Fatalf("U15/DEL-16 instrument: remove injected fixture: %v", err)
 	}
-	if _, err := os.Stat(fixture); !os.IsNotExist(err) {
+	if _, err := os.Stat(fixture); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("U15/DEL-16 instrument broken: removed fixture still statable (err=%v)", err)
 	}
 
 	path := filepath.Join(root, filepath.FromSlash(repoRelative))
 	if _, err := os.Stat(path); err == nil {
 		t.Errorf("%s still exists — DEL-16 requires the SSE /chat contract surface removed (spec §U15 DEL-16)", repoRelative)
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("U15/DEL-16 instrument: stat %s: %v", repoRelative, err)
 	}
 }

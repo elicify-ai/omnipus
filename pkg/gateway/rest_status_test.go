@@ -14,7 +14,6 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -58,10 +57,15 @@ func TestHandleActivity_ReturnsWrappedResponseNoWarning(t *testing.T) {
 }
 
 // TestHandleActivity_PartialFailure_SurfacesWarning verifies the Backend-High
-// fix: when session listing partially fails for one agent, the warning
-// computed internally (sessionWarning in HandleActivity) is returned to the
-// caller via ActivityEventsResponse.Warning instead of being discarded after
-// only a slog.Warn call.
+// fix: when session listing partially fails, the warning computed internally
+// (sessionWarning in HandleActivity) is returned to the caller via
+// ActivityEventsResponse.Warning instead of being discarded after only a
+// slog.Warn call.
+//
+// DEL-10 supersession: there is now ONE shared session store, so the failure
+// mode that CAN exist is the shared store's own ListSessions error — the
+// per-agent store this test used to break is gone. The warning therefore names
+// the shared source ("shared"), not a broken agent.
 func TestHandleActivity_PartialFailure_SurfacesWarning(t *testing.T) {
 	if os.Getuid() == 0 {
 		// Root bypasses DAC, so chmod 0o000 does not prevent os.ReadDir. This
@@ -81,18 +85,13 @@ func TestHandleActivity_PartialFailure_SurfacesWarning(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 
-	// Wire a broken UnifiedStore for "agent-broken": create the store then
-	// remove all read permission on its base dir so ListSessions fails,
-	// forcing ListAllSessions to return a partial error for this agent.
-	brokenBaseDir := t.TempDir()
-	brokenStore, err := session.NewUnifiedStore(brokenBaseDir)
-	require.NoError(t, err, "NewUnifiedStore(agent-broken)")
-	require.NoError(t, os.Chmod(brokenBaseDir, 0o000), "chmod brokenBaseDir")
-	t.Cleanup(func() { _ = os.Chmod(brokenBaseDir, 0o700) }) // restore for temp-dir cleanup
-
-	brokenAgent, ok := al.GetRegistry().GetAgent("agent-broken")
-	require.True(t, ok, "agent-broken must be registered")
-	brokenAgent.Sessions = brokenStore
+	// DEL-10: remove all read permission on the SHARED store's base dir so its
+	// ListSessions fails, forcing ListAllSessions to return a partial error.
+	shared := al.GetSessionStore()
+	require.NotNil(t, shared, "DEL-10: the loop owns one shared session store")
+	baseDir := shared.BaseDir()
+	require.NoError(t, os.Chmod(baseDir, 0o000), "chmod shared base dir")
+	t.Cleanup(func() { _ = os.Chmod(baseDir, 0o700) }) // restore for temp-dir cleanup
 
 	api := &restAPI{
 		agentLoop: al,
@@ -110,7 +109,8 @@ func TestHandleActivity_PartialFailure_SurfacesWarning(t *testing.T) {
 	warning, _ := resp["warning"].(string)
 	assert.NotEmpty(t, warning,
 		"warning must be surfaced to the caller (previously discarded after only a slog.Warn call)")
-	assert.Contains(t, warning, "agent-broken", "warning should identify the affected agent")
+	assert.Contains(t, warning, "shared",
+		"warning should identify the shared session source whose listing failed")
 	_, hasEvents := resp["events"]
 	assert.True(t, hasEvents, "events key must still be present alongside the warning")
 }

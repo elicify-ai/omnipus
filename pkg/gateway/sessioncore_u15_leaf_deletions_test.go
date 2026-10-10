@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -66,7 +67,7 @@ func sessionCoreU15AbsentFromPackageSources(t *testing.T, symbol, presentControl
 			continue
 		}
 		data, err := os.ReadFile(f)
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
@@ -105,7 +106,7 @@ func sessionCoreU15AbsentFromFile(t *testing.T, file, symbol, presentControl str
 	t.Helper()
 
 	data, err := os.ReadFile(file)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return
 	}
 	if err != nil {

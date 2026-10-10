@@ -9,6 +9,7 @@
 package session
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -75,7 +76,7 @@ func TestConvArchive_ConvertedAssistantPreservesSavedFields(t *testing.T) {
 
 	// The legacy source is retired only after the converted copy exists.
 	_, err := os.Stat(filepath.Join(baseDir, convContextDir, base+".jsonl"))
-	require.True(t, os.IsNotExist(err), "the legacy source is retired after publication")
+	require.True(t, errors.Is(err, os.ErrNotExist), "the legacy source is retired after publication")
 }
 
 // O4: a source archive flagged hydrated converts every record as conv_rebuilt.

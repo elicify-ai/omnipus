@@ -7,6 +7,7 @@
 package tools
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -125,7 +126,7 @@ func TestSwitchAgentDeleted_EmbeddedSkillsDoNotReference(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, scanned, 10, "scanner must walk the embedded skills")
 	_, err = os.Stat(filepath.Join(root, "handoff"))
-	assert.True(t, os.IsNotExist(err), "the handoff skill existed only to call switch_agent and must stay deleted")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "the handoff skill existed only to call switch_agent and must stay deleted")
 }
 
 func TestSwitchAgentDeleted_NotInCatalogOrPolicies(t *testing.T) {
