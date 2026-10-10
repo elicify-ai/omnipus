@@ -103,6 +103,9 @@ type RequestAdmission struct {
 	Source  addressing.Source
 	// SenderLabel is the human-readable origin shown in the request header.
 	SenderLabel string
+	// AskApproved is true when the receiver's send_message policy was Ask at
+	// preflight and that Ask was approved for this request.
+	AskApproved bool
 }
 
 // AdmitRequest records the capture, appends the request to the receiver's main
@@ -121,7 +124,7 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 	// before the receiver's main, the capture or the entry exist. A membership
 	// or policy change made while approval was pending refuses the request
 	// with nothing written.
-	if err := al.recheckReceiverAdmission(a.Receiver); err != nil {
+	if err := al.recheckReceiverAdmission(ctx, a.Receiver, a.Source.SessionID, a.AskApproved); err != nil {
 		return "", "", err
 	}
 	meta, err := store.GetOrCreateMainSession(a.Receiver.WorkspaceID, a.Receiver.AgentID)
@@ -202,7 +205,8 @@ func (r AddressRouter) SendPeer(ctx context.Context, req tools.PeerRequest) (too
 	if receiver == sender {
 		return tools.PeerReceipt{}, fmt.Errorf("%w: an agent cannot send a request to itself", ErrPeerRefused)
 	}
-	if err := al.CheckPeerAdmission(ctx, receiver, req.SenderSessionID); err != nil {
+	askApproved, err := al.checkPeerAdmission(ctx, receiver, req.SenderSessionID)
+	if err != nil {
 		return tools.PeerReceipt{}, err
 	}
 	id, sid, err := al.AdmitRequest(ctx, RequestAdmission{
@@ -215,6 +219,7 @@ func (r AddressRouter) SendPeer(ctx context.Context, req tools.PeerRequest) (too
 			Owner:     sender,
 			SessionID: req.SenderSessionID,
 		},
+		AskApproved: askApproved,
 	})
 	if err != nil {
 		return tools.PeerReceipt{RequestID: id, SessionID: sid}, err
@@ -228,30 +233,45 @@ func (r AddressRouter) SendPeer(ctx context.Context, req tools.PeerRequest) (too
 // default-workspace exception lives in AddressDeps), and the RECEIVER's
 // send_message policy admits it. It writes nothing.
 func (al *AgentLoop) CheckPeerAdmission(ctx context.Context, receiver addressing.Pair, senderSessionID string) error {
+	_, err := al.checkPeerAdmission(ctx, receiver, senderSessionID)
+	return err
+}
+
+// CheckPeerAdmissionDecision is CheckPeerAdmission that also reports whether the
+// receiver's policy was Ask and was approved for this request, so the admission
+// that follows (RequestAdmission.AskApproved) can tell "Ask already satisfied"
+// from "the policy has just become Ask" (U8 F9).
+func (al *AgentLoop) CheckPeerAdmissionDecision(ctx context.Context, receiver addressing.Pair, senderSessionID string) (askApproved bool, err error) {
+	return al.checkPeerAdmission(ctx, receiver, senderSessionID)
+}
+
+func (al *AgentLoop) checkPeerAdmission(ctx context.Context, receiver addressing.Pair, senderSessionID string) (bool, error) {
 	deps := al.loadAddressDeps()
 	if deps == nil {
-		return fmt.Errorf("%w: peer messaging is not available", ErrPeerRefused)
+		return false, fmt.Errorf("%w: peer messaging is not available", ErrPeerRefused)
 	}
 	if err := receiver.Validate(); err != nil {
-		return fmt.Errorf("%w: %v", ErrPeerRefused, err)
+		return false, fmt.Errorf("%w: %v", ErrPeerRefused, err)
 	}
 	ok, err := deps.PairEligible(receiver.WorkspaceID, receiver.AgentID)
 	if err != nil {
-		return fmt.Errorf("%w: membership could not be read: %v", ErrPeerRefused, err)
+		return false, fmt.Errorf("%w: membership could not be read: %v", ErrPeerRefused, err)
 	}
 	if !ok {
-		return fmt.Errorf("%w: %s/%s is not an eligible main (not a current member, a worker, or a system agent)",
+		return false, fmt.Errorf("%w: %s/%s is not an eligible main (not a current member, a worker, or a system agent)",
 			ErrPeerRefused, receiver.WorkspaceID, receiver.AgentID)
 	}
 	return al.admitByReceiverPolicy(ctx, receiver, senderSessionID)
 }
 
 // recheckReceiverAdmission re-reads the receiver's CURRENT eligibility and
-// effective send_message policy at the moment of admission. It never asks for
-// approval again: an Ask that was approved stays approved, but a membership
-// removal or a policy that became Deny (or unreadable) since the first check
-// refuses.
-func (al *AgentLoop) recheckReceiverAdmission(receiver addressing.Pair) error {
+// effective send_message policy at the moment of admission. A membership
+// removal, or a policy that became Deny (or unreadable) since the first check,
+// refuses. A policy that is Allow admits. A policy that is Ask admits only when
+// that Ask was already approved for this request (askApproved); an Ask that is
+// NEW since the preflight - it read Allow - goes through the existing approval
+// path now, never silently admitted (U8 F9).
+func (al *AgentLoop) recheckReceiverAdmission(ctx context.Context, receiver addressing.Pair, senderSessionID string, askApproved bool) error {
 	deps := al.loadAddressDeps()
 	if deps == nil {
 		return fmt.Errorf("%w: peer messaging is not available", ErrPeerRefused)
@@ -263,55 +283,77 @@ func (al *AgentLoop) recheckReceiverAdmission(receiver addressing.Pair) error {
 	if !ok {
 		return fmt.Errorf("%w: %s/%s is no longer an eligible main", ErrPeerRefused, receiver.WorkspaceID, receiver.AgentID)
 	}
-	reg := al.GetRegistry()
-	if reg == nil {
-		return fmt.Errorf("%w: agent registry unavailable", ErrPeerRefused)
+	policy, err := al.receiverSendPolicy(receiver)
+	if err != nil {
+		return err
 	}
-	inst, found := reg.GetAgent(receiver.AgentID)
-	if !found || inst == nil {
-		return fmt.Errorf("%w: agent %q is not available", ErrPeerRefused, receiver.AgentID)
-	}
-	cfg := inst.LoadToolPolicy()
-	if cfg == nil {
-		return fmt.Errorf("%w: the receiver's tool policy is unreadable", ErrPeerRefused)
-	}
-	switch tools.ResolveEffectivePolicy(cfg, "send_message") {
-	case string(config.ToolPolicyAllow), string(config.ToolPolicyAsk):
+	switch policy {
+	case string(config.ToolPolicyAllow):
 		return nil
+	case string(config.ToolPolicyAsk):
+		if askApproved {
+			return nil
+		}
+		return al.requestReceiverApproval(ctx, receiver, senderSessionID)
 	default:
 		return fmt.Errorf("%w: the receiver's send_message policy denies requests", ErrPeerRefused)
 	}
 }
 
-// admitByReceiverPolicy applies the RECEIVER's existing send_message policy
-// (two-layer resolver) before anything is written: deny refuses, ask uses the
-// existing approval path, allow admits (FR-045, F9).
-func (al *AgentLoop) admitByReceiverPolicy(ctx context.Context, receiver addressing.Pair, senderSessionID string) error {
+// receiverSendPolicy resolves the receiver's effective send_message policy
+// through the existing two-layer resolver.
+func (al *AgentLoop) receiverSendPolicy(receiver addressing.Pair) (string, error) {
 	reg := al.GetRegistry()
 	if reg == nil {
-		return fmt.Errorf("%w: agent registry unavailable", ErrPeerRefused)
+		return "", fmt.Errorf("%w: agent registry unavailable", ErrPeerRefused)
 	}
 	inst, ok := reg.GetAgent(receiver.AgentID)
 	if !ok || inst == nil {
-		return fmt.Errorf("%w: agent %q is not available", ErrPeerRefused, receiver.AgentID)
+		return "", fmt.Errorf("%w: agent %q is not available", ErrPeerRefused, receiver.AgentID)
 	}
 	cfg := inst.LoadToolPolicy()
 	if cfg == nil {
-		return fmt.Errorf("%w: the receiver's tool policy is unreadable", ErrPeerRefused)
+		return "", fmt.Errorf("%w: the receiver's tool policy is unreadable", ErrPeerRefused)
 	}
-	switch tools.ResolveEffectivePolicy(cfg, "send_message") {
+	return tools.ResolveEffectivePolicy(cfg, "send_message"), nil
+}
+
+// requestReceiverApproval runs the existing approval path for a receiver whose
+// send_message policy is Ask.
+func (al *AgentLoop) requestReceiverApproval(ctx context.Context, receiver addressing.Pair, senderSessionID string) error {
+	approved, reason, _ := al.CheckGrantOrRequestApproval(ctx, senderSessionID, receiver.AgentID,
+		"send_message", "peer-"+uuid.New().String(), "",
+		map[string]any{"recipient_workspace_id": receiver.WorkspaceID, "recipient_agent_id": receiver.AgentID})
+	if !approved {
+		return fmt.Errorf("%w: the receiver's send_message policy is ask and it was not approved (%s)", ErrPeerRefused, reason)
+	}
+	return nil
+}
+
+// admitByReceiverPolicy applies the RECEIVER's existing send_message policy
+// (two-layer resolver) before anything is written: deny refuses, ask uses the
+// existing approval path, allow admits (FR-045, F9). It reports whether an Ask
+// was approved. An approval can take as long as a person needs, so the
+// authorization is read again when it returns (U8 F1): the caller saves nothing
+// on the strength of an approval for a since-revoked membership or policy.
+func (al *AgentLoop) admitByReceiverPolicy(ctx context.Context, receiver addressing.Pair, senderSessionID string) (bool, error) {
+	policy, err := al.receiverSendPolicy(receiver)
+	if err != nil {
+		return false, err
+	}
+	switch policy {
 	case string(config.ToolPolicyAllow):
-		return nil
+		return false, nil
 	case string(config.ToolPolicyAsk):
-		approved, reason, _ := al.CheckGrantOrRequestApproval(ctx, senderSessionID, receiver.AgentID,
-			"send_message", "peer-"+uuid.New().String(), "",
-			map[string]any{"recipient_workspace_id": receiver.WorkspaceID, "recipient_agent_id": receiver.AgentID})
-		if !approved {
-			return fmt.Errorf("%w: the receiver's send_message policy is ask and it was not approved (%s)", ErrPeerRefused, reason)
+		if err := al.requestReceiverApproval(ctx, receiver, senderSessionID); err != nil {
+			return false, err
 		}
-		return nil
+		if err := al.recheckReceiverAdmission(ctx, receiver, senderSessionID, true); err != nil {
+			return false, err
+		}
+		return true, nil
 	default:
-		return fmt.Errorf("%w: the receiver's send_message policy denies requests", ErrPeerRefused)
+		return false, fmt.Errorf("%w: the receiver's send_message policy denies requests", ErrPeerRefused)
 	}
 }
 

@@ -100,15 +100,17 @@ type wsHandlerHandleChatMessage struct {
 	// recipient, when non-nil, makes this message a request to that peer pair
 	// (MessageFrame.recipient, session-core C-ADDRESS) rather than a turn for
 	// the owning chat's agent.
-	recipient           *addressing.Pair
-	wc                  *wsConn
-	targetAgentID       string
-	sessionID           string
-	store               *session.UnifiedStore
-	kickoffInstruction  string
-	acceptedMedia       []string
-	msg                 bus.InboundMessage
-	transcriptPersisted bool
+	recipient *addressing.Pair
+	// recipientAskApproved: the receiver's Ask was approved at the preflight.
+	recipientAskApproved bool
+	wc                   *wsConn
+	targetAgentID        string
+	sessionID            string
+	store                *session.UnifiedStore
+	kickoffInstruction   string
+	acceptedMedia        []string
+	msg                  bus.InboundMessage
+	transcriptPersisted  bool
 	// transcriptEntryID is the id of the user entry persistUserMessage wrote
 	// successfully; empty for a kickoff (system-role pill) or no write.
 	transcriptEntryID string
@@ -269,10 +271,13 @@ func (h *WSHandler) handleChatMessageToRecipient(
 		})
 		return
 	}
+	recipientAskApproved := false
 	if recipient != nil {
 		// A refused @recipient admits nothing — not even the user message — so
 		// the whole admission rule runs before any persistence.
-		if msg := h.refuseRecipient(ctx, frameSessionID, setupKickoff, *recipient); msg != "" {
+		msg, approved := h.refuseRecipient(ctx, frameSessionID, setupKickoff, *recipient)
+		recipientAskApproved = approved
+		if msg != "" {
 			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 				Type:    string(generated.WsFrameTypeError),
 				Message: msg,
@@ -280,7 +285,7 @@ func (h *WSHandler) handleChatMessageToRecipient(
 			return
 		}
 	}
-	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, setupKickoff: setupKickoff, clientMessageID: clientMessageID, autoApprove: autoApprove, recipient: recipient, wc: wc}
+	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, setupKickoff: setupKickoff, clientMessageID: clientMessageID, autoApprove: autoApprove, recipient: recipient, recipientAskApproved: recipientAskApproved, wc: wc}
 	hcm.firstMessage = frameSessionID == "" && !setupKickoff &&
 		(clientMessageID != "" || agent.UserMessageChars(content) <= h.agentLoop.UserMessageBound())
 	defer func() {

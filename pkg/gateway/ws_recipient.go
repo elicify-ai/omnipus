@@ -27,39 +27,40 @@ import (
 //   - not the owning chat's own pair;
 //   - the receiver's existing send_message policy admits it (Ask uses the
 //     existing approval path).
-func (h *WSHandler) refuseRecipient(ctx context.Context, sessionID string, setupKickoff bool, to addressing.Pair) string {
+func (h *WSHandler) refuseRecipient(ctx context.Context, sessionID string, setupKickoff bool, to addressing.Pair) (refusal string, askApproved bool) {
 	if strings.TrimSpace(sessionID) == "" {
-		return "a request to another agent needs an existing chat (session_id)"
+		return "a request to another agent needs an existing chat (session_id)", false
 	}
 	if setupKickoff {
-		return "a workspace setup message cannot be addressed to another agent"
+		return "a workspace setup message cannot be addressed to another agent", false
 	}
 	if err := to.Validate(); err != nil {
-		return "the addressed agent is not a valid {workspace_id, agent_id} pair"
+		return "the addressed agent is not a valid {workspace_id, agent_id} pair", false
 	}
 	// F7: validate the COMPLETE computed address (the main's session id, which
 	// is bounded to 255 bytes) before anything is saved - the components can
 	// each be valid and the joined id still too long.
 	if _, err := session.MainSessionID(to.WorkspaceID, to.AgentID); err != nil {
-		return "the addressed agent's address is too long to be reached"
+		return "the addressed agent's address is too long to be reached", false
 	}
 	store := h.resolveSessionStore(sessionID)
 	if store == nil {
-		return "session not found"
+		return "session not found", false
 	}
 	meta, err := store.GetMeta(sessionID)
 	if err != nil || meta == nil {
-		return "session not found"
+		return "session not found", false
 	}
 	if to.AgentID == meta.AgentID && (meta.WorkspaceID == "" || to.WorkspaceID == meta.WorkspaceID) {
-		return "this chat already belongs to that agent; write to it directly instead of addressing it"
+		return "this chat already belongs to that agent; write to it directly instead of addressing it", false
 	}
-	if err := h.agentLoop.CheckPeerAdmission(ctx, to, sessionID); err != nil {
+	approved, err := h.agentLoop.CheckPeerAdmissionDecision(ctx, to, sessionID)
+	if err != nil {
 		logsafeWarn("ws: recipient refused", "session_id", sessionID, "workspace_id", to.WorkspaceID,
 			"agent_id", to.AgentID, "error", err)
-		return "that agent cannot be reached from here right now"
+		return "that agent cannot be reached from here right now", false
 	}
-	return ""
+	return "", approved
 }
 
 // admitRecipientRequest delivers the already-saved user message to the
@@ -107,6 +108,7 @@ func (hcm *wsHandlerHandleChatMessage) admitRecipientRequest() {
 			Owner:     owner,
 			SessionID: hcm.sessionID,
 		},
+		AskApproved: hcm.recipientAskApproved,
 	})
 	if err != nil {
 		logsafeWarn("ws: could not deliver the request to the recipient", "session_id", hcm.sessionID, "error", err)
