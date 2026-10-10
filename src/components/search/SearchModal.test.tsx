@@ -95,6 +95,8 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     name: 'Mia',
     type: 'core',
     locked: false,
+    figure: 'Robot',
+    role: 'general',
     needs_model: false,
     status: 'active',
     model: 'anthropic/claude-3.5-haiku',

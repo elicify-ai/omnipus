@@ -9,6 +9,8 @@ const baseline = {
   description: 'Colleague',
   type: 'core',
   locked: true,
+  figure: 'Robot',
+  role: 'general',
   status: 'idle',
   soul: '',
   timeout_seconds: 300,

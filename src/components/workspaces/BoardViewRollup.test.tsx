@@ -77,6 +77,8 @@ const agentRay: Agent = {
   name: 'Ray',
   type: 'core',
   locked: true,
+  figure: 'Robot',
+  role: 'general',
   needs_model: false,
   status: 'active',
   soul: '',
@@ -153,7 +155,7 @@ describe('BoardView delegation roll-up', () => {
       ],
     })
 
-    const agentAva: Agent = { ...agentRay, id: 'ava', name: 'Ava', color: '#A855F7', icon: 'Gear' }
+    const agentAva: Agent = { ...agentRay, id: 'ava', name: 'Ava', color: '#C084FC', icon: 'Gear' }
 
     renderBoard([parentWithRollup], [agentRay, agentAva])
     showTaskInfo('Parent task')

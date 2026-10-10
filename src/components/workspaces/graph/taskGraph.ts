@@ -11,7 +11,7 @@
 
 import dagre from '@dagrejs/dagre'
 import { MarkerType, Position, type Edge, type Node } from '@xyflow/react'
-import type { Task, Plan } from '@/lib/api'
+import type { Agent, Task, Plan } from '@/lib/api'
 import {
   STATUS_ANIMATED,
   STATUS_COLORS,
@@ -131,7 +131,7 @@ export const NODE_HEIGHT = 96
 export interface AgentLike {
   id: string
   name?: string
-  color?: string
+  color?: Agent['color']
   icon?: string
 }
 

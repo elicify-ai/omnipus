@@ -131,12 +131,12 @@ describe('buildTaskGraph — edges', () => {
 describe('buildTaskGraph — agent avatar resolution', () => {
   it('resolves agent colour + icon from the agents cache', () => {
     const agents: AgentLike[] = [
-      { id: 'mia', name: 'Mia', color: '#d4af37', icon: 'Robot' },
+      { id: 'mia', name: 'Mia', color: '#3B82F6', icon: 'Robot' },
     ]
     const tasks = [makeTask({ id: 'a', agent_id: 'mia' })]
     const { nodes } = buildTaskGraph(tasks, agents)
     expect(nodes[0].data.agentName).toBe('Mia')
-    expect(nodes[0].data.agentColor).toBe('#d4af37')
+    expect(nodes[0].data.agentColor).toBe('#3B82F6')
     expect(nodes[0].data.agentIcon).toBe('Robot')
   })
 

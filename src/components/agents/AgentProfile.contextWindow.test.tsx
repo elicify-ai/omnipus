@@ -71,6 +71,8 @@ const baseAgent: Agent = {
   name: 'General Assistant',
   type: 'Main',
   locked: false,
+  figure: 'Robot',
+  role: 'general',
   needs_model: false,
   status: 'active',
   model: 'claude-sonnet-4-6',
