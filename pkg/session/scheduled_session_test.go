@@ -49,7 +49,6 @@ func TestGetOrCreateScheduledSession_Creates(t *testing.T) {
 	assert.Equal(t, id, meta.ID, "must use the exact supplied id")
 	assert.Equal(t, SessionTypeScheduled, meta.Type)
 	assert.Equal(t, "mia", meta.AgentID)
-	assert.Empty(t, meta.ActiveAgentID, "a fresh session records no handover owner (DEL-11)")
 	assert.Equal(t, []string{"mia"}, meta.AgentIDs)
 
 	// The meta is readable back through the public reader.
@@ -114,6 +113,4 @@ func TestNewScheduledSession_FreshIsolated(t *testing.T) {
 	assert.Equal(t, SessionTypeScheduled, b.Type)
 	assert.Equal(t, "mia", a.AgentID)
 	assert.Equal(t, "mia", b.AgentID)
-	assert.Empty(t, a.ActiveAgentID, "a fresh session records no handover owner (DEL-11)")
-	assert.Empty(t, b.ActiveAgentID, "a fresh session records no handover owner (DEL-11)")
 }

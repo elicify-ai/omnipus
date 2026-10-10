@@ -61,8 +61,10 @@ func TestSessionCoreConv_PreCutoverSavedChatIsNormalizedAndContinuable(t *testin
 	require.NoError(t, err, "the converted saved chat must be attachable")
 	assert.Equal(t, "mia", meta.AgentID,
 		"CONV Identity: agent_id stays the immutable owner, never active_agent_id (jim)")
-	assert.Equal(t, "", meta.ActiveAgentID,
-		"CONV Identity: the retired active_agent_id must be dropped, not adopted as owner")
+	rawMeta, readErr := os.ReadFile(filepath.Join(store.BaseDir(), id, "meta.json"))
+	require.NoError(t, readErr)
+	assert.NotContains(t, string(rawMeta), "active_agent_id",
+		"CONV Identity: the retired active_agent_id must be dropped from disk, not adopted as owner")
 	assert.Equal(t, "Old saved chat", meta.Title, "title preserved")
 	assert.True(t, meta.CreatedAt.Equal(created), "created_at preserved (no retention-age reset)")
 	assert.Equal(t, "", meta.WorkspaceID,

@@ -139,9 +139,6 @@ func TestDelegateTool_Resume_3PDispatchesNewCorrectiveSession(t *testing.T) {
 	if meta.ParentSessionID != parentID || meta.AgentID != "claude-code" || meta.WorkspaceID != "ws-1" {
 		t.Fatalf("new external corrective identity = %+v; want copied parent, agent, and workspace", meta)
 	}
-	if meta.ActiveAgentID != "" {
-		t.Fatalf("a freshly created corrective session must record no handover owner; got %q", meta.ActiveAgentID)
-	}
 	rec, err := lc.Load(launcher.sessionID)
 	if err != nil {
 		t.Fatalf("Load corrective record: %v", err)

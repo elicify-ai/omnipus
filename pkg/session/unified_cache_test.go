@@ -373,7 +373,6 @@ func TestConcurrentSetMetaWhileReading(t *testing.T) {
 			// concurrently mutating in place.
 			for _, m := range metas {
 				_ = m.Title
-				_ = m.ActiveAgentID
 				_ = len(m.AgentIDs)
 			}
 		}
@@ -388,7 +387,6 @@ func TestConcurrentSetMetaWhileReading(t *testing.T) {
 				continue
 			}
 			_ = m.Title
-			_ = m.ActiveAgentID
 		}
 	}()
 
