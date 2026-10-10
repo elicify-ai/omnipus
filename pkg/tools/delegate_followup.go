@@ -195,36 +195,7 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// silently dropped and the "no no-op success" rule (BDD-05.6) holds.
 	// Mirrors message_parent's identical Is3P posture (D5) for the fallback.
 	if rec.Is3P {
-		if deliverer, ok := t.steering.(steerExternalCLIDeliverer); ok {
-			if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
-				return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
-			}
-			requestedCorrelationID, _ := stringArg(args, "correlation_id")
-			resolved, derr := deliverer.DeliverExternalCLIInstruction(
-				ctx, sessionID, rec.AgentID,
-				providers.Message{Role: "user", Content: text}, requestedCorrelationID)
-			if derr != nil {
-				// Truthful visible refusal: no live conversation, or the
-				// interrupt/enqueue failed. Never a silent success. Authored
-				// refusals and plain context errors are shown; a store fault is
-				// a fixed sentence with its cause kept for logs and errors.Is.
-				if text, ok := displayableCause(derr); ok {
-					return ErrorResult("delegate: steer: not_steerable: " + text).WithError(derr)
-				}
-				return controlFailure("steer", fmt.Sprintf("not_steerable: the live instruction for session %s could not be delivered right now; retry shortly", sessionID), derr)
-			}
-			return NewToolResult(fmt.Sprintf(
-				"Steering message delivered to external CLI session %s by interrupt + native-conversation resume (correlation_id=%s); it will reach the same conversation.",
-				sessionID, resolved,
-			))
-		}
-		return ErrorResult(fmt.Sprintf(
-			"delegate: steer: not_steerable: external command-line session %s runs on an external CLI "+
-				"(claude-code/codex/opencode) and this steering sink cannot deliver a live instruction to it; "+
-				"action=\"resume\" continues a stopped or finished one whose CLI conversation this gateway still "+
-				"retains, or runs one that never started its CLI for the first time (otherwise start a new delegation)",
-			sessionID,
-		))
+		return t.steerExternalCLI(ctx, args, sessionID, text, rec)
 	}
 
 	// [Finding 1, ADR-091 fix lane 2 — Q17/D8] A terminal record (ADR-093
@@ -388,6 +359,42 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	return NewToolResult(fmt.Sprintf(
 		"Steering message queued for session %s (correlation_id=%s); it will apply at the child's next tool boundary.",
 		sessionID, resolvedCorrelationID,
+	))
+}
+
+// steerExternalCLI is executeSteer's external-CLI (3P) branch: deliver a live
+// instruction by interrupt + native-conversation resume, or refuse visibly.
+// Extracted from executeSteer unchanged in behaviour.
+func (t *DelegateTool) steerExternalCLI(ctx context.Context, args map[string]any, sessionID, text string, rec *session.LifecycleRecord) *ToolResult {
+	if deliverer, ok := t.steering.(steerExternalCLIDeliverer); ok {
+		if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
+			return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
+		}
+		requestedCorrelationID, _ := stringArg(args, "correlation_id")
+		resolved, derr := deliverer.DeliverExternalCLIInstruction(
+			ctx, sessionID, rec.AgentID,
+			providers.Message{Role: "user", Content: text}, requestedCorrelationID)
+		if derr != nil {
+			// Truthful visible refusal: no live conversation, or the
+			// interrupt/enqueue failed. Never a silent success. Authored
+			// refusals and plain context errors are shown; a store fault is
+			// a fixed sentence with its cause kept for logs and errors.Is.
+			if text, ok := displayableCause(derr); ok {
+				return ErrorResult("delegate: steer: not_steerable: " + text).WithError(derr)
+			}
+			return controlFailure("steer", fmt.Sprintf("not_steerable: the live instruction for session %s could not be delivered right now; retry shortly", sessionID), derr)
+		}
+		return NewToolResult(fmt.Sprintf(
+			"Steering message delivered to external CLI session %s by interrupt + native-conversation resume (correlation_id=%s); it will reach the same conversation.",
+			sessionID, resolved,
+		))
+	}
+	return ErrorResult(fmt.Sprintf(
+		"delegate: steer: not_steerable: external command-line session %s runs on an external CLI "+
+			"(claude-code/codex/opencode) and this steering sink cannot deliver a live instruction to it; "+
+			"action=\"resume\" continues a stopped or finished one whose CLI conversation this gateway still "+
+			"retains, or runs one that never started its CLI for the first time (otherwise start a new delegation)",
+		sessionID,
 	))
 }
 
