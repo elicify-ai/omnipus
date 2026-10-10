@@ -3338,15 +3338,18 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
             variant="outline"
             size="sm"
             onClick={() => {
-              refetchHistory()
-              // D5 (FR-030/031): when a /clear operation still owes the view
-              // its transcript re-read, this Retry completes THAT recovery
-              // too — a fresh read plus the merge — without resending
-              // /clear. No-op when no clear operation is pending.
+              // V3 (FR-030/031): when a /clear operation still owes this
+              // session its view, Retry runs ONLY that operation's own
+              // read+apply — it publishes into the history cache on success,
+              // and a competing ordinary refetch could fail afterwards and
+              // undo the recovery (round-3 review N5). No-op when no clear
+              // operation is pending.
               const sid = activeSessionId
               if (sid && sid !== '__pending' && pendingClearRefetches[sid]) {
                 useChatStore.getState().retryClearTranscript(sid)
+                return
               }
+              refetchHistory()
             }}
           >
             <ArrowCounterClockwise size={14} /> Retry

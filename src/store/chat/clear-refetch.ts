@@ -118,11 +118,11 @@ async function runClearRefetch(sid: string, withBucket: WithBucket): Promise<voi
   if (!op) return
   try {
     // C2: a read that rejects on failure — never invalidate-plus-cache-peek.
-    // D2: the query key carries the operation's client_message_id, so a
-    // newer /clear's read is a fresh network read and never joins an older
-    // operation's still-in-flight request.
+    // V3: the read runs on the SHARED history key, so its failure surfaces as
+    // the screen's own history-error state (with Retry) and its success
+    // publishes into the history cache directly.
     const fresh = await queryClient.fetchQuery({
-      queryKey: ['messages', sid, 'clear', op.clientMessageId],
+      queryKey: ['messages', sid],
       queryFn: () => fetchSessionMessages(sid),
       staleTime: 0,
     })
@@ -133,9 +133,6 @@ async function runClearRefetch(sid: string, withBucket: WithBucket): Promise<voi
       logDiagnostic('clearRefetchSuperseded', { sessionId: sid, operationId: op.clientMessageId })
       return
     }
-    // Keep the screen-facing transcript cache coherent with what the server
-    // actually answered (a real read, not a cache peek).
-    queryClient.setQueryData(['messages', sid], fresh)
     applyProjection(sid, op, fresh, withBucket)
   } catch (error) {
     // C2/D5: a READ failure is distinct from an application failure. Nothing
@@ -153,6 +150,14 @@ async function runClearRefetch(sid: string, withBucket: WithBucket): Promise<voi
 }
 
 function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[], withBucket: WithBucket): void {
+  // D2: a response that does not even contain THIS operation's own /clear
+  // user row predates the operation (it was answered before the server saw
+  // this /clear) — it is not this operation's view. Apply nothing; the
+  // intent survives and the next opportunity re-reads.
+  if (!projectionContainsOwnUserRow(fresh, op.clientMessageId)) {
+    logDiagnostic('clearRefetchPredatesOperation', { sessionId: sid, operationId: op.clientMessageId })
+    return
+  }
   let markerApplied = false
   let deferred = false
   try {
@@ -164,7 +169,7 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[],
         op.heldProjection = fresh
         return {}
       }
-      const merged = mergeServerProjection(b, fresh, op.armedAt)
+      const merged = mergeServerProjection(b, fresh, op)
       markerApplied = hasOwnMarker(merged, op.clientMessageId)
       return { messagesById: merged.messagesById, messageOrder: merged.messageOrder }
     })
@@ -202,6 +207,10 @@ function applyProjection(sid: string, op: PendingClearRefresh, fresh: Message[],
  * operation's own user row (matched by the wire correlation id), never a
  * historical marker from an earlier clear.
  */
+function projectionContainsOwnUserRow(fresh: Message[], clientMessageId: string): boolean {
+  return fresh.some((row) => row.role === 'user' && ((row as ChatMessage).clientMessageId ?? row.id) === clientMessageId)
+}
+
 function hasOwnMarker(
   merged: { messagesById: Record<string, ChatMessage>; messageOrder: string[] },
   clientMessageId: string,
@@ -214,63 +223,56 @@ function hasOwnMarker(
   return merged.messageOrder.slice(ownRowIndex + 1).some((id) => isClearContextMarker(merged.messagesById[id]))
 }
 
-/** The local rows a merge must keep even though the server projection omits them. */
-function preserveLocally(message: ChatMessage, armedAt: number): boolean {
-  if (message.role === 'system') {
-    // Client-only system rows newer than the /clear send (e.g. a /new
-    // refusal). Older system rows came from the server's own earlier view —
-    // if the projection drops them, that drop is the server speaking.
-    const ts = Date.parse(message.timestamp)
-    return Number.isNaN(ts) ? true : ts >= armedAt
-  }
-  if (message.role !== 'user') return false
-  // D3: only genuinely UNCONFIRMED input survives. `received`/`working` are
-  // durable transcript appends (MessageStatusFrame.yaml) — a confirmed
-  // pre-clear row obeys the server's post-clear window like every other row
-  // the projection covers. Still-streaming local bubbles, failed sends, and
-  // first sends the server has not confirmed as saved are kept.
-  if (message.isStreaming) return true
-  if (message.status === 'error') return true
-  if (message.deliveryStatus === 'queued' || message.deliveryStatus === 'sending' || message.deliveryStatus === 'failed') return true
-  const unconfirmedFirstSend = message.firstSendStatus !== undefined &&
-    ['sending', 'unconfirmed', 'retrying', 'checking_chat', 'check_failed', 'not_saved'].includes(message.firstSendStatus)
-  if (unconfirmedFirstSend) return true
-  return false
-}
 
 /**
- * C3: server rows are authoritative for what the server has; local rows the
- * server cannot know about survive the merge, appended after the server rows
- * (they happened after it answered).
+ * V1: the view after an operation's projection is applied = the server
+ * projection + the LIVE TAIL — every local row positioned AFTER this
+ * operation's own /clear user row in the bucket's current order, that the
+ * projection does not already contain (matched by server id, else
+ * clientMessageId), in local order, whatever its role or delivery status
+ * (queued/sending/failed/received/working/done, assistant rows included).
+ * Rows at or BEFORE the /clear row are never re-appended: confirmed
+ * pre-clear input obeys the server's post-clear window exactly like every
+ * other row the projection covers.
  */
 export function mergeServerProjection(
   bucket: SessionChatState,
   fresh: Message[],
-  armedAt: number,
+  op: PendingClearRefresh,
 ): { messagesById: Record<string, ChatMessage>; messageOrder: string[] } {
   const messagesById: Record<string, ChatMessage> = {}
   const messageOrder: string[] = []
-  const serverClientMessageIds = new Set<string>()
+  const projectionIds = new Set<string>()
+  const projectionClientMessageIds = new Set<string>()
   for (const row of fresh) {
     if (row.role !== 'user' && row.role !== 'assistant' && row.role !== 'system') continue
     const rowView = row as ChatMessage
-    if (rowView.clientMessageId) serverClientMessageIds.add(rowView.clientMessageId)
+    projectionIds.add(row.id)
+    if (rowView.clientMessageId) projectionClientMessageIds.add(rowView.clientMessageId)
     messagesById[row.id] = rowView
     messageOrder.push(row.id)
   }
-  const serverIds = new Set(messageOrder)
-  for (const id of bucket.messageOrder) {
-    if (serverIds.has(id)) continue
-    const local = bucket.messagesById[id]
-    if (!local) continue
-    if (!preserveLocally(local, armedAt)) continue
-    // A local user row the server has already confirmed (its
-    // client_message_id came back on a server row) is superseded — keeping it
-    // would duplicate the message in the view.
-    const localKey = local.clientMessageId ?? local.id
-    if (local.role === 'user' && (serverClientMessageIds.has(localKey) || serverClientMessageIds.has(local.id))) continue
-    messagesById[id] = local
-    messageOrder.push(id)
+  // The operation's own /clear user row: the optimistic bubble (its id IS
+  // the client_message_id) or the server echo (clientMessageId match).
+  let clearRowIndex = -1
+  for (let i = bucket.messageOrder.length - 1; i >= 0; i--) {
+    const m = bucket.messagesById[bucket.messageOrder[i]]
+    if (m && m.role === 'user' && (m.clientMessageId ?? m.id) === op.clientMessageId) {
+      clearRowIndex = i
+      break
+    }
+  }
+  if (clearRowIndex !== -1) {
+    for (let i = clearRowIndex + 1; i < bucket.messageOrder.length; i++) {
+      const id = bucket.messageOrder[i]
+      const local = bucket.messagesById[id]
+      if (!local) continue
+      if (projectionIds.has(id)) continue
+      if (local.clientMessageId && projectionClientMessageIds.has(local.clientMessageId)) continue
+      if (local.role === 'user' && projectionClientMessageIds.has(local.id)) continue
+      messagesById[id] = local
+      messageOrder.push(id)
+    }
   }
   return { messagesById, messageOrder }
 }

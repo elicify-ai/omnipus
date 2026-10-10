@@ -198,6 +198,11 @@ export function handleCatchUpFrame({ frame, targetSid, get, set, withBucket }: C
       }))
       finishRecoveredFirstSend({ set, get, withBucket }, targetSid)
       acknowledgeShownCatchUp(targetSid)
+      // D1/V2: catch-up completion is a replay→idle transition — a projection
+      // the clear re-read held back during replay applies HERE, with no new
+      // network read. (Round-3 review F2: the round-3 call sat in
+      // user_message by mistake.)
+      flushHeldClearProjection(targetSid, withBucket)
       return true
     }
 
@@ -233,9 +238,6 @@ export function handleCatchUpFrame({ frame, targetSid, get, set, withBucket }: C
           draft.messageOrder.push(newMsg.id)
         }) as Partial<SessionChatState>
       })
-      // D1: catch-up completion is a replay→idle transition — a projection
-      // the clear re-read held back during replay applies here, with no new read.
-      flushHeldClearProjection(targetSid, withBucket)
       return true
     }
 
