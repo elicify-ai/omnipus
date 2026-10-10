@@ -278,7 +278,7 @@ describe('T15 / US-4: slash menu — API-driven palette, delivery dispatch, stre
     // Founder X3: /clear is in this server fixture; /new is omitted. Neither
     // client-side hiding nor invented alias rows may change that table.
     expect(screen.getAllByRole('option').map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual([
-      '/resume', '/workspace', '/clear', '/help', '/model', '/agents', '/cancel',
+      '/sessions', '/workspace', '/clear', '/help', '/model', '/agents', '/cancel',
       '/code-review', '/data-analysis', '/web-research',
     ])
     expect(screen.getByText('/cancel')).toBeInTheDocument()

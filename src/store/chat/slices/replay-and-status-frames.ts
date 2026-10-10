@@ -70,27 +70,36 @@ interface ReplayAndStatusFrameContext {
 // `id` equals) and RE-KEYED to the server's real id — safe here
 // specifically because this is a RECONNECT replay, not the live first send:
 // message_status for this client_message_id (the only OTHER reader keyed on
-// it) already ran on an earlier connection cycle. Returns true when it
-// handled (deduped) the frame — the caller must return without any further
-// processing of this replay_message.
+// it) already ran on an earlier connection cycle.
+//
+// FR-024 (session-core, BDD-07.3): when the replayed stored entry carries
+// `input_disposition.state === 'discarded'` (Stop discarded this input
+// before it was delivered), the reconciled bubble resolves to the same quiet
+// 'discarded' deliveryStatus the live message_status frame stamped — never
+// 'received', which would contradict the server's stored truth. Absent
+// disposition keeps the historical 'received'.
+// Returns true when it handled (deduped) the frame — the caller must return
+// without any further processing of this replay_message.
 function reconcileOwnOptimisticBubble(
   draft: SessionChatState,
   clientMessageId: string | undefined,
   messageId: string | undefined,
   role: string,
+  inputDiscarded: boolean,
   targetSid: string | null,
 ): boolean {
   if (!clientMessageId || !draft.messageOrder.includes(clientMessageId) || clientMessageId === messageId) {
     return false
   }
+  const resolvedDeliveryStatus = inputDiscarded ? 'discarded' as const : 'received' as const
   const idx = draft.messageOrder.indexOf(clientMessageId)
   const existing = draft.messagesById[clientMessageId]
   if (messageId) {
     delete draft.messagesById[clientMessageId]
-    draft.messagesById[messageId] = { ...existing, id: messageId, deliveryStatus: 'received' }
+    draft.messagesById[messageId] = { ...existing, id: messageId, deliveryStatus: resolvedDeliveryStatus }
     draft.messageOrder[idx] = messageId
   } else {
-    existing.deliveryStatus = 'received'
+    existing.deliveryStatus = resolvedDeliveryStatus
   }
   console.warn('chat.replay_dedup_skipped', { id: messageId, role, reason: 'client-message-id-match' })
   logDiagnostic('chatReplayDedupSkipped', { messageId, role, reason: 'client-message-id-match', sessionId: targetSid })
@@ -632,13 +641,21 @@ function handleReplayMessageFrame({
     replayFrame.truncated,
     replayFrame.truncation_reason,
   )
+  // FR-024 (session-core, BDD-07.3/BDD-09.4): the read-only
+  // `input_disposition` marker on a stored user entry — Stop discarded this
+  // input before it was delivered into the agent's model input. Mapped onto
+  // the SAME quiet deliveryStatus the live `message_status` frame stamps, so
+  // a reload or reconnect replay shows the identical "Not delivered" status —
+  // never an error, and the archived text is kept. Absent on every delivered
+  // entry, so today's rendering is unchanged there.
+  const replayInputDiscarded = replayFrame.input_disposition?.state === 'discarded'
   withBucket(targetSid, (b) => {
     return produce(b, (draft) => {
       // Cursor advancement is handled centrally before the switch (I1);
       // no per-case advance needed here.
       const msgs = getMessages(b)
       // #823 Opus review round 2 item 2 — see reconcileOwnOptimisticBubble above.
-      if (reconcileOwnOptimisticBubble(draft, replayFrame.client_message_id, messageId, role, targetSid)) return
+      if (reconcileOwnOptimisticBubble(draft, replayFrame.client_message_id, messageId, role, replayInputDiscarded, targetSid)) return
       // Reconnection dedup: prefer server-assigned id match when present;
       // fall back to (content + role + timestamp) tuple. Content-only dedup
       // was silently dropping legitimate identical user retries.
@@ -773,6 +790,10 @@ function handleReplayMessageFrame({
         ...(replayTruncated && role === 'assistant'
           ? { truncated: true as const, truncationReason: replayTruncationReason }
           : {}),
+        // FR-024 — the discarded-input marker exists on user entries only
+        // (role-gated like turnId/model above): the minted bubble carries the
+        // same quiet deliveryStatus the live path showed before the reload.
+        ...(replayInputDiscarded && role === 'user' ? { deliveryStatus: 'discarded' as const } : {}),
       }
       draft.messagesById[newMsg.id] = newMsg
       // #823 Opus review round 2 item 2 (founder decision Q1): a

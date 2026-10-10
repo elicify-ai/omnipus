@@ -169,6 +169,7 @@ Your first message is kept in the open tab while Omnipus checks delivery. If loa
 | **Could not save message · Retry** | Omnipus reported that it could not save the message. You can retry delivery. |
 | **Message saved, but no answer started · Generate again** | The message was saved, but no answer began. **Generate again** deliberately starts a new answer in the saved chat. |
 | **Couldn't finish · Generate again** | Checking the recovered chat finished with your message still unanswered and no answer running. You can deliberately generate a new answer. |
+| **Not delivered** | You stopped the agent before it read this message, so it was discarded — the text stays in the chat, nothing is sent later, and the same status is shown again after you reload the page. |
 
 For an ordinary first message, an acknowledgement without the original delivery ID does not open or confirm the pending chat, or apply its agent and Auto-approve settings. Buffered messages remain queued until a matching save receipt or checked history confirms delivery; they also wait while a reply is running. An older acknowledgement alone does not release them.
 

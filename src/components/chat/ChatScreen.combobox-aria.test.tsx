@@ -245,7 +245,7 @@ describe('Composer combobox ARIA — textarea (deferred item 2)', () => {
     const initialOptions = screen.getAllByRole('option')
     expect(initialOptions).toHaveLength(7)
     expect(initialOptions.map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual([
-      '/resume', '/workspace', '/clear', '/help', '/cancel', '/code-review', '/web-research',
+      '/sessions', '/workspace', '/clear', '/help', '/cancel', '/code-review', '/web-research',
     ])
     // Option ids must be unique — a duplicate id would make getElementById
     // resolve to the WRONG row (the first match) without any test noticing,

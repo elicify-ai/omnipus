@@ -371,17 +371,24 @@ describe('live inline indicator', () => {
     expectMarkMotion(bubble, 'working')
   })
 
+  // Re-pinned to FR-039 (DEL-F39–40): the goal-aware label joins THIS
+  // producing message's own goal_id to the keyed `goalPills` record — the
+  // latest-goal-scalar indicator branch is deleted. The goal frame must live
+  // in goalPills (foreground + session bucket) and the streaming message
+  // must carry the matching goalId (convertMessage → metadata.custom.goalId).
   it('preserves the goal phrase without letting it override a real Working phase', async () => {
     const sid = 'goal-tool-phase'
-    seedMessages(sid, streamingPair(sid, 'agent-jim'), { streaming: true, replaying: false })
+    const [userMsg, assistantMsg] = streamingPair(sid, 'agent-jim')
+    seedMessages(sid, [userMsg, { ...assistantMsg, goalId: 'goal-tool-phase' }], { streaming: true, replaying: false })
     const goalStatus: GoalStatusFrame = {
       type: 'goal_status', session_id: sid, goal_id: 'goal-tool-phase',
       condition: 'Ship the release notes', round: 0, max_rounds: 20,
       latest_reason: '', active_loops: 1, cap: 16, state: 'active',
     }
+    const pills = { 'goal-tool-phase': goalStatus }
     act(() => useChatStore.setState((s) => ({
-      goalStatus,
-      sessionsById: { ...s.sessionsById, [sid]: { ...s.sessionsById[sid], goalStatus } },
+      goalPills: pills,
+      sessionsById: { ...s.sessionsById, [sid]: { ...s.sessionsById[sid], goalPills: pills } },
     })))
     const bubble = assistantBubble(await mount())
     expect(within(bubble).getByText('Framing your goal')).toBeInTheDocument()
