@@ -412,8 +412,8 @@ func (b *archiveBackend) PlaceSavedInput(ctx context.Context, key string, source
 		return ModelSlot{}, WindowView{}, err
 	}
 	meta.Count = row.Ordinal + 1
-	if err := b.saveMetaLocked(key, meta); err != nil {
-		return ModelSlot{}, WindowView{}, err
+	if saveErr := b.saveMetaLocked(key, meta); saveErr != nil {
+		return ModelSlot{}, WindowView{}, saveErr
 	}
 	msg, err := DecodeModelPayload(*src.ModelMessage)
 	if err != nil {
@@ -640,8 +640,8 @@ func (b *archiveBackend) viewLocked(key string) (WindowView, error) {
 	}
 	if meta.Count != n {
 		meta.Count = n
-		if err := b.saveMetaLocked(key, meta); err != nil {
-			return WindowView{}, err
+		if saveErr := b.saveMetaLocked(key, meta); saveErr != nil {
+			return WindowView{}, saveErr
 		}
 	}
 	if meta.Skip < 0 || meta.Skip > n {
@@ -649,8 +649,8 @@ func (b *archiveBackend) viewLocked(key string) (WindowView, error) {
 	}
 	state := memory.WindowState{Skip: meta.Skip, Count: meta.Count, AnchorLine: cloneIntPtr(meta.AnchorLine),
 		Projection: projectionFromMeta(meta)}
-	if err := validateWindowAnchor(store, state); err != nil {
-		return WindowView{}, err
+	if anchorErr := validateWindowAnchor(store, state); anchorErr != nil {
+		return WindowView{}, anchorErr
 	}
 	// Rows from Skip-1 (for the prior user-turn count) to the end.
 	first := meta.Skip
@@ -823,8 +823,8 @@ func (b *archiveBackend) saveMetaLocked(key string, m archiveBackendMeta) error 
 		return err
 	}
 	dir := store.dir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("archive_backend: create dir: %w", err)
+	if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
+		return fmt.Errorf("archive_backend: create dir: %w", mkErr)
 	}
 	data, err := json.Marshal(m)
 	if err != nil {

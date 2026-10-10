@@ -224,7 +224,7 @@ func TestAppendTranscriptRecord_TornFinalLineGetsFreshLine(t *testing.T) {
 	assert.Greater(t, second.ByteOffset, first.ByteOffset)
 	entries, err := s.ReadTranscript(sid)
 	require.NoError(t, err)
-	ids := []string{}
+	ids := make([]string, 0, len(entries))
 	for _, e := range entries {
 		ids = append(ids, e.ID)
 	}
@@ -285,7 +285,7 @@ func TestSharedArchive_OneFileSetChatModelAndEffects(t *testing.T) {
 
 	entries, err := s.ReadTranscript(sid)
 	require.NoError(t, err)
-	ids := []string{}
+	ids := make([]string, 0, len(entries))
 	for _, e := range entries {
 		ids = append(ids, e.ID)
 	}

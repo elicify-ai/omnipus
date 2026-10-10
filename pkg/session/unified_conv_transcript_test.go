@@ -48,7 +48,7 @@ func TestConvTranscripts_MembershipProvenanceResidueAndIndexTranslation(t *testi
 
 	entries, err := s.ReadTranscript(sid)
 	require.NoError(t, err)
-	ids := []string{}
+	ids := make([]string, 0, len(entries))
 	for _, e := range entries {
 		ids = append(ids, e.ID)
 		assert.Equal(t, ViewMembershipChat, e.ViewMembership, "%s is a chat record", e.ID)

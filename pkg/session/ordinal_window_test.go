@@ -148,8 +148,8 @@ func TestOrdinals_ToolResultWithoutProvableIssuerIsRefused(t *testing.T) {
 		"no membership": {Message: userMsg("x"), Source: modelSource},
 		"no source":     {Message: userMsg("x"), ViewMembership: ViewMembershipBoth},
 	} {
-		_, _, err := b.AppendModelMessage(context.Background(), key, in)
-		require.Error(t, err, name)
+		_, _, appendErr := b.AppendModelMessage(context.Background(), key, in)
+		require.Error(t, appendErr, name)
 	}
 	after, err := store.OrdinalCount()
 	require.NoError(t, err)

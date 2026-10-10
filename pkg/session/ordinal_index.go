@@ -290,7 +290,7 @@ func (s *ArchiveDayStore) readOrdinalRowLocked(o int) (ordinalRow, error) {
 	defer f.Close()
 	row, _, err := readRowAt(f, off)
 	if err != nil {
-		return ordinalRow{}, fmt.Errorf("%w: ordinal %d: %v", errOrdinalTable, o, err)
+		return ordinalRow{}, fmt.Errorf("%w: ordinal %d: %w", errOrdinalTable, o, err)
 	}
 	if row.Ordinal != o {
 		return ordinalRow{}, fmt.Errorf("%w: offset %d holds row %d, not %d", errOrdinalTable, off, row.Ordinal, o)
@@ -347,11 +347,11 @@ func (s *ArchiveDayStore) readOrdinalRowsLocked(from, to int) ([]ordinalRow, err
 	for o := from; o < to; o++ {
 		line, err := br.ReadBytes('\n')
 		if err != nil {
-			return nil, fmt.Errorf("%w: row %d: %v", errOrdinalTable, o, err)
+			return nil, fmt.Errorf("%w: row %d: %w", errOrdinalTable, o, err)
 		}
 		var row ordinalRow
 		if err := json.Unmarshal(bytes.TrimSuffix(line, []byte{'\n'}), &row); err != nil {
-			return nil, fmt.Errorf("%w: decode row %d: %v", errOrdinalTable, o, err)
+			return nil, fmt.Errorf("%w: decode row %d: %w", errOrdinalTable, o, err)
 		}
 		if row.Ordinal != o {
 			return nil, fmt.Errorf("%w: expected row %d, found %d", errOrdinalTable, o, row.Ordinal)
@@ -383,8 +383,8 @@ func (s *ArchiveDayStore) appendOrdinalRowLocked(row ordinalRow) (ordinalRow, er
 	if len(line) > ordinalRowBound {
 		return ordinalRow{}, fmt.Errorf("ordinal index: row %d is %d bytes, over the %d-byte bound", n, len(line), ordinalRowBound)
 	}
-	if err := os.MkdirAll(s.dir(), 0o700); err != nil {
-		return ordinalRow{}, fmt.Errorf("ordinal index: create dir: %w", err)
+	if mkErr := os.MkdirAll(s.dir(), 0o700); mkErr != nil {
+		return ordinalRow{}, fmt.Errorf("ordinal index: create dir: %w", mkErr)
 	}
 	rows, err := os.OpenFile(s.ordinalRowsPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -395,11 +395,11 @@ func (s *ArchiveDayStore) appendOrdinalRowLocked(row ordinalRow) (ordinalRow, er
 	if err != nil {
 		return ordinalRow{}, fmt.Errorf("ordinal index: seek rows: %w", err)
 	}
-	if _, err := rows.Write(append(line, '\n')); err != nil {
-		return ordinalRow{}, fmt.Errorf("ordinal index: write row %d: %w", n, err)
+	if _, wErr := rows.Write(append(line, '\n')); wErr != nil {
+		return ordinalRow{}, fmt.Errorf("ordinal index: write row %d: %w", n, wErr)
 	}
-	if err := rows.Sync(); err != nil {
-		return ordinalRow{}, fmt.Errorf("ordinal index: fsync rows: %w", err)
+	if sErr := rows.Sync(); sErr != nil {
+		return ordinalRow{}, fmt.Errorf("ordinal index: fsync rows: %w", sErr)
 	}
 	offs, err := os.OpenFile(s.ordinalOffsetsPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {

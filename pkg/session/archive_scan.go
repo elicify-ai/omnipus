@@ -52,9 +52,9 @@ func (s *ArchiveDayStore) ScanAllLines(fn func(ArchiveAddress, []byte, ArchiveRe
 	rolled := rolledPartitionNames(entries)
 	for _, name := range rolled {
 		key := strings.TrimSuffix(name, ".jsonl")
-		cont, err := s.scanPartitionLinesLocked(filepath.Join(dir, name), key, fn)
-		if err != nil {
-			return err
+		cont, scanErr := s.scanPartitionLinesLocked(filepath.Join(dir, name), key, fn)
+		if scanErr != nil {
+			return scanErr
 		}
 		if !cont {
 			return nil
@@ -92,9 +92,9 @@ func (s *ArchiveDayStore) scanAllLocked(fn func(ArchiveAddress, ArchiveRecord) b
 	rolled := rolledPartitionNames(entries)
 	for _, name := range rolled {
 		key := strings.TrimSuffix(name, ".jsonl")
-		cont, err := s.scanPartitionLocked(filepath.Join(dir, name), key, fn)
-		if err != nil {
-			return err
+		cont, scanErr := s.scanPartitionLocked(filepath.Join(dir, name), key, fn)
+		if scanErr != nil {
+			return scanErr
 		}
 		if !cont {
 			return nil

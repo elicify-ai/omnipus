@@ -10,6 +10,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -99,7 +100,7 @@ func TestArchiveBackend_RollbackIsNonDestructive(t *testing.T) {
 
 	after, err := os.ReadFile(rawPath)
 	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(string(after), string(before)),
+	require.True(t, bytes.HasPrefix(after, before),
 		"FR-006: rollback must never rewrite retained archive bytes")
 
 	// The window a request is built from holds exactly the turn-start messages.
@@ -248,7 +249,7 @@ func TestArchiveBackend_ToolResultJoinsItsAssistantOccurrence(t *testing.T) {
 	all, err := b.ReadArchive(ctx, key)
 	require.NoError(t, err)
 	require.Len(t, all, 2, "both the assistant call and its result are archived")
-	require.Equal(t, "call_0", all[1].Message.ToolCallID)
+	require.Equal(t, "call_0", all[1].ToolCallID)
 }
 
 // An ORPHAN tool result (no matching assistant call) is refused: every tool

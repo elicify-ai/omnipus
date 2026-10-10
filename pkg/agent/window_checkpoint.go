@@ -215,8 +215,8 @@ func (al *AgentLoop) checkpointWindow(ctx context.Context, ts *turnState, messag
 			break // Immutable residue is sent; never a local size-only failure.
 		}
 		progress = true
-		if err := p.rebuildBreadcrumb(ctx); err != nil {
-			return messages, false, err
+		if crumbErr := p.rebuildBreadcrumb(ctx); crumbErr != nil {
+			return messages, false, crumbErr
 		}
 		p.refreshNotice()
 	}

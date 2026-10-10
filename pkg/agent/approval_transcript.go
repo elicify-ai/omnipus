@@ -266,7 +266,8 @@ func (ts *turnState) callRecordFor(id session.ToolCallID) (callRecord, bool) {
 	if !ok {
 		return callRecord{}, false
 	}
-	return v.(callRecord), true
+	rec, ok := v.(callRecord)
+	return rec, ok
 }
 
 // replaceToolCallInTranscript settles the remembered tool_call record of callID

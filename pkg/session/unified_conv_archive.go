@@ -103,7 +103,7 @@ func convConvertOneLegacyArchive(baseDir, contextDir, base string, perAgent bool
 		// than guess an owner (spec CONV / Identity).
 		id = base
 	}
-	if perAgent && (strings.ContainsAny(id, ":") || validateSessionID(id) != nil) {
+	if perAgent && (strings.ContainsAny(id, ":") || !isSessionDirName(id)) {
 		slog.Warn("conversion: per-agent model archive names no session; left in place",
 			"archive", filepath.Join(contextDir, base+".jsonl"), "key", meta.Key)
 		return nil
@@ -143,8 +143,8 @@ func convConvertOneLegacyArchive(baseDir, contextDir, base string, perAgent bool
 		return err // refusal names the chat and the line; source untouched
 	}
 	for _, rec := range records {
-		if _, _, err := store.AppendIndexed(rec); err != nil {
-			return fmt.Errorf("conversion: saved chat %q: append archive record %s: %w", id, rec.ID, err)
+		if _, _, appendErr := store.AppendIndexed(rec); appendErr != nil {
+			return fmt.Errorf("conversion: saved chat %q: append archive record %s: %w", id, rec.ID, appendErr)
 		}
 	}
 	addrs, callsAt, err := convTranscriptLineAddrs(store.dir())
@@ -444,3 +444,6 @@ func convWriteBackendMeta(dir string, meta archiveBackendMeta) error {
 	}
 	return fileutil.WriteFileAtomic(filepath.Join(dir, archiveBackendMetaFile), data, 0o600)
 }
+
+// isSessionDirName reports whether id can name a session directory.
+func isSessionDirName(id string) bool { return validateSessionID(id) == nil }

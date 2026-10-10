@@ -151,7 +151,7 @@ func convConvergeSessionTranscript(dir, id string) error {
 func convReadLegacyProvenance(dir, id string) (map[string]convLegacyProvenance, error) {
 	data, err := os.ReadFile(filepath.Join(dir, convLegacyProvenanceFile))
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		return map[string]convLegacyProvenance{}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("conversion: saved chat %q: read %s: %w", id, convLegacyProvenanceFile, err)
