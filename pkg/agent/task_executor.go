@@ -618,49 +618,7 @@ func (te *TaskExecutor) automaticInitiator(t *task.Task) (*task.Initiator, bool,
 	if t.Initiator == nil {
 		return nil, false, nil
 	}
-	return t.Initiator, t.Initiator.AgentID == t.AgentID, nil
-}
-
-// retryInitiator is the resolver for an automatic retry of a run that already
-// started: the retry keeps the failed run's authority. A run a person started
-// (no InitiatedBy on its record) retries as a person's start; a run an agent
-// started is re-authorized against the CURRENT graph and may not exceed the
-// budget the first run was left with.
-func (te *TaskExecutor) retryInitiator(prev *session.InitiatedBy) initiatorResolver {
-	return func(t *task.Task) (*task.Initiator, bool, error) {
-		if prev == nil {
-			return nil, false, nil
-		}
-		budget := prev.Authorization.RemainingDepth + 1 // authorize subtracts one for the edge hop
-		self := t.Initiator != nil && t.Initiator.AgentID == t.AgentID && prev.AgentID == t.AgentID
-		return &task.Initiator{
-			AgentID: prev.AgentID, SessionID: prev.SessionID, Depth: prev.Depth - 1, Inherited: &budget,
-		}, self, nil
-	}
-}
-
-// reExecuteTask is the automatic retry entry point: ExecuteTask under the
-// failed run's own authority (prev is that run's InitiatedBy, nil for a person's
-// start).
-func (te *TaskExecutor) reExecuteTask(ctx context.Context, taskID string, occurrenceMs *int64, prev *session.InitiatedBy) error {
-	if !te.enterDispatch() {
-		return ErrExecutorDraining
-	}
-	defer te.wg.Done()
-	return te.executeTask(ctx, taskID, occurrenceMs, task.RunKindScheduled, false, te.retryInitiator(prev))
-}
-
-// runInitiatedBy reads the InitiatedBy a run's lifecycle record carries.
-func (te *TaskExecutor) runInitiatedBy(sessionID string) *session.InitiatedBy {
-	ls := te.getLifecycleStore()
-	if ls == nil || sessionID == "" {
-		return nil
-	}
-	rec, err := ls.Load(sessionID)
-	if err != nil {
-		return nil
-	}
-	return rec.InitiatedBy
+	return t.Initiator, t.Initiator.AgentID == t.AgentID && !t.Initiator.Direct, nil
 }
 
 // executeTaskPlanVerified is the ONE documented bypass of the plan-state gate

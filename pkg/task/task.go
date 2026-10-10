@@ -487,6 +487,11 @@ type Initiator struct {
 	// is kept on the work item so a later automatic start, which has no acting
 	// session, still cannot exceed it.
 	Inherited *int `json:"inherited,omitempty"`
+	// Direct marks authority carried over from a run an agent started directly
+	// (run_task, execute_plan) onto the task for its automatic retry. Unlike
+	// an initiator that merely created or assigned the task, a Direct one gets
+	// no self-edge exemption: the first run needed the edge, so the retry does.
+	Direct bool `json:"direct,omitempty"`
 }
 
 // CreatedByAgent reports whether this task was created by the agent agentID.
