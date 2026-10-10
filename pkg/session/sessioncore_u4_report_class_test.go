@@ -13,6 +13,10 @@
 //
 // No expected value here is read off the implementation: the accepted-kind set
 // and the exemption rule come from the spec text above.
+//
+// Q4 (ARCHITECT-ANSWER-U4-GAPS): decision_request stays OUT of U4 — it is not a
+// message_parent kind and not in BDD-04.1's accepted set. It is deliberately
+// not asserted here.
 
 package session
 
