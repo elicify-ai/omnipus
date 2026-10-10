@@ -195,7 +195,7 @@ func TestSessionCoreU1_ConcurrentLookupsStoreExactlyOneMainPerPair(t *testing.T)
 }
 
 func keys(m map[string]map[string]any) []string {
-	var k []string
+	k := make([]string, 0, len(m))
 	for name := range m {
 		k = append(k, name)
 	}

@@ -21,6 +21,27 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
 
+// initializeConvertedSessions runs the one-time CONV saved-chat cutover over
+// the shared sessions archive ($OMNIPUS_HOME/sessions) as an EXPLICIT boot step
+// that MUST run BEFORE registry/per-agent store construction (architect Q10).
+//
+// Why here and not only in the store constructor: initializeCore builds every
+// per-agent store (via NewAgentRegistry) BEFORE it builds the shared store, so
+// a constructor-only cutover runs over the shared archive too late — after the
+// per-agent stores already exist. Running it here, first, means no session
+// cache/list/attach, retention or task/scheduler/agent dispatch ever observes
+// the pre-cutover shape.
+//
+// A conversion failure (Q11) is returned to the caller so NewAgentLoop refuses
+// boot outright — the gateway maps a NewAgentLoop error to a fatal boot abort.
+// The store constructors' own cutover calls are an idempotent backstop: by the
+// time they run, this step has already converted the archive (or refused boot),
+// so they perform no write.
+func (nal *newAgentLoop) initializeConvertedSessions() error {
+	homePath := filepath.Dir(nal.cfg.AgentHomeBasePath())
+	return session.CutoverSavedChatsAtBoot(filepath.Join(homePath, "sessions"))
+}
+
 // initializeCore builds the registry, shared routing state, task executor, and session store.
 func (nal *newAgentLoop) initializeCore() {
 	nal.registry = NewAgentRegistry(nal.cfg, nal.provider)

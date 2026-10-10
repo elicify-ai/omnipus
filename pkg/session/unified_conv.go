@@ -43,15 +43,40 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
-// convergeSavedChats runs CONV over this store's base directory. Idempotent and
-// retry-safe: a completed conversion is recognized and not rewritten; an
-// interrupted one is finished without appending a second copy. Any failure is a
-// visible cutover error naming the affected saved chat.
-func (us *UnifiedStore) convergeSavedChats() error {
-	if err := us.convConvergeFlatJSONLSources(); err != nil {
+// CutoverSavedChatsAtBoot is the EXPLICIT boot entry for the one-time CONV
+// saved-chat cutover (architect Q10). It runs over a single session store base
+// directory and MUST be invoked by the boot flow BEFORE any session store
+// (shared or per-agent) is constructed — before caches warm, before
+// list/attach, before retention or any task/scheduler/agent dispatch — so no
+// runtime path ever observes the pre-cutover shape.
+//
+// It is exported precisely so the agent boot flow can run the cutover ahead of
+// registry/session-store construction; the store constructor calls it too
+// (convergeSavedChats) as a boot-constructor backstop. Both paths share this
+// one implementation, so the conversion is idempotent across the two calls:
+// a completed cutover performs no write on the second pass.
+//
+// Idempotent and retry-safe: a completed conversion is recognized and not
+// rewritten; an interrupted one is finished without appending a second copy.
+// Any failure is a visible cutover error naming the affected saved chat.
+func CutoverSavedChatsAtBoot(baseDir string) error {
+	// Faithful model-content conversion FIRST (unified_conv_archive.go): the
+	// legacy .context model archives become the addressed archive the runtime now
+	// reads. Then the metadata/recovery passes.
+	if err := convConvertLegacyModelArchives(baseDir); err != nil {
 		return err
 	}
-	return us.convNormalizeSavedChatDirs()
+	if err := convConvergeFlatJSONLSources(baseDir); err != nil {
+		return err
+	}
+	return convNormalizeSavedChatDirs(baseDir)
+}
+
+// convergeSavedChats runs CONV over this store's base directory; it is the
+// boot-constructor backstop for the explicit CutoverSavedChatsAtBoot entry
+// above (both share one implementation).
+func (us *UnifiedStore) convergeSavedChats() error {
+	return CutoverSavedChatsAtBoot(us.baseDir)
 }
 
 // convConvergeFlatJSONLSources handles the legacy flat "<id>.jsonl" sources
@@ -59,8 +84,8 @@ func (us *UnifiedStore) convergeSavedChats() error {
 // deletes that method; CONV is its replacement). Only a file directly in the
 // base dir is a source — session directories and the ".context" backend are
 // skipped.
-func (us *UnifiedStore) convConvergeFlatJSONLSources() error {
-	entries, err := os.ReadDir(us.baseDir)
+func convConvergeFlatJSONLSources(baseDir string) error {
+	entries, err := os.ReadDir(baseDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
@@ -75,7 +100,7 @@ func (us *UnifiedStore) convConvergeFlatJSONLSources() error {
 		if id == "" {
 			continue
 		}
-		if err := us.convConvergeFlatJSONLSource(id); err != nil {
+		if err := convConvergeFlatJSONLSource(baseDir, id); err != nil {
 			return err
 		}
 	}
@@ -90,9 +115,9 @@ func (us *UnifiedStore) convConvergeFlatJSONLSources() error {
 //   - destination holds DIFFERENT content → the conversion conflicts and
 //     refuses visibly, never overwriting (no last-wins);
 //   - otherwise the content is materialized first, then the source retired.
-func (us *UnifiedStore) convConvergeFlatJSONLSource(id string) error {
-	src := filepath.Join(us.baseDir, id+".jsonl")
-	sessionDir := filepath.Join(us.baseDir, id)
+func convConvergeFlatJSONLSource(baseDir, id string) error {
+	src := filepath.Join(baseDir, id+".jsonl")
+	sessionDir := filepath.Join(baseDir, id)
 	dst := filepath.Join(sessionDir, "context.jsonl")
 
 	srcData, err := os.ReadFile(src)
@@ -163,8 +188,8 @@ func convRetireLegacySource(id, src string) error {
 // CONV / Failure). A directory with NO meta.json is not a saved chat and is
 // left alone (nothing to strand), matching the store's existing lenient
 // treatment of a non-session directory.
-func (us *UnifiedStore) convNormalizeSavedChatDirs() error {
-	entries, err := os.ReadDir(us.baseDir)
+func convNormalizeSavedChatDirs(baseDir string) error {
+	entries, err := os.ReadDir(baseDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
@@ -175,7 +200,7 @@ func (us *UnifiedStore) convNormalizeSavedChatDirs() error {
 		if !e.IsDir() || e.Name() == ".context" {
 			continue
 		}
-		sessionDir := filepath.Join(us.baseDir, e.Name())
+		sessionDir := filepath.Join(baseDir, e.Name())
 		identity, rErr := u5ReadIdentityFile(sessionDir)
 		if rErr != nil {
 			if errors.Is(rErr, fs.ErrNotExist) {
@@ -217,12 +242,17 @@ func convNeedsNormalization(f u5IdentityFile) bool {
 	return f.Type == ""
 }
 
-// convWriteIdentityFile atomically writes a session directory's meta.json from
-// its parsed identity, in the SAME identity-file shape u5WriteIdentityLocked
-// uses — so a converted saved chat is byte-for-byte a current-format session
-// and a completed conversion round-trips unchanged. CONV runs before the store
-// has escaped its constructor, so no in-process shard lock is required; the OS
-// sidecar flock still guards a concurrent cross-process writer.
+// convWriteIdentityFile is the CONV-ONLY current-format publisher (architect
+// Q12): it atomically writes a session directory's meta.json from its parsed
+// identity, in the SAME identity-file shape u5WriteIdentityLocked uses — so a
+// converted saved chat is byte-for-byte a current-format session and a
+// completed conversion round-trips unchanged. It reuses the lock/atomic-write
+// primitives (fileutil.WithFlock + the writeFileAtomicFn seam) that the DEL-09
+// generic helper writeUnifiedMetaDirect used, but publishes ONLY the
+// current-format identity group a conversion needs — it is not a general meta
+// writer. CONV runs before the store has escaped its constructor, so no
+// in-process shard lock is required; the OS sidecar flock still guards a
+// concurrent cross-process writer.
 func convWriteIdentityFile(sessionDir string, identity u5IdentityFile) error {
 	data, err := json.MarshalIndent(identity, "", "  ")
 	if err != nil {

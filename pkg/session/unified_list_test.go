@@ -272,26 +272,25 @@ func TestListSessions_ReconcilesOutOfBandSessionDir(t *testing.T) {
 	require.NoError(t, err)
 
 	// Session 2: written DIRECTLY to disk, bypassing the store entirely.
-	// writeUnifiedMetaDirect is the same package-level helper migrateLegacy
-	// uses to write a session's meta.json before any UnifiedStore instance
-	// exists for it — an accurate stand-in for a genuinely out-of-band writer.
+	// convWriteIdentityFile is CONV's current-format publisher — the same
+	// package-level shape a real out-of-band writer (a conversion, another
+	// process, a restore) produces before any UnifiedStore instance exists for
+	// it — an accurate stand-in for a genuinely out-of-band writer.
 	outOfBandID := "out-of-band-session"
 	outOfBandDir := filepath.Join(store.baseDir, outOfBandID)
 	require.NoError(t, os.MkdirAll(outOfBandDir, 0o700))
 	now := time.Now().UTC()
-	outOfBandMeta := &UnifiedMeta{
-		SessionMeta: SessionMeta{
-			ID:        outOfBandID,
-			Status:    StatusActive,
-			CreatedAt: now.Add(-time.Hour),
-			// Deliberately newer than the cached session so descending sort
-			// order proves this entry was actually merged in, not just
-			// coincidentally present.
-			UpdatedAt: now.Add(time.Hour),
-		},
-		Type: SessionTypeChat,
-	}
-	require.NoError(t, writeUnifiedMetaDirect(outOfBandDir, outOfBandMeta))
+	require.NoError(t, convWriteIdentityFile(outOfBandDir, u5IdentityFile{
+		ID:        outOfBandID,
+		Status:    StatusActive,
+		CreatedAt: now.Add(-time.Hour),
+		// Deliberately newer than the cached session so descending sort
+		// order proves this entry was actually merged in, not just
+		// coincidentally present.
+		UpdatedAt:  now.Add(time.Hour),
+		Partitions: []string{},
+		Type:       SessionTypeChat,
+	}))
 
 	// Precondition: the out-of-band session must NOT already be cached — it
 	// was never written through this store instance.
@@ -347,14 +346,13 @@ func TestListSessions_SkipsMalformedOutOfBandSessionDir(t *testing.T) {
 	goodID := "out-of-band-good"
 	goodDir := filepath.Join(store.baseDir, goodID)
 	require.NoError(t, os.MkdirAll(goodDir, 0o700))
-	require.NoError(t, writeUnifiedMetaDirect(goodDir, &UnifiedMeta{
-		SessionMeta: SessionMeta{
-			ID:        goodID,
-			Status:    StatusActive,
-			CreatedAt: time.Now().UTC(),
-			UpdatedAt: time.Now().UTC(),
-		},
-		Type: SessionTypeChat,
+	require.NoError(t, convWriteIdentityFile(goodDir, u5IdentityFile{
+		ID:         goodID,
+		Status:     StatusActive,
+		CreatedAt:  time.Now().UTC(),
+		UpdatedAt:  time.Now().UTC(),
+		Partitions: []string{},
+		Type:       SessionTypeChat,
 	}))
 
 	badID := "out-of-band-bad"
