@@ -44,7 +44,10 @@ func probeEnvStub(t *testing.T, envFile string) string {
 //     control proving the env snapshot instrument would have seen a leak.
 func TestDetectCLIVersion_ChildEnvScrubbed(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("stub uses a POSIX shell script")
+		// Founder-accepted platform gap: issue #1256 (2026-10-09) accepts the
+		// missing Windows equivalents for this landing and tracks them. The
+		// fixture is a POSIX shell stub; the Windows replacement proof is owed.
+		t.Skip("stub uses a POSIX shell script (Windows equivalent owed — founder-accepted gap, issue #1256)")
 	}
 
 	// Gateway secrets set in the PARENT (gateway) env — these MUST NOT reach the
