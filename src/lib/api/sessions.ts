@@ -37,8 +37,11 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   // includeVerifier opt-in surfaces it (UsageScreen's "By session" tab only).
   // 'delegate' (ADR-057 FR-008/W2c) tags a subordinate session minted by a
   // delegation — it always carries a non-empty parent_session_id below.
-  // Like 'scheduled'/'heartbeat'/'verifier' it is server-minted only.
-  type: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier' | 'delegate'
+  // Like 'scheduled'/'main'/'verifier' it is server-minted only.
+  // Derived from the generated Session schema (contract-first #8) — 'main'
+  // (FR-002, the one standing session for an eligible workspace/agent pair)
+  // is a server-minted wire value, so the union is never hand-maintained.
+  type: WireSessionShape['type']
   status?: WireSessionShape['status']
   task_id?: string
   workspace_id?: string
@@ -99,13 +102,19 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   // the process table is unavailable (unknown, not zero). Zero means checked
   // and none. Not a roll-up of child sessions.
   background_command_count?: WireSessionShape['background_command_count']
+  // FR-047 (C-ATTENTION): the server's read-only main-attention value.
+  // Present as true or false on a valid main (including the default Admin
+  // main), omitted on every other session — so absence stays absent
+  // (unknown), and is never coerced to false here.
+  needs_attention?: WireSessionShape['needs_attention']
 }
 
 interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that renames nested stats fields before public Session type; the wire shape is validated via WireSessionSchema, this type only models the pre-transform intermediate
   id: string
   agent_id: string
   title: string
-  type?: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier' | 'delegate'
+  // Derived from the generated Session schema (see the public Session above).
+  type?: WireSessionShape['type']
   status?: WireSessionShape['status']
   task_id?: string
   workspace_id?: string
@@ -122,6 +131,7 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   stop_note?: WireSessionShape['stop_note']
   execution?: WireSessionShape['execution']
   background_command_count?: WireSessionShape['background_command_count']
+  needs_attention?: WireSessionShape['needs_attention']
   stats?: {
     tokens_in: number
     tokens_out: number
@@ -170,6 +180,10 @@ function rawToSession(raw: RawSession): Session {
     // do not turn a missing background count into 0 — unknown is not none.
     execution: raw.execution,
     background_command_count: raw.background_command_count,
+    // FR-047: verbatim pass-through — true, false, or absent stays exactly
+    // that. A main without the field (or any non-main, which never carries
+    // it) must read as unknown downstream, never as a fabricated off.
+    needs_attention: raw.needs_attention,
   }
 }
 

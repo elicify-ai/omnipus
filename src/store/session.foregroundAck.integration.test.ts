@@ -18,6 +18,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Session } from '@/lib/api'
+import { queryClient } from '@/lib/queryClient'
 import { useSessionStore } from './session'
 import { useChatStore } from './chat'
 import { useConnectionStore } from './connection'
@@ -69,8 +70,17 @@ const hidden = { value: false }
 const originalHidden = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden')
   ?? Object.getOwnPropertyDescriptor(document, 'hidden')
 
+/**
+ * Sessions this scenario's SPA has "loaded". FR-047: the acknowledgement now
+ * reads the real loaded roster metadata (the ['sessions'] list) for the
+ * session instead of acknowledging a bare id, so show() seeds that list from
+ * here. This harness's seam mock still decides mainness/attention, exactly
+ * as before — no assertion below changed.
+ */
+const loadedSessions: Session[] = []
+
 function session(id: string, agentId = 'mia'): Session {
-  return {
+  const built: Session = {
     id,
     agent_id: agentId,
     title: id,
@@ -80,10 +90,14 @@ function session(id: string, agentId = 'mia'): Session {
     message_count: 0,
     workspace_id: 'operations',
   }
+  loadedSessions.push(built)
+  return built
 }
 
 function resetAll() {
   hidden.value = false
+  loadedSessions.length = 0
+  queryClient.removeQueries({ queryKey: ['sessions'] })
   seam.mains.clear()
   seam.attention.clear()
   seam.attentionBoundOfFrame.mockClear()
@@ -126,6 +140,10 @@ function acks(send: ReturnType<typeof vi.fn>): Array<Record<string, unknown>> {
 }
 
 function show(sessionId: string) {
+  // By catch_up_complete the real SPA's roster has loaded (Sidebar's
+  // ['sessions'] query) — seed this scenario's loaded list there, where the
+  // acknowledgement reads it. The seam mock above still judges the session.
+  queryClient.setQueryData(['sessions'], [...loadedSessions])
   useChatStore.getState().handleFrame({
     type: 'catch_up_complete',
     session_id: sessionId,

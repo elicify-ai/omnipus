@@ -9,6 +9,7 @@
  */
 import type { Session } from '@/lib/api'
 import type { AttachSessionFrame } from '@/lib/api/generated/asyncapi-types'
+import { queryClient } from '@/lib/queryClient'
 import { ackForShownCommit, type AckInput } from '@/lib/nav/mainAttention'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
@@ -31,6 +32,18 @@ function documentIsHidden(): boolean {
 /** Remember the server snapshot whose attention bound the seam may read later. */
 export function noteServerAttentionFrame(sessionId: string, frame: unknown): void {
   snapshotBySession.set(sessionId, frame)
+}
+
+/**
+ * The loaded session metadata the SPA already holds for this id — the same
+ * ['sessions'] list (fetchSessions → rawToSession) the sidebar's roster
+ * reads. Nothing here when that list has not loaded the session: the caller
+ * must treat unknown metadata as no acknowledgement, never a guess.
+ */
+function loadedSession(sessionId: string): Session | null {
+  const sessions = queryClient.getQueryData<Session[]>(['sessions'])
+  if (!Array.isArray(sessions)) return null
+  return sessions.find((candidate) => candidate?.id === sessionId) ?? null
 }
 
 /** A successful visible attach becomes the foreground commit. It does not acknowledge. */
@@ -77,7 +90,12 @@ export function acknowledgeShownCatchUp(sessionId: string): void {
   else if (!current || current.sessionId !== sessionId || activeId !== sessionId) attemptKind = 'overtaken'
 
   const frame = snapshotBySession.get(sessionId) ?? null
-  const session = { id: sessionId } as Session
+  // FR-047: the seam needs the REAL main/attention metadata (type,
+  // needs_attention) the SPA loaded for this session — a bare `{ id }` would
+  // read as a non-main and never acknowledge. If the session is not in the
+  // loaded list the metadata is unknown, and unknown acknowledges nothing.
+  const session = loadedSession(sessionId)
+  if (!session) return
   const result = ackForShownCommit({
     attemptKind,
     session,

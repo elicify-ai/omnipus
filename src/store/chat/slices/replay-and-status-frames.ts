@@ -39,6 +39,7 @@ import {
   readLLMErrorFromReplayFrame,
 } from '@/lib/llm-error'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { noteServerAttentionFrame } from '@/store/session/foregroundAck'
 import { buildBrowserHandoverInsertion, buildGoalAckInsertion, evictGoalPillsOverCap, mergeGoalPillFrame } from '../goals'
 import { MAX_MESSAGES_PER_SESSION, evictMessageFromBucket, findAssistantMessageIdByTurnId, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { isTurnFinished, schedulePlanStatusInvalidate } from '../routing'
@@ -150,6 +151,17 @@ function handleSessionStateFrame(
   // ADR-082 review fix opens/marks the bubble first and this done
   // becomes a no-op for placeholder purposes.
   if (!targetSid) return
+  // FR-047 (C-ATTENTION): the attach response's attention_bound lives on THIS
+  // SessionStateFrame — per the contract it is "part of both the incremental
+  // catch-up and the full snapshot, so either attach answer can carry the
+  // bound" (the generated SessionSnapshotFrame has no such field). Remember
+  // this frame as the session's server attention frame so a later
+  // shown-commit acknowledgement can read the bound off it. Only an attach
+  // emit carries session_id (the connection-open emit does not), so a
+  // bound-less open emit can never overwrite a remembered bound.
+  if (frame.session_id) {
+    noteServerAttentionFrame(targetSid, frame)
+  }
   // ADR-092 review finding D: a page reload or gateway reconnect re-fetches
   // this frame, but a plain WS reconnect never replays a fresh
   // session_mode_updated ack — that only fires from a LIVE
