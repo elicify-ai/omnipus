@@ -611,9 +611,12 @@ func (t *DelegateTool) Description() string {
 		"then resumes it with the new instruction; this does not mark the helper failed or end its goal. " +
 		delegateClearGoalDescription +
 		"action=\"resume\" continues a stopped child on the same conversation, or starts its next " +
-		"round when it is done or failed; optional text adds instructions. " +
+		"round when it is done or failed; optional text adds instructions. For a worker running on an " +
+		"external CLI (subagent_3p) it continues the same CLI conversation only while that conversation " +
+		"is still live; once the worker has finished or been stopped the conversation is gone and resume " +
+		"is refused — start a new delegation instead (resume never creates a new session). " +
 		"action=\"redirect\" replaces the child's current turn with the new instruction — text is " +
-		"required (NOT available for an external CLI child; use stop_all or resume). " +
+		"required (NOT available for an external CLI child; use stop_all, or resume while its CLI conversation is live, otherwise start a new delegation). " +
 		"action=\"peek\" reads a child's latest checkpoint/progress without side effects. " +
 		"action=\"run\" requires agent_id — the specific agent to delegate to, which must be in " +
 		"your delegation allowlist. There is no default target and no implicit substitution of " +
@@ -788,7 +791,7 @@ func (t *DelegateTool) Parameters() map[string]any {
 // and dispatch have returned, so there is no later completion for a callback
 // to report. The AsyncCallback that used to be threaded in here reached four
 // levels down (executeRun -> launchAndDispatch, executeRespond /
-// executeResume -> spawnCorrectiveFollowUp) and was discarded, unread, at
+// executeResume) and was discarded, unread, at
 // every one of those leaves — a callback the registry could hand over but
 // that could never fire. The remaining `nil` arguments below are the last
 // trace of it; the `AsyncCallback` parameters on delegate_run.go,
