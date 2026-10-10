@@ -405,19 +405,13 @@ test(
 
     // Start a fresh session so we control the message count exactly.
     //
-    // TEST BUG (fixed): this used to click a "New Chat" button scoped inside
-    // `getByRole('banner')`. That button was removed from the header in the
-    // workspace top-bar redesign (src/components/chat/ChatControls.tsx: "New
-    // Chat was removed from the header — three paths for one action was
-    // redundant... It lives where the user already is: the sidebar's
-    // per-workspace 'New chat' row and the /new slash command."). The banner
-    // no longer contains any element with that accessible name, so the old
-    // `toBeVisible` assertion always failed — not LLM nondeterminism, not a
-    // slash-command regression, just a stale selector. `startNewChat`
-    // (tests/e2e/fixtures/selectors.ts) is the sanctioned replacement — it
-    // drives the actual current mechanism ("/new" + Enter, intercepted
-    // client-side by useSlashMenu's `runClientCommand('new')`) and is already
-    // used by chat.spec.ts for the same purpose.
+    // HISTORY: this used to click a "New Chat" button scoped inside
+    // `getByRole('banner')` (removed with the workspace top-bar redesign),
+    // then typed "/new" + Enter. Both are gone: FR-031 (founder WC-1,
+    // 2026-10-09) deleted "/new" outright and the composer has no new-chat
+    // control at all. `startNewChat` (tests/e2e/fixtures/selectors.ts) now
+    // drives the one remaining path — the agent row's "New chat with
+    // <Agent>" icon button in the sidebar (FR-029).
     await startNewChat(page);
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
 

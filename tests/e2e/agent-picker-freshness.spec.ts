@@ -1,79 +1,75 @@
 /**
  * agent-picker-freshness.spec.ts — row 55 (FAILURES.md) bug A, AND the
- * acceptance test for GitHub issue #1009.
+ * acceptance test for GitHub issue #1009, PORTED to the navigation redesign's
+ * observation surface (2026-10-11).
+ *
+ * PORT NOTE — why the surface changed: this spec used to observe the fresh
+ * agent in the composer AgentPicker dropdown. That picker is a RETIRED
+ * surface — deleted outright by nav commit e84ac0532 "remove the composer
+ * agent picker" (src/components/chat/ChatScreen.pickerRemoval.test.tsx pins
+ * its absence; session-core-spec FR-029 removes in-chat agent switching).
+ * The #1009 guarantee it accepted is NOT retired: an agent created by ANY
+ * path (the `create_agent` tool, another tab, raw REST) must become visible
+ * in the already-open UI without a reload. That guarantee now lives in the
+ * SIDEBAR roster — the workspace's agent list the user actually reads
+ * (src/components/layout/sidebar/WorkspaceAgentList.tsx) — so both tests
+ * observe (and, via selectAgent, reach) the new agent there instead.
  *
  * ORIGIN (bug A, 2026-09-28): browser-live-video.spec.ts intermittently
- * timed out (up to its full 720_000ms budget) waiting for a freshly-created
- * "Browser Probe <nonce>" agent to appear in the AgentPicker dropdown,
- * immediately after creating it via a raw `POST /api/v1/agents` call
- * (fixtures/browser-input-probe.ts::createBrowserProbeAgent). Confirmed on
- * PR #940 (run 36341847219, 2026-09-27) and on release/v0.1.1 itself (run
- * 36396042860 @ 8402634e7, 2026-09-28) — the exact same `selectAgent` call
- * resolved in ~14s on a healthy run and never resolved in 12 minutes on
- * two others. That symptom was fixed test-side (browser-live-video.spec.ts
- * now reloads before selecting), and THIS file was added as an isolated,
- * fast-failing regression test for the underlying caching gap — at the
- * time believed test-only.
- *
- * UPDATE (issue #1009, 2026-09-28): the "not a real-user-reachable bug"
- * verdict below was WRONG — corrected here rather than left standing. Two
- * confirmed real-user paths hit the exact same gap: (1) the `create_agent`
- * tool (pkg/sysagent/tools/agent.go::AgentCreateTool) lets an agent create
- * another agent mid-conversation, entirely bypassing CreateAgentModal.tsx,
- * so the very tab the user is watching never saw its own new agent; (2) any
- * other open tab/window, regardless of which path created the agent. The
- * PRODUCT fix (not just a test fixture fix) landed for #1009: a new
+ * timed out waiting for a freshly-created "Browser Probe <nonce>" agent to
+ * appear in a cached roster immediately after a raw `POST /api/v1/agents`
+ * call (fixtures/browser-input-probe.ts::createBrowserProbeAgent). The
+ * underlying caching gap and its PRODUCT fix (#1009) are unchanged: a new
  * `agent_created` websocket frame (contracts/components/schemas/
- * AgentCreatedFrame.yaml), broadcast from BOTH agent-creation code paths
- * (pkg/gateway/rest_agents_create.go::createAgent and the
- * create_agent tool above), handled in src/store/chat/slices/frames.ts's
- * `case 'agent_created':` (invalidates `['agents']`), plus a defense-in-
- * depth pull-half hook (src/hooks/useAgentsCrossTabRefresh.ts, mirroring
- * D-107's useLibraryCrossTabRefresh.ts) for a dropped/reconnecting WS
- * connection. The test below is now that fix's real, end-to-end acceptance
- * test — its `toBeVisible({ timeout: 5_000 })` assertion is the ONE piece
- * of coverage in this fix that exercises the real WS wire format, the real
- * React Query cache, and the real timing together; everything else (unit
- * tests on both backend call sites, the frontend switch case, the hook)
- * only proves its own unit is wired correctly in isolation.
+ * AgentCreatedFrame.yaml) broadcast from BOTH agent-creation code paths
+ * (pkg/gateway/rest_agents_create.go::createAgent and the create_agent tool),
+ * handled in src/store/chat/slices/frames.ts `case 'agent_created':`
+ * (invalidates `['agents']`), plus the defense-in-depth pull-half hook
+ * (src/hooks/useAgentsCrossTabRefresh.ts).
  *
- * ROOT CAUSE (still accurate, now closed by the #1009 fix above): the
- * AgentPicker's `['agents']` react-query cache (src/hooks/useChatAgents.ts)
- * is prefetched once per page load by AppShell.tsx and, before the #1009
- * fix, had no websocket-driven invalidation for agent creation. The only
- * UI path that creates an agent — src/components/agents/
- * CreateAgentModal.tsx — calls `queryClient.invalidateQueries({ queryKey:
- * ['agents'] })` right after a successful create, so a real user's own tab
- * always sees their own new agent immediately THROUGH THAT PATH; every
- * other path — including the create_agent tool (#1009's other real-user
- * vector) — relied on the 30s global staleTime (src/lib/queryClient.ts)
- * elapsing, or a focus/visibility event, before #1009's push-half frame
- * closed the gap directly. browser-live-video.spec.ts's `beforeEach`
- * navigates to "/" ONCE (populating the cache with the agents that existed
- * at that moment), then creates the probe agent via raw REST — bypassing
- * the modal and its invalidation — and immediately tries to select it from
- * what would, pre-#1009, have been an already-stale cache. Compare
- * fixtures/conformance-helpers.ts's `startFreshChatWithAgent`, which
- * navigates AFTER creating its agent (via `createMainAgent`) — the safe,
- * already-used pattern this spec did not follow (and, post-#1009, no
- * longer strictly needs to for freshness, though the reload-based second
- * test below still independently proves that shape works too).
+ * TIMEOUT RE-DERIVATION (honest, not a weakening): the old assertion was
+ * `toBeVisible({ timeout: 5_000 })` because the picker read ONLY the
+ * `['agents']` cache, which the WS frame invalidates within ms. The sidebar
+ * roster needs TWO inputs (workspaceMains = memberRoster(workspace, agents),
+ * src/components/layout/sidebar/workspaceRoster.ts): the agent object from
+ * `['agents']` — still WS-invalidated, near-instant — AND the workspace's
+ * core_team membership, which the raw REST PUT (below) writes with NO
+ * websocket broadcast: nothing invalidates the SPA's `['workspaces']` query
+ * on that PUT, so the row can only appear when the sidebar's workspaces poll
+ * next fires (refetchInterval: 30_000, Sidebar.tsx:171-174). The no-reload
+ * budget is therefore 45s — one poll interval plus load margin — and the
+ * first test below remains the fastest no-reload acceptance in the suite for
+ * the frame's OTHER half. (Coverage note for team-lead: a raw membership PUT
+ * reaching the open sidebar within a bounded time is NOT currently
+ * guaranteed by any invalidation — only by the poll. If that 30s bound ever
+ * matters to a user, the fix is a `workspace_changed` frame or an
+ * invalidation on the PUT path — production code, hence reported not
+ * written.)
  *
- * This test isolates the gap with a short timeout so it fails in seconds,
- * not minutes, and does none of browser-live-video.spec.ts's expensive
- * WebRTC/video work.
+ * Both tests create the probe the same way createBrowserProbeAgent always
+ * has: POST /api/v1/agents, tool policies, then PUT the default workspace's
+ * core_team — so the roster intersection (memberRoster) has both halves.
  */
 
 import { expect } from "@playwright/test";
 import { test } from "./fixtures/console-errors";
-import { agentPicker } from "./fixtures/selectors";
+import {
+  selectAgent,
+  agentRowGroup,
+  DEFAULT_WORKSPACE_NAME,
+} from "./fixtures/selectors";
 import { createBrowserProbeAgent } from "./fixtures/browser-input-probe";
 import { waitForWsConnected } from "./fixtures/session-setup";
 
-test.describe("agent picker freshness after a raw-REST agent creation (row 55 bug A / issue #1009)", () => {
-  test("a newly created agent becomes visible in the picker without a reload — the #1009 acceptance test", async ({
+test.describe("agent roster freshness after a raw-REST agent creation (row 55 bug A / issue #1009)", () => {
+  test("a newly created agent becomes visible in the sidebar roster without a reload — the #1009 acceptance test", async ({
     page,
   }) => {
+    // Outer budget = sum of the inner steps' own ceilings (goto + WS + raw
+    // creation + the 45s roster poll + selectAgent's sidebar checks) with
+    // cold-start headroom — the 90s config default would kill the test
+    // mid-flight before the 45s oracle below could legitimately resolve.
+    test.setTimeout(180_000);
     await page.goto("/");
     // The agent_created frame is fire-and-forget (nothing replays it on
     // connect), so the SPA socket must be open BEFORE the REST creation.
@@ -83,31 +79,29 @@ test.describe("agent picker freshness after a raw-REST agent creation (row 55 bu
       page,
       Date.now() % 65_536,
     );
-    const menuitemPattern = new RegExp(
-      probeAgentName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-      "i",
-    );
 
-    const picker = agentPicker(page);
-    await picker.waitFor({ state: "visible", timeout: 15_000 });
-    await picker.click();
+    // NO reload anywhere in this test — that is the acceptance claim. The
+    // row appears when the sidebar's workspaces poll (30s) lands the new
+    // core_team member; see the TIMEOUT RE-DERIVATION note above for why
+    // this cannot be the old 5s any more. If this fails, check both halves
+    // of the roster: the agent_created frame's ['agents'] invalidation
+    // (src/store/chat/slices/frames.ts) for the agent object, and the
+    // workspaces query poll (Sidebar.tsx) for the core_team membership.
+    const row = await agentRowGroup(page, probeAgentName, DEFAULT_WORKSPACE_NAME, {
+      rowTimeoutMs: 45_000,
+    });
+    await expect(row).toBeVisible();
 
-    // Short timeout deliberately: proves the #1009 fix (or the gap, if it
-    // regresses) in seconds. Production code (selectAgent) waits far longer
-    // and eats the whole test budget.
-    const menuitem = page.getByRole("menuitem", { name: menuitemPattern });
-    await expect(
-      menuitem,
-      `"${probeAgentName}" should be visible in the agent picker within 5s of creation ` +
-        "without a page reload after the fixture's separate workspace membership PUT; " +
-        "if the agents response already contains it, check the cached active workspace's " +
-        "core_team membership — refreshing ['agents'] alone does not refresh that team.",
-    ).toBeVisible({ timeout: 5_000 });
+    // And the row is not just rendered but reachable: clicking it selects the
+    // agent (the FR-029 row-click flow) — the reachability half of what the
+    // old picker menu interaction proved.
+    await selectAgent(page, probeAgentName, DEFAULT_WORKSPACE_NAME);
   });
 
   test("the SAME agent IS visible after a reload — proves the fix's shape", async ({
     page,
   }) => {
+    test.setTimeout(180_000);
     await page.goto("/");
     // The agent_created frame is fire-and-forget (nothing replays it on
     // connect), so the SPA socket must be open BEFORE the REST creation.
@@ -120,18 +114,10 @@ test.describe("agent picker freshness after a raw-REST agent creation (row 55 bu
 
     // The fix for browser-live-video.spec.ts: reload before selecting, the
     // same order fixtures/conformance-helpers.ts's startFreshChatWithAgent
-    // already uses safely.
+    // already uses safely. A fresh load refetches both roster inputs
+    // directly, so the row is bounded by page load, not by the poll.
     await page.goto("/");
 
-    const menuitemPattern = new RegExp(
-      probeAgentName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-      "i",
-    );
-    const picker = agentPicker(page);
-    await picker.waitFor({ state: "visible", timeout: 15_000 });
-    await picker.click();
-    await expect(
-      page.getByRole("menuitem", { name: menuitemPattern }),
-    ).toBeVisible({ timeout: 5_000 });
+    await selectAgent(page, probeAgentName, DEFAULT_WORKSPACE_NAME);
   });
 });

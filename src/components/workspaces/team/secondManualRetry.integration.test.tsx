@@ -197,7 +197,18 @@ async function assertMembers(ids: string[]) {
   expect(screen.queryByTestId(`team-node-${OTHER_MEMBER.id}`), 'unrelated active-workspace members must never enter this graph').not.toBeInTheDocument()
 }
 
-async function assertEditorUsable(user: ReturnType<typeof userEvent.setup>) {
+async function assertEditorUsable(user: ReturnType<typeof userEvent.setup>, client: QueryClient) {
+  // The picker's candidate list filters the GLOBAL agents query, not the
+  // workspace/editor data assertMembers already settled. Under CPU
+  // contention that GET can still be in flight when the editor is otherwise
+  // usable, and the picker renders an empty candidate list that is
+  // indistinguishable from a fully filtered one — the observed loaded-run
+  // failure ("unable to find team-add-agent-option-retry-new-member").
+  // Wait for the picker's actual input data before driving it.
+  await waitFor(() => {
+    const agents = client.getQueryData<Array<{ id: string }>>(['agents'])
+    expect(Array.isArray(agents)).toBe(true)
+  })
   // Actually operate the retained editor, rather than trusting enabled markup.
   await user.click(screen.getByRole('button', { name: 'Add agent' }))
   const search = await screen.findByRole('textbox', { name: 'Search agents' })
@@ -331,7 +342,7 @@ function recordCheckpoint(presentation: Presentation, client: QueryClient, stage
 describe.each(['docked', 'fullscreen'] as const)('Team second manual Retry — %s', (presentation) => {
   it('independent initial valid-load control: real current-workspace cache, member nodes and usable editor without a false warning', async () => {
     const { client, router } = await mountLoadedSurface(presentation)
-    await assertEditorUsable(userEvent.setup())
+    await assertEditorUsable(userEvent.setup(), client)
     expect(client.getQueryData(['agents'])).toEqual([INITIAL_MEMBER, NEW_MEMBER, OTHER_MEMBER])
     expect(client.getQueryData(workspacesQueryKeys.detail(WORKSPACE_ID))).toEqual(INITIAL_WORKSPACE)
     assertNoWarning(panelBody(presentation))
@@ -340,10 +351,18 @@ describe.each(['docked', 'fullscreen'] as const)('Team second manual Retry — %
     recordCheckpoint(presentation, client, 'independent initial valid-load control')
   })
 
-  it('SECOND failed manual Retry: network then ordinary HTTP500 each keep latest safe last-known Team warning and keyboard recovery; later success updates nodes in place without workspace leakage', async () => {
+  // 90s, not the 30s default: this test deliberately runs the REAL
+  // application retry backoff (its own header: "No ... fake clocks or retry
+  // overrides") — two full failure cycles at 1s+2s+4s is ~14s of wall clock
+  // the test cannot compress, on top of two full editor mounts and userEvent
+  // flows. The loaded-run failures at exactly 30072ms were this guillotine,
+  // not a missed settle signal: every wait below polls a real cache event or
+  // a real DOM settle. The per-test budget documents that designed cost;
+  // assertions are unchanged.
+  it('SECOND failed manual Retry: network then ordinary HTTP500 each keep latest safe last-known Team warning and keyboard recovery; later success updates nodes in place without workspace leakage', { timeout: 90_000 }, async () => {
     const { client, router } = await mountLoadedSurface(presentation)
     const user = userEvent.setup()
-    await assertEditorUsable(user)
+    await assertEditorUsable(user, client)
     const key = workspacesQueryKeys.detail(WORKSPACE_ID)
     const queryBefore = client.getQueryCache().find({ queryKey: key, exact: true })
     const bodyBefore = panelBody(presentation)
@@ -358,7 +377,7 @@ describe.each(['docked', 'fullscreen'] as const)('Team second manual Retry — %
     assertWorkspaceTraffic(refreshTraffic)
     expect(workspaceRequests()).toHaveLength(5)
     await assertMembers([INITIAL_MEMBER.id])
-    await assertEditorUsable(user)
+    await assertEditorUsable(user, client)
     assertSourceRetained(presentation, router)
     expect(screen.getByTestId(`team-node-${INITIAL_MEMBER.id}`)).toBe(memberBefore)
     expect(bodyBefore).not.toHaveTextContent(PRIVATE_DIAGNOSTIC)
@@ -384,7 +403,7 @@ describe.each(['docked', 'fullscreen'] as const)('Team second manual Retry — %
     assertWorkspaceTraffic(firstTraffic)
     expect(workspaceRequests()).toHaveLength(9)
     await assertMembers([INITIAL_MEMBER.id])
-    await assertEditorUsable(user)
+    await assertEditorUsable(user, client)
     assertSourceRetained(presentation, router)
     expect(screen.getByTestId(`team-node-${INITIAL_MEMBER.id}`)).toBe(memberBefore)
     const secondRetry = await waitFor(() => assertWarning(panelBody(presentation), NETWORK_REASON, 'FIRST failed manual Retry', SERVER_REASON))
@@ -407,7 +426,7 @@ describe.each(['docked', 'fullscreen'] as const)('Team second manual Retry — %
     assertWorkspaceTraffic(secondTraffic)
     expect(workspaceRequests()).toHaveLength(13)
     await assertMembers([INITIAL_MEMBER.id])
-    await assertEditorUsable(user)
+    await assertEditorUsable(user, client)
     assertSourceRetained(presentation, router)
     expect(client.getQueryCache().find({ queryKey: key, exact: true })).toBe(queryBefore)
     expect(panelBody(presentation)).toBe(bodyBefore)

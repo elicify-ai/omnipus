@@ -19,7 +19,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, agentPicker, selectAgent, waitForConnected } from './fixtures/selectors'
+import { chatInput, selectAgent, startNewChat, selectedAgentRow, waitForConnected } from './fixtures/selectors'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -245,11 +245,14 @@ async function triggerLongStreamingTurn(page: Page): Promise<void> {
   await waitForConnected(page, { timeout: 20_000 })
 
   // Switch to Jim — long inline generation, multi-second stream window.
-  const picker = agentPicker(page)
-  await expect(picker).toBeVisible({ timeout: 15_000 })
-  await picker.click()
-  await page.getByRole('menuitem', { name: /Jim/i }).click()
-  await expect(picker).toContainText(/Jim/i, { timeout: 5_000 })
+  // Sidebar row click is the only agent switch since the composer AgentPicker
+  // was removed (nav commit e84ac0532; FR-029 no in-chat handover).
+  await selectAgent(page, /Jim/i)
+  // Then start a fresh extra chat WITH Jim (the agent-row "New chat" action —
+  // FR-029/FR-031 deleted "/new") so every caller's turn mints its OWN session
+  // dir; without this the send would reuse Jim's already-on-disk main session
+  // and any sessions-dir diff below would find nothing new.
+  await startNewChat(page, /Jim/i)
 
   await input.fill(LONG_PROSE_PROMPT)
   await input.press('Enter')
@@ -498,16 +501,18 @@ async function assertCancelCascadesToSubagent(
   //
   // Selecting Jim BEFORE any session exists removes step 4 entirely: there is
   // no session to attach to, so nothing can clobber the selection. It is safe
-  // with respect to `/new` because `runClientCommand('new')` calls
-  // `startNewSession()` with NO arguments, and `startNewSession` preserves the
-  // current agent (`activeAgentId: agentId ?? state.activeAgentId`,
-  // src/store/session.ts) — the switch survives the reset.
+  // with respect to the fresh-chat step below because `startNewSession` (the
+  // store action behind the agent-row "New chat" action, pairExtra.ts
+  // ::beginPairExtra) preserves the current agent
+  // (`activeAgentId: agentId ?? state.activeAgentId`, src/store/session.ts) —
+  // the switch survives the reset.
   //
   // `selectAgent` also doubles as the real readiness gate the old
-  // `toBeEnabled()` was standing in for: it waits for the picker to be
-  // visible, opens the dropdown (which requires `GET /api/v1/agents` to have
-  // resolved) and asserts the label changed. By the time it returns, the
-  // composer is genuinely mounted.
+  // `toBeEnabled()` was standing in for: it opens the sidebar, resolves the
+  // workspace roster (which requires `GET /api/v1/agents` and the workspaces
+  // list to have resolved), clicks Jim's row and asserts the row's
+  // aria-current. By the time it returns, the chat surface is genuinely
+  // mounted.
   //
   // Route to Jim (Planner & Orchestrator), NOT the default agent Mia. An
   // earlier CI investigation (run 27296266639) found Mia's "guide" persona
@@ -518,61 +523,24 @@ async function assertCancelCascadesToSubagent(
   // is irrelevant — only that it delegates.
   await selectAgent(page, /Jim/i)
 
-  // Use the `/new` client-delivery slash command to create a fresh session
-  // and bind the page to it. Empirically createSession + page.goto(/#/sessions/<id>)
-  // does NOT bind the SPA — the input falls back to creating a new session
-  // on first message, leaving us reading the wrong transcript file.
+  // Fresh chat via the agent row's "New chat with Jim" icon button — the ONLY
+  // new-chat path since the navigation redesign (session-core-spec FR-029
+  // "only agent-row New chat creates extra MAIN chat"; FR-031, founder WC-1
+  // 2026-10-09, deleted "/new" from the command table AND forbids the SPA
+  // from sending it — typing /new now shows a refusal and sends nothing,
+  // src/hooks/useSlashMenu.ts RETIRED_COMMAND_NAMES). The /new-palette flow
+  // this block used to drive is therefore gone for good.
   //
-  // The header "New Chat" button this test used to click was REMOVED from
-  // the workspace top-bar banner (ChatControls.tsx: "New Chat was removed
-  // from the header — three paths for one action was redundant (Hick's
-  // Law). It lives where the user already is: the sidebar's per-workspace
-  // 'New chat' row and the /new slash command.") — a deliberate, documented
-  // product redesign, not a regression. `/new` drives the exact same
-  // `startNewSession()` store action the old button called (see
-  // useSlashMenu.ts's runClientCommand, name === 'new'), including the same
-  // "only nullifies activeSessionId, does not mint a new session" contract
-  // the comment below still describes — so this swap is behavior-preserving.
-  //
-  // `/new` only nullifies activeSessionId — it does NOT mint a new
-  // session. The SPA creates the session lazily on the first sent message. The
+  // What the fresh chat preserves from the old `/new` semantics: like `/new`,
+  // it only NULLIFIES activeSessionId (startNewSession, src/store/session.ts)
+  // — the SPA mints the session lazily on the first sent message, and the
   // workspace-scoped chat IA keeps the page at /#/workspaces/<id>/chat (no
-  // session id in the URL), so we discover the new session by diffing the
-  // OMNIPUS_HOME/sessions directory before vs. after the turn (below).
-  //
-  // RC6: drive `/new` through the PALETTE, never `fill` + a blind `Enter`.
-  // Typing the text and pressing Enter races the command-list fetch: if
-  // `allCommands` is not yet populated, `interceptClientCommand` falls through
-  // and the literal text "/new" is sent to the backend as chat (see the
-  // ordering note above for the full chain). Selecting the row instead goes
-  // through `executeSlashCommand`, which can only be reached once the command
-  // actually exists in the palette — so the client-side path is guaranteed,
-  // not merely likely. This is also the real user path.
-  //
-  // MUST be real keystrokes, not `fill()`. The palette opens from
-  // `onInputChange` (useSlashMenu.ts: `if (val.startsWith('/')) setSlashOpen(true)`),
-  // which is driven by the composer's own change handler. `fill()` sets the
-  // value in one shot without driving that handler, so the menu never opens —
-  // verified on ci-omnipus-2 at a1d77d58, where a `fill()` version of this
-  // block timed out waiting for the row (31.8s ≈ the 30s gate). T22 above is
-  // the in-repo precedent for the working form: `click()` then type.
-  await input.click()
-  await input.pressSequentially('/new')
-
-  // Palette rows are role="option" buttons whose accessible name starts with
-  // the command label (ChatScreen.tsx renders `item.label` then
-  // `item.description`). Anchored so it can never match a future "/newfoo".
-  // Scoped to the page rather than to [data-testid="slash-menu"], matching
-  // T22's `page.getByRole('option', …)` convention.
-  const newSessionCommand = page.getByRole('option', { name: /^\/new\b/ }).first()
-  await expect(newSessionCommand).toBeVisible({ timeout: 30_000 })
-  await newSessionCommand.click()
-
-  // Proof the CLIENT path ran: `executeSlashCommand` clears the composer via
-  // `composerRuntime.setText('')` before invoking `runClientCommand`. We never
-  // pressed Enter, so an empty composer can only mean the palette handled it —
-  // if `/new` had escaped to the backend this would still hold text.
-  await expect(input).toHaveValue('', { timeout: 10_000 })
+  // session id in the URL). So we still discover THIS turn's session by
+  // diffing the OMNIPUS_HOME/sessions directory before vs. after the turn
+  // (below) — Jim's already-on-disk MAIN session (which selectAgent above
+  // navigated to before resetting) stays in the "before" set, and the only
+  // new dir after the send is this turn's.
+  await startNewChat(page, /Jim/i)
   await expect(input).toBeEnabled({ timeout: 20_000 })
 
   // Snapshot existing session dirs so we can identify the one THIS turn creates
@@ -605,19 +573,21 @@ async function assertCancelCascadesToSubagent(
 
   // RC6 GUARD — re-assert the routed agent at the LAST possible moment before
   // the send. `selectAgent` already asserted this above, but in the failure
-  // this guard was written for the picker silently reverted to Mia AFTERWARDS
+  // this guard was written for the agent silently reverting to Mia AFTERWARDS
   // (a session attach calling `setActiveSession(id, 'mia', …)` clobbered it),
   // and the only symptom was the ActivityBar wait below dying 150s later with
   // a bare "element(s) not found". That error names neither the agent nor the
   // cause. Checking here turns the same defect into an immediate, truthful
   // failure that says which agent the turn was about to run as. Cheap: this is
-  // a rendered-label read with no network round-trip.
+  // a rendered-row read with no network round-trip. (The deleted composer
+  // picker's label was the old read; the selected sidebar row is the current
+  // user-visible signal for the same fact.)
   await expect(
-    agentPicker(page),
+    selectedAgentRow(page),
     'the routed agent must still be Jim at send time — Mia is denied `delegate` ' +
       'by her seeded policy (pkg/coreagent/core.go), so a silent revert to her ' +
       'makes the delegation impossible rather than merely slow (RC6)',
-  ).toContainText(/Jim/i, { timeout: 10_000 })
+  ).toHaveAttribute('aria-label', /Jim/i, { timeout: 10_000 })
 
   await input.press('Enter')
 
@@ -969,15 +939,15 @@ test(
       )
     }
 
-    // Start from a clean session. `/new` is intercepted client-side
-    // (useSlashMenu.ts runClientCommand 'new' → startNewSession()) and only
-    // NULLIFIES activeSessionId — it does not mint a session; the SPA creates one
-    // lazily on the first sent message. That is exactly what we want: the session
-    // dir that appears on disk after this point is unambiguously THIS turn's.
+    // Start from a clean session — provided by `triggerLongStreamingTurn`
+    // itself: it starts a fresh extra chat via the agent-row "New chat"
+    // action (FR-029/FR-031; the `/new` slash command this test used to type
+    // is deleted — typing it now shows a refusal and sends nothing). That
+    // fresh chat NULLIFIES activeSessionId without minting a session, and it
+    // runs AFTER the sessionsBefore snapshot earlier in this test, so the
+    // session dir that appears on disk after the send is unambiguously THIS
+    // turn's.
     const input = chatInput(page)
-    await expect(input).toBeEnabled({ timeout: 20_000 })
-    await input.fill('/new')
-    await input.press('Enter')
     await expect(input).toBeEnabled({ timeout: 20_000 })
 
     // Send, and — critically — do not proceed until the assistant has actually
