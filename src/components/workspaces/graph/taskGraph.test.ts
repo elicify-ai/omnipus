@@ -11,6 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildTaskGraph, statusVisual, taskNodeVisual, STATUS_VISUALS, type AgentLike } from './taskGraph'
 import type { Task } from '@/lib/api'
+import { makeAgent } from '@/test/factories'
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -130,13 +131,15 @@ describe('buildTaskGraph — edges', () => {
 
 describe('buildTaskGraph — agent avatar resolution', () => {
   it('resolves agent colour + icon from the agents cache', () => {
+    // Agent-first navigation spec, Locked identity vocabulary / DS-I I03:
+    // legacy identity gold maps to Orange #FB923C, not task-status Forge Gold.
     const agents: AgentLike[] = [
-      { id: 'mia', name: 'Mia', color: '#d4af37', icon: 'Robot' },
+      makeAgent({ id: 'mia', name: 'Mia', color: '#FB923C', icon: 'Robot' }),
     ]
     const tasks = [makeTask({ id: 'a', agent_id: 'mia' })]
     const { nodes } = buildTaskGraph(tasks, agents)
     expect(nodes[0].data.agentName).toBe('Mia')
-    expect(nodes[0].data.agentColor).toBe('#d4af37')
+    expect(nodes[0].data.agentColor).toBe('#FB923C')
     expect(nodes[0].data.agentIcon).toBe('Robot')
   })
 

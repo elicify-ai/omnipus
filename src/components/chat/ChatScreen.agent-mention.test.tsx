@@ -113,7 +113,7 @@ const mockSkills = [
 // worker exclusion applies BEFORE the prefix filter, not as an accident of
 // the filter itself.
 const mockAgents = [
-  makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#111111', description: 'Assistant' }),
+  makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#3B82F6', description: 'Assistant' }),
   makeAgent({ id: 'jim', name: 'Jim', type: 'core', status: 'idle', description: 'Orchestrator' }),
   makeAgent({ id: 'ava', name: 'Ava', type: 'Main', status: 'active', description: 'Builder' }),
   makeAgent({ id: 'max', name: 'Max Worker', type: 'Subagent', status: 'active', description: 'Labour agent' }),

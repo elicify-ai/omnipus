@@ -1,7 +1,17 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { resolve, dirname } from 'node:path'
+import { readFile, mkdir } from 'node:fs/promises'
+import { compile } from '@tailwindcss/node'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import type { ComponentType } from 'react'
+import { createRequire } from 'node:module'
+import { runInNewContext } from 'node:vm'
+import { build } from 'esbuild'
+import type { AgentIconProps } from '../../src/components/ui/agent-icon'
+import { AgentColor } from '../../src/lib/api/generated/schemas'
 
 type Check = { id: string; kind: string; file?: string; test?: string; story?: string; applicable: boolean }
 type Manifest = { component: string; stories: Array<{ file: string; exports: string[] }>; checks: Check[] }
@@ -715,3 +725,109 @@ for (const manifest of manifests) {
     })
   }
 }
+
+test('AgentIcon renders commissioned motion frames and opaque >=3:1 ink on both backgrounds', async ({ page }, testInfo) => {
+    // Spec Safeguards / ARCH decision 3.2. Compile the real publication CSS
+    // with the classes selected by real AgentIcon renders. No fake animation
+    // styles, phase data attributes or source-text checks certify a frame.
+    // Bundle only the actual component tree, using the app's existing path
+    // mapping. The browser test runner's own root config has no SPA aliases.
+    const compiled = await build({ entryPoints: [resolve('src/components/ui/agent-icon.tsx')], bundle: true, platform: 'node', format: 'cjs', write: false, tsconfig: resolve('tsconfig.app.json'), external: ['react', 'react/*'] })
+    const componentModule: { exports: { AgentIcon?: ComponentType<AgentIconProps> } } = { exports: {} }
+    runInNewContext(compiled.outputFiles[0].text, { module: componentModule, exports: componentModule.exports, require: createRequire(import.meta.url) })
+    const AgentIcon = componentModule.exports.AgentIcon
+    expect(typeof AgentIcon, 'actual bundled AgentIcon').toBe('function')
+    const markup = (['thinking', 'working', 'waiting'] as const).map((motion) => renderToStaticMarkup(createElement(AgentIcon!, {
+      figure: 'Robot', role: 'security', size: 48, motion, reducedMotion: false, color: AgentColor.options[8],
+    }))).join('') + renderToStaticMarkup(createElement(AgentIcon!, {
+      figure: 'Robot', role: 'security', size: 48, motion: 'thinking', color: AgentColor.options[8],
+    }))
+    const classes = Array.from(markup.matchAll(/class="([^"]*)"/g)).flatMap((match) => match[1].split(/\s+/))
+    const source = resolve('src/styles/library.css')
+    const css = await compile(await readFile(source, 'utf8'), { base: dirname(source), onDependency() {} })
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
+      await page.setContent(`<style>${css.build(classes)}</style>${markup}`)
+      await page.getByTestId('agent-icon').first().waitFor({ state: 'visible' })
+      for (const [index, oracle] of [
+        { duration: 2600, scales: [0.96, 1.01, 0.96], glow: [0.55, 1, 0.55] },
+        { duration: 1600, scales: [0.97, 1.03, 0.97], glow: null },
+        { duration: 3400, scales: null, glow: null },
+      ].entries()) {
+        const mark = page.getByTestId('agent-icon').nth(index)
+        const frames = await mark.evaluate((root) => {
+          const ink = root.querySelector('[data-ink]')!
+          const glow = root.querySelector('[data-glow]')!
+          const inkAnimation = ink.getAnimations()[0]
+          const glowAnimation = glow.getAnimations()[0]
+          if (!inkAnimation?.effect || !glowAnimation?.effect) throw new Error('Published CSS did not animate the rendered mark/glow')
+          const inkFrames = (inkAnimation.effect as KeyframeEffect).getKeyframes()
+          const glowFrames = (glowAnimation.effect as KeyframeEffect).getKeyframes()
+          return {
+            inkDuration: inkAnimation.effect.getTiming().duration,
+            glowDuration: glowAnimation.effect.getTiming().duration,
+            // CSSOM keyframes retain decimal contract values; converting
+            // them through DOMMatrix introduces unrelated Float32 rounding.
+            scales: inkFrames.filter((frame) => frame.transform !== undefined).map((frame) => {
+              const match = /^scale\((\d+(?:\.\d+)?)\)$/.exec(String(frame.transform))
+              if (!match) throw new Error(`Expected a uniform scale keyframe, got ${String(frame.transform)}`)
+              return Number(match[1])
+            }),
+            glowOpacity: glowFrames.filter((frame) => frame.opacity !== undefined).map((frame) => Number(frame.opacity)),
+            sheenDuration: root.querySelector('[data-agent-icon-sheen]')?.getAnimations()[0]?.effect?.getTiming().duration ?? null,
+          }
+        })
+        expect(frames.inkDuration).toBe(oracle.duration)
+        expect(frames.glowDuration).toBe(oracle.duration)
+        if (oracle.scales) expect(frames.scales).toEqual(oracle.scales)
+        else expect(Math.max(...frames.scales)).toBe(1.07) // Waiting specifies the peak, not a frame count.
+        if (oracle.glow) expect(frames.glowOpacity).toEqual(oracle.glow)
+        if (index === 1) expect(frames.sheenDuration).toBe(2400)
+      }
+      const thinking = page.getByTestId('agent-icon').first()
+      for (const background of ['#111113', '#0A0A0B']) {
+        // Pause at the actual glow's dimmest frame, not a guessed delay.
+        const sample = await thinking.evaluate((root, backdrop) => {
+          document.body.style.backgroundColor = backdrop
+          for (const animation of root.getAnimations({ subtree: true })) { animation.pause(); animation.currentTime = 0 }
+          const ink = root.querySelector('[data-ink]')!
+          const svg = ink.querySelector('svg')!
+          const badge = ink.querySelector('[data-role="security"]')!
+          function effectiveOpacity(element: Element) {
+            let value = 1
+            for (let node: Element | null = element; node; node = node.parentElement) value *= Number(getComputedStyle(node).opacity)
+            return value
+          }
+          return {
+            background: getComputedStyle(document.body).backgroundColor,
+            fill: getComputedStyle(svg).fill,
+            inkOpacity: effectiveOpacity(svg), badgeOpacity: effectiveOpacity(badge),
+            dimmestGlow: Number(getComputedStyle(root.querySelector('[data-glow]')!).opacity),
+          }
+        }, background)
+        expect(sample.fill).toBe('rgb(251, 146, 60)') // Orange from the spec palette.
+        expect(sample.inkOpacity).toBe(1)
+        expect(sample.badgeOpacity).toBe(1)
+        expect(sample.dimmestGlow).toBe(0.55)
+        // WCAG sRGB relative luminance; use actual browser fill/background.
+        const luminance = (rgb: string) => {
+          const channels = rgb.match(/\d+(?:\.\d+)?/g)!.slice(0, 3).map(Number).map((channel) => channel / 255)
+          const linear = channels.map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+          return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+        }
+        const inkL = luminance(sample.fill)
+        const backgroundL = luminance(sample.background)
+        expect((Math.max(inkL, backgroundL) + 0.05) / (Math.min(inkL, backgroundL) + 0.05), `dimmest ink contrast on ${background}`).toBeGreaterThanOrEqual(3)
+        const directory = testInfo.outputPath('wave1-testpower')
+        await mkdir(directory, { recursive: true })
+        await thinking.screenshot({ path: resolve(directory, `thinking-dimmest-${background.slice(1)}.png`), animations: 'allow' })
+      }
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+      const mediaAware = page.getByTestId('agent-icon').nth(3)
+      const reduced = await mediaAware.evaluate((root) => ({
+        inkAnimation: getComputedStyle(root.querySelector('[data-ink]')!).animationName,
+        glowAnimation: getComputedStyle(root.querySelector('[data-glow]')!).animationName,
+        loops: root.getAnimations({ subtree: true }).length,
+        inkOpacity: getComputedStyle(root.querySelector('[data-ink]')!).opacity,
+      }))
+      expect(reduced).toEqual({ inkAnimation: 'none', glowAnimation: 'none', loops: 0, inkOpacity: '1' })
+})

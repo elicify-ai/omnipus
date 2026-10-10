@@ -333,7 +333,7 @@ export interface paths {
         };
         /**
          * List sessions across all agents
-         * @description Returns root sessions (parent_session_id == "") visible to the authenticated user, paged, each carrying a child_count (ADR-057 US-19/FR-091). Subordinate ("delegate") sessions are reached a page at a time via the parent_session_id filter, or all at once (roots and subordinates together) via flat=true (FR-104). Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the page still returns its healthy rows plus a populated partial_errors and a valid next_cursor (FR-098). Verifier-role sessions (type "verifier", ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier=true is passed, and are never counted in child_count unless it is passed.
+         * @description Returns root sessions (parent_session_id == "") visible to the authenticated user, paged, each carrying a child_count (ADR-057 US-19/FR-091). Subordinate ("delegate") sessions are reached a page at a time via the parent_session_id filter, or all at once (roots and subordinates together) via flat=true (FR-104). Supports optional filtering by agent_id and type. When an agent store fails to enumerate sessions, or a session lifecycle journal unexpectedly fails to load, the page still returns its available rows plus distinguishable sanitized partial_errors and a valid next_cursor (FR-098; NAV-WAVE1 SF-2). An unreadable journal keeps its row with lifecycle_state, stop_note, and execution omitted, never null. A missing lifecycle record is normal and adds no token. Verifier-role sessions (type "verifier", ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier=true is passed, and are never counted in child_count unless it is passed.
          */
         get: operations["listSessions"];
         put?: never;
@@ -4427,13 +4427,24 @@ export interface components {
              */
             status: "active" | "archived" | "failed" | "interrupted";
             /**
-             * @description Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+             * @description Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
              * @example working
              * @enum {string}
              */
             lifecycle_state?: "working" | "waiting_for_answer" | "done" | "failed" | "stopped" | "interrupted";
             /** @description Present only when `lifecycle_state == stopped` (or the session's current generation last landed `stopped`) — the durable, lasting reason for the stop (who/when/why). Absent for every other `lifecycle_state`, and for a session with no lifecycle record. */
             stop_note?: components["schemas"]["StopNote"];
+            /**
+             * @description Projected queued/running classification for the session's current lifecycle display. Present only when the same loaded lifecycle record, evaluated through the canonical current-boot lifecycle projection, produces `lifecycle_state: working`: `queued` for a queued record and `running` for a running record. Omitted for any other projected display state, including Interrupted after a prior-boot root execution, and when no usable lifecycle record is available. Not a raw lifecycle-state export. The Sessions Running filter matches `running`; queued does not match. A nonmatching parent may still be included as hierarchy context.
+             * @example running
+             * @enum {string}
+             */
+            execution?: "queued" | "running";
+            /**
+             * @description How many background shell commands this session itself owns right now. Omitted when the process table is not available (unknown, not zero). Zero means the table was checked and this session owns none. Not a roll-up of child sessions.
+             * @example 2
+             */
+            background_command_count?: number;
             /**
              * Format: date-time
              * @description RFC3339 timestamp when the session was created.
@@ -4573,7 +4584,7 @@ export interface components {
         };
         /**
          * SessionPage
-         * @description Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098). `sessions` is this page's rows: root sessions by default, that node's direct children when parent_session_id is supplied, or every session (roots and subordinates) when flat=true (FR-104). `partial_errors` composes with paging: a page whose merge hit a failing legacy per-agent store still returns its healthy rows, still returns next_cursor, and populates partial_errors — a failing store contributes zero rows and does not halt the page or invalidate the cursor (FR-098).
+         * @description Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098). `sessions` is this page's rows: root sessions by default, that node's direct children when parent_session_id is supplied, or every session (roots and subordinates) when flat=true (FR-104). `partial_errors` composes with paging: a page whose merge hit a failing legacy per-agent store still returns its healthy rows, still returns next_cursor, and populates partial_errors — a failing store contributes zero rows and does not halt the page or invalidate the cursor (FR-098). This is also the page's general degradation channel: an unexpected per-session lifecycle-journal read failure keeps the row, omits lifecycle_state, stop_note, and execution (never null), and appends a sanitized session-scoped token. A missing lifecycle record is normal and contributes no token.
          */
         SessionPage: {
             sessions: components["schemas"]["Session"][];
@@ -4582,7 +4593,7 @@ export interface components {
              * @example 20
              */
             next_cursor?: string;
-            /** @description Opaque error tokens (agent ID + sanitized reason) from any store that failed during this page's merge. Present only when at least one store failed. */
+            /** @description General page-degradation channel. Distinguishable opaque tokens: agent=<id>: session_list_failed for a store enumeration failure; session=<id>: lifecycle_read_unavailable for an unexpected per-session lifecycle-journal read failure. No filesystem paths or underlying error details are exposed. An unreadable journal keeps its session row but omits lifecycle_state, stop_note, and execution, never sending null or inventing a state. A missing lifecycle record (ErrLifecycleNotFound) is normal, not degradation. Present only when at least one degradation occurred; omitted when empty. Rows and next_cursor remain valid, so clients can warn that the list or runtime state is incomplete and offer Retry. */
             partial_errors?: string[];
         };
         /** @description Body for POST /sessions. Creates a new session for an agent. */
@@ -8294,6 +8305,24 @@ export interface components {
              */
             types?: string[];
         };
+        /**
+         * @description Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+         * @example Omnipus
+         * @enum {string}
+         */
+        AgentFigure: "Robot" | "Man" | "Woman" | "Omnipus";
+        /**
+         * @description Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+         * @example general
+         * @enum {string}
+         */
+        AgentRole: "writer" | "designer" | "image" | "video" | "audio" | "social" | "developer" | "data" | "analyst" | "itops" | "automation" | "security" | "quality" | "science" | "orchestrator" | "project" | "product" | "sales" | "marketing" | "finance" | "legal" | "support" | "documents" | "researcher" | "people" | "tutor" | "knowledge" | "translator" | "general" | "personal" | "office";
+        /**
+         * @description Identity colour. Uppercase canonical hex. The ten values are the whole set; gold, warning yellow, semantic green, semantic red, and Liquid Silver are not in it. Letter-case of a listed hex is normalized to this form on write. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+         * @example #3B82F6
+         * @enum {string}
+         */
+        AgentColor: "#3B82F6" | "#38BDF8" | "#22D3EE" | "#818CF8" | "#A78BFA" | "#C084FC" | "#E879F9" | "#F472B6" | "#FB923C" | "#9CA3AF";
         /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT. */
         Agent: {
             revision: components["schemas"]["ConfigurationRevision"];
@@ -8324,13 +8353,11 @@ export interface components {
              * @example false
              */
             locked: boolean;
+            figure: components["schemas"]["AgentFigure"];
+            role: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
-             * @description Hex color code for agent avatar display (e.g. "#D4AF37").
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
+             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
              * @example Robot
              */
             icon?: string;
@@ -8605,6 +8632,7 @@ export interface components {
         /**
          * AgentCreateRequestMain
          * @description Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice is Main-only; executor is absent (Main never has one).
+         *     Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #9CA3AF), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
          */
         AgentCreateRequestMain: {
             /** @description Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected. */
@@ -8636,13 +8664,11 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
-             * @description Hex color code for the agent avatar.
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for the agent avatar.
+             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
              * @example ChartBar
              */
             icon?: string;
@@ -8698,6 +8724,7 @@ export interface components {
         /**
          * AgentCreateRequestSubagent
          * @description Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
+         *     Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #9CA3AF), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
          */
         AgentCreateRequestSubagent: {
             /** @description Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected. */
@@ -8729,13 +8756,11 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
-             * @description Hex color code for the agent avatar.
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for the agent avatar.
+             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
              * @example ChartBar
              */
             icon?: string;
@@ -8786,6 +8811,7 @@ export interface components {
         /**
          * AgentCreateRequestSubagent3p
          * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+         *     Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #9CA3AF), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
          */
         AgentCreateRequestSubagent3p: {
             /**
@@ -8814,13 +8840,11 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
-             * @description Hex color code for the agent avatar.
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for the agent avatar.
+             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
              * @example ChartBar
              */
             icon?: string;
@@ -8865,7 +8889,7 @@ export interface components {
              */
             max_tool_iterations?: number;
         };
-        /** @description Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected. */
+        /** @description Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected. For figure, role, and color, only omission means unchanged. Explicit null and invalid supplied values are rejected with HTTP 400, and no sibling field, timestamp, or revision is changed. */
         AgentUpdateRequest: {
             revision: components["schemas"]["ConfigurationRevision"];
             /** @description Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected. */
@@ -8906,13 +8930,11 @@ export interface components {
              * @example 100
              */
             max_tool_iterations?: number | null;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
-             * @description Hex color code for agent avatar display (e.g. "#D4AF37").
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
+             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
              * @example Robot
              */
             icon?: string;
@@ -18547,7 +18569,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description A page of sessions (ADR-057 FR-091/FR-098, grill2 M2-10). Default: root sessions only, each carrying child_count. With parent_session_id: that node's direct children only. With flat=true: every session, roots and subordinates. partial_errors is present only when at least one store failed during the merge; the page's rows and next_cursor stay valid regardless (FR-098). */
+            /** @description A page of sessions (ADR-057 FR-091/FR-098, grill2 M2-10). Default: root sessions only, each carrying child_count. With parent_session_id: that node's direct children only. With flat=true: every session, roots and subordinates. partial_errors is present only when at least one degradation occurred: a store enumeration failure or an unexpected per-session lifecycle-journal read failure. These use agent-scoped session_list_failed and session-scoped lifecycle_read_unavailable tokens respectively. Unreadable-journal rows remain, with lifecycle_state, stop_note, and execution omitted, never null; a missing record adds no token. The page's rows and next_cursor stay valid regardless (FR-098; NAV-WAVE1 SF-2). */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -26695,6 +26717,9 @@ export type VaultSearchNoteHit = components["schemas"]["VaultSearchNoteHit"];
 export type VaultSearchRecordHit = components["schemas"]["VaultSearchRecordHit"];
 export type VaultSearchViewHit = components["schemas"]["VaultSearchViewHit"];
 export type ValidationReport = components["schemas"]["ValidationReport"];
+export type AgentFigure = components["schemas"]["AgentFigure"];
+export type AgentRole = components["schemas"]["AgentRole"];
+export type AgentColor = components["schemas"]["AgentColor"];
 export type Agent = components["schemas"]["Agent"];
 export type AgentModelParams = components["schemas"]["AgentModelParams"];
 export type AgentRateLimits = components["schemas"]["AgentRateLimits"];

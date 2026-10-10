@@ -86,6 +86,19 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   // when lifecycle_state is 'stopped'. The stopped sidebar row shows its
   // cause alongside the Stopped label.
   stop_note?: WireSessionShape['stop_note']
+  // Wave 1 Sessions. Projected queued/running classification, not a raw
+  // lifecycle-record export. Present only when the same loaded lifecycle record's
+  // canonical current-boot projection produces lifecycle_state: working:
+  // queued for a queued record, running for a running record. Omitted for any
+  // other projected display state, including Interrupted after a prior-boot root
+  // execution, and when no usable lifecycle record is available.
+  // lifecycle_state is authoritative. The Sessions Running filter matches running;
+  // queued does not match. A nonmatching parent may remain as hierarchy context.
+  execution?: WireSessionShape['execution']
+  // How many background shell commands this session itself owns. Omitted when
+  // the process table is unavailable (unknown, not zero). Zero means checked
+  // and none. Not a roll-up of child sessions.
+  background_command_count?: WireSessionShape['background_command_count']
 }
 
 interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that renames nested stats fields before public Session type; the wire shape is validated via WireSessionSchema, this type only models the pre-transform intermediate
@@ -107,6 +120,8 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   // ADR-20260928 MAJ-009 — wire pass-through (see public Session above).
   lifecycle_state?: WireSessionShape['lifecycle_state']
   stop_note?: WireSessionShape['stop_note']
+  execution?: WireSessionShape['execution']
+  background_command_count?: WireSessionShape['background_command_count']
   stats?: {
     tokens_in: number
     tokens_out: number
@@ -151,6 +166,10 @@ function rawToSession(raw: RawSession): Session {
     // absent (a session with no lifecycle record shows no lifecycle label).
     lifecycle_state: raw.lifecycle_state,
     stop_note: raw.stop_note,
+    // Absent stays absent. Do not coerce a missing execution to a value, and
+    // do not turn a missing background count into 0 — unknown is not none.
+    execution: raw.execution,
+    background_command_count: raw.background_command_count,
   }
 }
 
@@ -624,19 +643,19 @@ export async function fetchSessionPage(
     undefined,
     WireSessionPageSchema as ZodType<{ sessions: RawSession[]; next_cursor?: string; partial_errors?: string[] }>,
   )
-  // A non-empty `partial_errors` means one or more agents failed to list
-  // their sessions — `resp.sessions` is a real but INCOMPLETE enumeration,
-  // not a full one. Silently returning it made a partial listing read as
-  // complete everywhere fetchSessions is consulted (worst on UsageScreen's
-  // spend-audit tab, which sums sessions to report cost/usage). Surface it
-  // the same way a schema mismatch does (console.warn + dev toast) rather
-  // than dropping it on the floor.
+  // Partial errors cover both agent session-list failures and unreadable
+  // session lifecycle records. Returned rows remain usable, but the page's
+  // sessions or runtime metadata are incomplete. Keep the tokens intact for
+  // callers and describe their categories only in this developer warning.
   if (resp.partial_errors && resp.partial_errors.length > 0) {
-    console.warn('[api] GET /sessions returned partial_errors — the list is incomplete:', resp.partial_errors)
-    void maybeDevToast(
-      `[api] Session list incomplete: ${resp.partial_errors.length} agent(s) failed to enumerate`,
-      'GET:/sessions:partial_errors',
-    )
+    const categories = [...new Set(resp.partial_errors.map((token) =>
+      token.startsWith('agent=') ? 'agent session list unavailable'
+        : token.startsWith('session=') ? 'session lifecycle unavailable'
+          : 'session data unavailable',
+    ))].join('; ')
+    const warning = `[api] Session list incomplete: ${resp.partial_errors.length} partial error(s) (${categories})`
+    console.warn(warning, resp.partial_errors)
+    void maybeDevToast(warning, 'GET:/sessions:partial_errors')
   }
   return {
     sessions: resp.sessions.map(rawToSession),
@@ -660,12 +679,43 @@ export async function fetchSessionPage(
 // fetchSessionPage() remains the single-page primitive for callers that DO
 // want to control paging themselves — SessionTree.tsx's useSessionForest
 // fetches one node's children a page at a time by design (BDD-103).
+// Coverage rides on the array itself so existing callers (Sidebar, Usage,
+// session restore, pagination tests) keep using .map/.find/.length. The
+// Sessions view reads partialErrors/incomplete and must not treat a partial
+// list as proof that a parent is missing.
+export interface SessionFetchCoverage { // not-wire-format: client-only flags derived while walking SessionPage cursors; not a wire object
+  /** Sanitized per-store failure tokens gathered across every page. Empty when none reported any. */
+  partialErrors: string[]
+  /** True when any page reported partial_errors, or the max-page walk aborted. */
+  incomplete: boolean
+}
+
+export type SessionListResult = Session[] & SessionFetchCoverage
+
+export function readSessionFetchCoverage(sessions: readonly Session[] | undefined): SessionFetchCoverage {
+  if (!sessions) return { partialErrors: [], incomplete: false }
+  const extra = sessions as Partial<SessionFetchCoverage>
+  return {
+    partialErrors: Array.isArray(extra.partialErrors) ? extra.partialErrors : [],
+    incomplete: extra.incomplete === true,
+  }
+}
+
+function finishSessionFetch(sessions: Session[], partialErrors: string[], incomplete: boolean): SessionListResult {
+  const result = sessions as SessionListResult
+  result.partialErrors = partialErrors
+  result.incomplete = incomplete
+  return result
+}
+
 export async function fetchSessions(
   agentId?: string,
   type?: Session['type'],
   opts?: FetchSessionsOptions,
 ): Promise<Session[]> {
   const sessions: Session[] = []
+  const partialErrors: string[] = []
+  let incomplete = false
   let offset = opts?.offset
   // Safety valve, not a normal exit: the server's own default page size is
   // 50, so 1000 pages is 50,000 sessions — far past any real install. If a
@@ -676,15 +726,22 @@ export async function fetchSessions(
   for (let i = 0; i < MAX_PAGES; i++) {
     const page = await fetchSessionPage(agentId, type, { ...opts, offset })
     sessions.push(...page.sessions)
-    if (!page.nextCursor) return sessions
+    if (page.partialErrors && page.partialErrors.length > 0) {
+      incomplete = true
+      for (const token of page.partialErrors) {
+        if (!partialErrors.includes(token)) partialErrors.push(token)
+      }
+    }
+    if (!page.nextCursor) return finishSessionFetch(sessions, partialErrors, incomplete)
     offset = Number(page.nextCursor)
   }
+  incomplete = true
   console.warn(`[api] fetchSessions: aborted after ${MAX_PAGES} pages — server kept returning next_cursor; result is INCOMPLETE`)
   void maybeDevToast(
     `[api] Session list exceeded ${MAX_PAGES} pages — showing a partial set`,
     'GET:/sessions:max-pages',
   )
-  return sessions
+  return finishSessionFetch(sessions, partialErrors, incomplete)
 }
 
 // ── Session tree assembly (ADR-057 US-19/FR-091/FR-097, W16d) ─────────────────

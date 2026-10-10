@@ -75,6 +75,29 @@ The hamburger means **Show sidebar** only; there is no second hamburger for pane
 
 The chat is a conversation with the workspace's agents. Replies stream in; each tool an agent uses appears as a card you can expand or collapse ([tools](tools.md) explains what agents can do). When an agent wants to do something sensitive, an approval dialog asks you to approve it once, deny it, or always allow it — [security](security.md) covers the rules behind it. Each active [goal](goals.md) shows as its own small pill under the message box.
 
+### Who is replying
+
+Replies in the web app's chat show the agent's name above the text without a portrait, including streaming replies, saved history, and another agent's replies in the same chat. When the reply records its author, the name follows that author rather than the current agent selection. Older replies without a recorded author fall back to the chat's current agent. If an agent's details cannot be found, its stored ID can appear instead of a name.
+
+During a live reply, an inline mark replaces the old bouncing-dot indicator. It combines the agent's figure and role badge with a short status phrase, inside the conversation, not on the message box. The name remains above the reply. While agent details are loading or unavailable, the phrase can appear without the figure. The same running-tool rule applies when the chat uses its simpler message-list fallback: a tool belonging to this reply selects Working until its call finishes; a tool in another reply does not.
+
+| What is happening | What you see |
+|---|---|
+| A reply is awaiting or generating a response, with no running tool or pending decision | The mark breathes and rotates through thinking phrases, starting with **Thinking…**. |
+| A tool call belonging to this reply is running, whether its card is visible or hidden | The mark uses its Working motion, with a stable **Working on it…** phrase unless more specific copy applies. Showing tool cards with **Verbose chat** does not change the phase. |
+| The agent is setting up a goal whose record is still empty | **Framing your goal**, or **Setting acceptance criteria** while that step runs. This phrase takes priority over a background-command label; the motion still follows whether a tool is actually running. |
+| A background-command tool call is running and its card is hidden in the chat | The Working mark shows the call's short description or a label such as **Running git…**, rather than its command line. It follows that tool call, not the whole lifetime of a background process. |
+| A tool needs your approval | **Waiting for your approval**, with the tool's name. The mark uses its waiting motion. |
+| The agent asked you a question | **Waiting for your input**. If a question and an approval are both pending, this phrase wins. |
+| The connection dropped or is reconnecting | **Unavailable/reconnecting** where the reply's status is shown. The mark stays still. |
+| The latest reply has settled, you are connected, and no approval or question is pending | **Idle** can appear next to that reply's name once history has finished loading. This describes the reply, not whether helpers or background commands have finished. |
+
+**Limits of the inline mark:** it needs an assistant reply to display against. A question or approval can still need attention when no inline mark is visible. In loaded history, a running reply that already has visible content does not show the Thinking or Working mark. Queued work has no inline **Queued** mark; check **Sessions** or Activity instead. For background processes that outlast their tool call, use the Sessions command count and the Activity panel.
+
+In the simpler message-list fallback, live tool activity appears against the reply that owns it, before the answer finishes. If a hidden tool finishes successfully and the reply still has nothing visible, the mark returns to Thinking while the agent continues. If a tool failure makes its **Failed** card visible, that otherwise-empty reply shows the card without an extra Thinking mark, even when the failure has no separate error text.
+
+The mark's figure and badge stay fully opaque. With normal motion they gently change size, and a separate glow animates behind them; Working also has a moving highlight. If your system requests reduced motion, these loops stop and the thinking phrase stops rotating. The name and current phrase remain visible.
+
 A failure or refusal routed to an existing chat appears in that conversation, including when no reply has started. It does not turn into an app-wide connection banner when you open another conversation or start a new chat. Connection and routing-protocol failures remain separate app-wide problems.
 
 **Open browser** at the top of the chat shows the agent's [live browser](browser.md). Library is in the sidebar, and opens every workspace's files. When an agent builds something reviewable, like a small site, the chat links to it ([previews](previews.md)).
@@ -132,6 +155,54 @@ An unconfirmed message does not offer **Generate again**. That action is separat
 When the current first message has no known chat ID, `/new` shows **“Delivery not confirmed. Copy your message before starting a new chat.”** before clearing its local message and recovery request. Choose **Keep this chat** to retain it, or **Start a new chat** to clear it. Copy advice matters: the old bubble will no longer be visible in the new chat. If a chat ID is already known, `/new` starts a new chat without this warning and clears the delivery-recovery request.
 
 **Limits:** recovery before a chat ID is known lives only in the open tab; a full browser reload can lose it. The gateway remembers delivery IDs only for its current process, and only for a limited number of recent first messages: up to 256 per account and 10,000 in total. When those limits are reached, the oldest are forgotten first, so a Retry of a very old unconfirmed first message can create a second chat and answer twice, exactly as after a restart. If it crashes after saving the message but before acknowledging it, Retry after that restart can likewise create a second chat and answer twice. Reusing a delivery ID for a different message is refused with a conflict error instead of being treated as the same message. Delivery Retry is not a guarantee of exactly-once answers or tool actions. After a gateway upgrade, reload any browser tab that was already open: an older tab does not understand the new delivery messages, so starting a new chat there can appear to hang until the page is reloaded.
+
+## Sessions
+
+Type `/sessions` in the web chat's message box and press Enter to open **Sessions**, or select it from the slash-command menu. It opens the same view as the sidebar's magnifier. `/resume` has been removed and is not an alias for `/sessions`.
+
+The view is titled **Sessions** and offers two status filters:
+
+| Filter | What it includes |
+|---|---|
+| **All** | The available sessions across workspaces, including queued and ended work. Search, date, and workspace filters can narrow the list. Internal verifier sessions are not included. |
+| **Running** | Sessions whose current lifecycle display is **Working** and whose server execution classification is running, plus their parent rows so helpers stay in context. Queued and restart-interrupted sessions do not match Running themselves, though a non-running parent can remain above a genuinely running helper. |
+
+Search matches a session's title, workspace, or agent name. The date-range control filters by when the session was last active, not when it started.
+
+If agent details cannot be loaded and no saved agent list is available in the open app, Sessions warns that **agent-name search is unavailable**. Title and workspace search still work, but a search by agent name alone can show no matches. Select the notice's **Retry** to load agent details again; your search stays in place, and agent-name matches return when that request succeeds.
+
+If the required session or workspace list cannot be loaded, the error names what failed: **Could not load sessions**, **Could not load workspaces**, or **Could not load sessions and workspaces**. Select **Retry** in that view to retry the failed requests. The list returns when they succeed; another failure keeps a visible error and Retry available.
+
+Each real session row shows its title above its status, kind, when it started, and when it was last active. On a phone, the title wraps rather than being squeezed beside the metadata, so chats with the same opening words remain distinguishable. Its token count appears when known and the screen is wide enough. A stored zero is shown as 0; a missing count is not invented.
+
+| Status | When you see it |
+|---|---|
+| **Working** | The server's lifecycle record says it is working, and it is not queued. |
+| **Waiting** | It is waiting for an answer. |
+| **Queued** | It is queued, not executing. |
+| **Done** | Its lifecycle record says it finished. If no lifecycle status is available, an archived chat also shows Done. |
+| **Failed** | It failed. |
+| **Stopped** | It was stopped. The cause is included when known, for example **Stopped · timeout**. |
+| **Interrupted** | A server restart cut the turn off. This takes priority over an old queued or running record. |
+| **Unavailable** | No usable lifecycle or queued status is available, and the chat is not archived. An active chat without that information is not labelled Working. |
+
+The server classifies queued or running work only while that same session's current lifecycle display is **Working**. After a restart, an interrupted main conversation is not itself running or queued, even if its old record still says so. It may remain in **Running** as parent context for a genuinely running helper. **Interrupted** is not a permanent label: once that conversation is actually resumed or re-adopted with a fresh execution in the current gateway process, running work shows **Working** and matches **Running** again. The gateway being back online alone does not restart the old execution. As explained [above](#if-the-gateway-restarts-during-a-reply), the Interrupted label alone does not prove that recovery saved a stop.
+
+Kind is the session's real type: **Chat**, **Task**, **Helper**, **Scheduled**, **Channel**, or **Heartbeat**. A Helper is a delegated session with its own parent chat.
+
+Helpers stay under their real parent in **All**, **Running**, and search, even when the parent itself does not match. If a complete list has no record of the parent, the helpers appear under **parent chat unavailable**. This is an expandable heading, not a chat you can open; the helpers beneath it can still be opened. Omnipus does not invent a title for the missing parent. If the list is incomplete, the heading instead says **Parent not in this partial list**: a missing page is not proof that a parent is unavailable. An incomplete-list notice offers **Retry** to load the list again.
+
+The list is also incomplete when the server cannot read a session's saved lifecycle record, even if it can load the session itself. That row stays in **All**, but the server does not guess its lifecycle status or whether it is running. Such a row does not qualify for **Running** on its own; an empty Running result with an incomplete-list notice is not proof that no work is running. Use **Retry** after the storage problem is resolved. A session with no lifecycle record is a normal case and does not, by itself, trigger this warning.
+
+API callers receive these warnings in the existing `partial_errors` array: `agent=<id>: session_list_failed` means session enumeration failed, while `session=<id>: lifecycle_read_unavailable` means one row's saved lifecycle could not be read. The tokens do not include local file paths or the underlying storage error. Healthy rows and pagination remain usable; the unreadable row's `lifecycle_state`, `stop_note`, and `execution` keys are omitted, not sent as `null`. Session detail, agent-specific session lists, and session create or rename responses have no page-level warning field: an unexpected lifecycle-read failure returns HTTP 500 with `session lifecycle unavailable` instead of pretending to have loaded the runtime state. A create or rename may already have saved its session or title before this response read fails; inspect the existing session before repeating a write.
+
+The browser console, and the warning toast in development builds, report these as partial errors rather than counting every warning as an agent-list failure. Their explanation distinguishes unavailable agent session lists from unavailable session lifecycle records. The original warning tokens remain available to API callers.
+
+Consecutive helpers with the same title under the same parent fold into **N similar helper runs**. This means similar labels, not a guarantee that their instructions or results are identical. Expand the heading to see each original session, with its own status and selectable title. Runs under different parents never fold together.
+
+When a session itself owns running background commands, its row says **N background commands running** (or **1 background command running**). Zero or an unknown count shows no sentence. The count belongs to that session only, not its helpers. Background commands do not get synthetic session rows: open the owning chat and inspect its Activity panel.
+
+With focus in the search field, **Up** and **Down** move the highlight, and **Enter** opens the highlighted session. You can also select a real row's title — its Open action. Once that chat is attached, its Activity panel opens. Folded and missing-parent headings expand or collapse instead of attaching a chat. If an update removes the highlighted target, the highlight clears and focus returns to the search field; Enter does not silently open another session in its place. A connection failure while opening a workspace chat shows an error instead of pretending the switch succeeded.
 
 ## Panels beside chat
 

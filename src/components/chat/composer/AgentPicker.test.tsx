@@ -47,6 +47,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([
       {
+        figure: 'Omnipus', role: 'general',
         id: 'mia',
         name: 'Mia',
         type: 'core',
@@ -55,6 +56,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
         description: 'Assistant',
       },
       {
+        figure: 'Omnipus', role: 'general',
         id: 'jim',
         name: 'Jim',
         type: 'core',
@@ -215,6 +217,7 @@ describe('AgentPicker — workspace core_team scoping', () => {
   it('excludes worker agents from the dropdown', async () => {
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
       {
+        figure: 'Omnipus', role: 'general',
         id: 'mia',
         name: 'Mia',
         type: 'core',
@@ -223,6 +226,7 @@ describe('AgentPicker — workspace core_team scoping', () => {
         description: 'Assistant',
       },
       {
+        figure: 'Omnipus', role: 'general',
         id: 'builder',
         name: 'Builder Worker',
         type: 'worker',
@@ -256,6 +260,7 @@ describe('AgentPicker — workspace core_team scoping', () => {
   it('auto-selects the first non-worker agent when none is active', async () => {
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
       {
+        figure: 'Omnipus', role: 'general',
         id: 'builder',
         name: 'Builder Worker',
         type: 'worker',
@@ -263,6 +268,7 @@ describe('AgentPicker — workspace core_team scoping', () => {
         description: 'Labour agent',
       },
       {
+        figure: 'Omnipus', role: 'general',
         id: 'mia',
         name: 'Mia',
         type: 'core',
@@ -359,7 +365,7 @@ describe('AgentPicker — error and empty states', () => {
     })
 
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
-      { id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'z-ai/glm-5.2', description: 'Assistant' },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'z-ai/glm-5.2', description: 'Assistant' },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any[])
     fireEvent.click(screen.getByRole('button', { name: /retry/i }))
@@ -373,7 +379,7 @@ describe('AgentPicker — error and empty states', () => {
   it('a background refetch failure does NOT replace a usable cached picker (cached agent keeps rendering)', async () => {
     const client = makeClient()
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
-      { id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'z-ai/glm-5.2', description: 'Assistant' },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'z-ai/glm-5.2', description: 'Assistant' },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any[])
     render(
@@ -400,6 +406,7 @@ describe('AgentPicker — error and empty states', () => {
   it('shows the all-draft message when every agent is in draft status', async () => {
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
       {
+        figure: 'Omnipus', role: 'general',
         id: 'mia',
         name: 'Mia',
         type: 'core',
@@ -435,7 +442,7 @@ describe('AgentPicker — agentSelectorOpen latch reset', () => {
 
   it('resets agentSelectorOpen to false when the all-draft branch is active', async () => {
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
-      { id: 'mia', name: 'Mia', type: 'core', status: 'draft', model: 'z-ai/glm-5.2', description: 'Assistant' },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', status: 'draft', model: 'z-ai/glm-5.2', description: 'Assistant' },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any[])
     act(() => {
