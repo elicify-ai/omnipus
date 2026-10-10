@@ -1815,6 +1815,20 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 			"run_task registered but will fail closed (no dispatcher installed)",
 			map[string]any{"agent_id": agent.ID})
 	}
+	// Founder ruling 2026-10-10: the delegation policy always applies. Starting
+	// a task runs its assignee, so an agent-initiated run_task is gated like
+	// any other delegation: caller (this agent) -> assignee needs an edge in
+	// the governing workspace graph, or the agent runs its own task. The
+	// self-target exemption is the task-tool one (no new delegation principal);
+	// the scheduler and the UI do not use this tool and are not gated here.
+	taskRun.SetDelegationDenyChecker(func(ctx context.Context, assigneeAgentID string) *tools.DelegationDenial {
+		return buildDelegationDenyCheckerForTaskReassignment(
+			agent.ID,
+			al.GetConfig().Performance,
+			config.DelegationModeTask,
+			delegationGateDeps{AgentExists: agentExistsChecker(al.GetRegistry())},
+		)(ctx, assigneeAgentID)
+	})
 	agent.Tools.RegisterReplacing(taskRun)
 
 	// inspect_session (FR-033, US-13 Acceptance 3): verifier-role-only by
