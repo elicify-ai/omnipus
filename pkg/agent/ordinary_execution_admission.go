@@ -68,12 +68,24 @@ type ordinaryExecutionPreparation struct{ execution *executionDisposition }
 // prepareOrdinaryExecution reuses identity preparation, not steered capacity or
 // FIFO admission. Only an actual human message may revive a saved session.
 func (al *AgentLoop) prepareOrdinaryExecution(ctx context.Context, msg bus.InboundMessage, opts processOptions) (ordinaryExecutionPreparation, error) {
+	if msg.Metadata[ownerWakeMetadataKey] != "" {
+		return al.prepareOrdinarySessionExecution(ctx, msg.SessionID, opts, &ownerWakeRevivalPrincipal)
+	}
 	if !reviveInboundIsHumanTurn(msg) {
 		return ordinaryExecutionPreparation{}, nil
 	}
 	by := steer.Principal{Kind: steer.PrincipalKindHuman, ID: msg.GatewayUserID}
 	return al.prepareOrdinarySessionExecution(ctx, msg.SessionID, opts, &by)
 }
+
+// ownerWakeRevivalPrincipal admits the owner wake after a guest answer. Like the
+// hand-back principal it may start the next round of a finished chat; it never
+// continues a stopped one (errOwnerWakeRetained).
+var ownerWakeRevivalPrincipal = steer.Principal{Kind: steer.PrincipalKindAgent, ID: "owner-wake"}
+
+// errOwnerWakeRetained reports that an owner wake met a stopped chat: nothing is
+// admitted, the answer stays in the transcript.
+var errOwnerWakeRetained = errors.New("ordinary admission: owner wake dropped: the conversation is stopped")
 
 // prepareOrdinarySessionExecution is shared by human and scheduled entries.
 // A nil revival principal never revives: the ordinary dispatch guard still
@@ -126,6 +138,14 @@ func (al *AgentLoop) prepareOrdinarySessionExecution(ctx context.Context, sessio
 	}
 	if fenceErr := al.inboundStopFenceInFlight(sessionID); fenceErr != nil {
 		return ordinaryExecutionPreparation{}, fenceErr
+	}
+	// F8: the owner wake never continues a stopped chat. This is decided here,
+	// under the admission lock and on the record just read, so a Stop that lands
+	// after the producer's precheck is still honoured; a Stop that lands after
+	// this point ends the admitted turn through the ordinary Stop path.
+	if revival != nil && revival.Kind == ownerWakeRevivalPrincipal.Kind && revival.ID == ownerWakeRevivalPrincipal.ID &&
+		rec.State == session.LifecycleStopped {
+		return ordinaryExecutionPreparation{}, errOwnerWakeRetained
 	}
 	identity := session.ExecutionIdentity{RunID: freshRunID(), BootSeq: bootSeq}
 	stampedByRevival := false

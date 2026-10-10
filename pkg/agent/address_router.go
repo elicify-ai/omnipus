@@ -470,17 +470,30 @@ func (al *AgentLoop) wakeSourceOwner(c addressing.Capture, meta *session.Unified
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err := al.bus.PublishInbound(ctx, bus.InboundMessage{
+	err := al.bus.PublishInbound(ctx, ownerWakeInbound(c, meta.AgentID, workspaceID, answer))
+	if err != nil {
+		logger.WarnCF("agent", "could not wake the conversation owner after an answer",
+			map[string]any{"request_id": c.RequestID, "error": err.Error()})
+	}
+}
+
+// ownerWakeMetadataKey marks an inbound as the owner wake after a guest answer
+// (U8 F8). It is the non-human marker: reviveInboundIsHumanTurn treats such a
+// message as no person's, and ordinary admission gives it the owner-wake
+// principal, which can start the next round of a finished chat but can never
+// continue a stopped one - however late a Stop lands.
+const ownerWakeMetadataKey = "owner_wake"
+
+// ownerWakeInbound is the one inbound message wakeSourceOwner publishes, built
+// in one place so the producer and the intake tests share its exact shape.
+func ownerWakeInbound(c addressing.Capture, ownerAgentID, workspaceID string, answer session.TranscriptEntry) bus.InboundMessage {
+	return bus.InboundMessage{
 		Channel:   "webchat",
 		ChatID:    "answer:" + answer.ID,
 		Sender:    bus.SenderInfo{CanonicalID: "answer:" + answer.ID},
 		Content:   fmt.Sprintf("%s answered request %s (see the answer above).", answer.AgentID, c.RequestID),
-		SessionID: sessionID,
-		Metadata:  map[string]string{"agent_id": meta.AgentID, "workspace_id": workspaceID},
-	})
-	if err != nil {
-		logger.WarnCF("agent", "could not wake the conversation owner after an answer",
-			map[string]any{"request_id": c.RequestID, "error": err.Error()})
+		SessionID: c.Source.SessionID,
+		Metadata:  map[string]string{"agent_id": ownerAgentID, "workspace_id": workspaceID, ownerWakeMetadataKey: "1"},
 	}
 }
 
