@@ -97,6 +97,12 @@ type externalCLIRunSession struct {
 	steerInterrupt bool
 	workDir        string
 	workspaceID    string
+	// reviveReserved is set (under mu) by a revival that has verified this
+	// holder still retains the driver its CLI conversation needs (NEW-4). While
+	// set, releaseExternalRunIfIdle keeps the driver, so a completion that is
+	// still unwinding cannot release it between the revival's availability check
+	// and the revived turn's own beginExternalRun, which consumes the reservation.
+	reviveReserved bool
 }
 
 // externalRunSessionKey resolves the registry key for a run — the child's own
@@ -162,34 +168,54 @@ func (al *AgentLoop) externalRunSessionIfPresent(sessionKey string) *externalCLI
 // explicit fresh Run per turn until the U6 CONTINUE work); a session with no
 // durable record is not a delegated session and keeps today's fresh-Run
 // behaviour (this is what a bare fixture turnState resolves to).
-func (al *AgentLoop) externalRunResumeOnly(sessionKey string) bool {
+//
+// NEW-3: a lifecycle READ FAILURE is not "no record". It returns an error, and
+// the caller refuses: treating an unreadable real session as a non-steered one
+// would skip the durable start mark, and after a restart a revival would start a
+// fresh CLI conversation inside the old chat. Only a missing store, an empty key
+// or a genuinely absent record (ErrLifecycleNotFound) is "not a steered session".
+func (al *AgentLoop) externalRunResumeOnly(sessionKey string) (bool, error) {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil || sessionKey == "" {
-		return false
+		return false, nil
 	}
 	rec, err := lifecycle.Load(sessionKey)
-	if err != nil || rec == nil {
-		return false
+	if errors.Is(err, session.ErrLifecycleNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("external-cli: read the session record for %q: %w", sessionKey, err)
+	}
+	if rec == nil {
+		return false, nil
 	}
 	if rec.Origin != nil && rec.Origin.Kind == session.OriginKindTask {
-		return false
+		return false, nil
 	}
-	return rec.SteeredBy != nil
+	return rec.SteeredBy != nil, nil
 }
 
 // externalRunPriorStart reports whether the durable lifecycle record says an
 // external CLI run already started for this session (LifecycleRecord.
-// ExternalRunStarted). It is the restart-proof half of `started` (N7). A missing
-// store, an unreadable or absent record is "no mark": the caller keeps today's
-// behaviour for a record-less fixture, and a real steered session always has a
-// record (externalRunResumeOnly requires one before this is consulted).
-func (al *AgentLoop) externalRunPriorStart(sessionKey string) bool {
+// ExternalRunStarted). It is the restart-proof half of `started` (N7) and is
+// consulted only for a steered session, whose record existed when
+// externalRunResumeOnly read it. A missing store or key is "no mark" (a
+// record-less fixture) and so is a record that is genuinely absent
+// (ErrLifecycleNotFound); an unreadable record is an ERROR (NEW-3), never "no
+// mark" — uncertainty about a started conversation must refuse.
+func (al *AgentLoop) externalRunPriorStart(sessionKey string) (bool, error) {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil || sessionKey == "" {
-		return false
+		return false, nil
 	}
 	rec, err := lifecycle.Load(sessionKey)
-	return err == nil && rec != nil && rec.ExternalRunStarted
+	if errors.Is(err, session.ErrLifecycleNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("external-cli: read the CLI conversation start mark for %q: %w", sessionKey, err)
+	}
+	return rec != nil && rec.ExternalRunStarted, nil
 }
 
 // markExternalRunStarted durably records, on the session's lifecycle record,
@@ -215,24 +241,68 @@ func (al *AgentLoop) markExternalRunStarted(sessionKey string) error {
 	return nil
 }
 
-// externalConversationAvailable reports whether reviving sessionKey's steered
-// external-CLI helper can continue a retained CLI conversation. A helper whose
-// external run never started (a queued child stopped before it ran) has no
-// conversation to lose, so its first run may still be fresh. Otherwise a driver
-// must still be retained; when it is not (released at the end of the episode, or
-// the gateway restarted), the revive must refuse visibly instead of dispatching
-// a turn that would start a fresh CLI conversation in the old chat (N7).
-func (al *AgentLoop) externalConversationAvailable(sessionKey string, rec *session.LifecycleRecord) bool {
-	if rec == nil || !rec.Is3P || !rec.ExternalRunStarted || !al.externalRunResumeOnly(sessionKey) {
-		return true
+// externalConversationReservation is a revival's hold on the retained driver.
+// It is taken together with the availability decision, under the holder lock
+// (NEW-4), and ends when the revived turn's beginExternalRun consumes it or the
+// revival gives up (cancel).
+type externalConversationReservation struct {
+	sess *externalCLIRunSession
+}
+
+// cancel ends the hold when the revival does not reach a dispatched turn. It is
+// a no-op for a nil reservation (a revival that needed none) and idempotent.
+func (r *externalConversationReservation) cancel() {
+	if r == nil || r.sess == nil {
+		return
+	}
+	r.sess.mu.Lock()
+	r.sess.reviveReserved = false
+	r.sess.mu.Unlock()
+}
+
+// reserveExternalConversation decides whether reviving sessionKey's steered
+// external-CLI helper can continue a retained CLI conversation and, when it can,
+// reserves that driver for the revival in the same holder-lock hold. A helper
+// whose external run never started (a queued child stopped before it ran) has no
+// conversation to lose, so its first run may still be fresh (nil reservation,
+// nil error). Otherwise a driver must still be retained; when it is not
+// (released at the end of the episode, or the gateway restarted) the revive must
+// refuse visibly instead of dispatching a turn that would start a fresh CLI
+// conversation in the old chat (N7). A lifecycle read failure refuses too
+// (NEW-3). The returned reservation keeps releaseExternalRunIfIdle from dropping
+// the driver until the revived turn begins (NEW-4).
+func (al *AgentLoop) reserveExternalConversation(sessionKey string, rec *session.LifecycleRecord) (*externalConversationReservation, error) {
+	if rec == nil || !rec.Is3P || !rec.ExternalRunStarted {
+		return nil, nil
+	}
+	resumeOnly, err := al.externalRunResumeOnly(sessionKey)
+	if err != nil {
+		return nil, err
+	}
+	if !resumeOnly {
+		return nil, nil
 	}
 	sess := al.externalRunSessionIfPresent(sessionKey)
 	if sess == nil {
-		return false
+		return nil, errExternalResumeUnavailable
 	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
-	return sess.driver != nil
+	if sess.driver == nil {
+		return nil, errExternalResumeUnavailable
+	}
+	sess.reviveReserved = true
+	return &externalConversationReservation{sess: sess}, nil
+}
+
+// externalConversationAvailable is the point-in-time form of
+// reserveExternalConversation: it reports whether a revival could continue the
+// conversation right now and holds nothing afterwards. Production revival uses
+// the reservation; this form serves read-only questions and the gate tests.
+func (al *AgentLoop) externalConversationAvailable(sessionKey string, rec *session.LifecycleRecord) bool {
+	res, err := al.reserveExternalConversation(sessionKey, rec)
+	res.cancel()
+	return err == nil
 }
 
 // beginExternalRun reserves one external-CLI dispatch on the session holder and
@@ -266,11 +336,20 @@ func (al *AgentLoop) beginExternalRun(
 	// like a first launch and start a fresh CLI conversation under the old
 	// chat. It is read before sess.mu is taken so the lifecycle lock is never
 	// acquired under the holder lock.
-	priorRun := resumeOnly && al.externalRunPriorStart(sessionKey)
+	priorRun := false
+	if resumeOnly {
+		var priorErr error
+		if priorRun, priorErr = al.externalRunPriorStart(sessionKey); priorErr != nil {
+			return nil, false, priorErr
+		}
+	}
 
 	sess = al.externalRunSession(sessionKey)
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+	// The revived turn has reached the holder: any revival reservation has done
+	// its job (the entry below either takes the driver or refuses visibly).
+	sess.reviveReserved = false
 
 	claim := al.tsExecutionClaim(ts, sessionKey)
 	resumeRequested := externalResumeRequested(ts)
@@ -381,10 +460,23 @@ func (al *AgentLoop) releaseExternalRunIfIdle(sessionKey string) {
 	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
-	if sess.running || al.pendingSteeringCountForScope(sessionKey) != 0 {
+	if sess.running || sess.reviveReserved || al.pendingSteeringCountForScope(sessionKey) != 0 {
 		return
 	}
 	sess.releaseDriverLocked()
+}
+
+// releaseExternalRunAfterStop is the Stop path's release: the session's episode
+// is over by an explicit operator decision, so a revival reservation whose turn
+// never began (it was stopped before beginExternalRun) is dropped with the
+// driver instead of pinning it forever.
+func (al *AgentLoop) releaseExternalRunAfterStop(sessionKey string) {
+	if sess := al.externalRunSessionIfPresent(sessionKey); sess != nil {
+		sess.mu.Lock()
+		sess.reviveReserved = false
+		sess.mu.Unlock()
+	}
+	al.releaseExternalRunIfIdle(sessionKey)
 }
 
 // ForgetExternalRunSession drops sessionID's retained external-CLI driver and
