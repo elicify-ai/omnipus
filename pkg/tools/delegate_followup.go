@@ -4,7 +4,9 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -12,6 +14,49 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
+
+// followupRefusal is a refusal sentence authored in this file (a race the
+// caller can act on). It is the only error text from a lifecycle Mutate that
+// may reach the calling agent as written; every other Mutate error is
+// store-level and is replaced by a fixed sentence.
+type followupRefusal struct{ text string }
+
+func (e *followupRefusal) Error() string { return e.text }
+
+// refusalTexter is implemented by an error whose text was authored for a
+// person or model to read (the agent package's curated revival refusals), so
+// the tool may show it as written. Any other revival error is shown as a fixed
+// sentence.
+type refusalTexter interface{ RefusalText() string }
+
+// controlFailure is the curated refusal for a store or revival failure whose
+// own text can carry filesystem paths or session-file detail: the calling agent
+// reads a fixed sentence, the gateway log keeps the cause, and the cause stays
+// reachable through errors.Is/As on the result's error.
+func controlFailure(action, fixed string, cause error) *ToolResult {
+	slog.Warn("delegate: "+action+" failed; the caller was given a fixed sentence", "error", cause)
+	return ErrorResult("delegate: " + action + ": " + fixed).WithError(cause)
+}
+
+// lifecycleLoadFailure is controlFailure for a failed lifecycle Load. A genuinely
+// absent record names the looked-up id (so a mistyped id is visible); anything
+// else is a store fault shown as a fixed sentence.
+func lifecycleLoadFailure(action, sessionID string, cause error) *ToolResult {
+	if errors.Is(cause, session.ErrLifecycleNotFound) {
+		return ErrorResult(fmt.Sprintf("delegate: %s: session %s was not found", action, sessionID)).WithError(cause)
+	}
+	return controlFailure(action, fmt.Sprintf("the record of session %s could not be read or updated right now; retry shortly", sessionID), cause)
+}
+
+// reviveFailure is controlFailure for a failed revival: a curated refusal is
+// shown as written, anything else as a fixed sentence.
+func reviveFailure(action, sessionID string, cause error) *ToolResult {
+	var curated refusalTexter
+	if errors.As(cause, &curated) {
+		return ErrorResult("delegate: " + action + ": " + curated.RefusalText()).WithError(cause)
+	}
+	return controlFailure(action, fmt.Sprintf("session %s could not be revived right now; retry shortly", sessionID), cause)
+}
 
 // checkSteerCaps enforces the steer/respond body-size cap (16 KiB default)
 // and per-target-session rate cap (6/min default) — ADR-053 §Contract
@@ -115,7 +160,7 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// inside that closure instead.
 	rec, lerr := t.lifecycle.Load(sessionID)
 	if lerr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: steer: %v", lerr))
+		return lifecycleLoadFailure("steer", sessionID, lerr)
 	}
 	by, verr := t.verifyCallerPrincipal(ctx, rec)
 	if verr != nil {
@@ -261,7 +306,7 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		// plain Load and this lock-protected re-read; their strings are
 		// refusals for those races alone.
 		if cur.Terminal() {
-			return fmt.Errorf("session %s is terminal (%s) and cannot be steered", sessionID, cur.State)
+			return &followupRefusal{fmt.Sprintf("session %s is terminal (%s) and cannot be steered", sessionID, cur.State)}
 		}
 		if cur.State == session.LifecycleStopped {
 			stoppedInRace = true
@@ -269,12 +314,16 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 			return nil
 		}
 		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
-			return fmt.Errorf("session %s is stopping (a stop is in flight for its current generation); retry the steer once it has stopped", sessionID)
+			return &followupRefusal{fmt.Sprintf("session %s is stopping (a stop is in flight for its current generation); retry the steer once it has stopped", sessionID)}
 		}
 		rec = cur
 		return nil
 	}); merr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: steer: %v", merr))
+		var refusal *followupRefusal
+		if errors.As(merr, &refusal) {
+			return ErrorResult("delegate: steer: " + refusal.text).WithError(merr)
+		}
+		return lifecycleLoadFailure("steer", sessionID, merr)
 	}
 
 	if stoppedInRace {
@@ -337,7 +386,7 @@ func (t *DelegateTool) steerReviveStopped(ctx context.Context, sessionID string,
 	}
 	revived, rerr := reviver.ReviveStoppedSession(ctx, sessionID, by, text)
 	if rerr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: steer: revive stopped session %s: %v", sessionID, rerr)).WithError(rerr)
+		return reviveFailure("steer", sessionID, rerr)
 	}
 	if !revived {
 		return ErrorResult(fmt.Sprintf("delegate: steer: session %s could not be revived", sessionID))
@@ -459,8 +508,8 @@ func (t *DelegateTool) executeResume(ctx context.Context, args map[string]any, c
 
 	rec, lerr := t.lifecycle.Load(sessionID)
 	if lerr != nil {
-		// Name the id that was looked up, so a mistyped id is visible.
-		return ErrorResult(fmt.Sprintf("delegate: resume: session %s: %v", sessionID, lerr)).WithError(lerr)
+		// A mistyped id is named; a store fault is a fixed sentence.
+		return lifecycleLoadFailure("resume", sessionID, lerr)
 	}
 	by, verr := t.verifyCallerPrincipal(ctx, rec)
 	if verr != nil {
@@ -490,7 +539,7 @@ func (t *DelegateTool) executeResume(ctx context.Context, args map[string]any, c
 	wasTerminal := rec.Terminal()
 	revived, rerr := reviver.ReviveStoppedSession(ctx, sessionID, by, instruction)
 	if rerr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: resume: %v", rerr)).WithError(rerr)
+		return reviveFailure("resume", sessionID, rerr)
 	}
 	if !revived {
 		return ErrorResult(fmt.Sprintf("delegate: resume: session %s could not be resumed", sessionID))
