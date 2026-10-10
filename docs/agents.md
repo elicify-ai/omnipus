@@ -56,7 +56,7 @@ You create one of three types. The create buttons sit in the section headers of 
 | Subagent (External) | An external command-line tool | Other agents, through delegation | No |
 
 1. Click **+ New Main** or **+ New Subagent** in its section header. For an external worker, click **+ Add Subagent (External)** and pick the command-line tool from the menu; entries for tools not installed on the host are greyed out.
-2. Fill in **Identity**: name, figure, **Role** (the job badge), colour, and model. The preview starts with Omnipus, General assistant, and Grey; leaving these choices untouched saves those defaults when you create the agent. There is no agent-picture upload. For workers, the description is required — it is what other agents read to decide when to delegate to this one.
+2. Fill in **Identity**: name, the agent's look (**Role badge**, **Look**, and **Colour**), and model. The preview starts with Omnipus, General assistant, and Grey; leaving these choices untouched saves those defaults when you create the agent. There is no agent-picture upload. For workers, the description is required — it is what other agents read to decide when to delegate to this one.
 3. Fill in **Personality**: the soul, the agent's persona prompt, is required for every type.
 4. Main and Subagent have a third step, **Tools**, for tool permissions, skills, and fallback models. An external worker has no Tools step — it brings its own.
 5. Create the agent. Its card appears in its section.
@@ -71,15 +71,15 @@ Deletion cleans the agent's own data first — its chats, its task assignments, 
 
 ## How an agent looks
 
-An agent's mark combines a figure, a small job badge, and a colour. The badge is labelled **Role** in the editor.
+An agent's mark combines a figure, a small job badge, and a colour. Omnipus shows every agent with this same mark everywhere: the agent list, chat, the sidebar, activity, team and task views, and the agent pickers.
 
 | Choice | What you pick | Default on a new agent |
 |---|---|---|
-| Figure | Robot, Man, Woman, Omnipus, or Monogram — Monogram takes the name's first character after trimming spaces, uppercases it, and displays the result if it is a single letter or digit; otherwise it displays `?` | Omnipus |
-| Role | One of the 31 badges below | General assistant |
+| Look (figure) | Omnipus, Man, Robot, Woman, or Monogram — Monogram takes the name's first character after trimming spaces, uppercases it, and displays the result if it is a single letter or digit; otherwise it displays `?` | Omnipus |
+| Role badge | One of the 31 badges below | General assistant |
 | Colour | Azure, Sky, Cyan, Indigo, Violet, Purple, Fuchsia, Pink, Orange, or Grey, in that order | Grey |
 
-The role choices are grouped like this:
+The role badges are grouped like this:
 
 | Group | Badges |
 |---|---|
@@ -89,7 +89,7 @@ The role choices are grouped like this:
 | People (4) | People and HR; Tutor; Knowledge and library; Translator |
 | Personal (3) | General assistant; Personal assistant; Office assistant |
 
-The create form shows the full mark live as you change these choices. The preview is a draft: it is saved only when creation succeeds. In the edit slide-over, **Basics** offers the same Figure, Role, and Colour choices and saves changes automatically. Its header mark previews the selected figure, role badge, and colour immediately, before the save completes. With Monogram selected, the create preview updates the initial as you type, using the rule above; an empty or whitespace-only name shows `?`. The edit slide-over header uses the same rule with the agent's saved name, so a draft rename is not previewed before its save completes. Check the save indicator before treating an edit as saved. There is no agent-picture or GIF upload; this does not affect attaching files to a chat.
+The editor puts the choices around one large live preview of the mark. **Role badge** is a single dropdown: type to search (for example "dev" finds Developer), and each option shows its badge. **Look** shows the five figures as pictures, drawn in your chosen colour and badge, so you can see each one before you pick it. **Colour** is a row of ten colour dots. In the create form the preview is a draft: it is saved only when creation succeeds. In the edit slide-over, **Basics** offers the same editor and saves changes automatically; its preview and the header mark show your selection immediately, before the save completes. With Monogram selected, the create preview updates the initial as you type, using the rule above; an empty or whitespace-only name shows `?`. In the edit slide-over the mark uses the agent's saved name, so a draft rename is not previewed before its save completes. Check the save indicator before treating an edit as saved. There is no agent-picture or GIF upload; this does not affect attaching files to a chat.
 
 When creating an agent through the API, omitting `figure`, `role`, or `color`, or sending JSON `null` or an empty string for it, chooses that field's create default: `Omnipus`, `general`, or `#9CA3AF`. This applies to Main agents, native workers, and external workers. A non-empty figure or role must match a listed value exactly; a whitespace-only string is not a default request. A listed palette hex accepts either letter case and is saved and returned uppercase, for example `#fb923c` becomes `#FB923C`. An unlisted colour still rejects the request. These rules are the same with optional inbound schema validation enabled or disabled.
 
@@ -101,7 +101,7 @@ On API create requests, `skills`, `mcp_servers`, and `tool_policy_changes` must 
 
 ### Built-in identity is locked
 
-Open a built-in agent's card, then **Basics**: the figure, role, and colour choices remain visible but cannot be changed. Omnipus restores their fixed values whenever the server starts. The jobs described in the base-agent table above are distinct from these badge choices.
+Open a built-in agent's card, then **Basics**: the role badge, look, and colour choices remain visible but cannot be changed. Omnipus restores their fixed values whenever the server starts. The jobs described in the base-agent table above are distinct from these badge choices.
 
 | Built-in agent | Figure | Role badge | Colour |
 |---|---|---|---|
