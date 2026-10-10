@@ -165,8 +165,13 @@ func TestProcessTaskDirect_ExternalCLIWorker_NoSoul_ComposesTaskOnly(t *testing.
 // TASK path — it derived runCtx via plain context.WithCancel(ctx)
 // (external_dispatch.go) and only forwarded rtCfg.defaultTimeout to the
 // DRIVER as a RunOptions.TimeoutSeconds hint, which only the REAL drivers
-// honor internally (each wraps its own runCtx in context.WithTimeout) — the
-// FakeRunner test double does not. spawnSubTurn's native delegation path
+// honor internally (each wraps its own runCtx in context.WithTimeout).
+// CORRECTION (2026-10-10, item 3): FakeRunner now honours the same
+// ctx-cancel-ends-the-stream contract (pkg/agent/runner/fake.go) as the real
+// drivers. NOTE: on this base the test already passed (~2.6s) with the OLD fake
+// too — the 61s hang this change was briefed to fix is NOT reproducible here, so
+// the change is a contract alignment, not a demonstrated hang fix.
+// spawnSubTurn's native delegation path
 // already had its own Go-level safety-net timeout for exactly this reason
 // (subturn.go ~458-473); processTaskDirectExternalCLI now has the equivalent
 // (loop.go, immediately after `rtCfg := al.getSubTurnConfig()`): a

@@ -102,7 +102,7 @@ var subagent3pCreateOnlyExemptFields = map[string]string{
 // firstForbiddenSubagent3pField returns the first forbidden field supplied on
 // an AgentUpdateRequest PUT to a subagent_3p (External CLI) agent, or ("",
 // false) when none are set. Fields NOT in this list — model, provider,
-// timeout_seconds, color, icon, description, name, voice(*),
+// timeout_seconds, color, description, name, voice(*),
 // rate_limits, executor (cli_path/env_overrides/cli_args only — cli is
 // immutable after create, enforced separately), default, updated_at — are
 // valid on a subagent_3p PUT.

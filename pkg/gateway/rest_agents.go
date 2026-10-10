@@ -397,8 +397,10 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 	// (Partitions) marshal as [] not null — Zod requires type:array on the SPA.
 	lifecycleStore := a.agentLoop.GetSessionLifecycleStore()
 	genSessions := make([]gen.Session, 0, len(metas))
+	approvals := a.pendingApprovalMains()
 	for _, m := range metas {
 		s := unifiedMetaToGenSession(m)
+		stampNeedsAttention(&s, m, approvals)
 		// Sub-agent control plane ADR D4/MAJ-009: lifecycle_state/stop_note,
 		// absent when this session has no LifecycleRecord — same producer
 		// listSessions/getSession use (computeSessionLifecycle, rest_sessions.go).
@@ -688,9 +690,6 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 			c := gen.AgentColor(ac.Color)
 			ag.Color = &c
 		}
-		if ac.Icon != "" {
-			ag.Icon = &ac.Icon
-		}
 		ag.Type = coreagent.ToWireType(ac)
 		ag.Locked = ac.Locked
 		applyAgentEditableFields(&ag, ac)
@@ -768,9 +767,6 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			if ac.Color != "" {
 				c := gen.AgentColor(ac.Color)
 				ag.Color = &c
-			}
-			if ac.Icon != "" {
-				ag.Icon = &ac.Icon
 			}
 			ag.Type = coreagent.ToWireType(ac)
 			ag.Locked = ac.Locked

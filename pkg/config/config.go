@@ -659,13 +659,11 @@ type AgentConfig struct {
 	Voice string `json:"voice,omitempty"`
 	// Color is the hex color code for this agent's avatar in the UI (e.g. "#22C55E").
 	Color string `json:"color,omitempty"`
-	// Icon is the Phosphor icon name for this agent's avatar in the UI (e.g. "robot").
-	Icon string `json:"icon,omitempty"`
 	// Type classifies the agent. Empty defaults to AgentTypeCustom for stored agents;
 	// use ResolveType() to get the effective type.
 	Type AgentType `json:"type,omitempty"`
 	// Locked prevents modification of identity fields (name, description, color,
-	// icon, prompt). Used by core agents to keep their identity stable.
+	// prompt). Used by core agents to keep their identity stable.
 	// Users CAN still change model, remove tools, and set heartbeat.
 	Locked bool `json:"locked,omitempty"`
 	// MemoryEnabled gates whether this agent's ContextBuilder injects its
@@ -1862,36 +1860,6 @@ type ToolsConfig struct {
 	// sent as a full callable def every turn (legacy behavior; backward-compat
 	// kill-switch).
 	Manifest ManifestConfig `json:"manifest" yaml:"manifest,omitempty"`
-
-	// Delegate holds the operator controls for the `delegate` tool.
-	// Maps to config.json: tools.delegate.*
-	Delegate DelegateToolConfig `json:"delegate,omitempty" yaml:"-"`
-}
-
-// DelegateToolConfig holds operator controls for the `delegate` tool.
-// Maps to config.json: tools.delegate.*
-type DelegateToolConfig struct {
-	// RequireParentAgentID gates the fail-closed parent-agent-id guard
-	// (R2-MAJ-015): when it resolves TRUE (the default), a delegate call whose
-	// context carries no resolvable calling-agent id is REFUSED outright rather
-	// than minting a delegation record with an empty ParentAgentID — an
-	// unattributable delegation is a broken audit chain, and a broken audit
-	// chain is not a safe thing to persist.
-	//
-	// This exists because that guard's failure mode is "delegation stops
-	// entirely": a wiring bug anywhere upstream of ToolAgentID turns every
-	// delegate call in the install into an error, with no operator lever to
-	// get work moving again while the real bug is diagnosed. Setting this to
-	// FALSE downgrades the guard to a log-at-Error and mints with an empty
-	// parent id — deliberately degraded attribution, chosen consciously, never
-	// the default and never silent.
-	//
-	// Pointer + omitempty because the semantic default is TRUE: a plain bool
-	// would make an explicit `false` indistinguishable from "unset" after a
-	// round-trip through omitempty, so the kill switch could never actually be
-	// turned off. nil = unset = true; an explicit false wins. Resolve via
-	// EffectiveRequireParentAgentID, never by reading the pointer directly.
-	RequireParentAgentID *bool `json:"require_parent_agent_id,omitempty"`
 }
 
 // ManifestConfig holds settings for the tool-manifest optimization.

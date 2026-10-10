@@ -33,12 +33,23 @@ type wsHandlerHandleAttachSession struct {
 	store    *session.UnifiedStore
 	res      attachResult
 	failed   bool // the catch-up failed; nothing else of this attach runs
+	// ack is the attach frame's acknowledgement of what was shown (U11); nil
+	// for every attach that does not carry one.
+	ack *attachAck
+}
+
+// attachAck is the acknowledging half of an attach_session frame (FR-047,
+// C-ATTENTION): ack_attention true plus the attention_bound the client was
+// shown. Either alone writes nothing.
+type attachAck struct {
+	Ack   bool
+	Bound *int64
 }
 
 // attachReadTranscript reads a session's history for a snapshot. A var only
 // so a test can make the read fail; never reassigned in production.
 var attachReadTranscript = func(store *session.UnifiedStore, sessionID string) ([]session.TranscriptEntry, error) {
-	return store.ReadTranscript(sessionID)
+	return store.ReadTranscriptWithDispositions(sessionID)
 }
 
 // attachAfterBindHook, when set, runs right after an attach has bound the
@@ -62,6 +73,8 @@ var attachAfterBindHook func(sessionID string)
 //	                   replay did not cover · catch_up_complete{W}
 //	A7  release hold: every frame published after the bind follows, in order
 //	A8  hydrate the agent's history, re-emit goal status
+//	A9  acknowledge attention: only for an acknowledging attach of a main whose
+//	    A1-A8 all succeeded (attention_ack.go)
 //
 // It runs synchronously in the connection's read loop, so a frame the
 // client sends after attach_session (e.g. a queued offline message) is
@@ -78,7 +91,20 @@ func (h *WSHandler) handleAttachSession(
 	cursor *attachCursor,
 	wc *wsConn,
 ) {
-	wh := &wsHandlerHandleAttachSession{h: h, ctx: ctx, chatID: chatID, attachID: attachID, cursor: cursor, wc: wc}
+	h.handleAttachSessionWithAck(ctx, chatID, attachID, cursor, nil, wc)
+}
+
+// handleAttachSessionWithAck is handleAttachSession plus the optional
+// attention acknowledgement carried by the attach frame (A9, below).
+func (h *WSHandler) handleAttachSessionWithAck(
+	ctx context.Context,
+	chatID string,
+	attachID string,
+	cursor *attachCursor,
+	ack *attachAck,
+	wc *wsConn,
+) {
+	wh := &wsHandlerHandleAttachSession{h: h, ctx: ctx, chatID: chatID, attachID: attachID, cursor: cursor, wc: wc, ack: ack}
 	if !wh.resolveSession() {
 		return
 	}
@@ -96,6 +122,7 @@ func (h *WSHandler) handleAttachSession(
 	}
 	wh.wc.releaseHold()
 	wh.resumeLiveSession()
+	wh.ackAttention()
 }
 
 // resolveSession is A1: validate the session id and resolve its store.

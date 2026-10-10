@@ -74,6 +74,8 @@ func launchSessionType(kind steer.OriginKind) session.UnifiedSessionType {
 		return session.SessionTypeChat
 	case steer.OriginKindChannel:
 		return session.SessionTypeChannel
+	case steer.OriginKindMain:
+		return session.SessionTypeMain
 	case steer.OriginKindScheduled:
 		return session.SessionTypeScheduled
 	case steer.OriginKindHeartbeat:
@@ -414,7 +416,7 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 		rollback()
 		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: edge: %w", steer.ErrStoreWrite, persistErr)
 	}
-	return steer.LaunchResult{SessionID: childID, Generation: 1}, nil
+	return steer.LaunchResult{SessionID: childID, Generation: 1, Is3P: is3P}, nil
 }
 
 // launchSteered is Launch's steered path (I-1): the child's record is
@@ -484,7 +486,7 @@ func (l *SteerLauncher) launchSteered(
 			// store invariant text); the tool layer maps it to D5's plain
 			// sentence telling the model a new message resumes the
 			// conversation.
-			if parentRec.Terminal() || parentRec.Stopped() {
+			if (parentRec.Terminal() || parentRec.Stopped()) && !isMainTaskChildLaunch(req) {
 				// Gate SFH#6: a session whose most recent revive attempt itself
 				// failed is a different refusal state from a session that is
 				// merely stopped. The standard D5 sentence tells the user to
@@ -510,16 +512,14 @@ func (l *SteerLauncher) launchSteered(
 			// mutable handover owner from session creation (see
 			// createSessionLocked's DEL-11 note), so ActiveAgentID is empty on
 			// any session that was never switched and this read made the edge
-			// look like it had no delegating agent. Mirrors
-			// pkg/tools/delegate_followup.go::cloneCorrectiveSessionIdentity,
-			// which migrated the identical read the same way.
+			// look like it had no delegating agent.
 			parentAgentID := strings.TrimSpace(steererMeta.AgentID)
-			if parentAgentID == "" && l.al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID() {
-				return nil, fmt.Errorf("steer: launch: %w: delegating agent identity is empty", steer.ErrInvalidEdge)
-			}
+			// Founder ruling 2026-10-10: the delegation policy always applies.
+			// A launch with no identified delegating agent cannot be matched
+			// against any caller->target edge, so it is refused here, before
+			// anything is created. No configuration value changes this.
 			if parentAgentID == "" {
-				logger.WarnCF("agent", "steer: launch: accepting empty parent agent identity by operator configuration",
-					map[string]any{"session_id": req.SteeringSessionID, "config": "tools.delegate.require_parent_agent_id"})
+				return nil, fmt.Errorf("steer: launch: %w: delegating agent identity is empty", steer.ErrInvalidEdge)
 			}
 			workspaceID := steererMeta.WorkspaceID
 			reportingChannel, reportingChatID := reportingTargetFor(steererMeta, req.SteeringSessionID)
@@ -602,7 +602,7 @@ func (l *SteerLauncher) launchSteered(
 		}
 		return steer.LaunchResult{}, pubErr
 	}
-	return steer.LaunchResult{SessionID: childID, Generation: resultGen}, nil
+	return steer.LaunchResult{SessionID: childID, Generation: resultGen, Is3P: is3P}, nil
 }
 
 // steerReportingSelfChannel is the fallback Channel a steered session's
@@ -905,16 +905,11 @@ func (l *SteerLauncher) startingRemainingDepth(
 	// no edge is required. Every other launch IS graph-gated and fails closed.
 	taskSelfExempt := originKind == steer.OriginKindTask && targetAgentID == steererRec.AgentID
 
-	// A launch with an EMPTY caller identity cannot be matched against a
-	// caller→target edge at all. It is reachable only when the operator has
-	// explicitly turned OFF tools.delegate.require_parent_agent_id — the
-	// fail-closed guard in launchSteered refuses an empty identity otherwise —
-	// so the operator's override stands and the graph gate does not apply. This
-	// keeps the documented kill-switch behaviour: with the requirement off, a
-	// degraded/identity-less launch still runs on the global/inherited budget.
-	// (It is NOT a general exemption: an IDENTIFIED caller is always gated.)
-	callerIdentified := steererRec.AgentID != ""
-	graphGated := callerIdentified && !taskSelfExempt
+	// The graph gate does not depend on caller identification: launchSteered
+	// refuses a launch with no identified caller before reaching this point,
+	// and a record that nevertheless arrives here without an AgentID is gated
+	// like any other (it cannot match an edge, so it fails closed).
+	graphGated := !taskSelfExempt
 
 	// Resolve the governing workspace EXACTLY as the gate did. An unbound turn
 	// resolves to the is_default workspace rather than skipping the graph read,
@@ -1298,7 +1293,13 @@ func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.Lifecy
 	// the retained external-CLI driver — and its RunOptions snapshot — here. A
 	// pending continuation keeps it (releaseExternalRunIfIdle re-checks the
 	// scope), and a follow-up after release refuses visibly (N5/N7).
-	defer al.releaseExternalRunIfIdle(rec.SessionID)
+	// NEW-6: first retire the revival hold bound to THIS turn's generation — a
+	// turn that failed before reaching the holder never consumed it — then
+	// release. Another revival's hold (a later generation) keeps the driver.
+	defer func() {
+		al.releaseExternalReservationsForGeneration(rec.SessionID, gen)
+		al.releaseExternalRunIfIdle(rec.SessionID)
+	}()
 	// Stop ends the turn, not the session or its goal. In particular, do not
 	// spend the durable marker or write a "session ended" goal outcome here.
 	if ts.stopRequested.Load() || executionStopPending(ts.opts.executionDisposition) {
@@ -1356,4 +1357,16 @@ func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.Lifecy
 	}
 	logger.WarnCF("agent", "steer: complete: bounded drain retry exhausted — no queued items remain",
 		map[string]any{"session_id": sessionID, "generation": gen, "attempts": continueDrainMaxRetries})
+}
+
+// isMainTaskChildLaunch is the FR-018 stopped-main exemption: a task-origin
+// launch whose steering session is the TARGET agent's own computed main may be
+// admitted under that main even while it is stopped. The exemption only lets the
+// child be published; it does not revive the main, write its state or dispatch
+// it (zero main-model wake), and the general stopped-parent guard stays for
+// every other launch — delegate helpers, extra-chat helpers, and tasks whose
+// parent is not the target's own main.
+func isMainTaskChildLaunch(req steer.LaunchRequest) bool {
+	_, agent, ok := session.SplitMainSessionID(req.SteeringSessionID)
+	return ok && req.Origin.Kind == steer.OriginKindTask && agent == req.TargetAgentID
 }

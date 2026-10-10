@@ -284,6 +284,10 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	AgentID string `json:"agent_id,omitempty"`
 	// Priority is 1 (highest) – 5 (lowest); 0 = unset (treated as 3 on read).
 	Priority int `json:"priority,omitempty"`
+	// RunIsolated forces every run of this task into a fresh independent chat,
+	// for either role (session-core FR-017). Default false: the run mode is
+	// derived from the assignee (an eligible main runs as a child of that main).
+	RunIsolated bool `json:"run_isolated,omitempty"`
 	// BlockedBy is the ordered DAG dependency set. A write-time cycle validator
 	// rejects self-edges and cycles; orphan edges are dropped on load; max
 	// depth 50.

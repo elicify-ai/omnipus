@@ -86,8 +86,8 @@ const u5aCallerAgentID = "u5a-seed-delegate-caller"
 // session's creation agent. A fixture that must pin a caller therefore CREATES
 // the session owned by that caller. (A session owned by a distinct caller is
 // what makes the graph gate see caller != target, which these tests require;
-// the freshly-created session also satisfies the fail-closed parent-agent guard,
-// tools.delegate.require_parent_agent_id, since its owner id is non-empty.)
+// the freshly-created session also satisfies the fail-closed parent-agent guard
+// (a launch with no identified delegating agent is refused), since its owner id is non-empty.)
 func newCallerSteeringSession(t *testing.T, al *AgentLoop, workspaceID string) string {
 	t.Helper()
 	return newTestSteeringSessionOwnedBy(t, al, workspaceID, u5aCallerAgentID)

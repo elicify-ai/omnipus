@@ -75,6 +75,20 @@ properties:
       - manual
     description: How the run started — an automatic trigger fire, or a user Run-now.
     example: "scheduled"
+  recipient_session_ids:
+    type: array
+    readOnly: true
+    uniqueItems: true
+    maxItems: 2
+    items:
+      type: string
+      minLength: 1
+      maxLength: 255
+    description: >
+      Session ids captured when this run actually started (FR-019): the
+      starting agent's main and the assignee's main, deduplicated. Never the
+      creator. Fixed for the life of the run. Absent when there is no recipient
+      (a skipped run, or a person/scheduler-started worker run).
   started_at:
     type: string
     format: date-time

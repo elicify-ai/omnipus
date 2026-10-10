@@ -536,7 +536,7 @@ func TestReconcileStuckTasks_ClosesOrphanedTaskRun(t *testing.T) {
 	// PATCH is not itself a legal transition.
 	taskA := createTaskWithStatusViaAPI(t, api, "ReconcileOrphanRunTask", "", "in_progress")
 
-	openRun, created, err := api.taskStore.OpenRun(taskA.Id, nil, task.RunKindManual, "sess-orphan")
+	openRun, created, err := api.taskStore.OpenRun(taskA.Id, nil, task.RunKindManual, "sess-orphan", nil)
 	require.NoError(t, err)
 	require.True(t, created)
 
@@ -546,7 +546,7 @@ func TestReconcileStuckTasks_ClosesOrphanedTaskRun(t *testing.T) {
 	// already-terminal run; this proves reconcile doesn't blindly force one).
 	taskB := createTaskWithStatusViaAPI(t, api, "ReconcileClosedRunTask", "", "in_progress")
 
-	closedRun, createdB, err := api.taskStore.OpenRun(taskB.Id, nil, task.RunKindManual, "sess-already-done")
+	closedRun, createdB, err := api.taskStore.OpenRun(taskB.Id, nil, task.RunKindManual, "sess-already-done", nil)
 	require.NoError(t, err)
 	require.True(t, createdB)
 	require.NoError(t, api.taskStore.CloseRun(taskB.Id, closedRun.RunID, task.StatusDone, "finished before the crash"))

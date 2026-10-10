@@ -164,6 +164,14 @@ type SessionDetail = {
 type Message = {
   id: string;
   client_message_id?: string | undefined;
+  input_disposition?:
+    | {
+        message_id: string;
+        client_message_id?: string | undefined;
+        state: "discarded";
+        reason: "stopped_before_delivery";
+      }
+    | undefined;
   type?:
     | (
         | "message"
@@ -273,12 +281,12 @@ type Message = {
           | "artifact"
           | "blocker"
           | "question"
-          | "decision_request"
           | "error"
           | "handback"
           | "steer"
           | "respond"
-          | "goal_status";
+          | "goal_status"
+          | "not_delivered";
         text?: string | undefined;
         pct?: number | undefined;
         correlation_id?: string | undefined;
@@ -1238,7 +1246,6 @@ type Agent = {
   figure: AgentFigure;
   role: AgentRole;
   color?: AgentColor | undefined;
-  icon?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
   description?: string | undefined;
@@ -1391,7 +1398,6 @@ type AgentCreateRequestMain = {
   figure?: AgentFigure | undefined;
   role?: AgentRole | undefined;
   color?: AgentColor | undefined;
-  icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?:
@@ -1424,7 +1430,6 @@ type AgentCreateRequestSubagent = {
   figure?: AgentFigure | undefined;
   role?: AgentRole | undefined;
   color?: AgentColor | undefined;
-  icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?:
@@ -1446,7 +1451,6 @@ type AgentCreateRequestSubagent3p = {
   figure?: AgentFigure | undefined;
   role?: AgentRole | undefined;
   color?: AgentColor | undefined;
-  icon?: string | undefined;
   rate_limits?:
     | Partial<{
         use_global_defaults: boolean;
@@ -1474,7 +1478,6 @@ type AgentUpdateRequest = {
   figure?: AgentFigure | undefined;
   role?: AgentRole | undefined;
   color?: AgentColor | undefined;
-  icon?: string | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?:
     | Partial<{
@@ -1851,6 +1854,7 @@ type Task = {
   agent_id?: string | undefined;
   cancel_reason?: ("stopped_by_user" | null) | undefined;
   agent_name?: string | undefined;
+  run_isolated?: boolean | undefined;
   priority?: number | undefined;
   blocked_by?: Array<string> | undefined;
   todos?: Array<Todo> | undefined;
@@ -2249,6 +2253,7 @@ type TaskCreateRequest = {
   description?: string | undefined;
   action: "llm";
   agent_id?: string | undefined;
+  run_isolated?: boolean | undefined;
   priority?: number | undefined;
   trigger?: TaskTrigger | undefined;
   blocked_by?: Array<string> | undefined;
@@ -2297,6 +2302,7 @@ type AcceptanceCriterionInput = {
 };
 type TaskUpdateRequest = Partial<{
   title: string;
+  run_isolated: boolean;
   description: string;
   prompt: string;
   status: "inbox" | "next" | "in_progress" | "blocked" | "done" | "failed";
@@ -2393,7 +2399,7 @@ type Schedule = {
   created_by?: string | undefined;
   trigger: ScheduleTrigger;
   message: string;
-  session_mode: "isolated" | "continue" | "main";
+  run_isolated?: boolean | undefined;
   timeout_seconds: number;
   session_id?: string | undefined;
   state: ScheduleState;
@@ -2427,7 +2433,7 @@ type ScheduleCreate = {
   owner_agent_id: string;
   trigger: ScheduleTrigger;
   message: string;
-  session_mode?: ("isolated" | "continue" | "main") | undefined;
+  run_isolated?: boolean | undefined;
   timeout_seconds?: number | undefined;
   enabled?: boolean | undefined;
 };
@@ -2436,7 +2442,7 @@ type ScheduleUpdate = Partial<{
   owner_agent_id: string;
   trigger: ScheduleTrigger;
   message: string;
-  session_mode: "isolated" | "continue" | "main";
+  run_isolated: boolean;
   timeout_seconds: number;
   enabled: boolean;
 }>;
@@ -2489,6 +2495,7 @@ type Workspace = {
   updated_at: string;
   owner?: string | undefined;
   member_configs?: {} | undefined;
+  admin_main_session_id?: string | undefined;
 };
 type WorkspaceDelegationEdge = {
   from_agent: string;
@@ -2666,7 +2673,6 @@ type SessionMessage =
   | SessionMessageArtifact
   | SessionMessageBlocker
   | SessionMessageQuestion
-  | SessionMessageDecisionRequest
   | SessionMessageError
   | SessionMessageHandback
   | SessionMessageRevisionEntry
@@ -2744,22 +2750,6 @@ type SessionMessageQuestion = {
   untrusted_origin: boolean;
   text: string;
   correlation_id: string;
-};
-type SessionMessageDecisionRequest = {
-  message_id: string;
-  session_id: string;
-  parent_session_id?: (string | null) | undefined;
-  generation?: number | undefined;
-  direction: "child_to_parent";
-  kind: "decision_request";
-  depth: number;
-  created_at: string;
-  sender_identity: string;
-  untrusted_origin: boolean;
-  text: string;
-  options: Array<string>;
-  correlation_id: string;
-  authority?: ("self_ok" | "owner_required") | undefined;
 };
 type SessionMessageError = {
   message_id: string;
@@ -3058,6 +3048,7 @@ type SessionLifecycleRecord = {
           | "task"
           | "chat"
           | "channel"
+          | "main"
           | "scheduled"
           | "heartbeat"
           | "verifier"
@@ -3105,6 +3096,17 @@ type DelegateInboxResponse = {
   messages: Array<SessionMessage>;
   has_more: boolean;
   next_cursor?: string | undefined;
+  not_delivered?: DelegateNotDeliveredSummary | undefined;
+};
+type DelegateNotDeliveredSummary = {
+  count: number;
+  last_reason:
+    | "rate_limited"
+    | "body_too_large"
+    | "question_blocker_ceiling"
+    | "unacked_cap";
+  last_kind: string;
+  last_at: string;
 };
 type DelegateRespondResponse = {
   acknowledged: boolean;
@@ -3558,6 +3560,14 @@ export const GoalOutcome: z.ZodType<GoalOutcome> = z.object({
 export const Message: z.ZodType<Message> = z.object({
   id: z.string(),
   client_message_id: z.string().min(1).max(128).optional(),
+  input_disposition: z
+    .object({
+      message_id: z.string().min(1).max(255),
+      client_message_id: z.string().min(1).max(128).optional(),
+      state: z.literal("discarded"),
+      reason: z.literal("stopped_before_delivery"),
+    })
+    .optional(),
   type: z
     .enum([
       "message",
@@ -3669,12 +3679,12 @@ export const Message: z.ZodType<Message> = z.object({
         "artifact",
         "blocker",
         "question",
-        "decision_request",
         "error",
         "handback",
         "steer",
         "respond",
         "goal_status",
+        "not_delivered",
       ]),
       text: z.string().optional(),
       pct: z.number().int().gte(0).lte(100).optional(),
@@ -3862,7 +3872,6 @@ export const Agent: z.ZodType<Agent> = z
     figure: AgentFigure,
     role: AgentRole,
     color: AgentColor.optional(),
-    icon: z.string().max(50).optional(),
     model: z.string().max(256).optional(),
     provider: z.string().max(64).optional(),
     description: z.string().optional(),
@@ -3915,7 +3924,6 @@ export const AgentCreateRequestMain =
     figure: AgentFigure.optional(),
     role: AgentRole.optional(),
     color: AgentColor.optional(),
-    icon: z.string().max(50).optional(),
     tools_cfg: AgentToolsCfg.optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: z
@@ -3940,7 +3948,6 @@ export const AgentCreateRequestSubagent =
     figure: AgentFigure.optional(),
     role: AgentRole.optional(),
     color: AgentColor.optional(),
-    icon: z.string().max(50).optional(),
     tools_cfg: AgentToolsCfg.optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: z
@@ -3962,7 +3969,6 @@ export const AgentCreateRequestSubagent3p =
     figure: AgentFigure.optional(),
     role: AgentRole.optional(),
     color: AgentColor.optional(),
-    icon: z.string().max(50).optional(),
     rate_limits: z
       .object({
         use_global_defaults: z.boolean(),
@@ -3998,7 +4004,6 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   figure: AgentFigure.optional(),
   role: AgentRole.optional(),
   color: AgentColor.optional(),
-  icon: z.string().max(50).optional(),
   fallback_models: z.array(FallbackModel).max(2).optional(),
   model_params: z
     .object({ temperature: z.number(), max_tokens: z.number().int() })
@@ -5054,6 +5059,7 @@ export const Task: z.ZodType<Task> = z
     agent_id: z.string().optional(),
     cancel_reason: z.literal("stopped_by_user").nullish(),
     agent_name: z.string().optional(),
+    run_isolated: z.boolean().optional(),
     priority: z.number().int().gte(1).lte(5).optional().default(3),
     blocked_by: z.array(z.string()).optional(),
     todos: z.array(Todo).optional(),
@@ -5154,6 +5160,7 @@ export const TaskCreateRequest: z.ZodType<TaskCreateRequest> = z.object({
   description: z.string().max(2000).optional(),
   action: z.literal("llm"),
   agent_id: z.string().optional(),
+  run_isolated: z.boolean().optional().default(false),
   priority: z.number().int().gte(1).lte(5).optional().default(3),
   trigger: TaskTrigger.optional(),
   blocked_by: z.array(z.string()).optional(),
@@ -5209,6 +5216,7 @@ export const TaskOccurrenceSet: z.ZodType<TaskOccurrenceSet> = z.object({
 export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
   .object({
     title: z.string().min(1).max(200),
+    run_isolated: z.boolean(),
     description: z.string().max(2000),
     prompt: z.string().max(10000),
     status: z.enum([
@@ -5262,6 +5270,7 @@ export const TaskRun = z.object({
   result: z.string().max(50000).optional(),
   session_id: z.string(),
   kind: z.enum(["scheduled", "manual"]),
+  recipient_session_ids: z.array(z.string().min(1).max(255)).max(2).optional(),
   started_at: z.string().datetime({ offset: true }),
   ended_at: z.string().datetime({ offset: true }).nullable(),
 });
@@ -5364,7 +5373,7 @@ export const Schedule: z.ZodType<Schedule> = z.object({
   created_by: z.string().optional(),
   trigger: ScheduleTrigger,
   message: z.string().min(1),
-  session_mode: z.enum(["isolated", "continue", "main"]),
+  run_isolated: z.boolean().optional(),
   timeout_seconds: z.number().int(),
   session_id: z.string().optional(),
   state: ScheduleState,
@@ -5380,7 +5389,7 @@ export const ScheduleCreate: z.ZodType<ScheduleCreate> = z.object({
   owner_agent_id: z.string().min(1),
   trigger: ScheduleTrigger,
   message: z.string().min(1),
-  session_mode: z.enum(["isolated", "continue", "main"]).optional(),
+  run_isolated: z.boolean().optional().default(false),
   timeout_seconds: z.number().int().gte(0).optional(),
   enabled: z.boolean().optional(),
 });
@@ -5390,7 +5399,7 @@ export const ScheduleUpdate: z.ZodType<ScheduleUpdate> = z
     owner_agent_id: z.string().min(1),
     trigger: ScheduleTrigger,
     message: z.string().min(1),
-    session_mode: z.enum(["isolated", "continue", "main"]),
+    run_isolated: z.boolean().default(false),
     timeout_seconds: z.number().int().gte(0),
     enabled: z.boolean(),
   })
@@ -5470,6 +5479,7 @@ export const Workspace: z.ZodType<Workspace> = z
     updated_at: z.string().datetime({ offset: true }),
     owner: z.string().optional(),
     member_configs: z.record(WorkspaceMemberConfig).optional(),
+    admin_main_session_id: z.string().max(255).optional(),
   })
   .passthrough();
 export const WorkspaceCreateRequest = z
@@ -7133,23 +7143,6 @@ export const SessionMessageQuestion =
     text: z.string().max(32768),
     correlation_id: z.string().min(1),
   }) satisfies z.ZodType<SessionMessageQuestion>;
-export const SessionMessageDecisionRequest =
-  z.object({
-    message_id: z.string().min(1),
-    session_id: z.string().min(1),
-    parent_session_id: z.string().nullish(),
-    generation: z.number().int().gte(0).optional(),
-    direction: z.literal("child_to_parent"),
-    kind: z.literal("decision_request"),
-    depth: z.number().int().gte(0).lte(5),
-    created_at: z.string().datetime({ offset: true }),
-    sender_identity: z.string().min(1),
-    untrusted_origin: z.boolean(),
-    text: z.string().max(32768),
-    options: z.array(z.string()).min(2),
-    correlation_id: z.string().min(1),
-    authority: z.enum(["self_ok", "owner_required"]).optional(),
-  }) satisfies z.ZodType<SessionMessageDecisionRequest>;
 export const SessionMessageError = z.object({
   message_id: z.string().min(1),
   session_id: z.string().min(1),
@@ -7272,7 +7265,6 @@ export const SessionMessage = z.discriminatedUnion(
     SessionMessageArtifact,
     SessionMessageBlocker,
     SessionMessageQuestion,
-    SessionMessageDecisionRequest,
     SessionMessageError,
     SessionMessageHandback,
     SessionMessageRevisionEntry,
@@ -7321,6 +7313,7 @@ export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
           "task",
           "chat",
           "channel",
+          "main",
           "scheduled",
           "heartbeat",
           "verifier",
@@ -7545,11 +7538,24 @@ export const DelegateStatusResponse: z.ZodType<DelegateStatusResponse> =
       .optional(),
     unacked_count: z.number().int().gte(0),
   });
+export const DelegateNotDeliveredSummary: z.ZodType<DelegateNotDeliveredSummary> =
+  z.object({
+    count: z.number().int().gte(1),
+    last_reason: z.enum([
+      "rate_limited",
+      "body_too_large",
+      "question_blocker_ceiling",
+      "unacked_cap",
+    ]),
+    last_kind: z.string().min(1),
+    last_at: z.string().datetime({ offset: true }),
+  });
 export const DelegateInboxResponse: z.ZodType<DelegateInboxResponse> = z.object(
   {
     messages: z.array(SessionMessage),
     has_more: z.boolean(),
     next_cursor: z.string().optional(),
+    not_delivered: DelegateNotDeliveredSummary.optional(),
   }
 );
 export const DelegateRespondResponse: z.ZodType<DelegateRespondResponse> =
@@ -16465,7 +16471,7 @@ export const AttachSessionFrame = z
     since_seq: z.number().int().min(1).optional(),
     boot_id: z.string().optional(),
     ack_attention: z.boolean().optional(),
-    attention_bound: z.number().int().optional(),
+    attention_bound: z.number().int().min(0).optional(),
   })
   .strict();
 
@@ -16494,7 +16500,8 @@ export const MessageStatusFrame = z
     type: z.literal("message_status"),
     session_id: z.string().min(1).max(255),
     client_message_id: z.string().min(1).max(128),
-    state: z.enum(["received", "working", "failed"]),
+    state: z.enum(["received", "working", "failed", "discarded"]),
+    reason: z.literal("stopped_before_delivery").optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -16730,7 +16737,7 @@ export const SubagentMessageFrame = z
     child_session_id: z.string().optional(),
     span_id: z.string().min(1),
     message_id: z.string().min(1),
-    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond", "goal_status"]),
+    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "error", "handback", "steer", "respond", "goal_status", "not_delivered"]),
     text: z.string().optional(),
     pct: z.number().int().min(0).max(100).optional(),
     correlation_id: z.string().optional(),
@@ -16803,6 +16810,14 @@ export const ReplayMessageFrame = z
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
     client_message_id: z.string().optional(),
+    input_disposition: z
+    .object({
+      message_id: z.string().min(1).max(255),
+      client_message_id: z.string().min(1).max(128).optional(),
+      state: z.literal("discarded"),
+      reason: z.literal("stopped_before_delivery"),
+    })
+    .strict().optional(),
     terminal_outcome: z.boolean().optional(),
   })
   .strict();
@@ -17077,7 +17092,7 @@ export const SessionStateFrame = z
     pending_approvals: z.array(SessionStatePendingApproval).max(1000),
     pending_asks: z.array(AskUserQuestionCard).max(64).optional(),
     session_id: z.string().optional(),
-    attention_bound: z.number().int().optional(),
+    attention_bound: z.number().int().min(0).optional(),
     auto_approve_modifier: z.boolean().nullable().optional(),
     active_turn: SessionStateActiveTurn.optional(),
     boot_id: z.string().optional(),

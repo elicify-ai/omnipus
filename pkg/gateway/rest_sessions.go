@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -51,9 +52,11 @@ func jsonSessionDetail(
 	messages []session.TranscriptEntry,
 	agentRemoved bool,
 	ls *session.LifecycleStore,
+	needsAttention *bool,
 	currentBootSeq ...uint64,
 ) {
 	genSession := unifiedMetaToGenSession(meta)
+	genSession.NeedsAttention = needsAttention
 	// C-MAIN: `protected` is computed here as well as in listSessions — the
 	// detail response is the surface the SPA's delete affordance keys on, so
 	// the two must not disagree about a main.
@@ -452,8 +455,11 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	// fields (Partitions in particular) marshal as [] not null — Zod on the SPA
 	// rejects null where the contract says type:array and drops the whole list.
 	genSessions := make([]gen.Session, 0, len(filtered))
+	approvals := a.pendingApprovalMains()
 	for _, m := range filtered {
 		s := unifiedMetaToGenSession(m)
+		// U11 (FR-047): needs_attention for a main (nil for every other row).
+		stampNeedsAttention(&s, m, approvals)
 		// C-MAIN: compute the `protected` flag. Only a main is protected;
 		// every other session gets nil (field omitted from the wire response).
 		s.Protected = computeSessionProtected(m)
@@ -492,12 +498,28 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, resp)
 }
 
+// jsonSessionStorageError answers a session-storage failure with one fixed,
+// actionable message. The full cause - which can carry filesystem paths, file
+// names and session ids - goes to the error-level server log only, never to the
+// client.
+func jsonSessionStorageError(w http.ResponseWriter, op, sessionID string, err error) {
+	slog.Error("rest: session storage failure", "op", op, "session_id", sessionID, "error", err)
+	jsonErr(w, http.StatusInternalServerError, fmt.Sprintf(
+		"This session could not be %s because session storage failed. "+
+			"Check disk space and permissions, then retry. Details are in the server log.", op))
+}
+
 func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) {
 	// session-core U1 / BDD-01.4: a main id resolves through its pair's
 	// eligibility, and any refusal (wrong owner, wrong workspace, unreadable
 	// metadata, non-member, Admin outside the default workspace) is a visible
 	// 404 — never a served mismatched record and never a guessed replacement.
-	if !a.resolveMainSessionForRead(id) {
+	mainOK, mainErr := a.resolveMainSessionForRead(id)
+	if mainErr != nil {
+		jsonErr(w, http.StatusInternalServerError, mainErr.Error())
+		return
+	}
+	if !mainOK {
 		jsonErr(w, http.StatusNotFound, "session not found")
 		return
 	}
@@ -508,13 +530,16 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 	}
 	meta, err := store.GetMeta(id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, fmt.Sprintf("session not found: %v", err))
+		if errors.Is(err, fs.ErrNotExist) {
+			jsonErr(w, http.StatusNotFound, "session not found")
+			return
+		}
+		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
-	messages, err := store.ReadTranscript(id)
+	messages, err := store.ReadTranscriptWithDispositions(id)
 	if err != nil {
-		slog.Error("rest: could not read transcript", "session_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))
+		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
 	// ADR-057 D1/W11 (FR-034/FR-038): a delegated child owns its own real
@@ -543,7 +568,7 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 	// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize to
 	// the same JSON layout defined in SessionDetail.yaml and Session.yaml/Message.yaml.
 	// Using jsonSessionDetail avoids an import cycle while staying lint-compliant.
-	jsonSessionDetail(w, meta, messages, agentRemoved, a.agentLoop.GetSessionLifecycleStore(), a.agentLoop.CurrentBootEpoch())
+	jsonSessionDetail(w, meta, messages, agentRemoved, a.agentLoop.GetSessionLifecycleStore(), mainNeedsAttention(meta, a.pendingApprovalMains()), a.agentLoop.CurrentBootEpoch())
 }
 
 func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id string) {
@@ -552,10 +577,9 @@ func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id 
 		jsonErr(w, http.StatusNotFound, "session not found")
 		return
 	}
-	messages, err := store.ReadTranscript(id)
+	messages, err := store.ReadTranscriptWithDispositions(id)
 	if err != nil {
-		slog.Error("rest: could not read transcript", "session_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))
+		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
 	// ADR-057 D1/W11 (FR-034/FR-038): see getSession's identical note above —
@@ -647,14 +671,12 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 	if err := store.SetMeta(id, session.MetaPatch{Title: &req.Title}); err != nil {
-		slog.Error("rest: rename session", "session_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not rename session: %v", err))
+		jsonSessionStorageError(w, "renamed", id, err)
 		return
 	}
 	meta, err := store.GetMeta(id)
 	if err != nil {
-		slog.Error("rest: rename session: get meta after update", "session_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read updated session: %v", err))
+		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
 	s := unifiedMetaToGenSession(meta)
@@ -731,18 +753,21 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 	// deleting anything, over the DURABLE lifecycle store — every delegation,
 	// live or not, has a LifecycleRecord (User Story 4), so this walk is
 	// authoritative independent of turn liveness and survives a restart.
-	// Reuses U11's already-tested u11CollectDescendantSessionIDs (same
-	// package, pkg/gateway/websocket.go), which walks U13's SteeringSessionID
-	// index (pkg/session/lifecycle.go) exactly as the cancel/approval-cascade
-	// paths do — this handler does not reimplement the walk. A nil lifecycle
-	// store (no delegation store wired — most webchat-only installs never
-	// mint one) degrades to zero descendants, matching that helper's
-	// documented nil-store behavior.
-	descendantIDs := u11CollectDescendantSessionIDs(a.agentLoop.GetSessionLifecycleStore(), id)
+	// Uses the one shared collector, agent.CollectDescendantSessionIDs, which
+	// walks the SteeringSessionID index (pkg/session/lifecycle.go) exactly as
+	// the cancel/approval-cascade paths do — this handler does not reimplement
+	// the walk. A nil lifecycle store (no delegation store wired — most
+	// webchat-only installs never mint one) degrades to zero descendants. A walk
+	// error is logged: the descendants found before the failure are still
+	// cleaned up, and the log says the set is incomplete.
+	descendantIDs, walkErr := agent.CollectDescendantSessionIDs(a.agentLoop.GetSessionLifecycleStore(), id)
+	if walkErr != nil {
+		slog.Warn("rest: delete session: descendant walk failed partway through — the cleanup set is INCOMPLETE",
+			"session_id", id, "error", walkErr)
+	}
 
 	if err := store.DeleteSession(id); err != nil {
-		slog.Error("rest: delete session", "session_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not delete session: %v", err))
+		jsonSessionStorageError(w, "deleted", id, err)
 		return
 	}
 	// N6: the session is gone, so drop any retained external-CLI driver (and its
@@ -922,8 +947,7 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 
 	meta, err := store.NewSession(sessionType, "webchat", agentID)
 	if err != nil {
-		slog.Error("rest: create session", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create session: %v", err))
+		jsonSessionStorageError(w, "created", "", err)
 		return
 	}
 	if workspaceID != "" {
@@ -959,6 +983,11 @@ func (a *restAPI) resolveSessionStore(sessionID string) *session.UnifiedStore {
 // stopBeforeDelete runs the one Stop (tree scope) for a session about to be
 // deleted and waits for its stopped turns to exit. It returns a non-empty
 // summary when the session may still be running, which refuses the delete.
+// stopBeforeDeleteFailedText is the fixed client message when the Stop that
+// precedes a delete could not run. It names no path, file or id.
+const stopBeforeDeleteFailedText = "Stop before delete failed; nothing was deleted. " +
+	"Check that session storage is available and writable, then retry. Details are in the server log."
+
 func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
 	if a.agentLoop == nil {
 		return ""
@@ -973,11 +1002,13 @@ func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
 		Channel:   "web",
 		Tree:      true,
 	})
-	if err != nil {
-		return "Stop before delete failed; nothing was deleted: " + err.Error()
-	}
-	if res.RootErr != nil {
-		return "Stop before delete failed; nothing was deleted: " + res.RootErr.Error()
+	if err != nil || res.RootErr != nil {
+		// The full cause (it can carry the lifecycle journal's path, file name
+		// and the session id) goes to the error log only; the client gets one
+		// fixed message and nothing is deleted.
+		slog.Error("rest: delete session: Stop before delete failed; deletion refused",
+			"session_id", id, "error", err, "root_error", res.RootErr)
+		return stopBeforeDeleteFailedText
 	}
 	// A background shell the tree Stop could not kill would outlive its deleted
 	// row (FR-022: tree Stop kills them), so it refuses the delete visibly.

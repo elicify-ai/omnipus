@@ -30,6 +30,8 @@ func (h *WSHandler) requestScopedStop(wc *wsConn, sessionID string, stopAll bool
 		Channel:   "web",
 		Tree:      stopAll,
 		Canceller: stopper,
+		// FR-024: tell the session's tabs which queued messages Stop discarded.
+		OnInputDiscarded: h.announceDiscardedInput,
 		HooksFor: func(id string) agent.CancelHooks {
 			if id != sessionID {
 				return h.webStopHooks(wc, nil, stopAll)

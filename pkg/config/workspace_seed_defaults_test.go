@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -87,18 +88,16 @@ func TestWorkspaceSeedDefaults_DefaultConfigShipsJudgeAndPlansupervisor(t *testi
 			workspaceSeedDefaultsKeyPath)
 	}
 	ids := configStringIDs(t, got, workspaceSeedDefaultsKeyPath)
-	// Shipped default = the two hidden system seed records only. Planner is a
+	// Freeze the COMPLETE shipped value (F6): exact membership AND order, so a
+	// duplicate such as [judge, judge] fails — it keeps the length and
+	// allowed-id checks green while silently dropping the required
+	// plansupervisor exclusion. Shipped default = the two hidden system seed
+	// records only, in the seed-owner-decision's own literal order. Planner is a
 	// native worker and is deliberately NOT excluded (seed-owner-decision).
-	want := map[string]bool{"judge": true, "plansupervisor": true}
-	if len(ids) != len(want) {
-		t.Fatalf("%s shipped default = %v, want exactly [judge plansupervisor]",
-			workspaceSeedDefaultsKeyPath, ids)
-	}
-	for _, id := range ids {
-		if !want[id] {
-			t.Fatalf("%s shipped default = %v, contains unexpected id %q (want exactly judge+plansupervisor)",
-				workspaceSeedDefaultsKeyPath, ids, id)
-		}
+	want := []string{"judge", "plansupervisor"}
+	if !slices.Equal(ids, want) {
+		t.Fatalf("%s shipped default = %v, want exactly %v (no duplicates, exact order)",
+			workspaceSeedDefaultsKeyPath, ids, want)
 	}
 }
 

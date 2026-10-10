@@ -18,10 +18,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 const workspaceSeedDefaultsKey = "workspace_seed_defaults"
@@ -47,6 +52,69 @@ func TestSanitizeConfigForWire_StripsWorkspaceSeedDefaults(t *testing.T) {
 	if _, present := m["gateway"]; !present {
 		t.Fatal("control: sanitizeConfigForWire must not touch keys outside the exclusion list")
 	}
+}
+
+// TestGetConfig_EndpointOmitsWorkspaceSeedDefaults drives the REAL GET handler
+// (getConfig) with the operator's file-only block loaded, and pins that the
+// generated response omits it while unrelated settings remain. This closes the
+// F4 gap: the sanitizer-only test above cannot see getConfig forgetting to call
+// sanitizeConfigForWire at all.
+func TestGetConfig_EndpointOmitsWorkspaceSeedDefaults(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	// Load the operator's file-only block into the live config the GET marshals.
+	api.agentLoop.GetConfig().WorkspaceSeedDefaults = &config.WorkspaceSeedDefaultsConfig{
+		SelfEdge: config.SelfEdgeSeedDefaults{ExcludeAgentIDs: []string{"judge", "plansupervisor"}},
+	}
+
+	w := httptest.NewRecorder()
+	api.getConfig(w)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp),
+		"GET /api/v1/config must return a JSON object")
+
+	if _, present := resp[workspaceSeedDefaultsKey]; present {
+		t.Fatalf("GET /api/v1/config leaked %q — the endpoint must call sanitizeConfigForWire "+
+			"(seed-owner-decision ::No gateway exposure; U5a condition-1)", workspaceSeedDefaultsKey)
+	}
+	// Control: the endpoint served a real config, not an empty body.
+	if _, present := resp["gateway"]; !present {
+		t.Fatal("control: GET /api/v1/config must still serve unrelated settings (gateway)")
+	}
+}
+
+// TestUpdateConfig_UnrelatedWritePreservesWorkspaceSeedDefaults pins that the
+// file-only operator block survives a generic UNRELATED PUT: the merge is
+// top-level, so a body that does not name the block must leave the operator's
+// value on disk untouched. Refusing the block must not mean silently dropping
+// it on the next benign settings write.
+func TestUpdateConfig_UnrelatedWritePreservesWorkspaceSeedDefaults(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	// Seed config.json with the operator's hand-edited file-only block.
+	seeded := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],` +
+		`"workspace_seed_defaults":{"self_edge":{"exclude_agent_ids":["judge","my-custom"]}}}`)
+	require.NoError(t, os.WriteFile(filepath.Join(api.homePath, "config.json"), seeded, 0o600))
+
+	body := `{"gateway":{"port":5001}}`
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/config", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.updateConfig(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "an unrelated PUT must be accepted")
+
+	after := readConfigOnDisk(t, api)
+	block, ok := after[workspaceSeedDefaultsKey].(map[string]any)
+	require.True(t, ok, "the file-only operator block must survive an unrelated PUT")
+	selfEdge, ok := block["self_edge"].(map[string]any)
+	require.True(t, ok, "self_edge must remain an object on disk")
+	assert.Equal(t, []any{"judge", "my-custom"}, selfEdge["exclude_agent_ids"],
+		"the operator's hand-edited value must be preserved verbatim")
+	// Control: the unrelated key the PUT carried was actually written — a no-op
+	// PUT would make the preservation assertion vacuous.
+	gw, ok := after["gateway"].(map[string]any)
+	require.True(t, ok, "control: the PUT must have written the gateway section")
+	assert.Equal(t, float64(5001), gw["port"], "control: the unrelated change landed")
 }
 
 // TestWireExcludedConfigFields_IncludesWorkspaceSeedDefaults pins the single
@@ -82,10 +150,11 @@ func TestUpdateConfig_RefusesWorkspaceSeedDefaultsWrite(t *testing.T) {
 			workspaceSeedDefaultsKey, w.Code, w.Body.String())
 	}
 	var resp map[string]string
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err == nil {
-		assert.Contains(t, resp["error"], workspaceSeedDefaultsKey,
-			"the refusal must name the key so the operator knows it is config-file-only")
-	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp),
+		"the 403 refusal must be a JSON object; a malformed body must FAIL this test, never "+
+			"silently skip the key assertion (security T2)")
+	assert.Contains(t, resp["error"], workspaceSeedDefaultsKey,
+		"the refusal must name the key so the operator knows it is config-file-only")
 	after := readConfigOnDisk(t, api)
 	assert.Equal(t, before, after, "a refused PUT must persist nothing (no partial mutation)")
 }

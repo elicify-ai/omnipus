@@ -4391,7 +4391,7 @@ export interface components {
              */
             protected?: boolean;
             /**
-             * @description Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session. This change only publishes the field. What sets the value, and the rule that a read failure is unknown rather than false, arrives in a later unit.
+             * @description Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session, and on a main whose attention sources could not be read (the client shows unknown, never false). True for a pending structured question, a pending tool approval on the main or one of its helpers, or a finished or failed goal outcome not yet seen; never for a goal the user stopped.
              * @example false
              */
             readonly needs_attention?: boolean;
@@ -4564,7 +4564,7 @@ export interface components {
         };
         /**
          * SessionPage
-         * @description Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098). `sessions` is this page's rows: root sessions by default, that node's direct children when parent_session_id is supplied, or every session (roots and subordinates) when flat=true (FR-104). `partial_errors` composes with paging: a page whose merge hit a failing legacy per-agent store still returns its healthy rows, still returns next_cursor, and populates partial_errors — a failing store contributes zero rows and does not halt the page or invalidate the cursor (FR-098).
+         * @description Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098). `sessions` is this page's rows: root sessions by default, that node's direct children when parent_session_id is supplied, or every session (roots and subordinates) when flat=true (FR-104). `partial_errors` composes with paging: a page in which one agent's sessions could not be read still returns its healthy rows, still returns next_cursor, and populates partial_errors — an unreadable source contributes zero rows and does not halt the page or invalidate the cursor (FR-098).
          */
         SessionPage: {
             sessions: components["schemas"]["Session"][];
@@ -4573,7 +4573,7 @@ export interface components {
              * @example 20
              */
             next_cursor?: string;
-            /** @description Opaque error tokens (agent ID + sanitized reason) from any store that failed during this page's merge. Present only when at least one store failed. */
+            /** @description Opaque error tokens (agent ID + sanitized reason) from any source that could not be read during this page's merge. Present only when at least one source failed. */
             partial_errors?: string[];
         };
         /** @description Body for POST /sessions. Creates a new session for an agent. */
@@ -4617,6 +4617,17 @@ export interface components {
              * @example cmid_01HXYZ
              */
             client_message_id?: string;
+            /** @description Read-only record that this user input was DISCARDED by Stop before it was delivered into the agent's model input (session-core FR-024). Absent on every delivered message. There is no client action to release or discard it; the archived message bytes are unchanged and this only labels them. */
+            readonly input_disposition?: {
+                /** @description The original input message id (this entry's id). */
+                message_id: string;
+                /** @description The sender's client_message_id, when the input carried one. */
+                client_message_id?: string;
+                /** @enum {string} */
+                state: "discarded";
+                /** @enum {string} */
+                reason: "stopped_before_delivery";
+            };
             /**
              * @description Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id.
              * @example message
@@ -4758,7 +4769,7 @@ export interface components {
              */
             tool: string;
             /**
-             * @description Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+             * @description Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
              * @example success
              * @enum {string}
              */
@@ -8303,7 +8314,7 @@ export interface components {
          */
         AgentFigure: "Robot" | "Man" | "Woman" | "Omnipus";
         /**
-         * @description Curated role slug. The badge, not the legacy Phosphor `icon`. Labels and the five groups are not on the wire.
+         * @description Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire.
          * @example general
          * @enum {string}
          */
@@ -8347,11 +8358,6 @@ export interface components {
             figure: components["schemas"]["AgentFigure"];
             role: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
-            /**
-             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
-             * @example Robot
-             */
-            icon?: string;
             /**
              * @description Model slug used for LLM calls (resolved from defaults when not explicitly set on the agent). With the O3 two-field model, this is the bare model slug (e.g. "google/gemini-2.5-flash"); routing is keyed by the explicit `provider` field. A legacy combined slug ("openrouter/google/gemini-2.5-flash") is split into {model, provider} by the config-load migration. Never inferred at call time once `provider` is set.
              * @example google/gemini-2.5-flash
@@ -8657,11 +8663,6 @@ export interface components {
             figure?: components["schemas"]["AgentFigure"];
             role?: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
-            /**
-             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
-             * @example ChartBar
-             */
-            icon?: string;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
@@ -8748,11 +8749,6 @@ export interface components {
             figure?: components["schemas"]["AgentFigure"];
             role?: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
-            /**
-             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
-             * @example ChartBar
-             */
-            icon?: string;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
@@ -8831,11 +8827,6 @@ export interface components {
             figure?: components["schemas"]["AgentFigure"];
             role?: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
-            /**
-             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
-             * @example ChartBar
-             */
-            icon?: string;
             /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
             rate_limits?: {
                 /**
@@ -8921,11 +8912,6 @@ export interface components {
             figure?: components["schemas"]["AgentFigure"];
             role?: components["schemas"]["AgentRole"];
             color?: components["schemas"]["AgentColor"];
-            /**
-             * @description Legacy Phosphor catalog name (for example "Robot", "lightbulb"). Not the role and not the figure. Identity rendering uses `figure`, `role`, and `color`. Kept so surfaces that still draw a Phosphor icon do not break. Omitted when the agent has none.
-             * @example Robot
-             */
-            icon?: string;
             /**
              * @description Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries. Rejected 400 on subagent_3p agents (CLI handles its own retries).
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
@@ -11128,7 +11114,7 @@ export interface components {
              */
             available_while_streaming?: boolean;
             /**
-             * @description How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /clear, /model) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame (e.g. /skill). Only meaningful for web-surfaced commands; defaults to "agent".
+             * @description How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /model, /skills) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame, where the server executes it (e.g. /status, /channels). Only meaningful for web-surfaced commands; defaults to "agent".
              * @example client
              * @enum {string}
              */
@@ -11313,6 +11299,11 @@ export interface components {
              * @example Jim
              */
             agent_name?: string;
+            /**
+             * @description True forces every run of this work into a fresh independent chat, for either role (session-core FR-017).
+             * @example false
+             */
+            run_isolated?: boolean;
             /**
              * @description Task priority from 1 (highest) to 5 (lowest). Defaults to 3.
              * @default 3
@@ -13618,6 +13609,12 @@ export interface components {
              */
             agent_id?: string;
             /**
+             * @description Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+             * @default false
+             * @example false
+             */
+            run_isolated: boolean;
+            /**
              * @description Task priority from 1 (highest) to 5 (lowest). Defaults to 3.
              * @default 3
              * @example 3
@@ -13716,6 +13713,11 @@ export interface components {
              * @example Updated task title
              */
             title?: string;
+            /**
+             * @description Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017); false clears it. Omitted leaves it unchanged.
+             * @example false
+             */
+            run_isolated?: boolean;
             /**
              * @description New free-form description.
              * @example Revised notes.
@@ -14080,6 +14082,8 @@ export interface components {
              * @enum {string}
              */
             kind: "scheduled" | "manual";
+            /** @description Session ids captured when this run actually started (FR-019): the starting agent's main and the assignee's main, deduplicated. Never the creator. Fixed for the life of the run. Absent when there is no recipient (a skipped run, or a person/scheduler-started worker run). */
+            readonly recipient_session_ids?: string[];
             /**
              * Format: date-time
              * @description RFC 3339 timestamp when the run opened (also the on-disk day-partition key for the open record).
@@ -14607,10 +14611,10 @@ export interface components {
             /** @description The instruction the owning agent processes on each run. */
             message: string;
             /**
-             * @description isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
-             * @enum {string}
+             * @description True when every run is forced into a fresh independent chat (session-core FR-017). The run mode is otherwise derived from the owner; there is no user-facing session-mode choice.
+             * @example false
              */
-            session_mode: "isolated" | "continue" | "main";
+            run_isolated?: boolean;
             /** @description Per-run deadline in seconds; 0 means use the global schedules.run_timeout_seconds default. */
             timeout_seconds: number;
             /** @description For continue/main modes, the persistent session id this schedule runs in. */
@@ -14633,10 +14637,11 @@ export interface components {
             trigger: components["schemas"]["ScheduleTrigger"];
             message: string;
             /**
-             * @description Default isolated.
-             * @enum {string}
+             * @description Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+             * @default false
+             * @example false
              */
-            session_mode?: "isolated" | "continue" | "main";
+            run_isolated: boolean;
             /** @description Per-run deadline; default 0 = use the global default. */
             timeout_seconds?: number;
             /** @description Default true. */
@@ -14651,8 +14656,12 @@ export interface components {
             owner_agent_id?: string;
             trigger?: components["schemas"]["ScheduleTrigger"];
             message?: string;
-            /** @enum {string} */
-            session_mode?: "isolated" | "continue" | "main";
+            /**
+             * @description Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+             * @default false
+             * @example false
+             */
+            run_isolated: boolean;
             timeout_seconds?: number;
             enabled?: boolean;
         };
@@ -14824,6 +14833,11 @@ export interface components {
             member_configs?: {
                 [key: string]: components["schemas"]["WorkspaceMemberConfig"];
             };
+            /**
+             * @description Server-computed id of the built-in Admin's main session in this workspace. Present only on the default workspace (is_default true) and only when that main resolves (same validation as WorkspaceMemberConfig.main_session_id). Omitted on every other workspace and whenever the main does not resolve - never a guessed id. Admin is not a workspace member; this is not a membership entry. The main's state (needs_attention, protected, etc.) comes from Session list/detail like any other main. Server-owned and read-only.
+             * @example main-session-ws-123+admin
+             */
+            readonly admin_main_session_id?: string;
         };
         /** @description Per-member config inside a workspace (keyed by agentId). */
         WorkspaceMemberConfig: {
@@ -15914,8 +15928,8 @@ export interface components {
              */
             total: number;
         };
-        /** @description The typed, schema-validated envelope carried over the existing pkg/bus MessageBus (no new transport) that derives every control/visibility surface of the session-control plane (ADR-053 S6/US-6). Discriminated by `kind` — 12 variants covering child->parent reporting (progress/checkpoint/artifact/blocker/ question/decision_request/error/handback), engine-emitted control (revision_entry), session->UI propagation (goal_status), and parent->child control (steer/respond). `direction` is one of `child_to_parent | parent_to_child | session_to_ui | engine` — the historical `human` value is dropped (M8); every kind variant maps to exactly one of the four. Every field/kind/direction pairing is the ratified shape from the spec's Contract Surface table — see the individual variant files for full per-kind documentation and caps (10 msgs/min, 32 KiB, depth <=5 for child sends; 6/min, 16 KiB for steer; per-child unacked ceiling 20 open question+blocker, D15). */
-        SessionMessage: components["schemas"]["SessionMessageProgress"] | components["schemas"]["SessionMessageCheckpoint"] | components["schemas"]["SessionMessageArtifact"] | components["schemas"]["SessionMessageBlocker"] | components["schemas"]["SessionMessageQuestion"] | components["schemas"]["SessionMessageDecisionRequest"] | components["schemas"]["SessionMessageError"] | components["schemas"]["SessionMessageHandback"] | components["schemas"]["SessionMessageRevisionEntry"] | components["schemas"]["SessionMessageGoalStatus"] | components["schemas"]["SessionMessageSteer"] | components["schemas"]["SessionMessageRespond"];
+        /** @description The typed, schema-validated envelope carried over the existing pkg/bus MessageBus (no new transport) that derives every control/visibility surface of the session-control plane (ADR-053 S6/US-6). Discriminated by `kind` — 11 variants covering child->parent reporting (progress/checkpoint/artifact/blocker/ question/error/handback), engine-emitted control (revision_entry), session->UI propagation (goal_status), and parent->child control (steer/respond). `direction` is one of `child_to_parent | parent_to_child | session_to_ui | engine` — the historical `human` value is dropped (M8); every kind variant maps to exactly one of the four. Every field/kind/direction pairing is the ratified shape from the spec's Contract Surface table — see the individual variant files for full per-kind documentation and caps (10 msgs/min, 32 KiB, depth <=5 for child sends; 6/min, 16 KiB for steer; per-child unacked ceiling 20 open question+blocker, D15). */
+        SessionMessage: components["schemas"]["SessionMessageProgress"] | components["schemas"]["SessionMessageCheckpoint"] | components["schemas"]["SessionMessageArtifact"] | components["schemas"]["SessionMessageBlocker"] | components["schemas"]["SessionMessageQuestion"] | components["schemas"]["SessionMessageError"] | components["schemas"]["SessionMessageHandback"] | components["schemas"]["SessionMessageRevisionEntry"] | components["schemas"]["SessionMessageGoalStatus"] | components["schemas"]["SessionMessageSteer"] | components["schemas"]["SessionMessageRespond"];
         /**
          * SessionMessageProgress
          * @description SessionMessage `oneOf` variant, `kind: progress` (ADR-053 §Contract Surface — SessionMessage). Child -> parent. A lightweight in-flight narration line; never a claim, never a checkpoint. Envelope fields are duplicated inline on every variant (ADR-034 precedent — oapi-codegen inlines `oneOf` members that are direct component refs into named `As*`/`From*` accessors; a shared base composed via `allOf` across files does not receive the same treatment, so each variant is flat, matching `AgentCreateRequestMain`/`AgentCreateRequestSubagent`).
@@ -16176,65 +16190,6 @@ export interface components {
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
              */
             correlation_id: string;
-        };
-        /**
-         * SessionMessageDecisionRequest
-         * @description SessionMessage `oneOf` variant, `kind: decision_request` (ADR-053 §Contract Surface, R§8.2). Child -> parent. Like `question` but enumerates discrete `options[]`; the answering `respond.text` names the chosen option. Same untrusted-authority handling as `question` (M3). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
-         */
-        SessionMessageDecisionRequest: {
-            /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WM */
-            message_id: string;
-            /** @example 550e8400-e29b-41d4-a716-446655440000 */
-            session_id: string;
-            /** @example 660e8400-e29b-41d4-a716-446655440000 */
-            parent_session_id?: string | null;
-            /** @example 0 */
-            generation?: number;
-            /**
-             * @example child_to_parent
-             * @enum {string}
-             */
-            direction: "child_to_parent";
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "decision_request";
-            /** @example 0 */
-            depth: number;
-            /**
-             * Format: date-time
-             * @example 2026-07-22T10:00:00Z
-             */
-            created_at: string;
-            /** @example ray */
-            sender_identity: string;
-            /** @example true */
-            untrusted_origin: boolean;
-            /**
-             * @description Untrusted decision prompt.
-             * @example Which lint profile should the plan-lint gate use?
-             */
-            text: string;
-            /**
-             * @description The enumerated choices. The answering `respond.text` names the chosen option verbatim.
-             * @example [
-             *       "strict",
-             *       "soft"
-             *     ]
-             */
-            options: string[];
-            /**
-             * @description Routes the eventual `respond` back to this decision request.
-             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WN
-             */
-            correlation_id: string;
-            /**
-             * @description Child-authored authority tag, untrusted (M3) — see SessionMessageQuestion.authority for the identical fail-closed derivation rule.
-             * @example owner_required
-             * @enum {string}
-             */
-            authority?: "self_ok" | "owner_required";
         };
         /**
          * SessionMessageError
@@ -16511,7 +16466,7 @@ export interface components {
         };
         /**
          * SessionMessageRespond
-         * @description SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The text is delivered as an ordinary steering message; the recipient's state decides the effect (ADR-20261004 C1). The former owner-answer authority rejection was withdrawn with the person-question pause (ADR-20261004, locked decision 7). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         * @description SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The text is delivered as an ordinary steering message; the recipient's state decides the effect (ADR-20261004 C1). The former owner-answer authority rejection was withdrawn with the person-question pause (ADR-20261004, locked decision 7). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
          */
         SessionMessageRespond: {
             /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WW */
@@ -16553,12 +16508,12 @@ export interface components {
              */
             untrusted_origin: boolean;
             /**
-             * @description The answer. For a `decision_request`, names the chosen option verbatim from its `options[]`.
+             * @description The answer to the child's question.
              * @example Yes, overwrite it — the backup is stale.
              */
             text: string;
             /**
-             * @description The `correlation_id` of the `question`/`decision_request` being answered.
+             * @description The `correlation_id` of the `question` being answered.
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
              */
             correlation_id: string;
@@ -16714,7 +16669,7 @@ export interface components {
             /** @description Present iff `state == needs_input`; absent otherwise (no schema `nullable: true` — an optional-object field paired with `nullable` generates a `T | null | undefined` Zod type against an openapi-typescript TS type that only ever emits `T | undefined` for a nullable, non-required, non-scalar property, a real codegen mismatch between the two generators for this shape; plain optional-only is unambiguous and matches how every other optional nested object in this contract set is expressed). `reconstructable` is a PARK-TIME HINT ONLY (m5) — the authoritative determination is `isNeedsInputReconstructable(rec)` re-evaluated AT BOOT (R§8.6), never this stored value. */
             needs_input?: {
                 /**
-                 * @description The open question/decision_request this session is parked on.
+                 * @description The open question this session is parked on.
                  * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
                  */
                 correlation_id: string;
@@ -16750,11 +16705,11 @@ export interface components {
             /** @description Every record carries its origin: how and where this session was launched (ADR-091 I-1). Kind discriminates the launch path. */
             origin?: {
                 /**
-                 * @description The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+                 * @description The launch path that created this session. Root kinds (chat/channel/main/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
                  * @example delegate
                  * @enum {string}
                  */
-                kind: "delegate" | "task" | "chat" | "channel" | "scheduled" | "heartbeat" | "verifier" | "plan" | "human";
+                kind: "delegate" | "task" | "chat" | "channel" | "main" | "scheduled" | "heartbeat" | "verifier" | "plan" | "human";
                 /**
                  * @description For delegate/task-origin sessions, the tool-call id (span key) of the originating delegate or create_task call. Absent for other kinds.
                  * @example span_01J3ZQK8N2H8VXNRP5T7C9M4WE
@@ -17102,7 +17057,7 @@ export interface components {
         };
         /**
          * DelegateInboxAction
-         * @description `delegate` tool call, `action: inbox` (ADR-053 §5.1). Drains the child->parent typed inbox (progress/checkpoint/artifact/blocker/ question/decision_request/error/handback), durable and keyed to the parent's chat/plan id (D16).
+         * @description `delegate` tool call, `action: inbox` (ADR-053 §5.1). Drains the child->parent typed inbox (progress/checkpoint/artifact/blocker/ question/error/handback), durable and keyed to the parent's chat/plan id (D16).
          */
         DelegateInboxAction: {
             /**
@@ -17191,12 +17146,12 @@ export interface components {
              */
             session_id: string;
             /**
-             * @description The answer. For a `decision_request`, names the chosen option verbatim.
+             * @description The answer to the child's question.
              * @example Yes, overwrite it — the backup is stale.
              */
             text: string;
             /**
-             * @description The `correlation_id` of the question/decision_request being answered.
+             * @description The `correlation_id` of the question being answered.
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
              */
             correlation_id: string;
@@ -17380,6 +17335,36 @@ export interface components {
              * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WF
              */
             next_cursor?: string;
+            /** @description Present only when at least one report from this child was refused at an inbox cap and not saved (FR-013). Absent when nothing was ever refused. Counts only; refused content is never kept. */
+            not_delivered?: components["schemas"]["DelegateNotDeliveredSummary"];
+        };
+        /**
+         * DelegateNotDeliveredSummary
+         * @description Reports from this helper that were refused at an inbox cap and NOT saved (FR-013, #1211). Counts and the last refusal only; refused content is never kept.
+         */
+        DelegateNotDeliveredSummary: {
+            /**
+             * Format: int64
+             * @description Cumulative number of refused reports for this child session; never reset.
+             * @example 3
+             */
+            count: number;
+            /**
+             * @description Why the most recent report was refused.
+             * @example rate_limited
+             * @enum {string}
+             */
+            last_reason: "rate_limited" | "body_too_large" | "question_blocker_ceiling" | "unacked_cap";
+            /**
+             * @description SessionMessage kind of the last refused report.
+             * @example progress
+             */
+            last_kind: string;
+            /**
+             * Format: date-time
+             * @description When the last refusal happened.
+             */
+            last_at: string;
         };
         /**
          * DelegateRespondResponse
@@ -17422,7 +17407,7 @@ export interface components {
              */
             latest_progress_pct?: number;
         };
-        /** @description The first-class child-side `message_parent` tool's argument shape, discriminated by `kind` (ADR-053 §5.1). A child uses this exactly ONE tool to push a typed message into its parent's inbox — `progress | checkpoint | artifact | blocker | question | handback`. `decision_request`/`error`/`revision_entry`/ `goal_status`/`steer`/`respond` are SessionMessage kinds the child tool does NOT expose (decision_request is reserved for future use; the other four are engine/parent-only or session- internal). */
+        /** @description The first-class child-side `message_parent` tool's argument shape, discriminated by `kind` (ADR-053 §5.1). A child uses this exactly ONE tool to push a typed message into its parent's inbox — `progress | checkpoint | artifact | blocker | question | handback`. `error`/`revision_entry`/`goal_status`/`steer`/ `respond` are SessionMessage kinds the child tool does NOT expose (they are engine/parent-only or session-internal). */
         MessageParentRequest: components["schemas"]["MessageParentProgress"] | components["schemas"]["MessageParentCheckpoint"] | components["schemas"]["MessageParentArtifact"] | components["schemas"]["MessageParentBlocker"] | components["schemas"]["MessageParentQuestion"] | components["schemas"]["MessageParentHandback"];
         /**
          * MessageParentProgress
@@ -17821,11 +17806,11 @@ export interface components {
              */
             message_id: string;
             /**
-             * @description The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+             * @description The underlying SessionMessage kind, or `not_delivered` (FR-013): a server-authored line saying a child's report was refused at an inbox cap and not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
              * @example progress
              * @enum {string}
              */
-            kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond" | "goal_status";
+            kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "error" | "handback" | "steer" | "respond" | "goal_status" | "not_delivered";
             /**
              * @description Flattened display text (progress.text / checkpoint.summary / blocker.text / question.text / error.text / steer.text / respond.text), when the kind carries one.
              * @example Scanning pkg/plan for the write-set boundary...
@@ -17837,7 +17822,7 @@ export interface components {
              */
             pct?: number;
             /**
-             * @description Present for `question`/`decision_request`/`steer`/`respond` — lets the SPA thread a live reply.
+             * @description Present for `question`/`steer`/`respond` — lets the SPA thread a live reply.
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
              */
             correlation_id?: string;
@@ -18541,7 +18526,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description A page of sessions (ADR-057 FR-091/FR-098, grill2 M2-10). Default: root sessions only, each carrying child_count. With parent_session_id: that node's direct children only. With flat=true: every session, roots and subordinates. partial_errors is present only when at least one store failed during the merge; the page's rows and next_cursor stay valid regardless (FR-098). */
+            /** @description A page of sessions (ADR-057 FR-091/FR-098, grill2 M2-10). Default: root sessions only, each carrying child_count. With parent_session_id: that node's direct children only. With flat=true: every session, roots and subordinates. partial_errors is present only when at least one source could not be read during the merge; the page's rows and next_cursor stay valid regardless (FR-098). */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -26909,7 +26894,6 @@ export type SessionMessageCheckpoint = components["schemas"]["SessionMessageChec
 export type SessionMessageArtifact = components["schemas"]["SessionMessageArtifact"];
 export type SessionMessageBlocker = components["schemas"]["SessionMessageBlocker"];
 export type SessionMessageQuestion = components["schemas"]["SessionMessageQuestion"];
-export type SessionMessageDecisionRequest = components["schemas"]["SessionMessageDecisionRequest"];
 export type SessionMessageError = components["schemas"]["SessionMessageError"];
 export type SessionMessageHandback = components["schemas"]["SessionMessageHandback"];
 export type SessionMessageRevisionEntry = components["schemas"]["SessionMessageRevisionEntry"];
@@ -26935,6 +26919,7 @@ export type DelegatePeekAction = components["schemas"]["DelegatePeekAction"];
 export type DelegateSessionResponse = components["schemas"]["DelegateSessionResponse"];
 export type DelegateStatusResponse = components["schemas"]["DelegateStatusResponse"];
 export type DelegateInboxResponse = components["schemas"]["DelegateInboxResponse"];
+export type DelegateNotDeliveredSummary = components["schemas"]["DelegateNotDeliveredSummary"];
 export type DelegateRespondResponse = components["schemas"]["DelegateRespondResponse"];
 export type DelegatePeekResponse = components["schemas"]["DelegatePeekResponse"];
 export type MessageParentRequest = components["schemas"]["MessageParentRequest"];

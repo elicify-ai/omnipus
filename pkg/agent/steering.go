@@ -64,6 +64,11 @@ type steeringQueueItem struct {
 	// receipt (D4). Empty for items with no ledger receipt (human chat
 	// input, wakes, runtime notices).
 	steerControlID string
+	// transcriptEntryID is the archive entry id of the person's message this
+	// item carries (bus.InboundMessage.TranscriptEntryID). Set only for human
+	// web/channel input; Stop's FR-024 discard uses it to label the original
+	// message "discarded". Empty for every other item.
+	transcriptEntryID string
 }
 
 type steeringWake struct {
@@ -82,6 +87,10 @@ func newSteeringQueue() *steeringQueue {
 		terminalizing:     make(map[string]*steeringTerminalTransition),
 	}
 }
+
+// errSteeringQueueFull is the refusal for a scope already holding MaxQueueSize
+// items; its text is already a plain, publishable sentence.
+var errSteeringQueueFull = errors.New("steering queue is full")
 
 var errSteeringScopeClosed = errors.New("steering session finished; use follow_up to continue it")
 
@@ -140,7 +149,7 @@ func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueIt
 			}
 		} else if len(transition.finishingItems) >= MaxQueueSize {
 			sq.mu.Unlock()
-			return false, fmt.Errorf("steering queue is full")
+			return false, errSteeringQueueFull
 		}
 		transition.finishingItems = append(transition.finishingItems, item)
 		sq.mu.Unlock()
@@ -166,7 +175,7 @@ func (sq *steeringQueue) pushItemScopeChecked(scope string, item steeringQueueIt
 		}
 	} else if len(queue) >= MaxQueueSize {
 		sq.mu.Unlock()
-		return false, fmt.Errorf("steering queue is full")
+		return false, errSteeringQueueFull
 	}
 	sq.queues[scope] = append(queue, item)
 	sq.mu.Unlock()
@@ -266,6 +275,35 @@ func (sq *steeringQueue) takeSteerReceiptItemsScope(scope string) []steeringQueu
 		kept := items[:0]
 		for _, item := range items {
 			if item.steerControlID != "" {
+				taken = append(taken, item)
+				continue
+			}
+			kept = append(kept, item)
+		}
+		return kept
+	}
+	if queue, ok := sq.queues[scope]; ok {
+		sq.queues[scope] = split(queue)
+	}
+	if transition := sq.terminalizing[scope]; transition != nil {
+		transition.finishingItems = split(transition.finishingItems)
+	}
+	return taken
+}
+
+// takeHumanItemsScope removes and returns scope's queued items that are
+// undelivered human chat input - no delegate steer receipt and not an upward
+// wake - from the main queue and an open finishing buffer, leaving everything
+// else in place and in order (FR-024).
+func (sq *steeringQueue) takeHumanItemsScope(scope string) []steeringQueueItem {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	scope = normalizeSteeringScope(scope)
+	var taken []steeringQueueItem
+	split := func(items []steeringQueueItem) []steeringQueueItem {
+		kept := items[:0]
+		for _, item := range items {
+			if item.steerControlID == "" && item.wake == nil {
 				taken = append(taken, item)
 				continue
 			}
@@ -483,7 +521,7 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 		Content: msg.Content,
 		Media:   append([]string(nil), msg.Media...),
 	}
-	_, _, err = al.enqueueSteeringMessage(route.SessionKey, ag.ID, pmsg, "")
+	_, _, err = al.enqueueHumanSteeringMessage(route.SessionKey, ag.ID, pmsg, msg.TranscriptEntryID)
 	return err
 }
 
@@ -598,6 +636,13 @@ func (al *AgentLoop) ReviveStoppedSessionAsRedirect(ctx context.Context, session
 	return al.reviveStoppedSession(ctx, sessionID, by, instruction, true)
 }
 
+// reviveAfterAvailabilityTestHook is a test-only seam fired right after the
+// external-conversation availability decision and before the revival writes
+// anything. Always nil in production; never set outside a _test.go file. It lets
+// a test land a competing release of the driver in exactly the window NEW-4
+// closes.
+var reviveAfterAvailabilityTestHook func(sessionID string)
+
 // reviveStoppedSession is ReviveStoppedSession's body. asRedirect is true only
 // for the /stop-redirect delivery (RedirectSteeredSession's waiter and the
 // stopped-helper branch of RedirectSessionTurn): the instruction is then
@@ -639,6 +684,29 @@ func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string,
 	if !rec.Terminal() && !rec.Stopped() {
 		return false, nil
 	}
+	// N7 / FR-043: an external-CLI helper that already ran can only continue its
+	// retained native CLI conversation. When that conversation is gone (driver
+	// released at the end of its episode, or the gateway restarted) the revive
+	// refuses visibly, before the instruction is stored or the generation moves,
+	// rather than dispatching a turn that starts a fresh CLI conversation inside
+	// the old chat.
+	// NEW-3/NEW-4: the decision and the hold on the retained driver are one
+	// step, and the hold lasts until the revived turn begins (or the revival
+	// fails below), so a completion still unwinding cannot release the driver
+	// between this check and the dispatch.
+	externalHold, availErr := al.reserveExternalConversation(sessionID, rec)
+	if availErr != nil {
+		return false, &curatedTurnError{text: fmt.Sprintf("steer: revive %q: %s", sessionID, availErr.Error())}
+	}
+	dispatched := false
+	defer func() {
+		if !dispatched {
+			externalHold.cancel()
+		}
+	}()
+	if reviveAfterAvailabilityTestHook != nil {
+		reviveAfterAvailabilityTestHook(sessionID)
+	}
 	// [Defect 4, ADR-091 fix lane RX-DELIVERY, HIGH] The instruction lands
 	// BEFORE the generation is minted, and a failure refuses the revive
 	// outright. Both halves matter:
@@ -677,6 +745,10 @@ func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string,
 	// mislabelled (gate SFH#6).
 	al.clearRevivalFailure(sessionID)
 	al.resetUnifiedMetaStatusActive(sessionID)
+	// NEW-5/NEW-6: the hold now names the turn that will consume it, so only that
+	// turn (reaching the holder, or ending) retires it; a failed dispatch below
+	// still cancels this revival's own hold through the deferred owner-clear.
+	externalHold.bind(newGeneration)
 	// al.dispatchSteeredSession IS steer.SessionLauncher.Dispatch's own body
 	// (SteerLauncher.Dispatch, steer_launcher.go: "a thin delegate onto
 	// AgentLoop.dispatchSteeredSession") — called directly here, exactly as
@@ -687,6 +759,7 @@ func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string,
 	if _, derr := al.dispatchSteeredSession(ctx, sessionID, newGeneration); derr != nil {
 		return false, fmt.Errorf("steer: revive %q: dispatch generation %d: %w", sessionID, newGeneration, derr)
 	}
+	dispatched = true
 	return true, nil
 }
 
@@ -763,7 +836,7 @@ func (al *AgentLoop) appendSteeredInstruction(sessionID, agentID, instruction st
 // the item joined the main queue as before.
 func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error) {
 	resolved, _, err := al.enqueueDelegateSteer(scope, agentID, msg, correlationID)
-	return resolved, err
+	return resolved, curateSteerRefusal(scope, err)
 }
 
 // EnqueueSteeringMessageWithStatus is the rich return shape the round-4
@@ -782,7 +855,8 @@ func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, msg providers
 // assertion (see delegate_followup.go's enqueueSteeringWithStatus), mirroring
 // steerReviver's parallel-capability pattern.
 func (al *AgentLoop) EnqueueSteeringMessageWithStatus(scope, agentID string, msg providers.Message, correlationID string) (string, EnqueueStatus, error) {
-	return al.enqueueDelegateSteer(scope, agentID, msg, correlationID)
+	resolved, status, err := al.enqueueDelegateSteer(scope, agentID, msg, correlationID)
+	return resolved, status, curateSteerRefusal(scope, err)
 }
 
 // enqueueDelegateSteer is the delegate steer/respond enqueue (the exported
@@ -829,11 +903,22 @@ func (al *AgentLoop) enqueueDelegateSteer(scope, agentID string, msg providers.M
 // EnqueueSteeringMessage wrapper above strips the status to keep the
 // pkg/tools DelegateSteeringSink interface unchanged.
 func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, EnqueueStatus, error) {
+	return al.enqueueSteeringMessageEntry(scope, agentID, msg, correlationID, "")
+}
+
+// enqueueHumanSteeringMessage queues a person's web/channel message and keeps
+// its archive entry id, so a Stop that discards it before delivery (FR-024) can
+// label that original message.
+func (al *AgentLoop) enqueueHumanSteeringMessage(scope, agentID string, msg providers.Message, transcriptEntryID string) (string, EnqueueStatus, error) {
+	return al.enqueueSteeringMessageEntry(scope, agentID, msg, "", transcriptEntryID)
+}
+
+func (al *AgentLoop) enqueueSteeringMessageEntry(scope, agentID string, msg providers.Message, correlationID, transcriptEntryID string) (string, EnqueueStatus, error) {
 	correlationID = strings.TrimSpace(correlationID)
 	if correlationID == "" {
 		correlationID = "corr_" + uuid.NewString()
 	}
-	item := steeringQueueItem{message: msg, correlationID: correlationID}
+	item := steeringQueueItem{message: msg, correlationID: correlationID, transcriptEntryID: transcriptEntryID}
 	// onPostFinish fires only when the closing hand-off's transition buffer
 	// accepted this item during a terminal transition with non-refusal; its
 	// return value becomes enqueueSteeringItemWithStatus's own returned
@@ -2051,7 +2136,7 @@ func (al *AgentLoop) InjectSteering(msg providers.Message) error {
 // ErrSessionMessageNotTurnInjectable is returned by DeliverSessionMessage
 // for any SessionMessage kind that is not a parent->child turn injection
 // (steer/respond). Every other kind — child->parent reporting
-// (progress/checkpoint/artifact/blocker/question/decision_request/error/
+// (progress/checkpoint/artifact/blocker/question/error/
 // handback) and engine/session_to_ui kinds (revision_entry/goal_status) —
 // is inbox/UI delivery, not a turn injection, and must be routed to the
 // durable inbox (pkg/session.MessageInboxStore) or the bounded typed wake

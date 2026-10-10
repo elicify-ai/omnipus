@@ -10,6 +10,7 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -168,7 +169,14 @@ type CronJob struct {
 	// default-zero for back-compat; empty owners are migrated on load (W-8).
 	AgentID string `json:"agentId,omitempty"`
 	// SessionMode is one of isolated|continue|main (FR-004); default isolated.
+	// It is DERIVED, never chosen (session-core FR-017): by the gateway at
+	// create/update from RunIsolated and the owner, and by the heartbeat
+	// reconciler (main).
 	SessionMode SessionMode `json:"sessionMode,omitempty"`
+	// RunIsolated forces every run into a fresh independent chat (FR-017); the
+	// one user-facing session choice, kept so a later owner/trigger change
+	// re-derives the mode from it.
+	RunIsolated bool `json:"runIsolated,omitempty"`
 	// TimeoutSeconds is the per-schedule run deadline override (FR-003); 0 = use default.
 	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
 	// CreatedBy is the user who created the schedule (W-7 notification ownership).
@@ -198,10 +206,6 @@ type CronService struct {
 
 	// runner is the agent fire path (W-3/runner seam); nil until SetRunner.
 	runner ScheduledRunner
-
-	// defaultAgentID backfills owner-less jobs on load (W-8 migration). Empty
-	// means "no default" → owner-less jobs are skipped, not fired.
-	defaultAgentID string
 
 	// maxConcurrentRuns bounds the parallel autonomous lane (FR-007).
 	maxConcurrentRuns int
@@ -268,15 +272,6 @@ func (cs *CronService) SetRunner(r ScheduledRunner) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.runner = r
-}
-
-// SetDefaultAgentID supplies the default agent id used to backfill owner-less
-// jobs on load (W-8 migration). If empty, owner-less jobs are skipped on fire.
-func (cs *CronService) SetDefaultAgentID(id string) {
-	cs.mu.Lock()
-	cs.defaultAgentID = id
-	cs.mu.Unlock()
-	cs.migrateOwners()
 }
 
 // SetMaxConcurrentRuns configures the parallel-lane capacity (FR-007). Values
@@ -360,7 +355,6 @@ func (cs *CronService) initRunStateUnsafe(physicalBoot bool) (started bool, err 
 	if err := cs.loadStore(); err != nil {
 		return false, fmt.Errorf("failed to load store: %w", err)
 	}
-	cs.migrateOwnersUnsafe()
 	if physicalBoot {
 		// The prior process has no live lane. Preserve all schedule/history data;
 		// normal Start/reload deliberately retain the same-process overlap flag.
@@ -929,35 +923,6 @@ func (cs *CronService) recomputeNextRuns() {
 	}
 }
 
-// migrateOwners backfills owner-less jobs with the default agent id, if one was
-// supplied (W-8). Idempotent: only fills empty owners; persists once when it
-// changes anything. Safe to call with the lock not held.
-func (cs *CronService) migrateOwners() {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	cs.migrateOwnersUnsafe()
-}
-
-// migrateOwnersUnsafe is migrateOwners with the lock already held.
-func (cs *CronService) migrateOwnersUnsafe() {
-	if cs.defaultAgentID == "" || cs.store == nil {
-		return
-	}
-	var migratedJobIDs []string
-	for i := range cs.store.Jobs {
-		if cs.store.Jobs[i].AgentID == "" {
-			cs.store.Jobs[i].AgentID = cs.defaultAgentID
-			migratedJobIDs = append(migratedJobIDs, cs.store.Jobs[i].ID)
-		}
-	}
-	if len(migratedJobIDs) > 0 {
-		log.Printf("[cron] migration: backfilled owner-less jobs with default agent %q", cs.defaultAgentID)
-		if err := cs.saveStoreUnsafe(); err != nil {
-			slog.Error("cron failed to persist owner migration", "job_ids", migratedJobIDs, "error", err)
-		}
-	}
-}
-
 func (cs *CronService) getNextWakeMS() *int64 {
 	var nextWake *int64
 	for _, job := range cs.store.Jobs {
@@ -1003,50 +968,6 @@ func (cs *CronService) saveStoreUnsafe() error {
 	return fileutil.WriteFileAtomic(cs.storePath, data, 0o600)
 }
 
-// AddJob creates a schedule. It used to take deliver/channel/to as well; those
-// went with the retired Schedules UI plumbing (ADR-065 spec FR-8) and were
-// left as ignored parameters for a while, which is its own kind of lie about
-// what the function does.
-func (cs *CronService) AddJob(
-	name string,
-	schedule CronSchedule,
-	message string,
-) (*CronJob, error) {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-
-	now := cs.clockNowUnsafeMS()
-
-	// One-time tasks (at) should be deleted after execution
-	deleteAfterRun := (schedule.Kind == "at")
-
-	job := CronJob{
-		ID:       generateID(),
-		Name:     name,
-		Enabled:  true,
-		Schedule: schedule,
-		Payload: CronPayload{
-			Kind:    "agent_turn",
-			Message: message,
-		},
-		State: CronJobState{
-			NextRunAtMS: cs.computeNextRun(&schedule, now),
-		},
-		CreatedAtMS:    now,
-		UpdatedAtMS:    now,
-		DeleteAfterRun: deleteAfterRun,
-	}
-
-	cs.store.Jobs = append(cs.store.Jobs, job)
-	if err := cs.saveStoreUnsafe(); err != nil {
-		return nil, err
-	}
-
-	cs.notify()
-
-	return &job, nil
-}
-
 // JobSpec is the full creation spec for AddJobFull. Every #264 field (owner,
 // session mode, timeout, created-by, delivery) is set in one atomic write, so
 // the REST handler avoids the two-write create window (AddJob + UpdateJob) that
@@ -1058,6 +979,7 @@ type JobSpec struct {
 	Command        string
 	AgentID        string
 	SessionMode    SessionMode
+	RunIsolated    bool
 	TimeoutSeconds int
 	CreatedBy      string
 	Enabled        *bool // nil → default true
@@ -1071,10 +993,14 @@ type JobSpec struct {
 }
 
 // AddJobFull persists a complete job (including owner/mode/timeout) in a single
-// atomic write. It is the preferred constructor for the #264 REST create path;
-// AddJob is kept for back-compat with the legacy cron tool. Returns a copy of
-// the stored job.
+// atomic write. It is the ONLY creation path (session-core DEL-15: the legacy
+// AddJob and the owner-less backfill are deleted): the job needs an explicit,
+// already-authorized owner (spec.AgentID), and a job without one is refused
+// rather than persisted for a later backfill. Returns a copy of the stored job.
 func (cs *CronService) AddJobFull(spec JobSpec) (*CronJob, error) {
+	if strings.TrimSpace(spec.AgentID) == "" {
+		return nil, errors.New("cron: a job needs an explicit owner (AgentID); owner-less jobs are not created")
+	}
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
@@ -1112,6 +1038,7 @@ func (cs *CronService) AddJobFull(spec JobSpec) (*CronJob, error) {
 		DeleteAfterRun: spec.Schedule.Kind == "at",
 		AgentID:        spec.AgentID,
 		SessionMode:    mode,
+		RunIsolated:    spec.RunIsolated,
 		TimeoutSeconds: spec.TimeoutSeconds,
 		CreatedBy:      spec.CreatedBy,
 		SessionID:      spec.SessionID,

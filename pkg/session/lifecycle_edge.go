@@ -31,14 +31,18 @@ import (
 // OriginKind discriminates what created a lifecycle record — a session's
 // record-level Origin.Kind (I-1). One value per
 // UnifiedSessionType plus the two kinds that have no session type of their
-// own (plan, human).
+// own (plan, human). A new UnifiedSessionType needs its kind here too
+// (guard: TestEverySessionTypeMapsToAValidOriginKind).
 type OriginKind string
 
 const (
-	OriginKindDelegate  OriginKind = "delegate"
-	OriginKindTask      OriginKind = "task"
-	OriginKindChat      OriginKind = "chat"
-	OriginKindChannel   OriginKind = "channel"
+	OriginKindDelegate OriginKind = "delegate"
+	OriginKindTask     OriginKind = "task"
+	OriginKindChat     OriginKind = "chat"
+	OriginKindChannel  OriginKind = "channel"
+	// OriginKindMain is the standing main session of an eligible
+	// (workspace, agent) pair (session-core FR-002/C-MAIN).
+	OriginKindMain      OriginKind = "main"
 	OriginKindScheduled OriginKind = "scheduled"
 	OriginKindHeartbeat OriginKind = "heartbeat"
 	OriginKindVerifier  OriginKind = "verifier"
@@ -46,11 +50,11 @@ const (
 	OriginKindHuman     OriginKind = "human"
 )
 
-// IsValidOriginKind reports whether k is one of the nine canonical origin
+// IsValidOriginKind reports whether k is one of the ten canonical origin
 // kinds (I-1).
 func IsValidOriginKind(k OriginKind) bool {
 	switch k {
-	case OriginKindDelegate, OriginKindTask, OriginKindChat, OriginKindChannel,
+	case OriginKindDelegate, OriginKindTask, OriginKindChat, OriginKindChannel, OriginKindMain,
 		OriginKindScheduled, OriginKindHeartbeat, OriginKindVerifier, OriginKindPlan, OriginKindHuman:
 		return true
 	default:

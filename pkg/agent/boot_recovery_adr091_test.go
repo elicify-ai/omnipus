@@ -673,8 +673,10 @@ func TestBoot_ClassifiesAllClasses(t *testing.T) {
 	if steeredAfter.State != session.LifecycleNeedsInput {
 		t.Fatalf("steered parked state = %q", steeredAfter.State)
 	}
-	if legacyAfter.State != session.LifecycleFailed || legacyAfter.FailedReason != failedReasonPreADR091NotResumable {
-		t.Fatalf("legacy consequence = state %q reason %q", legacyAfter.State, legacyAfter.FailedReason)
+	// DEL-13 (session-core): boot no longer fails a legacy delegate; it is
+	// refused with a notice (asserted below) and its record is left untouched.
+	if legacyAfter.State != session.LifecycleRunning || legacyAfter.FailedReason != "" {
+		t.Fatalf("legacy record was rewritten: state %q reason %q", legacyAfter.State, legacyAfter.FailedReason)
 	}
 	if invalidAfter.State != session.LifecycleRunning {
 		t.Fatalf("invalid edge was resumed or rewritten: %q", invalidAfter.State)

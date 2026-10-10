@@ -30,7 +30,7 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 	if len(fields) == 0 {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "at least one editable field is required", ""))
 	}
-	if err := validateColorIconArgs(args); err != nil {
+	if err := validateColorArgs(args); err != nil {
 		return err
 	}
 	home, err := resolveOmnipusHome(t.deps.Home)
@@ -136,15 +136,10 @@ func fieldErrorResult(err error) *tools.ToolResult {
 	return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), ""))
 }
 
-func validateColorIconArgs(args map[string]any) *tools.ToolResult {
+func validateColorArgs(args map[string]any) *tools.ToolResult {
 	if color, ok := args["color"].(string); ok {
 		if err := validateAgentColor(color); err != nil {
 			return tools.ErrorResult(errorJSON("INVALID_COLOR", err.Error(), "Use a 6-digit hex color"))
-		}
-	}
-	if icon, ok := args["icon"].(string); ok {
-		if err := validateAgentIcon(icon); err != nil {
-			return tools.ErrorResult(errorJSON("INVALID_ICON", err.Error(), "Use a Phosphor icon name"))
 		}
 	}
 	return nil

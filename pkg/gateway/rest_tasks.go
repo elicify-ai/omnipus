@@ -833,6 +833,9 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		t.Priority = *req.Priority
 	}
+	if req.RunIsolated != nil {
+		t.RunIsolated = *req.RunIsolated
+	}
 	if req.AgentId != nil && *req.AgentId != "" {
 		agentID := *req.AgentId
 		if err := validateEntityID(agentID); err != nil {
@@ -1160,6 +1163,9 @@ func (tp *taskPatch) buildPatch() bool {
 	}
 	if tp.req.Priority != nil {
 		tp.patch.Priority = tp.req.Priority
+	}
+	if tp.req.RunIsolated != nil {
+		tp.patch.RunIsolated = tp.req.RunIsolated
 	}
 	if tp.req.BlockedBy != nil {
 		tp.patch.BlockedBy = tp.req.BlockedBy

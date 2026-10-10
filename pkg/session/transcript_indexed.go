@@ -85,6 +85,11 @@ func (us *UnifiedStore) appendTranscriptLocked(sessionID string, entry Transcrip
 	if entry.ViewMembership != "" && entry.ViewMembership != ViewMembershipChat {
 		return ArchiveAddress{}, fmt.Errorf("unified_store: %s: a transcript append is a chat record, not %q", what, entry.ViewMembership)
 	}
+	// U11: an attention outcome raises the main's saved order BEFORE the entry is
+	// appended (see raiseAttentionLocked for why this order).
+	if err := us.raiseAttentionLocked(sessionID, meta, entry); err != nil {
+		return ArchiveAddress{}, fmt.Errorf("unified_store: %s: %w", what, err)
+	}
 	entry.ViewMembership = ViewMembershipChat
 	// Every archive record has an id: it is half of the record's address. An
 	// entry written without one is given a server-minted id here.

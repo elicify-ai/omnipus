@@ -34,7 +34,7 @@ type SessionMessageEvent struct {
 	//     the consumer injects this at the child's next tool boundary via
 	//     the (generalized) steering queue.
 	//   - child_to_parent kinds (progress/checkpoint/artifact/blocker/
-	//     question/decision_request/error/handback): the PARENT's owner key
+	//     question/error/handback): the PARENT's owner key
 	//     (D16 — durable chat/plan id) the durable inbox is keyed to. The
 	//     child's OWN session_id still lives on Message itself
 	//     (Message.session_id, via the envelope).

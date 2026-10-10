@@ -491,6 +491,14 @@ func workspaceToWireFrom(
 		}
 		wire.MemberConfigs = &wireMC
 	}
+	// C-MAIN: Admin is not a team member (no member_configs entry), so his main
+	// rides on the default workspace as a read-only top-level id, present only
+	// when it resolves — same resolver and validation as a member's address.
+	if w.IsDefault && mains != nil {
+		if id := mains(w, string(coreagent.IDAdmin)); id != "" {
+			wire.AdminMainSessionId = &id
+		}
+	}
 	// FR-5/FR-8.2: mounts, with each entry's status computed live (never
 	// stored — see mountsToWire's doc comment).
 	wire.Mounts = mountsToWire(home, w.ID)
@@ -967,7 +975,10 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	// main per eligible member — the same get-or-create the membership write
 	// path runs, so a member's identity does not depend on which surface
 	// established the membership. Best-effort and idempotent.
-	a.ensureMainsForTeam(ws)
+	if mainsErr := a.ensureMainsForTeam(ws); mainsErr != nil {
+		logsafeError("rest: workspace create: some team mains were not created; each is re-attempted when its chat is opened",
+			"workspace_id", ws.ID, "error", mainsErr)
+	}
 	wire := workspaceToWire(a, ws, 0)
 	if a.auditor != nil {
 		if err := a.auditor.Log(
@@ -1285,6 +1296,22 @@ func (rw *restAPIHandleWorkspacePut) prepareDelegation(team []string) bool {
 			jsonErr(rw.w, http.StatusBadRequest, message)
 			return true
 		}
+		// session-core FR-014/015/016 (founder ruling 2026-10-10): every agent
+		// added to a workspace gets its ordinary self-edge, whichever client
+		// sent the request. An explicit complete graph (the Team tab's "Add
+		// agent" save) replaces the stored graph verbatim, so the server adds
+		// the self-edge of each member THIS request introduces. A continuing
+		// member's self-line the graph omits is NOT restored (deletion is
+		// authoritative), and the operator exclusion data still applies.
+		cfg := rw.a.agentLoop.GetConfig()
+		introduced := make([]string, 0, len(team))
+		existingMembers := workspace.TeamSet(rw.state.Workspace.CoreTeam, nil)
+		for _, id := range team {
+			if !existingMembers[id] {
+				introduced = append(introduced, id)
+			}
+		}
+		edges = append(edges, workspace.SelfEdgeSeedRows(introduced, edges, cfg.SelfEdgeExcludeAgentIDSet(), delegationDepthCeiling(cfg))...)
 		rw.delegation = edges
 	} else {
 		for _, edge := range rw.state.Delegation {
@@ -1438,7 +1465,10 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 	// Best-effort and idempotent: the get-or-create reuses an existing main,
 	// and a pair whose stored identity is unreadable or mismatched is logged
 	// and skipped here — its refusal is served on the main's own lookup/attach.
-	rw.a.ensureMainsForTeam(rw.ws)
+	if mainsErr := rw.a.ensureMainsForTeam(rw.ws); mainsErr != nil {
+		logsafeError("rest: workspace team update: some team mains were not created; each is re-attempted when its chat is opened",
+			"workspace_id", rw.ws.ID, "error", mainsErr)
+	}
 
 	// FR-007: after persisting, reconcile cron schedules to reflect the new
 	// member_configs. Best-effort: a failure is logged but does not prevent

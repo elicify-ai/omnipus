@@ -122,7 +122,7 @@ func (te *TaskExecutor) runTask(
 	// created taskSessionID successfully before launching this goroutine.
 	// Open this execution's TaskRun with that real session — see openRun's
 	// own doc comment for why run-open cannot happen any earlier.
-	run = te.openRun(t.ID, occurrenceMs, kind, taskSessionID)
+	run = te.openRun(t.ID, occurrenceMs, kind, taskSessionID, te.captureRunRecipients(ctx, t)...)
 
 	taskCtx := tools.WithAgentID(ctx, t.AgentID)
 	if t.WorkspaceID != "" {
@@ -375,8 +375,11 @@ func (te *TaskExecutor) dispatchesExternalCLI(agentID string) bool {
 // for this execution) rather than failing the task dispatch — TaskRun is a
 // purely additive record layer (RD2); a run-history I/O problem must never
 // prevent or fail a real agent execution.
-func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.RunKind, sessionID string) *activeRun {
-	run, _, err := te.store.OpenRun(taskID, occurrenceMs, kind, sessionID)
+//
+// recipients are the run's captured recipient sessions (FR-019), fixed by the
+// first open; omit for a run with none.
+func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.RunKind, sessionID string, recipients ...string) *activeRun {
+	run, _, err := te.store.OpenRun(taskID, occurrenceMs, kind, sessionID, recipients)
 	if err != nil {
 		// M3-log: escalated from Warn to Error — a failed open means no run
 		// will ever be tracked for this execution, and there is no reaper to
@@ -386,7 +389,18 @@ func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.Ru
 		return nil
 	}
 	te.emitRunStatus(taskID, run.RunID, run.OccurrenceMs, task.StatusInProgress)
-	return &activeRun{runID: run.RunID, occurrenceMs: run.OccurrenceMs}
+	return &activeRun{runID: run.RunID, occurrenceMs: run.OccurrenceMs, recipients: run.RecipientSessionIDs}
+}
+
+// runForSession picks up the run its dispatcher already opened for taskSessionID
+// (a MAIN or launcher-front run is opened BEFORE dispatch, with its captured
+// recipients) and only opens a manual run when there is none — the
+// StartTaskNow path, whose recipients ride the detached context.
+func (te *TaskExecutor) runForSession(ctx context.Context, t *task.Task, taskSessionID string) *activeRun {
+	if existing, err := te.store.OpenRunForSession(t.ID, taskSessionID); err == nil && existing != nil {
+		return &activeRun{runID: existing.RunID, occurrenceMs: existing.OccurrenceMs, recipients: existing.RecipientSessionIDs}
+	}
+	return te.openRun(t.ID, nil, task.RunKindManual, taskSessionID, runRecipientsFrom(ctx)...)
 }
 
 // closeRun best-effort closes run's TaskRun record with the given terminal
@@ -538,7 +552,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 	// ADR-050 RD5/RD7 run-open (task-run-history-spec.md §3.2): taskSessionID
 	// was already created and persisted synchronously by the dispatch owner
 	// before this goroutine was launched, so it is available immediately.
-	run = te.openRun(t.ID, nil, task.RunKindManual, taskSessionID)
+	run = te.runForSession(ctx, t, taskSessionID)
 
 	taskCtx := tools.WithAgentID(ctx, t.AgentID)
 	if t.WorkspaceID != "" {
@@ -843,6 +857,12 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	prompt, sessionKey, taskChatID string,
 	delegationDepth int,
 ) (string, error) {
+	// N6: a task's external-CLI episode ends when this function returns (the
+	// run has exited and any steer continuation has been consumed), so release
+	// the retained driver — and with it the last prompt and the environment
+	// snapshot — exactly as a delegate's completion does. A pending continuation
+	// keeps it (the release re-checks the scope).
+	defer al.releaseExternalRunIfIdle(taskChatID)
 	var out taskExternalOutcome
 	resp, err := al.runTaskExternalCLIOnce(ctx, liveAgent, prompt, sessionKey, taskChatID, delegationDepth, false, &out)
 	for ctx.Err() == nil && !out.stopped && al.takeExternalSteerInterrupt(taskChatID) {

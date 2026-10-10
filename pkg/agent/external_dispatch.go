@@ -350,7 +350,12 @@ func runExternalCLISubTurn(
 	//    for a steered (non-task) session, whose every post-launch entry must
 	//    resume-or-refuse.
 	sessionKey := externalRunSessionKey(ed.childTS)
-	resumeOnly := al.externalRunResumeOnly(sessionKey)
+	resumeOnly, resumeOnlyErr := al.externalRunResumeOnly(sessionKey)
+	if resumeOnlyErr != nil {
+		// NEW-3: an unreadable session record refuses before any driver exists;
+		// it must never fall through to a fresh, unmarked run.
+		return nil, fmt.Errorf("external-cli dispatch: %w", resumeOnlyErr)
+	}
 	sess, resume, beginErr := al.beginExternalRun(sessionKey, ed.childTS, cancel, resumeOnly)
 	if beginErr != nil {
 		return nil, fmt.Errorf("external-cli dispatch: %w", beginErr)
@@ -427,6 +432,14 @@ func runExternalCLISubTurn(
 	// Run creates one (recorded for a later continuation to Resume); a Resume
 	// reuses the retained one. A canceled-before-start run therefore never
 	// instantiates a driver (the belt-and-suspenders check above).
+	if !resume && resumeOnly {
+		// N7: durably record that this steered session's first CLI run is
+		// starting, BEFORE any driver exists, so a revive after a restart
+		// resumes-or-refuses instead of starting a fresh conversation.
+		if markErr := al.markExternalRunStarted(sessionKey); markErr != nil {
+			return nil, fmt.Errorf("external-cli dispatch: %w", markErr)
+		}
+	}
 	driver, driverErr := sess.driverForRun(cli, consent, resume)
 	if driverErr != nil {
 		return nil, fmt.Errorf("external-cli dispatch: %w", driverErr)

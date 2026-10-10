@@ -159,7 +159,8 @@ export interface MessageStatusFrame {
   type: "message_status";
   session_id: string;
   client_message_id: string;
-  state: "received" | "working" | "failed";
+  state: "received" | "working" | "failed" | "discarded";
+  reason?: "stopped_before_delivery";
   seq?: number;
 }
 
@@ -354,7 +355,7 @@ export interface SubagentMessageFrame {
   child_session_id?: string;
   span_id: string;
   message_id: string;
-  kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond" | "goal_status";
+  kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "error" | "handback" | "steer" | "respond" | "goal_status" | "not_delivered";
   text?: string;
   pct?: number;
   correlation_id?: string;
@@ -417,6 +418,12 @@ export interface ReplayMessageFrame {
   truncated?: boolean;
   truncation_reason?: "cancelled" | "max_output_tokens";
   client_message_id?: string;
+  input_disposition?: {
+    message_id: string;
+    client_message_id?: string;
+    state: "discarded";
+    reason: "stopped_before_delivery";
+  };
   terminal_outcome?: boolean;
 }
 

@@ -395,14 +395,13 @@ var sessionMessageWakeableConsumerKinds = map[string]bool{ //nolint:gochecknoglo
 // delegated child, and without an entry here it fell to the unknown-kind
 // default (DEBUG log + dropped) instead of reaching the durable inbox.
 var sessionMessageChildToParentKinds = map[string]bool{ //nolint:gochecknoglobals
-	"progress":         true,
-	"checkpoint":       true,
-	"artifact":         true,
-	"blocker":          true,
-	"question":         true,
-	"handback":         true,
-	"decision_request": true,
-	"error":            true,
+	"progress":   true,
+	"checkpoint": true,
+	"artifact":   true,
+	"blocker":    true,
+	"question":   true,
+	"handback":   true,
+	"error":      true,
 }
 
 // StartSessionMessageConsumer launches the kind-router goroutine that drains
@@ -411,7 +410,7 @@ var sessionMessageChildToParentKinds = map[string]bool{ //nolint:gochecknoglobal
 //   - steer/respond (parent->child) → DeliverSessionMessage (inject at the
 //     child's next tool boundary via the steering queue).
 //   - child->parent kinds (progress/checkpoint/artifact/blocker/question/
-//     handback/decision_request) → MessageInboxStore.Append keyed to the
+//     handback) → MessageInboxStore.Append keyed to the
 //     durable owner key (D16) + WakeParent for the wakeable kinds.
 //   - engine/session_to_ui kinds (goal_status/revision_entry) → the matching
 //     WS frame emission.

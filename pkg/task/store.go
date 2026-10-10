@@ -952,6 +952,7 @@ type Patch struct {
 	CancelReason *CancelReason
 	AgentID      *string
 	Priority     *int
+	RunIsolated  *bool // session-core FR-017: nil = unchanged
 	BlockedBy    *[]string
 	Todos        *[]Todo
 	Trigger      **Trigger // double pointer: outer nil = unchanged, *outer nil = clear
@@ -1328,6 +1329,9 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, bool, error) {
 			return nil, true, err
 		}
 		su.t.Priority = *su.patch.Priority
+	}
+	if su.patch.RunIsolated != nil {
+		su.t.RunIsolated = *su.patch.RunIsolated
 	}
 	if su.patch.BlockedBy != nil {
 		newDeps := *su.patch.BlockedBy

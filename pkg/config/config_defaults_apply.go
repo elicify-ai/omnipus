@@ -265,13 +265,6 @@ func (c *ExaConfig) APIKey() string {
 	return os.Getenv(c.APIKeyRef)
 }
 
-// EffectiveRequireParentAgentID resolves tools.delegate.require_parent_agent_id
-// (R2-MAJ-015). An unset key resolves to TRUE — the fail-closed posture is the
-// default, and an operator must opt OUT of it explicitly.
-func (d DelegateToolConfig) EffectiveRequireParentAgentID() bool {
-	return ResolveBool(d.RequireParentAgentID, true)
-}
-
 // defaultControlIdleReleaseSec is FR-031a's shipped default: 900 seconds
 // (15 minutes) of no proof of life before a held wheel is released back to
 // the agent. Applied whenever ControlIdleReleaseSec is unset (its Go zero

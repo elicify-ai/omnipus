@@ -629,10 +629,6 @@ func SeedConfig(cfg *config.Config) bool {
 			a.Color = ca.Color
 			sc.modified = true
 		}
-		if a.Icon != ca.Icon {
-			a.Icon = ca.Icon
-			sc.modified = true
-		}
 		// Fresh-install-only skill-allowlist seed (ADR-072 D5.1, FR-034).
 		// Under D5, an empty/absent Skills list means "the operator granted
 		// nothing" — a valid, deliberate state — not "never configured". This
@@ -728,7 +724,6 @@ func SeedConfig(cfg *config.Config) bool {
 			Name:        ca.Name,
 			Description: ca.Description,
 			Color:       ca.Color,
-			Icon:        ca.Icon,
 			Type:        agentType,
 			Locked:      true,
 			Default:     isDefault,

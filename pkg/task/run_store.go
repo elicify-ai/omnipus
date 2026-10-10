@@ -155,6 +155,11 @@ type TaskRun struct { //nolint:revive // exported name matches package purpose
 	StartedAt string `json:"started_at"`
 	// EndedAt is the close time, RFC 3339 UTC; nil while in_progress.
 	EndedAt *string `json:"ended_at"`
+	// RecipientSessionIDs are the sessions captured when the run actually
+	// started (FR-019): the starting agent's main and the assignee's main,
+	// deduplicated, never the creator. Fixed by the FIRST open of the run and
+	// carried unchanged by its close record; empty/absent when there is none.
+	RecipientSessionIDs []string `json:"recipient_session_ids,omitempty"`
 }
 
 // IsOpen reports whether r has not yet been closed (EndedAt is nil).
@@ -417,7 +422,11 @@ func (s *Store) appendRunRecord(taskID string, rec TaskRun, at time.Time) error 
 // records a run with a best-effort blank session_id rather than losing run
 // history entirely; a distinct Warn log makes that anomaly visible instead
 // of silently persisting.
-func (s *Store) OpenRun(taskID string, occurrenceMs *int64, kind RunKind, sessionID string) (*TaskRun, bool, error) {
+//
+// recipients are the run's captured recipient sessions (FR-019). The FIRST open
+// fixes them; a later idempotent re-open returns the stored run unchanged, so a
+// recipient reassigned or removed after the run started cannot alter them.
+func (s *Store) OpenRun(taskID string, occurrenceMs *int64, kind RunKind, sessionID string, recipients []string) (*TaskRun, bool, error) {
 	if err := validateID(taskID); err != nil {
 		return nil, false, err
 	}
@@ -472,10 +481,47 @@ func (s *Store) OpenRun(taskID string, occurrenceMs *int64, kind RunKind, sessio
 		StartedAt:    now.Format(time.RFC3339),
 		EndedAt:      nil,
 	}
+	if len(recipients) > 0 {
+		run.RecipientSessionIDs = append([]string(nil), recipients...)
+	}
 	if err := s.appendRunRecord(taskID, run, now); err != nil {
 		return nil, false, err
 	}
 	return &run, true, nil
+}
+
+// OpenRunForSession returns the currently-open run of taskID bound to
+// sessionID, so a run-loop entry can pick up the run its dispatcher already
+// opened (with its captured recipients) instead of opening a second one. It
+// returns an error when there is none.
+func (s *Store) OpenRunForSession(taskID, sessionID string) (*TaskRun, error) {
+	if err := validateID(taskID); err != nil {
+		return nil, err
+	}
+	if sessionID == "" {
+		return nil, fmt.Errorf("task: session id must not be empty")
+	}
+	mu := s.lock.Get(taskID)
+	mu.Lock()
+	defer mu.Unlock()
+	folded, err := s.foldRunsLocked(taskID)
+	if err != nil {
+		return nil, err
+	}
+	var found *TaskRun
+	for _, r := range folded {
+		if r.SessionID != sessionID || !r.IsOpen() {
+			continue
+		}
+		r := r
+		if found == nil || r.StartedAt > found.StartedAt {
+			found = &r
+		}
+	}
+	if found == nil {
+		return nil, fmt.Errorf("%w: no open run of task %q is bound to session %q", ErrRunNotFound, taskID, sessionID)
+	}
+	return found, nil
 }
 
 // CloseRun appends the terminal record for runID: the SAME RunID with status

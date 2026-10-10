@@ -91,9 +91,9 @@ type AskUserQuestionFrame struct {
 
 // AttachSessionFrame — Client → server request to attach to a session and catch it up to the present. #823 catch-up redesign: since_seq/boot_id replace the retired timestamp cursor (`since`, removed). Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
 type AttachSessionFrame struct {
-	// Optional. True means this attach is an acknowledgement of what was shown. It does not choose the bound. Defaults to false. A failed, background, or reconnect attach does not write the seen mark. Field only; the write arrives in a later unit. Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
+	// Optional. True means this attach is an acknowledgement of what was shown. It does not choose the bound. Defaults to false. A failed, background, or reconnect attach does not write the seen mark. Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
 	AckAttention *bool `json:"ack_attention,omitempty"`
-	// Optional integer on the acknowledging attach. The saved outcome/entry order, not a new counter. Absent means do not write the seen mark and do not substitute the current order. Field only. Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
+	// Optional integer on the acknowledging attach. The saved outcome/entry order, not a new counter. Absent means do not write the seen mark and do not substitute the current order. Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
 	AttentionBound *int64 `json:"attention_bound,omitempty"`
 	// #823 review finding 7. The gateway boot ID the SPA last saw for this session. A mismatch forces a snapshot (reason boot_mismatch) regardless of since_seq.
 	BootId    *string `json:"boot_id,omitempty"`
@@ -875,9 +875,11 @@ type MessageFrame struct {
 	Type      string         `json:"type"`
 }
 
-// MessageStatusFrame — Server → client delivery status for one user message. Session-scoped. received follows durable transcript persistence; working follows successful turn admission; failed means processing stopped before admission. Emitted only when the client supplied client_message_id.
+// MessageStatusFrame — Server → client delivery status for one user message. Session-scoped. received follows durable transcript persistence; working follows successful turn admission; failed means processing stopped before admission; discarded (reason stopped_before_delivery) means Stop discarded the input before delivery (session-core FR-024). Emitted only when the client supplied client_message_id.
 type MessageStatusFrame struct {
 	ClientMessageId string `json:"client_message_id"`
+	// Present only with state=discarded: why the input never reached the agent (session-core FR-024).
+	Reason *string `json:"reason,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/MessageStatusFrame.yaml.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
@@ -1029,6 +1031,13 @@ type ReplayMessageFrame struct {
 	// session-core FR-039 / C-GOAL. The goal the replayed entry's producing turn was dispatched under (from TranscriptEntry.GoalID). Live, history, REST and replay must retain the SAME association so the SPA joins each bubble to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier replayed message.
 	GoalId *string `json:"goal_id,omitempty"`
 	Id     *string `json:"id,omitempty"`
+	// Read-only record that this user input was DISCARDED by Stop before it was delivered into the agent's model input (session-core FR-024). Absent on every delivered message. There is no client action to release or discard it; the archived message bytes are unchanged and this only labels them.
+	InputDisposition *struct {
+		ClientMessageId *string `json:"client_message_id,omitempty"`
+		MessageId       string  `json:"message_id"`
+		Reason          string  `json:"reason"`
+		State           string  `json:"state"`
+	} `json:"input_disposition,omitempty"`
 	// Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014). Omitted for legacy entries written before per-turn model recording landed.
 	Model     *string `json:"model,omitempty"`
 	Role      string  `json:"role"`
@@ -1114,7 +1123,7 @@ type SessionStateActiveTurn struct {
 type SessionStateFrame struct {
 	// ADR-082 D4 — present only when the attached session has a foreground turn in flight at emit time. Absent when idle. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
 	ActiveTurn *SessionStateActiveTurn `json:"active_turn,omitempty"`
-	// Optional. The saved outcome/entry order for this main, echoed so a later acknowledgement can name the same number. Not a new counter. This frame is part of both the incremental catch-up and the full snapshot. Omitted when this emit is not an attach of a main. Field only. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
+	// Optional. The saved outcome/entry order for this main, echoed so a later acknowledgement can name the same number. Not a new counter. This frame is part of both the incremental catch-up and the full snapshot. 0 when the main has no outcome yet; omitted when this emit is not an attach of a main or the saved order could not be read. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
 	AttentionBound *int64 `json:"attention_bound,omitempty"`
 	// ADR-092 — this session's own per-chat Auto-approve modifier (the value last set by session_mode_update and still held by the server), so a reloading or reconnecting SPA re-learns it instead of losing it. Only meaningful when session_id is present (the connection-open emit carries neither). true — Auto-approve forced ON for this chat; false — forced OFF for this chat; null or absent — no per-chat modifier is set, the chat follows the global default (SandboxStatus.auto_approve_effective). Same value space as SessionModeUpdateFrame.auto_approve. The modifier lives in server memory only: after a gateway restart it is gone and this field reads null/absent, so the UI follows the server. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
 	AutoApproveModifier *bool `json:"auto_approve_modifier,omitempty"`

@@ -3,18 +3,29 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
+
+// del10Provider is a provider that answers every request with "ok".
+type del10Provider struct{}
+
+func (del10Provider) Chat(context.Context, []providers.Message, []providers.ToolDefinition, string, map[string]any) (*providers.LLMResponse, error) {
+	return &providers.LLMResponse{Content: "ok", FinishReason: "stop"}, nil
+}
+func (del10Provider) GetDefaultModel() string { return "test-model" }
 
 func del10Cfg(t *testing.T) *config.Config {
 	t.Helper()
@@ -31,7 +42,7 @@ func del10Cfg(t *testing.T) *config.Config {
 // directories (two lock-shard sets, a leaked flusher per reload).
 func TestSingleSessionStore_AgentsLoopAndReloadedRegistryShareOneStore(t *testing.T) {
 	cfg := del10Cfg(t)
-	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &simpleMockProvider{response: "ok"})
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &del10Provider{})
 	shared := al.GetSessionStore()
 	require.NotNil(t, shared)
 	for _, id := range []string{"mia", "ava"} {
@@ -39,7 +50,7 @@ func TestSingleSessionStore_AgentsLoopAndReloadedRegistryShareOneStore(t *testin
 		require.True(t, ok)
 		assert.True(t, inst.Sessions == session.SessionStore(shared), "agent %s holds the shared store, not a store of its own", id)
 	}
-	reloaded := NewAgentRegistry(cfg, &simpleMockProvider{response: "ok"})
+	reloaded := NewAgentRegistry(cfg, &del10Provider{})
 	for _, id := range []string{"mia", "ava"} {
 		inst, ok := reloaded.GetAgent(id)
 		require.True(t, ok)
@@ -48,17 +59,20 @@ func TestSingleSessionStore_AgentsLoopAndReloadedRegistryShareOneStore(t *testin
 	// A discarded duplicate instance must not close the live store.
 	dup, ok := reloaded.GetAgent("mia")
 	require.True(t, ok)
-	require.NoError(t, dup.Close())
 	meta, err := shared.NewSession(session.SessionTypeChat, "test", "mia")
-	require.NoError(t, err, "the shared store is still writable after a discarded instance was closed")
-	require.NotEmpty(t, meta.ID)
+	require.NoError(t, err)
+	require.NoError(t, shared.AppendTranscript(meta.ID, session.TranscriptEntry{ID: "m1", Role: "user", Content: "hi", Timestamp: time.Now().UTC()}))
+	statsPath := filepath.Join(shared.BaseDir(), meta.ID, "stats.json")
+	require.NoFileExists(t, statsPath, "precondition: the throttled stats are still only in memory")
+	require.NoError(t, dup.Close())
+	assert.NoFileExists(t, statsPath, "closing a discarded instance must not close (and so flush) the live shared store")
 }
 
 // DEL-10 / A2: a task run's error note is written into the store that holds the
 // run's session (the shared one), whichever agent the task is assigned to.
 func TestEndTaskAssigneeCannotFinish_WritesIntoTheSessionsOwnStore(t *testing.T) {
 	cfg := del10Cfg(t)
-	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &simpleMockProvider{response: "ok"})
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &del10Provider{})
 	shared := al.GetSessionStore()
 	require.NotNil(t, shared)
 	meta, err := shared.NewSession(session.SessionTypeTask, "system", "mia")

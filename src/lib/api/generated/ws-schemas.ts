@@ -82,7 +82,7 @@ export const AttachSessionFrame = z
     since_seq: z.number().int().min(1).optional(),
     boot_id: z.string().optional(),
     ack_attention: z.boolean().optional(),
-    attention_bound: z.number().int().optional(),
+    attention_bound: z.number().int().min(0).optional(),
   })
   .strict();
 
@@ -111,7 +111,8 @@ export const MessageStatusFrame = z
     type: z.literal("message_status"),
     session_id: z.string().min(1).max(255),
     client_message_id: z.string().min(1).max(128),
-    state: z.enum(["received", "working", "failed"]),
+    state: z.enum(["received", "working", "failed", "discarded"]),
+    reason: z.literal("stopped_before_delivery").optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -347,7 +348,7 @@ export const SubagentMessageFrame = z
     child_session_id: z.string().optional(),
     span_id: z.string().min(1),
     message_id: z.string().min(1),
-    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond", "goal_status"]),
+    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "error", "handback", "steer", "respond", "goal_status", "not_delivered"]),
     text: z.string().optional(),
     pct: z.number().int().min(0).max(100).optional(),
     correlation_id: z.string().optional(),
@@ -420,6 +421,14 @@ export const ReplayMessageFrame = z
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
     client_message_id: z.string().optional(),
+    input_disposition: z
+    .object({
+      message_id: z.string().min(1).max(255),
+      client_message_id: z.string().min(1).max(128).optional(),
+      state: z.literal("discarded"),
+      reason: z.literal("stopped_before_delivery"),
+    })
+    .strict().optional(),
     terminal_outcome: z.boolean().optional(),
   })
   .strict();
@@ -694,7 +703,7 @@ export const SessionStateFrame = z
     pending_approvals: z.array(SessionStatePendingApproval).max(1000),
     pending_asks: z.array(AskUserQuestionCard).max(64).optional(),
     session_id: z.string().optional(),
-    attention_bound: z.number().int().optional(),
+    attention_bound: z.number().int().min(0).optional(),
     auto_approve_modifier: z.boolean().nullable().optional(),
     active_turn: SessionStateActiveTurn.optional(),
     boot_id: z.string().optional(),

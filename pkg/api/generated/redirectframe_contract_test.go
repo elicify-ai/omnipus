@@ -7,7 +7,7 @@ package generated
 // SPEC SOURCES (expected values derive from these, never from the
 // implementation — oracle independence):
 //   - contracts/components/schemas/RedirectFrame.yaml: {type: const "redirect",
-//     session_id: string 1..128 required, instruction: string minLength 1 /
+//     session_id: string 1..255 required, instruction: string minLength 1 /
 //     maxLength 16384 / pattern \S}, additionalProperties: false, NO scope
 //     field (D9 row 2 fixes scope: that helper only — a scope enum would
 //     re-open a decided behavior).
@@ -31,11 +31,15 @@ package generated
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // ─── Fixtures (local — fixtures.go is grandfathered and may only shrink) ────
@@ -156,16 +160,39 @@ func TestRedirectFrameSchema_ScopePropertyRejected(t *testing.T) {
 		"additionalProperties:false — D9 row 2 fixes scope; a scope field would re-open a decided behavior")
 }
 
+// redirectFrameSchemaStringBound reads an integer bound (e.g. "maxLength") for a
+// string property straight from the RedirectFrame contract schema, so the
+// boundary tests take their oracle from the CONTRACT rather than a hardcoded
+// literal that silently goes stale when the schema widens (item 11: session_id
+// maxLength was widened 128 -> 255 and the old literal 128/129 test stayed).
+func redirectFrameSchemaStringBound(t *testing.T, prop, bound string) int {
+	t.Helper()
+	var doc map[string]any
+	require.NoError(t, yaml.Unmarshal(componentSchemaYAML(t, "RedirectFrame"), &doc),
+		"RedirectFrame schema must parse as YAML")
+	props, ok := doc["properties"].(map[string]any)
+	require.True(t, ok, "RedirectFrame schema must declare properties")
+	p, ok := props[prop].(map[string]any)
+	require.True(t, ok, "RedirectFrame schema must declare property %q", prop)
+	v, ok := p[bound]
+	require.True(t, ok, "RedirectFrame property %q must declare %q", prop, bound)
+	n, ok := v.(int)
+	require.True(t, ok, "RedirectFrame property %q %q must be an integer, got %T", prop, bound, v)
+	return n
+}
+
 func TestRedirectFrameSchema_SessionIdBoundaries(t *testing.T) {
-	t.Run("128 chars accepted", func(t *testing.T) {
+	// Derived from the contract schema, never a copied literal: 255 today.
+	max := redirectFrameSchemaStringBound(t, "session_id", "maxLength")
+	t.Run(fmt.Sprintf("%d chars accepted", max), func(t *testing.T) {
 		f := FixtureRedirectFrame_Populated()
-		f.SessionId = strings.Repeat("s", 128)
+		f.SessionId = strings.Repeat("s", max)
 		mustPassAsyncAPI(t, "RedirectFrame", f)
 	})
-	t.Run("129 chars rejected", func(t *testing.T) {
+	t.Run(fmt.Sprintf("%d chars rejected", max+1), func(t *testing.T) {
 		f := FixtureRedirectFrame_Populated()
-		f.SessionId = strings.Repeat("s", 129)
-		mustFailAsyncAPI(t, "RedirectFrame", f, "session_id maxLength 128")
+		f.SessionId = strings.Repeat("s", max+1)
+		mustFailAsyncAPI(t, "RedirectFrame", f, fmt.Sprintf("session_id maxLength %d", max))
 	})
 	t.Run("empty rejected", func(t *testing.T) {
 		f := FixtureRedirectFrame_Populated()

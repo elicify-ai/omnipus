@@ -199,6 +199,9 @@ func (a *restAPI) toWireTask(t task.Task, idx rollupIndex, gidx taskGoalIndex) (
 
 	prio := t.EffectivePriority()
 	out.Priority = &prio
+	if t.RunIsolated {
+		out.RunIsolated = ptr(true)
+	}
 	surface := gen.TaskSurface(t.EffectiveSurface())
 	out.Surface = &surface
 

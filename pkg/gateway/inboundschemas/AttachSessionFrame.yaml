@@ -63,18 +63,17 @@ properties:
     description: >
       Optional. True means this attach is an acknowledgement of what was
       shown. It does not choose the bound. Defaults to false. A failed,
-      background, or reconnect attach does not write the seen mark. This
-      change only publishes the field; the write arrives in a later unit.
+      background, or reconnect attach does not write the seen mark.
       Keep in sync by hand with contracts/asyncapi.yaml's inline
       AttachSessionFrame.
   attention_bound:
     type: integer
     format: int64
+    minimum: 0
     description: >
       Optional integer on the acknowledging attach. The saved outcome/entry
       order, not a new counter. When an acknowledgement carries this number,
-      the later unit advances the one shared seen mark to the lesser of this
-      number and the current saved order. Absent means do not write the seen
-      mark and do not substitute the current order. This change only publishes
-      the field. Keep in sync by hand with contracts/asyncapi.yaml's inline
+      the server advances the one shared seen mark to the lesser of this
+      number and the current saved order (never lowering it). Absent means do
+      not write the seen mark and do not substitute the current order. Keep in sync by hand with contracts/asyncapi.yaml's inline
       AttachSessionFrame.

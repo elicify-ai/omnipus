@@ -103,6 +103,20 @@ func NewPartitionStore(agentWorkspaceDir, agentID string) *PartitionStore {
 	}
 }
 
+// AttentionMark is the bounded shared attention state of a main (U11).
+//
+//   - OutcomeOrder is the saved order of the newest attention outcome (a goal
+//     ending met, rounds_exhausted or other; stopped_by_user never raises it):
+//     the outcome entry's saved timestamp in Unix MILLISECONDS, made strictly
+//     increasing. Milliseconds, not nanoseconds: a nanosecond int64 exceeds
+//     JavaScript's exact-integer range, and the SPA echoes this number back.
+//   - SeenOrder is the one shared seen mark; it only ever moves up, and never
+//     past OutcomeOrder.
+type AttentionMark struct {
+	OutcomeOrder int64 `json:"outcome_order"`
+	SeenOrder    int64 `json:"seen_order"`
+}
+
 // SessionMeta is the meta.json file per Appendix E §E.5.1.
 type SessionMeta struct {
 	ID          string        `json:"id"`
@@ -162,6 +176,16 @@ type SessionMeta struct {
 	// listing) — without a reader this field could ship write-only with
 	// every test green (spec note on W2).
 	ParentSessionID string `json:"parent_session_id,omitempty"`
+
+	// Attention is a main's bounded attention mark (session-core U11, FR-047,
+	// C-ATTENTION): the saved order of its newest attention outcome and the one
+	// shared seen mark. Nil on every non-main and on a main that has never had an
+	// attention outcome. Lives in meta.json (identity group).
+	//
+	// A VALUE, not a pointer, and excluded from this struct's own JSON (json:"-"):
+	// it is persisted only through meta.json's identity group (u5IdentityFile),
+	// and a value keeps UnifiedMeta.Clone a plain copy (no new reference field).
+	Attention AttentionMark `json:"-"`
 
 	// ADR-086 GOAL-FR-005 (wave S6, "the deletion half"): the goal loop
 	// state that used to live here — GoalID, GoalCondition, GoalRoundsUsed,
@@ -489,6 +513,11 @@ type TranscriptEntry struct {
 	// design (contrast with ParentSpawnCallID's "never serialized onto a
 	// wire frame").
 	ClientMessageID string `json:"client_message_id,omitempty"`
+
+	// InputDisposition is a READ-ONLY PROJECTION (session-core FR-024): set
+	// only by ReadTranscriptWithDispositions for a user input Stop discarded
+	// before delivery. It is never written to the archive.
+	InputDisposition *InputDisposition `json:"input_disposition,omitempty"`
 
 	// SystemSubtype discriminates an EntryTypeSystem entry by what kind of
 	// system event it records (ADR-085 BROWSER-FR-043a, folded into this

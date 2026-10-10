@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"unicode"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -86,24 +85,6 @@ func resolveOmnipusHome(depsHome string) (string, error) {
 	return h + "/.omnipus", nil
 }
 
-// validateAgentIcon returns an error when icon is non-empty and contains
-// characters outside the Phosphor icon naming convention (alphanumeric + hyphens,
-// max 64 chars). Empty strings pass (field is optional).
-func validateAgentIcon(s string) error {
-	if s == "" {
-		return nil
-	}
-	if len(s) > 64 {
-		return fmt.Errorf("invalid icon %q: must be ≤64 characters", s)
-	}
-	for _, r := range s {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' {
-			return fmt.Errorf("invalid icon %q: must be alphanumeric + hyphens only", s)
-		}
-	}
-	return nil
-}
-
 // ---- system.agent.create ----
 
 // AgentCreateTool implements system.agent.create per BRD §D.4.2.
@@ -114,7 +95,7 @@ func NewAgentCreateTool(d *Deps) *AgentCreateTool { return &AgentCreateTool{deps
 func (t *AgentCreateTool) Name() string           { return "create_agent" }
 func (t *AgentCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentCreateTool) Description() string {
-	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description, soul, model, color (6-digit hex, e.g. #22C55E) and icon (a Phosphor icon name, e.g. 'robot') are all required — color/icon are rejected if missing or malformed. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened."
+	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description, soul, model and color (6-digit hex, e.g. #22C55E) are all required — a malformed color is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened."
 }
 
 func (t *AgentCreateTool) Parameters() map[string]any {
@@ -136,10 +117,6 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"description": "Primary LLM model slug (e.g. 'z-ai/glm-5v-turbo')",
 			},
 			"color": map[string]any{"type": "string", "description": "Hex avatar color (e.g. '#22C55E')"},
-			"icon": map[string]any{
-				"type":        "string",
-				"description": "Phosphor icon name (e.g. 'robot', 'pencil', 'book')",
-			},
 			// Optional — agent type + external-CLI worker runtime.
 			"agent_type": map[string]any{
 				"type":        "string",
@@ -185,7 +162,7 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 			},
 			"model_params": modelParamsParameters(),
 		},
-		"required": []string{"name", "description", "soul", "model", "color", "icon"},
+		"required": []string{"name", "description", "soul", "model", "color"},
 	}
 }
 
@@ -199,7 +176,6 @@ type agentCreateToolExecute struct {
 	soul            string
 	model           string
 	color           string
-	icon            string
 	agentType       string
 	execCLI         string
 	execCLIPath     string
@@ -272,10 +248,6 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 	if err := validateAgentColor(ac.color); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_COLOR", err.Error(), "Use a 6-digit hex color, e.g. #22C55E")), true
 	}
-	ac.icon, _ = ac.args["icon"].(string)
-	if err := validateAgentIcon(ac.icon); err != nil {
-		return tools.ErrorResult(errorJSON("INVALID_ICON", err.Error(), "Use alphanumeric + hyphens, e.g. robot")), true
-	}
 
 	// Agent type + external-CLI worker runtime (W4 taxonomy). Default "Main".
 	ac.agentType, _ = ac.args["agent_type"].(string)
@@ -332,7 +304,6 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 		Name:        ac.name,
 		Description: ac.description,
 		Color:       ac.color,
-		Icon:        ac.icon,
 		Model:       &config.AgentModelConfig{Primary: ac.model},
 	}
 	// Agent type / runtime (W4). Subagent + subagent_3p persist as worker;
@@ -867,7 +838,6 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 				"description": "Explicit provider routing key for the primary model. Empty string clears an existing pin (falls back to default-provider resolution).",
 			},
 			"color": map[string]any{"type": "string"},
-			"icon":  map[string]any{"type": "string"},
 			// #904 D15: JSON null clears the own value ("use the global
 			// limit"), so the schema admits null; 1..1000 bound structurally.
 			"max_tool_iterations": map[string]any{

@@ -29,6 +29,11 @@ import (
 // verbatim).
 const deliveryModel = "openai/gpt-4o-mini"
 
+// deliveryMaxTurns is the turn cap the first Run is given; FR-043 requires the
+// instruction-bearing Resume to retain it (a delivery mutant that resets the cap
+// to 1 must die here).
+const deliveryMaxTurns = 37
+
 // u5bDeliveryStub builds a POSIX stub CLI that logs its argv, delivers its
 // stdin to stdinLog, and drops a marker file in its own working directory — but
 // ONLY on a real run invocation (one carrying marker), so the `--version` probe
@@ -65,7 +70,10 @@ func countMarkers(t *testing.T, dir string) int {
 
 func TestSessionCoreU5bFollowup_ResumeDeliversInstructionAndRetainsCaps(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("stub uses a POSIX shell script")
+		// Founder-accepted platform gap: issue #1256 (2026-10-09) accepts the
+		// missing Windows equivalents for this landing and tracks them. The
+		// fixture is a POSIX shell stub; the Windows replacement proof is owed.
+		t.Skip("stub uses a POSIX shell script (Windows equivalent owed — founder-accepted gap, issue #1256)")
 	}
 	cases := []struct {
 		name       string
@@ -75,17 +83,21 @@ func TestSessionCoreU5bFollowup_ResumeDeliversInstructionAndRetainsCaps(t *testi
 		doneLine   string
 		nativeID   string
 		modelFlag  string
-		newD       func() ExternalAgentRunner
+		// maxTurnsFlag is the child argv fragment carrying the turn cap, for the
+		// driver that passes it on the command line (claude); empty otherwise.
+		maxTurnsFlag string
+		newD         func() ExternalAgentRunner
 	}{
 		{
-			name:       "claude",
-			binVar:     &claudeBinName,
-			marker:     "stream-json",
-			nativeLine: `{"type":"system","subtype":"init","session_id":"native-claude-77"}`,
-			doneLine:   `{"type":"result","subtype":"success","result":"ok"}`,
-			nativeID:   "native-claude-77",
-			modelFlag:  "--model " + deliveryModel,
-			newD:       func() ExternalAgentRunner { return NewClaudeDriver(nil) },
+			name:         "claude",
+			binVar:       &claudeBinName,
+			marker:       "stream-json",
+			nativeLine:   `{"type":"system","subtype":"init","session_id":"native-claude-77"}`,
+			doneLine:     `{"type":"result","subtype":"success","result":"ok"}`,
+			nativeID:     "native-claude-77",
+			modelFlag:    "--model " + deliveryModel,
+			maxTurnsFlag: "--max-turns 37",
+			newD:         func() ExternalAgentRunner { return NewClaudeDriver(nil) },
 		},
 		{
 			name:       "codex",
@@ -127,7 +139,7 @@ func TestSessionCoreU5bFollowup_ResumeDeliversInstructionAndRetainsCaps(t *testi
 			defer cancel()
 
 			ch, err := d.Run(ctx, RunOptions{
-				Input: "first instruction", MaxTurns: 37, Model: deliveryModel, WorkDir: workDir,
+				Input: "first instruction", MaxTurns: deliveryMaxTurns, Model: deliveryModel, WorkDir: workDir,
 			})
 			if err != nil {
 				t.Fatalf("instrument: first Run error = %v", err)
@@ -151,6 +163,16 @@ func TestSessionCoreU5bFollowup_ResumeDeliversInstructionAndRetainsCaps(t *testi
 			}
 			if !strings.Contains(runs[1], tc.modelFlag) {
 				t.Fatalf("FR-043 caps: resumed argv %q does not retain the run's model (%q)", runs[1], tc.modelFlag)
+			}
+			// FR-043 caps: the instruction-bearing resume must retain the run's
+			// TURN CAP. A delivery mutant that resets it (e.g. opts.MaxTurns = 1
+			// in Resume) leaves the name/comment claiming cap retention while the
+			// real cap is lost — this assertion is what makes that claim true.
+			if got := recordedCap(t, d); got != deliveryMaxTurns {
+				t.Fatalf("FR-043 caps: the instruction-bearing resume recorded turn cap %d, want the first Run's %d", got, deliveryMaxTurns)
+			}
+			if tc.maxTurnsFlag != "" && !strings.Contains(runs[1], tc.maxTurnsFlag) {
+				t.Fatalf("FR-043 caps: resumed argv %q does not retain the run's turn cap (%q)", runs[1], tc.maxTurnsFlag)
 			}
 
 			stdin, err := os.ReadFile(stdinLog)

@@ -148,7 +148,6 @@ func TestValidateConfigKey_LegitimateKeysStillAccepted(t *testing.T) {
 		"tools.read_file.max_read_file_size",
 		"tools.web.brave.max_results",
 		"tools.manifest.compressed",
-		"tools.delegate.require_parent_agent_id",
 		"channels.discord.enabled",
 	}
 	for _, key := range allowed {

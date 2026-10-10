@@ -1,6 +1,6 @@
 type: string
 description: >
-  Curated role slug. The badge, not the legacy Phosphor `icon`.
+  Curated role slug. The badge shown with the agent's avatar.
   Labels and the five groups are not on the wire.
 enum:
   - writer

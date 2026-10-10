@@ -40,6 +40,7 @@ import (
 	"sync"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
@@ -265,6 +266,28 @@ type LifecycleRecord struct {
 	// not-wire-format: internal steered-launch bookkeeping, omitted from the
 	// wire SessionLifecycleRecord (it is not session status).
 	Unattended bool `json:"unattended,omitempty"`
+
+	// ExternalRunStarted is the durable "this steered external-CLI session has
+	// already started its native CLI conversation" fact (session-core N7,
+	// FR-043). Set once, before the first CLI Run, by
+	// agent.AgentLoop.markExternalRunStarted; never cleared. Every later entry
+	// of the session — a revive, a wake, a human message after a gateway
+	// restart — must Resume that conversation or refuse visibly, never start a
+	// fresh one. The in-memory holder flag alone does not survive a restart.
+	//
+	// not-wire-format: internal external-run bookkeeping, omitted from the wire
+	// SessionLifecycleRecord.
+	ExternalRunStarted bool `json:"external_run_started,omitempty"`
+
+	// NotDelivered summarizes this helper's reports that were refused at an
+	// inbox cap and NOT saved (FR-013, #1211): a cumulative count and the last
+	// refusal, never the refused content. Written by the upward deliverer on a
+	// cap refusal; read by delegate inbox/status. Typed as the generated
+	// contract schema so no parallel struct exists.
+	//
+	// not-wire-format: disk-only on the record; the wire carries it through
+	// DelegateInboxResponse.not_delivered, not through SessionLifecycleRecord.
+	NotDelivered *generated.DelegateNotDeliveredSummary `json:"not_delivered,omitempty"`
 
 	// FinalHandback marks a final handback delivered in the execution it
 	// names. It is read only when it matches the record's current ExecutionID

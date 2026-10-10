@@ -1314,13 +1314,19 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	if wsErr := ensureDefaultWorkspace(stg.homePath, ownerUsername, stg.cfg); wsErr != nil {
 		slog.Error("gateway: default workspace auto-creation failed", "error", wsErr)
 	}
-	// FR-002/C-MAIN: Admin owns ONE main, in the default workspace only. Admin
-	// is deliberately not a workspace member (coreagent.ExcludedFromWorkspaceTeams),
-	// so unlike every other agent he has no membership write to create it on —
-	// the same get-or-create runs here instead. This covers BOTH branches of
-	// ensureDefaultWorkspace above (the workspace just created, and the one that
-	// already existed); it is a no-op when no default workspace exists.
-	stg.api.ensureDefaultWorkspaceAdminMain()
+	// FR-002/C-MAIN: mains exist eagerly - Admin's (default workspace only; he
+	// is not a team member, so no membership write could create it) and one per
+	// eligible member of every existing workspace team, so a fresh install's
+	// seeded team has its mains at first boot with no team change. Covers both
+	// branches of ensureDefaultWorkspace above; a no-op for Admin when no
+	// default workspace exists.
+	stg.api.ensureBootMains()
+	// session-core U6 (FR-017/019): the task executor derives a run's mode and
+	// captures its recipients from which agents own a visible main. Without this
+	// resolver every task run stays ISOLATED.
+	if stg.tExecutor != nil {
+		stg.tExecutor.SetMainSessionResolver(taskMainResolver{api: stg.api})
+	}
 
 	// ADR-046 P1 (FR-007/008): execution is workspace-scoped, and the system
 	// deliberately never auto-adds a custom/pre-existing agent to any
@@ -2022,13 +2028,6 @@ func setupCronTool(
 	runner.setProcessTracker(procReg.Track)
 	runner.setProcessCleanup(procReg.Cleanup)
 	cronService.SetRunner(runner)
-
-	// Default agent id used only to migrate owner-less legacy jobs on load (W-8).
-	defaultAgentID := ""
-	if def := agentLoop.GetRegistry().GetDefaultAgent(); def != nil {
-		defaultAgentID = def.ID
-	}
-	cronService.SetDefaultAgentID(defaultAgentID)
 
 	if cfg != nil {
 		cronService.SetMaxConcurrentRuns(cfg.Schedules.MaxConcurrentRuns)

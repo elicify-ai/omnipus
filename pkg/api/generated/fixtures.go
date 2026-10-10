@@ -716,7 +716,6 @@ func FixtureSession_Edge() Session {
 
 func FixtureAgent_Populated() Agent {
 	color := AgentColorHash3B82F6
-	icon := "Robot"
 	model := "claude-sonnet-4-6"
 	warning := strPtr("Config reload failed after update")
 	return Agent{
@@ -735,7 +734,6 @@ func FixtureAgent_Populated() Agent {
 		MaxToolIterationsSource:   MaxToolIterationsSourceAgent,
 		MaxToolIterationsOverride: intPtr(50),
 		Color:                     &color,
-		Icon:                      &icon,
 		Model:                     &model,
 		Warning:                   warning,
 	}
@@ -2410,7 +2408,7 @@ func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 // Field allocation per docs/internal/architecture/agent-types-field-matrix.md:
 //   - Main: full field set (voice included), no executor.
 //   - Subagent: like Main minus voice, no executor (server derives native).
-//   - Subagent3p: ONLY type/name/description/model/provider/color/icon/
+//   - Subagent3p: ONLY type/name/description/model/provider/color/
 //     rate_limits/soul/executor/timeout_seconds — executor
 //     is REQUIRED. All Main/Subagent-only fields (tools_cfg, skills,
 //     fallback_models, model_params, shell_policy, voice,
@@ -2419,7 +2417,6 @@ func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 
 func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 	color := AgentColorHash3B82F6
-	icon := "Robot"
 	model := "claude-sonnet-4-6"
 	deny := AgentCreateRequestMainToolsCfgBuiltinPoliciesDeny
 	description := "Focused research assistant"
@@ -2434,7 +2431,6 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 		Description:       &description,
 		Model:             &model,
 		Color:             &color,
-		Icon:              &icon,
 		Soul:              "You are a focused research assistant.",
 		Skills:            &[]string{"web-research"},
 		MaxToolIterations: &maxToolIterations,
@@ -2485,7 +2481,6 @@ func FixtureAgentCreateRequestMain_InvalidType() AgentCreateRequestMain {
 
 func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
 	color := AgentColorHash38BDF8
-	icon := "Robot"
 	model := "claude-sonnet-4-6"
 	description := "Native delegation-only research worker"
 	deny := AgentCreateRequestSubagentToolsCfgBuiltinPoliciesDeny
@@ -2497,7 +2492,6 @@ func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
 		Description:       &description,
 		Model:             &model,
 		Color:             &color,
-		Icon:              &icon,
 		Soul:              "You are a focused research worker invoked only via delegation.",
 		Skills:            &[]string{"web-research"},
 		MaxToolIterations: &maxToolIterations,
@@ -2534,11 +2528,10 @@ func FixtureAgentCreateRequestSubagent_InvalidType() AgentCreateRequestSubagent 
 }
 
 // FixtureAgentCreateRequestSubagent3p_Populated — every field this variant
-// allows: type/name/description/model/provider/color/icon/rate_limits/soul/
+// allows: type/name/description/model/provider/color/rate_limits/soul/
 // executor/timeout_seconds. executor is REQUIRED.
 func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3p {
 	color := AgentColorHashF472B6
-	icon := "Terminal"
 	model := "claude-sonnet-4-6"
 	provider := "anthropic"
 	description := "External-CLI delegation-only worker"
@@ -2557,7 +2550,6 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 		Model:          &model,
 		Provider:       &provider,
 		Color:          &color,
-		Icon:           &icon,
 		Soul:           "You are a focused worker running on the claude-code CLI.",
 		TimeoutSeconds: &timeoutSeconds,
 		RateLimits: &struct {
@@ -2628,7 +2620,6 @@ func FixtureAgentCreateRequestSubagent3p_ForbiddenFieldJSON() []byte {
 
 func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 	color := AgentColorHash3B82F6
-	icon := "Robot"
 	model := "gpt-4o"
 	name := "Renamed Agent"
 	description := "Updated description"
@@ -2645,7 +2636,6 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 		Description: &description,
 		Model:       &model,
 		Color:       &color,
-		Icon:        &icon,
 		Default:     &vDefault,
 		Soul:        &soul,
 		Voice:       &voice,

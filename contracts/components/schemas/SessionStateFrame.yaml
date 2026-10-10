@@ -56,14 +56,15 @@ properties:
   attention_bound:
     type: integer
     format: int64
+    minimum: 0
     description: >
       Optional. The saved outcome/entry order for this main, echoed on the
       attach response so a later acknowledgement can name the same number.
       Not a new counter. This frame is part of both the incremental catch-up
       and the full snapshot, so either attach answer can carry the bound.
-      Omitted when this emit is not an attach of a main. This change only
-      publishes the field; nothing writes the seen mark yet. Keep in sync by
-      hand with contracts/asyncapi.yaml's inline SessionStateFrame.
+      0 when the main has no outcome yet. Omitted when this emit is not an
+      attach of a main, or when the saved order could not be read. Keep in
+      sync by hand with contracts/asyncapi.yaml's inline SessionStateFrame.
   auto_approve_modifier:
     type: boolean
     nullable: true

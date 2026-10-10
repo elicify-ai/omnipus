@@ -356,7 +356,10 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 		seeded = seedDelegationEdgesForNewMembers(w.CoreTeam, w.CoreTeam, nil, ceiling, configPresent, selfEdgeExcludedAgentIDs(t.deps))
 	}
 	if delegationPresent {
-		seeded = explicitDelegation
+		// Explicit graph replaces the default seed, but every member of the
+		// fresh team still gets its ordinary self-edge (FR-014/015/016).
+		seeded, _ = withNewMemberSelfEdges(explicitDelegation, w.CoreTeam,
+			workspaceDelegationDepthCeiling(t.deps), configAgentPresenceSet(t.deps), selfEdgeExcludedAgentIDs(t.deps))
 	}
 
 	if err := writeEntity(workspacesDir(t.deps.Home), w.ID, w); err != nil {
@@ -512,7 +515,17 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 	var delegationSeedNote string
 	var pendingDelegation []workspacepkg.DelegationEdge
 	if delegationPresent {
+		// An explicit complete graph replaces the stored one verbatim, but
+		// every member THIS call introduces still gets its ordinary
+		// self-edge (session-core FR-014/015/016, founder ruling 2026-10-10).
 		pendingDelegation = explicitDelegation
+		if coreTeamChanged {
+			added := teamDiffAdded(oldTeam, w.CoreTeam)
+			var selfSeeded []workspacepkg.DelegationEdge
+			pendingDelegation, selfSeeded = withNewMemberSelfEdges(explicitDelegation, added,
+				workspaceDelegationDepthCeiling(t.deps), configAgentPresenceSet(t.deps), selfEdgeExcludedAgentIDs(t.deps))
+			delegationSeedNote = seededEdgesSummary(selfSeeded, added)
+		}
 	} else if coreTeamChanged {
 		added := teamDiffAdded(oldTeam, w.CoreTeam)
 		if len(added) > 0 {
@@ -1036,6 +1049,37 @@ func seededEdgesSummary(seeded []workspacepkg.DelegationEdge, added []string) st
 	}
 	sort.Strings(names)
 	return fmt.Sprintf("seeded %d default delegation edge(s) for: %s", len(seeded), strings.Join(names, ", "))
+}
+
+// withNewMemberSelfEdges returns graph with the ordinary self-edge of every id in
+// added appended (and that appended slice on its own), for a call that carries
+// an EXPLICIT complete delegation graph. An explicit graph suppresses default
+// seeding, but session-core FR-014/015/016 (founder ruling 2026-10-10) makes
+// the self-edge unconditional for a member a call introduces, so this runs the
+// one shared workspace.SelfEdgeSeedRows computation over the introduced
+// members that are present in the live config (configPresent) and not on the
+// operator exclusion data (excluded). Members already carrying a self-row in
+// graph are skipped; continuing members are not in added, so a self-line the
+// graph omits for them is never restored. A nil/empty added returns graph as
+// sent.
+func withNewMemberSelfEdges(
+	graph []workspacepkg.DelegationEdge,
+	added []string,
+	ceiling int,
+	configPresent map[string]bool,
+	excluded map[string]bool,
+) (merged, seeded []workspacepkg.DelegationEdge) {
+	var introduced []string
+	for _, id := range added {
+		if configPresent[id] {
+			introduced = append(introduced, id)
+		}
+	}
+	seeded = workspacepkg.SelfEdgeSeedRows(introduced, graph, excluded, ceiling)
+	if len(seeded) == 0 {
+		return graph, nil
+	}
+	return append(append([]workspacepkg.DelegationEdge(nil), graph...), seeded...), seeded
 }
 
 // configAgentPresenceSet returns the set of agent IDs present in the live

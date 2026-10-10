@@ -5,7 +5,7 @@
 // ADR-053 §5.1 — message_parent is the first-class CHILD-side tool a
 // delegated session uses to push a typed message into its parent's durable
 // inbox: progress | checkpoint | artifact | blocker | question | handback.
-// `decision_request`/`error`/`revision_entry`/`goal_status`/`steer`/`respond`
+// `error`/`revision_entry`/`goal_status`/`steer`/`respond`
 // are SessionMessage kinds this tool deliberately does NOT expose (they are
 // engine/parent-only or session-internal — see generated.MessageParentRequest's
 // doc comment).
@@ -720,6 +720,9 @@ func (mt *messageParentToolExecute) finishDelivery() *ToolResult {
 	if mt.err != nil {
 		// Never-silent-drop (FR-125): every rejection surfaces to the child
 		// as a clear tool error.
+		if text, ok := notDeliveredRefusalText(mt.err); ok {
+			return ErrorResult(text).WithError(mt.err)
+		}
 		return ErrorResult(fmt.Sprintf("message_parent: %v", mt.err)).WithError(mt.err)
 	}
 
@@ -868,4 +871,36 @@ func toIntArg(v any) (int, error) {
 	default:
 		return 0, fmt.Errorf("not a number")
 	}
+}
+
+// notDeliveredRefusalText renders the fixed, parseable refusal for an inbox cap
+// refusal (FR-013 / #1211 D3, architect Q2): a stable reason= token, a
+// retry_after_seconds= token for the rate cap, and one sentence on what to do.
+// ok is false for every error that is not one of the four cap refusals; those
+// keep the plain "message_parent: <err>" text.
+func notDeliveredRefusalText(err error) (string, bool) {
+	reason, ok := session.InboxRefusalReason(err)
+	if !ok {
+		return "", false
+	}
+	var head, advice string
+	switch reason {
+	case generated.DelegateNotDeliveredSummaryLastReasonRateLimited:
+		head = "reason=rate_limited, retry_after_seconds=60"
+		advice = "Nothing was saved; wait 60 seconds, then send this report again."
+	case generated.DelegateNotDeliveredSummaryLastReasonQuestionBlockerCeiling:
+		head = "reason=question_blocker_ceiling"
+		advice = "Nothing was saved; send it again after the parent answers one of your open questions or blockers."
+	case generated.DelegateNotDeliveredSummaryLastReasonUnackedCap:
+		head = "reason=unacked_cap"
+		advice = "Nothing was saved; send it again after the parent reads its inbox."
+	default:
+		head = "reason=body_too_large"
+		advice = "Nothing was saved; do not resend it unchanged — shorten it, then send again."
+	}
+	text := fmt.Sprintf("message_parent: not delivered (%s): %v. %s", head, err, advice)
+	if strings.Contains(err.Error(), session.ParentNotNotifiedMarker) {
+		text += " The parent could not be told about this refusal."
+	}
+	return text, true
 }

@@ -59,6 +59,21 @@ func (p *delegateDispatchProvider) GetDefaultModel() string { return "delegate-d
 // so the real Launch+Dispatch admission path is exercised.
 func newDelegateDispatchLoop(t *testing.T, provider providers.LLMProvider) *AgentLoop {
 	t.Helper()
+	// Seed a default workspace carrying the ordinary caller→target edges the
+	// launcher's graph gate (FR-014) requires: startingRemainingDepth resolves
+	// the governing workspace and refuses (steer.ErrInvalidEdge) when no
+	// caller→target edge exists, so an edge-less fixture cannot reach Launch at
+	// all (the CHECK's "Launch fixture fails before body" — INCONCLUSIVE). The
+	// steerer is testDefaultAgentID (newSteeringSessionWithActiveAgent switches
+	// the chat to it), so the edges run from it. Must run BEFORE mustNewAgentLoop
+	// so OMNIPUS_HOME is set when the membership seeder reads it.
+	seedWorkspaceGraph(t, "01JXDISPATCHSEC000000000001", true, []graphEdge{
+		edge(testDefaultAgentID, delegateExtCLIAgentID, nil, nil),
+		edge(testDefaultAgentID, delegateNativeWorkerAgentID, nil, nil),
+		// A self-delegation is an ORDINARY edge (FR-014): the launch-to-mia
+		// tests need the caller→caller self-edge, exactly like any other target.
+		edge(testDefaultAgentID, testDefaultAgentID, nil, nil),
+	})
 	tmpDir := filepath.Join(t.TempDir(), "home")
 	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
 		t.Fatalf("mkdir home: %v", err)
@@ -141,7 +156,7 @@ func waitUntil(t *testing.T, timeout time.Duration, what string, cond func() boo
 // The launcher reads the session's IMMUTABLE owner — meta.AgentID, set once at
 // creation (session-core U1/DEL-11 deleted the mutable handover owner it used
 // to read via ActiveAgentID) — and launchSteered's fail-closed parent-identity
-// guard (config.DelegateToolConfig.RequireParentAgentID, TRUE when unset) reads
+// guard (a launch with no identified delegating agent is refused) reads
 // that same non-empty id. Owning the session by testDefaultAgentID directly is
 // therefore both the caller the graph gate sees and the identity that satisfies
 // the guard; a decoy-owner-then-SwitchAgent fixture no longer moves either.

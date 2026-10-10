@@ -1,5 +1,7 @@
 # ADR-091 WP-G — Shared fixtures, test classification, cross-package suites
 
+**Superseded 2026-10-10 (founder ruling, delegation policy always applies):** the operator setting `tools.delegate.require_parent_agent_id` no longer exists. Every launch carries an identified calling agent or is refused; no configuration value turns that check off. Every statement in this document that describes the setting, its `false` value, a downgrade-to-log behavior or a rollback procedure for it is void. Authority: session-core spec FR-014/015/016, `docs/internal/specs/session-core-spec.md`.
+
 **Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. A second Stop / Esc / `/stop` within that window stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. Agent delegate `stop` / `stop_all` is unchanged (one helper's turn / its tree). Authority: founder decision, 2026-10-06.
 
 ## Amended 2026-10-06 — founder decision

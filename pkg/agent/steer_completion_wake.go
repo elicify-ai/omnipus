@@ -112,7 +112,27 @@ func (al *AgentLoop) replayPostFinishWake(sessionID, messageID string) error {
 	if rec.Stopped() {
 		return fmt.Errorf("steer: post-finish wake %q: recipient %q was stopped; entry remains unacknowledged", messageID, sessionID)
 	}
+	// Hold the retained external-CLI conversation (when the recipient has one)
+	// before reviving, exactly as reviveStoppedSession does: this path revives a
+	// terminal recipient too, and without the hold an already-started external
+	// recipient would change generation before its conversation was known to
+	// exist, and an unwinding completion could release the driver underneath the
+	// woken turn. A recipient with no retained conversation refuses here, with the
+	// entry left unacknowledged. The hold is the turn's to retire (beginExternalRun
+	// or the end of that generation's turn); it is cancelled only on failure.
+	var externalHold *externalConversationReservation
+	handed := false
+	defer func() {
+		if !handed {
+			externalHold.cancel()
+		}
+	}()
 	if rec.Terminal() {
+		hold, holdErr := al.reserveExternalConversation(sessionID, rec)
+		if holdErr != nil {
+			return fmt.Errorf("steer: post-finish wake %q: recipient %q: %w", messageID, sessionID, holdErr)
+		}
+		externalHold = hold
 		if _, reviveErr := al.steerCanceller().Revive(context.Background(), sessionID,
 			steer.Principal{Kind: steer.PrincipalKindAgent, ID: rec.AgentID}); reviveErr != nil {
 			return fmt.Errorf("steer: post-finish wake: revive recipient %q: %w", sessionID, reviveErr)
@@ -123,11 +143,13 @@ func (al *AgentLoop) replayPostFinishWake(sessionID, messageID string) error {
 		if err != nil {
 			return fmt.Errorf("steer: post-finish wake: reload recipient %q: %w", sessionID, err)
 		}
+		externalHold.bind(rec.Generation)
 	}
 	content := deliverySummary(*durable)
 	if ts := al.getActiveTurnState(sessionID); ts != nil && ts.IsAlive() {
 		if enqueueErr := al.EnqueueSteeringWake(sessionID, rec.AgentID, sessionID, messageID,
 			providers.Message{Role: "user", Content: content}); enqueueErr == nil {
+			handed = true
 			return nil
 		} else if !errors.Is(enqueueErr, errSteeringScopeClosed) {
 			return fmt.Errorf("steer: post-finish wake: enqueue live turn: %w", enqueueErr)
@@ -144,5 +166,6 @@ func (al *AgentLoop) replayPostFinishWake(sessionID, messageID string) error {
 		},
 	}
 	_, err = al.processSteeredSystemWake(context.Background(), message)
+	handed = err == nil
 	return err
 }

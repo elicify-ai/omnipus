@@ -268,7 +268,6 @@ func TestLaunch_SteeredEmptyParentAgentHonorsFailClosedSwitch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			al, cleanup := newSteerAL(t)
 			defer cleanup()
-			al.GetConfig().Tools.Delegate.RequireParentAgentID = &tc.strict
 			steerer, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "")
 			if err != nil {
 				t.Fatalf("NewSession(steerer): %v", err)
