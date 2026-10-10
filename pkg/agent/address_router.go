@@ -393,5 +393,16 @@ func (al *AgentLoop) wakeRequestSender(c addressing.Capture, answer session.Tran
 	}
 }
 
+// DiscardRequest marks an admitted request as discarded before delivery (Stop
+// before the receiver consumed it), so it can no longer be answered. A request
+// with no capture is a no-op.
+func (al *AgentLoop) DiscardRequest(receiverSessionID, requestID string) error {
+	ledger := al.RequestLedger()
+	if ledger == nil {
+		return errors.New("session store unavailable")
+	}
+	return ledger.Discard(receiverSessionID, requestID)
+}
+
 // NewAddressRouter returns the router tools hold. Exported for wiring tests.
 func (al *AgentLoop) NewAddressRouter() AddressRouter { return AddressRouter{al: al} }
