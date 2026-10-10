@@ -33,6 +33,38 @@ properties:
       matching. Absent on entries written before this field existed and on non-user
       entries.
     example: "cmid_01HXYZ"
+  input_disposition:
+    type: object
+    readOnly: true
+    description: >
+      Read-only record that this user input was DISCARDED by Stop before it was
+      delivered into the agent's model input (session-core FR-024). Absent on
+      every delivered message. There is no client action to release or discard
+      it; the archived message bytes are unchanged and this only labels them.
+    required:
+      - message_id
+      - state
+      - reason
+    additionalProperties: false
+    properties:
+      message_id:
+        type: string
+        minLength: 1
+        maxLength: 255
+        description: The original input message id (this entry's id).
+      client_message_id:
+        type: string
+        minLength: 1
+        maxLength: 128
+        description: The sender's client_message_id, when the input carried one.
+      state:
+        type: string
+        enum:
+          - discarded
+      reason:
+        type: string
+        enum:
+          - stopped_before_delivery
   type:
     type: string
     enum:

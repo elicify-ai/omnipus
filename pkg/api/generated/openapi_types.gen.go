@@ -6065,6 +6065,36 @@ func (e MessageGoalOutcomeEnding) Valid() bool {
 	}
 }
 
+// Defines values for MessageInputDispositionReason.
+const (
+	MessageInputDispositionReasonStoppedBeforeDelivery MessageInputDispositionReason = "stopped_before_delivery"
+)
+
+// Valid indicates whether the value is a known member of the MessageInputDispositionReason enum.
+func (e MessageInputDispositionReason) Valid() bool {
+	switch e {
+	case MessageInputDispositionReasonStoppedBeforeDelivery:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageInputDispositionState.
+const (
+	MessageInputDispositionStateDiscarded MessageInputDispositionState = "discarded"
+)
+
+// Valid indicates whether the value is a known member of the MessageInputDispositionState enum.
+func (e MessageInputDispositionState) Valid() bool {
+	switch e {
+	case MessageInputDispositionStateDiscarded:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageRole.
 const (
 	MessageRoleAssistant MessageRole = "assistant"
@@ -9806,6 +9836,36 @@ func (e SessionDetailMessagesGoalOutcomeEnding) Valid() bool {
 	case SessionDetailMessagesGoalOutcomeEndingRoundsExhausted:
 		return true
 	case SessionDetailMessagesGoalOutcomeEndingStoppedByUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesInputDispositionReason.
+const (
+	SessionDetailMessagesInputDispositionReasonStoppedBeforeDelivery SessionDetailMessagesInputDispositionReason = "stopped_before_delivery"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesInputDispositionReason enum.
+func (e SessionDetailMessagesInputDispositionReason) Valid() bool {
+	switch e {
+	case SessionDetailMessagesInputDispositionReasonStoppedBeforeDelivery:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesInputDispositionState.
+const (
+	SessionDetailMessagesInputDispositionStateDiscarded SessionDetailMessagesInputDispositionState = "discarded"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesInputDispositionState enum.
+func (e SessionDetailMessagesInputDispositionState) Valid() bool {
+	switch e {
+	case SessionDetailMessagesInputDispositionStateDiscarded:
 		return true
 	default:
 		return false
@@ -20705,6 +20765,17 @@ type Message struct {
 	// Id Unique message identifier.
 	Id string `json:"id"`
 
+	// InputDisposition Read-only record that this user input was DISCARDED by Stop before it was delivered into the agent's model input (session-core FR-024). Absent on every delivered message. There is no client action to release or discard it; the archived message bytes are unchanged and this only labels them.
+	InputDisposition *struct {
+		// ClientMessageId The sender's client_message_id, when the input carried one.
+		ClientMessageId *string `json:"client_message_id,omitempty"`
+
+		// MessageId The original input message id (this entry's id).
+		MessageId string                        `json:"message_id"`
+		Reason    MessageInputDispositionReason `json:"reason"`
+		State     MessageInputDispositionState  `json:"state"`
+	} `json:"input_disposition,omitempty"`
+
 	// MessagesCompacted Number of messages compacted (present only on compaction entries).
 	MessagesCompacted *int `json:"messages_compacted,omitempty"`
 
@@ -21015,6 +21086,12 @@ type MessageContextWindowNoticeKind string
 
 // MessageGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 type MessageGoalOutcomeEnding string
+
+// MessageInputDispositionReason defines model for Message.InputDisposition.Reason.
+type MessageInputDispositionReason string
+
+// MessageInputDispositionState defines model for Message.InputDisposition.State.
+type MessageInputDispositionState string
 
 // MessageRole Author role. Absent on compaction entries.
 type MessageRole string
@@ -24285,6 +24362,17 @@ type SessionDetail struct {
 		// Id Unique message identifier.
 		Id string `json:"id"`
 
+		// InputDisposition Read-only record that this user input was DISCARDED by Stop before it was delivered into the agent's model input (session-core FR-024). Absent on every delivered message. There is no client action to release or discard it; the archived message bytes are unchanged and this only labels them.
+		InputDisposition *struct {
+			// ClientMessageId The sender's client_message_id, when the input carried one.
+			ClientMessageId *string `json:"client_message_id,omitempty"`
+
+			// MessageId The original input message id (this entry's id).
+			MessageId string                                      `json:"message_id"`
+			Reason    SessionDetailMessagesInputDispositionReason `json:"reason"`
+			State     SessionDetailMessagesInputDispositionState  `json:"state"`
+		} `json:"input_disposition,omitempty"`
+
 		// MessagesCompacted Number of messages compacted (present only on compaction entries).
 		MessagesCompacted *int `json:"messages_compacted,omitempty"`
 
@@ -24731,6 +24819,12 @@ type SessionDetailMessagesContextWindowNoticeKind string
 
 // SessionDetailMessagesGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 type SessionDetailMessagesGoalOutcomeEnding string
+
+// SessionDetailMessagesInputDispositionReason defines model for SessionDetail.Messages.InputDisposition.Reason.
+type SessionDetailMessagesInputDispositionReason string
+
+// SessionDetailMessagesInputDispositionState defines model for SessionDetail.Messages.InputDisposition.State.
+type SessionDetailMessagesInputDispositionState string
 
 // SessionDetailMessagesRole Author role. Absent on compaction entries.
 type SessionDetailMessagesRole string

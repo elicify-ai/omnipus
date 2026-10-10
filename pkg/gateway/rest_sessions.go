@@ -511,7 +511,7 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("session not found: %v", err))
 		return
 	}
-	messages, err := store.ReadTranscript(id)
+	messages, err := store.ReadTranscriptWithDispositions(id)
 	if err != nil {
 		slog.Error("rest: could not read transcript", "session_id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))
@@ -552,7 +552,7 @@ func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id 
 		jsonErr(w, http.StatusNotFound, "session not found")
 		return
 	}
-	messages, err := store.ReadTranscript(id)
+	messages, err := store.ReadTranscriptWithDispositions(id)
 	if err != nil {
 		slog.Error("rest: could not read transcript", "session_id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))

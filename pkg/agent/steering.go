@@ -64,6 +64,11 @@ type steeringQueueItem struct {
 	// receipt (D4). Empty for items with no ledger receipt (human chat
 	// input, wakes, runtime notices).
 	steerControlID string
+	// transcriptEntryID is the archive entry id of the person's message this
+	// item carries (bus.InboundMessage.TranscriptEntryID). Set only for human
+	// web/channel input; Stop's FR-024 discard uses it to label the original
+	// message "discarded". Empty for every other item.
+	transcriptEntryID string
 }
 
 type steeringWake struct {
@@ -282,6 +287,35 @@ func (sq *steeringQueue) takeSteerReceiptItemsScope(scope string) []steeringQueu
 	return taken
 }
 
+// takeHumanItemsScope removes and returns scope's queued items that are
+// undelivered human chat input - no delegate steer receipt and not an upward
+// wake - from the main queue and an open finishing buffer, leaving everything
+// else in place and in order (FR-024).
+func (sq *steeringQueue) takeHumanItemsScope(scope string) []steeringQueueItem {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	scope = normalizeSteeringScope(scope)
+	var taken []steeringQueueItem
+	split := func(items []steeringQueueItem) []steeringQueueItem {
+		kept := items[:0]
+		for _, item := range items {
+			if item.steerControlID == "" && item.wake == nil {
+				taken = append(taken, item)
+				continue
+			}
+			kept = append(kept, item)
+		}
+		return kept
+	}
+	if queue, ok := sq.queues[scope]; ok {
+		sq.queues[scope] = split(queue)
+	}
+	if transition := sq.terminalizing[scope]; transition != nil {
+		transition.finishingItems = split(transition.finishingItems)
+	}
+	return taken
+}
+
 // finishingPending reports whether input was accepted into scope's open
 // terminal transition. The completion commit reads it under the record lock:
 // accepted before the commit means the current generation continues.
@@ -483,7 +517,7 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 		Content: msg.Content,
 		Media:   append([]string(nil), msg.Media...),
 	}
-	_, _, err = al.enqueueSteeringMessage(route.SessionKey, ag.ID, pmsg, "")
+	_, _, err = al.enqueueHumanSteeringMessage(route.SessionKey, ag.ID, pmsg, msg.TranscriptEntryID)
 	return err
 }
 
@@ -838,11 +872,22 @@ func (al *AgentLoop) enqueueDelegateSteer(scope, agentID string, msg providers.M
 // EnqueueSteeringMessage wrapper above strips the status to keep the
 // pkg/tools DelegateSteeringSink interface unchanged.
 func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, EnqueueStatus, error) {
+	return al.enqueueSteeringMessageEntry(scope, agentID, msg, correlationID, "")
+}
+
+// enqueueHumanSteeringMessage queues a person's web/channel message and keeps
+// its archive entry id, so a Stop that discards it before delivery (FR-024) can
+// label that original message.
+func (al *AgentLoop) enqueueHumanSteeringMessage(scope, agentID string, msg providers.Message, transcriptEntryID string) (string, EnqueueStatus, error) {
+	return al.enqueueSteeringMessageEntry(scope, agentID, msg, "", transcriptEntryID)
+}
+
+func (al *AgentLoop) enqueueSteeringMessageEntry(scope, agentID string, msg providers.Message, correlationID, transcriptEntryID string) (string, EnqueueStatus, error) {
 	correlationID = strings.TrimSpace(correlationID)
 	if correlationID == "" {
 		correlationID = "corr_" + uuid.NewString()
 	}
-	item := steeringQueueItem{message: msg, correlationID: correlationID}
+	item := steeringQueueItem{message: msg, correlationID: correlationID, transcriptEntryID: transcriptEntryID}
 	// onPostFinish fires only when the closing hand-off's transition buffer
 	// accepted this item during a terminal transition with non-refusal; its
 	// return value becomes enqueueSteeringItemWithStatus's own returned

@@ -875,9 +875,11 @@ type MessageFrame struct {
 	Type      string         `json:"type"`
 }
 
-// MessageStatusFrame — Server → client delivery status for one user message. Session-scoped. received follows durable transcript persistence; working follows successful turn admission; failed means processing stopped before admission. Emitted only when the client supplied client_message_id.
+// MessageStatusFrame — Server → client delivery status for one user message. Session-scoped. received follows durable transcript persistence; working follows successful turn admission; failed means processing stopped before admission; discarded (reason stopped_before_delivery) means Stop discarded the input before delivery (session-core FR-024). Emitted only when the client supplied client_message_id.
 type MessageStatusFrame struct {
 	ClientMessageId string `json:"client_message_id"`
+	// Present only with state=discarded: why the input never reached the agent (session-core FR-024).
+	Reason *string `json:"reason,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/MessageStatusFrame.yaml.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
@@ -1029,6 +1031,13 @@ type ReplayMessageFrame struct {
 	// session-core FR-039 / C-GOAL. The goal the replayed entry's producing turn was dispatched under (from TranscriptEntry.GoalID). Live, history, REST and replay must retain the SAME association so the SPA joins each bubble to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier replayed message.
 	GoalId *string `json:"goal_id,omitempty"`
 	Id     *string `json:"id,omitempty"`
+	// Read-only record that this user input was DISCARDED by Stop before it was delivered into the agent's model input (session-core FR-024). Absent on every delivered message. There is no client action to release or discard it; the archived message bytes are unchanged and this only labels them.
+	InputDisposition *struct {
+		ClientMessageId *string `json:"client_message_id,omitempty"`
+		MessageId       string  `json:"message_id"`
+		Reason          string  `json:"reason"`
+		State           string  `json:"state"`
+	} `json:"input_disposition,omitempty"`
 	// Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014). Omitted for legacy entries written before per-turn model recording landed.
 	Model     *string `json:"model,omitempty"`
 	Role      string  `json:"role"`

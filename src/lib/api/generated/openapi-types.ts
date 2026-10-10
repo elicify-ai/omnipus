@@ -4617,6 +4617,17 @@ export interface components {
              * @example cmid_01HXYZ
              */
             client_message_id?: string;
+            /** @description Read-only record that this user input was DISCARDED by Stop before it was delivered into the agent's model input (session-core FR-024). Absent on every delivered message. There is no client action to release or discard it; the archived message bytes are unchanged and this only labels them. */
+            readonly input_disposition?: {
+                /** @description The original input message id (this entry's id). */
+                message_id: string;
+                /** @description The sender's client_message_id, when the input carried one. */
+                client_message_id?: string;
+                /** @enum {string} */
+                state: "discarded";
+                /** @enum {string} */
+                reason: "stopped_before_delivery";
+            };
             /**
              * @description Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id.
              * @example message
