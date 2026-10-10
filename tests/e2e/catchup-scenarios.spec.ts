@@ -58,23 +58,6 @@ const assistantConnectionStatus = (page: Page) => page.getByTestId('assistant-co
 const LONG_PROMPT =
   'Do NOT use any tools. Plain prose only. Write eight short paragraphs about the tide, about 600 words total.'
 
-// Scenario h only: real-browser follow-up (orchestrator) — the ordinary
-// LONG_PROMPT above genuinely raced kill9() in practice against the pass-3
-// model (it completed the full ~600-word answer, `done` and all,
-// before that cycle finished — confirmed by a local run whose failure
-// screenshot showed a COMPLETE, model-footer-stamped answer with no
-// "Generate again", i.e. nothing was actually interrupted, not a real
-// product bug). The central e2e model (tests/e2e/e2e-model.json) streams
-// far more slowly than that, and the
-// pass-4 stream-delay knob below keeps the turn mid-stream through
-// kill9()/restart() regardless of model speed either way. Item h's whole
-// premise is a turn that is GENUINELY still in flight at the moment of the
-// crash, so this scenario alone asks for a much longer answer to widen that
-// window well past kill9()'s own real-world latency (SIGKILL + wait-for-exit
-// + re-spawn + health-check).
-const VERY_LONG_PROMPT =
-  'Do NOT use any tools. Plain prose only. Write twenty long, detailed paragraphs about the history and science of tides, at least 3000 words total.'
-
 // Real-browser follow-up (orchestrator): assertNoDuplicateOrGapText compared
 // the whole bubble's innerText, which includes bubble CHROME (the model
 // footer, `[data-testid="message-model"]`, rendered via ModelFooter.tsx —
@@ -469,160 +452,164 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     expect((await bubbleText(assistantMessages(page).first())).trim().length).toBeGreaterThan(0)
   })
 
-  // Un-skipped (pass 3, orchestrator): the earlier `.skip` reasoning ("this
-  // spec file has no process control to restart the binary unattended") no
-  // longer holds — `tests/e2e/fixtures/gateway-process.ts`'s `GatewayProcess`
-  // was purpose-built for exactly this (its own doc comment: "needs to
-  // `kill -9` a REAL gateway process mid-task and restart it"), already
-  // proven out by `conformance-design-exec-e2e.spec.ts`'s E.1 boot-sweep
-  // test. It owns its OWN ephemeral port and its OWN mkdtemp'd OMNIPUS_HOME
-  // (never the shared worker's OMNIPUS_HOME/port the rest of this file's
-  // `page` fixture is wired to via playwright.config.ts's `baseURL`) — so
-  // this test drives a SEPARATE browser navigation (`page.goto(gw.baseURL)`,
-  // an absolute URL, which overrides the configured relative baseURL) and a
-  // real UI login against its own isolated process, entirely independent of
-  // the shared gateway every other scenario in this file uses. `kill9()`
-  // sends a real SIGKILL and waits for the OS to actually reap the process
-  // (no `--allow-empty`/graceful-shutdown path involved — this is a genuine
-  // crash, matching item h's "gateway restart" framing), and `restart()`
-  // re-spawns the SAME binary against the SAME OMNIPUS_HOME/port, which
-  // mints a fresh in-process boot id (§3.4) while the on-disk session/
-  // transcript state survives — exactly the `boot_mismatch` precondition.
-  //
-  // Deliberately NOT `page.reload()`d after the restart: item h is "tab
-  // OPEN" (still-live tab), not "tab reloaded" — the existing WS client
-  // (`src/lib/ws.ts`) already owns exponential-backoff auto-reconnect
-  // (`_scheduleReconnect`) once the SIGKILL surfaces as a socket close, so
-  // the live tab reconnects to the restarted process on its own, sends its
-  // stale (pre-restart) `{since_seq, boot_id}` on `attach_session`, and the
-  // new process's differing boot id is what actually drives the
-  // `boot_mismatch` snapshot path — reloading first would discard that
-  // stale cursor and prove a different (if related) code path instead.
-  // RE-UN-SKIPPED (pass 4, orchestrator): pass 3's `test.skip` reasoning
-  // ("no flaky tests" — the mid-answer kill window wasn't reliably
-  // reproducible against a real, fast model) no longer applies now that the
-  // backend's test-only `OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS` knob
-  // exists (`pkg/gateway/ws_session_hub.go`'s
-  // `streamTokenDelayEnvOverrideVar` — read once at gateway start; the web
-  // streamer pauses that long after each published token; unset/0/invalid
-  // = no pause, same pattern as scenario g's
-  // `OMNIPUS_TEST_ONLY_HUB_IDLE_EVICT_SECONDS`). Set to 300ms below, ONLY
-  // on THIS test's own isolated `GatewayProcess` (never the shared gateway
-  // every other scenario in this file uses), via `GatewayProcess.start({
-  // env })` — `restart()` re-spawns through the SAME `spawnProcess()` that
-  // reads this env, so the respawned process after SIGKILL keeps the exact
-  // same pause without anything extra needed here. With a 300ms pause per
-  // token, the turn now stays genuinely mid-stream for many seconds, so
-  // the kill point below (first token visibly landed — a non-empty answer
-  // bubble) reliably lands well before the answer completes; see the
-  // comments below the `try` block for the pass-3 investigation that found
-  // this precise kill point (too early = no session/no content yet; too
-  // late used to race full completion, no longer a risk with the knob).
-  test('h: gateway restart with tab open — snapshot boot_mismatch, "couldn\'t be finished · Generate again"', async ({ page }) => {
-    test.setTimeout(420_000)
-    const gw = await GatewayProcess.start({ env: { OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '300' } })
-    try {
-      // Real UI login against the isolated process — GatewayProcess.start()
-      // onboarded the admin/provider via REST (its own APIRequestContext),
-      // which does NOT extend to this test's separate browser `page`
-      // context, so a genuine login-form submission is required here (mirrors
-      // `fixtures/login.ts`'s `completeLoginForm`, inlined because that
-      // helper's own `loginAs` hardcodes `page.goto('/')` — relative to the
-      // SHARED gateway's configured baseURL, not this isolated one).
-      await page.goto(gw.baseURL)
-      await expect(page.locator('#login-username')).toBeVisible({ timeout: 15_000 })
-      await page.locator('#login-username').pressSequentially(gw.adminUsername)
-      await page.locator('#login-password').pressSequentially(gw.adminPassword)
-      await page.getByRole('button', { name: 'Sign in' }).click()
-      await expect(page).not.toHaveURL(/\/#\/login/, { timeout: 15_000 })
+  // F1: the held-open tab must choose the same single status regardless of
+  // whether the optional lifecycle list or the boot-mismatch attach arrives first.
+  for (const ordering of ['catch-up first', 'lifecycle first'] as const) {
+    test(`h: gateway restart with tab open — Interrupted alone, Generate again completes (${ordering})`, async ({ page }) => {
+      test.setTimeout(420_000)
+      const gw = await GatewayProcess.start({ env: { OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '300' } })
+      let crashed = false
+      let releaseList!: () => void
+      let listReachedPage = false
+      const listHeld = new Promise<void>((resolve) => { releaseList = resolve })
+      const waitForLifecycleList = () => expect.poll(() => listReachedPage, {
+        timeout: 60_000, message: 'The SPA must refetch its lifecycle list after reconnecting; the ordering gate cannot wait forever.',
+      }).toBe(true)
+      let regenerating = false
+      let retryHasContent = false
+      let targetSessionId: string | null = null
+      const retryDone: import('@/lib/api/generated/asyncapi-types').DoneFrame[] = []
+      const retryErrors: import('@/lib/api/generated/asyncapi-types').ErrorFrame[] = []
+      page.on('websocket', (socket) => socket.on('framereceived', ({ payload }) => {
+        const frame = JSON.parse(payload.toString()) as import('@/lib/api/generated/asyncapi-types').ServerFrame
+        if (!regenerating || !('session_id' in frame) || frame.session_id !== targetSessionId) return
+        if (frame.type === 'token' && /\S/.test(frame.content)) retryHasContent = true
+        if (frame.type === 'done') retryDone.push(frame)
+        if (frame.type === 'error') retryErrors.push(frame)
+      }))
+      try {
+        // Delay a real response, never fabricate lifecycle state or mock the UI.
+        await page.route(/\/api\/v1\/sessions(?:\?.*)?$/, async (route) => {
+          if (!crashed) { await route.continue(); return }
+          let response
+          try { response = await route.fetch() }
+          catch (error) {
+            // A request hitting the intentional SIGKILL window must still fail
+            // on the wire, just as it would without this timing interceptor.
+            if (!/ECONNREFUSED/.test(String(error))) throw error
+            await route.abort('connectionrefused')
+            return
+          }
+          if (ordering === 'catch-up first') await listHeld
+          await route.fulfill({ response })
+          listReachedPage = true
+        })
+        if (ordering === 'lifecycle first') {
+          await page.routeWebSocket(/\/api\/v1\/chat\/ws/, (socket) => {
+            const server = socket.connectToServer()
+            socket.onMessage((message) => server.send(message))
+            server.onMessage(async (message) => {
+              const frame = JSON.parse(message.toString()) as import('@/lib/api/generated/asyncapi-types').ServerFrame
+              if (crashed && frame.type === 'catch_up_complete') await waitForLifecycleList()
+              socket.send(message)
+            })
+            socket.onClose((code, reason) => server.close({ code, reason }))
+            server.onClose((code, reason) => socket.close({ code, reason }))
+          })
+        }
 
-      // Deliberately NOT `startLongTurn()` here: that helper polls for
-      // >80 characters of streamed bubble text before returning, which two
-      // pass-3 runs proved fatal for this scenario specifically (before the
-      // stream-delay knob existed) — the then-configured model (the pass-3
-      // GatewayProcess default) answered BOTH the
-      // original 600-word LONG_PROMPT and a 3000-word VERY_LONG_PROMPT so
-      // fast (screenshots showed the COMPLETE, model-footer-stamped answer,
-      // 16-20k tokens, already rendered) that by the time that poll
-      // resolved, the turn had already finished — nothing was left to
-      // interrupt. GatewayProcess's default is now the central e2e model
-      // (tests/e2e/e2e-model.json via `fixtures/e2e-model.ts`, which
-      // streams far more slowly than that), and
-      // pass 4's `OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '300'` (above)
-      // removes the race at the source anyway (300ms per token keeps the
-      // turn mid-stream for many seconds on ANY model), but the kill point
-      // below still waits for the minimum real signal rather than any
-      // particular amount of content — see the "two rounds" comment just
-      // below for why.
-      const input = chatInput(page)
-      await expect(input).toBeVisible({ timeout: 15_000 })
-      await waitForConnected(page)
-      await startNewChat(page)
-      await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-      await input.fill(VERY_LONG_PROMPT)
-      await input.press('Enter')
-      // Precondition, asserted explicitly rather than assumed: the turn
-      // must still be genuinely in flight the instant before the crash —
-      // this is item h's whole premise. If the model somehow answers before
-      // even THIS appears, this fails here with a clear, honest reason,
-      // instead of silently proceeding to kill a process with nothing left
-      // to interrupt and producing a confusing "Generate again never
-      // appeared" failure three steps later.
-      await expect(stopButton(page)).toBeVisible({ timeout: 15_000 })
-      // Real-browser follow-up (orchestrator, this scenario, two rounds):
-      // round 1 killed THIS early (immediately on the stop button, no wait
-      // for any content) — too early: it landed on the blank "Welcome to
-      // omnipus.ai" screen after reconnecting, because the client's own
-      // pre-turn assistant placeholder (a LOCAL `generateId()`, never
-      // anything the server echoes) had captured NO real content and NO
-      // real message_id yet, so `ConnectionStatus.tsx::AssistantMessage
-      // ConnectionStatus`'s `disconnectedAssistantMessageId === messageId`
-      // gate could never match anything the post-restart snapshot rebuild
-      // reconstructs — a wiped, orphaned local id, not the turn's real one.
-      // Round 2 waited for the bubble to merely EXIST (any `[data-message-
-      // id]`, not `assistantMessages()`'s completion-only definition) —
-      // still too early for the SAME reason: existing is not the same as
-      // having received real content, i.e. the point at which
-      // `resolveTokenBubbleByMessageId` (slices/frames.ts) registers the
-      // server's own `message_id` onto this bubble — before that, it is
-      // still the orphaned local placeholder id. Waiting for the bubble to
-      // hold actual TEXT (any non-empty content, not any particular
-      // amount — that's what raced full completion in an earlier pass) is
-      // the minimum signal that at least one real token — and therefore
-      // the server's real message_id — has been applied to it.
-      const anyAssistantBubble = page.locator('[data-message-id]:not(.flex-row-reverse)')
-      await expect(anyAssistantBubble).toHaveCount(1, { timeout: 15_000 })
-      await expect.poll(
-        async () => (await bubbleText(anyAssistantBubble.first()).catch(() => '')).trim().length,
-        { timeout: 15_000 },
-      ).toBeGreaterThan(0)
+        // The isolated process owns its own login; never replace its cookie
+        // with the shared gateway's, or re-login behind this open tab on restart.
+        await page.goto(gw.baseURL)
+        await expect(page.locator('#login-username')).toBeVisible({ timeout: 15_000 })
+        await page.locator('#login-username').pressSequentially(gw.adminUsername)
+        await page.locator('#login-password').pressSequentially(gw.adminPassword)
+        await page.getByRole('button', { name: 'Sign in' }).click()
+        await expect(page).not.toHaveURL(/\/#\/login/, { timeout: 15_000 })
+        const input = chatInput(page)
+        await expect(input).toBeVisible({ timeout: 15_000 })
+        await waitForConnected(page)
+        await startNewChat(page)
+        await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
+        // Token delay plus the explicit running precondition make a finite
+        // answer long enough to interrupt, and still let its manual retry finish.
+        await input.fill(LONG_PROMPT)
+        await input.press('Enter')
+        await expect(stopButton(page)).toBeVisible({ timeout: 15_000 })
+        const liveAnswer = page.locator('[data-message-id]:not(.flex-row-reverse)')
+        await expect(liveAnswer).toHaveCount(1, { timeout: 15_000 })
+        // Entire bubble text includes the agent name and Thinking… before any
+        // token. Only rendered markdown proves real answer content arrived.
+        await expect(liveAnswer.locator('.prose-sm')).toContainText(/\S/, { timeout: 60_000 })
+        const chat = page.locator('[data-active-session-id]')
+        const sessionId = await chat.getAttribute('data-active-session-id')
+        expect(sessionId).not.toBeNull()
+        expect(sessionId).not.toBe('')
+        expect(sessionId).not.toBe('__pending')
+        targetSessionId = sessionId
+        await expect(liveAnswer).toHaveAttribute('data-status', 'running')
+        await expect(stopButton(page)).toBeVisible()
+        crashed = true
+        await gw.kill9()
+        // Keep the interrupted turn slow, not the completed retry: 300ms per
+        // frame made 800 observed CI frames consume 240s before the reply ended.
+        // At 25ms, the shortest measured 343-frame reply keeps Stop for 8.6s
+        // (>1s polling); a 3,947-delta replay takes ~99s within the same 240s wait.
+        await gw.restart({ relogin: false, env: { OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '25' } })
 
-      // A real crash, not a graceful shutdown — SIGKILL, waited out to a
-      // genuine 'exit', then the SAME binary re-spawned against the SAME
-      // OMNIPUS_HOME/port (see gateway-process.ts's own doc comments on
-      // kill9()/restart() for why both steps must be awaited in full before
-      // proceeding, not just fired-and-forgotten).
-      //
-      // `relogin: false` — restart()'s own default re-login (a second
-      // `POST /api/v1/auth/login` for the SAME `admin` account this test's
-      // `page` already logged in as, above) would overwrite `admin`'s
-      // single-slot session-token hash and silently sign THIS page out from
-      // under itself (`src/lib/authLogout.ts`'s 'elsewhere' banner — this is
-      // exactly what a first pass of this test hit, traced to this race, not
-      // a real product bug: see gateway-process.ts's own corrected doc
-      // comment on `restart()`). This test only needs the process back up,
-      // never `gw.apiFetch()`, so skipping the internal re-login is correct.
-      await gw.kill9()
-      await gw.restart({ relogin: false })
+        const notice = page.getByTestId('restart-interrupted-notice')
+        const generateAgain = page.getByRole('button', { name: /Generate again/i })
+        const assertSingleStatus = async () => {
+          await expect(notice).toHaveCount(1, { timeout: 60_000 })
+          await expect(notice).toContainText('Interrupted · The restart cut this answer off. Send a message to continue.')
+          await expect(assistantConnectionStatus(page)).toHaveCount(0)
+          await expect(page.getByText(/couldn't be finished/i)).toHaveCount(0)
+          await expect(generateAgain).toHaveCount(1)
+          await expect(notice.getByRole('button', { name: 'Generate again', exact: true })).toBeVisible()
+          await expect(stopButton(page)).toBeHidden()
+          await expect(chat).toHaveAttribute('data-active-session-id', sessionId!)
+        }
+        await assertSingleStatus()
+        // The late-list case has already asserted the status while REST is
+        // held. Releasing it must not replace or duplicate that same status.
+        releaseList()
+        await waitForLifecycleList()
+        await assertSingleStatus()
+        await test.info().attach(`interrupted-${ordering}`, { body: await page.screenshot(), contentType: 'image/png' })
 
-      await expect(page.getByRole('button', { name: /Generate again/i })).toBeVisible({ timeout: 60_000 })
-      await expect(assistantConnectionStatus(page)).toContainText('couldn\'t be finished')
-    } finally {
-      // Always tear down the isolated process/home, pass or fail — never
-      // leaves an orphaned gateway or a leaked mkdtemp directory behind.
-      await gw.stop()
-    }
-  })
+        regenerating = true
+        await generateAgain.click()
+        await expect(notice).toHaveCount(0)
+        await expect(generateAgain).toHaveCount(0)
+        // Resend only shows Stop after the first token; its working acknowledgement
+        // changes delivery ticks, not streaming state. Do not turn model startup
+        // latency into a 30s UI deadline. Use waitTurnDone's existing turn budget,
+        // but fail immediately on an error or an empty terminal response.
+        await expect.poll(() => retryHasContent || retryErrors.length > 0 || retryDone.length > 0, {
+          timeout: 240_000, message: 'Generate again must produce real answer content within the turn budget.',
+        }).toBe(true)
+        expect(retryErrors, 'Generate again must start without a provider/turn error').toEqual([])
+        expect(retryHasContent, 'Generate again must not finish without real answer content').toBe(true)
+        const retryAnswer = page.locator('[data-message-id]:not(.flex-row-reverse)[data-status="running"]')
+        await expect(retryAnswer.locator('.prose-sm')).toContainText(/\S/)
+        await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
+        await waitTurnDone(page)
+        const answer = assistantMessages(page)
+        await expect(answer).toHaveCount(1, { timeout: 30_000 })
+        await expect(answer).toHaveAttribute('data-status', 'complete')
+        await expect(answer.locator('p').first()).toContainText(/\S/)
+        expect(retryErrors, 'Generate again must not end in a provider/turn error').toEqual([])
+        expect(retryDone, 'Generate again must complete exactly one new answer').toHaveLength(1)
+        expect(retryDone[0].stats?.turn_failed).not.toBe(true)
+        expect(retryDone[0].stats?.truncated).not.toBe(true)
+        expect(retryDone[0].stats?.replay_error).not.toBe(true)
+        await expect(userMessages(page)).toHaveCount(1)
+        await expect(chat).toHaveAttribute('data-active-session-id', sessionId!)
+        await expect(notice).toHaveCount(0)
+        await expect(generateAgain).toHaveCount(0)
+        await expect(assistantConnectionStatus(page)).toHaveCount(0)
+        await expect(page.getByText(/couldn't be finished/i)).toHaveCount(0)
+        await test.info().attach(`completed-${ordering}`, { body: await page.screenshot(), contentType: 'image/png' })
+      } finally {
+        releaseList()
+        // done refreshes the lifecycle list. Drain its active route.fetch
+        // before stopping the server or letting Playwright close the context;
+        // wait preserves handler failures, unlike ignoreErrors.
+        try { await page.unrouteAll({ behavior: 'wait' }) }
+        finally { await gw.stop() }
+      }
+    })
+  }
 
   test('i: message typed while offline — appears at the end, then its answer; no duplicate; ticks received → working', async ({ page, context }) => {
     test.setTimeout(180_000)

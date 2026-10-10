@@ -166,7 +166,7 @@ export class GatewayProcess {
   /** Spawn the binary against this.homeDir/this.port and resolve once the
    * process has logged that it is listening (mirrors setup.ts:startGateway's
    * log-matching + fatal-exit-during-boot handling exactly). */
-  private async spawnProcess(): Promise<void> {
+  private async spawnProcess(envOverrides: Record<string, string> = {}): Promise<void> {
     const args = ['gateway', '--allow-empty', ...this.extraArgs];
     this.proc = await new Promise<ChildProcess>((resolve, reject) => {
       const child = spawn(this.binary, args, {
@@ -175,6 +175,7 @@ export class GatewayProcess {
           OMNIPUS_HOME: this.homeDir,
           OMNIPUS_BEARER_TOKEN: '',
           ...this.extraEnv,
+          ...envOverrides,
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -388,8 +389,11 @@ export class GatewayProcess {
    * genuinely needs both an external page's session AND its own apiFetch
    * access after a restart).
    */
-  async restart(opts: { relogin?: boolean } = {}): Promise<void> {
-    await this.spawnProcess();
+  async restart(opts: { relogin?: boolean; env?: Record<string, string> } = {}): Promise<void> {
+    // Test-only process knobs can be phase-scoped without changing the saved
+    // home, port, binary or credentials. Overrides apply to this boot only;
+    // omitted keys retain the fixture's original environment.
+    await this.spawnProcess(opts.env);
     await waitForHealth(this.baseURL, 15_000, this.proc ?? undefined);
     if (opts.relogin ?? true) {
       await this.login();

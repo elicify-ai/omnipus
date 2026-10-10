@@ -45,7 +45,7 @@
 //   - [data-testid="activity-row-open"]      — ActivityPanel.tsx (open control into the child's session)
 //   - [data-testid="activity-row-toggle"]    — ActivityPanel.tsx's own per-row disclosure
 
-import { expect, type Page } from '@playwright/test';
+import { errors, expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { expectA11yClean } from './fixtures/a11y';
 import {
@@ -133,6 +133,74 @@ async function waitForBoundSession(page: Page, excludeIDs: Array<string | null>)
   const id = await surface.getAttribute('data-active-session-id');
   if (!id) throw new Error('waitForBoundSession: resolved to an empty session id');
   return id;
+}
+
+// ── In-flight ADR-092 approval drain (test (d)) ─────────────────────────────
+// Mirrors bug-regression.spec.ts's helpers of the same names (this suite's
+// convention is per-file mirrored helpers that cite each other, not shared
+// fixture exports). Mechanism on record there (CI run 36328177911) and in
+// this file's own setup path (dismissStaleDialogOverlay, CI run 36123574726):
+// a delegated child's tool call can raise an ADR-092 Auto pre-flight ask
+// (pkg/tools/shell_permission_mode.go::requestPreflightApproval); unattended
+// CI never answers, the approval pends for the full 600s server TTL
+// (pkg/gateway/gateway.go::defaultToolApprovalTimeout), and while it pends
+// the turn's assistant message stays data-status="running" — invisible to
+// assistantMessages() — so a plain count-wait burns its whole budget against
+// a stall, not a failure (CI run 37970424261, test (d) attempt 1: the child's
+// `git status && …` compound sat unanswered from t+20s to the teardown Stop).
+// dismissStaleDialogOverlay is the sanctioned disposal: Escape ON a live
+// approval overlay maps to a server-side Deny (the safe default), the tool
+// call is refused, and the run continues past it. Escape is pressed only
+// while an overlay is actually present — a bare Escape with no dialog open
+// cancels a streaming turn (cancel-cross-channel.spec.ts T23), which must
+// never happen here. Its 15s budget expiry is ridden out (the outer poll
+// below owns the overall budget); any other error propagates loudly.
+
+async function dismissAndAnnotate(page: Page): Promise<void> {
+  const dismissedDialogs = await dismissStaleDialogOverlay(page);
+  for (const dialogText of dismissedDialogs) {
+    test.info().annotations.push({
+      type: 'approval-drained',
+      description:
+        `Approval dialog dismissed via Escape → server-side Deny — the run ` +
+        `continues past the refused tool: ${dialogText}`,
+    });
+  }
+}
+
+async function drainApprovalDialogsAndCount(page: Page): Promise<number> {
+  try {
+    await dismissAndAnnotate(page);
+  } catch (err) {
+    if (!(err instanceof errors.TimeoutError)) throw err;
+    // The overlay drainer's own 15s budget expired; keep counting anyway —
+    // this outer poll owns the overall budget and a later tick can still
+    // clear the dialog.
+  }
+  return assistantMessages(page).count();
+}
+
+/**
+ * Test (d)'s completion wait: exactly `count` settled assistant messages
+ * within `timeoutMs` — the same predicate and budget as the plain
+ * `expect(assistantMessages(page)).toHaveCount(count, { timeout: timeoutMs })`
+ * it replaced — with approval-drain ticks interleaved, so an ADR-092
+ * escalation raised mid-turn resolves as a ~1s Deny (annotated) instead of a
+ * 600s stall no e2e budget can absorb. Nothing is weakened: the settled-reply
+ * requirement is unchanged (assistantMessages excludes the optimistic
+ * data-status="running" placeholder ChatScreen renders on send).
+ */
+async function expectAssistantMessagesWithApprovalDrain(
+  page: Page,
+  count: number,
+  timeoutMs: number,
+): Promise<void> {
+  await expect
+    .poll(async () => drainApprovalDialogsAndCount(page), {
+      timeout: timeoutMs,
+      intervals: [500, 1_000, 2_000, 4_000],
+    })
+    .toBe(count);
 }
 
 // Per-page WS-frame capture (registered in beforeEach BEFORE page.goto('/'),
@@ -651,12 +719,29 @@ test(
     // Name the tool, and keep the subagent's work inside the sandbox so it can
     // actually complete (see the RC6 note above). `list_directory` on "." is
     // the agent's own workspace root and is known-permitted; `/tmp` is not.
-    // No "do not call any other tool" guardrail here: `delegate` is a LAZY
-    // manifest tool, so the model legitimately calls `ToolSearch` first.
+    // No "do not call any other tool" guardrail for the PARENT here: `delegate`
+    // is a LAZY manifest tool, so the model legitimately calls `ToolSearch`
+    // first.
+    //
+    // The CHILD's tool is named too (2026-10-10, CI run 37970424261, attempt 1):
+    // an unqualified "list the files" task let the delegatee (the central e2e
+    // model) reach for a `git status && git branch -a && git log …` compound
+    // instead of `list_directory`. `git` may reach the network, so ADR-092's D8
+    // pre-flight escalated it to a human approval
+    // (pkg/tools/shell_permission_mode.go::requestPreflightApproval) — and
+    // unattended CI never answers, so the child sat blocked on the modal for
+    // the full 600s TTL (pkg/gateway/gateway.go::defaultToolApprovalTimeout),
+    // taking the parent's still-open turn with it. The trace shows the dialog
+    // up from t+20s to the teardown Stop; the 300s oracle burned out underneath
+    // it; the retry (child used list_directory) passed in 38s. This is RC6's
+    // "name the tool" fix applied one level down, exactly as sibling test (e)
+    // already does for its child's bash. The drain-wait below is the second,
+    // independent half of the fix — it keeps a residual escalation a ~1s Deny
+    // instead of a 600s stall, without touching any budget.
     await input.fill(
       [
         'Use the `delegate` tool exactly once to hand this to a subagent:',
-        '  task: "List the files in your current working directory (path `.`) and report back what you find."',
+        '  task: "Use the `list_directory` tool with path `.` to list the files in your current working directory, and report back exactly what it returned. Do not use bash or git."',
         'Then summarise what the subagent reported.',
       ].join('\n'),
     );
@@ -718,7 +803,24 @@ test(
     // checks below navigates), and the child's row is retained through
     // completion by useRunningActivity's recentlyFinished (successes
     // included, cap 8).
-    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 300_000 });
+    //
+    // Drain-shaped (2026-10-10, CI run 37970424261): a bare toHaveCount here
+    // timed out in CI because the CHILD's own tool call had raised an ADR-092
+    // pre-flight approval mid-turn; the approval modal holds the child's turn
+    // (and with it the parent's) open for the full 600s server TTL
+    // (pkg/gateway/gateway.go::defaultToolApprovalTimeout), the assistant
+    // message stays data-status="running" the whole time, so the count never
+    // reaches 1 even though nothing is broken. This is the exact mechanism
+    // bug-regression.spec.ts's expectAssistantMessagesWithApprovalDrain was
+    // built for (its CI run 36328177911) — mirrored here per this suite's
+    // per-file helper convention. No assertion is weakened: the predicate is
+    // still "exactly 1 settled assistant message within the same 300s" — the
+    // drain only Escape→Denies an approval dialog while polling (Escape on a
+    // live approval maps to a server-side Deny, the safe default, so the run
+    // continues past the refused tool), and every Deny is annotated into the
+    // report. The named-tool task text above is the first half of the fix;
+    // this drain is the second — a residual escalation costs ~1s, not 600s.
+    await expectAssistantMessagesWithApprovalDrain(page, 1, 300_000);
     const row = page.locator('[data-testid="activity-row"]').first();
     await expect(
       row,

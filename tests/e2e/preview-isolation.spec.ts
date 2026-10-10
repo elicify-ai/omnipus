@@ -861,9 +861,9 @@ test.describe('ADR-067 preview isolation — seven egress vectors, retries: 0', 
   // ───────────────────────────────────────────────────────────────────────────
   test('D-106 — the same token URL opened as its own tab is refused, carries the isolation policy, and never renders the page', async ({ page }) => {
     // Temporary isolation-webkit-only quarantine: current CI top-level refusal failure.
-    // https://github.com/elicify-ai/omnipus/issues/1181 — expires 2026-10-10.
+    // https://github.com/elicify-ai/omnipus/issues/1181 — expires 2026-10-17.
     if (test.info().project.name === 'isolation-webkit') {
-      softSkip(test, 'D-106 isolation-webkit CI failure; security verification gap: https://github.com/elicify-ai/omnipus/issues/1181; expires 2026-10-10');
+      softSkip(test, 'D-106 isolation-webkit CI failure; security verification gap: https://github.com/elicify-ai/omnipus/issues/1181; expires 2026-10-17');
     }
     // The witness for what replaced the old top-level measurements (founder
     // ruling 2026-09-14). A preview token URL exists to feed the framed view;

@@ -445,26 +445,26 @@ jobs:
           go-version-file: go.mod
 
       - name: Install Chrome (declared dependency, not an in-test download)
+        id: chrome
         uses: browser-actions/setup-chrome@v2
         with:
           chrome-version: stable
 
-      - name: Verify Chrome resolves under a name skipIfNoBrowser probes
-        # skipIfNoBrowser (pkg/tools/browser/browser_e2e_test.go) probes
-        # EXACTLY these four names via exec.LookPath. Bare `chrome` is NOT
-        # among them, and setup-chrome can install the executable under that
-        # name — so checking for "some chrome binary" would pass while every
-        # test still skipped. Check the names the code actually looks for.
+      - name: Verify and pin the declared Chrome for measurement gates
+        # One source of truth: setup-chrome's exact chrome-path output.
+        # requireBrowserOrFail reads this pin before any PATH probe and fails
+        # rather than falling back when the declared executable is unusable.
+        env:
+          OMNIPUS_BROWSER_TEST_CHROME: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           set -euo pipefail
-          for n in google-chrome google-chrome-stable chromium chromium-browser; do
-            if command -v "$n" >/dev/null 2>&1; then
-              echo "found $n: $("$n" --version)"; exit 0
-            fi
-          done
-          echo "::error::No Chrome binary under a name skipIfNoBrowser probes" >&2
-          echo "PATH candidates present: $(command -v chrome || true)" >&2
-          exit 1
+          if [[ "$OMNIPUS_BROWSER_TEST_CHROME" != /* || ! -x "$OMNIPUS_BROWSER_TEST_CHROME" ]]; then
+            echo "::error::setup-chrome did not provide an absolute executable chrome-path" >&2
+            exit 1
+          fi
+          "$OMNIPUS_BROWSER_TEST_CHROME" --version
+          echo "Measurement gates pinned to: $OMNIPUS_BROWSER_TEST_CHROME"
+          printf 'OMNIPUS_BROWSER_TEST_CHROME=%s\n' "$OMNIPUS_BROWSER_TEST_CHROME" >> "$GITHUB_ENV"
 
       - name: "G-2 gate: chrome.tabCapture against a SECOND Chrome process"
         # ADR-075 / browser-workspace-ownership-spec FR-045, SC-012a.
@@ -513,6 +513,12 @@ jobs:
           passes=$(grep -c -- '--- PASS' /tmp/g2-second-chrome.log || true)
           if [ "$passes" -ne 1 ]; then
             echo "::error::G-2: expected exactly one '--- PASS' line, got $passes. The gate's result is not what this step asserts on." >&2
+            exit 1
+          fi
+
+          resolved=$(grep -F 'G-2 spike: resolved Chrome at ' /tmp/g2-second-chrome.log)
+          if [[ "${resolved##*G-2 spike: resolved Chrome at }" != "$OMNIPUS_BROWSER_TEST_CHROME" ]]; then
+            echo "::error::G-2 measured a different Chrome than setup-chrome provided: $resolved" >&2
             exit 1
           fi
 

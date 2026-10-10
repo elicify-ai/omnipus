@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -255,31 +257,150 @@ func pollUntilReady(cfg pollConfig) pollResult {
 	}
 }
 
-// allocateEphemeralPort returns a port the kernel just handed out on
-// 127.0.0.1 and then released (the listen/close/reuse idiom).
+// ─────────────────────────────────────────────────────────────────────────────
+// Port allocation — the harness's private below-ephemeral window.
 //
-// The number is a HINT, not a reservation: nothing stops another process from
-// taking it before the caller binds. StartTestGateway's retry loop exists for
-// exactly that case — see its comment. Extracted so the loop can ask for a
-// fresh port per attempt.
-func allocateEphemeralPort(t *testing.T) int {
+// Every supported platform's kernel hands EPHEMERAL ports (outbound connects,
+// listen(":0") draws) from a floor upward:
+//
+//	Linux    32768–60999 (net.ipv4.ip_local_port_range default)
+//	macOS    49152–65535 (net.inet.ip.portrange)
+//	Windows  49152–65535 (default dynamic port range)
+//
+// The old allocator drew via listen("127.0.0.1:0") — i.e. FROM that shared
+// global range — and released the port before the gateway could bind it. The
+// number was a hint, not a reservation, and every OTHER process drawing :0
+// ports on the machine (all other test binaries in a parallel `go test` run,
+// outbound connects) played in the same pool: the kernel re-hands just-freed
+// ports aggressively, so two processes were regularly handed the SAME number.
+// That produced CI 37943454247: our gateway lost the bind, a foreign server
+// answered /health 200 on the port, the harness accepted the stranger as our
+// readiness, and the test ran against the wrong server.
+//
+// The window below ends strictly beneath every platform's DEFAULT ephemeral
+// floor, so the KERNEL can never assign a window port to anyone: no outbound
+// connect and no other process's listen(":0") draw can ever land here. This
+// assumes stock OS settings — a host whose dynamic-port floor has been LOWERED
+// (Linux net.ipv4.ip_local_port_range tuned down, Windows dynamicport range
+// resized via netsh) can overlap the window and hand window ports to other
+// processes again; the squatter check in bootUntilReady, the EADDRINUSE retry
+// and the gateway.port identity check are the backstops for that case. The
+// remaining contenders on default settings are processes that deliberately
+// bind a specific port in the window — another harness process drawing the
+// same random number (1/12768 per overlapping boot) or an unrelated service
+// squatting there. All handled: the draw skips occupied ports, bootUntilReady
+// refuses to boot onto a port that already has a listener (the squatter
+// check), and the EADDRINUSE retry is still the last resort. Random draw over
+// the whole window (rather than per-process regions) keeps the code simple:
+// with random draws, two processes share a region only in the probabilistic
+// sense that matters, and region bookkeeping would add nothing a random draw
+// does not already give.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const (
+	// portRangeLo/portRangeHi bound the harness's private port window:
+	// [20000, 32768) — 12,768 ports, ending just below the LOWEST supported
+	// platform's DEFAULT ephemeral floor (Linux 32768; the floor is a sysctl
+	// on Linux and a netsh setting on Windows, so a tuned-down host can
+	// overlap this window — see the block above for the backstops). These are
+	// registered-range ports, so an unrelated service may legitimately squat
+	// one (e.g. MongoDB on 27017); the draw, the squatter check and the
+	// EADDRINUSE retry all tolerate that. CI runners are clean machines; dev
+	// machines rarely run anything in this range.
+	portRangeLo = 20000
+	portRangeHi = 32768
+
+	// portDrawAttempts bounds how many occupied ports the draw skips in a row
+	// before giving up. With 12,768 window ports this is unreachable in
+	// practice; it exists so a pathologically occupied window fails loudly
+	// instead of spinning.
+	portDrawAttempts = 64
+)
+
+// allocatePrivateWindowPort returns a random, currently-free port from the
+// harness's private [portRangeLo, portRangeHi) window — verified bindable at
+// draw time (listen/close on the SPECIFIC port, never ":0", so the kernel is
+// never asked to pick for us).
+//
+// The number is still a HINT, not a reservation: the TOCTOU between this close
+// and the gateway's bind can only be closed by binding for real. The squatter
+// check in bootUntilReady and its EADDRINUSE retry cover what remains.
+func allocatePrivateWindowPort(t *testing.T) int {
 	t.Helper()
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("testutil.StartTestGateway: allocate port: %v", err)
+	for i := 0; i < portDrawAttempts; i++ {
+		port := portRangeLo + rand.IntN(portRangeHi-portRangeLo)
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			continue // occupied — draw again
+		}
+		tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+		if !ok {
+			_ = ln.Close()
+			t.Fatalf("testutil.StartTestGateway: unexpected listener address type %T (want *net.TCPAddr)", ln.Addr())
+		}
+		if err = ln.Close(); err != nil {
+			t.Fatalf("testutil.StartTestGateway: close probe listener: %v", err)
+		}
+		return tcpAddr.Port
 	}
-	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
-	if !ok {
-		_ = ln.Close()
-		t.Fatalf("testutil.StartTestGateway: unexpected listener address type %T (want *net.TCPAddr)", ln.Addr())
-	}
-	port := tcpAddr.Port
-	if err = ln.Close(); err != nil {
-		t.Fatalf("testutil.StartTestGateway: close ephemeral listener: %v", err)
-	}
-	return port
+	t.Fatalf("testutil.StartTestGateway: no free port in the private window [%d, %d) after %d draws",
+		portRangeLo, portRangeHi, portDrawAttempts)
+	return -1 // unreachable; Fatalf exits the test
 }
+
+// portAlreadyListening reports whether ANYTHING is accepting TCP connections
+// on 127.0.0.1:port right now — the squatter check. A port that already has a
+// listener must never be booted onto: our bind would lose, and whatever the
+// holder serves on /health would be indistinguishable from our gateway's own
+// readiness signal (the exact stolen-readiness failure this harness had).
+func portAlreadyListening(port int) bool {
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 250*time.Millisecond)
+	if err != nil {
+		return false // nothing accepted the connection — the port is free
+	}
+	_ = conn.Close()
+	return true
+}
+
+// gatewayPortFileName must match the file gateway_boot.go::registerProcess
+// writes into the agent home after the shared HTTP server's bind succeeds.
+// The harness's readiness probe requires it as the identity proof that the
+// /health responder is OUR gateway (see gatewayPortIdentityError). If the
+// production file name ever changes, the probe degrades visibly: /health
+// answers but readiness is never granted, and the failure message names the
+// missing file.
+const gatewayPortFileName = "gateway.port"
+
+// gatewayPortIdentityError is the readiness probe's identity proof: the
+// /health responder is accepted as OUR gateway only when homeDir's
+// gateway.port file exists AND names exactly port — the file is written by
+// the gateway itself (gateway_boot.go::registerProcess) only after ITS OWN
+// bind succeeded, and it must name the port we asked this attempt to boot on.
+// A 200 /health from a server that won the port behind our back (CI
+// 37943454247) has written nothing into our home, and a stale file from an
+// earlier attempt names a different port — both are rejected here, keeping
+// the probe polling until bootErr lands and the EADDRINUSE retry takes over.
+func gatewayPortIdentityError(homeDir string, port int) error {
+	raw, err := os.ReadFile(filepath.Join(homeDir, gatewayPortFileName))
+	if err != nil {
+		return fmt.Errorf("health answered but %s is not readable yet "+
+			"(our boot still completing, or a foreign server answering on this port): %w",
+			gatewayPortFileName, err)
+	}
+	if strings.TrimSpace(string(raw)) != strconv.Itoa(port) {
+		return fmt.Errorf("health answered but %s names port %q, want %d — "+
+			"stale identity file from an earlier attempt, or a foreign server "+
+			"answering on this port", gatewayPortFileName, strings.TrimSpace(string(raw)), port)
+	}
+	return nil
+}
+
+// portAllocator is the port-selection function bootUntilReady calls once per
+// boot attempt. A package var only so tests can force a specific draw (the
+// foreign-responder regression test pins the first draw to an already-bound
+// port). Non-test code must never reassign it.
+var portAllocator = allocatePrivateWindowPort
 
 // startTestGateway carries the shared state of StartTestGateway across its stages.
 type startTestGateway struct {
@@ -294,8 +415,11 @@ type startTestGateway struct {
 
 // StartTestGateway boots a real gateway via the registered RunContextFunc on
 // a port from the harness's private below-ephemeral window (see the port
-// allocation block at the top of this file) and returns a TestGateway once the
-// /health endpoint responds 200.
+// allocation block above allocatePrivateWindowPort) and returns a TestGateway
+// once OUR gateway — not a stranger on the same port — answers /health 200:
+// readiness additionally requires the gateway.port identity file naming this
+// exact port, which the gateway writes into its home only after its own bind
+// succeeded (gatewayPortIdentityError).
 //
 // It requires RegisterGatewayRunner to have been called first (typically from
 // a TestMain in the test package that imports pkg/gateway). If it has not
@@ -304,14 +428,18 @@ type startTestGateway struct {
 // It:
 //   - Creates a temp dir for OMNIPUS_HOME via t.TempDir().
 //   - Sets OMNIPUS_MASTER_KEY to a fixed test value via t.Setenv.
-//   - Picks a free port from this process's own region of the harness's
-//     private [portRangeLo, portRangeHi) window, which sits below the kernel's
-//     ephemeral floor so no outbound connect() can be assigned it.
+//   - Picks a free port by random draw from the harness's private
+//     [portRangeLo, portRangeHi) window, which ends below every supported
+//     platform's ephemeral floor, so the kernel can never hand the port to an
+//     outbound connect or another process's listen(":0") draw. A port that
+//     already has a listener is discarded before boot (the squatter check).
 //   - Writes a config.json seeded with a real OpenRouter+glm provider entry.
 //   - Seeds OPENROUTER_API_KEY (from env, or a stub if env is empty) into
 //     credentials.json so credentials.InjectFromConfig succeeds at boot.
 //   - Runs the gateway in a goroutine; captures boot errors.
-//   - Polls GET /health until 200 (max 5 s) before returning.
+//   - Polls GET /health until 200 AND the gateway.port identity file names
+//     this port (budget: the health* constants in bootUntilReady), retrying
+//     on a fresh port when the bind race is lost with EADDRINUSE.
 //   - Registers t.Cleanup to call Close, which cancels ctx and waits up to 10 s.
 //
 // Tests that exercise LLM behavior require OPENROUTER_API_KEY in the env;
@@ -440,7 +568,23 @@ func (sg *startTestGateway) bootUntilReady() {
 	var done chan struct{}
 
 	for attempt := 1; ; attempt++ {
-		port := allocateEphemeralPort(sg.t)
+		port := portAllocator(sg.t)
+
+		// SQUATTER CHECK — never boot onto a port someone already listens on.
+		// A pre-existing listener would win the bind race, and any 200 /health
+		// it serves would be indistinguishable from our gateway's readiness:
+		// that is how CI 37943454247 got its readiness stolen. Refuse the port
+		// up front instead; the draw below returns a different number.
+		if portAlreadyListening(port) {
+			if attempt >= maxBindAttempts {
+				sg.t.Fatalf("testutil.StartTestGateway: %d consecutive port draws in the private window "+
+					"[%d, %d) were already occupied — the window is pathologically busy, refusing to continue",
+					maxBindAttempts, portRangeLo, portRangeHi)
+			}
+			sg.t.Logf("testutil.StartTestGateway: port %d already has a listener before boot "+
+				"(attempt %d/%d) — discarding it and drawing a fresh port", port, attempt, maxBindAttempts)
+			continue
+		}
 
 		cfg := buildConfig(sg.hc, sg.homeDir, port)
 
@@ -522,6 +666,18 @@ func (sg *startTestGateway) bootUntilReady() {
 				defer func() { _ = resp.Body.Close() }()
 				if resp.StatusCode != http.StatusOK {
 					return probeOutcome{err: fmt.Errorf("health endpoint returned status %d", resp.StatusCode)}
+				}
+				// IDENTITY CHECK — a 200 /health on this port is necessary but
+				// not sufficient. Only our gateway's own successful bind leads
+				// to a gateway.port file in OUR home naming THIS port; see
+				// gatewayPortIdentityError. While it says otherwise, a 200 may
+				// be a foreign server that won the port behind our back —
+				// accepting it stole readiness in CI 37943454247. Keep polling:
+				// if our bind genuinely failed, bootErr lands within the
+				// manager's bind-retry window and the EADDRINUSE retry below
+				// takes over with a fresh port.
+				if identErr := gatewayPortIdentityError(sg.homeDir, port); identErr != nil {
+					return probeOutcome{err: identErr}
 				}
 				return probeOutcome{}
 			},
@@ -1024,9 +1180,11 @@ func portRaceHint(port int, bootErr error) string {
 	}
 	return fmt.Sprintf(
 		" — THIS IS THE PORT RACE, not a gateway defect: port %d was free when the harness "+
-			"allocated it (allocateEphemeralPort: kernel-assigned, listener closed again) but "+
-			"something else held it by the time RunContext bound it. Look for another process "+
-			"that grabbed %d in that window (a parallel test binary or an outbound connection)",
-		port, port,
+			"drew it from its private window [%d, %d) (verified bindable, listener closed again) "+
+			"but something else held it by the time RunContext bound it. Look for a process that "+
+			"deliberately bound %d in that window — the kernel never allocates below its ephemeral "+
+			"floor, so it cannot be a listen(\":0\") draw or an outbound connection; suspect another "+
+			"harness process or a service squatting in the window",
+		port, portRangeLo, portRangeHi, port,
 	)
 }

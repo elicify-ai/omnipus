@@ -572,8 +572,8 @@ test.describe('UAT Group C — the live browser panel', () => {
 
   test('UAT-13 — video is smooth, and it is really video', async ({ page }, testInfo) => {
     // Temporary quarantine: current CI live-browser video failure.
-    // https://github.com/elicify-ai/omnipus/issues/1142 — expires 2026-10-10.
-    softSkip(test, 'UAT-13 current CI live-browser failure: https://github.com/elicify-ai/omnipus/issues/1142; expires 2026-10-10');
+    // https://github.com/elicify-ai/omnipus/issues/1142 — expires 2026-10-17.
+    softSkip(test, 'UAT-13 current CI live-browser failure: https://github.com/elicify-ai/omnipus/issues/1142; expires 2026-10-17');
     test.setTimeout(300_000);
 
     const opened = await openLivePanel(page);
@@ -709,8 +709,8 @@ test.describe('UAT Group C — the live browser panel', () => {
 
   test('UAT-14 — a click lands where you clicked, and the page responds', async ({ page }, testInfo) => {
     // Temporary quarantine: current CI live-browser click failure.
-    // https://github.com/elicify-ai/omnipus/issues/1142 — expires 2026-10-10.
-    softSkip(test, 'UAT-14 current CI live-browser failure: https://github.com/elicify-ai/omnipus/issues/1142; expires 2026-10-10');
+    // https://github.com/elicify-ai/omnipus/issues/1142 — expires 2026-10-17.
+    softSkip(test, 'UAT-14 current CI live-browser failure: https://github.com/elicify-ai/omnipus/issues/1142; expires 2026-10-17');
     test.setTimeout(300_000);
 
     const opened = await openLivePanel(page);
@@ -853,8 +853,8 @@ test.describe('UAT Group C — the live browser panel', () => {
     page,
   }, testInfo) => {
     // Temporary quarantine: current CI live-browser handover failure.
-    // https://github.com/elicify-ai/omnipus/issues/1142 — expires 2026-10-10.
-    softSkip(test, 'UAT-15 human half current CI failure: https://github.com/elicify-ai/omnipus/issues/1142; expires 2026-10-10');
+    // https://github.com/elicify-ai/omnipus/issues/1142 — expires 2026-10-17.
+    softSkip(test, 'UAT-15 human half current CI failure: https://github.com/elicify-ai/omnipus/issues/1142; expires 2026-10-17');
     test.setTimeout(300_000);
 
     const opened = await openLivePanel(page);
@@ -981,8 +981,8 @@ test.describe('UAT Group C — the live browser panel', () => {
     page,
   }, testInfo) => {
     // Temporary quarantine: current CI agent handback failure after release.
-    // https://github.com/elicify-ai/omnipus/issues/1142 — expires 2026-10-10.
-    softSkip(test, 'UAT-15 agent half current CI failure: https://github.com/elicify-ai/omnipus/issues/1142; expires 2026-10-10');
+    // https://github.com/elicify-ai/omnipus/issues/1142 — expires 2026-10-17.
+    softSkip(test, 'UAT-15 agent half current CI failure: https://github.com/elicify-ai/omnipus/issues/1142; expires 2026-10-17');
     test.setTimeout(420_000);
 
     const opened = await openLivePanel(page);
