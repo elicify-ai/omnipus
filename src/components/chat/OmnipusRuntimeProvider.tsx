@@ -225,6 +225,8 @@ function WsLifecycle() {
         useChatStore.getState().drainOutboundQueue();
       },
       onDisconnected: () => {
+        // A retired effect connection must not overwrite its replacement's state.
+        if (connectionRef.current !== conn) return;
         const chatState = useChatStore.getState();
         useConnectionStore.getState().recordDisconnect(
           chatState.isStreaming ? chatState.lastAssistantMessageId : null,

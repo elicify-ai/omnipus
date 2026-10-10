@@ -132,7 +132,6 @@ vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null })
 // dispatch (setting agentSelectorOpen via the command interceptor), not the
 // picker's own UI, so its sub-components are stubbed to null — avoids mocking
 // the workspaces/providers query plumbing they own.
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 

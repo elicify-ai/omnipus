@@ -8,6 +8,7 @@ import {
   registerGetSessionCursor,
   registerChatClearPendingAutoApprove,
   registerChatAbandonPendingFirstSend,
+  registerReadPendingFirstSend,
 } from '@/store/session'
 
 import { registerSyncChatForeground } from '@/store/session'
@@ -29,6 +30,28 @@ registerGetSessionCursor((sessionId) => useChatStore.getState().sessionsById[ses
 // comment for why this is not folded into setReplaying/resetForReplay.
 registerChatClearPendingAutoApprove(() => useChatStore.getState().setPendingAutoApproveChoice(null))
 registerChatAbandonPendingFirstSend(() => useChatStore.getState().abandonPendingFirstSend())
+registerReadPendingFirstSend(() => {
+  const state = useChatStore.getState()
+  const pending = state.pendingFirstSend
+  if (!pending) return null
+  // Same rule as getPendingFirstSend: a cleared bucket no longer owns the slot.
+  // A workspace-setup kickoff uses __pending without a user first-send bubble.
+  const bucket = state.sessionsById[pending.sessionId ?? '__pending']
+  const ownsBubble = !!bucket && Object.values(bucket.messagesById).some((message) =>
+    message.role === 'user' && (message.clientMessageId === pending.clientMessageId || message.id === pending.clientMessageId),
+  )
+  if (!ownsBubble) return null
+  const allowed = ['sending', 'unconfirmed', 'retrying', 'not_saved', 'check_failed', 'saved'] as const
+  const status = (allowed as readonly string[]).includes(pending.status)
+    ? pending.status as (typeof allowed)[number]
+    : 'saved'
+  return {
+    sessionId: pending.sessionId,
+    clientMessageId: pending.clientMessageId,
+    text: typeof pending.payload.content === 'string' ? pending.payload.content : '',
+    status,
+  }
+})
 
 // ── Split modules (2026-09-16) ──────────────────────────────────────────────────
 //

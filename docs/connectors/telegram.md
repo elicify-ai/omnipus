@@ -67,23 +67,14 @@ The Telegram channel receives messages via long polling (30-second timeout) usin
 
 ## Built-in Commands
 
-At startup Telegram registers Omnipus's built-in bot commands automatically via `CommandRegistrarCapable`. Registration retries in the background with exponential backoff if the Telegram API is temporarily unavailable. The registered commands are:
+At startup Telegram registers Omnipus's built-in bot commands automatically via `CommandRegistrarCapable`. Registration retries in the background after increasing delays if the Telegram API is temporarily unavailable. The installed server supplies the command list; use `/help` for its current commands rather than an older fixed list. Hidden commands and aliases are not registered in Telegram's menu. A command whose name Telegram cannot display, such as `/stop-redirect`, can still work when typed if the server supports it.
 
 | Command | Purpose |
 | --- | --- |
-| `/start` | Open or resume the current session |
-| `/help` | Show help text |
-| `/show` | Show the active agent or session details |
-| `/list` | List resources (e.g. `/list skills`) |
-| `/use` | Select a skill for the next request (e.g. `/use git`) |
-| `/switch` | Switch to a different agent |
-| `/check` | Show current health/status of the gateway |
-| `/clear` | Clear the active session's transcript |
-| `/subagents` | List or interact with sub-agents |
-| `/reload` | Hot-reload configuration |
-| `/cancel` | Interrupt the agent's current turn |
+| `/help` | Show the commands available on this server |
+| `/cancel` | Request Stop all for this chat and its helpers, not its parent or sibling chats |
 
-(Defined in `pkg/commands/builtin.go` — the full registered set.)
+The joint navigation update has no `/new` or `/clear` command. Do not rely on an older clearing or agent-switching command table.
 
 ## Notes
 

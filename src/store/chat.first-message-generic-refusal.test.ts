@@ -20,7 +20,7 @@ import { useWorkspacesStore } from './workspacesStore'
 // Cases: two pending refusals, one late abandoned refusal, one established-chat
 // generic-error control. Original whitespace, ordered media and false Auto survive.
 // No bounded numeric input. Known gaps: backend persistence/dedupe and live browser
-// acceptance are other lanes. CHECK probes (deferred): remove pending interception,
+// acceptance are other lanes. CHECK probes: remove pending interception,
 // forget abandoned IDs, or swallow unrelated errors. No GREEN/mutation proof here.
 
 const ORIGINAL_ID = '1090-red6-original-client'
@@ -178,11 +178,13 @@ describe('#1090 C3 — generic correlated first-message refusals', () => {
       .toStrictEqual([{ id: ORIGINAL_ID, clientMessageId: ORIGINAL_ID, content: ORIGINAL_TEXT }])
   })
 
-  it('a late abandoned first-send refusal after /new leaves the new bucket, status and turn unchanged', () => {
+  it('a late abandoned first-send refusal after confirmed + New chat leaves the new bucket, status and turn unchanged', () => {
     const sender = beginSameIdRetry()
-    act(() => useSessionStore.getState().startNewSession())
-    expect(useChatStore.getState().pendingFirstSend, 'fixture: /new really abandons the old request').toBeNull()
-    expect(useChatStore.getState().sessionsById.__pending, 'fixture: /new clears the old shared bucket').toBeUndefined()
+    // Wave-2 FR-005: this is the accepted + New chat confirmation, not typed
+    // /new (now server-owned). Keep C3's full stale-refusal isolation assertions.
+    act(() => useSessionStore.getState().startNewSession({ choice: 'confirm', clientMessageId: ORIGINAL_ID }))
+    expect(useChatStore.getState().pendingFirstSend, 'fixture: confirmed + New chat really abandons the old request').toBeNull()
+    expect(useChatStore.getState().sessionsById.__pending, 'fixture: confirmed + New chat clears the old shared bucket').toBeUndefined()
     act(() => useChatStore.getState().sendMessage(NEW_TEXT, { clientMessageId: NEW_ID }))
     expect(users(), 'fixture: only the new message occupies the new chat')
       .toStrictEqual([{ id: NEW_ID, clientMessageId: NEW_ID, content: NEW_TEXT }])

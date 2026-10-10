@@ -34,9 +34,9 @@ You need an artificial intelligence provider account or a local provider. Keep i
 
    **If it does not look like that:** Read the message beside the connection check. Recopy a rejected key, complete any provider sign-in, or check the custom endpoint when the provider requires one. A local provider must already be running. The [settings](settings.md) page owns the full provider guide.
 
-4. **Have your first conversation with Mia.** Select **Start chatting**. In **My Workspace**, type: `Give me three useful ways to test this workspace.` Send the message.
+4. **Have your first conversation with Mia.** Select **Start chatting**, then open the sidebar and select **Mia** under **My Workspace**. In Mia's chat, type: `Give me three useful ways to test this workspace.` Send the message once the chat is available.
 
-   **What you see:** **Chat** opens with Mia selected in the agent picker. Mia's answer appears in the conversation.
+   **What you see:** There is no agent picker beside the message box. Selecting **Mia** opens her main chat when the matching server update is available. If it says **Main chat unavailable**, select **Retry**; [workspaces](workspaces.md) explains unavailable chats. Mia's answer appears in the conversation.
 
    **If it does not look like that:** If the composer says it is connecting, wait for the connection before sending. If sending fails, return to the provider check in Settings and confirm that the selected model is available.
 

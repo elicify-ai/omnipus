@@ -6,7 +6,7 @@ import { Separator } from '@/components/ui/separator'
 import { Wordmark } from '@/components/shared/Wordmark'
 import { fetchAboutInfo } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
-import omnipusLogo from '@/assets/logo/omnipus-logo.svg'
+import { OMNIPUS_MARK_URL as omnipusLogo } from '@/lib/brandAssets'
 
 function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds}s`

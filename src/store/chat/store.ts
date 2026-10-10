@@ -4,6 +4,8 @@ import { create } from 'zustand'
 import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
 import { useSessionStore } from '@/store/session'
+import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
+import { registerWorkspaceEntryQueueResume } from '@/store/session/workspaceEntryFlow'
 import type { Message } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
 import { findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from './messages'
@@ -277,6 +279,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
   function maybeDrainNext(): void {
     const { pendingDrainQueue, isStreaming } = get()
     if (pendingDrainQueue.length === 0 || isStreaming || firstSendBlocksQueue(get())) return
+    // Gate BEFORE the pop: sendMessage may refuse an unresolved destination.
+    if (blockSendForWorkspaceEntry('drain')) return
     const [next, ...rest] = pendingDrainQueue
     set({ pendingDrainQueue: rest })
     drainQueuedMessage(get, next)
@@ -778,6 +782,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
     ...createFrameSlice({ set, get, getActiveSid, bucketToForeground, withBucket, deleteBucket, resolveKickoffAttempt, abandonPendingKickoffInternal, syncForeground, armRateLimitClear, maybeDrainNext, runtime: chatRuntime }),
   }
 })
+
+// Same cycle-break registration as session/chat foreground callbacks. Entry
+// and New chat resume only AFTER their coherent destination is committed.
+registerWorkspaceEntryQueueResume(() => useChatStore.getState().drainOutboundQueue())
 
 // Expose syncForeground so setActiveSession can call it after switching sessions.
 // Avoiding a direct import of the session store here to keep the cycle-break intact.

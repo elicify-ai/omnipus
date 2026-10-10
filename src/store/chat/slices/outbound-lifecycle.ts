@@ -8,6 +8,7 @@ import { isGoalRunning } from '@/lib/goalActivity'
 import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 // Runtime (value) schema from the self-contained ws-schemas.ts, not
 // schemas.ts — the latter also carries the REST Zodios `makeApi([...])`
 // call, which references every REST schema and defeats tree-shaking
@@ -107,6 +108,7 @@ function performResendMessage(
     }
   }
   if (!sid || !existing || existing.role !== 'user') return
+  if (blockSendForWorkspaceEntry('resend')) return
 
   const ordinary = getPendingFirstSend(state)
   if (ordinary && (existing.clientMessageId ?? existing.id) === ordinary.clientMessageId) {
@@ -304,6 +306,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
     },
 
     sendMessage: (content, opts) => {
+      if (blockSendForWorkspaceEntry('send')) return
       const mediaRefs = opts?.mediaRefs ?? []
       const attachments = opts?.attachments ?? []
       const { clientMessageId, queuedAt, queuedMessage } = beginSend(content, opts)
