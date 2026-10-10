@@ -184,3 +184,40 @@ func TestSF1_StopBeforeDeleteFailureShapesNeverEchoTheCause(t *testing.T) {
 		})
 	}
 }
+
+// Round 5 sibling handlers: GET /agents/{id}/sessions and DELETE /sessions/all.
+func TestSF1_ListAgentSessionsStorageFailureLeaksNothing(t *testing.T) {
+	env := u1NewEnv(t, false)
+	sf1NewChat(t, env)
+	sf1Block(t, env.store(t).BaseDir(), 0o000)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/mia/sessions", nil)
+	r.URL.Path = "/api/v1/agents/mia/sessions"
+	env.api.HandleAgents(w, r)
+	assert.Equal(t, http.StatusInternalServerError, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "could not list sessions")
+	assert.Contains(t, w.Body.String(), "retry")
+	sf1AssertNoInternalDetail(t, env, w.Body.String(), "unified_store", "permission denied", "mia")
+}
+
+// The clear-all warning is fixed text per failed agent. (A real per-agent
+// legacy store failing cannot be produced with this fixture - its agents use the
+// shared store - so the warning text itself is what is pinned.)
+func TestSF1_ClearAllSessionsWarningIsFixedText(t *testing.T) {
+	env := u1NewEnv(t, false)
+	got := clearSessionsWarning("mia")
+	assert.Contains(t, got, "mia")
+	assert.Contains(t, got, "see the server log")
+	sf1AssertNoInternalDetail(t, env, got, "permission denied", "unified_store", "remove session dir")
+}
+
+// jsonServerFailure never echoes its cause.
+func TestJSONServerFailureNeverEchoesTheCause(t *testing.T) {
+	env := u1NewEnv(t, false)
+	w := httptest.NewRecorder()
+	jsonServerFailure(w, http.StatusInternalServerError, "could not save config",
+		errors.New(env.home+"/config.json: permission denied"))
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "could not save config")
+	sf1AssertNoInternalDetail(t, env, w.Body.String(), "config.json", "permission denied")
+}

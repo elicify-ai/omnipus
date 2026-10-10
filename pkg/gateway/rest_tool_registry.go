@@ -354,7 +354,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	agentTypeVal := gen.AgentToolsResponseAgentType(wireAgentType)
 	state, stateErr := agentstore.New(a.homePath).ReadState(agentID)
 	if stateErr != nil {
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read agent revision: %v", stateErr))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not read agent revision", stateErr)
 		return
 	}
 	overrideNames := make([]string, 0)

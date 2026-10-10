@@ -492,7 +492,7 @@ func (a *restAPI) loweringFailure(ctx context.Context, store maxToolIterationsAg
 	}
 	code := maxToolIterationsLoweringFailedCode
 	return &performanceWriteError{status: http.StatusInternalServerError, body: gen.ErrorResponse{
-		Error: fmt.Sprintf("could not lower the tool-iteration limit of %s: %v; nothing was changed", target, cause),
+		Error: fmt.Sprintf("could not lower the tool-iteration limit of %s: the setting could not be saved; nothing was changed. Details are in the server log.", target),
 		Code:  &code,
 	}}
 }
