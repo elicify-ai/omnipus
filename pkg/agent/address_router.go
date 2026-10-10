@@ -142,6 +142,9 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 		AgentID:   a.Receiver.AgentID,
 		Content:   composeRequestText(requestID, a.SenderLabel, a.Content),
 		Timestamp: capture.AdmittedAt,
+		// Display label of the left-side sender (F15), from the router-built
+		// Sender, never from the request text.
+		Participant: participantFromSender(a.Sender, al.agentDisplayName),
 	}
 	if err := store.AppendTranscriptStrict(receiverSessionID, entry); err != nil {
 		if dErr := ledger.Discard(receiverSessionID, requestID); dErr != nil {
@@ -150,6 +153,7 @@ func (al *AgentLoop) AdmitRequest(ctx context.Context, a RequestAdmission) (requ
 		}
 		return "", "", fmt.Errorf("%w: could not record the request: %v", ErrPeerRefused, err)
 	}
+	al.publishUserEntry(receiverSessionID, entry)
 
 	pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -360,6 +364,9 @@ func (al *AgentLoop) replyIntoConversation(c addressing.Capture, responder addre
 		Content:          req.Content,
 		Timestamp:        time.Now().UTC(),
 		ReplyToMessageID: c.RequestID,
+		// Who the answer went to (F15): from the server-held capture, so the
+		// model cannot name a recipient.
+		ReplyToParticipant: participantFromSender(c.Sender, al.agentDisplayName),
 	}
 	if err := store.AppendTranscriptStrict(c.Source.SessionID, entry); err != nil {
 		return tools.ReplyReceipt{}, fmt.Errorf("the reply could not be saved: %w", err)

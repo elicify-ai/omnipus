@@ -314,6 +314,13 @@ type TranscriptEntry struct {
 	// id of the admitted request this entry answers. The guest author is
 	// AgentID. Projected as reply_to_message_id live and on replay.
 	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
+	// Participant labels who wrote a left-side user-role entry, and
+	// ReplyToParticipant who a reply went to (session-core F15). Display only,
+	// stamped by the server from authenticated facts or the request capture —
+	// never from model or tool input. Projected as participant /
+	// reply_to_participant live, on replay and in REST.
+	Participant        *generated.ChatParticipant `json:"participant,omitempty"`
+	ReplyToParticipant *generated.ChatParticipant `json:"reply_to_participant,omitempty"`
 	// Model records which model produced this assistant message. Populated
 	// on every assistant message written via pkg/agent/turn.go (FR-013).
 	// Empty for legacy turns written before this field existed; the UI
