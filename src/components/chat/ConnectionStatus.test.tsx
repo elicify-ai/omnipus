@@ -41,6 +41,23 @@ describe('UserMessageDeliveryStatus', () => {
     expect(screen.getByRole('tooltip')).toHaveTextContent(tooltip)
   })
 
+  it('renders the discarded state as a quiet "Not delivered" tooltip with no retry action (FR-024)', () => {
+    const { container } = render(
+      <UserMessageDeliveryStatus state="discarded" agentName="Mia" latest onRetry={vi.fn()} />,
+    )
+
+    // Same quiet icon-button shape as queued/received/working — an accessible
+    // label plus tooltip, never an error colour and never an action button:
+    // the input is archived and there is nothing to release or resend.
+    const icon = screen.getByRole('button', { name: 'Not delivered' })
+    fireEvent.focus(icon)
+    expect(screen.getByRole('tooltip')).toHaveTextContent(
+      'Not delivered. You stopped Mia before it read this message, so it was discarded.',
+    )
+    expect(screen.queryByRole('button', { name: "Couldn't be sent. Try again" })).toBeNull()
+    expect(container.innerHTML).not.toMatch(/color-(?:error|warning)|\bred-|\borange-|\bamber-/)
+  })
+
   it('keeps failed text and exposes the exact retry action without error colours', () => {
     const onRetry = vi.fn()
     const { container } = render(

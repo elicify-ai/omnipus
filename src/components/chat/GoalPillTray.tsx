@@ -12,18 +12,12 @@
 // The latest goal-scoped JudgeVerdict (for the expanded per-criterion view)
 // is read from the global judgeActivity store.
 //
-// 8 of the 9 wire-enum pill states render with distinct colour/icon grammar
-// per the design: active (gold target) / waiting_on_user (amber) /
+// The wire-enum pill states render with distinct colour/icon grammar per the
+// design: active (gold target) / waiting_on_user (amber) /
 // judge_unavailable (amber) / re-planning (amber) / judging (muted pulse) /
 // done (green) / failed (red) / cleared (muted — a deliberate user stop is
-// neither success nor failure, UAT S3 fix). The 9th, `queued`, is retired
-// (ADR-088 D5/D9): the backend never emits it anymore (the pending-confirm
-// state it represented is deleted in full), so it renders no pill at all —
-// see the defensive skip in `GoalPill` and the pre-filter in `GoalPillTray`
-// below. The wire-enum value itself survives untouched in the generated
-// type (Constraint #8; do not edit generated files), which is why
-// `describePillState` still narrows it out explicitly rather than the type
-// simply not existing. The pill-state→render mapping for the 8 live states
+// neither success nor failure, UAT S3 fix), plus the later judge/expiry
+// states. The pill-state→render mapping
 // lives in `describePillState` below — an exhaustive switch with a `never`
 // default so a future 10th enum value fails typecheck.
 //
@@ -92,7 +86,7 @@ interface PillStateConfig {
   Icon: typeof Target
 }
 
-function describePillState(state: Exclude<GoalStatusFrame['state'], 'queued'>): PillStateConfig {
+function describePillState(state: GoalStatusFrame['state']): PillStateConfig {
   switch (state) {
     case 'active':
       return { testId: 'goal-pill-active', label: 'active', accentClass: 'text-[var(--color-accent)]', Icon: Target }
@@ -159,14 +153,6 @@ interface GoalPillProps {
 
 function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
   const [expanded, setExpanded] = useState(false)
-
-  // ADR-088 D5/D9: `queued` is retired — the backend never emits it
-  // anymore. `GoalPillTray` already filters queued frames out before
-  // mapping to this component; this is a defensive second layer (never
-  // reached in practice) that also narrows `frame.state` for
-  // `describePillState`'s exhaustive switch below, which no longer has a
-  // `queued` case.
-  if (frame.state === 'queued') return null
 
   const config = describePillState(frame.state)
 
@@ -362,10 +348,7 @@ export function GoalPillTray() {
   const verdicts = useJudgeActivityStore((s) => s.verdicts)
   const visiblePills = useVisibleGoalPills(goalPills)
 
-  // ADR-088 D5/D9: `queued` is retired and never emitted — filtered here
-  // (not just inside `GoalPill`) so a session holding only a stale/legacy
-  // queued pill renders NO tray at all, rather than an empty container.
-  const entries = Object.entries(visiblePills).filter(([, frame]) => frame.state !== 'queued')
+  const entries = Object.entries(visiblePills)
   if (entries.length === 0) return null
 
   // Find the latest goal-scoped verdict for correlation in the expanded view.

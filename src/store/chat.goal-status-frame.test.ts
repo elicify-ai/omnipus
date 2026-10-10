@@ -76,7 +76,6 @@ describe('chat handleFrame — goal_status (ADR-049 D6)', () => {
   })
 
   it.each([
-    'queued',
     'waiting_on_user',
     'judge_unavailable',
     're-planning',

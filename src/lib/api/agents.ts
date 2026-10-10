@@ -4,12 +4,14 @@ import type { ZodType } from 'zod'
 import { z } from 'zod'
 import {
   Agent as AgentSchema,
+  AgentActivityRun as AgentActivityRunSchema,
   AgentSession as AgentSessionSchema,
   ConfigurationMutationState as ConfigurationMutationStateSchema,
   // Spec-4 — external-CLI runner connection test (contract-first #8):
   RunnerTestResponse as RunnerTestResponseSchema,
 } from '@/lib/api/generated/schemas'
 import type {
+  AgentActivityRun,
   AgentSession,
   // Wire types migrated from hand-written interfaces to generated types:
   Agent,
@@ -112,6 +114,15 @@ export function fetchAgents(): Promise<Agent[]> {
 
 export function fetchAgent(id: string): Promise<Agent> {
   return request<Agent>(`/agents/${encodeURIComponent(id)}`, undefined, AgentSchema as ZodType<Agent>)
+}
+
+/** Open task and scheduler runs an agent should see in Activity (FR-033). */
+export function fetchAgentActivityRuns(agentId: string): Promise<AgentActivityRun[]> {
+  return request<AgentActivityRun[]>(
+    `/agents/${encodeURIComponent(agentId)}/activity-runs`,
+    undefined,
+    z.array(AgentActivityRunSchema) as ZodType<AgentActivityRun[]>,
+  )
 }
 
 export function createAgent(data: AgentCreateRequest): Promise<Agent> {
