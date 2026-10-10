@@ -150,21 +150,24 @@ describe('edit header live identity preview', () => {
     await screen.findByRole('heading', { name: 'Custom Mia' })
     const layout = visibleIdentityLayout()
     fireEvent.click(within(layout).getByRole('button', { name: 'Woman' }))
-    fireEvent.click(within(layout).getByRole('button', { name: 'Writer' }))
+    // The role is ONE searchable dropdown (founder 2026-10-10): open it and
+    // pick the Writer option; the header mark must preview it before any save.
+    fireEvent.click(within(layout).getByRole('combobox', { name: 'Role badge' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Writer' }))
     fireEvent.click(within(layout).getByRole('button', { name: 'Violet' }))
     const preview = headerMark('Custom Mia')
     expect(preview).toHaveAttribute('data-figure', 'Woman')
     expect(preview.querySelector('[data-role]')).toHaveAttribute('data-role', 'writer')
     expect(preview).toHaveStyle({ color: '#A78BFA' })
     expect(within(layout).getByRole('button', { name: 'Woman' })).toHaveAttribute('aria-pressed', 'true')
-    expect(within(layout).getByRole('button', { name: 'Writer' })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(layout).getByRole('combobox', { name: 'Role badge' })).toHaveTextContent('Writer')
     expect(within(layout).getByRole('button', { name: 'Violet' })).toHaveAttribute('aria-pressed', 'true')
     expect(updateAgent).not.toHaveBeenCalled()
   })
 })
 
 describe('successful custom identity edit', () => {
-  it('autosaves the exact identity patch at the reviewed revision and reloads the confirmed identity without clearing icon', async () => {
+  it('autosaves the exact identity patch at the reviewed revision and reloads the confirmed identity (the stored legacy icon is never sent and never displayed)', async () => {
     // FR-020 / ARCH decision 1.1: wire figure/role/palette values, not art
     // keys or display names. The stored legacy icon is not part of this edit.
     const reviewedRevision = 'a'.repeat(64)
@@ -192,7 +195,9 @@ describe('successful custom identity edit', () => {
     try {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       fireEvent.click(within(layout).getByRole('button', { name: 'Woman' }))
-      fireEvent.click(within(layout).getByRole('button', { name: 'Writer' }))
+      // The role is ONE searchable dropdown (founder 2026-10-10).
+      fireEvent.click(within(layout).getByRole('combobox', { name: 'Role badge' }))
+      fireEvent.click(screen.getByRole('option', { name: 'Writer' }))
       fireEvent.click(within(layout).getByRole('button', { name: 'Violet' }))
       // Run the profile's real 1500ms debounce, not saveNow or a mocked hook.
       await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
@@ -200,9 +205,11 @@ describe('successful custom identity edit', () => {
       expect(updateAgent).toHaveBeenCalledWith('custom-save', {
         revision: reviewedRevision, figure: 'Woman', role: 'writer', color: '#A78BFA',
       })
+      // The deleted legacy field must not ride onto the wire with the patch.
       expect(vi.mocked(updateAgent).mock.calls[0][1]).not.toHaveProperty('icon')
       expect(screen.getByText('Saved just now')).toBeInTheDocument()
       expect(stored.revision).toBe('b'.repeat(64))
+      // Mock bookkeeping: the patch omitted icon, so the stored slug survives.
       expect(stored.icon).toBe('lightbulb')
       profile.unmount()
       vi.useRealTimers()
@@ -218,10 +225,11 @@ describe('successful custom identity edit', () => {
       expect(headerMark('Saved identity').querySelector('[data-role]')).toHaveAttribute('data-role', 'writer')
       expect(headerMark('Saved identity')).toHaveStyle({ color: '#A78BFA' })
       const reloadedLayout = visibleIdentityLayout()
-      for (const choice of ['Woman', 'Writer', 'Violet']) {
-        expect(within(reloadedLayout).getByRole('button', { name: choice })).toHaveAttribute('aria-pressed', 'true')
-      }
-      expect(screen.getByText('lightbulb')).toBeInTheDocument()
+      expect(within(reloadedLayout).getByRole('button', { name: 'Woman' })).toHaveAttribute('aria-pressed', 'true')
+      expect(within(reloadedLayout).getByRole('combobox', { name: 'Role badge' })).toHaveTextContent('Writer')
+      expect(within(reloadedLayout).getByRole('button', { name: 'Violet' })).toHaveAttribute('aria-pressed', 'true')
+      // FOUNDER DECISION 2026-10-10 (avatar consistency): the stored legacy
+      // slug is no longer displayed anywhere; nothing about Agent.icon is UI.
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
       await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
       expect(updateAgent).toHaveBeenCalledTimes(1)
@@ -232,7 +240,7 @@ describe('successful custom identity edit', () => {
 })
 
 describe('built-in identity stays locked', () => {
-  it('shows selected figure, role and colour as locked choices and keeps the stored icon slug', async () => {
+  it('shows selected figure, role and colour as locked choices, and never an icon control', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(
       <QueryClientProvider client={client}>
@@ -249,15 +257,18 @@ describe('built-in identity stays locked', () => {
     const layout = visibleIdentityLayout()
     const figure = await within(layout).findByRole('button', { name: 'Omnipus' })
     expect(figure).toBeDisabled()
-    const role = within(layout).getByRole('button', { name: 'General assistant' })
+    // The role is ONE searchable dropdown (founder 2026-10-10), disabled for
+    // a built-in and showing the stored role's label.
+    const role = within(layout).getByRole('combobox', { name: 'Role badge' })
     expect(role).toBeDisabled()
+    expect(role).toHaveTextContent('General assistant')
     const colour = within(layout).getByRole('button', { name: 'Azure' })
     expect(colour).toBeDisabled()
     expect(figure).toHaveAttribute('aria-pressed', 'true')
-    expect(role).toHaveAttribute('aria-pressed', 'true')
     expect(colour).toHaveAttribute('aria-pressed', 'true')
-    // The slug lives once above both layouts, not inside either one.
-    expect(screen.getByText('lightbulb')).toBeInTheDocument()
+    // FOUNDER DECISION 2026-10-10 (avatar consistency): the stored legacy
+    // slug ("lightbulb") is no longer displayed anywhere — the old
+    // "kept the stored icon slug" assertion asserted deleted UI and is gone.
     expect(within(layout).queryByLabelText('Icon')).toBeNull()
     expect(document.querySelector('input[type="file"]')).toBeNull()
   })

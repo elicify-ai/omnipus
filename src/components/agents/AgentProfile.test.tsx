@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor, act, within } from '@testing-librar
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
 import type { Agent, Skill } from '@/lib/api'
-import { expectEditableIdentityChoices, expectLockedIdentityColours } from '@/test/agentIdentityAssertions'
+import { expectEditableIdentityChoices, expectLockedFigureAndRole, expectLockedIdentityColours } from '@/test/agentIdentityAssertions'
 
 // ResizeObserver is required by cmdk (used inside the ModelSelector popover);
 // jsdom does not implement it. Polyfill with a noop for the tests that open
@@ -2988,12 +2988,18 @@ describe('AgentProfile — locked core agent identity fields: visible read-only 
     expect(screen.queryByTestId('avatar-color-readonly')).toBeNull()
   })
 
-  it('shows a static read-only avatar icon (not the interactive picker)', async () => {
+  it('shows the built-in identity editor locked per field: figure and role visible but unchangeable (W1-6)', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
     renderProfile('mia')
     await screen.findByText('Mia')
-    expect((await screen.findAllByTestId('avatar-icon-readonly')).length).toBeGreaterThanOrEqual(1)
-    expect(screen.queryByTestId('avatar-icon-trigger')).toBeNull()
+    // The locked-ness the old read-only avatar line guarded now lives in the
+    // per-field locks of the ONE editor (colour lock is the sibling test).
+    expectLockedFigureAndRole(screen.getByRole('tabpanel', { name: 'Basics' }))
+    // FOUNDER DECISION 2026-10-10 (avatar consistency): the static read-only
+    // "Avatar icon" line was deleted — the interactive per-field-locked
+    // AgentLookPicker is the only identity UI, and no legacy icon UI returns.
+    expect(screen.queryByTestId('avatar-icon-readonly')).toBeNull()
+    expect(document.querySelector('input[type="file"]')).toBeNull()
   })
 })
 
@@ -3140,7 +3146,9 @@ describe('AgentProfile — unlocked Main agent: interactive identity fields rend
     expectEditableIdentityChoices(screen.getByRole('tabpanel', { name: 'Basics' }))
     expect(screen.queryByTestId('avatar-icon-trigger')).toBeNull()
     expect(screen.queryAllByTestId('avatar-color-readonly').length).toBe(0)
-    expect(screen.getByTestId('avatar-icon-readonly').querySelector('span')?.textContent).toBe('Chat')
+    // FOUNDER DECISION 2026-10-10 (avatar consistency): the stored legacy
+    // icon slug is no longer displayed anywhere — Agent.icon is not part of
+    // the identity UI, so the old "stored slug shown once" assertion is gone.
   })
 
   it('does NOT disable the description textarea for an editable Main agent', async () => {

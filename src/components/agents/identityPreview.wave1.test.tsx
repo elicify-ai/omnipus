@@ -60,13 +60,16 @@ describe('identity colour choices', () => {
 })
 
 describe('create wizard identity preview', () => {
-  it('previews the chosen figure, role and colour and does not offer an upload', () => {
+  it('previews the chosen figure, role and colour and does not offer an upload', async () => {
     const onSubmit = vi.fn()
     render(<CreateAgentWizard initialType="Main" onSubmit={onSubmit} onClose={vi.fn()} connectedProviders={[]} />)
+    // The role is ONE searchable dropdown (founder 2026-10-10): each option
+    // shows its badge; picking one previews the badge on the mark.
     expect(screen.getByRole('button', { name: 'Woman' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Writer' })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: 'Role badge' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Woman' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Writer' }))
+    fireEvent.click(screen.getByRole('combobox', { name: 'Role badge' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Writer' }))
     fireEvent.click(screen.getByRole('button', { name: 'Sky' }))
     const preview = document.querySelector('[data-art]')
     expect(preview?.getAttribute('data-art')).toBe('woman')
@@ -100,7 +103,8 @@ describe('create wizard identity preview', () => {
     fireEvent.change(screen.getByTestId('wizard-description'), { target: { value: 'Writes release notes' } })
     fireEvent.click(screen.getByTestId('wizard-inherit-model'))
     fireEvent.click(screen.getByRole('button', { name: 'Woman' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Writer' }))
+    fireEvent.click(screen.getByRole('combobox', { name: 'Role badge' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Writer' }))
     fireEvent.click(screen.getByRole('button', { name: 'Sky' }))
     expect(onSubmit).not.toHaveBeenCalled()
     fireEvent.click(screen.getByTestId('wizard-next-1'))
@@ -125,15 +129,19 @@ describe('create wizard identity preview', () => {
 })
 
 // The 5th figure, Monogram, in the create wizard. Oracles are the picker
-// buttons and the preview's data-initial seam (ARCH-RULING-monogram D2b/D3).
+// thumbnails and the preview's data-initial seam (ARCH-RULING-monogram D2b/D3).
 describe('create wizard Monogram figure', () => {
-  it('offers exactly the five figure choices in order (AC-13)', () => {
+  it('offers exactly the five figure choices in the founder order (AC-13, founder 2026-10-10)', () => {
     render(<CreateAgentWizard initialType="Main" onSubmit={vi.fn()} onClose={vi.fn()} connectedProviders={[]} />)
-    const figureWords = ['Robot', 'Man', 'Woman', 'Omnipus', 'Monogram']
-    const figureButtons = screen
-      .getAllByRole('button')
-      .filter((button) => figureWords.includes((button.textContent ?? '').trim()))
-    expect(figureButtons.map((button) => (button.textContent ?? '').trim())).toEqual(figureWords)
+    // The Look row is ONE row of five picture thumbnails (founder 2026-10-10:
+    // "order Omnipus, Man, Robot, Woman, Monogram" — the pre-decision order
+    // [Robot, Man, Woman, Omnipus, Monogram] is superseded). Each thumbnail
+    // is a picture (an AgentIcon), so the stable handle is its test id.
+    const figureWords = ['Omnipus', 'Man', 'Robot', 'Woman', 'Monogram']
+    const thumbnails = screen.getAllByTestId(/^wizard-figure-/)
+    expect(thumbnails.map((button) => button.getAttribute('data-testid'))).toEqual(
+      figureWords.map((figure) => `wizard-figure-${figure}`),
+    )
     for (const figure of figureWords) {
       expect(screen.getByRole('button', { name: figure })).toBeEnabled()
     }
