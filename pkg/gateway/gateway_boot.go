@@ -1321,6 +1321,12 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	// ensureDefaultWorkspace above (the workspace just created, and the one that
 	// already existed); it is a no-op when no default workspace exists.
 	stg.api.ensureDefaultWorkspaceAdminMain()
+	// session-core U6 (FR-017/019): the task executor derives a run's mode and
+	// captures its recipients from which agents own a visible main. Without this
+	// resolver every task run stays ISOLATED.
+	if stg.tExecutor != nil {
+		stg.tExecutor.SetMainSessionResolver(taskMainResolver{api: stg.api})
+	}
 
 	// ADR-046 P1 (FR-007/008): execution is workspace-scoped, and the system
 	// deliberately never auto-adds a custom/pre-existing agent to any
