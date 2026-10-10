@@ -956,7 +956,9 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           }
 
           // Ordinary first sends are resolved by handleFirstSendFrame above.
-          // Kickoff and legacy acknowledgements retain their existing path.
+          // This tail remains only for a workspace-setup kickoff and any
+          // other ack that arrives with no unbound pending first send
+          // (DEL-F21/F22 deleted the legacy ordinary-ack migration).
           // A newer explicit agent-picker choice wins over this stale echo.
           const currentAgentId = useSessionStore.getState().activeAgentId
           const userReselected =
