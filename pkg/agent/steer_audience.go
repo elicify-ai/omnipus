@@ -458,7 +458,7 @@ func (d *SteerUpwardDeliverer) publishUpward(
 
 	res, appendErr := inbox.Append(ownerKey, msg)
 	if appendErr != nil {
-		return steer.Delivery{}, fmt.Errorf("steer: deliver: append: %w", appendErr)
+		return steer.Delivery{}, al.recordNotDelivered(lifecycle, ownerKey, childRec, class.Kind, appendErr)
 	}
 
 	// Finding C (ADR-091 fix lane 1, CRITICAL): a deterministic duplicate at
