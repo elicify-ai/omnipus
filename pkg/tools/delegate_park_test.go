@@ -125,8 +125,13 @@ func TestDelegateTool_Respond_RefusesVisiblyWhenTheReviveFails(t *testing.T) {
 	if sink.gotSessionID != sessionID {
 		t.Errorf("the refused respond must still have been addressed to the named session, got %q", sink.gotSessionID)
 	}
-	if !strings.Contains(result.ForLLM, "resume session") {
-		t.Errorf("the refusal must name the failed resume step, got: %s", result.ForLLM)
+	// secfix5 7181c5c4f: the refusal now carries fixed text, with the raw
+	// cause logged server-side only.
+	if !strings.Contains(result.ForLLM, "could not be revived right now; retry shortly") {
+		t.Errorf("the refusal must carry the fixed revive-failure text, got: %s", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, sink.err.Error()) {
+		t.Errorf("the refusal leaked the raw revive cause %q: %s", sink.err.Error(), result.ForLLM)
 	}
 	rec, err := lc.Load(sessionID)
 	if err != nil {

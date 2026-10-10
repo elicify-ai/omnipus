@@ -208,7 +208,7 @@ func TestHelpFormatter_SurfaceFilter(t *testing.T) {
 	// Web surface canonical commands: help, model, cancel, stop, stop-redirect,
 	// skills, remember, recall, retrospective, goal, loop = 11.
 	webHelp := formatHelpMessage(defs, SurfaceWeb)
-	for _, name := range []string{"help", "model", "cancel", "stop", "stop-redirect", "skills", "remember", "recall", "retrospective", "goal", "loop"} {
+	for _, name := range []string{"help", "model", "clear", "cancel", "stop", "stop-redirect", "skills", "remember", "recall", "retrospective", "goal", "loop"} {
 		if !containsWord(webHelp, "/"+name) {
 			t.Errorf("web help must contain /%s, got:\n%s", name, webHelp)
 		}
@@ -223,7 +223,7 @@ func TestHelpFormatter_SurfaceFilter(t *testing.T) {
 	// command entry. We check "/<name> -" (the help-line format used by
 	// formatHelpMessage) to avoid false substring matches (e.g. "/skill" inside
 	// "/skills - List installed skills").
-	for _, name := range []string{"new", "clear", "agents", "show", "list", "switch", "check", "start", "channel", "resume", "subagents", "reload", "use", "skill"} {
+	for _, name := range []string{"new", "agents", "show", "list", "switch", "check", "start", "channel", "resume", "subagents", "reload", "use", "skill"} {
 		if containsWord(webHelp, "/"+name+" -") {
 			t.Errorf("web help must NOT contain /%s as a command entry (removed/hidden), got:\n%s", name, webHelp)
 		}

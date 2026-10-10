@@ -77,7 +77,6 @@ var knownTaskDeleters = []taskDeleter{
 	// ---- the task-delete surfaces: each must remove the paired goal first --
 	{where: "pkg/gateway.restAPI.handleTaskDelete", mustClean: true},
 	{where: "pkg/tools.TaskDeleteTool.Execute", mustClean: true},
-	{where: "pkg/sysagent/tools.TaskDeleteTool.Execute", mustClean: true},
 
 	// ---- not task deletes: each states what it actually deletes -----------
 	{
