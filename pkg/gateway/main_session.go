@@ -20,6 +20,7 @@ package gateway
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -31,6 +32,14 @@ import (
 // wired. It is a server-side inconsistency (the store is constructed at boot),
 // never a user input error.
 var errNoSessionStore = errors.New("session store unavailable")
+
+// errMainChatNotPrepared is the fixed client-facing text when an entitled pair's
+// main could not be created or trusted. It is deliberately free of paths, file
+// names, session or identity ids and stored owner/workspace values; the real
+// cause is in the server log at error level.
+var errMainChatNotPrepared = errors.New(
+	"This agent's main chat could not be prepared because session storage failed. " +
+		"Check disk space and permissions, then retry. Details are in the server log.")
 
 // mainSessionAccessor is the slice of *agent.AgentLoop this file needs:
 // the live config (agent eligibility) and the shared session store (main
@@ -145,26 +154,30 @@ func (a *restAPI) mainSessionAddress(ws storedWorkspace, agentID string) string 
 }
 
 // ensureMainsForTeam get-or-creates the main of every eligible member of ws's
-// team. Best-effort per member: a pair whose stored identity is corrupt or
-// mismatched is logged and skipped — the membership write does not carry that
-// session file, so failing the whole workspace update over it would be the
-// wrong surface to report it on. The refusal is served where it belongs, on
-// the main's own lookup/attach (see getSession) and by the absence of a
-// main_session_id on the wire.
+// team. Best-effort per member: one pair whose stored identity is corrupt or
+// mismatched, or whose storage write fails, does not stop the others — the
+// membership write does not carry that session file, so failing the whole
+// workspace update over it would be the wrong surface to report it on. Every
+// per-pair failure is RETURNED (joined, each naming the workspace and agent) so
+// the caller logs it at error level; none is swallowed here. The user-facing
+// refusal is served where it belongs, on the main's own lookup/attach (see
+// getSession, which re-attempts creation and reports the real cause) and by the
+// absence of a main_session_id on the wire.
 //
 // Over-cap pairs never reach here: prepareWorkspacePutMembers validates every
 // prospective id up front and refuses the request with a visible 422.
-func (a *restAPI) ensureMainsForTeam(ws storedWorkspace) {
+func (a *restAPI) ensureMainsForTeam(ws storedWorkspace) error {
 	cfg := a.agentLoop.GetConfig()
+	var errs []error
 	for _, agentID := range ws.CoreTeam {
 		if !mainSessionPairEligible(cfg, ws, agentID) {
 			continue
 		}
 		if _, err := a.ensureMainSession(ws.ID, agentID); err != nil {
-			slog.Warn("rest: workspace team: main session not resolved",
-				"workspace_id", ws.ID, "agent_id", agentID, "error", err)
+			errs = append(errs, fmt.Errorf("workspace %s agent %s: %w", ws.ID, agentID, err))
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // resolveMainSessionForRead is the lookup/attach gate for a session id that
@@ -181,24 +194,34 @@ func (a *restAPI) ensureMainsForTeam(ws storedWorkspace) {
 //   - the stored identity is corrupt, unreadable or owned by someone else —
 //     BDD-01.4's refusal, served here so a mismatched record can never be
 //     handed back as the pair's valid main.
-func (a *restAPI) resolveMainSessionForRead(id string) bool {
+//
+// The error return separates "this pair has no main" (false, nil: the caller's
+// 404 is the truth) from "this pair is entitled to a main but it could not be
+// created or trusted" (false, errMainChatNotPrepared): a fixed, actionable
+// message (the real cause is logged), so a retry shows something useful instead
+// of "session not found". It is re-attempted on every call, so a transient
+// storage failure at boot heals on the next open.
+func (a *restAPI) resolveMainSessionForRead(id string) (bool, error) {
 	wsID, agentID, ok := session.SplitMainSessionID(id)
 	if !ok {
-		return true // not a computed main id: the ordinary lookup path owns it
+		return true, nil // not a computed main id: the ordinary lookup path owns it
 	}
 	ws, ok := a.workspaceForMainSession(wsID)
 	if !ok {
-		return false
+		return false, nil
 	}
 	if !mainSessionPairEligible(a.agentLoop.GetConfig(), ws, agentID) {
-		return false
+		return false, nil
 	}
 	if _, err := a.ensureMainSession(wsID, agentID); err != nil {
-		slog.Warn("rest: main session lookup refused",
+		// The full contextual error stays in the server log; the client gets a
+		// fixed, actionable message that carries no path, file name, id or
+		// stored identity value.
+		slog.Error("rest: main session could not be prepared on open",
 			"session_id", id, "workspace_id", wsID, "agent_id", agentID, "error", err)
-		return false
+		return false, errMainChatNotPrepared
 	}
-	return true
+	return true, nil
 }
 
 // mainSessionVisible reports whether a listed session should be surfaced.
@@ -225,26 +248,31 @@ func (a *restAPI) mainSessionVisible(m *session.UnifiedMeta) bool {
 	return m.AgentID == agentID && m.WorkspaceID == wsID
 }
 
-// ensureDefaultWorkspaceAdminMain get-or-creates Admin's main in the default
-// workspace. Admin has no membership event to hang it on, so this runs from
-// the boot path that already ensures the default workspace, in BOTH branches —
-// the one that creates the workspace and the one that finds it already there.
-// An install with no default workspace (nothing to be Admin's main IN) is a
-// no-op, never a guessed workspace.
-func (a *restAPI) ensureDefaultWorkspaceAdminMain() {
+// ensureBootMains eagerly establishes every main that FR-002 says exists
+// without any later event: Admin's main in the default workspace, and one main
+// per eligible member of EVERY existing workspace team. It runs from the boot
+// path after the default workspace is ensured, so a fresh install's seeded
+// team owns its mains at first boot — a same-team PUT is a no-op and never the
+// trigger. Admin has no membership to hang a main on, so it is handled here
+// explicitly. Best-effort and idempotent: ensureMainSession reuses an existing
+// main, and an unresolvable pair is logged and skipped. An install with no
+// default workspace gets no Admin main — never a guessed workspace.
+func (a *restAPI) ensureBootMains() {
 	workspaces, err := listWorkspaceFiles(a.homePath)
 	if err != nil {
-		slog.Warn("rest: admin main: list workspaces failed", "error", err)
+		slog.Warn("rest: boot mains: list workspaces failed", "error", err)
 		return
 	}
 	for _, ws := range workspaces {
-		if !ws.IsDefault {
-			continue
+		if ws.IsDefault {
+			if _, err := a.ensureMainSession(ws.ID, string(coreagent.IDAdmin)); err != nil {
+				slog.Error("rest: boot mains: Admin's main was not created; it is re-attempted when the chat is opened",
+					"workspace_id", ws.ID, "agent_id", string(coreagent.IDAdmin), "error", err)
+			}
 		}
-		if _, err := a.ensureMainSession(ws.ID, string(coreagent.IDAdmin)); err != nil {
-			slog.Warn("rest: admin main: default-workspace main not resolved",
+		if err := a.ensureMainsForTeam(ws); err != nil {
+			slog.Error("rest: boot mains: some team mains were not created; each is re-attempted when its chat is opened",
 				"workspace_id", ws.ID, "error", err)
 		}
-		return
 	}
 }

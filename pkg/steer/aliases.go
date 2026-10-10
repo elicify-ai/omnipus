@@ -54,6 +54,7 @@ const (
 	OriginKindTask      = session.OriginKindTask
 	OriginKindChat      = session.OriginKindChat
 	OriginKindChannel   = session.OriginKindChannel
+	OriginKindMain      = session.OriginKindMain
 	OriginKindScheduled = session.OriginKindScheduled
 	OriginKindHeartbeat = session.OriginKindHeartbeat
 	OriginKindVerifier  = session.OriginKindVerifier
