@@ -80,9 +80,10 @@ func TestAttach_TwiceArchiveByteIdentical(t *testing.T) {
 	gwTruncateWindowTo(t, ag.Sessions, key, 40)
 	require.NoError(t, ag.Sessions.Save(key))
 
-	// The one archive lives at the transcript path of the owning session (the
-	// routing key embeds it: agent:<id>:session:<sid>).
-	sessionDir := filepath.Join(ag.Home, "sessions", meta.ID)
+	// session-core DEL-10: every agent shares ONE store at the loop's session
+	// base directory, so the archive lives at the transcript path of the owning
+	// session id under that store's BaseDir.
+	sessionDir := filepath.Join(store.BaseDir(), meta.ID)
 	archivePath := filepath.Join(sessionDir, "transcript.jsonl")
 	metaPath := filepath.Join(sessionDir, "backend_meta.json")
 	bytesBefore, err := os.ReadFile(archivePath)
