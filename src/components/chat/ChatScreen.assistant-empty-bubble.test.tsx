@@ -85,7 +85,6 @@ vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 // more), so there is nothing left to mock here.
 vi.mock('./ActivityBar', () => ({ ActivityBar: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
 // Composer Redesign (variant A1): this file targets the live AssistantMessage()
 // bubble render, not the composer's picker/model/token sub-components — stub
 // them to null so their workspaces/providers query plumbing doesn't need

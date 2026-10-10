@@ -251,10 +251,8 @@ describe('EventChip — renders the normal chip for EVERY surviving kind; the Ag
  * bug like `ICON_MAP = { ..., SkipForward: Prohibit }` (right KEY, wrong
  * Phosphor COMPONENT) would slip through every existing test untouched.
  *
- * Distinguishing "SkipForward rendered" from "some other icon rendered"
- * follows the SAME technique already established in this codebase by
- * `src/components/shared/IconRenderer.test.tsx` (see its case-insensitivity
- * proof): render the actual Phosphor component directly as a reference and
+ * Distinguishing "SkipForward rendered" from "some other icon rendered":
+ * render the actual Phosphor component directly as a reference and
  * compare the rendered `<svg>`'s markup — identical icons produce identical
  * SVG output (same `<path>` data), a different icon component does not. A
  * negative control against `Prohibit` (an existing, differently-shaped

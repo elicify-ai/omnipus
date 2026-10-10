@@ -4,7 +4,7 @@ import { Info, Plus, SquaresFour, ListBullets, Graph as GraphIcon, UsersThree, T
 import { Button } from '@/components/ui/button'
 import { FilterMenu } from '@/components/ui/filter-menu'
 import { ViewSwitch, type ViewSwitchOption } from '@/components/ui/view-switch'
-import { IconRenderer } from '@/components/shared/IconRenderer'
+import { AgentMark } from '@/components/agents/AgentMark'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import { CreatePlanSlideOver } from './CreatePlanSlideOver'
 import { PlansFilterBand } from './PlansFilterBand'
@@ -139,8 +139,8 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
             <FilterMenu mode="single" value={ownerAgentId} onChange={setOwnerAgentId} clearLabel="All agents"
               label={ownerAgent?.name ?? 'Agent'} aria-label={`Filter by agent (current: ${ownerAgent?.name ?? 'all agents'})`}
               data-testid="tasks-agent-filter" className="max-w-[200px]"
-              icon={ownerAgent?.icon ? <IconRenderer icon={ownerAgent.icon} size={13} /> : <UsersThree size={13} className="shrink-0" aria-hidden="true" />}
-              options={agents.map((agent) => ({ value: agent.id, label: agent.name, icon: agent.icon ? <IconRenderer icon={agent.icon} size={13} /> : undefined }))} />
+              icon={ownerAgent ? <AgentMark agent={ownerAgent} size={18} /> : <UsersThree size={13} className="shrink-0" aria-hidden="true" />}
+              options={agents.map((agent) => ({ value: agent.id, label: agent.name, icon: <AgentMark agent={agent} size={18} /> }))} />
             <FilterMenu mode="multiple" value={activeTags} onChange={setActiveTags} clearLabel="Clear tags" options={tagOptions}
               label={activeTags.length === 0 ? 'Tags' : `${activeTags.length} tag${activeTags.length === 1 ? '' : 's'}`}
               aria-label={activeTags.length === 0 ? 'Filter by tags' : `Filter by tags (${activeTags.length} tag${activeTags.length === 1 ? '' : 's'})`} data-testid="tasks-tag-filter" icon={<Tag size={13} className="shrink-0" aria-hidden="true" />} />

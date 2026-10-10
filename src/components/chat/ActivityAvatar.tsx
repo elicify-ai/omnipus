@@ -2,33 +2,21 @@
 //
 // Visual grammar per kind:
 //   - bash            → monochrome terminal icon, muted/bordered surface.
-//   - agent (native)  → colored avatar (agent.color + agent.icon), same
-//                        treatment MessageItem.tsx uses for assistant messages.
-//   - agent (3p)      → DELIBERATELY distinct from native: a bordered,
-//                        monospace-initials badge (no colored gradient) so
-//                        external-CLI subagents (claude-code/codex/opencode)
-//                        read as a different kind of thing at a glance.
-//   - agent (unknown) → generic muted fallback icon. Must never throw even
-//                        when agentId is absent or doesn't match any known
-//                        agent (see useRunningActivity's resolveAgent).
+//   - any agent       → the agent's own AgentMark (figure, role badge,
+//                        colour) — the same mark every surface draws. That
+//                        includes external-CLI workers, which carry their own
+//                        figure. An agent that is not resolved draws the
+//                        Omnipus fallback; it must never throw when agentId is
+//                        absent or unknown (see useRunningActivity's resolveAgent).
 
-import { Terminal, UserCircle, Scales } from '@phosphor-icons/react'
+import { Terminal, Scales } from '@phosphor-icons/react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { IconRenderer } from '@/components/shared/IconRenderer'
+import { AgentMark } from '@/components/agents/AgentMark'
 import type { ActivityItem } from '@/hooks/useRunningActivity'
 
 export interface ActivityAvatarProps {
   item: ActivityItem
   size?: 'sm' | 'md'
-}
-
-/** First 1-2 letters of a name, uppercased — used for the 3p badge only. */
-function initials(name: string): string {
-  const trimmed = name.trim()
-  if (!trimmed) return '?'
-  const words = trimmed.split(/\s+/).filter(Boolean)
-  if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase()
-  return trimmed.slice(0, 2).toUpperCase()
 }
 
 export function ActivityAvatar({ item, size = 'md' }: ActivityAvatarProps) {
@@ -45,8 +33,8 @@ export function ActivityAvatar({ item, size = 'md' }: ActivityAvatarProps) {
   }
 
   // ADR-049 D2/D4/US-13: judge verdicts — a distinct, Forge-Gold-tinted
-  // "scales" glyph so a judge row reads as a different kind of thing at a
-  // glance, same rationale as the 3p-agent badge above.
+  // "scales" glyph so a judge verdict row reads as a different kind of thing
+  // at a glance — a verdict, not an agent at work.
   if (item.kind === 'judge') {
     return (
       <Avatar size={size} className="border border-[var(--color-accent)]/30">
@@ -57,50 +45,7 @@ export function ActivityAvatar({ item, size = 'md' }: ActivityAvatarProps) {
     )
   }
 
-  switch (item.agentType) {
-    case '3p':
-      return (
-        <Avatar size={size} className="border border-[var(--color-border)]">
-          <AvatarFallback className="bg-[var(--color-surface-1)] text-[var(--color-secondary)] font-mono text-[length:var(--type-caption-size)] tracking-tight">
-            {initials(item.agentName)}
-          </AvatarFallback>
-        </Avatar>
-      )
-    case 'unknown':
-      return (
-        <Avatar size={size}>
-          <AvatarFallback className="bg-[var(--color-surface-3)] text-[var(--color-muted)]">
-            <UserCircle size={iconSize} aria-hidden="true" />
-          </AvatarFallback>
-        </Avatar>
-      )
-    case 'native':
-      return (
-        <Avatar size={size}>
-          <AvatarFallback
-            style={{ backgroundColor: item.agentColor ?? 'var(--color-surface-3)', color: 'var(--color-secondary)' }}
-          >
-            {item.agentIcon ? (
-              <IconRenderer icon={item.agentIcon} size={iconSize} />
-            ) : (
-              <UserCircle size={iconSize} aria-hidden="true" />
-            )}
-          </AvatarFallback>
-        </Avatar>
-      )
-    default: {
-      // Exhaustiveness guard (mirrors ActivityPanel.tsx's ActivityStatus switch) —
-      // a future 4th agentType value fails to compile here instead of silently
-      // rendering as native.
-      const _exhaustive: never = item.agentType
-      void _exhaustive
-      return (
-        <Avatar size={size}>
-          <AvatarFallback className="bg-[var(--color-surface-3)] text-[var(--color-muted)]">
-            <UserCircle size={iconSize} aria-hidden="true" />
-          </AvatarFallback>
-        </Avatar>
-      )
-    }
-  }
+  // Every agent kind (native, external CLI, unresolved) draws its AgentMark;
+  // the 28px `sm` slot fits the 26px mark.
+  return <AgentMark agent={item.agent} name={item.agentName} size={26} />
 }

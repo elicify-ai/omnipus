@@ -39,29 +39,14 @@ import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
 import { logDiagnostic } from '@/lib/telemetry'
 
-// ── Slash/skill/agent palette item shape ─────────────────────────────────────
+// ── Slash/skill palette item shape ─────────────────────────────────────
 
 export interface SlashItem {
   key: string
   label: string
   description: string
-  section: 'commands' | 'skills' | 'agents'
+  section: 'commands' | 'skills'
   argumentHint?: string
-  /** Agent-row-only (section === 'agents') — the avatar dot's background color. */
-  agentColor?: string
-  /** Agent-row-only — Phosphor icon name for the avatar; falls back to the agent's initial when unset. */
-  agentIcon?: string
-  /**
-   * Agent-row-only — the agent's display name, for the render layer's
-   * avatar-initial computation (Fix 9). Carrying the name explicitly (not
-   * deriving the initial from `label.charAt(1)`, which assumes `label` is
-   * always exactly "@" + one BMP character) keeps the initial correct for
-   * astral-plane first characters and survives any future label formatting
-   * change without a silent initial regression.
-   */
-  agentName?: string
-  /** Agent-row-only — true when this row is the currently active chat agent (renders the "active" marker). */
-  isActiveAgent?: boolean
   onSelect: () => void
 }
 
