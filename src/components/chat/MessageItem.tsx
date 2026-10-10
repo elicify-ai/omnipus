@@ -14,7 +14,7 @@ import { formatErrorDetail } from '@/lib/llm-error'
 import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalOutcomeRow } from './GoalOutcomeRow'
 import { ParticipantMessageRow, ReplyHeaderView, usePairedReplyToIds, useParticipantLabelParts } from './ParticipantLabels'
-import { collectPairedReplyToIds, isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
+import { isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 
 // ADR-051 — cap on the verbose-only "Technical details" disclosure content.
 // Keeps a runaway provider error payload from blowing out the chat scroll.

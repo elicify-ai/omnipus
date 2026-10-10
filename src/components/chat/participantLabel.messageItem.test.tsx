@@ -6,7 +6,6 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import * as React from 'react'
 import { useChatStore } from '@/store/chat'
 import type { ChatMessage } from '@/store/chat'
 import { useWorkspacesStore } from '@/store/workspacesStore'

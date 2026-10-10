@@ -55,7 +55,9 @@ export function useParticipantLabelParts(): ParticipantLabelParts {
   })
   const { data: workspaces = [] } = useQuery({
     queryKey: ['workspaces'],
-    queryFn: fetchWorkspaces,
+    // Wrapped: react-query calls queryFn with a context object, and
+    // fetchWorkspaces's optional params bag must not receive it.
+    queryFn: () => fetchWorkspaces(),
     staleTime: 30_000,
   })
   const currentWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
