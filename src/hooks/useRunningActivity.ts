@@ -41,8 +41,10 @@ import { useQuery } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat'
 import type { SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
-import { fetchAgents } from '@/lib/api'
+import { useSessionStore } from '@/store/session'
+import { fetchAgentActivityRuns, fetchAgents } from '@/lib/api'
 import type { Agent, ToolCall } from '@/lib/api'
+import type { AgentActivityRun } from '@/lib/api/generated/openapi-types'
 
 export type ActivityStatus = 'running' | 'success' | 'error' | 'cancelled' | 'interrupted' | 'timeout' | 'parked'
 
@@ -164,7 +166,57 @@ export interface JudgeActivityItem {
   durationMs?: undefined
 }
 
-export type ActivityItem = AgentActivityItem | BashActivityItem | JudgeActivityItem
+/**
+ * FR-033: one open task or scheduler run for the active agent
+ * (GET /agents/{id}/activity-runs), shown even when the current chat spawned
+ * nothing. A `main` run is one MAIN row, never a task row plus a child row.
+ */
+export interface TaskRunActivityItem {
+  kind: 'task'
+  key: string // run_id
+  taskLabel: string
+  status: ActivityStatus
+  /** The run's session lifecycle: queued and waiting rows are not executing. */
+  runState: AgentActivityRun['state']
+  runKind: AgentActivityRun['kind']
+  mode: AgentActivityRun['mode']
+  taskId?: string
+  agentId?: string
+  agentName: string
+  /** The assignee, when known — its avatar is drawn with AgentMark. */
+  agent?: Agent
+  /** The run's own session - the target of the Open control. */
+  sessionId?: string
+  /** Provider-run tokens still available. null / undefined = UNKNOWN, never zero (BDD-10.3). */
+  availableTokens?: number | null
+  durationMs?: number
+}
+
+/**
+ * FR-013 / U4: a child's report the server refused at an inbox cap and did not
+ * save, from the span's `subagent_message` of kind `not_delivered`. Always
+ * terminal; a refusal is not an agent failure, so it never raises the failed pill.
+ */
+export interface NotDeliveredActivityItem {
+  kind: 'not_delivered'
+  key: string
+  taskLabel: string
+  status: ActivityStatus
+  agentId?: string
+  agentName: string
+  agent?: Agent
+  /** The server-authored line; never the refused body. */
+  text?: string
+  at: string
+  durationMs?: undefined
+}
+
+export type ActivityItem =
+  | AgentActivityItem
+  | BashActivityItem
+  | JudgeActivityItem
+  | TaskRunActivityItem
+  | NotDeliveredActivityItem
 
 export interface RunningActivity {
   runningCount: number
@@ -518,6 +570,29 @@ function groupBashSessions(orderedCalls: ToolCall[]): Map<string, BashSessionSta
 // started — D7 table) must NOT count as running activity, and the former
 // guessed `span.status` fallback is removed. A missing/unknown state maps to
 // 'parked' — pending, not executing.
+/** Map one wire run onto its Activity row. Queued/waiting runs are parked, not executing. */
+function taskRunItem(run: AgentActivityRun, agents: Agent[]): TaskRunActivityItem {
+  const resolved = resolveAgent(run.agent_id, agents)
+  const startedAt = Date.parse(run.started_at)
+  return {
+    kind: 'task',
+    key: run.run_id,
+    taskLabel: run.mode === 'main' ? `MAIN · ${run.task_title}` : run.task_title,
+    status: run.state === 'running' ? 'running' : 'parked',
+    runState: run.state,
+    runKind: run.kind,
+    mode: run.mode,
+    taskId: run.task_id,
+    agentId: run.agent_id,
+    agentName: resolved.agentName,
+    agent: resolved.agent,
+    sessionId: run.session_id,
+    // The endpoint carries no token figure (descoped): unknown, never zero.
+    availableTokens: null,
+    durationMs: run.state === 'running' && !Number.isNaN(startedAt) ? Math.max(0, Date.now() - startedAt) : undefined,
+  }
+}
+
 function activityStatusForSpan(span: SubagentSpan): ActivityStatus {
   switch (span.lifecycleState) {
     case 'running': return 'running'
@@ -541,6 +616,17 @@ export function useRunningActivity(): RunningActivity {
     queryKey: ['agents'],
     queryFn: fetchAgents,
     staleTime: 30_000,
+  })
+
+  // FR-033: the active agent's open task/scheduler runs. Polled while the
+  // activity surface is mounted; a failed poll leaves the last rows in place.
+  const activeAgentId = useSessionStore((s) => s.activeAgentId)
+  const { data: activityRuns } = useQuery({
+    queryKey: ['agent-activity-runs', activeAgentId],
+    queryFn: () => fetchAgentActivityRuns(activeAgentId as string),
+    enabled: !!activeAgentId,
+    refetchInterval: 5_000,
+    staleTime: 2_000,
   })
 
   // 1Hz re-render tick so running-item elapsed time stays live. Mirrors the
@@ -615,6 +701,29 @@ export function useRunningActivity(): RunningActivity {
     } else {
       finishedCandidates.push({ item, time: observeFinishedAt(span.spanId), seq: finishedSeq++ })
     }
+    if (span.notDelivered) {
+      const refusal: NotDeliveredActivityItem = {
+        kind: 'not_delivered',
+        key: `${span.spanId}:not_delivered`,
+        taskLabel: span.taskLabel,
+        status: 'cancelled',
+        agentId: effectiveAgentId,
+        agentName: resolved.agentName,
+        agent: resolved.agent,
+        text: span.notDelivered.text,
+        at: span.notDelivered.at,
+      }
+      const refusedAt = Date.parse(span.notDelivered.at)
+      finishedCandidates.push({ item: refusal, time: Number.isNaN(refusedAt) ? observeFinishedAt(refusal.key) : refusedAt, seq: finishedSeq++ })
+    }
+  }
+
+  // A MAIN run that is already this chat's child span is that span's row, not a
+  // second one (FR-033 "one MAIN row, no task+child duplicate").
+  const spawnedSessionIds = new Set(agentSpans.flatMap((s) => (s.childSessionId ? [s.childSessionId] : [])))
+  for (const run of activityRuns ?? []) {
+    if (run.session_id && spawnedSessionIds.has(run.session_id)) continue
+    running.push(taskRunItem(run, agents))
   }
 
   for (const [sessionId, session] of bashSessions) {
