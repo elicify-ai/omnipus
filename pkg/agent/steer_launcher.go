@@ -514,12 +514,12 @@ func (l *SteerLauncher) launchSteered(
 			// pkg/tools/delegate_followup.go::cloneCorrectiveSessionIdentity,
 			// which migrated the identical read the same way.
 			parentAgentID := strings.TrimSpace(steererMeta.AgentID)
-			if parentAgentID == "" && l.al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID() {
-				return nil, fmt.Errorf("steer: launch: %w: delegating agent identity is empty", steer.ErrInvalidEdge)
-			}
+			// Founder ruling 2026-10-10: the delegation policy always applies.
+			// A launch with no identified delegating agent cannot be matched
+			// against any caller->target edge, so it is refused here, before
+			// anything is created. No configuration value changes this.
 			if parentAgentID == "" {
-				logger.WarnCF("agent", "steer: launch: accepting empty parent agent identity by operator configuration",
-					map[string]any{"session_id": req.SteeringSessionID, "config": "tools.delegate.require_parent_agent_id"})
+				return nil, fmt.Errorf("steer: launch: %w: delegating agent identity is empty", steer.ErrInvalidEdge)
 			}
 			workspaceID := steererMeta.WorkspaceID
 			reportingChannel, reportingChatID := reportingTargetFor(steererMeta, req.SteeringSessionID)
@@ -905,16 +905,11 @@ func (l *SteerLauncher) startingRemainingDepth(
 	// no edge is required. Every other launch IS graph-gated and fails closed.
 	taskSelfExempt := originKind == steer.OriginKindTask && targetAgentID == steererRec.AgentID
 
-	// A launch with an EMPTY caller identity cannot be matched against a
-	// caller→target edge at all. It is reachable only when the operator has
-	// explicitly turned OFF tools.delegate.require_parent_agent_id — the
-	// fail-closed guard in launchSteered refuses an empty identity otherwise —
-	// so the operator's override stands and the graph gate does not apply. This
-	// keeps the documented kill-switch behaviour: with the requirement off, a
-	// degraded/identity-less launch still runs on the global/inherited budget.
-	// (It is NOT a general exemption: an IDENTIFIED caller is always gated.)
-	callerIdentified := steererRec.AgentID != ""
-	graphGated := callerIdentified && !taskSelfExempt
+	// The graph gate does not depend on caller identification: launchSteered
+	// refuses a launch with no identified caller before reaching this point,
+	// and a record that nevertheless arrives here without an AgentID is gated
+	// like any other (it cannot match an edge, so it fails closed).
+	graphGated := !taskSelfExempt
 
 	// Resolve the governing workspace EXACTLY as the gate did. An unbound turn
 	// resolves to the is_default workspace rather than skipping the graph read,
