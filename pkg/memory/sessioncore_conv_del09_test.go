@@ -35,8 +35,8 @@ func TestSessionCoreConv_Del09MigrateFromJSONIsAbsent(t *testing.T) {
 
 	// Instrument controls: a kept symbol reads present; a fabricated name reads
 	// absent, so the verdict below is a real absence.
-	require.True(t, decls["NewJSONLStore"],
-		"control: the scanner sees a real pkg/memory declaration (NewJSONLStore)")
+	require.True(t, decls["ArchivedMessage"],
+		"control: the scanner sees a real pkg/memory declaration (ArchivedMessage)")
 	require.False(t, decls["convDel09AbsenceSentinel"],
 		"control: a fabricated name must read absent")
 

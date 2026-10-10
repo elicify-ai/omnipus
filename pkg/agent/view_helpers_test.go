@@ -54,6 +54,13 @@ func scanJSONLRangeFixture(ctx context.Context, r io.Reader, from, to int, fn fu
 // (session-core DEL-12/DEL-10): it appends one MODEL message through the
 // checked model seam and returns the bounded view after the append.
 func appendWindowMsg(store session.ContextWindowStore, ctx context.Context, key string, msg providers.Message) (session.WindowView, error) {
+	// A real UnifiedStore's own append resolves the issuing assistant for a
+	// role:"tool" message from the window (the legacy SessionWriter seam), which
+	// is what the deleted AppendWindowMessage offered.
+	if us, ok := store.(*session.UnifiedStore); ok {
+		us.AddFullMessage(key, msg)
+		return store.WindowView(ctx, key)
+	}
 	_, view, err := store.AppendModelMessage(ctx, key, session.ModelAppend{
 		Message: msg, ViewMembership: session.ViewMembershipModel, Source: session.EntrySource{Kind: entrySourceKind(msg.Role)},
 	})

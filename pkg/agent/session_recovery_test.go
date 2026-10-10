@@ -346,12 +346,10 @@ func TestRecovery_StripOrphanedTurn_NoOpOnHistoryWithNoToolCalls(t *testing.T) {
 func TestRecovery_RecoverOrphaned_ExistingMarkerNoNewOrphan_CleanViewNoNewRecord(t *testing.T) {
 	storage := t.TempDir()
 	store := recoveryStore(t, storage)
-	// Fixture property, not an oracle: the audited scenario is the
-	// no-checkpoint fallback path. Fails loudly if the store ever grows
-	// checkpoint support and this leaf silently stops covering that path.
-	var checkpointLess session.SessionStore = store
-	_, hasCheckpoints := checkpointLess.(session.ContextWindowStore)
-	require.False(t, hasCheckpoints, "fixture must stay checkpoint-less: only there is the returned slice the authority")
+	// session-core DEL-10: the one shared store is always a ContextWindowStore,
+	// so the old checkpoint-less SessionManager fixture cannot be built; the
+	// assertions below (idempotency, marker preservation, archive retention)
+	// still hold on the checkpointed store.
 
 	const sessionKey = "test-premarked-no-new-orphan"
 	// Session recovered once earlier (marker persisted), one clean turn after.
