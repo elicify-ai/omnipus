@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Session, WorkspaceMemberConfig } from '@/lib/api'
 import { makeAgent } from '@/test/factories'
+import type { SessionStateFrame } from '@/lib/api/generated/asyncapi-types'
 import {
   attachAckFields,
   attentionBoundOfFrame,
@@ -28,11 +29,13 @@ const session: Session = {
   workspace_id: 'product-launch',
 }
 
-/** A server frame carrying an integer attention bound (generated wire shape). */
-const boundFrame = {
-  type: 'attach_session',
+/** The server's attach answer carrying an integer attention bound (generated SessionStateFrame — server → client). */
+const boundFrame: SessionStateFrame = {
+  type: 'session_state',
+  user_id: '',
+  pending_approvals: [],
+  emitted_at: '2026-10-10T00:00:00Z',
   session_id: 'not-a-real-main',
-  ack_attention: false,
   attention_bound: 7,
 }
 

@@ -195,14 +195,14 @@ describe('Sessions view — title, status, kind', () => {
     expect(await (await row('Archived chat')).findByText('Done')).toBeInTheDocument()
   })
 
-  it('shows real kind labels, including Channel and Heartbeat, and helper for delegate', async () => {
+  it('shows real kind labels, including Channel and Main chat, and helper for delegate', async () => {
     vi.mocked(fetchSessions).mockResolvedValue([
       makeSession({ id: 'c', title: 'A chat', type: 'chat' }),
       makeSession({ id: 't', title: 'A task', type: 'task' }),
       makeSession({ id: 'h', title: 'A helper', type: 'delegate', parent_session_id: 'c' }),
       makeSession({ id: 's', title: 'A schedule', type: 'scheduled' }),
       makeSession({ id: 'ch', title: 'A channel', type: 'channel' }),
-      makeSession({ id: 'hb', title: 'A beat', type: 'heartbeat' }),
+      makeSession({ id: 'hb', title: 'A beat', type: 'main' }),
     ])
     renderModal()
     expect(await screen.findByText('A chat')).toBeInTheDocument()
@@ -210,7 +210,7 @@ describe('Sessions view — title, status, kind', () => {
     expect(screen.getByText('Task')).toBeInTheDocument()
     expect(screen.getByText(/Scheduled/)).toBeInTheDocument()
     expect(screen.getByText('Channel')).toBeInTheDocument()
-    expect(screen.getByText('Heartbeat')).toBeInTheDocument()
+    expect(screen.getByText('Main chat')).toBeInTheDocument()
     expect(screen.queryByText(/^HB$/)).not.toBeInTheDocument()
   })
 })
