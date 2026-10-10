@@ -552,8 +552,9 @@ func TestU5b_N7_SteeredSessionLaterEntryRefusesWithoutDriver_RealDispatch(t *tes
 	sessKey := externalRunSessionKey(ts)
 	// A steered, NON-task durable record → the production determination is true.
 	u5bSeedSteered(t, al, sessKey, ts.agentID, false)
-	require.True(t, al.externalRunResumeOnly(sessKey),
-		"precondition: a steered non-task session must determine resume-only")
+	ro, roErr := al.externalRunResumeOnly(sessKey)
+	require.NoError(t, roErr)
+	require.True(t, ro, "precondition: a steered non-task session must determine resume-only")
 
 	// A factory handing out one DISTINCT driver per construction: its Run/Resume
 	// return an ALREADY-CLOSED stream (so drainExternalRun never blocks) and its

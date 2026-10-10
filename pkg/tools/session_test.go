@@ -79,8 +79,10 @@ func TestProcessSession_IsDone(t *testing.T) {
 	session.Status = "done"
 	require.True(t, session.IsDone())
 
+	// DEL-27/28/29 (U15): StatusExited was deleted, so "exited" is no longer a
+	// terminal status IsDone recognises — it must NOT report done.
 	session.Status = "exited"
-	require.True(t, session.IsDone())
+	require.False(t, session.IsDone())
 
 	session.Status = "canceled"
 	require.True(t, session.IsDone())
