@@ -707,6 +707,10 @@ func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string,
 	// mislabelled (gate SFH#6).
 	al.clearRevivalFailure(sessionID)
 	al.resetUnifiedMetaStatusActive(sessionID)
+	// NEW-5/NEW-6: the hold now names the turn that will consume it, so only that
+	// turn (reaching the holder, or ending) retires it; a failed dispatch below
+	// still cancels this revival's own hold through the deferred owner-clear.
+	externalHold.bind(newGeneration)
 	// al.dispatchSteeredSession IS steer.SessionLauncher.Dispatch's own body
 	// (SteerLauncher.Dispatch, steer_launcher.go: "a thin delegate onto
 	// AgentLoop.dispatchSteeredSession") — called directly here, exactly as
