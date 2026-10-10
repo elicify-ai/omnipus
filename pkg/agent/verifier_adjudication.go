@@ -2051,17 +2051,6 @@ func (al *AgentLoop) dispatchVerifierTurn(
 	if delegationDepth > 0 {
 		ts.depth = delegationDepth
 	}
-	if opts.TranscriptSessionID != "" {
-		resolverKey := "session:" + opts.TranscriptSessionID
-		ts.activeAgentResolver = func() string {
-			if v, ok := al.sessionActiveAgent.Load(resolverKey); ok {
-				if id, ok := v.(string); ok && id != "" {
-					return id
-				}
-			}
-			return ""
-		}
-	}
 
 	// JUDGE-FR-051/FR-052: the caps come from the OPERATOR's JudgeConfig via
 	// its Effective* accessors — never a second copy of the default/clamp

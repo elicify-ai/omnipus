@@ -491,12 +491,39 @@ func (pe *PlanEngine) dispatchReadyMembers(ctx context.Context, planID string, t
 	// authority is unchanged: the explicit cancel func TaskExecutor stores in
 	// te.running[taskID], which the plan-scoped Stop fan-out drives.
 	dispatchCtx := context.WithoutCancel(ctx)
+
+	// A plan an agent approved carries its initiator; each member is authorized
+	// against it, with the live graph, as it is dispatched (executeTask). A
+	// plan a person approved or played carries none. If the plan cannot be read
+	// the initiator is unknown, so nothing is dispatched.
+	var initiator *task.Initiator
+	if pe.planStore != nil {
+		p, err := pe.planStore.Get(planID)
+		if err != nil {
+			logger.ErrorCF("plan_engine", "plan unreadable at member dispatch; not dispatching",
+				map[string]any{"plan_id": planID, "error": err.Error()})
+			return false
+		}
+		initiator = p.InitiatedBy
+	}
+	initiated, canInitiate := pe.dispatcher.(planInitiatedDispatcher)
 	for i := range tasks {
 		t := &tasks[i]
 		if t.Status != task.StatusNext {
 			continue
 		}
-		if err := pe.dispatcher.executeTaskPlanVerified(dispatchCtx, t.ID); err != nil {
+		var err error
+		switch {
+		case initiator == nil:
+			err = pe.dispatcher.executeTaskPlanVerified(dispatchCtx, t.ID)
+		case !canInitiate:
+			logger.ErrorCF("plan_engine", "dispatcher cannot carry the plan's initiating agent; refusing to dispatch",
+				map[string]any{"plan_id": planID, "task_id": t.ID})
+			continue
+		default:
+			err = initiated.executeTaskPlanInitiated(dispatchCtx, t.ID, initiator)
+		}
+		if err != nil {
 			logger.WarnCF("plan_engine", "member task dispatch failed (will retry)",
 				map[string]any{"plan_id": planID, "task_id": t.ID, "error": err.Error()})
 			continue
@@ -749,7 +776,10 @@ func (pe *PlanEngine) PlayPlan(ctx context.Context, planID string) (*PlayResult,
 	// (plan.ValidateRestartTransition). This is the same gate the REST
 	// /restart endpoint uses.
 	approved := plan.StateApproved
-	if _, updateErr := pe.planStore.Update(planID, plan.Patch{State: &approved}); updateErr != nil {
+	// A person playing the plan takes over its authority: clear any agent
+	// initiator in the same write, so members dispatch as a person's start.
+	var personStart *task.Initiator
+	if _, updateErr := pe.planStore.Update(planID, plan.Patch{State: &approved, InitiatedBy: &personStart}); updateErr != nil {
 		return nil, fmt.Errorf("plan_engine: PlayPlan: restart transition: %w", updateErr)
 	}
 

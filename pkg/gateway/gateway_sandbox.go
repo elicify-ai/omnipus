@@ -235,17 +235,15 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 // to paper over.
 //
 // Order matters and must not be reshuffled (each step's own doc comment
-// explains why it must run where it does):
-//  1. config.MigrateLegacyToolPolicyKeys — rename retired keys forward first,
-//     so step 2 never reconciles a "missing" entry for a name that was only
-//     missing because it hadn't been renamed yet.
-//  2. config.ReconcileToolPolicyCeiling (ADR-076) — backfill the GLOBAL
+// explains why it must run where it does). There is no legacy key remapping
+// (session-core DEL-21): retired saved keys are inert and never rewritten.
+//  1. config.ReconcileToolPolicyCeiling (ADR-076) — backfill the GLOBAL
 //     ceiling with the real shipped default for any static builtin tool
 //     added to pkg/config/defaults.go since this install's config.json was
 //     last written, so newly-added tools resolve to their intended
 //     allow/ask/deny posture from the ceiling itself.
-//  3. config.ValidateToolPolicyCoverage — a never-firing correctness
-//     tripwire (ADR-077 D4): after step 2 guarantees ceiling completeness
+//  2. config.ValidateToolPolicyCoverage — a never-firing correctness
+//     tripwire (ADR-077 D4): after step 1 guarantees ceiling completeness
 //     for the static catalog, a both-sides gap can only mean a genuine
 //     internal drift (a catalog tool with no defaults.go entry), so this
 //     aborts boot loudly rather than resolving silently.
@@ -254,22 +252,11 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 // what "remaining gaps" means for it (abort boot vs. reject the reload and
 // keep serving the previous config).
 func repairAndValidateToolPolicyCoverage(cfg *config.Config) []config.CoverageGap {
-	// ADR-071 §5.3.5a: this migration MUST run FIRST, before the ceiling is
-	// reconciled below. ToolSearch/switch_agent are new names with no policy
-	// entry anywhere until this migration folds the retired load_tool /
-	// hand_off / return_to_default keys forward. Sequenced any later, the
-	// first post-upgrade boot would reconcile a "missing" entry under the
-	// stale name instead of recognizing it as already migrated.
-	if config.MigrateLegacyToolPolicyKeys(cfg) {
-		slog.Info("gateway: migrated legacy tool-policy keys to their ADR-071 replacements",
-			"migrations", "load_tool->ToolSearch, hand_off/return_to_default->switch_agent",
-		)
-	}
 	knownTools := buildKnownBuiltinToolNames()
 
 	// ADR-076: reconcile the GLOBAL ceiling against the shipped static-catalog
-	// defaults. Must run after the legacy-key migration (a renamed key must
-	// not be re-added under its old name). Under ADR-077, this reconciled
+	// defaults. Retired keys are absent from knownTools, so they are never
+	// re-added. Under ADR-077, this reconciled
 	// ceiling IS the default for every tool a per-agent map does not mention
 	// — there is no further backfill step after this one.
 	if added := config.ReconcileToolPolicyCeiling(cfg, knownTools); len(added) > 0 {

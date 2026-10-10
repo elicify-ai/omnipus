@@ -36,7 +36,7 @@ func TestToolManifestTier_FullSetExact(t *testing.T) {
 		"library_read", "list_agents", "list_directory", "list_jobs", "list_mounts",
 		"list_tasks", "message_parent", "plan_correct", "read_file", "recall_conversation",
 		"recall_memory", "remember", "search_web", "send_file", "send_message",
-		"set_goal", "set_todos", "stop_plan", "switch_agent", "update_task", "write_file",
+		"set_goal", "set_todos", "stop_plan", "update_task", "write_file",
 	}
 	for _, n := range specFull {
 		if ToolManifestTier(n) != ManifestFull {

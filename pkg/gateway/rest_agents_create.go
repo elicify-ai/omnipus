@@ -16,7 +16,6 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/google/uuid"
 )
 
@@ -267,11 +266,6 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 	pap.name = strings.TrimSpace(pap.name)
 	if pap.name == "" {
 		jsonErr(pap.cra.w, http.StatusUnprocessableEntity, "name is required")
-		return true
-	}
-	if strings.EqualFold(pap.name, tools.SwitchAgentDefaultTarget) {
-		jsonErr(pap.cra.w, http.StatusBadRequest,
-			fmt.Sprintf("agent name %q is reserved — it collides with switch_agent's target:%q sentinel", pap.name, tools.SwitchAgentDefaultTarget))
 		return true
 	}
 	if pap.createType == config.AgentTypeWorker && wireType == string(gen.AgentTypeSubagent3p) {

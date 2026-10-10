@@ -35,16 +35,6 @@ import (
 // left "class not yet assigned by the W5 audit" on their generated types
 // pending this classification, verified 2026-08 against this tree:
 //
-//   - agent_switched → class (a). Built at this file's ToolExecEnd case
-//     (below, evtSID := p.SessionID from agent.ToolExecEndPayload) immediately
-//     after a successful switch_agent tool_call_result (ADR-071 D4 merged
-//     hand_off/return_to_default into this one tool) — the IDENTICAL payload
-//     and session-id source as tool_call_result, which is already verified
-//     class (a). A delegated child can invoke switch_agent on its own session
-//     exactly as a root turn can, so evtSID is the child's own producing
-//     session whenever that happens, distinct from the routing key. Stamped
-//     alongside tool_call_result above.
-//
 //   - task_status_changed → class (b). Its only non-test construction site is
 //     `TaskStatusChangedFrame{..., SessionId: p.SessionID, ...}` (this file's
 //     EventKindTaskStatusChanged case), fed solely by

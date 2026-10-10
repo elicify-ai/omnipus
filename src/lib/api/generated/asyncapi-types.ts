@@ -36,7 +36,6 @@ export type WsFrameType =
   | "context_window_notice"
   | "provider_fallback"
   | "media"
-  | "agent_switched"
   | "tool_approval_required"
   | "tool_approval_resolved"
   | "session_state"
@@ -533,15 +532,6 @@ export interface MediaFrame {
   type: "media";
   session_id: string;
   parts: Array<MediaPart>;
-  seq?: number;
-}
-
-export interface AgentSwitchedFrame {
-  type: "agent_switched";
-  session_id: string;
-  agent_id?: string;
-  message?: string;
-  producing_session_id?: string;
   seq?: number;
 }
 
@@ -1210,7 +1200,6 @@ export type WsFrame =
   | ProviderFallbackNote
   | LibraryChangedFrame
   | MediaFrame
-  | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
@@ -1315,7 +1304,6 @@ export type ServerFrame =
   | ProviderFallbackNote
   | LibraryChangedFrame
   | MediaFrame
-  | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame

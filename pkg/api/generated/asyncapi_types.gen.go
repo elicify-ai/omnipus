@@ -21,18 +21,6 @@ type AgentCreatedFrame struct {
 	Type    string `json:"type"`
 }
 
-// AgentSwitchedFrame — Server → client active agent changed. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
-type AgentSwitchedFrame struct {
-	AgentId *string `json:"agent_id,omitempty"`
-	Message *string `json:"message,omitempty"`
-	// ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit (FR-089) — see this frame's description.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/AgentSwitchedFrame.yaml.
-	Seq       *int64 `json:"seq,omitempty"`
-	SessionId string `json:"session_id"`
-	Type      string `json:"type"`
-}
-
 // AskUserAnswerFrame — Client → server (askuserquestion-tool-spec v3 §3). The card's submission: either a full answer set (every question answered exactly once — server-validated by askuser.Registry.Submit, first-valid-wins) or cancel:true (the Cancel affordance — selections discarded, submission-free cancelled resume). Canonical copy — keep in sync by hand with components/schemas/AskUserAnswerFrame.yaml.
 type AskUserAnswerFrame struct {
 	Answers []struct {
@@ -1470,7 +1458,6 @@ const (
 	WsFrameTypeContextWindowNotice      WsFrameType = "context_window_notice"
 	WsFrameTypeProviderFallback         WsFrameType = "provider_fallback"
 	WsFrameTypeMedia                    WsFrameType = "media"
-	WsFrameTypeAgentSwitched            WsFrameType = "agent_switched"
 	WsFrameTypeToolApprovalRequired     WsFrameType = "tool_approval_required"
 	WsFrameTypeToolApprovalResolved     WsFrameType = "tool_approval_resolved"
 	WsFrameTypeSessionState             WsFrameType = "session_state"

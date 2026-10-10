@@ -59,7 +59,7 @@ func agentExistsChecker(registry *AgentRegistry) func(id string) bool {
 		// establishes this exact "ask the durable entity store, not the
 		// possibly-stale in-memory view" precedent) can be real on disk
 		// before the registry catches up. Without this fallback, a
-		// delegate/switch_agent call landing in that window reports the
+		// delegate call landing in that window reports the
 		// misleading "agent %q does not exist" — masking the actual denial
 		// reason (e.g. a missing trust edge) a UAT run observed when the
 		// target agent, in fact, existed. Best-effort: a store read error
@@ -248,6 +248,20 @@ func enforceEdgeModeAndDepth(
 	mode config.DelegationMode,
 	globalDepthCap int,
 ) *tools.DelegationDenial {
+	return enforceEdgeModeAndDepthAt(edge, callerAgentID, targetAgentID, mode, globalDepthCap, currentDelegationDepth(ctx))
+}
+
+// enforceEdgeModeAndDepthAt is enforceEdgeModeAndDepth with the caller's chain
+// depth passed explicitly rather than read from a turn on ctx — the form
+// authorizeInitiatedRun needs, because a task or plan start is not made from
+// the turn that carries the depth.
+func enforceEdgeModeAndDepthAt(
+	edge *workspace.DelegationEdge,
+	callerAgentID, targetAgentID string,
+	mode config.DelegationMode,
+	globalDepthCap int,
+	currentDepth int,
+) *tools.DelegationDenial {
 	// Modes. Empty edge.Modes ⇒ all modes allowed (handled by the len > 0 guard).
 	// Otherwise compare the edge's collapsed vocabulary against mode's category,
 	// not mode itself.
@@ -310,7 +324,7 @@ func enforceEdgeModeAndDepth(
 	// durable depth budget, and advertised cap are never computed independently
 	// (#477, FR-D9/FR-D10).
 	depthCap := resolveEffectiveDelegationDepth(edge.Depth, globalDepthCap)
-	if d := currentDelegationDepth(ctx); d >= depthCap {
+	if d := currentDepth; d >= depthCap {
 		logger.WarnCF("agent", "delegation denied: max delegation depth exceeded", map[string]any{
 			"agent_id": callerAgentID, "target": targetAgentID, "mode": string(mode),
 			"current_depth": d, "max_depth": depthCap,

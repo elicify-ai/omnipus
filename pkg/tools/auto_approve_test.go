@@ -40,7 +40,6 @@ var founderRunsNames = []string{
 	"search_email",
 	"read_message",
 	"delegate",
-	"switch_agent",
 	"message_parent",
 	"list_agents",
 	"create_plan",

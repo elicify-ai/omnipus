@@ -24,14 +24,13 @@ import (
 func makeSession(id, agentID string, tokensIn, tokensOut int, updatedAt time.Time) *session.UnifiedMeta {
 	sm := &session.UnifiedMeta{
 		SessionMeta: session.SessionMeta{
-			ID:            id,
-			AgentID:       agentID,
-			ActiveAgentID: agentID,
-			AgentIDs:      []string{agentID},
-			Status:        "active",
-			Channel:       "webchat",
-			CreatedAt:     updatedAt,
-			UpdatedAt:     updatedAt,
+			ID:        id,
+			AgentID:   agentID,
+			AgentIDs:  []string{agentID},
+			Status:    "active",
+			Channel:   "webchat",
+			CreatedAt: updatedAt,
+			UpdatedAt: updatedAt,
 			Stats: session.SessionStats{
 				TokensIn:    tokensIn,
 				TokensOut:   tokensOut,

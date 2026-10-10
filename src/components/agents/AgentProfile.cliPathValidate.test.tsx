@@ -67,6 +67,8 @@ const mockExternalAgent: Agent = {
   name: 'External Worker',
   type: 'subagent_3p',
   locked: false,
+  figure: 'Robot',
+  role: 'general',
   needs_model: false,
   status: 'active',
   model: 'claude-sonnet-4-6',

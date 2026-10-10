@@ -38,7 +38,7 @@ const mockSkills = [
 // files should mean the same thing everywhere, so "max" is a worker in both
 // files, never a chat-eligible agent in either.
 const mockAgents: Agent[] = [
-  makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#111111', description: 'Assistant' }),
+  makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', color: '#9CA3AF', description: 'Assistant' }),
   makeAgent({ id: 'jim', name: 'Jim', type: 'core', status: 'idle', description: 'Orchestrator' }),
   makeAgent({ id: 'mars', name: 'Mars', type: 'Main', status: 'active', description: 'Ops lead' }),
   makeAgent({ id: 'max', name: 'Max Worker', type: 'Subagent', status: 'active', description: 'Labour agent' }),
@@ -1482,7 +1482,7 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
     const item = result.current.slashItems[0]
     expect(item.label).toBe('@Mia')
     expect(item.description).toBe('Assistant')
-    expect(item.agentColor).toBe('#111111')
+    expect(item.agentColor).toBe('#9CA3AF')
   })
 
   it('"/" and "@" triggers never mix — "/" still shows commands+skills, unaffected by agent data', () => {

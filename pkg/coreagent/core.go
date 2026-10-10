@@ -323,8 +323,7 @@ func Admin() *CoreAgent {
 // tier (Type=worker), NOT a base/core agent: never a chat target, no heartbeat,
 // never the default, invoked only via delegation. It carries a native executor
 // (set in SeedConfig) and a leaner tool set focused on getting one delegated
-// task done and reporting back. No switch_agent tool — a worker does not
-// steer conversation.
+// task done and reporting back.
 func Worker() *CoreAgent {
 	return &CoreAgent{
 		ID:       IDWorker,

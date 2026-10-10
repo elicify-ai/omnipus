@@ -133,13 +133,29 @@ func TestAgentDelete_PreservesSharedSession(t *testing.T) {
 		t.Fatalf("test setup: create session: %v", metaErr)
 	}
 	sessionID := meta.ID
-	// A mid-conversation agent switch makes this a MULTI-agent (joined)
-	// session: AgentIDs becomes ["victim","survivor"].
-	if err := sessStore.SwitchAgent(sessionID, "survivor"); err != nil {
-		t.Fatalf("test setup: switch agent: %v", err)
-	}
 	if err := sessStore.Close(); err != nil {
 		t.Fatalf("test setup: close session store: %v", err)
+	}
+	// Make this a MULTI-agent (joined) session: AgentIDs becomes
+	// ["victim","survivor"]. The switch_agent tool and UnifiedStore.SwitchAgent
+	// that used to produce this state are deleted (session-core DEL-07), so the
+	// fixture writes the identity file's agent_ids directly.
+	metaPath := filepath.Join(home, "sessions", sessionID, "meta.json")
+	rawMeta, readErr := os.ReadFile(metaPath)
+	if readErr != nil {
+		t.Fatalf("test setup: read meta.json: %v", readErr)
+	}
+	var metaDoc map[string]any
+	if err := json.Unmarshal(rawMeta, &metaDoc); err != nil {
+		t.Fatalf("test setup: parse meta.json: %v", err)
+	}
+	metaDoc["agent_ids"] = []string{"victim", "survivor"}
+	patched, marshalErr := json.Marshal(metaDoc)
+	if marshalErr != nil {
+		t.Fatalf("test setup: marshal meta.json: %v", marshalErr)
+	}
+	if err := os.WriteFile(metaPath, patched, 0o600); err != nil {
+		t.Fatalf("test setup: write meta.json: %v", err)
 	}
 
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{

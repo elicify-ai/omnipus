@@ -18,7 +18,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/entity"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // firstForbiddenSubagent3pField moved to agent_field_rules.go (W2a) — it now
@@ -242,17 +241,6 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	}
 	if uf.ru.req.ToolsCfg != nil && uf.ru.req.ToolPolicyChanges != nil {
 		jsonErr(uf.w, http.StatusBadRequest, "tools_cfg and tool_policy_changes cannot be supplied together")
-		return true
-	}
-	// ADR-071 §5.1.3 part 2: "default" (case-insensitive) is reserved — see
-	// the identical check in createAgent for the full rationale. An agent's
-	// id is never editable via PUT (it comes from the URL path, matched
-	// against cfg.Agents.List above), so only the name half is reachable
-	// here too; a pre-existing agent literally id'd "default" is covered by
-	// the boot-time WARN (part 3), not this rejection.
-	if uf.ru.req.Name != nil && strings.EqualFold(strings.TrimSpace(*uf.ru.req.Name), tools.SwitchAgentDefaultTarget) {
-		jsonErr(uf.w, http.StatusBadRequest,
-			fmt.Sprintf("agent name %q is reserved — it collides with switch_agent's target:%q sentinel", strings.TrimSpace(*uf.ru.req.Name), tools.SwitchAgentDefaultTarget))
 		return true
 	}
 	// Timestamp applied to the persisted agent on every successful save.

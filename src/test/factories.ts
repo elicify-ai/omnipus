@@ -31,6 +31,8 @@ export function makeAgent(overrides: Partial<Agent> = {}): Agent {
     name: 'Agent Fixture',
     type: 'Main',
     locked: false,
+    figure: 'Robot',
+    role: 'general',
     needs_model: false,
     status: 'active',
     soul: '',

@@ -170,6 +170,8 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     name: 'Ray',
     type: 'core',
     locked: true,
+    figure: 'Robot',
+    role: 'general',
     needs_model: false,
     status: 'active',
     soul: '',
