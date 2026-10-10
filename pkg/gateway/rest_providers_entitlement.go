@@ -282,7 +282,7 @@ func (a *restAPI) handleProviderEntitlement(w http.ResponseWriter, r *http.Reque
 		slog.Warn("rest: entitlement: upstream listing failed",
 			"provider", providerID, "error", err)
 		jsonErr(w, http.StatusBadGateway,
-			fmt.Sprintf("could not fetch upstream model list: %v", err))
+			"could not fetch upstream model list: the provider could not be reached. Details are in the server log.")
 		return
 	}
 

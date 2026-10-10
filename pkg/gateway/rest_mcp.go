@@ -21,6 +21,13 @@ import (
 
 // --- MCP Servers ---
 
+// mcpTestFailureText logs the real cause of an MCP connection-test failure and
+// returns the fixed diagnostic for the HTTP 200 response.
+func mcpTestFailureText(text, id string, cause error) string {
+	slog.Warn("rest: mcp server test failed", "id", id, "error", cause)
+	return text + "; details are in the server log."
+}
+
 // HandleMCPServers handles GET/POST /api/v1/mcp-servers and DELETE /api/v1/mcp-servers/{id}.
 // GET returns McpServer[] shaped from cfg.Tools.MCP.Servers (contracts/components/schemas/McpServer.yaml).
 // POST accepts McpServerCreate (contracts/components/schemas/McpServerCreate.yaml) and
@@ -571,7 +578,7 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, r *http.Request, id strin
 	if err != nil {
 		jsonOK(w, gen.McpServerTestResponse{
 			Success: false,
-			Message: fmt.Sprintf("env_file: %s", err.Error()),
+			Message: mcpTestFailureText("env_file could not be resolved. Check the env_file path and its permissions", id, err),
 		})
 		return
 	}
@@ -588,7 +595,7 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, r *http.Request, id strin
 	if err != nil {
 		jsonOK(w, gen.McpServerTestResponse{
 			Success: false,
-			Message: fmt.Sprintf("env credential reference: %s", err.Error()),
+			Message: mcpTestFailureText("an environment credential reference could not be resolved. Check that each referenced credential exists", id, err),
 		})
 		return
 	}
@@ -606,7 +613,7 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, r *http.Request, id strin
 	if err := tmpMgr.ConnectServer(ctx, id, resolvedSrv); err != nil {
 		resp := gen.McpServerTestResponse{
 			Success: false,
-			Message: fmt.Sprintf("connection failed: %s", err.Error()),
+			Message: mcpTestFailureText("connection failed: the server did not start or did not answer. Check its command, arguments and environment", id, err),
 		}
 		jsonOK(w, resp)
 		return
