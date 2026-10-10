@@ -7,7 +7,7 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { logDiagnostic } from '@/lib/telemetry'
 import { noteForegroundAttach } from '@/store/session/foregroundAck'
-import { runStartNewSession, type NewChatStartArg } from '@/store/session/newChatFlow'
+import { runStartNewSession, type NewChatOutcome, type NewChatStartArg } from '@/store/session/newChatFlow'
 import type { NewChatPrompt } from '@/store/session/newChatFlow'
 import { resumeWorkspaceEntryQueue, runWorkspaceEntry } from '@/store/session/workspaceEntryFlow'
 import type { WorkspaceEntryView } from '@/store/session/workspaceEntryFlow'
@@ -153,7 +153,7 @@ interface SessionStore {
   agentSelectionWorkspaceId: string | null
   /** The validated main id per `${workspaceId}::${agentId}`. An extra never replaces it. */
   mainPointerByPair: Record<string, string>
-  /** Set when + New chat must ask before abandoning an unconfirmed first send. */
+  /** Set when + New chat must ask before abandoning an unconfirmed first send. Read by the sidebar row's dialog (M7: newChatFlow is the decision's only owner). */
   newChatPrompt: NewChatPrompt | null
   /** Last workspace-entry decision. `sendEnabled: false` blocks send. */
   workspaceEntry: WorkspaceEntryView | null
@@ -195,10 +195,15 @@ interface SessionStore {
     agentId?: string
   ) => boolean
   setAttachedContext: (type: Session['type'], title: string | null) => void
+  /**
+   * The guarded + New chat action. newChatFlow is the single decision owner
+   * (M7); the return value is what it actually DID — callers navigate only
+   * on 'started'.
+   */
   startNewSession: (
     agentId?: NewChatStartArg,
     agentType?: AgentKind | null,
-  ) => void
+  ) => NewChatOutcome
   sessionByWorkspace: Record<string, WorkspaceSessionDescriptor | null>
   /**
    * Write a session descriptor for a specific workspace key directly, bypassing
@@ -337,10 +342,13 @@ function rememberMainPointer(
   get: () => SessionStore,
   set: (partial: Partial<SessionStore> | ((state: SessionStore) => Partial<SessionStore>)) => void,
   sessionId: string,
+  type: Session['type'],
 ): void {
   const workspaceId = useWorkspacesStore.getState().activeWorkspaceId
   const owner = get().activeAgentId
-  if (!workspaceId || !owner || !isMainSession({ id: sessionId })) return
+  // The record's own type decides — isMainSession reads type, not the bare id
+  // (M2: an id-only check is always false and the pointer is never written).
+  if (!workspaceId || !owner || !isMainSession({ id: sessionId, type })) return
   const key = `${workspaceId}::${owner}`
   set((state) => ({
     mainPointerByPair: { ...state.mainPointerByPair, [key]: sessionId },
@@ -523,7 +531,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         persistSessionByWorkspaceEntry(wsId, descriptor)
       }
       syncForeground()
-      rememberMainPointer(get, set, sessionId)
+      rememberMainPointer(get, set, sessionId, type)
       noteForegroundAttach(sessionId)
       setChatReplaying(true)
       if (entryWasBlocked) queueMicrotask(resumeWorkspaceEntryQueue)
@@ -563,7 +571,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         persistSessionByWorkspaceEntry(wsId, descriptor)
       }
       syncForeground()
-      rememberMainPointer(get, set, sessionId)
+      rememberMainPointer(get, set, sessionId, type)
       noteForegroundAttach(sessionId)
       if (entryWasBlocked) queueMicrotask(resumeWorkspaceEntryQueue)
       return true
@@ -571,7 +579,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   startNewSession: (agentId, agentType) => {
-    runStartNewSession(agentId, agentType)
+    return runStartNewSession(agentId, agentType)
   },
 
   setAttachedContext: (type, title) => {

@@ -25,6 +25,8 @@ export type EntryKind = 'workspace-name' | 'cold-reload' | 'login' | 'modal-swit
 export type PointerVerdict =
   | 'visible'
   | 'deleted'
+  /** M3: absent from a list the API itself marked incomplete — unknown, not deleted. */
+  | 'partial-list'
   | 'hidden'
   | 'forbidden'
   | 'timeout'
@@ -77,7 +79,10 @@ export type FailedAttempt = { // not-wire-format: client entry outcome that keep
 
 export type EntryResult = ExactEntry | WelcomeEntry | UnavailableEntry | FailedAttempt
 
-const TRANSPORT_FAILURE = new Set<PointerVerdict>(['timeout', 'offline', 'server-error'])
+// 'partial-list' rides here as a fail-safe: an unresolved partial-list verdict
+// must never reach the welcome path (that would overwrite a pointer the entry
+// could not actually check). workspaceEntryFlow resolves it before this point.
+const TRANSPORT_FAILURE = new Set<PointerVerdict>(['timeout', 'offline', 'server-error', 'partial-list'])
 
 function isRealPointer(id: string | null | undefined): id is string {
   return typeof id === 'string' && id !== '__pending' && id.trim() !== ''

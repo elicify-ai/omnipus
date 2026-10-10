@@ -9,22 +9,24 @@
  * pointer. Start a new chat abandons that client message id and starts an
  * extra owned by the row's agent, without replacing the main pointer.
  * A dialog opened against an older pending id cannot discard a newer message
- * that has since reused the pending slot. With no unconfirmed send, New chat
+ * that has since reused the pending slot — and the refusal is VISIBLE (M7: a
+ * warning toast), never a silent no-op. With no unconfirmed send, New chat
  * starts the extra directly.
  *
- * REAL: WorkspaceAgentList, ConfirmDialog, decideNewChat, beginPairExtra,
- * startNewSession, and the chat/session stores.
+ * REAL: WorkspaceAgentList, ConfirmDialog, newChatFlow (the decision's single
+ * owner), beginPairExtra, startNewSession, and the chat/session/ui stores.
  * MOCK: the router (navigation is a process edge) and the session-core seam
  * (the row's main id is not on the wire yet). The test never calls
- * startNewSession itself except to set up the stale-slot replacement the
- * deleted test performed with a real store action.
+ * startNewSession itself: the stale-slot fixture replaces the pending slot
+ * directly on the chat store, the way a late delivery acknowledgement would.
  *
  * Cases: Keep (negative), Start (exact abandon + owner), stale slot
- * (negative), no pending (direct extra). No sized numeric boundary.
- * Mutations that must die: confirm passes a string and returns; confirm
- * abandons whatever id is pending now; confirm starts the extra for the
- * previously active agent; decline clears the message. Proof of those
- * mutations is deferred to CHECK, except the red run of this file.
+ * (negative + visible refusal), no pending (direct extra). No sized numeric
+ * boundary. Mutations that must die: confirm passes a string and returns;
+ * confirm abandons whatever id is pending now; confirm starts the extra for
+ * the previously active agent; decline clears the message; the stale refusal
+ * stays silent. Proof of those mutations is deferred to CHECK, except the
+ * red run of this file.
  */
 import type { ReactNode } from 'react'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
@@ -34,6 +36,7 @@ import { makeAgent } from '@/test/factories'
 import { getMessages, useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { WorkspaceAgentList } from './WorkspaceAgentList'
 
@@ -245,6 +248,7 @@ describe('WorkspaceAgentList + New chat (FR-005, BDD-03.1, BDD-E02, N09)', () =>
     seam.mains.set(miaMember, MIA_MAIN)
     seam.mains.set(jimMember, JIM_MAIN)
     localStorage.clear()
+    useUiStore.setState({ toasts: [] })
   })
 
   afterEach(() => {
@@ -307,21 +311,43 @@ describe('WorkspaceAgentList + New chat (FR-005, BDD-03.1, BDD-E02, N09)', () =>
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
-  it('a stale Start a new chat cannot discard a newer message that reused the pending slot', () => {
+  it('a stale Start a new chat cannot discard a newer message that reused the pending slot, and says so', () => {
     armUnconfirmed('mia')
     const before = pointers()
     renderList()
     const dialog = openMiaNewChat()
 
-    const sender = { send: vi.fn().mockReturnValue(false), close: vi.fn(), isConnected: true as const }
+    // M7 fixture: the pending slot is replaced out from under the open dialog
+    // (a late acknowledgement or another send can do this) — without
+    // answering the question, which is now a real, consequential action.
     act(() => {
-      useConnectionStore.setState({
-        connection: sender as never,
-        isConnected: true,
-        connectionError: null,
+      useChatStore.setState({
+        pendingFirstSend: {
+          clientMessageId: NEW_ID,
+          payload: {
+            type: 'message',
+            content: NEW_TEXT,
+            client_message_id: NEW_ID,
+            agent_id: 'mia',
+          },
+          workspaceId: WS,
+          attemptGeneration: 2,
+          sessionId: null,
+          assistantPlaceholderId: 'asst-new',
+          status: 'unconfirmed',
+        },
+        abandonedFirstSendIds: [],
+        pendingKickoff: null,
+        isStreaming: false,
+        sessionsById: {},
       })
-      useSessionStore.getState().startNewSession({ choice: 'confirm' })
-      useChatStore.getState().sendMessage(NEW_TEXT, { clientMessageId: NEW_ID })
+      useChatStore.getState().appendMessage({
+        id: NEW_ID,
+        role: 'user',
+        content: NEW_TEXT,
+        timestamp: '2026-01-01T00:00:00Z',
+        clientMessageId: NEW_ID,
+      })
     })
     const newer = structuredClone(useChatStore.getState().pendingFirstSend)
     expect(pendingUsers(), 'fixture: the newer message occupies the pending slot').toEqual([{ id: NEW_ID, content: NEW_TEXT }])
@@ -335,9 +361,13 @@ describe('WorkspaceAgentList + New chat (FR-005, BDD-03.1, BDD-E02, N09)', () =>
     expect(screen.queryByRole('alertdialog'), 'the stale dialog can close').not.toBeInTheDocument()
     expect(pendingUsers(), 'D8: the stale choice preserves the newer message').toEqual([{ id: NEW_ID, content: NEW_TEXT }])
     expect(useChatStore.getState().pendingFirstSend, 'D8: the stale choice cannot replace the newer recovery request').toEqual(newer)
-    expect(useChatStore.getState().abandonedFirstSendIds, 'D8: the newer id is not abandoned').not.toContain(NEW_ID)
+    expect(useChatStore.getState().abandonedFirstSendIds, 'D8: neither id is abandoned by the stale choice').toEqual([])
     expect(useSessionStore.getState().activeSessionId, 'D8: the stale choice cannot leave the newer chat').toBe('__pending')
     expect(pointers(), 'the stale choice does not replace the main pointer').toEqual(before)
+    // M7: the refusal is never silent — the user sees why nothing started.
+    const toast = useUiStore.getState().toasts.at(-1)
+    expect(toast?.variant, 'M7: the stale refusal warns').toBe('warning')
+    expect(toast?.message, 'M7: the warning names the pending-message mismatch').toContain('no longer pending')
   })
 
   it('with no unconfirmed send, New chat starts the extra for this agent and leaves the main pointer in place', () => {

@@ -7,9 +7,10 @@
  * back. Entry attaches without acknowledgement. A newer navigation intent
  * wins; a late resolution must not split the tuple.
  */
-import { fetchSessions, fetchWorkspace } from '@/lib/api'
+import { fetchSessionDetail, fetchSessions, fetchWorkspace, readSessionFetchCoverage } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
 import type { Session, WorkspaceMemberConfig } from '@/lib/api'
+import { ApiError } from '@/lib/api-error'
 import { resolveWorkspaceEntry, workspaceEntryBlocksSend, type EntryResult, type FailedAttempt, type PointerVerdict, type WelcomeEntry } from '@/lib/nav/workspaceEntry'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
@@ -83,19 +84,57 @@ function classifyPointer(
   workspaceId: string,
   remembered: string | null | undefined,
   transportFailed: boolean,
+  listIncomplete: boolean,
 ): PointerVerdict {
   if (transportFailed) return 'timeout'
   if (typeof remembered !== 'string' || remembered.trim() === '' || remembered === '__pending') return 'absent'
   const match = sessions.find((session) => session.id === remembered)
-  if (!match) return 'deleted'
+  // Absent from an INCOMPLETE list is unknown, not deleted (M3): the list
+  // itself says pages failed to load, so the id may simply not have been
+  // enumerated. Same coverage flag SearchModal/sessionOverview read.
+  if (!match) return listIncomplete ? 'partial-list' : 'deleted'
   if (match.workspace_id !== workspaceId) return 'hidden'
   return 'visible'
+}
+
+/**
+ * M3: the remembered id is absent from an INCOMPLETE list — unknown, not
+ * deleted. Resolve it directly (GET /sessions/{id}) before anything may
+ * overwrite the pointer: found here → 'visible' (the fetched record is
+ * pushed onto the list so the exact path has its owner); a 404 is the ONE
+ * truthful deletion (the welcome path may then take over); any other
+ * failure is a transport failure — the pointer is kept with Retry, never a
+ * silent fallback to the main.
+ */
+async function resolvePartialListPointer(
+  remembered: string,
+  workspaceId: string,
+  sessions: Session[],
+): Promise<PointerVerdict> {
+  try {
+    const detail = await fetchSessionDetail(remembered)
+    const fetched = detail.session
+    if (fetched?.workspace_id !== workspaceId) return 'hidden'
+    sessions.push(fetched)
+    return 'visible'
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return 'deleted'
+    const fields = {
+      workspaceId,
+      sessionId: remembered,
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+    }
+    console.warn('[session] workspace entry pointer check failed', fields)
+    logDiagnostic('sessionWorkspaceEntryPointerCheckFailed', fields)
+    return 'timeout'
+  }
 }
 
 async function loadInputs(workspaceId: string): Promise<{
   sessions: Session[]
   transportFailed: boolean
   member: WorkspaceMemberConfig
+  pointerVerdict: PointerVerdict
 }> {
   const [sessionsResult, workspaceResult] = await Promise.allSettled([
     fetchSessions(),
@@ -105,10 +144,25 @@ async function loadInputs(workspaceId: string): Promise<{
     ? sessionsResult.value
     : []
   const sessionsFailed = sessionsResult.status !== 'fulfilled' || !Array.isArray(sessionsResult.value)
+  const remembered = rememberedId(workspaceId)
+  let pointerVerdict = classifyPointer(
+    sessions,
+    workspaceId,
+    remembered,
+    sessionsFailed,
+    readSessionFetchCoverage(sessions).incomplete,
+  )
+  if (pointerVerdict === 'partial-list' && typeof remembered === 'string') {
+    pointerVerdict = await resolvePartialListPointer(remembered, workspaceId, sessions)
+  }
   // Exact restore needs only the visible session and its immutable owner.
   // Workspace details are required only to resolve the welcome/unavailable path.
-  const exactAvailable = classifyPointer(sessions, workspaceId, rememberedId(workspaceId), sessionsFailed) === 'visible'
+  const exactAvailable = pointerVerdict === 'visible'
   const transportFailed = sessionsFailed || (workspaceResult.status === 'rejected' && !exactAvailable)
+  // A transport failure outranks every pointer classification — the pointer
+  // could not actually be checked (previously done by re-classifying with the
+  // flag at the call site; now applied once, here).
+  if (transportFailed) pointerVerdict = 'timeout'
   for (const [resource, result] of [['sessions', sessionsResult], ['workspace', workspaceResult]] as const) {
     if (result.status !== 'rejected') continue
     const fields = {
@@ -120,7 +174,7 @@ async function loadInputs(workspaceId: string): Promise<{
   }
   const workspace = workspaceResult.status === 'fulfilled' ? workspaceResult.value : null
   const member = workspace?.member_configs?.ava ?? {}
-  return { sessions, transportFailed, member }
+  return { sessions, transportFailed, member, pointerVerdict }
 }
 
 function committedNow(): { sessionId: string; agentId: string } | null {
@@ -241,7 +295,7 @@ async function execute(workspaceId: string): Promise<void> {
       workspaceId,
       entryKind: 'cold-reload',
       rememberedSessionId: rememberedId(workspaceId),
-      pointerVerdict: classifyPointer(loaded.sessions, workspaceId, rememberedId(workspaceId), loaded.transportFailed),
+      pointerVerdict: loaded.pointerVerdict,
       sessions: loaded.sessions,
       avaMember: loaded.member,
       committed,

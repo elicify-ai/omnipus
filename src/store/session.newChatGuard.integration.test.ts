@@ -14,6 +14,7 @@ import { useSessionStore } from './session'
 import { useChatStore } from './chat'
 import { useWorkspacesStore } from './workspacesStore'
 import { useConnectionStore } from './connection'
+import { useUiStore } from './ui'
 
 const MAIN = 'seam-main-mia'
 const EXTRA = 'extra-real'
@@ -153,6 +154,7 @@ describe('startNewSession behind decideNewChat (T-03, N09)', () => {
           mainSessionId: MAIN,
           clientMessageId: CLIENT,
           started: false,
+          agentId: 'mia',
         },
         abandoned: [],
       })
@@ -230,5 +232,59 @@ describe('startNewSession behind decideNewChat (T-03, N09)', () => {
       mainPointer: MAIN,
       pendingSaved: false,
     })
+  })
+
+  it('M7: a confirm naming an id that is no longer pending refuses visibly — prompt closes, a warning toast explains, nothing is abandoned', () => {
+    useUiStore.setState({ toasts: [] })
+    armPending('unconfirmed')
+    startNewChat()
+    expect(useSessionStore.getState().newChatPrompt?.clientMessageId, 'fixture: the question is open').toBe(CLIENT)
+
+    // The pending slot is replaced while the question is open — recovery
+    // request AND bucket message together (the reader validates one against
+    // the other, as a late real replacement would).
+    useChatStore.setState({
+      pendingFirstSend: {
+        clientMessageId: 'client-2',
+        payload: {
+          type: 'message',
+          content: 'A newer message',
+          client_message_id: 'client-2',
+          agent_id: 'mia',
+        },
+        workspaceId: WS,
+        attemptGeneration: 2,
+        sessionId: null,
+        assistantPlaceholderId: 'asst-2',
+        status: 'unconfirmed',
+      },
+      abandonedFirstSendIds: [],
+      sessionsById: {},
+    })
+    useChatStore.getState().appendMessage({
+      id: 'client-2',
+      role: 'user',
+      content: 'A newer message',
+      timestamp: '2026-01-01T00:00:00Z',
+      clientMessageId: 'client-2',
+    })
+
+    // The dialog confirm passes exactly the id it opened against.
+    const dialogConfirm = useSessionStore.getState().startNewSession as unknown as (
+      arg: { choice: 'confirm'; clientMessageId: string },
+    ) => void
+    dialogConfirm({ choice: 'confirm', clientMessageId: CLIENT })
+
+    const after = snapshot()
+    expect(after.prompt, 'the stale question closes').toBeNull()
+    expect(after.clientMessageId, 'the newer delivery is untouched').toBe('client-2')
+    expect(after.text).toBe('A newer message')
+    expect(after.abandoned, 'nothing is abandoned by a stale confirm').toEqual([])
+    expect(after.activeSessionId, 'the newer pending chat stays selected').toBe('__pending')
+    expect(after.mainPointer, 'the main pointer is untouched').toBe(MAIN)
+    expect(after.pointerId, 'the saved pointer is untouched').toBe(MAIN)
+    const toast = useUiStore.getState().toasts.at(-1)
+    expect(toast?.variant, 'M7: the refusal is visible, never silent').toBe('warning')
+    expect(toast?.message).toContain('no longer pending')
   })
 })
