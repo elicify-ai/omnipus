@@ -112,6 +112,7 @@ class StubResizeObserver {
   unobserve() {}
   disconnect() {}
 }
+void StubResizeObserver
 
 // ── Import AFTER the mocks ─────────────────────────────────────────────────────
 import { ChatScreen } from './ChatScreen'
@@ -189,7 +190,10 @@ beforeEach(() => {
     connectionError: null,
     connection: null,
   })
-  vi.stubGlobal('ResizeObserver', StubResizeObserver)
+  // NO ResizeObserver stub: the feature-detect (ChatScreen's
+  // VirtualizedMessageList) then takes PlainMessageList, which renders every
+  // row directly — the same row components the virtualized path mounts, minus
+  // jsdom's missing layout engine. Assertions below rely on rows being present.
 })
 
 afterEach(() => {
