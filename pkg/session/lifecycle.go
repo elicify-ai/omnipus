@@ -266,6 +266,18 @@ type LifecycleRecord struct {
 	// wire SessionLifecycleRecord (it is not session status).
 	Unattended bool `json:"unattended,omitempty"`
 
+	// ExternalRunStarted is the durable "this steered external-CLI session has
+	// already started its native CLI conversation" fact (session-core N7,
+	// FR-043). Set once, before the first CLI Run, by
+	// agent.AgentLoop.markExternalRunStarted; never cleared. Every later entry
+	// of the session — a revive, a wake, a human message after a gateway
+	// restart — must Resume that conversation or refuse visibly, never start a
+	// fresh one. The in-memory holder flag alone does not survive a restart.
+	//
+	// not-wire-format: internal external-run bookkeeping, omitted from the wire
+	// SessionLifecycleRecord.
+	ExternalRunStarted bool `json:"external_run_started,omitempty"`
+
 	// FinalHandback marks a final handback delivered in the execution it
 	// names. It is read only when it matches the record's current ExecutionID
 	// (FinalHandbackThisExecution), so a mark left by an earlier execution is

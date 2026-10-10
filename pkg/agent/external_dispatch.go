@@ -427,6 +427,14 @@ func runExternalCLISubTurn(
 	// Run creates one (recorded for a later continuation to Resume); a Resume
 	// reuses the retained one. A canceled-before-start run therefore never
 	// instantiates a driver (the belt-and-suspenders check above).
+	if !resume && resumeOnly {
+		// N7: durably record that this steered session's first CLI run is
+		// starting, BEFORE any driver exists, so a revive after a restart
+		// resumes-or-refuses instead of starting a fresh conversation.
+		if markErr := al.markExternalRunStarted(sessionKey); markErr != nil {
+			return nil, fmt.Errorf("external-cli dispatch: %w", markErr)
+		}
+	}
 	driver, driverErr := sess.driverForRun(cli, consent, resume)
 	if driverErr != nil {
 		return nil, fmt.Errorf("external-cli dispatch: %w", driverErr)

@@ -639,6 +639,15 @@ func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string,
 	if !rec.Terminal() && !rec.Stopped() {
 		return false, nil
 	}
+	// N7 / FR-043: an external-CLI helper that already ran can only continue its
+	// retained native CLI conversation. When that conversation is gone (driver
+	// released at the end of its episode, or the gateway restarted) the revive
+	// refuses visibly, before the instruction is stored or the generation moves,
+	// rather than dispatching a turn that starts a fresh CLI conversation inside
+	// the old chat.
+	if !al.externalConversationAvailable(sessionID, rec) {
+		return false, &curatedTurnError{text: fmt.Sprintf("steer: revive %q: %s", sessionID, errExternalResumeUnavailable.Error())}
+	}
 	// [Defect 4, ADR-091 fix lane RX-DELIVERY, HIGH] The instruction lands
 	// BEFORE the generation is minted, and a failure refuses the revive
 	// outright. Both halves matter:
