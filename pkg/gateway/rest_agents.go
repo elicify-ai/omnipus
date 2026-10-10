@@ -132,6 +132,13 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// GET /api/v1/agents/{id}/activity-runs — the Activity panel's task and
+	// scheduler run rows (session-core FR-033).
+	if r.Method == http.MethodGet && agentID != "" && subPath == "activity-runs" {
+		a.listAgentActivityRuns(w, r, agentID)
+		return
+	}
+
 	// POST /api/v1/agents/{id}/runner/test — external-CLI runner connection test (Spec-4 FR-4.2)
 	if agentID != "" && subPath == "runner/test" {
 		if r.Method != http.MethodPost {
