@@ -1,27 +1,24 @@
-// archive_day_store.go: the standalone addressed day-partitioned archive —
-// the append-and-seek half of session-core C-ARCHIVE / U2 Decisions B and C
-// (spec FR-004/FR-005).
+// archive_day_store.go: the addressed day-partitioned archive — the
+// append-and-seek half of session-core C-ARCHIVE / U2 Decisions B and C
+// (spec FR-004/FR-005) and the ONE append path of a session directory (effects
+// design D1/D2/D7): chat records, model payloads, model_refs and tool-call
+// effects are all appended here, under the same file set and the same lock.
 //
-// This is the NEW path built ALONGSIDE the running product, verified in
-// isolation. It writes under its OWN subdirectory so no existing reader can
-// pick its files up (the transcript day-lister matches only the session
-// directory's own `transcript.jsonl` / `<date>*.jsonl`; a subdirectory is
-// skipped outright). It does not create or read `.context`, does not change the
-// running transcript, and is consumed only by the archive tests and the
-// placement/window helpers in this package until the Decision-D cutover wires
-// it in.
+// Layout, inside the session directory `<baseDir>/<sessionID>/`:
 //
-// Layout, inside `<sessionDir>/u2archive/`:
+//	transcript.jsonl   the live partition (the day mark holds its key)
+//	transcript.day     the day mark: the UTC day transcript.jsonl currently holds
+//	<key>.jsonl        every rolled-over partition, frozen once rolled
 //
-//	current.jsonl   the live partition (the day mark holds its key)
-//	current.day     the day mark: the UTC day current.jsonl currently holds
-//	<key>.jsonl     every rolled-over partition, frozen once rolled
-//
-// Rollover mirrors transcript_partition.go's rule and is crash-safe by the
-// same ordering: the rename happens BEFORE the day mark advances, and the
-// partition key a record is addressed by is the DAY it was written under, which
-// survives the rename unchanged. Append captures the pre-write end offset, so
-// the returned address seeks back to exactly that record.
+// Rollover is by the SERVER's append UTC day (never an entry's own timestamp)
+// and is crash-safe by ordering: the rename happens BEFORE the day mark
+// advances, and the partition key a record is addressed by is the DAY it was
+// written under, which survives the rename unchanged. A rolled name that
+// already exists is refused visibly: it would re-point every address already
+// issued for the older file. Append captures the pre-write end offset, so the
+// returned address seeks back to exactly that record; a torn final line gets a
+// newline first, and a failed write is truncated back, so a returned address is
+// always a complete, newline-framed record and unpublished bytes never linger.
 package session
 
 import (
@@ -31,8 +28,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -41,14 +40,10 @@ import (
 )
 
 const (
-	// archiveSubdirName isolates the new path from every existing reader (see
-	// the package comment). A subdirectory is skipped by the session-directory
-	// file lister, so nothing currently running can stumble onto these files.
-	archiveSubdirName = "u2archive"
 	// archiveCurrentFile is the live partition file name.
-	archiveCurrentFile = "current.jsonl"
+	archiveCurrentFile = transcriptFileName
 	// archiveDayMarkFile is the disk-only day mark (never on the wire).
-	archiveDayMarkFile = "current.day"
+	archiveDayMarkFile = transcriptDayMarkFile
 	// archiveRecordBound caps one encoded envelope, reusing the archive's
 	// existing 8 MiB encoded-line admission bound rather than enlarging it.
 	archiveRecordBound = memory.EncodedLineBound
@@ -88,7 +83,7 @@ func NewArchiveDayStore(baseDir, sessionID string) (*ArchiveDayStore, error) {
 }
 
 func (s *ArchiveDayStore) dir() string {
-	return filepath.Join(s.baseDir, s.sessionID, archiveSubdirName)
+	return filepath.Join(s.baseDir, s.sessionID)
 }
 
 // Append validates one envelope, appends it to the current partition with
@@ -123,29 +118,46 @@ func encodeArchiveLine(rec ArchiveRecord) ([]byte, error) {
 }
 
 // appendLineLocked writes one encoded envelope to the current partition. s.mu
-// must be held.
+// must be held. A non-empty partition that does not end in a newline (a torn
+// final line) gets one first, so the record starts on its own line and the
+// returned address is the record's first byte; a write or fsync failure
+// truncates the partition back to its pre-append size, so bytes that were never
+// published are not left behind (they are not retained bytes: no address was
+// returned for them).
 func (s *ArchiveDayStore) appendLineLocked(id string, line []byte) (ArchiveAddress, error) {
 	key, path, err := s.partitionForAppendLocked(s.now().UTC().Format(transcriptDayLayout))
 	if err != nil {
 		return ArchiveAddress{}, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
 		return ArchiveAddress{}, fmt.Errorf("archive: open %s: %w", path, err)
 	}
 	defer f.Close()
-	offset, err := f.Seek(0, io.SeekEnd)
+	pre, err := f.Seek(0, io.SeekEnd)
 	if err != nil {
 		return ArchiveAddress{}, fmt.Errorf("archive: seek end %s: %w", path, err)
 	}
-	payload := make([]byte, 0, len(line)+1)
+	offset := pre
+	payload := make([]byte, 0, len(line)+2)
+	if pre > 0 {
+		last := make([]byte, 1)
+		if _, rerr := f.ReadAt(last, pre-1); rerr != nil {
+			return ArchiveAddress{}, fmt.Errorf("archive: read last byte of %s: %w", path, rerr)
+		} else if last[0] != '\n' {
+			slog.Warn("archive: partition did not end in a newline; starting the new record on its own line",
+				"session_id", s.sessionID, "partition", key)
+			payload = append(payload, '\n')
+			offset++
+		}
+	}
 	payload = append(payload, line...)
 	payload = append(payload, '\n')
-	if _, err := f.Write(payload); err != nil {
-		return ArchiveAddress{}, fmt.Errorf("archive: write %s: %w", path, err)
+	if _, werr := f.Write(payload); werr != nil {
+		return ArchiveAddress{}, errors.Join(fmt.Errorf("archive: write %s: %w", path, werr), truncateBack(f, pre))
 	}
-	if err := f.Sync(); err != nil {
-		return ArchiveAddress{}, fmt.Errorf("archive: fsync %s: %w", path, err)
+	if serr := f.Sync(); serr != nil {
+		return ArchiveAddress{}, errors.Join(fmt.Errorf("archive: fsync %s: %w", path, serr), truncateBack(f, pre))
 	}
 	return ArchiveAddress{PartitionKey: key, ByteOffset: offset, EntryID: id}, nil
 }
@@ -232,7 +244,16 @@ func (s *ArchiveDayStore) partitionForAppendLocked(day string) (key, path string
 		return mark, current, nil
 	}
 	if _, statErr := os.Stat(current); statErr == nil {
-		rolled := uniqueArchiveRolledPath(dir, mark)
+		rolled := filepath.Join(dir, mark+".jsonl")
+		// A record is addressed by its partition key, and the rolled file is
+		// named by that same key. A colliding name would silently re-point every
+		// address already issued for the older file, so it is refused visibly
+		// (an out-of-band file, or a rollover that did not complete).
+		if _, collideErr := os.Stat(rolled); collideErr == nil {
+			return "", "", fmt.Errorf("archive: roll day %s: %s already exists; refusing to re-point issued record addresses", mark, filepath.Base(rolled))
+		} else if !errors.Is(collideErr, os.ErrNotExist) {
+			return "", "", fmt.Errorf("archive: stat rolled partition name: %w", collideErr)
+		}
 		if err = os.Rename(current, rolled); err != nil {
 			return "", "", fmt.Errorf("archive: roll day %s: %w", mark, err)
 		}
@@ -291,21 +312,20 @@ func (s *ArchiveDayStore) writeDayMarkLocked(day string) error {
 	return nil
 }
 
-// uniqueArchiveRolledPath returns a non-colliding "<key>.jsonl" path in dir. A
-// collision is reachable only after an out-of-band write or a partially
-// completed rollover; a suffixed name keeps the date prefix so read order stays
-// intact, and the suffixed name is the partition key that file is addressed by.
-func uniqueArchiveRolledPath(dir, key string) string {
-	base := filepath.Join(dir, key+".jsonl")
-	if _, err := os.Stat(base); errors.Is(err, os.ErrNotExist) {
-		return base
-	}
-	for i := 1; ; i++ {
-		cand := filepath.Join(dir, fmt.Sprintf("%s-%d.jsonl", key, i))
-		if _, err := os.Stat(cand); errors.Is(err, os.ErrNotExist) {
-			return cand
+// rolledPartitionNames returns the frozen day partitions among entries, in
+// chronological order. Only date-named files are partitions: the session
+// directory holds other files that are not archive content.
+func rolledPartitionNames(entries []os.DirEntry) []string {
+	var names []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || name == archiveCurrentFile || !transcriptDayPattern.MatchString(name) {
+			continue
 		}
+		names = append(names, name)
 	}
+	sort.Strings(names)
+	return names
 }
 
 // readArchiveRecordBounded reads exactly one newline-framed record from r,

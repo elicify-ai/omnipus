@@ -72,18 +72,6 @@ func (b *JSONLBackend) GetHistory(key string) []providers.Message {
 	return msgs
 }
 
-func (b *JSONLBackend) SetHistory(key string, history []providers.Message) {
-	if err := b.store.SetHistory(context.Background(), key, history); err != nil {
-		slog.Error("session: set history", "key", key, "error", err)
-	}
-}
-
-func (b *JSONLBackend) TruncateHistory(key string, keepLast int) {
-	if err := b.store.TruncateHistory(context.Background(), key, keepLast); err != nil {
-		slog.Error("session: truncate history", "key", key, "error", err)
-	}
-}
-
 // Projection implements SessionStore.
 func (b *JSONLBackend) Projection(key string) memory.ProjectionMeta {
 	pm, err := b.store.GetProjection(context.Background(), key)
@@ -98,13 +86,6 @@ func (b *JSONLBackend) Projection(key string) memory.ProjectionMeta {
 func (b *JSONLBackend) SetProjectionState(key string, pk memory.ProjectionKey, state memory.ProjectionState) {
 	if err := b.store.SetProjectionState(context.Background(), key, pk, state); err != nil {
 		slog.Error("session: set projection state", "key", key, "error", err)
-	}
-}
-
-// MarkHydrated implements SessionStore.
-func (b *JSONLBackend) MarkHydrated(key string) {
-	if err := b.store.MarkHydrated(context.Background(), key); err != nil {
-		slog.Error("session: mark hydrated", "key", key, "error", err)
 	}
 }
 

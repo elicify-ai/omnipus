@@ -2658,7 +2658,7 @@ func clearSessionWindow(sessions session.SessionStore, sessionKey string) error 
 	after.AnchorLine = nil
 	after.Projection.Entries = memory.ProjectionSet{}
 	after.Projection.SourceRunes = map[memory.ProjectionKey]int{}
-	after.Projection.TranscriptLine = map[memory.ProjectionKey]int{}
+	after.Projection.TranscriptAddr = map[memory.ProjectionKey]memory.RecordAddress{}
 	return store.CommitWindow(ctx, sessionKey, view.State, after)
 }
 

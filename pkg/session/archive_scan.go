@@ -19,7 +19,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -50,15 +49,7 @@ func (s *ArchiveDayStore) ScanAllLines(fn func(ArchiveAddress, []byte, ArchiveRe
 		}
 		return fmt.Errorf("archive: scan: read dir: %w", err)
 	}
-	var rolled []string
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".jsonl") || name == archiveCurrentFile {
-			continue
-		}
-		rolled = append(rolled, name)
-	}
-	sort.Strings(rolled)
+	rolled := rolledPartitionNames(entries)
 	for _, name := range rolled {
 		key := strings.TrimSuffix(name, ".jsonl")
 		cont, err := s.scanPartitionLinesLocked(filepath.Join(dir, name), key, fn)
@@ -98,15 +89,7 @@ func (s *ArchiveDayStore) scanAllLocked(fn func(ArchiveAddress, ArchiveRecord) b
 		}
 		return fmt.Errorf("archive: scan: read dir: %w", err)
 	}
-	var rolled []string
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".jsonl") || name == archiveCurrentFile {
-			continue
-		}
-		rolled = append(rolled, name)
-	}
-	sort.Strings(rolled)
+	rolled := rolledPartitionNames(entries)
 	for _, name := range rolled {
 		key := strings.TrimSuffix(name, ".jsonl")
 		cont, err := s.scanPartitionLocked(filepath.Join(dir, name), key, fn)

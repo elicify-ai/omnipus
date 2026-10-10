@@ -85,6 +85,10 @@ func (b *JSONLBackend) RollbackWindow(ctx context.Context, key string, start mem
 }
 
 func (us *UnifiedStore) AppendWindowMessage(ctx context.Context, key string, msg providers.Message) (memory.WindowSnapshot, error) {
+	// Effects design D2: a model append is a write to the session archive, so it
+	// takes the session shard first (shard, then backend, then store lock).
+	h := us.lockSession(owningSessionID(key))
+	defer h.Unlock()
 	return us.backend.AppendWindowMessage(ctx, key, msg)
 }
 
@@ -107,10 +111,18 @@ func (us *UnifiedStore) WindowView(ctx context.Context, key string) (WindowView,
 }
 
 func (us *UnifiedStore) AppendModelMessage(ctx context.Context, key string, in ModelAppend) (ModelSlot, WindowView, error) {
+	// Effects design D2: a model append is a write to the session archive, so it
+	// takes the session shard first (shard, then backend, then store lock).
+	h := us.lockSession(owningSessionID(key))
+	defer h.Unlock()
 	return us.backend.AppendModelMessage(ctx, key, in)
 }
 
 func (us *UnifiedStore) PlaceSavedInput(ctx context.Context, key string, source ArchiveAddress) (ModelSlot, WindowView, error) {
+	// Effects design D2: a model append is a write to the session archive, so it
+	// takes the session shard first (shard, then backend, then store lock).
+	h := us.lockSession(owningSessionID(key))
+	defer h.Unlock()
 	return us.backend.PlaceSavedInput(ctx, key, source)
 }
 

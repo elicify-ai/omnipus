@@ -574,7 +574,7 @@ func TestAbortPath_MidTurnEviction_HardAbort(t *testing.T) {
 
 	// Phase 2: simulate a prior eviction BEFORE the turn starts (Skip advances).
 	// Keep 8 messages visible → Skip = 12 - 8 = 4.
-	agent.Sessions.TruncateHistory(sk, 8)
+	truncateWindowTo(t, agent.Sessions, sk, 8)
 	windowAfterPreEvict := agent.Sessions.GetHistory(sk)
 	require.Equal(t, 8, len(windowAfterPreEvict),
 		"after pre-evict: 8 messages visible (Skip=4)")
@@ -590,7 +590,7 @@ func TestAbortPath_MidTurnEviction_HardAbort(t *testing.T) {
 
 	// Phase 3: simulate mid-turn windowTrim advancing Skip further.
 	// Keep 4 messages → Skip advances to 12 - 4 = 8.
-	agent.Sessions.TruncateHistory(sk, 4)
+	truncateWindowTo(t, agent.Sessions, sk, 4)
 	windowAfterMidEvict := agent.Sessions.GetHistory(sk)
 	require.Equal(t, 4, len(windowAfterMidEvict),
 		"after mid-turn eviction: only 4 messages visible (Skip=8)")
@@ -685,7 +685,7 @@ func TestAbortPath_MidTurnEviction_RestoreSession(t *testing.T) {
 	require.NotNil(t, agent)
 
 	// Phase 2: pre-turn eviction → keep 8 visible (Skip=4).
-	agent.Sessions.TruncateHistory(sk, 8)
+	truncateWindowTo(t, agent.Sessions, sk, 8)
 	windowAfterPreEvict := agent.Sessions.GetHistory(sk)
 	require.Equal(t, 8, len(windowAfterPreEvict))
 
@@ -700,7 +700,7 @@ func TestAbortPath_MidTurnEviction_RestoreSession(t *testing.T) {
 	initialHistoryLength := len(windowAfterPreEvict) // 8
 
 	// Phase 3: mid-turn windowTrim → keep 4 visible (Skip advances to 8).
-	agent.Sessions.TruncateHistory(sk, 4)
+	truncateWindowTo(t, agent.Sessions, sk, 4)
 	require.Equal(t, 4, len(agent.Sessions.GetHistory(sk)),
 		"mid-turn eviction: 4 messages visible")
 

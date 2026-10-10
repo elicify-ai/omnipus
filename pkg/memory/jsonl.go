@@ -64,7 +64,6 @@ type sessionMeta struct {
 	CreatedAt  time.Time         `json:"created_at"`
 	UpdatedAt  time.Time         `json:"updated_at"`
 	Projection []projectionEntry `json:"projection,omitempty"`
-	Hydrated   bool              `json:"hydrated,omitempty"`
 	AnchorLine *int              `json:"anchor_archive_line,omitempty"`
 	// Retracted lists physical archive-line spans that are RETAINED on disk
 	// but EXCLUDED from the model view by an append-only rollback effect
@@ -581,26 +580,6 @@ func (s *JSONLStore) SetProjectionState(
 		pm.SourceRunes[pk] = 0
 	}
 	meta.Projection = entriesWithLimits(pm)
-	meta.UpdatedAt = time.Now()
-	return s.writeMeta(sessionKey, meta)
-}
-
-// MarkHydrated sets the one-way hydrated flag (FR-048): the archive was
-// rebuilt from the UI transcript, so recall by tool_call_id cannot promise
-// the original result bytes.
-func (s *JSONLStore) MarkHydrated(_ context.Context, sessionKey string) error {
-	l := s.sessionLock(sessionKey)
-	l.Lock()
-	defer l.Unlock()
-
-	meta, err := s.readMeta(sessionKey)
-	if err != nil {
-		return err
-	}
-	if meta.Hydrated {
-		return nil
-	}
-	meta.Hydrated = true
 	meta.UpdatedAt = time.Now()
 	return s.writeMeta(sessionKey, meta)
 }

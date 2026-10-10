@@ -121,9 +121,9 @@ func (p *windowCheckpoint) slideOldest() bool {
 				delete(p.notice.shortened, key)
 			}
 		}
-		for key := range p.state.Projection.TranscriptLine {
+		for key := range p.state.Projection.TranscriptAddr {
 			if key.ArchiveLine < cut {
-				delete(p.state.Projection.TranscriptLine, key)
+				delete(p.state.Projection.TranscriptAddr, key)
 			}
 		}
 		return true

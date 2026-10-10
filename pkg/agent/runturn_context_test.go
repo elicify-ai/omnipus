@@ -574,7 +574,7 @@ func TestRunTurn_InjectedSpanSubjectToD5(t *testing.T) {
 			"ToolSearch": config.ToolPolicyAllow,
 		},
 	})
-	agent.Sessions.TruncateHistory(recallInjectionSessionKey, len(turns)*2-2)
+	truncateWindowTo(t, agent.Sessions, recallInjectionSessionKey, len(turns)*2-2)
 
 	_, err := al.processTaskDirect(context.Background(), agent.ID, "recall then work", recallInjectionSessionKey, taskSessionID)
 	require.NoError(t, err)

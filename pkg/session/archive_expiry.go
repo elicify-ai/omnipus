@@ -6,11 +6,9 @@
 // advances to first retained complete group with agent expiry notice, or empty
 // same-ID window when no complete content remains."
 //
-// This is the additive half the standalone Decisions-B/C lane left unbuilt: the
-// archive had no way to expire old day partitions and repair the content-free
-// AddressedWindow afterwards. It writes NOTHING to the runtime (the Decision-D
-// cutover is a separate, larger change): it operates only on a session's own
-// <sessionDir>/u2archive/ directory and its persisted window.json.
+// The archive expires old day partitions and repairs the content-free
+// AddressedWindow afterwards. It operates only on a session's own directory
+// <sessionDir>/ (the rolled <day>.jsonl partitions) and its persisted window.json.
 //
 // Semantics kept from the existing session retention sweep
 // (pkg/session/retention_sweep.go::RetentionSweep), so the two stay consistent:
@@ -36,7 +34,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -130,12 +127,12 @@ func (s *ArchiveDayStore) sweepRolledPartitionsLocked(cutoff time.Time) (int, er
 		return 0, fmt.Errorf("archive: sweep: read dir: %w", err)
 	}
 	removed := 0
+	byName := make(map[string]os.DirEntry, len(entries))
 	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || name == archiveCurrentFile || !strings.HasSuffix(name, ".jsonl") {
-			continue
-		}
-		info, err := e.Info()
+		byName[e.Name()] = e
+	}
+	for _, name := range rolledPartitionNames(entries) {
+		info, err := byName[name].Info()
 		if err != nil {
 			return removed, fmt.Errorf("archive: sweep: stat %s: %w", name, err)
 		}

@@ -707,7 +707,7 @@ func cwRangeNextRequestDataOnly(t *testing.T) {
 	}
 	provider := &recallInjectionProvider{first: cwRangeArgs(0, 2)}
 	al, agent := recallInjectionFixture(t, provider, 200_000, 1000, turns)
-	agent.Sessions.TruncateHistory(recallInjectionSessionKey, 2)
+	truncateWindowTo(t, agent.Sessions, recallInjectionSessionKey, 2)
 	if live := agent.Sessions.GetHistory(recallInjectionSessionKey); len(live) != 2 || live[0].Content != "CURRENT window" {
 		t.Fatalf("fixture must actually evict the three historical records: %+v", live)
 	}

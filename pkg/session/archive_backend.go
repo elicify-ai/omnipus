@@ -68,6 +68,9 @@ type archiveBackend struct {
 	mu      sync.Mutex
 	baseDir string
 	stores  map[string]*ArchiveDayStore
+	// provider, when set, hands out the one ArchiveDayStore per session id that
+	// the owning UnifiedStore shares with its transcript writers.
+	provider func(sessionID string) (*ArchiveDayStore, error)
 }
 
 func newArchiveBackend(baseDir string) *archiveBackend {
@@ -83,14 +86,18 @@ var (
 )
 
 func (b *archiveBackend) store(key string) (*ArchiveDayStore, error) {
-	if s, ok := b.stores[key]; ok {
+	id := owningSessionID(key)
+	if b.provider != nil {
+		return b.provider(id)
+	}
+	if s, ok := b.stores[id]; ok {
 		return s, nil
 	}
-	s, err := NewArchiveDayStore(b.baseDir, owningSessionID(key))
+	s, err := NewArchiveDayStore(b.baseDir, id)
 	if err != nil {
 		return nil, err
 	}
-	b.stores[key] = s
+	b.stores[id] = s
 	return s, nil
 }
 
@@ -98,7 +105,7 @@ func (b *archiveBackend) store(key string) (*ArchiveDayStore, error) {
 // the model content belongs to (ARCHITECT-ANSWER-CUTOVER-SLICE4.md, "Identity";
 // Decision D "no current-agent/active-agent guessing"). The agent routing key
 // "agent:<agentID>:session:<sessionID>" embeds the store-backed owning session
-// id, so the archive then lives at <baseDir>/<sessionID>/u2archive — beside the
+// id, so the archive then lives in <baseDir>/<sessionID>/ — the same files as the
 // chat transcript, so a session delete removes both. Any other key (a plain
 // session id, or a chat-scoped key whose owning session is not encoded) is left
 // unchanged.
@@ -124,7 +131,6 @@ type archiveBackendMeta struct {
 	Count      int                    `json:"count"`
 	AnchorLine *int                   `json:"anchor_archive_line,omitempty"`
 	Retracted  []memory.ArchiveSpan   `json:"retracted,omitempty"`
-	Hydrated   bool                   `json:"hydrated,omitempty"`
 	Projection []archiveProjectionRow `json:"projection,omitempty"`
 	// ConvSourceTorn records that the one-time CONV conversion tolerated a torn
 	// final line (N2=B) and therefore RETAINED the legacy source bytes rather
@@ -139,7 +145,7 @@ type archiveProjectionRow struct {
 	ArchiveLine    int                    `json:"archive_line"`
 	State          memory.ProjectionState `json:"state,omitempty"`
 	SourceRunes    *int                   `json:"retained_source_runes,omitempty"`
-	TranscriptLine *int                   `json:"transcript_line,omitempty"`
+	TranscriptAddr *memory.RecordAddress  `json:"transcript_addr,omitempty"`
 }
 
 // payloadLine is one model-archive line: its exact address, its decoded envelope
@@ -206,94 +212,6 @@ func (b *archiveBackend) AddFullMessage(sessionKey string, msg providers.Message
 	}
 }
 
-// SetHistory fills an EMPTY model archive; it refuses a non-empty one (FR-047).
-func (b *archiveBackend) SetHistory(key string, history []providers.Message) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	store, err := b.store(key)
-	if err != nil {
-		slog.Error("archive_backend: set history: open", "key", key, "error", err)
-		return
-	}
-	n, err := store.OrdinalCount()
-	if err != nil {
-		slog.Error("archive_backend: set history: count", "key", key, "error", err)
-		return
-	}
-	if n > 0 {
-		slog.Error("archive_backend: set history refused",
-			"key", key, "error", fmt.Errorf("%w: %q has %d line(s)", memory.ErrArchiveNotEmpty, key, n))
-		return
-	}
-	meta, err := b.loadMetaLocked(key)
-	if err != nil {
-		slog.Error("archive_backend: set history: read meta", "key", key, "error", err)
-		return
-	}
-	// Skip is left as-is (FR-047); projection and retracted cannot survive a
-	// first fill.
-	meta.Projection = nil
-	meta.Retracted = nil
-	for _, m := range history {
-		if _, err := b.appendLegacyLocked(key, m); err != nil {
-			slog.Error("archive_backend: set history: append", "key", key, "error", err)
-			return
-		}
-	}
-	if meta.Count, err = store.OrdinalCount(); err != nil {
-		slog.Error("archive_backend: set history: count", "key", key, "error", err)
-		return
-	}
-	if err := b.saveMetaLocked(key, meta); err != nil {
-		slog.Error("archive_backend: set history: write meta", "key", key, "error", err)
-	}
-}
-
-// TruncateHistory keeps only the last keepLast messages (mirrors the JSONL rule).
-func (b *archiveBackend) TruncateHistory(key string, keepLast int) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	store, err := b.store(key)
-	if err != nil {
-		slog.Error("archive_backend: truncate: open", "key", key, "error", err)
-		return
-	}
-	n, err := store.OrdinalCount()
-	if err != nil {
-		slog.Error("archive_backend: truncate: count", "key", key, "error", err)
-		return
-	}
-	meta, err := b.loadMetaLocked(key)
-	if err != nil {
-		slog.Error("archive_backend: truncate: read meta", "key", key, "error", err)
-		return
-	}
-	meta.Count = n
-	if meta.Skip < 0 || meta.Skip > meta.Count {
-		slog.Error("archive_backend: truncate: invalid cursor", "key", key, "skip", meta.Skip)
-		return
-	}
-	if keepLast <= 0 {
-		meta.Skip = meta.Count
-	} else {
-		effective := meta.Count - meta.Skip
-		if keepLast < effective {
-			meta.Skip = meta.Count - keepLast
-		}
-	}
-	// Prune projection rows for evicted lines (FR-019 / US-6.AC9).
-	kept := meta.Projection[:0]
-	for _, row := range meta.Projection {
-		if row.ArchiveLine >= meta.Skip {
-			kept = append(kept, row)
-		}
-	}
-	meta.Projection = kept
-	if err := b.saveMetaLocked(key, meta); err != nil {
-		slog.Error("archive_backend: truncate: write meta", "key", key, "error", err)
-	}
-}
-
 func (b *archiveBackend) SetProjectionState(key string, pk memory.ProjectionKey, state memory.ProjectionState) {
 	if err := validateArchiveProjection(pk, state); err != nil {
 		slog.Error("archive_backend: set projection", "key", key, "error", err)
@@ -314,20 +232,6 @@ func (b *archiveBackend) SetProjectionState(key string, pk memory.ProjectionKey,
 	meta.Projection = metaFromProjection(pm)
 	if err := b.saveMetaLocked(key, meta); err != nil {
 		slog.Error("archive_backend: set projection: write meta", "key", key, "error", err)
-	}
-}
-
-func (b *archiveBackend) MarkHydrated(key string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	meta, err := b.loadMetaLocked(key)
-	if err != nil {
-		slog.Error("archive_backend: mark hydrated: read meta", "key", key, "error", err)
-		return
-	}
-	meta.Hydrated = true
-	if err := b.saveMetaLocked(key, meta); err != nil {
-		slog.Error("archive_backend: mark hydrated: write meta", "key", key, "error", err)
 	}
 }
 
@@ -404,7 +308,6 @@ func (b *archiveBackend) commitWindow(ctx context.Context, key string, before, a
 	meta.Count = after.Count
 	meta.AnchorLine = cloneIntPtr(after.AnchorLine)
 	meta.Projection = metaFromProjection(after.Projection)
-	meta.Hydrated = after.Projection.Hydrated
 	if err := b.saveMetaLocked(key, meta); err != nil {
 		return err
 	}
@@ -440,7 +343,6 @@ func (b *archiveBackend) RollbackWindow(ctx context.Context, key string, start m
 	meta.Count = n
 	meta.AnchorLine = cloneIntPtr(start.AnchorLine)
 	meta.Projection = metaFromProjection(start.Projection)
-	meta.Hydrated = start.Projection.Hydrated
 	return b.saveMetaLocked(key, meta)
 }
 
@@ -668,7 +570,7 @@ func (b *archiveBackend) appendMessage(key string, msg providers.Message) error 
 func (b *archiveBackend) appendLegacyLocked(key string, msg providers.Message) (ModelSlot, error) {
 	in := ModelAppend{
 		Message:        msg,
-		ViewMembership: viewMembershipForRole(msg.Role),
+		ViewMembership: ViewMembershipModel,
 		Source:         EntrySource{Kind: sourceKindForRole(msg.Role)},
 	}
 	if msg.Role == "tool" {
@@ -1016,13 +918,18 @@ func newPayloadRecord(store *ArchiveDayStore, in ModelAppend) (ArchiveRecord, er
 	src := in.Source
 	rec := ArchiveRecord{
 		TranscriptEntry: TranscriptEntry{
-			ID: id, Role: in.Message.Role, Content: in.Message.Content,
-			ViewMembership: in.ViewMembership,
-			Timestamp:      time.Now().UTC(),
-			AgentID:        in.AgentID,
+			ID: id, ViewMembership: in.ViewMembership,
+			Timestamp: time.Now().UTC(),
+			AgentID:   in.AgentID,
 		},
 		ModelMessage: &mp,
 		Source:       &src,
+	}
+	// The payload lives only in model_message. A record the chat view also shows
+	// (membership both) carries the chat-visible fields as well; a model-only
+	// record must not, or the chat projection would double-render it.
+	if in.ViewMembership == ViewMembershipBoth {
+		rec.Role, rec.Content = in.Message.Role, in.Message.Content
 	}
 	if in.Message.Role == "tool" {
 		issuer, err := store.ReadAt(*in.ToolResultFor)
@@ -1070,18 +977,6 @@ func newArchivePayloadID() (string, error) {
 		return "", fmt.Errorf("archive_backend: generate payload id: %w", err)
 	}
 	return "msg_" + id.String(), nil
-}
-
-// viewMembershipForRole picks the persisted membership for a model message:
-// user/assistant text appears in chat as well as model order; system/tool
-// messages are model-only. (Revisited when the generated chat projection lands.)
-func viewMembershipForRole(role string) string {
-	switch role {
-	case "user", "assistant":
-		return ViewMembershipBoth
-	default:
-		return ViewMembershipModel
-	}
 }
 
 // sourceKindForRole mints the transitional provenance kind from the role only;
@@ -1171,9 +1066,8 @@ func windowStateEqual(meta archiveBackendMeta, state memory.WindowState) bool {
 func projectionFromMeta(meta archiveBackendMeta) memory.ProjectionMeta {
 	pm := memory.ProjectionMeta{
 		Entries:        make(memory.ProjectionSet),
-		Hydrated:       meta.Hydrated,
 		SourceRunes:    make(map[memory.ProjectionKey]int),
-		TranscriptLine: make(map[memory.ProjectionKey]int),
+		TranscriptAddr: make(map[memory.ProjectionKey]memory.RecordAddress),
 	}
 	for _, row := range meta.Projection {
 		pk := memory.ProjectionKey{ToolCallID: row.ToolCallID, ArchiveLine: row.ArchiveLine}
@@ -1183,8 +1077,8 @@ func projectionFromMeta(meta archiveBackendMeta) memory.ProjectionMeta {
 		if row.SourceRunes != nil && *row.SourceRunes >= 0 {
 			pm.SourceRunes[pk] = *row.SourceRunes
 		}
-		if row.TranscriptLine != nil && *row.TranscriptLine >= 0 {
-			pm.TranscriptLine[pk] = *row.TranscriptLine
+		if row.TranscriptAddr != nil {
+			pm.TranscriptAddr[pk] = *row.TranscriptAddr
 		}
 	}
 	return pm
@@ -1196,8 +1090,8 @@ func metaFromProjection(pm memory.ProjectionMeta) []archiveProjectionRow {
 	for k, v := range pm.SourceRunes {
 		srcByKey[k] = v
 	}
-	tlByKey := make(map[memory.ProjectionKey]int, len(pm.TranscriptLine))
-	for k, v := range pm.TranscriptLine {
+	tlByKey := make(map[memory.ProjectionKey]memory.RecordAddress, len(pm.TranscriptAddr))
+	for k, v := range pm.TranscriptAddr {
 		tlByKey[k] = v
 	}
 	keys := make(map[memory.ProjectionKey]struct{}, len(pm.Entries))
@@ -1219,7 +1113,7 @@ func metaFromProjection(pm memory.ProjectionMeta) []archiveProjectionRow {
 		}
 		if v, ok := tlByKey[k]; ok {
 			vv := v
-			row.TranscriptLine = &vv
+			row.TranscriptAddr = &vv
 		}
 		rows = append(rows, row)
 	}
@@ -1228,8 +1122,8 @@ func metaFromProjection(pm memory.ProjectionMeta) []archiveProjectionRow {
 }
 
 func projectionEqual(a, b memory.ProjectionMeta) bool {
-	if a.Hydrated != b.Hydrated || len(a.Entries) != len(b.Entries) ||
-		len(a.SourceRunes) != len(b.SourceRunes) || len(a.TranscriptLine) != len(b.TranscriptLine) {
+	if len(a.Entries) != len(b.Entries) ||
+		len(a.SourceRunes) != len(b.SourceRunes) || len(a.TranscriptAddr) != len(b.TranscriptAddr) {
 		return false
 	}
 	for k, v := range a.Entries {
@@ -1242,8 +1136,8 @@ func projectionEqual(a, b memory.ProjectionMeta) bool {
 			return false
 		}
 	}
-	for k, v := range a.TranscriptLine {
-		if b.TranscriptLine[k] != v {
+	for k, v := range a.TranscriptAddr {
+		if b.TranscriptAddr[k] != v {
 			return false
 		}
 	}

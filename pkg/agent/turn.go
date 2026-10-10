@@ -229,11 +229,11 @@ type turnState struct {
 	// call occurrence, not tool_call_id alone). A tool result names its issuer
 	// from here — never from a lookup by id. Guarded by mu.
 	callIssuers map[string]session.ArchiveAddress
-	// emptiedTranscriptPrev holds, for every transcript tool_call record the
-	// D5 pass rewrote during this turn (content_state emptied + projected
-	// result), the record's PREVIOUS state — so an abort can put the
-	// transcript back in step with the rolled-back window. Guarded by mu.
-	emptiedTranscriptPrev []session.ToolCallProjectionUpdate
+	// projectionEffects holds the address of every projection effect the D5 pass
+	// appended during this turn (content_state emptied + projected result), so an
+	// abort can retract them and put the transcript back in step with the
+	// rolled-back window. Guarded by mu.
+	projectionEffects []session.ArchiveAddress
 
 	// SubTurn support
 	depth          int                    // SubTurn depth (0 for root turn)
@@ -523,6 +523,11 @@ type turnState struct {
 	// sync.Map rather than a plain map under ts.mu: the settle can arrive from
 	// the async tool callback goroutine as well as the synchronous loop.
 	askPendingToolCalls sync.Map // session.ToolCallID -> struct{}
+
+	// callRecords maps each tool call id this turn wrote a chat tool_call record
+	// for to that record's address and post-image (approval_transcript.go
+	// callRecord). A settle or a projection names the address; nothing searches.
+	callRecords sync.Map // session.ToolCallID -> callRecord
 
 	// activeAgentResolver, when non-nil, returns the runtime-current active
 	// agent for this session's transcript. It is set at turn construction for

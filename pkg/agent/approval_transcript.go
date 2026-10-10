@@ -35,21 +35,17 @@
 package agent
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 
-	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
-// transcriptMutateMissed is incremented each time mutateToolCallInTranscript
+// transcriptMutateMissed is incremented each time mutateToolCall
 // (below) cannot find a target to mutate — either the session's transcript
 // file does not exist yet (ADR-057 FR-099's "session not found" case) or an
 // existing transcript has no tool_call entry matching the given
@@ -70,7 +66,7 @@ func TranscriptMutateMissed() uint64 {
 
 // u22RecordTranscriptMutateMissed increments transcriptMutateMissed and
 // emits the matching WARN naming the session id and call id (FR-099). Shared
-// by mutateToolCallInTranscript's three miss sites (the common
+// by mutateToolCall's three miss sites (the common
 // directory-does-not-exist case, the narrow post-open-deletion race, and the
 // entry-not-found case) so the log fields cannot drift out of sync between
 // them. Uses slog (not this file's other logger.WarnCF call, used for a
@@ -250,187 +246,84 @@ func askDenialText(reason string) string {
 	return cls.TranscriptText
 }
 
-// replaceToolCallInTranscript finds the most recent transcript entry of type
-// tool_call carrying a ToolCall whose ID is callID and whose Status is
-// expectStatus, replaces that ToolCall wholesale with replacement, and rewrites
-// the transcript file atomically under an advisory flock. Returns true when an
-// entry was found and the rewrite succeeded.
-//
-// This is the shared read-modify-rewrite core; recordExternalToolResultUpdateInPlace
-// (external_dispatch.go) resolves its own case through
-// mutateToolCallInTranscript below. The expectStatus guard is what makes the
-// operation idempotent: an entry that already carries a terminal status is left
-// alone, so a double-settle cannot clobber a real result.
-//
-// Concurrency caveat, inherited and unchanged: AppendTranscript is guarded by
-// an in-process mutex rather than the flock this takes, so a sibling sub-turn
-// sharing the same transcript session can in the worst case land an appended
-// line inside the read→rewrite gap and lose it. Accepted here for the same
-// reason it is accepted for the external-CLI path — a structural fix means an
-// exported UpdateToolCall method on UnifiedStore.
+// callRecord is what a turn remembers of one chat tool_call record it wrote:
+// the record's exact archive address (returned by the append that wrote it) and
+// the post-image it carried. A later settle names that address, so no search of
+// the transcript ever decides which record is meant (U2 Decision D5).
+type callRecord struct {
+	addr session.ArchiveAddress
+	tc   session.ToolCall
+}
+
+// rememberCallRecord stores the address of a just-appended tool_call record.
+func (ts *turnState) rememberCallRecord(tc session.ToolCall, addr session.ArchiveAddress) {
+	ts.callRecords.Store(tc.ID, callRecord{addr: addr, tc: tc})
+}
+
+// callRecordFor returns the remembered record of a tool call.
+func (ts *turnState) callRecordFor(id session.ToolCallID) (callRecord, bool) {
+	v, ok := ts.callRecords.Load(id)
+	if !ok {
+		return callRecord{}, false
+	}
+	return v.(callRecord), true
+}
+
+// replaceToolCallInTranscript settles the remembered tool_call record of callID
+// to replacement as ONE appended settle effect, which applies only while the
+// call's merged status is still expectStatus (a double settle is a no-op on
+// read, so it cannot clobber a real result). It returns true when the effect was
+// durably appended. A false return is counted and logged and the caller appends
+// the result as a fresh record instead.
 func replaceToolCallInTranscript(
 	ts *turnState,
 	callID session.ToolCallID,
 	expectStatus string,
 	replacement session.ToolCall,
 ) bool {
-	if ts == nil || ts.abandoned.Load() ||
-		ts.transcriptStore == nil || ts.transcriptSessionID == "" {
-		return false
-	}
-	return mutateToolCallInTranscript(
-		ts.transcriptStore, ts.transcriptSessionID, callID, expectStatus,
-		func(tc *session.ToolCall) { *tc = replacement },
-	)
+	return mutateToolCall(ts, callID, expectStatus, func(tc *session.ToolCall) { *tc = replacement })
 }
 
-// mutateToolCallInTranscript is the file-level primitive behind
-// replaceToolCallInTranscript and external_dispatch.go's result updater: it
-// locates the tool_call entry for callID whose Status == expectStatus, applies
-// mutate to that ToolCall, and rewrites the file. Split from the two callers so
-// the JSONL read-modify-rewrite exists exactly once.
-func mutateToolCallInTranscript(
-	store *session.UnifiedStore,
-	sessionID string,
+// mutateToolCall is the one settle primitive behind replaceToolCallInTranscript
+// and external_dispatch.go's result updater: it applies mutate to the remembered
+// post-image of callID's record and appends that as a settle effect guarded by
+// expectStatus.
+func mutateToolCall(
+	ts *turnState,
 	callID session.ToolCallID,
 	expectStatus string,
 	mutate func(*session.ToolCall),
 ) bool {
-	if store == nil || sessionID == "" || mutate == nil {
+	if ts == nil || ts.abandoned.Load() || ts.transcriptStore == nil ||
+		ts.transcriptSessionID == "" || mutate == nil {
 		return false
 	}
-	transcriptPath := filepath.Join(store.BaseDir(), sessionID, "transcript.jsonl")
-
-	var found bool
-	// Lock the sidecar transcript.jsonl.lock, never transcript.jsonl: the
-	// rewrite below renames a new file over the transcript, so a lock on the
-	// transcript itself sat on an inode that rewrite unlinked, and two
-	// concurrent rewrites could each hold "the" lock and overwrite each other's
-	// settled tool call. Locking the transcript also created it empty when it
-	// did not exist yet. See fileutil.SidecarLockPath.
-	rewriteErr := fileutil.WithFlock(fileutil.SidecarLockPath(transcriptPath), func() error {
-		found = false
-		data, err := os.ReadFile(transcriptPath)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				// No transcript file. If the session directory is still there
-				// the session exists and has no tool_call entry to settle — an
-				// entry miss. If the directory is gone too, a DeleteSession
-				// raced this call and the session is gone (FR-099).
-				_, dirErr := os.Stat(filepath.Dir(transcriptPath))
-				switch {
-				case dirErr == nil:
-					u22RecordTranscriptMutateMissed("transcript mutate: tool_call entry not found", sessionID, callID,
-						"expect_status", expectStatus, "reason", "entry_not_found")
-					return nil
-				case errors.Is(dirErr, os.ErrNotExist):
-					u22RecordTranscriptMutateMissed("transcript mutate: session not found", sessionID, callID,
-						"reason", "session_not_found")
-					return nil // no transcript — nothing to update
-				default:
-					return fmt.Errorf("transcript mutate: stat session dir: %w", dirErr)
-				}
-			}
-			return err
-		}
-
-		// Preserve malformed lines verbatim so the file layout is unchanged on
-		// rewrite (matches ReadTranscript's skip-and-continue behaviour).
-		rawLines := bytes.Split(data, []byte{'\n'})
-		targetIdx := -1
-		var updatedEntry session.TranscriptEntry
-		for i, raw := range rawLines {
-			line := bytes.TrimSpace(raw)
-			if len(line) == 0 {
-				continue
-			}
-			var entry session.TranscriptEntry
-			if jErr := json.Unmarshal(line, &entry); jErr != nil {
-				continue
-			}
-			if entry.Type != session.EntryTypeToolCall {
-				continue
-			}
-			for j := range entry.ToolCalls {
-				if entry.ToolCalls[j].ID != callID {
-					continue
-				}
-				if entry.ToolCalls[j].Status != expectStatus {
-					// Already settled — idempotent guard against a
-					// double-processed outcome overwriting a real result.
-					continue
-				}
-				targetIdx = i
-				updatedEntry = entry
-				mutate(&updatedEntry.ToolCalls[j])
-				break
-			}
-			if targetIdx == i {
-				break
-			}
-		}
-		if targetIdx == -1 {
-			// FR-099: "entry not found" — session exists but no tool_call
-			// entry matches callID/expectStatus. Distinguishable from the
-			// session-not-found case above via the "reason" field, per
-			// BDD-109. Surfaced as a counter increment plus a WARN naming
-			// the session id and call id, rather than the bare false this
-			// used to return silently.
-			u22RecordTranscriptMutateMissed("transcript mutate: tool_call entry not found", sessionID, callID,
-				"expect_status", expectStatus, "reason", "entry_not_found")
-			return nil // no matching entry — signal fallback to the caller
-		}
-
-		rewritten, mErr := json.Marshal(updatedEntry)
-		if mErr != nil {
-			return mErr
-		}
-		rawLines[targetIdx] = rewritten
-
-		var buf bytes.Buffer
-		for i, line := range rawLines {
-			// Skip a trailing empty line produced by a final-newline split so
-			// the file does not grow a blank line on each rewrite.
-			if i == len(rawLines)-1 && len(bytes.TrimSpace(line)) == 0 {
-				continue
-			}
-			buf.Write(line)
-			buf.WriteByte('\n')
-		}
-		if wErr := fileutil.WriteFileAtomic(transcriptPath, buf.Bytes(), 0o600); wErr != nil {
-			return wErr
-		}
-		found = true
-		return nil
-	})
-
-	if rewriteErr != nil {
-		// FR-099: the MAIN "session not found" path. fileutil.WithFlock opens
-		// the transcript's sidecar lock file with os.O_CREATE, which can create
-		// the leaf FILE but not a missing PARENT directory — so for a session
-		// id that was never
-		// minted (no per-session directory at all, matching BDD-109's "no
-		// meta.json exists"), WithFlock's own open fails with ENOENT and the
-		// closure above never runs at all. Verified: reproduced against a
-		// real UnifiedStore with an unminted session id — the closure's own
-		// os.IsNotExist(err) branch on os.ReadFile is NOT reached for this
-		// case; only this outer branch is. Distinguish it from a genuine I/O
-		// failure (permission denied, disk error, flock contention) via
-		// errors.Is, so only the true "does not exist" case gets FR-099's
-		// specific counter+reason — a real I/O error keeps the existing
-		// generic WARN below, which is a different failure class entirely.
-		if errors.Is(rewriteErr, os.ErrNotExist) {
-			u22RecordTranscriptMutateMissed("transcript mutate: session not found", sessionID, callID,
+	rec, ok := ts.callRecordFor(callID)
+	if !ok {
+		u22RecordTranscriptMutateMissed("transcript mutate: tool_call entry not found", ts.transcriptSessionID, callID,
+			"expect_status", expectStatus, "reason", "entry_not_found")
+		return false
+	}
+	post := rec.tc
+	mutate(&post)
+	if _, err := ts.transcriptStore.SettleToolCall(ts.transcriptSessionID, rec.addr, expectStatus, post); err != nil {
+		transcriptWriteFailures.Add(1)
+		// FR-099: tell "the session is gone" from "the target record is gone".
+		if _, statErr := os.Stat(filepath.Join(ts.transcriptStore.BaseDir(), ts.transcriptSessionID)); errors.Is(statErr, os.ErrNotExist) {
+			u22RecordTranscriptMutateMissed("transcript mutate: session not found", ts.transcriptSessionID, callID,
 				"reason", "session_not_found")
-			return false
+		} else {
+			u22RecordTranscriptMutateMissed("transcript mutate: tool_call entry not found", ts.transcriptSessionID, callID,
+				"expect_status", expectStatus, "reason", "entry_not_found")
 		}
-		logger.WarnCF("agent", "in-place tool_call transcript update failed; caller will append instead",
+		logger.WarnCF("agent", "tool_call settle failed; caller will append instead",
 			map[string]any{
-				"session_id":   sessionID,
+				"session_id":   ts.transcriptSessionID,
 				"tool_call_id": string(callID),
-				"error":        rewriteErr.Error(),
+				"error":        err.Error(),
 			})
 		return false
 	}
-	return found
+	ts.rememberCallRecord(post, rec.addr)
+	return true
 }

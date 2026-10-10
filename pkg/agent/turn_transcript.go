@@ -97,34 +97,32 @@ func (ts *turnState) appendToolCallTranscript(tc session.ToolCall, archiveLine .
 				map[string]any{"session_id": ts.transcriptSessionID, "tool": tc.Tool, "error": err.Error()})
 		}
 	}()
-	var recordLine func(int) error
+	var recordAddr func(session.ArchiveAddress) error
 	if len(archiveLine) > 0 {
 		store, snap, snapshotErr := ts.resultTranscriptSnapshot(tc, archiveLine[0])
 		if snapshotErr != nil {
 			return snapshotErr
 		}
-		recordLine = func(line int) error {
-			return ts.persistResultTranscriptLine(store, snap, tc, archiveLine[0], line)
+		recordAddr = func(addr session.ArchiveAddress) error {
+			return ts.persistResultTranscriptAddr(store, snap, tc, archiveLine[0], addr)
 		}
 	}
-	// An admitted result uses the shard-locked indexed settle so its archive
-	// mapping records the actual placeholder row, not a subsequent bare-id guess.
+	// An admitted result settles the approval placeholder through its remembered
+	// address, so its archive mapping records the actual placeholder record, not a
+	// later guess. An error here is returned: a placeholder that cannot be settled
+	// is a real failure, not a reason to write a second record with the same id.
 	if tc.Status != toolCallStatusPending {
-		if _, hadPending := ts.askPendingToolCalls.Load(tc.ID); hadPending {
-			if recordLine != nil {
-				line, found, settleErr := ts.transcriptStore.ReplacePendingToolCallIndexed(ts.transcriptSessionID, ts.turnID, tc.ID, toolCallStatusPending, tc)
-				if settleErr != nil {
+		if _, hadPending := ts.askPendingToolCalls.LoadAndDelete(tc.ID); hadPending {
+			if rec, known := ts.callRecordFor(tc.ID); known {
+				if _, settleErr := ts.transcriptStore.SettleToolCall(ts.transcriptSessionID, rec.addr, toolCallStatusPending, tc); settleErr != nil {
 					return settleErr
 				}
-				if found {
-					ts.askPendingToolCalls.Delete(tc.ID)
-					return recordLine(line)
+				ts.rememberCallRecord(tc, rec.addr)
+				if recordAddr != nil {
+					return recordAddr(rec.addr)
 				}
-			} else if replaceToolCallInTranscript(ts, tc.ID, toolCallStatusPending, tc) {
-				ts.askPendingToolCalls.Delete(tc.ID)
 				return nil
 			}
-			ts.askPendingToolCalls.Delete(tc.ID)
 		}
 	}
 	entry := session.TranscriptEntry{
@@ -132,14 +130,15 @@ func (ts *turnState) appendToolCallTranscript(tc session.ToolCall, archiveLine .
 		AgentID: ts.resolveActiveAgentID(), Timestamp: time.Now().UTC(),
 		ToolCalls: []session.ToolCall{tc}, TurnID: ts.turnID, GoalID: ts.goalID,
 	}
-	if recordLine == nil {
-		return ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry)
-	}
-	line, appendErr := ts.transcriptStore.AppendTranscriptIndexed(ts.transcriptSessionID, entry)
+	addr, appendErr := ts.transcriptStore.AppendTranscriptAddressed(ts.transcriptSessionID, entry)
 	if appendErr != nil {
 		return appendErr
 	}
-	return recordLine(line)
+	ts.rememberCallRecord(tc, addr)
+	if recordAddr == nil {
+		return nil
+	}
+	return recordAddr(addr)
 }
 
 // appendIntermediateAssistantTranscript persists an assistant text segment that

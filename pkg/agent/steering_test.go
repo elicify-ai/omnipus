@@ -1380,7 +1380,7 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 		{Role: "user", Content: "before"},
 		{Role: "assistant", Content: "after"},
 	}
-	defaultAgent.Sessions.SetHistory(sessionKey, originalHistory)
+	seedWindowHistory(defaultAgent.Sessions, sessionKey, originalHistory)
 
 	sub := al.SubscribeEvents(16)
 	defer al.UnsubscribeEvents(sub.ID)

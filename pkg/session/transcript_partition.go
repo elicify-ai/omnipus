@@ -1,36 +1,15 @@
-// transcript_partition.go: UTC day partitioning of the one append-only
-// chat/model transcript archive (session-core U2, FR-004/FR-005).
+// transcript_partition.go: the file names of a session's one append-only
+// archive and the read-side partition lister (session-core U2, FR-004/FR-005).
 //
-// PARTIAL — FR-005 bounded reads are not yet delivered. The archive is ONE
-// logical append-only transcript split into UTC day files, which is the
-// LAYOUT FR-005 needs; but the model window still decodes from line zero
-// (pkg/memory/window.go::snapshotWindowLocked / AppendWindowMessage), so a
-// window read is NOT yet bounded to the days it needs. This comment must be
-// updated to an accurate "bounded read" claim only once that lands. The
-// layout, all inside a session directory:
+// The archive is ONE logical append-only record stream split into UTC day files
+// inside the session directory. Writing, rollover and addressing live in
+// archive_day_store.go (ArchiveDayStore); this file only names the files and
+// lists them for readers:
 //
-//	transcript.jsonl        the CURRENT (most recent) day's file — the live,
-//	                        hot file every existing reader/writer already
-//	                        opens by that name, kept as the current partition
-//	                        so same-day appends, tool-call status rewrites and
-//	                        provenance paired saves are unchanged.
-//	<YYYY-MM-DD>.jsonl      every PRIOR day, written once when its day rolls
-//	                        over (a byte-preserving rename of transcript.jsonl
-//	                        to its date name) and then frozen.
-//	transcript.day          the day mark: the UTC day transcript.jsonl
-//	                        currently holds. Disk-only, never on the wire.
-//
-// Rollover rule (ADR D2 — "acceptance order governs append order even when
-// source timestamps are delayed"): an entry whose UTC day is NEWER than the
-// current day mark rolls the file over; an entry whose day is the SAME or
-// OLDER is appended to the current file — a delayed older timestamp never
-// inserts into an already-passed day file ("no old-file back-insertion").
-// Rows are therefore always in acceptance order within the current file.
-//
-// Rollover is crash-safe by ordering: the rename happens BEFORE the day mark
-// is advanced, so a crash in between leaves the old day safely in its date
-// file and an unchanged mark; the next append re-derives the rollover (skip
-// the rename when transcript.jsonl is already absent) and completes it.
+//	transcript.jsonl   the CURRENT day's file
+//	<YYYY-MM-DD>.jsonl every prior day, frozen once rolled
+//	transcript.day     the day mark: the UTC day transcript.jsonl holds
+//	                   (disk-only, never on the wire)
 package session
 
 import (
@@ -42,8 +21,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-
-	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
 const (
@@ -63,65 +40,6 @@ const (
 // .jsonl file in the session directory is not part of the chat/model archive.
 var transcriptDayPattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}).*\.jsonl$`)
 
-// transcriptPartitionPathLocked returns the archive path an entry dated entryDay
-// must append to, performing a day rollover when entryDay is newer than the
-// persisted day mark. The caller holds sessionID's shard.
-func (us *UnifiedStore) transcriptPartitionPathLocked(sessionID, entryDay string) (string, error) {
-	dir := filepath.Join(us.baseDir, sessionID)
-	current := filepath.Join(dir, transcriptFileName)
-
-	mark, err := us.readTranscriptDayMark(sessionID)
-	if err != nil {
-		return "", err
-	}
-	if mark == "" {
-		// Fresh session, or a legacy single-file session that predates day
-		// partitioning: adopt the existing transcript.jsonl as the current
-		// day's file (never split a pre-existing archive) and record the mark.
-		if err := us.writeTranscriptDayMark(sessionID, entryDay); err != nil {
-			return "", err
-		}
-		return current, nil
-	}
-	if entryDay <= mark {
-		// Same day, or a delayed older timestamp: append to the current file.
-		// Comparing the date keys lexically is correct for the YYYY-MM-DD form.
-		return current, nil
-	}
-	// A newer day: freeze the current file under its own day name, then start
-	// a fresh current file. The rename is idempotent under a crash — when the
-	// current file is already gone we only advance the mark.
-	if _, statErr := os.Stat(current); statErr == nil {
-		rolled := us.uniqueRolledPath(dir, mark)
-		if err := os.Rename(current, rolled); err != nil {
-			return "", fmt.Errorf("unified_store: roll transcript day %s: %w", mark, err)
-		}
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return "", fmt.Errorf("unified_store: stat transcript before rollover: %w", statErr)
-	}
-	if err := us.writeTranscriptDayMark(sessionID, entryDay); err != nil {
-		return "", err
-	}
-	return current, nil
-}
-
-// uniqueRolledPath returns a non-colliding "<day>.jsonl" path inside dir. A
-// collision is only reachable after an out-of-band write or a partially
-// completed prior rollover; a suffixed name keeps the date prefix (and so the
-// read order) intact rather than overwriting retained bytes.
-func (us *UnifiedStore) uniqueRolledPath(dir, day string) string {
-	base := filepath.Join(dir, day+".jsonl")
-	if _, err := os.Stat(base); errors.Is(err, os.ErrNotExist) {
-		return base
-	}
-	for i := 1; ; i++ {
-		cand := filepath.Join(dir, fmt.Sprintf("%s-%d.jsonl", day, i))
-		if _, err := os.Stat(cand); errors.Is(err, os.ErrNotExist) {
-			return cand
-		}
-	}
-}
-
 // readTranscriptDayMark returns the persisted current-day mark, or "" when no
 // mark exists yet (fresh or legacy session).
 func (us *UnifiedStore) readTranscriptDayMark(sessionID string) (string, error) {
@@ -133,15 +51,6 @@ func (us *UnifiedStore) readTranscriptDayMark(sessionID string) (string, error) 
 		return "", fmt.Errorf("unified_store: read transcript day mark: %w", err)
 	}
 	return strings.TrimSpace(string(b)), nil
-}
-
-// writeTranscriptDayMark persists the current-day mark atomically.
-func (us *UnifiedStore) writeTranscriptDayMark(sessionID, day string) error {
-	path := filepath.Join(us.baseDir, sessionID, transcriptDayMarkFile)
-	if err := fileutil.WriteFileAtomic(path, []byte(day+"\n"), 0o600); err != nil {
-		return fmt.Errorf("unified_store: write transcript day mark: %w", err)
-	}
-	return nil
 }
 
 // transcriptPartitionPaths returns the archive's partitions in chronological
@@ -196,24 +105,4 @@ func (us *UnifiedStore) transcriptPartitionPaths(sessionID string) ([]string, er
 func warnOnStrayDayPartition(sessionID string, err error) {
 	slog.Warn("unified_store: transcript partition list failed; reading current partition only",
 		"session_id", sessionID, "error", err)
-}
-
-// transcriptLineCountPartitions returns the session's GLOBAL transcript record
-// index — the number of nonempty records across every day partition in order.
-// The index must be global (not per-file) because a TranscriptLine projection
-// address identifies one record for the session's whole lifetime.
-func (us *UnifiedStore) transcriptLineCountPartitions(sessionID string) (int, error) {
-	paths, err := us.transcriptPartitionPaths(sessionID)
-	if err != nil {
-		return 0, err
-	}
-	total := 0
-	for _, p := range paths {
-		n, err := transcriptLineCount(p)
-		if err != nil {
-			return 0, err
-		}
-		total += n
-	}
-	return total, nil
 }

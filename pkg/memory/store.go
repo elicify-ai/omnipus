@@ -59,11 +59,6 @@ type StoreWriter interface {
 	// TruncateHistory prunes entries whose archive_line < Skip.
 	SetProjectionState(ctx context.Context, sessionKey string, pk ProjectionKey, state ProjectionState) error
 
-	// MarkHydrated sets the one-way hydrated flag (FR-048): the archive was
-	// rebuilt from the UI transcript, so recall by id cannot return the
-	// original result bytes.
-	MarkHydrated(ctx context.Context, sessionKey string) error
-
 	// Compact reclaims storage by physically removing logically truncated
 	// data. Backends that do not accumulate dead data may return nil.
 	//

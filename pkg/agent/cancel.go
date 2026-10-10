@@ -26,6 +26,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/google/uuid"
 )
 
 // cancelHardAbortDelay is PHASE B's escalation delay: how long after a
@@ -659,15 +660,14 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 		// independent PHASE A and therefore its OWN accurate
 		// turn_canceled audit event, computed at THE MOMENT it was caught —
 		// not by mutating this single event after the fact.
-		// Mark the last transcript entry as truncated.
 		if rc.store != nil {
-			if err := rc.store.MarkLastEntryTruncated(rc.sessionID, rc.turnID, "cancelled"); err != nil {
-				slog.Warn("agent: RequestCancel: MarkLastEntryTruncated failed",
-					"session_id", rc.sessionID, "turn_id", rc.turnID, "error", err)
-			}
-			// Append a turn_canceled entry to the transcript.
+			// Append a turn_canceled entry to the transcript. It is also what
+			// marks the turn's last assistant entry truncated: the transcript
+			// reader derives that from this record (session.deriveCancelTruncation),
+			// so no earlier line is rewritten. It must stay appended AFTER that
+			// assistant entry.
 			appendErr := rc.store.AppendTranscript(rc.sessionID, session.TranscriptEntry{
-				ID:                   rc.sessionID + "_canceled",
+				ID:                   canceledEntryID(rc.sessionID, rc.turnID),
 				Type:                 session.EntryTypeTurnCancelled,
 				TurnID:               rc.turnID,
 				CancelledByUser:      rc.canceller.UserID,
@@ -1354,4 +1354,15 @@ func (al *AgentLoop) RequestCancelByChannelChat(ctx context.Context, channelName
 		return false, false, fmt.Errorf("RequestCancelByChannelChat: channel and chatID must not be empty")
 	}
 	return al.requestCommandStopByChannelChat(ctx, channelName, chatID, userID, "tree")
+}
+
+// canceledEntryID is the transcript id of one turn_canceled record. Every cancel
+// in a session needs its own id: a shared "<session>_canceled" would let any
+// id-deduplicating writer drop all but the first. The turn id makes it unique per
+// canceled turn; a cancel with no turn id gets a random suffix.
+func canceledEntryID(sessionID, turnID string) string {
+	if turnID == "" {
+		turnID = uuid.NewString()
+	}
+	return sessionID + "_canceled_" + turnID
 }

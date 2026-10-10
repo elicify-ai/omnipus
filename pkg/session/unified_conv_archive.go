@@ -2,7 +2,7 @@
 // saved-chat cutover (spec CONV "Content / continuation", FR-038;
 // ARCHITECT-ANSWER-CONV-PROVENANCE.md, CONV-P A). It converts each legacy
 // `.context/<key>.jsonl` model archive — and, per N3, only when it PROVABLY
-// decodes — into the addressed day archive under `<baseDir>/<id>/u2archive/`,
+// decodes — into the addressed day archive in the session directory `<baseDir>/<id>/`,
 // preserving every field the saved line actually holds byte-for-byte, joining
 // tool results to their producing assistant occurrence, and marking each
 // converted record with the private `model_origin` provenance (CONV-P A).
@@ -124,7 +124,11 @@ func convConvertOneLegacyArchive(baseDir, contextDir, base string) error {
 			return fmt.Errorf("conversion: saved chat %q: append archive record %s: %w", id, rec.ID, err)
 		}
 	}
-	outMeta := convTranslateMeta(meta, len(records))
+	addrs, callsAt, err := convTranscriptLineAddrs(store.dir())
+	if err != nil {
+		return fmt.Errorf("conversion: saved chat %q: index converted transcript: %w", id, err)
+	}
+	outMeta := convTranslateMeta(id, meta, len(records), addrs, callsAt)
 	outMeta.ConvSourceTorn = tornAt >= 0
 	if err := convWriteBackendMeta(store.dir(), outMeta); err != nil {
 		return fmt.Errorf("conversion: saved chat %q: publish window metadata: %w", id, err)
@@ -155,37 +159,40 @@ func convRetireLegacyArchive(contextDir, base string) error {
 	return nil
 }
 
-// convArchiveAlreadyMaterialized reports whether the addressed archive for this
-// session already holds a completed conversion (lines + a backend meta file).
-// Lines present WITHOUT the meta are a conflict and refuse. The second return is
-// true when the earlier conversion retained a torn source (N2=B), which a later
-// boot must not retire.
+// convArchiveAlreadyMaterialized reports whether the archive for this session
+// already holds a completed model conversion: the backend window metadata is the
+// completion mark, published last. The session's chat records share the file, so
+// content alone says nothing. Converted model records WITHOUT the mark are a
+// conflict (an interrupted append) and refuse. The second return is true when
+// the earlier conversion retained a torn source (N2=B), which a later boot must
+// not retire.
 func convArchiveAlreadyMaterialized(store *ArchiveDayStore) (materialized bool, tornRetained bool, err error) {
-	cur := filepath.Join(store.dir(), archiveCurrentFile)
-	if _, statErr := os.Stat(cur); errors.Is(statErr, fs.ErrNotExist) {
-		return false, false, nil
-	} else if statErr != nil {
-		return false, false, statErr
-	}
-	info, statErr := os.Stat(cur)
-	if statErr != nil {
-		return false, false, statErr
-	}
-	if info.Size() == 0 {
-		return false, false, nil
-	}
 	metaPath := filepath.Join(store.dir(), archiveBackendMetaFile)
 	data, metaErr := os.ReadFile(metaPath)
-	if errors.Is(metaErr, fs.ErrNotExist) {
-		return false, false, fmt.Errorf("destination already holds archive content with no window metadata; refusing to overwrite")
-	} else if metaErr != nil {
+	if metaErr == nil {
+		var m archiveBackendMeta
+		if jsonErr := json.Unmarshal(data, &m); jsonErr != nil {
+			return false, false, jsonErr
+		}
+		return true, m.ConvSourceTorn, nil
+	}
+	if !errors.Is(metaErr, fs.ErrNotExist) {
 		return false, false, metaErr
 	}
-	var m archiveBackendMeta
-	if jsonErr := json.Unmarshal(data, &m); jsonErr != nil {
-		return false, false, jsonErr
+	partial := false
+	if scanErr := store.ScanAll(func(_ ArchiveAddress, rec ArchiveRecord) bool {
+		if rec.ModelOrigin != "" {
+			partial = true
+			return false
+		}
+		return true
+	}); scanErr != nil {
+		return false, false, scanErr
 	}
-	return true, m.ConvSourceTorn, nil
+	if partial {
+		return false, false, fmt.Errorf("destination already holds converted model records with no window metadata; refusing to overwrite")
+	}
+	return false, false, nil
 }
 
 // convTornTailDecision is the ONE isolated place the open N2 question lives
@@ -288,9 +295,7 @@ func convBuildRecord(id string, offset int, msg providers.Message, origin string
 	rec := ArchiveRecord{
 		TranscriptEntry: TranscriptEntry{
 			ID:             "conv_" + id + "_" + fmt.Sprintf("%d", offset),
-			Role:           msg.Role,
-			Content:        msg.Content,
-			ViewMembership: viewMembershipForRole(msg.Role),
+			ViewMembership: ViewMembershipModel,
 		},
 		ModelMessage: &mp,
 		ModelOrigin:  origin,
@@ -337,16 +342,26 @@ func convRejectForeignToolFields(id string, offset int, msg providers.Message) e
 	return nil
 }
 
+// convLegacyProjectionRow is one projection row of the legacy sidecar, which
+// named its chat tool_call record by a transcript LINE INDEX.
+type convLegacyProjectionRow struct {
+	ToolCallID     string                 `json:"tool_call_id"`
+	ArchiveLine    int                    `json:"archive_line"`
+	State          memory.ProjectionState `json:"state,omitempty"`
+	SourceRunes    *int                   `json:"retained_source_runes,omitempty"`
+	TranscriptLine *int                   `json:"transcript_line,omitempty"`
+}
+
 // convLegacyMeta is the legacy `.context/<key>.meta.json` sidecar (memory's
 // sessionMeta), decoded here so CONV carries the window state forward.
 type convLegacyMeta struct {
-	Key        string                 `json:"key"`
-	Skip       int                    `json:"skip"`
-	Count      int                    `json:"count"`
-	Projection []archiveProjectionRow `json:"projection,omitempty"`
-	Hydrated   bool                   `json:"hydrated,omitempty"`
-	AnchorLine *int                   `json:"anchor_archive_line,omitempty"`
-	Retracted  []memory.ArchiveSpan   `json:"retracted,omitempty"`
+	Key        string                    `json:"key"`
+	Skip       int                       `json:"skip"`
+	Count      int                       `json:"count"`
+	Projection []convLegacyProjectionRow `json:"projection,omitempty"`
+	Hydrated   bool                      `json:"hydrated,omitempty"`
+	AnchorLine *int                      `json:"anchor_archive_line,omitempty"`
+	Retracted  []memory.ArchiveSpan      `json:"retracted,omitempty"`
 }
 
 func convReadLegacyMeta(path string) (convLegacyMeta, error) {
@@ -365,14 +380,29 @@ func convReadLegacyMeta(path string) (convLegacyMeta, error) {
 }
 
 // convTranslateMeta carries the legacy window state onto the new backend meta.
-func convTranslateMeta(m convLegacyMeta, convertedCount int) archiveBackendMeta {
+// A projection row's legacy transcript line index becomes the exact address of
+// that record in the converted partitions; an index that does not resolve to a
+// record carrying the row's tool call is dropped with a WARN, never guessed.
+func convTranslateMeta(chat string, m convLegacyMeta, convertedCount int, addrs []ArchiveAddress, callsAt map[int]string) archiveBackendMeta {
 	out := archiveBackendMeta{
 		Skip:       m.Skip,
 		Count:      convertedCount,
 		AnchorLine: m.AnchorLine,
 		Retracted:  m.Retracted,
-		Hydrated:   m.Hydrated,
-		Projection: m.Projection,
+	}
+	for _, r := range m.Projection {
+		row := archiveProjectionRow{ToolCallID: r.ToolCallID, ArchiveLine: r.ArchiveLine, State: r.State, SourceRunes: r.SourceRunes}
+		if r.TranscriptLine != nil {
+			k := *r.TranscriptLine
+			if k >= 0 && k < len(addrs) && addrs[k].EntryID != "" && strings.Contains(callsAt[k], "\x00"+r.ToolCallID+"\x00") {
+				a := addrs[k]
+				row.TranscriptAddr = &a
+			} else {
+				slog.Warn("conversion: dropped an unresolvable transcript identity",
+					"chat", chat, "tool_call_id", r.ToolCallID, "transcript_line", k)
+			}
+		}
+		out.Projection = append(out.Projection, row)
 	}
 	if out.Count == 0 {
 		out.Count = m.Count

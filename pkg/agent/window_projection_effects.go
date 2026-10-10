@@ -13,7 +13,7 @@ type windowProjectionChange struct {
 	key          memory.ProjectionKey
 	state        memory.ProjectionState
 	text, mark   string
-	transcriptAt *int
+	transcriptAt *session.ArchiveAddress
 }
 
 // Build every mark before any persistence or publication. Updates are ordered by
@@ -47,8 +47,8 @@ func (p *windowCheckpoint) projectionChanges() ([]windowProjectionChange, error)
 			return nil, err
 		}
 		change := windowProjectionChange{key: key, state: public, text: m.Content, mark: mark}
-		if line, ok := p.state.Projection.TranscriptLine[key]; ok {
-			change.transcriptAt = &line
+		if addr, ok := p.state.Projection.TranscriptAddr[key]; ok {
+			change.transcriptAt = &addr
 		}
 		changes = append(changes, change)
 	}
@@ -66,25 +66,27 @@ func recordWindowProjections(ts *turnState, changes []windowProjectionChange) er
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
 		return nil
 	}
-	updates := make([]session.ToolCallProjectionUpdate, 0, len(changes))
+	edits := make([]session.ToolCallProjectionEdit, 0, len(changes))
 	for _, c := range changes {
 		// A just-admitted result is recorded by finishCall after this checkpoint.
 		// No bare-id guess can substitute for a missing archive mapping.
 		if c.transcriptAt == nil {
 			continue
 		}
-		text := c.text
-		updates = append(updates, session.ToolCallProjectionUpdate{
-			ToolCallID: session.ToolCallID(c.key.ToolCallID), TranscriptLine: c.transcriptAt,
-			ContentState: string(c.state), Text: &text,
+		edits = append(edits, session.ToolCallProjectionEdit{
+			Target: *c.transcriptAt, ToolCallID: session.ToolCallID(c.key.ToolCallID),
+			ContentState: string(c.state), Text: c.text,
 		})
 	}
-	previous, err := ts.transcriptStore.UpdateToolCallProjections(ts.transcriptSessionID, updates)
+	if len(edits) == 0 {
+		return nil
+	}
+	effect, err := ts.transcriptStore.ProjectToolCalls(ts.transcriptSessionID, edits)
 	if err != nil {
 		return fmt.Errorf("context checkpoint: update transcript projections: %w", err)
 	}
 	ts.mu.Lock()
-	ts.emptiedTranscriptPrev = append(ts.emptiedTranscriptPrev, previous...)
+	ts.projectionEffects = append(ts.projectionEffects, effect)
 	ts.mu.Unlock()
 	return nil
 }

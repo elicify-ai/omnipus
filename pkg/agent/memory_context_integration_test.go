@@ -271,7 +271,7 @@ func TestIntegration_ContextCompactionOverflow(t *testing.T) {
 		{Role: "assistant", Content: "ctxIT_recent_question: landlock policy applied, any final steps?"},
 	}
 
-	agent.Sessions.SetHistory(sessionKey, history)
+	seedWindowHistory(agent.Sessions, sessionKey, history)
 	require.NoError(t, agent.Sessions.Save(sessionKey))
 
 	beforeCount := len(history)

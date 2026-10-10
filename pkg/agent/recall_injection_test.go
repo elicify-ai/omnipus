@@ -152,7 +152,7 @@ func recallInjectionFixture(
 	for _, tr := range turns {
 		history = append(history, tr...)
 	}
-	agent.Sessions.SetHistory(recallInjectionSessionKey, history)
+	seedWindowHistory(agent.Sessions, recallInjectionSessionKey, history)
 	require.NoError(t, agent.Sessions.Save(recallInjectionSessionKey))
 	return al, agent
 }
@@ -221,7 +221,7 @@ func TestRunTurn_RecallInjected_NonceInSecondRequest(t *testing.T) {
 	// The nonce sits AFTER the filler so the breadcrumb's 80-char snippet of
 	// the evicted user line (system message) never carries it — only a real
 	// splice of the recalled turn can put it in a request.
-	agent.Sessions.TruncateHistory(recallInjectionSessionKey, len(turns)*2-2)
+	truncateWindowTo(t, agent.Sessions, recallInjectionSessionKey, len(turns)*2-2)
 	for _, m := range agent.Sessions.GetHistory(recallInjectionSessionKey) {
 		require.NotContains(t, m.Content, nonce, "test setup: the nonce must be evicted from the live window")
 	}
@@ -268,7 +268,7 @@ func TestRunTurn_RecallNonFit_ToolResultStatesIt(t *testing.T) {
 	provider := &recallInjectionProvider{first: map[string]any{"turn_range": "1-1"}}
 	al, agent := recallInjectionFixture(t, provider, 12000, 1000, turns)
 	taskSessionID := newRecallInjectionTaskSession(t, al, agent)
-	agent.Sessions.TruncateHistory(recallInjectionSessionKey, len(turns)*2-2)
+	truncateWindowTo(t, agent.Sessions, recallInjectionSessionKey, len(turns)*2-2)
 
 	_, err := al.processTaskDirect(context.Background(), agent.ID, "what was the nonce?", recallInjectionSessionKey, taskSessionID)
 	require.NoError(t, err)
@@ -320,7 +320,7 @@ func TestRunTurn_RecallSpanDroppedFirstOnOverflowRejection(t *testing.T) {
 	}
 	al, agent := recallInjectionFixture(t, provider, 200000, 1000, turns)
 	taskSessionID := newRecallInjectionTaskSession(t, al, agent)
-	agent.Sessions.TruncateHistory(recallInjectionSessionKey, len(turns)*2-2)
+	truncateWindowTo(t, agent.Sessions, recallInjectionSessionKey, len(turns)*2-2)
 
 	pressureBefore := RecallSpanDropCount("pressure")
 	_, err := al.processTaskDirect(context.Background(), agent.ID, "what was the nonce?", recallInjectionSessionKey, taskSessionID)
@@ -372,7 +372,7 @@ func TestRunTurn_RecallReplacedInSameTurn_OneMarker(t *testing.T) {
 	al, agent := recallInjectionFixture(t, provider, 200000, 1000, turns)
 	taskSessionID := newRecallInjectionTaskSession(t, al, agent)
 	// Evict turns 1 and 2.
-	agent.Sessions.TruncateHistory(recallInjectionSessionKey, len(turns)*2-4)
+	truncateWindowTo(t, agent.Sessions, recallInjectionSessionKey, len(turns)*2-4)
 
 	_, err := al.processTaskDirect(context.Background(), agent.ID, "recall twice", recallInjectionSessionKey, taskSessionID)
 	require.NoError(t, err)
@@ -496,7 +496,7 @@ func TestRunTurn_RecallByIdPageInjected(t *testing.T) {
 	for _, tr := range turns {
 		total += len(tr)
 	}
-	agent.Sessions.TruncateHistory(recallInjectionSessionKey, total-len(firstTurn))
+	truncateWindowTo(t, agent.Sessions, recallInjectionSessionKey, total-len(firstTurn))
 	for _, m := range agent.Sessions.GetHistory(recallInjectionSessionKey) {
 		require.NotContains(t, m.Content, nonce1, "test setup: the result must be evicted from the window")
 		require.NotContains(t, m.Content, nonce2, "test setup: the result must be evicted from the window")

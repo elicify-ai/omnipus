@@ -32,9 +32,9 @@ func (w WindowState) Clone() WindowState {
 	for k, v := range w.Projection.SourceRunes {
 		out.Projection.SourceRunes[k] = v
 	}
-	out.Projection.TranscriptLine = make(map[ProjectionKey]int, len(w.Projection.TranscriptLine))
-	for k, v := range w.Projection.TranscriptLine {
-		out.Projection.TranscriptLine[k] = v
+	out.Projection.TranscriptAddr = make(map[ProjectionKey]RecordAddress, len(w.Projection.TranscriptAddr))
+	for k, v := range w.Projection.TranscriptAddr {
+		out.Projection.TranscriptAddr[k] = v
 	}
 	return out
 }
@@ -67,15 +67,15 @@ func windowState(meta sessionMeta) WindowState {
 
 func projectionMeta(meta sessionMeta) ProjectionMeta {
 	pm := ProjectionMeta{Entries: projectionFromEntries(meta.Projection),
-		Hydrated: meta.Hydrated, SourceRunes: make(map[ProjectionKey]int),
-		TranscriptLine: make(map[ProjectionKey]int)}
+		SourceRunes:    make(map[ProjectionKey]int),
+		TranscriptAddr: make(map[ProjectionKey]RecordAddress)}
 	for _, e := range meta.Projection {
 		k := ProjectionKey{ToolCallID: e.ToolCallID, ArchiveLine: e.ArchiveLine}
 		if e.SourceRunes != nil && *e.SourceRunes >= 0 && validProjectionState(e.State) {
 			pm.SourceRunes[k] = *e.SourceRunes
 		}
-		if e.TranscriptLine != nil && *e.TranscriptLine >= 0 && k.ToolCallID != "" && k.ArchiveLine >= 0 {
-			pm.TranscriptLine[k] = *e.TranscriptLine
+		if e.TranscriptAddr != nil && validRecordAddress(*e.TranscriptAddr) && k.ToolCallID != "" && k.ArchiveLine >= 0 {
+			pm.TranscriptAddr[k] = *e.TranscriptAddr
 		}
 	}
 	return pm
@@ -83,7 +83,7 @@ func projectionMeta(meta sessionMeta) ProjectionMeta {
 
 func entriesWithLimits(pm ProjectionMeta) []projectionEntry {
 	keys := pm.Entries.Clone()
-	for k := range pm.TranscriptLine {
+	for k := range pm.TranscriptAddr {
 		if _, exists := keys[k]; !exists {
 			keys[k] = "" // A full result still needs its transcript identity.
 		}
@@ -95,9 +95,9 @@ func entriesWithLimits(pm ProjectionMeta) []projectionEntry {
 			v := n
 			entries[i].SourceRunes = &v
 		}
-		if n, ok := pm.TranscriptLine[k]; ok {
-			v := n
-			entries[i].TranscriptLine = &v
+		if a, ok := pm.TranscriptAddr[k]; ok {
+			v := a
+			entries[i].TranscriptAddr = &v
 		}
 	}
 	return entries
@@ -107,7 +107,6 @@ func applyWindow(meta *sessionMeta, state WindowState) {
 	state = state.Clone()
 	meta.Skip, meta.Count, meta.AnchorLine = state.Skip, state.Count, state.AnchorLine
 	meta.Projection = entriesWithLimits(state.Projection)
-	meta.Hydrated = state.Projection.Hydrated
 	meta.UpdatedAt = time.Now()
 }
 
@@ -281,8 +280,8 @@ func validateWindowMetadata(after WindowState, archive []ArchivedMessage) error 
 			return errors.New("memory: invalid retained source limit")
 		}
 	}
-	for k, line := range after.Projection.TranscriptLine {
-		if line < 0 || k.ToolCallID == "" || k.ArchiveLine < after.Skip || k.ArchiveLine >= len(archive) {
+	for k, addr := range after.Projection.TranscriptAddr {
+		if !validRecordAddress(addr) || k.ToolCallID == "" || k.ArchiveLine < after.Skip || k.ArchiveLine >= len(archive) {
 			return errors.New("memory: invalid transcript projection identity")
 		}
 		if source := archive[k.ArchiveLine]; source.Role != "tool" || source.ToolCallID != k.ToolCallID {
@@ -370,4 +369,9 @@ func retractSpan(spans []ArchiveSpan, start, end int) []ArchiveSpan {
 		merged = append(merged, s)
 	}
 	return merged
+}
+
+// validRecordAddress reports whether a is a complete address (offset 0 is valid).
+func validRecordAddress(a RecordAddress) bool {
+	return a.PartitionKey != "" && a.EntryID != "" && a.ByteOffset >= 0
 }

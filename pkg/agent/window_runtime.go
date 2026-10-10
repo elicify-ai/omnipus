@@ -23,7 +23,7 @@ const (
 )
 
 func (p windowProducer) modelAppend(msg providers.Message, agentID string) session.ModelAppend {
-	in := session.ModelAppend{Message: msg, ViewMembership: session.ViewMembershipBoth, AgentID: agentID}
+	in := session.ModelAppend{Message: msg, ViewMembership: session.ViewMembershipModel, AgentID: agentID}
 	if p == windowProducerAssistant {
 		in.Source = session.EntrySource{Kind: "agent"}
 	} else {

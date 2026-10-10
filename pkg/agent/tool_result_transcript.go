@@ -36,10 +36,10 @@ func (ts *turnState) resultTranscriptSnapshot(tc session.ToolCall, line int) (se
 	return store, snap, nil
 }
 
-func (ts *turnState) persistResultTranscriptLine(store session.ContextWindowStore, snap session.WindowView, tc session.ToolCall, archiveLine, transcriptLine int) error {
+func (ts *turnState) persistResultTranscriptAddr(store session.ContextWindowStore, snap session.WindowView, tc session.ToolCall, archiveLine int, transcriptAddr session.ArchiveAddress) error {
 	after := snap.State.Clone()
 	key := memory.ProjectionKey{ToolCallID: string(tc.ID), ArchiveLine: archiveLine}
-	after.Projection.TranscriptLine[key] = transcriptLine
+	after.Projection.TranscriptAddr[key] = transcriptAddr
 	if err := store.CommitWindow(context.Background(), ts.sessionKey, snap.State, after); err != nil {
 		return fmt.Errorf("context transcript: persist exact result identity: %w", err)
 	}

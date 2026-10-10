@@ -63,6 +63,11 @@ func CutoverSavedChatsAtBoot(baseDir string) error {
 	// Faithful model-content conversion FIRST (unified_conv_archive.go): the
 	// legacy .context model archives become the addressed archive the runtime now
 	// reads. Then the metadata/recovery passes.
+	// The chat partitions convert first: the model conversion appends into the
+	// same files, and its projection identities name converted chat records.
+	if err := convConvergeTranscripts(baseDir); err != nil {
+		return err
+	}
 	if err := convConvertLegacyModelArchives(baseDir); err != nil {
 		return err
 	}

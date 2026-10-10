@@ -99,29 +99,25 @@ func (ts *turnState) hardAbortRequested() bool {
 	return ts.hardAbort
 }
 
-// revertEmptiedTranscript puts back the PREVIOUS content_state / result of
-// every transcript tool_call record the D5 pass rewrote during this turn
-// (ADR-066 FR-020/FR-022): the window's projection set has just been rolled
-// back to turn start, so the transcript must stop claiming those results are
-// projected. A failed restore retains the undo records for a later attempt.
+// revertEmptiedTranscript retracts every projection effect the D5 pass appended
+// during this turn (ADR-066 FR-020/FR-022): the window's projection set has just
+// been rolled back to turn start, so the transcript must stop claiming those
+// results are projected. A retract restores the exact pre-effect value, whatever
+// the number of repeated projections. A failed retract keeps the effects for a
+// later attempt.
 func (ts *turnState) revertEmptiedTranscript() error {
-	// Serialize restoration with undo-list updates. Failed I/O retains the
-	// exact list, and concurrent restores cannot consume the same prefix twice.
+	// Serialize with the effect-list updates so concurrent restores cannot
+	// retract the same prefix twice.
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
-	prev := append([]session.ToolCallProjectionUpdate(nil), ts.emptiedTranscriptPrev...)
-	if len(prev) == 0 || ts.transcriptStore == nil || ts.transcriptSessionID == "" {
+	effects := append([]session.ArchiveAddress(nil), ts.projectionEffects...)
+	if len(effects) == 0 || ts.transcriptStore == nil || ts.transcriptSessionID == "" {
 		return nil
 	}
-	// Undo newest change first. A result shortened repeatedly in one turn
-	// must finish on its exact original result, error and projection state.
-	for i, j := 0, len(prev)-1; i < j; i, j = i+1, j-1 {
-		prev[i], prev[j] = prev[j], prev[i]
-	}
-	if _, err := ts.transcriptStore.UpdateToolCallProjections(ts.transcriptSessionID, prev); err != nil {
+	if _, err := ts.transcriptStore.RetractToolCallEffects(ts.transcriptSessionID, effects); err != nil {
 		return fmt.Errorf("context rollback: transcript projection restore: %w", err)
 	}
-	ts.emptiedTranscriptPrev = ts.emptiedTranscriptPrev[len(prev):]
+	ts.projectionEffects = ts.projectionEffects[len(effects):]
 	return nil
 }
 

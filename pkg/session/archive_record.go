@@ -19,7 +19,11 @@
 // into REST/WS/replay, which project to the generated public shapes.
 package session
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/elicify-ai/omnipus/pkg/memory"
+)
 
 // ArchiveAddress is the stable, disk-only mark identifying the START of one
 // complete encoded archive record (session-core C-ARCHIVE / U2, Decision C; spec
@@ -35,11 +39,10 @@ import "fmt"
 //   - EntryID is the record's own id, re-checked on read: an offset that lands
 //     on a different record is a corrupt or stale mark, not a silent
 //     wrong-record read.
-type ArchiveAddress struct {
-	PartitionKey string `json:"partition_key"`
-	ByteOffset   int64  `json:"byte_offset"`
-	EntryID      string `json:"entry_id"`
-}
+//
+// The type lives in pkg/memory (RecordAddress) so the window projection can name
+// a chat record without an import cycle; ArchiveAddress is its alias here.
+type ArchiveAddress = memory.RecordAddress
 
 // EntrySource is the trusted, server-minted provenance of a content record
 // (session-core C-ARCHIVE / U2, Decision A; FR-008/027/028/045). It is filled
@@ -109,6 +112,43 @@ type ArchiveRecord struct {
 	// mirrored or never present. It is disk-only and never crosses the
 	// gateway/SPA boundary.
 	ModelOrigin string `json:"model_origin,omitempty"`
+
+	// ToolCallEffect is the append-only correction of an earlier chat tool_call
+	// record (effects design D5): a settle, a projection batch, or the retraction
+	// of earlier projection effects. Merged on read, never applied in place. Set
+	// only on an EntryTypeToolCallEffect record, with no model payload.
+	ToolCallEffect *ToolCallEffect `json:"tool_call_effect,omitempty"`
+}
+
+// EntryTypeToolCallEffect is the private discriminator of a tool-call effect
+// record. Like model_ref it is internal persistence, never a public Message type.
+const EntryTypeToolCallEffect EntryType = "tool_call_effect"
+
+// ToolCallEffect carries exactly one of Settle, Projections or Retracts.
+type ToolCallEffect struct {
+	Settle      *ToolCallSettle          `json:"settle,omitempty"`
+	Projections []ToolCallProjectionEdit `json:"projections,omitempty"`
+	// Retracts names earlier Projections effects to undo, restoring the exact
+	// pre-effect value (it replaces a reverse-order undo replay).
+	Retracts []ArchiveAddress `json:"retracts,omitempty"`
+}
+
+// ToolCallSettle replaces one tool call of an earlier chat record wholesale.
+type ToolCallSettle struct {
+	Target ArchiveAddress `json:"target"` // the chat tool_call record
+	// IfStatus, when non-empty, applies the settle only if the call's merged
+	// status equals it (the double-settle guard, evaluated on read).
+	IfStatus string   `json:"if_status,omitempty"`
+	ToolCall ToolCall `json:"tool_call"` // wholesale post-image; ToolCall.ID names the call
+}
+
+// ToolCallProjectionEdit changes the projected content state and text of one
+// tool call of an earlier chat record.
+type ToolCallProjectionEdit struct {
+	Target       ArchiveAddress `json:"target"`
+	ToolCallID   ToolCallID     `json:"tool_call_id"`
+	ContentState string         `json:"content_state"`
+	Text         string         `json:"text"`
 }
 
 // ModelOrigin values (CONV-P A). Absent (the empty string) is the live case.
@@ -186,10 +226,64 @@ func (r ArchiveRecord) Validate() error {
 		}
 	}
 
+	if err := r.validateToolCallEffect(); err != nil {
+		return err
+	}
 	if err := r.validateModelOrigin(); err != nil {
 		return err
 	}
 	return nil
+}
+
+// validateToolCallEffect keeps the effect discriminator, its member and its
+// single variant together, and the target addresses complete.
+func (r ArchiveRecord) validateToolCallEffect() error {
+	if (r.Type == EntryTypeToolCallEffect) != (r.ToolCallEffect != nil) {
+		return fmt.Errorf("archive record %s: a %q record and its tool_call_effect member must appear together", r.ID, EntryTypeToolCallEffect)
+	}
+	e := r.ToolCallEffect
+	if e == nil {
+		return nil
+	}
+	if r.ViewMembership != ViewMembershipChat || r.ModelMessage != nil || r.ModelRef != nil || r.Content != "" || len(r.ToolCalls) != 0 {
+		return fmt.Errorf("archive record %s: a tool_call_effect is a chat-view effect with no payload, model message or content", r.ID)
+	}
+	variants := 0
+	if e.Settle != nil {
+		variants++
+		if !completeAddress(e.Settle.Target) || e.Settle.ToolCall.ID == "" {
+			return fmt.Errorf("archive record %s: a settle needs a complete target and a tool call id", r.ID)
+		}
+	}
+	if len(e.Projections) > 0 {
+		variants++
+		for _, p := range e.Projections {
+			if !completeAddress(p.Target) || p.ToolCallID == "" || !validEffectContentState(p.ContentState) {
+				return fmt.Errorf("archive record %s: a projection edit needs a complete target, a tool call id and a public content state", r.ID)
+			}
+		}
+	}
+	if len(e.Retracts) > 0 {
+		variants++
+		for _, a := range e.Retracts {
+			if !completeAddress(a) {
+				return fmt.Errorf("archive record %s: a retract needs complete effect addresses", r.ID)
+			}
+		}
+	}
+	if variants != 1 {
+		return fmt.Errorf("archive record %s: a tool_call_effect carries exactly one of settle, projections or retracts", r.ID)
+	}
+	return nil
+}
+
+func completeAddress(a ArchiveAddress) bool {
+	return a.PartitionKey != "" && a.EntryID != "" && a.ByteOffset >= 0
+}
+
+// validEffectContentState reports whether s is a public projection state.
+func validEffectContentState(s string) bool {
+	return s == "capped" || s == "emptied"
 }
 
 // validateModelOrigin enforces the CONV-P A provenance invariant (a write-side

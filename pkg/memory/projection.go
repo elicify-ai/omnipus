@@ -69,18 +69,33 @@ func (p ProjectionSet) Clone() ProjectionSet {
 	return out
 }
 
-// ProjectionMeta is what a reader gets back: the set plus the D5.5
-// hydrated flag (FR-048 — an archive rebuilt from the UI transcript cannot
-// answer recall-by-id with the original bytes).
+// ProjectionMeta is what a reader gets back: the projection set plus the
+// retained-source limits and transcript identities. (An archive converted from
+// a hydrated source is flagged per record, model_origin == conv_rebuilt, not
+// here.)
 type ProjectionMeta struct {
-	Entries  ProjectionSet
-	Hydrated bool
+	Entries ProjectionSet
 	// SourceRunes records the exact retained source limit, excluding the mark.
 	// Presence, including zero, wins over later cap-setting changes.
 	SourceRunes map[ProjectionKey]int
-	// TranscriptLine is the actual zero-based nonempty transcript record index.
-	// It exists for full results too; absence means no recorded transcript identity.
-	TranscriptLine map[ProjectionKey]int
+	// TranscriptAddr is the exact address of the chat tool_call record that
+	// presents the result, as returned by the append that wrote it. It exists for
+	// full results too; absence means no recorded transcript identity. (An
+	// address with offset 0 is valid: presence in the map is the identity.)
+	TranscriptAddr map[ProjectionKey]RecordAddress
+}
+
+// RecordAddress identifies one complete record of a session's day-partitioned
+// archive: the partition it was written under, the byte offset of its first
+// byte within that partition, and its own entry id (re-checked on read, so an
+// offset that lands on another record is a stale mark, never a wrong-record
+// read). The partition key is the UTC day the record was written under and
+// names the rolled file after a rollover, so an address survives the rename.
+// It is internal persistence state, never a gateway wire type.
+type RecordAddress struct {
+	PartitionKey string `json:"partition_key"`
+	ByteOffset   int64  `json:"byte_offset"`
+	EntryID      string `json:"entry_id"`
 }
 
 // validProjectionState reports whether s is one of the two known states.
@@ -111,7 +126,7 @@ type projectionEntry struct {
 	ArchiveLine    int             `json:"archive_line"`
 	State          ProjectionState `json:"state,omitempty"`
 	SourceRunes    *int            `json:"retained_source_runes,omitempty"`
-	TranscriptLine *int            `json:"transcript_line,omitempty"`
+	TranscriptAddr *RecordAddress  `json:"transcript_addr,omitempty"`
 }
 
 // projectionToEntries flattens a set for persistence.

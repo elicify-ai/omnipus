@@ -1018,16 +1018,10 @@ func recordExternalToolResultUpdateInPlace(
 	status string,
 	result map[string]any,
 ) bool {
-	return mutateToolCallInTranscript(
-		childTS.transcriptStore,
-		childTS.transcriptSessionID,
-		callID,
-		"completed",
-		func(tc *session.ToolCall) {
-			tc.Status = status
-			tc.Result = result
-		},
-	)
+	return mutateToolCall(childTS, callID, "completed", func(tc *session.ToolCall) {
+		tc.Status = status
+		tc.Result = result
+	})
 }
 
 // resolveExternalMaxTurns resolves agentID's effective tool-iteration limit

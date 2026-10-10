@@ -220,6 +220,15 @@ type UnifiedStore struct {
 	homePath     string // ~/.omnipus/ — uploads cascade-delete root (home-rooted per rest.go:4352)
 	backend      *archiveBackend
 
+	// archiveMu guards archives: the one ArchiveDayStore per session directory,
+	// shared by the transcript writers and the model-window backend so every
+	// append to a session's archive serializes on the same store lock (effects
+	// design D2). archiveNow, when set (tests), is the store clock that decides
+	// the UTC day an append is written under.
+	archiveMu  sync.Mutex
+	archives   map[string]*ArchiveDayStore
+	archiveNow func() time.Time
+
 	// cacheMu is the FR-048(b) narrow lock guarding metaCache,
 	// cacheLoadFailures and the FR-097 parent index ONLY — see this struct's
 	// doc comment above for the full lock-order contract.
@@ -424,12 +433,14 @@ func newUnifiedStore(baseDir, homePath string, runCutover bool) (*UnifiedStore, 
 		baseDir:       baseDir,
 		homePath:      homePath,
 		backend:       backend,
+		archives:      make(map[string]*ArchiveDayStore),
 		metaCache:     make(map[string]*UnifiedMeta),
 		parentIndex:   make(map[string]map[string]struct{}),
 		childToParent: make(map[string]string),
 		dirtyStats:    make(map[string]struct{}),
 	}
 
+	backend.provider = us.archiveStore
 	if runCutover {
 		if convErr := us.convergeSavedChats(); convErr != nil {
 			// Visible cutover failure (spec CONV / Failure): do not start
@@ -971,4 +982,23 @@ func readUnifiedMeta(sessionDir string) (*UnifiedMeta, error) {
 	}
 	meta.PostLoad()
 	return meta, nil
+}
+
+// archiveStore returns the session's one ArchiveDayStore, creating it on first
+// use. Every append to the session directory's archive goes through it.
+func (us *UnifiedStore) archiveStore(sessionID string) (*ArchiveDayStore, error) {
+	us.archiveMu.Lock()
+	defer us.archiveMu.Unlock()
+	if s, ok := us.archives[sessionID]; ok {
+		return s, nil
+	}
+	s, err := NewArchiveDayStore(us.baseDir, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if us.archiveNow != nil {
+		s.now = us.archiveNow
+	}
+	us.archives[sessionID] = s
+	return s, nil
 }

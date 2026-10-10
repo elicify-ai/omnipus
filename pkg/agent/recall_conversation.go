@@ -835,15 +835,9 @@ type ConversationArchiveScanner interface {
 	ScanArchive(ctx context.Context, sessionKey string, fn func(idx int, msg memory.ArchivedMessage) bool) error
 }
 
-// recallProjectionReader is the optional projection-meta side (FR-046 /
-// B-53b): a hydrated session's archive was rebuilt from the UI transcript,
-// so the original tool-result bytes are not available by id.
-type recallProjectionReader interface {
-	Projection(key string) memory.ProjectionMeta
-}
-
-// recallHydratedAnswer is the FR-046 answer for recall by id on a hydrated
-// session. The exact phrase is specified (B-53b).
+// recallHydratedAnswer is the FR-046 answer for recall by id on a record
+// converted from a hydrated source (model_origin == conv_rebuilt). The exact
+// phrase is specified (B-53b).
 const recallHydratedAnswer = "recall_conversation: not available — session was rebuilt from the transcript"
 
 // recallPageFraming is the framing header a tool_call_id page carries in
@@ -947,15 +941,6 @@ func (t *RecallConversationTool) executeToolCallID(
 				"recall_conversation: length must be >= 1, got %d", v))
 		}
 		length = v
-	}
-
-	// --- FR-046: a hydrated archive has no original result bytes ------
-	if pr, ok := t.archive.(recallProjectionReader); ok {
-		if pr.Projection(sessionKey).Hydrated {
-			incRecallCounter("error")
-			return tools.ErrorResult(fmt.Sprintf(
-				"%s (the original bytes of tool result %s are gone)", recallHydratedAnswer, id))
-		}
 	}
 
 	// --- streaming scan (FR-024, FR-025, B-31b) -----------------------

@@ -148,29 +148,6 @@ func (sm *SessionManager) ReadArchive(_ context.Context, key string) ([]memory.A
 	return archived, nil
 }
 
-func (sm *SessionManager) TruncateHistory(key string, keepLast int) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	session, ok := sm.sessions[key]
-	if !ok {
-		return
-	}
-
-	if keepLast <= 0 {
-		session.Messages = []providers.Message{}
-		session.Updated = time.Now()
-		return
-	}
-
-	if len(session.Messages) <= keepLast {
-		return
-	}
-
-	session.Messages = session.Messages[len(session.Messages)-keepLast:]
-	session.Updated = time.Now()
-}
-
 // sanitizeFilename converts a session key into a cross-platform safe filename
 // using hex encoding to prevent collisions. For example, "a:b" and "a_b" would
 // both become "_" under the old character-replacement scheme but are distinct
@@ -319,7 +296,7 @@ func (sm *SessionManager) Projection(key string) memory.ProjectionMeta {
 	if !ok {
 		return memory.ProjectionMeta{Entries: memory.ProjectionSet{}}
 	}
-	return memory.ProjectionMeta{Entries: pm.Entries.Clone(), Hydrated: pm.Hydrated}
+	return memory.ProjectionMeta{Entries: pm.Entries.Clone()}
 }
 
 // SetProjectionState implements SessionStore (in-memory, not persisted).
@@ -327,27 +304,4 @@ func (sm *SessionManager) SetProjectionState(key string, pk memory.ProjectionKey
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.projectionLocked(key).Entries[pk] = state
-}
-
-// MarkHydrated implements SessionStore (in-memory, not persisted).
-func (sm *SessionManager) MarkHydrated(key string) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	sm.projectionLocked(key).Hydrated = true
-}
-
-// SetHistory updates the messages of a session.
-func (sm *SessionManager) SetHistory(key string, history []providers.Message) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	session, ok := sm.sessions[key]
-	if ok {
-		// Create a deep copy to strictly isolate internal state
-		// from the caller's slice.
-		msgs := make([]providers.Message, len(history))
-		copy(msgs, history)
-		session.Messages = msgs
-		session.Updated = time.Now()
-	}
 }
