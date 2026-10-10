@@ -79,6 +79,31 @@ func (al *AgentLoop) boundConnectorPair(msg bus.InboundMessage) (addressing.Pair
 // the pair's main with its envelope), and a user-facing refusal when it was
 // refused (nothing written, no turn).
 func (al *AgentLoop) admitBoundConnectorInput(msg *bus.InboundMessage) (refusal string, err error) {
+	return al.admitBoundConnectorInputCtx(context.Background(), msg)
+}
+
+// metadataKeyAudioTranscribed marks a message whose voice parts admission has
+// already transcribed, so the turn does not transcribe (and bill, and echo
+// feedback for) them a second time. The turn still sends the deferred
+// placeholder for it. Set only by admitBoundConnectorInputCtx.
+const metadataKeyAudioTranscribed = "audio_transcribed"
+
+// boundAudioNeedsTranscription reports whether msg is bound-connector input
+// whose media would be transcribed by the turn - the case whose text size is
+// only known after transcription.
+func (al *AgentLoop) boundAudioNeedsTranscription(msg bus.InboundMessage) bool {
+	if _, _, bound := al.boundConnectorPair(msg); !bound {
+		return false
+	}
+	return al.transcriber != nil && al.GetMediaStore() != nil && len(msg.Media) > 0
+}
+
+// admitBoundConnectorInputCtx is admitBoundConnectorInput with a context for
+// the transcription step (U8 r2 F5): voice parts are transcribed FIRST, and
+// every size gate, the capture and the transcript entry then use the text the
+// turn will actually consume. An over-bound expansion is refused, never
+// truncated, with nothing written.
+func (al *AgentLoop) admitBoundConnectorInputCtx(ctx context.Context, msg *bus.InboundMessage) (refusal string, err error) {
 	if msg == nil {
 		return "", nil
 	}
@@ -96,6 +121,16 @@ func (al *AgentLoop) admitBoundConnectorInput(msg *bus.InboundMessage) (refusal 
 	eligible, eErr := deps.PairEligible(pair.WorkspaceID, pair.AgentID)
 	if eErr != nil || !eligible {
 		return unroutable, fmt.Errorf("connector intake: %s/%s has no eligible main (%v)", pair.WorkspaceID, pair.AgentID, eErr)
+	}
+	// 2b. Expand voice parts so the bounds below see the real turn text.
+	if al.boundAudioNeedsTranscription(*msg) {
+		if expanded, did := al.transcribeAudioInMessage(ctx, *msg); did {
+			if expanded.Metadata == nil {
+				expanded.Metadata = map[string]string{}
+			}
+			expanded.Metadata[metadataKeyAudioTranscribed] = "1"
+			*msg = expanded
+		}
 	}
 	// 3. Bounds before any write - on the RAW text AND on the composed envelope
 	// the turn will measure (security review r1 F3): the turn's own gate sees

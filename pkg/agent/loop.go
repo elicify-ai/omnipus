@@ -897,37 +897,49 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 				continue
 			}
 
-			// U8 (FR-028): bound connector input flows into the pair's main
-			// with a captured request id before the worker scope is chosen.
-			if refusal, admitErr := al.admitBoundConnectorInput(&msg); refusal != "" || admitErr != nil {
-				if admitErr != nil {
-					logger.WarnCF("agent", "bound connector input refused",
-						map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID, "error": admitErr.Error()})
-				}
-				if refusal != "" {
-					al.refuseConnectorInput(runCtx, msg, refusal)
-				}
+			// A bound connector voice message is transcribed BEFORE its size gate
+			// and any write (U8 r2 F5), which can take seconds: it is admitted off
+			// the dispatch loop so one slow transcription never stalls every
+			// channel. All other input is admitted inline, in arrival order.
+			if al.boundAudioNeedsTranscription(msg) && al.beginActiveRequest() {
+				go func(m bus.InboundMessage) {
+					defer al.endActiveRequest()
+					al.admitAndDispatch(runCtx, m)
+				}(msg)
 				continue
 			}
-
-			scope, _, ok := al.resolveSteeringTarget(msg)
-			if !ok {
-				// Unroutable — fall through to the original single-shot path so
-				// channels with no configured agent still get an error reply.
-				al.launchUnroutableMessage(runCtx, msg)
-				continue
-			}
-
-			// If a worker already exists for this scope AND is not in the
-			// middle of exiting, enqueue into it; otherwise spawn one under
-			// the admission controller. See dispatchSessionWorker
-			// (session_worker.go) — the same helper #505's system-message
-			// dispatch uses to serialize async-origin turns against the
-			// origin session's worker. On an admission refusal the helper has
-			// already published the capacity reply; nothing further to do.
-			al.dispatchSessionWorker(scope, msg)
+			al.admitAndDispatch(runCtx, msg)
 		}
 	}
+}
+
+// admitAndDispatch is the per-message tail of Run: bound-connector admission
+// (U8, FR-028), then routing to the session worker (or the unroutable path).
+func (al *AgentLoop) admitAndDispatch(runCtx context.Context, msg bus.InboundMessage) {
+	if refusal, admitErr := al.admitBoundConnectorInputCtx(runCtx, &msg); refusal != "" || admitErr != nil {
+		if admitErr != nil {
+			logger.WarnCF("agent", "bound connector input refused",
+				map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID, "error": admitErr.Error()})
+		}
+		if refusal != "" {
+			al.refuseConnectorInput(runCtx, msg, refusal)
+		}
+		return
+	}
+
+	scope, _, ok := al.resolveSteeringTarget(msg)
+	if !ok {
+		// Unroutable — fall through to the original single-shot path so
+		// channels with no configured agent still get an error reply.
+		al.launchUnroutableMessage(runCtx, msg)
+		return
+	}
+
+	// If a worker already exists for this scope AND is not in the middle of
+	// exiting, enqueue into it; otherwise spawn one under the admission
+	// controller. See dispatchSessionWorker (session_worker.go). On an
+	// admission refusal the helper has already published the capacity reply.
+	al.dispatchSessionWorker(scope, msg)
 }
 
 // stopSessionWorkers cancels all active session workers and waits for each
