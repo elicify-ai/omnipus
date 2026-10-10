@@ -97,12 +97,15 @@ type externalCLIRunSession struct {
 	steerInterrupt bool
 	workDir        string
 	workspaceID    string
-	// reviveReserved is set (under mu) by a revival that has verified this
-	// holder still retains the driver its CLI conversation needs (NEW-4). While
-	// set, releaseExternalRunIfIdle keeps the driver, so a completion that is
-	// still unwinding cannot release it between the revival's availability check
-	// and the revived turn's own beginExternalRun, which consumes the reservation.
-	reviveReserved bool
+	// reservations holds (under mu) one OWNED entry per revival that has
+	// verified this holder still retains the driver its CLI conversation needs
+	// (NEW-4/NEW-5). While any entry is live, releaseExternalRunIfIdle keeps the
+	// driver, so a completion that is still unwinding cannot release it between
+	// a revival's availability check and the revived turn's own
+	// beginExternalRun. Each entry is removed only by its owner (cancel), by the
+	// turn of the generation it was bound to (beginExternalRun or the end of that
+	// turn, NEW-6), or by Stop — never by another revival.
+	reservations map[*externalConversationReservation]struct{}
 }
 
 // externalRunSessionKey resolves the registry key for a run — the child's own
@@ -241,23 +244,73 @@ func (al *AgentLoop) markExternalRunStarted(sessionKey string) error {
 	return nil
 }
 
-// externalConversationReservation is a revival's hold on the retained driver.
-// It is taken together with the availability decision, under the holder lock
-// (NEW-4), and ends when the revived turn's beginExternalRun consumes it or the
-// revival gives up (cancel).
+// externalConversationReservation is ONE revival's owned hold on the retained
+// driver. It is taken together with the availability decision, under the holder
+// lock (NEW-4), and is a distinct identity per revival (NEW-5): two overlapping
+// revivals each hold their own entry, so one giving up never ends the other's
+// hold. It ends when its owner cancels it, when the turn of the generation it
+// was bound to reaches the holder (beginExternalRun) or ends (NEW-6), or on
+// Stop.
 type externalConversationReservation struct {
 	sess *externalCLIRunSession
+	// gen is the generation the revival minted (or, for a revival that found the
+	// record already revived, the current one) — the turn that will consume the
+	// hold. Zero until bind; guarded by sess.mu.
+	gen int
 }
 
-// cancel ends the hold when the revival does not reach a dispatched turn. It is
-// a no-op for a nil reservation (a revival that needed none) and idempotent.
+// bind records the generation of the turn this revival dispatches, so that
+// turn (and only that turn) can consume or retire the hold. A no-op for a nil
+// or already-ended reservation.
+func (r *externalConversationReservation) bind(gen int) {
+	if r == nil || r.sess == nil {
+		return
+	}
+	r.sess.mu.Lock()
+	defer r.sess.mu.Unlock()
+	if _, held := r.sess.reservations[r]; held {
+		r.gen = gen
+	}
+}
+
+// cancel ends THIS reservation only. It is a no-op for a nil reservation (a
+// revival that needed none) and idempotent; it never touches another revival's
+// hold (NEW-5).
 func (r *externalConversationReservation) cancel() {
 	if r == nil || r.sess == nil {
 		return
 	}
 	r.sess.mu.Lock()
-	r.sess.reviveReserved = false
+	delete(r.sess.reservations, r)
 	r.sess.mu.Unlock()
+}
+
+// dropReservationsForGenerationLocked ends every hold bound to generation gen
+// (the turn of that generation has reached the holder, or has ended). Holds
+// bound to another generation, and holds not yet bound, are untouched. Caller
+// holds s.mu.
+func (s *externalCLIRunSession) dropReservationsForGenerationLocked(gen int) {
+	if gen == 0 {
+		return
+	}
+	for r := range s.reservations {
+		if r.gen == gen {
+			delete(s.reservations, r)
+		}
+	}
+}
+
+// releaseExternalReservationsForGeneration ends the holds bound to the turn of
+// generation gen once that turn has ended, whatever its outcome (NEW-6): an
+// accepted revival whose turn failed before it reached beginExternalRun has no
+// other consumer, and its hold would pin the driver and its prompt/environment
+// snapshot indefinitely.
+func (al *AgentLoop) releaseExternalReservationsForGeneration(sessionKey string, gen int) {
+	if sess := al.externalRunSessionIfPresent(sessionKey); sess != nil {
+		sess.mu.Lock()
+		sess.dropReservationsForGenerationLocked(gen)
+		sess.mu.Unlock()
+	}
 }
 
 // reserveExternalConversation decides whether reviving sessionKey's steered
@@ -291,8 +344,12 @@ func (al *AgentLoop) reserveExternalConversation(sessionKey string, rec *session
 	if sess.driver == nil {
 		return nil, errExternalResumeUnavailable
 	}
-	sess.reviveReserved = true
-	return &externalConversationReservation{sess: sess}, nil
+	res := &externalConversationReservation{sess: sess}
+	if sess.reservations == nil {
+		sess.reservations = make(map[*externalConversationReservation]struct{})
+	}
+	sess.reservations[res] = struct{}{}
+	return res, nil
 }
 
 // externalConversationAvailable is the point-in-time form of
@@ -347,11 +404,11 @@ func (al *AgentLoop) beginExternalRun(
 	sess = al.externalRunSession(sessionKey)
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
-	// The revived turn has reached the holder: any revival reservation has done
-	// its job (the entry below either takes the driver or refuses visibly).
-	sess.reviveReserved = false
-
 	claim := al.tsExecutionClaim(ts, sessionKey)
+	// The revived turn has reached the holder: the reservations bound to ITS
+	// generation have done their job (the entry below either takes the driver or
+	// refuses visibly). A reservation of another revival stays.
+	sess.dropReservationsForGenerationLocked(claim.Generation)
 	resumeRequested := externalResumeRequested(ts)
 	needsResume := resumeRequested || (resumeOnly && (sess.started || priorRun))
 	if needsResume {
@@ -460,7 +517,7 @@ func (al *AgentLoop) releaseExternalRunIfIdle(sessionKey string) {
 	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
-	if sess.running || sess.reviveReserved || al.pendingSteeringCountForScope(sessionKey) != 0 {
+	if sess.running || len(sess.reservations) != 0 || al.pendingSteeringCountForScope(sessionKey) != 0 {
 		return
 	}
 	sess.releaseDriverLocked()
@@ -473,7 +530,7 @@ func (al *AgentLoop) releaseExternalRunIfIdle(sessionKey string) {
 func (al *AgentLoop) releaseExternalRunAfterStop(sessionKey string) {
 	if sess := al.externalRunSessionIfPresent(sessionKey); sess != nil {
 		sess.mu.Lock()
-		sess.reviveReserved = false
+		clear(sess.reservations)
 		sess.mu.Unlock()
 	}
 	al.releaseExternalRunIfIdle(sessionKey)
