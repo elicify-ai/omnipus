@@ -13,7 +13,7 @@ import { splitMessageParts } from '@/lib/messageParts'
 import { formatErrorDetail } from '@/lib/llm-error'
 import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalOutcomeRow } from './GoalOutcomeRow'
-import { ParticipantMessageRow, ReplyHeaderView, useParticipantLabelParts } from './ParticipantLabel'
+import { ParticipantMessageRow, ReplyHeaderView, useParticipantLabelParts } from './ParticipantLabels'
 import { collectPairedReplyToIds, isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 
 // ADR-051 — cap on the verbose-only "Technical details" disclosure content.
