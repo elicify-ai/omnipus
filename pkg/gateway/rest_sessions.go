@@ -979,7 +979,11 @@ func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
 	if a.agentLoop == nil {
 		return ""
 	}
-	res, err := a.agentLoop.StopSession(r.Context(), agent.StopRequest{
+	stop := a.agentLoop.StopSession
+	if a.stopSession != nil {
+		stop = a.stopSession
+	}
+	res, err := stop(r.Context(), agent.StopRequest{
 		SessionID: id,
 		By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: actorUsername(r)},
 		Channel:   "web",
