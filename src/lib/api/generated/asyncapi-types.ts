@@ -88,6 +88,16 @@ export type WsFrameType =
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
+export interface ChatParticipant {
+  kind: "human" | "agent";
+  display_name: string;
+  source?: string;
+  agent?: {
+    workspace_id: string;
+    agent_id: string;
+  };
+}
+
 export interface AuthFrame {
   type: "auth";
   token: string;
@@ -535,16 +545,6 @@ export interface MediaFrame {
   session_id: string;
   parts: Array<MediaPart>;
   seq?: number;
-}
-
-export interface ChatParticipant {
-  kind: "human" | "agent";
-  display_name: string;
-  source?: string;
-  agent?: {
-    workspace_id: string;
-    agent_id: string;
-  };
 }
 
 export interface CommandSegmentInfo {

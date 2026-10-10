@@ -1571,6 +1571,45 @@ components:
       payload:
         $ref: '#/components/schemas/MailPanelObserverErrorFrame'
   schemas:
+    ChatParticipant:
+      title: ChatParticipant
+      description: >
+        Server-made display record of a chat participant (F15). Display only:
+        no ids, no route. Mirrors contracts/components/schemas/ChatParticipant.yaml.
+      type: object
+      readOnly: true
+      required:
+      - kind
+      - display_name
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+          - human
+          - agent
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        source:
+          type: string
+          pattern: '^[a-z][a-z0-9_-]{0,31}$'
+        agent:
+          type: object
+          required:
+          - workspace_id
+          - agent_id
+          additionalProperties: false
+          properties:
+            workspace_id:
+              type: string
+              minLength: 1
+              maxLength: 128
+            agent_id:
+              type: string
+              minLength: 1
+              maxLength: 128
     WsFrameType:
       title: WsFrameType
       description: Enum of all WebSocket frame type discriminator strings.
@@ -4287,45 +4326,6 @@ components:
             Per-session sequence number of this frame (#823 catch-up redesign). Optional:
             absent on an unsequenced copy. Keep in sync by hand with
             contracts/components/schemas/MediaFrame.yaml.
-    ChatParticipant:
-      title: ChatParticipant
-      description: >
-        Server-made display record of a chat participant (F15). Display only:
-        no ids, no route. Mirrors contracts/components/schemas/ChatParticipant.yaml.
-      type: object
-      readOnly: true
-      required:
-      - kind
-      - display_name
-      additionalProperties: false
-      properties:
-        kind:
-          type: string
-          enum:
-          - human
-          - agent
-        display_name:
-          type: string
-          minLength: 1
-          maxLength: 128
-        source:
-          type: string
-          pattern: '^[a-z][a-z0-9_-]{0,31}$'
-        agent:
-          type: object
-          required:
-          - workspace_id
-          - agent_id
-          additionalProperties: false
-          properties:
-            workspace_id:
-              type: string
-              minLength: 1
-              maxLength: 128
-            agent_id:
-              type: string
-              minLength: 1
-              maxLength: 128
     CommandSegmentInfo:
       title: CommandSegmentInfo
       description: >

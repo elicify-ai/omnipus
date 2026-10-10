@@ -8,6 +8,20 @@
 
 export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "context_window_notice", "provider_fallback", "media", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error"]);
 
+export const ChatParticipant = z
+  .object({
+    kind: z.enum(["human", "agent"]),
+    display_name: z.string().min(1).max(128),
+    source: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional(),
+    agent: z
+    .object({
+      workspace_id: z.string().min(1).max(128),
+      agent_id: z.string().min(1).max(128),
+    })
+    .strict().optional(),
+  })
+  .strict();
+
 export const AuthFrame = z
   .object({
     type: z.literal("auth"),
@@ -556,20 +570,6 @@ export const MediaFrame = z
     session_id: z.string().min(1),
     parts: z.array(MediaPart).min(1).max(32),
     seq: z.number().int().min(1).optional(),
-  })
-  .strict();
-
-export const ChatParticipant = z
-  .object({
-    kind: z.enum(["human", "agent"]),
-    display_name: z.string().min(1).max(128),
-    source: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional(),
-    agent: z
-    .object({
-      workspace_id: z.string().min(1).max(128),
-      agent_id: z.string().min(1).max(128),
-    })
-    .strict().optional(),
   })
   .strict();
 
