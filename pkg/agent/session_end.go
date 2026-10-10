@@ -908,11 +908,8 @@ func (al *AgentLoop) AgentForSession(sessionID string) (*AgentInstance, error) {
 		return nil, fmt.Errorf("meta_not_found: %w", err)
 	}
 
-	// Prefer ActiveAgentID (v2 multi-agent) over AgentID (legacy).
-	agentID := meta.ActiveAgentID
-	if agentID == "" {
-		agentID = meta.AgentID
-	}
+	// The session's agent is its immutable owner.
+	agentID := meta.AgentID
 	if agentID == "" {
 		return nil, fmt.Errorf("agent_not_found: session %s has no agent_id in meta", sessionID)
 	}

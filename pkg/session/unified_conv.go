@@ -242,7 +242,6 @@ func convNormalizeSavedChatDirs(baseDir string) error {
 		if identity.Type == "" {
 			identity.Type = SessionTypeChat
 		}
-		identity.ActiveAgentID = ""
 		if wErr := convWriteIdentityFile(sessionDir, identity); wErr != nil {
 			return fmt.Errorf(
 				"conversion: saved chat %q: write normalized metadata: %w",

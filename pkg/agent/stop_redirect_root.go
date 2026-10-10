@@ -86,7 +86,7 @@ func (al *AgentLoop) ordinaryRedirectMessage(sessionID, instruction, userID, rep
 	if err != nil {
 		return bus.InboundMessage{}, err
 	}
-	agentID := strings.TrimSpace(meta.ActiveAgentID)
+	agentID := strings.TrimSpace(meta.AgentID)
 	if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
 		if rec, loadErr := lifecycle.Load(sessionID); loadErr == nil && strings.TrimSpace(rec.AgentID) != "" {
 			agentID = rec.AgentID

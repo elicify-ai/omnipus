@@ -1463,7 +1463,7 @@ func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Tas
 	// starts with them — and a per-chat "never auto-approve" would silently
 	// stop applying. Same helper, same components, active/inactive parity.
 	if t.OriginSessionID != "" && steeringSessionID == "" && creatorMeta != nil {
-		if parentAgentID := strings.TrimSpace(creatorMeta.ActiveAgentID); parentAgentID != "" {
+		if parentAgentID := strings.TrimSpace(creatorMeta.AgentID); parentAgentID != "" {
 			te.agentLoop.inheritSessionPermissions(t.OriginSessionID, parentAgentID, launched.SessionID, t.AgentID)
 		}
 	}

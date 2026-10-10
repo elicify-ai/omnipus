@@ -1254,7 +1254,7 @@ func (al *AgentLoop) goalIdleExpirySweep(cfg config.PlanningConfig, now time.Tim
 			}
 			agentID := ""
 			if meta, merr := recStore.GetMeta(sessionID); merr == nil && meta != nil {
-				agentID = meta.ActiveAgentID
+				agentID = meta.AgentID
 			}
 			// clearGoalStatus performs the terminal transition itself, by
 			// goal id, which is correct for BOTH owner kinds — the separate

@@ -146,7 +146,6 @@ type SessionMeta struct {
 
 	// v2 multi-agent fields (joined session model)
 	AgentIDs            []string          `json:"agent_ids,omitempty"`
-	ActiveAgentID       string            `json:"active_agent_id,omitempty"`
 	CompactionSummaries map[string]string `json:"compaction_summaries,omitempty"` // per-agent compaction
 
 	// ParentSessionID names the DIRECT parent of a delegated child session
@@ -227,14 +226,9 @@ type SessionMeta struct {
 // PostLoad backfills the participants list from the single owner field.
 // Call after every JSON unmarshal of SessionMeta.
 //
-// session-core U1 / DEL-11: this no longer backfills ActiveAgentID from
-// AgentID. That backfill was the last reader-side step that manufactured a
-// handover owner for a session that never had one — every read of a session
-// whose metadata carried no active_agent_id (which is now every freshly
-// created session) invented one equal to its owner, so the retired
-// handover-owner concept kept leaking back onto the wire and onto disk on the
-// next write. A session's owner is its immutable AgentID; ActiveAgentID stays
-// empty until something genuinely switches the session's active agent.
+// A session's owner is its immutable AgentID. The retired handover owner
+// (active_agent_id) no longer exists: a saved file that still carries the key
+// has it ignored on read and dropped on the next write (session-core DEL-11).
 func (m *SessionMeta) PostLoad() {
 	if len(m.AgentIDs) == 0 && m.AgentID != "" {
 		m.AgentIDs = []string{m.AgentID}
