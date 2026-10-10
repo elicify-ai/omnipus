@@ -65,7 +65,11 @@ var errAgentVanishedDuringUpdate = errors.New("agent no longer exists")
 // Note: do NOT cache *config.Config here — use a.agentLoop.GetConfig() for
 // the current config, since config can hot-reload.
 type restAPI struct {
-	agentLoop     *agent.AgentLoop
+	agentLoop *agent.AgentLoop
+	// stopSession, when set, replaces agentLoop.StopSession in the delete
+	// path (a test seam for outcomes a real Stop cannot be made to produce
+	// portably). Nil in production.
+	stopSession   func(context.Context, agent.StopRequest) (agent.StopResult, error)
 	allowedOrigin string
 	onboardingMgr *onboarding.Manager // manages first-launch + doctor state
 	// onboardingStateUnknown records that system/state.json existed at boot

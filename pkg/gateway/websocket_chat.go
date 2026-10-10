@@ -932,7 +932,7 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 		}
 		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: fmt.Sprintf("could not create session: %v", err),
+			Message: "could not create session: session storage failed. Check disk space and permissions, then retry. Details are in the server log.",
 		})
 		return true
 	}

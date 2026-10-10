@@ -704,7 +704,7 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 	uf.workspace, wsErr = agentWorkspacePath(uf.cfg, uf.ru.id, capturedWorkspace, uf.ru.a.homePath)
 	if wsErr != nil {
 		logsafeError("rest: agentWorkspacePath for update", "agent_id", uf.ru.id, "error", wsErr)
-		jsonErr(uf.w, http.StatusInternalServerError, fmt.Sprintf("could not resolve workspace: %v", wsErr))
+		jsonServerFailure(uf.w, http.StatusInternalServerError, "could not resolve workspace", wsErr)
 		return true
 	}
 	// Rebuild the running agent only when a changed field is one the

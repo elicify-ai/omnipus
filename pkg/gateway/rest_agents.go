@@ -414,7 +414,7 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 	// a coordinated SPA update, not a decision to make unilaterally here.
 	if len(errs) > 0 {
 		logsafeError("rest: list agent sessions: store read failed", "agent_id", agentID, "errors", errs)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list sessions: %v", errors.Join(errs...)))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not list sessions", errors.Join(errs...))
 		return
 	}
 
@@ -836,7 +836,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			if state, stateErr := agentstore.New(a.homePath).ReadState(ac.ID); stateErr == nil {
 				ag.Revision = state.Revision
 			} else {
-				jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read agent revision: %v", stateErr))
+				jsonServerFailure(w, http.StatusInternalServerError, "could not read agent revision", stateErr)
 				return
 			}
 			jsonOK(w, ag)
@@ -938,7 +938,7 @@ func (a *restAPI) withToolPolicyCoverageGuard(
 		cfg := a.agentLoop.GetConfig()
 		gaps, err := a.validateCandidateToolPolicyCoverage(cfg, mutate)
 		if err != nil {
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("tool policy coverage check: %v", err))
+			jsonServerFailure(w, http.StatusInternalServerError, "tool policy coverage check", err)
 			return false
 		}
 		if len(gaps) > 0 {

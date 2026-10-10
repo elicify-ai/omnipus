@@ -692,7 +692,7 @@ func (scr *restAPISetChannelRouting) handleBound() bool {
 			return nil
 		}); err != nil {
 			slog.Error("rest: save config for channel routing (bound)", "channel_id", scr.channelID, "error", err)
-			jsonErr(scr.w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+			jsonServerFailure(scr.w, http.StatusInternalServerError, "could not save config", err)
 			return true
 		}
 
@@ -861,7 +861,7 @@ func (scr *restAPISetChannelRouting) persistUnbound() bool {
 		return nil
 	}); err != nil {
 		slog.Error("rest: save config for channel routing", "channel_id", scr.channelID, "error", err)
-		jsonErr(scr.w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(scr.w, http.StatusInternalServerError, "could not save config", err)
 		return true
 	}
 	return false
@@ -1061,7 +1061,7 @@ func (a *restAPI) createChannelInstance(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		slog.Error("rest: create channel instance: save config", "instance", instanceKey, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 
@@ -1177,7 +1177,7 @@ func (a *restAPI) deleteChannelInstance(w http.ResponseWriter, channelID string)
 		return nil
 	}); err != nil {
 		slog.Error("rest: delete channel instance: save config", "id", channelID, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 
@@ -1271,7 +1271,7 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 		stored, err := a.readChannelConfigRaw(channelID)
 		if err != nil {
 			slog.Error("rest: read config for channel enable validation", "channel", channelID, "error", err)
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read config: %v", err))
+			jsonServerFailure(w, http.StatusInternalServerError, "could not read config", err)
 			return
 		}
 		if msg := validateChannelConfigComplete(baseType, stored, nil, nil); msg != "" {
@@ -1298,7 +1298,7 @@ func (a *restAPI) setChannelEnabled(w http.ResponseWriter, channelID string, ena
 		return nil
 	}); err != nil {
 		slog.Error("rest: set channel enabled", "channel", channelID, "enabled", enabled, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 	// #358: persisting channels.<id>.enabled via safeUpdateConfigJSON only swaps the
@@ -1369,7 +1369,7 @@ func (a *restAPI) getChannelConfig(w http.ResponseWriter, channelID string) {
 	chCfg, err := a.readChannelConfigRaw(channelID)
 	if err != nil {
 		slog.Error("rest: read config for channel get", "channel", channelID, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not read config", err)
 		return
 	}
 	jsonOK(w, redactChannelConfig(channelID, chCfg))
@@ -1593,7 +1593,7 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 	existing, err := a.readChannelConfigRaw(channelID)
 	if err != nil {
 		slog.Error("rest: read config for channel configure validation", "channel", channelID, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not read config", err)
 		return
 	}
 	if msg := validateChannelConfigComplete(chBaseType, existing, updates, prospectiveRefs); msg != "" {
@@ -1617,7 +1617,7 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 		}
 		if _, err := a.storeCredential(act.refName, act.secret); err != nil {
 			slog.Error("rest: store channel credential", "channel", channelID, "field", act.field, "error", err)
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not store %s credential: %v", act.field, err))
+			jsonServerFailure(w, http.StatusInternalServerError, "could not store the "+act.field+" credential", err)
 			return
 		}
 		updates[refField] = act.refName
@@ -1652,7 +1652,7 @@ func (a *restAPI) configureChannel(w http.ResponseWriter, r *http.Request, chann
 		return nil
 	}); err != nil {
 		slog.Error("rest: configure channel", "channel", channelID, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 
@@ -1725,7 +1725,7 @@ func (a *restAPI) testChannel(w http.ResponseWriter, channelID string) {
 	chCfg, err := a.readChannelConfigRaw(channelID)
 	if err != nil {
 		slog.Error("rest: read config for channel test", "channel", channelID, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not read config", err)
 		return
 	}
 

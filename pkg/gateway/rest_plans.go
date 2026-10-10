@@ -1352,7 +1352,7 @@ func (a *restAPI) handlePlanStop(w http.ResponseWriter, r *http.Request, id stri
 		// instead of assuming a fully clean stop.
 		logsafeError("rest: plan stop: partial fan-out failure", "id", id, "error", serr)
 		a.auditPlan("plan.stop", id)
-		jsonErr(w, http.StatusInternalServerError, serr.Error())
+		jsonServerFailure(w, http.StatusInternalServerError, "the plan was stopped but some member tasks could not be updated; re-check their state", serr)
 		return
 	}
 	a.auditPlan("plan.stop", id)
