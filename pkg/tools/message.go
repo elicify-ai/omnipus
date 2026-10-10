@@ -116,7 +116,7 @@ func (t *MessageTool) Parameters() map[string]any {
 			},
 			"agent_id": map[string]any{
 				"type":        "string",
-				"description": "Optional: with workspace_id, the recipient agent for a peer request.",
+				"description": "Optional: the RECIPIENT agent for a peer request — the agent you are asking, never yourself or the author. Omit workspace_id to mean your current workspace.",
 			},
 		},
 		"required": []string{"content"},
