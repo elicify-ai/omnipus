@@ -34,7 +34,7 @@ import (
 )
 
 func u1Sorted(m map[string]u1Stored) []string {
-	var out []string
+	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
 	}
@@ -239,7 +239,7 @@ func TestSessionCoreU1_BootEagerlyCreatesAdminMainBeforeAnyLookup(t *testing.T) 
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&page))
 
 	adminMainID := u1MainID(wsID, "admin")
-	var rows []string
+	rows := make([]string, 0, len(page.Sessions))
 	for _, s := range page.Sessions {
 		id, _ := s["id"].(string)
 		rows = append(rows, id)
@@ -303,9 +303,8 @@ func TestSessionCoreU1_ConcurrentMembershipWritesStoreOneMainPerPair(t *testing.
 	close(start)
 	wg.Wait()
 
-	want := []string{
-		u1MainID(racing, "jim"), u1MainID(racing, "mia"),
-	}
+	want := make([]string, 0, 2+2*len(others))
+	want = append(want, u1MainID(racing, "jim"), u1MainID(racing, "mia"))
 	for _, id := range others {
 		want = append(want, u1MainID(id, "jim"), u1MainID(id, "mia"))
 	}

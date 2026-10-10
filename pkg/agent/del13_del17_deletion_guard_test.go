@@ -21,34 +21,42 @@ import (
 // non-test Go files of dir.
 func declaredFuncs(t *testing.T, dir string) map[string]bool {
 	t.Helper()
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir, func(fi os.FileInfo) bool {
-		return !strings.HasSuffix(fi.Name(), "_test.go")
-	}, 0)
+	// SA1019: parser.ParseDir is deprecated — it groups files into packages
+	// without honouring build tags. This scan only needs the declared names in
+	// the directory, so each non-test file is parsed on its own; the result is
+	// the same name set without the deprecated call.
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("parse %s: %v", dir, err)
+		t.Fatalf("read %s: %v", dir, err)
 	}
+	fset := token.NewFileSet()
 	out := map[string]bool{}
-	for _, pkg := range pkgs {
-		for _, f := range pkg.Files {
-			for _, d := range f.Decls {
-				fd, ok := d.(*ast.FuncDecl)
-				if !ok {
-					continue
-				}
-				name := fd.Name.Name
-				if fd.Recv != nil && len(fd.Recv.List) == 1 {
-					switch rt := fd.Recv.List[0].Type.(type) {
-					case *ast.StarExpr:
-						if id, ok := rt.X.(*ast.Ident); ok {
-							name = id.Name + "." + name
-						}
-					case *ast.Ident:
-						name = rt.Name + "." + name
-					}
-				}
-				out[name] = true
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, d := range file.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok {
+				continue
 			}
+			declName := fd.Name.Name
+			if fd.Recv != nil && len(fd.Recv.List) == 1 {
+				switch rt := fd.Recv.List[0].Type.(type) {
+				case *ast.StarExpr:
+					if id, ok := rt.X.(*ast.Ident); ok {
+						declName = id.Name + "." + declName
+					}
+				case *ast.Ident:
+					declName = rt.Name + "." + declName
+				}
+			}
+			out[declName] = true
 		}
 	}
 	return out

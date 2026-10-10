@@ -61,7 +61,7 @@ func TestAgentIdentity_CreateRejectsNonEnumAndNonPalette(t *testing.T) {
 	}
 }
 
-func TestAgentIdentity_CreateNormalisesHexAndKeepsIcon(t *testing.T) {
+func TestAgentIdentity_CreateNormalisesHex(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 	rec := postAgent(t, api, `{
 		"name":"Chosen",
@@ -69,15 +69,18 @@ func TestAgentIdentity_CreateNormalisesHexAndKeepsIcon(t *testing.T) {
 		"soul":"chosen-soul",
 		"figure":"Woman",
 		"role":"writer",
-		"color":"#fb923c",
-		"icon":"magnifying-glass"
+		"color":"#fb923c"
 	}`)
 	require.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body.String())
 	body := decodeObject(t, rec.Body.Bytes())
 	assert.Equal(t, "Woman", body["figure"])
 	assert.Equal(t, "writer", body["role"])
 	assert.Equal(t, "#FB923C", body["color"])
-	assert.Equal(t, "magnifying-glass", body["icon"], "legacy icon is stored as sent; the hyphenated name is not a role")
+	// Agent.icon is deleted (7b6d48db6 "feat(contracts): remove Agent.icon",
+	// 802879225 "delete the legacy icon system"), so the wire shape must carry
+	// no icon key at all — this replaces the retired "keeps the legacy icon
+	// slug" oracle with the removal pin.
+	assert.NotContains(t, body, "icon", "the response must not carry the deleted Agent.icon field")
 
 	id, idOK := body["id"].(string)
 	require.True(t, idOK, "create response id must be a string, got %#v", body["id"])
@@ -85,7 +88,7 @@ func TestAgentIdentity_CreateNormalisesHexAndKeepsIcon(t *testing.T) {
 	assert.Equal(t, "Woman", saved["figure"])
 	assert.Equal(t, "writer", saved["role"])
 	assert.Equal(t, "#FB923C", saved["color"])
-	assert.Equal(t, "magnifying-glass", saved["icon"])
+	assert.NotContains(t, saved, "icon", "the stored record must not carry the deleted Agent.icon field")
 }
 
 func TestAgentIdentity_UpdateOmittedLeavesStoredAndRejectsBadValues(t *testing.T) {
@@ -96,8 +99,7 @@ func TestAgentIdentity_UpdateOmittedLeavesStoredAndRejectsBadValues(t *testing.T
 		"soul":"editable-soul",
 		"figure":"Man",
 		"role":"developer",
-		"color":"#3B82F6",
-		"icon":"magnifying-glass"
+		"color":"#3B82F6"
 	}`)
 	require.Equal(t, http.StatusCreated, created.Code, "body: %s", created.Body.String())
 	createdBody := decodeObject(t, created.Body.Bytes())
@@ -110,7 +112,7 @@ func TestAgentIdentity_UpdateOmittedLeavesStoredAndRejectsBadValues(t *testing.T
 	assert.Equal(t, "Man", saved["figure"], "omitted figure stays")
 	assert.Equal(t, "developer", saved["role"], "omitted role stays")
 	assert.Equal(t, "#3B82F6", saved["color"], "omitted colour stays")
-	assert.Equal(t, "magnifying-glass", saved["icon"], "a presentation save must not clear icon")
+	assert.NotContains(t, saved, "icon", "Agent.icon is deleted (7b6d48db6); nothing may reintroduce it")
 
 	before, err := agentstore.New(api.homePath).ReadState(id)
 	require.NoError(t, err)
@@ -149,7 +151,7 @@ func TestAgentIdentity_UpdateOmittedLeavesStoredAndRejectsBadValues(t *testing.T
 			// A prior rejected case must not supply state to this one, even
 			// while the suite is red and the implementation partially writes.
 			api := buildExecutorTestAPI(t)
-			created := postAgent(t, api, `{"name":"Isolated Editable","type":"Main","soul":"editable-soul","figure":"Man","role":"developer","color":"#3B82F6","icon":"magnifying-glass"}`)
+			created := postAgent(t, api, `{"name":"Isolated Editable","type":"Main","soul":"editable-soul","figure":"Man","role":"developer","color":"#3B82F6"}`)
 			require.Equal(t, http.StatusCreated, created.Code, "body: %s", created.Body.String())
 			id, ok := decodeObject(t, created.Body.Bytes())["id"].(string)
 			require.True(t, ok, "created identity id must be a string")

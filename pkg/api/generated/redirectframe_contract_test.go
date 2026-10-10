@@ -183,16 +183,16 @@ func redirectFrameSchemaStringBound(t *testing.T, prop, bound string) int {
 
 func TestRedirectFrameSchema_SessionIdBoundaries(t *testing.T) {
 	// Derived from the contract schema, never a copied literal: 255 today.
-	max := redirectFrameSchemaStringBound(t, "session_id", "maxLength")
-	t.Run(fmt.Sprintf("%d chars accepted", max), func(t *testing.T) {
+	maxLen := redirectFrameSchemaStringBound(t, "session_id", "maxLength")
+	t.Run(fmt.Sprintf("%d chars accepted", maxLen), func(t *testing.T) {
 		f := FixtureRedirectFrame_Populated()
-		f.SessionId = strings.Repeat("s", max)
+		f.SessionId = strings.Repeat("s", maxLen)
 		mustPassAsyncAPI(t, "RedirectFrame", f)
 	})
-	t.Run(fmt.Sprintf("%d chars rejected", max+1), func(t *testing.T) {
+	t.Run(fmt.Sprintf("%d chars rejected", maxLen+1), func(t *testing.T) {
 		f := FixtureRedirectFrame_Populated()
-		f.SessionId = strings.Repeat("s", max+1)
-		mustFailAsyncAPI(t, "RedirectFrame", f, fmt.Sprintf("session_id maxLength %d", max))
+		f.SessionId = strings.Repeat("s", maxLen+1)
+		mustFailAsyncAPI(t, "RedirectFrame", f, fmt.Sprintf("session_id maxLength %d", maxLen))
 	})
 	t.Run("empty rejected", func(t *testing.T) {
 		f := FixtureRedirectFrame_Populated()

@@ -42,13 +42,14 @@ type u1Env struct {
 // core operator (never a workspace member); worker1 is a worker (no main);
 // judge is a hidden system agent (no main).
 func u1Roster(extra ...config.AgentConfig) []config.AgentConfig {
-	l := []config.AgentConfig{
-		{ID: "mia", Name: "Mia", Type: config.AgentTypeCustom},
-		{ID: "jim", Name: "Jim", Type: config.AgentTypeCustom},
-		{ID: "admin", Name: "Admin", Type: config.AgentTypeCore},
-		{ID: "worker1", Name: "Worker", Type: config.AgentTypeWorker},
-		{ID: "judge", Name: "Judge", Type: config.AgentTypeSystem},
-	}
+	l := make([]config.AgentConfig, 0, 5+len(extra))
+	l = append(l,
+		config.AgentConfig{ID: "mia", Name: "Mia", Type: config.AgentTypeCustom},
+		config.AgentConfig{ID: "jim", Name: "Jim", Type: config.AgentTypeCustom},
+		config.AgentConfig{ID: "admin", Name: "Admin", Type: config.AgentTypeCore},
+		config.AgentConfig{ID: "worker1", Name: "Worker", Type: config.AgentTypeWorker},
+		config.AgentConfig{ID: "judge", Name: "Judge", Type: config.AgentTypeSystem},
+	)
 	return append(l, extra...)
 }
 

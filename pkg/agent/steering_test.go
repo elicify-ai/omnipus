@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/stretchr/testify/require"
 )
 
 // --- steeringQueue unit tests ---
@@ -228,7 +229,9 @@ func TestAgentLoop_Continue_WithMessages(t *testing.T) {
 
 	// DEL-04: the steering queue is scoped; a message is enqueued in the scope
 	// of the session that will consume it (there is no shared fallback bucket).
-	_, _, _ = al.enqueueSteeringMessage("test-session", "", providers.Message{Role: "user", Content: "new direction"}, "")
+	correlationID, _, err := al.enqueueSteeringMessage("test-session", "", providers.Message{Role: "user", Content: "new direction"}, "")
+	require.NoError(t, err, "SETUP: the steering enqueue must succeed")
+	require.NotEmpty(t, correlationID, "every queued steering item is minted a correlation id")
 
 	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1", "")
 	if err != nil {
@@ -716,7 +719,9 @@ func TestAgentLoop_Steering_InitialPoll(t *testing.T) {
 	if routeErr != nil {
 		t.Fatalf("resolve route: %v", routeErr)
 	}
-	_, _, _ = al.enqueueSteeringMessage(resolveScopeKey(route, "test-session"), "", providers.Message{Role: "user", Content: "pre-enqueued steering"}, "")
+	correlationID, _, err := al.enqueueSteeringMessage(resolveScopeKey(route, "test-session"), "", providers.Message{Role: "user", Content: "pre-enqueued steering"}, "")
+	require.NoError(t, err, "SETUP: the steering enqueue must succeed")
+	require.NotEmpty(t, correlationID, "every queued steering item is minted a correlation id")
 
 	// Process a normal message - the initial steering poll should inject the steering message
 	_, err = al.ProcessDirectWithChannel(

@@ -136,7 +136,7 @@ func TestCaptureAnswerRetainsOriginalIdentityThroughWriterWait(t *testing.T) {
 				// Leak round 6 (REVIEW-mainfix-r6-e14ac89eb T1): the frame now
 				// carries fixed text, never the interpolated cause.
 				t.Fatalf("current error was lost or leaked the cause: %s", raw)
-			} else if strings.Contains(body["message"].(string), "encoder negotiation failed") {
+			} else if msgText, _ := body["message"].(string); strings.Contains(msgText, "encoder negotiation failed") {
 				t.Fatalf("the error frame leaked the raw encoder cause: %s", raw)
 			}
 		})
