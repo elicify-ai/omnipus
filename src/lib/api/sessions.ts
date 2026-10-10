@@ -285,15 +285,19 @@ export interface UserMessage extends MessageBase { // not-wire-format: SPA-inter
   /** 'done' — delivered to gateway. 'error' — WS send failed; show Retry. */
   status?: 'done' | 'error'
   /**
-   * FR-024 (session-core) — stamped ONLY from the wire
-   * `input_disposition.state === 'discarded'` on a cold REST load
-   * (`rawToMessage`): Stop discarded this input before it was delivered, and
-   * the bubble must show the same quiet "Not delivered" state the live
-   * `message_status` frame drives. The transient delivery states
-   * ('queued'/'sending'/'received'/'working'/'failed') are store-only
-   * (ChatMessage.deliveryStatus) and never appear on the REST Message.
+   * FR-024 (session-core) — the REST adapter (`rawToMessage`) stamps ONLY the
+   * terminal 'discarded' value, from the wire
+   * `input_disposition.state === 'discarded'` on a cold load: Stop discarded
+   * this input before it was delivered, and the bubble must show the same
+   * quiet "Not delivered" state the live `message_status` frame drives. The
+   * union is nevertheless the FULL deliveryStatus set shared with
+   * ChatMessage (src/store/chat/types.ts): ChatMessage intersects this
+   * interface, so a narrower literal here would collapse the intersection and
+   * break every store writer of the transient states ('queued'/'sending'/
+   * 'received'/'working'/'failed' — store-only, never produced by the REST
+   * path). Keep both unions in sync deliberately.
    */
-  deliveryStatus?: 'discarded'
+  deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed' | 'discarded'
   tool_calls?: never
 }
 
