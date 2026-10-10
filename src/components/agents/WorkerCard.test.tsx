@@ -22,8 +22,6 @@ function makeWorker(overrides: Partial<Agent> = {}): Agent {
     name: 'General Worker',
     type: 'Subagent',
     locked: false,
-    figure: 'Robot',
-    role: 'general',
     needs_model: false,
     status: 'idle',
     model: 'anthropic/claude-3.5-haiku',
