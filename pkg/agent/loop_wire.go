@@ -847,6 +847,7 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 			// Register the task's time trigger (no-op for manual/heartbeat).
 			rw.rs.al.NotifyTaskUpserted(entity)
 		})
+		taskCreate.SetInitiatorFn(func(ctx context.Context) *task.Initiator { return rw.rs.al.initiatorFor(ctx, currentAgentID) })
 		agent.Tools.RegisterReplacing(taskCreate)
 
 		taskUpdate := tools.NewTaskUpdateTool(rw.rs.al.taskStore)
@@ -882,6 +883,7 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 		// Same rationale as taskCreate above: the subagent_3p reassignment
 		// guard is retired now that processTaskDirect dispatches an
 		// external-CLI worker's task run through the shared command-line runner.
+		taskUpdate.SetInitiatorFn(func(ctx context.Context) *task.Initiator { return rw.rs.al.initiatorFor(ctx, currentAgentID) })
 		agent.Tools.RegisterReplacing(taskUpdate)
 
 		setTodos := tools.NewSetTodosTool(rw.rs.al.taskStore)

@@ -457,6 +457,15 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// it is NOT part of the gen.Task wire contract and never crosses the
 	// gateway/SPA boundary (the REST task mapper does not copy it).
 	DelegationDepth int `json:"delegation_depth,omitempty"`
+	// Initiator is the agent that created or assigned this task by its own
+	// action (create_task, an agent's reassignment), with the onward budget that
+	// agent had inherited. Every AUTOMATIC start of the task (queue, dependency
+	// unblock, retry) re-authorizes it against the current delegation graph and
+	// carries the budget; a run a person or the scheduler starts directly
+	// consults nothing. Nil means a person or the scheduler created it.
+	// DISK-ONLY, like DelegationDepth: the REST mappers do not copy it and it
+	// must not be added to any contracts/ schema.
+	Initiator *Initiator `json:"initiator,omitempty"`
 }
 
 // Initiator is the agent whose own action (run_task, execute_plan) started a
@@ -473,6 +482,11 @@ type Initiator struct {
 	SessionID string `json:"session_id,omitempty"`
 	// Depth is the acting turn's delegation-chain depth.
 	Depth int `json:"depth"`
+	// Inherited is the onward delegation budget the acting session itself had
+	// inherited when it started or created this work (nil = unrestricted). It
+	// is kept on the work item so a later automatic start, which has no acting
+	// session, still cannot exceed it.
+	Inherited *int `json:"inherited,omitempty"`
 }
 
 // CreatedByAgent reports whether this task was created by the agent agentID.

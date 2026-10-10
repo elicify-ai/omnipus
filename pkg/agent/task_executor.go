@@ -585,7 +585,82 @@ func (te *TaskExecutor) ExecuteTask(ctx context.Context, taskID string, occurren
 		return ErrExecutorDraining
 	}
 	defer te.wg.Done()
-	return te.executeTask(ctx, taskID, occurrenceMs, task.RunKindScheduled, false, nil)
+	return te.executeTask(ctx, taskID, occurrenceMs, task.RunKindScheduled, false, te.automaticInitiator)
+}
+
+// initiatorResolver names, for a claimed task, the agent whose authority the
+// start runs under (nil = a person or the scheduler, which is not delegation)
+// and whether the founder-allowed self exemption applies. An error fails the
+// start closed.
+type initiatorResolver func(t *task.Task) (initiator *task.Initiator, selfStoredExempt bool, err error)
+
+// automaticInitiator is the resolver for every AUTOMATIC start (queue drain,
+// dependency unblock, a Calendar trigger): the work item's own stored
+// authority, re-authorized against the CURRENT graph by executeTask.
+//   - a plan member runs under the plan's initiating agent (Plan.InitiatedBy),
+//     nil when a person approved or played the plan;
+//   - any other task runs under Task.Initiator, the agent that created or
+//     assigned it, nil when a person or the scheduler did. The one exemption
+//     (ruling F13): when that initiator IS the assignee, the queue may run the
+//     task without a self-edge, though the stored budget still applies.
+func (te *TaskExecutor) automaticInitiator(t *task.Task) (*task.Initiator, bool, error) {
+	if t.PlanID != "" {
+		planStore := te.getPlanStore()
+		if planStore == nil {
+			return nil, false, fmt.Errorf("plan store is not wired for plan member %q", t.ID)
+		}
+		p, err := planStore.Get(t.PlanID)
+		if err != nil {
+			return nil, false, fmt.Errorf("read plan %q: %w", t.PlanID, err)
+		}
+		return p.InitiatedBy, false, nil
+	}
+	if t.Initiator == nil {
+		return nil, false, nil
+	}
+	return t.Initiator, t.Initiator.AgentID == t.AgentID, nil
+}
+
+// retryInitiator is the resolver for an automatic retry of a run that already
+// started: the retry keeps the failed run's authority. A run a person started
+// (no InitiatedBy on its record) retries as a person's start; a run an agent
+// started is re-authorized against the CURRENT graph and may not exceed the
+// budget the first run was left with.
+func (te *TaskExecutor) retryInitiator(prev *session.InitiatedBy) initiatorResolver {
+	return func(t *task.Task) (*task.Initiator, bool, error) {
+		if prev == nil {
+			return nil, false, nil
+		}
+		budget := prev.Authorization.RemainingDepth + 1 // authorize subtracts one for the edge hop
+		self := t.Initiator != nil && t.Initiator.AgentID == t.AgentID && prev.AgentID == t.AgentID
+		return &task.Initiator{
+			AgentID: prev.AgentID, SessionID: prev.SessionID, Depth: prev.Depth - 1, Inherited: &budget,
+		}, self, nil
+	}
+}
+
+// reExecuteTask is the automatic retry entry point: ExecuteTask under the
+// failed run's own authority (prev is that run's InitiatedBy, nil for a person's
+// start).
+func (te *TaskExecutor) reExecuteTask(ctx context.Context, taskID string, occurrenceMs *int64, prev *session.InitiatedBy) error {
+	if !te.enterDispatch() {
+		return ErrExecutorDraining
+	}
+	defer te.wg.Done()
+	return te.executeTask(ctx, taskID, occurrenceMs, task.RunKindScheduled, false, te.retryInitiator(prev))
+}
+
+// runInitiatedBy reads the InitiatedBy a run's lifecycle record carries.
+func (te *TaskExecutor) runInitiatedBy(sessionID string) *session.InitiatedBy {
+	ls := te.getLifecycleStore()
+	if ls == nil || sessionID == "" {
+		return nil
+	}
+	rec, err := ls.Load(sessionID)
+	if err != nil {
+		return nil
+	}
+	return rec.InitiatedBy
 }
 
 // executeTaskPlanVerified is the ONE documented bypass of the plan-state gate
@@ -641,7 +716,11 @@ func (te *TaskExecutor) executeTaskPlanInitiated(ctx context.Context, taskID str
 	ctx = tools.WithAutoDenyAsk(ctx, true)
 	// Plan-member dispatch is never tied to a recurring occurrence — nil,
 	// task.RunKindScheduled (matching every other non-manual dispatch path).
-	return te.executeTask(ctx, taskID, nil, task.RunKindScheduled, true, initiator)
+	var resolve initiatorResolver
+	if initiator != nil {
+		resolve = func(*task.Task) (*task.Initiator, bool, error) { return initiator, false, nil }
+	}
+	return te.executeTask(ctx, taskID, nil, task.RunKindScheduled, true, resolve)
 }
 
 // executeTask is ExecuteTask's real body. planVerifiedUnderDecisionMu is true
@@ -653,7 +732,7 @@ func (te *TaskExecutor) executeTaskPlanInitiated(ctx context.Context, taskID str
 // cannot be reached by accident.
 func (te *TaskExecutor) executeTask(
 	ctx context.Context, taskID string, occurrenceMs *int64, kind task.RunKind, planVerifiedUnderDecisionMu bool,
-	initiator *task.Initiator,
+	resolveAuthority initiatorResolver,
 ) error {
 	t, err := te.store.Get(taskID)
 	if err != nil {
@@ -702,7 +781,7 @@ func (te *TaskExecutor) executeTask(
 			return te.failTaskBeforeDispatch(taskID, mainErr)
 		}
 		if deriveTaskRunMode(t, hasMain) == taskRunMain {
-			return te.executeMainTask(ctx, t, occurrenceMs, kind, initiator)
+			return te.executeMainTask(ctx, t, occurrenceMs, kind, resolveAuthority)
 		}
 	}
 
@@ -746,14 +825,22 @@ func (te *TaskExecutor) executeTask(
 	// late members are all covered by this one call. A denial fails the member
 	// visibly; no session is created.
 	var initiatedBy *session.InitiatedBy
-	if initiator != nil {
-		ib, denial := te.agentLoop.authorizeInitiatedRun(ctx, *initiator, t.AgentID, t.WorkspaceID)
-		if denial != nil {
+	if resolveAuthority != nil {
+		initiator, selfExempt, rerr := resolveAuthority(t)
+		if rerr != nil {
 			release()
 			return te.failTaskBeforeDispatch(taskID, fmt.Errorf(
-				"task_executor: start refused by the delegation policy: %s", denial.Reason))
+				"task_executor: start refused, the starting authority cannot be determined: %w", rerr))
 		}
-		initiatedBy = ib
+		if initiator != nil {
+			ib, denial := te.agentLoop.authorizeInitiatedRunFor(ctx, *initiator, t.AgentID, t.WorkspaceID, selfExempt)
+			if denial != nil {
+				release()
+				return te.failTaskBeforeDispatch(taskID, fmt.Errorf(
+					"task_executor: start refused by the delegation policy: %s", denial.Reason))
+			}
+			initiatedBy = ib
+		}
 	}
 
 	// M1 (ADR-052 FR-029): create the task session and persist its SessionID
@@ -2325,7 +2412,7 @@ func (al *AgentLoop) ExecuteBoardTask(agentID, taskID, sessionID, prompt string,
 // executeMainTask is executeTask's MAIN branch: claim the task, then launch it
 // as a child of the assignee's main (launchMainTaskRun). A launch failure is
 // recorded as the task's truthful pre-dispatch failure.
-func (te *TaskExecutor) executeMainTask(ctx context.Context, t *task.Task, occurrenceMs *int64, kind task.RunKind, initiator *task.Initiator) error {
+func (te *TaskExecutor) executeMainTask(ctx context.Context, t *task.Task, occurrenceMs *int64, kind task.RunKind, resolveAuthority initiatorResolver) error {
 	if _, ok := te.agentLoop.GetRegistry().GetAgent(t.AgentID); !ok {
 		logger.ErrorCF("task_executor", "Agent not found, failing task",
 			map[string]any{"task_id": t.ID, "agent_id": t.AgentID})
@@ -2345,13 +2432,20 @@ func (te *TaskExecutor) executeMainTask(ctx context.Context, t *task.Task, occur
 	// and is the run's starter for recipient capture. nil is a person or the
 	// scheduler.
 	var initiatedBy *session.InitiatedBy
-	if initiator != nil {
-		ib, denial := te.agentLoop.authorizeInitiatedRun(ctx, *initiator, claimed.AgentID, claimed.WorkspaceID)
-		if denial != nil {
+	if resolveAuthority != nil {
+		initiator, selfExempt, rerr := resolveAuthority(claimed)
+		if rerr != nil {
 			return te.failTaskBeforeDispatch(t.ID, fmt.Errorf(
-				"task_executor: start refused by the delegation policy: %s", denial.Reason))
+				"task_executor: start refused, the starting authority cannot be determined: %w", rerr))
 		}
-		initiatedBy = ib
+		if initiator != nil {
+			ib, denial := te.agentLoop.authorizeInitiatedRunFor(ctx, *initiator, claimed.AgentID, claimed.WorkspaceID, selfExempt)
+			if denial != nil {
+				return te.failTaskBeforeDispatch(t.ID, fmt.Errorf(
+					"task_executor: start refused by the delegation policy: %s", denial.Reason))
+			}
+			initiatedBy = ib
+		}
 	}
 	if _, err := te.launchMainTaskRun(ctx, claimed, occurrenceMs, kind, initiatedBy); err != nil {
 		return te.failTaskBeforeDispatch(t.ID, err)
