@@ -209,6 +209,10 @@ var testHarnessWorkspaceMu sync.Mutex
 type testHarnessWorkspaceRecord struct {
 	ID       string   `json:"id"`
 	CoreTeam []string `json:"core_team"`
+	// IsDefault is round-tripped (the read-merge-write above unmarshals into
+	// this struct) so seedDefaultDelegationGraph's is_default flag survives a
+	// later membership re-seed for another test's newly-registered agents.
+	IsDefault bool `json:"is_default,omitempty"`
 }
 
 // ensureTestWorkspaceMembership makes every agent ID testHarnessAgentIDs(cfg)

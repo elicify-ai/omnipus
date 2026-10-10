@@ -119,22 +119,9 @@ func edge(from, to string, modes []string, depth *int) graphEdge {
 	return graphEdge{FromAgent: from, ToAgent: to, Modes: modes, Depth: depth}
 }
 
-// testHarnessDelegationDefaultID is the id of the is_default workspace the
-// shared loop harness (mustNewAgentLoop, via seedDefaultDelegationGraphForLoop)
-// seeds when the effective home carries none of its own.
-//
-// Deliberately DISTINCT from testHarnessWorkspaceMembershipID: that workspace
-// carries core_team membership only — never is_default, never a delegation
-// edge — while THIS one is the workspace every UNBOUND delegation/launch gate
-// resolves (workspace.ResolveDefaultID). Keeping them apart is what lets
-// TestDelegationDistinction_RealWiringThroughCreateTask (delegation_enforce_test.go)
-// keep asserting a denial: it binds testHarnessWorkspaceMembershipID on the
-// turn, which has no delegation edges, while this default workspace is never
-// consulted for a bound turn.
-const testHarnessDelegationDefaultID = "test-harness-delegation-default"
-
-// seedDefaultDelegationGraph writes an is_default workspace under home that
-// carries a directed delegation edge for EVERY ordered pair of agentIDs — self
+// seedDefaultDelegationGraph flags the harness's membership workspace
+// (testHarnessWorkspaceMembershipID) as THE is_default workspace under home and
+// gives it a directed delegation edge for EVERY ordered pair of agentIDs — self
 // edges (a→a) included.
 //
 // Why it is needed: the U5a launch gate
@@ -147,36 +134,61 @@ const testHarnessDelegationDefaultID = "test-harness-delegation-default"
 // graph-free latitude those fixtures were written against, WITHOUT asserting
 // any specific edge a test did not ask for.
 //
+// It deliberately REUSES the one workspace file the harness already writes
+// rather than adding a second: a System Agent (coreagent.IsSystemAgentID — the
+// Judge, Admin, PlanSupervisor) is an IMPLICIT member of every workspace file
+// (workspace.find_for_agent.go::isImplicitMember), so a second workspace file
+// makes every one of them ambiguous and BrowserManagerForAgent's
+// ResolveBrowsingKey then REFUSES rather than picks one — which broke
+// browser_reload_test.go::TestReload_OneCyclePerKeyNotPerAgent. One file, one
+// workspace, no ambiguity.
+//
 // Never clobbers a test's own graph: a home that already carries an is_default
-// workspace whose id is NOT testHarnessDelegationDefaultID (i.e. the test
+// workspace whose id is NOT testHarnessWorkspaceMembershipID (i.e. the test
 // seeded its own with seedWorkspaceGraph) is left byte-for-byte untouched, so
 // every graph-refusal test keeps its controlled edge set and its refusal
-// reason. The mesh is a UNION across calls, because the shared TestMain home
-// is reused by the whole test binary — a later test's agents must be able to
+// reason. The mesh is a UNION across calls, because the shared TestMain home is
+// reused by the whole test binary — a later test's agents must be able to
 // delegate to each other too.
 //
-// The workspace record carries NO core_team, so it is invisible to
-// workspace.FindForAgent's membership scan and can never make an ordinary
-// agent ambiguous across workspaces.
-//
-// Same discipline as seedTestWorkspaceMembershipForIDs: guarded by the
-// package-level testHarnessWorkspaceMu (so it is safe under t.Parallel) and
-// written atomically.
+// The membership record's core_team is preserved. Same discipline as
+// seedTestWorkspaceMembershipForIDs: guarded by the package-level
+// testHarnessWorkspaceMu (so it is safe under t.Parallel) and written
+// atomically.
 func seedDefaultDelegationGraph(t *testing.T, home string, agentIDs []string) {
 	t.Helper()
 	testHarnessWorkspaceMu.Lock()
 	defer testHarnessWorkspaceMu.Unlock()
 
-	if def, err := workspace.ResolveDefaultID(home); err == nil && def != "" && def != testHarnessDelegationDefaultID {
+	if def, err := workspace.ResolveDefaultID(home); err == nil && def != "" && def != testHarnessWorkspaceMembershipID {
 		// The test seeded its own default graph — never touch it.
 		return
 	}
 
-	// Union the existing mesh (if this default already exists) with the new
+	wsDir := filepath.Join(home, "workspaces")
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		t.Fatalf("seedDefaultDelegationGraph: mkdir %s: %v", wsDir, err)
+	}
+	wsPath := filepath.Join(wsDir, testHarnessWorkspaceMembershipID+".json")
+	rec := testHarnessWorkspaceFile{ID: testHarnessWorkspaceMembershipID}
+	if data, readErr := os.ReadFile(wsPath); readErr == nil {
+		_ = json.Unmarshal(data, &rec) // preserve core_team; a malformed file is overwritten below
+	}
+	rec.ID = testHarnessWorkspaceMembershipID
+	rec.IsDefault = true
+	wsData, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatalf("seedDefaultDelegationGraph: marshal workspace record: %v", err)
+	}
+	if err := fileutil.WriteFileAtomic(wsPath, wsData, 0o644); err != nil {
+		t.Fatalf("seedDefaultDelegationGraph: write workspace record: %v", err)
+	}
+
+	// Union the existing mesh (if this default already has one) with the new
 	// ordered pairs, so the shared home only ever GROWS coverage.
 	type pair struct{ from, to string }
 	seen := map[pair]bool{}
-	if existing, ok := workspace.LoadDelegation(home, testHarnessDelegationDefaultID); ok {
+	if existing, ok := workspace.LoadDelegation(home, testHarnessWorkspaceMembershipID); ok {
 		for _, e := range existing {
 			seen[pair{e.FromAgent, e.ToAgent}] = true
 		}
@@ -186,27 +198,15 @@ func seedDefaultDelegationGraph(t *testing.T, home string, agentIDs []string) {
 			seen[pair{from, to}] = true
 		}
 	}
+	if len(seen) == 0 {
+		return
+	}
 	edges := make([]graphEdge, 0, len(seen))
 	for p := range seen {
 		edges = append(edges, edge(p.from, p.to, nil, nil))
 	}
 
-	wsDir := filepath.Join(home, "workspaces")
-	if err := os.MkdirAll(wsDir, 0o755); err != nil {
-		t.Fatalf("seedDefaultDelegationGraph: mkdir %s: %v", wsDir, err)
-	}
-	wsData, err := json.Marshal(testWorkspaceRecord{ID: testHarnessDelegationDefaultID, IsDefault: true})
-	if err != nil {
-		t.Fatalf("seedDefaultDelegationGraph: marshal workspace record: %v", err)
-	}
-	if err := fileutil.WriteFileAtomic(filepath.Join(wsDir, testHarnessDelegationDefaultID+".json"), wsData, 0o644); err != nil {
-		t.Fatalf("seedDefaultDelegationGraph: write workspace record: %v", err)
-	}
-
-	if len(edges) == 0 {
-		return
-	}
-	storePath, pathErr := workspace.DelegationStorePath(home, testHarnessDelegationDefaultID)
+	storePath, pathErr := workspace.DelegationStorePath(home, testHarnessWorkspaceMembershipID)
 	if pathErr != nil {
 		t.Fatalf("seedDefaultDelegationGraph: delegation store path: %v", pathErr)
 	}
@@ -214,7 +214,7 @@ func seedDefaultDelegationGraph(t *testing.T, home string, agentIDs []string) {
 		t.Fatalf("seedDefaultDelegationGraph: mkdir delegation store: %v", mkErr)
 	}
 	storeData, marshalErr := json.Marshal(testDelegationStoreRecord{
-		WorkspaceID: testHarnessDelegationDefaultID,
+		WorkspaceID: testHarnessWorkspaceMembershipID,
 		Delegation:  edges,
 	})
 	if marshalErr != nil {
@@ -223,6 +223,16 @@ func seedDefaultDelegationGraph(t *testing.T, home string, agentIDs []string) {
 	if wErr := fileutil.WriteFileAtomic(storePath, storeData, 0o600); wErr != nil {
 		t.Fatalf("seedDefaultDelegationGraph: write delegation store: %v", wErr)
 	}
+}
+
+// testHarnessWorkspaceFile is the read-modify-write view seedDefaultDelegationGraph
+// uses: it must preserve the membership record's core_team while setting
+// is_default, so it carries both fields (testHarnessWorkspaceRecord, written by
+// the membership seeder, carries the same pair).
+type testHarnessWorkspaceFile struct {
+	ID        string   `json:"id"`
+	CoreTeam  []string `json:"core_team,omitempty"`
+	IsDefault bool     `json:"is_default,omitempty"`
 }
 
 // seedDefaultDelegationGraphForLoop seeds the default delegation mesh under the
