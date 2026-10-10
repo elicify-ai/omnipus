@@ -552,6 +552,9 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 	// AgentLoop on each call, so a reload never leaves a stale one behind.
 	messageTool.SetPeerRouter(rw.rs.al.NewAddressRouter())
 	messageTool.SetReplyRouter(rw.rs.al.NewAddressRouter())
+	messageTool.SetMainConnectorGuard(func(sessionID, channel string) bool {
+		return rw.rs.al.mainConnectorTurn(channel, sessionID)
+	})
 	// Re-apply the stored resolver: this runs on every reload, and the
 	// MessageTool above is brand new each time (ADR-065).
 	if own := rw.rs.al.ChannelOwnership(); own != nil {

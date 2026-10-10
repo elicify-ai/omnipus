@@ -95,6 +95,10 @@ properties:
   agent_id:
     type: string
     description: Agent that produced this message (assistant messages only).
+  participant:
+    $ref: ./ChatParticipant.yaml
+  reply_to_participant:
+    $ref: ./ChatParticipant.yaml
   reply_to_message_id:
     type: string
     minLength: 1

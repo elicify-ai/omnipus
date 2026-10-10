@@ -6173,6 +6173,42 @@ func (e MessageInputDispositionState) Valid() bool {
 	}
 }
 
+// Defines values for MessageParticipantKind.
+const (
+	MessageParticipantKindAgent MessageParticipantKind = "agent"
+	MessageParticipantKindHuman MessageParticipantKind = "human"
+)
+
+// Valid indicates whether the value is a known member of the MessageParticipantKind enum.
+func (e MessageParticipantKind) Valid() bool {
+	switch e {
+	case MessageParticipantKindAgent:
+		return true
+	case MessageParticipantKindHuman:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageReplyToParticipantKind.
+const (
+	MessageReplyToParticipantKindAgent MessageReplyToParticipantKind = "agent"
+	MessageReplyToParticipantKindHuman MessageReplyToParticipantKind = "human"
+)
+
+// Valid indicates whether the value is a known member of the MessageReplyToParticipantKind enum.
+func (e MessageReplyToParticipantKind) Valid() bool {
+	switch e {
+	case MessageReplyToParticipantKindAgent:
+		return true
+	case MessageReplyToParticipantKindHuman:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageRole.
 const (
 	MessageRoleAssistant MessageRole = "assistant"
@@ -9860,6 +9896,42 @@ const (
 func (e SessionDetailMessagesInputDispositionState) Valid() bool {
 	switch e {
 	case SessionDetailMessagesInputDispositionStateDiscarded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesParticipantKind.
+const (
+	SessionDetailMessagesParticipantKindAgent SessionDetailMessagesParticipantKind = "agent"
+	SessionDetailMessagesParticipantKindHuman SessionDetailMessagesParticipantKind = "human"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesParticipantKind enum.
+func (e SessionDetailMessagesParticipantKind) Valid() bool {
+	switch e {
+	case SessionDetailMessagesParticipantKindAgent:
+		return true
+	case SessionDetailMessagesParticipantKindHuman:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailMessagesReplyToParticipantKind.
+const (
+	SessionDetailMessagesReplyToParticipantKindAgent SessionDetailMessagesReplyToParticipantKind = "agent"
+	SessionDetailMessagesReplyToParticipantKindHuman SessionDetailMessagesReplyToParticipantKind = "human"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailMessagesReplyToParticipantKind enum.
+func (e SessionDetailMessagesReplyToParticipantKind) Valid() bool {
+	switch e {
+	case SessionDetailMessagesReplyToParticipantKindAgent:
+		return true
+	case SessionDetailMessagesReplyToParticipantKindHuman:
 		return true
 	default:
 		return false
@@ -20712,7 +20784,7 @@ type MemorySettings struct {
 	SessionDays *int `json:"session_days,omitempty"`
 }
 
-// Message The public CHAT PROJECTION of one entry of a session's single append-only archive, served by GET /sessions/{id}/messages and mapped to the Message interface in src/lib/api.ts. This is a projection of the canonical disk archive (session.TranscriptEntry on the Go side), never the raw private persistence record: the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance, and its partition/encoded-byte/entry-id marks are disk-only and MUST NOT appear here (session-core C-ARCHIVE / U2; FR-004/FR-005). Entries that belong to the model view only (view_membership="model") are excluded from this projection entirely.
+// Message The public CHAT PROJECTION of one entry of a session's single append-only archive, served by GET /sessions/{id}/messages and mapped to the Message interface in src/lib/api.ts. This is a projection of the canonical disk archive (session.TranscriptEntry on the Go side), never the raw private persistence record: the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance, and its partition/encoded-byte/entry-id marks are disk-only and MUST NOT appear here (session-core C-ARCHIVE / U2; FR-004/FR-005). The one display-only exception (F15) is participant / reply_to_participant (ChatParticipant): a name, a kind and a source label, never an id or a route. Entries that belong to the model view only (view_membership="model") are excluded from this projection entirely.
 type Message struct {
 	// AgentId ID of the agent that produced this entry (FR-002). Always present.
 	AgentId string `json:"agent_id"`
@@ -20809,8 +20881,46 @@ type Message struct {
 	// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
 	Model *string `json:"model,omitempty"`
 
+	// Participant A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
+	Participant *struct {
+		// Agent A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
+		Agent *struct {
+			// AgentId The addressed (recipient) agent. Never the author.
+			AgentId string `json:"agent_id"`
+
+			// WorkspaceId Workspace of the addressed agent.
+			WorkspaceId string `json:"workspace_id"`
+		} `json:"agent,omitempty"`
+
+		// DisplayName Plain text. The server strips control characters before stamping.
+		DisplayName string                 `json:"display_name"`
+		Kind        MessageParticipantKind `json:"kind"`
+
+		// Source Present iff kind=human. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id.
+		Source *string `json:"source,omitempty"`
+	} `json:"participant,omitempty"`
+
 	// ReplyToMessageId Present only on a guest reply (session-core FR-027): the message_id of the admitted request this entry answers. The guest author is the existing agent_id. Same value live and on replay.
 	ReplyToMessageId *string `json:"reply_to_message_id,omitempty"`
+
+	// ReplyToParticipant A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
+	ReplyToParticipant *struct {
+		// Agent A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
+		Agent *struct {
+			// AgentId The addressed (recipient) agent. Never the author.
+			AgentId string `json:"agent_id"`
+
+			// WorkspaceId Workspace of the addressed agent.
+			WorkspaceId string `json:"workspace_id"`
+		} `json:"agent,omitempty"`
+
+		// DisplayName Plain text. The server strips control characters before stamping.
+		DisplayName string                        `json:"display_name"`
+		Kind        MessageReplyToParticipantKind `json:"kind"`
+
+		// Source Present iff kind=human. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id.
+		Source *string `json:"source,omitempty"`
+	} `json:"reply_to_participant,omitempty"`
 
 	// Role Author role. Absent on compaction entries.
 	Role *MessageRole `json:"role,omitempty"`
@@ -21122,6 +21232,12 @@ type MessageInputDispositionReason string
 
 // MessageInputDispositionState defines model for Message.InputDisposition.State.
 type MessageInputDispositionState string
+
+// MessageParticipantKind defines model for Message.Participant.Kind.
+type MessageParticipantKind string
+
+// MessageReplyToParticipantKind defines model for Message.ReplyToParticipant.Kind.
+type MessageReplyToParticipantKind string
 
 // MessageRole Author role. Absent on compaction entries.
 type MessageRole string
@@ -24399,8 +24515,46 @@ type SessionDetail struct {
 		// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
 		Model *string `json:"model,omitempty"`
 
+		// Participant A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
+		Participant *struct {
+			// Agent A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
+			Agent *struct {
+				// AgentId The addressed (recipient) agent. Never the author.
+				AgentId string `json:"agent_id"`
+
+				// WorkspaceId Workspace of the addressed agent.
+				WorkspaceId string `json:"workspace_id"`
+			} `json:"agent,omitempty"`
+
+			// DisplayName Plain text. The server strips control characters before stamping.
+			DisplayName string                               `json:"display_name"`
+			Kind        SessionDetailMessagesParticipantKind `json:"kind"`
+
+			// Source Present iff kind=human. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id.
+			Source *string `json:"source,omitempty"`
+		} `json:"participant,omitempty"`
+
 		// ReplyToMessageId Present only on a guest reply (session-core FR-027): the message_id of the admitted request this entry answers. The guest author is the existing agent_id. Same value live and on replay.
 		ReplyToMessageId *string `json:"reply_to_message_id,omitempty"`
+
+		// ReplyToParticipant A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
+		ReplyToParticipant *struct {
+			// Agent A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
+			Agent *struct {
+				// AgentId The addressed (recipient) agent. Never the author.
+				AgentId string `json:"agent_id"`
+
+				// WorkspaceId Workspace of the addressed agent.
+				WorkspaceId string `json:"workspace_id"`
+			} `json:"agent,omitempty"`
+
+			// DisplayName Plain text. The server strips control characters before stamping.
+			DisplayName string                                      `json:"display_name"`
+			Kind        SessionDetailMessagesReplyToParticipantKind `json:"kind"`
+
+			// Source Present iff kind=human. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id.
+			Source *string `json:"source,omitempty"`
+		} `json:"reply_to_participant,omitempty"`
 
 		// Role Author role. Absent on compaction entries.
 		Role *SessionDetailMessagesRole `json:"role,omitempty"`
@@ -24848,6 +25002,12 @@ type SessionDetailMessagesInputDispositionReason string
 
 // SessionDetailMessagesInputDispositionState defines model for SessionDetail.Messages.InputDisposition.State.
 type SessionDetailMessagesInputDispositionState string
+
+// SessionDetailMessagesParticipantKind defines model for SessionDetail.Messages.Participant.Kind.
+type SessionDetailMessagesParticipantKind string
+
+// SessionDetailMessagesReplyToParticipantKind defines model for SessionDetail.Messages.ReplyToParticipant.Kind.
+type SessionDetailMessagesReplyToParticipantKind string
 
 // SessionDetailMessagesRole Author role. Absent on compaction entries.
 type SessionDetailMessagesRole string

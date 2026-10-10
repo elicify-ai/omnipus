@@ -39,7 +39,7 @@ func TestReply_HumanRequest_WakesIdleSourceOwnerOnce(t *testing.T) {
 	}
 	in, ok := addrDrainInbound(t, f.bus)
 	if !ok || in.SessionID != src || in.Metadata["agent_id"] != "ann" || in.Metadata["workspace_id"] != addrWS ||
-		in.UserInitiated || in.OperatorPrompt || in.Channel != "webchat" {
+		in.UserInitiated || in.OperatorPrompt || in.Channel != "webchat" || in.Metadata[ownerWakeMetadataKey] == "" {
 		t.Fatalf("wake = %+v ok=%v, want one non-user-initiated inbound to the owner ann in %s", in, ok, addrWS)
 	}
 	if _, again := addrDrainInbound(t, f.bus); again {

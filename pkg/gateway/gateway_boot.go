@@ -1996,6 +1996,10 @@ func wireChannelManager(cm *channels.Manager, al *agent.AgentLoop) {
 			al.EmitWhatsAppPairing(channelID, status, qr, message)
 		},
 	)
+	// BDD-08.9 / N1: an answer the final egress check refused (instance rebound,
+	// unbound or deleted since the request arrived) must be visible to the
+	// responding side, not only counted and logged.
+	cm.SetReturnRefusalObserver(al.ReportReturnRefusal)
 }
 
 // agentCheckerFunc adapts a func to the agentChecker interface used by the

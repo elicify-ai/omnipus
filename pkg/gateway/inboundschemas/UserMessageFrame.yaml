@@ -57,6 +57,8 @@ properties:
   agent_id:
     type: string
     description: Agent this message was routed to.
+  participant:
+    $ref: ./ChatParticipant.yaml
   seq:
     type: integer
     format: int64

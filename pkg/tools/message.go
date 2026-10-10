@@ -49,6 +49,11 @@ type MessageTool struct {
 	// message_address.go). Nil leaves each form refused, never defaulted.
 	peerRouter  PeerRouter
 	replyRouter ReplyRouter
+
+	// mainConnectorGuard, when set, reports whether (sessionID, channel) is a
+	// main session addressing a connector. The ordinary send form is refused
+	// there: a main reaches a connector ONLY by reply_to (FR-028).
+	mainConnectorGuard func(sessionID, channel string) bool
 }
 
 func NewMessageTool() *MessageTool {
@@ -179,6 +184,19 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 			return errResult
 		}
 		channel = resolved
+	}
+
+	// FR-028 (security review r1 F1): a main reaches a connector only by
+	// reply_to. The ordinary form - default destination or explicit channel -
+	// is refused before any ownership decision or send, so it can never leave
+	// a main without a captured return route.
+	if t.mainConnectorGuard != nil && channel != "" && t.mainConnectorGuard(ToolTranscriptSessionID(ctx), channel) {
+		return &ToolResult{
+			ForLLM: "in your main conversation a connector is reached only by replying to a request: call " +
+				"send_message with reply_to=<request id> and your answer as content. Nothing was sent.",
+			IsError: true,
+			Err:     ErrMainConnectorReplyOnly,
+		}
 	}
 
 	// ADR-091 boundary 8 (FR-B-009): a steered session's

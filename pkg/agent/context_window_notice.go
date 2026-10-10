@@ -58,5 +58,11 @@ func transcriptModelHistoryRole(entry *session.TranscriptEntry) string {
 	if entry.Type == session.EntryTypeContextWindowNotice {
 		return ""
 	}
+	// A chat-only entry (view_membership "chat": the connector-reply mirror, the
+	// clear marker) is display-only and never part of the model window, on every
+	// path including empty-archive reconstruction (U8 r2 F4).
+	if entry.ViewMembership == session.ViewMembershipChat {
+		return ""
+	}
 	return entry.Role
 }

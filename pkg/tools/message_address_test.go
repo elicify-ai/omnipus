@@ -61,8 +61,10 @@ func TestReplyForm_RoutesWithActingAgentFromContextAndTrimmedID(t *testing.T) {
 	if *sent {
 		t.Fatal("a reply must not take the ordinary send path")
 	}
-	if tool.HasSentInRound() {
-		t.Fatal("a reply to another conversation must not suppress the turn's own automatic reply")
+	// N2 (architect U8-OPEN): an accepted reply IS this round's send, so the
+	// turn's plain closing text is not delivered a second time.
+	if !tool.HasSentInRound() {
+		t.Fatal("an accepted reply must mark the round as sent")
 	}
 }
 
@@ -171,5 +173,67 @@ func TestAddressedForms_RefusedInDelegatedSessions(t *testing.T) {
 	tool.SetSteerAudienceResolver(fixedAudience{a: steer.AudienceUser})
 	if res := tool.Execute(ctx, map[string]any{"content": "x", "agent_id": "ray"}); res.IsError {
 		t.Errorf("ordinary session refused: %s", res.ForLLM)
+	}
+}
+
+// N2: an accepted reply counts as the round's send, so a plain closing reply in
+// the same (unbound, per-chat) turn is not sent a second time.
+func TestReplyForm_AcceptedReplyMarksTheRoundSent(t *testing.T) {
+	tool, _, reply, _ := addrTool()
+	if tool.HasSentInRound() {
+		t.Fatal("precondition")
+	}
+	if res := tool.Execute(u8TurnCtx(), map[string]any{"content": "x", "reply_to": "q1"}); res.IsError {
+		t.Fatal(res.ForLLM)
+	}
+	if !tool.HasSentInRound() {
+		t.Fatal("an accepted reply must mark the round as sent")
+	}
+	tool2, _, reply2, _ := addrTool()
+	reply2.err = errors.New("refused")
+	_ = reply
+	tool2.Execute(u8TurnCtx(), map[string]any{"content": "x", "reply_to": "q1"})
+	if tool2.HasSentInRound() {
+		t.Fatal("a refused reply must not mark the round as sent")
+	}
+}
+
+// Security review r1 F1: in a main, the ORDINARY send form must not reach a
+// connector either - a connector is reached only by reply_to there.
+func TestOrdinarySend_RefusedToAConnectorFromAMain(t *testing.T) {
+	for name, args := range map[string]map[string]any{
+		"default destination":        {"content": "confidential"},
+		"explicit channel":           {"content": "confidential", "channel": "telegram.a", "chat_id": "victim"},
+		"channel only (turn's chat)": {"content": "confidential", "channel": "telegram.a"},
+	} {
+		tool := NewMessageTool()
+		sent := false
+		tool.SetSendCallback(func(_, _, _ string, _ SendOrigin) error { sent = true; return nil })
+		tool.SetMainConnectorGuard(func(sessionID, channel string) bool { return sessionID == "main-1" && channel == "telegram.a" })
+		ctx := WithTranscriptSessionID(WithToolContext(WithWorkspaceID(WithAgentID(context.Background(), "jim"), "ws-1"), "telegram.a", "chat-1"), "main-1")
+		res := tool.Execute(ctx, args)
+		if !res.IsError || !errors.Is(res.Err, ErrMainConnectorReplyOnly) {
+			t.Errorf("%s: want ErrMainConnectorReplyOnly, got %+v", name, res)
+		}
+		if sent || tool.HasSentInRound() {
+			t.Errorf("%s: the ordinary send reached the callback", name)
+		}
+	}
+	// Controls: the same tool outside a main, to webchat from a main, and a
+	// valid reply_to from a main all still work.
+	tool, _, reply, sent := addrTool()
+	tool.SetMainConnectorGuard(func(sessionID, channel string) bool { return sessionID == "main-1" && channel == "telegram.a" })
+	other := WithTranscriptSessionID(WithToolContext(WithAgentID(context.Background(), "jim"), "telegram.a", "chat-1"), "chat-session")
+	if res := tool.Execute(other, map[string]any{"content": "hi"}); res.IsError || !*sent {
+		t.Errorf("a non-main session must keep its ordinary send: %+v", res)
+	}
+	mainCtx := WithTranscriptSessionID(WithToolContext(WithAgentID(context.Background(), "jim"), "telegram.a", "chat-1"), "main-1")
+	if res := tool.Execute(mainCtx, map[string]any{"content": "x", "reply_to": "q1"}); res.IsError || len(reply.calls) != 1 {
+		t.Errorf("a valid reply_to from a main must still work: %+v", res)
+	}
+	webMain := WithTranscriptSessionID(WithToolContext(WithAgentID(context.Background(), "jim"), "webchat", "w"), "main-1")
+	*sent = false
+	if res := tool.Execute(webMain, map[string]any{"content": "hi"}); res.IsError || !*sent {
+		t.Errorf("a main's webchat send must keep working: %+v", res)
 	}
 }

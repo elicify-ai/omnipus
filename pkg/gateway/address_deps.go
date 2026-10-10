@@ -5,6 +5,9 @@
 package gateway
 
 import (
+	"encoding/json"
+	"time"
+
 	"errors"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -53,6 +56,7 @@ func (d gatewayAddressDeps) PublishGuestReply(sessionID string, entry session.Tr
 	}
 	if replyTo != "" {
 		token.ReplyToMessageId = &replyTo
+		token.ReplyToParticipant = entry.ReplyToParticipant
 	}
 	d.h.hubPublishFrameMeta(sessionID, string(generated.WsFrameTypeToken), hubFrameMeta{
 		kind: hubKindToken, messageID: messageID, agentID: agentID, content: entry.Content,
@@ -63,4 +67,45 @@ func (d gatewayAddressDeps) PublishGuestReply(sessionID string, entry session.Tr
 		MessageId: &messageID,
 	}
 	d.h.hubPublishFrameMeta(sessionID, string(generated.WsFrameTypeDone), hubFrameMeta{kind: hubKindDone}, done)
+}
+
+var _ interface {
+	PublishUserEntry(string, session.TranscriptEntry)
+} = gatewayAddressDeps{}
+
+// PublishUserEntry shows a server-written left-side user entry (a peer
+// request, bound-connector input) to every tab bound to the session, as the
+// same user_message frame the web intake publishes, carrying the participant
+// label. The entry is already durable; this is delivery only.
+func (d gatewayAddressDeps) PublishUserEntry(sessionID string, entry session.TranscriptEntry) {
+	frame := generated.UserMessageFrame{
+		Type:        string(generated.WsFrameTypeUserMessage),
+		SessionId:   sessionID,
+		Id:          entry.ID,
+		Content:     entry.Content,
+		Timestamp:   entry.Timestamp.UTC().Format(time.RFC3339Nano),
+		Participant: entry.Participant,
+	}
+	if entry.AgentID != "" {
+		aid := entry.AgentID
+		frame.AgentId = &aid
+	}
+	data, err := json.Marshal(frame)
+	if err != nil {
+		logsafeError("ws: marshal user_message for a server-written entry failed", "session_id", sessionID, "error", err)
+		return
+	}
+	d.h.hubPublishAndDeliver(sessionID, string(generated.WsFrameTypeUserMessage), data)
+}
+
+// PublishSessionError shows an error frame to every tab bound to the session
+// (agent.sessionErrorPublisher): the visible half of the refusal of a default
+// send to a connector from a main, and of a refused return.
+func (d gatewayAddressDeps) PublishSessionError(sessionID, message string) {
+	sid := sessionID
+	d.h.hubPublishFrame(sessionID, string(generated.WsFrameTypeError), generated.ErrorFrame{
+		Type:      string(generated.WsFrameTypeError),
+		Message:   message,
+		SessionId: &sid,
+	}, nil)
 }

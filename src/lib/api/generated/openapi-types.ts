@@ -4666,7 +4666,7 @@ export interface components {
              */
             title: string;
         };
-        /** @description The public CHAT PROJECTION of one entry of a session's single append-only archive, served by GET /sessions/{id}/messages and mapped to the Message interface in src/lib/api.ts. This is a projection of the canonical disk archive (session.TranscriptEntry on the Go side), never the raw private persistence record: the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance, and its partition/encoded-byte/entry-id marks are disk-only and MUST NOT appear here (session-core C-ARCHIVE / U2; FR-004/FR-005). Entries that belong to the model view only (view_membership="model") are excluded from this projection entirely. */
+        /** @description The public CHAT PROJECTION of one entry of a session's single append-only archive, served by GET /sessions/{id}/messages and mapped to the Message interface in src/lib/api.ts. This is a projection of the canonical disk archive (session.TranscriptEntry on the Go side), never the raw private persistence record: the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance, and its partition/encoded-byte/entry-id marks are disk-only and MUST NOT appear here (session-core C-ARCHIVE / U2; FR-004/FR-005). The one display-only exception (F15) is participant / reply_to_participant (ChatParticipant): a name, a kind and a source label, never an id or a route. Entries that belong to the model view only (view_membership="model") are excluded from this projection entirely. */
         Message: {
             /**
              * @description Unique message identifier.
@@ -4749,6 +4749,8 @@ export interface components {
              * @example jim
              */
             agent_id: string;
+            participant?: components["schemas"]["ChatParticipant"];
+            reply_to_participant?: components["schemas"]["ChatParticipant"];
             /**
              * @description Present only on a guest reply (session-core FR-027): the message_id of the admitted request this entry answers. The guest author is the existing agent_id. Same value live and on replay.
              * @example msg_01HXYZ
@@ -17714,6 +17716,29 @@ export interface components {
              * @example 1
              */
             boot_seq?: number;
+        };
+        /**
+         * AgentAddress
+         * @description A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
+         */
+        AgentAddress: {
+            /** @description Workspace of the addressed agent. */
+            workspace_id: string;
+            /** @description The addressed (recipient) agent. Never the author. */
+            agent_id: string;
+        };
+        /**
+         * ChatParticipant
+         * @description A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
+         */
+        ChatParticipant: {
+            /** @enum {string} */
+            kind: "human" | "agent";
+            /** @description Plain text. The server strips control characters before stamping. */
+            display_name: string;
+            /** @description Present iff kind=human. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id. */
+            source?: string;
+            agent?: components["schemas"]["AgentAddress"];
         };
         /**
          * SubagentStartFrame

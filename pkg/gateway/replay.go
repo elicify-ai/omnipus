@@ -942,6 +942,8 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 		replyCopy := entry.ReplyToMessageID
 		sr.msgFrame.ReplyToMessageId = &replyCopy
 	}
+	sr.msgFrame.Participant = entry.Participant
+	sr.msgFrame.ReplyToParticipant = entry.ReplyToParticipant
 	// #823 catch-up redesign (BE-DESIGN.md §4.2/§6.3): the persisted entry
 	// id is the same id the live frames used (user_message.id; an assistant
 	// round's token/done message_id), so a client can merge a replayed
