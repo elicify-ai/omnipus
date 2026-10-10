@@ -78,7 +78,6 @@ import (
 // "distinguish at least: met, budget or round exhaustion, idle expiry, and
 // an explicit operator clear" — four groups, now four distinct pills.
 const (
-	goalPillQueued           = "queued"
 	goalPillActive           = "active"
 	goalPillWaitingOnUser    = "waiting_on_user"
 	goalPillJudgeUnavailable = "judge_unavailable"
