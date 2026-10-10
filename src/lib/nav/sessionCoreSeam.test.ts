@@ -1,21 +1,21 @@
 /**
- * Production seam default, unmocked. Oracles: the wave contract — until the
- * generated main / needs_attention fields exist, every read is unavailable
- * and nothing is acknowledged. A guess or a fake ack fails this test.
+ * Production seam, unmocked. Oracles: the generated wire fields exist and this
+ * seam is the only reader — main_session_id, needs_attention, and the integer
+ * attention bound are read and validated; a missing or unusable value stays
+ * unavailable (undefined / false / 'unknown' / an empty object). A fabricated
+ * main id, a fabricated off, or an acknowledgement without a server-bound
+ * integer fails this test.
  */
 import { describe, expect, it } from 'vitest'
-import type { Session } from '@/lib/api'
+import type { Session, WorkspaceMemberConfig } from '@/lib/api'
 import { makeAgent } from '@/test/factories'
-
-const SEAM = '@/lib/nav/sessionCoreSeam'
-
-type SeamModule = {
-  mainSessionIdOfMember: (member: unknown) => string | undefined
-  isMainSession: (session: unknown) => boolean
-  sessionAttention: (session: unknown) => 'on' | 'off' | 'unknown'
-  attachAckFields: (bound: unknown) => Record<string, unknown>
-  attentionBoundOfFrame: (frame: unknown) => number | undefined
-}
+import {
+  attachAckFields,
+  attentionBoundOfFrame,
+  isMainSession,
+  mainSessionIdOfMember,
+  sessionAttention,
+} from '@/lib/nav/sessionCoreSeam'
 
 const session: Session = {
   id: 'not-a-real-main',
@@ -28,68 +28,99 @@ const session: Session = {
   workspace_id: 'product-launch',
 }
 
-async function loadSeam(): Promise<SeamModule> {
-  return await import(/* @vite-ignore */ SEAM) as SeamModule
+/** A server frame carrying an integer attention bound (generated wire shape). */
+const boundFrame = {
+  type: 'attach_session',
+  session_id: 'not-a-real-main',
+  ack_attention: false,
+  attention_bound: 7,
 }
 
-describe('sessionCoreSeam production default', () => {
-  it('is unavailable: no main id, not a main, unknown attention, and no ack fields', async () => {
-    let seam: SeamModule
-    try {
-      seam = await loadSeam()
-    } catch (err) {
-      expect.fail(
-        `BLOCKED: ${SEAM} not implemented — required by the wave seam contract. Expected mainSessionIdOfMember undefined, isMainSession false, sessionAttention "unknown", attachAckFields {}, attentionBoundOfFrame undefined. Actual: module missing (${err instanceof Error ? err.message : String(err)})`,
-      )
-    }
-    expect(seam.mainSessionIdOfMember({})).toBeUndefined()
-    expect(seam.mainSessionIdOfMember(null)).toBeUndefined()
-    expect(seam.isMainSession(session)).toBe(false)
-    expect(seam.isMainSession(undefined)).toBe(false)
-    expect(seam.sessionAttention(session)).toBe('unknown')
-    expect(seam.sessionAttention(undefined)).toBe('unknown')
-    expect(seam.attachAckFields(1)).toEqual({})
-    expect(seam.attachAckFields(undefined)).toEqual({})
-    expect(typeof seam.attentionBoundOfFrame, 'PLAN 5.2 attentionBoundOfFrame').toBe('function')
-    const snapshot = { type: 'session_snapshot', session_id: session.id, seq: 4, attention_bound: 1 }
-    expect(seam.attentionBoundOfFrame(snapshot), 'production default reads no server bound').toBeUndefined()
-    expect(seam.attentionBoundOfFrame(undefined)).toBeUndefined()
-    expect(seam.attentionBoundOfFrame({ attention_bound: 'goal1' }), 'a string is not an integer bound').toBeUndefined()
-    expect(seam.attachAckFields(seam.attentionBoundOfFrame(snapshot)), 'no ack fields without a server bound').toEqual({})
+describe('sessionCoreSeam reads the generated wire fields', () => {
+  it('mainSessionIdOfMember returns the member main_session_id — the read that lights the sidebar', () => {
+    const member: WorkspaceMemberConfig = { main_session_id: 'x' }
+    expect(mainSessionIdOfMember(member)).toBe('x')
+    const padded: WorkspaceMemberConfig = { main_session_id: '  spaced-id  ' }
+    expect(mainSessionIdOfMember(padded)).toBe('  spaced-id  ')
   })
 
-  it('callers show unavailable / Retry, never a fabricated main and never an ack', async () => {
-    try {
-      await loadSeam()
-    } catch (err) {
-      expect.fail(
-        `BLOCKED: ${SEAM} not implemented — required before the unavailable-UI proof. Actual: module missing (${err instanceof Error ? err.message : String(err)})`,
-      )
-    }
-    const miaMember = {}
-    const agent = makeAgent({ id: 'mia', name: 'Mia', type: 'core' })
-    const eligibleSpec = '@/lib/nav/eligibleMains'
-    const entrySpec = '@/lib/nav/workspaceEntry'
-    const attentionSpec = '@/lib/nav/mainAttention'
-    let listed: { status: string; retry: boolean; rows: unknown[]; missingMainAgentIds: string[] }
-    try {
-      const eligible = await import(/* @vite-ignore */ eligibleSpec) as {
-        eligibleMainAgents: (input: unknown) => typeof listed
-      }
-      listed = eligible.eligibleMainAgents({
-        workspaceId: 'product-launch',
-        isDefaultWorkspace: false,
-        rosterState: 'fresh',
-        roster: [{ agent, member: miaMember }],
-        adminDefault: null,
-        sessions: [session],
-        cachedRows: [],
-      })
-    } catch (err) {
-      expect.fail(
-        `BLOCKED: @/lib/nav/eligibleMains not implemented — required by BDD-01.4 never a fake main. Expected status unavailable, retry true, rows []. Actual: module missing (${err instanceof Error ? err.message : String(err)})`,
-      )
-    }
+  it('mainSessionIdOfMember is unavailable for every non-id: empty, blank, non-string, missing, null', () => {
+    expect(mainSessionIdOfMember({ main_session_id: '' })).toBeUndefined()
+    expect(mainSessionIdOfMember({ main_session_id: '   ' })).toBeUndefined()
+    expect(mainSessionIdOfMember({ main_session_id: 7 })).toBeUndefined()
+    expect(mainSessionIdOfMember({})).toBeUndefined()
+    expect(mainSessionIdOfMember(null)).toBeUndefined()
+    expect(mainSessionIdOfMember(undefined)).toBeUndefined()
+    expect(mainSessionIdOfMember('main-session-workspace-mia')).toBeUndefined()
+  })
+
+  it('isMainSession is true only for the generated type "main"', () => {
+    expect(isMainSession({ type: 'main' })).toBe(true)
+    expect(isMainSession({ type: 'chat' })).toBe(false)
+    expect(isMainSession(session)).toBe(false)
+    expect(isMainSession(undefined)).toBe(false)
+  })
+
+  it('sessionAttention maps needs_attention strictly: true→on, false→off, missing→unknown', () => {
+    expect(sessionAttention({ needs_attention: true })).toBe('on')
+    expect(sessionAttention({ needs_attention: false })).toBe('off')
+    expect(sessionAttention({})).toBe('unknown')
+    expect(sessionAttention(session)).toBe('unknown')
+    expect(sessionAttention({ needs_attention: 'yes' })).toBe('unknown')
+    expect(sessionAttention(undefined)).toBe('unknown')
+  })
+
+  it('attentionBoundOfFrame accepts only an integer bound; a string is never a bound', () => {
+    expect(attentionBoundOfFrame(boundFrame)).toBe(7)
+    expect(attentionBoundOfFrame({ attention_bound: 'goal1' })).toBeUndefined()
+    expect(attentionBoundOfFrame({ attention_bound: 1.5 })).toBeUndefined()
+    expect(attentionBoundOfFrame({})).toBeUndefined()
+    expect(attentionBoundOfFrame(undefined)).toBeUndefined()
+  })
+
+  it('attachAckFields acknowledges only through a server integer bound', () => {
+    expect(attachAckFields(7)).toEqual({ ack_attention: true, attention_bound: 7 })
+    expect(attachAckFields('goal1')).toEqual({})
+    expect(attachAckFields(1.5)).toEqual({})
+    expect(attachAckFields(undefined)).toEqual({})
+  })
+})
+
+describe('sessionCoreSeam end to end at eligibleMainAgents (unmocked)', () => {
+  it('a roster member with a real main_session_id produces ready rows from the seam id', async () => {
+    const { eligibleMainAgents } = await import('@/lib/nav/eligibleMains')
+    const member: WorkspaceMemberConfig = { main_session_id: 'x' }
+    const listed = eligibleMainAgents({
+      workspaceId: 'product-launch',
+      isDefaultWorkspace: false,
+      rosterState: 'fresh',
+      roster: [{ agent: makeAgent({ id: 'mia', name: 'Mia', type: 'core' }), member }],
+      adminDefault: null,
+      sessions: [session],
+      cachedRows: [],
+    })
+    expect(listed).toEqual({
+      status: 'ready',
+      retry: false,
+      reason: null,
+      rows: [{ agentId: 'mia', workspaceId: 'product-launch', name: 'Mia', mainSessionId: 'x' }],
+      missingMainAgentIds: [],
+    })
+    expect(JSON.stringify(listed)).not.toContain('main-session-')
+  })
+
+  it('a roster member without a main_session_id is still unavailable — never a fabricated main', async () => {
+    const { eligibleMainAgents } = await import('@/lib/nav/eligibleMains')
+    const miaMember: WorkspaceMemberConfig = {}
+    const listed = eligibleMainAgents({
+      workspaceId: 'product-launch',
+      isDefaultWorkspace: false,
+      rosterState: 'fresh',
+      roster: [{ agent: makeAgent({ id: 'mia', name: 'Mia', type: 'core' }), member: miaMember }],
+      adminDefault: null,
+      sessions: [session],
+      cachedRows: [],
+    })
     expect(listed).toEqual({
       status: 'unavailable',
       retry: true,
@@ -98,26 +129,20 @@ describe('sessionCoreSeam production default', () => {
       missingMainAgentIds: ['mia'],
     })
     expect(JSON.stringify(listed)).not.toContain('main-session-')
+  })
 
-    let entry: { status: string; sessionId: string | null; sendEnabled: boolean; acknowledged: boolean; retry?: boolean }
-    try {
-      const workspaceEntry = await import(/* @vite-ignore */ entrySpec) as {
-        resolveWorkspaceEntry: (input: unknown) => typeof entry
-      }
-      entry = workspaceEntry.resolveWorkspaceEntry({
-        workspaceId: 'product-launch',
-        entryKind: 'login',
-        rememberedSessionId: null,
-        pointerVerdict: 'absent',
-        sessions: [session],
-        avaMember: miaMember,
-        committed: null,
-      })
-    } catch (err) {
-      expect.fail(
-        `BLOCKED: @/lib/nav/workspaceEntry not implemented — required by BDD-02.2 unavailable / Retry / no send. Actual: module missing (${err instanceof Error ? err.message : String(err)})`,
-      )
-    }
+  it('entry without a member main id stays unavailable / Retry / no send', async () => {
+    const { resolveWorkspaceEntry } = await import('@/lib/nav/workspaceEntry')
+    const avaMember: WorkspaceMemberConfig = {}
+    const entry = resolveWorkspaceEntry({
+      workspaceId: 'product-launch',
+      entryKind: 'login',
+      rememberedSessionId: null,
+      pointerVerdict: 'absent',
+      sessions: [session],
+      avaMember,
+      committed: null,
+    })
     expect(entry).toEqual({
       status: 'unavailable',
       sessionId: null,
@@ -125,30 +150,23 @@ describe('sessionCoreSeam production default', () => {
       acknowledged: false,
       retry: true,
     })
+  })
 
-    let ack: { acknowledge: boolean; fields?: unknown }
-    try {
-      const attention = await import(/* @vite-ignore */ attentionSpec) as {
-        ackForShownCommit: (input: unknown) => typeof ack
-      }
-      ack = attention.ackForShownCommit({
-        attemptKind: 'shown-commit',
-        session,
+  it('a non-main chat session is never acknowledged', async () => {
+    const { ackForShownCommit } = await import('@/lib/nav/mainAttention')
+    const ack = ackForShownCommit({
+      attemptKind: 'shown-commit',
+      session,
+      generation: 1,
+      frame: boundFrame,
+      newerOutcomeId: null,
+      foreground: {
+        sessionId: session.id,
         generation: 1,
-        frame: { type: 'session_snapshot', session_id: session.id, seq: 4, attention_bound: 1 },
-        newerOutcomeId: null,
-        foreground: {
-          sessionId: session.id,
-          generation: 1,
-          frame: { type: 'session_snapshot', session_id: session.id, seq: 4, attention_bound: 1 },
-        },
-        viewerId: 'user-a',
-      })
-    } catch (err) {
-      expect.fail(
-        `BLOCKED: @/lib/nav/mainAttention not implemented — required by BDD-04.4 no read acknowledgement. Actual: module missing (${err instanceof Error ? err.message : String(err)})`,
-      )
-    }
+        frame: boundFrame,
+      },
+      viewerId: 'user-a',
+    })
     expect(ack.acknowledge).toBe(false)
     expect(ack.fields).toBeUndefined()
   })
