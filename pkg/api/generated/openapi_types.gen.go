@@ -28287,7 +28287,10 @@ type VoiceProvider struct {
 type Workspace struct {
 	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
 	ActivationStatus *WorkspaceActivationStatus `json:"activation_status,omitempty"`
-	ChangedFields    *[]string                  `json:"changed_fields,omitempty"`
+
+	// AdminMainSessionId Server-computed id of the built-in Admin's main session in this workspace. Present only on the default workspace (is_default true) and only when that main resolves (same validation as WorkspaceMemberConfig.main_session_id). Omitted on every other workspace and whenever the main does not resolve - never a guessed id. Admin is not a workspace member; this is not a membership entry. The main's state (needs_attention, protected, etc.) comes from Session list/detail like any other main. Server-owned and read-only.
+	AdminMainSessionId *string   `json:"admin_main_session_id,omitempty"`
+	ChangedFields      *[]string `json:"changed_fields,omitempty"`
 
 	// CoreTeam Default agent roster for this workspace. Not an access gate — any agent can work on any workspace's tasks. Deduplicated at write time.
 	CoreTeam *[]string `json:"core_team,omitempty"`

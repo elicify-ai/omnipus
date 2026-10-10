@@ -14824,6 +14824,11 @@ export interface components {
             member_configs?: {
                 [key: string]: components["schemas"]["WorkspaceMemberConfig"];
             };
+            /**
+             * @description Server-computed id of the built-in Admin's main session in this workspace. Present only on the default workspace (is_default true) and only when that main resolves (same validation as WorkspaceMemberConfig.main_session_id). Omitted on every other workspace and whenever the main does not resolve - never a guessed id. Admin is not a workspace member; this is not a membership entry. The main's state (needs_attention, protected, etc.) comes from Session list/detail like any other main. Server-owned and read-only.
+             * @example main-session-ws-123+admin
+             */
+            readonly admin_main_session_id?: string;
         };
         /** @description Per-member config inside a workspace (keyed by agentId). */
         WorkspaceMemberConfig: {
