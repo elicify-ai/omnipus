@@ -2,7 +2,6 @@ import { useNavigate } from '@tanstack/react-router'
 import { Circle, Lightning } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { IconRenderer } from '@/components/shared/IconRenderer'
 import type { Agent, ExecutorConfig } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -70,11 +69,7 @@ export function WorkerCard({ agent }: WorkerCardProps) {
             className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-[length:var(--type-body-compact-size)] font-bold"
             style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
           >
-            {agent.icon ? (
-              <IconRenderer icon={agent.icon} size={18} className="text-[var(--color-secondary)]" />
-            ) : (
-              <Lightning size={18} weight="fill" className="text-[var(--color-secondary)]" />
-            )}
+            <Lightning size={18} weight="fill" className="text-[var(--color-secondary)]" />
           </div>
 
           {/* Info */}

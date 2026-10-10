@@ -2987,13 +2987,6 @@ describe('AgentProfile — locked core agent identity fields: visible read-only 
     expect(screen.queryByTestId('avatar-color-Forge Gold')).toBeNull()
   })
 
-  it('shows a static read-only avatar icon (not the interactive picker)', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
-    renderProfile('mia')
-    await screen.findByText('Mia')
-    expect((await screen.findAllByTestId('avatar-icon-readonly')).length).toBeGreaterThanOrEqual(1)
-    expect(screen.queryByTestId('avatar-icon-trigger')).toBeNull()
-  })
 })
 
 describe('AgentProfile — locked core agent Sampling/Execution: editable (W2c)', () => {
@@ -3134,14 +3127,12 @@ describe('AgentProfile — Default-agent toggle visibility (field matrix, W2c)',
 // regression that made `isLocked` accidentally evaluate `true` for every
 // agent (not just locked core ones) would slip through undetected.
 describe('AgentProfile — unlocked Main agent: interactive identity fields render (isLocked regression guard, W2c)', () => {
-  it('renders the interactive avatar color and icon pickers (not the read-only swatch) for an editable Main agent', async () => {
+  it('renders the interactive avatar color picker (not the read-only swatch) for an editable Main agent', async () => {
     vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#3B82F6' })
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
     expect((await screen.findAllByTestId('avatar-color-Forge Gold')).length).toBeGreaterThanOrEqual(1)
-    expect((await screen.findAllByTestId('avatar-icon-trigger')).length).toBeGreaterThanOrEqual(1)
     expect(screen.queryAllByTestId('avatar-color-readonly').length).toBe(0)
-    expect(screen.queryAllByTestId('avatar-icon-readonly').length).toBe(0)
   })
 
   it('does NOT disable the description textarea for an editable Main agent', async () => {

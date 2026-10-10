@@ -900,7 +900,6 @@ export function useSlashMenu(params: UseSlashMenuParams): UseSlashMenuResult {
     description: agent.description || agent.model || '',
     section: 'agents' as const,
     agentColor: agent.color ?? undefined,
-    agentIcon: agent.icon ?? undefined,
     agentName: agent.name,
     isActiveAgent: agent.id === effectiveActiveAgentId,
     onSelect: () => selectMentionAgent(agent),

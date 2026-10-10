@@ -60,13 +60,6 @@ describe('AgentCard — rendering (test #12)', () => {
     expect(screen.getAllByText(/^core$/i).length).toBeGreaterThan(0)
   })
 
-  it('renders without crashing when icon is unrecognized', () => {
-    // Dataset: Agent Card Rendering row 3 — unrecognized icon → fallback initial letter
-    expect(() =>
-      render(<AgentCard agent={makeAgent({ icon: 'unknown-icon-xyz', type: 'Main' })} />)
-    ).not.toThrow()
-  })
-
   it('renders without crashing when color is undefined', () => {
     // Dataset: Agent Card Rendering row 4 — missing color → CSS variable default
     expect(() =>

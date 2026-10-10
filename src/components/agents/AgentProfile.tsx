@@ -39,7 +39,7 @@ import {
 import { DeleteAgentControl } from './DeleteAgentControl'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { ExecutorSelector } from './ExecutorSelector'
-import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader, UploadMdButton } from './AgentFormFields'
+import { BehaviorFields, AvatarColorPicker, AvatarHeader, UploadMdButton } from './AgentFormFields'
 import { CliPathValidationHint } from './CliPathValidationHint'
 import { CommandPreview } from './CommandPreview'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -69,7 +69,6 @@ import { formatTokens } from '@/lib/formatTokens'
 import { logDiagnostic } from '@/lib/telemetry'
 import { useUiStore } from '@/store/ui'
 import type { FallbackModel } from '@/lib/api/generated/openapi-types'
-import { type IconName, getIconComponent } from '@/lib/agentIcons'
 import { avatarColorName } from '@/lib/constants'
 import { agentKindFlags } from '@/lib/agentKind'
 import { cliValidationBlocked, useCliPathValidation } from '@/hooks/useCliPathValidation'
@@ -337,7 +336,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // via default provider (back-compat with pre-O3 agents).
   const [primaryProvider, setPrimaryProvider] = useState('')
   const [selectedColor, setSelectedColor] = useState<string | undefined>(undefined)
-  const [selectedIcon, setSelectedIcon] = useState<IconName>('Robot')
   // W6-B4 / G3: `default` flag mirrors Agent.default on the wire. At most one
   // agent is default across the roster; the backend enforces that on PUT.
   // The toggle in the Identity strip is the only way to flip it from the
@@ -570,7 +568,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // O3 two-field: hydrate the explicit provider routing key.
     setPrimaryProvider(agent.provider ?? '')
     setSelectedColor(agent.color)
-    setSelectedIcon((agent.icon as IconName) ?? 'Robot')
     // W6-B4 / G3: hydrate the `default` flag from the agent response. The
     // wire field is a plain boolean; absent = false. The Identity strip
     // shows the current state of this flag and lets the user flip it.
@@ -655,8 +652,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // backend. Build a restricted payload for that tier.
     const isSubagent3p = agent?.type === 'subagent_3p'
     const identity = isSubagent3p
-      ? { name, description, color: selectedColor, icon: selectedIcon }
-      : { name, description, color: selectedColor, icon: selectedIcon, default: isDefault }
+      ? { name, description, color: selectedColor }
+      : { name, description, color: selectedColor, default: isDefault }
     if (isSubagent3p) {
       // #904 D14 supersedes agent-types-field-matrix.md Decisions #1: the
       // own tool-iteration limit is the CLI's turn cap, sent only when the
@@ -744,7 +741,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       executor,
     }
   }, [
-    agent?.type, name, description, model, primaryProvider, selectedColor, selectedIcon, isDefault, fallbackModels,
+    agent?.type, name, description, model, primaryProvider, selectedColor, isDefault, fallbackModels,
     temperature, maxTokens, soul, memoryEnabled, voice,
     maxToolIterationsEdit, contextWindowOverride,
     agentSkills, executor,
@@ -1407,24 +1404,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     value={selectedColor ?? ''}
                     onChange={(color) => { markDirty(); setSelectedColor(color) }}
                     testIdPrefix="avatar-color"
-                  />
-                )}
-              </div>
-              <div className="space-y-[var(--space-1)]">
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Avatar icon</p>
-                {!isFieldEditable('icon') ? (
-                  <div className="flex items-center gap-[var(--space-2)]" data-testid="avatar-icon-readonly">
-                    {(() => {
-                      const ReadOnlyIcon = getIconComponent(selectedIcon)
-                      return <ReadOnlyIcon size={18} className="text-[var(--color-secondary)]" aria-hidden="true" />
-                    })()}
-                    <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">{selectedIcon}</span>
-                  </div>
-                ) : (
-                  <IconPicker
-                    value={selectedIcon}
-                    onChange={(icon) => { markDirty(); setSelectedIcon(icon) }}
-                    triggerTestId="avatar-icon-trigger"
                   />
                 )}
               </div>

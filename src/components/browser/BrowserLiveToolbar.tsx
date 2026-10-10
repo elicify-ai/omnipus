@@ -17,7 +17,6 @@ import {
 import { cn, initialOf } from '@/lib/utils'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
-import { IconRenderer } from '@/components/shared/IconRenderer'
 import type { Agent } from '@/lib/api'
 import type { DriveMode, LiveStatus, VisualState } from './browserLiveViewModel'
 
@@ -219,9 +218,7 @@ export function BrowserLiveToolbar({
           className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[length:var(--type-caption-size)] font-bold text-[var(--color-primary)]"
           style={{ backgroundColor: resolvedAgent?.color ?? 'var(--color-surface-3)' }}
         >
-          {resolvedAgent?.icon ? (
-            <IconRenderer icon={resolvedAgent.icon} size={9} />
-          ) : resolvedAgent && resolvedAgent.name ? (
+          {resolvedAgent && resolvedAgent.name ? (
             initialOf(resolvedAgent.name)
           ) : (
             <Robot size={9} />

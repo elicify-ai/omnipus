@@ -45,7 +45,7 @@ function agent(id: string, over: Partial<Agent> = {}): Agent {
 }
 
 const AGENTS: Agent[] = [
-  agent('mia', { name: 'Mia', default: true, color: '#3B82F6', icon: 'Robot' }),
+  agent('mia', { name: 'Mia', default: true, color: '#3B82F6' }),
   agent('jim', { name: 'Jim' }),
   agent('planner', { name: 'Planner', type: 'Subagent' }),
   agent('explorer', { name: 'Explorer', type: 'Subagent' }),
@@ -219,7 +219,7 @@ describe('buildTeamGraphModel', () => {
 // "looked absent" even though it always verifies work on this workspace.
 
 describe('buildTeamGraphModel — implicit System agent nodes (Judge, ADR-049 D3)', () => {
-  const JUDGE = agent('judge', { name: 'Judge', type: 'system', color: '#9CA3AF', icon: 'Scales' })
+  const JUDGE = agent('judge', { name: 'Judge', type: 'system', color: '#9CA3AF' })
   const AGENTS_WITH_JUDGE = [...AGENTS, JUDGE]
 
   it('renders the System agent as an implicit node even though it is never in state.members', () => {
