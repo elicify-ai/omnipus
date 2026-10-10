@@ -49,7 +49,7 @@ type attachAck struct {
 // attachReadTranscript reads a session's history for a snapshot. A var only
 // so a test can make the read fail; never reassigned in production.
 var attachReadTranscript = func(store *session.UnifiedStore, sessionID string) ([]session.TranscriptEntry, error) {
-	return store.ReadTranscript(sessionID)
+	return store.ReadTranscriptWithDispositions(sessionID)
 }
 
 // attachAfterBindHook, when set, runs right after an attach has bound the

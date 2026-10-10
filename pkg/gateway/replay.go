@@ -972,6 +972,21 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 		cidCopy := entry.ClientMessageID
 		sr.msgFrame.ClientMessageId = &cidCopy
 	}
+	// session-core FR-024: a user input Stop discarded before delivery keeps
+	// its archived bytes; the replayed frame carries the read-only label.
+	if d := entry.InputDisposition; d != nil {
+		disp := &struct {
+			ClientMessageId *string `json:"client_message_id,omitempty"`
+			MessageId       string  `json:"message_id"`
+			Reason          string  `json:"reason"`
+			State           string  `json:"state"`
+		}{MessageId: d.MessageID, Reason: d.Reason, State: d.State}
+		if d.ClientMessageID != "" {
+			cid := d.ClientMessageID
+			disp.ClientMessageId = &cid
+		}
+		sr.msgFrame.InputDisposition = disp
+	}
 	// Wave 3 fix 5c/1: surface TranscriptEntry.TurnID — stamped on
 	// every real assistant entry at its three production write sites:
 	// pkg/agent/turn.go's appendIntermediateAssistantTranscript and

@@ -514,6 +514,11 @@ type TranscriptEntry struct {
 	// wire frame").
 	ClientMessageID string `json:"client_message_id,omitempty"`
 
+	// InputDisposition is a READ-ONLY PROJECTION (session-core FR-024): set
+	// only by ReadTranscriptWithDispositions for a user input Stop discarded
+	// before delivery. It is never written to the archive.
+	InputDisposition *InputDisposition `json:"input_disposition,omitempty"`
+
 	// SystemSubtype discriminates an EntryTypeSystem entry by what kind of
 	// system event it records (ADR-085 BROWSER-FR-043a, folded into this
 	// wave per delivery-plan R-23 — a persisted-field dependency of wave

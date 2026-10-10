@@ -73,8 +73,6 @@ type BootSweepResult struct {
 	RebaselinedGoals []string
 }
 
-const failedReasonPreADR091NotResumable = "pre-adr-091-not-resumable"
-
 // SteerBootRecovery is ADR-091's boot operation. Its collaborators are the
 // published pkg/steer package boundaries, so production and the
 // reboot fixture execute the same code against reopened durable stores.
@@ -164,9 +162,7 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 			if err := r.recoverSteered(ctx, id, notice); err != nil {
 				refusals = append(refusals, err)
 			}
-		case steer.ClassLegacyDelegate:
-			r.failLegacy(id, notice)
-		case steer.ClassDamagedChild, steer.ClassInvalidEdge, steer.ClassUnreadable:
+		case steer.ClassLegacyDelegate, steer.ClassDamagedChild, steer.ClassInvalidEdge, steer.ClassUnreadable:
 			notice("refused:"+id, fmt.Sprintf("session %s refused at boot: classification %s", id, class))
 		default:
 			notice("refused:"+id, fmt.Sprintf("session %s refused at boot: unknown classification %q", id, class))
@@ -217,23 +213,6 @@ func (r *SteerBootRecovery) sessionIDs() ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
-}
-
-func (r *SteerBootRecovery) failLegacy(id string, notice func(string, string)) {
-	err := r.Lifecycle.Mutate(id, func(rec *session.LifecycleRecord) error {
-		if rec.Terminal() {
-			return nil
-		}
-		rec.State = session.LifecycleFailed
-		rec.FailedReason = failedReasonPreADR091NotResumable
-		rec.NeedsInput = nil
-		return nil
-	})
-	if err != nil {
-		notice("legacy-write:"+id, fmt.Sprintf("legacy delegate %s could not be failed at boot: %v", id, err))
-		return
-	}
-	notice("legacy:"+id, fmt.Sprintf("legacy delegate %s failed at boot: %s", id, failedReasonPreADR091NotResumable))
 }
 
 func (r *SteerBootRecovery) recoverSteered(ctx context.Context, id string, notice func(string, string)) error {

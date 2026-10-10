@@ -986,18 +986,10 @@ func stringSliceSetDiff(a, b []string) (onlyInA, onlyInB []string) {
 // returns every reachable descendant's own session id (rootSessionID itself
 // is never included).
 //
-// [FIX-5, Defect 4, 2026-08-03] Exported and HOISTED: this used to be
-// duplicated byte-for-byte as pkg/gateway/websocket.go's unexported
-// u11CollectDescendantSessionIDs, kept as a separate copy only because a
-// parallel-implementation ownership rule forbade that unit from editing
-// pkg/agent (or this unit from editing pkg/gateway). That rule has expired.
-// websocket.go's buildCancelHooks now calls this function directly;
-// u11CollectDescendantSessionIDs itself survives only as a signature-compat
-// shim (its exact pre-existing name/signature is called directly by
-// pkg/gateway/rest.go's deleteSession handler and by
-// pkg/gateway/websocket_adr057_test.go's U11 unit tests — both outside this
-// fix's file ownership, so the shim is kept rather than requiring edits
-// there).
+// The ONE implementation: the gateway's cancel/approval cascade
+// (buildCancelHooks) and its session-delete handler both call it directly, and
+// it returns the walk error so a partial walk is never mistaken for "no more
+// children".
 //
 // This is the same primitive the cancel/approval-cascade paths in both
 // packages share, because a background bash/exec session (FR-027, see

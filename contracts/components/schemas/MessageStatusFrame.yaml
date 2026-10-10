@@ -3,7 +3,9 @@ description: >
   Server → client delivery status for one user message. Session-scoped. The
   gateway emits received only after the user transcript entry is durably
   appended, working after the message is successfully admitted to the agent
-  bus, and failed when processing stops before admission. Emitted only for a
+  bus, failed when processing stops before admission, and discarded (with
+  reason stopped_before_delivery) when Stop discards the input before it is
+  delivered into the agent's model input (session-core FR-024). Emitted only for a
   MessageFrame carrying client_message_id, preserving compatibility with older
   clients.
 type: object
@@ -31,6 +33,15 @@ properties:
       - received
       - working
       - failed
+      - discarded
+  reason:
+    type: string
+    enum:
+      - stopped_before_delivery
+    description: >
+      Present only with state=discarded: why the input never reached the agent
+      (session-core FR-024). Stop discards web and channel input that was not yet
+      committed into the agent's model input; the archived message stays.
 
   seq:
     type: integer

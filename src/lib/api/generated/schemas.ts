@@ -164,6 +164,14 @@ type SessionDetail = {
 type Message = {
   id: string;
   client_message_id?: string | undefined;
+  input_disposition?:
+    | {
+        message_id: string;
+        client_message_id?: string | undefined;
+        state: "discarded";
+        reason: "stopped_before_delivery";
+      }
+    | undefined;
   type?:
     | (
         | "message"
@@ -3555,6 +3563,14 @@ export const GoalOutcome: z.ZodType<GoalOutcome> = z.object({
 export const Message: z.ZodType<Message> = z.object({
   id: z.string(),
   client_message_id: z.string().min(1).max(128).optional(),
+  input_disposition: z
+    .object({
+      message_id: z.string().min(1).max(255),
+      client_message_id: z.string().min(1).max(128).optional(),
+      state: z.literal("discarded"),
+      reason: z.literal("stopped_before_delivery"),
+    })
+    .optional(),
   type: z
     .enum([
       "message",
@@ -16490,7 +16506,8 @@ export const MessageStatusFrame = z
     type: z.literal("message_status"),
     session_id: z.string().min(1).max(255),
     client_message_id: z.string().min(1).max(128),
-    state: z.enum(["received", "working", "failed"]),
+    state: z.enum(["received", "working", "failed", "discarded"]),
+    reason: z.literal("stopped_before_delivery").optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -16799,6 +16816,14 @@ export const ReplayMessageFrame = z
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
     client_message_id: z.string().optional(),
+    input_disposition: z
+    .object({
+      message_id: z.string().min(1).max(255),
+      client_message_id: z.string().min(1).max(128).optional(),
+      state: z.literal("discarded"),
+      reason: z.literal("stopped_before_delivery"),
+    })
+    .strict().optional(),
     terminal_outcome: z.boolean().optional(),
   })
   .strict();
