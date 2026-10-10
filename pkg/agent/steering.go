@@ -598,6 +598,13 @@ func (al *AgentLoop) ReviveStoppedSessionAsRedirect(ctx context.Context, session
 	return al.reviveStoppedSession(ctx, sessionID, by, instruction, true)
 }
 
+// reviveAfterAvailabilityTestHook is a test-only seam fired right after the
+// external-conversation availability decision and before the revival writes
+// anything. Always nil in production; never set outside a _test.go file. It lets
+// a test land a competing release of the driver in exactly the window NEW-4
+// closes.
+var reviveAfterAvailabilityTestHook func(sessionID string)
+
 // reviveStoppedSession is ReviveStoppedSession's body. asRedirect is true only
 // for the /stop-redirect delivery (RedirectSteeredSession's waiter and the
 // stopped-helper branch of RedirectSessionTurn): the instruction is then
@@ -645,8 +652,22 @@ func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string,
 	// refuses visibly, before the instruction is stored or the generation moves,
 	// rather than dispatching a turn that starts a fresh CLI conversation inside
 	// the old chat.
-	if !al.externalConversationAvailable(sessionID, rec) {
-		return false, &curatedTurnError{text: fmt.Sprintf("steer: revive %q: %s", sessionID, errExternalResumeUnavailable.Error())}
+	// NEW-3/NEW-4: the decision and the hold on the retained driver are one
+	// step, and the hold lasts until the revived turn begins (or the revival
+	// fails below), so a completion still unwinding cannot release the driver
+	// between this check and the dispatch.
+	externalHold, availErr := al.reserveExternalConversation(sessionID, rec)
+	if availErr != nil {
+		return false, &curatedTurnError{text: fmt.Sprintf("steer: revive %q: %s", sessionID, availErr.Error())}
+	}
+	dispatched := false
+	defer func() {
+		if !dispatched {
+			externalHold.cancel()
+		}
+	}()
+	if reviveAfterAvailabilityTestHook != nil {
+		reviveAfterAvailabilityTestHook(sessionID)
 	}
 	// [Defect 4, ADR-091 fix lane RX-DELIVERY, HIGH] The instruction lands
 	// BEFORE the generation is minted, and a failure refuses the revive
@@ -696,6 +717,7 @@ func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string,
 	if _, derr := al.dispatchSteeredSession(ctx, sessionID, newGeneration); derr != nil {
 		return false, fmt.Errorf("steer: revive %q: dispatch generation %d: %w", sessionID, newGeneration, derr)
 	}
+	dispatched = true
 	return true, nil
 }
 

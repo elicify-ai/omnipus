@@ -89,7 +89,7 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	// external-CLI driver (its option/env snapshot). No-op while the run is still
 	// winding down (releaseExternalRunIfIdle checks the running flag); the
 	// steered exit path's own release covers that case.
-	defer al.releaseExternalRunIfIdle(req.SessionID)
+	defer al.releaseExternalRunAfterStop(req.SessionID)
 	hooksFor := req.HooksFor
 	if hooksFor == nil {
 		// Founder decision Q13: a plain Stop ends the session's current turn

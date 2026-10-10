@@ -350,7 +350,12 @@ func runExternalCLISubTurn(
 	//    for a steered (non-task) session, whose every post-launch entry must
 	//    resume-or-refuse.
 	sessionKey := externalRunSessionKey(ed.childTS)
-	resumeOnly := al.externalRunResumeOnly(sessionKey)
+	resumeOnly, resumeOnlyErr := al.externalRunResumeOnly(sessionKey)
+	if resumeOnlyErr != nil {
+		// NEW-3: an unreadable session record refuses before any driver exists;
+		// it must never fall through to a fresh, unmarked run.
+		return nil, fmt.Errorf("external-cli dispatch: %w", resumeOnlyErr)
+	}
 	sess, resume, beginErr := al.beginExternalRun(sessionKey, ed.childTS, cancel, resumeOnly)
 	if beginErr != nil {
 		return nil, fmt.Errorf("external-cli dispatch: %w", beginErr)
