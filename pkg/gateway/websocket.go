@@ -1346,8 +1346,9 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 		if f.SessionId != "" {
 			// #823: the client's cursor for this session ({since_seq, boot_id})
 			// decides incremental catch-up vs snapshot (BE-DESIGN.md §3.3/§4).
-			wh.h.handleAttachSession(wh.ctx, wh.chatID, f.SessionId,
-				&attachCursor{SinceSeq: f.SinceSeq, BootID: f.BootId}, wh.wc)
+			wh.h.handleAttachSessionWithAck(wh.ctx, wh.chatID, f.SessionId,
+				&attachCursor{SinceSeq: f.SinceSeq, BootID: f.BootId},
+				&attachAck{Ack: f.AckAttention != nil && *f.AckAttention, Bound: f.AttentionBound}, wh.wc)
 		} else {
 			slog.Warn("ws: attach_session with empty session_id", "chat_id", wh.chatID)
 		}

@@ -426,8 +426,10 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 	// (Partitions) marshal as [] not null — Zod requires type:array on the SPA.
 	lifecycleStore := a.agentLoop.GetSessionLifecycleStore()
 	genSessions := make([]gen.Session, 0, len(metas))
+	approvals := a.pendingApprovalMains()
 	for _, m := range metas {
 		s := unifiedMetaToGenSession(m)
+		stampNeedsAttention(&s, m, approvals)
 		// Sub-agent control plane ADR D4/MAJ-009: lifecycle_state/stop_note,
 		// absent when this session has no LifecycleRecord — same producer
 		// listSessions/getSession use (computeSessionLifecycle, rest_sessions.go).

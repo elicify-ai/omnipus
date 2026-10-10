@@ -97,6 +97,11 @@ func (us *UnifiedStore) appendTranscriptLocked(sessionID string, entry Transcrip
 	if entry.ViewMembership == "" {
 		entry.ViewMembership = ViewMembershipBoth
 	}
+	// U11: an attention outcome raises the main's saved order BEFORE the entry is
+	// appended (see raiseAttentionLocked for why this order).
+	if err := us.raiseAttentionLocked(sessionID, meta, entry); err != nil {
+		return -1, fmt.Errorf("unified_store: %s: %w", what, err)
+	}
 	// FR-005: the archive is UTC day-partitioned. This resolves (and, when the
 	// entry's day is newer than the current one, completes) the day rollover,
 	// returning the file to append to. See transcript_partition.go.
