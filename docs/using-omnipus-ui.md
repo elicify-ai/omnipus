@@ -106,6 +106,18 @@ In the simpler message-list fallback, live tool activity appears against the rep
 
 The mark's figure and badge stay fully opaque. With normal motion they gently change size, and a separate glow animates behind them; Working also has a moving highlight. If your system requests reduced motion, these loops stop and the thinking phrase stops rotating. The name and current phrase remain visible.
 
+### Who each message is from
+
+Your own messages sit on the right with no name. Every other message in the conversation carries a name above its text:
+
+- A message that arrived from a chat platform — Telegram, Slack, and the like — shows who sent it and where it came from, for example **Alice · Telegram**. The source is always shown for messages from outside the web app, so a Telegram user called Dan can never be mistaken for you.
+- A message another agent sent into this conversation (for example a request from a teammate agent in another workspace) shows that agent's current name, plus the workspace it belongs to when that is not the workspace you are looking at — for example **Mia · Atlas**.
+- A name longer than about 40 characters is shortened with an ellipsis; point at it, or focus it with the keyboard, to see the full name.
+
+Names are plain text. A name that contains characters that look like formatting shows them exactly as written, never styled.
+
+When an agent answers someone — for example a reply that goes back out to a message that arrived on Telegram — the reply shows **Ava → Alice · Telegram** above the text: who answered, and who it went to. If a reply records where it went without a name, it shows **Ava → reply** instead. The tool card for the send that produced such a reply is hidden in the conversation, because the reply itself already shows what was sent and to whom.
+
 A failure or refusal routed to an existing chat appears in that conversation, including when no reply has started. It does not turn into an app-wide connection banner when you open another conversation or start a new chat. Connection and routing-protocol failures remain separate app-wide problems.
 
 Chat follows the current gateway connection. Once a replacement connection opens, an older connection closing does not disable the message box or interrupt the current reply. A genuine connection loss still triggers reconnect and reloads the chat's missing history.
