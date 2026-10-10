@@ -14625,10 +14625,10 @@ export interface components {
             /** @description The instruction the owning agent processes on each run. */
             message: string;
             /**
-             * @description isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
-             * @enum {string}
+             * @description True when every run is forced into a fresh independent chat (session-core FR-017). The run mode is otherwise derived from the owner; there is no user-facing session-mode choice.
+             * @example false
              */
-            session_mode: "isolated" | "continue" | "main";
+            run_isolated?: boolean;
             /** @description Per-run deadline in seconds; 0 means use the global schedules.run_timeout_seconds default. */
             timeout_seconds: number;
             /** @description For continue/main modes, the persistent session id this schedule runs in. */
@@ -14656,11 +14656,6 @@ export interface components {
              * @example false
              */
             run_isolated: boolean;
-            /**
-             * @description Default isolated.
-             * @enum {string}
-             */
-            session_mode?: "isolated" | "continue" | "main";
             /** @description Per-run deadline; default 0 = use the global default. */
             timeout_seconds?: number;
             /** @description Default true. */
@@ -14681,8 +14676,6 @@ export interface components {
              * @example false
              */
             run_isolated: boolean;
-            /** @enum {string} */
-            session_mode?: "isolated" | "continue" | "main";
             timeout_seconds?: number;
             enabled?: boolean;
         };

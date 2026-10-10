@@ -2023,13 +2023,6 @@ func setupCronTool(
 	runner.setProcessCleanup(procReg.Cleanup)
 	cronService.SetRunner(runner)
 
-	// Default agent id used only to migrate owner-less legacy jobs on load (W-8).
-	defaultAgentID := ""
-	if def := agentLoop.GetRegistry().GetDefaultAgent(); def != nil {
-		defaultAgentID = def.ID
-	}
-	cronService.SetDefaultAgentID(defaultAgentID)
-
 	if cfg != nil {
 		cronService.SetMaxConcurrentRuns(cfg.Schedules.MaxConcurrentRuns)
 		cronService.SetRetryBackoff(cfg.Schedules.RetryBackoffMs)

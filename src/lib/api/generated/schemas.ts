@@ -2396,7 +2396,7 @@ type Schedule = {
   created_by?: string | undefined;
   trigger: ScheduleTrigger;
   message: string;
-  session_mode: "isolated" | "continue" | "main";
+  run_isolated?: boolean | undefined;
   timeout_seconds: number;
   session_id?: string | undefined;
   state: ScheduleState;
@@ -2431,7 +2431,6 @@ type ScheduleCreate = {
   trigger: ScheduleTrigger;
   message: string;
   run_isolated?: boolean | undefined;
-  session_mode?: ("isolated" | "continue" | "main") | undefined;
   timeout_seconds?: number | undefined;
   enabled?: boolean | undefined;
 };
@@ -2441,7 +2440,6 @@ type ScheduleUpdate = Partial<{
   trigger: ScheduleTrigger;
   message: string;
   run_isolated: boolean;
-  session_mode: "isolated" | "continue" | "main";
   timeout_seconds: number;
   enabled: boolean;
 }>;
@@ -5367,7 +5365,7 @@ export const Schedule: z.ZodType<Schedule> = z.object({
   created_by: z.string().optional(),
   trigger: ScheduleTrigger,
   message: z.string().min(1),
-  session_mode: z.enum(["isolated", "continue", "main"]),
+  run_isolated: z.boolean().optional(),
   timeout_seconds: z.number().int(),
   session_id: z.string().optional(),
   state: ScheduleState,
@@ -5384,7 +5382,6 @@ export const ScheduleCreate: z.ZodType<ScheduleCreate> = z.object({
   trigger: ScheduleTrigger,
   message: z.string().min(1),
   run_isolated: z.boolean().optional().default(false),
-  session_mode: z.enum(["isolated", "continue", "main"]).optional(),
   timeout_seconds: z.number().int().gte(0).optional(),
   enabled: z.boolean().optional(),
 });
@@ -5395,7 +5392,6 @@ export const ScheduleUpdate: z.ZodType<ScheduleUpdate> = z
     trigger: ScheduleTrigger,
     message: z.string().min(1),
     run_isolated: z.boolean().default(false),
-    session_mode: z.enum(["isolated", "continue", "main"]),
     timeout_seconds: z.number().int().gte(0),
     enabled: z.boolean(),
   })

@@ -15,18 +15,12 @@ package gateway
 // TestOccurrences_BucketingAndCaps) exercise it directly without linking the
 // full gateway test binary.
 //
-// Three trigger flavors, three expansion strategies:
+// Two trigger flavors, two expansion strategies (the legacy cron_expr expansion
+// was deleted — session-core DEL-19):
 //   - rrule (task.ExpandRRULE / task.IsRegular / task.RegularPeriodMs /
 //     task.CountRegularInRange) — provably-regular rules (no BY* modifiers)
 //     get O(1) arithmetic bucket derivation; irregular rules iterate and
 //     consume the 10,000-occurrence budget.
-//   - cron_expr (legacy, expandCronServerZone below) — always expanded by
-//     walking gronx.NextTickAfter in the SERVER's local zone (Timezone
-//     Semantics §2, D8 display-only), matching pkg/cron/service.go's own
-//     computeNextRun exactly (same time.UnixMilli + gronx.NextTickAfter
-//     call shape) so the endpoint and the live scheduler can never disagree
-//     — always consumes the iteration budget (no arithmetic shortcut for
-//     cron).
 //   - every_ms (legacy, FR-008a) — always provably regular: countEveryMsInRange
 //     below derives per-day counts by pure modular arithmetic, never
 //     consuming the iteration budget, projected forward from the live
@@ -44,8 +38,6 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
-
-	"github.com/adhocore/gronx"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -289,26 +281,10 @@ func buildOneOccurrenceSet(
 			}
 			occMs, buckets, truncated = res.raw, res.buckets, res.truncated
 
-		case cfg.CronExpr != nil && *cfg.CronExpr != "":
-			expr := *cfg.CronExpr
-
-			if detail {
-				occMs, truncated = expandCronServerZone(expr, fromMs, toMs, perTaskInstantCap)
-				break
-			}
-			res, err := buildOverview(loc, fromMs, toMs, nil, cronDayFn(expr))
-			if err != nil {
-				slog.Warn("task_occurrences: cron overview expansion failed, skipping task",
-					"task_id", t.ID, "error", err)
-				return gen.TaskOccurrenceSet{}, false
-			}
-			occMs, buckets, truncated = res.raw, res.buckets, res.truncated
-
 		default:
-			// Neither rrule nor cron_expr set on a `recurring` trigger:
-			// malformed data (creation-time ValidateTrigger should prevent
-			// this) — omit defensively rather than erroring the whole
-			// request.
+			// A `recurring` trigger without an rrule (the legacy cron_expr form is
+			// no longer supported — session-core DEL-19): omit defensively rather
+			// than erroring the whole request.
 			return gen.TaskOccurrenceSet{}, false
 		}
 
@@ -765,26 +741,6 @@ func irregularRruleDayFn(rruleBody string, dtstartMs int64, ruleTZ string) overv
 	}
 }
 
-// cronDayFn expands a day's legacy cron_expr occurrences by iterating
-// expandCronServerZone (gronx, server zone), consuming `budget` occurrences.
-// Always the irregular/budgeted path — cron has no arithmetic shortcut.
-func cronDayFn(expr string) overviewDayFn {
-	return func(dayFromMs, dayToMs int64, budget int) (dayResult, error) {
-		instants, truncated := expandCronServerZone(expr, dayFromMs, dayToMs, budget)
-		if truncated {
-			return dayResult{truncated: true}, nil
-		}
-		dr := dayResult{count: len(instants), consumed: len(instants)}
-		if len(instants) > 0 {
-			dr.firstMs = instants[0]
-			if len(instants) <= 3 {
-				dr.instants = instants
-			}
-		}
-		return dr, nil
-	}
-}
-
 // everyMsDayFn derives a day's every_ms occurrences arithmetically
 // (countEveryMsInRange), never consuming the iteration budget — every_ms is
 // always provably regular (FR-008a projects from a fixed anchor at a fixed
@@ -808,44 +764,6 @@ func everyMsDayFn(anchorMs, everyMs int64) overviewDayFn {
 }
 
 // --- flavor-specific expansion primitives -----------------------------------
-
-// expandCronServerZone expands a legacy cron_expr trigger's occurrences
-// within [fromMs, toMs) by walking gronx.NextTickAfter in the SERVER's local
-// zone (time.UnixMilli's implicit time.Local) — the identical mechanism
-// pkg/cron/service.go's computeNextRun uses for a "cron"-kind job
-// (`gronx.NextTickAfter(schedule.Expr, time.UnixMilli(nowMS), false)`), so
-// this endpoint's expansion and the live scheduler's own fire computation
-// can never disagree (Timezone Semantics §2, D8: display-only, no reverse
-// zone-mapping). The first call is inclusive (captures a tick exactly at
-// fromMs, honoring the half-open [from, to) contract); subsequent calls are
-// exclusive (advance strictly past the last found tick).
-func expandCronServerZone(expr string, fromMs, toMs int64, limit int) ([]int64, bool) {
-	if limit <= 0 || fromMs >= toMs {
-		return nil, false
-	}
-	cur := time.UnixMilli(fromMs)
-	inclusive := true
-	var out []int64
-	truncated := false
-	for {
-		next, err := gronx.NextTickAfter(expr, cur, inclusive)
-		if err != nil {
-			break // unparseable/exhausted — treat as "no further ticks"
-		}
-		ms := next.UnixMilli()
-		if ms < fromMs || ms >= toMs {
-			break
-		}
-		out = append(out, ms)
-		if len(out) >= limit {
-			truncated = true
-			break
-		}
-		cur = next
-		inclusive = false
-	}
-	return out, truncated
-}
 
 // countEveryMsInRange derives, by pure modular arithmetic (no iteration),
 // the count and first occurrence of a fixed-interval every_ms projection

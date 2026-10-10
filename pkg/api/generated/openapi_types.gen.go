@@ -9272,27 +9272,6 @@ func (e ScheduleRunsStatus) Valid() bool {
 	}
 }
 
-// Defines values for ScheduleSessionMode.
-const (
-	ScheduleSessionModeContinue ScheduleSessionMode = "continue"
-	ScheduleSessionModeIsolated ScheduleSessionMode = "isolated"
-	ScheduleSessionModeMain     ScheduleSessionMode = "main"
-)
-
-// Valid indicates whether the value is a known member of the ScheduleSessionMode enum.
-func (e ScheduleSessionMode) Valid() bool {
-	switch e {
-	case ScheduleSessionModeContinue:
-		return true
-	case ScheduleSessionModeIsolated:
-		return true
-	case ScheduleSessionModeMain:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ScheduleTriggerKind.
 const (
 	ScheduleTriggerKindAt    ScheduleTriggerKind = "at"
@@ -9308,27 +9287,6 @@ func (e ScheduleTriggerKind) Valid() bool {
 	case ScheduleTriggerKindCron:
 		return true
 	case ScheduleTriggerKindEvery:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ScheduleCreateSessionMode.
-const (
-	ScheduleCreateSessionModeContinue ScheduleCreateSessionMode = "continue"
-	ScheduleCreateSessionModeIsolated ScheduleCreateSessionMode = "isolated"
-	ScheduleCreateSessionModeMain     ScheduleCreateSessionMode = "main"
-)
-
-// Valid indicates whether the value is a known member of the ScheduleCreateSessionMode enum.
-func (e ScheduleCreateSessionMode) Valid() bool {
-	switch e {
-	case ScheduleCreateSessionModeContinue:
-		return true
-	case ScheduleCreateSessionModeIsolated:
-		return true
-	case ScheduleCreateSessionModeMain:
 		return true
 	default:
 		return false
@@ -9374,27 +9332,6 @@ func (e ScheduleListSchedulesRunsStatus) Valid() bool {
 	case ScheduleListSchedulesRunsStatusSkipped:
 		return true
 	case ScheduleListSchedulesRunsStatusTimeout:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ScheduleListSchedulesSessionMode.
-const (
-	ScheduleListSchedulesSessionModeContinue ScheduleListSchedulesSessionMode = "continue"
-	ScheduleListSchedulesSessionModeIsolated ScheduleListSchedulesSessionMode = "isolated"
-	ScheduleListSchedulesSessionModeMain     ScheduleListSchedulesSessionMode = "main"
-)
-
-// Valid indicates whether the value is a known member of the ScheduleListSchedulesSessionMode enum.
-func (e ScheduleListSchedulesSessionMode) Valid() bool {
-	switch e {
-	case ScheduleListSchedulesSessionModeContinue:
-		return true
-	case ScheduleListSchedulesSessionModeIsolated:
-		return true
-	case ScheduleListSchedulesSessionModeMain:
 		return true
 	default:
 		return false
@@ -9464,27 +9401,6 @@ func (e ScheduleRunResultStatus) Valid() bool {
 	case ScheduleRunResultStatusSkipped:
 		return true
 	case ScheduleRunResultStatusTimeout:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ScheduleUpdateSessionMode.
-const (
-	ScheduleUpdateSessionModeContinue ScheduleUpdateSessionMode = "continue"
-	ScheduleUpdateSessionModeIsolated ScheduleUpdateSessionMode = "isolated"
-	ScheduleUpdateSessionModeMain     ScheduleUpdateSessionMode = "main"
-)
-
-// Valid indicates whether the value is a known member of the ScheduleUpdateSessionMode enum.
-func (e ScheduleUpdateSessionMode) Valid() bool {
-	switch e {
-	case ScheduleUpdateSessionModeContinue:
-		return true
-	case ScheduleUpdateSessionModeIsolated:
-		return true
-	case ScheduleUpdateSessionModeMain:
 		return true
 	default:
 		return false
@@ -23710,6 +23626,9 @@ type Schedule struct {
 	// OwnerAgentId The agent that runs this schedule. Pinned; never falls back to the default agent.
 	OwnerAgentId string `json:"owner_agent_id"`
 
+	// RunIsolated True when every run is forced into a fresh independent chat (session-core FR-017). The run mode is otherwise derived from the owner; there is no user-facing session-mode choice.
+	RunIsolated *bool `json:"run_isolated,omitempty"`
+
 	// Runs The most recent runs (newest first), capped at 20.
 	Runs *[]struct {
 		// DurationMs Wall-clock duration of the run in milliseconds.
@@ -23730,9 +23649,6 @@ type Schedule struct {
 
 	// SessionId For continue/main modes, the persistent session id this schedule runs in.
 	SessionId *string `json:"session_id,omitempty"`
-
-	// SessionMode isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
-	SessionMode ScheduleSessionMode `json:"session_mode"`
 
 	// State Runtime state of a schedule (#264). All fields are server-maintained.
 	State struct {
@@ -23776,9 +23692,6 @@ type Schedule struct {
 // ScheduleRunsStatus ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
 type ScheduleRunsStatus string
 
-// ScheduleSessionMode isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
-type ScheduleSessionMode string
-
 // ScheduleTriggerKind defines model for Schedule.Trigger.Kind.
 type ScheduleTriggerKind string
 
@@ -23792,9 +23705,6 @@ type ScheduleCreate struct {
 
 	// RunIsolated Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
 	RunIsolated *bool `json:"run_isolated,omitempty"`
-
-	// SessionMode Default isolated.
-	SessionMode *ScheduleCreateSessionMode `json:"session_mode,omitempty"`
 
 	// TimeoutSeconds Per-run deadline; default 0 = use the global default.
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
@@ -23812,9 +23722,6 @@ type ScheduleCreate struct {
 		Kind    ScheduleCreateTriggerKind `json:"kind"`
 	} `json:"trigger"`
 }
-
-// ScheduleCreateSessionMode Default isolated.
-type ScheduleCreateSessionMode string
 
 // ScheduleCreateTriggerKind defines model for ScheduleCreate.Trigger.Kind.
 type ScheduleCreateTriggerKind string
@@ -23840,6 +23747,9 @@ type ScheduleList struct {
 		// OwnerAgentId The agent that runs this schedule. Pinned; never falls back to the default agent.
 		OwnerAgentId string `json:"owner_agent_id"`
 
+		// RunIsolated True when every run is forced into a fresh independent chat (session-core FR-017). The run mode is otherwise derived from the owner; there is no user-facing session-mode choice.
+		RunIsolated *bool `json:"run_isolated,omitempty"`
+
 		// Runs The most recent runs (newest first), capped at 20.
 		Runs *[]struct {
 			// DurationMs Wall-clock duration of the run in milliseconds.
@@ -23860,9 +23770,6 @@ type ScheduleList struct {
 
 		// SessionId For continue/main modes, the persistent session id this schedule runs in.
 		SessionId *string `json:"session_id,omitempty"`
-
-		// SessionMode isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
-		SessionMode ScheduleListSchedulesSessionMode `json:"session_mode"`
 
 		// State Runtime state of a schedule (#264). All fields are server-maintained.
 		State struct {
@@ -23906,9 +23813,6 @@ type ScheduleList struct {
 
 // ScheduleListSchedulesRunsStatus ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
 type ScheduleListSchedulesRunsStatus string
-
-// ScheduleListSchedulesSessionMode isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
-type ScheduleListSchedulesSessionMode string
 
 // ScheduleListSchedulesTriggerKind defines model for ScheduleList.Schedules.Trigger.Kind.
 type ScheduleListSchedulesTriggerKind string
@@ -23991,9 +23895,8 @@ type ScheduleUpdate struct {
 	OwnerAgentId *string `json:"owner_agent_id,omitempty"`
 
 	// RunIsolated Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
-	RunIsolated    *bool                      `json:"run_isolated,omitempty"`
-	SessionMode    *ScheduleUpdateSessionMode `json:"session_mode,omitempty"`
-	TimeoutSeconds *int                       `json:"timeout_seconds,omitempty"`
+	RunIsolated    *bool `json:"run_isolated,omitempty"`
+	TimeoutSeconds *int  `json:"timeout_seconds,omitempty"`
 
 	// Trigger When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
 	Trigger *struct {
@@ -24008,9 +23911,6 @@ type ScheduleUpdate struct {
 		Kind    ScheduleUpdateTriggerKind `json:"kind"`
 	} `json:"trigger,omitempty"`
 }
-
-// ScheduleUpdateSessionMode defines model for ScheduleUpdate.SessionMode.
-type ScheduleUpdateSessionMode string
 
 // ScheduleUpdateTriggerKind defines model for ScheduleUpdate.Trigger.Kind.
 type ScheduleUpdateTriggerKind string
