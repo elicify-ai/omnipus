@@ -16750,11 +16750,11 @@ export interface components {
             /** @description Every record carries its origin: how and where this session was launched (ADR-091 I-1). Kind discriminates the launch path. */
             origin?: {
                 /**
-                 * @description The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+                 * @description The launch path that created this session. Root kinds (chat/channel/main/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
                  * @example delegate
                  * @enum {string}
                  */
-                kind: "delegate" | "task" | "chat" | "channel" | "scheduled" | "heartbeat" | "verifier" | "plan" | "human";
+                kind: "delegate" | "task" | "chat" | "channel" | "main" | "scheduled" | "heartbeat" | "verifier" | "plan" | "human";
                 /**
                  * @description For delegate/task-origin sessions, the tool-call id (span key) of the originating delegate or create_task call. Absent for other kinds.
                  * @example span_01J3ZQK8N2H8VXNRP5T7C9M4WE

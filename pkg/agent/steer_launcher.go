@@ -74,6 +74,8 @@ func launchSessionType(kind steer.OriginKind) session.UnifiedSessionType {
 		return session.SessionTypeChat
 	case steer.OriginKindChannel:
 		return session.SessionTypeChannel
+	case steer.OriginKindMain:
+		return session.SessionTypeMain
 	case steer.OriginKindScheduled:
 		return session.SessionTypeScheduled
 	case steer.OriginKindHeartbeat:
