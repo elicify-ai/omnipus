@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -111,25 +112,29 @@ func (e *ChannelInitError) Error() string {
 func (e *ChannelInitError) Unwrap() error { return e.Err }
 
 type Manager struct {
-	channels          map[string]Channel
-	workers           map[string]*channelWorker
-	bus               *bus.MessageBus
-	config            *config.Config
-	secrets           credentials.SecretBundle // resolved plaintext secrets; never written to env
-	mediaStore        media.MediaStore
-	dispatchTask      *asyncTask
-	dispatchCtx       context.Context // stored so RegisterChannel can spin up workers after Start
-	mux               *dynamicServeMux
-	httpServer        *http.Server
-	mu                sync.RWMutex
-	placeholders      sync.Map           // "channel:chatID" → placeholderEntry
-	typingStops       sync.Map           // "channel:chatID" → typingEntry
-	reactionUndos     sync.Map           // "channel:chatID" → reactionEntry
-	streamActive      sync.Map           // "channel:chatID" → streamEntry (set when streamer.Finalize sent the message)
-	channelHashes     map[string]string  // channel name → config hash
-	streamFallback    bus.StreamDelegate // optional fallback for channels not in m.channels (e.g., webchat WebSocket)
-	failedChannels    []ChannelInitError // enabled channels that failed to start
-	cancelInterceptor CancelRequester    // set after construction via SetCancelInterceptor; may be nil
+	channels map[string]Channel
+	workers  map[string]*channelWorker
+	bus      *bus.MessageBus
+	config   *config.Config
+	// liveCfg mirrors config for lock-free reads from workers (see liveConfig).
+	liveCfg atomic.Pointer[config.Config]
+	// returnRefusalObserver is told about answers the return-route check refused.
+	returnRefusalObserver atomic.Pointer[ReturnRefusalObserver]
+	secrets               credentials.SecretBundle // resolved plaintext secrets; never written to env
+	mediaStore            media.MediaStore
+	dispatchTask          *asyncTask
+	dispatchCtx           context.Context // stored so RegisterChannel can spin up workers after Start
+	mux                   *dynamicServeMux
+	httpServer            *http.Server
+	mu                    sync.RWMutex
+	placeholders          sync.Map           // "channel:chatID" → placeholderEntry
+	typingStops           sync.Map           // "channel:chatID" → typingEntry
+	reactionUndos         sync.Map           // "channel:chatID" → reactionEntry
+	streamActive          sync.Map           // "channel:chatID" → streamEntry (set when streamer.Finalize sent the message)
+	channelHashes         map[string]string  // channel name → config hash
+	streamFallback        bus.StreamDelegate // optional fallback for channels not in m.channels (e.g., webchat WebSocket)
+	failedChannels        []ChannelInitError // enabled channels that failed to start
+	cancelInterceptor     CancelRequester    // set after construction via SetCancelInterceptor; may be nil
 
 	// steerAudience is ADR-091 I-5's injected steer.AudienceResolver
 	// (injected into every package that hosts a
@@ -376,6 +381,7 @@ func NewManager(
 		mediaStore:    store,
 		channelHashes: make(map[string]string),
 	}
+	m.liveCfg.Store(cfg)
 
 	// Register as streaming delegate so the agent loop can obtain streamers
 	messageBus.SetStreamDelegate(m)
@@ -1396,6 +1402,13 @@ func (m *Manager) sendWithRetry(
 		return
 	}
 
+	// Final egress binding check (C-REPLY): before the placeholder edit and
+	// again before every attempt below. Nothing is sent on refusal, and no
+	// failure notice is posted to the chat (that would be a guessed send).
+	if !m.refuseReturnRoute(m.liveConfig(), msg, "pre-send") {
+		return
+	}
+
 	// Pre-send: stop typing and try to edit placeholder
 	if m.preSend(ctx, name, msg, w.ch) {
 		return // placeholder was edited successfully, skip Send
@@ -1403,6 +1416,9 @@ func (m *Manager) sendWithRetry(
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 && !m.refuseReturnRoute(m.liveConfig(), msg, "retry") {
+			return
+		}
 		lastErr = w.ch.Send(ctx, msg)
 		if lastErr == nil {
 			return
@@ -1578,6 +1594,9 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 			// channel, permanently, on the first refused send. Skip the
 			// message; keep the loop alive.
 			if !allowAgentOriginatedSend(m.configSnapshot(), msg) {
+				return true
+			}
+			if !m.refuseReturnRoute(m.configSnapshot(), msg, "dispatch") {
 				return true
 			}
 			return m.enqueueOutbound(ctx, w, msg)
@@ -1871,6 +1890,7 @@ func (mr *managerReload) prepareDispatch() {
 
 	// Update config and secrets early: initChannel uses m.config and m.secrets via factory call.
 	mr.m.config = mr.cfg
+	mr.m.liveCfg.Store(mr.cfg)
 	mr.m.secrets = mr.secrets
 
 	mr.list = toChannelHashes(mr.cfg)
@@ -1987,6 +2007,7 @@ func (mr *managerReload) initializeAdded() (error, bool) {
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("toChannelConfig error: %v", err))
 		mr.m.config = mr.oldConfig
+		mr.m.liveCfg.Store(mr.oldConfig)
 		mr.m.secrets = mr.oldSecrets
 		mr.cancel()
 		return err, true
@@ -2043,6 +2064,7 @@ func (mr *managerReload) initializeAdded() (error, bool) {
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("initChannels error: %v", err))
 		mr.m.config = mr.oldConfig
+		mr.m.liveCfg.Store(mr.oldConfig)
 		mr.m.secrets = mr.oldSecrets
 		mr.m.failedChannels = oldFailed
 		mr.cancel()

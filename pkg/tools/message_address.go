@@ -87,18 +87,18 @@ func (t *MessageTool) SetPeerRouter(r PeerRouter) { t.peerRouter = r }
 // SetReplyRouter injects the reply seam. Nil leaves the reply form refused.
 func (t *MessageTool) SetReplyRouter(r ReplyRouter) { t.replyRouter = r }
 
-func refuse(format string, a ...any) *ToolResult {
+func addrRefuse(format string, a ...any) *ToolResult {
 	return &ToolResult{ForLLM: fmt.Sprintf(format, a...), IsError: true}
 }
 
-func refuseWith(err error, format string, a ...any) *ToolResult {
+func addrRefuseWith(err error, format string, a ...any) *ToolResult {
 	return &ToolResult{ForLLM: fmt.Sprintf(format, a...), IsError: true, Err: err}
 }
 
-// argString reads an optional string argument. present is true when the key
+// addrArgString reads an optional string argument. present is true when the key
 // exists at all (so a supplied-but-blank value is distinguishable from an
 // omitted one); ok is false when the value is present but not a string.
-func argString(args map[string]any, key string) (value string, present, ok bool) {
+func addrArgString(args map[string]any, key string) (value string, present, ok bool) {
 	raw, exists := args[key]
 	if !exists || raw == nil {
 		return "", false, true
@@ -113,17 +113,17 @@ func argString(args map[string]any, key string) (value string, present, ok bool)
 // executeAddressedForm handles the reply and peer forms. handled is false
 // when the call is an ordinary send and the caller should continue as before.
 func (t *MessageTool) executeAddressedForm(ctx context.Context, content string, args map[string]any) (result *ToolResult, handled bool) {
-	replyTo, hasReplyTo, replyToOK := argString(args, "reply_to")
-	wsArg, hasWS, wsOK := argString(args, "workspace_id")
-	agentArg, hasAgent, agentOK := argString(args, "agent_id")
-	channel, hasChannel, channelOK := argString(args, "channel")
-	chatID, hasChat, chatOK := argString(args, "chat_id")
+	replyTo, hasReplyTo, replyToOK := addrArgString(args, "reply_to")
+	wsArg, hasWS, wsOK := addrArgString(args, "workspace_id")
+	agentArg, hasAgent, agentOK := addrArgString(args, "agent_id")
+	channel, hasChannel, channelOK := addrArgString(args, "channel")
+	chatID, hasChat, chatOK := addrArgString(args, "chat_id")
 
 	if !hasReplyTo && !hasWS && !hasAgent {
 		return nil, false
 	}
 	if !replyToOK || !wsOK || !agentOK || !channelOK || !chatOK {
-		return refuse("reply_to, workspace_id, agent_id, channel and chat_id must be strings"), true
+		return addrRefuse("reply_to, workspace_id, agent_id, channel and chat_id must be strings"), true
 	}
 	if denied := t.denySteeredAddressing(ctx); denied != nil {
 		return denied, true
@@ -133,7 +133,7 @@ func (t *MessageTool) executeAddressedForm(ctx context.Context, content string, 
 			hasWS || hasAgent, (hasChannel && strings.TrimSpace(channel) != "") || (hasChat && strings.TrimSpace(chatID) != "")), true
 	}
 	if (hasChannel && strings.TrimSpace(channel) != "") || (hasChat && strings.TrimSpace(chatID) != "") {
-		return refuseWith(ErrPeerForm, "a peer send is addressed by workspace_id and agent_id only; "+
+		return addrRefuseWith(ErrPeerForm, "a peer send is addressed by workspace_id and agent_id only; "+
 			"do not also supply channel or chat_id"), true
 	}
 	return t.executePeerForm(ctx, content, wsArg, hasWS, agentArg, hasAgent), true
@@ -141,19 +141,19 @@ func (t *MessageTool) executeAddressedForm(ctx context.Context, content string, 
 
 func (t *MessageTool) executeReplyForm(ctx context.Context, content, replyTo string, hasRecipient, hasDestination bool) *ToolResult {
 	if hasDestination || hasRecipient {
-		return refuseWith(ErrReplyForm, "a reply is addressed by reply_to alone; do not also supply "+
+		return addrRefuseWith(ErrReplyForm, "a reply is addressed by reply_to alone; do not also supply "+
 			"channel, chat_id, workspace_id or agent_id — the destination comes from the request you are answering")
 	}
 	replyTo = strings.TrimSpace(replyTo)
 	if replyTo == "" {
-		return refuseWith(ErrReplyForm, "reply_to is blank: name the request id you are answering. "+
+		return addrRefuseWith(ErrReplyForm, "reply_to is blank: name the request id you are answering. "+
 			"Nothing was sent, and no default destination is used")
 	}
 	if strings.TrimSpace(content) == "" {
-		return refuseWith(ErrReplyForm, "a reply needs non-empty content")
+		return addrRefuseWith(ErrReplyForm, "a reply needs non-empty content")
 	}
 	if t.replyRouter == nil {
-		return refuseWith(ErrReplyForm, "replying to a request is not configured here; nothing was sent")
+		return addrRefuseWith(ErrReplyForm, "replying to a request is not configured here; nothing was sent")
 	}
 	author := SendOrigin{AgentID: ToolAgentID(ctx), WorkspaceID: ToolWorkspaceID(ctx)}
 	receipt, err := t.replyRouter.Reply(ctx, ReplyRequest{
@@ -172,27 +172,27 @@ func (t *MessageTool) executePeerForm(ctx context.Context, content, wsArg string
 	workspaceID := strings.TrimSpace(wsArg)
 	agentID := strings.TrimSpace(agentArg)
 	if !hasAgent || agentID == "" {
-		return refuseWith(ErrPeerForm, "a peer send needs a non-empty agent_id (the recipient pair is "+
+		return addrRefuseWith(ErrPeerForm, "a peer send needs a non-empty agent_id (the recipient pair is "+
 			"{workspace_id, agent_id}); nothing was sent and the current conversation is not used instead")
 	}
 	if hasWS && workspaceID == "" {
-		return refuseWith(ErrPeerForm, "workspace_id is blank; omit it for your current workspace or name the "+
+		return addrRefuseWith(ErrPeerForm, "workspace_id is blank; omit it for your current workspace or name the "+
 			"recipient's workspace; nothing was sent")
 	}
 	if !hasWS {
 		workspaceID = ToolWorkspaceID(ctx)
 	}
 	if workspaceID == "" {
-		return refuseWith(ErrPeerForm, "this turn has no workspace, so workspace_id must be named explicitly; nothing was sent")
+		return addrRefuseWith(ErrPeerForm, "this turn has no workspace, so workspace_id must be named explicitly; nothing was sent")
 	}
 	if _, err := session.MainSessionID(workspaceID, agentID); err != nil {
-		return refuseWith(ErrPeerForm, "invalid recipient pair {workspace_id, agent_id}: %v; nothing was sent", err)
+		return addrRefuseWith(ErrPeerForm, "invalid recipient pair {workspace_id, agent_id}: %v; nothing was sent", err)
 	}
 	if strings.TrimSpace(content) == "" {
-		return refuseWith(ErrPeerForm, "a peer send needs non-empty content")
+		return addrRefuseWith(ErrPeerForm, "a peer send needs non-empty content")
 	}
 	if t.peerRouter == nil {
-		return refuseWith(ErrPeerForm, "peer messaging is not configured here; nothing was sent")
+		return addrRefuseWith(ErrPeerForm, "peer messaging is not configured here; nothing was sent")
 	}
 	sender := SendOrigin{AgentID: ToolAgentID(ctx), WorkspaceID: ToolWorkspaceID(ctx)}
 	receipt, err := t.peerRouter.SendPeer(ctx, PeerRequest{
