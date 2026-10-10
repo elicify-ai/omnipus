@@ -1,18 +1,19 @@
 /**
  * CalendarEventSlideOver — the calendar-specific create/edit Sheet for
- * recurring tasks and calendar-created one-time tasks (US-1, US-2, US-5).
+ * recurring tasks and calendar-created one-time tasks (US-1, US-2).
  *
  * Spec: docs/internal/specs/calendar-recurrence-redesign-spec.md
  *   User Story 1 (create without cron), User Story 2 (edit a recurring
- *   series), User Story 5 (legacy replace); FR-001/005/006/012/013/019/020/
- *   021/022/024; Timezone Semantics §1.
+ *   series); FR-001/005/006/012/019/020/021/022/024; Timezone Semantics §1.
+ *   Session-core FR-017: the one scheduling control beside the schedule is the
+ *   "Run isolated" checkbox (wire field `run_isolated`); there is no
+ *   session-mode chooser.
  *
  * Open/routing contract (owned by CalendarScreen, see that file):
  *   - `task === null` → CREATE mode, pre-filled from `initialDate`.
  *   - `task !== null` → EDIT mode (series edit). Reachable only from a
  *     recurring occurrence/aggregated chip (`task-occurrence` /
- *     `task-occurrence-agg`) or a legacy (`cron_expr`/`every_ms`) task's
- *     chip — due chips and `once` fire chips keep opening the existing
+ *     `task-occurrence-agg`) — due chips and `once` fire chips keep opening the existing
  *     TaskDetailSlideOver, unchanged (US-2 Acceptance Scenario 6).
  *
  * FR-024 anchor semantics (edit mode, already-RRULE trigger):
@@ -29,19 +30,11 @@
  *   - Either touch restarts COUNT (a fresh DTSTART restarts RRULE's
  *     occurrence-position counting) and is announced inline before saving
  *     (`data-testid="reanchor-notice"`).
- *   Legacy (`cron_expr`/`every_ms`) tasks are exempt from byte-identical
- *   preservation — US-5/D8: every legacy save replaces outright with a
- *   fresh RRULE anchored like any new rule.
- *
- * FR-013/US-5 (legacy): the Repeat section ALWAYS starts fresh
- * (`{kind:'none'}`) for a legacy trigger — never a translated/parsed
- * cron_expr or every_ms. No cron string is ever rendered anywhere in this
- * component (D8/D9).
+ *   No cron string is ever rendered anywhere in this component.
  *
  * FR-020 (optional, implemented): a small "Upcoming" preview list for an
  * already-RRULE series, sourced from the SAME `useOccurrences` endpoint the
  * calendar grid uses (never client-computed) over a short forward window.
- * The same query also backs the legacy note's "next run" time.
  */
 
 import { useEffect, useMemo, useState } from 'react'
@@ -54,6 +47,7 @@ import {
   SheetFooter,
 } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -144,21 +138,10 @@ function isRruleTrigger(trigger?: TaskTrigger | null): trigger is TaskTrigger {
   )
 }
 
-function isLegacyTrigger(trigger?: TaskTrigger | null): boolean {
-  if (!trigger) return false
-  if (trigger.type === 'every') return true
-  return trigger.type === 'recurring' && typeof trigger.config?.cron_expr === 'string' && !!trigger.config.cron_expr
-}
-
 // ── Occurrence preview helpers (server-sourced only, FR-020) ───────────────
 
 function setInstants(set: TaskOccurrenceSet): number[] {
   return [...set.occurrences_ms, ...set.day_buckets.map((b) => b.first_ms)]
-}
-
-function earliestInstant(set: TaskOccurrenceSet): number | null {
-  const all = setInstants(set)
-  return all.length === 0 ? null : Math.min(...all)
 }
 
 function upcomingInstants(set: TaskOccurrenceSet, limit: number): number[] {
@@ -187,7 +170,6 @@ export function CalendarEventSlideOver({
   const username = useAuthStore((s) => s.username)
 
   const isEdit = task != null
-  const isLegacy = isEdit && isLegacyTrigger(task.trigger)
   const isEditingExistingRrule = isEdit && isRruleTrigger(task.trigger)
   // H2 fix — see the prop doc comment. Bucket takes precedence if somehow
   // both were set.
@@ -201,6 +183,8 @@ export function CalendarEventSlideOver({
   const [recurrenceValid, setRecurrenceValid] = useState(true)
   const [anchorFieldTouched, setAnchorFieldTouched] = useState(false)
   const [recurrenceFieldTouched, setRecurrenceFieldTouched] = useState(false)
+  // session-core FR-017: forces every run into a fresh independent chat.
+  const [runIsolated, setRunIsolated] = useState(false)
   const [titleError, setTitleError] = useState('')
   const [saveError, setSaveError] = useState<string | null>(null)
   // GOAL-FR-047/FR-053/D-C (R-26) — the calendar slide-over gets the same
@@ -233,6 +217,7 @@ export function CalendarEventSlideOver({
       setPrompt(task.prompt || '')
       setCriteria(task.criteria ?? [])
       setDod(task.dod ?? [])
+      setRunIsolated(task.run_isolated === true)
       if (isRruleTrigger(task.trigger)) {
         const dtstartMs = task.trigger.config.dtstart_ms as number
         const rruleBody = task.trigger.config.rrule as string
@@ -240,9 +225,8 @@ export function CalendarEventSlideOver({
         const parsed = parseRruleString(rruleBody, dtstartMs)
         setRecurrence(parsed ? { kind: 'rrule', state: parsed } : { kind: 'none' })
       } else {
-        // Legacy (cron_expr / every_ms) — US-5/D8: FRESH picker, never a
-        // translated rule. No stored anchor is meaningful here either, so
-        // the Date & time field defaults to "now" like a brand-new rule.
+        // Not an RRULE series: no stored anchor is meaningful, so the Date &
+        // time field defaults to "now" like a brand-new rule.
         setAnchorDate(new Date())
         setRecurrence({ kind: 'none' })
       }
@@ -252,6 +236,7 @@ export function CalendarEventSlideOver({
       setPrompt('')
       setCriteria([])
       setDod([])
+      setRunIsolated(false)
       setAnchorDate(initialDate ?? new Date())
       setRecurrence({ kind: 'none' })
     }
@@ -268,7 +253,7 @@ export function CalendarEventSlideOver({
   })
   const { teamIds, isLoading: teamLoading, isError: teamError } = useWorkspaceTeamIds(workspaceId)
 
-  // ── FR-020 / legacy "next run" preview — server-sourced, short window ──────
+  // ── FR-020 upcoming-runs preview — server-sourced, short window ────────────
   const previewRange = useMemo(() => {
     const from = Date.now()
     return { from, to: from + PREVIEW_WINDOW_MS }
@@ -284,7 +269,6 @@ export function CalendarEventSlideOver({
     () => previewQuery.data?.find((s) => s.task_id === task?.id) ?? null,
     [previewQuery.data, task?.id],
   )
-  const nextRunMs = previewSet ? earliestInstant(previewSet) : null
   const upcomingPreview = previewSet ? upcomingInstants(previewSet, 3) : []
 
   // ── ADR-050 RD8 / spec §4.3 — resolve the clicked occurrence's own run ─────
@@ -323,17 +307,6 @@ export function CalendarEventSlideOver({
 
   // ── Trigger construction (FR-024) ───────────────────────────────────────────
   function buildTriggerForSave(): TaskTrigger {
-    if (isLegacy && recurrence.kind === 'none') {
-      // FIX (grill-code, CRITICAL): the Repeat section ALWAYS starts fresh
-      // ({kind:'none'}) for a legacy trigger (US-5/D8), so "the operator
-      // never built a new rule" and "the operator explicitly chose 'Does not
-      // repeat'" are indistinguishable from `recurrence` alone. Treating
-      // this as create-mode's none→once conversion would silently destroy a
-      // working cron/every_ms schedule on ANY edit — even a title-only one.
-      // Only an actually-built RRULE (recurrence.kind==='rrule', US-5.3
-      // replace) may replace a legacy trigger; otherwise preserve it as-is.
-      return task!.trigger!
-    }
     if (isEditingExistingRrule && !scheduleTouched) {
       // Byte-identical: never re-serialize an untouched rule.
       return task!.trigger!
@@ -341,8 +314,8 @@ export function CalendarEventSlideOver({
     if (recurrence.kind === 'none') {
       return { type: 'once', config: { at_ms: (anchorDate ?? new Date()).getTime() } }
     }
-    // Fresh compile — anchors in the browser zone for a create or a legacy
-    // replace (Timezone Semantics §1); an existing RRULE series being
+    // Fresh compile — anchors in the browser zone for a create (Timezone
+    // Semantics §1); an existing RRULE series being
     // re-anchored keeps its OWN stored zone instead (FR-024) — re-anchoring
     // dtstart must not silently change the series' timezone too.
     const anchor =
@@ -469,6 +442,7 @@ export function CalendarEventSlideOver({
         criteria,
         dod,
         trigger,
+        run_isolated: runIsolated,
       })
     } else {
       createMutation.mutate({
@@ -482,6 +456,7 @@ export function CalendarEventSlideOver({
         criteria,
         dod,
         trigger,
+        run_isolated: runIsolated,
         // Fold the buffered create-mode checklist into the new task; omit when
         // empty to keep the request minimal.
         ...(draftTodos.length > 0 ? { todos: draftTodos } : {}),
@@ -641,26 +616,6 @@ export function CalendarEventSlideOver({
             />
           </div>
 
-          {/* Legacy old-format note (US-5, FR-013) — no cron string, no pre-fill. */}
-          {isLegacy && (
-            <div
-              data-testid="legacy-trigger-note"
-              className="rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 p-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] space-y-[var(--space-1)]"
-            >
-              <p className="font-medium">This task uses an old schedule format.</p>
-              <p>
-                {previewError
-                  ? "Couldn't load upcoming run times."
-                  : nextRunMs != null
-                    ? `Next run: ${formatDateTime(nextRunMs)}`
-                    : 'Next run time unavailable.'}
-              </p>
-              <p className="text-[var(--color-muted)]">
-                Set a new repeat rule below to replace it.
-              </p>
-            </div>
-          )}
-
           {/* Repeat section */}
           <div className="flex flex-col gap-[var(--space-1)]">
             <RecurrenceEditor
@@ -677,6 +632,25 @@ export function CalendarEventSlideOver({
               </p>
             )}
             <FormError id="ces-repeat-error" error={saveError} />
+          </div>
+
+          {/* session-core FR-017: the only run-mode control. Unchecked, the run
+              mode is derived from who owns the work (a main assignee runs as a
+              fresh child of its main; a worker runs isolated once or continues
+              its own chat when recurring). */}
+          <div className="flex items-start gap-[var(--space-2)]">
+            <Checkbox
+              id="ces-run-isolated"
+              checked={runIsolated}
+              onCheckedChange={(next) => setRunIsolated(next === true)}
+              disabled={isPending}
+            />
+            <div className="flex flex-col gap-[var(--space-0-5)]">
+              <Label htmlFor="ces-run-isolated">Run isolated</Label>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+                Every run starts in a fresh, independent chat.
+              </p>
+            </div>
           </div>
 
           {/* FR-020: upcoming fires preview, server-sourced (edit mode, active RRULE only) */}

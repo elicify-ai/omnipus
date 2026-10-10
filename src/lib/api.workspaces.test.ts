@@ -393,7 +393,7 @@ describe('createTask', () => {
     fetchSpy.mockResolvedValueOnce(makeJsonResponse(created, 201))
 
     const { createTask } = await import('./api')
-    const result = await createTask({ title: 'New task', action: 'llm', priority: 3, workspace_id: 'ws-test', surface: 'user' })
+    const result = await createTask({ title: 'New task', action: 'llm', priority: 3, workspace_id: 'ws-test', surface: 'user', run_isolated: false })
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
@@ -427,8 +427,8 @@ describe('createTask', () => {
       .mockResolvedValueOnce(makeJsonResponse(task2, 201))
 
     const { createTask } = await import('./api')
-    const r1 = await createTask({ title: 'Alpha task', action: 'llm', priority: 3, workspace_id: 'ws-1', surface: 'user' })
-    const r2 = await createTask({ title: 'Beta task', action: 'llm', priority: 1, workspace_id: 'ws-1', surface: 'user' })
+    const r1 = await createTask({ title: 'Alpha task', action: 'llm', priority: 3, workspace_id: 'ws-1', surface: 'user', run_isolated: false })
+    const r2 = await createTask({ title: 'Beta task', action: 'llm', priority: 1, workspace_id: 'ws-1', surface: 'user', run_isolated: false })
 
     expect(r1.id).toBe('task-alpha')
     expect(r2.id).toBe('task-beta')
@@ -450,7 +450,7 @@ describe('createTask', () => {
     const { createTask, ApiError, isApiError } = await import('./api')
     let thrown: unknown
     try {
-      await createTask({ title: '', action: 'llm', priority: 3, workspace_id: 'ws-1', surface: 'user' })
+      await createTask({ title: '', action: 'llm', priority: 3, workspace_id: 'ws-1', surface: 'user', run_isolated: false })
     } catch (err) {
       thrown = err
     }
