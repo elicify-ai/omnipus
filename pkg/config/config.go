@@ -659,13 +659,11 @@ type AgentConfig struct {
 	Voice string `json:"voice,omitempty"`
 	// Color is the hex color code for this agent's avatar in the UI (e.g. "#22C55E").
 	Color string `json:"color,omitempty"`
-	// Icon is the Phosphor icon name for this agent's avatar in the UI (e.g. "robot").
-	Icon string `json:"icon,omitempty"`
 	// Type classifies the agent. Empty defaults to AgentTypeCustom for stored agents;
 	// use ResolveType() to get the effective type.
 	Type AgentType `json:"type,omitempty"`
 	// Locked prevents modification of identity fields (name, description, color,
-	// icon, prompt). Used by core agents to keep their identity stable.
+	// prompt). Used by core agents to keep their identity stable.
 	// Users CAN still change model, remove tools, and set heartbeat.
 	Locked bool `json:"locked,omitempty"`
 	// MemoryEnabled gates whether this agent's ContextBuilder injects its

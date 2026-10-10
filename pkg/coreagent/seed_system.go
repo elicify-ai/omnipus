@@ -563,7 +563,6 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 				Name:        sa.Name,
 				Description: sa.Description,
 				Color:       sa.Color,
-				Icon:        sa.Icon,
 				Type:        config.AgentTypeSystem,
 				Locked:      true,
 				Default:     false,
@@ -623,10 +622,6 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 			}
 			if a.Color != sa.Color {
 				a.Color = sa.Color
-				modified = true
-			}
-			if a.Icon != sa.Icon {
-				a.Icon = sa.Icon
 				modified = true
 			}
 			// Re-enforce MemoryEnabled=false on EVERY boot (ADR-052 FR-039):
@@ -749,7 +744,6 @@ func Judge() *CoreAgent {
 			"Adjudicates as a real agent in a read-only verifier role, in its own session; " +
 			"not a chat persona.",
 		Color: "#64748B",
-		Icon:  "gavel",
 		// systemAgentSeed defines fixed capabilities; this constructor defines identity only.
 	}
 }
@@ -783,7 +777,6 @@ func PlanSupervisor() *CoreAgent {
 			"Definition of Done is ruled unmet or its DAG has stalled, it issues exactly one " +
 			"correction per wake; not a chat persona.",
 		Color: "#0F766E",
-		Icon:  "compass-tool",
 		// systemAgentSeed defines fixed capabilities; this constructor defines identity only.
 	}
 }
