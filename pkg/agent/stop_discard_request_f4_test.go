@@ -20,8 +20,8 @@ func TestStopDiscardsAdmittedRequestAndRevokesItsReplyAuthority(t *testing.T) {
 	pair := addressing.Pair{WorkspaceID: "ws-1", AgentID: testDefaultAgentID}
 	if err := al.RequestLedger().Put(addressing.Capture{
 		RequestID: requestID, ReceiverSessionID: sessionID, Receiver: pair,
-		Sender: addressing.Sender{Principal: "alice"},
-		Source: addressing.Source{Kind: addressing.SourceConversation, Owner: addressing.Pair{WorkspaceID: "ws-1", AgentID: "ann"}, SessionID: "src-chat"},
+		Sender:     addressing.Sender{Principal: "alice"},
+		Source:     addressing.Source{Kind: addressing.SourceConversation, Owner: addressing.Pair{WorkspaceID: "ws-1", AgentID: "ann"}, SessionID: "src-chat"},
 		AdmittedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("SETUP capture: %v", err)
