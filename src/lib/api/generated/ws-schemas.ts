@@ -82,7 +82,7 @@ export const AttachSessionFrame = z
     since_seq: z.number().int().min(1).optional(),
     boot_id: z.string().optional(),
     ack_attention: z.boolean().optional(),
-    attention_bound: z.number().int().optional(),
+    attention_bound: z.number().int().min(0).optional(),
   })
   .strict();
 
@@ -694,7 +694,7 @@ export const SessionStateFrame = z
     pending_approvals: z.array(SessionStatePendingApproval).max(1000),
     pending_asks: z.array(AskUserQuestionCard).max(64).optional(),
     session_id: z.string().optional(),
-    attention_bound: z.number().int().optional(),
+    attention_bound: z.number().int().min(0).optional(),
     auto_approve_modifier: z.boolean().nullable().optional(),
     active_turn: SessionStateActiveTurn.optional(),
     boot_id: z.string().optional(),

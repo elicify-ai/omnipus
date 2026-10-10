@@ -91,9 +91,9 @@ type AskUserQuestionFrame struct {
 
 // AttachSessionFrame — Client → server request to attach to a session and catch it up to the present. #823 catch-up redesign: since_seq/boot_id replace the retired timestamp cursor (`since`, removed). Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
 type AttachSessionFrame struct {
-	// Optional. True means this attach is an acknowledgement of what was shown. It does not choose the bound. Defaults to false. A failed, background, or reconnect attach does not write the seen mark. Field only; the write arrives in a later unit. Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
+	// Optional. True means this attach is an acknowledgement of what was shown. It does not choose the bound. Defaults to false. A failed, background, or reconnect attach does not write the seen mark. Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
 	AckAttention *bool `json:"ack_attention,omitempty"`
-	// Optional integer on the acknowledging attach. The saved outcome/entry order, not a new counter. Absent means do not write the seen mark and do not substitute the current order. Field only. Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
+	// Optional integer on the acknowledging attach. The saved outcome/entry order, not a new counter. Absent means do not write the seen mark and do not substitute the current order. Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
 	AttentionBound *int64 `json:"attention_bound,omitempty"`
 	// #823 review finding 7. The gateway boot ID the SPA last saw for this session. A mismatch forces a snapshot (reason boot_mismatch) regardless of since_seq.
 	BootId    *string `json:"boot_id,omitempty"`
@@ -1114,7 +1114,7 @@ type SessionStateActiveTurn struct {
 type SessionStateFrame struct {
 	// ADR-082 D4 — present only when the attached session has a foreground turn in flight at emit time. Absent when idle. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
 	ActiveTurn *SessionStateActiveTurn `json:"active_turn,omitempty"`
-	// Optional. The saved outcome/entry order for this main, echoed so a later acknowledgement can name the same number. Not a new counter. This frame is part of both the incremental catch-up and the full snapshot. Omitted when this emit is not an attach of a main. Field only. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
+	// Optional. The saved outcome/entry order for this main, echoed so a later acknowledgement can name the same number. Not a new counter. This frame is part of both the incremental catch-up and the full snapshot. 0 when the main has no outcome yet; omitted when this emit is not an attach of a main or the saved order could not be read. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
 	AttentionBound *int64 `json:"attention_bound,omitempty"`
 	// ADR-092 — this session's own per-chat Auto-approve modifier (the value last set by session_mode_update and still held by the server), so a reloading or reconnecting SPA re-learns it instead of losing it. Only meaningful when session_id is present (the connection-open emit carries neither). true — Auto-approve forced ON for this chat; false — forced OFF for this chat; null or absent — no per-chat modifier is set, the chat follows the global default (SandboxStatus.auto_approve_effective). Same value space as SessionModeUpdateFrame.auto_approve. The modifier lives in server memory only: after a gateway restart it is gone and this field reads null/absent, so the UI follows the server. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
 	AutoApproveModifier *bool `json:"auto_approve_modifier,omitempty"`
