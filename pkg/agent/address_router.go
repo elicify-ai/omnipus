@@ -294,10 +294,33 @@ func (al *AgentLoop) recheckReceiverAdmission(ctx context.Context, receiver addr
 		if askApproved {
 			return nil
 		}
-		return al.requestReceiverApproval(ctx, receiver, senderSessionID)
+		if err := al.requestReceiverApproval(ctx, receiver, senderSessionID); err != nil {
+			return err
+		}
+		// F11: the person's approval can take arbitrarily long. Authorization
+		// is read AGAIN after it returns - membership and the effective policy -
+		// so a revoke made during the wait refuses here, before any write.
+		return al.recheckReceiverAdmission(ctx, receiver, senderSessionID, true)
 	default:
 		return fmt.Errorf("%w: the receiver's send_message policy denies requests", ErrPeerRefused)
 	}
+}
+
+// SettleRecipientAdmission is the last authorization decision a caller makes
+// BEFORE it commits anything of its own (the WebSocket path saves and echoes the
+// source message only after this returns nil - U8 F12). It re-reads eligibility
+// and policy now, puts a newly required Ask to the person and re-reads after the
+// approval (F11). The returned flag says the receiver's policy is Ask and is
+// approved for this request, which AdmitRequest then honours without asking again.
+func (al *AgentLoop) SettleRecipientAdmission(ctx context.Context, receiver addressing.Pair, senderSessionID string, askApproved bool) (bool, error) {
+	if err := al.recheckReceiverAdmission(ctx, receiver, senderSessionID, askApproved); err != nil {
+		return false, err
+	}
+	policy, err := al.receiverSendPolicy(receiver)
+	if err != nil {
+		return false, err
+	}
+	return policy == string(config.ToolPolicyAsk), nil
 }
 
 // receiverSendPolicy resolves the receiver's effective send_message policy

@@ -82,3 +82,84 @@ func TestRecipient_ApprovedAskStillAuthorizedIsAdmitted(t *testing.T) {
 	require.True(t, ok, "an approved, still-authorized request must be published")
 	assert.Equal(t, "ray", in.Metadata["agent_id"])
 }
+
+// wsHookDeps runs onEligible on every membership read (1-based), so a test can
+// change the receiver's policy at an exact point between decisions.
+type wsHookDeps struct {
+	*recipientDeps
+	n          int
+	onEligible func(n int)
+}
+
+func (d *wsHookDeps) PairEligible(ws, a string) (bool, error) {
+	d.mu.Lock()
+	d.n++
+	n := d.n
+	hook := d.onEligible
+	d.mu.Unlock()
+	if hook != nil {
+		hook(n)
+	}
+	return d.recipientDeps.PairEligible(ws, a)
+}
+
+type denyApprover struct{ calls *int }
+
+func (d denyApprover) RequestApproval(context.Context, agent.PolicyApprovalReq) (bool, string, bool) {
+	*d.calls++
+	return false, "user", false
+}
+
+// U8 security r3 F12: Allow at the preflight, Ask by the time admission reads
+// the policy, the person DENIES. A denied late Ask must leave the source
+// history, the receiver's main and the request untouched.
+func TestRecipient_DeniedLateAskLeavesSourceHistoryUntouched(t *testing.T) {
+	h, b, deps := newRecipientHandler(t)
+	wc := makeTestConn()
+	sid := mintOwnerChat(t, h, b, wc)
+	inst, ok := h.agentLoop.GetRegistry().GetAgent("ray")
+	require.True(t, ok)
+	hd := &wsHookDeps{recipientDeps: deps}
+	h.agentLoop.SetAddressDeps(hd)
+	asks := 0
+	h.agentLoop.SetToolApprover(denyApprover{calls: &asks})
+	hd.mu.Lock()
+	base := hd.n
+	hd.onEligible = func(n int) {
+		if n > base+1 { // after the preflight's own read
+			inst.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"send_message": config.ToolPolicyAsk}})
+		}
+	}
+	hd.mu.Unlock()
+	store := h.agentLoop.ResolveSessionStore(sid)
+	before, err := store.ReadTranscript(sid)
+	require.NoError(t, err)
+	to := addressing.Pair{WorkspaceID: "ws-1", AgentID: "ray"}
+	drainWC := func() int {
+		n := 0
+		for {
+			select {
+			case <-wc.sendCh:
+				n++
+			default:
+				return n
+			}
+		}
+	}
+	drainWC()
+
+	h.handleChatMessageToRecipient(context.Background(), "chat-owner", sid, "@ray late ask", "ann", nil, "", "ws-1", false, "", nil, &to, wc)
+
+	assert.Equal(t, 1, asks, "the newly required Ask must be put to the person")
+	_, started := nextInbound(t, b, 300*time.Millisecond)
+	assert.False(t, started, "no request may be published after a denial")
+	after, err := store.ReadTranscript(sid)
+	require.NoError(t, err)
+	assert.Len(t, after, len(before), "a denied late Ask must not leave the request saved in the source chat")
+	mainID, _ := session.MainSessionID(to.WorkspaceID, to.AgentID)
+	if _, err := store.GetMeta(mainID); err == nil {
+		t.Error("the receiver's main was created for a denied request")
+	}
+	for i := drainWC(); i > 0; i-- { // the only frame allowed is the error
+	}
+}

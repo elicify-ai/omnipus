@@ -151,3 +151,46 @@ func TestCheckPeerAdmission_RevocationDuringAskRefusesBeforeAnySave(t *testing.T
 		t.Fatalf("approved and still authorized must pass: %v", err)
 	}
 }
+
+// U8 security r3 F11: Allow at preflight -> Ask at admission -> the person's
+// approval is pending -> the receiver is revoked (membership removed, or Deny)
+// -> approve. The approval must not commit: authorization is read again after
+// the approval returns, before any receiver write.
+func TestAdmitRequest_RevocationDuringNewlyRequiredAsk_WritesNothing(t *testing.T) {
+	cases := map[string]func(f *addrFixture){
+		"membership removed": func(f *addrFixture) { f.deps.mu.Lock(); f.deps.eligible = map[string]bool{}; f.deps.mu.Unlock() },
+		"policy became deny": func(f *addrFixture) { setSendMessagePolicy(t, f.al, addrReceiver, config.ToolPolicyDeny) },
+	}
+	for name, revoke := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newAddrFixture(t)
+			hd := &hookDeps{fakeAddressDeps: f.deps}
+			f.al.SetAddressDeps(hd)
+			setSendMessagePolicy(t, f.al, addrReceiver, config.ToolPolicyAllow)
+			// Preflight (Allow) passes; the policy tightens at the admission read.
+			if err := f.al.CheckPeerAdmission(context.Background(), addressing.Pair{WorkspaceID: addrWS, AgentID: addrReceiver}, "src-session"); err != nil {
+				t.Fatal(err)
+			}
+			var tightened atomic.Bool
+			hd.onEligible = func(int32) {
+				if tightened.CompareAndSwap(false, true) { // one-shot: only the admission read
+					setSendMessagePolicy(t, f.al, addrReceiver, config.ToolPolicyAsk)
+				}
+			}
+			// The approval comes back approved, but only after the revoke ran.
+			f.al.SetToolApprover(revokingApprover{revoke: func() { revoke(f) }})
+
+			_, _, err := f.al.AdmitRequest(context.Background(), admissionFor(f, false))
+
+			if err == nil {
+				t.Fatal("an approval returned for a since-revoked authorization must refuse at commit")
+			}
+			if receiverMainExists(f) {
+				t.Fatal("the receiver's main was created under revoked authorization")
+			}
+			if _, ok := addrDrainInbound(t, f.bus); ok {
+				t.Fatal("a request was published under revoked authorization")
+			}
+		})
+	}
+}

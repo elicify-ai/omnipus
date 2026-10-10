@@ -60,6 +60,15 @@ func (h *WSHandler) refuseRecipient(ctx context.Context, sessionID string, setup
 			"agent_id", to.AgentID, "error", err)
 		return "that agent cannot be reached from here right now", false
 	}
+	// F12: authorization is settled ONE MORE time, with any newly required Ask put
+	// to the person, immediately before the caller saves and echoes the source
+	// message. A denial or revocation here leaves the source history untouched.
+	approved, err = h.agentLoop.SettleRecipientAdmission(ctx, to, sessionID, approved)
+	if err != nil {
+		logsafeWarn("ws: recipient refused at settlement", "session_id", sessionID, "workspace_id", to.WorkspaceID,
+			"agent_id", to.AgentID, "error", err)
+		return "that agent cannot be reached from here right now", false
+	}
 	return "", approved
 }
 
