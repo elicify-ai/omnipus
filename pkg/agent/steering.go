@@ -639,6 +639,15 @@ func (al *AgentLoop) reviveStoppedSession(ctx context.Context, sessionID string,
 	if !rec.Terminal() && !rec.Stopped() {
 		return false, nil
 	}
+	// N7 / FR-043: an external-CLI helper that already ran can only continue its
+	// retained native CLI conversation. When that conversation is gone (driver
+	// released at the end of its episode, or the gateway restarted) the revive
+	// refuses visibly, before the instruction is stored or the generation moves,
+	// rather than dispatching a turn that starts a fresh CLI conversation inside
+	// the old chat.
+	if !al.externalConversationAvailable(sessionID, rec) {
+		return false, &curatedTurnError{text: fmt.Sprintf("steer: revive %q: %s", sessionID, errExternalResumeUnavailable.Error())}
+	}
 	// [Defect 4, ADR-091 fix lane RX-DELIVERY, HIGH] The instruction lands
 	// BEFORE the generation is minted, and a failure refuses the revive
 	// outright. Both halves matter:
@@ -2051,7 +2060,7 @@ func (al *AgentLoop) InjectSteering(msg providers.Message) error {
 // ErrSessionMessageNotTurnInjectable is returned by DeliverSessionMessage
 // for any SessionMessage kind that is not a parent->child turn injection
 // (steer/respond). Every other kind — child->parent reporting
-// (progress/checkpoint/artifact/blocker/question/decision_request/error/
+// (progress/checkpoint/artifact/blocker/question/error/
 // handback) and engine/session_to_ui kinds (revision_entry/goal_status) —
 // is inbox/UI delivery, not a turn injection, and must be routed to the
 // durable inbox (pkg/session.MessageInboxStore) or the bounded typed wake

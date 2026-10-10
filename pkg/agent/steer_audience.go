@@ -403,7 +403,10 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	if err != nil {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: load child %q: %w", event.ChildSessionID, err)
 	}
-	ownerKey := deliverOwnerKey(childRec)
+	ownerKey := strings.TrimSpace(event.RecipientSessionID)
+	if ownerKey == "" {
+		ownerKey = deliverOwnerKey(childRec)
+	}
 	if ownerKey == "" {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: child %q has no steering session (no edge)", event.ChildSessionID)
 	}
@@ -458,7 +461,7 @@ func (d *SteerUpwardDeliverer) publishUpward(
 
 	res, appendErr := inbox.Append(ownerKey, msg)
 	if appendErr != nil {
-		return steer.Delivery{}, fmt.Errorf("steer: deliver: append: %w", appendErr)
+		return steer.Delivery{}, al.recordNotDelivered(lifecycle, ownerKey, childRec, class.Kind, appendErr)
 	}
 
 	// Finding C (ADR-091 fix lane 1, CRITICAL): a deterministic duplicate at
@@ -500,7 +503,11 @@ func (d *SteerUpwardDeliverer) publishUpward(
 	// event in the parent's OWN transcript so it survives a reload
 	// (steer_frames.go). Best-effort — see deliverSubagentMessage/State's
 	// own doc comments for why a failure here never fails Deliver itself.
-	if kind := subagentMessageKindForOutcome(event.Outcome); kind != "" {
+	// A monitoring recipient (U6, FR-020) that is not the child's real parent
+	// gets the inbox entry and the wake only: no fake child row in its panel and
+	// no Stop over a tree it does not own.
+	realParent := ownerKey == deliverOwnerKey(childRec)
+	if kind := subagentMessageKindForOutcome(event.Outcome); realParent && kind != "" {
 		if event.Outcome == steer.OutcomeCheckpoint || event.Outcome == steer.OutcomeBlocker {
 			// Each allowed kind (outcomeAllowedKinds: checkpoint/artifact,
 			// blocker/handback) is a SubagentMessageFrame kind, so an
@@ -509,10 +516,10 @@ func (d *SteerUpwardDeliverer) publishUpward(
 		}
 		al.deliverSubagentMessage(ownerKey, childRec, kind, deliverySummary(msg), nil)
 	}
-	if state := subagentStateForOutcome(event.Outcome); state != "" {
+	if state := subagentStateForOutcome(event.Outcome); realParent && state != "" {
 		al.deliverSubagentState(ownerKey, childRec, state, nil)
 	}
-	if isTerminalOutcome(event.Outcome) {
+	if realParent && isTerminalOutcome(event.Outcome) {
 		al.deliverSubagentEnd(ownerKey, childRec, event.Outcome)
 	}
 

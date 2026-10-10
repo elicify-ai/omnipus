@@ -354,7 +354,7 @@ export interface SubagentMessageFrame {
   child_session_id?: string;
   span_id: string;
   message_id: string;
-  kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond" | "goal_status";
+  kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "error" | "handback" | "steer" | "respond" | "goal_status" | "not_delivered";
   text?: string;
   pct?: number;
   correlation_id?: string;

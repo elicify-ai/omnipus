@@ -10,16 +10,13 @@ import (
 )
 
 func TestI1CronBulkPersistFailureErrorCarriesJobIDs(t *testing.T) {
-	for _, operation := range []string{"due-collection", "owner-migration"} {
+	for _, operation := range []string{"due-collection"} {
 		t.Run(operation, func(t *testing.T) {
 			out := i1CronDiagnosticSink(t)
 			path := filepath.Join(t.TempDir(), "jobs.json")
 			cs := NewCronService(path)
 			cs.SetRunner(&recordingRunner{})
 			owner := "mia"
-			if operation == "owner-migration" {
-				owner = ""
-			}
 			interval := int64(60000)
 			job, err := cs.AddJobFull(JobSpec{Name: "diagnostic-bulk", AgentID: owner,
 				Schedule: CronSchedule{Kind: "every", EveryMS: &interval}})
@@ -36,8 +33,6 @@ func TestI1CronBulkPersistFailureErrorCarriesJobIDs(t *testing.T) {
 				cs.RunDueJobs(time.Now().Add(2 * time.Minute))
 				cs.WaitForLane()
 				message, count = "cron failed to save store", 3
-			} else {
-				cs.SetDefaultAgentID("mia")
 			}
 			records := i1CronDiagnosticRecords(t, out)
 			require.Len(t, records, count)

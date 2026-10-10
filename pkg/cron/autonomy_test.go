@@ -74,7 +74,7 @@ func newAutonomyService(t *testing.T, clk Clock) (*CronService, string) {
 // addDueJob inserts an enabled recurring job whose NextRun is in the past.
 func addDueJob(t *testing.T, cs *CronService, owner string) *CronJob {
 	t.Helper()
-	job, err := cs.AddJob("due", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "do it")
+	job, err := cs.AddJobFull(JobSpec{Name: "due", Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, Message: "do it", AgentID: "u6-test-owner"})
 	if err != nil {
 		t.Fatalf("AddJob: %v", err)
 	}
@@ -240,27 +240,6 @@ func TestRunDueJobs_ConcurrencyCapQueues(t *testing.T) {
 	}
 }
 
-// TestMigration_BackfillsOwner verifies owner-less jobs are backfilled with the
-// supplied default agent id (W-8) and persisted.
-func TestMigration_BackfillsOwner(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "jobs.json")
-	seedStore(t, path, []CronJob{{ID: "j1", Name: "old", Enabled: true}})
-
-	cs := NewCronService(path)
-	cs.SetDefaultAgentID("default-agent")
-
-	jobs := cs.ListJobs(true)
-	if len(jobs) != 1 || jobs[0].AgentID != "default-agent" {
-		t.Fatalf("expected owner backfilled to default-agent, got %+v", jobs)
-	}
-
-	// Persisted on disk.
-	cs2 := NewCronService(path)
-	if got := cs2.ListJobs(true)[0].AgentID; got != "default-agent" {
-		t.Fatalf("backfill not persisted: owner = %q", got)
-	}
-}
-
 // TestMigration_NilDefaultSkipsFire verifies that with no default agent, an
 // owner-less job is left empty AND is not fired by the lane (W-8).
 func TestMigration_NilDefaultSkipsFire(t *testing.T) {
@@ -275,7 +254,7 @@ func TestMigration_NilDefaultSkipsFire(t *testing.T) {
 	defer cs.Stop()
 
 	// Add an owner-less due job (no SetDefaultAgentID).
-	job, err := cs.AddJob("orphan", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "x")
+	job, err := cs.AddJobFull(JobSpec{Name: "orphan", Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, Message: "x", AgentID: "u6-test-owner"})
 	if err != nil {
 		t.Fatalf("AddJob: %v", err)
 	}

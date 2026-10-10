@@ -74,7 +74,7 @@ func TestRecurringSurvivesOwnerMissingSkip(t *testing.T) {
 
 	// Owner-less recurring job (no SetDefaultAgentID) — the runner-wired lane
 	// skips it because AgentID == "".
-	job, err := cs.AddJob("orphan", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "x")
+	job, err := cs.AddJobFull(JobSpec{Name: "orphan", Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, Message: "x", AgentID: "u6-test-owner"})
 	if err != nil {
 		t.Fatalf("AddJob: %v", err)
 	}

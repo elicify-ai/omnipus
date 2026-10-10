@@ -414,7 +414,7 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 		rollback()
 		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: edge: %w", steer.ErrStoreWrite, persistErr)
 	}
-	return steer.LaunchResult{SessionID: childID, Generation: 1}, nil
+	return steer.LaunchResult{SessionID: childID, Generation: 1, Is3P: is3P}, nil
 }
 
 // launchSteered is Launch's steered path (I-1): the child's record is
@@ -484,7 +484,7 @@ func (l *SteerLauncher) launchSteered(
 			// store invariant text); the tool layer maps it to D5's plain
 			// sentence telling the model a new message resumes the
 			// conversation.
-			if parentRec.Terminal() || parentRec.Stopped() {
+			if (parentRec.Terminal() || parentRec.Stopped()) && !isMainTaskChildLaunch(req) {
 				// Gate SFH#6: a session whose most recent revive attempt itself
 				// failed is a different refusal state from a session that is
 				// merely stopped. The standard D5 sentence tells the user to
@@ -510,9 +510,7 @@ func (l *SteerLauncher) launchSteered(
 			// mutable handover owner from session creation (see
 			// createSessionLocked's DEL-11 note), so ActiveAgentID is empty on
 			// any session that was never switched and this read made the edge
-			// look like it had no delegating agent. Mirrors
-			// pkg/tools/delegate_followup.go::cloneCorrectiveSessionIdentity,
-			// which migrated the identical read the same way.
+			// look like it had no delegating agent.
 			parentAgentID := strings.TrimSpace(steererMeta.AgentID)
 			if parentAgentID == "" && l.al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID() {
 				return nil, fmt.Errorf("steer: launch: %w: delegating agent identity is empty", steer.ErrInvalidEdge)
@@ -602,7 +600,7 @@ func (l *SteerLauncher) launchSteered(
 		}
 		return steer.LaunchResult{}, pubErr
 	}
-	return steer.LaunchResult{SessionID: childID, Generation: resultGen}, nil
+	return steer.LaunchResult{SessionID: childID, Generation: resultGen, Is3P: is3P}, nil
 }
 
 // steerReportingSelfChannel is the fallback Channel a steered session's
@@ -1356,4 +1354,16 @@ func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.Lifecy
 	}
 	logger.WarnCF("agent", "steer: complete: bounded drain retry exhausted — no queued items remain",
 		map[string]any{"session_id": sessionID, "generation": gen, "attempts": continueDrainMaxRetries})
+}
+
+// isMainTaskChildLaunch is the FR-018 stopped-main exemption: a task-origin
+// launch whose steering session is the TARGET agent's own computed main may be
+// admitted under that main even while it is stopped. The exemption only lets the
+// child be published; it does not revive the main, write its state or dispatch
+// it (zero main-model wake), and the general stopped-parent guard stays for
+// every other launch — delegate helpers, extra-chat helpers, and tasks whose
+// parent is not the target's own main.
+func isMainTaskChildLaunch(req steer.LaunchRequest) bool {
+	_, agent, ok := session.SplitMainSessionID(req.SteeringSessionID)
+	return ok && req.Origin.Kind == steer.OriginKindTask && agent == req.TargetAgentID
 }

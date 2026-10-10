@@ -66,9 +66,11 @@ properties:
     readOnly: true
     description: >
       Present as true or false on a valid main, including the default-workspace
-      Admin main. Omitted on every other session. This change only publishes
-      the field. What sets the value, and the rule that a read failure is
-      unknown rather than false, arrives in a later unit.
+      Admin main. Omitted on every other session, and on a main whose
+      attention sources could not be read (the client shows unknown, never
+      false). True for a pending structured question, a pending tool approval
+      on the main or one of its helpers, or a finished or failed goal outcome
+      not yet seen; never for a goal the user stopped.
     example: false
   agent_id:
     type: string

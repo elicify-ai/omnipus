@@ -51,9 +51,11 @@ func jsonSessionDetail(
 	messages []session.TranscriptEntry,
 	agentRemoved bool,
 	ls *session.LifecycleStore,
+	needsAttention *bool,
 	currentBootSeq ...uint64,
 ) {
 	genSession := unifiedMetaToGenSession(meta)
+	genSession.NeedsAttention = needsAttention
 	// C-MAIN: `protected` is computed here as well as in listSessions — the
 	// detail response is the surface the SPA's delete affordance keys on, so
 	// the two must not disagree about a main.
@@ -452,8 +454,11 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	// fields (Partitions in particular) marshal as [] not null — Zod on the SPA
 	// rejects null where the contract says type:array and drops the whole list.
 	genSessions := make([]gen.Session, 0, len(filtered))
+	approvals := a.pendingApprovalMains()
 	for _, m := range filtered {
 		s := unifiedMetaToGenSession(m)
+		// U11 (FR-047): needs_attention for a main (nil for every other row).
+		stampNeedsAttention(&s, m, approvals)
 		// C-MAIN: compute the `protected` flag. Only a main is protected;
 		// every other session gets nil (field omitted from the wire response).
 		s.Protected = computeSessionProtected(m)
@@ -543,7 +548,7 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 	// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize to
 	// the same JSON layout defined in SessionDetail.yaml and Session.yaml/Message.yaml.
 	// Using jsonSessionDetail avoids an import cycle while staying lint-compliant.
-	jsonSessionDetail(w, meta, messages, agentRemoved, a.agentLoop.GetSessionLifecycleStore(), a.agentLoop.CurrentBootEpoch())
+	jsonSessionDetail(w, meta, messages, agentRemoved, a.agentLoop.GetSessionLifecycleStore(), mainNeedsAttention(meta, a.pendingApprovalMains()), a.agentLoop.CurrentBootEpoch())
 }
 
 func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id string) {

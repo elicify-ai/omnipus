@@ -2246,6 +2246,30 @@ func (e DelegateInboxActionAction) Valid() bool {
 	}
 }
 
+// Defines values for DelegateNotDeliveredSummaryLastReason.
+const (
+	DelegateNotDeliveredSummaryLastReasonBodyTooLarge           DelegateNotDeliveredSummaryLastReason = "body_too_large"
+	DelegateNotDeliveredSummaryLastReasonQuestionBlockerCeiling DelegateNotDeliveredSummaryLastReason = "question_blocker_ceiling"
+	DelegateNotDeliveredSummaryLastReasonRateLimited            DelegateNotDeliveredSummaryLastReason = "rate_limited"
+	DelegateNotDeliveredSummaryLastReasonUnackedCap             DelegateNotDeliveredSummaryLastReason = "unacked_cap"
+)
+
+// Valid indicates whether the value is a known member of the DelegateNotDeliveredSummaryLastReason enum.
+func (e DelegateNotDeliveredSummaryLastReason) Valid() bool {
+	switch e {
+	case DelegateNotDeliveredSummaryLastReasonBodyTooLarge:
+		return true
+	case DelegateNotDeliveredSummaryLastReasonQuestionBlockerCeiling:
+		return true
+	case DelegateNotDeliveredSummaryLastReasonRateLimited:
+		return true
+	case DelegateNotDeliveredSummaryLastReasonUnackedCap:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DelegatePeekActionAction.
 const (
 	DelegatePeekActionActionPeek DelegatePeekActionAction = "peek"
@@ -6154,17 +6178,17 @@ func (e MessageSubagentEndType) Valid() bool {
 
 // Defines values for MessageSubagentMessageKind.
 const (
-	MessageSubagentMessageKindArtifact        MessageSubagentMessageKind = "artifact"
-	MessageSubagentMessageKindBlocker         MessageSubagentMessageKind = "blocker"
-	MessageSubagentMessageKindCheckpoint      MessageSubagentMessageKind = "checkpoint"
-	MessageSubagentMessageKindDecisionRequest MessageSubagentMessageKind = "decision_request"
-	MessageSubagentMessageKindError           MessageSubagentMessageKind = "error"
-	MessageSubagentMessageKindGoalStatus      MessageSubagentMessageKind = "goal_status"
-	MessageSubagentMessageKindHandback        MessageSubagentMessageKind = "handback"
-	MessageSubagentMessageKindProgress        MessageSubagentMessageKind = "progress"
-	MessageSubagentMessageKindQuestion        MessageSubagentMessageKind = "question"
-	MessageSubagentMessageKindRespond         MessageSubagentMessageKind = "respond"
-	MessageSubagentMessageKindSteer           MessageSubagentMessageKind = "steer"
+	MessageSubagentMessageKindArtifact     MessageSubagentMessageKind = "artifact"
+	MessageSubagentMessageKindBlocker      MessageSubagentMessageKind = "blocker"
+	MessageSubagentMessageKindCheckpoint   MessageSubagentMessageKind = "checkpoint"
+	MessageSubagentMessageKindError        MessageSubagentMessageKind = "error"
+	MessageSubagentMessageKindGoalStatus   MessageSubagentMessageKind = "goal_status"
+	MessageSubagentMessageKindHandback     MessageSubagentMessageKind = "handback"
+	MessageSubagentMessageKindNotDelivered MessageSubagentMessageKind = "not_delivered"
+	MessageSubagentMessageKindProgress     MessageSubagentMessageKind = "progress"
+	MessageSubagentMessageKindQuestion     MessageSubagentMessageKind = "question"
+	MessageSubagentMessageKindRespond      MessageSubagentMessageKind = "respond"
+	MessageSubagentMessageKindSteer        MessageSubagentMessageKind = "steer"
 )
 
 // Valid indicates whether the value is a known member of the MessageSubagentMessageKind enum.
@@ -6176,13 +6200,13 @@ func (e MessageSubagentMessageKind) Valid() bool {
 		return true
 	case MessageSubagentMessageKindCheckpoint:
 		return true
-	case MessageSubagentMessageKindDecisionRequest:
-		return true
 	case MessageSubagentMessageKindError:
 		return true
 	case MessageSubagentMessageKindGoalStatus:
 		return true
 	case MessageSubagentMessageKindHandback:
+		return true
+	case MessageSubagentMessageKindNotDelivered:
 		return true
 	case MessageSubagentMessageKindProgress:
 		return true
@@ -9248,27 +9272,6 @@ func (e ScheduleRunsStatus) Valid() bool {
 	}
 }
 
-// Defines values for ScheduleSessionMode.
-const (
-	ScheduleSessionModeContinue ScheduleSessionMode = "continue"
-	ScheduleSessionModeIsolated ScheduleSessionMode = "isolated"
-	ScheduleSessionModeMain     ScheduleSessionMode = "main"
-)
-
-// Valid indicates whether the value is a known member of the ScheduleSessionMode enum.
-func (e ScheduleSessionMode) Valid() bool {
-	switch e {
-	case ScheduleSessionModeContinue:
-		return true
-	case ScheduleSessionModeIsolated:
-		return true
-	case ScheduleSessionModeMain:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ScheduleTriggerKind.
 const (
 	ScheduleTriggerKindAt    ScheduleTriggerKind = "at"
@@ -9284,27 +9287,6 @@ func (e ScheduleTriggerKind) Valid() bool {
 	case ScheduleTriggerKindCron:
 		return true
 	case ScheduleTriggerKindEvery:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ScheduleCreateSessionMode.
-const (
-	ScheduleCreateSessionModeContinue ScheduleCreateSessionMode = "continue"
-	ScheduleCreateSessionModeIsolated ScheduleCreateSessionMode = "isolated"
-	ScheduleCreateSessionModeMain     ScheduleCreateSessionMode = "main"
-)
-
-// Valid indicates whether the value is a known member of the ScheduleCreateSessionMode enum.
-func (e ScheduleCreateSessionMode) Valid() bool {
-	switch e {
-	case ScheduleCreateSessionModeContinue:
-		return true
-	case ScheduleCreateSessionModeIsolated:
-		return true
-	case ScheduleCreateSessionModeMain:
 		return true
 	default:
 		return false
@@ -9350,27 +9332,6 @@ func (e ScheduleListSchedulesRunsStatus) Valid() bool {
 	case ScheduleListSchedulesRunsStatusSkipped:
 		return true
 	case ScheduleListSchedulesRunsStatusTimeout:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ScheduleListSchedulesSessionMode.
-const (
-	ScheduleListSchedulesSessionModeContinue ScheduleListSchedulesSessionMode = "continue"
-	ScheduleListSchedulesSessionModeIsolated ScheduleListSchedulesSessionMode = "isolated"
-	ScheduleListSchedulesSessionModeMain     ScheduleListSchedulesSessionMode = "main"
-)
-
-// Valid indicates whether the value is a known member of the ScheduleListSchedulesSessionMode enum.
-func (e ScheduleListSchedulesSessionMode) Valid() bool {
-	switch e {
-	case ScheduleListSchedulesSessionModeContinue:
-		return true
-	case ScheduleListSchedulesSessionModeIsolated:
-		return true
-	case ScheduleListSchedulesSessionModeMain:
 		return true
 	default:
 		return false
@@ -9440,27 +9401,6 @@ func (e ScheduleRunResultStatus) Valid() bool {
 	case ScheduleRunResultStatusSkipped:
 		return true
 	case ScheduleRunResultStatusTimeout:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ScheduleUpdateSessionMode.
-const (
-	ScheduleUpdateSessionModeContinue ScheduleUpdateSessionMode = "continue"
-	ScheduleUpdateSessionModeIsolated ScheduleUpdateSessionMode = "isolated"
-	ScheduleUpdateSessionModeMain     ScheduleUpdateSessionMode = "main"
-)
-
-// Valid indicates whether the value is a known member of the ScheduleUpdateSessionMode enum.
-func (e ScheduleUpdateSessionMode) Valid() bool {
-	switch e {
-	case ScheduleUpdateSessionModeContinue:
-		return true
-	case ScheduleUpdateSessionModeIsolated:
-		return true
-	case ScheduleUpdateSessionModeMain:
 		return true
 	default:
 		return false
@@ -9901,17 +9841,17 @@ func (e SessionDetailMessagesSubagentEndType) Valid() bool {
 
 // Defines values for SessionDetailMessagesSubagentMessageKind.
 const (
-	SessionDetailMessagesSubagentMessageKindArtifact        SessionDetailMessagesSubagentMessageKind = "artifact"
-	SessionDetailMessagesSubagentMessageKindBlocker         SessionDetailMessagesSubagentMessageKind = "blocker"
-	SessionDetailMessagesSubagentMessageKindCheckpoint      SessionDetailMessagesSubagentMessageKind = "checkpoint"
-	SessionDetailMessagesSubagentMessageKindDecisionRequest SessionDetailMessagesSubagentMessageKind = "decision_request"
-	SessionDetailMessagesSubagentMessageKindError           SessionDetailMessagesSubagentMessageKind = "error"
-	SessionDetailMessagesSubagentMessageKindGoalStatus      SessionDetailMessagesSubagentMessageKind = "goal_status"
-	SessionDetailMessagesSubagentMessageKindHandback        SessionDetailMessagesSubagentMessageKind = "handback"
-	SessionDetailMessagesSubagentMessageKindProgress        SessionDetailMessagesSubagentMessageKind = "progress"
-	SessionDetailMessagesSubagentMessageKindQuestion        SessionDetailMessagesSubagentMessageKind = "question"
-	SessionDetailMessagesSubagentMessageKindRespond         SessionDetailMessagesSubagentMessageKind = "respond"
-	SessionDetailMessagesSubagentMessageKindSteer           SessionDetailMessagesSubagentMessageKind = "steer"
+	SessionDetailMessagesSubagentMessageKindArtifact     SessionDetailMessagesSubagentMessageKind = "artifact"
+	SessionDetailMessagesSubagentMessageKindBlocker      SessionDetailMessagesSubagentMessageKind = "blocker"
+	SessionDetailMessagesSubagentMessageKindCheckpoint   SessionDetailMessagesSubagentMessageKind = "checkpoint"
+	SessionDetailMessagesSubagentMessageKindError        SessionDetailMessagesSubagentMessageKind = "error"
+	SessionDetailMessagesSubagentMessageKindGoalStatus   SessionDetailMessagesSubagentMessageKind = "goal_status"
+	SessionDetailMessagesSubagentMessageKindHandback     SessionDetailMessagesSubagentMessageKind = "handback"
+	SessionDetailMessagesSubagentMessageKindNotDelivered SessionDetailMessagesSubagentMessageKind = "not_delivered"
+	SessionDetailMessagesSubagentMessageKindProgress     SessionDetailMessagesSubagentMessageKind = "progress"
+	SessionDetailMessagesSubagentMessageKindQuestion     SessionDetailMessagesSubagentMessageKind = "question"
+	SessionDetailMessagesSubagentMessageKindRespond      SessionDetailMessagesSubagentMessageKind = "respond"
+	SessionDetailMessagesSubagentMessageKindSteer        SessionDetailMessagesSubagentMessageKind = "steer"
 )
 
 // Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentMessageKind enum.
@@ -9923,13 +9863,13 @@ func (e SessionDetailMessagesSubagentMessageKind) Valid() bool {
 		return true
 	case SessionDetailMessagesSubagentMessageKindCheckpoint:
 		return true
-	case SessionDetailMessagesSubagentMessageKindDecisionRequest:
-		return true
 	case SessionDetailMessagesSubagentMessageKindError:
 		return true
 	case SessionDetailMessagesSubagentMessageKindGoalStatus:
 		return true
 	case SessionDetailMessagesSubagentMessageKindHandback:
+		return true
+	case SessionDetailMessagesSubagentMessageKindNotDelivered:
 		return true
 	case SessionDetailMessagesSubagentMessageKindProgress:
 		return true
@@ -10676,54 +10616,6 @@ const (
 func (e SessionMessageCheckpointKind) Valid() bool {
 	switch e {
 	case SessionMessageCheckpointKindCheckpoint:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionMessageDecisionRequestAuthority.
-const (
-	SessionMessageDecisionRequestAuthorityOwnerRequired SessionMessageDecisionRequestAuthority = "owner_required"
-	SessionMessageDecisionRequestAuthoritySelfOk        SessionMessageDecisionRequestAuthority = "self_ok"
-)
-
-// Valid indicates whether the value is a known member of the SessionMessageDecisionRequestAuthority enum.
-func (e SessionMessageDecisionRequestAuthority) Valid() bool {
-	switch e {
-	case SessionMessageDecisionRequestAuthorityOwnerRequired:
-		return true
-	case SessionMessageDecisionRequestAuthoritySelfOk:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionMessageDecisionRequestDirection.
-const (
-	SessionMessageDecisionRequestDirectionChildToParent SessionMessageDecisionRequestDirection = "child_to_parent"
-)
-
-// Valid indicates whether the value is a known member of the SessionMessageDecisionRequestDirection enum.
-func (e SessionMessageDecisionRequestDirection) Valid() bool {
-	switch e {
-	case SessionMessageDecisionRequestDirectionChildToParent:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionMessageDecisionRequestKind.
-const (
-	SessionMessageDecisionRequestKindDecisionRequest SessionMessageDecisionRequestKind = "decision_request"
-)
-
-// Valid indicates whether the value is a known member of the SessionMessageDecisionRequestKind enum.
-func (e SessionMessageDecisionRequestKind) Valid() bool {
-	switch e {
-	case SessionMessageDecisionRequestKindDecisionRequest:
 		return true
 	default:
 		return false
@@ -16134,7 +16026,7 @@ type DelegateInboxAckAction struct {
 // DelegateInboxAckActionAction defines model for DelegateInboxAckAction.Action.
 type DelegateInboxAckActionAction string
 
-// DelegateInboxAction `delegate` tool call, `action: inbox` (ADR-053 §5.1). Drains the child->parent typed inbox (progress/checkpoint/artifact/blocker/ question/decision_request/error/handback), durable and keyed to the parent's chat/plan id (D16).
+// DelegateInboxAction `delegate` tool call, `action: inbox` (ADR-053 §5.1). Drains the child->parent typed inbox (progress/checkpoint/artifact/blocker/ question/error/handback), durable and keyed to the parent's chat/plan id (D16).
 type DelegateInboxAction struct {
 	Action DelegateInboxActionAction `json:"action"`
 
@@ -16161,7 +16053,28 @@ type DelegateInboxResponse struct {
 
 	// NextCursor Opaque cursor to pass as since_cursor on the next drain.
 	NextCursor *string `json:"next_cursor,omitempty"`
+
+	// NotDelivered Reports from this helper that were refused at an inbox cap and NOT saved (FR-013, #1211). Counts and the last refusal only; refused content is never kept.
+	NotDelivered *DelegateNotDeliveredSummary `json:"not_delivered,omitempty"`
 }
+
+// DelegateNotDeliveredSummary Reports from this helper that were refused at an inbox cap and NOT saved (FR-013, #1211). Counts and the last refusal only; refused content is never kept.
+type DelegateNotDeliveredSummary struct {
+	// Count Cumulative number of refused reports for this child session; never reset.
+	Count int64 `json:"count"`
+
+	// LastAt When the last refusal happened.
+	LastAt time.Time `json:"last_at"`
+
+	// LastKind SessionMessage kind of the last refused report.
+	LastKind string `json:"last_kind"`
+
+	// LastReason Why the most recent report was refused.
+	LastReason DelegateNotDeliveredSummaryLastReason `json:"last_reason"`
+}
+
+// DelegateNotDeliveredSummaryLastReason Why the most recent report was refused.
+type DelegateNotDeliveredSummaryLastReason string
 
 // DelegatePeekAction `delegate` tool call, `action: peek` (ADR-053 §5.1). AGENT-callable, read-only Agent-View parity read WITHOUT attach — inspects the child's latest checkpoint/progress without steering, without consuming the child's unacked ceiling, and without enqueuing anything on the child's steering queue (m8). Distinct from the human-facing FE-5 `ActivityPanel -> Agent-View` render surface, which is a separate UI concept, not this tool action.
 type DelegatePeekAction struct {
@@ -16211,13 +16124,13 @@ type DelegateRedirectActionAction string
 type DelegateRespondAction struct {
 	Action DelegateRespondActionAction `json:"action"`
 
-	// CorrelationId The `correlation_id` of the question/decision_request being answered.
+	// CorrelationId The `correlation_id` of the question being answered.
 	CorrelationId string `json:"correlation_id"`
 
 	// SessionId The child session being answered.
 	SessionId string `json:"session_id"`
 
-	// Text The answer. For a `decision_request`, names the chosen option verbatim.
+	// Text The answer to the child's question.
 	Text string `json:"text"`
 }
 
@@ -16937,7 +16850,7 @@ type DelegateStatusResponse struct {
 
 		// NeedsInput Present iff `state == needs_input`; absent otherwise (no schema `nullable: true` — an optional-object field paired with `nullable` generates a `T | null | undefined` Zod type against an openapi-typescript TS type that only ever emits `T | undefined` for a nullable, non-required, non-scalar property, a real codegen mismatch between the two generators for this shape; plain optional-only is unambiguous and matches how every other optional nested object in this contract set is expressed). `reconstructable` is a PARK-TIME HINT ONLY (m5) — the authoritative determination is `isNeedsInputReconstructable(rec)` re-evaluated AT BOOT (R§8.6), never this stored value.
 		NeedsInput *struct {
-			// CorrelationId The open question/decision_request this session is parked on.
+			// CorrelationId The open question this session is parked on.
 			CorrelationId string `json:"correlation_id"`
 
 			// Reconstructable Park-time hint (m5) — NOT authoritative. See description above.
@@ -20760,13 +20673,13 @@ type Message struct {
 		// ChildSessionId Optional session id of the delegated child session this mid-span update is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
 		ChildSessionId *string `json:"child_session_id,omitempty"`
 
-		// CorrelationId Present for `question`/`decision_request`/`steer`/`respond` — lets the SPA thread a live reply.
+		// CorrelationId Present for `question`/`steer`/`respond` — lets the SPA thread a live reply.
 		CorrelationId *string `json:"correlation_id,omitempty"`
 
 		// CreatedAt RFC3339 timestamp the underlying message was created.
 		CreatedAt time.Time `json:"created_at"`
 
-		// Kind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+		// Kind The underlying SessionMessage kind, or `not_delivered` (FR-013): a server-authored line saying a child's report was refused at an inbox cap and not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
 		Kind MessageSubagentMessageKind `json:"kind"`
 
 		// MessageId The underlying SessionMessage's `message_id` — correlates this live ping with the full record fetchable via `delegate.inbox`/`peek`.
@@ -21034,7 +20947,7 @@ type MessageSubagentEndStatus string
 // MessageSubagentEndType defines model for Message.SubagentEnd.Type.
 type MessageSubagentEndType string
 
-// MessageSubagentMessageKind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+// MessageSubagentMessageKind The underlying SessionMessage kind, or `not_delivered` (FR-013): a server-authored line saying a child's report was refused at an inbox cap and not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
 type MessageSubagentMessageKind string
 
 // MessageSubagentMessageType defines model for Message.SubagentMessage.Type.
@@ -21196,7 +21109,7 @@ type MessageParentQuestion struct {
 // MessageParentQuestionKind defines model for MessageParentQuestion.Kind.
 type MessageParentQuestionKind string
 
-// MessageParentRequest The first-class child-side `message_parent` tool's argument shape, discriminated by `kind` (ADR-053 §5.1). A child uses this exactly ONE tool to push a typed message into its parent's inbox — `progress | checkpoint | artifact | blocker | question | handback`. `decision_request`/`error`/`revision_entry`/ `goal_status`/`steer`/`respond` are SessionMessage kinds the child tool does NOT expose (decision_request is reserved for future use; the other four are engine/parent-only or session- internal).
+// MessageParentRequest The first-class child-side `message_parent` tool's argument shape, discriminated by `kind` (ADR-053 §5.1). A child uses this exactly ONE tool to push a typed message into its parent's inbox — `progress | checkpoint | artifact | blocker | question | handback`. `error`/`revision_entry`/`goal_status`/`steer`/ `respond` are SessionMessage kinds the child tool does NOT expose (they are engine/parent-only or session-internal).
 type MessageParentRequest struct {
 	union json.RawMessage
 }
@@ -23713,6 +23626,9 @@ type Schedule struct {
 	// OwnerAgentId The agent that runs this schedule. Pinned; never falls back to the default agent.
 	OwnerAgentId string `json:"owner_agent_id"`
 
+	// RunIsolated True when every run is forced into a fresh independent chat (session-core FR-017). The run mode is otherwise derived from the owner; there is no user-facing session-mode choice.
+	RunIsolated *bool `json:"run_isolated,omitempty"`
+
 	// Runs The most recent runs (newest first), capped at 20.
 	Runs *[]struct {
 		// DurationMs Wall-clock duration of the run in milliseconds.
@@ -23733,9 +23649,6 @@ type Schedule struct {
 
 	// SessionId For continue/main modes, the persistent session id this schedule runs in.
 	SessionId *string `json:"session_id,omitempty"`
-
-	// SessionMode isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
-	SessionMode ScheduleSessionMode `json:"session_mode"`
 
 	// State Runtime state of a schedule (#264). All fields are server-maintained.
 	State struct {
@@ -23779,9 +23692,6 @@ type Schedule struct {
 // ScheduleRunsStatus ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
 type ScheduleRunsStatus string
 
-// ScheduleSessionMode isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
-type ScheduleSessionMode string
-
 // ScheduleTriggerKind defines model for Schedule.Trigger.Kind.
 type ScheduleTriggerKind string
 
@@ -23793,8 +23703,8 @@ type ScheduleCreate struct {
 	Name         string `json:"name"`
 	OwnerAgentId string `json:"owner_agent_id"`
 
-	// SessionMode Default isolated.
-	SessionMode *ScheduleCreateSessionMode `json:"session_mode,omitempty"`
+	// RunIsolated Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+	RunIsolated *bool `json:"run_isolated,omitempty"`
 
 	// TimeoutSeconds Per-run deadline; default 0 = use the global default.
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
@@ -23812,9 +23722,6 @@ type ScheduleCreate struct {
 		Kind    ScheduleCreateTriggerKind `json:"kind"`
 	} `json:"trigger"`
 }
-
-// ScheduleCreateSessionMode Default isolated.
-type ScheduleCreateSessionMode string
 
 // ScheduleCreateTriggerKind defines model for ScheduleCreate.Trigger.Kind.
 type ScheduleCreateTriggerKind string
@@ -23840,6 +23747,9 @@ type ScheduleList struct {
 		// OwnerAgentId The agent that runs this schedule. Pinned; never falls back to the default agent.
 		OwnerAgentId string `json:"owner_agent_id"`
 
+		// RunIsolated True when every run is forced into a fresh independent chat (session-core FR-017). The run mode is otherwise derived from the owner; there is no user-facing session-mode choice.
+		RunIsolated *bool `json:"run_isolated,omitempty"`
+
 		// Runs The most recent runs (newest first), capped at 20.
 		Runs *[]struct {
 			// DurationMs Wall-clock duration of the run in milliseconds.
@@ -23860,9 +23770,6 @@ type ScheduleList struct {
 
 		// SessionId For continue/main modes, the persistent session id this schedule runs in.
 		SessionId *string `json:"session_id,omitempty"`
-
-		// SessionMode isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
-		SessionMode ScheduleListSchedulesSessionMode `json:"session_mode"`
 
 		// State Runtime state of a schedule (#264). All fields are server-maintained.
 		State struct {
@@ -23906,9 +23813,6 @@ type ScheduleList struct {
 
 // ScheduleListSchedulesRunsStatus ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
 type ScheduleListSchedulesRunsStatus string
-
-// ScheduleListSchedulesSessionMode isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
-type ScheduleListSchedulesSessionMode string
 
 // ScheduleListSchedulesTriggerKind defines model for ScheduleList.Schedules.Trigger.Kind.
 type ScheduleListSchedulesTriggerKind string
@@ -23985,12 +23889,14 @@ type ScheduleTrigger struct {
 
 // ScheduleUpdate Request body to update a schedule (#264). All fields optional; only provided fields are changed. Changing owner_agent_id is re-authorized.
 type ScheduleUpdate struct {
-	Enabled        *bool                      `json:"enabled,omitempty"`
-	Message        *string                    `json:"message,omitempty"`
-	Name           *string                    `json:"name,omitempty"`
-	OwnerAgentId   *string                    `json:"owner_agent_id,omitempty"`
-	SessionMode    *ScheduleUpdateSessionMode `json:"session_mode,omitempty"`
-	TimeoutSeconds *int                       `json:"timeout_seconds,omitempty"`
+	Enabled      *bool   `json:"enabled,omitempty"`
+	Message      *string `json:"message,omitempty"`
+	Name         *string `json:"name,omitempty"`
+	OwnerAgentId *string `json:"owner_agent_id,omitempty"`
+
+	// RunIsolated Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+	RunIsolated    *bool `json:"run_isolated,omitempty"`
+	TimeoutSeconds *int  `json:"timeout_seconds,omitempty"`
 
 	// Trigger When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
 	Trigger *struct {
@@ -24005,9 +23911,6 @@ type ScheduleUpdate struct {
 		Kind    ScheduleUpdateTriggerKind `json:"kind"`
 	} `json:"trigger,omitempty"`
 }
-
-// ScheduleUpdateSessionMode defines model for ScheduleUpdate.SessionMode.
-type ScheduleUpdateSessionMode string
 
 // ScheduleUpdateTriggerKind defines model for ScheduleUpdate.Trigger.Kind.
 type ScheduleUpdateTriggerKind string
@@ -24074,7 +23977,7 @@ type Session struct {
 	// Model LLM model name used in this session (may be empty for legacy sessions).
 	Model *string `json:"model,omitempty"`
 
-	// NeedsAttention Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session. This change only publishes the field. What sets the value, and the rule that a read failure is unknown rather than false, arrives in a later unit.
+	// NeedsAttention Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session, and on a main whose attention sources could not be read (the client shows unknown, never false). True for a pending structured question, a pending tool approval on the main or one of its helpers, or a finished or failed goal outcome not yet seen; never for a goal the user stopped.
 	NeedsAttention *bool `json:"needs_attention,omitempty"`
 
 	// ParentSessionId ADR-057 FR-008/FR-091. The direct parent's session id, present only on a subordinate ("delegate") session created by a delegation. Absent (never empty-string) on a root session. A session whose parent_session_id names an id that no longer resolves is still surfaced as a root by GET /api/v1/sessions rather than being silently dropped (FR-091, BDD-106).
@@ -24340,13 +24243,13 @@ type SessionDetail struct {
 			// ChildSessionId Optional session id of the delegated child session this mid-span update is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
 			ChildSessionId *string `json:"child_session_id,omitempty"`
 
-			// CorrelationId Present for `question`/`decision_request`/`steer`/`respond` — lets the SPA thread a live reply.
+			// CorrelationId Present for `question`/`steer`/`respond` — lets the SPA thread a live reply.
 			CorrelationId *string `json:"correlation_id,omitempty"`
 
 			// CreatedAt RFC3339 timestamp the underlying message was created.
 			CreatedAt time.Time `json:"created_at"`
 
-			// Kind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+			// Kind The underlying SessionMessage kind, or `not_delivered` (FR-013): a server-authored line saying a child's report was refused at an inbox cap and not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
 			Kind SessionDetailMessagesSubagentMessageKind `json:"kind"`
 
 			// MessageId The underlying SessionMessage's `message_id` — correlates this live ping with the full record fetchable via `delegate.inbox`/`peek`.
@@ -24625,7 +24528,7 @@ type SessionDetail struct {
 		// Model LLM model name used in this session (may be empty for legacy sessions).
 		Model *string `json:"model,omitempty"`
 
-		// NeedsAttention Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session. This change only publishes the field. What sets the value, and the rule that a read failure is unknown rather than false, arrives in a later unit.
+		// NeedsAttention Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session, and on a main whose attention sources could not be read (the client shows unknown, never false). True for a pending structured question, a pending tool approval on the main or one of its helpers, or a finished or failed goal outcome not yet seen; never for a goal the user stopped.
 		NeedsAttention *bool `json:"needs_attention,omitempty"`
 
 		// ParentSessionId ADR-057 FR-008/FR-091. The direct parent's session id, present only on a subordinate ("delegate") session created by a delegation. Absent (never empty-string) on a root session. A session whose parent_session_id names an id that no longer resolves is still surfaced as a root by GET /api/v1/sessions rather than being silently dropped (FR-091, BDD-106).
@@ -24750,7 +24653,7 @@ type SessionDetailMessagesSubagentEndStatus string
 // SessionDetailMessagesSubagentEndType defines model for SessionDetail.Messages.SubagentEnd.Type.
 type SessionDetailMessagesSubagentEndType string
 
-// SessionDetailMessagesSubagentMessageKind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+// SessionDetailMessagesSubagentMessageKind The underlying SessionMessage kind, or `not_delivered` (FR-013): a server-authored line saying a child's report was refused at an inbox cap and not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
 type SessionDetailMessagesSubagentMessageKind string
 
 // SessionDetailMessagesSubagentMessageType defines model for SessionDetail.Messages.SubagentMessage.Type.
@@ -24838,7 +24741,7 @@ type SessionLifecycleRecord struct {
 
 	// NeedsInput Present iff `state == needs_input`; absent otherwise (no schema `nullable: true` — an optional-object field paired with `nullable` generates a `T | null | undefined` Zod type against an openapi-typescript TS type that only ever emits `T | undefined` for a nullable, non-required, non-scalar property, a real codegen mismatch between the two generators for this shape; plain optional-only is unambiguous and matches how every other optional nested object in this contract set is expressed). `reconstructable` is a PARK-TIME HINT ONLY (m5) — the authoritative determination is `isNeedsInputReconstructable(rec)` re-evaluated AT BOOT (R§8.6), never this stored value.
 	NeedsInput *struct {
-		// CorrelationId The open question/decision_request this session is parked on.
+		// CorrelationId The open question this session is parked on.
 		CorrelationId string `json:"correlation_id"`
 
 		// Reconstructable Park-time hint (m5) — NOT authoritative. See description above.
@@ -24958,7 +24861,7 @@ type SessionLifecycleRecordSteeredByAuthorizationMode string
 // SessionLifecycleRecordStopByKind Principal kind (agent or human).
 type SessionLifecycleRecordStopByKind string
 
-// SessionMessage The typed, schema-validated envelope carried over the existing pkg/bus MessageBus (no new transport) that derives every control/visibility surface of the session-control plane (ADR-053 S6/US-6). Discriminated by `kind` — 12 variants covering child->parent reporting (progress/checkpoint/artifact/blocker/ question/decision_request/error/handback), engine-emitted control (revision_entry), session->UI propagation (goal_status), and parent->child control (steer/respond). `direction` is one of `child_to_parent | parent_to_child | session_to_ui | engine` — the historical `human` value is dropped (M8); every kind variant maps to exactly one of the four. Every field/kind/direction pairing is the ratified shape from the spec's Contract Surface table — see the individual variant files for full per-kind documentation and caps (10 msgs/min, 32 KiB, depth <=5 for child sends; 6/min, 16 KiB for steer; per-child unacked ceiling 20 open question+blocker, D15).
+// SessionMessage The typed, schema-validated envelope carried over the existing pkg/bus MessageBus (no new transport) that derives every control/visibility surface of the session-control plane (ADR-053 S6/US-6). Discriminated by `kind` — 11 variants covering child->parent reporting (progress/checkpoint/artifact/blocker/ question/error/handback), engine-emitted control (revision_entry), session->UI propagation (goal_status), and parent->child control (steer/respond). `direction` is one of `child_to_parent | parent_to_child | session_to_ui | engine` — the historical `human` value is dropped (M8); every kind variant maps to exactly one of the four. Every field/kind/direction pairing is the ratified shape from the spec's Contract Surface table — see the individual variant files for full per-kind documentation and caps (10 msgs/min, 32 KiB, depth <=5 for child sends; 6/min, 16 KiB for steer; per-child unacked ceiling 20 open question+blocker, D15).
 type SessionMessage struct {
 	union json.RawMessage
 }
@@ -25047,40 +24950,6 @@ type SessionMessageCheckpointDirection string
 
 // SessionMessageCheckpointKind defines model for SessionMessageCheckpoint.Kind.
 type SessionMessageCheckpointKind string
-
-// SessionMessageDecisionRequest SessionMessage `oneOf` variant, `kind: decision_request` (ADR-053 §Contract Surface, R§8.2). Child -> parent. Like `question` but enumerates discrete `options[]`; the answering `respond.text` names the chosen option. Same untrusted-authority handling as `question` (M3). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
-type SessionMessageDecisionRequest struct {
-	// Authority Child-authored authority tag, untrusted (M3) — see SessionMessageQuestion.authority for the identical fail-closed derivation rule.
-	Authority *SessionMessageDecisionRequestAuthority `json:"authority,omitempty"`
-
-	// CorrelationId Routes the eventual `respond` back to this decision request.
-	CorrelationId string                                 `json:"correlation_id"`
-	CreatedAt     time.Time                              `json:"created_at"`
-	Depth         int                                    `json:"depth"`
-	Direction     SessionMessageDecisionRequestDirection `json:"direction"`
-	Generation    *int                                   `json:"generation,omitempty"`
-	Kind          SessionMessageDecisionRequestKind      `json:"kind"`
-	MessageId     string                                 `json:"message_id"`
-
-	// Options The enumerated choices. The answering `respond.text` names the chosen option verbatim.
-	Options         []string `json:"options"`
-	ParentSessionId *string  `json:"parent_session_id,omitempty"`
-	SenderIdentity  string   `json:"sender_identity"`
-	SessionId       string   `json:"session_id"`
-
-	// Text Untrusted decision prompt.
-	Text            string `json:"text"`
-	UntrustedOrigin bool   `json:"untrusted_origin"`
-}
-
-// SessionMessageDecisionRequestAuthority Child-authored authority tag, untrusted (M3) — see SessionMessageQuestion.authority for the identical fail-closed derivation rule.
-type SessionMessageDecisionRequestAuthority string
-
-// SessionMessageDecisionRequestDirection defines model for SessionMessageDecisionRequest.Direction.
-type SessionMessageDecisionRequestDirection string
-
-// SessionMessageDecisionRequestKind defines model for SessionMessageDecisionRequest.Kind.
-type SessionMessageDecisionRequestKind string
 
 // SessionMessageError SessionMessage `oneOf` variant, `kind: error` (ADR-053 §Contract Surface). Child -> parent. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
 type SessionMessageError struct {
@@ -25254,9 +25123,9 @@ type SessionMessageQuestionDirection string
 // SessionMessageQuestionKind defines model for SessionMessageQuestion.Kind.
 type SessionMessageQuestionKind string
 
-// SessionMessageRespond SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The text is delivered as an ordinary steering message; the recipient's state decides the effect (ADR-20261004 C1). The former owner-answer authority rejection was withdrawn with the person-question pause (ADR-20261004, locked decision 7). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+// SessionMessageRespond SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The text is delivered as an ordinary steering message; the recipient's state decides the effect (ADR-20261004 C1). The former owner-answer authority rejection was withdrawn with the person-question pause (ADR-20261004, locked decision 7). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
 type SessionMessageRespond struct {
-	// CorrelationId The `correlation_id` of the `question`/`decision_request` being answered.
+	// CorrelationId The `correlation_id` of the `question` being answered.
 	CorrelationId string                         `json:"correlation_id"`
 	CreatedAt     time.Time                      `json:"created_at"`
 	Depth         int                            `json:"depth"`
@@ -25272,7 +25141,7 @@ type SessionMessageRespond struct {
 	// SessionId The CHILD session being answered.
 	SessionId string `json:"session_id"`
 
-	// Text The answer. For a `decision_request`, names the chosen option verbatim from its `options[]`.
+	// Text The answer to the child's question.
 	Text string `json:"text"`
 
 	// UntrustedOrigin False — parent-authored, trusted content.
@@ -25979,6 +25848,9 @@ type Task struct {
 		Status TaskRollupStatus `json:"status"`
 	} `json:"rollup,omitempty"`
 
+	// RunIsolated True forces every run of this work into a fresh independent chat, for either role (session-core FR-017).
+	RunIsolated *bool `json:"run_isolated,omitempty"`
+
 	// SessionId Session ID created/linked when the task runs.
 	SessionId *string `json:"session_id,omitempty"`
 
@@ -26285,6 +26157,9 @@ type TaskCreateRequest struct {
 	// Prompt Optional agent prompt for an `llm` action.
 	Prompt *string `json:"prompt,omitempty"`
 
+	// RunIsolated Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+	RunIsolated *bool `json:"run_isolated,omitempty"`
+
 	// SourceChannel Originating channel for a delegated task (Detail
 	SourceChannel *string `json:"source_channel,omitempty"`
 
@@ -26490,6 +26365,9 @@ type TaskRun struct {
 
 	// OccurrenceMs The scheduled RRULE instant this run realizes (the calendar join key, Unix epoch milliseconds). Null for an ad-hoc/once/manual run.
 	OccurrenceMs *int64 `json:"occurrence_ms"`
+
+	// RecipientSessionIds Session ids captured when this run actually started (FR-019): the starting agent's main and the assignee's main, deduplicated. Never the creator. Fixed for the life of the run. Absent when there is no recipient (a skipped run, or a person/scheduler-started worker run).
+	RecipientSessionIds *[]string `json:"recipient_session_ids,omitempty"`
 
 	// Result Terminal-run output text. Absent while the run is `in_progress` (mirrors Task.result's own "absent while running" convention).
 	Result *string `json:"result,omitempty"`
@@ -26720,6 +26598,9 @@ type TaskUpdateRequest struct {
 
 	// Result Task result or output summary.
 	Result *string `json:"result,omitempty"`
+
+	// RunIsolated Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017); false clears it. Omitted leaves it unchanged.
+	RunIsolated *bool `json:"run_isolated,omitempty"`
 
 	// StartedAt When the task started execution.
 	StartedAt *time.Time `json:"started_at,omitempty"`
@@ -31174,34 +31055,6 @@ func (t *SessionMessage) MergeSessionMessageQuestion(v SessionMessageQuestion) e
 	return err
 }
 
-// AsSessionMessageDecisionRequest returns the union data inside the SessionMessage as a SessionMessageDecisionRequest
-func (t SessionMessage) AsSessionMessageDecisionRequest() (SessionMessageDecisionRequest, error) {
-	var body SessionMessageDecisionRequest
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromSessionMessageDecisionRequest overwrites any union data inside the SessionMessage as the provided SessionMessageDecisionRequest
-func (t *SessionMessage) FromSessionMessageDecisionRequest(v SessionMessageDecisionRequest) error {
-	v.Kind = "decision_request"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeSessionMessageDecisionRequest performs a merge with any union data inside the SessionMessage, using the provided SessionMessageDecisionRequest
-func (t *SessionMessage) MergeSessionMessageDecisionRequest(v SessionMessageDecisionRequest) error {
-	v.Kind = "decision_request"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
 // AsSessionMessageError returns the union data inside the SessionMessage as a SessionMessageError
 func (t SessionMessage) AsSessionMessageError() (SessionMessageError, error) {
 	var body SessionMessageError
@@ -31390,8 +31243,6 @@ func (t SessionMessage) ValueByDiscriminator() (interface{}, error) {
 		return t.AsSessionMessageBlocker()
 	case "checkpoint":
 		return t.AsSessionMessageCheckpoint()
-	case "decision_request":
-		return t.AsSessionMessageDecisionRequest()
 	case "error":
 		return t.AsSessionMessageError()
 	case "goal_status":

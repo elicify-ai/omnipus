@@ -10,7 +10,7 @@
 // message — Correction C1's message/state table applies to the recipient:
 // working mid-turn → delivered into the current turn (never stopping it);
 // stopped → same-generation resume; done/failed → next round. A 3P child
-// keeps its D5 corrective re-dispatch (no warm-resume primitive).
+// resumes its own native CLI conversation or refuses visibly (FR-043).
 
 package tools
 
@@ -33,7 +33,6 @@ type delegateToolExecuteRespond struct {
 	t             *DelegateTool
 	ctx           context.Context
 	args          map[string]any
-	cb            AsyncCallback
 	sessionID     string
 	correlationID string
 	text          string
@@ -45,7 +44,7 @@ type delegateToolExecuteRespond struct {
 }
 
 func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
-	dt := &delegateToolExecuteRespond{t: t, ctx: ctx, args: args, cb: cb}
+	dt := &delegateToolExecuteRespond{t: t, ctx: ctx, args: args}
 	// The answer slot is reserved atomically inside validateAndLoad; every exit
 	// that did not deliver must give it back so the question stays open for a retry.
 	delivered := false
@@ -181,85 +180,29 @@ func (dt *delegateToolExecuteRespond) validateAndLoad() (*ToolResult, bool) {
 	return nil, false
 }
 
-// dispatchThirdParty handles a 3P recipient: D5 — a 3P child never
-// warm-resumes; the answer spawns a NEW corrective session carrying the
-// prior context, and the original is marked stopped as superseded by that
-// successor. Dispatch it FIRST — a failure here (e.g. a Persist I/O error,
-// or the inner executeAsync call) never marks the original as superseded,
-// so it stays retryable.
+// dispatchThirdParty handles a LIVE 3P (external-CLI) recipient: the answer
+// reaches the SAME native CLI conversation by interrupt + resume (FR-043), the
+// way executeSteer delivers a live instruction. It NEVER mints a new corrective
+// session: that bypassed the creation-edge authorization and started a fresh
+// CLI conversation (DEL-31). A sink that cannot deliver, or a session with no
+// live conversation, refuses visibly. A stopped or finished 3P recipient is not
+// handled here: it falls through to deliverNative, whose ReviveStoppedSession
+// either continues the retained conversation or refuses.
 func (dt *delegateToolExecuteRespond) dispatchThirdParty() (*ToolResult, bool) {
-	if !dt.rec.Is3P {
+	if !dt.rec.Is3P || dt.rec.Terminal() || dt.rec.Stopped() {
 		return nil, false
 	}
-	dispatch := dt.t.spawnCorrectiveFollowUp(dt.ctx, dt.sessionID, dt.rec, dt.instruction, dt.cb)
-	if dispatch.IsError {
-		return dispatch, true
+	deliverer, ok := dt.t.steering.(steerExternalCLIDeliverer)
+	if !ok {
+		return ErrorResult(fmt.Sprintf(
+			"delegate: respond: not_steerable: external command-line session %s cannot receive an answer from this "+
+				"steering sink; start a new delegation instead", dt.sessionID)), true
 	}
-	// The corrective successor is confirmed dispatched — only now mark
-	// the ORIGINAL stopped (superseded by the successor). A terminal
-	// original is left alone (L-3 immutable-terminal invariant): the
-	// corrective spawn already carried its context, and there is nothing
-	// left to supersede.
-	if merr := dt.t.lifecycle.Mutate(dt.sessionID, func(cur *session.LifecycleRecord) error {
-		if cur == nil {
-			return session.ErrLifecycleNotFound
-		}
-		if cur.Terminal() || cur.State == session.LifecycleStopped {
-			return nil
-		}
-		cur.State = session.LifecycleStopped
-		cur.FailedReason = "superseded by corrective re-dispatch (3P respond)"
-		// No cascade/stamp precedes this write — a 3P respond that
-		// supersedes its own original with a freshly dispatched corrective
-		// session (D5) is closest to redirect_pause (a new instruction
-		// superseding the current generation), never a Stop/cascade.
-		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
-			cur.Stop = nil
-		}
-		// Correction C3, the same discipline every other fence-less stop
-		// obeys (boot_sweep.go::failInterrupted): the transition is ledgered
-		// IN THIS SAME lock hold — the ledger, not the resumable stop note,
-		// is the stop's durable history and the direct-parent notice's
-		// discovery source. The note's Seq is the allocated ledger sequence,
-		// never the generation. A ledger failure refuses the whole mutation:
-		// the stop does not land note-only, and the original stays live.
-		at := dt.t.now().UTC()
-		actor := session.StopActorAgent(ToolAgentID(dt.ctx))
-		landed := session.LandedStop{
-			ParentSessionID: cur.SteeringSessionID(),
-			Generation:      cur.Generation,
-			Cause:           session.StopCauseRedirectPause,
-			Actor:           actor,
-			At:              at,
-		}
-		if cur.ExecutionID != nil {
-			landed.RunID = cur.ExecutionID.RunID
-			landed.BootSeq = cur.ExecutionID.BootSeq
-		}
-		seq, ledgerErr := dt.t.lifecycle.RecordFencelessLandedStopLocked(cur.SessionID, landed)
-		if ledgerErr != nil {
-			return fmt.Errorf("steer: respond: supersede stop for %q not landed: its transition could not be ledgered: %w",
-				cur.SessionID, ledgerErr)
-		}
-		cur.StopNote = &session.StopNote{
-			At:    at,
-			By:    actor,
-			Seq:   uint64(seq),
-			Cause: session.StopCauseRedirectPause,
-		}
-		return nil
-	}); merr != nil {
-		// The corrective successor is already running by this point —
-		// returning an error here would misleadingly tell the caller
-		// "respond failed" when the answer was in fact delivered. But this
-		// failure is not a display nicety: with the transition refused, the
-		// supersede STOP DID NOT LAND — the original keeps its pre-respond
-		// state and is not superseded until a retry lands the ledgered stop.
-		// The Warn below is the visible record of that.
-		slog.Warn("delegate: respond: 3P corrective successor dispatched but the supersede stop DID NOT LAND — the original session remains live and unsuperseded",
-			"session_id", dt.sessionID, "error", merr)
+	if _, derr := deliverer.DeliverExternalCLIInstruction(dt.ctx, dt.sessionID, dt.rec.AgentID,
+		providers.Message{Role: "user", Content: dt.text}, dt.correlationID); derr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: respond: not_steerable: %v", derr)).WithError(derr), true
 	}
-	return dispatch, true
+	return dt.acknowledgedRespond("Answer delivered to the external CLI conversation by interrupt + resume."), true
 }
 
 // deliverNative delivers the answer to a native child as an ordinary

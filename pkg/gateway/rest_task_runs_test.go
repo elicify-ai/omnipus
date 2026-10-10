@@ -167,7 +167,7 @@ func TestTaskRunsEndpoint(t *testing.T) {
 
 		// First attempt: a scheduled occurrence run that fails.
 		occMs := int64(1_800_000_000_000)
-		older, created, err := api.taskStore.OpenRun(tsk.Id, &occMs, task.RunKindScheduled, "sess-older")
+		older, created, err := api.taskStore.OpenRun(tsk.Id, &occMs, task.RunKindScheduled, "sess-older", nil)
 		require.NoError(t, err)
 		require.True(t, created)
 		require.NoError(t, api.taskStore.CloseRun(tsk.Id, older.RunID, task.StatusFailed, "older result"))
@@ -176,7 +176,7 @@ func TestTaskRunsEndpoint(t *testing.T) {
 		// OpenRun's idempotency only guards a concurrently-OPEN run for the
 		// same key, so a fresh attempt after the prior one closed opens a
 		// genuinely new run and the prior failed run is preserved.
-		newer, created2, err := api.taskStore.OpenRun(tsk.Id, &occMs, task.RunKindManual, "sess-newer")
+		newer, created2, err := api.taskStore.OpenRun(tsk.Id, &occMs, task.RunKindManual, "sess-newer", nil)
 		require.NoError(t, err)
 		require.True(t, created2)
 		require.NoError(t, api.taskStore.CloseRun(tsk.Id, newer.RunID, task.StatusDone, "newer result"))
@@ -212,7 +212,7 @@ func TestTaskRunsEndpoint(t *testing.T) {
 		api := newTestRestAPIWithHome(t)
 		tsk := createTaskViaAPI(t, api, "RunsInProgressTask", "")
 
-		open, created, err := api.taskStore.OpenRun(tsk.Id, nil, task.RunKindManual, "sess-open")
+		open, created, err := api.taskStore.OpenRun(tsk.Id, nil, task.RunKindManual, "sess-open", nil)
 		require.NoError(t, err)
 		require.True(t, created)
 

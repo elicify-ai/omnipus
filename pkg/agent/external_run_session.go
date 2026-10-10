@@ -46,6 +46,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
@@ -176,6 +177,64 @@ func (al *AgentLoop) externalRunResumeOnly(sessionKey string) bool {
 	return rec.SteeredBy != nil
 }
 
+// externalRunPriorStart reports whether the durable lifecycle record says an
+// external CLI run already started for this session (LifecycleRecord.
+// ExternalRunStarted). It is the restart-proof half of `started` (N7). A missing
+// store, an unreadable or absent record is "no mark": the caller keeps today's
+// behaviour for a record-less fixture, and a real steered session always has a
+// record (externalRunResumeOnly requires one before this is consulted).
+func (al *AgentLoop) externalRunPriorStart(sessionKey string) bool {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil || sessionKey == "" {
+		return false
+	}
+	rec, err := lifecycle.Load(sessionKey)
+	return err == nil && rec != nil && rec.ExternalRunStarted
+}
+
+// markExternalRunStarted durably records, on the session's lifecycle record,
+// that its first external CLI run is about to start, so every later entry —
+// including one after a gateway restart — resumes or refuses instead of
+// starting a fresh conversation (N7). A failure to record it refuses the run:
+// starting a CLI conversation that a later entry could not recognise is exactly
+// the silent fresh fallback FR-043 forbids.
+func (al *AgentLoop) markExternalRunStarted(sessionKey string) error {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return errors.New("external-cli: lifecycle store is not wired; cannot record the CLI conversation start")
+	}
+	if err := lifecycle.Mutate(sessionKey, func(rec *session.LifecycleRecord) error {
+		if rec == nil {
+			return session.ErrLifecycleNotFound
+		}
+		rec.ExternalRunStarted = true
+		return nil
+	}); err != nil {
+		return fmt.Errorf("external-cli: record the CLI conversation start for %q: %w", sessionKey, err)
+	}
+	return nil
+}
+
+// externalConversationAvailable reports whether reviving sessionKey's steered
+// external-CLI helper can continue a retained CLI conversation. A helper whose
+// external run never started (a queued child stopped before it ran) has no
+// conversation to lose, so its first run may still be fresh. Otherwise a driver
+// must still be retained; when it is not (released at the end of the episode, or
+// the gateway restarted), the revive must refuse visibly instead of dispatching
+// a turn that would start a fresh CLI conversation in the old chat (N7).
+func (al *AgentLoop) externalConversationAvailable(sessionKey string, rec *session.LifecycleRecord) bool {
+	if rec == nil || !rec.Is3P || !rec.ExternalRunStarted || !al.externalRunResumeOnly(sessionKey) {
+		return true
+	}
+	sess := al.externalRunSessionIfPresent(sessionKey)
+	if sess == nil {
+		return false
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return sess.driver != nil
+}
+
 // beginExternalRun reserves one external-CLI dispatch on the session holder and
 // decides whether the caller must Resume (a retained conversation) or Run
 // (a fresh one). It does NOT instantiate the driver: that happens after the
@@ -184,7 +243,8 @@ func (al *AgentLoop) externalRunResumeOnly(sessionKey string) bool {
 //
 //   - A Resume is selected when the caller requested a continuation
 //     (externalResumeRequested) OR this is a later entry of a steered session
-//     (sess.started && resumeOnly, N7) AND a driver is retained. When a resume
+//     (resumeOnly && (sess.started || the durable ExternalRunStarted mark), N7,
+//     so the rule survives a gateway restart) AND a driver is retained. When a resume
 //     is required but no driver is retained (N5: released, or the original
 //     dispatch failed before construction) it refuses with
 //     errExternalResumeUnavailable — NEVER a fresh fallback.
@@ -200,13 +260,21 @@ func (al *AgentLoop) beginExternalRun(
 	cancel context.CancelFunc,
 	resumeOnly bool,
 ) (sess *externalCLIRunSession, resume bool, err error) {
+	// priorRun is the DURABLE "this steered session already started an external
+	// CLI run" fact (N7). The in-memory sess.started alone is lost on a gateway
+	// restart, after which a revive of a stopped/finished helper would look
+	// like a first launch and start a fresh CLI conversation under the old
+	// chat. It is read before sess.mu is taken so the lifecycle lock is never
+	// acquired under the holder lock.
+	priorRun := resumeOnly && al.externalRunPriorStart(sessionKey)
+
 	sess = al.externalRunSession(sessionKey)
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 
 	claim := al.tsExecutionClaim(ts, sessionKey)
 	resumeRequested := externalResumeRequested(ts)
-	needsResume := resumeRequested || (sess.started && resumeOnly)
+	needsResume := resumeRequested || (resumeOnly && (sess.started || priorRun))
 	if needsResume {
 		if sess.driver == nil {
 			// N5/N7: a continuation (or a later steered entry) with no retained

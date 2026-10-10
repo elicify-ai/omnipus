@@ -88,6 +88,7 @@ type u5IdentityFile struct {
 	CompactionSummaries   map[string]string  `json:"compaction_summaries,omitempty"`
 	Type                  UnifiedSessionType `json:"type"`
 	ParentSessionID       string             `json:"parent_session_id,omitempty"`
+	Attention             *AttentionMark     `json:"attention,omitempty"`
 }
 
 // u5StatsFile is stats.json's on-disk shape (FR-053): SessionStats plus its
@@ -153,6 +154,7 @@ func u5IdentityFromMeta(meta *UnifiedMeta) u5IdentityFile {
 		CompactionSummaries:   meta.CompactionSummaries,
 		Type:                  meta.Type,
 		ParentSessionID:       meta.ParentSessionID,
+		Attention:             meta.Attention.persisted(),
 	}
 }
 
@@ -213,6 +215,7 @@ func u5ComposeUnifiedMeta(identity u5IdentityFile, stats u5StatsFile, loop u5Loo
 			ActiveAgentID:         identity.ActiveAgentID,
 			CompactionSummaries:   identity.CompactionSummaries,
 			ParentSessionID:       identity.ParentSessionID,
+			Attention:             identity.Attention.value(),
 			PendingAskJSON:        pendingAsk.PendingAskJSON,
 			LoopMode:              loop.LoopMode,
 			LoopPrompt:            loop.LoopPrompt,
@@ -361,6 +364,7 @@ func (us *UnifiedStore) u5WriteIdentityLocked(sessionID string, meta *UnifiedMet
 		cached.ActiveAgentID = meta.ActiveAgentID
 		cached.CompactionSummaries = maps.Clone(meta.CompactionSummaries)
 		cached.ParentSessionID = meta.ParentSessionID
+		cached.Attention = meta.Attention
 		cached.Type = meta.Type
 		if meta.UpdatedAt.After(cached.UpdatedAt) {
 			cached.UpdatedAt = meta.UpdatedAt

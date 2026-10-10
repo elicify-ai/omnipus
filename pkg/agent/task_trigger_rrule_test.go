@@ -1395,7 +1395,7 @@ func TestTriggerOverlapGuard_SuppressesSkipWhenOccurrenceAlreadyRunNow(t *testin
 	// RD8: the user Run-now's this exact FUTURE occurrence ahead of its
 	// natural schedule — OpenRun records a manual, still-open run keyed to
 	// occurrenceMs.
-	manualRun, created, err := store.OpenRun(tsk.ID, &occurrenceMs, task.RunKindManual, "session-manual-run-now")
+	manualRun, created, err := store.OpenRun(tsk.ID, &occurrenceMs, task.RunKindManual, "session-manual-run-now", nil)
 	if err != nil {
 		t.Fatalf("store.OpenRun (manual run-now): %v", err)
 	}
