@@ -198,6 +198,24 @@ A **cache unavailable** warning on the mail panel means Omnipus could not prove 
 
 Removing a mailbox always removes its configuration and stored password first — the account stops working immediately. Omnipus then erases its cached mail metadata and new-mail watching state. When that erase could not fully finish (a file held open or a disk error), the removal result says **cleanup pending** with a safe reason code and a retry key, instead of claiming success. Nothing of the mailbox remains usable in the meantime. Retry the cleanup with the key — `POST /api/v1/mailboxes/cleanup` with `{"cleanup_intent": "<the retry key>"}` — which also works after the mailbox row is already gone from the settings; the response is truthful again: **removed** when every step has now succeeded, **cleanup pending** with the same key if something still failed. Removing an agent or a workspace runs the same erase for each mailbox it held; files you saved from mail into a workspace are ordinary workspace files and are never touched by this cleanup.
 
+## An agent's main chat says it "could not be prepared"
+
+Opening an agent's main chat (see [Each agent's own chat, per workspace](workspaces.md#each-agents-own-chat-per-workspace)) can answer with this fixed message:
+
+> This agent's main chat could not be prepared because session storage failed. Check disk space and permissions, then retry. Details are in the server log.
+
+It means the agent is entitled to a main chat in that workspace, but Omnipus could not create it, or could not trust the one it found. The message deliberately names no file, folder or id; the full cause is in the gateway log as an error-level line starting `rest: main session could not be prepared on open`, with the `workspace_id`, `agent_id` and the underlying error. (A missing chat for an agent that is *not* on the team, a worker, or Admin outside the default workspace is different: that stays a plain "session not found".)
+
+**Why it can happen at startup too.** On every start Omnipus creates the main chats of the default workspace's team and of every saved workspace team, plus Admin's in the default workspace. A failure there does not stop the gateway. It is logged at error level — `rest: boot mains: ...`, naming the workspace (and the agent) — and the chat is tried again the next time someone opens it.
+
+**What to do.**
+
+1. Read the error line in the gateway log (see [debugging](operations/debug.md)); it names the workspace and agent and the cause.
+2. If the cause is disk space or permissions on the data directory's `sessions` folder, fix that, then open the chat again. Opening it re-attempts the creation, so no restart is needed: the chat is created, or — if it already existed — the same chat is reused with its history.
+3. If the log says a saved main chat is unreadable or "does not match the pair" (for example its `meta.json` is damaged, or it records a different owner or workspace), Omnipus will not repair, adopt or replace it. An administrator must fix or remove that chat's folder under `sessions/` (its name is `main-session-<workspace>+<agent>`), after which opening the chat creates a fresh one.
+
+Other session reads and writes that hit a storage failure answer in the same way — "This session could not be read / renamed / deleted / created because session storage failed. Check disk space and permissions, then retry. Details are in the server log." — with the cause only in the log.
+
 ## Two more errors with short fixes
 
 **"priority must be between 1 and 5"** — task priority runs from 1 (highest) to 5 (lowest); 3 is the default, and anything outside the range is rejected.
