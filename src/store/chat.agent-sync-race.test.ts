@@ -112,14 +112,20 @@ describe('chat — session_started agent sync with the session owner', () => {
   it('adopts the owner when a later acknowledgement binds a different session', () => {
     // Guard against over-correction: the marker is cleared on the first ack,
     // so a later session binding is not mistaken for a same-session hint.
-    connectWithSendSpy()
+    const send = connectWithSendSpy()
     act(() => {
       useChatStore.getState().sendMessage('first')
     })
+    // The gateway echoes the initiating message's client_message_id on the
+    // first send's ack (pkg/gateway/websocket_first_message.go::
+    // acknowledgeNewSession) — DEL-F21/F22 made that echo the only
+    // correlated receipt, so the first ack carries it. The SECOND ack below
+    // stays uncorrelated (kickoff shape) to drive the preserved tail.
+    const firstCid = (send.mock.calls[0][0] as { client_message_id?: string }).client_message_id
     act(() => {
       useChatStore
         .getState()
-        .handleFrame({ type: 'session_started', session_id: MINTED_SID, agent_id: 'mia' } as never)
+        .handleFrame({ type: 'session_started', session_id: MINTED_SID, agent_id: 'mia', client_message_id: firstCid } as never)
     })
 
     act(() => {
