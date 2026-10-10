@@ -2217,6 +2217,14 @@ components:
           type: string
           description: Opaque cursor to pass as since_cursor on the next drain.
           example: "sm_01J3ZQK8N2H8VXNRP5T7C9M4WF"
+        not_delivered:
+          $ref: '#/components/schemas/DelegateNotDeliveredSummary'
+          description: >
+            Present only when at least one report from this child was refused at an inbox
+            cap and not saved (FR-013). Absent when nothing was ever refused. Counts
+            only; refused content is never kept.
+    DelegateNotDeliveredSummary:
+      $ref: ./components/schemas/DelegateNotDeliveredSummary.yaml
     DelegateRespondResponse:
       $ref: ./components/schemas/DelegateRespondResponse.yaml
     DelegatePeekResponse:

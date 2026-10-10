@@ -17380,6 +17380,36 @@ export interface components {
              * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WF
              */
             next_cursor?: string;
+            /** @description Present only when at least one report from this child was refused at an inbox cap and not saved (FR-013). Absent when nothing was ever refused. Counts only; refused content is never kept. */
+            not_delivered?: components["schemas"]["DelegateNotDeliveredSummary"];
+        };
+        /**
+         * DelegateNotDeliveredSummary
+         * @description Reports from this helper that were refused at an inbox cap and NOT saved (FR-013, #1211). Counts and the last refusal only; refused content is never kept.
+         */
+        DelegateNotDeliveredSummary: {
+            /**
+             * Format: int64
+             * @description Cumulative number of refused reports for this child session; never reset.
+             * @example 3
+             */
+            count: number;
+            /**
+             * @description Why the most recent report was refused.
+             * @example rate_limited
+             * @enum {string}
+             */
+            last_reason: "rate_limited" | "body_too_large" | "question_blocker_ceiling" | "unacked_cap";
+            /**
+             * @description SessionMessage kind of the last refused report.
+             * @example progress
+             */
+            last_kind: string;
+            /**
+             * Format: date-time
+             * @description When the last refusal happened.
+             */
+            last_at: string;
         };
         /**
          * DelegateRespondResponse
@@ -17821,11 +17851,11 @@ export interface components {
              */
             message_id: string;
             /**
-             * @description The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+             * @description The underlying SessionMessage kind, or `not_delivered` (FR-013): a server-authored line saying a child's report was refused at an inbox cap and not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
              * @example progress
              * @enum {string}
              */
-            kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond" | "goal_status";
+            kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond" | "goal_status" | "not_delivered";
             /**
              * @description Flattened display text (progress.text / checkpoint.summary / blocker.text / question.text / error.text / steer.text / respond.text), when the kind carries one.
              * @example Scanning pkg/plan for the write-set boundary...
@@ -26935,6 +26965,7 @@ export type DelegatePeekAction = components["schemas"]["DelegatePeekAction"];
 export type DelegateSessionResponse = components["schemas"]["DelegateSessionResponse"];
 export type DelegateStatusResponse = components["schemas"]["DelegateStatusResponse"];
 export type DelegateInboxResponse = components["schemas"]["DelegateInboxResponse"];
+export type DelegateNotDeliveredSummary = components["schemas"]["DelegateNotDeliveredSummary"];
 export type DelegateRespondResponse = components["schemas"]["DelegateRespondResponse"];
 export type DelegatePeekResponse = components["schemas"]["DelegatePeekResponse"];
 export type MessageParentRequest = components["schemas"]["MessageParentRequest"];

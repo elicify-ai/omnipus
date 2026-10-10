@@ -3410,6 +3410,7 @@ components:
             - steer
             - respond
             - goal_status
+            - not_delivered
         text:
           type: string
         pct:

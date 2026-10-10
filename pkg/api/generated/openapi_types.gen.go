@@ -2246,6 +2246,30 @@ func (e DelegateInboxActionAction) Valid() bool {
 	}
 }
 
+// Defines values for DelegateNotDeliveredSummaryLastReason.
+const (
+	DelegateNotDeliveredSummaryLastReasonBodyTooLarge           DelegateNotDeliveredSummaryLastReason = "body_too_large"
+	DelegateNotDeliveredSummaryLastReasonQuestionBlockerCeiling DelegateNotDeliveredSummaryLastReason = "question_blocker_ceiling"
+	DelegateNotDeliveredSummaryLastReasonRateLimited            DelegateNotDeliveredSummaryLastReason = "rate_limited"
+	DelegateNotDeliveredSummaryLastReasonUnackedCap             DelegateNotDeliveredSummaryLastReason = "unacked_cap"
+)
+
+// Valid indicates whether the value is a known member of the DelegateNotDeliveredSummaryLastReason enum.
+func (e DelegateNotDeliveredSummaryLastReason) Valid() bool {
+	switch e {
+	case DelegateNotDeliveredSummaryLastReasonBodyTooLarge:
+		return true
+	case DelegateNotDeliveredSummaryLastReasonQuestionBlockerCeiling:
+		return true
+	case DelegateNotDeliveredSummaryLastReasonRateLimited:
+		return true
+	case DelegateNotDeliveredSummaryLastReasonUnackedCap:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DelegatePeekActionAction.
 const (
 	DelegatePeekActionActionPeek DelegatePeekActionAction = "peek"
@@ -6161,6 +6185,7 @@ const (
 	MessageSubagentMessageKindError           MessageSubagentMessageKind = "error"
 	MessageSubagentMessageKindGoalStatus      MessageSubagentMessageKind = "goal_status"
 	MessageSubagentMessageKindHandback        MessageSubagentMessageKind = "handback"
+	MessageSubagentMessageKindNotDelivered    MessageSubagentMessageKind = "not_delivered"
 	MessageSubagentMessageKindProgress        MessageSubagentMessageKind = "progress"
 	MessageSubagentMessageKindQuestion        MessageSubagentMessageKind = "question"
 	MessageSubagentMessageKindRespond         MessageSubagentMessageKind = "respond"
@@ -6183,6 +6208,8 @@ func (e MessageSubagentMessageKind) Valid() bool {
 	case MessageSubagentMessageKindGoalStatus:
 		return true
 	case MessageSubagentMessageKindHandback:
+		return true
+	case MessageSubagentMessageKindNotDelivered:
 		return true
 	case MessageSubagentMessageKindProgress:
 		return true
@@ -9908,6 +9935,7 @@ const (
 	SessionDetailMessagesSubagentMessageKindError           SessionDetailMessagesSubagentMessageKind = "error"
 	SessionDetailMessagesSubagentMessageKindGoalStatus      SessionDetailMessagesSubagentMessageKind = "goal_status"
 	SessionDetailMessagesSubagentMessageKindHandback        SessionDetailMessagesSubagentMessageKind = "handback"
+	SessionDetailMessagesSubagentMessageKindNotDelivered    SessionDetailMessagesSubagentMessageKind = "not_delivered"
 	SessionDetailMessagesSubagentMessageKindProgress        SessionDetailMessagesSubagentMessageKind = "progress"
 	SessionDetailMessagesSubagentMessageKindQuestion        SessionDetailMessagesSubagentMessageKind = "question"
 	SessionDetailMessagesSubagentMessageKindRespond         SessionDetailMessagesSubagentMessageKind = "respond"
@@ -9930,6 +9958,8 @@ func (e SessionDetailMessagesSubagentMessageKind) Valid() bool {
 	case SessionDetailMessagesSubagentMessageKindGoalStatus:
 		return true
 	case SessionDetailMessagesSubagentMessageKindHandback:
+		return true
+	case SessionDetailMessagesSubagentMessageKindNotDelivered:
 		return true
 	case SessionDetailMessagesSubagentMessageKindProgress:
 		return true
@@ -16161,7 +16191,28 @@ type DelegateInboxResponse struct {
 
 	// NextCursor Opaque cursor to pass as since_cursor on the next drain.
 	NextCursor *string `json:"next_cursor,omitempty"`
+
+	// NotDelivered Reports from this helper that were refused at an inbox cap and NOT saved (FR-013, #1211). Counts and the last refusal only; refused content is never kept.
+	NotDelivered *DelegateNotDeliveredSummary `json:"not_delivered,omitempty"`
 }
+
+// DelegateNotDeliveredSummary Reports from this helper that were refused at an inbox cap and NOT saved (FR-013, #1211). Counts and the last refusal only; refused content is never kept.
+type DelegateNotDeliveredSummary struct {
+	// Count Cumulative number of refused reports for this child session; never reset.
+	Count int64 `json:"count"`
+
+	// LastAt When the last refusal happened.
+	LastAt time.Time `json:"last_at"`
+
+	// LastKind SessionMessage kind of the last refused report.
+	LastKind string `json:"last_kind"`
+
+	// LastReason Why the most recent report was refused.
+	LastReason DelegateNotDeliveredSummaryLastReason `json:"last_reason"`
+}
+
+// DelegateNotDeliveredSummaryLastReason Why the most recent report was refused.
+type DelegateNotDeliveredSummaryLastReason string
 
 // DelegatePeekAction `delegate` tool call, `action: peek` (ADR-053 §5.1). AGENT-callable, read-only Agent-View parity read WITHOUT attach — inspects the child's latest checkpoint/progress without steering, without consuming the child's unacked ceiling, and without enqueuing anything on the child's steering queue (m8). Distinct from the human-facing FE-5 `ActivityPanel -> Agent-View` render surface, which is a separate UI concept, not this tool action.
 type DelegatePeekAction struct {
@@ -20766,7 +20817,7 @@ type Message struct {
 		// CreatedAt RFC3339 timestamp the underlying message was created.
 		CreatedAt time.Time `json:"created_at"`
 
-		// Kind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+		// Kind The underlying SessionMessage kind, or `not_delivered` (FR-013): a server-authored line saying a child's report was refused at an inbox cap and not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
 		Kind MessageSubagentMessageKind `json:"kind"`
 
 		// MessageId The underlying SessionMessage's `message_id` — correlates this live ping with the full record fetchable via `delegate.inbox`/`peek`.
@@ -21034,7 +21085,7 @@ type MessageSubagentEndStatus string
 // MessageSubagentEndType defines model for Message.SubagentEnd.Type.
 type MessageSubagentEndType string
 
-// MessageSubagentMessageKind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+// MessageSubagentMessageKind The underlying SessionMessage kind, or `not_delivered` (FR-013): a server-authored line saying a child's report was refused at an inbox cap and not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
 type MessageSubagentMessageKind string
 
 // MessageSubagentMessageType defines model for Message.SubagentMessage.Type.
@@ -24346,7 +24397,7 @@ type SessionDetail struct {
 			// CreatedAt RFC3339 timestamp the underlying message was created.
 			CreatedAt time.Time `json:"created_at"`
 
-			// Kind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+			// Kind The underlying SessionMessage kind, or `not_delivered` (FR-013): a server-authored line saying a child's report was refused at an inbox cap and not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
 			Kind SessionDetailMessagesSubagentMessageKind `json:"kind"`
 
 			// MessageId The underlying SessionMessage's `message_id` — correlates this live ping with the full record fetchable via `delegate.inbox`/`peek`.
@@ -24750,7 +24801,7 @@ type SessionDetailMessagesSubagentEndStatus string
 // SessionDetailMessagesSubagentEndType defines model for SessionDetail.Messages.SubagentEnd.Type.
 type SessionDetailMessagesSubagentEndType string
 
-// SessionDetailMessagesSubagentMessageKind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+// SessionDetailMessagesSubagentMessageKind The underlying SessionMessage kind, or `not_delivered` (FR-013): a server-authored line saying a child's report was refused at an inbox cap and not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
 type SessionDetailMessagesSubagentMessageKind string
 
 // SessionDetailMessagesSubagentMessageType defines model for SessionDetail.Messages.SubagentMessage.Type.

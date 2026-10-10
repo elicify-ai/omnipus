@@ -278,7 +278,8 @@ type Message = {
           | "handback"
           | "steer"
           | "respond"
-          | "goal_status";
+          | "goal_status"
+          | "not_delivered";
         text?: string | undefined;
         pct?: number | undefined;
         correlation_id?: string | undefined;
@@ -3105,6 +3106,17 @@ type DelegateInboxResponse = {
   messages: Array<SessionMessage>;
   has_more: boolean;
   next_cursor?: string | undefined;
+  not_delivered?: DelegateNotDeliveredSummary | undefined;
+};
+type DelegateNotDeliveredSummary = {
+  count: number;
+  last_reason:
+    | "rate_limited"
+    | "body_too_large"
+    | "question_blocker_ceiling"
+    | "unacked_cap";
+  last_kind: string;
+  last_at: string;
 };
 type DelegateRespondResponse = {
   acknowledged: boolean;
@@ -3675,6 +3687,7 @@ export const Message: z.ZodType<Message> = z.object({
         "steer",
         "respond",
         "goal_status",
+        "not_delivered",
       ]),
       text: z.string().optional(),
       pct: z.number().int().gte(0).lte(100).optional(),
@@ -7545,11 +7558,24 @@ export const DelegateStatusResponse: z.ZodType<DelegateStatusResponse> =
       .optional(),
     unacked_count: z.number().int().gte(0),
   });
+export const DelegateNotDeliveredSummary: z.ZodType<DelegateNotDeliveredSummary> =
+  z.object({
+    count: z.number().int().gte(1),
+    last_reason: z.enum([
+      "rate_limited",
+      "body_too_large",
+      "question_blocker_ceiling",
+      "unacked_cap",
+    ]),
+    last_kind: z.string().min(1),
+    last_at: z.string().datetime({ offset: true }),
+  });
 export const DelegateInboxResponse: z.ZodType<DelegateInboxResponse> = z.object(
   {
     messages: z.array(SessionMessage),
     has_more: z.boolean(),
     next_cursor: z.string().optional(),
+    not_delivered: DelegateNotDeliveredSummary.optional(),
   }
 );
 export const DelegateRespondResponse: z.ZodType<DelegateRespondResponse> =
@@ -16730,7 +16756,7 @@ export const SubagentMessageFrame = z
     child_session_id: z.string().optional(),
     span_id: z.string().min(1),
     message_id: z.string().min(1),
-    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond", "goal_status"]),
+    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond", "goal_status", "not_delivered"]),
     text: z.string().optional(),
     pct: z.number().int().min(0).max(100).optional(),
     correlation_id: z.string().optional(),
