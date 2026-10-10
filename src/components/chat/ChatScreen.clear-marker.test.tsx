@@ -146,7 +146,7 @@ describe('ChatScreen — the /clear marker row and other system rows (FR-030/031
   it('renders the clear marker as a quiet divider with the marker text, not a chat bubble', async () => {
     seedBucket([
       { id: 'u1', role: 'user', status: 'done', content: 'what changed?', timestamp: new Date().toISOString() },
-      { id: 'clear-1', role: 'system', type: 'system', status: 'done', content: CLEAR_MARKER_TEXT, timestamp: new Date().toISOString() },
+      { id: 'clear-1', role: 'system', status: 'done', content: CLEAR_MARKER_TEXT, timestamp: new Date().toISOString() },
     ])
 
     let container!: HTMLElement
@@ -164,7 +164,7 @@ describe('ChatScreen — the /clear marker row and other system rows (FR-030/031
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     try {
       seedBucket([
-        { id: 'sys-unknown-1', role: 'system', type: 'system', status: 'done', content: 'Some future system marker nobody told the SPA about.', timestamp: new Date().toISOString() },
+        { id: 'sys-unknown-1', role: 'system', status: 'done', content: 'Some future system marker nobody told the SPA about.', timestamp: new Date().toISOString() },
       ])
 
       let container!: HTMLElement
@@ -185,8 +185,8 @@ describe('ChatScreen — the /clear marker row and other system rows (FR-030/031
 
   it('keeps the marker divider and an unknown system row distinct in the same thread', async () => {
     seedBucket([
-      { id: 'clear-1', role: 'system', type: 'system', status: 'done', content: CLEAR_MARKER_TEXT, timestamp: new Date().toISOString() },
-      { id: 'sys-unknown-2', role: 'system', type: 'system', status: 'done', content: 'Another unknown marker.', timestamp: new Date().toISOString() },
+      { id: 'clear-1', role: 'system', status: 'done', content: CLEAR_MARKER_TEXT, timestamp: new Date().toISOString() },
+      { id: 'sys-unknown-2', role: 'system', status: 'done', content: 'Another unknown marker.', timestamp: new Date().toISOString() },
     ])
 
     let container!: HTMLElement
@@ -205,7 +205,7 @@ describe('ChatScreen — the /clear marker row and other system rows (FR-030/031
     seedBucket([
       { id: 'u1', role: 'user', status: 'done', content: '/clear', timestamp: new Date().toISOString() },
       { id: 'a1', role: 'assistant', status: 'done', content: SUCCESS_REPLY, timestamp: new Date().toISOString() },
-      { id: 'clear-1', role: 'system', type: 'system', status: 'done', content: CLEAR_MARKER_TEXT, timestamp: new Date().toISOString() },
+      { id: 'clear-1', role: 'system', status: 'done', content: CLEAR_MARKER_TEXT, timestamp: new Date().toISOString() },
     ])
 
     let container!: HTMLElement

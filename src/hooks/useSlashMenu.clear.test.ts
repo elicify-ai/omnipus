@@ -92,9 +92,12 @@ vi.mock('@/lib/api', async (importOriginal) => {
 function makeComposerRuntime(text = '') {
   return {
     getState: () => ({ text }),
-    // Mirrors the real runtime: setText updates the composer core's text, so
-    // a later getState() reads back what was set.
-    setText: vi.fn((value: string) => { text = value }),
+    // The real setText writes the composer core's text; here the tests that
+    // need the written value assert the setText call argument directly (the
+    // design-system ts-colors scanner cannot statically clear a
+    // closure-mutating mock implementation, and the audit refuses to
+    // baseline it).
+    setText: vi.fn(),
     addAttachment: vi.fn(),
     subscribe: vi.fn(() => vi.fn()),
     send: vi.fn(),
@@ -182,7 +185,9 @@ describe('useSlashMenu — typed /clear goes to the server (FR-030/031)', () => 
 
     expect(startNewSession).not.toHaveBeenCalled()
     expect(composerRuntime.send).toHaveBeenCalledTimes(1)
-    expect((composerRuntime.getState() as { text: string }).text).toBe('/clear')
+    // The label handed to the runtime is exactly the server command — the
+    // text the real runtime sends on the wire.
+    expect(composerRuntime.setText).toHaveBeenCalledWith('/clear')
     expect(result.current.showGhostText).toBe(false)
   })
 
@@ -194,7 +199,7 @@ describe('useSlashMenu — typed /clear goes to the server (FR-030/031)', () => 
 
     let intercepted = true
     act(() => { intercepted = result.current.interceptClientCommand() })
-    expect(intercepted).toBe(true, 'held while the command list is in flight')
+    expect(intercepted).toBe(true)
     expect(composerRuntime.send).not.toHaveBeenCalled()
 
     commandsQueryIsLoading = false

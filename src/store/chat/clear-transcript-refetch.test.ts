@@ -30,9 +30,9 @@ const MARKER_TEXT = 'Conversation context cleared'
 // The fresh server projection a post-clear re-read returns: the /clear
 // command reply and the ONE chat-view marker entry.
 const FRESH_PROJECTION: Message[] = [
-  { id: 'u-clear', role: 'user', content: '/clear', timestamp: '2026-10-10T00:00:00Z', agent_id: 'jim', status: 'ok' },
-  { id: 'a-reply', role: 'assistant', content: 'Context cleared. The conversation and its history are kept; the assistant continues from here with a fresh context.', timestamp: '2026-10-10T00:00:01Z', agent_id: 'jim', status: 'ok' },
-  { id: 'clear-marker-1', role: 'system', type: 'system', content: MARKER_TEXT, timestamp: '2026-10-10T00:00:02Z', agent_id: 'jim', status: 'ok' },
+  { id: 'u-clear', role: 'user', content: '/clear', timestamp: '2026-10-10T00:00:00Z', agentId: 'jim', status: 'done' },
+  { id: 'a-reply', role: 'assistant', content: 'Context cleared. The conversation and its history are kept; the assistant continues from here with a fresh context.', timestamp: '2026-10-10T00:00:01Z', agentId: 'jim', status: 'done' },
+  { id: 'clear-marker-1', role: 'system', content: MARKER_TEXT, timestamp: '2026-10-10T00:00:02Z', agentId: 'jim', status: 'done' },
 ]
 
 let sentFrames: unknown[] = []
