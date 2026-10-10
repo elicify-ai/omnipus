@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -73,6 +74,8 @@ func launchSessionType(kind steer.OriginKind) session.UnifiedSessionType {
 		return session.SessionTypeChat
 	case steer.OriginKindChannel:
 		return session.SessionTypeChannel
+	case steer.OriginKindMain:
+		return session.SessionTypeMain
 	case steer.OriginKindScheduled:
 		return session.SessionTypeScheduled
 	case steer.OriginKindHeartbeat:
@@ -153,6 +156,25 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 	if !ok {
 		return steer.LaunchResult{}, steer.ErrAgentUnknown
 	}
+	// Resolve the target's execution kind ONCE, through the shared gate, and
+	// carry that outcome through this whole launch: it decides the
+	// message_parent exemption below, it is stamped onto the child's
+	// LifecycleRecord.Is3P (the field every 3P refusal in pkg/tools reads —
+	// executeSteer/message_parent/delegate_redirect/…, see
+	// session.LifecycleRecord.Is3P), and it is the same resolution the runtime
+	// body dispatch performs (steer_turn_body.go::runSteeredTurnBody). One
+	// resolution, three consumers — never a second, report-only guess, and
+	// never a silent native fallback: an unresolvable kind (reserved
+	// remote-a2a, or anything unknown) refuses the launch here, before any
+	// write, exactly as the pre-ADR-091 spawnSubTurn failed such a dispatch
+	// cleanly.
+	targetDispatchKind, targetDispatchErr := runner.ResolveDispatch(executorConfigOf(targetAgent))
+	if targetDispatchErr != nil {
+		return steer.LaunchResult{}, fmt.Errorf(
+			"steer: launch: agent %q has an unusable executor configuration: %w",
+			req.TargetAgentID, targetDispatchErr)
+	}
+	targetIs3P := targetDispatchKind == runner.DispatchKindExternalCLI
 	// ADR-072 D9/FR-050/FR-053/FR-054: requested_skill is "a hard request,
 	// not a hint" (pkg/tools/delegate.go::Parameters). Resolved here, on the
 	// real launch path, BEFORE any write below (launchOrdinaryRoot/
@@ -184,7 +206,7 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 	// delegate front door is checked: other origins (task runs, chat, ...)
 	// report through other surfaces. External-CLI targets deliver through the
 	// drained CLI stream, not the message_parent tool, so they are exempt.
-	if req.Origin.Kind == steer.OriginKindDelegate && !l.al.GetRegistry().IsExternalCLI(req.TargetAgentID) {
+	if req.Origin.Kind == steer.OriginKindDelegate && !targetIs3P {
 		// Resolve through the same global x agent resolution the runtime tool
 		// filter uses (exact and wildcard entries, strictest wins). Only a
 		// RESOLVED deny refuses: a nil snapshot, or one with no coverage for
@@ -213,13 +235,13 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 	sessionType := launchSessionType(req.Origin.Kind)
 
 	if req.SteeringSessionID == "" {
-		return l.launchOrdinaryRoot(sessions, lifecycle, req, title, sessionType)
+		return l.launchOrdinaryRoot(sessions, lifecycle, req, title, sessionType, targetIs3P)
 	}
 	// #891: the launching tool's ctx carries AutoDenyAsk when the parent runs
 	// unattended (task/trigger/headless). The child's turn is rebuilt later from
 	// its lifecycle record on a detached context, so the posture is persisted
 	// ON that record, in the launch's own write (reconstructSteeredTurn reads it).
-	result, err := l.launchSteered(sessions, lifecycle, req, title, sessionType, tools.ToolAutoDenyAsk(ctx))
+	result, err := l.launchSteered(ctx, sessions, lifecycle, req, title, sessionType, tools.ToolAutoDenyAsk(ctx), targetIs3P)
 	if err == nil {
 		l.inheritDelegatePermissions(lifecycle, req.SteeringSessionID, result.SessionID)
 		l.publishSteeredLaunch(req, result)
@@ -257,8 +279,8 @@ func (l *SteerLauncher) Launch(ctx context.Context, req steer.LaunchRequest) (st
 //
 // Reads the child's own record rather than threading a second value through
 // LaunchResult: ParentAgentID is exactly the value launchSteered resolved
-// and persisted under the parent's own record lock (steererMeta.
-// ActiveAgentID at launch time), so this reads the committed truth instead
+// and persisted under the parent's own record lock (steererMeta.AgentID, the
+// immutable owner, at launch time), so this reads the committed truth instead
 // of re-resolving a possibly-stale copy. Best-effort, matching
 // publishSteeredLaunch's own lifecycle.Load immediately below it: a read
 // failure here leaves the child on the global Auto default
@@ -342,6 +364,7 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 	req steer.LaunchRequest,
 	title string,
 	sessionType session.UnifiedSessionType,
+	is3P bool,
 ) (steer.LaunchResult, error) {
 	meta, identityErr := sessions.NewSession(sessionType, "", req.TargetAgentID)
 	if identityErr != nil {
@@ -383,13 +406,18 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 		WorkspaceID:    req.WorkspaceID,
 		AgentID:        req.TargetAgentID,
 		Origin:         &origin,
+		InitiatedBy:    cloneInitiatedBy(req.Initiator),
+		// Stamped from the target's resolved executor kind, not a
+		// report-only re-check: this record IS the session's identity for
+		// every later 3P refusal and lifecycle projection.
+		Is3P: is3P,
 	}
 	if persistErr := lifecycle.Persist(rec); persistErr != nil {
 		rollbackGoal()
 		rollback()
 		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: edge: %w", steer.ErrStoreWrite, persistErr)
 	}
-	return steer.LaunchResult{SessionID: childID, Generation: 1}, nil
+	return steer.LaunchResult{SessionID: childID, Generation: 1, Is3P: is3P}, nil
 }
 
 // launchSteered is Launch's steered path (I-1): the child's record is
@@ -403,12 +431,14 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 // records are loaded before the callback because lifecycle shard locks are
 // not re-entrant; the callback revalidates the direct edge before publishing.
 func (l *SteerLauncher) launchSteered(
+	ctx context.Context,
 	sessions *session.UnifiedStore,
 	lifecycle *session.LifecycleStore,
 	req steer.LaunchRequest,
 	title string,
 	sessionType session.UnifiedSessionType,
 	unattended bool,
+	is3P bool,
 ) (steer.LaunchResult, error) {
 	if req.WorkspaceID != "" || req.Owner != "" {
 		return steer.LaunchResult{}, fmt.Errorf(
@@ -457,7 +487,7 @@ func (l *SteerLauncher) launchSteered(
 			// store invariant text); the tool layer maps it to D5's plain
 			// sentence telling the model a new message resumes the
 			// conversation.
-			if parentRec.Terminal() || parentRec.Stopped() {
+			if (parentRec.Terminal() || parentRec.Stopped()) && !isMainTaskChildLaunch(req) {
 				// Gate SFH#6: a session whose most recent revive attempt itself
 				// failed is a different refusal state from a session that is
 				// merely stopped. The standard D5 sentence tells the user to
@@ -478,13 +508,19 @@ func (l *SteerLauncher) launchSteered(
 				return nil, fmt.Errorf("steer: launch: %w: resolve steering session %q: %w",
 					steer.ErrInvalidEdge, req.SteeringSessionID, metaErr)
 			}
-			parentAgentID := strings.TrimSpace(steererMeta.ActiveAgentID)
-			if parentAgentID == "" && l.al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID() {
-				return nil, fmt.Errorf("steer: launch: %w: delegating agent identity is empty", steer.ErrInvalidEdge)
-			}
+			// The delegating agent is the steering session's IMMUTABLE owner,
+			// AgentID — not ActiveAgentID. session-core U1 / DEL-11 deleted the
+			// mutable handover owner from session creation (see
+			// createSessionLocked's DEL-11 note), so ActiveAgentID is empty on
+			// any session that was never switched and this read made the edge
+			// look like it had no delegating agent.
+			parentAgentID := strings.TrimSpace(steererMeta.AgentID)
+			// Founder ruling 2026-10-10: the delegation policy always applies.
+			// A launch with no identified delegating agent cannot be matched
+			// against any caller->target edge, so it is refused here, before
+			// anything is created. No configuration value changes this.
 			if parentAgentID == "" {
-				logger.WarnCF("agent", "steer: launch: accepting empty parent agent identity by operator configuration",
-					map[string]any{"session_id": req.SteeringSessionID, "config": "tools.delegate.require_parent_agent_id"})
+				return nil, fmt.Errorf("steer: launch: %w: delegating agent identity is empty", steer.ErrInvalidEdge)
 			}
 			workspaceID := steererMeta.WorkspaceID
 			reportingChannel, reportingChatID := reportingTargetFor(steererMeta, req.SteeringSessionID)
@@ -496,9 +532,19 @@ func (l *SteerLauncher) launchSteered(
 				initializeOrdinaryRootRecord(parentRec, steererMeta)
 			}
 
-			remainingDepth := l.startingRemainingDepth(parentRec, req.TargetAgentID, parentDepth)
+			remainingDepth, depthErr := l.startingRemainingDepth(ctx, parentRec, req.TargetAgentID, parentDepth, req.Origin.Kind)
+			if depthErr != nil {
+				return nil, depthErr
+			}
 			if remainingDepth <= 0 {
 				return nil, steer.ErrDepthExceeded
+			}
+			childRemaining := remainingDepth - 1
+			if req.Initiator != nil && req.Initiator.Authorization.RemainingDepth < childRemaining {
+				// An agent-initiated task run keeps the tighter onward budget the
+				// delegation edge left it (authorizeInitiatedRun), even though a
+				// creating chat is its steering parent.
+				childRemaining = req.Initiator.Authorization.RemainingDepth
 			}
 
 			steeredBy := &session.SteeredBy{
@@ -511,7 +557,7 @@ func (l *SteerLauncher) launchSteered(
 				},
 				Authorization: session.Authorization{
 					Mode:           launchAuthorizationMode(req.Origin.Kind),
-					RemainingDepth: remainingDepth - 1,
+					RemainingDepth: childRemaining,
 				},
 				Limits:         req.Limits,
 				ToolExclusions: req.ToolExclusions,
@@ -524,7 +570,7 @@ func (l *SteerLauncher) launchSteered(
 				return nil, err
 			}
 			var goalErr error
-			goalID, goalErr = l.createLaunchGoal(req, childID, title, steererMeta.ActiveAgentID)
+			goalID, goalErr = l.createLaunchGoal(req, childID, title, parentAgentID)
 			if goalErr != nil {
 				_ = sessions.DeleteSession(childID)
 				return nil, goalErr
@@ -546,6 +592,12 @@ func (l *SteerLauncher) launchSteered(
 				Origin:         &origin,
 				SteeredBy:      steeredBy,
 				Unattended:     unattended,
+				InitiatedBy:    cloneInitiatedBy(req.Initiator),
+				// Stamped from the target's resolved executor kind — the
+				// durable identity every 3P refusal and lifecycle projection
+				// reads, fixed for this child across reload, queued
+				// admission, Stop/revival and resume.
+				Is3P: is3P,
 			}, nil
 		},
 	)
@@ -559,7 +611,7 @@ func (l *SteerLauncher) launchSteered(
 		}
 		return steer.LaunchResult{}, pubErr
 	}
-	return steer.LaunchResult{SessionID: childID, Generation: resultGen}, nil
+	return steer.LaunchResult{SessionID: childID, Generation: resultGen, Is3P: is3P}, nil
 }
 
 // steerReportingSelfChannel is the fallback Channel a steered session's
@@ -607,6 +659,16 @@ func reportingTargetFor(steererMeta *session.UnifiedMeta, steeringSessionID stri
 		return steererMeta.Channel, steererMeta.PeerID
 	}
 	return steerReportingSelfChannel, steeringSessionID
+}
+
+// cloneInitiatedBy copies an initiator so a stored record never aliases the
+// request's value.
+func cloneInitiatedBy(ib *session.InitiatedBy) *session.InitiatedBy {
+	if ib == nil {
+		return nil
+	}
+	c := *ib
+	return &c
 }
 
 func launchAuthorizationMode(kind steer.OriginKind) session.AuthorizationMode {
@@ -804,41 +866,86 @@ func (l *SteerLauncher) walkVerifiedRoot(steeringSessionID string, steererRec *s
 
 // startingRemainingDepth resolves the budget available at the steering
 // session before minting its child. The new edge and the performance ceiling
-// use the shared precedence function; an inherited budget can only tighten
-// that result. parentDepth is verified by the ancestor walk before the parent
-// record lock is taken.
-func (l *SteerLauncher) startingRemainingDepth(steererRec *session.LifecycleRecord, targetAgentID string, parentDepth int) int {
+// use the shared precedence function (delegationBudget); an inherited onward
+// budget (the steering record's OnwardBudget: its steering edge's and its
+// initiator's RemainingDepth) can only tighten that result. parentDepth is
+// verified by the ancestor walk before the parent record lock is taken.
+//
+// Only a DELEGATE-origin launch is graph-gated here. The graph is the same one
+// the delegation gate resolved for this turn — resolveEffectiveWorkspaceID
+// (loop_delegation.go), which falls back to the is_default workspace when the
+// turn is unbound — never a skip, and never the steering session's own
+// recorded workspace. The budget must never be WIDENED between the gate and
+// the launch, so every failure to locate and verify the caller→target edge
+// FAILS CLOSED (the launch is refused with steer.ErrInvalidEdge): the
+// governing workspace cannot be resolved, its delegation graph is unreadable,
+// or no caller→target edge exists. There is no self-target exemption: a
+// delegate to oneself needs the ordinary self-edge.
+//
+// A TASK-origin launch is not authorized here. An agent-initiated task run
+// (run_task, execute_plan) was authorized by AgentLoop.authorizeInitiatedRun
+// inside the task executor, with the live graph, before the launch, and its
+// restricted onward budget travels on LaunchRequest.Initiator; a run a person
+// or the scheduler started is not delegation and takes the global budget.
+func (l *SteerLauncher) startingRemainingDepth(
+	ctx context.Context,
+	steererRec *session.LifecycleRecord,
+	targetAgentID string,
+	parentDepth int,
+	originKind steer.OriginKind,
+) (int, error) {
 	globalMaxDepth := 0
 	if cfg := l.al.GetConfig(); cfg != nil {
 		configured, depthOK := configuredDelegationDepth(cfg.Performance, "launch depth budget")
 		if !depthOK {
 			// No delegation budget on an invalid limit, matching the gate's
 			// denial (and the Depth <= 0 edge case below).
-			return 0
+			return 0, nil
 		}
 		globalMaxDepth = configured
 	}
-	depthCap := resolveEffectiveDelegationDepth(nil, globalMaxDepth)
-	if steererRec.WorkspaceID != "" && steererRec.AgentID != "" && targetAgentID != "" {
-		if edges, err := workspace.ReadDelegation(omnipusHome(), steererRec.WorkspaceID); err == nil {
-			for i := range edges {
-				edge := &edges[i]
-				if edge.FromAgent != steererRec.AgentID || edge.ToAgent != targetAgentID {
-					continue
-				}
-				if edge.Depth != nil && *edge.Depth <= 0 {
-					return 0
-				}
-				depthCap = resolveEffectiveDelegationDepth(edge.Depth, globalMaxDepth)
-				break
+	var edgeDepth *int
+
+	if originKind == steer.OriginKindDelegate {
+		wsID, denial := resolveEffectiveWorkspaceID(ctx, targetAgentID)
+		if denial != nil {
+			// FAIL CLOSED: no governing workspace to read is a closed graph.
+			return 0, fmt.Errorf("steer: launch: %w: %s", steer.ErrInvalidEdge, denial.Reason)
+		}
+		edges, err := workspace.ReadDelegation(omnipusHome(), wsID)
+		if err != nil {
+			// FAIL CLOSED: an unreadable graph is a closed graph.
+			return 0, fmt.Errorf("steer: launch: %w: workspace %q delegation graph unreadable: %w",
+				steer.ErrInvalidEdge, wsID, err)
+		}
+		matched := false
+		for i := range edges {
+			edge := &edges[i]
+			if edge.FromAgent != steererRec.AgentID || edge.ToAgent != targetAgentID {
+				continue
 			}
+			matched = true
+			if edge.Depth != nil && *edge.Depth <= 0 {
+				return 0, nil
+			}
+			edgeDepth = edge.Depth
+			break
+		}
+		// A Delegate launch reached the launcher only because the gate found a
+		// caller→target edge; a missing edge here means the graph changed
+		// between the gate and this read. Fail closed rather than widen to the
+		// global cap.
+		if !matched {
+			return 0, fmt.Errorf("steer: launch: %w: no delegation edge %s→%s in workspace %q",
+				steer.ErrInvalidEdge, steererRec.AgentID, targetAgentID, wsID)
 		}
 	}
-	available := depthCap - parentDepth
-	if steererRec.SteeredBy != nil && steererRec.SteeredBy.Authorization.RemainingDepth < available {
-		available = steererRec.SteeredBy.Authorization.RemainingDepth
+
+	var inherited *int
+	if b, ok := steererRec.OnwardBudget(); ok {
+		inherited = &b
 	}
-	return available
+	return delegationBudget(edgeDepth, globalMaxDepth, parentDepth, inherited), nil
 }
 
 // Dispatch implements steer.SessionLauncher (I-2/I-3): a thin delegate onto
@@ -1104,7 +1211,10 @@ func (al *AgentLoop) runDispatchedSteeredTurn(rec *session.LifecycleRecord, ts *
 
 	runCtx, cancel := steeredTurnRunContext(context.Background(), rec)
 	defer cancel()
-	result, runErr := al.runTurn(runCtx, ts)
+	// The body is chosen by the target's own dispatch kind (steer_turn_body.go):
+	// a native delegate runs al.runTurn, an external-CLI delegate drives the
+	// shared CLI runner instead of silently running the native loop.
+	result, runErr := al.runSteeredTurnBody(runCtx, rec, ts)
 	finalAudience := al.audienceFor(runCtx, steer.BoundaryFinalReply, sessionID)
 	ts, result, runErr = al.drainSteeredTurn(runCtx, rec, ts, result, runErr)
 	if runErr == nil && result.finalContent != "" && finalAudience == steer.AudienceUser {
@@ -1163,6 +1273,22 @@ func steeredTurnRunContext(base context.Context, rec *session.LifecycleRecord) (
 // pathological shape without ever throwing away a caller's accepted
 // instruction.
 func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.LifecycleRecord, gen int, result turnResult, runErr error) {
+	// N6: the whole steered episode is over once this exit path runs (the turn
+	// has exited AND drainSteeredTurn has emptied the steering scope), so release
+	// the retained external-CLI driver — and its RunOptions snapshot — here. A
+	// pending continuation keeps it (releaseExternalRunIfIdle re-checks the
+	// scope), and a follow-up after release refuses visibly (N5/N7).
+	// NEW-6: first retire the revival hold bound to THIS turn's execution — a
+	// turn that failed before reaching the holder never consumed it — then
+	// release (retire re-runs the idle release). Another revival's hold (a later
+	// generation or another run id) keeps the driver.
+	defer func() {
+		claim := al.tsExecutionClaim(ts, rec.SessionID)
+		if claim.Generation == 0 {
+			claim.Generation = gen
+		}
+		al.retireExternalReservations(rec.SessionID, claim)
+	}()
 	// Stop ends the turn, not the session or its goal. In particular, do not
 	// spend the durable marker or write a "session ended" goal outcome here.
 	if ts.stopRequested.Load() || executionStopPending(ts.opts.executionDisposition) {
@@ -1220,4 +1346,16 @@ func (al *AgentLoop) disposeSteeredTurnResult(ts *turnState, rec *session.Lifecy
 	}
 	logger.WarnCF("agent", "steer: complete: bounded drain retry exhausted — no queued items remain",
 		map[string]any{"session_id": sessionID, "generation": gen, "attempts": continueDrainMaxRetries})
+}
+
+// isMainTaskChildLaunch is the FR-018 stopped-main exemption: a task-origin
+// launch whose steering session is the TARGET agent's own computed main may be
+// admitted under that main even while it is stopped. The exemption only lets the
+// child be published; it does not revive the main, write its state or dispatch
+// it (zero main-model wake), and the general stopped-parent guard stays for
+// every other launch — delegate helpers, extra-chat helpers, and tasks whose
+// parent is not the target's own main.
+func isMainTaskChildLaunch(req steer.LaunchRequest) bool {
+	_, agent, ok := session.SplitMainSessionID(req.SteeringSessionID)
+	return ok && req.Origin.Kind == steer.OriginKindTask && agent == req.TargetAgentID
 }

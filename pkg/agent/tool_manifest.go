@@ -59,9 +59,8 @@ const manifestBucketKeySep = "\x1f"
 
 // manifestBucketKey derives the loaded-tool bucket key for (agentID, session)
 // (ADR-071 D3 §4.6). It NARROWS manifestSessionID's session-only key by
-// prepending the acting agent's id, so a `switch_agent` within one session no
-// longer lets the incoming agent inherit the outgoing agent's loaded Tier 3
-// tools — closing the D3 x D4 interaction §4.6 documents in detail.
+// prepending the acting agent's id, so two agents in one session never share
+// loaded Tier 3 tools.
 //
 // This is a strict narrowing of manifestSessionID's key, never a widening:
 // ADR-057's invariant for manifestSessionID ("derives a bucket from the ids

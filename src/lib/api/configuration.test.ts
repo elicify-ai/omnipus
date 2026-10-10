@@ -10,6 +10,8 @@ import { ConfigurationSaveError } from './configuration'
 const revision = 'a'.repeat(64)
 const agent = {
   revision, id: 'mia', name: 'Mia', type: 'core', locked: true,
+  // W1-5: required identity on the generated Agent response schema.
+  figure: 'Omnipus', role: 'general',
   needs_model: false, model: 'test-model', status: 'active', soul: 'fixed',
   timeout_seconds: 60, max_tool_iterations: 20, memory_enabled: true,
   // Issue #904: the effective limit's provenance is required on every Agent.

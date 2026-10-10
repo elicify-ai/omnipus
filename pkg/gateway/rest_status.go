@@ -76,10 +76,8 @@ func (a *restAPI) HandleDoctor(w http.ResponseWriter, r *http.Request) {
 				"info":   info,
 			},
 			"session_store": func() map[string]any {
-				for _, id := range a.agentLoop.GetRegistry().ListAgentIDs() {
-					if store := a.agentLoop.GetAgentStore(id); store != nil {
-						return map[string]any{"status": "ok", "available": true}
-					}
+				if a.agentLoop.GetSessionStore() != nil {
+					return map[string]any{"status": "ok", "available": true}
 				}
 				return map[string]any{"status": "degraded", "available": false}
 			}(),
@@ -197,7 +195,7 @@ func (a *restAPI) getUserContext(w http.ResponseWriter) {
 	_, content, err := config.ReadUserProfile()
 	if err != nil {
 		slog.Error("rest: read USER.md", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read USER.md: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not read the user profile", err)
 		return
 	}
 	jsonOK(w, gen.UserContextResponse{Content: content})
@@ -214,12 +212,12 @@ func (a *restAPI) putUserContext(w http.ResponseWriter, r *http.Request) {
 	userMDPath := config.UserProfilePath()
 	if err := os.MkdirAll(filepath.Dir(userMDPath), 0o700); err != nil {
 		slog.Error("rest: create USER.md parent", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write USER.md: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save the user profile", err)
 		return
 	}
 	if err := fileutil.WriteFileAtomic(userMDPath, []byte(req.Content), 0o600); err != nil {
 		slog.Error("rest: write USER.md", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write USER.md: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save the user profile", err)
 		return
 	}
 	jsonOK(w, gen.UserContextResponse(req))
@@ -373,7 +371,7 @@ func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 		if a.onboardingMgr != nil {
 			if err := a.onboardingMgr.CompleteOnboarding(); err != nil {
 				slog.Error("rest: could not persist onboarding completion", "error", err)
-				jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save onboarding state: %v", err))
+				jsonServerFailure(w, http.StatusInternalServerError, "could not save onboarding state", err)
 				return
 			}
 		}
@@ -690,7 +688,7 @@ func (a *restAPI) HandleStorageStats(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}); err != nil {
 		slog.Warn("rest: storage stats: walk failed", "error", err)
-		warnings = append(warnings, fmt.Sprintf("workspace size unavailable: %v", err))
+		warnings = append(warnings, "workspace size unavailable: the workspace could not be read; details are in the server log")
 	}
 
 	resp := map[string]any{

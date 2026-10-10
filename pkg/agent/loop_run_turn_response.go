@@ -945,7 +945,7 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
 			ThoughtSignature: thoughtSignature,
 		})
 	}
-	if err := rr.rq.ri.rf.rt.ts.appendWindowMessage(assistantMsg); err != nil {
+	if _, err := rr.rq.ri.rf.rt.ts.appendWindowMessage(assistantMsg, windowProducerAssistant); err != nil {
 		return err
 	}
 	rr.rq.ri.messages = append(rr.rq.ri.messages, assistantMsg)

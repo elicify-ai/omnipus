@@ -173,13 +173,13 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = withTurnState(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts)
 	// SEC-15: Inject agent ID so audit entries carry the agent identity.
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithAgentID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.agent.ID)
-	// Inject session key so switch_agent can address the session.
+	// Inject the session key so tools can address the session.
 	if rc.rx.rr.rq.ri.rf.rt.ts.sessionKey == "" {
-		logger.WarnCF("agent", "runTurn: sessionKey is empty — switch_agent tool will not work",
+		logger.WarnCF("agent", "runTurn: sessionKey is empty — session-addressed tools will not work",
 			map[string]any{"agent_id": rc.rx.rr.rq.ri.rf.rt.ts.agentID, "chat_id": rc.rx.rr.rq.ri.rf.rt.ts.chatID})
 	}
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithSessionKey(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.sessionKey)
-	// Inject the actual session ID (directory name) for the switch_agent tool.
+	// Inject the actual session ID (directory name) for session-addressed tools.
 	// The session key is a routing key; the transcript session ID is the
 	// real session directory (e.g., "session_01KP30THP63YFESKGECYYHYQWY").
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithTranscriptSessionID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.opts.TranscriptSessionID)
@@ -723,7 +723,7 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 			Content: rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage,
 			Media:   append([]string(nil), rp.rc.rx.rr.rq.ri.rf.rt.ts.media...),
 		}
-		if err := rp.rc.rx.rr.rq.ri.rf.rt.ts.appendWindowMessage(rootMsg); err != nil {
+		if _, err := rp.rc.rx.rr.rq.ri.rf.rt.ts.appendWindowMessage(rootMsg, windowProducerUser); err != nil {
 			rt := rp.rc.rx.rr.rq.ri.rf.rt
 			var status TurnEndStatus
 			rp.rc.ret0, status, rp.rc.ret1 = rt.al.contextWindowTurnExit(rt.ts, rt.iteration, rt.llmModel, err)
@@ -1270,7 +1270,7 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 		for i, pm := range ri.pendingMessages {
 			// Persist original compact media refs before using the resolved
 			// provider-only message. Failed admission cannot emit an applied receipt.
-			if err := ri.rf.rt.ts.appendWindowMessage(pm); err != nil {
+			if _, err := ri.rf.rt.ts.appendWindowMessage(pm, windowProducerUser); err != nil {
 				var status TurnEndStatus
 				ri.ret0, status, ri.ret1 = ri.rf.rt.al.contextWindowTurnExit(ri.rf.rt.ts, ri.rf.rt.iteration, ri.rf.rt.llmModel, err)
 				ri.turnStatus = status

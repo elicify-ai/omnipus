@@ -23,7 +23,7 @@ properties:
   session_id:
     type: string
     minLength: 1
-    maxLength: 128
+    maxLength: 255
     description: Session ID to attach to and catch up.
   since_seq:
     type: integer
@@ -57,3 +57,23 @@ properties:
       says — a numeric position from a previous gateway process carries no
       meaning against the current one's counter. Keep in sync by hand with
       contracts/asyncapi.yaml's inline AttachSessionFrame.
+  ack_attention:
+    type: boolean
+    default: false
+    description: >
+      Optional. True means this attach is an acknowledgement of what was
+      shown. It does not choose the bound. Defaults to false. A failed,
+      background, or reconnect attach does not write the seen mark.
+      Keep in sync by hand with contracts/asyncapi.yaml's inline
+      AttachSessionFrame.
+  attention_bound:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >
+      Optional integer on the acknowledging attach. The saved outcome/entry
+      order, not a new counter. When an acknowledgement carries this number,
+      the server advances the one shared seen mark to the lesser of this
+      number and the current saved order (never lowering it). Absent means do
+      not write the seen mark and do not substitute the current order. Keep in sync by hand with contracts/asyncapi.yaml's inline
+      AttachSessionFrame.

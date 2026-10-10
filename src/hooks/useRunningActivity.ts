@@ -41,8 +41,10 @@ import { useQuery } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat'
 import type { SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
-import { fetchAgents } from '@/lib/api'
+import { useSessionStore } from '@/store/session'
+import { fetchAgentActivityRuns, fetchAgents } from '@/lib/api'
 import type { Agent, ToolCall } from '@/lib/api'
+import type { AgentActivityRun } from '@/lib/api/generated/openapi-types'
 
 export type ActivityStatus = 'running' | 'success' | 'error' | 'cancelled' | 'interrupted' | 'timeout' | 'parked'
 
@@ -52,8 +54,8 @@ export interface AgentActivityItem {
   agentId?: string
   agentName: string
   agentType: 'native' | '3p' | 'unknown'
-  agentColor?: string
-  agentIcon?: string
+  /** The resolved agent, when known — its avatar is drawn with AgentMark. */
+  agent?: Agent
   taskLabel: string
   status: ActivityStatus
   durationMs?: number
@@ -164,7 +166,57 @@ export interface JudgeActivityItem {
   durationMs?: undefined
 }
 
-export type ActivityItem = AgentActivityItem | BashActivityItem | JudgeActivityItem
+/**
+ * FR-033: one open task or scheduler run for the active agent
+ * (GET /agents/{id}/activity-runs), shown even when the current chat spawned
+ * nothing. A `main` run is one MAIN row, never a task row plus a child row.
+ */
+export interface TaskRunActivityItem {
+  kind: 'task'
+  key: string // run_id
+  taskLabel: string
+  status: ActivityStatus
+  /** The run's session lifecycle: queued and waiting rows are not executing. */
+  runState: AgentActivityRun['state']
+  runKind: AgentActivityRun['kind']
+  mode: AgentActivityRun['mode']
+  taskId?: string
+  agentId?: string
+  agentName: string
+  /** The assignee, when known — its avatar is drawn with AgentMark. */
+  agent?: Agent
+  /** The run's own session - the target of the Open control. */
+  sessionId?: string
+  /** Provider-run tokens still available. null / undefined = UNKNOWN, never zero (BDD-10.3). */
+  availableTokens?: number | null
+  durationMs?: number
+}
+
+/**
+ * FR-013 / U4: a child's report the server refused at an inbox cap and did not
+ * save, from the span's `subagent_message` of kind `not_delivered`. Always
+ * terminal; a refusal is not an agent failure, so it never raises the failed pill.
+ */
+export interface NotDeliveredActivityItem {
+  kind: 'not_delivered'
+  key: string
+  taskLabel: string
+  status: ActivityStatus
+  agentId?: string
+  agentName: string
+  agent?: Agent
+  /** The server-authored line; never the refused body. */
+  text?: string
+  at: string
+  durationMs?: undefined
+}
+
+export type ActivityItem =
+  | AgentActivityItem
+  | BashActivityItem
+  | JudgeActivityItem
+  | TaskRunActivityItem
+  | NotDeliveredActivityItem
 
 export interface RunningActivity {
   runningCount: number
@@ -294,8 +346,7 @@ export function mergeAndCapFinished(candidates: FinishedCandidate[]): ActivityIt
 interface ResolvedAgent {
   agentName: string
   agentType: 'native' | '3p' | 'unknown'
-  agentColor?: string
-  agentIcon?: string
+  agent?: Agent
 }
 
 /** Resolve a span's agentId against the reused agents list. Never throws — unknown/missing agentId falls back to 'unknown'. */
@@ -306,56 +357,22 @@ function resolveAgent(agentId: string | undefined, agents: Agent[]): ResolvedAge
   return {
     agentName: agent.name,
     agentType: agent.type === 'subagent_3p' ? '3p' : 'native',
-    agentColor: agent.color,
-    agentIcon: agent.icon,
+    agent,
   }
 }
 
 /**
- * Resolve the agentId to display for a span — there are two sources of
- * truth and they disagree in one real case.
- *
- * For NATIVE (non-external-CLI) delegation to a specific named target
- * agent, the backend used to deliberately leave the WS frame's `agent_id`
- * as the PARENT's id, not the target's (pre-ADR-091, `pkg/agent/subturn.go`
- * — since deleted — only `DispatchKindExternalCLI` got `agent.ID`
- * reassigned; the comment there called native reassignment a larger
- * refactor out of that fix's scope). That made `span.agentId` correct for
- * untargeted delegation and for external-CLI dispatch, but wrong for
- * "delegate to agent X" when X is native — it would show the parent's
- * avatar/name instead of X's.
- *
- * ADR-091 fix lane RX-SUBTURN finding (comment-only; code unchanged):
- * today's backend emitter, `pkg/agent/steer_frames.go`'s
- * `deliverSubagentStart`/`deliverSubagentEnd`, sets
- * `SubagentStartFrame.AgentId`/`SubagentEndFrame.AgentId` from
- * `childRec.AgentID` (the real target agent) for EVERY delegation kind,
- * not just external-CLI — so the gap this workaround exists for may no
- * longer be present on the wire. This function's fallback logic is left
- * unchanged (out of scope for a comment-only lane); flagged for the
- * frontend team to verify whether the workaround below is still needed.
- *
- * Workaround: the originating `delegate` tool call (found via
- * `span.parentCallId`) carries the actual `agent_id` argument the calling
- * agent asked for, unaffected by the backend gap. Prefer that when present;
- * fall back to `span.agentId` when the call can't be found (e.g. scrolled
- * out of the loaded window) or didn't target a specific agent (untargeted
- * delegation — `span.agentId` is already correct there, no fix needed).
- *
- * `toolCallsById` must be keyed from BOTH the live flat `toolCalls` map AND
- * every finalized message's baked `message.tool_calls` (see the caller) —
- * the delegate call that started this span may belong to a turn that has
- * already finished and been baked out of the live map by the time this
- * runs, same root cause as groupBashSessions' doc comment below.
+ * Resolve the agentId to display for a span. The span's own stamped
+ * `agentId` — set by the start/end reducer from
+ * `SubagentStartFrame.AgentId`/`SubagentEndFrame.AgentId` (the real target
+ * agent for EVERY delegation kind, `pkg/agent/steer_frames.go`) — is the
+ * single source of truth (DEL-F26). The former originating-`delegate`-call
+ * `params.agent_id` workaround is removed: it existed only for a
+ * pre-ADR-091 emitter gap that always stamped the parent's id on the wire,
+ * which today's emitter no longer does, so `span.agentId` is correct for
+ * targeted and untargeted delegation alike.
  */
-function resolveSpanAgentId(span: SubagentSpan, toolCallsById: Record<string, ToolCall>): string | undefined {
-  const originatingCall = toolCallsById[span.parentCallId]
-  if (originatingCall?.tool === 'delegate') {
-    const targetAgentId = originatingCall.params?.agent_id
-    if (typeof targetAgentId === 'string' && targetAgentId.length > 0) {
-      return targetAgentId
-    }
-  }
+function resolveSpanAgentId(span: SubagentSpan): string | undefined {
   return span.agentId
 }
 
@@ -547,7 +564,35 @@ function groupBashSessions(orderedCalls: ToolCall[]): Map<string, BashSessionSta
 }
 
 // A delegation bracket can stay open across Stop/Resume (ADR-20260928 D2).
-// Prefer the current lifecycle; span.status is only a legacy fallback.
+// The lifecycle state is the ONLY running signal (DEL-F27): an open
+// `subagent_start` bracket with no `lifecycleState` yet (its `status` is
+// already 'running' from the bracket opening, before the child has actually
+// started — D7 table) must NOT count as running activity, and the former
+// guessed `span.status` fallback is removed. A missing/unknown state maps to
+// 'parked' — pending, not executing.
+/** Map one wire run onto its Activity row. Queued/waiting runs are parked, not executing. */
+function taskRunItem(run: AgentActivityRun, agents: Agent[]): TaskRunActivityItem {
+  const resolved = resolveAgent(run.agent_id, agents)
+  const startedAt = Date.parse(run.started_at)
+  return {
+    kind: 'task',
+    key: run.run_id,
+    taskLabel: run.mode === 'main' ? `MAIN · ${run.task_title}` : run.task_title,
+    status: run.state === 'running' ? 'running' : 'parked',
+    runState: run.state,
+    runKind: run.kind,
+    mode: run.mode,
+    taskId: run.task_id,
+    agentId: run.agent_id,
+    agentName: resolved.agentName,
+    agent: resolved.agent,
+    sessionId: run.session_id,
+    // The endpoint carries no token figure (descoped): unknown, never zero.
+    availableTokens: null,
+    durationMs: run.state === 'running' && !Number.isNaN(startedAt) ? Math.max(0, Date.now() - startedAt) : undefined,
+  }
+}
+
 function activityStatusForSpan(span: SubagentSpan): ActivityStatus {
   switch (span.lifecycleState) {
     case 'running': return 'running'
@@ -556,7 +601,7 @@ function activityStatusForSpan(span: SubagentSpan): ActivityStatus {
     case 'stopped': return 'parked'
     case 'completed': return 'success'
     case 'failed': return 'error'
-    default: return span.status
+    default: return 'parked'
   }
 }
 
@@ -573,6 +618,17 @@ export function useRunningActivity(): RunningActivity {
     staleTime: 30_000,
   })
 
+  // FR-033: the active agent's open task/scheduler runs. Polled while the
+  // activity surface is mounted; a failed poll leaves the last rows in place.
+  const activeAgentId = useSessionStore((s) => s.activeAgentId)
+  const { data: activityRuns } = useQuery({
+    queryKey: ['agent-activity-runs', activeAgentId],
+    queryFn: () => fetchAgentActivityRuns(activeAgentId as string),
+    enabled: !!activeAgentId,
+    refetchInterval: 5_000,
+    staleTime: 2_000,
+  })
+
   // 1Hz re-render tick so running-item elapsed time stays live. Mirrors the
   // interval-cleanup pattern in RateLimitIndicator.tsx (effect re-subscribes
   // on unmount only — no leaked timers).
@@ -585,23 +641,18 @@ export function useRunningActivity(): RunningActivity {
   const agentSpans: SubagentSpan[] = useMemo(() => messages.flatMap((m) => m.spans ?? []), [messages])
 
   // All tool calls the active session knows about, live turn plus every
-  // already-finalized (baked) turn — see groupBashSessions' and
-  // resolveSpanAgentId's doc comments for why the live flat `toolCalls` map
-  // alone isn't enough: `chat.ts` bakes a finished turn's tool calls into
-  // that message's own `tool_calls` array and clears the flat map, so
-  // anything keyed only off the live map loses track the instant a turn
-  // completes. Finalized messages are already in chronological order; the
-  // live map (always the newest, in-flight turn) is concatenated/merged last
-  // so it wins on any id collision (there shouldn't be one in practice).
+  // already-finalized (baked) turn — see groupBashSessions' doc comment for
+  // why the live flat `toolCalls` map alone isn't enough: `chat.ts` bakes a
+  // finished turn's tool calls into that message's own `tool_calls` array and
+  // clears the flat map, so anything keyed only off the live map loses track
+  // the instant a turn completes. Finalized messages are already in
+  // chronological order; the live map (always the newest, in-flight turn) is
+  // concatenated/merged last so it wins on any id collision (there shouldn't
+  // be one in practice).
   const allToolCalls = useMemo(
     () => [...messages.flatMap((m) => m.tool_calls ?? []), ...Object.values(toolCalls)],
     [messages, toolCalls],
   )
-  const toolCallsById = useMemo(() => {
-    const byId: Record<string, ToolCall> = {}
-    for (const tc of allToolCalls) byId[tc.id] = tc
-    return byId
-  }, [allToolCalls])
   const bashSessions = useMemo(() => groupBashSessions(allToolCalls), [allToolCalls])
 
   const running: ActivityItem[] = []
@@ -618,7 +669,7 @@ export function useRunningActivity(): RunningActivity {
   let finishedSeq = 0
 
   for (const span of agentSpans) {
-    const effectiveAgentId = resolveSpanAgentId(span, toolCallsById)
+    const effectiveAgentId = resolveSpanAgentId(span)
     const resolved = resolveAgent(effectiveAgentId, agents)
     const status = activityStatusForSpan(span)
     const isSpanRunning = status === 'running'
@@ -650,6 +701,29 @@ export function useRunningActivity(): RunningActivity {
     } else {
       finishedCandidates.push({ item, time: observeFinishedAt(span.spanId), seq: finishedSeq++ })
     }
+    if (span.notDelivered) {
+      const refusal: NotDeliveredActivityItem = {
+        kind: 'not_delivered',
+        key: `${span.spanId}:not_delivered`,
+        taskLabel: span.taskLabel,
+        status: 'cancelled',
+        agentId: effectiveAgentId,
+        agentName: resolved.agentName,
+        agent: resolved.agent,
+        text: span.notDelivered.text,
+        at: span.notDelivered.at,
+      }
+      const refusedAt = Date.parse(span.notDelivered.at)
+      finishedCandidates.push({ item: refusal, time: Number.isNaN(refusedAt) ? observeFinishedAt(refusal.key) : refusedAt, seq: finishedSeq++ })
+    }
+  }
+
+  // A MAIN run that is already this chat's child span is that span's row, not a
+  // second one (FR-033 "one MAIN row, no task+child duplicate").
+  const spawnedSessionIds = new Set(agentSpans.flatMap((s) => (s.childSessionId ? [s.childSessionId] : [])))
+  for (const run of activityRuns ?? []) {
+    if (run.session_id && spawnedSessionIds.has(run.session_id)) continue
+    running.push(taskRunItem(run, agents))
   }
 
   for (const [sessionId, session] of bashSessions) {

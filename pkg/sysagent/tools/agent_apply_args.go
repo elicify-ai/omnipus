@@ -12,14 +12,14 @@ import (
 
 var agentUpdateArgNames = map[string]struct{}{
 	"id": {}, "revision": {}, "name": {}, "description": {}, "soul": {},
-	"model": {}, "provider": {}, "fallback_models": {}, "color": {}, "icon": {},
+	"model": {}, "provider": {}, "fallback_models": {}, "color": {},
 	"max_tool_iterations": {}, "skills": {}, "mcp_servers": {}, "tool_policy_changes": {},
 	"memory_enabled": {}, "default": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
 }
 
 var agentCreateArgNames = map[string]struct{}{
-	"name": {}, "description": {}, "soul": {}, "model": {}, "color": {}, "icon": {},
+	"name": {}, "description": {}, "soul": {}, "model": {}, "color": {},
 	"agent_type": {}, "cli": {}, "cli_path": {}, "provider": {}, "fallback_models": {},
 	"heartbeat": {}, "max_tool_iterations": {}, "skills": {}, "mcp_servers": {},
 	"tool_policy_changes": {}, "memory_enabled": {}, "default": {}, "voice": {},
@@ -83,15 +83,6 @@ func applyIdentityAndModelArgs(a *config.AgentConfig, args map[string]any, defau
 			return err
 		}
 		a.Color = v
-		return nil
-	}); err != nil {
-		return err
-	}
-	if err := applyOptionalString(args, "icon", func(v string) error {
-		if err := validateAgentIcon(v); err != nil {
-			return err
-		}
-		a.Icon = v
 		return nil
 	}); err != nil {
 		return err

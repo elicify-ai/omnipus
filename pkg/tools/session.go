@@ -50,10 +50,6 @@ const (
 	// after a session-level cancel is distinguishable from a natural exit, an
 	// explicit action=kill, or a timeout.
 	StatusCanceled SessionStatus = "canceled"
-	// StatusExited is a legacy terminal value predating ADR-036's
-	// kill/timeout/canceled relabels; IsDone() still recognizes it for
-	// back-compat, but no current code path sets it.
-	StatusExited SessionStatus = "exited"
 )
 
 // PtyKeyMode represents arrow key encoding mode for PTY sessions.
@@ -127,12 +123,12 @@ type ProcessSession struct {
 // is the analogous relabel KillAllForSession applies for the RequestCancel
 // kill cascade (FR-B10/FR-B11), distinguishing a cancel-triggered kill from
 // both a natural exit and an explicit action=kill call. All are terminal
-// exactly like "done"/"exited" for every existing caller of IsDone.
+// exactly like "done" for every existing caller of IsDone.
 func (s *ProcessSession) IsDone() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch s.Status {
-	case StatusDone, StatusExited, StatusKilled, StatusTimeout, StatusCanceled:
+	case StatusDone, StatusKilled, StatusTimeout, StatusCanceled:
 		return true
 	default:
 		return false
@@ -184,7 +180,7 @@ func (s *ProcessSession) GetExitCode() int {
 
 // statusPriority ranks terminal SessionStatus values so KillAndRelabel can
 // tell a caller with a SPECIFIC terminal reason (canceled/killed/timeout)
-// apart from one with only a GENERIC fallback reason (done/exited — "no more
+// apart from one with only a GENERIC fallback reason (done — "no more
 // specific label to apply", see StatusDone's doc comment). Two independent
 // callers can legitimately race to be the one that transitions the SAME
 // ProcessSession out of StatusRunning — e.g. SessionManager.KillAll's
@@ -214,7 +210,7 @@ func statusPriority(s SessionStatus) int {
 	switch s {
 	case StatusKilled, StatusTimeout, StatusCanceled:
 		return 2 // a caller that knows WHY the session ended
-	case StatusDone, StatusExited:
+	case StatusDone:
 		return 1 // the generic fallback — no specific reason known
 	default: // StatusRunning, or any future/unrecognized value
 		return 0
@@ -255,7 +251,7 @@ func (s *ProcessSession) KillAndRelabel(status SessionStatus) error {
 		// session untouched" test — see statusPriority's doc comment —
 		// never reaches this branch at all; they stop at the pre-check).
 		// Default to the existing benign no-op UNLESS the racing writer only
-		// left the generic StatusDone/StatusExited fallback and THIS call
+		// left the generic StatusDone fallback and THIS call
 		// carries a more specific terminal reason: then correct the label in
 		// place rather than silently discarding it. The process itself is
 		// already terminated (or a kill for it is already in flight) by
@@ -749,6 +745,35 @@ func (sm *SessionManager) Remove(sessionID string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	delete(sm.sessions, sessionID)
+}
+
+// CountRunningBackgroundCommands counts background processes this chat
+// session owns that are still running. A child session's bash is not
+// included: the owner id is the session that started the command.
+// A nil manager returns 0; callers omit the wire field when no manager
+// is wired rather than reporting that 0.
+func (sm *SessionManager) CountRunningBackgroundCommands(ownerSessionID string) int {
+	if sm == nil || ownerSessionID == "" {
+		return 0
+	}
+	sm.mu.RLock()
+	matched := make([]*ProcessSession, 0)
+	for _, s := range sm.sessions {
+		if s != nil && s.Background && s.OwnerSessionID == ownerSessionID {
+			matched = append(matched, s)
+		}
+	}
+	sm.mu.RUnlock()
+	n := 0
+	for _, s := range matched {
+		s.mu.Lock()
+		running := s.Status == StatusRunning
+		s.mu.Unlock()
+		if running {
+			n++
+		}
+	}
+	return n
 }
 
 func (sm *SessionManager) List() []SessionInfo {

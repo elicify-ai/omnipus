@@ -562,8 +562,9 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 				ID:          string(sa.ID),
 				Name:        sa.Name,
 				Description: sa.Description,
+				Figure:      sa.Figure,
+				Role:        sa.Role,
 				Color:       sa.Color,
-				Icon:        sa.Icon,
 				Type:        config.AgentTypeSystem,
 				Locked:      true,
 				Default:     false,
@@ -621,12 +622,16 @@ func seedSystemAgents(cfg *config.Config, existing map[string]bool) bool {
 				a.Description = sa.Description
 				modified = true
 			}
-			if a.Color != sa.Color {
-				a.Color = sa.Color
+			if a.Figure != sa.Figure {
+				a.Figure = sa.Figure
 				modified = true
 			}
-			if a.Icon != sa.Icon {
-				a.Icon = sa.Icon
+			if a.Role != sa.Role {
+				a.Role = sa.Role
+				modified = true
+			}
+			if a.Color != sa.Color {
+				a.Color = sa.Color
 				modified = true
 			}
 			// Re-enforce MemoryEnabled=false on EVERY boot (ADR-052 FR-039):
@@ -748,8 +753,9 @@ func Judge() *CoreAgent {
 		Description: "Impartial acceptance-criteria evaluator for the Planning & Goals engine. " +
 			"Adjudicates as a real agent in a read-only verifier role, in its own session; " +
 			"not a chat persona.",
-		Color: "#64748B",
-		Icon:  "gavel",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#3B82F6",
 		// systemAgentSeed defines fixed capabilities; this constructor defines identity only.
 	}
 }
@@ -782,8 +788,9 @@ func PlanSupervisor() *CoreAgent {
 		Description: "Sole adjudicator authorised to correct a running plan. Woken when a plan's " +
 			"Definition of Done is ruled unmet or its DAG has stalled, it issues exactly one " +
 			"correction per wake; not a chat persona.",
-		Color: "#0F766E",
-		Icon:  "compass-tool",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#22D3EE",
 		// systemAgentSeed defines fixed capabilities; this constructor defines identity only.
 	}
 }

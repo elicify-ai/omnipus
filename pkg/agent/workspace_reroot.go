@@ -74,6 +74,19 @@ import (
 // rather than re-resolved here to keep this a plain, dependency-light
 // function (no AgentLoop/registry access).
 func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWorkspaceID string) (string, error) {
+	dir, _, err := resolveTurnWorkDirAndWorkspaceOrRefuse(ctx, agentID, agentHome, optWorkspaceID)
+	return dir, err
+}
+
+// resolveTurnWorkDirAndWorkspaceOrRefuse is resolveTurnWorkDirOrRefuse AGAINST
+// the same gate, but it ALSO returns the resolved workspace id (empty for the
+// agent-home-rooted branches: Admin, a System Agent override, and a
+// resume-tree override). The external-CLI continuation path (N1/FR-043) needs
+// the id as well as the dir: a resume must re-resolve the workspace the native
+// CLI conversation STARTED in, so `resolveTurnWorkDirOrRefuse` alone (dir only)
+// cannot express that check. The work dir is always the SAME value the
+// dir-only wrapper returns — one body, no divergent resolution.
+func resolveTurnWorkDirAndWorkspaceOrRefuse(ctx context.Context, agentID, agentHome, optWorkspaceID string) (workDir, workspaceID string, err error) {
 	home := omnipusHome()
 
 	// Sign-off 14 MINOR-1 / architect F4: an explicit agent-home request
@@ -90,7 +103,8 @@ func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWork
 	// one producer, runVerifierAdjudication, which only ever dispatches
 	// System Agent turns).
 	if systemAgentAgentHomeOverrideFromContext(ctx) && coreagent.IsSystemAgentID(coreagent.CoreAgentID(agentID)) {
-		return systemAgentHomeDir(agentID, agentHome)
+		dir, herr := systemAgentHomeDir(agentID, agentHome)
+		return dir, "", herr
 	}
 
 	// ADR-090 §2.2 / FR-001: the Admin standalone operator. Admin is a
@@ -116,7 +130,8 @@ func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWork
 	// unassigned agents keep the hard refusal below — standalone is Admin's
 	// role property, not a general relaxation.
 	if coreagent.CoreAgentID(agentID) == coreagent.IDAdmin {
-		return systemAgentHomeDir(agentID, agentHome)
+		dir, herr := systemAgentHomeDir(agentID, agentHome)
+		return dir, "", herr
 	}
 
 	// D13/G-12 (E.5): a Play-resumed plan member runs in the tree that was
@@ -130,7 +145,7 @@ func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWork
 	// verifier turn adjudicating a resumed member must still root at its own
 	// agent home, not at the member's resume tree.
 	if resumeDir := resumeWorkDirOverrideFromContext(ctx); resumeDir != "" {
-		return resumeDir, nil
+		return resumeDir, "", nil
 	}
 
 	// The verifier turn's work-under-review workspace (ADR-052
@@ -162,7 +177,8 @@ func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWork
 		// than refuse; every other agent keeps the hard refusal below
 		// unconditionally.
 		if coreagent.IsSystemAgentID(coreagent.CoreAgentID(agentID)) {
-			return systemAgentHomeDir(agentID, agentHome)
+			dir, herr := systemAgentHomeDir(agentID, agentHome)
+			return dir, "", herr
 		}
 
 		logger.WarnCF(
@@ -170,7 +186,7 @@ func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWork
 			"turn refused: agent is not a member of any workspace",
 			map[string]any{"agent_id": agentID},
 		)
-		return "", fmt.Errorf("%w: agent_id=%s", ErrAgentNotWorkspaceMember, agentID)
+		return "", "", fmt.Errorf("%w: agent_id=%s", ErrAgentNotWorkspaceMember, agentID)
 	}
 
 	// workspace.EnsureWorkDir (SafeWorkDir + MkdirAll + idempotent git-evidence
@@ -193,7 +209,7 @@ func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWork
 			"turn refused: workspace work dir unavailable",
 			map[string]any{"agent_id": agentID, "workspace_id": wsID, "error": dirErr.Error()},
 		)
-		return "", fmt.Errorf(
+		return "", "", fmt.Errorf(
 			"%w: agent_id=%s workspace_id=%s: %w",
 			ErrWorkspaceWorkDirUnavailable,
 			agentID,
@@ -202,7 +218,7 @@ func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWork
 		)
 	}
 
-	return wsDir, nil
+	return wsDir, wsID, nil
 }
 
 // systemAgentHomeDir materializes and returns a System Agent's own private

@@ -19,14 +19,24 @@ package systools_test
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
+
+// callerCtx returns a context carrying an agent principal, which is what
+// production always supplies: pkg/agent/loop.go seeds every turn context via
+// tools.WithAgentID before any tool executes. A bare context.Background() is
+// not a realistic invocation of these tools.
+func callerCtx(agentID string) context.Context {
+	return tools.WithAgentID(context.Background(), agentID)
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -109,159 +119,6 @@ func (s *inMemoryMemoryStore) SearchEntries(query string, limit int) ([]tools.Me
 		}
 	}
 	return results, nil
-}
-
-// ── Chain 1: create_task → list_tasks → update_task → delete_task ────────────
-
-// TestToolChain_TaskCRUD exercises the full create → list → update → delete
-// sequence through the sysagent tool layer, asserting real state at every step.
-//
-// BDD:
-//
-//	Given a workspace exists
-//	When  create_task_in_workspace is called with name="Chain Test"
-//	Then  the task appears in list_tasks_in_workspace
-//	And   update_task_in_workspace changes its status to "done" (issue #593:
-//	      in_progress is no longer directly settable via update_task_in_workspace
-//	      — it is reached only through real dispatch — so this chain now
-//	      exercises a status update tool CAN still make directly)
-//	And   the updated status is visible in a fresh list
-//	And   delete_task_in_workspace removes it (list is empty afterward)
-//
-// Traces to: Plan §10 — Chain 1 (create_task → list_tasks → update_task → delete_task)
-func TestToolChain_TaskCRUD(t *testing.T) {
-	deps, _ := chainDeps(t)
-	// A calling agent principal, as production always supplies (pkg/agent/loop.go
-	// seeds every turn ctx via tools.WithAgentID). The task tools scope reads to
-	// the caller and gate mutations on it, so a bare context is not a realistic
-	// invocation of this chain.
-	ctx := callerCtx("chain-agent")
-
-	// Precondition: create a workspace to hold the task.
-	wsResult := systools.NewWorkspaceCreateTool(deps).Execute(ctx, map[string]any{
-		"name": "Chain Workspace",
-	})
-	if wsResult.IsError {
-		t.Fatalf("create_workspace: %s", wsResult.ForLLM)
-	}
-	wsID := extractID(t, wsResult.ForLLM)
-
-	// ── step 1: create ────────────────────────────────────────────────────
-	createResult := systools.NewTaskCreateTool(deps).Execute(ctx, map[string]any{
-		"name":         "Chain Test",
-		"workspace_id": wsID,
-	})
-	if createResult.IsError {
-		t.Fatalf("create_task: %s", createResult.ForLLM)
-	}
-	taskID := extractID(t, createResult.ForLLM)
-
-	// Content test: status defaults to "inbox".
-	assertJSONField(t, createResult.ForLLM, "status", "inbox")
-	assertJSONField(t, createResult.ForLLM, "name", "Chain Test")
-
-	// ── step 2: list — task must appear ───────────────────────────────────
-	listResult := systools.NewTaskListTool(deps).Execute(ctx, map[string]any{
-		"workspace_id": wsID,
-	})
-	if listResult.IsError {
-		t.Fatalf("list_tasks: %s", listResult.ForLLM)
-	}
-	if !strings.Contains(listResult.ForLLM, taskID) {
-		t.Errorf("list_tasks after create: task id %q not in result:\n%s", taskID, listResult.ForLLM)
-	}
-	if !strings.Contains(listResult.ForLLM, "Chain Test") {
-		t.Errorf("list_tasks after create: task name 'Chain Test' not in result:\n%s", listResult.ForLLM)
-	}
-
-	// ── step 3: update status ─────────────────────────────────────────────
-	// Issue #593: "done", not "in_progress" — in_progress is no longer
-	// directly settable via update_task_in_workspace (it is reached only
-	// through real dispatch: run_task / the executor / REST PATCH).
-	updateResult := systools.NewTaskUpdateTool(deps).Execute(ctx, map[string]any{
-		"id":     taskID,
-		"status": "done",
-	})
-	if updateResult.IsError {
-		t.Fatalf("update_task: %s", updateResult.ForLLM)
-	}
-
-	// Verify the updated status is reflected in a fresh list.
-	listResult2 := systools.NewTaskListTool(deps).Execute(ctx, map[string]any{
-		"workspace_id": wsID,
-	})
-	if listResult2.IsError {
-		t.Fatalf("list_tasks after update: %s", listResult2.ForLLM)
-	}
-	if !strings.Contains(listResult2.ForLLM, "done") {
-		t.Errorf("list_tasks after update: 'done' status not in result:\n%s", listResult2.ForLLM)
-	}
-
-	// ── step 4: delete ────────────────────────────────────────────────────
-	deleteResult := systools.NewTaskDeleteTool(deps).Execute(ctx, map[string]any{
-		"id":      taskID,
-		"confirm": true,
-	})
-	if deleteResult.IsError {
-		t.Fatalf("delete_task: %s", deleteResult.ForLLM)
-	}
-	assertJSONField(t, deleteResult.ForLLM, "deleted", true)
-
-	// Persistence test: task must be gone from list.
-	listResult3 := systools.NewTaskListTool(deps).Execute(ctx, map[string]any{
-		"workspace_id": wsID,
-	})
-	if listResult3.IsError {
-		t.Fatalf("list_tasks after delete: %s", listResult3.ForLLM)
-	}
-	if strings.Contains(listResult3.ForLLM, taskID) {
-		t.Errorf("delete: task id %q still appears in list after delete:\n%s", taskID, listResult3.ForLLM)
-	}
-}
-
-// TestToolChain_TaskCRUD_DifferentInputsDifferentIDs is the differentiation
-// test: two different tasks created in sequence must receive distinct IDs and
-// names, proving create_task is not returning hardcoded data.
-//
-// Traces to: Plan §10 — differentiation guard for Chain 1
-func TestToolChain_TaskCRUD_DifferentInputsDifferentIDs(t *testing.T) {
-	deps, _ := chainDeps(t)
-	ctx := context.Background()
-
-	wsResult := systools.NewWorkspaceCreateTool(deps).Execute(ctx, map[string]any{
-		"name": "Diff Workspace",
-	})
-	if wsResult.IsError {
-		t.Fatalf("create_workspace: %s", wsResult.ForLLM)
-	}
-	wsID := extractID(t, wsResult.ForLLM)
-
-	r1 := systools.NewTaskCreateTool(deps).Execute(ctx, map[string]any{
-		"name": "Task Alpha", "workspace_id": wsID,
-	})
-	r2 := systools.NewTaskCreateTool(deps).Execute(ctx, map[string]any{
-		"name": "Task Beta", "workspace_id": wsID,
-	})
-
-	if r1.IsError {
-		t.Fatalf("create Task Alpha: %s", r1.ForLLM)
-	}
-	if r2.IsError {
-		t.Fatalf("create Task Beta: %s", r2.ForLLM)
-	}
-
-	id1 := extractID(t, r1.ForLLM)
-	id2 := extractID(t, r2.ForLLM)
-
-	if id1 == id2 {
-		t.Errorf("differentiation FAIL: two tasks have the same id %q", id1)
-	}
-	if strings.Contains(r1.ForLLM, "Task Beta") {
-		t.Error("differentiation FAIL: Task Alpha result contains 'Task Beta'")
-	}
-	if strings.Contains(r2.ForLLM, "Task Alpha") {
-		t.Error("differentiation FAIL: Task Beta result contains 'Task Alpha'")
-	}
 }
 
 // ── Chain 2: remember → recall_memory ────────────────────────────────────────
@@ -485,25 +342,21 @@ func TestToolChain_SendMessage_Differentiation(t *testing.T) {
 // tasks have already been listed works correctly, and that a task in the workspace
 // can be retrieved/listed before the workspace is deleted.
 //
-// NOTE: The current delete_workspace implementation deletes the workspace file
-// only; it does NOT cascade-delete child tasks (a future concern per the
-// BRD; not yet scheduled).  This test asserts the CURRENT behavior: after delete_workspace, the
-// workspace itself is gone (list_workspaces does not include it), while the
-// task store is still accessible separately.
-//
-// If cascade-delete is later implemented, this test should be updated to assert
-// that the task is also gone.
+// delete_workspace cascades: it deletes the workspace's own tasks first (a task
+// cannot exist without its parent workspace), then the workspace file and its
+// delegation store.
 //
 // BDD:
 //
 //	Given create_workspace returns workspace W
-//	And   create_task_in_workspace creates task T in W
-//	When  list_tasks_in_workspace for W returns T
-//	And   delete_workspace W is called
+//	And   a task T exists in W on the task store
+//	When  delete_workspace W is called
 //	Then  the workspace file is gone (list_workspaces no longer lists W)
-//	And   the task was observable in the list before deletion
+//	And   T is cascade-deleted with its workspace
 //
-// Traces to: Plan §10 — Chain 4 (create_workspace → create_task → delete_workspace)
+// Traces to: Plan §10 — Chain 4 (create_workspace → task → delete_workspace).
+// The task is seeded through the store directly: the *_in_workspace agent
+// tools that once created it were retired by DEL-23.
 func TestToolChain_WorkspaceCascadeDelete(t *testing.T) {
 	deps, _ := chainDeps(t)
 	ctx := callerCtx("chain-agent")
@@ -518,25 +371,20 @@ func TestToolChain_WorkspaceCascadeDelete(t *testing.T) {
 	}
 	wsID := extractID(t, wsResult.ForLLM)
 
-	// ── step 2: create a task inside the workspace ────────────────────────
-	taskResult := systools.NewTaskCreateTool(deps).Execute(ctx, map[string]any{
-		"name":         "Orphaned Task",
-		"workspace_id": wsID,
-	})
-	if taskResult.IsError {
-		t.Fatalf("create_task: %s", taskResult.ForLLM)
+	// ── step 2: seed a task inside the workspace ──────────────────────────
+	store := task.New(filepath.Join(deps.Home, "tasks"))
+	tk := &task.Task{
+		Title: "Orphaned Task", Action: task.ActionLLM,
+		WorkspaceID: wsID, Status: task.StatusNext,
 	}
-	taskID := extractID(t, taskResult.ForLLM)
+	if err := store.Create(tk); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	taskID := tk.ID
 
-	// ── step 3: list — task appears before deletion ───────────────────────
-	listBefore := systools.NewTaskListTool(deps).Execute(ctx, map[string]any{
-		"workspace_id": wsID,
-	})
-	if listBefore.IsError {
-		t.Fatalf("list_tasks before delete: %s", listBefore.ForLLM)
-	}
-	if !strings.Contains(listBefore.ForLLM, taskID) {
-		t.Errorf("list before delete: task %q not found:\n%s", taskID, listBefore.ForLLM)
+	// ── step 3: the task is observable before deletion ────────────────────
+	if _, err := store.Get(taskID); err != nil {
+		t.Fatalf("list before delete: task %q not found: %v", taskID, err)
 	}
 
 	// ── step 4: delete workspace ──────────────────────────────────────────
@@ -560,6 +408,11 @@ func TestToolChain_WorkspaceCascadeDelete(t *testing.T) {
 	}
 	if strings.Contains(listWS.ForLLM, "Cascade Workspace") {
 		t.Errorf("delete_workspace: 'Cascade Workspace' still appears in list_workspaces:\n%s", listWS.ForLLM)
+	}
+
+	// ── step 6: the task was cascade-deleted with its workspace ───────────
+	if _, err := store.Get(taskID); err == nil {
+		t.Errorf("delete_workspace: task %q survived its workspace's deletion (expected cascade delete)", taskID)
 	}
 }
 
@@ -606,75 +459,6 @@ func TestToolChain_WorkspaceCascadeDelete_Differentiation(t *testing.T) {
 	}
 	if !strings.Contains(listWS.ForLLM, idB) {
 		t.Errorf("Workspace Beta (%s) missing from list after Alpha deleted", idB)
-	}
-}
-
-// ── Rejection / invalid-input tests ──────────────────────────────────────────
-
-// TestToolChain_CreateTask_InvalidWorkspaceID verifies that create_task_in_workspace
-// rejects a non-existent workspace_id with a structured error.
-//
-// Traces to: Plan §10 — rejection test for Chain 1
-func TestToolChain_CreateTask_InvalidWorkspaceID(t *testing.T) {
-	deps, _ := chainDeps(t)
-	ctx := context.Background()
-
-	result := systools.NewTaskCreateTool(deps).Execute(ctx, map[string]any{
-		"name":         "Orphan Task",
-		"workspace_id": "nonexistent-workspace-id-99999",
-	})
-	if !result.IsError {
-		t.Fatalf("expected error for invalid workspace_id, got success:\n%s", result.ForLLM)
-	}
-	// Content test: error must reference the invalid input.
-	if !strings.Contains(result.ForLLM, "workspace_id") &&
-		!strings.Contains(result.ForLLM, "INVALID_INPUT") {
-		t.Errorf("error body does not mention workspace_id or INVALID_INPUT:\n%s", result.ForLLM)
-	}
-}
-
-// TestToolChain_DeleteTask_RequiresConfirm verifies the confirmation guard.
-//
-// Traces to: Plan §10 — rejection test for Chain 1
-func TestToolChain_DeleteTask_RequiresConfirm(t *testing.T) {
-	deps, _ := chainDeps(t)
-	ctx := callerCtx("chain-agent")
-
-	// Create a workspace and a task.
-	wsRes := systools.NewWorkspaceCreateTool(deps).Execute(ctx, map[string]any{"name": "Del Guard"})
-	if wsRes.IsError {
-		t.Fatalf("create_workspace: %s", wsRes.ForLLM)
-	}
-	wsID := extractID(t, wsRes.ForLLM)
-
-	taskRes := systools.NewTaskCreateTool(deps).Execute(ctx, map[string]any{
-		"name": "Must Confirm", "workspace_id": wsID,
-	})
-	if taskRes.IsError {
-		t.Fatalf("create_task: %s", taskRes.ForLLM)
-	}
-	taskID := extractID(t, taskRes.ForLLM)
-
-	// Delete without confirm=true must fail.
-	delResult := systools.NewTaskDeleteTool(deps).Execute(ctx, map[string]any{
-		"id":      taskID,
-		"confirm": false,
-	})
-	if !delResult.IsError {
-		t.Fatalf("expected error when confirm=false, got success:\n%s", delResult.ForLLM)
-	}
-	if !strings.Contains(delResult.ForLLM, "confirm") &&
-		!strings.Contains(delResult.ForLLM, "CONFIRMATION_REQUIRED") {
-		t.Errorf("rejection body does not mention 'confirm':\n%s", delResult.ForLLM)
-	}
-
-	// Task must still be in the list (not deleted).
-	listResult := systools.NewTaskListTool(deps).Execute(ctx, map[string]any{"workspace_id": wsID})
-	if listResult.IsError {
-		t.Fatalf("list after rejected delete: %s", listResult.ForLLM)
-	}
-	if !strings.Contains(listResult.ForLLM, taskID) {
-		t.Errorf("task %q disappeared after rejected delete:\n%s", taskID, listResult.ForLLM)
 	}
 }
 

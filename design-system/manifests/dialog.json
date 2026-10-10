@@ -79,7 +79,8 @@
       "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "Dialog [check:dialog-browser] browser",
-      "story": "DialogContract"
+      "story": "DialogContract",
+      "requiredTargets": [{ "selector": "[data-ds-trigger]", "attribute": "data-ds-trigger", "value": "true" }]
     },
     {
       "id": "dialog-pointer",

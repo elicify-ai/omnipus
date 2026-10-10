@@ -74,8 +74,10 @@ func (t *DelegateTool) executeRedirect(ctx context.Context, args map[string]any)
 	if rec.Is3P {
 		return ErrorResult(fmt.Sprintf(
 			"delegate: redirect: not_steerable: external command-line session %s runs on an external CLI "+
-				"(claude-code/codex/opencode) with no steerable live turn to replace; use "+
-				"action=\"stop_all\" to stop it or action=\"resume\" (a corrective re-dispatch) instead",
+				"(claude-code/codex/opencode) with no steerable live turn to replace; "+
+				"action=\"steer\" instructs one with a CLI run in flight, action=\"stop_all\" stops it, and "+
+				"action=\"resume\" continues a stopped or finished one whose CLI conversation this gateway still "+
+				"retains, or runs one that never started its CLI for the first time (otherwise start a new delegation)",
 			sessionID,
 		))
 	}

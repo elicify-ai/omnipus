@@ -12,22 +12,18 @@ description: >
                     `llm` action that runs the assigned agent. `config` is empty.
     - `once`      — fire exactly once at an absolute instant. `config.at_ms` is the
                     Unix epoch-milliseconds instant (required).
-    - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
-                    interval in milliseconds (required, min 1000). Each fire spawns
-                    a FRESH run (fresh session + run history + pause).
-    - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
-                    `cron_expr` (legacy, 5/6-field cron expression, still accepted
-                    and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
-                    `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
-                    siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
-                    Each fire spawns a FRESH run.
+    - `recurring` — fire on a repeat rule. `config` carries `rrule` (RFC 5545
+                    RRULE body, e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`)
+                    plus its required siblings `dtstart_ms` (anchor instant) and
+                    `tz` (IANA zone). Each fire spawns a FRESH run.
 
-  `once`/`every`/`recurring` triggers are executed by the existing per-agent
-  Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just
-  a task with a time trigger; a heartbeat is a `recurring` task with
-  `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger`
-  semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this
-  type rather than `ScheduleTrigger`.
+  The legacy `every` trigger type and the `every_ms` and `cron_expr` config keys
+  were removed (session-core DEL-19); the server refuses them with a 400.
+
+  `once`/`recurring` triggers are executed by the existing per-agent Schedules
+  engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task
+  with a time trigger; a heartbeat is a `recurring` task with `surface:
+  heartbeat` (Main-only).
 
   ## Future growth path (design intent — DO NOT build in this release)
   The discriminated `type` enum grows additively with event kinds:
@@ -51,7 +47,6 @@ properties:
     enum:
       - manual
       - once
-      - every
       - recurring
     description: >
       The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds
@@ -63,9 +58,8 @@ properties:
     additionalProperties: true
     description: >
       Kind-specific parameters. The relevant subset depends on `type`:
-      `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` →
-      exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and
-      `tz`). Validated server-side against `type`. This object is the open
+      `manual` → empty; `once` → `at_ms`; `recurring` → `rrule` (+ required
+      `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open
       growth surface — future event kinds add their own keys here without changing
       the outer shape.
     properties:
@@ -76,29 +70,13 @@ properties:
           Unix epoch milliseconds for a one-shot fire. Required when
           `type = once`; ignored otherwise.
         example: 1781000000000
-      every_ms:
-        type: integer
-        format: int64
-        minimum: 1000
-        description: >
-          Interval in milliseconds between fires. Required when `type = every`
-          (minimum 1000ms); ignored otherwise.
-        example: 3600000
-      cron_expr:
-        type: string
-        description: >
-          Cron expression (5 or 6 fields), legacy path. Valid only when
-          `type = recurring`; ignored otherwise. Exactly one of `cron_expr` /
-          `rrule` is present on a `recurring` trigger — never both.
-        example: "0 9 * * MON"
       rrule:
         type: string
         maxLength: 512
         description: >
           RFC 5545 RRULE body (no `RRULE:` prefix), e.g.
           `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when
-          `type = recurring`; ignored otherwise. Exactly one of `cron_expr` /
-          `rrule` is present on a `recurring` trigger — never both. Requires the
+          `type = recurring`; ignored otherwise. Requires the
           sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds
           (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window
           minimum-gap scan (≥60s between occurrences), liveness (must produce an

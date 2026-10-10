@@ -461,16 +461,16 @@ func (a *restAPI) HandleTaskOccurrences(w http.ResponseWriter, r *http.Request) 
 	// (pkg/agent/task_trigger.go OnTaskUpserted's early skips). Heartbeat
 	// -surface tasks are always omitted (the heartbeat service owns those
 	// fires). A terminal task is omitted UNLESS its trigger REPEATS
-	// (recurring/every): a per-run done/failed status does not end a
+	// (recurring): a per-run done/failed status does not end a
 	// repeating series (see OnTaskUpserted's doc comment) — the scheduler
-	// re-arms a terminal recurring/every task's next occurrence exactly as it
+	// re-arms a terminal recurring task's next occurrence exactly as it
 	// would a non-terminal one, so the calendar must keep rendering it too.
 	// A truly exhausted RRULE series (COUNT/UNTIL) naturally yields zero
 	// occurrences from buildOccurrenceSets below and is omitted that way, not
 	// by this predicate. A terminal `once`/manual task is still omitted here
 	// (task.Trigger.IsRepeating is false for them) — its single occurrence IS
 	// its whole series — and would be omitted a second time regardless by
-	// buildOccurrenceSets' own trigger-FLAVOR filter (recurring/every only).
+	// buildOccurrenceSets' own trigger-FLAVOR filter (recurring only).
 	eligible := make([]task.Task, 0, len(tasks))
 	for _, t := range tasks {
 		if t.EffectiveSurface() == task.SurfaceHeartbeat {
@@ -482,27 +482,13 @@ func (a *restAPI) HandleTaskOccurrences(w http.ResponseWriter, r *http.Request) 
 		eligible = append(eligible, t)
 	}
 
-	// FR-008a: the every_ms projection anchor is the live armed job's
-	// NextRunAtMS, read from the installed TaskTriggerScheduler. Nil-safe —
-	// a nil scheduler (not yet wired / test scaffolding) makes every
-	// `every`-triggered task omit cleanly rather than erroring the request.
-	sched := agent.GetTaskTriggerScheduler(a.agentLoop)
-	everyAnchor := func(taskID string) (int64, bool) {
-		if sched == nil {
-			return 0, false
-		}
-		return sched.NextRunAtMSForTask(taskID)
-	}
-
 	// ADR-050 RD6, task-run-history-spec.md §3.7: the occurrence-run overlay
-	// dependency is wired in here, sourced from the live store. Unlike
-	// everyAnchor above — a required, non-variadic func(taskID string)
-	// (int64, bool) parameter — runsInRange is buildOccurrenceSets' own
+	// dependency is wired in here, sourced from the live store. runsInRange is buildOccurrenceSets' own
 	// trailing VARIADIC parameter (see its doc comment, task_occurrences.go);
 	// that is what lets this single positional call add the dependency
 	// without breaking the pre-existing task_occurrences_test.go call sites
 	// that predate this feature and pass none.
-	sets, err := buildOccurrenceSets(eligible, fromMs, toMs, tz, everyAnchor, a.taskStore.RunsInRange)
+	sets, err := buildOccurrenceSets(eligible, fromMs, toMs, tz, nil, a.taskStore.RunsInRange)
 	if err != nil {
 		// Range/tz were already validated above, so a non-nil error here
 		// indicates a genuine internal failure rather than bad input.
@@ -770,6 +756,24 @@ func (a *restAPI) handleTaskSubtasks(w http.ResponseWriter, parentID string) {
 	jsonOK(w, out)
 }
 
+// copyTaskCreateOrderingFields copies the plain optional plan-ordering and
+// labelling fields of a create request (write_set, stream, is_join, tags) onto
+// the new task. They need no validation beyond the wire schema.
+func copyTaskCreateOrderingFields(t *task.Task, req *gen.TaskCreateRequest) {
+	if req.WriteSet != nil {
+		t.WriteSet = *req.WriteSet
+	}
+	if req.Stream != nil {
+		t.Stream = *req.Stream
+	}
+	if req.IsJoin != nil {
+		t.IsJoin = *req.IsJoin
+	}
+	if req.Tags != nil {
+		t.Tags = *req.Tags
+	}
+}
+
 // handleTaskCreate handles POST /api/v1/tasks → 201 Created. The task always
 // lands in `inbox` (Detail #8); status is never a create-time field.
 func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
@@ -833,6 +837,9 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		t.Priority = *req.Priority
 	}
+	if req.RunIsolated != nil {
+		t.RunIsolated = *req.RunIsolated
+	}
 	if req.AgentId != nil && *req.AgentId != "" {
 		agentID := *req.AgentId
 		if err := validateEntityID(agentID); err != nil {
@@ -857,18 +864,7 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		t.PlanID = *req.PlanId
 	}
-	if req.WriteSet != nil {
-		t.WriteSet = *req.WriteSet
-	}
-	if req.Stream != nil {
-		t.Stream = *req.Stream
-	}
-	if req.IsJoin != nil {
-		t.IsJoin = *req.IsJoin
-	}
-	if req.Tags != nil {
-		t.Tags = *req.Tags
-	}
+	copyTaskCreateOrderingFields(t, &req)
 	// GOAL-FR-021/FR-047/GOAL-MV-6/D-C: creating a task through the API or
 	// the interface requires at least one acceptance criterion AND at least
 	// one definition-of-done item — naming explicitly which is missing.
@@ -925,11 +921,13 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if req.Trigger != nil {
+		if msg := legacyTimingKeysMessage(req.Trigger.Config.AdditionalProperties); msg != "" {
+			jsonErr(w, http.StatusBadRequest, msg)
+			return
+		}
 		t.Trigger = buildTrigger(
 			string(req.Trigger.Type),
 			req.Trigger.Config.AtMs,
-			req.Trigger.Config.EveryMs,
-			req.Trigger.Config.CronExpr,
 			req.Trigger.Config.Rrule,
 			req.Trigger.Config.DtstartMs,
 			req.Trigger.Config.Tz,
@@ -966,7 +964,8 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf(
-			"task %q was created but its Definition of Done could not be persisted: %v", t.ID, gErr))
+			"task %q was created but its Definition of Done could not be persisted. "+
+				"Check disk space and permissions, then retry. Details are in the server log.", t.ID))
 		return
 	}
 
@@ -976,7 +975,7 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	// call site stays in place regardless.
 	a.auditTriggerChange(t.ID, nil, t.Trigger)
 	a.emitTaskStatus(t)
-	// Register the task's time trigger (once/every/recurring) so it actually
+	// Register the task's time trigger (once/recurring) so it actually
 	// fires; a no-op for manual/heartbeat tasks.
 	if a.agentLoop != nil {
 		a.agentLoop.NotifyTaskUpserted(t)
@@ -1114,6 +1113,37 @@ func (tp *taskPatch) validate() bool {
 	return false
 }
 
+// buildTimingPatch translates the request's trigger and due-date fields into
+// the patch. It reports true, with the response already written, when the
+// trigger carries a removed key (every_ms, cron_expr).
+func (tp *taskPatch) buildTimingPatch() bool {
+	if tp.req.Trigger != nil {
+		if msg := legacyTimingKeysMessage(tp.req.Trigger.Config.AdditionalProperties); msg != "" {
+			jsonErr(tp.w, http.StatusBadRequest, msg)
+			return true
+		}
+		tr := buildTrigger(
+			string(tp.req.Trigger.Type),
+			tp.req.Trigger.Config.AtMs,
+			tp.req.Trigger.Config.Rrule,
+			tp.req.Trigger.Config.DtstartMs,
+			tp.req.Trigger.Config.Tz,
+		)
+		tp.patch.Trigger = &tr
+	}
+	if tp.req.Due != nil {
+		due := tp.req.Due.UTC().Format(time.RFC3339)
+		tp.patch.Due = &due
+	} else if tp.req.ClearDue != nil && *tp.req.ClearDue {
+		// clear_due unambiguously clears the stored due date. Ignored when `due`
+		// is set to a value (the value wins). The store applies *patch.Due
+		// verbatim, so an empty string clears Task.Due (which omits when empty).
+		empty := ""
+		tp.patch.Due = &empty
+	}
+	return false
+}
+
 // buildPatch translates the request's fields into a task.Patch.
 func (tp *taskPatch) buildPatch() bool {
 	tp.patch = task.Patch{}
@@ -1161,6 +1191,9 @@ func (tp *taskPatch) buildPatch() bool {
 	if tp.req.Priority != nil {
 		tp.patch.Priority = tp.req.Priority
 	}
+	if tp.req.RunIsolated != nil {
+		tp.patch.RunIsolated = tp.req.RunIsolated
+	}
 	if tp.req.BlockedBy != nil {
 		tp.patch.BlockedBy = tp.req.BlockedBy
 	}
@@ -1182,27 +1215,8 @@ func (tp *taskPatch) buildPatch() bool {
 	// reflecting the first call's write even though both calls' own writes
 	// were correctly serialized by the store's per-task lock).
 
-	if tp.req.Trigger != nil {
-		tr := buildTrigger(
-			string(tp.req.Trigger.Type),
-			tp.req.Trigger.Config.AtMs,
-			tp.req.Trigger.Config.EveryMs,
-			tp.req.Trigger.Config.CronExpr,
-			tp.req.Trigger.Config.Rrule,
-			tp.req.Trigger.Config.DtstartMs,
-			tp.req.Trigger.Config.Tz,
-		)
-		tp.patch.Trigger = &tr
-	}
-	if tp.req.Due != nil {
-		due := tp.req.Due.UTC().Format(time.RFC3339)
-		tp.patch.Due = &due
-	} else if tp.req.ClearDue != nil && *tp.req.ClearDue {
-		// clear_due unambiguously clears the stored due date. Ignored when `due`
-		// is set to a value (the value wins). The store applies *patch.Due
-		// verbatim, so an empty string clears Task.Due (which omits when empty).
-		empty := ""
-		tp.patch.Due = &empty
+	if tp.buildTimingPatch() {
+		return true
 	}
 	if tp.req.PlanId != nil {
 		if *tp.req.PlanId != "" {
@@ -1502,8 +1516,8 @@ func (tp *taskPatch) syncGoalRecord() bool {
 				return true
 			}
 			jsonErr(tp.w, http.StatusInternalServerError, fmt.Sprintf(
-				"task %q was updated but its Definition of Done could not be persisted: %v",
-				tp.id, gErr))
+				"task %q was updated but its Definition of Done could not be persisted. "+
+					"Check disk space and permissions, then retry. Details are in the server log.", tp.id))
 			return true
 		}
 	}
@@ -1566,8 +1580,11 @@ func (tp *taskPatch) launchIfStarted() bool {
 		if startErr != nil {
 			fresh, readErr := tp.a.taskStore.Get(tp.id)
 			if readErr != nil {
-				jsonErr(tp.w, http.StatusInternalServerError, fmt.Sprintf(
-					"%v; could not read task status before rollback: %v", startErr, readErr))
+				slog.Error("rest: could not read task status before rollback",
+					"id", tp.id, "start_error", startErr, "error", readErr)
+				jsonErr(tp.w, http.StatusInternalServerError,
+					"the task could not be started and its status could not be checked before rollback: "+
+						"server storage failed. Check disk space and permissions, then retry. Details are in the server log.")
 				return true
 			}
 			// A successful executor failure write stores the same cause it returns.
@@ -1578,8 +1595,9 @@ func (tp *taskPatch) launchIfStarted() bool {
 				if _, rErr := tp.a.taskStore.Update(tp.id, revertPatch); rErr != nil {
 					slog.Error("rest: could not revert task status after StartTaskNow failure",
 						"id", tp.id, "revert_to", tp.preUpdateStatus, "error", rErr)
-					jsonErr(tp.w, http.StatusInternalServerError, fmt.Sprintf(
-						"%v; could not revert task status: %v", startErr, rErr))
+					jsonErr(tp.w, http.StatusInternalServerError,
+						"the task could not be started and its status could not be reverted: "+
+							"server storage failed. Check disk space and permissions, then retry. Details are in the server log.")
 					return true
 				}
 			}
@@ -1606,7 +1624,21 @@ func (tp *taskPatch) launchIfStarted() bool {
 			slog.Warn("rest: StartTaskNow failed",
 				"id", tp.id, "agent_id", tp.updated.AgentID, "prior_status", tp.preUpdateStatus,
 				"failed_disposition_preserved", failedDisposition, "error", startErr)
-			jsonErr(tp.w, httpStatus, startErr.Error())
+			switch {
+			case errors.Is(startErr, agent.ErrPlanStateUnresolvable):
+				// Not a conflict: the server could not READ the plan's state,
+				// and the wrapped cause carries the plan file's path. Fixed
+				// text, the cause is already logged above.
+				jsonServerFailure(tp.w, http.StatusInternalServerError,
+					"the task's plan state could not be verified", startErr)
+			case httpStatus == http.StatusConflict:
+				// The remaining 409 classes (dispatch cap, plan not
+				// executing) are domain errors built from fixed text, ids and
+				// the plan's state.
+				jsonErr(tp.w, httpStatus, startErr.Error())
+			default:
+				jsonErr(tp.w, httpStatus, "the task could not be started. Check the agent and try again; details are in the server log.")
+			}
 			return true
 		}
 		if sessID != "" {
@@ -1941,7 +1973,7 @@ func (a *restAPI) auditTask(event, id string) {
 }
 
 // auditTriggerChange implements FR-022: every save that CHANGES a task's
-// recurrence trigger to a new `recurring` (RRULE or legacy cron_expr) rule
+// recurrence trigger to a new `recurring` (RRULE) rule
 // emits an audit entry recording the task id, the prior trigger, and the
 // new trigger — covering both the US-5.3 legacy→RRULE conversion and an
 // RRULE→RRULE rule change (FR-024's "re-anchor" case) alike, so a change

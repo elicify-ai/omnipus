@@ -6,9 +6,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/commands"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -20,6 +22,65 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
+
+// initializeConvertedSessions runs the one-time CONV saved-chat cutover over
+// the shared sessions archive ($OMNIPUS_HOME/sessions) as an EXPLICIT boot step
+// that MUST run BEFORE registry/per-agent store construction (architect Q10).
+//
+// Why here and not only in the store constructor: initializeCore builds every
+// per-agent store (via NewAgentRegistry) BEFORE it builds the shared store, so
+// a constructor-only cutover runs over the shared archive too late — after the
+// per-agent stores already exist. Running it here, first, means no session
+// cache/list/attach, retention or task/scheduler/agent dispatch ever observes
+// the pre-cutover shape.
+//
+// A conversion failure (Q11) is returned to the caller so NewAgentLoop refuses
+// boot outright — the gateway maps a NewAgentLoop error to a fatal boot abort.
+// The store constructors' own cutover calls are an idempotent backstop: by the
+// time they run, this step has already converted the archive (or refused boot),
+// so they perform no write.
+func (nal *newAgentLoop) initializeConvertedSessions() error {
+	homePath := filepath.Dir(nal.cfg.AgentHomeBasePath())
+	if err := session.CutoverSavedChatsAtBootWithAgentStores(
+		filepath.Join(homePath, "sessions"), perAgentSessionDirs(nal.cfg)); err != nil {
+		return err
+	}
+	// The one shared store opens right after the cutover, before any registry
+	// exists. A failure refuses boot (the same rule as a refused cutover): there
+	// is no other store to fall back to.
+	store, err := openSharedSessionStore(homePath)
+	if err != nil {
+		return err
+	}
+	nal.sharedStore = store
+	return nil
+}
+
+// perAgentSessionDirs lists every per-agent session directory the retired
+// per-agent stores could have used: each configured agent's own home, the
+// default workspace, and every directory under the agents base path (an agent
+// that has since been deleted still has saved chats to take in).
+func perAgentSessionDirs(cfg *config.Config) []string {
+	var dirs []string
+	add := func(home string) {
+		if strings.TrimSpace(home) != "" {
+			dirs = append(dirs, filepath.Join(home, "sessions"))
+		}
+	}
+	for i := range cfg.Agents.List {
+		add(resolveAgentHome(&cfg.Agents.List[i], &cfg.Agents.Defaults))
+	}
+	add(resolveAgentHome(nil, &cfg.Agents.Defaults))
+	agentsBase := filepath.Join(filepath.Dir(cfg.AgentHomeBasePath()), "agents")
+	if entries, err := os.ReadDir(agentsBase); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				add(filepath.Join(agentsBase, e.Name()))
+			}
+		}
+	}
+	return dirs
+}
 
 // initializeCore builds the registry, shared routing state, task executor, and session store.
 func (nal *newAgentLoop) initializeCore() {
@@ -52,7 +113,7 @@ func (nal *newAgentLoop) initializeCore() {
 		eventBus:                eventBus,
 		fallback:                fallbackChain,
 		cmdRegistry:             commands.NewRegistry(commands.BuiltinDefinitions()),
-		steering:                newSteeringQueue(parseSteeringMode(nal.cfg.Agents.Defaults.SteeringMode)),
+		steering:                newSteeringQueue(),
 		contextBuilderRegistry:  NewContextBuilderRegistry(),
 		loadedTools:             make(map[string]map[string]bool),
 		pendingSearchPromotions: make(map[string]map[string]int),
@@ -93,34 +154,13 @@ func (nal *newAgentLoop) initializeCore() {
 	// holder because the REST side already reaches the task engine here.
 	nal.al.taskExecutor.SetLiveTaskActivitySource(nal.al)
 
-	// Initialize shared session store at $OMNIPUS_HOME/sessions/.
-	// All new chat sessions are created here (joined session model).
-	sharedDir := filepath.Join(nal.homePath, "sessions")
-	if err := os.MkdirAll(sharedDir, 0o700); err != nil {
-		logger.ErrorCF("agent", "Shared session store unavailable — new sessions will use per-agent stores",
-			map[string]any{"dir": sharedDir, "error": err.Error()})
-	} else {
-		sharedStore, ssErr := session.NewUnifiedStoreWithHome(sharedDir, nal.homePath)
-		if ssErr != nil {
-			logger.ErrorCF("agent", "Shared session store init failed — new sessions will use per-agent stores",
-				map[string]any{"dir": sharedDir, "error": ssErr.Error()})
-		} else {
-			nal.al.sharedSessionStore = sharedStore
-			// FR-067/SC-048 (ADR-057): apply the operator's resolved
-			// stats-flush override onto the store's live periodic flusher.
-			// Without this call, startStatsFlusher (unified_stats_flush.go,
-			// invoked unconditionally from NewUnifiedStoreWithHome) always
-			// runs on the hardcoded config.DefaultSessionStatsFlushInterval
-			// (5s) constant — a seeded, documented
-			// sessions.stats_flush_interval key in config.json would persist
-			// but have zero runtime effect. cfg.Session.
-			// EffectiveStatsFlushInterval() resolves the operator's value (or
-			// the same 5s default when unset), exactly matching
-			// startStatsFlusher's own doc comment naming this call site.
-			sharedStore.SetStatsFlushInterval(nal.cfg.Session.EffectiveStatsFlushInterval())
-			nal.al.rebuildChannelSessionIndex()
-		}
-	}
+	// The shared session store was opened (and the cutover run) by
+	// initializeConvertedSessions; the loop adopts that one instance.
+	nal.al.sharedSessionStore = nal.sharedStore
+	// FR-067/SC-048 (ADR-057): apply the operator's resolved stats-flush
+	// override onto the store's live periodic flusher.
+	nal.sharedStore.SetStatsFlushInterval(nal.cfg.Session.EffectiveStatsFlushInterval())
+	nal.al.rebuildChannelSessionIndex()
 }
 
 // initializeAudit constructs audit logging and wires it into registries when enabled.

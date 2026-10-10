@@ -352,7 +352,7 @@ func (h *WSHandler) handleAskUserAnswer(wc *wsConn, f generated.AskUserAnswerFra
 				"reason", reason)
 			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 				Type:    string(generated.WsFrameTypeError),
-				Message: "ask_user_answer: " + err.Error(),
+				Message: "ask_user_answer: your answer was accepted but the paused turn could not resume. Details are in the server log.",
 			})
 			return
 		}

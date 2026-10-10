@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
@@ -95,15 +96,21 @@ type wsHandlerHandleChatMessage struct {
 	// modifier unset). Meaningless — and never read — once frameSessionID is
 	// non-empty: an existing session's mode changes exclusively via
 	// session_mode_update.
-	autoApprove         *bool
-	wc                  *wsConn
-	targetAgentID       string
-	sessionID           string
-	store               *session.UnifiedStore
-	kickoffInstruction  string
-	acceptedMedia       []string
-	msg                 bus.InboundMessage
-	transcriptPersisted bool
+	autoApprove *bool
+	// recipient, when non-nil, makes this message a request to that peer pair
+	// (MessageFrame.recipient, session-core C-ADDRESS) rather than a turn for
+	// the owning chat's agent.
+	recipient *addressing.Pair
+	// recipientAskApproved: the receiver's Ask was approved at the preflight.
+	recipientAskApproved bool
+	wc                   *wsConn
+	targetAgentID        string
+	sessionID            string
+	store                *session.UnifiedStore
+	kickoffInstruction   string
+	acceptedMedia        []string
+	msg                  bus.InboundMessage
+	transcriptPersisted  bool
 	// transcriptEntryID is the id of the user entry persistUserMessage wrote
 	// successfully; empty for a kickoff (system-role pill) or no write.
 	transcriptEntryID string
@@ -233,6 +240,28 @@ func (h *WSHandler) handleChatMessageWithClientID(
 	autoApprove *bool,
 	wc *wsConn,
 ) {
+	h.handleChatMessageToRecipient(ctx, chatID, frameSessionID, content, agentID, mediaRefs, modelName, workspaceID, setupKickoff, clientMessageID, autoApprove, nil, wc)
+}
+
+// handleChatMessageToRecipient is the intake behind
+// handleChatMessageWithClientID. recipient is MessageFrame.recipient: non-nil
+// makes the message a request to that peer pair (session-core C-ADDRESS)
+// instead of a turn for the owning chat's agent; nil is the ordinary path.
+func (h *WSHandler) handleChatMessageToRecipient(
+	ctx context.Context,
+	chatID string,
+	frameSessionID string,
+	content string,
+	agentID string,
+	mediaRefs []string,
+	modelName string,
+	workspaceID string,
+	setupKickoff bool,
+	clientMessageID string,
+	autoApprove *bool,
+	recipient *addressing.Pair,
+	wc *wsConn,
+) {
 	// Schema validation is optional, but the client-id bound is not. Reject
 	// before resolution, persistence, or the deferred status/cache cleanup.
 	if utf8.RuneCountInString(clientMessageID) > maxClientMessageIDChars {
@@ -242,7 +271,21 @@ func (h *WSHandler) handleChatMessageWithClientID(
 		})
 		return
 	}
-	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, setupKickoff: setupKickoff, clientMessageID: clientMessageID, autoApprove: autoApprove, wc: wc}
+	recipientAskApproved := false
+	if recipient != nil {
+		// A refused @recipient admits nothing — not even the user message — so
+		// the whole admission rule runs before any persistence.
+		msg, approved := h.refuseRecipient(ctx, frameSessionID, setupKickoff, *recipient)
+		recipientAskApproved = approved
+		if msg != "" {
+			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:    string(generated.WsFrameTypeError),
+				Message: msg,
+			})
+			return
+		}
+	}
+	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, setupKickoff: setupKickoff, clientMessageID: clientMessageID, autoApprove: autoApprove, recipient: recipient, recipientAskApproved: recipientAskApproved, wc: wc}
 	hcm.firstMessage = frameSessionID == "" && !setupKickoff &&
 		(clientMessageID != "" || agent.UserMessageChars(content) <= h.agentLoop.UserMessageBound())
 	defer func() {
@@ -251,6 +294,14 @@ func (h *WSHandler) handleChatMessageWithClientID(
 			hcm.sendMessageStatus("failed")
 		}
 	}()
+
+	if hcm.recipient != nil {
+		// The request goes to the recipient's main; the owner's own turn is not
+		// started. The user's message is saved in the owning chat INSIDE the
+		// admission, after the final receiver authorization (U8 r4 F12).
+		hcm.admitRecipientRequest()
+		return
+	}
 
 	if hcm.prepareMessage() {
 		return
@@ -742,9 +793,6 @@ func (hcm *wsHandlerHandleChatMessage) resolveSessionStore() bool {
 		}
 	} else {
 		hcm.store = hcm.h.agentLoop.GetSessionStore()
-		if hcm.store == nil {
-			hcm.store = hcm.h.agentLoop.GetAgentStore(hcm.targetAgentID)
-		}
 	}
 
 	if hcm.firstMessage && hcm.store == nil {
@@ -932,7 +980,7 @@ func (hcm *wsHandlerHandleChatMessage) mintSession() bool {
 		}
 		sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
-			Message: fmt.Sprintf("could not create session: %v", err),
+			Message: "could not create session: session storage failed. Check disk space and permissions, then retry. Details are in the server log.",
 		})
 		return true
 	}

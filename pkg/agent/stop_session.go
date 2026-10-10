@@ -55,6 +55,11 @@ type StopRequest struct {
 	// Canceller overrides the loop's own canceller (the gateway passes the
 	// composition-root instance). Nil uses al.steerCanceller().
 	Canceller StopTurnsCanceller
+	// OnInputDiscarded, when set, is called synchronously for each queued
+	// person's message this Stop discards (FR-024), BEFORE the turn is asked to
+	// stop - so a live client learns of it before the turn's end can report the
+	// message as working.
+	OnInputDiscarded func(DiscardedInput)
 }
 
 // StopResult reports what one Stop reached.
@@ -73,6 +78,11 @@ type StopResult struct {
 	BackgroundKilled, BackgroundFailed int
 	// Selected holds each reached session's accepted execution/control pair.
 	Selected map[string]session.StopSelection
+	// Discarded lists the person's queued web/channel messages this Stop
+	// discarded before delivery (FR-024); DiscardErr is a failure to label any
+	// of them. A discarded message is never consumed either way.
+	Discarded  []DiscardedInput
+	DiscardErr error
 }
 
 // StopSession runs the one Stop. Callers authenticate By before calling (the
@@ -85,6 +95,15 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	if al == nil || strings.TrimSpace(req.SessionID) == "" {
 		return res, fmt.Errorf("Stop requires a session")
 	}
+	// N6: once this Stop has ended the session's episode, release any retained
+	// external-CLI driver (its option/env snapshot). No-op while the run is still
+	// winding down (releaseExternalRunIfIdle checks the running flag; the steered
+	// exit path's own release covers that case) and while any revival still holds
+	// the driver: a Stop retires only the holds of the admissions it actually
+	// selected, at their settlement (removeQueuedStopEffects, NEW-7) — never a
+	// session-wide clear, which a failed or delayed Stop would aim at someone
+	// else's accepted revival.
+	defer al.releaseExternalRunIfIdle(req.SessionID)
 	hooksFor := req.HooksFor
 	if hooksFor == nil {
 		// Founder decision Q13: a plain Stop ends the session's current turn
@@ -103,6 +122,8 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 	if lifecycle == nil {
 		// No lifecycle store: no durable helper edges exist, so the session's
 		// own turn is the whole tree.
+		res.Discarded, res.DiscardErr = al.discardUndeliveredHumanInput(req.SessionID)
+		notifyDiscarded(req.OnInputDiscarded, res.Discarded)
 		res.Root, res.RootErr = al.RequestCancel(ctx, CancelScope{SessionID: req.SessionID, TurnOnly: true}, canceller, hooksFor(req.SessionID))
 		return al.finishPlainStop(res), nil
 	}
@@ -116,9 +137,15 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 				return GenerationCancelResult{}, err
 			}
 		}
+		// FR-024: input admitted but not yet committed into the model input is
+		// discarded by this Stop, and labelled.
+		discarded, discardErr := al.discardUndeliveredHumanInput(id)
+		notifyDiscarded(req.OnInputDiscarded, discarded)
 		outcome, err := al.RequestCancel(effectCtx,
 			CancelScope{SessionID: id, TurnOnly: true, Generation: generation}, canceller, hooksFor(id))
 		mu.Lock()
+		res.Discarded = append(res.Discarded, discarded...)
+		res.DiscardErr = errors.Join(res.DiscardErr, discardErr)
 		swept[id] = true
 		if selected, carried := stopSelectionFromContext(effectCtx); carried {
 			res.Selected[id] = selected
@@ -163,6 +190,8 @@ func (al *AgentLoop) StopSession(ctx context.Context, req StopRequest) (StopResu
 				return res, fmt.Errorf("resolve Stop-all tree: %w", listErr)
 			}
 		}
+		res.Discarded, res.DiscardErr = al.discardUndeliveredHumanInput(req.SessionID)
+		notifyDiscarded(req.OnInputDiscarded, res.Discarded)
 		res.Root, res.RootErr = al.RequestCancel(ctx, CancelScope{SessionID: req.SessionID, TurnOnly: true}, canceller, hooksFor(req.SessionID))
 		res = al.finishPlainStop(res)
 		for _, child := range children {
@@ -333,5 +362,15 @@ func (al *AgentLoop) killTreeBackgroundShells(sessionID string, hooksFor func(st
 		killed, failed := kill(id)
 		res.BackgroundKilled += killed
 		res.BackgroundFailed += failed
+	}
+}
+
+// notifyDiscarded hands each discarded input to the Stop caller's hook.
+func notifyDiscarded(hook func(DiscardedInput), discarded []DiscardedInput) {
+	if hook == nil {
+		return
+	}
+	for _, d := range discarded {
+		hook(d)
 	}
 }

@@ -48,6 +48,13 @@ func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, ag *AgentInsta
 		return
 	}
 
+	// U8 (FR-028): in a main, a connector is reached only by reply_to - the
+	// default send is refused once, visibly, never guessed to a sender.
+	if al.mainConnectorTurn(channel, sessionID) {
+		al.refuseMainConnectorDefaultSend(ctx, channel, sessionID, ag)
+		return
+	}
+
 	if err := al.bus.PublishOutbound(ctx, bus.OutboundMessage{
 		Channel:   channel,
 		ChatID:    chatID,

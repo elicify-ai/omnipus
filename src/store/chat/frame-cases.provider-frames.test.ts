@@ -13,7 +13,7 @@ import { useChatStore } from './store'
 import { useSessionStore } from '@/store/session'
 import { logDiagnostic } from '@/lib/telemetry'
 import { assembleFallbackNoteMessage } from './slices/provider-frames'
-import type { WsReceiveFrame } from '@/lib/ws'
+import type { ServerFrame } from '@/lib/ws'
 
 // Partial module mock: the telemetry sink is a process edge (mock at edges
 // only) — everything else in the module stays real. logDiagnostic is a no-op
@@ -56,7 +56,7 @@ function providerRetryFrame(fields: {
   provider?: string
   model?: string
   attempt?: number
-}): WsReceiveFrame {
+}): ServerFrame {
   return {
     type: 'provider_retry',
     session_id: SID,
@@ -70,7 +70,7 @@ function providerRetryFrame(fields: {
     max_attempts: 3,
     error_code: 'rate_limited',
     seq: fields.seq,
-  } as unknown as WsReceiveFrame
+  } as unknown as ServerFrame
 }
 
 function providerFallbackFrame(fields: {
@@ -79,7 +79,7 @@ function providerFallbackFrame(fields: {
   answered?: string
   unavailable?: string
   code?: 'rate_limited' | 'model_retired'
-}): WsReceiveFrame {
+}): ServerFrame {
   return {
     type: 'provider_fallback',
     session_id: SID,
@@ -88,7 +88,7 @@ function providerFallbackFrame(fields: {
     unavailable_model: fields.unavailable ?? 'primary-y',
     unavailable_code: fields.code ?? 'rate_limited',
     seq: fields.seq,
-  } as unknown as WsReceiveFrame
+  } as unknown as ServerFrame
 }
 
 function replayFallbackFrame(fields: {
@@ -98,7 +98,7 @@ function replayFallbackFrame(fields: {
   unavailable?: string
   message?: string
   code?: 'rate_limited' | 'model_retired'
-}): WsReceiveFrame {
+}): ServerFrame {
   return {
     type: 'replay_provider_fallback',
     session_id: SID,
@@ -108,7 +108,7 @@ function replayFallbackFrame(fields: {
     unavailable_model: fields.unavailable ?? 'primary-y',
     unavailable_code: fields.code ?? 'rate_limited',
     message: fields.message ?? EXPECTED_NOTE_TEXT,
-  } as unknown as WsReceiveFrame
+  } as unknown as ServerFrame
 }
 
 describe('provider_retry — fact threading (§7.1 item 3 / §8 item 2)', () => {
@@ -258,7 +258,7 @@ describe('provider_fallback — live path + the D17 once-per-CHAT-per-pair guard
       unavailable_model: 'primary-y',
       unavailable_code: 'rate_limited',
       seq: 10,
-    } as unknown as WsReceiveFrame
+    } as unknown as ServerFrame
     useChatStore.getState().handleFrame(violated)
 
     expect(fallbackNotes()).toHaveLength(0)
@@ -335,7 +335,7 @@ describe('replay_provider_fallback — persisted-note carrier (FB-2)', () => {
       entry_id: 'e-skip',
       timestamp: '2026-09-27T00:00:00Z',
       message: '',
-    } as unknown as WsReceiveFrame
+    } as unknown as ServerFrame
     useChatStore.getState().handleFrame(violated)
 
     expect(fallbackNotes()).toHaveLength(0)

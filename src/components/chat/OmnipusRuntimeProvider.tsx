@@ -82,10 +82,9 @@ function MemoryObserverLifecycle() {
 // live value to the creating agent.
 //
 // Resolution order:
-//   1. The LIVE store value when the session matches — it already reflects any
-//      live handover (set by the agent_switched frame). Preferring it first
-//      means a transient reconnect during a live handover can never be clobbered
-//      by a stale session-detail cache.
+//   1. The LIVE store value when the session matches — it already reflects the
+//      attached session's owner. Preferring it first means a transient
+//      reconnect can never be clobbered by a stale session-detail cache.
 //   2. The cached ['session-detail', id] — set fresh by the route loader on a
 //      full reload (the case this fix targets); active_agent_id ?? agent_id.
 //   3. The cached ['sessions'] list entry; active_agent_id ?? agent_id.
@@ -203,7 +202,9 @@ function WsLifecycle() {
 
   useEffect(() => {
     const conn = new WsConnection({
-      onFrame: handleFrame,
+      onFrames: (frames) => {
+        for (const frame of frames) handleFrame(frame)
+      },
       onConnected: async () => {
         setConnected(true);
         setConnectionError(null);
@@ -225,6 +226,8 @@ function WsLifecycle() {
         useChatStore.getState().drainOutboundQueue();
       },
       onDisconnected: () => {
+        // A retired effect connection must not overwrite its replacement's state.
+        if (connectionRef.current !== conn) return;
         const chatState = useChatStore.getState();
         useConnectionStore.getState().recordDisconnect(
           chatState.isStreaming ? chatState.lastAssistantMessageId : null,

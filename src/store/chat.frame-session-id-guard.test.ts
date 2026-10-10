@@ -29,7 +29,7 @@ import { useSessionStore } from './session'
 import { useConnectionStore } from './connection'
 import { useToolApprovalStore } from './toolApproval'
 import { pendingCancelAckSids } from './chat/runtime-state'
-import type { WsReceiveFrame } from '@/lib/ws'
+import type { ServerFrame } from '@/lib/ws'
 
 const ACTIVE_SID = 'guard-active-session'
 const OTHER_SID = 'guard-other-session-with-pending-cancel'
@@ -71,7 +71,7 @@ describe('chat frame routing — missing session_id is always dropped, never rea
       useChatStore.getState().handleFrame({
         type: 'done',
         stats: { tokens: 1, cost: 0, duration_ms: 1 },
-      } as unknown as WsReceiveFrame)
+      } as unknown as ServerFrame)
     })
     // Dropped: the active session's bucket must not exist/advance from this frame.
     expect(useChatStore.getState().sessionsById[ACTIVE_SID]).toBeUndefined()
@@ -92,7 +92,7 @@ describe('chat frame routing — missing session_id is always dropped, never rea
       useChatStore.getState().handleFrame({
         type: 'done',
         stats: { tokens: 1, cost: 0, duration_ms: 1 },
-      } as unknown as WsReceiveFrame)
+      } as unknown as ServerFrame)
     })
 
     // The pending cancel-ack tracking for OTHER_SID must be untouched — a
@@ -111,7 +111,7 @@ describe('chat frame routing — missing session_id is always dropped, never rea
         policy_rule: 'sec26',
         retry_after_seconds: 60,
         agent_id: 'mia',
-      } as unknown as WsReceiveFrame)
+      } as unknown as ServerFrame)
     })
     expect(useChatStore.getState().rateLimitEvent).toBeNull()
     expect(useConnectionStore.getState().connectionError).toContain('session_id')
@@ -128,7 +128,7 @@ describe('chat frame routing — missing session_id is always dropped, never rea
         agent_id: 'agent-x',
         turn_id: 'turn-x',
         expires_in_ms: 300_000,
-      } as unknown as WsReceiveFrame)
+      } as unknown as ServerFrame)
     })
     expect(useToolApprovalStore.getState().queue).toHaveLength(0)
     expect(useConnectionStore.getState().connectionError).toContain('session_id')
@@ -139,7 +139,7 @@ describe('chat frame routing — missing session_id is always dropped, never rea
       useSessionStore.setState({ activeSessionId: null, activeAgentId: null, activeAgentType: null })
       useChatStore.getState().handleFrame({
         type: 'session_started',
-      } as unknown as WsReceiveFrame)
+      } as unknown as ServerFrame)
     })
     expect(useSessionStore.getState().activeSessionId).toBeNull()
     expect(Object.keys(useChatStore.getState().sessionsById)).toHaveLength(0)
@@ -156,7 +156,7 @@ describe('chat frame routing — missing session_id is always dropped, never rea
         policy_rule: 'sec26',
         retry_after_seconds: 60,
         agent_id: 'mia',
-      } as unknown as WsReceiveFrame)
+      } as unknown as ServerFrame)
     })
     expect(useChatStore.getState().rateLimitEvent?.resource).toBe('turns')
     expect(useConnectionStore.getState().connectionError).toBeNull()

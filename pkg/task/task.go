@@ -43,7 +43,7 @@ const (
 	StatusInProgress Status = "in_progress" // worked by a human OR agent
 	StatusBlocked    Status = "blocked"     // auto side-state: unmet dependency
 	// StatusDone is terminal success — of the RUN that just finished. For a
-	// task with a repeating trigger (Trigger.IsRepeating: recurring/every) the
+	// task with a repeating trigger (Trigger.IsRepeating: recurring) the
 	// SERIES continues past this status: the scheduler re-arms the next
 	// occurrence regardless (pkg/agent/task_trigger.go OnTaskUpserted), and
 	// only trigger removal or RRULE exhaustion (COUNT/UNTIL) actually retires
@@ -125,14 +125,13 @@ type TriggerType string
 const (
 	TriggerManual    TriggerType = "manual"    // no auto trigger; starts on drag-to-in_progress / Run
 	TriggerOnce      TriggerType = "once"      // fire exactly once at config.at_ms
-	TriggerEvery     TriggerType = "every"     // fire every config.every_ms (>=1000)
-	TriggerRecurring TriggerType = "recurring" // fire on config.cron_expr
+	TriggerRecurring TriggerType = "recurring" // fire on config.rrule
 )
 
 // IsValidTriggerType reports whether t is a known (Tier-2) trigger kind.
 func IsValidTriggerType(t TriggerType) bool {
 	switch t {
-	case TriggerManual, TriggerOnce, TriggerEvery, TriggerRecurring:
+	case TriggerManual, TriggerOnce, TriggerRecurring:
 		return true
 	default:
 		return false
@@ -146,14 +145,8 @@ func IsValidTriggerType(t TriggerType) bool {
 type TriggerConfig struct {
 	// AtMs is the Unix epoch-milliseconds instant for a `once` fire.
 	AtMs *int64 `json:"at_ms,omitempty"`
-	// EveryMs is the interval in milliseconds for an `every` fire (min 1000).
-	EveryMs *int64 `json:"every_ms,omitempty"`
-	// CronExpr is the 5/6-field cron expression for a `recurring` fire (legacy
-	// path). Exactly one of CronExpr/Rrule is set on a `recurring` trigger.
-	CronExpr *string `json:"cron_expr,omitempty"`
 	// Rrule is the RFC 5545 RRULE body for a `recurring` fire (Calendar
-	// Recurrence Redesign). Requires DtstartMs and Tz. Exactly one of
-	// CronExpr/Rrule is set on a `recurring` trigger.
+	// Recurrence Redesign). Requires DtstartMs and Tz.
 	Rrule *string `json:"rrule,omitempty"`
 	// DtstartMs is the anchor instant (Unix epoch milliseconds) for Rrule —
 	// the first occurrence's wall-clock moment. Required sibling of Rrule.
@@ -172,8 +165,7 @@ type Trigger struct {
 }
 
 // IsRepeating reports whether tr's series survives a per-run terminal status
-// (done/failed) — a `recurring` (rrule or legacy cron_expr) or `every`
-// trigger keeps firing after any single run's outcome; only trigger
+// (done/failed) — a `recurring` (rrule) trigger keeps firing after any single run's outcome; only trigger
 // removal/change-to-manual or RRULE exhaustion (COUNT/UNTIL) actually ends
 // the series. `once` (and manual/nil) is deliberately excluded: its single
 // occurrence IS its whole series. nil-safe: a nil trigger is not repeating.
@@ -182,7 +174,7 @@ type Trigger struct {
 // OnTaskUpserted and pkg/gateway/rest_tasks.go's occurrence-selection filter
 // both call this instead of each re-deriving the same type check.
 func (tr *Trigger) IsRepeating() bool {
-	return tr != nil && (tr.Type == TriggerRecurring || tr.Type == TriggerEvery)
+	return tr != nil && tr.Type == TriggerRecurring
 }
 
 // TodoStatus is the tri-state status of a checklist Todo.
@@ -284,6 +276,10 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	AgentID string `json:"agent_id,omitempty"`
 	// Priority is 1 (highest) – 5 (lowest); 0 = unset (treated as 3 on read).
 	Priority int `json:"priority,omitempty"`
+	// RunIsolated forces every run of this task into a fresh independent chat,
+	// for either role (session-core FR-017). Default false: the run mode is
+	// derived from the assignee (an eligible main runs as a child of that main).
+	RunIsolated bool `json:"run_isolated,omitempty"`
 	// BlockedBy is the ordered DAG dependency set. A write-time cycle validator
 	// rejects self-edges and cycles; orphan edges are dropped on load; max
 	// depth 50.
@@ -453,6 +449,41 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// it is NOT part of the gen.Task wire contract and never crosses the
 	// gateway/SPA boundary (the REST task mapper does not copy it).
 	DelegationDepth int `json:"delegation_depth,omitempty"`
+	// Initiator is the agent that created or assigned this task by its own
+	// action (create_task, an agent's reassignment), with the onward budget that
+	// agent had inherited. Every AUTOMATIC start of the task (queue, dependency
+	// unblock, retry) re-authorizes it against the current delegation graph and
+	// carries the budget; a run a person or the scheduler starts directly
+	// consults nothing. Nil means a person or the scheduler created it.
+	// DISK-ONLY, like DelegationDepth: the REST mappers do not copy it and it
+	// must not be added to any contracts/ schema.
+	Initiator *Initiator `json:"initiator,omitempty"`
+}
+
+// Initiator is the agent whose own action (run_task, execute_plan) started a
+// run. A nil *Initiator everywhere means a person or the scheduler started it,
+// which is not delegation. It is DISK-ONLY and never on the wire, like
+// Task.DelegationDepth: the REST mappers do not copy it and it must not be
+// added to any contracts/ schema.
+type Initiator struct {
+	// AgentID is the initiating agent, taken from the tool wiring (never from
+	// ctx, which a task run re-stamps with the assignee).
+	AgentID string `json:"agent_id"`
+	// SessionID is the acting turn's transcript session, when known; the
+	// authorizer reads that session's record for an inherited onward budget.
+	SessionID string `json:"session_id,omitempty"`
+	// Depth is the acting turn's delegation-chain depth.
+	Depth int `json:"depth"`
+	// Inherited is the onward delegation budget the acting session itself had
+	// inherited when it started or created this work (nil = unrestricted). It
+	// is kept on the work item so a later automatic start, which has no acting
+	// session, still cannot exceed it.
+	Inherited *int `json:"inherited,omitempty"`
+	// Direct marks authority carried over from a run an agent started directly
+	// (run_task, execute_plan) onto the task for its automatic retry. Unlike
+	// an initiator that merely created or assigned the task, a Direct one gets
+	// no self-edge exemption: the first run needed the edge, so the retry does.
+	Direct bool `json:"direct,omitempty"`
 }
 
 // CreatedByAgent reports whether this task was created by the agent agentID.

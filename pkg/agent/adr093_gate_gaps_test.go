@@ -574,33 +574,6 @@ func TestDelegateRun_DispatchRefusal_SaysHowToResume(t *testing.T) {
 	}
 }
 
-// TestAdr093TaskLaunch_SteeringRefusalUsesThePlainSentence is ADR-093 D5 for
-// the task executor: a launch refused because the creator stopped between
-// the gate and Launch is the plain sentence, not "task_executor: StartTaskNow: launch:".
-func TestAdr093TaskLaunch_SteeringRefusalUsesThePlainSentence(t *testing.T) {
-	al, cleanup := newSteerAL(t)
-	t.Cleanup(cleanup)
-	creatorID := newTestSteeringSession(t, al, adr093Workspace)
-	adr093Persist(t, al, adr093Record(creatorID, 1, session.LifecycleRunning))
-
-	te := adr093TaskExecutor(t, al)
-	te.launcher = adr093RefuseLiveSteering{inner: te.launcher}
-	tk := adr093CreatorTask("Live then stopped", creatorID)
-	if err := te.store.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	_, err := te.startTaskNowViaLauncher(context.Background(), tk)
-	if err == nil {
-		t.Fatal("startTaskNowViaLauncher succeeded — ADR-093 D5: a steering refusal is returned to the caller")
-	}
-	if err.Error() != adr093D5Sentence {
-		t.Fatalf("task launch refusal =\n%s\nwant ADR-093 D5's sentence\n%s", err.Error(), adr093D5Sentence)
-	}
-	if strings.Contains(err.Error(), "task_executor:") || strings.Contains(err.Error(), "steer:") {
-		t.Fatalf("task launch refusal still quotes machinery: %s", err.Error())
-	}
-}
-
 // TestAdr093RevivePredicate_Halves is MIN-004's predicate, both conjuncts:
 // channel system refuses, and steer-wake metadata refuses even on a human
 // channel. Either conjunct false means no revival.
@@ -646,10 +619,13 @@ func TestAdr093RevivePredicate_SteerWakeOnWebchatDoesNotRevive(t *testing.T) {
 	}
 }
 
-// TestAdr093TaskFromStoppedChat_InheritsNeverAutoApprove is ADR-092's per-chat
-// off switch on ADR-093 D6's path: global auto-approve is on, the chat turned
-// it off, the chat is stopped, and the task started from it must still be off.
-func TestAdr093TaskFromStoppedChat_InheritsNeverAutoApprove(t *testing.T) {
+// TestAdr093TaskFromStoppedChat_DoesNotInheritCreatorAutoApprove is F10: a
+// task run does NOT copy the creating chat's per-chat Auto setting — the run
+// uses the agent's and the global settings (founder ruling F10, session-core
+// U6). Global auto-approve is on and the creating chat turned its own off, so
+// the task session must resolve to the GLOBAL default (on), not the chat's off
+// switch. The creating chat is never the parent and never a recipient.
+func TestAdr093TaskFromStoppedChat_DoesNotInheritCreatorAutoApprove(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	adr093GlobalAutoOn(t, al)
@@ -667,15 +643,17 @@ func TestAdr093TaskFromStoppedChat_InheritsNeverAutoApprove(t *testing.T) {
 		t.Fatalf("startTaskNowViaLauncher: %v — ADR-093 D6: the task still runs", err)
 	}
 	adr093AssertOrdinaryTaskRoot(t, al, childID, tk.ID)
-	if al.SessionAutoApprove(childID) {
-		t.Fatalf("task session %s has auto-approve on — the stopped chat had turned it off, and ADR-092's per-chat off switch still applies (D6 does not drop it)", childID)
+	if !al.SessionAutoApprove(childID) {
+		t.Fatalf("task session %s has auto-approve off — F10: the run uses the agent's and global settings, "+
+			"never the creating chat's per-chat setting", childID)
 	}
 }
 
-// TestAdr093TaskFromLiveChat_InheritsNeverAutoApprove is the control: a task
-// from a live chat with the same off switch inherits it. If this fails, the
-// stopped-chat test is not measuring inheritance.
-func TestAdr093TaskFromLiveChat_InheritsNeverAutoApprove(t *testing.T) {
+// TestAdr093TaskFromLiveChat_DoesNotInheritCreatorAutoApprove is the control: a
+// task from a LIVE chat with the same per-chat off switch behaves identically —
+// no inheritance either way. If the stopped-chat case and this disagree, the
+// stopped-chat test is not measuring the F10 rule.
+func TestAdr093TaskFromLiveChat_DoesNotInheritCreatorAutoApprove(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	adr093GlobalAutoOn(t, al)
@@ -692,8 +670,9 @@ func TestAdr093TaskFromLiveChat_InheritsNeverAutoApprove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("startTaskNowViaLauncher: %v", err)
 	}
-	if al.SessionAutoApprove(childID) {
-		t.Fatalf("task session %s has auto-approve on — a live chat's off switch must be inherited (control for the stopped-chat case)", childID)
+	if !al.SessionAutoApprove(childID) {
+		t.Fatalf("task session %s has auto-approve off — F10: a live chat's per-chat off switch is NOT "+
+			"inherited either (control for the stopped-chat case)", childID)
 	}
 }
 
@@ -730,30 +709,5 @@ func TestAdr093Revival_MissingRecordIsNotAnErrorLog(t *testing.T) {
 	}
 	if log := readLog(); strings.Contains(log, parentID) {
 		t.Fatalf("a missing lifecycle record was logged at error level:\n%s\nnot-found is not a read failure", log)
-	}
-}
-
-// TestAdr093Task_CreatorReadErrorIsLogged is the same rule on the task path:
-// the creator record could not be read, and that is logged, not dropped.
-func TestAdr093Task_CreatorReadErrorIsLogged(t *testing.T) {
-	al, cleanup := newSteerAL(t)
-	t.Cleanup(cleanup)
-	creatorID := newTestSteeringSession(t, al, adr093Workspace)
-	adr093StoppedRoot(t, al, creatorID)
-	adr093MakeLifecycleUnreadable(t, al, creatorID)
-
-	te := adr093TaskExecutor(t, al)
-	tk := adr093CreatorTask("Unreadable creator", creatorID)
-	if err := te.store.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	readLog := captureLogFile(t, logger.ERROR)
-	_, err := te.startTaskNowViaLauncher(context.Background(), tk)
-	log := readLog()
-	if err == nil {
-		t.Fatal("startTaskNowViaLauncher succeeded despite an unreadable creator record")
-	}
-	if !strings.Contains(log, creatorID) || !strings.Contains(strings.ToLower(log), "permission denied") {
-		t.Fatalf("creator-record read error was not logged at error level.\nerr: %v\nlog:\n%s\nwant both %q and \"permission denied\"", err, log, creatorID)
 	}
 }

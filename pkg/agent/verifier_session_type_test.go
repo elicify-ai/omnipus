@@ -16,9 +16,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/bus"
-	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -54,7 +51,7 @@ func TestVerifierSessionType_RealAdjudicationStampsVerifierType(t *testing.T) {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 
-	judgeStore := al.GetAgentStore(string(coreagent.IDJudge))
+	judgeStore := al.GetSessionStore()
 	if judgeStore == nil {
 		t.Fatal("judge session store not available")
 	}
@@ -94,7 +91,7 @@ func TestVerifierSessionType_ChatIDIsAPreCreatedSessionNotAnAdHocString(t *testi
 
 	chatID := al.newVerifierSessionChatID("agent:judge:verify:test-key", "task:t-precreate")
 
-	judgeStore := al.GetAgentStore(string(coreagent.IDJudge))
+	judgeStore := al.GetSessionStore()
 	if judgeStore == nil {
 		t.Fatal("judge session store not available")
 	}
@@ -107,38 +104,5 @@ func TestVerifierSessionType_ChatIDIsAPreCreatedSessionNotAnAdHocString(t *testi
 	}
 	if meta.Title != "Verifier: task:t-precreate" {
 		t.Errorf("pre-created session Title = %q, want %q", meta.Title, "Verifier: task:t-precreate")
-	}
-}
-
-// TestVerifierSessionType_FallsBackWhenJudgeNotRegistered proves
-// newVerifierSessionChatID degrades gracefully — never blocks adjudication
-// — when the Judge's session store cannot be resolved (the Judge is not
-// registered at all, e.g. a raw pkg/agent harness that never ran
-// coreagent.SeedConfig): it returns the ORIGINAL Wave-1 ad hoc
-// "verify:"+sessionKey construction verbatim, unstamped, rather than
-// erroring or panicking. Uses a minimal config with NO agents at all
-// (mirrors cancel_test.go's newCancelTestAgentLoop harness shape) so
-// al.GetAgentStore(string(coreagent.IDJudge)) genuinely returns nil.
-func TestVerifierSessionType_FallsBackWhenJudgeNotRegistered(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}},
-			// Deliberately no List entries — no Judge, no worker, nothing.
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
-		},
-	}
-	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
-	t.Cleanup(func() { al.Close() })
-
-	if store := al.GetAgentStore(string(coreagent.IDJudge)); store != nil {
-		t.Fatal("test premise broken: the Judge must NOT be registered in this harness")
-	}
-
-	sessKey := "agent:judge:verify:fallback-key"
-	got := al.newVerifierSessionChatID(sessKey, "task:t-fallback")
-	if want := "verify:" + sessKey; got != want {
-		t.Errorf("newVerifierSessionChatID with no Judge registered = %q, want the ad hoc fallback %q", got, want)
 	}
 }

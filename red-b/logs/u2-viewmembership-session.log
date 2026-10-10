@@ -1,0 +1,9 @@
+--- FAIL: TestSessionCoreU2_ArchiveEntryCarriesViewMembership (0.25s)
+    sessioncore_u2_archive_test.go:61: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-b-20261009/pkg/session/sessioncore_u2_archive_test.go:61
+        	Error:      	Should be true
+        	Test:       	TestSessionCoreU2_ArchiveEntryCarriesViewMembership
+        	Messages:   	FR-004/C-ARCHIVE: every archive entry must carry view_membership; got {"id":"m-1","role":"user","content":"hello","timestamp":"2023-11-14T22:13:20Z","agent_id":"mia"}
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/session	1.940s
+FAIL

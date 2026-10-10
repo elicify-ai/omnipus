@@ -90,9 +90,8 @@ func ToolDelegateSessionID(ctx context.Context) string {
 // the durable record on every later action — ADR-091 deleted the in-process
 // DelegateTaskState this classification used to be stamped on.
 //
-// Satisfied by *agent.AgentRegistry; defined as an interface here (mirroring
-// AgentRegistryReader in handoff.go) to avoid an import cycle
-// (tools -> agent -> tools).
+// Satisfied by *agent.AgentRegistry; defined as an interface here to avoid
+// an import cycle (tools -> agent -> tools).
 type DelegateAgentRegistry interface {
 	// IsExternalCLI reports whether agentID resolves to dispatch kind
 	// "external-cli" (subagent_3p). Returns false (native) for an unknown or
@@ -102,9 +101,8 @@ type DelegateAgentRegistry interface {
 
 // DelegateSessionStore is the subset of *session.UnifiedStore DelegateTool
 // needs to read back a running native task's own transcript entries for
-// action:"status" (W2). Defined as an interface (mirroring
-// HandoffSessionStore in handoff.go) to decouple from the concrete store
-// type.
+// action:"status" (W2). Defined as an interface to decouple from the
+// concrete store type.
 type DelegateSessionStore interface {
 	// ReadTranscript returns all transcript entries for the session.
 	ReadTranscript(sessionID string) ([]session.TranscriptEntry, error)
@@ -183,8 +181,7 @@ type DelegateTool struct {
 	// getAgentRegistry, when set, resolves the live agent registry used to
 	// classify a delegation target as native or external-CLI at
 	// task-creation time (W2). Called at task-creation time (not
-	// construction time) so hot reloads are reflected automatically,
-	// mirroring NewHandoffTool's getRegistry closure pattern. A nil/unset
+	// construction time) so hot reloads are reflected automatically. A nil/unset
 	// resolver leaves every task's Is3P at its zero value (false — treated
 	// as native), matching the pre-W2 behavior for anyone who doesn't wire
 	// it (e.g. this file's existing unit tests).
@@ -286,21 +283,6 @@ type DelegateTool struct {
 	// configuration bug, not a permission grant.
 	sessionMessagingEnabled func() bool
 	sessionMessagingWired   atomic.Bool
-
-	// requireParentAgentID is WRITE-ONLY on this type: SetRequireParentAgentID
-	// assigns it and nothing reads it. It used to back the FR-015 fail-closed
-	// parent-agent-id guard in this tool's own lifecycle-mint block; ADR-091
-	// moved that mint onto the launcher, and the guard now lives — and reads
-	// the same key directly — at
-	// pkg/agent/steer_launcher.go::SteerLauncher.Launch, which calls
-	// config.DelegateToolConfig.EffectiveRequireParentAgentID() itself. The
-	// resolver that was this field's only consumer has been deleted.
-	//
-	// The field and SetRequireParentAgentID survive ONLY because
-	// pkg/agent/loop_wire.go still calls the setter; all three must be
-	// deleted in one change by whoever owns loop_wire.go. Do not build
-	// anything new on this field — read the config key directly instead.
-	requireParentAgentID func() bool
 
 	// steerRateMu/steerRateWindows back the steer/respond rate cap (ADR-053
 	// §Contract Surface "Caps": 6/min, 16 KiB — session_messaging.steer_rate/
@@ -407,16 +389,6 @@ func (t *DelegateTool) sessionMessagingPlaneEnabled() bool {
 		return false
 	}
 	return t.sessionMessagingEnabled()
-}
-
-// SetRequireParentAgentID stores a reader for
-// tools.delegate.require_parent_agent_id (R2-MAJ-015) that this tool no
-// longer consults — see the requireParentAgentID field doc. The FR-015
-// guard it used to feed now reads the key itself at
-// pkg/agent/steer_launcher.go::SteerLauncher.Launch. Retained only so
-// pkg/agent/loop_wire.go keeps compiling; delete both together.
-func (t *DelegateTool) SetRequireParentAgentID(fn func() bool) {
-	t.requireParentAgentID = fn
 }
 
 // isSessionMessagingAction reports whether a delegate action touches the
@@ -601,21 +573,38 @@ func (t *DelegateTool) Description() string {
 		"to address a child; use list_jobs to see everything you have outstanding. " +
 		"action=\"inbox\" drains messages the child has pushed back to you (progress/" +
 		"checkpoint/artifact/blocker/question/handback); action=\"inbox_ack\" acknowledges " +
-		"them. action=\"steer\" injects an instruction at the child's next tool boundary " +
-		"(NOT available for a delegation running on an external CLI, subagent_3p: " +
-		"claude-code/codex/opencode — use respond or resume instead); " +
-		"action=\"respond\" replies to one of the child's messages by correlation_id — the text is " +
-		"delivered to the child as an ordinary message, always available for a delegation you started. " +
+		"them. action=\"steer\" injects an instruction into the child: at its next tool boundary for a " +
+		"native worker, or — for a worker running on an external CLI (subagent_3p: claude-code/codex/opencode) " +
+		"— by interrupting the subprocess and continuing the same CLI conversation. It needs " +
+		"a CLI run in flight: for a child with none (stopped, finished, not yet started, or after a " +
+		"gateway restart) the external steer is refused as not_steerable. It never revives the child " +
+		"and never starts a fresh conversation; use resume for that. " +
+		"action=\"respond\" answers one open question of the child, identified by its correlation_id " +
+		"(an unknown or already-answered id is refused). A native child receives the answer as an " +
+		"ordinary message. For a live external CLI child (subagent_3p) the answer is delivered into its " +
+		"running CLI conversation by interrupting the subprocess; for a stopped or finished one it goes " +
+		"through the same revival as resume, with the same conditions. An external CLI child cannot call message_parent, so it " +
+		"cannot raise a question that way. " +
 		"action=\"stop_all\" stops that child and every helper under it. action=\"redirect\" stops the helper's current turn, " +
 		"then resumes it with the new instruction; this does not mark the helper failed or end its goal. " +
 		delegateClearGoalDescription +
 		"action=\"resume\" continues a stopped child on the same conversation, or starts its next " +
-		"round when it is done or failed; optional text adds instructions. " +
+		"round when it is done or failed; optional text adds instructions. On a child that is " +
+		"still running resume does nothing and sends no text (use steer). For a worker running on an external CLI (subagent_3p) " +
+		"it depends on two facts, not on whether the worker is stopped or finished: has its CLI " +
+		"conversation started, and does this gateway still retain it? If it started and is still " +
+		"retained, resume continues that same conversation. If it started and is no longer retained " +
+		"(released when its episode ended, or the gateway restarted), resume is refused — start a " +
+		"new delegation instead. If it never started (stopped before its CLI ever ran), resume runs " +
+		"it for the first time. Resume never creates a new session. " +
 		"action=\"redirect\" replaces the child's current turn with the new instruction — text is " +
-		"required (NOT available for an external CLI child; use stop_all or resume). " +
+		"required (refused as not_steerable for an external CLI child: it has no steerable turn to " +
+		"replace; use steer to instruct one with a CLI run in flight, stop_all to stop it, or resume under the " +
+		"conditions above; otherwise start a new delegation). " +
 		"action=\"peek\" reads a child's latest checkpoint/progress without side effects. " +
-		"Optionally provide agent_id to target a specific agent from your delegation " +
-		"allowlist; omit it to run a generic subagent under your own agent."
+		"action=\"run\" requires agent_id — the specific agent to delegate to, which must be in " +
+		"your delegation allowlist. There is no default target and no implicit substitution of " +
+		"your own id: a caller delegating to itself passes its own agent_id explicitly."
 }
 
 func (t *DelegateTool) Scope() ToolScope { return ScopeCore }
@@ -679,15 +668,17 @@ func (t *DelegateTool) Parameters() map[string]any {
 			},
 			"agent_id": map[string]any{
 				"type": "string",
-				"description": "Optional: the id of a specific agent to delegate to (must be in your " +
-					"delegation allowlist). Omit to run a generic subagent under your own agent.",
+				"description": "Required for action=\"run\": the id of the specific agent to delegate " +
+					"to (must be in your delegation allowlist). There is no default target and no " +
+					"implicit substitution — a caller delegating to itself passes its own agent_id " +
+					"explicitly.",
 			},
 			"action": map[string]any{
 				"type": "string",
 				"enum": []string{"run", "status", "inbox", "inbox_ack", "steer", "respond", "stop_all", "clear_goal", "resume", "redirect", "peek"},
 				"description": "\"run\" (default) delegates a new task. \"status\" checks progress. \"inbox\" " +
 					"drains child->parent messages. \"inbox_ack\" acknowledges them. \"steer\" injects an " +
-					"instruction. \"respond\" answers one of the child's messages. \"stop_all\" stops the " +
+					"instruction. \"respond\" answers one of the child's open questions. \"stop_all\" stops the " +
 					"child and every helper under it. \"resume\" continues a stopped child or starts its " +
 					"next round. \"redirect\" replaces the child's current turn with a new instruction. " +
 					"\"peek\" reads latest checkpoint/progress." +
@@ -765,7 +756,7 @@ func (t *DelegateTool) Parameters() map[string]any {
 			},
 			"text": map[string]any{
 				"type":        "string",
-				"description": "Required for action=\"steer\", \"respond\", \"resume\" and \"redirect\": the instruction or answer text.",
+				"description": "Required for action=\"steer\", \"respond\" and \"redirect\": the instruction or answer text. Optional for \"resume\": additional instructions.",
 			},
 			"correlation_id": map[string]any{
 				"type":        "string",
@@ -784,7 +775,7 @@ func (t *DelegateTool) Parameters() map[string]any {
 // and dispatch have returned, so there is no later completion for a callback
 // to report. The AsyncCallback that used to be threaded in here reached four
 // levels down (executeRun -> launchAndDispatch, executeRespond /
-// executeResume -> spawnCorrectiveFollowUp) and was discarded, unread, at
+// executeResume) and was discarded, unread, at
 // every one of those leaves — a callback the registry could hand over but
 // that could never fire. The remaining `nil` arguments below are the last
 // trace of it; the `AsyncCallback` parameters on delegate_run.go,

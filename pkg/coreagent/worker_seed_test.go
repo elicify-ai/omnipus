@@ -96,10 +96,11 @@ func TestWorkerNotCoreAgent(t *testing.T) {
 }
 
 // TestSeedBaseDelegationPolicies verifies fresh defaults: Jim delegates to
-// Planner, Researcher, General Purpose, Jim and Ava; Planner delegates only
-// to Researcher with depth 2; General Purpose delegates to itself. Other
-// roles have no onward defaults. SeededEdgeDepth bounds self-edge depth.
-// The workspace graph remains the runtime authority.
+// Planner, Researcher, General Purpose, Jim and Ava; Planner delegates to
+// itself and to Researcher with depth 2; General Purpose delegates to itself.
+// Every other role (Mia, Ava, Admin, Researcher, and customs) ships a single
+// self-edge (settled design, 2026-10-09). SeededEdgeDepth bounds self-edge
+// depth. The workspace graph remains the runtime authority.
 func TestSeedBaseDelegationPolicies(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg))
@@ -152,8 +153,14 @@ func TestSeedBaseDelegationPolicies(t *testing.T) {
 		seedModesToEdgeModes(jimDP.Modes),
 		"Jim's seeded modes, translated onto a workspace graph edge, must collapse to [direct, task]")
 
+	// Settled design: every non-system agent ships a single self-edge — Mia,
+	// Ava, Admin and Researcher included (Admin's is dropped from any workspace
+	// graph because Admin is off-team, but the SEED must still carry it).
 	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDAva, coreagent.IDAdmin, coreagent.IDResearcher} {
-		assert.Nil(t, coreagent.SeedDelegationEdges(id), "%s has no shipped delegation edge", id)
+		idp := coreagent.SeedDelegationEdges(id)
+		require.NotNil(t, idp, "%s must ship a default self-edge", id)
+		assert.Len(t, idp.To, 1, "%s ships exactly one edge (its self-edge)", id)
+		assert.True(t, hasTarget(idp, string(id)), "%s must seed a self-edge to itself", id)
 	}
 	workerDP := coreagent.SeedDelegationEdges(coreagent.IDWorker)
 	require.NotNil(t, workerDP)
@@ -208,8 +215,7 @@ func TestWorkerToolPolicyTightensGlobalCeiling(t *testing.T) {
 		"configure_provider", "list_providers", "test_provider", "list_models",
 		"get_config", "set_config", "run_doctor", "get_usage",
 		"create_agent", "update_agent", "delete_agent", "read_agent_metadata",
-		"create_task", "delete_task", "create_task_in_workspace", "update_task_in_workspace",
-		"delete_task_in_workspace", "list_tasks_in_workspace",
+		"create_task", "delete_task",
 		"create_workspace", "update_workspace", "delete_workspace", "list_workspaces", "get_workspace",
 		// inspect_session (fix-wave finding #2): the global ceiling now seeds
 		// "allow" for this tool (defaults.go), so an absent entry here would

@@ -35,11 +35,11 @@ type adr091AuditRow struct {
 	// deleted/renamed directory makes the check pass by accident, proving nothing (mirrors the
 	// "Address not borrowed" bug where a --include glob matched zero files).
 	mustDirExist string
-	// expectedSoleFile: for a row whose `expected` is exactly 1 (not 0), the ONE occurrence must
-	// live in this file — not just "somewhere in scope". Pins the surviving occurrence to the
-	// legitimate site instead of merely counting it, so the row fails just as loudly if the
-	// literal moves (or is duplicated) to any other file as it does if it vanishes entirely.
-	expectedSoleFile string
+	// expectedFiles: for a row whose `expected` is a small positive count (not 0), every occurrence
+	// must live in one of these files — not just "somewhere in scope". Pins the surviving
+	// occurrences to their legitimate sites instead of merely counting them, so the row fails just
+	// as loudly if a literal moves (or is duplicated) to any other file as it does if one vanishes.
+	expectedFiles []string
 }
 
 func adr091AuditRows(repoRoot string, pkgGoSentinel func([]string) *exec.Cmd) []adr091AuditRow {
@@ -80,10 +80,10 @@ func adr091AuditRows(repoRoot string, pkgGoSentinel func([]string) *exec.Cmd) []
 			// a second acceptance site appears anywhere in pkg/tools/ (count rises to 2, or the sole
 			// hit moves out of delegate_run.go). Same shape as "One runner caller" below, the one
 			// original row that already proved its own mechanism this way.
-			name:             "allow_blocking_question refused by name, not accepted anywhere",
-			cmd:              buildGrep(repoRoot, []string{"pkg/tools/"}, []string{"allow_blocking_question"}, []string{"*.go"}, []string{"*_test.go"}),
-			expected:         1,
-			expectedSoleFile: "pkg/tools/delegate_run.go",
+			name:          "allow_blocking_question refused by name, not accepted anywhere",
+			cmd:           buildGrep(repoRoot, []string{"pkg/tools/"}, []string{"allow_blocking_question"}, []string{"*.go"}, []string{"*_test.go"}),
+			expected:      1,
+			expectedFiles: []string{"pkg/tools/delegate_run.go"},
 		},
 		{
 			name:          "Prompt clean",
@@ -116,11 +116,18 @@ func adr091AuditRows(repoRoot string, pkgGoSentinel func([]string) *exec.Cmd) []
 			sentinelLabel: "pkg/**/*.go (excl _test.go) contains real package declarations",
 		},
 		{
-			// The one row that asserts a positive count: its own >=1 assertion already proves the
-			// search mechanism works, so it is exempt from the sentinel rule above.
-			name:     "One runner caller",
-			cmd:      buildGrepExcludeFile(repoRoot, []string{"pkg/"}, []string{"runExternalCLISubTurn("}, []string{"*.go"}, []string{"*_test.go", "external_dispatch.go"}),
-			expected: 1,
+			// A positive-count row: its own exact-count assertion already proves the search
+			// mechanism works, so it is exempt from the sentinel rule above.
+			//
+			// TWO production callers since U10b/FR-032: the delegate steered turn
+			// (steer_turn_body.go) AND the task external-CLI run (task_executor_run.go, the
+			// consumer that makes a task-origin external run steerable). Before U10b only the
+			// delegate path called it. Pinning both files means the row still fails if either
+			// vanishes OR if a third, unreviewed caller appears.
+			name:          "Two runner callers (delegate steered turn + task external CLI)",
+			cmd:           buildGrepExcludeFile(repoRoot, []string{"pkg/"}, []string{"runExternalCLISubTurn("}, []string{"*.go"}, []string{"*_test.go", "external_dispatch.go"}),
+			expected:      2,
+			expectedFiles: []string{"pkg/agent/steer_turn_body.go", "pkg/agent/task_executor_run.go"},
 		},
 		{
 			name:     "ParentDurableKey gone",
@@ -263,8 +270,11 @@ func TestADR091_ResidualAudit(t *testing.T) {
 				return
 			}
 
-			if tt.expectedSoleFile != "" {
-				wantPath := filepath.Join(repoRoot, tt.expectedSoleFile)
+			if len(tt.expectedFiles) > 0 {
+				wantPaths := make(map[string]bool, len(tt.expectedFiles))
+				for _, f := range tt.expectedFiles {
+					wantPaths[filepath.Join(repoRoot, f)] = true
+				}
 				for _, line := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
 					if line == "" {
 						continue
@@ -276,12 +286,12 @@ func TestADR091_ResidualAudit(t *testing.T) {
 					if idx := strings.Index(line, ":"); idx >= 0 {
 						filePath = line[:idx]
 					}
-					if filePath != wantPath {
+					if !wantPaths[filePath] {
 						t.Errorf(
-							"the sole occurrence must be in %s, but found one in %s — either the "+
-								"rejection moved (fine, update expectedSoleFile) or a SECOND, "+
-								"unreviewed site now references this banned literal (not fine):\n%s",
-							tt.expectedSoleFile, filePath, out,
+							"an occurrence must be in one of %v, but found one in %s — either the "+
+								"site moved (fine, update expectedFiles) or a new, unreviewed site "+
+								"now references this banned literal (not fine):\n%s",
+							tt.expectedFiles, filePath, out,
 						)
 					}
 				}
@@ -290,16 +300,36 @@ func TestADR091_ResidualAudit(t *testing.T) {
 	}
 }
 
-// TestExternalRunner_SingleProductionCaller verifies that runExternalCLISubTurn has exactly one production caller.
-func TestExternalRunner_SingleProductionCaller(t *testing.T) {
+// TestExternalRunner_TwoProductionCallers verifies that runExternalCLISubTurn has exactly two
+// production callers — the delegate steered turn (steer_turn_body.go) and the task external-CLI run
+// (task_executor_run.go, added by U10b/FR-032 so a task-origin external run is steerable). Before
+// U10b there was one; the shared run body is legitimately reached from both paths now.
+func TestExternalRunner_TwoProductionCallers(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 
 	// Search for callers of runExternalCLISubTurn, excluding test files and the definition itself
 	cmd := buildGrepExcludeFile(repoRoot, []string{"pkg/"}, []string{"runExternalCLISubTurn("}, []string{"*.go"}, []string{"*_test.go", "external_dispatch.go"})
 
 	count, out := runGrepCmd(t, cmd)
-	if count != 1 {
-		t.Errorf("Expected exactly 1 production caller of runExternalCLISubTurn, got %d\nGrep output:\n%s", count, out)
+	if count != 2 {
+		t.Errorf("Expected exactly 2 production callers of runExternalCLISubTurn, got %d\nGrep output:\n%s", count, out)
+	}
+	want := map[string]bool{
+		filepath.Join(repoRoot, "pkg/agent/steer_turn_body.go"):   true,
+		filepath.Join(repoRoot, "pkg/agent/task_executor_run.go"): true,
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		filePath := line
+		if idx := strings.Index(line, ":"); idx >= 0 {
+			filePath = line[:idx]
+		}
+		if !want[filePath] {
+			t.Errorf("unexpected production caller site %s — the shared run body must be reached only from the reviewed paths:\n%s",
+				filePath, out)
+		}
 	}
 }
 

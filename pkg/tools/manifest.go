@@ -64,7 +64,7 @@ var fullManifestToolNames = map[string]struct{}{
 	"list_tasks": {}, "message_parent": {}, "plan_correct": {}, "read_file": {},
 	"recall_conversation": {}, "recall_memory": {}, "remember": {}, "search_web": {},
 	"send_file": {}, "send_message": {}, "set_goal": {}, "set_todos": {},
-	"stop_plan": {}, "switch_agent": {}, "update_task": {}, "write_file": {},
+	"stop_plan": {}, "update_task": {}, "write_file": {},
 }
 
 // infraManifestToolNames is the set of infrastructure tools that are always
@@ -166,20 +166,19 @@ var administrativeToolNames = map[string]struct{}{
 	// state. Classifying it here narrows only ToolSearch's speculative
 	// cross-category promotion; it is NOT a policy mechanism (the tool's
 	// policy is the ordinary two-level ask) and does not make it Admin-only.
-	"environment_setup":        {},
-	"delete_agent":             {},
-	"delete_task":              {},
-	"delete_task_in_workspace": {},
-	"delete_workspace":         {},
-	"remove_mcp_server":        {},
-	"remove_skill":             {},
-	"disable_channel":          {},
-	"enable_channel":           {},
-	"add_mcp_server":           {},
-	"configure_channel":        {},
-	"configure_provider":       {},
-	"set_config":               {},
-	"stop_plan":                {},
+	"environment_setup":  {},
+	"delete_agent":       {},
+	"delete_task":        {},
+	"delete_workspace":   {},
+	"remove_mcp_server":  {},
+	"remove_skill":       {},
+	"disable_channel":    {},
+	"enable_channel":     {},
+	"add_mcp_server":     {},
+	"configure_channel":  {},
+	"configure_provider": {},
+	"set_config":         {},
+	"stop_plan":          {},
 }
 
 // administrativeExemptNames carries a one-line reason for every static tool

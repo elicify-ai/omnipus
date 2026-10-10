@@ -11,7 +11,6 @@ enum:
   - ping
   - attach_session
   - device_pairing_response
-  - session_close
   - ask_user_answer
   # ── Server → client ─────────────────────────────────────────────────────────
   - session_started
@@ -28,7 +27,6 @@ enum:
   - replay_message
   - rate_limit
   - media
-  - agent_switched
   - tool_approval_required
   - tool_approval_resolved
   - session_state
@@ -38,7 +36,6 @@ enum:
   - pong
   - ask_user_question
   # ── Server → client (internal / ack) ────────────────────────────────────────
-  - session_close_ack
   - device_pairing_request
   - browser_input_offer
   - browser_input_answer

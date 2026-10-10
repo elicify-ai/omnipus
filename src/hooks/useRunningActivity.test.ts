@@ -21,6 +21,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import { fetchAgents } from '@/lib/api'
+import { makeAgent } from '@/test/factories'
 import { useRunningActivity, mergeAndCapFinished } from './useRunningActivity'
 import type { ActivityItem, AgentActivityItem, JudgeActivityItem } from './useRunningActivity'
 
@@ -37,8 +38,8 @@ function makeClient() {
 }
 
 const AGENTS: Agent[] = [
-  { id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', color: '#4488ff', icon: 'compass' } as Agent,
-  { id: 'ext-1', name: 'ClaudeCode', type: 'subagent_3p', locked: false, status: 'active' } as Agent,
+  makeAgent({ id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', color: '#3B82F6' }),
+  makeAgent({ id: 'ext-1', name: 'ClaudeCode', type: 'subagent_3p', locked: false, status: 'active' }),
 ]
 
 function makeAssistantMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
@@ -60,7 +61,12 @@ function makeSpan(overrides: Partial<SubagentSpan> & { status: SubagentSpan['sta
     agentId: overrides.agentId,
     childSessionId: overrides.childSessionId,
     statusLine: overrides.statusLine,
-    lifecycleState: overrides.lifecycleState,
+    // A span is running ONLY via its lifecycleState (DEL-F27) — a fixture that
+    // declares status:'running' is a genuinely running child, so it carries
+    // lifecycleState:'running'. A success span is a completed child.
+    lifecycleState:
+      overrides.lifecycleState ??
+      (overrides.status === 'running' ? 'running' : overrides.status === 'success' ? 'completed' : undefined),
     lastUpdateAt: overrides.lastUpdateAt,
   }
   if (overrides.status === 'running') {
@@ -651,7 +657,7 @@ describe('useRunningActivity — bash session tracking survives turn finalizatio
     client.clear()
   })
 
-  it('resolveSpanAgentId falls back correctly when the originating delegate call is baked into a finalized message', async () => {
+  it('uses the stamped span.agentId even when the originating delegate call is baked into a finalized message (DEL-F26)', async () => {
     const client = makeClient()
     act(() => {
       useChatStore.setState({
@@ -659,8 +665,8 @@ describe('useRunningActivity — bash session tracking survives turn finalizatio
           makeAssistantMessage({
             id: 'msg_delegate_baked',
             status: 'done',
-            tool_calls: [makeDelegateToolCall({ id: 'call_delegate_baked', call_id: 'call_delegate_baked', params: { agent_id: 'ray' } })],
-            spans: [makeSpan({ status: 'running', parentCallId: 'call_delegate_baked', agentId: 'someone-else' })],
+            tool_calls: [makeDelegateToolCall({ id: 'call_delegate_baked', call_id: 'call_delegate_baked', params: { agent_id: 'jim-parent' } })],
+            spans: [makeSpan({ status: 'running', parentCallId: 'call_delegate_baked', agentId: 'ray' })],
           }),
         ],
         toolCalls: {}, // the delegate call has already been baked out of the live map
@@ -676,9 +682,9 @@ describe('useRunningActivity — bash session tracking survives turn finalizatio
       const item = result.current.running[0]
       expect(item.kind).toBe('agent')
       if (item.kind === 'agent') {
-        // Must prefer the baked delegate call's agent_id ('ray') over the
-        // span's own agentId ('someone-else') — same fix as the live-map
-        // case, now proven to also work when the call is baked.
+        // The span's own stamped agentId ('ray') decides — the baked delegate
+        // call's params.agent_id ('jim-parent') is never consulted.
+        expect(item.agentId).toBe('ray')
         expect(item.agentName).toBe('Ray')
       }
     })
@@ -744,16 +750,15 @@ describe('useRunningActivity — terminal span', () => {
   })
 })
 
-// ── Native named-target delegation misattribution fix ───────────────────────
+// ── Agent identity resolution — the stamped span.agentId is authoritative ────
 //
-// Regression coverage for the bug described in useRunningActivity.ts's
-// resolveSpanAgentId doc comment: for native delegation to a named target
-// agent, the backend's subagent_start/subagent_end frame carries the
-// PARENT's agent_id, not the target's. The hook must prefer the originating
-// `delegate` tool call's own `params.agent_id` when present.
+// DEL-F26: a span's own emitted `agentId` (set by the start/end reducer from
+// SubagentStartFrame.AgentId / SubagentEndFrame.AgentId) is the only source of
+// truth. The former originating-`delegate`-call `params.agent_id` workaround is
+// gone, so a delegate call naming a different agent must NOT override it.
 
-describe('useRunningActivity — agent identity resolution (native named-target delegation)', () => {
-  it('prefers the originating delegate call\'s agent_id over a differing span.agentId', async () => {
+describe('useRunningActivity — agent identity resolution (stamped span.agentId)', () => {
+  it('uses the stamped span.agentId even when an originating delegate call names a different agent', async () => {
     const client = makeClient()
     act(() => {
       useChatStore.setState({
@@ -763,8 +768,7 @@ describe('useRunningActivity — agent identity resolution (native named-target 
               makeSpan({
                 spanId: 'span_mismatch',
                 status: 'running',
-                // Backend limitation: this is the PARENT's id, not the delegate's.
-                agentId: 'jim-parent',
+                agentId: 'ray',
                 parentCallId: 'call_delegate_1',
               }),
             ],
@@ -773,7 +777,7 @@ describe('useRunningActivity — agent identity resolution (native named-target 
         toolCalls: {
           call_delegate_1: makeDelegateToolCall({
             id: 'call_delegate_1',
-            params: { agent_id: 'ray' },
+            params: { agent_id: 'jim-parent' }, // disagrees with the stamped span.agentId
           }),
         },
       })
@@ -791,7 +795,8 @@ describe('useRunningActivity — agent identity resolution (native named-target 
       const item = result.current.running[0]
       expect(item.kind).toBe('agent')
       if (item.kind === 'agent') {
-        // Resolved via the delegate call's agent_id ('ray'), NOT span.agentId ('jim-parent').
+        // Resolved from the stamped span.agentId ('ray'), NOT the delegate
+        // call's params.agent_id ('jim-parent').
         expect(item.agentId).toBe('ray')
         expect(item.agentName).toBe('Ray')
         expect(item.agentType).toBe('native')
@@ -800,7 +805,7 @@ describe('useRunningActivity — agent identity resolution (native named-target 
     client.clear()
   })
 
-  it('falls back to span.agentId without crashing when the originating call is not found (scrolled out)', async () => {
+  it('uses span.agentId without crashing when the originating call is not found (scrolled out)', async () => {
     const client = makeClient()
     act(() => {
       useChatStore.setState({
@@ -839,7 +844,7 @@ describe('useRunningActivity — agent identity resolution (native named-target 
     client.clear()
   })
 
-  it('uses span.agentId (the parent\'s own id) when the originating call has no agent_id param (untargeted delegation)', async () => {
+  it('uses span.agentId for an untargeted delegate call (no agent_id param)', async () => {
     const client = makeClient()
     act(() => {
       useChatStore.setState({
@@ -849,7 +854,7 @@ describe('useRunningActivity — agent identity resolution (native named-target 
               makeSpan({
                 spanId: 'span_untargeted',
                 status: 'running',
-                agentId: 'ray', // untargeted delegation: span.agentId IS the parent's own id, and is correct here.
+                agentId: 'ray',
                 parentCallId: 'call_delegate_untargeted',
               }),
             ],
@@ -1174,7 +1179,7 @@ describe('useRunningActivity — elapsed time ticking', () => {
         messages: s.messages.map((m) => ({
           ...m,
           spans: (m.spans ?? []).map((sp) =>
-            sp.spanId === 'span_tick' ? { ...sp, status: 'success' as const, durationMs: 9999 } : sp,
+            sp.spanId === 'span_tick' ? { ...sp, status: 'success' as const, lifecycleState: 'completed' as const, durationMs: 9999 } : sp,
           ),
         })),
       }))
@@ -1203,7 +1208,7 @@ describe('useRunningActivity — elapsed time ticking', () => {
         messages: s.messages.map((m) => ({
           ...m,
           spans: (m.spans ?? []).map((sp) =>
-            sp.spanId === 'span_tick' ? { spanId: sp.spanId, parentCallId: sp.parentCallId, taskLabel: sp.taskLabel, agentId: sp.agentId, status: 'running' as const } : sp,
+            sp.spanId === 'span_tick' ? { spanId: sp.spanId, parentCallId: sp.parentCallId, taskLabel: sp.taskLabel, agentId: sp.agentId, status: 'running' as const, lifecycleState: 'running' as const } : sp,
           ),
         })),
       }))

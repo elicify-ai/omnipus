@@ -159,8 +159,6 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avata
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -190,7 +188,7 @@ function resetStores() {
 
 beforeEach(() => {
   resetStores()
-  mockComposerSend.mockClear()
+  mockComposerSend.mockReset()
   mockSetText.mockClear()
   // One test below overrides useComposerRuntime's return value (to control
   // composerRuntime.getState().text for the client-command-interception
@@ -240,22 +238,22 @@ describe('OmnipusComposer — mid-turn steering send (Enter)', () => {
     expect(screen.queryByTestId('chat-send-mid-stream')).not.toBeInTheDocument()
   })
 
-  it('a typed client command ("/clear") mid-stream still intercepts locally instead of steering literal text into the turn', async () => {
-    // "/clear" is NOT available_while_streaming (see the mocked commands
-    // list above), so it never matches the mid-stream-filtered menu —
-    // shouldShowSlash is false, routing this Enter through
-    // submitMidStreamMessage()'s OWN interceptClientCommand() check rather
-    // than the menu's Enter-selects-item branch (covered by the next
-    // describe block below).
+  it('typing /clear mid-stream does not start a new chat', async () => {
+    // /clear is not a client command (FR-007). It must not call startNewSession.
     const realStartNewSession = useSessionStore.getState().startNewSession
     const startNewSession = vi.fn()
     act(() => { useSessionStore.setState({ startNewSession }) })
 
     try {
       const { useComposerRuntime } = await import('@assistant-ui/react')
+      let composerText = '/clear'
+      const sentTexts: string[] = []
+      // Founder X3: observe the unchanged command at the actual runtime-send
+      // boundary, including any setText rewrite made before that send.
+      mockComposerSend.mockImplementation(() => { sentTexts.push(composerText) })
       ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
-        getState: () => ({ text: '/clear' }),
-        setText: mockSetText,
+        getState: () => ({ text: composerText }),
+        setText: vi.fn((text: string) => { composerText = text }),
         addAttachment: vi.fn(),
         subscribe: vi.fn(() => vi.fn()),
         send: mockComposerSend,
@@ -267,10 +265,9 @@ describe('OmnipusComposer — mid-turn steering send (Enter)', () => {
       act(() => { fireEvent.change(input, { target: { value: '/clear' } }) })
       act(() => { fireEvent.keyDown(input, { key: 'Enter' }) })
 
-      // Intercepted locally — the client command ran...
-      expect(startNewSession).toHaveBeenCalledTimes(1)
-      // ...and the literal text "/clear" was never steered into the turn.
-      expect(mockComposerSend).not.toHaveBeenCalled()
+      expect(startNewSession).not.toHaveBeenCalled()
+      expect(mockComposerSend).toHaveBeenCalledTimes(1)
+      expect(sentTexts).toEqual(['/clear'])
     } finally {
       act(() => { useSessionStore.setState({ startNewSession: realStartNewSession }) })
     }

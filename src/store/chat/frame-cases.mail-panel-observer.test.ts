@@ -41,7 +41,7 @@ import { useChatStore } from './store'
 import { useSessionStore } from '@/store/session'
 import { logDiagnostic } from '@/lib/telemetry'
 import { MailPanelObserverAckFrame, MailPanelObserverErrorFrame } from '@/lib/api/generated/ws-schemas'
-import type { WsReceiveFrame } from '@/lib/ws'
+import type { ServerFrame } from '@/lib/ws'
 
 vi.mock('@/lib/telemetry', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/telemetry')>()
@@ -83,7 +83,7 @@ afterEach(() => {
 })
 
 function send(frame: object): void {
-  useChatStore.getState().handleFrame(frame as unknown as WsReceiveFrame)
+  useChatStore.getState().handleFrame(frame as unknown as ServerFrame)
 }
 
 function unknownFrameWarnings(): unknown[][] {

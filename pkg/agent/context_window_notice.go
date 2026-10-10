@@ -51,12 +51,3 @@ func (ts *turnState) recordContextWindowNotice(notice generated.ContextWindowNot
 	}
 	return &frame, nil
 }
-
-// transcriptModelHistoryRole keeps classified UI diagnostics out of hydration,
-// even when a stored entry also has an ordinary role or Content.
-func transcriptModelHistoryRole(entry *session.TranscriptEntry) string {
-	if entry.Type == session.EntryTypeContextWindowNotice {
-		return ""
-	}
-	return entry.Role
-}

@@ -676,10 +676,6 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 	}
 	stg.agentLoop.WireTier13Deps(tier13)
 
-	// SSE chat endpoint — kept for backward compatibility; streaming tokens now route through WebSocket.
-	sseHandler := newSSEHandler(stg.msgBus, nil, stg.allowedOrigin, func() *config.Config { return stg.cfg })
-	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/chat", sseHandler)
-
 	// WebSocket chat endpoint — primary transport for bi-directional chat streaming.
 	stg.wsHandler = newWSHandler(stg.msgBus, stg.agentLoop, stg.allowedOrigin)
 	stg.wsHandler.home = stg.homePath
@@ -700,6 +696,9 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 	// The webchatChannel and wsHandler share a reference so streaming can suppress duplicate Send().
 	wch := newWebchatChannel(stg.wsHandler)
 	stg.wsHandler.webchatCh = wch
+	// Peer requests and guest replies (session-core U8): the gateway owns
+	// member eligibility and live delivery.
+	stg.wsHandler.agentLoop.SetAddressDeps(gatewayAddressDeps{h: stg.wsHandler})
 	stg.runningServices.ChannelManager.RegisterChannel("webchat", wch)
 
 	// Live interactive browser panel WebSocket (ADR-038 D1) — a dedicated
@@ -1317,6 +1316,19 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	}
 	if wsErr := ensureDefaultWorkspace(stg.homePath, ownerUsername, stg.cfg); wsErr != nil {
 		slog.Error("gateway: default workspace auto-creation failed", "error", wsErr)
+	}
+	// FR-002/C-MAIN: mains exist eagerly - Admin's (default workspace only; he
+	// is not a team member, so no membership write could create it) and one per
+	// eligible member of every existing workspace team, so a fresh install's
+	// seeded team has its mains at first boot with no team change. Covers both
+	// branches of ensureDefaultWorkspace above; a no-op for Admin when no
+	// default workspace exists.
+	stg.api.ensureBootMains()
+	// session-core U6 (FR-017/019): the task executor derives a run's mode and
+	// captures its recipients from which agents own a visible main. Without this
+	// resolver every task run stays ISOLATED.
+	if stg.tExecutor != nil {
+		stg.tExecutor.SetMainSessionResolver(taskMainResolver{api: stg.api})
 	}
 
 	// ADR-046 P1 (FR-007/008): execution is workspace-scoped, and the system
@@ -1984,6 +1996,10 @@ func wireChannelManager(cm *channels.Manager, al *agent.AgentLoop) {
 			al.EmitWhatsAppPairing(channelID, status, qr, message)
 		},
 	)
+	// BDD-08.9 / N1: an answer the final egress check refused (instance rebound,
+	// unbound or deleted since the request arrived) must be visible to the
+	// responding side, not only counted and logged.
+	cm.SetReturnRefusalObserver(al.ReportReturnRefusal)
 }
 
 // agentCheckerFunc adapts a func to the agentChecker interface used by the
@@ -2019,13 +2035,6 @@ func setupCronTool(
 	runner.setProcessTracker(procReg.Track)
 	runner.setProcessCleanup(procReg.Cleanup)
 	cronService.SetRunner(runner)
-
-	// Default agent id used only to migrate owner-less legacy jobs on load (W-8).
-	defaultAgentID := ""
-	if def := agentLoop.GetRegistry().GetDefaultAgent(); def != nil {
-		defaultAgentID = def.ID
-	}
-	cronService.SetDefaultAgentID(defaultAgentID)
 
 	if cfg != nil {
 		cronService.SetMaxConcurrentRuns(cfg.Schedules.MaxConcurrentRuns)

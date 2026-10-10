@@ -41,30 +41,6 @@ func (al *AgentLoop) GetSessionStore() *session.UnifiedStore {
 	return al.sharedSessionStore
 }
 
-// GetAgentStore returns the UnifiedStore for a given agent, or nil if not found
-// or if the agent's session store is not a UnifiedStore.
-// Use GetSessionStore() for creating new sessions; GetAgentStore is kept for
-// legacy per-agent session access.
-func (al *AgentLoop) GetAgentStore(agentID string) *session.UnifiedStore {
-	agent, ok := al.GetRegistry().GetAgent(agentID)
-	if !ok {
-		return nil
-	}
-	us, ok := agent.Sessions.(*session.UnifiedStore)
-	if !ok {
-		logger.WarnCF("agent", "GetAgentStore: session store is not UnifiedStore",
-			map[string]any{"agent_id": agentID})
-		return nil
-	}
-	return us
-}
-
-// getLegacyAgentStore returns the per-agent UnifiedStore for legacy session
-// access. It is an internal alias for GetAgentStore used by ListAllSessions.
-func (al *AgentLoop) getLegacyAgentStore(agentID string) *session.UnifiedStore {
-	return al.GetAgentStore(agentID)
-}
-
 // rebuildChannelSessionIndex populates channelSessionIdx from existing shared sessions.
 // Called once after sharedSessionStore is initialized.
 func (al *AgentLoop) rebuildChannelSessionIndex() {
@@ -138,9 +114,9 @@ func (al *AgentLoop) resolveOrCreateChannelSession(
 	return meta.ID
 }
 
-// ResolveSessionStore finds which UnifiedStore owns the given sessionID.
-// Checks the shared store first, then the main agent's legacy store, then
-// all other per-agent stores. Returns nil if the session cannot be found.
+// ResolveSessionStore finds which UnifiedStore owns the given sessionID. There
+// is one store, so this is an existence check on it: nil when the session
+// cannot be found.
 //
 // FIX (silent-corruption gap): each probe below used to accept a store only
 // on err == nil, treating "session genuinely doesn't live here"
@@ -186,72 +162,11 @@ func (al *AgentLoop) ResolveSessionStore(sessionID string) *session.UnifiedStore
 			return al.sharedSessionStore
 		}
 	}
-	// Slow path: scan all per-agent stores. The former "legacy fast path"
-	// here special-cased the retired "main" sentinel agent (which used to own
-	// most old sessions); with the sentinel removed there is no reserved
-	// agent ID to fast-path or skip, so every registered agent is scanned
-	// uniformly.
-	for _, id := range al.GetRegistry().ListAgentIDs() {
-		store := al.GetAgentStore(id)
-		if store == nil {
-			continue
-		}
-		if _, err := store.GetMeta(sessionID); err == nil {
-			return store
-		} else if !errors.Is(err, os.ErrNotExist) {
-			logger.WarnCF(
-				"agent",
-				"ResolveSessionStore: session meta unreadable (not a missing-session case); returning owning store despite read failure",
-				map[string]any{"session_id": sessionID, "store": store.BaseDir(), "error": err.Error()},
-			)
-			return store
-		}
-	}
 	return nil
 }
 
-// taskSessionStore resolves the UnifiedStore that actually holds a TASK run's
-// session, instead of assuming the agent the task is assigned to also owns the
-// store its session lives in.
-//
-// The two shapes a task session can have, and why only the session id can tell
-// them apart:
-//
-//   - ADR-091 (task_executor.go::startTaskNowViaLauncher ->
-//     SteerLauncher.Launch -> launchOrdinaryRoot): the session is minted in the
-//     SHARED store, GetSessionStore() at $OMNIPUS_HOME/sessions.
-//   - Pre-ADR-091, still live for the ExecuteTask path
-//     (task_executor.go::createTaskSessionSync and StartTaskNow's launcher-less
-//     branch): the session is minted in the agent's OWN legacy store,
-//     GetAgentStore(agentID) at <agent workspace>/sessions.
-//
-// Both stores refuse a write against a session they do not hold
-// (UnifiedStore.AppendTranscript/AppendTranscriptStrict check meta.json first)
-// and ReadTranscript answers with an EMPTY slice and no error, so resolving by
-// agent against a launcher-minted session drops every write and reads back
-// nothing — silently, with no status code to notice. That is the defect this
-// helper closes at its root: the store follows the SESSION, never the agent.
-//
-// Behaviour-preserving for the legacy shape: ResolveSessionStore falls back to
-// scanning the per-agent stores, so a session that lives in the agent's own
-// store still resolves to exactly the store GetAgentStore would have returned.
-// An id that resolves to no store at all (no session yet, or the "task:<id>"
-// placeholder the run path uses when a task has no session) falls back to
-// GetAgentStore, leaving those callers exactly as they were.
-func (al *AgentLoop) taskSessionStore(sessionID, agentID string) *session.UnifiedStore {
-	if al == nil {
-		return nil
-	}
-	if sessionID != "" {
-		if store := al.ResolveSessionStore(sessionID); store != nil {
-			return store
-		}
-	}
-	return al.GetAgentStore(agentID)
-}
-
 // ListAllSessions returns a stably-ordered, paginated window of sessions from
-// the shared store merged with legacy per-agent stores, deduplicated
+// the one shared store, deduplicated
 // (ADR-057 FR-092/FR-098, W16b, owner U9 — the loop layer of the four-layer
 // pagination stack FR-068/FR-092 requires: UnifiedStore.ListSessions (U6) ->
 // AgentLoop.ListAllSessions (here) -> restAPI.listSessions (U18) ->
@@ -276,11 +191,8 @@ func (al *AgentLoop) taskSessionStore(sessionID, agentID string) *session.Unifie
 //     already-served page is not, because this method never re-derives an
 //     already-returned row's position from anything but that same total
 //     order.
-//   - (c) A legacy per-agent store that errors mid-merge contributes zero
-//     rows, is appended to the returned errs, and does NOT halt the page or
-//     invalidate the cursor — the merge simply continues over the remaining
-//     stores (unchanged from this method's pre-pagination behavior; see the
-//     loop below). Callers should surface these as partial_errors rather
+//   - (c) A store read error contributes zero rows and is appended to the
+//     returned errs. Callers should surface these as partial_errors rather
 //     than treating the whole response as a failure.
 //
 // Hierarchy (FR-091/FR-104) is applied BEFORE pagination, over the full
@@ -309,7 +221,6 @@ func (al *AgentLoop) ListAllSessions(limit, offset int, parentSessionID string, 
 	var errs []error
 
 	// 1. Shared store (new sessions).
-	sharedIDs := make(map[string]bool)
 	allIDs := make(map[string]bool)
 	if al.sharedSessionStore != nil {
 		shared, err := al.sharedSessionStore.ListSessions()
@@ -319,29 +230,6 @@ func (al *AgentLoop) ListAllSessions(limit, offset int, parentSessionID string, 
 			errs = append(errs, fmt.Errorf("shared: %w", err))
 		} else {
 			for _, s := range shared {
-				sharedIDs[s.ID] = true
-				allIDs[s.ID] = true
-				all = append(all, s)
-			}
-		}
-	}
-
-	// 2. Legacy per-agent stores — deduplicate against shared. FR-098(c): a
-	// store that errors here contributes zero rows and the merge continues.
-	for _, id := range al.GetRegistry().ListAgentIDs() {
-		store := al.getLegacyAgentStore(id)
-		if store == nil {
-			continue
-		}
-		sessions, err := store.ListSessions()
-		if err != nil {
-			logger.WarnCF("agent", "ListAllSessions: could not list sessions for agent",
-				map[string]any{"agent_id": id, "error": err.Error()})
-			errs = append(errs, fmt.Errorf("agent=%s: %w", id, err))
-			continue
-		}
-		for _, s := range sessions {
-			if !sharedIDs[s.ID] {
 				allIDs[s.ID] = true
 				all = append(all, s)
 			}

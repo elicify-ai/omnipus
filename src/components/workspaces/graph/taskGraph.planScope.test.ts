@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest'
 import { buildTaskGraph } from './taskGraph'
 import type { Task } from '@/lib/api'
+import { makeAgent } from '@/test/factories'
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -95,9 +96,11 @@ describe('buildTaskGraph — plan scoping', () => {
 
   it('resolves agent avatar info the same way in plan scope as in the unscoped graph', () => {
     const tasks = [makeTask({ id: 'a', plan_id: 'plan-1', agent_id: 'mia' })]
-    const agents = [{ id: 'mia', name: 'Mia', color: '#d4af37', icon: 'Robot' }]
+    // Agent-first navigation spec, Locked identity vocabulary / DS-I I03:
+    // legacy identity gold maps to the approved Orange #FB923C.
+    const agents = [makeAgent({ id: 'mia', name: 'Mia', color: '#FB923C' })]
     const { nodes } = buildTaskGraph(tasks, agents, { planId: 'plan-1' })
     expect(nodes[0].data.agentName).toBe('Mia')
-    expect(nodes[0].data.agentColor).toBe('#d4af37')
+    expect(nodes[0].data.agentColor).toBe('#FB923C')
   })
 })

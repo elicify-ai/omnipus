@@ -51,7 +51,7 @@ beforeEach(() => {
   // Vitest does not set React's act environment flag without Jest globals.
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   sessionStorage.clear()
-  fetchAgents.mockReset().mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+  fetchAgents.mockReset().mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
   fetchMailboxes.mockReset().mockResolvedValue([
     { agent_id: 'mia', workspace_id: 'ws-1', enabled: true, configured: true, username: 'mailbox@test.local' },
   ])

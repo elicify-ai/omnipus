@@ -155,8 +155,6 @@ vi.mock('./tools/WebServeUI', () => ({
 vi.mock('./markdown-text', () => ({
   MarkdownText: () => React.createElement('div', {}),
 }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 vi.mock('@/lib/memory-observer', () => ({
@@ -186,9 +184,14 @@ function makeGoalFrame(overrides: Partial<GoalStatusFrame> = {}): GoalStatusFram
 }
 
 /** Seeds a FINISHED (non-streaming) assistant message carrying one FAILED
- * baked tool call, plus an optional goalStatus frame on both the session
- * bucket and the foreground selector. */
-function seedFailedToolCallAssistant(goalFrame: GoalStatusFrame | null): void {
+ * baked tool call, a keyed `goalPills` map on both the session bucket and the
+ * foreground selector, and — when `goalId` is given — that goal association
+ * on the producing message itself (FR-039: the failure line joins THIS id to
+ * the exact keyed criteria). */
+function seedFailedToolCallAssistant(
+  goalId: string | null,
+  goalPills: Record<string, GoalStatusFrame>,
+): void {
   const userMsg: ChatMessage = {
     id: 'u1',
     role: 'user',
@@ -202,6 +205,7 @@ function seedFailedToolCallAssistant(goalFrame: GoalStatusFrame | null): void {
     content: '',
     timestamp: new Date().toISOString(),
     status: 'done',
+    ...(goalId ? { goalId } : {}),
     tool_calls: [
       {
         id: 'tc_ask_user_question_1',
@@ -215,6 +219,9 @@ function seedFailedToolCallAssistant(goalFrame: GoalStatusFrame | null): void {
   }
   const messages = [userMsg, assistantMsg]
   const bucket = makeBucketMessages(messages)
+  const pills = Object.fromEntries(
+    Object.entries(goalPills).map(([id, f]) => [id, { ...f, session_id: SID }]),
+  )
 
   useChatStore.setState((s) => ({
     ...s,
@@ -235,14 +242,14 @@ function seedFailedToolCallAssistant(goalFrame: GoalStatusFrame | null): void {
         cancelStage: null,
         lastReceivedEventTime: null,
         trimmedCount: 0,
-        goalStatus: goalFrame,
+        goalPills: pills,
       },
     },
     messages,
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: SID,
-    goalStatus: goalFrame,
+    goalPills: pills,
   }))
 }
 
@@ -272,7 +279,9 @@ afterEach(() => {
 
 describe('ChatScreen goal-setup failure line (operator UX fix, 2026-09-08)', () => {
   it('renders the quiet failure line, with the error available on expand, while a goal is active and its record is empty', () => {
-    seedFailedToolCallAssistant(makeGoalFrame())
+    seedFailedToolCallAssistant('goal_failure_line_test', {
+      goal_failure_line_test: makeGoalFrame(),
+    })
 
     const { container } = render(<ChatScreen />)
 
@@ -284,7 +293,7 @@ describe('ChatScreen goal-setup failure line (operator UX fix, 2026-09-08)', () 
   })
 
   it('does not change general tool-error rendering when there is no active goal', () => {
-    seedFailedToolCallAssistant(null)
+    seedFailedToolCallAssistant(null, {})
 
     const { container } = render(<ChatScreen />)
 
@@ -295,11 +304,11 @@ describe('ChatScreen goal-setup failure line (operator UX fix, 2026-09-08)', () 
   })
 
   it('does not change general tool-error rendering once the goal record is populated', () => {
-    seedFailedToolCallAssistant(
-      makeGoalFrame({
+    seedFailedToolCallAssistant('goal_failure_line_test', {
+      goal_failure_line_test: makeGoalFrame({
         criteria: [{ id: 'c1', kind: 'prose', text: 'release notes are published', judgment: 'boolean', status: 'pending', author: { kind: 'agent', id: 'tester' } }],
       }),
-    )
+    })
 
     const { container } = render(<ChatScreen />)
 
@@ -309,7 +318,9 @@ describe('ChatScreen goal-setup failure line (operator UX fix, 2026-09-08)', () 
 
   it('falls through to the raw call when verbose chat is on, even during goal setup', () => {
     useChatPreferencesStore.setState({ verboseChatEnabled: true })
-    seedFailedToolCallAssistant(makeGoalFrame())
+    seedFailedToolCallAssistant('goal_failure_line_test', {
+      goal_failure_line_test: makeGoalFrame(),
+    })
 
     const { container } = render(<ChatScreen />)
 

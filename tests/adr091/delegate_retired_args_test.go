@@ -54,7 +54,13 @@ func TestDelegateRun_RejectsRetiredArgumentsAtEveryValue(t *testing.T) {
 				result := tool.Execute(context.Background(), map[string]any{
 					"action": "run",
 					"task":   "inspect checkout",
-					retired:  value.value,
+					// agent_id is REQUIRED since the settled explicit-target design
+					// (FR-014): validateRequest refuses a missing target BEFORE it
+					// checks the retired arguments, so without a valid target the
+					// refusal below would be "agent_id is required", masking the
+					// retired-argument rejection this test exists to prove.
+					"agent_id": "worker",
+					retired:    value.value,
 				})
 				if result == nil {
 					t.Fatalf("Execute returned nil for %s=%v", retired, value.value)
@@ -80,6 +86,9 @@ func TestDelegateRun_AcceptsTheRequestWithoutTheRetiredArguments(t *testing.T) {
 	result := tool.Execute(context.Background(), map[string]any{
 		"action": "run",
 		"task":   "inspect checkout",
+		// Same valid explicit target as the rejection table above, minus the
+		// retired key — so the two tests differ ONLY by that key.
+		"agent_id": "worker",
 	})
 	if result == nil {
 		t.Fatal("Execute returned nil for a well-formed run request")

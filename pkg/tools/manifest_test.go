@@ -36,7 +36,7 @@ func TestToolManifestTier_FullSetExact(t *testing.T) {
 		"library_read", "list_agents", "list_directory", "list_jobs", "list_mounts",
 		"list_tasks", "message_parent", "plan_correct", "read_file", "recall_conversation",
 		"recall_memory", "remember", "search_web", "send_file", "send_message",
-		"set_goal", "set_todos", "stop_plan", "switch_agent", "update_task", "write_file",
+		"set_goal", "set_todos", "stop_plan", "update_task", "write_file",
 	}
 	for _, n := range specFull {
 		if ToolManifestTier(n) != ManifestFull {
@@ -605,8 +605,10 @@ func TestInfraManifestToolNames_Set(t *testing.T) {
 // resolve to ManifestSearchOnly by DEFAULT per ADR-071 §4.4, everything lazy
 // that isn’t in previewedLazyToolNames, not by membership in an explicit set).
 
-// TestVisibility_TierArithmetic pins ADR-090's 36 full + 1 preview + 1 infra
+// TestVisibility_TierArithmetic pins ADR-090's 35 full + 1 preview + 1 infra
 // cardinalities and their disjointness. Deferred tools remain lazy/search-only.
+// (U8 / DEL-07 / DEL-21 deleted switch_agent, dropping the full set from 36 to
+// 35 and the union from 38 to 37.)
 // navigate's retirement dropped the previewed set from 8 to 7, and
 // write_agent_metadata's retirement dropped the search-only set from 63 to
 // 62, and ADR-075 D2 raised it from 62 to 68 (five interaction/snapshot
@@ -625,8 +627,8 @@ func TestVisibility_TierArithmetic(t *testing.T) {
 	previewed := PreviewedLazyToolNames()
 	infra := InfraManifestToolNames()
 
-	if len(full) != 36 {
-		t.Errorf("len(FullManifestToolNames()) = %d, want 36; got %v", len(full), full)
+	if len(full) != 35 {
+		t.Errorf("len(FullManifestToolNames()) = %d, want 35; got %v", len(full), full)
 	}
 	if len(previewed) != 1 {
 		t.Errorf("len(PreviewedLazyToolNames()) = %d, want 1; got %v", len(previewed), previewed)
@@ -634,7 +636,7 @@ func TestVisibility_TierArithmetic(t *testing.T) {
 	if len(infra) != 1 {
 		t.Errorf("len(InfraManifestToolNames()) = %d, want 1; got %v", len(infra), infra)
 	}
-	seen := make(map[string]string, 38)
+	seen := make(map[string]string, 37)
 	record := func(setName string, names []string) {
 		for _, n := range names {
 			if prior, ok := seen[n]; ok {
@@ -647,8 +649,8 @@ func TestVisibility_TierArithmetic(t *testing.T) {
 	record("full", full)
 	record("previewed", previewed)
 	record("infra", infra)
-	if len(seen) != 38 {
-		t.Errorf("union of upfront and preview sets has %d unique names, want 38", len(seen))
+	if len(seen) != 37 {
+		t.Errorf("union of upfront and preview sets has %d unique names, want 37", len(seen))
 	}
 
 	for _, n := range []string{"create_agent", "browser_navigate", "send_email", "delete_workspace"} {

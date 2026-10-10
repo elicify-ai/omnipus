@@ -40,7 +40,6 @@ var founderRunsNames = []string{
 	"search_email",
 	"read_message",
 	"delegate",
-	"switch_agent",
 	"message_parent",
 	"list_agents",
 	"create_plan",
@@ -99,9 +98,6 @@ var founderRunsNames = []string{
 	"list_workspaces",
 	"get_workspace",
 	"create_workspace",
-	"list_tasks_in_workspace",
-	"create_task_in_workspace",
-	"update_task_in_workspace",
 	"list_skills",
 }
 
@@ -130,7 +126,6 @@ var founderAsksNames = []string{
 	"delete_agent",
 	"update_workspace",
 	"delete_workspace",
-	"delete_task_in_workspace",
 	"create_skill",
 	"edit_skill",
 	"remove_skill",
@@ -148,8 +143,8 @@ var founderRunsIfArgsNames = []string{
 }
 
 func TestAutoApprove_ClassTableMatchesFounderFile(t *testing.T) {
-	if len(founderRunsNames) != 81 || len(founderAsksNames) != 28 {
-		t.Fatalf("founder lists: %d runs, %d asks; spec §3.8 says 81 and 28", len(founderRunsNames), len(founderAsksNames))
+	if len(founderRunsNames) != 77 || len(founderAsksNames) != 27 {
+		t.Fatalf("founder lists: %d runs, %d asks; spec §3.8 says 81 and 28 minus the four retired *_in_workspace tools (DEL-23) and switch_agent (U8 DEL-07/DEL-21) = 77 and 27", len(founderRunsNames), len(founderAsksNames))
 	}
 	runsIf := map[string]bool{}
 	for _, n := range founderRunsIfArgsNames {
@@ -181,8 +176,8 @@ func TestAutoApprove_ClassTableMatchesFounderFile(t *testing.T) {
 	// shares with write_file/send_file, since its destination is always the
 	// authorized workspace's mail hierarchy. No attachment-specific
 	// mechanism; auto_approve_mail_test.go pins the peer-class equality.
-	if len(table) != 114 {
-		t.Errorf("table has %d entries, want 114 (109 founder-file tools plus bash plus create_email_draft -- D45, 2026-09-26 -- plus the three mail attachment tools, ADR-20261001 F3 / w4 US-3, founder Q4=A, 2026-10-02)", len(table))
+	if len(table) != 109 {
+		t.Errorf("table has %d entries, want 109 (104 founder-file tools after DEL-23 removed the four *_in_workspace task tools and U8 removed switch_agent, plus bash plus create_email_draft -- D45, 2026-09-26 -- plus the three mail attachment tools, ADR-20261001 F3 / w4 US-3, founder Q4=A, 2026-10-02)", len(table))
 	}
 	if got := table["bash"]; got != AutoShellMode {
 		t.Errorf("bash class = %s, want shell_mode (bash keeps its own mechanism, §3.7)", got)

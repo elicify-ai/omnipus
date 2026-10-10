@@ -145,6 +145,7 @@ func DefaultConfig() *Config {
 
 			SteerRatePerMinute: DefaultSMSteerRatePerMinute,
 			SteerBody:          DefaultSMSteerBodyBytes,
+			SteerAggregateBody: DefaultSMSteerAggregateBodyBytes,
 
 			NeedsInputTTL: duration(DefaultSMNeedsInputTTL),
 
@@ -173,6 +174,15 @@ func DefaultConfig() *Config {
 			ModelName:         "",
 			EchoTranscription: false,
 		},
+		// WorkspaceSeedDefaults (session-core C-DELEGATE, FR-014/015,
+		// BDD-05.7): the config-file-only self-delegation seed exclusion list,
+		// shipped as the two hidden type:system seed records. Seeded explicitly
+		// so a fresh install's config.json is self-documenting and an operator
+		// sees the key they may edit by hand. This is a fresh-install seed, not
+		// a re-enforcement: loadConfig starts from these defaults and overlays
+		// the file, so an operator's persisted values (including an explicit
+		// []) survive every boot — see workspace_seed_defaults.go.
+		WorkspaceSeedDefaults: defaultWorkspaceSeedDefaults(),
 		BuildInfo: BuildInfo{
 			Version:   Version,
 			GitCommit: GitCommit,
@@ -243,7 +253,6 @@ func defaultToolPoliciesGeneral() map[string]string {
 		"search_web":     "allow",
 		"fetch_url":      "allow",
 		"send_message":   "allow",
-		"switch_agent":   "allow",
 		"send_file":      "allow",
 		"find_skills":    "allow",
 		"install_skill":  "allow",
@@ -416,27 +425,23 @@ func defaultToolPoliciesSysagent() map[string]string {
 		"remove_mcp_server": "ask",
 		// list_mcp_servers is read-only and reports name/transport/enabled/
 		// command/url only — never args or env — so it leaks no credential.
-		"list_mcp_servers":         "allow",
-		"create_skill":             "allow",
-		"edit_skill":               "allow",
-		"create_task_in_workspace": "allow",
-		"update_task_in_workspace": "allow",
-		"delete_task_in_workspace": "ask", // irreversible delete
-		"list_tasks_in_workspace":  "allow",
-		"remove_skill":             "allow", // Ava confirms the combined proposal once.
-		"list_skills":              "allow",
-		"enable_channel":           "allow",
-		"configure_channel":        "allow",
-		"disable_channel":          "allow", // reversible, not a delete
-		"list_channels":            "allow",
-		"test_channel":             "allow",
-		"get_config":               "allow",
-		"set_config":               "allow",
-		"get_agent":                "allow",
-		"get_agent_tools":          "allow",
-		"create_agent":             "allow",
-		"update_agent":             "allow",
-		"delete_agent":             "allow", // Ava confirms the combined proposal once.
+		"list_mcp_servers":  "allow",
+		"create_skill":      "allow",
+		"edit_skill":        "allow",
+		"remove_skill":      "allow", // Ava confirms the combined proposal once.
+		"list_skills":       "allow",
+		"enable_channel":    "allow",
+		"configure_channel": "allow",
+		"disable_channel":   "allow", // reversible, not a delete
+		"list_channels":     "allow",
+		"test_channel":      "allow",
+		"get_config":        "allow",
+		"set_config":        "allow",
+		"get_agent":         "allow",
+		"get_agent_tools":   "allow",
+		"create_agent":      "allow",
+		"update_agent":      "allow",
+		"delete_agent":      "allow", // Ava confirms the combined proposal once.
 	}
 }
 
@@ -1135,7 +1140,6 @@ func defaultAgentsConfig(workspacePath string) AgentsConfig {
 			MaxTokens:         32768,
 			Temperature:       nil, // nil means use provider default
 			MaxToolIterations: DefaultMaxToolIterations,
-			SteeringMode:      "one-at-a-time",
 			ToolFeedback: ToolFeedbackConfig{
 				Enabled:       false,
 				MaxArgsLength: 300,

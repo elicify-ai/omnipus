@@ -4,6 +4,17 @@ description: >
   Create a Main agent — a user-defined chat colleague on the Omnipus engine.
   Field set per docs/internal/architecture/agent-types-field-matrix.md: voice
   is Main-only; executor is absent (Main never has one).
+
+  Create-input identity normalization (founder ruling 2026-10-09): on this
+  create request only, `figure`, `role`, and `color` are lenient at the
+  boundary — omitted, null, or "" (empty string) each mean "use the default"
+  (Omnipus / general / #9CA3AF), and a letter-case variant of one of the ten
+  palette hexes is normalized to its uppercase enum value before the strict
+  schema check (gateway.validate_inbound) and again on store. The enum
+  schemas stay exact-case and closed: any other non-empty figure or role
+  value, and any non-palette hex, is rejected 400 with the setting on or
+  off. On PUT (AgentUpdateRequest) an explicit null or empty identity value
+  is rejected instead.
 required:
   - type
   - name
@@ -52,16 +63,15 @@ properties:
       infers a provider. Optional; when omitted the model resolves via the default
       provider.
     example: "openrouter"
+  figure:
+    $ref: './AgentFigure.yaml'
+    x-go-type: AgentFigure
+  role:
+    $ref: './AgentRole.yaml'
+    x-go-type: AgentRole
   color:
-    type: string
-    pattern: '^#[0-9A-Fa-f]{6}$'
-    description: Hex color code for the agent avatar.
-    example: "#D4AF37"
-  icon:
-    type: string
-    maxLength: 50
-    description: Phosphor icon name for the agent avatar.
-    example: "ChartBar"
+    $ref: './AgentColor.yaml'
+    x-go-type: AgentColor
   tools_cfg:
     $ref: './AgentToolsCfg.yaml'
   fallback_models:

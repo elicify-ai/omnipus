@@ -77,9 +77,9 @@ func u26AssertNoSessionDir(t *testing.T, store *session.UnifiedStore, sessionID 
 // contract: same existence predicate).
 func TestU26_BareAppendTranscript_AlreadyStrictAgainstNonexistentSession(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 
 	if err := store.AppendTranscript(u26NonexistentSessionID, session.TranscriptEntry{
@@ -105,9 +105,9 @@ func TestU26_BareAppendTranscript_AlreadyStrictAgainstNonexistentSession(t *test
 // and no directory must be created.
 func TestU26_WriteJudgeVerdictTranscript_NonexistentSession_CountsAndWarns(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	tk := &task.Task{
 		Title: "u26 judge verdict negative", Prompt: "x", Action: task.ActionLLM,
@@ -137,9 +137,9 @@ func TestU26_WriteJudgeVerdictTranscript_NonexistentSession_CountsAndWarns(t *te
 // failure counter.
 func TestU26_WriteJudgeVerdictTranscript_RealSession_PersistsAndDoesNotCount(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	sessionID := u26FreshTaskSession(t, store, "native-agent")
 	tk := &task.Task{
@@ -181,9 +181,9 @@ func TestU26_WriteJudgeVerdictTranscript_RealSession_PersistsAndDoesNotCount(t *
 // against a nonexistent session.
 func TestU26_RunSteeringTranscript_NonexistentSession_CountsAndWarns(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	tk := &task.Task{
 		Title: "u26 steering negative", Prompt: "x", Action: task.ActionLLM,
@@ -208,9 +208,9 @@ func TestU26_RunSteeringTranscript_NonexistentSession_CountsAndWarns(t *testing.
 // the counter does not move.
 func TestU26_RunSteeringTranscript_RealSession_PersistsAndDoesNotCount(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	sessionID := u26FreshTaskSession(t, store, "native-agent")
 	tk := &task.Task{

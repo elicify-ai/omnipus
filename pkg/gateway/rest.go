@@ -65,7 +65,11 @@ var errAgentVanishedDuringUpdate = errors.New("agent no longer exists")
 // Note: do NOT cache *config.Config here — use a.agentLoop.GetConfig() for
 // the current config, since config can hot-reload.
 type restAPI struct {
-	agentLoop     *agent.AgentLoop
+	agentLoop *agent.AgentLoop
+	// stopSession, when set, replaces agentLoop.StopSession in the delete
+	// path (a test seam for outcomes a real Stop cannot be made to produce
+	// portably, such as a failed background-shell kill). Nil in production.
+	stopSession   func(context.Context, agent.StopRequest) (agent.StopResult, error)
 	allowedOrigin string
 	onboardingMgr *onboarding.Manager // manages first-launch + doctor state
 	// onboardingStateUnknown records that system/state.json existed at boot
@@ -764,7 +768,6 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	rae.cm.RegisterHTTPHandler("/api/v1/mcp-servers/", rae.a.withAuth(rae.a.HandleMCPServers))
 	rae.cm.RegisterHTTPHandler("/api/v1/storage/stats", rae.a.withAuth(rae.a.HandleStorageStats))
 	rae.cm.RegisterHTTPHandler("/api/v1/tools", rae.a.withAuth(rae.a.HandleToolsRegistry))
-	rae.cm.RegisterHTTPHandler("/api/v1/tools/builtin", rae.a.withAuth(rae.a.HandleBuiltinToolsDeprecated))
 	rae.cm.RegisterHTTPHandler("/api/v1/tools/mcp", rae.a.withAuth(rae.a.HandleMCPTools))
 	rae.cm.RegisterHTTPHandler("/api/v1/tool-approvals/", rae.a.withAuth(rae.a.HandleToolApprovals))
 	rae.cm.RegisterHTTPHandler("/api/v1/channels", rae.a.withAuth(rae.a.HandleChannels))

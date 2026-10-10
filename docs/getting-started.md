@@ -20,7 +20,7 @@ Use this page once, on a fresh install or a new machine. If Omnipus is already r
 4. **Open `http://localhost:5000`.** On a fresh install the app takes you straight to the setup wizard. On a Mac, the first start may ask you to approve the binary under System Settings, then Privacy & Security.
 5. **Work through the wizard's four screens.** The wizard table below describes each one. **Finish** creates your account and saves the provider in one step, then logs you in.
 6. **Select Start chatting** on the "Mia — Assistant" screen. The app opens **My Workspace** on **Chat**, its base page.
-7. **Type a message and send it.** Mia answers. Use the agent picker next to the message box to talk to a different agent. The workspace bar at the top offers **Tasks**, **Calendar**, **Library**, **Mail**, and **Team** as panel toggles; on a narrow bar, use the panels menu.
+7. **Type a message and send it once a chat is available.** To choose Mia or another agent, open the sidebar and select that agent's name under the workspace: that opens the agent's main chat. **Past sessions** on the same row opens earlier chats for this workspace and that agent. **New chat** starts an extra chat and leaves the main chat in place. Main-chat navigation requires the matching server update; if a main chat is unavailable, use **Retry** rather than sending into an unidentified chat. There is no agent picker beside the message box. Which chat is open is the one this browser last had in the workspace, or Ava's main chat when there is none yet; [workspaces](workspaces.md) covers that. The workspace bar at the top offers **Tasks**, **Calendar**, **Library**, **Mail**, and **Team** as panel toggles; on a narrow bar, use the panels menu.
 
 Three ways to install, and what each is good for:
 
@@ -53,11 +53,11 @@ The local setup wizard has four numbered screens plus a closing screen: admin us
 
 | Screen | What you do | What Omnipus does |
 |---|---|---|
-| 1 — What should I call you? | Type the admin username | Accepts any name that is not empty |
+| 1 — What should I call you? | Type the admin username | Continue accepts a nonblank name. Finish requires 2–63 characters using A–Z, a–z, 0–9, dots, dashes or underscores, starting with a letter or digit. `cli` is reserved, regardless of letter case |
 | 2 — Set your password | Choose a password of at least 8 characters, twice | Shows how strong it is |
 | 3 — What should I call you? (personal preferences) | Enter your name, choose Tone and How much detail | Includes these preferences when you finish setup |
 | 4 — Select your model provider and default model | Pick a provider, connect it, choose **Default model** | Checks the connection for the model you picked |
-| Last — Mia, Assistant | Select Start chatting | Logs you in and opens Chat |
+| Last — Mia, Assistant | Select Start chatting | Opens Chat; Finish has already signed you in |
 
 The check on screen 4 runs when you pick a model, or when you press its Check connection button. **Finish** stays locked until that check passes for the model you selected, so a working key with a broken model cannot get through setup.
 

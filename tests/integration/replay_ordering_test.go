@@ -657,6 +657,12 @@ func writeTranscriptEntries(t *testing.T, gw *testutil.TestGateway, sessionID st
 	transcriptPath := filepath.Join(sessionDir, "transcript.jsonl")
 	var sb strings.Builder
 	for _, e := range entries {
+		// session-core U2 (effects design D4/D11): the archive carries no reader
+		// default for view_membership, so a raw fixture line must state it. These
+		// are chat-replay fixtures, so an unspecified record is a chat record.
+		if _, ok := e["view_membership"]; !ok {
+			e["view_membership"] = "chat"
+		}
 		line, err := json.Marshal(e)
 		if err != nil {
 			t.Fatalf("writeTranscriptEntries: marshal entry: %v", err)

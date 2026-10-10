@@ -44,6 +44,16 @@ type MessageTool struct {
 	// posture.
 	steerAudience steer.AudienceResolver
 	steerObserver steer.BoundaryObserver
+
+	// peerRouter / replyRouter serve the peer and reply forms (U8,
+	// message_address.go). Nil leaves each form refused, never defaulted.
+	peerRouter  PeerRouter
+	replyRouter ReplyRouter
+
+	// mainConnectorGuard, when set, reports whether (sessionID, channel) is a
+	// main session addressing a connector. The ordinary send form is refused
+	// there: a main reaches a connector ONLY by reply_to (FR-028).
+	mainConnectorGuard func(sessionID, channel string) bool
 }
 
 func NewMessageTool() *MessageTool {
@@ -99,6 +109,20 @@ func (t *MessageTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Optional: target chat/user ID",
 			},
+			"reply_to": map[string]any{
+				"type": "string",
+				"description": "Optional: the id of a request you were sent. Answers that request through its " +
+					"source; cannot be combined with channel, chat_id, workspace_id or agent_id.",
+			},
+			"workspace_id": map[string]any{
+				"type": "string",
+				"description": "Optional: with agent_id, the recipient pair for a peer request. Defaults to " +
+					"your current workspace when omitted.",
+			},
+			"agent_id": map[string]any{
+				"type":        "string",
+				"description": "Optional: the RECIPIENT agent for a peer request — the agent you are asking, never yourself or the author. Omit workspace_id to mean your current workspace.",
+			},
 		},
 		"required": []string{"content"},
 	}
@@ -123,6 +147,10 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	content, ok := args["content"].(string)
 	if !ok {
 		return &ToolResult{ForLLM: "content is required", IsError: true}
+	}
+
+	if result, handled := t.executeAddressedForm(ctx, content, args); handled {
+		return result
 	}
 
 	// The ACTING agent — never the session's original agent and never a
@@ -156,6 +184,19 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 			return errResult
 		}
 		channel = resolved
+	}
+
+	// FR-028 (security review r1 F1): a main reaches a connector only by
+	// reply_to. The ordinary form - default destination or explicit channel -
+	// is refused before any ownership decision or send, so it can never leave
+	// a main without a captured return route.
+	if t.mainConnectorGuard != nil && channel != "" && t.mainConnectorGuard(ToolTranscriptSessionID(ctx), channel) {
+		return &ToolResult{
+			ForLLM: "in your main conversation a connector is reached only by replying to a request: call " +
+				"send_message with reply_to=<request id> and your answer as content. Nothing was sent.",
+			IsError: true,
+			Err:     ErrMainConnectorReplyOnly,
+		}
 	}
 
 	// ADR-091 boundary 8 (FR-B-009): a steered session's

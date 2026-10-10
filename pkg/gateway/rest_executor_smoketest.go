@@ -287,6 +287,13 @@ func smokeTestOK(responseText string, durationMs int, usedAgentWorkspace bool) g
 
 // smokeTestFail builds a failed ExecutorSmokeTestResponse: ok=false, error
 // populated, response_text left nil. See smokeTestOK's doc.
+// smokeTestPrepText logs the real cause of a smoke-test preparation or start
+// failure and returns the fixed text for the response's error field.
+func smokeTestPrepText(what string, cause error) string {
+	slog.Error("executor-smoke-test: "+what, "error", cause)
+	return what + ". Check disk space, permissions and the CLI installation; details are in the server log."
+}
+
 func smokeTestFail(errMsg string, durationMs int, usedAgentWorkspace bool) gen.ExecutorSmokeTestResponse {
 	return gen.ExecutorSmokeTestResponse{
 		Ok:                 false,
@@ -417,7 +424,7 @@ func (a *restAPI) runExecutorSmokeTest(
 		// a new convention.
 		if mkErr := os.MkdirAll(resolved, 0o755); mkErr != nil {
 			return smokeTestFail(
-				fmt.Sprintf("could not prepare agent directory: %v", mkErr),
+				smokeTestPrepText("could not prepare agent directory", mkErr),
 				ra.durationMs(), false,
 			), ra.resolvedBinary
 		}
@@ -427,14 +434,14 @@ func (a *restAPI) runExecutorSmokeTest(
 		root := filepath.Join(config.OmnipusHomeDir(), smokeTestRunsSubdir)
 		if mkRootErr := os.MkdirAll(root, 0o700); mkRootErr != nil {
 			return smokeTestFail(
-				fmt.Sprintf("could not prepare scratch workspace: %v", mkRootErr),
+				smokeTestPrepText("could not prepare scratch workspace", mkRootErr),
 				ra.durationMs(), false,
 			), ra.resolvedBinary
 		}
 		dir, mkErr := os.MkdirTemp(root, "run-")
 		if mkErr != nil {
 			return smokeTestFail(
-				fmt.Sprintf("could not create scratch workspace: %v", mkErr),
+				smokeTestPrepText("could not create scratch workspace", mkErr),
 				ra.durationMs(),
 				false,
 			), ra.resolvedBinary
@@ -481,7 +488,7 @@ func (a *restAPI) runExecutorSmokeTest(
 	driver, err := smokeTestNewDriver(ra.cli, nil)
 	if err != nil {
 		return smokeTestFail(
-			fmt.Sprintf("could not construct driver: %v", err),
+			smokeTestPrepText("could not construct driver", err),
 			ra.durationMs(),
 			ra.usedAgentWorkspace,
 		), ra.resolvedBinary
@@ -500,7 +507,7 @@ func (a *restAPI) runExecutorSmokeTest(
 	})
 	if runErr != nil {
 		return smokeTestFail(
-			fmt.Sprintf("failed to start %s: %v", ra.cli, runErr),
+			smokeTestPrepText("failed to start "+ra.cli, runErr),
 			ra.durationMs(),
 			ra.usedAgentWorkspace,
 		), ra.resolvedBinary

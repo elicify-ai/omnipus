@@ -214,7 +214,6 @@ func FixtureDoneFrame_Populated() DoneFrame {
 	tokens := float64(1234)
 	cost := float64(0.00412)
 	durationMs := float64(3720)
-	tokensDropped := float64(2)
 	framesEmitted := float64(47)
 	orphanCount := float64(0)
 	dupCount := float64(0)
@@ -233,7 +232,6 @@ func FixtureDoneFrame_Populated() DoneFrame {
 			Tokens:                   &tokens,
 			Cost:                     &cost,
 			DurationMs:               &durationMs,
-			TokensDropped:            &tokensDropped,
 			FramesEmitted:            &framesEmitted,
 			OrphanCount:              &orphanCount,
 			DuplicateToolCallIdCount: &dupCount,
@@ -507,23 +505,6 @@ func FixtureRateLimitFrame_ZeroValue() RateLimitFrame {
 	return RateLimitFrame{}
 }
 
-// AgentSwitchedFrame
-
-func FixtureAgentSwitchedFrame_Populated() AgentSwitchedFrame {
-	agentId := "ava"
-	msg := "Switched to Ava for research task"
-	return AgentSwitchedFrame{
-		Type:      "agent_switched",
-		SessionId: "sess-1",
-		AgentId:   &agentId,
-		Message:   &msg,
-	}
-}
-
-func FixtureAgentSwitchedFrame_ZeroValue() AgentSwitchedFrame {
-	return AgentSwitchedFrame{}
-}
-
 // TaskStatusChangedFrame
 
 func FixtureTaskStatusChangedFrame_Populated() TaskStatusChangedFrame {
@@ -586,21 +567,6 @@ func FixtureReplayWarningFrame_ZeroValue() ReplayWarningFrame {
 	return ReplayWarningFrame{}
 }
 
-// SessionCloseAckFrame
-
-func FixtureSessionCloseAckFrame_Populated() SessionCloseAckFrame {
-	id := "close-ack-1"
-	return SessionCloseAckFrame{
-		Type:      "session_close_ack",
-		SessionId: "sess-1",
-		Id:        &id,
-	}
-}
-
-func FixtureSessionCloseAckFrame_ZeroValue() SessionCloseAckFrame {
-	return SessionCloseAckFrame{}
-}
-
 // DevicePairingRequestFrame
 
 func FixtureDevicePairingRequestFrame_Populated() DevicePairingRequestFrame {
@@ -647,23 +613,21 @@ func FixtureOnboardingCompleteResponse_Edge() OnboardingCompleteResponse {
 
 func FixtureSession_Populated() Session {
 	agentId := "jim"
-	activeAgentId := "jim"
 	model := "claude-sonnet-4-6"
 	sessionType := SessionType("chat")
 	partitions := []string{"2026-05-16.jsonl", "2026-05-17.jsonl"}
 	return Session{
-		Id:            "550e8400-e29b-41d4-a716-446655440000",
-		AgentId:       "jim",
-		ActiveAgentId: &activeAgentId,
-		AgentIds:      &[]string{agentId},
-		Title:         "My test session",
-		Status:        "active",
-		CreatedAt:     time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC),
-		UpdatedAt:     time.Date(2026, 5, 17, 10, 0, 0, 0, time.UTC),
-		Channel:       "webchat",
-		Partitions:    partitions,
-		Model:         &model,
-		Type:          &sessionType,
+		Id:         "550e8400-e29b-41d4-a716-446655440000",
+		AgentId:    "jim",
+		AgentIds:   &[]string{agentId},
+		Title:      "My test session",
+		Status:     "active",
+		CreatedAt:  time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:  time.Date(2026, 5, 17, 10, 0, 0, 0, time.UTC),
+		Channel:    "webchat",
+		Partitions: partitions,
+		Model:      &model,
+		Type:       sessionType,
 		Stats: struct {
 			ByModel *map[string]struct {
 				CacheRead  *int `json:"cache_read,omitempty"`
@@ -710,7 +674,7 @@ func FixtureSession_Edge() Session {
 		UpdatedAt:  time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC),
 		Channel:    "telegram",
 		Partitions: []string{},
-		Type:       &sessionType,
+		Type:       sessionType,
 		Stats: struct {
 			ByModel *map[string]struct {
 				CacheRead  *int `json:"cache_read,omitempty"`
@@ -734,8 +698,7 @@ func FixtureSession_Edge() Session {
 // Agent
 
 func FixtureAgent_Populated() Agent {
-	color := "#D4AF37"
-	icon := "Robot"
+	color := AgentColorHash3B82F6
 	model := "claude-sonnet-4-6"
 	warning := strPtr("Config reload failed after update")
 	return Agent{
@@ -743,6 +706,8 @@ func FixtureAgent_Populated() Agent {
 		Id:                "jim",
 		Name:              "Jim",
 		Type:              AgentTypeCore,
+		Figure:            AgentFigureRobot,
+		Role:              AgentRoleGeneral,
 		Locked:            true,
 		Status:            AgentStatusIdle,
 		Soul:              "You are Jim, a helpful assistant.",
@@ -752,7 +717,6 @@ func FixtureAgent_Populated() Agent {
 		MaxToolIterationsSource:   MaxToolIterationsSourceAgent,
 		MaxToolIterationsOverride: intPtr(50),
 		Color:                     &color,
-		Icon:                      &icon,
 		Model:                     &model,
 		Warning:                   warning,
 	}
@@ -775,6 +739,10 @@ func FixtureAgent_Edge() Agent {
 		// #904: the effective limit's lower bound is 1 (Agent.yaml minimum).
 		MaxToolIterations:       1,
 		MaxToolIterationsSource: MaxToolIterationsSourceGlobal,
+		// figure and role are required on the wire. The edge case is the
+		// unicode name and the numeric bounds, not a missing identity.
+		Figure: AgentFigureOmnipus,
+		Role:   AgentRoleGeneral,
 	}
 }
 
@@ -969,7 +937,7 @@ func FixturePingFrame_Edge() PingFrame {
 
 // ── REST response type fixtures ─────────────────────────────────────────────
 //
-// Covers Task, SessionCloseFrame, and related types.
+// Covers Task and related types.
 
 // ── Task ─────────────────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/Task.yaml
@@ -1101,20 +1069,20 @@ func FixtureTask_Edge() Task {
 		CreatedAt:   createdAt,
 		UpdatedAt:   createdAt,
 	}
-	cron := "0 9 * * MON"
+	rrule, dtstart, tz := "FREQ=WEEKLY;BYDAY=MO", int64(1784624400000), "Europe/Berlin"
 	t.Trigger = &struct {
 		Config Task_Trigger_Config `json:"config"`
 		Type   TaskTriggerType     `json:"type"`
 	}{Type: TaskTriggerType("recurring")}
-	t.Trigger.Config.CronExpr = &cron
+	t.Trigger.Config.Rrule, t.Trigger.Config.DtstartMs, t.Trigger.Config.Tz = &rrule, &dtstart, &tz
 	return t
 }
 
 // FixtureTaskTrigger_Populated — a recurring time trigger.
 func FixtureTaskTrigger_Populated() TaskTrigger {
-	cron := "0 9 * * MON"
+	rrule, dtstart, tz := "FREQ=WEEKLY;BYDAY=MO", int64(1784624400000), "Europe/Berlin"
 	tr := TaskTrigger{Type: TaskTriggerType("recurring")}
-	tr.Config.CronExpr = &cron
+	tr.Config.Rrule, tr.Config.DtstartMs, tr.Config.Tz = &rrule, &dtstart, &tz
 	return tr
 }
 
@@ -1601,30 +1569,6 @@ func FixtureStorageStats_NilWarningsAllowed() StorageStats {
 		MemoryEntryCount:   0,
 		OldestSessionDate:  &oldest,
 		Warnings:           nil, // optional — nil is valid
-	}
-}
-
-// ── SessionCloseFrame ─────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/SessionCloseFrame.yaml
-
-func FixtureSessionCloseFrame_Populated() SessionCloseFrame {
-	return SessionCloseFrame{
-		Type:      "session_close",
-		SessionId: "sess-550e8400-e29b-41d4-a716-446655440003",
-	}
-}
-
-// FixtureSessionCloseFrame_ZeroValue — Go zero values.
-// Expected: FAIL because type="" (const: session_close), session_id="" (minLength: 1).
-func FixtureSessionCloseFrame_ZeroValue() SessionCloseFrame {
-	return SessionCloseFrame{}
-}
-
-// FixtureSessionCloseFrame_Edge — long session_id (valid).
-func FixtureSessionCloseFrame_Edge() SessionCloseFrame {
-	return SessionCloseFrame{
-		Type:      "session_close",
-		SessionId: "sess-" + repeatStr("c", 60),
 	}
 }
 
@@ -2449,7 +2393,7 @@ func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 // Field allocation per docs/internal/architecture/agent-types-field-matrix.md:
 //   - Main: full field set (voice included), no executor.
 //   - Subagent: like Main minus voice, no executor (server derives native).
-//   - Subagent3p: ONLY type/name/description/model/provider/color/icon/
+//   - Subagent3p: ONLY type/name/description/model/provider/color/
 //     rate_limits/soul/executor/timeout_seconds — executor
 //     is REQUIRED. All Main/Subagent-only fields (tools_cfg, skills,
 //     fallback_models, model_params, shell_policy, voice,
@@ -2457,8 +2401,7 @@ func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 //     variant at all.
 
 func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
-	color := "#D4AF37"
-	icon := "Robot"
+	color := AgentColorHash3B82F6
 	model := "claude-sonnet-4-6"
 	deny := AgentCreateRequestMainToolsCfgBuiltinPoliciesDeny
 	description := "Focused research assistant"
@@ -2473,7 +2416,6 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 		Description:       &description,
 		Model:             &model,
 		Color:             &color,
-		Icon:              &icon,
 		Soul:              "You are a focused research assistant.",
 		Skills:            &[]string{"web-research"},
 		MaxToolIterations: &maxToolIterations,
@@ -2523,8 +2465,7 @@ func FixtureAgentCreateRequestMain_InvalidType() AgentCreateRequestMain {
 }
 
 func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
-	color := "#4287f5"
-	icon := "Robot"
+	color := AgentColorHash38BDF8
 	model := "claude-sonnet-4-6"
 	description := "Native delegation-only research worker"
 	deny := AgentCreateRequestSubagentToolsCfgBuiltinPoliciesDeny
@@ -2536,7 +2477,6 @@ func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
 		Description:       &description,
 		Model:             &model,
 		Color:             &color,
-		Icon:              &icon,
 		Soul:              "You are a focused research worker invoked only via delegation.",
 		Skills:            &[]string{"web-research"},
 		MaxToolIterations: &maxToolIterations,
@@ -2573,11 +2513,10 @@ func FixtureAgentCreateRequestSubagent_InvalidType() AgentCreateRequestSubagent 
 }
 
 // FixtureAgentCreateRequestSubagent3p_Populated — every field this variant
-// allows: type/name/description/model/provider/color/icon/rate_limits/soul/
+// allows: type/name/description/model/provider/color/rate_limits/soul/
 // executor/timeout_seconds. executor is REQUIRED.
 func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3p {
-	color := "#f542a7"
-	icon := "Terminal"
+	color := AgentColorHashF472B6
 	model := "claude-sonnet-4-6"
 	provider := "anthropic"
 	description := "External-CLI delegation-only worker"
@@ -2596,7 +2535,6 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 		Model:          &model,
 		Provider:       &provider,
 		Color:          &color,
-		Icon:           &icon,
 		Soul:           "You are a focused worker running on the claude-code CLI.",
 		TimeoutSeconds: &timeoutSeconds,
 		RateLimits: &struct {
@@ -2666,8 +2604,7 @@ func FixtureAgentCreateRequestSubagent3p_ForbiddenFieldJSON() []byte {
 // Traces to: contracts/components/schemas/AgentUpdateRequest.yaml
 
 func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
-	color := "#D4AF37"
-	icon := "Robot"
+	color := AgentColorHash3B82F6
 	model := "gpt-4o"
 	name := "Renamed Agent"
 	description := "Updated description"
@@ -2684,7 +2621,6 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 		Description: &description,
 		Model:       &model,
 		Color:       &color,
-		Icon:        &icon,
 		Default:     &vDefault,
 		Soul:        &soul,
 		Voice:       &voice,

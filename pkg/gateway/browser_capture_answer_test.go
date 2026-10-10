@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -119,21 +120,38 @@ func TestCaptureAnswerRetainsOriginalIdentityThroughWriterWait(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var body map[string]any
-			if err = json.Unmarshal(raw, &body); err != nil {
-				t.Fatal(err)
-			}
-			if !current {
-				if body["type"] != "marker" {
-					t.Fatalf("retired response escaped before marker: %s", raw)
-				}
-			} else if kind == "current" {
-				if body["type"] != "browser_capture_answer" || body["sdp"] != "expected-answer" || body["capture_generation"] != float64(1) || body["target_id"] != "page-a" || body["offer_id"] != float64(9) {
-					t.Fatalf("current answer lost immutable identity: %s", raw)
-				}
-			} else if body["type"] != "error" || body["message"] != "capture ingest offer failed: encoder negotiation failed" {
-				t.Fatalf("current error was lost: %s", raw)
-			}
+			assertCaptureAnswerFrame(t, raw, kind, current)
 		})
+	}
+}
+
+// assertCaptureAnswerFrame checks the single frame the client reads after the
+// offer: a retired response must not escape before the marker; a live answer
+// carries its immutable identity; a live error carries the fixed text with no
+// raw cause.
+func assertCaptureAnswerFrame(t *testing.T, raw []byte, kind string, current bool) {
+	t.Helper()
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	switch {
+	case !current:
+		if body["type"] != "marker" {
+			t.Fatalf("retired response escaped before marker: %s", raw)
+		}
+	case kind == "current":
+		if body["type"] != "browser_capture_answer" || body["sdp"] != "expected-answer" || body["capture_generation"] != float64(1) || body["target_id"] != "page-a" || body["offer_id"] != float64(9) {
+			t.Fatalf("current answer lost immutable identity: %s", raw)
+		}
+	default:
+		// Leak round 6 (REVIEW-mainfix-r6-e14ac89eb T1): the frame now carries
+		// fixed text, never the interpolated cause.
+		if body["type"] != "error" || body["message"] != "capture ingest offer failed; details are in the server log" {
+			t.Fatalf("current error was lost or leaked the cause: %s", raw)
+		}
+		if strings.Contains(body["message"].(string), "encoder negotiation failed") {
+			t.Fatalf("the error frame leaked the raw encoder cause: %s", raw)
+		}
 	}
 }

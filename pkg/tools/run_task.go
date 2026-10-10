@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
@@ -45,6 +46,17 @@ type TaskRunTool struct {
 	// is a configuration error, never a silent success — mirrors every other
 	// unwired-checker discipline in this package.
 	startTaskNow TaskStartNowFunc
+	// delegationDeny is the delegation-policy pre-check for an AGENT-initiated
+	// start (founder ruling 2026-10-10: the delegation policy always applies).
+	// Starting a task runs its assignee, so the calling agent needs a
+	// caller->assignee edge in the task's workspace graph — including for its
+	// OWN task (the self-edge; there is no self-exemption on a run). The
+	// executor re-runs the same decision (AgentLoop.authorizeInitiatedRun)
+	// inside StartTaskNowAs; this earlier call lets a refused run leave the
+	// task byte-identical. FAIL CLOSED when unwired, exactly like create_task.
+	// This tool is the agent origin; the scheduler and a person's UI start
+	// reach the executor through other entry points and are not gated here.
+	delegationDeny func(ctx context.Context, assigneeAgentID, workspaceID string) *DelegationDenial
 }
 
 // NewTaskRunTool constructs a TaskRunTool. store may be nil for
@@ -57,6 +69,16 @@ func NewTaskRunTool(store *task.Store) *TaskRunTool {
 // SetStartTaskNow installs the dispatch hook (see TaskStartNowFunc doc).
 func (t *TaskRunTool) SetStartTaskNow(fn TaskStartNowFunc) {
 	t.startTaskNow = fn
+}
+
+// SetDelegationDenyChecker installs the delegation-policy pre-check applied to
+// the task's assignee, in the task's workspace, before any status write or
+// dispatch. The wiring layer builds it for the owning agent as the calling
+// identity.
+func (t *TaskRunTool) SetDelegationDenyChecker(
+	fn func(ctx context.Context, assigneeAgentID, workspaceID string) *DelegationDenial,
+) {
+	t.delegationDeny = fn
 }
 
 func (t *TaskRunTool) Name() string           { return "run_task" }
@@ -105,6 +127,24 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult(fmt.Sprintf("run_task failed: could not load task: %v", err))
 	}
 
+	// FR-048/BDD-08.6: a task living in a workspace OTHER than the caller's
+	// current one is NOT the caller's to run. Execution happens only inside the
+	// workspace a task belongs to, under that workspace's own delegation policy
+	// and by its own team's local pickup — a foreign delivery (create_task with
+	// an explicit foreign workspace_id) lands as not-started Inbox work and
+	// must never be dispatched from the delivering side. Refused here, BEFORE
+	// any status write or dispatch: the caller sees created/not-started
+	// guidance, not a launched run. A caller whose turn carries no workspace
+	// (the pre-merge behaviour) is unaffected, as are tasks with no workspace.
+	if ownWS := strings.TrimSpace(ToolWorkspaceID(ctx)); ownWS != "" &&
+		existing.WorkspaceID != "" && existing.WorkspaceID != ownWS {
+		return ErrorResult(fmt.Sprintf(
+			"task %q is in workspace %q, not your current workspace %q — a task delivered to another "+
+				"workspace is created-and-not-started work its own team picks up locally; it cannot be "+
+				"run, started or re-run from here (FR-048)",
+			taskID, existing.WorkspaceID, ownWS))
+	}
+
 	// G4/A3: in-plan tasks are rejected AT THE TOOL BOUNDARY — the plan
 	// drives its own members' start order; run_task never dispatches one.
 	if existing.PlanID != "" {
@@ -131,6 +171,22 @@ func (t *TaskRunTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	}
 	if existing.AgentID == "" {
 		return ErrorResult(fmt.Sprintf("task %q has no assigned agent; assign one before running it", taskID))
+	}
+
+	// Delegation policy always applies to an agent-initiated start: refuse
+	// BEFORE any status write or dispatch, keyed on the actual calling agent
+	// and the task's assignee, never on the task's stored creator field.
+	if t.delegationDeny == nil {
+		slog.Error("run_task: no delegation-deny checker installed — denying by default",
+			"task_id", taskID, "assignee", existing.AgentID)
+		return DelegationDeniedResult("run_task", &DelegationDenial{
+			Reason:        "delegation is not configured for this agent (no policy gate installed) — denying by default",
+			Policy:        DenyTrustSet,
+			TargetAgentID: existing.AgentID,
+		})
+	}
+	if denial := t.delegationDeny(ctx, existing.AgentID, existing.WorkspaceID); denial != nil {
+		return DelegationDeniedResult("run_task", denial)
 	}
 
 	if t.startTaskNow == nil {

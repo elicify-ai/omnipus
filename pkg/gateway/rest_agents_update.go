@@ -18,7 +18,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/entity"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // firstForbiddenSubagent3pField moved to agent_field_rules.go (W2a) — it now
@@ -55,6 +54,7 @@ type restAPIUpdateAgentFlow struct {
 	cfg                 *config.Config
 	foundIdx            int
 	rawBody             []byte
+	presence            rawJSONFields
 	foundAgent          config.AgentConfig
 	toolsCoverageMutate func(*config.Config)
 	workspace           string
@@ -72,8 +72,9 @@ func suppliedRESTAgentFields(req *gen.AgentUpdateRequest) []string {
 	}
 	add(req.Name != nil, "name")
 	add(req.Description != nil, "description")
+	add(req.Figure != nil, "figure")
+	add(req.Role != nil, "role")
 	add(req.Color != nil, "color")
-	add(req.Icon != nil, "icon")
 	add(req.Soul != nil, "soul")
 	add(req.Skills != nil, "skills")
 	add(req.McpServers != nil, "mcp_servers")
@@ -150,10 +151,9 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	// this raw-body-sniff pattern for exactly this failure mode; ADR-037
 	// follows the same precedent rather than accepting the silent drop). Read
 	// +restore r.Body so the normal decode below is unaffected.
-	var readErr error
-	uf.rawBody, readErr = io.ReadAll(io.LimitReader(uf.r.Body, 1<<20))
-	if readErr != nil {
-		jsonErr(uf.w, http.StatusBadRequest, "could not read request body")
+	var readOK bool
+	uf.rawBody, readOK = readAgentWriteBody(uf.w, uf.r)
+	if !readOK {
 		return true
 	}
 	uf.r.Body = io.NopCloser(bytes.NewReader(uf.rawBody))
@@ -210,7 +210,12 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	}
 
 	validateEnabled := uf.cfg.Gateway.ValidateInbound
-	if !decodeAndValidate(uf.w, uf.r, "AgentUpdateRequest", &uf.ru.req, validateEnabled) {
+	if validateEnabled && !validateAgentIdentitySchema(uf.w, "AgentUpdateRequest", uf.rawBody, false) {
+		return true
+	}
+	// Validate a normalized copy above, but decode the original request so
+	// duplicate-key ordering and raw null/omission semantics do not change.
+	if !decodeAndValidate(uf.w, uf.r, "AgentUpdateRequest", &uf.ru.req, false) {
 		return true
 	}
 	if uf.ru.req.Revision == "" {
@@ -221,21 +226,23 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 		jsonErr(uf.w, http.StatusBadRequest, err.Error())
 		return true
 	}
-	var presence map[string]json.RawMessage
-	if err := json.Unmarshal(uf.rawBody, &presence); err == nil {
-		if _, supplied := presence["updated_at"]; supplied {
-			writeJSON(uf.w, http.StatusBadRequest, gen.ErrorResponse{
-				Error: "updated_at is read-only; use revision for configuration updates",
-				Code:  strPtr("invalid_input"),
-				Field: strPtr("updated_at"),
-			})
+	var fieldsOK bool
+	uf.presence, fieldsOK = readAgentUpdateFields(uf.w, uf.rawBody)
+	if !fieldsOK {
+		return true
+	}
+	if uf.presence.has("updated_at") {
+		writeJSON(uf.w, http.StatusBadRequest, gen.ErrorResponse{
+			Error: "updated_at is read-only; use revision for configuration updates",
+			Code:  strPtr("invalid_input"),
+			Field: strPtr("updated_at"),
+		})
+		return true
+	}
+	for _, field := range []string{"skills", "mcp_servers", "tool_policy_changes", "soul"} {
+		if uf.presence.hasNull(field) {
+			jsonErr(uf.w, http.StatusBadRequest, field+" must not be null")
 			return true
-		}
-		for _, field := range []string{"skills", "mcp_servers", "tool_policy_changes", "soul"} {
-			if raw, ok := presence[field]; ok && string(bytes.TrimSpace(raw)) == "null" {
-				jsonErr(uf.w, http.StatusBadRequest, field+" must not be null")
-				return true
-			}
 		}
 	}
 	if !validateAgentUpdateShape(uf.w, uf.rawBody) {
@@ -243,17 +250,6 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	}
 	if uf.ru.req.ToolsCfg != nil && uf.ru.req.ToolPolicyChanges != nil {
 		jsonErr(uf.w, http.StatusBadRequest, "tools_cfg and tool_policy_changes cannot be supplied together")
-		return true
-	}
-	// ADR-071 §5.1.3 part 2: "default" (case-insensitive) is reserved — see
-	// the identical check in createAgent for the full rationale. An agent's
-	// id is never editable via PUT (it comes from the URL path, matched
-	// against cfg.Agents.List above), so only the name half is reachable
-	// here too; a pre-existing agent literally id'd "default" is covered by
-	// the boot-time WARN (part 3), not this rejection.
-	if uf.ru.req.Name != nil && strings.EqualFold(strings.TrimSpace(*uf.ru.req.Name), tools.SwitchAgentDefaultTarget) {
-		jsonErr(uf.w, http.StatusBadRequest,
-			fmt.Sprintf("agent name %q is reserved — it collides with switch_agent's target:%q sentinel", strings.TrimSpace(*uf.ru.req.Name), tools.SwitchAgentDefaultTarget))
 		return true
 	}
 	// Timestamp applied to the persisted agent on every successful save.
@@ -270,15 +266,48 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 			return true
 		}
 	} else {
-		var windowPeek map[string]json.RawMessage
-		if json.Unmarshal(uf.rawBody, &windowPeek) == nil {
-			if v, present := windowPeek["context_window_override"]; present &&
-				string(bytes.TrimSpace(v)) == "null" {
-				uf.ru.clearsContextWindowOverride = true
-			}
-		}
+		uf.ru.clearsContextWindowOverride = uf.presence.hasNull("context_window_override")
+	}
+	if !acceptAgentIdentityWrite(uf.w, &uf.ru.req, uf.presence) {
+		return true
 	}
 	return uf.validateMaxToolIterations()
+}
+
+// acceptAgentIdentityWrite rejects a present figure, role, or colour that is
+// null or not in the closed set, before any field is persisted. The raw-body
+// presence map distinguishes null from omission, which the generated pointers
+// cannot. Colour letter-case is normalized; omitted fields are left alone.
+func acceptAgentIdentityWrite(w http.ResponseWriter, req *gen.AgentUpdateRequest, presence rawJSONFields) bool {
+	figureValid := true
+	if req.Figure != nil {
+		_, figureValid = coreagent.CanonicalFigure(string(*req.Figure))
+	}
+	if !figureValid || presence.hasNull("figure") {
+		jsonErr(w, http.StatusBadRequest, "figure must be Robot, Man, Woman, Omnipus, or Monogram")
+		return false
+	}
+	roleValid := true
+	if req.Role != nil {
+		_, roleValid = coreagent.CanonicalRole(string(*req.Role))
+	}
+	if !roleValid || presence.hasNull("role") {
+		jsonErr(w, http.StatusBadRequest, "role must be one of the curated role slugs")
+		return false
+	}
+	canon, colorValid := "", true
+	if req.Color != nil {
+		canon, colorValid = coreagent.CanonicalColor(string(*req.Color))
+	}
+	if !colorValid || presence.hasNull("color") {
+		jsonErr(w, http.StatusBadRequest, "color must be one of the ten identity colours")
+		return false
+	}
+	if req.Color != nil {
+		c := gen.AgentColor(canon)
+		req.Color = &c
+	}
+	return true
 }
 
 // validateMaxToolIterations is the #904 fast-path check of the per-agent
@@ -290,13 +319,7 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 func (uf *restAPIUpdateAgentFlow) validateMaxToolIterations() bool {
 	uf.ru.clearsMaxToolIterations = false
 	if uf.ru.req.MaxToolIterations == nil {
-		var peek map[string]json.RawMessage
-		if json.Unmarshal(uf.rawBody, &peek) == nil {
-			if v, present := peek["max_tool_iterations"]; present &&
-				string(bytes.TrimSpace(v)) == "null" {
-				uf.ru.clearsMaxToolIterations = true
-			}
-		}
+		uf.ru.clearsMaxToolIterations = uf.presence.hasNull("max_tool_iterations")
 		return false
 	}
 	if err := config.ValidateAgentMaxToolIterations(*uf.ru.req.MaxToolIterations, &uf.cfg.Agents.Defaults); err != nil {
@@ -668,7 +691,7 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 	uf.workspace, wsErr = agentWorkspacePath(uf.cfg, uf.ru.id, capturedWorkspace, uf.ru.a.homePath)
 	if wsErr != nil {
 		logsafeError("rest: agentWorkspacePath for update", "agent_id", uf.ru.id, "error", wsErr)
-		jsonErr(uf.w, http.StatusInternalServerError, fmt.Sprintf("could not resolve workspace: %v", wsErr))
+		jsonServerFailure(uf.w, http.StatusInternalServerError, "could not resolve workspace", wsErr)
 		return true
 	}
 	// Rebuild the running agent only when a changed field is one the
@@ -844,6 +867,7 @@ func (uf *restAPIUpdateAgentFlow) respond() {
 	if liveCfg := uf.ru.a.agentLoop.GetConfig(); liveCfg != nil {
 		for _, ac := range liveCfg.Agents.List {
 			if ac.ID == agentID {
+				applyStoredAgentIdentity(&ag, ac)
 				ag.Type = coreagent.ToWireType(ac)
 				// Derived from the settings singleton — see listAgents' comment
 				// for the full rationale. liveCfg is fetched fresh above, and
@@ -1111,11 +1135,14 @@ func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRe
 	// tool_feedback was removed from the wire in W1 (it's now per-channel
 	// runtime behavior driven by pkg/agent/loop.go: webchat skips). The
 	// global config-level agents.defaults.tool_feedback stays.
-	if rp.ru.req.Color != nil {
-		agentRec.Color = *rp.ru.req.Color
+	if rp.ru.req.Figure != nil {
+		agentRec.Figure = string(*rp.ru.req.Figure)
 	}
-	if rp.ru.req.Icon != nil {
-		agentRec.Icon = *rp.ru.req.Icon
+	if rp.ru.req.Role != nil {
+		agentRec.Role = string(*rp.ru.req.Role)
+	}
+	if rp.ru.req.Color != nil {
+		agentRec.Color = string(*rp.ru.req.Color)
 	}
 	// voice: ADR-090 FR-002 supported editable persona field. Persisted
 	// even though TTS playback is inactive. Worker non-empty values are
@@ -1127,7 +1154,7 @@ func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRe
 	// AgentUpdateRequest.yaml — including locked/system agents (the
 	// Judge), which is why this is not gated behind the
 	// foundAgent.Locked identity-mutation check above (that block
-	// only forbids name/description/soul/color/icon/skills).
+	// only forbids name/description/soul/color/skills).
 	if rp.ru.req.MemoryEnabled != nil {
 		agentRec.MemoryEnabled = rp.ru.req.MemoryEnabled
 	}

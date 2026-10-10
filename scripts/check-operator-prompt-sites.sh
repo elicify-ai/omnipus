@@ -18,22 +18,37 @@
 # Two counts, both from the joint delivery plan's own text:
 #
 #   1. `bus.InboundMessage.OperatorPrompt` is assigned the literal `true` at
-#      EXACTLY THREE non-test sites in pkg/: pkg/gateway/websocket.go,
-#      pkg/gateway/sse.go, pkg/channels/base.go::HandleMessage. Never at
+#      EXACTLY TWO non-test sites in pkg/: pkg/gateway/websocket_chat.go and
+#      pkg/channels/base.go::HandleMessage. Never at
 #      pkg/gateway/ws_ask_user.go, pkg/agent/async_notifier.go, or
-#      pkg/agent/loop.go (the goal-loop follow-up re-injection) — a fourth
-#      site or a missing site are both failures (C-77's exact wording: "fails
-#      if OperatorPrompt is assigned true at any number of non-test sites
-#      other than exactly three").
+#      pkg/agent/loop.go (the goal-loop follow-up re-injection) — a third
+#      site or a missing site are both failures. (C-77's original wording was
+#      "exactly three"; pkg/gateway/sse.go's site went with the SSE transport,
+#      so the count is two. The pinned property is unchanged: a new site here
+#      silently changes when the wheel releases.)
 #   2. `bus.MessageBus.PublishInbound` is CALLED (never its own `func`
-#      definition in pkg/bus/bus.go) at EXACTLY SIX non-test sites in pkg/
-#      (BROWSER-FR-029a's own text: "the PublishInbound census is exactly six
-#      non-test call sites, so a new publish site cannot appear
-#      un-classified"). Verified today: pkg/agent/async_notifier.go,
-#      pkg/agent/loop.go (the goal-loop follow-up — this ONE call site is
-#      legitimate and must stay; the point is that no SEVENTH appears
-#      unclassified), pkg/gateway/sse.go, pkg/gateway/websocket.go,
+#      definition in pkg/bus/bus.go) at EXACTLY EIGHT non-test sites in pkg/
+#      (BROWSER-FR-029a's own text: the PublishInbound census is pinned, so a
+#      new publish site cannot appear un-classified). Verified today:
+#      pkg/agent/async_notifier.go, pkg/agent/loop.go (the goal-loop
+#      follow-up — this ONE call site is legitimate and must stay),
+#      pkg/agent/address_router.go (TWO sites), pkg/agent/connector_egress.go
+#      (the main-connector refusal note), pkg/gateway/websocket_chat.go,
 #      pkg/gateway/ws_ask_user.go, pkg/channels/base.go.
+#
+#      Security-lead ruling (OPSITE-connector_egress.md, u8-inbound-20261010):
+#      the connector_egress.go publication is a NON-operator, server-generated
+#      note. It never sets OperatorPrompt=true and it carries the owner-wake
+#      marker, so reviveInboundIsHumanTurn rejects it and it can never clear a
+#      landed human Stop; the pinned test is
+#      pkg/agent/refusal_note_stop_test.go.
+#
+#      Security-lead ruling (REVIEW-u8-r3-78271d0f0.md): the two
+#      pkg/agent/address_router.go publications and the
+#      pkg/agent/async_notifier.go publication are legitimate NON-operator
+#      sites — they must never set OperatorPrompt=true, and they do not. They
+#      are admitted here as non-operator publishes; a change that flips any of
+#      them to OperatorPrompt=true fails count 1.
 #
 # Per C-77: do NOT scan pkg/gateway/websocket.go's ADR-057 FR-089 "W5 audit
 # classification artefact" comment block for OperatorPrompt assignments. That
@@ -160,33 +175,32 @@ fail=0
 
 echo "=== check-operator-prompt-sites ==="
 echo ""
-echo "OperatorPrompt assigned true: $op_count site(s) (want exactly 3)"
+echo "OperatorPrompt assigned true: $op_count site(s) (want exactly 2)"
 if [ -n "$op_hits" ]; then
   printf '%s\n' "$op_hits" | sed 's/^/  /'
 fi
-if [ "$op_count" -ne 3 ]; then
+if [ "$op_count" -ne 2 ]; then
   fail=1
 fi
 
 echo ""
-echo "PublishInbound call sites: $pi_count (want exactly 6)"
+echo "PublishInbound call sites: $pi_count (want exactly 8)"
 if [ -n "$pi_hits" ]; then
   printf '%s\n' "$pi_hits" | sed 's/^/  /'
 fi
-if [ "$pi_count" -ne 6 ]; then
+if [ "$pi_count" -ne 8 ]; then
   fail=1
 fi
 
 echo ""
 if [ "$fail" -ne 0 ]; then
   echo "ERROR: BROWSER-FR-029/FR-029a's assignment partition is no longer exactly" >&2
-  echo "3 OperatorPrompt=true sites and 6 PublishInbound call sites (see counts" >&2
+  echo "2 OperatorPrompt=true sites and 8 PublishInbound call sites (see counts" >&2
   echo "above). This is the fail-closed browser-wheel release discriminator —" >&2
   echo "a new, un-classified site here silently changes when the wheel releases." >&2
-  echo "See docs/internal/specs/browser-control-handover-spec.md FR-029/FR-029a" >&2
-  echo "and pkg/gateway/browser_release_sites_test.go." >&2
+  echo "See docs/internal/specs/browser-control-handover-spec.md FR-029/FR-029a." >&2
   exit 1
 fi
 
-echo "OK: exactly 3 OperatorPrompt=true sites and 6 PublishInbound call sites."
+echo "OK: exactly 2 OperatorPrompt=true sites and 8 PublishInbound call sites."
 exit 0

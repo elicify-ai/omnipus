@@ -20,7 +20,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -66,9 +65,9 @@ func orphanACPick(raw []providers.Message, indexes ...int) []providers.Message {
 	return out
 }
 
-func orphanACSnapshot(t *testing.T, h *cwR1Harness) memory.WindowSnapshot {
+func orphanACSnapshot(t *testing.T, h *cwR1Harness) session.WindowView {
 	t.Helper()
-	snap, err := h.store.SnapshotWindow(context.Background(), h.key)
+	snap, err := h.store.WindowView(context.Background(), h.key)
 	require.NoError(t, err, "read exact real-store snapshot")
 	return snap
 }
@@ -96,7 +95,7 @@ func orphanACAssertView(t *testing.T, h *cwR1Harness, ts *turnState, want []prov
 	return out
 }
 
-func orphanACAssertUnchanged(t *testing.T, h *cwR1Harness, before memory.WindowSnapshot, bytes []byte) {
+func orphanACAssertUnchanged(t *testing.T, h *cwR1Harness, before session.WindowView, bytes []byte) {
 	t.Helper()
 	require.Equal(t, before, orphanACSnapshot(t, h), "pure recovery view changes neither archive nor captured Skip/Count/AnchorLine/projection metadata")
 	require.Equal(t, bytes, orphanACArchiveBytes(t, h), "recovery never rewrites, deletes or fabricates archive bytes")
@@ -104,11 +103,11 @@ func orphanACAssertUnchanged(t *testing.T, h *cwR1Harness, before memory.WindowS
 
 func orphanACReopen(t *testing.T, h *cwR1Harness) {
 	t.Helper()
-	reloaded, err := memory.NewJSONLStore(h.dir)
+	reloaded, err := session.NewUnifiedStore(h.dir)
 	require.NoError(t, err, "reload uses a fresh real store reading persisted archive and metadata")
 	t.Cleanup(func() { require.NoError(t, reloaded.Close(), "close reloaded store") })
 	h.store = reloaded
-	h.agent.Sessions = session.NewJSONLBackend(reloaded)
+	h.agent.Sessions = reloaded
 }
 
 func orphanACAssertRejectedBeforeSend(t *testing.T, h *cwR1Harness, ts *turnState, messages []providers.Message, wantErr string) {

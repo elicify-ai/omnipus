@@ -22,7 +22,7 @@
   },
   {
     "name": "create_agent",
-    "description": "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description, soul, model, color (6-digit hex, e.g. #22C55E) and icon (a Phosphor icon name, e.g. 'robot') are all required — color/icon are rejected if missing or malformed. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened.",
+    "description": "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description, soul, model and color (6-digit hex, e.g. #22C55E) are all required — a malformed color is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"
@@ -32,13 +32,6 @@
     "description": "Author a NEW skill (procedural memory). Writes a SKILL.md to the user skills directory; prior versions are snapshotted for rollback. This call writes the file; it is not a confirmation step. Policy may still Ask at execution; that is not a substitute for the user's confirmation of the proposal, and you must not invent a second confirmation ritual. content must not exceed 262144 bytes. A name that already exists is refused — use edit_skill to modify it instead. Parameters: name (required, alphanumeric+hyphens), content (required, full SKILL.md including YAML frontmatter with name and description).",
     "scope": "core",
     "category": "skills",
-    "source": "builtin"
-  },
-  {
-    "name": "create_task_in_workspace",
-    "description": "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, blocked, done, failed — defaults to inbox; in_progress is rejected — it is only ever reached through real dispatch via run_task, never persisted directly), due (optional, RFC 3339 due date/time), priority (optional, 1 highest to 5 lowest, default 3), plan_id (optional, ID of the Plan this task is a member of — must exist in the same workspace and must still be a draft plan; a plan's membership is frozen at approval), write_set (optional, array of concrete paths this plan member creates/edits; meaningful only alongside plan_id), stream (optional, the parallel-group id this plan member belongs to), is_join (optional, true marks this plan member as an authored join/assemble member), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion), dod (REQUIRED when agent_id is set: at least one definition-of-done item, distinct from criteria — GOAL-FR-021/D-C). Before authoring acceptance criteria or dod, load the define-goal skill (via the Skill tool) and follow its quality bar. Assigning agent_id to an agent other than yourself is delegation and requires delegation trust to that agent within the workspace, or the call is refused. If every acceptance criterion is kind=check, the assignee must have bash policy allow — otherwise the criteria set could never be satisfied and the create is rejected. An unknown status value is rejected, not defaulted.",
-    "scope": "core",
-    "category": "tasks",
     "source": "builtin"
   },
   {
@@ -53,13 +46,6 @@
     "description": "Delete an agent. IRREVERSIBLE. Removes the agent's entity record and applicable SOUL.md instructions. Preserves unrelated files in its home, including HEARTBEAT.md, local skills, and any vestigial MEMORY.md left by an older install. Also cascades: every chat session in the shared session store that belongs SOLELY to this agent is deleted, together with its uploaded files — a session another agent also participated in (e.g. via a mid-conversation agent switch) is left untouched to avoid destroying that agent's history, and is reported separately in the response. Every GTD task assigned to this agent is unassigned (not deleted — the task itself survives); tasks it merely created keep that historical attribution. This agent is also removed from every workspace's core_team, and every delegation-trust edge naming it (as either side) is dropped from each affected workspace's delegation graph. Seeded built-ins (Mia, Jim, Ava, Admin, Planner, Researcher, General Purpose, Judge, and Plan Supervisor), the currently configured default agent, and an agent that owns at least one active (running) Plan cannot be deleted — set another agent as default first (Agents screen ★), or stop/reassign the Plan(s), before retrying. A step that fails partway through is reported in the response rather than silently swallowed — check for a warning field before assuming the cascade fully completed.\nParameters: id (required), revision (required, from get_agent), confirm (bool, must be true).",
     "scope": "core",
     "category": "agents",
-    "source": "builtin"
-  },
-  {
-    "name": "delete_task_in_workspace",
-    "description": "Permanently delete a to-do/task item from a workspace by id. Irreversible. You may only delete a task you own (creator or assignee) — deleting another agent's task requires delegation trust to that agent within the workspace, or the call is refused. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required), confirm (bool, must be true). Deleting a task also removes it from every other task's blocked_by list, which can unblock dependents and make them runnable — the response lists any tasks unblocked this way in unblocked_tasks. If those edges cannot be fully cleaned up the deletion still stands and the response carries a cascade_warning.",
-    "scope": "core",
-    "category": "tasks",
     "source": "builtin"
   },
   {
@@ -161,13 +147,6 @@
     "source": "builtin"
   },
   {
-    "name": "list_tasks_in_workspace",
-    "description": "List YOUR OWN tasks across workspaces: tasks assigned to you, plus tasks you created for other agents. It never returns another agent's or a human's tasks, so an empty result means you have no matching work — not that the workspace is empty. Bounded to the 100 most recently updated matches; `truncated` and `matched` say when there were more.\nParameters: workspace_id, agent_id, status (all optional, all narrow the result further).",
-    "scope": "core",
-    "category": "tasks",
-    "source": "builtin"
-  },
-  {
     "name": "list_workspaces",
     "description": "List workspaces with their live task counts. Call this to find workspace ids for create_task_in_workspace, list_tasks_in_workspace, get_workspace, or update_workspace. Ordering is: the default workspace first, then pinned workspaces by pin_order, then the rest newest-first — so the first result is not necessarily the most recently created one. Returns id, name, description, status, pinned, pin_order, is_default, core_team and task_count. Any workspace file that cannot be read is skipped and counted in `skipped`.\nParameters: status (optional: active/archived/all, defaults to active).",
     "scope": "core",
@@ -228,13 +207,6 @@
     "description": "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Ava, Admin, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their tool policies, installed connector assignments, and skills are editable. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty provider clears its pin. Use fallback_models with model/provider objects; [] clears the fallback chain. The agent type and an external agent's cli/cli_path cannot change after creation; create a new agent for a different type.",
     "scope": "core",
     "category": "agents",
-    "source": "builtin"
-  },
-  {
-    "name": "update_task_in_workspace",
-    "description": "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required, from list_tasks_in_workspace), name, description, prompt, workspace_id, agent_id, status (inbox/next/blocked/done/failed — in_progress is reached only through real dispatch via run_task, never written directly here), due (RFC 3339), priority (1 highest to 5 lowest), blocked_by (array of task IDs, replaces existing list), write_set (array of concrete paths this plan member creates/edits, replaces existing list; pass [] to clear), stream (new parallel-group id for this plan member; pass \"\" to clear), is_join (set/clear whether this plan member is an authored join/assemble member), result (completion summary; used as the judge's claim text — required in practice for a done claim on a task with acceptance criteria, since only the criteria's own assignee running that task can force one through). Only provided fields are updated. A status:\"done\" call on a task with acceptance criteria is NOT applied immediately — it is adjudicated by the judge during that task's own run. You may only update a task you own (assignee or creator); updating another agent's task requires delegation trust to that agent within the workspace, or the call is refused. Refuses with PRINCIPAL_REQUIRED if the calling agent cannot be resolved. A call that fails validation changes nothing — the whole update, including a workspace_id move, is all-or-nothing.",
-    "scope": "core",
-    "category": "tasks",
     "source": "builtin"
   },
   {

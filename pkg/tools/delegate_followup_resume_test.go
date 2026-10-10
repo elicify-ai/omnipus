@@ -4,24 +4,11 @@
 
 // Regression tests for the delegate resume path (ADR-20261004 locked decision
 // 4: `follow_up` was RENAMED to `resume` with no alias; `cancel` became
-// `stop_all`). The native half of the old warm-resume defect — a terminal
-// session resumed through agent.spawnSubTurn's CreateSessionWithID collision
-// guard (FR-096), silently doing nothing behind a well-formed ack — is now
-// carried by the steering sink's ReviveStoppedSession (agent side) and is
-// pinned in pkg/tools/delegate_adr053_test.go plus pkg/agent's revive tests;
-// this file keeps the half that still lives at the pkg/tools boundary:
-//
-//   - a 3P child has no warm-resume primitive (D5): `resume` (and a 3P
-//     `respond`) mint a NEW corrective session carrying the prior context,
-//     and the launcher dispatch marks it as a genuine cold create.
-//   - any async spawn failure is logged unconditionally (grep-able in
-//     gateway.log) regardless of whether a downstream callback happens to
-//     do anything with the result, and the affected session's lifecycle
-//     record is left in a discoverable Failed state.
-//   - the refusal half of ADR-091 fix lane RX-DELIVERY, DEFECT 4: when the
-//     new instruction did not land, NOTHING is dispatched.
-//   - the landing half: the instruction is written where the rebuilt turn
-//     actually reads it — the TRANSCRIPT.
+// `stop_all`). A resume continues the SAME session through the steering sink's
+// ReviveStoppedSession for native AND external-CLI (3P) children alike — it
+// never mints a new corrective session (DEL-31 / FR-043: the cold-replacement
+// branch bypassed the creation-edge authorization and started a fresh CLI
+// conversation after the edge was revoked).
 
 package tools
 
@@ -31,43 +18,79 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-type followUpLauncher struct {
-	sessionID  string
-	generation int
-	dispatch   steer.DispatchResult
-	err        error
+// dispatchCountingLauncher records every Dispatch and fails any Launch: a
+// resume or a 3P respond may use neither (a Dispatch of a NEW session id is the
+// cold-replacement bypass this file pins shut).
+type dispatchCountingLauncher struct {
+	mu          sync.Mutex
+	dispatchIDs []string
 }
 
-func (f *followUpLauncher) Launch(context.Context, steer.LaunchRequest) (steer.LaunchResult, error) {
-	return steer.LaunchResult{}, fmt.Errorf("resume must not launch a second native session")
+func (f *dispatchCountingLauncher) Launch(context.Context, steer.LaunchRequest) (steer.LaunchResult, error) {
+	return steer.LaunchResult{}, fmt.Errorf("resume must not launch a second session")
 }
 
-func (f *followUpLauncher) Dispatch(_ context.Context, sessionID string, generation int) (steer.DispatchResult, error) {
-	f.sessionID = sessionID
-	f.generation = generation
-	result := f.dispatch
-	if result.Generation == 0 {
-		result.Generation = generation
+func (f *dispatchCountingLauncher) Dispatch(_ context.Context, sessionID string, generation int) (steer.DispatchResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dispatchIDs = append(f.dispatchIDs, sessionID)
+	return steer.DispatchResult{State: steer.DispatchRunning, Generation: generation}, nil
+}
+
+func (f *dispatchCountingLauncher) dispatched() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.dispatchIDs...)
+}
+
+// externalSteeringSink is a steering sink with every optional capability the
+// 3P paths probe: plain enqueue, revive, and live external-CLI delivery. The
+// revive/deliver outcomes are injected so each test drives both the success and
+// the visible-refusal half.
+type externalSteeringSink struct {
+	mu            sync.Mutex
+	reviveIDs     []string
+	reviveText    []string
+	reviveErr     error
+	deliverIDs    []string
+	deliverErr    error
+	enqueuedCount int
+}
+
+func (f *externalSteeringSink) EnqueueSteeringMessage(string, string, providers.Message, string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.enqueuedCount++
+	return "corr_test", nil
+}
+
+func (f *externalSteeringSink) ReviveStoppedSession(_ context.Context, sessionID string, _ steer.Principal, instruction string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reviveIDs = append(f.reviveIDs, sessionID)
+	f.reviveText = append(f.reviveText, instruction)
+	if f.reviveErr != nil {
+		return false, f.reviveErr
 	}
-	return result, f.err
+	return true, nil
 }
 
-// appendFailingStore is a real UnifiedStore whose transcript append fails —
-// the process-edge fault for the 3P refusal test: the corrective identity
-// clone succeeds (real store underneath), the instruction append cannot land.
-type appendFailingStore struct {
-	*session.UnifiedStore
-	err error
-}
-
-func (s *appendFailingStore) AppendTranscriptStrict(sessionID string, entry session.TranscriptEntry) error {
-	return s.err
+func (f *externalSteeringSink) DeliverExternalCLIInstruction(_ context.Context, sessionID, _ string, _ providers.Message, correlationID string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deliverIDs = append(f.deliverIDs, sessionID)
+	if f.deliverErr != nil {
+		return "", f.deliverErr
+	}
+	return correlationID, nil
 }
 
 // seed3PChild creates the parent + the external-CLI child session in a REAL
@@ -105,202 +128,192 @@ func seed3PChild(t *testing.T, lc *session.LifecycleStore) (*session.UnifiedStor
 	return sessions, parentID, childID
 }
 
-// TestDelegateTool_Resume_3PDispatchesNewCorrectiveSession pins D5 at the
-// resume action: an external-CLI child has no warm-resume primitive, so
-// `resume` mints a NEW corrective session carrying the prior context, linked
-// back via ResumedFrom.
-func TestDelegateTool_Resume_3PDispatchesNewCorrectiveSession(t *testing.T) {
-	launcher := &followUpLauncher{dispatch: steer.DispatchResult{State: steer.DispatchRunning, Generation: 2}}
+// lifecycleIDs lists every session id the lifecycle store knows, so a test can
+// prove that no corrective session was minted.
+func lifecycleIDs(t *testing.T, lc *session.LifecycleStore) []string {
+	t.Helper()
+	all, err := lc.List(session.LifecycleFilter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	ids := make([]string, 0, len(all))
+	for i := range all {
+		ids = append(ids, all[i].SessionID)
+	}
+	return ids
+}
+
+// Oracle: DEL-31 / FR-043 (session-core spec) — resuming a finished external
+// CLI child continues the SAME session through the steering sink's revive and
+// never creates a new child nor dispatches one directly.
+func TestDelegateTool_Resume_3P_RevivesSameSessionAndNeverMintsAChild(t *testing.T) {
+	launcher := &dispatchCountingLauncher{}
+	sink := &externalSteeringSink{}
 	tool, lc, _, _ := newADR053TestTool(t)
 	tool.SetSessionLauncher(launcher)
+	tool.SetSteeringSink(sink)
 	sessions, parentID, childID := seed3PChild(t, lc)
 	tool.SetSessionStore(sessions)
 	ctx := WithTranscriptSessionID(context.Background(), parentID)
 
-	result := tool.Execute(ctx, map[string]any{
-		"action": "resume", "session_id": childID, "text": "resume please",
-	})
+	result := tool.Execute(ctx, map[string]any{"action": "resume", "session_id": childID, "text": "resume please"})
 	if result.IsError {
 		t.Fatalf("resume failed: %s", result.ForLLM)
 	}
-	if launcher.sessionID == "" || launcher.sessionID == childID {
-		t.Error("a 3P resume must mint a NEW session id, not reuse the terminal one verbatim")
+	if got := launcher.dispatched(); len(got) != 0 {
+		t.Fatalf("resume dispatched %v directly: a 3P resume must go through the steering sink's revive, never Dispatch (creation-gate bypass)", got)
 	}
-	if launcher.generation != 2 {
-		t.Fatalf("3P corrective Dispatch generation = %d, want 2", launcher.generation)
+	if len(sink.reviveIDs) != 1 || sink.reviveIDs[0] != childID {
+		t.Fatalf("revive calls = %v, want exactly one for the SAME session %q", sink.reviveIDs, childID)
 	}
-	meta, err := sessions.GetMeta(launcher.sessionID)
-	if err != nil {
-		t.Fatalf("new external corrective session has no durable identity: %v", err)
+	if sink.reviveText[0] != "resume please" {
+		t.Errorf("revive instruction = %q, want the resume text verbatim", sink.reviveText[0])
 	}
-	if meta.ParentSessionID != parentID || meta.ActiveAgentID != "claude-code" || meta.WorkspaceID != "ws-1" {
-		t.Fatalf("new external corrective identity = %+v; want copied parent, agent, and workspace", meta)
-	}
-	rec, err := lc.Load(launcher.sessionID)
-	if err != nil {
-		t.Fatalf("Load corrective record: %v", err)
-	}
-	if rec.ResumedFrom != childID {
-		t.Errorf("corrective record ResumedFrom = %q, want %q", rec.ResumedFrom, childID)
-	}
-	history := sessions.GetHistory(launcher.sessionID)
-	if len(history) == 0 || history[len(history)-1].Content != "resume please" {
-		t.Fatalf("new external corrective session lacks follow-up instruction: %+v", history)
+	if ids := lifecycleIDs(t, lc); len(ids) != 1 || ids[0] != childID {
+		t.Fatalf("lifecycle sessions after resume = %v, want only the original %q (no corrective child)", ids, childID)
 	}
 }
 
-// TestDelegateTool_Resume_DispatchFailure_LoggedUnconditionally pins the
-// immediate error, durable failed state, and operator-visible diagnostic for
-// the 3P corrective dispatch.
-func TestDelegateTool_Resume_DispatchFailure_LoggedUnconditionally(t *testing.T) {
-	getLogs := captureLogs(t)
-
-	tool, lc, _, _ := newADR053TestTool(t)
-	sessions, parentID, childID := seed3PChild(t, lc)
-	tool.SetSessionStore(sessions)
-	failingLauncher := &followUpLauncher{err: errors.New("dispatch: simulated store failure")}
-	tool.SetSessionLauncher(failingLauncher)
-	ctx := WithTranscriptSessionID(context.Background(), parentID)
-
-	result := tool.Execute(ctx, map[string]any{
-		"action": "resume", "session_id": childID, "text": "resume please",
-	})
-	if !result.IsError {
-		t.Fatalf("a Dispatch failure must be returned immediately, got: %s", result.ForLLM)
-	}
-
-	logs := getLogs()
-	if !strings.Contains(logs, "follow-up dispatch failed") {
-		t.Errorf("a Dispatch failure must be logged unconditionally, got logs:\n%s", logs)
-	}
-	// The corrective successor (the record the failed dispatch strands) is the
-	// NEW session id, not the original — discoverable via its ResumedFrom link.
-	all, listErr := lc.List(session.LifecycleFilter{})
-	if listErr != nil {
-		t.Fatalf("List: %v", listErr)
-	}
-	var successor *session.LifecycleRecord
-	for i := range all {
-		if all[i].ResumedFrom == childID && all[i].SessionID != childID {
-			successor = &all[i]
-			break
-		}
-	}
-	if successor == nil {
-		t.Fatal("no corrective successor record was persisted for the failed dispatch")
-	}
-	if !strings.Contains(logs, successor.SessionID) {
-		t.Errorf("the failure log must name the affected session_id, got logs:\n%s", logs)
-	}
-	if successor.State != session.LifecycleFailed {
-		t.Errorf("a failed async resume must transition the lifecycle record to Failed so a later "+
-			"delegate(status)/peek poll can discover it — got state=%s", successor.State)
-	}
-	if successor.FailedReason == "" {
-		t.Error("a failed lifecycle record must carry a non-empty FailedReason")
-	}
-}
-
-// --- ADR-091 fix lane RX-DELIVERY, DEFECT 4 (HIGH) ---
-//
-// appendFollowUpInstruction was fire-and-forget: a failed transcript write was
-// invisible and spawnCorrectiveFollowUp dispatched regardless. The dispatched
-// turn is then rebuilt by agent/steer_reconstruct.go::reconstructSteeredTurn
-// (wake == nil), which scans the TRANSCRIPT backwards for the last non-blank
-// `user` entry — so a session whose new instruction never landed re-runs its
-// PREVIOUS instruction and reports that answer upward as a real result.
-
-// TestDelegateTool_Resume_RefusesDispatchWhenTheInstructionCannotLand is
-// the refusal half: no dispatch may happen once the new instruction is known
-// not to have landed. The fault is injected at the process edge (the real
-// store's transcript append), so the corrective identity clone still succeeds
-// and only the instruction write fails.
-func TestDelegateTool_Resume_RefusesDispatchWhenTheInstructionCannotLand(t *testing.T) {
-	launcher := &followUpLauncher{dispatch: steer.DispatchResult{State: steer.DispatchRunning, Generation: 2}}
+// Oracle: FR-043 — when the native CLI conversation is gone the revive refuses
+// and the refusal is visible; nothing is dispatched and no child is minted.
+func TestDelegateTool_Resume_3P_RefusalIsVisibleAndStartsNothing(t *testing.T) {
+	launcher := &dispatchCountingLauncher{}
+	// The agent's revival refusals are authored sentences (curatedTurnError); the
+	// stand-in carries the same RefusalText capability so the tool shows it as written.
+	sink := &externalSteeringSink{reviveErr: curatedRefusalStub{"the external CLI conversation is no longer available; start a new delegation"}}
 	tool, lc, _, _ := newADR053TestTool(t)
 	tool.SetSessionLauncher(launcher)
+	tool.SetSteeringSink(sink)
 	sessions, parentID, childID := seed3PChild(t, lc)
-	tool.SetSessionStore(&appendFailingStore{UnifiedStore: sessions, err: fmt.Errorf("transcript append failed: disk full")})
+	tool.SetSessionStore(sessions)
 	ctx := WithTranscriptSessionID(context.Background(), parentID)
 
-	result := tool.Execute(ctx, map[string]any{
-		"action": "resume", "session_id": childID, "text": "stop, do this instead: summarise the release notes",
-	})
-
-	if launcher.sessionID != "" {
-		t.Fatalf("Dispatch was called for %q even though the new instruction never landed — "+
-			"the session will re-run its PREVIOUS instruction and report that answer upward as a real result",
-			launcher.sessionID)
-	}
+	result := tool.Execute(ctx, map[string]any{"action": "resume", "session_id": childID, "text": "continue"})
 	if !result.IsError {
-		t.Fatalf("resume reported success though the new instruction never landed: %s", result.ForLLM)
+		t.Fatalf("a resume with no retained conversation must be an error, got success: %s", result.ForLLM)
 	}
-	all, listErr := lc.List(session.LifecycleFilter{})
-	if listErr != nil {
-		t.Fatalf("List: %v", listErr)
+	if !strings.Contains(result.ForLLM, "start a new delegation") {
+		t.Errorf("refusal %q must tell the caller to start a new delegation", result.ForLLM)
 	}
-	var successor *session.LifecycleRecord
-	for i := range all {
-		if all[i].ResumedFrom == childID && all[i].SessionID != childID {
-			successor = &all[i]
-			break
-		}
+	if got := launcher.dispatched(); len(got) != 0 {
+		t.Fatalf("refused resume still dispatched %v", got)
 	}
-	if successor == nil {
-		t.Fatal("no corrective successor record was persisted for the refused resume")
-	}
-	if successor.State != session.LifecycleFailed || successor.FailedReason == "" {
-		t.Errorf("a refused resume must leave a discoverable failed record, got state=%s reason=%q",
-			successor.State, successor.FailedReason)
+	if ids := lifecycleIDs(t, lc); len(ids) != 1 {
+		t.Fatalf("lifecycle sessions after a refused resume = %v, want only the original", ids)
 	}
 }
 
-// TestDelegateTool_Resume_WritesTheInstructionWhereTheRebuiltTurnReadsIt is
-// the landing half: AddMessage alone writes context.jsonl, but the rebuilt
-// turn takes its UserMessage from the TRANSCRIPT, so the instruction has to
-// be written there too — exactly as SteerLauncher.Launch writes the launch
-// instruction to both.
-func TestDelegateTool_Resume_WritesTheInstructionWhereTheRebuiltTurnReadsIt(t *testing.T) {
-	const original = "ORIGINAL: audit the whole checkout flow"
-	const replacement = "stop, do this instead: summarise the release notes"
-	tool, lc, _, _ := newADR053TestTool(t)
-	launcher := &followUpLauncher{dispatch: steer.DispatchResult{State: steer.DispatchRunning, Generation: 2}}
+// Oracle: the same bypass through `respond` — a live external child receives
+// the answer by interrupt + native-conversation resume on the SAME session.
+func TestDelegateTool_Respond_3P_Live_DeliversToTheSameConversation(t *testing.T) {
+	launcher := &dispatchCountingLauncher{}
+	sink := &externalSteeringSink{}
+	tool, lc, inbox, _ := newADR053TestTool(t)
 	tool.SetSessionLauncher(launcher)
-	sessions, parentID, childID := seed3PChild(t, lc)
-	tool.SetSessionStore(sessions)
-	if err := sessions.AppendTranscriptStrict(childID, session.TranscriptEntry{
-		ID: childID + "-task", Role: "user", AgentID: "claude-code", Content: original,
+	tool.SetSteeringSink(sink)
+	seedOpenQuestion(t, inbox, "parent-1", "child-3p-resp", "corr-3p")
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-3p-resp", Generation: 1, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
+		WorkspaceID: "ws-1", AgentID: "worker-3p", Is3P: true,
 	}); err != nil {
-		t.Fatalf("seed original instruction: %v", err)
+		t.Fatalf("seed failed: %v", err)
 	}
-	ctx := WithTranscriptSessionID(context.Background(), parentID)
 
 	result := tool.Execute(ctx, map[string]any{
-		"action": "resume", "session_id": childID, "text": replacement,
+		"action": "respond", "session_id": "child-3p-resp", "correlation_id": "corr-3p", "text": "go",
 	})
 	if result.IsError {
-		t.Fatalf("resume failed: %s", result.ForLLM)
+		t.Fatalf("3P respond failed: %s", result.ForLLM)
 	}
-	if launcher.sessionID == "" || launcher.sessionID == childID {
-		t.Fatalf("Dispatch session = %q, want the NEW corrective session", launcher.sessionID)
+	if len(sink.deliverIDs) != 1 || sink.deliverIDs[0] != "child-3p-resp" {
+		t.Fatalf("external deliveries = %v, want exactly one to the SAME session", sink.deliverIDs)
+	}
+	if got := launcher.dispatched(); len(got) != 0 {
+		t.Fatalf("3P respond dispatched %v: it must never start a corrective session", got)
+	}
+	if ids := lifecycleIDs(t, lc); len(ids) != 1 {
+		t.Fatalf("lifecycle sessions after respond = %v, want only the original", ids)
+	}
+	orig, err := lc.Load("child-3p-resp")
+	if err != nil {
+		t.Fatalf("Load original: %v", err)
+	}
+	if orig.State != session.LifecycleRunning || orig.Generation != 1 {
+		t.Errorf("original after respond = (%s, gen %d), want untouched (running, 1)", orig.State, orig.Generation)
+	}
+}
+
+// Oracle: FR-043 — a live external child with no deliverable conversation
+// refuses visibly; the question slot is released (a retry stays possible) and
+// nothing is started.
+func TestDelegateTool_Respond_3P_Live_UndeliverableRefusesWithoutStartingAnything(t *testing.T) {
+	launcher := &dispatchCountingLauncher{}
+	sink := &externalSteeringSink{deliverErr: errors.New("no live conversation")}
+	tool, lc, inbox, _ := newADR053TestTool(t)
+	tool.SetSessionLauncher(launcher)
+	tool.SetSteeringSink(sink)
+	seedOpenQuestion(t, inbox, "parent-1", "child-3p-undeliv", "corr-u")
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-3p-undeliv", Generation: 1, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
+		WorkspaceID: "ws-1", AgentID: "worker-3p", Is3P: true,
+	}); err != nil {
+		t.Fatalf("seed failed: %v", err)
 	}
 
-	entries, err := sessions.ReadTranscript(launcher.sessionID)
+	args := map[string]any{"action": "respond", "session_id": "child-3p-undeliv", "correlation_id": "corr-u", "text": "go"}
+	if result := tool.Execute(ctx, args); !result.IsError {
+		t.Fatalf("an undeliverable 3P answer must be an error, got: %s", result.ForLLM)
+	}
+	if got := launcher.dispatched(); len(got) != 0 {
+		t.Fatalf("refused respond dispatched %v", got)
+	}
+	if ids := lifecycleIDs(t, lc); len(ids) != 1 {
+		t.Fatalf("lifecycle sessions = %v, want only the original", ids)
+	}
+	// The slot was given back: the same respond is NOT refused as already_answered.
+	retry := tool.Execute(ctx, args)
+	if strings.Contains(retry.ForLLM, "already_answered") {
+		t.Fatalf("a refused respond must release the answer slot, retry said: %s", retry.ForLLM)
+	}
+}
+
+// Oracle: a stopped/finished external recipient is answered through revive on
+// the SAME session (resume-or-refuse), not a corrective session.
+func TestDelegateTool_Respond_3P_Stopped_RevivesSameSession(t *testing.T) {
+	launcher := &dispatchCountingLauncher{}
+	sink := &externalSteeringSink{}
+	tool, lc, inbox, _ := newADR053TestTool(t)
+	tool.SetSessionLauncher(launcher)
+	tool.SetSteeringSink(sink)
+	seedStoppedChild(t, lc, "child-3p-stopped")
+	rec, err := lc.Load("child-3p-stopped")
 	if err != nil {
-		t.Fatalf("ReadTranscript: %v", err)
+		t.Fatalf("Load: %v", err)
 	}
-	// The same backwards scan reconstructSteeredTurn performs.
-	lastUser := ""
-	for i := len(entries) - 1; i >= 0; i-- {
-		if entries[i].Role == "user" && strings.TrimSpace(entries[i].Content) != "" {
-			lastUser = entries[i].Content
-			break
-		}
+	rec.Is3P = true
+	if err := lc.Persist(rec); err != nil {
+		t.Fatalf("persist Is3P: %v", err)
 	}
-	if lastUser == original {
-		t.Fatalf("the rebuilt turn would re-run the ORIGINAL instruction %q — the new instruction never reached the transcript", lastUser)
+	seedOpenQuestion(t, inbox, "parent-1", "child-3p-stopped", "corr-s")
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+
+	result := tool.Execute(ctx, map[string]any{
+		"action": "respond", "session_id": "child-3p-stopped", "correlation_id": "corr-s", "text": "yes",
+	})
+	if result.IsError {
+		t.Fatalf("respond failed: %s", result.ForLLM)
 	}
-	if lastUser != replacement {
-		t.Fatalf("last `user` transcript entry = %q, want the new instruction %q", lastUser, replacement)
+	if len(sink.reviveIDs) != 1 || sink.reviveIDs[0] != "child-3p-stopped" {
+		t.Fatalf("revive calls = %v, want one for the SAME session", sink.reviveIDs)
+	}
+	if got := launcher.dispatched(); len(got) != 0 {
+		t.Fatalf("respond dispatched %v directly", got)
+	}
+	if ids := lifecycleIDs(t, lc); len(ids) != 1 {
+		t.Fatalf("lifecycle sessions = %v, want only the original", ids)
 	}
 }

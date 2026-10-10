@@ -19,10 +19,6 @@ import (
 )
 
 const (
-	// workerInboxCap is the buffered capacity of a session worker's inbox.
-	// A depth of 8 covers rapid-fire follow-ups without blocking the dispatcher.
-	workerInboxCap = 8
-
 	// continueDrainMaxRetries bounds processTurn's drain-loop retry of a
 	// failing al.Continue call before giving up and abandoning the queued
 	// steering messages (design note "Recommended design"). The mixed
@@ -55,9 +51,20 @@ type sessionWorker struct {
 	// this worker. Immutable after construction.
 	scope string
 
-	// inbox receives messages dispatched by Run().
-	// Full → drop with WARN and notify user (see enqueue).
+	// inbox receives messages dispatched by Run(). It is a SMALL channel
+	// (workerInboxBuffer): the one waiting-item bound, MaxQueueSize, is counted
+	// on enqueue over inbox plus overflow rather than preallocated here, so an
+	// idle worker costs a few slots, not MaxQueueSize of them. Waiting more than
+	// MaxQueueSize → drop with WARN and notify user (see enqueue).
 	inbox chan bus.InboundMessage
+
+	// inboxMu guards overflow and makes the bound check atomic with the add.
+	inboxMu sync.Mutex
+	// overflow holds the waiting messages that did not fit in inbox, oldest
+	// first. Invariant: overflow is non-empty only while inbox is non-empty
+	// (every receive is followed by refillInbox), so FIFO order is inbox then
+	// overflow.
+	overflow []bus.InboundMessage
 
 	// ctx is the worker's own context, derived from context.Background() so
 	// the worker's lifetime is independent of Run()'s context.
@@ -114,6 +121,54 @@ type sessionWorker struct {
 	parent *AgentLoop
 }
 
+// workerInboxBuffer is the inbox channel's buffer: only the hot path, not a
+// capacity. The capacity is MaxQueueSize, counted in enqueue (see pushInbox).
+const workerInboxBuffer = 8
+
+// waitingInboxCount is the number of messages waiting to start a turn, in
+// the channel and the overflow together.
+func (w *sessionWorker) waitingInboxCount() int {
+	w.inboxMu.Lock()
+	defer w.inboxMu.Unlock()
+	return len(w.inbox) + len(w.overflow)
+}
+
+// pushInbox adds msg behind everything already waiting, reporting false when
+// MaxQueueSize messages are already waiting.
+func (w *sessionWorker) pushInbox(msg bus.InboundMessage) bool {
+	w.inboxMu.Lock()
+	defer w.inboxMu.Unlock()
+	if len(w.inbox)+len(w.overflow) >= MaxQueueSize {
+		return false
+	}
+	if len(w.overflow) == 0 {
+		select {
+		case w.inbox <- msg:
+			return true
+		default:
+		}
+	}
+	w.overflow = append(w.overflow, msg)
+	return true
+}
+
+// refillInbox moves waiting overflow messages into the channel after a receive
+// freed room, keeping FIFO order.
+func (w *sessionWorker) refillInbox() {
+	w.inboxMu.Lock()
+	defer w.inboxMu.Unlock()
+	for len(w.overflow) > 0 {
+		select {
+		case w.inbox <- w.overflow[0]:
+			w.overflow[0] = bus.InboundMessage{}
+			w.overflow = w.overflow[1:]
+		default:
+			return
+		}
+	}
+	w.overflow = nil
+}
+
 // newSessionWorker constructs a session worker but does NOT start its goroutine.
 // Callers must call go w.runLoop() immediately after spawning.
 //
@@ -129,8 +184,13 @@ func newSessionWorker(scope string, parent *AgentLoop, admissionRelease func()) 
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &sessionWorker{
-		scope:            scope,
-		inbox:            make(chan bus.InboundMessage, workerInboxCap),
+		scope: scope,
+		// FR-009 / DEL-03: ONE waiting-item bound (MaxQueueSize, 200), enforced
+		// in enqueue. The channel itself stays small: preallocating the bound
+		// gave every session worker 200 message slots and pushed
+		// TestCompactionBoundsMemory from ~3 MB to ~10 MB. The deeper
+		// unification of this inbox into the steering FIFO is a follow-up.
+		inbox:            make(chan bus.InboundMessage, workerInboxBuffer),
 		ctx:              ctx,
 		cancel:           cancel,
 		done:             make(chan struct{}),
@@ -169,38 +229,36 @@ func (w *sessionWorker) enqueue(msg bus.InboundMessage) bool {
 	if w.trySteerIntoLiveTurn(msg) {
 		return true
 	}
-	select {
-	case w.inbox <- msg:
-		return true
-	default:
-		if msg.Channel == "system" {
-			logger.WarnCF("agent.worker", "Session worker inbox full — system message not queued; falling back to unserialized dispatch",
-				map[string]any{
-					"scope":      w.scope,
-					"chat_id":    msg.ChatID,
-					"session_id": msg.AsyncTranscriptSessionID,
-				})
-			return false
-		}
-		logger.WarnCF("agent.worker", "Session worker inbox full — dropping message",
-			map[string]any{
-				"scope":   w.scope,
-				"channel": msg.Channel,
-				"chat_id": msg.ChatID,
-			})
-		// Notify the user so the drop is not silent.
-		rejectCtx, rejectCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer rejectCancel()
-		if pubErr := w.parent.bus.PublishOutbound(rejectCtx, bus.OutboundMessage{
-			Channel: msg.Channel,
-			ChatID:  msg.ChatID,
-			Content: "Your message could not be queued — the agent is busy. Please resend in a few seconds.",
-		}); pubErr != nil {
-			logger.WarnCF("agent.worker", "Failed to send inbox-full reply",
-				map[string]any{"channel": msg.Channel, "error": pubErr.Error()})
-		}
+	if w.pushInbox(msg) {
 		return true
 	}
+	if msg.Channel == "system" {
+		logger.WarnCF("agent.worker", "Session worker inbox full — system message not queued; falling back to unserialized dispatch",
+			map[string]any{
+				"scope":      w.scope,
+				"chat_id":    msg.ChatID,
+				"session_id": msg.AsyncTranscriptSessionID,
+			})
+		return false
+	}
+	logger.WarnCF("agent.worker", "Session worker inbox full — dropping message",
+		map[string]any{
+			"scope":   w.scope,
+			"channel": msg.Channel,
+			"chat_id": msg.ChatID,
+		})
+	// Notify the user so the drop is not silent.
+	rejectCtx, rejectCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer rejectCancel()
+	if pubErr := w.parent.bus.PublishOutbound(rejectCtx, bus.OutboundMessage{
+		Channel: msg.Channel,
+		ChatID:  msg.ChatID,
+		Content: "Your message could not be queued — the agent is busy. Please resend in a few seconds.",
+	}); pubErr != nil {
+		logger.WarnCF("agent.worker", "Failed to send inbox-full reply",
+			map[string]any{"channel": msg.Channel, "error": pubErr.Error()})
+	}
+	return true
 }
 
 // trySteerIntoLiveTurn routes msg into the live turn's steering queue when
@@ -442,6 +500,7 @@ func (w *sessionWorker) runLoop() {
 			}
 			idleTimer.Reset(workerIdleTimeout)
 
+			w.refillInbox()
 			w.processTurn(ctx, msg)
 		}
 	}

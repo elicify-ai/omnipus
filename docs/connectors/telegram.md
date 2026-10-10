@@ -67,23 +67,33 @@ The Telegram channel receives messages via long polling (30-second timeout) usin
 
 ## Built-in Commands
 
-At startup Telegram registers Omnipus's built-in bot commands automatically via `CommandRegistrarCapable`. Registration retries in the background with exponential backoff if the Telegram API is temporarily unavailable. The registered commands are:
+At startup Telegram registers Omnipus's built-in bot commands automatically via `CommandRegistrarCapable`. Registration retries in the background after increasing delays if the Telegram API is temporarily unavailable. The installed server supplies the command list; use `/help` for its current commands rather than an older fixed list. Hidden commands and aliases are not registered in Telegram's menu. A command whose name Telegram cannot display, such as `/stop-redirect`, can still work when typed if the server supports it.
 
 | Command | Purpose |
 | --- | --- |
-| `/start` | Open or resume the current session |
 | `/help` | Show help text |
-| `/show` | Show the active agent or session details |
-| `/list` | List resources (e.g. `/list skills`) |
-| `/use` | Select a skill for the next request (e.g. `/use git`) |
-| `/switch` | Switch to a different agent |
-| `/check` | Show current health/status of the gateway |
-| `/clear` | Clear the active session's transcript |
-| `/subagents` | List or interact with sub-agents |
-| `/reload` | Hot-reload configuration |
-| `/cancel` | Interrupt the agent's current turn |
+| `/model` | Show or switch the active model (e.g. `/model gpt-4.1`) |
+| `/status` | Show the current model, channel, and agent summary |
+| `/tasks` | Show running sub-agents and the task tree |
+| `/skills` | List installed skills |
+| `/channels` | List enabled channels, or check one (`/channels telegram`) |
+| `/config` | Hot-reload configuration |
+| `/remember` | Have the agent remember something (`/remember …`) |
+| `/recall` | Recall stored memory (`/recall …`) |
+| `/retrospective` | Run a session retrospective (`/retrospective [focus]`) |
+| `/goal` | Start a goal-driven session loop (`/goal …`) |
+| `/loop` | Start a time-driven loop (`/loop …`) |
+| `/stop` | Stop only this conversation's current turn |
+| `/cancel` | Interrupt the current turn and every helper under it |
 
-(Defined in `pkg/commands/builtin.go` — the full registered set.)
+`/stop-redirect` (stop the current turn and continue it with a new instruction)
+also works when typed, but is left out of the native menu — Telegram allows only
+`a-z`, `0-9` and `_` in menu commands.
+
+(Defined in `pkg/commands/builtin.go` — the full registered set.) `/new`,
+`/agents`, `/clear`, `/start`, `/show`, `/list`, `/switch`, `/check` and `/use`
+are no longer commands: typing one of them sends it to the agent as ordinary
+text.
 
 ## Notes
 

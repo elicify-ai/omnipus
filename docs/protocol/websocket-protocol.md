@@ -240,8 +240,7 @@ Signals that a streaming response has completed. The partial buffer is finalized
   "stats": {
     "tokens": 342,
     "cost": 0.0021,
-    "duration_ms": 4120,
-    "tokens_dropped": 0
+    "duration_ms": 4120
   }
 }
 ```
@@ -253,7 +252,6 @@ Signals that a streaming response has completed. The partial buffer is finalized
 | stats.tokens | number | no | Total tokens consumed (prompt + completion) |
 | stats.cost | number | no | Estimated cost in USD |
 | stats.duration_ms | number | no | Wall-clock duration of the turn in milliseconds |
-| stats.tokens_dropped | number | no | Tokens pruned during tool result compression |
 
 **Producer**: Agent loop turn completion in `pkg/agent/`
 **Consumer**: Chat message component — removes cursor, renders markdown, shows stats below message
@@ -469,7 +467,6 @@ Emitted by the WhatsApp native/QR channel during linked-device pairing so the SP
 | S→C | `replay_message` | One replayed transcript entry during an `attach_session` |
 | S→C | `rate_limit` | Rate-limit denial applied to an agent action (SEC-26) |
 | S→C | `media` | One or more media attachments from a tool (parts array, never null) |
-| S→C | `agent_switched` | Active agent for a session changed (`switch_agent`) |
 | S→C | `tool_approval_required` | Tool call paused for ask-policy approval (FR-011, FR-082); `args` always an object, never null |
 | S→C | `tool_approval_resolved` | A pending tool approval was resolved (approved, denied, or expired) — sent to every connected tab so all of them drop the request together |
 | S→C | `session_state` | One-shot approval-state snapshot on every WS reconnect (FR-052, FR-073, FR-081) |

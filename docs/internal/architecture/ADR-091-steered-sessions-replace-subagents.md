@@ -1,6 +1,15 @@
 # ADR-091 — A sub-agent is a session steered by another session
 
+## Amended 2026-10-07 — session-core founder decisions
+
+**Dated correction of D1/D3/D5 task parentage, selective report wakes and external steering exclusion.** MAIN tasks are fresh real children of the assignee's main for every run, while retaining task/run/goal/plan ownership. ISOLATED/CONTINUE are independent. Every accepted helper report wakes an idle non-stopped parent; stopped parents hold. External control uses interrupt plus actual native-ID resume, with the accepted subprocess-kill Stop exception. Peer messages are not child edges.
+
+Authority and complete clause/reuse map: **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/ADR-20261006-session-core-with-an-agent-address-book.md`::Decision / Earlier ADR clauses amended; founder ledger `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md` plus the binding October 7 answers through 15:55. This is a design amendment, not a claim that production implements it. Conflicting older prescriptions below are historical within this scope; unrelated decisions and historical evidence remain unchanged.
+
+
 **Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. A second Stop / Esc / `/stop` within that window stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. Agent delegate `stop` / `stop_all` is unchanged (one helper's turn / its tree). Authority: founder decision, 2026-10-06.
+
+**[External-worker qualification, U5b 2026-10-09]:** the older scope/preservation/acceptance clauses below that say live external steering is excluded or rejected are historical within this scope. Current behaviour: an external-CLI (subagent_3p) helper steers by interrupt + native-conversation resume (FR-043); its chat refuses `/stop-redirect`; after its run ends the CLI conversation is gone and a follow-up refuses (start a new delegation). The "any root or helper chat" redirect scope is native-engine behaviour.
 
 ## Amended 2026-10-06 — founder decision
 

@@ -88,8 +88,6 @@ vi.mock('./IframePreview', () => ({ IframePreview: () => null }))
 vi.mock('./markdown-text', () => ({
   MarkdownText: () => React.createElement('div', {}),
 }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 vi.mock('@/lib/memory-observer', () => ({
@@ -347,6 +345,9 @@ function seedReadFileFailureWithActiveGoal(): void {
       content: '',
       timestamp: new Date().toISOString(),
       status: 'done',
+      // FR-039: the producing message carries its own goal association; the
+      // GoalSetupFailureLine override joins THIS id (not the latest scalar).
+      goalId: 'goal_read_fail_test',
       tool_calls: [
         {
           id: 'tc_read_goal',
@@ -379,6 +380,7 @@ function seedReadFileFailureWithActiveGoal(): void {
         lastReceivedEventTime: null,
         trimmedCount: 0,
         goalStatus: goalFrame,
+        goalPills: { goal_read_fail_test: goalFrame },
       },
     },
     messages,
@@ -386,6 +388,7 @@ function seedReadFileFailureWithActiveGoal(): void {
     isReplaying: false,
     replayCompletedForSession: SID,
     goalStatus: goalFrame,
+    goalPills: { goal_read_fail_test: goalFrame },
   }))
 }
 

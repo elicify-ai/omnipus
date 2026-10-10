@@ -11,6 +11,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -121,7 +122,7 @@ func (te *TaskExecutor) runTask(
 	// created taskSessionID successfully before launching this goroutine.
 	// Open this execution's TaskRun with that real session — see openRun's
 	// own doc comment for why run-open cannot happen any earlier.
-	run = te.openRun(t.ID, occurrenceMs, kind, taskSessionID)
+	run = te.openRun(t.ID, occurrenceMs, kind, taskSessionID, te.captureRunRecipients(ctx, t, te.lifecycleInitiator(taskSessionID))...)
 
 	taskCtx := tools.WithAgentID(ctx, t.AgentID)
 	if t.WorkspaceID != "" {
@@ -136,7 +137,7 @@ func (te *TaskExecutor) runTask(
 	// is what bounds an A→B→A task-mode delegation chain — without it every task
 	// run starts at depth 0 and the gate never trips (see taskCreate's
 	// SetMaxDelegationDepth bound, resolved from performance.max_delegation_depth).
-	taskCtx = tools.WithDelegationDepth(taskCtx, t.DelegationDepth)
+	taskCtx = tools.WithDelegationDepth(taskCtx, te.runDelegationDepth(t, taskSessionID))
 	// review r2 Chunk 1: mark this turn as THIS task's own executor run so
 	// TaskUpdateTool refuses any status write on it and goal_claim accepts
 	// this turn's claim at any delegation depth — completion is claimed with
@@ -374,8 +375,11 @@ func (te *TaskExecutor) dispatchesExternalCLI(agentID string) bool {
 // for this execution) rather than failing the task dispatch — TaskRun is a
 // purely additive record layer (RD2); a run-history I/O problem must never
 // prevent or fail a real agent execution.
-func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.RunKind, sessionID string) *activeRun {
-	run, _, err := te.store.OpenRun(taskID, occurrenceMs, kind, sessionID)
+//
+// recipients are the run's captured recipient sessions (FR-019), fixed by the
+// first open; omit for a run with none.
+func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.RunKind, sessionID string, recipients ...string) *activeRun {
+	run, _, err := te.store.OpenRun(taskID, occurrenceMs, kind, sessionID, recipients)
 	if err != nil {
 		// M3-log: escalated from Warn to Error — a failed open means no run
 		// will ever be tracked for this execution, and there is no reaper to
@@ -385,7 +389,18 @@ func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.Ru
 		return nil
 	}
 	te.emitRunStatus(taskID, run.RunID, run.OccurrenceMs, task.StatusInProgress)
-	return &activeRun{runID: run.RunID, occurrenceMs: run.OccurrenceMs}
+	return &activeRun{runID: run.RunID, occurrenceMs: run.OccurrenceMs, recipients: run.RecipientSessionIDs}
+}
+
+// runForSession picks up the run its dispatcher already opened for taskSessionID
+// (a MAIN or launcher-front run is opened BEFORE dispatch, with its captured
+// recipients) and only opens a manual run when there is none — the
+// StartTaskNow path, whose recipients ride the detached context.
+func (te *TaskExecutor) runForSession(ctx context.Context, t *task.Task, taskSessionID string) *activeRun {
+	if existing, err := te.store.OpenRunForSession(t.ID, taskSessionID); err == nil && existing != nil {
+		return &activeRun{runID: existing.RunID, occurrenceMs: existing.OccurrenceMs, recipients: existing.RecipientSessionIDs}
+	}
+	return te.openRun(t.ID, nil, task.RunKindManual, taskSessionID, runRecipientsFrom(ctx)...)
 }
 
 // closeRun best-effort closes run's TaskRun record with the given terminal
@@ -537,7 +552,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 	// ADR-050 RD5/RD7 run-open (task-run-history-spec.md §3.2): taskSessionID
 	// was already created and persisted synchronously by the dispatch owner
 	// before this goroutine was launched, so it is available immediately.
-	run = te.openRun(t.ID, nil, task.RunKindManual, taskSessionID)
+	run = te.runForSession(ctx, t, taskSessionID)
 
 	taskCtx := tools.WithAgentID(ctx, t.AgentID)
 	if t.WorkspaceID != "" {
@@ -547,7 +562,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 	// No-op (ctx unchanged) for an ordinary attempt. Both dispatch entry points
 	// set this — runTaskFromInProgress is the one Play itself re-enters through.
 	taskCtx = WithResumeWorkDirOverride(taskCtx, te.resumeWorkDirFor(t))
-	taskCtx = tools.WithDelegationDepth(taskCtx, t.DelegationDepth)
+	taskCtx = tools.WithDelegationDepth(taskCtx, te.runDelegationDepth(t, taskSessionID))
 	// review r2 Chunk 1: same in-run marker as runTask above — see
 	// tools.WithRunningTaskID's doc comment.
 	taskCtx = tools.WithRunningTaskID(taskCtx, t.ID)
@@ -560,7 +575,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 	redispatchTaskID = te.executeTaskRun(ctx, t, taskSessionID, " (StartTaskNow path)", run, turn)
 }
 
-// processTaskDirectExternalCLI runs a task assigned to a subagent_3p
+// runTaskExternalCLIOnce runs ONE external-CLI invocation of a task assigned to a subagent_3p
 // (external-CLI) worker through runExternalCLISubTurn — the same dispatch
 // machinery task_executor_run.go's dispatchesExternalCLI check and the
 // delegate tool's own dispatch path share for agent-to-agent delegation
@@ -629,11 +644,13 @@ func (te *TaskExecutor) runTaskFromInProgress(
 //     delegate/create_task tools that could populate ts.childTurnIDs, so the
 //     hard-abort child-cascade branch is still unreachable here — that part
 //     of the "no-panic" reasoning is unaffected.
-func (al *AgentLoop) processTaskDirectExternalCLI(
+func (al *AgentLoop) runTaskExternalCLIOnce(
 	ctx context.Context,
 	liveAgent *AgentInstance,
 	prompt, sessionKey, taskChatID string,
 	delegationDepth int,
+	resume bool,
+	out *taskExternalOutcome,
 ) (string, error) {
 	// FIX 1 (7-reviewer gate, data race): liveAgent is the LIVE registry
 	// *AgentInstance (registry.GetAgent, in processTaskDirect above) —
@@ -658,7 +675,7 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 		SenderID:            "task-executor",
 		UserMessage:         prompt,
 		TranscriptSessionID: taskChatID,
-		TranscriptStore:     al.taskSessionStore(taskChatID, agent.ID),
+		TranscriptStore:     al.GetSessionStore(),
 		// WorkspaceID is already on ctx via tools.WithWorkspaceID (set by the
 		// task executor before calling processTaskDirect); thread it through
 		// processOptions explicitly too so runExternalCLISubTurn's
@@ -672,8 +689,16 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 		// turn is registered below under the run's identity so a Stop finds
 		// its barrier and interrupts the external process.
 		executionDisposition: taskExecutionFor(ctx, taskChatID),
+		// FR-032: a continuation after a steer-interrupt delivers the person's
+		// instruction to the SAME native CLI conversation (never a fresh Run).
+		ExternalCLIResume: resume,
 	}
 	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, sessionKey))
+	if out != nil {
+		// A person's Stop claims the cancel on this turn; a steer delivery
+		// interrupts only the CLI run. Read after the run, so it is exact.
+		defer func() { out.stopped = ts.cancelFired.Load() || ts.hardAbortRequested() }()
+	}
 	if d := opts.executionDisposition; d != nil {
 		ts.generation = d.claim.Generation
 		if identityErr := ts.setExecutionIdentity(d.claim.RunID, d.claim.BootSeq); identityErr != nil {
@@ -810,4 +835,97 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 		return result.ForUser, nil
 	}
 	return result.ForLLM, nil
+}
+
+// taskExternalOutcome reports how one external-CLI task invocation ended.
+type taskExternalOutcome struct {
+	// stopped is true when a person's Stop claimed the turn (as opposed to a
+	// steer delivery interrupting the CLI run so it can be resumed).
+	stopped bool
+}
+
+// processTaskDirectExternalCLI runs a task assigned to a subagent_3p
+// (external-CLI) worker. A person's instruction delivered to the live run
+// (FR-032 / FR-043: DeliverExternalCLIInstruction) interrupts the CLI process;
+// this loop then resumes the SAME native conversation with the instruction and
+// returns the run's final answer, so the task's claim, attempts and result rules
+// see one turn. A Stop, or a run the person did not steer, ends exactly as
+// before: the interrupted turn's own outcome is returned and nothing is resumed.
+func (al *AgentLoop) processTaskDirectExternalCLI(
+	ctx context.Context,
+	liveAgent *AgentInstance,
+	prompt, sessionKey, taskChatID string,
+	delegationDepth int,
+) (string, error) {
+	// N6: a task's external-CLI episode ends when this function returns (the
+	// run has exited and any steer continuation has been consumed), so release
+	// the retained driver — and with it the last prompt and the environment
+	// snapshot — exactly as a delegate's completion does. A pending continuation
+	// keeps it (the release re-checks the scope).
+	defer al.releaseExternalRunIfIdle(taskChatID)
+	var out taskExternalOutcome
+	resp, err := al.runTaskExternalCLIOnce(ctx, liveAgent, prompt, sessionKey, taskChatID, delegationDepth, false, &out)
+	for ctx.Err() == nil && !out.stopped && al.takeExternalSteerInterrupt(taskChatID) {
+		resumed := false
+		var nextResp string
+		var nextErr error
+		_, contErr := al.continuePendingSteeringWithAgent(ctx, taskChatID, liveAgent,
+			func(_ *AgentInstance, steeringMsgs []providers.Message, _ []string) (string, error) {
+				resumed = true
+				out = taskExternalOutcome{}
+				nextResp, nextErr = al.runTaskExternalCLIOnce(ctx, liveAgent,
+					joinSteeringContent(steeringMsgs), sessionKey, taskChatID, delegationDepth, true, &out)
+				// The instruction reached the CLI (or the resume refused
+				// visibly): the queue item is consumed either way, never restored.
+				return "", nil
+			})
+		if contErr != nil {
+			return "", fmt.Errorf("processTaskDirect: external-cli steer continuation: %w", contErr)
+		}
+		if !resumed {
+			// The queued instruction was superseded (a Stop) before it could be
+			// consumed: the interrupted turn's own outcome stands.
+			return resp, err
+		}
+		resp, err = nextResp, nextErr
+	}
+	return resp, err
+}
+
+// joinSteeringContent is the instruction text of queued steering messages, the
+// same join steeredExternalCLIInput applies for a steered CLI continuation.
+func joinSteeringContent(msgs []providers.Message) string {
+	parts := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		if content := strings.TrimSpace(m.Content); content != "" {
+			parts = append(parts, content)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+// runDelegationDepth is the chain depth the run's root turn is seeded with: the
+// larger of the task's stored generation counter and the depth its lifecycle
+// record's InitiatedBy recorded when an agent started it. The graph gate inside
+// the run then sees the run's real position in the chain, so an A->B run cannot
+// delegate onward as if it started at depth 0.
+func (te *TaskExecutor) runDelegationDepth(t *task.Task, sessionID string) int {
+	depth := t.DelegationDepth
+	if ls := te.getLifecycleStore(); ls != nil && sessionID != "" {
+		if rec, err := ls.Load(sessionID); err == nil && rec.InitiatedBy != nil && rec.InitiatedBy.Depth > depth {
+			depth = rec.InitiatedBy.Depth
+		}
+	}
+	return depth
+}
+
+// lifecycleInitiator is the authorized initiator recorded on a run's lifecycle
+// record (nil: a person, the scheduler, or no record).
+func (te *TaskExecutor) lifecycleInitiator(sessionID string) *session.InitiatedBy {
+	if ls := te.getLifecycleStore(); ls != nil && sessionID != "" {
+		if rec, err := ls.Load(sessionID); err == nil {
+			return rec.InitiatedBy
+		}
+	}
+	return nil
 }

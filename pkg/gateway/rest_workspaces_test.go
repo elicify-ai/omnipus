@@ -1331,8 +1331,12 @@ func TestHandleWorkspacePost_NoCoreTeam_SeedsAvaOnly_SetupPending(t *testing.T) 
 	assert.True(t, stored.SetupPending, "on-disk setup_pending must be true")
 	seeded, storeOK := workspace.LoadDelegation(api.homePath, ws.Id)
 	require.True(t, storeOK, "delegation store record must be readable")
-	assert.Empty(t, seeded,
-		"ava's only coreagent seed edge (ava->worker) must be dropped since worker is off-team")
+	// Ava's ava→worker policy edge is dropped (worker is off-team), but Ava
+	// still gets her own ordinary self-row (session-core FR-014/015: every
+	// ordinary built-in is seeded) — and nothing else.
+	require.Len(t, seeded, 1, "the Ava-only team must seed exactly Ava's self-row")
+	assert.Equal(t, "ava", seeded[0].FromAgent)
+	assert.Equal(t, "ava", seeded[0].ToAgent)
 }
 
 // TestHandleWorkspacePost_ExplicitCoreTeam_HonoredVerbatim_NoSetupPending
@@ -1470,7 +1474,7 @@ func TestHandleWorkspacePut_CoreTeam_RejectsSystemAgentAndUnregisteredID(t *test
 //	When POST /api/v1/workspaces is called with "core_team": [] (present but empty),
 //	Then 201 with core_team=["ava"] and setup_pending=true in the wire response
 //	(identical outcome to omitting core_team entirely), and the persisted
-//	on-disk file agrees, with no delegation edges (mirrors the no-core_team case).
+//	on-disk file agrees, with only Ava's own self-row (mirrors the no-core_team case).
 func TestHandleWorkspacePost_ExplicitEmptyCoreTeam_SeedsAvaOnly_SetupPending(t *testing.T) {
 	api := newTestRestAPIWithAvaRoster(t)
 
@@ -1500,7 +1504,11 @@ func TestHandleWorkspacePost_ExplicitEmptyCoreTeam_SeedsAvaOnly_SetupPending(t *
 	assert.True(t, stored.SetupPending, "on-disk setup_pending must be true")
 	seeded, storeOK := workspace.LoadDelegation(api.homePath, ws.Id)
 	require.True(t, storeOK, "delegation store record must be readable")
-	assert.Empty(t, seeded, "no delegation edges expected for the Ava-only seed team")
+	// No cross edge survives an Ava-only team (ava→worker is off-team), but Ava
+	// still carries her own ordinary self-row (session-core FR-014/015).
+	require.Len(t, seeded, 1, "the Ava-only seed team must seed exactly Ava's self-row")
+	assert.Equal(t, "ava", seeded[0].FromAgent)
+	assert.Equal(t, "ava", seeded[0].ToAgent)
 }
 
 // TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending is a
@@ -1517,8 +1525,8 @@ func TestHandleWorkspacePost_ExplicitEmptyCoreTeam_SeedsAvaOnly_SetupPending(t *
 //	When ensureDefaultWorkspace creates the default workspace,
 //	Then core_team contains every registered base/specialist agent except
 //	admin, setup_pending absent/false, and the full seed delegation edge set
-//	on disk (jim→planner/researcher/worker/jim/ava, planner→researcher,
-//	worker→worker — 7 edges).
+//	on disk (one ordinary self-row per on-team member, plus Jim's
+//	planner/researcher/worker/ava cross edges and planner→researcher — 11 edges).
 func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
@@ -1549,12 +1557,16 @@ func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T
 		"admin must never be auto-seeded onto the default workspace team")
 	bootEdges, storeOK := workspace.LoadDelegation(home, ws.ID)
 	require.True(t, storeOK, "delegation store record must be readable")
-	assert.Len(t, bootEdges, 7, "the boot default workspace must seed the full ADR-090 edge set "+
-		"(jim→planner/researcher/worker/jim/ava, planner→researcher, worker→worker)")
+	// 6 ordinary self-rows (one per on-team member) + the 4 Jim cross edges
+	// (jim→ava/worker/planner/researcher) + planner→researcher = 11. The former
+	// jim→jim / worker→worker policy self edges are now the generic self-rows;
+	// admin's produced self-row is dropped (off-team).
+	assert.Len(t, bootEdges, 11, "the boot default workspace must seed the ordinary self-rows "+
+		"plus the full ADR-090 cross-edge set")
 	assert.False(t, ws.SetupPending,
 		"the boot default workspace must never be setup_pending — it never runs the setup interview")
 
-	wire := workspaceToWire(home, ws, 0)
+	wire := workspaceToWireFrom(home, ws, 0, nil, nil)
 	assert.Nil(t, wire.SetupPending, "the wire response must not report setup_pending for the default workspace")
 }
 

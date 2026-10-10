@@ -43,8 +43,10 @@ func TestSeedSpecialists(t *testing.T) {
 }
 
 // TestPlannerBoundedDelegation verifies Planner's default onward target is
-// Researcher only, with depth 2. Researcher remains a leaf. These defaults
-// seed the workspace graph; they are not a persisted AgentConfig field.
+// Researcher (with depth 2) plus its own self-edge (settled design 2026-10-09:
+// every non-system agent seeds a self-edge). Researcher seeds only its own
+// self-edge — no onward delegation to others. These defaults seed the workspace
+// graph; they are not a persisted AgentConfig field.
 func TestPlannerBoundedDelegation(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg))
@@ -65,10 +67,14 @@ func TestPlannerBoundedDelegation(t *testing.T) {
 		targets[ref.ID] = true
 	}
 	assert.True(t, targets["researcher"], "Planner must delegate to Researcher")
-	assert.Len(t, targets, 1, "Planner's ADR-090 default delegation target is Researcher only")
+	assert.True(t, targets[string(coreagent.IDPlanner)], "Planner must seed its own self-edge")
+	assert.Len(t, targets, 2, "Planner's default targets: Researcher plus its own self-edge")
 
-	// Researcher is a leaf: no onward delegation seeded.
-	assert.Nil(t, coreagent.SeedDelegationEdges(coreagent.IDResearcher), "Researcher must be a delegation leaf")
+	// Researcher seeds only its own self-edge (no onward delegation to others).
+	researcherDP := coreagent.SeedDelegationEdges(coreagent.IDResearcher)
+	require.NotNil(t, researcherDP, "Researcher now seeds its ordinary self-edge")
+	require.Len(t, researcherDP.To, 1)
+	assert.Equal(t, string(coreagent.IDResearcher), researcherDP.To[0].ID)
 }
 
 // TestSpecialistsKeepMemoryTools verifies Planner and Researcher retain

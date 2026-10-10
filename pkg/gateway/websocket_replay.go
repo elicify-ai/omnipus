@@ -33,12 +33,23 @@ type wsHandlerHandleAttachSession struct {
 	store    *session.UnifiedStore
 	res      attachResult
 	failed   bool // the catch-up failed; nothing else of this attach runs
+	// ack is the attach frame's acknowledgement of what was shown (U11); nil
+	// for every attach that does not carry one.
+	ack *attachAck
+}
+
+// attachAck is the acknowledging half of an attach_session frame (FR-047,
+// C-ATTENTION): ack_attention true plus the attention_bound the client was
+// shown. Either alone writes nothing.
+type attachAck struct {
+	Ack   bool
+	Bound *int64
 }
 
 // attachReadTranscript reads a session's history for a snapshot. A var only
 // so a test can make the read fail; never reassigned in production.
 var attachReadTranscript = func(store *session.UnifiedStore, sessionID string) ([]session.TranscriptEntry, error) {
-	return store.ReadTranscript(sessionID)
+	return store.ReadTranscriptWithDispositions(sessionID)
 }
 
 // attachAfterBindHook, when set, runs right after an attach has bound the
@@ -62,6 +73,8 @@ var attachAfterBindHook func(sessionID string)
 //	                   replay did not cover · catch_up_complete{W}
 //	A7  release hold: every frame published after the bind follows, in order
 //	A8  hydrate the agent's history, re-emit goal status
+//	A9  acknowledge attention: only for an acknowledging attach of a main whose
+//	    A1-A8 all succeeded (attention_ack.go)
 //
 // It runs synchronously in the connection's read loop, so a frame the
 // client sends after attach_session (e.g. a queued offline message) is
@@ -78,7 +91,20 @@ func (h *WSHandler) handleAttachSession(
 	cursor *attachCursor,
 	wc *wsConn,
 ) {
-	wh := &wsHandlerHandleAttachSession{h: h, ctx: ctx, chatID: chatID, attachID: attachID, cursor: cursor, wc: wc}
+	h.handleAttachSessionWithAck(ctx, chatID, attachID, cursor, nil, wc)
+}
+
+// handleAttachSessionWithAck is handleAttachSession plus the optional
+// attention acknowledgement carried by the attach frame (A9, below).
+func (h *WSHandler) handleAttachSessionWithAck(
+	ctx context.Context,
+	chatID string,
+	attachID string,
+	cursor *attachCursor,
+	ack *attachAck,
+	wc *wsConn,
+) {
+	wh := &wsHandlerHandleAttachSession{h: h, ctx: ctx, chatID: chatID, attachID: attachID, cursor: cursor, wc: wc, ack: ack}
 	if !wh.resolveSession() {
 		return
 	}
@@ -96,6 +122,7 @@ func (h *WSHandler) handleAttachSession(
 	}
 	wh.wc.releaseHold()
 	wh.resumeLiveSession()
+	wh.ackAttention()
 }
 
 // resolveSession is A1: validate the session id and resolve its store.
@@ -367,27 +394,10 @@ func sendConnGenFrameDirect(wc *wsConn, frame any) {
 	wc.direct(data)
 }
 
-// resumeLiveSession is A8: hydrate the agent's history and re-emit goal
-// status for the attached session.
+// resumeLiveSession is A8: re-emit goal status for the attached session. The
+// model window is the addressed archive itself (session-core U2 DEL-12), so
+// nothing is rebuilt from the transcript on attach.
 func (wh *wsHandlerHandleAttachSession) resumeLiveSession() {
-	// Hydrate the per-agent session.SessionStore from the transcript so the
-	// next LLM turn sees the prior conversation. ADR-066 D5.5 (FR-045): only
-	// an EMPTY agent archive is hydrated — an archive with ≥ 1 line is the
-	// live record of the session.
-	if wh.h.agentLoop.AgentArchiveNonEmpty(wh.attachID) {
-		logsafeDebug("ws: attach_session: agent archive non-empty; hydration skipped",
-			"session_id", wh.attachID)
-	} else if err := wh.h.agentLoop.HydrateAgentHistoryFromTranscript(wh.attachID); err != nil {
-		logsafeWarn("ws: attach_session: hydrate agent history failed",
-			"session_id", wh.attachID, "error", err)
-		sidCopy := wh.attachID
-		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-			Type:      string(generated.WsFrameTypeError),
-			SessionId: &sidCopy,
-			Message:   "could not restore conversation context — agent may not remember earlier turns",
-		})
-	}
-
 	// Item 14 (review-round-1, ADR-088): goal_status is a pure live push —
 	// never a replayable transcript entry — so re-emit it for the attached
 	// session; this connection is already bound and receives it like any

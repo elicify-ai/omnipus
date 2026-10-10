@@ -59,7 +59,8 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 		}
 	}
 	// Use streaming if the provider supports it and we have a streamer for this channel.
-	if sp, ok := p.(providers.StreamingProvider); ok && rt.al.bus != nil {
+	// U8 (FR-028): never stream to a connector from a main - which sender would it be?
+	if sp, ok := p.(providers.StreamingProvider); ok && rt.al.bus != nil && !rt.al.mainConnectorTurn(rt.ts.channel, rt.ts.transcriptSessionID) {
 		logger.DebugCF("agent", "Provider supports streaming, checking for streamer", map[string]any{"channel": rt.ts.channel, "chat_id": rt.ts.chatID})
 		if streamer, hasStreamer := rt.al.bus.GetStreamer(ctx, rt.ts.channel, rt.ts.chatID, rt.ts.transcriptSessionID); hasStreamer {
 			logger.InfoCF("agent", "Using streaming for response", map[string]any{"channel": rt.ts.channel, "chat_id": rt.ts.chatID})
@@ -74,6 +75,11 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 			rt.ts.stampStreamerProducerAgentID(streamer)
 			rt.ts.stampStreamerTurnID(streamer)
 			rt.ts.stampStreamerParentSpawnCallID(streamer)
+			// session-core FR-039 / C-GOAL: stamp the turn's captured goal id
+			// so the live TokenFrame/DoneFrame and the persisted entry join to
+			// the EXACT keyed goal criteria. Empty (no proven goal) is a valid
+			// no-op — see stampStreamerGoalID's doc comment.
+			rt.ts.stampStreamerGoalID(streamer)
 			// #823: mint (or, for an ADR-087 D6 auto-continue round, reuse)
 			// this round's message id BEFORE any token can flow — mirrors the
 			// three stamps immediately above. nextRoundMessageID must run

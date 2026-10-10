@@ -37,8 +37,11 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   // includeVerifier opt-in surfaces it (UsageScreen's "By session" tab only).
   // 'delegate' (ADR-057 FR-008/W2c) tags a subordinate session minted by a
   // delegation — it always carries a non-empty parent_session_id below.
-  // Like 'scheduled'/'heartbeat'/'verifier' it is server-minted only.
-  type: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier' | 'delegate'
+  // Like 'scheduled'/'main'/'verifier' it is server-minted only.
+  // Derived from the generated Session schema (contract-first #8) — 'main'
+  // (FR-002, the one standing session for an eligible workspace/agent pair)
+  // is a server-minted wire value, so the union is never hand-maintained.
+  type: WireSessionShape['type']
   status?: WireSessionShape['status']
   task_id?: string
   workspace_id?: string
@@ -86,13 +89,32 @@ export interface Session { // not-wire-format: SPA transformation type produced 
   // when lifecycle_state is 'stopped'. The stopped sidebar row shows its
   // cause alongside the Stopped label.
   stop_note?: WireSessionShape['stop_note']
+  // Wave 1 Sessions. Projected queued/running classification, not a raw
+  // lifecycle-record export. Present only when the same loaded lifecycle record's
+  // canonical current-boot projection produces lifecycle_state: working:
+  // queued for a queued record, running for a running record. Omitted for any
+  // other projected display state, including Interrupted after a prior-boot root
+  // execution, and when no usable lifecycle record is available.
+  // lifecycle_state is authoritative. The Sessions Running filter matches running;
+  // queued does not match. A nonmatching parent may remain as hierarchy context.
+  execution?: WireSessionShape['execution']
+  // How many background shell commands this session itself owns. Omitted when
+  // the process table is unavailable (unknown, not zero). Zero means checked
+  // and none. Not a roll-up of child sessions.
+  background_command_count?: WireSessionShape['background_command_count']
+  // FR-047 (C-ATTENTION): the server's read-only main-attention value.
+  // Present as true or false on a valid main (including the default Admin
+  // main), omitted on every other session — so absence stays absent
+  // (unknown), and is never coerced to false here.
+  needs_attention?: WireSessionShape['needs_attention']
 }
 
 interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that renames nested stats fields before public Session type; the wire shape is validated via WireSessionSchema, this type only models the pre-transform intermediate
   id: string
   agent_id: string
   title: string
-  type?: 'chat' | 'task' | 'channel' | 'scheduled' | 'heartbeat' | 'verifier' | 'delegate'
+  // Derived from the generated Session schema (see the public Session above).
+  type?: WireSessionShape['type']
   status?: WireSessionShape['status']
   task_id?: string
   workspace_id?: string
@@ -107,6 +129,9 @@ interface _RawSessionInternal { // not-wire-format: SPA-internal adapter that re
   // ADR-20260928 MAJ-009 — wire pass-through (see public Session above).
   lifecycle_state?: WireSessionShape['lifecycle_state']
   stop_note?: WireSessionShape['stop_note']
+  execution?: WireSessionShape['execution']
+  background_command_count?: WireSessionShape['background_command_count']
+  needs_attention?: WireSessionShape['needs_attention']
   stats?: {
     tokens_in: number
     tokens_out: number
@@ -151,6 +176,14 @@ function rawToSession(raw: RawSession): Session {
     // absent (a session with no lifecycle record shows no lifecycle label).
     lifecycle_state: raw.lifecycle_state,
     stop_note: raw.stop_note,
+    // Absent stays absent. Do not coerce a missing execution to a value, and
+    // do not turn a missing background count into 0 — unknown is not none.
+    execution: raw.execution,
+    background_command_count: raw.background_command_count,
+    // FR-047: verbatim pass-through — true, false, or absent stays exactly
+    // that. A main without the field (or any non-main, which never carries
+    // it) must read as unknown downstream, never as a fabricated off.
+    needs_attention: raw.needs_attention,
   }
 }
 
@@ -182,6 +215,14 @@ interface MessageBase { // not-wire-format
    * populates ChatMessage.agentId from each frame's agent_id.
    */
   agentId?: string
+  /**
+   * The generated wire correlation id (`Message.client_message_id`,
+   * #823 catch-up redesign): present on saved user entries that were
+   * persisted with the client-supplied id, forwarded verbatim by
+   * rawToMessage. Absent on entries written before the field existed and
+   * on non-user entries.
+   */
+  clientMessageId?: string
   /**
    * Per-turn model record (Phase 1, FR-013). Only populated for assistant
    * messages that have a recorded model on the wire. Legacy turns and
@@ -243,6 +284,20 @@ export interface UserMessage extends MessageBase { // not-wire-format: SPA-inter
   role: 'user'
   /** 'done' — delivered to gateway. 'error' — WS send failed; show Retry. */
   status?: 'done' | 'error'
+  /**
+   * FR-024 (session-core) — the REST adapter (`rawToMessage`) stamps ONLY the
+   * terminal 'discarded' value, from the wire
+   * `input_disposition.state === 'discarded'` on a cold load: Stop discarded
+   * this input before it was delivered, and the bubble must show the same
+   * quiet "Not delivered" state the live `message_status` frame drives. The
+   * union is nevertheless the FULL deliveryStatus set shared with
+   * ChatMessage (src/store/chat/types.ts): ChatMessage intersects this
+   * interface, so a narrower literal here would collapse the intersection and
+   * break every store writer of the transient states ('queued'/'sending'/
+   * 'received'/'working'/'failed' — store-only, never produced by the REST
+   * path). Keep both unions in sync deliberately.
+   */
+  deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed' | 'discarded'
   tool_calls?: never
 }
 
@@ -369,6 +424,15 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
   content?: string
   summary?: string
   timestamp: string
+  /** Generated wire correlation id (`Message.client_message_id`) — present on saved user entries. */
+  client_message_id?: string
+  /**
+   * FR-024 (session-core) — read-only record that this user input was
+   * DISCARDED by Stop before it was delivered into the agent's model input.
+   * Present on discarded entries only; absent on every delivered message
+   * (contracts/components/schemas/Message.yaml `input_disposition`).
+   */
+  input_disposition?: WireMessage['input_disposition']
   tokens?: number
   cost?: number
   status?: 'ok' | 'error' | 'interrupted'
@@ -485,7 +549,20 @@ function rawToMessage(raw: RawMessage): Message {
       tokens: raw.tokens,
       cost: raw.cost,
       agentId: raw.agent_id || undefined,
+      // The generated wire correlation id (`Message.client_message_id`,
+      // present on saved user entries): lets client-side reconcilers match a
+      // server row to the optimistic bubble that was sent under that id
+      // (the /clear transcript re-read's merge does exactly that).
+      clientMessageId: raw.client_message_id,
       status: (baseStatus === 'done' || baseStatus === 'error') ? baseStatus : 'done',
+      // FR-024 — the wire `input_disposition` (present on discarded user
+      // inputs only) maps onto the same quiet deliveryStatus the live
+      // `message_status` frame stamps, so a reloaded thread shows the
+      // identical "Not delivered" status — never an error. The message text
+      // is kept (the archived bytes are preserved, BDD-07.3); an absent or
+      // unknown disposition leaves the field undefined and today's rendering
+      // unchanged.
+      ...(raw.input_disposition?.state === 'discarded' ? { deliveryStatus: 'discarded' as const } : {}),
     } satisfies UserMessage
   }
   if (role === 'system') {
@@ -660,12 +737,43 @@ export async function fetchSessionPage(
 // fetchSessionPage() remains the single-page primitive for callers that DO
 // want to control paging themselves — SessionTree.tsx's useSessionForest
 // fetches one node's children a page at a time by design (BDD-103).
+// Coverage rides on the array itself so existing callers (Sidebar, Usage,
+// session restore, pagination tests) keep using .map/.find/.length. The
+// Sessions view reads partialErrors/incomplete and must not treat a partial
+// list as proof that a parent is missing.
+export interface SessionFetchCoverage { // not-wire-format: client-only flags derived while walking SessionPage cursors; not a wire object
+  /** Sanitized per-store failure tokens gathered across every page. Empty when none reported any. */
+  partialErrors: string[]
+  /** True when any page reported partial_errors, or the max-page walk aborted. */
+  incomplete: boolean
+}
+
+export type SessionListResult = Session[] & SessionFetchCoverage
+
+export function readSessionFetchCoverage(sessions: readonly Session[] | undefined): SessionFetchCoverage {
+  if (!sessions) return { partialErrors: [], incomplete: false }
+  const extra = sessions as Partial<SessionFetchCoverage>
+  return {
+    partialErrors: Array.isArray(extra.partialErrors) ? extra.partialErrors : [],
+    incomplete: extra.incomplete === true,
+  }
+}
+
+function finishSessionFetch(sessions: Session[], partialErrors: string[], incomplete: boolean): SessionListResult {
+  const result = sessions as SessionListResult
+  result.partialErrors = partialErrors
+  result.incomplete = incomplete
+  return result
+}
+
 export async function fetchSessions(
   agentId?: string,
   type?: Session['type'],
   opts?: FetchSessionsOptions,
 ): Promise<Session[]> {
   const sessions: Session[] = []
+  const partialErrors: string[] = []
+  let incomplete = false
   let offset = opts?.offset
   // Safety valve, not a normal exit: the server's own default page size is
   // 50, so 1000 pages is 50,000 sessions — far past any real install. If a
@@ -676,15 +784,22 @@ export async function fetchSessions(
   for (let i = 0; i < MAX_PAGES; i++) {
     const page = await fetchSessionPage(agentId, type, { ...opts, offset })
     sessions.push(...page.sessions)
-    if (!page.nextCursor) return sessions
+    if (page.partialErrors && page.partialErrors.length > 0) {
+      incomplete = true
+      for (const token of page.partialErrors) {
+        if (!partialErrors.includes(token)) partialErrors.push(token)
+      }
+    }
+    if (!page.nextCursor) return finishSessionFetch(sessions, partialErrors, incomplete)
     offset = Number(page.nextCursor)
   }
+  incomplete = true
   console.warn(`[api] fetchSessions: aborted after ${MAX_PAGES} pages — server kept returning next_cursor; result is INCOMPLETE`)
   void maybeDevToast(
     `[api] Session list exceeded ${MAX_PAGES} pages — showing a partial set`,
     'GET:/sessions:max-pages',
   )
-  return sessions
+  return finishSessionFetch(sessions, partialErrors, incomplete)
 }
 
 // ── Session tree assembly (ADR-057 US-19/FR-091/FR-097, W16d) ─────────────────

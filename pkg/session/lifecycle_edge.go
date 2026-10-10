@@ -31,14 +31,18 @@ import (
 // OriginKind discriminates what created a lifecycle record — a session's
 // record-level Origin.Kind (I-1). One value per
 // UnifiedSessionType plus the two kinds that have no session type of their
-// own (plan, human).
+// own (plan, human). A new UnifiedSessionType needs its kind here too
+// (guard: TestEverySessionTypeMapsToAValidOriginKind).
 type OriginKind string
 
 const (
-	OriginKindDelegate  OriginKind = "delegate"
-	OriginKindTask      OriginKind = "task"
-	OriginKindChat      OriginKind = "chat"
-	OriginKindChannel   OriginKind = "channel"
+	OriginKindDelegate OriginKind = "delegate"
+	OriginKindTask     OriginKind = "task"
+	OriginKindChat     OriginKind = "chat"
+	OriginKindChannel  OriginKind = "channel"
+	// OriginKindMain is the standing main session of an eligible
+	// (workspace, agent) pair (session-core FR-002/C-MAIN).
+	OriginKindMain      OriginKind = "main"
 	OriginKindScheduled OriginKind = "scheduled"
 	OriginKindHeartbeat OriginKind = "heartbeat"
 	OriginKindVerifier  OriginKind = "verifier"
@@ -46,11 +50,11 @@ const (
 	OriginKindHuman     OriginKind = "human"
 )
 
-// IsValidOriginKind reports whether k is one of the nine canonical origin
+// IsValidOriginKind reports whether k is one of the ten canonical origin
 // kinds (I-1).
 func IsValidOriginKind(k OriginKind) bool {
 	switch k {
-	case OriginKindDelegate, OriginKindTask, OriginKindChat, OriginKindChannel,
+	case OriginKindDelegate, OriginKindTask, OriginKindChat, OriginKindChannel, OriginKindMain,
 		OriginKindScheduled, OriginKindHeartbeat, OriginKindVerifier, OriginKindPlan, OriginKindHuman:
 		return true
 	default:
@@ -114,6 +118,37 @@ type Authorization struct {
 	RemainingDepth int               `json:"remaining_depth"`
 }
 
+// InitiatedBy records that a run was started by an agent's own action
+// (run_task, execute_plan) and what that start left it allowed: the initiator,
+// the run's chain depth (initiator depth + 1), and the onward depth budget the
+// delegation edge permitted. It is the carrier the launcher and the
+// authorizer read when this run later delegates or starts further work.
+// Disk-only; never on the wire.
+type InitiatedBy struct {
+	AgentID       string        `json:"agent_id"`
+	SessionID     string        `json:"session_id,omitempty"`
+	Depth         int           `json:"depth"`
+	Authorization Authorization `json:"authorization"`
+}
+
+// OnwardBudget is the tightest onward delegation budget this session inherited:
+// the minimum over its steering edge's and its initiator's RemainingDepth.
+// ok is false when neither is set.
+func (r *LifecycleRecord) OnwardBudget() (budget int, ok bool) {
+	if r == nil {
+		return 0, false
+	}
+	if r.SteeredBy != nil {
+		budget, ok = r.SteeredBy.Authorization.RemainingDepth, true
+	}
+	if r.InitiatedBy != nil {
+		if rd := r.InitiatedBy.Authorization.RemainingDepth; !ok || rd < budget {
+			budget, ok = rd, true
+		}
+	}
+	return budget, ok
+}
+
 // Limits is the creator-set resource ceiling on a steered session's
 // lifetime across re-entries (I-1 SteeredBy.Limits).
 type Limits struct {
@@ -133,8 +168,7 @@ type SteeredBy struct {
 	ReportingTarget ReportingTarget `json:"reporting_target"`
 	Authorization   Authorization   `json:"authorization"`
 	Limits          Limits          `json:"limits"`
-	// ToolExclusions names tools this steered session may not call —
-	// `switch_agent` today.
+	// ToolExclusions names tools this steered session may not call.
 	ToolExclusions []string `json:"tool_exclusions,omitempty"`
 }
 

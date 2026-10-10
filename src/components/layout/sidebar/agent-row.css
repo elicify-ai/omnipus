@@ -1,0 +1,21 @@
+/* R22 wireframe --accent-tint is exactly the registered gold tint.
+   Use the registered token directly; local colour aliases are lock findings. */
+.sidebar-agent-row[data-selected='true'] {
+  background: var(--primitive-color-gold-tint);
+}
+
+.sidebar-agent-actions {
+  opacity: 0;
+}
+
+.sidebar-agent-row[data-selected='true'] .sidebar-agent-actions,
+.sidebar-agent-row:hover .sidebar-agent-actions,
+.sidebar-agent-row:focus-within .sidebar-agent-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .sidebar-agent-actions {
+    opacity: 1;
+  }
+}

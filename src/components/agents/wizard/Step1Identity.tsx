@@ -1,15 +1,16 @@
 // Step1Identity — wizard step ① (Identity).
 //
-// Per spec §5.3-§5.5: color, icon, name, description, model, fallback
+// Per spec §5.3-§5.5: name, description, the agent's look (AgentLookPicker:
+// role badge, figure, colour — founder 2026-10-10), model, fallback
 // models (item 6 reorg — moved from Step3Tools so the editor sits directly
 // adjacent to the primary model field), plus the subagent_3p executor block
-// (cli_path / env_overrides / cli_args). The color + icon editors are
-// lifted from `AgentFormFields.tsx` (`<AvatarColorPicker>`, `<IconPicker>`),
+// (cli_path / env_overrides / cli_args). The look editor is the shared
+// `<AgentLookPicker>` from `AgentFormFields.tsx` (same one as the edit panel),
 // the model picker is `<ModelSelector>` (Main + Subagent), and the
 // subagent_3p executor inputs are free-text per the spec wireframe.
 //
 // W4 + W5 testids emitted per the plan's UI table:
-//   wizard-name, wizard-description, wizard-color, wizard-icon, wizard-model,
+//   wizard-name, wizard-description, wizard-look, wizard-color-*, wizard-model,
 //   wizard-add-fallback, wizard-fallback-N (item 6),
 //   wizard-cli-chip (locked, only when initialCli is set),
 //   wizard-cli-path, wizard-env-overrides, wizard-cli-args
@@ -28,10 +29,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  AvatarColorPicker,
-  IconPicker,
-} from '../AgentFormFields'
+import { AgentLookPicker } from '../AgentFormFields'
 import { ModelSelector, type ModelGroup } from '@/components/ui/model-selector'
 import { InheritToggle } from './InheritToggle'
 import { CliPathValidationHint } from '../CliPathValidationHint'
@@ -41,7 +39,6 @@ import { useCliDetect } from '@/hooks/useCliDetect'
 import { buildExecutorPreviewRequest } from '@/hooks/useCommandPreview'
 import { detectEntryFor, resolveCliDetectHint, SUPPORTED_CLIS } from '@/lib/cliDetect'
 import { useModelToProvider } from '@/lib/agents/modelToProvider'
-import type { IconName } from '@/lib/agentIcons'
 import type { ExecutorCommandPreviewRequest, FallbackModel } from '@/lib/api'
 import type { Provider } from '@/lib/api/generated/openapi-types'
 import { X } from '@phosphor-icons/react'
@@ -150,23 +147,16 @@ export function Step1Identity({
         />
       </div>
 
-      <div className="space-y-[var(--space-2)]">
-        <Label>Avatar color</Label>
-        <AvatarColorPicker
-          value={payload.color}
-          onChange={(c) => setField('color', c)}
-          testIdPrefix="wizard-color"
-        />
-      </div>
-
-      <div className="space-y-[var(--space-2)]">
-        <Label>Icon</Label>
-        <IconPicker
-          value={payload.icon as IconName}
-          onChange={(icon) => setField('icon', icon)}
-          triggerTestId="wizard-icon"
-        />
-      </div>
+      <AgentLookPicker
+        name={payload.name}
+        figure={payload.figure ?? 'Omnipus'}
+        role={payload.role ?? 'general'}
+        color={payload.color}
+        onFigureChange={(figure) => setField('figure', figure)}
+        onRoleChange={(role) => setField('role', role)}
+        onColorChange={(c) => setField('color', c)}
+        testIdPrefix="wizard"
+      />
 
       {/* Native-subagent inherit toggle (UAT 4a). ON = model inherited from
           the caller; the picker is hidden and no model is sent. */}

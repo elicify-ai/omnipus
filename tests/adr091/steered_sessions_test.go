@@ -278,6 +278,13 @@ func newE2EHarnessCustom(
 	if writeErr := os.WriteFile(filepath.Join(workspaceDir, "adr091-fixture-workspace.json"), workspaceRecord, 0o600); writeErr != nil {
 		t.Fatalf("write fixture workspace: %v", writeErr)
 	}
+	// The fixture workspace above is not is_default, so the U5a launch gate
+	// resolves the is_default workspace instead — seed its delegation graph for
+	// every agent this fixture's tree launches to.
+	seedADR091DelegationGraph(t, home, []string{
+		"adr091-fixture-agent-root", "adr091-fixture-agent-a", "adr091-fixture-agent-b",
+		"adr091-fixture-agent-c", "mia", "adr091-fixture-task-agent",
+	})
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
 	cfg := &config.Config{Agents: config.AgentsConfig{

@@ -217,6 +217,34 @@ Leave the field blank and live available memory governs each new turn, reported 
 
 `performance.delegation_timeout_minutes` caps how long a delegated session may run across its whole life — a follow-up that wakes the child does not restart the clock. The default is **30 minutes**. A delegating agent can override that for one call with `timeout_seconds`; leaving that at zero uses the default.
 
+### Which new agents get a self-line
+
+When an agent joins a workspace team — by any route, including a save that carries a complete list of lines — Omnipus seeds it a **self-line** — a trust line from the agent to itself, which is what allows handing a fresh piece of work back to the same agent. It seeds one for every agent that joins, except the ids on an exclusion list (a Team save that carries a complete list of lines still gets the new member's self-line). That list is a private, file-only key:
+
+- `workspace_seed_defaults.self_edge.exclude_agent_ids` in `config.json`.
+
+There is no screen for it. It ships as `["judge", "plansupervisor"]` — the two hidden engine agents — so an ordinary install never seeds them a self-line. Three cases decide what it means:
+
+| The key | Effect |
+|---|---|
+| Absent (the key, or the whole `workspace_seed_defaults` block, is missing) | The shipped list applies. A fresh install and an install that never wrote the key behave the same |
+| An empty list `[]` | **Nobody is excluded by this list.** It does not make the two hidden agents (or Admin) team members: they cannot be added to a workspace team, so they still get no workspace self-line. Every ordinary agent that joins a team is seeded one |
+| A list of ids | Exactly those ids are excluded. Adding an ordinary agent such as `"mia"` takes effect with no code change and no restart beyond the usual config reload |
+
+Two limits on what the key does:
+
+- **It governs future seeds only.** It is a default for the lines the product creates when a workspace is made or a team grows. It never edits the lines a workspace already has, never re-creates a line somebody removed while the agent stays on the team (an agent removed from the team and added back is a new member and is seeded again), and never affects who may currently delegate to whom. To change an agent's *current* lines, edit them in the workspace [Team](workspaces.md#how-to-set-who-may-delegate-to-whom) panel.
+- **It is not editable through the settings API.** It is left out of what the settings API returns, and a generic settings write refuses it. Edit `config.json` by hand.
+
+### Steer, respond and redirect message size
+
+When one agent sends a message into another's turn — `delegate` with `action: steer`, `respond`, or `redirect` — the message is bounded by two keys in the `session_messaging` block of `config.json`:
+
+- `steer_body` — the largest message body, in bytes. Default **65,536**.
+- `steer_rate` — how many steer, respond or redirect messages one agent may send to the same target per minute. Default **60**.
+
+Both are read from the live config, so editing `config.json` and letting it reload changes the real limit without a restart. A message beyond either bound is refused with a named error — it is never silently trimmed. Report messages a child sends up to its parent use their own separate ceilings and are not affected by these two keys.
+
 ### Safety stops that are not settings
 
 Three protections are fixed in the code on purpose. They guard against malformed data — a corrupted or looping parent chain, a gap in the live stream — not against any normal amount of use, and there is no setting for them:

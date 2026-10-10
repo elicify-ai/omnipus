@@ -983,6 +983,19 @@ type curatedTurnError struct{ text string }
 
 func (e *curatedTurnError) Error() string { return e.text }
 
+// RefusalText is the Omnipus-authored sentence, readable as written by the
+// delegate tool's refusal to the calling agent (pkg/tools.refusalTexter).
+func (e *curatedTurnError) RefusalText() string { return e.text }
+
+// authoredRefusalError is a refusal whose sentence was written by Omnipus and is
+// path-free (a session id at most): the delegate tool may show it as written. It
+// is the only other type that carries RefusalText; a wrapped store error never
+// does.
+type authoredRefusalError struct{ text string }
+
+func (e *authoredRefusalError) Error() string       { return e.text }
+func (e *authoredRefusalError) RefusalText() string { return e.text }
+
 // turnErrorUserText is what a person or a model may read about a turn that
 // ended on err: the contract's plain message for err's typed code
 // (TranslateTurnError), never err's own text. A provider error's text carries

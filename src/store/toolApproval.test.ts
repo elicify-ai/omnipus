@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
 import { useToolApprovalStore } from './toolApproval'
-import type { WsSessionStateFrame, WsToolApprovalRequiredFrame } from '@/lib/ws'
+import type { SessionStateFrame, ToolApprovalRequiredFrame } from '@/lib/ws'
 
 beforeEach(() => {
   act(() => {
@@ -22,7 +22,7 @@ beforeEach(() => {
 describe('reconcileWithSessionState — reconnect-gap stub creation', () => {
   it('adds a stub entry for a pending_approvals id absent from the local queue', () => {
     const before = Date.now()
-    const frame: WsSessionStateFrame = {
+    const frame: SessionStateFrame = {
       type: 'session_state',
       user_id: 'user-1',
       pending_approvals: [
@@ -63,7 +63,7 @@ describe('reconcileWithSessionState — reconnect-gap stub creation', () => {
   })
 
   it('adds stubs for multiple unseen approvals in the same frame', () => {
-    const frame: WsSessionStateFrame = {
+    const frame: SessionStateFrame = {
       type: 'session_state',
       user_id: 'user-1',
       pending_approvals: [
@@ -99,7 +99,7 @@ describe('reconcileWithSessionState — reconnect-gap stub creation', () => {
     // Date.now() + s.expires_in_ms) would still "work" for large deltas by
     // accident-of-magnitude, but would be unmistakably wrong at 0.
     const before = Date.now()
-    const frame: WsSessionStateFrame = {
+    const frame: SessionStateFrame = {
       type: 'session_state',
       user_id: 'user-1',
       pending_approvals: [
@@ -147,7 +147,7 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
       })
     })
 
-    const frame: WsSessionStateFrame = {
+    const frame: SessionStateFrame = {
       type: 'session_state',
       user_id: 'user-1',
       pending_approvals: [
@@ -203,7 +203,7 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
       })
     })
 
-    const frame: WsSessionStateFrame = {
+    const frame: SessionStateFrame = {
       type: 'session_state',
       user_id: 'user-1',
       pending_approvals: [
@@ -257,7 +257,7 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
       })
     })
 
-    const frame: WsSessionStateFrame = {
+    const frame: SessionStateFrame = {
       type: 'session_state',
       user_id: 'user-1',
       pending_approvals: [],
@@ -278,7 +278,7 @@ describe('reconcileWithSessionState — refresh, not duplicate, for an approval 
 // lives in ToolApprovalModal.scopeAndSegments.test.tsx.
 describe('enqueue — carries segments through (ADR-092 D4)', () => {
   it('copies frame.segments onto the new queue entry', () => {
-    const frame: WsToolApprovalRequiredFrame = {
+    const frame: ToolApprovalRequiredFrame = {
       type: 'tool_approval_required',
       approval_id: 'appr-chain-1',
       tool_call_id: 'call-chain-1',
@@ -303,7 +303,7 @@ describe('enqueue — carries segments through (ADR-092 D4)', () => {
   })
 
   it('leaves segments undefined when the frame carried none', () => {
-    const frame: WsToolApprovalRequiredFrame = {
+    const frame: ToolApprovalRequiredFrame = {
       type: 'tool_approval_required',
       approval_id: 'appr-plain-1',
       tool_call_id: 'call-plain-1',
@@ -323,7 +323,7 @@ describe('enqueue — carries segments through (ADR-092 D4)', () => {
   })
 
   it('updates segments in place when a duplicate frame for the same approval arrives', () => {
-    const base: WsToolApprovalRequiredFrame = {
+    const base: ToolApprovalRequiredFrame = {
       type: 'tool_approval_required',
       approval_id: 'appr-dup-1',
       tool_call_id: 'call-dup-1',

@@ -99,7 +99,7 @@ func TestGoal1000_TerminalWriteRetryBeforeConsumptionQueuesOneWakeAndOneParentTu
 
 func TestGoal1000_DistinctWakeIDsRemainFIFO(t *testing.T) {
 	const wakeCount = 17
-	sq := newSteeringQueue(SteeringAll)
+	sq := newSteeringQueue()
 
 	for i := 0; i < wakeCount; i++ {
 		messageID := fmt.Sprintf("wake-%02d", i)
@@ -124,7 +124,7 @@ func TestGoal1000_DistinctWakeIDsRemainFIFO(t *testing.T) {
 }
 
 func TestGoal1000_ConsumedWakeIDCanBeQueuedAgain(t *testing.T) {
-	sq := newSteeringQueue(SteeringOneAtATime)
+	sq := newSteeringQueue()
 	item := steeringQueueItem{
 		message: providers.Message{Role: "user", Content: "child completed"},
 		wake:    &steeringWake{messageID: "wake-reusable-after-consumption"},
@@ -148,7 +148,7 @@ func TestGoal1000_ConsumedWakeIDCanBeQueuedAgain(t *testing.T) {
 func TestGoal1000_MarkerFailureRestoreCoalescesConcurrentWakeByID(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
-	al.steering = newSteeringQueue(SteeringAll)
+	al.steering = newSteeringQueue()
 
 	const (
 		scope     = "parent"
@@ -200,7 +200,7 @@ func TestGoal1000_MarkerFailureRestoreCoalescesConcurrentWakeByID(t *testing.T) 
 func TestGoal1000_MarkerFailureRestorePreservesDistinctWakeFIFO(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
-	al.steering = newSteeringQueue(SteeringAll)
+	al.steering = newSteeringQueue()
 
 	const scope = "parent"
 	for i := 0; i < 3; i++ {

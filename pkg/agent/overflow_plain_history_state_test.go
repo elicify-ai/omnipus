@@ -39,7 +39,7 @@ func TestContextOverflowPlain_CommittedReliefPreservesArchiveAndReload(t *testin
 	current := providers.Message{Role: "user", Content: "current media anchor", Media: []string{"media://original-user-media"}}
 	al, agent, ts, messages := plainHistoryCheckpointFixture(t, key, history, current)
 	store := plainHistoryStore(t, agent)
-	before, err := store.SnapshotWindow(context.Background(), key)
+	before, err := store.WindowView(context.Background(), key)
 	require.NoError(t, err)
 	archiveBytes := plainHistoryArchiveBytes(t, agent, key)
 	candidate, changed, err := al.checkpointWindow(context.Background(), ts, messages, nil, true)
@@ -48,18 +48,18 @@ func TestContextOverflowPlain_CommittedReliefPreservesArchiveAndReload(t *testin
 	require.Equal(t, append(plainHistoryExchange(2), current), plainHistoryNonSystem(candidate), "newest assistant and original user/media identity survive exactly")
 	require.Contains(t, candidate[0].Content, messages[0].Content, "pinned instruction remains")
 	require.Equal(t, archiveBytes, plainHistoryArchiveBytes(t, agent, key), "committed relief must not rewrite even one admitted archive byte")
-	after, err := store.SnapshotWindow(context.Background(), key)
+	after, err := store.WindowView(context.Background(), key)
 	require.NoError(t, err)
 	require.Equal(t, 2, after.State.Skip, "exact completed oldest plain prefix")
 	require.Equal(t, before.State.Count, after.State.Count)
-	require.Equal(t, before.Archive, after.Archive)
+	require.Equal(t, viewArchived(before), viewArchived(after))
 
 	// A separately constructed REAL store has no live backend cache or staged
 	// message slice. Its metadata+archive projection must reproduce the view.
-	reopened, err := memory.NewJSONLStore(plainHistoryContextDirectory(t, agent))
+	reopened, err := session.NewUnifiedStore(plainHistoryContextDirectory(t, agent))
 	require.NoError(t, err)
-	reloadedBackend := session.NewJSONLBackend(reopened)
-	reloaded, err := reloadedBackend.SnapshotWindow(context.Background(), key)
+	reloadedBackend := reopened
+	reloaded, err := reloadedBackend.WindowView(context.Background(), key)
 	require.NoError(t, err)
 	require.Equal(t, after, reloaded, "fresh backend reads the exact committed cursor/projection/anchor and source")
 	require.Equal(t, plainHistoryNonSystem(candidate), reloadedBackend.GetHistory(key), "reloaded reduced live view equals the committed candidate, including media")
@@ -72,21 +72,22 @@ func TestContextOverflowPlain_AbortRestoresActualTurnStart(t *testing.T) {
 	history := append(plainHistoryExchange(1), plainHistoryExchange(2)...)
 	seedPlainHistory(t, agent, key, history)
 	store := plainHistoryStore(t, agent)
-	start, err := store.SnapshotWindow(context.Background(), key)
+	start, err := store.WindowView(context.Background(), key)
 	require.NoError(t, err)
 	startBytes := plainHistoryArchiveBytes(t, agent, key)
 	ts := newTurnState(agent, processOptions{SessionKey: key, UserMessage: "turn appended user"}, turnEventScope{turnID: "plain-abort"})
 	require.NotNil(t, ts.initialWindow)
 	require.Equal(t, start.State, *ts.initialWindow, "real constructor captured the actual start before the append")
 	ts.ctx = context.Background()
-	require.NoError(t, ts.appendWindowMessage(providers.Message{Role: "user", Content: ts.userMessage, Media: []string{"media://abort-anchor"}}))
+	_, appendErr := ts.appendWindowMessage(providers.Message{Role: "user", Content: ts.userMessage, Media: []string{"media://abort-anchor"}}, windowProducerUser)
+	require.NoError(t, appendErr)
 	admittedBytes := plainHistoryArchiveBytes(t, agent, key)
 	messages := append([]providers.Message{{Role: "system", Content: "pinned"}}, agent.Sessions.GetHistory(key)...)
 	_, changed, err := al.checkpointWindow(context.Background(), ts, messages, nil, true)
 	require.NoError(t, err)
 	require.True(t, changed, "must enter a genuinely committed intermediate relief state before testing abort")
 	require.Equal(t, admittedBytes, plainHistoryArchiveBytes(t, agent, key), "relief itself does not rewrite admitted source")
-	intermediate, err := store.SnapshotWindow(context.Background(), key)
+	intermediate, err := store.WindowView(context.Background(), key)
 	require.NoError(t, err)
 	require.Equal(t, 2, intermediate.State.Skip)
 	require.Equal(t, start.State.Count+1, intermediate.State.Count)
@@ -94,10 +95,19 @@ func TestContextOverflowPlain_AbortRestoresActualTurnStart(t *testing.T) {
 	result, err := al.abortTurn(ts, "plain-history-test", hardInterruptAbortReason)
 	require.NoError(t, err)
 	require.Equal(t, TurnEndStatusAborted, result.status)
-	restored, err := store.SnapshotWindow(context.Background(), key)
+	restored, err := store.WindowView(context.Background(), key)
 	require.NoError(t, err)
-	require.Equal(t, start, restored, "B-58: restore actual start, NOT the last intermediate cursor or the post-append count")
-	require.Equal(t, startBytes, plainHistoryArchiveBytes(t, agent, key), "abort removes only this turn's suffix and restores the original archive bytes")
+	// FR-006 / DEL-12: the abort is non-destructive. Skip, the anchor and the
+	// exact projection are restored, but the archive KEEPS the appended bytes
+	// (count re-syncs to the physical length) and the aborted span is recorded
+	// as a retained-but-excluded effect.
+	require.Equal(t, start.State.Skip, restored.State.Skip, "B-58: restore the actual start cursor, NOT the last intermediate one")
+	require.Equal(t, start.State.AnchorLine, restored.State.AnchorLine, "restore the actual start anchor")
+	require.Equal(t, start.State.Projection, restored.State.Projection, "restore the exact start projection")
+	require.Len(t, restored.Excluded, 1, "the aborted append is recorded as a retained-but-excluded span")
+	retainedBytes := plainHistoryArchiveBytes(t, agent, key)
+	require.True(t, strings.HasPrefix(string(retainedBytes), string(startBytes)), "FR-006: abort never rewrites retained archive bytes")
+	require.Greater(t, len(retainedBytes), len(startBytes), "FR-006: the aborted append's bytes are RETAINED, not truncated")
 	require.Equal(t, history, agent.Sessions.GetHistory(key))
 }
 
@@ -146,7 +156,7 @@ type metadataCommitFailureTurn struct {
 	fault         *plainHistoryCommitFailure
 	failure       error
 	rejection     *plainHistoryOverflowError
-	admitted      memory.WindowSnapshot
+	admitted      session.WindowView
 	admittedBytes []byte
 	reliefEvents  func() []EventKind
 	events        func() []Event
@@ -170,7 +180,7 @@ func runMetadataCommitFailureTurn(t *testing.T) *metadataCommitFailureTurn {
 	turn.p.observe = func(call int, _ plainHistoryCapture) {
 		if call == 1 {
 			var err error
-			turn.admitted, err = turn.fault.SnapshotWindow(context.Background(), turn.key)
+			turn.admitted, err = turn.fault.WindowView(context.Background(), turn.key)
 			require.NoError(t, err)
 			turn.admittedBytes = plainHistoryArchiveBytes(t, turn.agent, turn.key)
 		}
@@ -191,7 +201,7 @@ func TestContextOverflowPlain_MetadataCommitFailureDoesNotSendDivergentView(t *t
 		require.ErrorIs(t, run.err, run.failure, "B-58: propagate storage failure, never turn failed metadata persistence into permission to retry")
 		require.Len(t, run.p.recorded(), 1, "no provider attempt after persistence failed")
 		require.Empty(t, run.reliefEvents(), "no committed-relief/retry event for failed persistence")
-		after, snapshotErr := run.fault.SnapshotWindow(context.Background(), run.key)
+		after, snapshotErr := run.fault.WindowView(context.Background(), run.key)
 		require.NoError(t, snapshotErr)
 		require.Equal(t, run.admitted, after, "failed candidate cannot alter real persisted window")
 		require.Equal(t, run.admittedBytes, plainHistoryArchiveBytes(t, run.agent, run.key))

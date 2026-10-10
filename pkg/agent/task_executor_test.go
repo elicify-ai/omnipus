@@ -28,7 +28,7 @@ import (
 // fake channel is registered under that name.
 func TestProcessTaskDirect_MediaToolDelivery_StampsWorkspaceID(t *testing.T) {
 	al, defaultAgent, webchatChannel, _ := newMediaWorkspaceIDTestLoop(t, "webchat")
-	sessionStore := al.GetAgentStore(defaultAgent.ID)
+	sessionStore := al.GetSessionStore()
 	require.NotNil(t, sessionStore, "test setup: executing agent must have a session store")
 	taskSession, err := sessionStore.NewSession(session.SessionTypeTask, "system", defaultAgent.ID)
 	require.NoError(t, err)
@@ -165,8 +165,13 @@ func TestProcessTaskDirect_ExternalCLIWorker_NoSoul_ComposesTaskOnly(t *testing.
 // TASK path — it derived runCtx via plain context.WithCancel(ctx)
 // (external_dispatch.go) and only forwarded rtCfg.defaultTimeout to the
 // DRIVER as a RunOptions.TimeoutSeconds hint, which only the REAL drivers
-// honor internally (each wraps its own runCtx in context.WithTimeout) — the
-// FakeRunner test double does not. spawnSubTurn's native delegation path
+// honor internally (each wraps its own runCtx in context.WithTimeout).
+// CORRECTION (2026-10-10, item 3): FakeRunner now honours the same
+// ctx-cancel-ends-the-stream contract (pkg/agent/runner/fake.go) as the real
+// drivers. NOTE: on this base the test already passed (~2.6s) with the OLD fake
+// too — the 61s hang this change was briefed to fix is NOT reproducible here, so
+// the change is a contract alignment, not a demonstrated hang fix.
+// spawnSubTurn's native delegation path
 // already had its own Go-level safety-net timeout for exactly this reason
 // (subturn.go ~458-473); processTaskDirectExternalCLI now has the equivalent
 // (loop.go, immediately after `rtCfg := al.getSubTurnConfig()`): a
@@ -335,9 +340,9 @@ func TestProcessTaskDirect_ExternalCLIWorker_Cancel_FiresTurnCanceledCallback(t 
 	fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
 	fr.Cancel() // closes the event channel so drainExternalRun's loop actually exits
 
-	sessStore := al.GetAgentStore("ext-agent")
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
-		t.Fatal("GetAgentStore(\"ext-agent\") returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 
 	deadline := time.Now().Add(asyncTaskPollTimeout)

@@ -56,7 +56,19 @@ imports pkg/goal — that would be an import cycle).
 the ROOT's SessionID and must never resolve store-backed state for anyone
 but the root (this confusion was bugs #576/#577). `CreateSessionWithID`
 refuses a colliding caller-supplied id loudly (FR-096). Scheduled-session
-ids are reserved conventions (`sched-main-<owner>`), not ULIDs.
+ids are ULIDs (`NewScheduledSession`).
+
+A MAIN session's id is COMPUTED, never minted or stored:
+`main_session.go::MainSessionID` joins the pair as
+`main-session-<workspace>+<agent>` — the `+` cannot occur in either validated
+component, so two distinct pairs can never collide on one id. Each component
+keeps its own 128-byte bound; the computed id is capped at 255 UTF-8 bytes
+(the directory-name limit) and above it the store REFUSES with a visible
+error, storing nothing — no hash, truncation or replacement id.
+`unified.go::GetOrCreateMainSession` is the only creator, and it treats a
+read error on that id as the BDD-01.4 refusal, NOT as a cache miss: only a
+genuinely absent record creates. A stored record whose owner, workspace or
+type does not match the pair is refused untouched, never adopted or repaired.
 
 ## A meta.json that fails to parse stays invisible
 

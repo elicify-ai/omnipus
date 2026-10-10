@@ -363,8 +363,6 @@ func (us *UnifiedStore) DeleteSession(sessionID string) error {
 	delete(us.dirtyStats, sessionID) // step 5: drop the dirty-set entry too
 	us.cacheMu.Unlock()
 	us.u4IndexEvict(sessionID) // FR-097: drop sessionID from the parent index either as a parent or as a child
-	contextFile := filepath.Join(us.baseDir, ".context", sessionID+".jsonl")
-	os.Remove(contextFile) // best-effort, ignore error if file does not exist
 
 	// Cascade-delete uploads that were associated with this session.
 	// Uploads are always home-rooted at <homePath>/uploads/<sessionID> regardless
@@ -432,8 +430,6 @@ func (us *UnifiedStore) ClearAll() (int, error) {
 		delete(us.dirtyStats, entry.Name())
 		us.cacheMu.Unlock()
 		us.u4IndexEvict(entry.Name()) // FR-097
-		contextFile := filepath.Join(us.baseDir, ".context", entry.Name()+".jsonl")
-		os.Remove(contextFile) // best-effort, ignore error if file does not exist
 		// Cascade-delete uploads for this session.
 		uploadsDir := filepath.Join(uploadsRoot, entry.Name())
 		if rmErr := os.RemoveAll(uploadsDir); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {

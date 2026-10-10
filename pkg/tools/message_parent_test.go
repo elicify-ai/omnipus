@@ -684,14 +684,17 @@ func TestMessageParent_StoredNotWoken_LoggedAtError(t *testing.T) {
 	}
 }
 
-// TestMessageParent_ProgressStoredNotWokenStaysQuiet is the gate half: for
-// `progress` (never wake-eligible, FR-B-010) stored_not_woken IS the
-// contract, so it must produce no ERROR line. Without this, a report that
-// fired on every stored_not_woken would pass the test above and drown the
-// real signal in production.
-func TestMessageParent_ProgressStoredNotWokenStaysQuiet(t *testing.T) {
+// TestMessageParent_ProgressStoredNotWoken_LoggedAtError (FR-012): every
+// accepted helper report kind — progress included — wakes an idle non-stopped
+// parent now, so a progress entry stored without a wake is a STALL, not a
+// contract, and must be logged at ERROR exactly like a blocker. The
+// non-wake-eligible kinds this test's predecessor covered (progress/checkpoint)
+// no longer exist among message_parent's accepted kinds
+// (progress/checkpoint/artifact/blocker/question/handback are all
+// wake-eligible), so the gate's silent branch is unreachable from this tool.
+func TestMessageParent_ProgressStoredNotWoken_LoggedAtError(t *testing.T) {
 	logs := captureSlogInfo(t)
-	tool, _ := newStoredNotWokenSetup(t)
+	tool, deliverer := newStoredNotWokenSetup(t)
 
 	result := tool.Execute(withChildContext("child-not-woken"), map[string]any{
 		"kind": "progress", "text": "still checking the checkout page",
@@ -700,7 +703,13 @@ func TestMessageParent_ProgressStoredNotWokenStaysQuiet(t *testing.T) {
 		t.Fatalf("message_parent(progress) failed: %s", result.ForLLM)
 	}
 
-	if captured := logs.String(); strings.Contains(captured, `"level":"ERROR"`) {
-		t.Fatalf("a progress entry stored without a wake produced an ERROR line — that outcome is its contract, not a failure; captured log:\n%s", captured)
+	captured := logs.String()
+	if !strings.Contains(captured, `"level":"ERROR"`) {
+		t.Fatalf("a progress entry stored without a wake produced no ERROR line — under FR-012 every accepted report kind wakes the parent, so this is a stall; captured log:\n%s", captured)
+	}
+	for _, want := range []string{"child-not-woken", "parent-1", deliverer.messageID, string(steer.DeliveryStoredNotWoken), "progress"} {
+		if !strings.Contains(captured, want) {
+			t.Errorf("captured ERROR log does not name %q; captured log:\n%s", want, captured)
+		}
 	}
 }

@@ -57,7 +57,6 @@ func TestAgentCreate_NotifiesAgentCreated(t *testing.T) {
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
 		"color":       "#22C55E",
-		"icon":        "robot",
 	})
 	if result.IsError {
 		t.Fatalf("create_agent failed: %s", result.ForLLM)
@@ -98,7 +97,6 @@ func TestAgentCreate_ValidationFailure_DoesNotNotifyAgentCreated(t *testing.T) {
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
 		"color":       "#22C55E",
-		"icon":        "robot",
 	})
 	if !result.IsError {
 		t.Fatalf("create_agent with no name must fail validation, got success: %s", result.ForLLM)
@@ -160,7 +158,6 @@ func TestAgentCreate_NotifyFiresOnlyAfterAgentIsListable(t *testing.T) {
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
 		"color":       "#22C55E",
-		"icon":        "robot",
 	})
 	if result.IsError {
 		t.Fatalf("create_agent failed: %s", result.ForLLM)
@@ -251,7 +248,6 @@ func TestAgentCreate_InitAgentHomeFailure_DoesNotNotifyAgentCreated(t *testing.T
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
 		"color":       "#22C55E",
-		"icon":        "robot",
 	})
 	if !result.IsError {
 		t.Fatalf("create_agent must fail when InitAgentHome cannot create the agent's sessions/ subdir "+
@@ -314,7 +310,6 @@ func TestAgentCreate_NilNotifyAgentCreatedIsSafe(t *testing.T) {
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
 		"color":       "#22C55E",
-		"icon":        "robot",
 	})
 	if result.IsError {
 		t.Fatalf("create_agent failed: %s", result.ForLLM)
@@ -363,7 +358,6 @@ func TestAgentCreate_DefaultSingletonWriteFailure_DoesNotNotifyAgentCreated(t *t
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
 		"color":       "#22C55E",
-		"icon":        "robot",
 		"default":     true,
 	})
 	if !result.IsError {
@@ -440,7 +434,6 @@ func TestAgentCreate_HeartbeatWriteFailure_DoesNotNotifyAgentCreated(t *testing.
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
 		"color":       "#22C55E",
-		"icon":        "robot",
 		"heartbeat":   "ping every morning",
 	})
 	if !result.IsError {
@@ -636,7 +629,6 @@ func TestAgentCreate_NotifyFiresOnlyAfterAsyncReloadLands(t *testing.T) {
 				"soul":        "You are a test agent.",
 				"model":       "test-model",
 				"color":       "#22C55E",
-				"icon":        "robot",
 			}),
 		}
 	}()

@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"unicode"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -86,24 +85,6 @@ func resolveOmnipusHome(depsHome string) (string, error) {
 	return h + "/.omnipus", nil
 }
 
-// validateAgentIcon returns an error when icon is non-empty and contains
-// characters outside the Phosphor icon naming convention (alphanumeric + hyphens,
-// max 64 chars). Empty strings pass (field is optional).
-func validateAgentIcon(s string) error {
-	if s == "" {
-		return nil
-	}
-	if len(s) > 64 {
-		return fmt.Errorf("invalid icon %q: must be ≤64 characters", s)
-	}
-	for _, r := range s {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' {
-			return fmt.Errorf("invalid icon %q: must be alphanumeric + hyphens only", s)
-		}
-	}
-	return nil
-}
-
 // ---- system.agent.create ----
 
 // AgentCreateTool implements system.agent.create per BRD §D.4.2.
@@ -114,7 +95,7 @@ func NewAgentCreateTool(d *Deps) *AgentCreateTool { return &AgentCreateTool{deps
 func (t *AgentCreateTool) Name() string           { return "create_agent" }
 func (t *AgentCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentCreateTool) Description() string {
-	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description, soul, model, color (6-digit hex, e.g. #22C55E) and icon (a Phosphor icon name, e.g. 'robot') are all required — color/icon are rejected if missing or malformed. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened."
+	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description, soul, model and color (6-digit hex, e.g. #22C55E) are all required — a malformed color is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened."
 }
 
 func (t *AgentCreateTool) Parameters() map[string]any {
@@ -136,10 +117,6 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"description": "Primary LLM model slug (e.g. 'z-ai/glm-5v-turbo')",
 			},
 			"color": map[string]any{"type": "string", "description": "Hex avatar color (e.g. '#22C55E')"},
-			"icon": map[string]any{
-				"type":        "string",
-				"description": "Phosphor icon name (e.g. 'robot', 'pencil', 'book')",
-			},
 			// Optional — agent type + external-CLI worker runtime.
 			"agent_type": map[string]any{
 				"type":        "string",
@@ -185,7 +162,7 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 			},
 			"model_params": modelParamsParameters(),
 		},
-		"required": []string{"name", "description", "soul", "model", "color", "icon"},
+		"required": []string{"name", "description", "soul", "model", "color"},
 	}
 }
 
@@ -199,7 +176,6 @@ type agentCreateToolExecute struct {
 	soul            string
 	model           string
 	color           string
-	icon            string
 	agentType       string
 	execCLI         string
 	execCLIPath     string
@@ -272,10 +248,6 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 	if err := validateAgentColor(ac.color); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_COLOR", err.Error(), "Use a 6-digit hex color, e.g. #22C55E")), true
 	}
-	ac.icon, _ = ac.args["icon"].(string)
-	if err := validateAgentIcon(ac.icon); err != nil {
-		return tools.ErrorResult(errorJSON("INVALID_ICON", err.Error(), "Use alphanumeric + hyphens, e.g. robot")), true
-	}
 
 	// Agent type + external-CLI worker runtime (W4 taxonomy). Default "Main".
 	ac.agentType, _ = ac.args["agent_type"].(string)
@@ -332,7 +304,6 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 		Name:        ac.name,
 		Description: ac.description,
 		Color:       ac.color,
-		Icon:        ac.icon,
 		Model:       &config.AgentModelConfig{Primary: ac.model},
 	}
 	// Agent type / runtime (W4). Subagent + subagent_3p persist as worker;
@@ -515,11 +486,26 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 	// present, since a join attempt can also fail (logged, non-fatal).
 	ac.joinedWorkspace = false
 	if wsID := tools.ToolWorkspaceID(ac.ctx); wsID != "" {
-		if err := ac.t.joinWorkspaceTeam(wsID, ac.finalID); err != nil {
+		joined, joinErr := ac.t.joinWorkspaceTeam(wsID, ac.finalID)
+		ac.joinedWorkspace = joined
+		switch {
+		case joinErr == nil:
+			// Fully joined: the membership landed AND the self-row was seeded.
+		case joined:
+			// U5A-FIX-R1 / N3: the membership landed, but the self-row seed did
+			// not. The agent IS a workspace member, so returning the normal
+			// "metadata_only" success would both misdescribe its state and hide
+			// a missing required authorization row. Return the truthful
+			// partial-failure result naming what landed and how to recover.
+			slog.Error("sysagent: create_agent: joined workspace but could not seed the self-delegation row",
+				"agent_id", ac.finalID, "workspace_id", wsID, "error", joinErr)
+			return createJoinSeedPartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args), wsID, joinErr), true
+		default:
+			// The membership itself did not land, so the agent is genuinely
+			// metadata-only (a member of no team). Best-effort: keep creation
+			// succeeding, exactly as before.
 			slog.Warn("sysagent: create_agent: could not add new agent to workspace core_team",
-				"agent_id", ac.finalID, "workspace_id", wsID, "error", err)
-		} else {
-			ac.joinedWorkspace = true
+				"agent_id", ac.finalID, "workspace_id", wsID, "error", joinErr)
 		}
 	}
 	return nil, false
@@ -663,12 +649,53 @@ func createHeartbeatPartialResult(id, revision string, fields []string, err erro
 	}))
 }
 
+// createJoinSeedPartialResult is the U5A-FIX-R1 / N3 truthful partial-failure
+// result for a creation-in-context whose MEMBERSHIP landed but whose ordinary
+// self-delegation row could not be seeded. It follows the same shape as the
+// other create_agent partial results (createHomePartialResult /
+// createHeartbeatPartialResult): the entity and (here) the workspace membership
+// are already durably written, so this is a partial success that must NOT be
+// dressed up as the ordinary "metadata_only" success — that status would say
+// the agent belongs to no team when it is in fact a member, and would hide the
+// missing row.
+//
+// The suggestion names a recovery that actually re-seeds: the self-row is a
+// normal, editable Team-tab row, so the operator can add it directly (or remove
+// and re-add the agent on the team). Re-running update_workspace with an
+// UNCHANGED team does NOT recover it — that tool only seeds for NEWLY added
+// members — so it is deliberately not offered as the fix.
+func createJoinSeedPartialResult(id, revision string, fields []string, wsID string, err error) *tools.ToolResult {
+	return tools.ErrorResult(successJSON(map[string]any{
+		"id":                 id,
+		"code":               "SAVE_FAILED",
+		"message":            fmt.Sprintf("agent %q was saved and added to workspace %q, but its self-delegation row could not be written. Read the workspace's Team tab before retrying.", id, wsID),
+		"persistence_status": agentstore.PersistencePartial,
+		"activation_status":  agentstore.ActivationNotAttempted,
+		"revision":           revision,
+		"changed_fields":     fields,
+		"error_stage":        "seed_self_edge",
+		"workspace_id":       wsID,
+		"joined_workspace":   true,
+		"self_edge_seeded":   false,
+		"detail":             err.Error(),
+		"suggestion":         "Open the workspace's Team tab and add this agent's self-delegation row (or remove and re-add the agent on the team), then confirm the row is present.",
+	}))
+}
+
 // joinWorkspaceTeam appends agentID to workspace wsID's CoreTeam (deduped)
-// and persists the change. Used exclusively by create_agent's
-// creation-in-context join (ADR-046 P1, US-3 AS-2): a custom agent created
-// from within a workspace's turn context joins THAT workspace's team only —
-// never any other, and never seeds a Delegation[] trust edge (FR-038:
-// expanding a workspace team must not create or imply delegation trust).
+// and persists the change, then seeds agentID's ordinary self-delegation row.
+// Used exclusively by create_agent's creation-in-context join (ADR-046 P1,
+// US-3 AS-2): a custom agent created from within a workspace's turn context
+// joins THAT workspace's team only — never any other.
+//
+// session-core C-DELEGATE (FR-014/015, BDD-05.7): an authorized
+// creation-with-membership seeds the new agent's ordinary {id→id} self-row
+// IMMEDIATELY, through the same shared workspace-graph computation the install
+// seed and the team-growth writer use. This is not the retired "expanding a
+// team implies delegation trust" grant — it is the single, removable self-row
+// the operator data list governs, and no other agent's trust changes. A join
+// that must not seed (metadata-only creation with no membership) never reaches
+// here.
 //
 // wsID here is the caller's tools.ToolWorkspaceID(ctx) — the channel-bound
 // turn workspace id that memory routing uses — which is a different,
@@ -676,20 +703,105 @@ func createHeartbeatPartialResult(id, revision string, fields []string, err erro
 // workspace.FindForAgentPreferring keys off (CoreTeam membership) for
 // execution/work-dir purposes; the two can diverge, exactly as pkg/agent/loop.go's
 // runTurn documents for its own mirrored resolution.
-func (t *AgentCreateTool) joinWorkspaceTeam(wsID, agentID string) error {
+func (t *AgentCreateTool) joinWorkspaceTeam(wsID, agentID string) (joined bool, seedErr error) {
+	// U5A-FIX-R1 / N1: the authoritative membership read-and-decision and the
+	// self-row seed publication run in ONE workspace critical section
+	// (workspacepkg.LockID + the authoritative re-read below). The membership
+	// write used to be unlocked: a concurrent explicit delegation graph PUT
+	// (which holds LockID and replaces the whole edge set) could land after the
+	// membership became visible but before the seed acquired its own lock, and
+	// the late implicit seed then re-added the self-row the operator had just
+	// excluded — reversing a successful explicit policy decision. Holding one
+	// lock across both phases means a competing writer lands wholly before or
+	// wholly after this join, never between.
+	unlock := workspacepkg.LockID(wsID)
+	defer unlock()
+
 	w, err := readWorkspaceFromDisk(t.deps.Home, wsID)
 	if err != nil {
-		return fmt.Errorf("read workspace %s: %w", wsID, err)
+		return false, fmt.Errorf("read workspace %s: %w", wsID, err)
 	}
-	for _, id := range w.CoreTeam {
-		if id == agentID {
-			return nil // already a member
+	if !teamContains(w.CoreTeam, agentID) {
+		w.CoreTeam = append(w.CoreTeam, agentID)
+		w.UpdatedAt = nowISO()
+		if err := writeEntity(workspacesDir(t.deps.Home), wsID, w); err != nil {
+			return false, fmt.Errorf("write workspace %s: %w", wsID, err)
 		}
 	}
-	w.CoreTeam = append(w.CoreTeam, agentID)
-	w.UpdatedAt = nowISO()
-	if err := writeEntity(workspacesDir(t.deps.Home), wsID, w); err != nil {
-		return fmt.Errorf("write workspace %s: %w", wsID, err)
+
+	// Deterministic test seam (always nil in production): fires with LockID
+	// held, AFTER the membership write and BEFORE the authoritative re-read, so
+	// a test can land a competing membership/graph edit at exactly this point.
+	if joinWorkspaceMembershipTestHook != nil {
+		joinWorkspaceMembershipTestHook(wsID, agentID)
+	}
+
+	// Re-read the AUTHORITATIVE membership (fresh from disk) and seed ONLY when
+	// the agent is genuinely on the team. A member that is no longer on the team
+	// (a competing removal that landed) gets no self-row: seeding one would
+	// invent a delegation row for a non-member. The re-read is what turns "this
+	// call appended a member" into "the member is actually on the team now".
+	fresh, readErr := readWorkspaceFromDisk(t.deps.Home, wsID)
+	if readErr != nil {
+		// The membership write above already landed; only the confirm failed.
+		return true, fmt.Errorf("re-read workspace %s membership: %w", wsID, readErr)
+	}
+	if !teamContains(fresh.CoreTeam, agentID) {
+		return false, nil
+	}
+
+	// Seed the new agent's ordinary self-row. A failure here means the agent IS
+	// a workspace member but its required self-row was not written — the caller
+	// reports the truthful partial result (never a metadata_only success).
+	if err := t.seedSelfEdgeLocked(wsID, agentID); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+// teamContains reports whether agentID is a (non-empty) entry of team.
+func teamContains(team []string, agentID string) bool {
+	for _, id := range team {
+		if id == agentID {
+			return true
+		}
+	}
+	return false
+}
+
+// joinWorkspaceMembershipTestHook is a test-only synchronization seam fired by
+// joinWorkspaceTeam while it holds workspacepkg.LockID(wsID), after the
+// membership write and before the seed's authoritative membership re-read. It
+// lets a test land a competing membership/graph edit at exactly that point
+// deterministically (no sleeps), proving the join is one critical section and
+// that the seed never fires for a member that is no longer on the team. Always
+// nil in production; never set outside a _test.go file.
+var joinWorkspaceMembershipTestHook func(wsID, agentID string)
+
+// seedSelfEdgeLocked writes agentID's ordinary self-delegation row into
+// workspace wsID's delegation store, preserving every existing edge. It uses
+// the shared workspace.SelfEdgeSeedRows computation, so the row is identical to
+// the install-seed and team-growth rows, and it threads the OPERATOR exclusion
+// data (config.workspace_seed_defaults.self_edge.exclude_agent_ids) through
+// selfEdgeExcludedAgentIDs — the exclusion is config DATA, never a Go identity
+// predicate. Idempotent: an agent already carrying a self-row is left untouched.
+//
+// The caller MUST already hold workspacepkg.LockID(wsID) (joinWorkspaceTeam
+// does, for its whole membership-plus-seed span): the lock pool is not
+// reentrant, so this must NOT acquire it again.
+func (t *AgentCreateTool) seedSelfEdgeLocked(wsID, agentID string) error {
+	existing, ok := workspacepkg.LoadDelegation(t.deps.Home, wsID)
+	if !ok {
+		return fmt.Errorf("workspace %s delegation record is unreadable — refusing to seed a self-row over it", wsID)
+	}
+	rows := workspacepkg.SelfEdgeSeedRows(
+		[]string{agentID}, existing, selfEdgeExcludedAgentIDs(t.deps), workspaceDelegationDepthCeiling(t.deps))
+	if len(rows) == 0 {
+		return nil
+	}
+	merged := append(append([]workspacepkg.DelegationEdge(nil), existing...), rows...)
+	if err := saveWorkspaceDelegation(t.deps.Home, wsID, merged); err != nil {
+		return fmt.Errorf("seed self-row for %s in workspace %s: %w", agentID, wsID, err)
 	}
 	return nil
 }
@@ -726,7 +838,6 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 				"description": "Explicit provider routing key for the primary model. Empty string clears an existing pin (falls back to default-provider resolution).",
 			},
 			"color": map[string]any{"type": "string"},
-			"icon":  map[string]any{"type": "string"},
 			// #904 D15: JSON null clears the own value ("use the global
 			// limit"), so the schema admits null; 1..1000 bound structurally.
 			"max_tool_iterations": map[string]any{
@@ -969,87 +1080,147 @@ func (ad *agentDeleteToolExecute) validateAndLoad() (*tools.ToolResult, bool) {
 	return nil, false
 }
 
-// deleteAndCascade deletes the agent record and performs the best-effort cleanup cascades.
-func (ad *agentDeleteToolExecute) deleteAndCascade() (*tools.ToolResult, bool) {
-	// cascadeWarnings collects every best-effort cascade-step failure so the
-	// response can report a real partial-failure instead of silently
-	// claiming full success (mirrors this file's
-	// existing publish_warning pattern for create/update, generalized to the
-	// several independent stores this cascade touches). None of these steps
-	// abort the delete — the agent entity record is already durably removed
-	// by the time any of them run (see store.Delete below) — so a failure
-	// here is best-effort/non-fatal, matching delete_workspace's own
-	// best-effort-cascade shape (a failed mount/delegation-store cleanup
-	// there does not stop the workspace from being deleted either).
-	// Capacity 3: one slot per cascade source (sessions, tasks, workspaces)
-	// below — a reasonable hint for the common case of zero-to-few
-	// warnings; exact per-source counts aren't known until each step runs.
-	ad.cascadeWarnings = make([]string, 0, 3)
+// AgentDeleteCascadeResult is the outcome of RunAgentDeleteCascade, the
+// shared FR-037/C-DELETE cleanup-first / record-last agent delete cascade.
+type AgentDeleteCascadeResult struct {
+	// SessionsDeleted, SessionsPreservedShared, TasksUnassigned,
+	// WorkspacesUpdated and EdgesRemoved are the per-step cleanup counts, so a
+	// caller can report exactly what the cascade did.
+	SessionsDeleted         int
+	SessionsPreservedShared int
+	TasksUnassigned         int
+	WorkspacesUpdated       int
+	EdgesRemoved            int
+	// Warnings collects every per-step cleanup failure so the caller reports
+	// what happened rather than claiming full success.
+	Warnings []string
+	// CleanupFailed is true when at least one owned-data cleanup step failed.
+	// The record was then deliberately left in place (record-last), so Deletion
+	// and DeletionErr are zero-valued and the same Delete retries idempotently.
+	CleanupFailed bool
+	// Deletion is the record-removal result and DeletionErr its error. Only
+	// meaningful when CleanupFailed is false; DeletionErr is nil on success.
+	Deletion    agentstore.MutationResult
+	DeletionErr error
+}
 
-	// store.Delete(id) — the authoritative entity-record delete — runs
-	// FIRST, before any of the irreversible cascade steps below (bug-fix,
-	// this session: sessions/tasks cascade used to run BEFORE this call,
-	// which meant a store.Delete failure was reported to the caller as a
-	// bare SAVE_FAILED with the sessions already gone and tasks already
-	// unassigned — directly contradicting this tool's own Description(),
-	// which promises "a step that fails partway through is reported in the
-	// response rather than silently swallowed". With store.Delete FIRST: if
-	// it fails, nothing destructive has happened yet — the fail-safe order.
-	// Unrelated files in the agent home are deliberately preserved; DeleteState
-	// removes only the entity and applicable SOUL bytes owned by this resource.
-	var err error
-	ad.deletionResult, err = ad.store.DeleteState(ad.id, ad.revision)
-	if err != nil {
-		if errors.Is(err, agentstore.ErrRevisionConflict) {
-			return tools.ErrorResult(errorJSON("REVISION_CONFLICT", err.Error(), "Read the agent again and retry with its current revision")), true
-		}
-		payload := map[string]any{
-			"code":               "SAVE_FAILED",
-			"message":            "agent storage deletion failed; read the agent again before retrying",
-			"persistence_status": ad.deletionResult.PersistenceStatus,
-			"activation_status":  ad.deletionResult.ActivationStatus,
-			"revision":           ad.deletionResult.Revision,
-			"changed_fields":     ad.deletionResult.ChangedFields,
-			"error_stage":        ad.deletionResult.ErrorStage,
-		}
-		return tools.ErrorResult(successJSON(payload)), true
-	}
+// RunAgentDeleteCascade performs FR-037/C-DELETE's cleanup-first, record-last
+// agent delete cascade — the SAME sequence BOTH the delete_agent tool and the
+// REST DELETE /api/v1/agents/{id} handler run, so the two entry points cannot
+// drift on the order (spec §C-DELETE: "UI/tool/API same cleanup-first/
+// record-last cascade").
+//
+// Every artifact the agent owns or that dangles off it — its solely-owned
+// sessions (with uploads), its task assignments, and its workspace core_team /
+// delegation-edge references — is cleaned FIRST. If any cleanup step fails the
+// record is deliberately left in place (CleanupFailed=true, so the record stays
+// visible) and the caller reports the agent as only PARTLY DELETED, so the same
+// Delete retries idempotently, including after a restart. Only when every
+// cleanup step succeeds is the authoritative agent entity record (with any
+// owned SOUL bytes) removed LAST, via store.DeleteState.
+//
+// omnipusHome is the resolved $OMNIPUS_HOME (see resolveOmnipusHome) and
+// revision the caller's expected record revision. The agent store is built here
+// so both callers pass identical inputs.
+func RunAgentDeleteCascade(omnipusHome, agentID, revision string) AgentDeleteCascadeResult {
+	res := AgentDeleteCascadeResult{Warnings: make([]string, 0, 3)}
 
 	// Step 1a: delete every session in the SHARED session store
 	// ($OMNIPUS_HOME/sessions/) that belongs SOLELY to this agent, together
-	// with its uploads. Runs AFTER the authoritative entity-record delete
-	// above (see that call's comment for why) — this is best-effort cascade
-	// cleanup of things that reference the now-deleted agent, mirroring
-	// cascadeCleanAgentWorkspaceReferences below. See
-	// cascadeDeleteAgentSessions's doc comment for why a session shared with
-	// another agent is deliberately left untouched rather than deleted or
-	// partially edited.
-	var sessionWarnings []string
-	ad.sessionsDeleted, ad.sessionsPreservedShared, sessionWarnings = cascadeDeleteAgentSessions(ad.omnipusHome, ad.id)
-	ad.cascadeWarnings = append(ad.cascadeWarnings, sessionWarnings...)
+	// with its uploads. See cascadeDeleteAgentSessions's doc comment for why a
+	// session shared with another agent is deliberately left untouched rather
+	// than deleted or partially edited.
+	var w []string
+	res.SessionsDeleted, res.SessionsPreservedShared, w = cascadeDeleteAgentSessions(omnipusHome, agentID)
+	res.Warnings = append(res.Warnings, w...)
 
-	// Step 1b: unassign (never delete) every GTD task currently
-	// assigned to this agent, using the same task.Store.Update primitive
-	// (and per-task locking) the ordinary task-update tools use — never a
-	// hand-rolled read-modify-write. Runs AFTER the authoritative
-	// entity-record delete above, same reasoning as Step 1a. See
+	// Step 1b: unassign (never delete) every GTD task currently assigned to
+	// this agent, using the same task.Store.Update primitive (and per-task
+	// locking) the ordinary task-update tools use. See
 	// cascadeUnassignAgentTasks's doc comment for why CreatedByAgentID is
 	// deliberately left untouched.
-	var taskWarnings []string
-	ad.tasksUnassigned, taskWarnings = cascadeUnassignAgentTasks(ad.omnipusHome, ad.id)
-	ad.cascadeWarnings = append(ad.cascadeWarnings, taskWarnings...)
+	res.TasksUnassigned, w = cascadeUnassignAgentTasks(omnipusHome, agentID)
+	res.Warnings = append(res.Warnings, w...)
 
-	// Step 2: best-effort cleanup of DANGLING REFERENCES to the
-	// now-deleted agent across every workspace — core_team membership and
-	// delegation-trust edges naming it as either side. Runs AFTER the
-	// authoritative entity-record delete above, mirroring delete_workspace's
-	// own post-record-delete cleanup of its mount/delegation stores: this is
-	// "clean up what still points at the thing that's gone", not data that
-	// belongs to the agent itself.
-	var wsWarnings []string
-	ad.workspacesUpdated, ad.edgesRemoved, wsWarnings = cascadeCleanAgentWorkspaceReferences(ad.omnipusHome, ad.id)
-	ad.cascadeWarnings = append(ad.cascadeWarnings, wsWarnings...)
+	// Step 2: cleanup of DANGLING REFERENCES to the agent across every
+	// workspace — core_team membership and delegation-trust edges naming it as
+	// either side.
+	res.WorkspacesUpdated, res.EdgesRemoved, w = cascadeCleanAgentWorkspaceReferences(omnipusHome, agentID)
+	res.Warnings = append(res.Warnings, w...)
+
+	// FR-037: if any owned-data cleanup step failed, STOP — the record must
+	// remain VISIBLE so the same Delete can retry, and the result must say the
+	// agent is only partly deleted rather than claim success.
+	if len(res.Warnings) > 0 {
+		res.CleanupFailed = true
+		return res
+	}
+
+	// Step 3 (LAST): remove the authoritative entity record and any SOUL bytes
+	// it owns. Unrelated files in the agent home are deliberately preserved;
+	// DeleteState removes only the entity and applicable SOUL bytes owned by
+	// this resource.
+	res.Deletion, res.DeletionErr = agentstore.New(omnipusHome).DeleteState(agentID, revision)
+	return res
+}
+
+// deleteAndCascade runs the shared cleanup-first, record-last cascade
+// (RunAgentDeleteCascade) and maps its outcome onto the tool result: a cleanup
+// failure or a failed record removal becomes the honest partly-deleted result
+// (the record stays visible and the same Delete retries with its current
+// revision), a stale revision becomes a REVISION_CONFLICT error, and a clean
+// run returns stop=false so Execute proceeds to reload/respond.
+func (ad *agentDeleteToolExecute) deleteAndCascade() (*tools.ToolResult, bool) {
+	res := RunAgentDeleteCascade(ad.omnipusHome, ad.id, ad.revision)
+	ad.cascadeWarnings = res.Warnings
+	ad.sessionsDeleted = res.SessionsDeleted
+	ad.sessionsPreservedShared = res.SessionsPreservedShared
+	ad.tasksUnassigned = res.TasksUnassigned
+	ad.workspacesUpdated = res.WorkspacesUpdated
+	ad.edgesRemoved = res.EdgesRemoved
+
+	if res.CleanupFailed {
+		return ad.partlyDeletedResult("cleanup"), true
+	}
+
+	ad.deletionResult = res.Deletion
+	if res.DeletionErr != nil {
+		if errors.Is(res.DeletionErr, agentstore.ErrRevisionConflict) {
+			return tools.ErrorResult(errorJSON("REVISION_CONFLICT", res.DeletionErr.Error(), "Read the agent again and retry with its current revision")), true
+		}
+		return ad.partlyDeletedResult("record_delete"), true
+	}
 	return nil, false
+}
+
+// partlyDeletedResult builds the honest FR-037 failure result: the agent's
+// owned data may already be partly cleaned, but its record is still visible and
+// the same Delete retries with the agent's current revision. It carries the
+// cascade counts already performed and the collected warnings so the caller can
+// see exactly what did and did not happen — never a bare success.
+func (ad *agentDeleteToolExecute) partlyDeletedResult(errorStage string) *tools.ToolResult {
+	body := map[string]any{
+		"success": false,
+		"error": map[string]any{
+			"code":       "SAVE_FAILED",
+			"message":    fmt.Sprintf("agent %q is partly deleted (%s failed); its record remains visible and the same delete retries with its current revision", ad.id, errorStage),
+			"suggestion": "Read the agent again and retry delete_agent with its current revision",
+		},
+		"id":                        ad.id,
+		"partly_deleted":            true,
+		"error_stage":               errorStage,
+		"persistence_status":        string(agentstore.PersistencePartial),
+		"activation_status":         string(agentstore.ActivationNotAttempted),
+		"sessions_deleted":          ad.sessionsDeleted,
+		"sessions_preserved_shared": ad.sessionsPreservedShared,
+		"tasks_unassigned":          ad.tasksUnassigned,
+		"workspaces_updated":        ad.workspacesUpdated,
+		"delegation_edges_removed":  ad.edgesRemoved,
+	}
+	if len(ad.cascadeWarnings) > 0 {
+		body["cascade_warnings"] = ad.cascadeWarnings
+	}
+	return tools.ErrorResult(successJSON(body))
 }
 
 // reload reloads live configuration and records a warning if publication fails.
@@ -1172,7 +1343,7 @@ func (ad *agentDeleteToolExecute) respond() *tools.ToolResult {
 // pkg/session's SessionMeta doc comment — PostLoad-backfilled from the
 // legacy AgentID on every disk read, so this check is safe even against
 // pre-v2 sessions). A session with MORE than one agent in AgentIDs (a
-// conversation another agent also participated in, e.g. via SwitchAgent) is
+// conversation another agent also participated in) is
 // deliberately left COMPLETELY untouched rather than partially edited:
 // there is no supported primitive to remove a single id from AgentIDs
 // (session.MetaPatch has no AgentIDs field), and hand-rolling a direct

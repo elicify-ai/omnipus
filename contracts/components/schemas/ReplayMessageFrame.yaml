@@ -3,6 +3,13 @@ description: >
   Server → client. One replayed turn entry emitted during a session replay
   (attach_session). Each entry corresponds to a user, assistant, or system
   transcript entry. The SPA reconstructs the conversation from these frames.
+  This is a CHAT PROJECTION of the session's single append-only archive, not
+  a provider-message or raw-storage type (session-core C-ARCHIVE / U2;
+  FR-004/FR-005): the archive's private model payload (model_message), its
+  body-free same-session consumption reference (type=model_ref / model_ref),
+  its trusted source/return-route provenance and its disk/byte/view marks
+  are disk-only and are never emitted on this frame, and entries that belong
+  to the model view only are not replayed.
 type: object
 required:
   - type
@@ -49,6 +56,38 @@ properties:
       (matched by this id) against the persisted entry the snapshot just replayed, so a
       message sent from this tab — or drained from the offline queue — is not duplicated
       and is not placed above history.
+  input_disposition:
+    type: object
+    readOnly: true
+    description: >
+      Read-only record that this user input was DISCARDED by Stop before it was
+      delivered into the agent's model input (session-core FR-024). Absent on
+      every delivered message. There is no client action to release or discard
+      it; the archived message bytes are unchanged and this only labels them.
+    required:
+      - message_id
+      - state
+      - reason
+    additionalProperties: false
+    properties:
+      message_id:
+        type: string
+        minLength: 1
+        maxLength: 255
+        description: The original input message id (this entry's id).
+      client_message_id:
+        type: string
+        minLength: 1
+        maxLength: 128
+        description: The sender's client_message_id, when the input carried one.
+      state:
+        type: string
+        enum:
+          - discarded
+      reason:
+        type: string
+        enum:
+          - stopped_before_delivery
   timestamp:
     type: string
     format: date-time
@@ -56,6 +95,16 @@ properties:
   agent_id:
     type: string
     description: Agent that produced this message (assistant messages only).
+  participant:
+    $ref: ./ChatParticipant.yaml
+  reply_to_participant:
+    $ref: ./ChatParticipant.yaml
+  reply_to_message_id:
+    type: string
+    minLength: 1
+    description: >
+      Present only on a guest reply (session-core FR-027): the message_id of
+      the admitted request this entry answers.
   model:
     type: string
     description: >
@@ -75,6 +124,14 @@ properties:
       replay stream (async delegation can interleave other agents'/turns' frames
       in between). Omitted for legacy entries written before turn-id stamping
       landed.
+  goal_id:
+    type: string
+    description: >
+      session-core FR-039 / C-GOAL. The goal the replayed entry's producing turn
+      was dispatched under (from TranscriptEntry.GoalID). Live, history, REST and
+      replay must retain the SAME association so the SPA joins each bubble to its
+      own exact keyed goal criteria. Absent means UNKNOWN association; a later
+      goal's frame must never rebind an earlier replayed message.
   truncated:
     type: boolean
     description: >
@@ -94,8 +151,8 @@ properties:
       why `truncated` is true: "cancelled" (the user canceled the turn
       mid-stream) or "max_output_tokens" (the provider's output-token limit
       cut the answer off before it finished). Absent on a `truncated: true`
-      frame means "cancelled" — every entry written before this field
-      existed predates it and was always a cancel.
+      frame means the reason is not recorded: readers do not default it to
+      "cancelled" or to anything else (session-core DEL-F36).
     example: "max_output_tokens"
   terminal_outcome:
     type: boolean

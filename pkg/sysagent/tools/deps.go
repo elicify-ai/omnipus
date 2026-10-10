@@ -2,8 +2,10 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Package systools implements the 33 exclusive system.* tools for the
-// Omnipus system agent per BRD Appendix D §D.4.
+// Package systools implements the exclusive system.* tools for the
+// Omnipus system agent per BRD Appendix D §D.4. The four *_in_workspace task
+// tools were retired by DEL-23 (merged into the canonical pkg/tools task
+// family); this package's remaining surface is the registry.go catalog.
 package systools
 
 import (
@@ -25,7 +27,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // Deps bundles all shared dependencies for system tools.
@@ -262,55 +263,9 @@ type Deps struct {
 	// produces a user override rather than mutating the shipped built-in in
 	// place. Nil in tests or when not wired — callers must nil-check before use.
 	SkillWriter *skills.SkillWriter
-	// DelegationDeny, when non-nil, applies the full FR-6.2 delegation policy
-	// (trust set + mode("task") + depth) to a cross-workspace task assignment or
-	// reassignment. It is the SAME gate the plain create_task / update_task tools
-	// enforce (pkg/tools/task.go), resolved dynamically from the live config for
-	// the CALLING agent — because the sysagent in_workspace tools are registered
-	// once on a central registry and cannot bind a per-agent checker at
-	// construction time.
-	//
-	// callerAgentID is the acting agent (tools.ToolAgentID(ctx)); targetAgentID is
-	// the agent_id being assigned. A nil return ALLOWS; a non-nil *tools.DelegationDenial
-	// DENIES (carrying the structured reason + policy axis the SPA renders).
-	//
-	// When nil (tests / standalone), the gate is SKIPPED (fail-open ONLY when
-	// unwired — matching how the plain tools no-op when their checker is unset).
-	// The production gateway MUST wire this; see gateway.go where sysAgentDeps is
-	// constructed.
-	DelegationDeny func(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial
-
-	// ResolveBashPolicy resolves an assignee agent's effective "bash" tool
-	// policy (ADR-049 D2 rule 5, FR-017/052, review r1 major M5) — the SAME
-	// gate the plain create_task tool enforces (pkg/tools/task.go), needed so
-	// create_task_in_workspace can reject a create whose criteria are ALL
-	// kind=check when that policy is deny or ask (structurally unsatisfiable:
-	// the machine check could never even run). Returns ok=false when the
-	// assignee agent cannot be resolved at all.
-	//
-	// FAIL CLOSED, not open, when nil (tests / standalone): an unwired
-	// checker is a configuration error, never a permission grant — mirrors
-	// the plain create_task tool's own bashPolicyChecker discipline
-	// (pkg/tools/task.go SetBashPolicyChecker), NOT DelegationDeny's
-	// documented fail-open-when-unwired convention above (a separate,
-	// pre-existing policy axis this fix does not touch). The production
-	// gateway MUST wire this; see gateway.go where sysAgentDeps is
-	// constructed.
-	ResolveBashPolicy func(assigneeAgentID string) (policy string, ok bool)
-
 	// ResolveToolPolicy returns the live compositor verdict for a registered
 	// caller. ok is false when the identity is absent or no longer registered.
 	ResolveToolPolicy func(agentID, toolName string) (policy string, ok bool)
-
-	// AssigneeCannotFinish answers whether an assignee can finish a task at all
-	// (founder decision 2026-09-15) — the SAME answer the plain create_task /
-	// update_task tools and the task run's pre-run check use (pkg/agent
-	// AgentLoop.TaskAssigneeCannotFinish): the reason naming the fix, or "".
-	// When nil (tests / standalone) no refusal is made and a warning is logged
-	// once (tools.AssigneeCannotFinishRefusal); the task run's pre-run check
-	// still ends such a task at once. The production gateway wires it where
-	// sysAgentDeps is constructed.
-	AssigneeCannotFinish tools.AssigneeReadinessChecker
 
 	// ListSessions returns all sessions across all stores (shared + legacy per-agent),
 	// deduplicating entries that appear in both. Errors are per-store and non-fatal;
@@ -333,13 +288,10 @@ type Deps struct {
 	// make get_usage under-report real spend with a green build.
 	ListSessions func() ([]*session.UnifiedMeta, []error)
 
-	// PlanStore, when non-nil, backs create_task_in_workspace's optional
-	// plan_id linkage arg (ADR-052 FR-002): validates the same-workspace FK
-	// and rejects linking to a terminal (done/failed) plan. Mirrors the
-	// plain create_task tool's SetPlanStore (pkg/tools/task.go). A nil
-	// PlanStore with a non-empty plan_id arg fails closed — never a silent
-	// no-op linkage. The production gateway wires this to the same
-	// *plan.Store instance passed to the plain create_task tool.
+	// PlanStore, when non-nil, backs the create_plan / execute_plan tool
+	// surfaces (ADR-052 FR-002). A nil PlanStore fails closed on any plan
+	// operation that needs it. The production gateway wires this to the same
+	// *plan.Store instance passed to the plain task tools.
 	PlanStore *plan.Store
 }
 

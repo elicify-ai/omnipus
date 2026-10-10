@@ -74,10 +74,8 @@ func (ts *turnState) warnAbandonedTranscriptWrite(writer string) {
 // It is a no-op when no transcript store or session ID is configured, or when
 // the turn has been marked abandoned (B4: suppresses writes from stuck goroutines).
 //
-// Bug 1 fix: the AgentID on the entry reflects the runtime-current active agent
-// (via activeAgentResolver) rather than the turn's starting agent. This ensures
-// that tool_call entries produced after a handoff carry the correct agent_id —
-// the new active agent — instead of the one that initiated the turn.
+// The AgentID on the entry is the turn's own agent (a session has one immutable
+// owner and there is no mid-turn agent switch).
 func (ts *turnState) appendToolCallTranscript(tc session.ToolCall, archiveLine ...int) (err error) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
@@ -97,49 +95,48 @@ func (ts *turnState) appendToolCallTranscript(tc session.ToolCall, archiveLine .
 				map[string]any{"session_id": ts.transcriptSessionID, "tool": tc.Tool, "error": err.Error()})
 		}
 	}()
-	var recordLine func(int) error
+	var recordAddr func(session.ArchiveAddress) error
 	if len(archiveLine) > 0 {
 		store, snap, snapshotErr := ts.resultTranscriptSnapshot(tc, archiveLine[0])
 		if snapshotErr != nil {
 			return snapshotErr
 		}
-		recordLine = func(line int) error {
-			return ts.persistResultTranscriptLine(store, snap, tc, archiveLine[0], line)
+		recordAddr = func(addr session.ArchiveAddress) error {
+			return ts.persistResultTranscriptAddr(store, snap, tc, archiveLine[0], addr)
 		}
 	}
-	// An admitted result uses the shard-locked indexed settle so its archive
-	// mapping records the actual placeholder row, not a subsequent bare-id guess.
+	// An admitted result settles the approval placeholder through its remembered
+	// address, so its archive mapping records the actual placeholder record, not a
+	// later guess. An error here is returned: a placeholder that cannot be settled
+	// is a real failure, not a reason to write a second record with the same id.
 	if tc.Status != toolCallStatusPending {
-		if _, hadPending := ts.askPendingToolCalls.Load(tc.ID); hadPending {
-			if recordLine != nil {
-				line, found, settleErr := ts.transcriptStore.ReplacePendingToolCallIndexed(ts.transcriptSessionID, ts.turnID, tc.ID, toolCallStatusPending, tc)
-				if settleErr != nil {
+		if _, hadPending := ts.askPendingToolCalls.LoadAndDelete(tc.ID); hadPending {
+			if rec, known := ts.callRecordFor(tc.ID); known {
+				if _, settleErr := ts.transcriptStore.SettleToolCall(ts.transcriptSessionID, rec.addr, toolCallStatusPending, tc); settleErr != nil {
 					return settleErr
 				}
-				if found {
-					ts.askPendingToolCalls.Delete(tc.ID)
-					return recordLine(line)
+				ts.rememberCallRecord(tc, rec.addr)
+				if recordAddr != nil {
+					return recordAddr(rec.addr)
 				}
-			} else if replaceToolCallInTranscript(ts, tc.ID, toolCallStatusPending, tc) {
-				ts.askPendingToolCalls.Delete(tc.ID)
 				return nil
 			}
-			ts.askPendingToolCalls.Delete(tc.ID)
 		}
 	}
 	entry := session.TranscriptEntry{
 		ID: string(tc.ID), Type: session.EntryTypeToolCall,
 		AgentID: ts.resolveActiveAgentID(), Timestamp: time.Now().UTC(),
-		ToolCalls: []session.ToolCall{tc}, TurnID: ts.turnID,
+		ToolCalls: []session.ToolCall{tc}, TurnID: ts.turnID, GoalID: ts.goalID,
 	}
-	if recordLine == nil {
-		return ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry)
-	}
-	line, appendErr := ts.transcriptStore.AppendTranscriptIndexed(ts.transcriptSessionID, entry)
+	addr, appendErr := ts.transcriptStore.AppendTranscriptAddressed(ts.transcriptSessionID, entry)
 	if appendErr != nil {
 		return appendErr
 	}
-	return recordLine(line)
+	ts.rememberCallRecord(tc, addr)
+	if recordAddr == nil {
+		return nil
+	}
+	return recordAddr(addr)
 }
 
 // appendIntermediateAssistantTranscript persists an assistant text segment that
@@ -193,6 +190,10 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 		// ever exercised by tests that hand-seed TurnID directly. See
 		// appendAssistantTranscript's identical fix for the full rationale.
 		TurnID: ts.turnID,
+		// GoalID (session-core FR-039 / C-GOAL): the goal this producing turn
+		// was dispatched under, so the persisted entry joins to its exact keyed
+		// goal criteria live/replay/REST alike. Empty = unknown association.
+		GoalID: ts.goalID,
 		// ParentSpawnCallID: DOCUMENTED to be non-empty only when ts is a
 		// CHILD delegation sub-turn — pre-ADR-091, the deleted spawnSubTurn
 		// stamped childTS.parentSpawnCallID before any turn processing ran.
@@ -319,7 +320,10 @@ func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bo
 		// match a real entry either, silently disabling the Truncated flag
 		// for every real cancel. Both were only ever exercised by tests that
 		// hand-seed TurnID directly on the entry.
-		TurnID:           ts.turnID,
+		TurnID: ts.turnID,
+		// GoalID (session-core FR-039 / C-GOAL): the goal this producing turn
+		// was dispatched under. Empty = unknown association.
+		GoalID:           ts.goalID,
 		Timestamp:        time.Now().UTC(),
 		Tokens:           int(turnTokens),
 		Cost:             turnCost,
@@ -595,6 +599,7 @@ func (ts *turnState) persistErrorTranscript(kind, stage string, llm LLMError, co
 		AgentID:        ts.resolveActiveAgentID(),
 		Content:        content,
 		Timestamp:      time.Now().UTC(),
+		GoalID:         ts.goalID,
 		ErrorCode:      string(llm.Code),
 		ErrorRetryable: llm.Retryable,
 		// MAJ-104/C-14: the persisted entry carries the provider_message

@@ -1,7 +1,7 @@
 // types.ts: Chat, attachment, subagent-span, rate-limit, and per-session state contracts
 
 import type { Message, ToolCall, AgentKind } from '@/lib/api'
-import type { WsReceiveFrame, WsConnection } from '@/lib/ws'
+import type { WsConnection } from '@/lib/ws'
 import type {
   GoalStatusFrame,
   LoopStatusFrame,
@@ -10,6 +10,7 @@ import type {
   SubagentStateFrame,
   MessageFrame,
   CancelFrame,
+  ServerFrame,
   LLMError as GeneratedLLMError,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
@@ -106,6 +107,13 @@ interface SubagentSpanBase {
    */
   hasRun?: boolean
   /**
+   * FR-013 / U4: set when a `subagent_message` of kind `not_delivered` arrived
+   * for this span — the server refused the child's report at an inbox cap and
+   * did not save it. `text` is the server-authored line (never the refused
+   * body). Sticky; Activity shows it as its own "Not delivered" row.
+   */
+  notDelivered?: { text?: string; at: string }
+  /**
    * ADR-091 D7 table's own status-line example, "last update N s ago":
    * the ISO timestamp (`created_at`) of the last `subagent_message` OR
    * `subagent_state` frame reduced onto this span (also seeded at
@@ -172,7 +180,7 @@ export type ChatMessage = Message & {
   /** Ordinary first-send status only; workspace kickoffs never use it. */
   firstSendStatus?: FirstSendStatus
   /** SPA-only acknowledgement state for a user-authored message. */
-  deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed'
+  deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed' | 'discarded'
   media?: MediaAttachment[]
   /**
    * Review finding 17 — the `media://` refs (opts.mediaRefs) this user
@@ -188,6 +196,15 @@ export type ChatMessage = Message & {
   spans?: SubagentSpan[]
   /** Agent that produced this message (assistant messages only). */
   agentId?: string
+  /**
+   * Goal association (FR-039): the `goal_id` of the goal this message's
+   * producing run/turn belongs to, stamped by the producer (the camelCase twin
+   * of the wire `goal_id`, matching the `turnId`/`agentId` convention above).
+   * The thinking/error indicators join on THIS exact id — `goalPills[goalId]`
+   * via `isGoalRecordEmpty` — never the session's "latest goal" scalar. Absent
+   * means an UNKNOWN association, which the indicators treat as neutral.
+   */
+  goalId?: string
   /**
    * Turn-correlation id (Fix 5c; wire field ReplayMessageFrame.turn_id, sourced
    * from TranscriptEntry.TurnID), stamped on assistant messages hydrated via WS
@@ -597,7 +614,7 @@ export interface SessionChatState {
    * message-only update and a later state-only update for the SAME span_id
    * both survive to be applied together.
    */
-  pendingSpanUpdatesBySpanId?: Record<string, { statusLine?: string; lifecycleState?: SubagentStateFrame['state']; lastUpdateAt?: string; hasRun?: boolean }>
+  pendingSpanUpdatesBySpanId?: Record<string, { statusLine?: string; lifecycleState?: SubagentStateFrame['state']; lastUpdateAt?: string; hasRun?: boolean; notDelivered?: { text?: string; at: string } }>
   /**
    * Session-scoped record of every replay_message id that has EVER been
    * merged (via the `replay_message` same-turn/same-agent coalesce branch)
@@ -651,12 +668,14 @@ export interface SessionChatState {
   goalStatus?: GoalStatusFrame | null
   /**
    * ADR-053 FE-1 / US-14: per-goal-id pill-state map. Each active goal in the
-   * session gets its own entry (keyed by `GoalStatusFrame.goal_id`, falling
-   * back to `'_default'` when the frame omits one), so a session carrying 2
-   * goals renders 2 pills + 2 timers. The bottom-right `GoalPillTray` reads
+   * session gets its own entry, keyed by exactly `GoalStatusFrame.goal_id`
+   * (DEL-F41 — no `'_default'` fallback: a frame omitting `goal_id` is an
+   * unknown association and files nothing), so a session carrying 2 goals
+   * renders 2 pills + 2 timers. The bottom-right `GoalPillTray` reads
    * this map; the legacy single `goalStatus` (above) is still maintained as a
    * derived "latest frame" for back-compat with any reader that hasn't
-   * migrated yet. Optional for the same fixture-compat reason as
+   * migrated yet — Stop's `isGoalRunning` is the live such reader. Optional
+   * for the same fixture-compat reason as
    * `toolCallOwnerMessageId` above — pre-existing test fixtures construct a
    * `SessionChatState`-shaped bucket by hand; every read site falls back to
    * `{}` and every write site initializes it.
@@ -1005,6 +1024,13 @@ export interface ChatStore {
    * existing, resend-eligible (role:'user') message.
    */
   resendMessage: (messageId: string) => void
+  /**
+   * D5 (FR-030/031 clear refresh): repeats the post-/clear transcript read
+   * AND its merge application for the session's retained clear operation —
+   * the screen's history-Retry recovery control. Never resends /clear.
+   * No-op when no clear operation owes a refresh.
+   */
+  retryClearTranscript: (sessionId: string) => void
   /** Validate an outbound MessageFrame against the generated Zod schema. Logs and dev-toasts on failure but never blocks the send. `sessionId` (the sending session, or the pending-bucket key when no session exists yet) is threaded through into the production telemetry record for operator correlation. */
   _validateOutboundFrame: (payload: unknown, sessionId?: string | null) => void
   /**
@@ -1206,7 +1232,7 @@ export interface ChatStore {
   // assistant message as 'done' so AssistantUI stops rendering it as running.
   clearStreamingState: () => void
 
-  handleFrame: (frame: WsReceiveFrame) => void
+  handleFrame: (frame: ServerFrame) => void
 }
 
 export const finishedTurnIdsBySession: Record<string, string[]> = {}

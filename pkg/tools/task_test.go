@@ -394,7 +394,7 @@ func TestTaskCreateTool_NoWorkspaceError(t *testing.T) {
 	if !result.IsError {
 		t.Fatal("expected error when no workspace can be resolved")
 	}
-	if !strings.Contains(result.ForLLM, "could not resolve workspace") {
+	if !strings.Contains(result.ForLLM, "no active workspace bound and no default workspace resolver configured") {
 		t.Errorf("unexpected error message: %s", result.ForLLM)
 	}
 }

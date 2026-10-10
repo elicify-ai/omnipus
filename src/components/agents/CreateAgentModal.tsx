@@ -38,6 +38,8 @@ import type {
   RegistryTool,
 } from '@/lib/api'
 import { findOrphanedPresetOverrideKeys, resolveToolsCfg } from '@/lib/toolPolicyPresets'
+import { AgentColor } from '@/lib/api/generated/schemas'
+import type { AgentColor as AgentColorValue, AgentFigure, AgentRole } from '@/lib/api/generated/openapi-types'
 import { isProviderUsable } from '@/lib/providerStatus'
 
 import {
@@ -107,6 +109,24 @@ function normalizeWizardType(
  *    not carry `tools_cfg` at all — the external CLI runs its own tool loop
  *    and never reaches the Tools step (2-step wizard for that type).
  */
+function isPaletteColor(value: string): value is AgentColorValue {
+  return (AgentColor.options as readonly string[]).includes(value)
+}
+
+/** Figure, role, and colour only. A colour that is not one of the ten is
+ *  omitted so the server applies Grey. */
+function identityOnCreate(payload: WizardSubmitPayload): {
+  figure?: AgentFigure
+  role?: AgentRole
+  color?: AgentColorValue
+} {
+  return {
+    ...(payload.figure ? { figure: payload.figure } : {}),
+    ...(payload.role ? { role: payload.role } : {}),
+    ...(isPaletteColor(payload.color) ? { color: payload.color } : {}),
+  }
+}
+
 function payloadToCreateRequest(
   payload: WizardSubmitPayload,
   tools: RegistryTool[],
@@ -119,8 +139,7 @@ function payloadToCreateRequest(
     const req: AgentCreateRequestSubagent3p = {
       type: 'subagent_3p',
       name,
-      color: payload.color,
-      icon: payload.icon,
+      ...identityOnCreate(payload),
       soul,
       // The external CLI is the runner; the variant requires the block.
       executor: { kind: 'external-cli' },
@@ -149,8 +168,7 @@ function payloadToCreateRequest(
     const req: AgentCreateRequestSubagent = {
       type: 'Subagent',
       name,
-      color: payload.color,
-      icon: payload.icon,
+      ...identityOnCreate(payload),
       soul,
     }
     if (description) req.description = description
@@ -172,8 +190,7 @@ function payloadToCreateRequest(
   const req: AgentCreateRequestMain = {
     type: 'Main',
     name,
-    color: payload.color,
-    icon: payload.icon,
+    ...identityOnCreate(payload),
     soul,
   }
   if (description) req.description = description

@@ -52,7 +52,6 @@ func createNativeArgs(name string) map[string]any {
 		"soul":        "You help.",
 		"model":       "test/model",
 		"color":       "#22C55E",
-		"icon":        "robot",
 	}
 }
 

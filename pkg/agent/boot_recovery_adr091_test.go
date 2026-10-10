@@ -371,19 +371,19 @@ func TestBoot_RenudgesUnconsumedEntriesOnce_EligibleOnly(t *testing.T) {
 	// marker. Without this line the fixture is the crash gap and the
 	// handback is legitimately re-woken.
 	archived := providers.Message{Role: "user", Content: deliverySummary(consumedHandback)}
-	if _, err := h.sessions.AppendWindowMessage(context.Background(), child, archived); err != nil {
+	if _, err := appendWindowMsg(h.sessions, context.Background(), child, archived); err != nil {
 		t.Fatalf("AppendWindowMessage archived handback instruction: %v", err)
 	}
 	// Instrument check: the archive write must read back from the child
 	// archive recovery's accepted-drain oracle reads — a silently swallowed
 	// append would leave the fixture asserting the very crash-gap shape it
 	// exists to rule out.
-	snap, err := h.sessions.SnapshotWindow(context.Background(), child)
+	snap, err := h.sessions.WindowView(context.Background(), child)
 	if err != nil {
 		t.Fatalf("SnapshotWindow archived handback instruction: %v", err)
 	}
 	archivedVisible := false
-	for _, line := range snap.Archive {
+	for _, line := range viewArchived(snap) {
 		if line.Role == "user" && line.Content == deliverySummary(consumedHandback) {
 			archivedVisible = true
 			break
@@ -402,7 +402,10 @@ func TestBoot_RenudgesUnconsumedEntriesOnce_EligibleOnly(t *testing.T) {
 		got = append(got, bootEnvelope(t, event.Message).MessageID)
 	}
 	slices.Sort(got)
-	if !slices.Equal(got, []string{"handback-open", "question-open"}) {
+	// FR-012: every accepted report kind is wake-eligible, so the unconsumed
+	// progress entry is re-nudged too — only the genuinely delivered
+	// (consumed) handback stays quiet.
+	if !slices.Equal(got, []string{"handback-open", "progress-open", "question-open"}) {
 		t.Fatalf("re-woken = %v", got)
 	}
 	remaining, _, _, err := h.inbox.Drain(parent, child, "", 20)
@@ -673,8 +676,10 @@ func TestBoot_ClassifiesAllClasses(t *testing.T) {
 	if steeredAfter.State != session.LifecycleNeedsInput {
 		t.Fatalf("steered parked state = %q", steeredAfter.State)
 	}
-	if legacyAfter.State != session.LifecycleFailed || legacyAfter.FailedReason != failedReasonPreADR091NotResumable {
-		t.Fatalf("legacy consequence = state %q reason %q", legacyAfter.State, legacyAfter.FailedReason)
+	// DEL-13 (session-core): boot no longer fails a legacy delegate; it is
+	// refused with a notice (asserted below) and its record is left untouched.
+	if legacyAfter.State != session.LifecycleRunning || legacyAfter.FailedReason != "" {
+		t.Fatalf("legacy record was rewritten: state %q reason %q", legacyAfter.State, legacyAfter.FailedReason)
 	}
 	if invalidAfter.State != session.LifecycleRunning {
 		t.Fatalf("invalid edge was resumed or rewritten: %q", invalidAfter.State)

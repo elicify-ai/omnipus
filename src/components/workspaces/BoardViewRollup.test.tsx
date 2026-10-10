@@ -81,13 +81,14 @@ const agentRay: Agent = {
   status: 'active',
   soul: '',
   color: '#3B82F6',
-  icon: 'MagnifyingGlass',
   timeout_seconds: 300,
   max_tool_iterations: 50,
   max_tool_iterations_source: 'global',
   max_tool_iterations_override_ignored: false,
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
   memory_enabled: true,
+  figure: 'Omnipus',
+  role: 'general',
 }
 
 const plans: Plan[] = []
@@ -153,7 +154,7 @@ describe('BoardView delegation roll-up', () => {
       ],
     })
 
-    const agentAva: Agent = { ...agentRay, id: 'ava', name: 'Ava', color: '#A855F7', icon: 'Gear' }
+    const agentAva: Agent = { ...agentRay, id: 'ava', name: 'Ava', color: '#A78BFA' }
 
     renderBoard([parentWithRollup], [agentRay, agentAva])
     showTaskInfo('Parent task')

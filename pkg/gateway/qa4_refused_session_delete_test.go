@@ -68,7 +68,26 @@ func qa4SeedOriginalEntries(t *testing.T, store *session.UnifiedStore, id string
 	for _, entry := range entries {
 		require.NoError(t, store.AppendTranscript(id, entry))
 	}
-	return entries
+	// FR-004 / C-ARCHIVE: an append-only transcript entry is a CHAT record, so
+	// the archive WRITER stamps ViewMembership "chat" on an unset membership —
+	// it refuses a caller-supplied "both" outright. The exact durable value is
+	// therefore what ReadTranscript returns, not the unstamped struct handed
+	// in; compare the before/after whole-struct checks against that read-back.
+	readBack, err := store.ReadTranscript(id)
+	require.NoError(t, err)
+	byID := make(map[string]session.TranscriptEntry, len(readBack))
+	for _, e := range readBack {
+		byID[e.ID] = e
+	}
+	out := make([]session.TranscriptEntry, 0, len(entries))
+	for _, entry := range entries {
+		got, ok := byID[entry.ID]
+		require.True(t, ok, "SETUP: seeded entry %s must be durable", entry.ID)
+		require.Equal(t, session.ViewMembershipChat, got.ViewMembership,
+			"SETUP: the archive writer stamps a chat transcript entry as ViewMembershipChat")
+		out = append(out, got)
+	}
+	return out
 }
 
 func qa4NewRefusedDeleteFixture(t *testing.T) *qa4DeleteFixture {

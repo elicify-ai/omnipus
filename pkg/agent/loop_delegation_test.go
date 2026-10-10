@@ -231,35 +231,44 @@ func TestEdgeModeCategory_ExhaustiveOverConfigModes(t *testing.T) {
 	}
 }
 
-// TestNewSysagentDelegationDeny_SelfAllowedNonSelfGated gives the cross-workspace
-// task-tool delegation gate (AgentLoop.NewSysagentDelegationDeny) its first direct
-// coverage — pr-test-analyzer confirmed it had ZERO. It backs the sysagent
-// create_task_in_workspace / update_task_in_workspace tools, so it must enforce the
-// SAME task-mode policy as the plain task tools: self-target and empty-target are
-// no-op reassignments (allowed), a trusted non-self target is allowed, an un-edged
-// non-self target is denied trust_set.
-func TestNewSysagentDelegationDeny_SelfAllowedNonSelfGated(t *testing.T) {
+// TestTaskReassignmentDelegationGate_SelfAllowedNonSelfGated covers the
+// task-reassignment delegation gate that create_task / update_task enforce
+// (buildDelegationDenyCheckerForTaskReassignment, still wired in loop_wire.go).
+// It used to be reached only through the deleted sysagent
+// create_task_in_workspace / update_task_in_workspace gate
+// (AgentLoop.NewSysagentDelegationDeny, removed by DEL-23); after that removal
+// this is the gate's direct coverage — a self-target is a no-op reassignment
+// (allowed), an EMPTY target is refused (delegation always names a target; the
+// omitted-target path was removed), a trusted non-self target is allowed, an
+// un-edged non-self target is denied trust_set.
+func TestTaskReassignmentDelegationGate_SelfAllowedNonSelfGated(t *testing.T) {
 	const callerID = "jim"
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("jim", "ava", []string{"task"}, nil), // jim→ava trusted (task)
 	})
 	al, _ := wireTestLoopWithGraph(t, callerID)
-	deny := al.NewSysagentDelegationDeny()
+	gate := buildDelegationDenyCheckerForTaskReassignment(
+		callerID, config.PerformanceConfig{}, config.DelegationModeTask,
+		delegationGateDeps{AgentExists: agentExistsChecker(al.GetRegistry())},
+	)
 
+	// Empty target: REFUSED — the omitted-target path was removed (settled
+	// design). The task tools never pass an empty target in production
+	// (create_task requires agent_id; update_task only gates a non-empty one),
+	// so this is a defensive-uniformity assertion, not a reachable path.
+	if d := gate(ctxWS(testWS, 0), ""); d == nil {
+		t.Fatal("empty target must be refused — delegation always names an explicit target")
+	}
 	// Self-target: a no-op task reassignment to the owner — allowed.
-	if d := deny(ctxWS(testWS, 0), callerID, callerID); d != nil {
+	if d := gate(ctxWS(testWS, 0), callerID); d != nil {
 		t.Fatalf("self-target task reassignment must be allowed, got deny: %+v", d)
 	}
-	// Empty target: no-op assignment — allowed.
-	if d := deny(ctxWS(testWS, 0), callerID, ""); d != nil {
-		t.Fatalf("empty target must be a no-op (allowed), got deny: %+v", d)
-	}
 	// Trusted non-self (jim→ava task edge present): allowed.
-	if d := deny(ctxWS(testWS, 0), callerID, "ava"); d != nil {
+	if d := gate(ctxWS(testWS, 0), "ava"); d != nil {
 		t.Fatalf("jim→ava is task-edged and must be allowed, got deny: %+v", d)
 	}
 	// Un-edged non-self (no jim→ray edge): DENIED trust_set.
-	d := deny(ctxWS(testWS, 0), callerID, "ray")
+	d := gate(ctxWS(testWS, 0), "ray")
 	if d == nil {
 		t.Fatal("jim→ray (no edge) must be DENIED, got allow")
 	}

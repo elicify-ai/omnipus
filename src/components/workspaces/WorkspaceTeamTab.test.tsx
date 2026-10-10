@@ -13,6 +13,7 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Agent, Workspace, WorkspaceDelegation } from '@/lib/api'
+import { makeAgent } from '@/test/factories'
 import { useUiStore } from '@/store/ui'
 import type { WorkspaceTeamGraphProps } from './team/WorkspaceTeamGraph'
 
@@ -37,21 +38,19 @@ beforeAll(() => {
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 function agent(id: string, over: Partial<Agent> = {}): Agent {
-  return {
+  return makeAgent({
     id,
     name: id.charAt(0).toUpperCase() + id.slice(1),
     type: 'Main',
     locked: false,
     status: 'active',
     soul: '',
-    heartbeat: '',
-    instructions: '',
     timeout_seconds: 60,
     max_tool_iterations: 10,
-    heartbeat_enabled: false,
-    heartbeat_interval: 0,
+    figure: 'Omnipus',
+    role: 'general',
     ...over,
-  } as Agent
+  })
 }
 
 const WORKSPACE: Workspace = {

@@ -426,9 +426,9 @@ func backgroundCompletionResult(sessionID string, status SessionStatus, exitCode
 		summary = fmt.Sprintf("Background session %s finished (exit code %d).\n\n%s", sessionID, exitCode, output)
 		isError = false
 	default:
-		// Unexpected status reaching this switch (e.g. StatusRunning/
-		// StatusExited, which should never be the FINAL status a completion
-		// goroutine observes) — keep the same generic-failure fallback the
+		// Unexpected status reaching this switch (e.g. StatusRunning, which
+		// should never be the FINAL status a completion goroutine observes) —
+		// keep the same generic-failure fallback the
 		// pre-existing default case used, so an unforeseen future status
 		// still produces a safe (loud, not silently-successful) result.
 		summary = fmt.Sprintf("Background session %s finished (exit code %d).\n\n%s", sessionID, exitCode, output)

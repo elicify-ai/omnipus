@@ -499,7 +499,7 @@ func (a *restAPI) HandleTranscribe(w http.ResponseWriter, r *http.Request) {
 	res, err := transcriber.Transcribe(r.Context(), tmpPath)
 	if err != nil {
 		slog.Error("transcribe: transcription failed", "provider", transcriber.Name(), "error", err)
-		jsonErr(w, http.StatusBadGateway, "transcription failed: "+err.Error())
+		jsonErr(w, http.StatusBadGateway, "transcription failed: the transcription provider could not process the audio. Details are in the server log.")
 		return
 	}
 

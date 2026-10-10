@@ -42,7 +42,7 @@ func TestDelegateTool_ExecuteRejectsInvalidRunInput(t *testing.T) {
 		{name: "missing task", args: map[string]any{"label": "test"}, want: "task is required"},
 		{name: "blank task", args: map[string]any{"task": " \t\n"}, want: "task is required"},
 		{name: "wrong task type", args: map[string]any{"task": 123}, want: "task is required"},
-		{name: "retired async", args: map[string]any{"task": "work", "async": true}, want: "invalid_argument: async"},
+		{name: "retired async", args: map[string]any{"task": "work", "agent_id": "worker", "async": true}, want: "invalid_argument: async"},
 		{name: "invalid action", args: map[string]any{"action": "bogus"}, want: "invalid action"},
 		// ADR-20261004: follow_up and cancel are gone with NO alias — both must
 		// hit the invalid-action error, and that error must point at the new

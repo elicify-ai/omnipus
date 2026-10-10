@@ -4,95 +4,50 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// TestNewCommand_ResolveAndExecuteByName covers the canonical /new command
-// the way a user types it. /new was renamed from /clear (cmd_clear.go); a
-// rename with no test behind it is how a command silently stops resolving.
-func TestNewCommand_ResolveAndExecuteByName(t *testing.T) {
-	reg := NewRegistry(BuiltinDefinitions())
-
-	def, ok := reg.Lookup("new")
-	if !ok {
-		t.Fatal(`Lookup("new") not found — the canonical name must resolve`)
+func TestClearCommand_RegisteredWithoutAliasAndNewStaysRetired(t *testing.T) {
+	var clear *Definition
+	for _, d := range BuiltinDefinitions() {
+		d := d
+		assert.NotEqual(t, "new", d.Name, "/new is retired (FR-031)")
+		assert.NotContains(t, d.Aliases, "new")
+		assert.NotContains(t, d.Aliases, "clear")
+		if d.Name == "clear" {
+			clear = &d
+		}
 	}
-	if def.Name != "new" {
-		t.Fatalf(`Lookup("new").Name=%q, want "new"`, def.Name)
-	}
-
-	rt := &Runtime{ClearHistory: func() error { return nil }}
-	ex := NewExecutor(reg, rt)
-
-	var reply string
-	res := ex.Execute(context.Background(), Request{
-		Channel: "cli",
-		Text:    "/new",
-		Reply:   func(text string) error { reply = text; return nil },
-	})
-	if res.Outcome != OutcomeHandled {
-		t.Fatalf("/new: outcome=%v, want=%v", res.Outcome, OutcomeHandled)
-	}
-	if reply != "Chat history cleared!" {
-		t.Fatalf("/new reply=%q, want %q", reply, "Chat history cleared!")
-	}
+	require.NotNil(t, clear, "/clear must be a canonical server command")
+	assert.Empty(t, clear.Aliases)
+	assert.False(t, clear.Hidden)
+	assert.Equal(t, DeliveryAgent, clear.EffectiveDelivery(), "the server executes /clear")
+	assert.NotNil(t, clear.Handler)
 }
 
-// TestClearAlias_ExecutesNewCommand verifies the hidden /clear alias still
-// resolves to the same definition and executes its handler (CLI/channel
-// muscle memory). Dropping the Aliases entry in cmd_clear.go breaks this.
-func TestClearAlias_ExecutesNewCommand(t *testing.T) {
-	rt := &Runtime{ClearHistory: func() error { return nil }}
-	ex := NewExecutor(NewRegistry(BuiltinDefinitions()), rt)
-
+func runClear(t *testing.T, rt *Runtime) (string, error) {
+	t.Helper()
 	var reply string
-	res := ex.Execute(context.Background(), Request{
-		Channel: "telegram",
-		Text:    "/clear",
-		Reply:   func(text string) error { reply = text; return nil },
-	})
-	if res.Outcome != OutcomeHandled {
-		t.Fatalf("/clear: outcome=%v, want=%v", res.Outcome, OutcomeHandled)
-	}
-	if res.Command != "new" {
-		t.Fatalf("/clear resolved to command=%q, want \"new\"", res.Command)
-	}
-	if reply != "Chat history cleared!" {
-		t.Fatalf("/clear reply=%q, want %q", reply, "Chat history cleared!")
-	}
+	err := clearHandler()(context.Background(), Request{Reply: func(s string) error { reply = s; return nil }}, rt)
+	return reply, err
 }
 
-// TestNewCommand_ErrorAndUnavailablePaths covers the failure paths the
-// handler itself implements: ClearHistory returning an error, and a Runtime
-// without the ClearHistory dependency.
-func TestNewCommand_ErrorAndUnavailablePaths(t *testing.T) {
-	ex := NewExecutor(NewRegistry(BuiltinDefinitions()), &Runtime{
-		ClearHistory: func() error { return errors.New("disk full") },
-	})
+func TestClearHandler_Outcomes(t *testing.T) {
+	reply, err := runClear(t, &Runtime{ClearHistory: func() error { return nil }})
+	require.NoError(t, err)
+	assert.Contains(t, reply, "Context cleared")
 
-	var reply string
-	res := ex.Execute(context.Background(), Request{
-		Channel: "cli",
-		Text:    "/new",
-		Reply:   func(text string) error { reply = text; return nil },
-	})
-	if res.Outcome != OutcomeHandled {
-		t.Fatalf("outcome=%v, want=%v", res.Outcome, OutcomeHandled)
-	}
-	if reply != "Failed to clear chat history: disk full" {
-		t.Fatalf("reply=%q, want failure message", reply)
-	}
+	reply, err = runClear(t, &Runtime{ClearHistory: func() error { return &ClearRefusedError{Reason: "only in a main or extra chat"} }})
+	require.NoError(t, err)
+	assert.Equal(t, "only in a main or extra chat", reply, "a refusal explains itself to the person")
 
-	exNoDep := NewExecutor(NewRegistry(BuiltinDefinitions()), &Runtime{})
-	reply = ""
-	res = exNoDep.Execute(context.Background(), Request{
-		Channel: "cli",
-		Text:    "/new",
-		Reply:   func(text string) error { reply = text; return nil },
-	})
-	if res.Outcome != OutcomeHandled {
-		t.Fatalf("no-dep outcome=%v, want=%v", res.Outcome, OutcomeHandled)
-	}
-	if reply != unavailableMsg {
-		t.Fatalf("no-dep reply=%q, want %q", reply, unavailableMsg)
-	}
+	boom := errors.New("disk failed")
+	_, err = runClear(t, &Runtime{ClearHistory: func() error { return boom }})
+	assert.ErrorIs(t, err, boom, "a real failure is returned, never reported as cleared")
+
+	reply, err = runClear(t, &Runtime{})
+	require.NoError(t, err)
+	assert.Equal(t, unavailableMsg, reply)
 }

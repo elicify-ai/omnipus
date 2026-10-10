@@ -25,6 +25,39 @@ func (te *TaskExecutor) persistTaskSessionBinding(taskID, sessionID string) (*ta
 		taskID, errors.Join(firstErr, retryErr))
 }
 
+// boundSessionRetryable is StartTaskNow's non-launcher idempotency gate (S1):
+// it decides whether an already-bound session may be returned as-is. Returns nil
+// only when the durable-lifecycle subsystem is unwired (the documented
+// test-harness/degraded-boot seam — dispatch proceeds as before the wave) OR the
+// bound session's classification record exists AND the task is not Failed.
+// Otherwise it returns an error naming the recorded failure, so a second
+// StartTaskNow after a failed pre-dispatch setup never reports a false retry
+// success — it starts nothing and tells the caller to Rerun.
+func (te *TaskExecutor) boundSessionRetryable(t *task.Task) error {
+	if t == nil || t.SessionID == "" {
+		return nil
+	}
+	ls := te.getLifecycleStore()
+	if ls == nil {
+		// No durable record to verify against — the harness seam.
+		return nil
+	}
+	if _, err := ls.Load(t.SessionID); err != nil {
+		return fmt.Errorf(
+			"task_executor: task %q is bound to session %q whose runtime classification was never persisted "+
+				"(a prior dispatch failed before it could start); Rerun the task", t.ID, t.SessionID)
+	}
+	if t.Status == task.StatusFailed {
+		reason := t.Result
+		if reason == "" {
+			reason = "the previous run failed before it could start"
+		}
+		return fmt.Errorf(
+			"task_executor: task %q is Failed (%s); Rerun the task to start a new run", t.ID, reason)
+	}
+	return nil
+}
+
 // failTaskBeforeDispatch makes a session-setup failure visible without running
 // a worker. Unlike the log-only failTask helper, it retains a Failed-write
 // error alongside the setup cause so the dispatch caller can see both.

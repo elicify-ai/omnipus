@@ -2,7 +2,6 @@ package agent
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -18,7 +17,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
-	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
@@ -370,8 +368,13 @@ func (nai *newAgentInstance) prepareIdentity() {
 		nai.skillsFilter = nai.agentCfg.Skills
 	}
 
-	sessionsDir := filepath.Join(nai.workspace, "sessions")
-	nai.sessions = initSessionStore(sessionsDir, nai.agentID, omnipusHome())
+	// DEL-10: every agent shares the ONE session store; there is no per-agent
+	// store and no fallback to another kind of store.
+	sharedStore, storeErr := openSharedSessionStore(sessionsHomeFor(nai.cfg))
+	if storeErr != nil {
+		panic(fmt.Sprintf("agent %q: %v", nai.agentID, storeErr))
+	}
+	nai.sessions = sharedStore
 
 	// WithToolDiscovery gates the "Tool Discovery" prompt section on the
 	// 3-tier tool-manifest system (cfg.Tools.Manifest.Compressed, default ON)
@@ -1365,41 +1368,11 @@ func mediaTempDirPattern() string {
 	return "^" + regexp.QuoteMeta(filepath.Clean(media.TempDir())) + "(?:" + sep + "|$)"
 }
 
-// Close releases resources held by the agent's session store.
+// Close releases the agent's own resources. The session store is shared by every
+// agent and closed once, by the loop that owns it (AgentLoop.Close), never here:
+// a discarded duplicate instance must not close the store live turns are using.
 func (a *AgentInstance) Close() error {
-	if a.Sessions != nil {
-		return a.Sessions.Close()
-	}
 	return nil
-}
-
-// initSessionStore creates the unified session store for an agent.
-// homePath is the ~/.omnipus/ root so that uploads cascade-delete on
-// DeleteSession finds the correct <homePath>/uploads/<sessionID> path
-// regardless of how deep the store's baseDir is in the directory tree (N-B fix).
-// Falls back to the JSONL backend if the unified store cannot be initialized.
-func initSessionStore(dir, agentID, homePath string) session.SessionStore {
-	us, err := session.NewUnifiedStoreWithHome(dir, homePath)
-	if err != nil {
-		logger.ErrorCF("agent", "UnifiedStore init failed; falling back to JSONL backend",
-			map[string]any{"dir": dir, "error": err.Error()})
-		store, storeErr := memory.NewJSONLStore(dir)
-		if storeErr != nil {
-			logger.ErrorCF("agent", "JSONL store fallback also failed; using SessionManager",
-				map[string]any{"error": storeErr.Error()})
-			return session.NewSessionManager(dir)
-		}
-		if n, merr := memory.MigrateFromJSON(context.Background(), dir, store); merr != nil {
-			logger.ErrorCF("agent", "Memory migration failed; falling back to SessionManager",
-				map[string]any{"error": merr.Error()})
-			store.Close()
-			return session.NewSessionManager(dir)
-		} else if n > 0 {
-			logger.InfoCF("agent", "Memory migrated to JSONL", map[string]any{"sessions_migrated": n})
-		}
-		return session.NewJSONLBackend(store)
-	}
-	return us
 }
 
 // omnipusHome returns the Omnipus data directory.

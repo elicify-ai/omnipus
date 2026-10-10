@@ -72,6 +72,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "SegmentedControl [check:segmented-control-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[data-testid=\"segment-view\"]", "attribute": "aria-pressed", "value": "true" }],
       "applicable": true
     },
     {

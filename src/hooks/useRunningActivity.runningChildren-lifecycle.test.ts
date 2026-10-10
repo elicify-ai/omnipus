@@ -29,6 +29,7 @@ import React from 'react'
 import { useChatStore } from '@/store/chat'
 import type { ChatMessage, SubagentSpan } from '@/store/chat'
 import type { Agent, ToolCall } from '@/lib/api'
+import { makeAgent } from '@/test/factories'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -49,7 +50,7 @@ function makeClient() {
 }
 
 const AGENTS: Agent[] = [
-  { id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', icon: 'compass' } as Agent,
+  makeAgent({ id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active' }),
 ]
 
 function makeAssistantMessage(spans: SubagentSpan[]): ChatMessage {
@@ -136,6 +137,14 @@ describe('useRunningActivity — runningChildren is exactly-lifecycleState-runni
     client.clear()
   })
 
+  // Re-pinned to the settled rule (spec DEL-F27, commit a5789fb5c — UF2): an
+  // open `subagent_start` bracket with no `lifecycleState` yet maps to
+  // 'parked' — pending, not executing — and the guessed `span.status`
+  // fallback is gone (the old assertion here had the span in `running`;
+  // uf2_running-activity-attribution.test.ts pins the opposite). The span is
+  // therefore not running activity at all: absent from `running` (and so
+  // from runningChildren), retained among recentlyFinished until a
+  // `subagent_state` frame arrives.
   it('a span with no lifecycleState yet (subagent_start received, no subagent_state yet) does not count toward runningChildren', async () => {
     vi.mocked(fetchAgents).mockResolvedValue(AGENTS)
     const client = makeClient()
@@ -152,8 +161,11 @@ describe('useRunningActivity — runningChildren is exactly-lifecycleState-runni
     const { result } = renderHook(() => useRunningActivity(), { wrapper: makeWrapper(client) })
 
     await waitFor(() => {
-      expect(result.current.running).toHaveLength(1)
+      expect(result.current.recentlyFinished.map((item) => ({ key: item.key, status: item.status }))).toStrictEqual([
+        { key: 'span-no-state-yet', status: 'parked' },
+      ])
     })
+    expect(result.current.running).toHaveLength(0)
     expect(result.current.runningChildren).toBe(0)
     client.clear()
   })

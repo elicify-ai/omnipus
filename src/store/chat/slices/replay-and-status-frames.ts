@@ -8,10 +8,6 @@ import { generateId } from '@/lib/constants'
 import { useUiStore } from '@/store/ui'
 import { queryClient } from '@/lib/queryClient'
 import type {
-  WsReplayMessageFrame,
-  WsRateLimitFrame,
-} from '@/lib/ws'
-import type {
   WhatsAppPairingFrame,
   KnowledgeIndexProgressFrame,
   NotificationFrame,
@@ -21,6 +17,8 @@ import type {
   PlanStatusFrame,
   AskUserQuestionFrame,
   SessionStateFrame,
+  ReplayMessageFrame,
+  RateLimitFrame,
   BrowserHandoverNoticeFrame,
   GoalOutcomeFrame,
   ContextWindowNoticeFrame,
@@ -41,6 +39,7 @@ import {
   readLLMErrorFromReplayFrame,
 } from '@/lib/llm-error'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { noteServerAttentionFrame } from '@/store/session/foregroundAck'
 import { buildBrowserHandoverInsertion, buildGoalAckInsertion, evictGoalPillsOverCap, mergeGoalPillFrame } from '../goals'
 import { MAX_MESSAGES_PER_SESSION, evictMessageFromBucket, findAssistantMessageIdByTurnId, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { isTurnFinished, schedulePlanStatusInvalidate } from '../routing'
@@ -71,27 +70,36 @@ interface ReplayAndStatusFrameContext {
 // `id` equals) and RE-KEYED to the server's real id — safe here
 // specifically because this is a RECONNECT replay, not the live first send:
 // message_status for this client_message_id (the only OTHER reader keyed on
-// it) already ran on an earlier connection cycle. Returns true when it
-// handled (deduped) the frame — the caller must return without any further
-// processing of this replay_message.
+// it) already ran on an earlier connection cycle.
+//
+// FR-024 (session-core, BDD-07.3): when the replayed stored entry carries
+// `input_disposition.state === 'discarded'` (Stop discarded this input
+// before it was delivered), the reconciled bubble resolves to the same quiet
+// 'discarded' deliveryStatus the live message_status frame stamped — never
+// 'received', which would contradict the server's stored truth. Absent
+// disposition keeps the historical 'received'.
+// Returns true when it handled (deduped) the frame — the caller must return
+// without any further processing of this replay_message.
 function reconcileOwnOptimisticBubble(
   draft: SessionChatState,
   clientMessageId: string | undefined,
   messageId: string | undefined,
   role: string,
+  inputDiscarded: boolean,
   targetSid: string | null,
 ): boolean {
   if (!clientMessageId || !draft.messageOrder.includes(clientMessageId) || clientMessageId === messageId) {
     return false
   }
+  const resolvedDeliveryStatus = inputDiscarded ? 'discarded' as const : 'received' as const
   const idx = draft.messageOrder.indexOf(clientMessageId)
   const existing = draft.messagesById[clientMessageId]
   if (messageId) {
     delete draft.messagesById[clientMessageId]
-    draft.messagesById[messageId] = { ...existing, id: messageId, deliveryStatus: 'received' }
+    draft.messagesById[messageId] = { ...existing, id: messageId, deliveryStatus: resolvedDeliveryStatus }
     draft.messageOrder[idx] = messageId
   } else {
-    existing.deliveryStatus = 'received'
+    existing.deliveryStatus = resolvedDeliveryStatus
   }
   console.warn('chat.replay_dedup_skipped', { id: messageId, role, reason: 'client-message-id-match' })
   logDiagnostic('chatReplayDedupSkipped', { messageId, role, reason: 'client-message-id-match', sessionId: targetSid })
@@ -152,6 +160,17 @@ function handleSessionStateFrame(
   // ADR-082 review fix opens/marks the bubble first and this done
   // becomes a no-op for placeholder purposes.
   if (!targetSid) return
+  // FR-047 (C-ATTENTION): the attach response's attention_bound lives on THIS
+  // SessionStateFrame — per the contract it is "part of both the incremental
+  // catch-up and the full snapshot, so either attach answer can carry the
+  // bound" (the generated SessionSnapshotFrame has no such field). Remember
+  // this frame as the session's server attention frame so a later
+  // shown-commit acknowledgement can read the bound off it. Only an attach
+  // emit carries session_id (the connection-open emit does not), so a
+  // bound-less open emit can never overwrite a remembered bound.
+  if (frame.session_id) {
+    noteServerAttentionFrame(targetSid, frame)
+  }
   // ADR-092 review finding D: a page reload or gateway reconnect re-fetches
   // this frame, but a plain WS reconnect never replays a fresh
   // session_mode_updated ack — that only fires from a LIVE
@@ -481,7 +500,7 @@ function handleTurnCanceledReplayEntry({
   targetSid,
   withBucket,
 }: {
-  replayFrame: WsReplayMessageFrame
+  replayFrame: ReplayMessageFrame
   targetSid: string
   withBucket: ReplayAndStatusFrameContext['withBucket']
 }): void {
@@ -570,7 +589,7 @@ function handleReplayMessageFrame({
 }): void {
   if (!targetSid) return
   sawReplayMessageThisTurn[targetSid] = true
-  const replayFrame = frame as WsReplayMessageFrame
+  const replayFrame = frame as ReplayMessageFrame
   // FR-16 / Fix 5c: turn_canceled entries are metadata-only and must
   // never render as their own chat bubble. ReplayMessageFrame carries
   // no status/truncated field, so — unlike a fresh REST cold-load,
@@ -622,13 +641,21 @@ function handleReplayMessageFrame({
     replayFrame.truncated,
     replayFrame.truncation_reason,
   )
+  // FR-024 (session-core, BDD-07.3/BDD-09.4): the read-only
+  // `input_disposition` marker on a stored user entry — Stop discarded this
+  // input before it was delivered into the agent's model input. Mapped onto
+  // the SAME quiet deliveryStatus the live `message_status` frame stamps, so
+  // a reload or reconnect replay shows the identical "Not delivered" status —
+  // never an error, and the archived text is kept. Absent on every delivered
+  // entry, so today's rendering is unchanged there.
+  const replayInputDiscarded = replayFrame.input_disposition?.state === 'discarded'
   withBucket(targetSid, (b) => {
     return produce(b, (draft) => {
       // Cursor advancement is handled centrally before the switch (I1);
       // no per-case advance needed here.
       const msgs = getMessages(b)
       // #823 Opus review round 2 item 2 — see reconcileOwnOptimisticBubble above.
-      if (reconcileOwnOptimisticBubble(draft, replayFrame.client_message_id, messageId, role, targetSid)) return
+      if (reconcileOwnOptimisticBubble(draft, replayFrame.client_message_id, messageId, role, replayInputDiscarded, targetSid)) return
       // Reconnection dedup: prefer server-assigned id match when present;
       // fall back to (content + role + timestamp) tuple. Content-only dedup
       // was silently dropping legitimate identical user retries.
@@ -763,6 +790,10 @@ function handleReplayMessageFrame({
         ...(replayTruncated && role === 'assistant'
           ? { truncated: true as const, truncationReason: replayTruncationReason }
           : {}),
+        // FR-024 — the discarded-input marker exists on user entries only
+        // (role-gated like turnId/model above): the minted bubble carries the
+        // same quiet deliveryStatus the live path showed before the reload.
+        ...(replayInputDiscarded && role === 'user' ? { deliveryStatus: 'discarded' as const } : {}),
       }
       draft.messagesById[newMsg.id] = newMsg
       // #823 Opus review round 2 item 2 (founder decision Q1): a
@@ -987,7 +1018,7 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
           // rate_limit get filed under whatever session happened to be
           // active).
           if (!targetSid) break
-          const rlFrame = frame as WsRateLimitFrame
+          const rlFrame = frame as RateLimitFrame
           const event: RateLimitEventData = {
             scope: rlFrame.scope,
             resource: rlFrame.resource,
@@ -1005,12 +1036,12 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
           // SESSION_SCOPED_FRAME_TYPES above) — targetSid is already
           // resolved/dropped per the routing rules at the top of handleFrame.
           //
-          // PER-GOAL-ID pill map (FE-1): the frame carries `goal_id` (optional
-          // — the §6 compat shim may omit it for a single-goal session). Key
-          // the pill map by goal_id (falling back to '_default' when absent) so
-          // a session with 2 goals shows 2 pills. Also maintain the legacy
-          // single `goalStatus` (latest frame across all goals) for back-compat
-          // with GoalIndicator's loop-only rendering path. The tray/pill
+          // PER-GOAL-ID pill map (FE-1): the frame carries `goal_id`. Key the
+          // pill map by exactly that goal_id so a session with 2 goals shows 2
+          // pills (DEL-F41: no `'_default'` fallback — an absent goal_id files
+          // nothing). Also maintain the legacy single `goalStatus` (latest
+          // frame across all goals) for back-compat with GoalIndicator's
+          // loop-only rendering path AND Stop's isGoalRunning. The tray/pill
           // components still decide whether/how to RENDER each state — no
           // special-casing of that kind here (GoalPillTray owns the "keep a
           // terminal pill visible briefly, then stop showing it" behaviour).
@@ -1029,18 +1060,17 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
           // now?) — the render policy the comment above still refers to is
           // untouched.
           //
-          // ADR-088 D5 store hygiene: an EMPTY-goal_id frame (the '_default'
-          // key) was root cause #2 of the 2026-09-07 UX trace — the deleted
-          // `queued` emission carried no `goal_id`, landed on '_default', and
-          // was never overwritten once the later keyed `active` frame arrived
-          // under a different key, so the stale card rendered forever. The
-          // `queued` emission itself is gone (ADR-088 D9), but a keyed frame
-          // arriving for this session still evicts any lingering '_default'
-          // pill defensively — harmless once no frame is ever emitted with an
-          // empty goal_id, cheap insurance against any stale/legacy one.
+          // DEL-F41 (FR-039): an EMPTY-goal_id frame is an UNKNOWN
+          // association and files NO pill at all — the invented `'_default'`
+          // compatibility key is removed outright. The old `'_default'`
+          // eviction dance (ADR-088 D5) existed only to evict that compat
+          // entry once a keyed frame arrived; with the entry never minted,
+          // there is nothing to evict. An unknown goal can never be matched
+          // to the exact keyed criteria the thinking/error indicators read,
+          // so it stays neutral.
           //
           // ADR-088 code-review round 1, Finding 1 (HIGH): the pill for
-          // `pillKey` is no longer stored verbatim — it goes through
+          // the goal's own key is no longer stored verbatim — it goes through
           // `mergeGoalPillFrame` so a routine, criteria-less progress frame
           // cannot clobber a record a prior `set_goal` write already
           // authored. `goalStatus` (the legacy single latest-frame selector,
@@ -1050,23 +1080,30 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
           // doc comment for the merge rule.
           if (!targetSid) break
           const goalFrame = frame as GoalStatusFrame
-          const pillKey = goalFrame.goal_id && goalFrame.goal_id.length > 0 ? goalFrame.goal_id : '_default'
+          // DEL-F41 (FR-039): the pill key is the frame's OWN goal_id and
+          // nothing else — an unknown association (a frame carrying no
+          // goal_id at all) mints NO `_default` compatibility key.
+          const goalId = goalFrame.goal_id && goalFrame.goal_id.length > 0 ? goalFrame.goal_id : null
           withBucket(targetSid, (b) => {
-            const storedPill = b.goalPills?.[pillKey]
-            const mergedPill = mergeGoalPillFrame(storedPill, goalFrame)
-            const merged = { ...(b.goalPills ?? {}), [pillKey]: mergedPill }
-            if (pillKey !== '_default') {
-              delete merged['_default']
-            }
             // Operator-reported UX fix (2026-09-08): the goal-ack line — see
             // buildGoalAckInsertion's doc comment above for the full design
             // (why this frame, why idempotent-by-goal_id, and the durability
             // tradeoff vs. a persisted transcript anchor). Applied in the
-            // SAME withBucket pass as the pill-map update above (one set()
+            // SAME withBucket pass as the pill-map update below (one set()
             // call) rather than a second withBucket, so a reattach that
             // fires both the pill update and the first-ever ack insertion
             // renders as one atomic state transition, not two.
             const ackInsertion = buildGoalAckInsertion(b, goalFrame)
+            // Unknown association: no keyed pill (DEL-F41). The legacy scalar
+            // `goalStatus` is still written verbatim — KEEP (FR-039): Stop's
+            // isGoalRunning reads it — but `goalPills` (the exact-keyed join
+            // the thinking/error indicators read) gets no entry.
+            if (!goalId) {
+              return { goalStatus: goalFrame, ...ackInsertion }
+            }
+            const storedPill = b.goalPills?.[goalId]
+            const mergedPill = mergeGoalPillFrame(storedPill, goalFrame)
+            const merged = { ...(b.goalPills ?? {}), [goalId]: mergedPill }
             return {
               goalStatus: goalFrame,
               goalPills: evictGoalPillsOverCap(merged),
@@ -1233,12 +1270,22 @@ export function handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, 
           // handleFrame, so frame.session_id (which enqueue reads directly)
           // is guaranteed present here.
           useToolApprovalStore.getState().enqueue(frame)
+          // session-core-build-20261008 ARCHITECT-ANSWER-U8-U11, U11 N2:
+          // approval frames carry the HELPER's session id, never the main's,
+          // so the frame itself must never be matched against mains. The
+          // roster refetch is what lets a main's needs_attention refresh
+          // from server truth.
+          void queryClient.invalidateQueries({ queryKey: ['sessions'] })
           break
 
         case 'tool_approval_resolved':
           // The server closed this approval (a decision from any tab, timeout,
           // Stop, agent deletion, shutdown) — drop it here and keep it dropped.
           useToolApprovalStore.getState().markResolved(frame.approval_id)
+          // U11 N2, same reasoning as tool_approval_required above: any
+          // approval frame refreshes the roster; the frame's helper session
+          // id is never matched against mains.
+          void queryClient.invalidateQueries({ queryKey: ['sessions'] })
           break
 
         case 'session_state': {

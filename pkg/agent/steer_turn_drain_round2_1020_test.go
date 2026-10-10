@@ -287,7 +287,6 @@ func TestSteeredTurnDrain1020_SteeringAllLaterMarkerFailureDoesNotLoseConsumedPr
 		t.Fatal("SETUP: default test agent is not registered")
 	}
 	agent.Provider = provider
-	al.SetSteeringMode(SteeringAll)
 
 	originalBackoff := continueDrainBackoff
 	continueDrainBackoff = []time.Duration{0, 0, 0}

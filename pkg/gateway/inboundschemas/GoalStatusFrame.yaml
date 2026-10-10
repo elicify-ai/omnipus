@@ -96,7 +96,6 @@ properties:
   state:
     type: string
     enum:
-      - queued
       - active
       - waiting_on_user
       - judge_unavailable
@@ -113,8 +112,7 @@ properties:
       ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk
       (originally 8 states, superseding the earlier 4-value
       active/paused_judge_unavailable/brake_fired/cleared set — no
-      back-compat at the time). `queued` retained for wire compatibility;
-      never emitted since ADR-088 (work-first goal flow). `active`
+      back-compat at the time). `queued` is retired (ADR-088 work-first goal flow; session-core C-GOAL) and no longer a wire value. `active`
       iterating normally (lifecycle default overlay). `waiting_on_user` a typed `GOAL_STATUS:
       waiting_on_user` pause, OR `needs_input`/`paused` for any other
       reason — cancel-soft grace, etc. (lifecycle). `judge_unavailable`
@@ -173,9 +171,8 @@ properties:
       technical payload, commands verbatim) so the confirmation surface
       shows exactly what will run. SHAPE DECISION (documented per D5.2's
       "implementation chooses"): an ADDITIVE OPTIONAL field on
-      GoalStatusFrame — not a sibling GoalEchoFrame — because the pending
-      (`state: queued`) pill already reaches GoalThreadTailCards through
-      this frame and the breakdown is the same lifecycle datum; items $ref
+      GoalStatusFrame — not a sibling GoalEchoFrame — because the breakdown is the same lifecycle datum the goal
+      pill already carries; items $ref
       the canonical AcceptanceCriterion (never a third criteria shape).
       Present on the `active` emission that follows a goal record
       register/update (ADR-088 `set_goal`) or marker activation; absent

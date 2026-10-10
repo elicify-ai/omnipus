@@ -216,7 +216,7 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 		seedMsgs = append(seedMsgs, providers.Message{Role: "user", Content: turnText})
 		seedMsgs = append(seedMsgs, providers.Message{Role: "assistant", Content: turnText})
 	}
-	agent.Sessions.SetHistory(sessionKey, seedMsgs)
+	seedWindowHistory(agent.Sessions, sessionKey, seedMsgs)
 	require.NoError(t, agent.Sessions.Save(sessionKey))
 
 	historyBefore := agent.Sessions.GetHistory(sessionKey)
@@ -305,7 +305,7 @@ func TestSwitchTime_EmptySession_NoSyntheticMessage(t *testing.T) {
 	require.NotEqual(t, oldModel, newModel)
 
 	const sessionKey = "empty-session"
-	agent.Sessions.SetHistory(sessionKey, nil)
+	seedWindowHistory(agent.Sessions, sessionKey, nil)
 	require.NoError(t, agent.Sessions.Save(sessionKey))
 
 	updatedAgent, err := al.handleModelSwitch(
@@ -346,7 +346,7 @@ func TestSwitchTime_LLMHistoryHasNoSystemMessage(t *testing.T) {
 
 	const sessionKey = "llm-no-system-msg"
 	bigText := strings.Repeat("b", 50000)
-	agent.Sessions.SetHistory(sessionKey, []providers.Message{
+	seedWindowHistory(agent.Sessions, sessionKey, []providers.Message{
 		{Role: "user", Content: "I need help with: " + bigText},
 		{Role: "assistant", Content: "Sure: " + bigText},
 	})
@@ -407,7 +407,7 @@ func TestSwitchTime_UnknownModel_LogsWarn(t *testing.T) {
 
 	const sessionKey = "unknown-model-test"
 	const typoModel = "not-a-real-model-typo"
-	agent.Sessions.SetHistory(sessionKey, nil)
+	seedWindowHistory(agent.Sessions, sessionKey, nil)
 	require.NoError(t, agent.Sessions.Save(sessionKey))
 
 	// Drive the switch with the typo'd model name.

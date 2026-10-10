@@ -56,6 +56,15 @@ const (
 	EntryTypeContextWindowNotice EntryType = "context_window_notice"
 )
 
+// ViewMembership values of a TranscriptEntry (session-core FR-004 / contract
+// slice C-ARCHIVE): which view(s) of the single append-only archive an entry
+// belongs to. See TranscriptEntry.ViewMembership.
+const (
+	ViewMembershipChat  = "chat"
+	ViewMembershipModel = "model"
+	ViewMembershipBoth  = "both"
+)
+
 // SessionStatus classifies the lifecycle state of a session.
 type SessionStatus string
 
@@ -92,6 +101,20 @@ func NewPartitionStore(agentWorkspaceDir, agentID string) *PartitionStore {
 		agentID: agentID,
 		baseDir: filepath.Join(agentWorkspaceDir, "sessions"),
 	}
+}
+
+// AttentionMark is the bounded shared attention state of a main (U11).
+//
+//   - OutcomeOrder is the saved order of the newest attention outcome (a goal
+//     ending met, rounds_exhausted or other; stopped_by_user never raises it):
+//     the outcome entry's saved timestamp in Unix MILLISECONDS, made strictly
+//     increasing. Milliseconds, not nanoseconds: a nanosecond int64 exceeds
+//     JavaScript's exact-integer range, and the SPA echoes this number back.
+//   - SeenOrder is the one shared seen mark; it only ever moves up, and never
+//     past OutcomeOrder.
+type AttentionMark struct {
+	OutcomeOrder int64 `json:"outcome_order"`
+	SeenOrder    int64 `json:"seen_order"`
 }
 
 // SessionMeta is the meta.json file per Appendix E §E.5.1.
@@ -137,7 +160,6 @@ type SessionMeta struct {
 
 	// v2 multi-agent fields (joined session model)
 	AgentIDs            []string          `json:"agent_ids,omitempty"`
-	ActiveAgentID       string            `json:"active_agent_id,omitempty"`
 	CompactionSummaries map[string]string `json:"compaction_summaries,omitempty"` // per-agent compaction
 
 	// ParentSessionID names the DIRECT parent of a delegated child session
@@ -153,6 +175,16 @@ type SessionMeta struct {
 	// listing) — without a reader this field could ship write-only with
 	// every test green (spec note on W2).
 	ParentSessionID string `json:"parent_session_id,omitempty"`
+
+	// Attention is a main's bounded attention mark (session-core U11, FR-047,
+	// C-ATTENTION): the saved order of its newest attention outcome and the one
+	// shared seen mark. Nil on every non-main and on a main that has never had an
+	// attention outcome. Lives in meta.json (identity group).
+	//
+	// A VALUE, not a pointer, and excluded from this struct's own JSON (json:"-"):
+	// it is persisted only through meta.json's identity group (u5IdentityFile),
+	// and a value keeps UnifiedMeta.Clone a plain copy (no new reference field).
+	Attention AttentionMark `json:"-"`
 
 	// ADR-086 GOAL-FR-005 (wave S6, "the deletion half"): the goal loop
 	// state that used to live here — GoalID, GoalCondition, GoalRoundsUsed,
@@ -215,14 +247,15 @@ type SessionMeta struct {
 	LoopLastActivityAt string `json:"loop_last_activity_at,omitempty"`
 }
 
-// PostLoad backfills v2 multi-agent fields from the legacy AgentID field.
+// PostLoad backfills the participants list from the single owner field.
 // Call after every JSON unmarshal of SessionMeta.
+//
+// A session's owner is its immutable AgentID. The retired handover owner
+// (active_agent_id) no longer exists: a saved file that still carries the key
+// has it ignored on read and dropped on the next write (session-core DEL-11).
 func (m *SessionMeta) PostLoad() {
 	if len(m.AgentIDs) == 0 && m.AgentID != "" {
 		m.AgentIDs = []string{m.AgentID}
-	}
-	if m.ActiveAgentID == "" && m.AgentID != "" {
-		m.ActiveAgentID = m.AgentID
 	}
 }
 
@@ -273,6 +306,17 @@ type TranscriptEntry struct {
 	Type    EntryType `json:"type,omitempty"` // EntryTypeMessage | EntryTypeCompaction | EntryTypeSystem; empty = message
 	Role    string    `json:"role,omitempty"` // "user" | "assistant" | "system"
 	Content string    `json:"content,omitempty"`
+	// ViewMembership classifies which view(s) of the single append-only archive
+	// this entry belongs to (session-core FR-004 / contract slice C-ARCHIVE):
+	// ViewMembershipChat ("chat" — rendered in the conversation),
+	// ViewMembershipModel ("model" — part of the model context window) or
+	// ViewMembershipBoth ("both"). Every canonical archive entry the store
+	// writes carries exactly one of these; the writer defaults an empty value
+	// to ViewMembershipBoth (an ordinary turn lives in both views). Empty is
+	// tolerated on read for entries written before this field existed — the
+	// reader treats absent as unknown, never re-deriving a view. It is a
+	// per-entry classification on the one archive, never a second store.
+	ViewMembership string `json:"view_membership,omitempty"`
 	// ContextWindowNotice is required when Type is context_window_notice. The
 	// generated payload survives REST history without becoming ordinary Content.
 	ContextWindowNotice *generated.ContextWindowNotice `json:"context_window_notice,omitempty"`
@@ -284,6 +328,17 @@ type TranscriptEntry struct {
 	Attachments         []Attachment                   `json:"attachments,omitempty"`
 	ToolCalls           []ToolCall                     `json:"tool_calls,omitempty"`
 	AgentID             string                         `json:"agent_id"` // which agent produced this entry (FR-002)
+	// ReplyToMessageID is set only on a guest reply (session-core FR-027): the
+	// id of the admitted request this entry answers. The guest author is
+	// AgentID. Projected as reply_to_message_id live and on replay.
+	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
+	// Participant labels who wrote a left-side user-role entry, and
+	// ReplyToParticipant who a reply went to (session-core F15). Display only,
+	// stamped by the server from authenticated facts or the request capture —
+	// never from model or tool input. Projected as participant /
+	// reply_to_participant live, on replay and in REST.
+	Participant        *generated.ChatParticipant `json:"participant,omitempty"`
+	ReplyToParticipant *generated.ChatParticipant `json:"reply_to_participant,omitempty"`
 	// Model records which model produced this assistant message. Populated
 	// on every assistant message written via pkg/agent/turn.go (FR-013).
 	// Empty for legacy turns written before this field existed; the UI
@@ -344,6 +399,16 @@ type TranscriptEntry struct {
 	// TurnID preserves the producing turn for cancellations and classified
 	// context-window diagnostics.
 	TurnID string `json:"turn_id,omitempty"`
+
+	// GoalID is the goal the producing turn was dispatched under (session-core
+	// FR-039 / C-GOAL), captured once at turn start from the session's active
+	// goal record and stamped onto every entry that turn writes. It is the
+	// EXACT key the SPA joins this message to its keyed goal criteria
+	// (goalPills[goal_id]) — never the latest-goal scalar. Empty means UNKNOWN
+	// association (the turn ran under no proven goal); a later goal's frame must
+	// never rebind an earlier entry. Additive/optional: entries written before
+	// this field existed carry no value.
+	GoalID string `json:"goal_id,omitempty"`
 
 	// Cancel-specific fields — only populated for EntryTypeTurnCancelled entries
 	// (FR-15). All are omitempty so they are invisible on other entry types.
@@ -454,25 +519,10 @@ type TranscriptEntry struct {
 	// wire frame").
 	ClientMessageID string `json:"client_message_id,omitempty"`
 
-	// ProvenancePending is the SERVER-INTERNAL write-phase marker of the
-	// provenance-paired append (ADR-20261004 Correction C4 abrupt-exit rule).
-	// It is stamped by UnifiedStore.appendTranscript immediately before the
-	// transcript line of a paired append lands and cleared by an atomic
-	// rewrite once the paired MessageProvenance record is durably written —
-	// so a line still carrying the marker is a line whose paired save did not
-	// complete: either the process died between the two writes (the marker
-	// and no sender record — crash residue), or the record landed but the
-	// clearing rewrite did not (marker and record — accepted). Only the first
-	// state is residue, which is why the reader rule checks BOTH halves:
-	// a line is skipped iff it carries the marker AND no provenance record
-	// exists for its ID (unified_write.go::ReadTranscript — the single filter
-	// every person- and model-facing transcript reader reaches the store
-	// through). It carries no provenance data — no principal, no ordinal,
-	// nothing client-meaningful — and every ordinary append leaves it false,
-	// so legacy lines and all agent/tool lines round-trip byte-identically.
-	// No SPA, REST or WebSocket consumer reads it; nothing client-visible
-	// changes shape.
-	ProvenancePending bool `json:"provenance_pending,omitempty"`
+	// InputDisposition is a READ-ONLY PROJECTION (session-core FR-024): set
+	// only by ReadTranscriptWithDispositions for a user input Stop discarded
+	// before delivery. It is never written to the archive.
+	InputDisposition *InputDisposition `json:"input_disposition,omitempty"`
 
 	// SystemSubtype discriminates an EntryTypeSystem entry by what kind of
 	// system event it records (ADR-085 BROWSER-FR-043a, folded into this

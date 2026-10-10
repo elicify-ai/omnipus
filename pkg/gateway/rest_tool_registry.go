@@ -7,7 +7,6 @@
 // Implements:
 //   - GET  /api/v1/tools                        (FR-027) — registry snapshot
 //   - GET  /api/v1/agents/{id}/tools            (FR-028, FR-086) — per-agent policy view
-//   - GET  /api/v1/tools/builtin               (FR-029) — returns HTTP 404
 //   - POST /api/v1/tool-approvals/{approval_id} (FR-011, FR-014, FR-017, FR-018)
 
 package gateway
@@ -91,13 +90,6 @@ func toolRegistryAutoApprove(ctx context.Context, t tools.Tool, name, source str
 	default: // tools.AutoShellMode (bash) — no entry on the wire.
 		return nil
 	}
-}
-
-// HandleBuiltinToolsDeprecated handles GET /api/v1/tools/builtin — returns HTTP 404.
-// The legacy catalog endpoint is replaced by GET /api/v1/tools (FR-029).
-func (a *restAPI) HandleBuiltinToolsDeprecated(w http.ResponseWriter, r *http.Request) {
-	// FR-029: /tools/builtin returns 404 post-redesign.
-	jsonErr(w, http.StatusNotFound, "endpoint removed: use GET /api/v1/tools instead")
 }
 
 // HandleToolsRegistry handles GET /api/v1/tools.
@@ -362,7 +354,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	agentTypeVal := gen.AgentToolsResponseAgentType(wireAgentType)
 	state, stateErr := agentstore.New(a.homePath).ReadState(agentID)
 	if stateErr != nil {
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read agent revision: %v", stateErr))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not read agent revision", stateErr)
 		return
 	}
 	overrideNames := make([]string, 0)

@@ -254,7 +254,6 @@ func TestRestTasks_CreateRecurringRrule(t *testing.T) {
 		assert.EqualValues(t, "recurring", tsk.Trigger.Type)
 		require.NotNil(t, tsk.Trigger.Config.Rrule)
 		assert.Equal(t, "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10", *tsk.Trigger.Config.Rrule)
-		assert.Nil(t, tsk.Trigger.Config.CronExpr)
 		require.NotNil(t, tsk.Trigger.Config.DtstartMs)
 		assert.Equal(t, dtstart, *tsk.Trigger.Config.DtstartMs)
 		require.NotNil(t, tsk.Trigger.Config.Tz)
@@ -273,13 +272,8 @@ func TestRestTasks_CreateRecurringRrule(t *testing.T) {
 		assert.Equal(t, "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10", *fetched.Trigger.Config.Rrule)
 	})
 
-	t.Run("PATCH legacy cron_expr -> rrule updates to 200 and emits an FR-022 audit entry", func(t *testing.T) {
+	t.Run("legacy cron_expr config is refused at create (every-del, DEL-19)", func(t *testing.T) {
 		api := newTestRestAPIWithHomeAndAgent(t)
-		auditDir := t.TempDir()
-		logger, err := audit.NewLogger(audit.LoggerConfig{Dir: auditDir, RetentionDays: 90})
-		require.NoError(t, err)
-		api.auditor = logger
-
 		wsID := ensureTestWorkspace(t, api)
 		setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 		body := fmt.Sprintf(
@@ -291,39 +285,8 @@ func TestRestTasks_CreateRecurringRrule(t *testing.T) {
 		r.Header.Set("Content-Type", "application/json")
 		r.URL.Path = "/api/v1/tasks"
 		api.HandleTasks(w, r)
-		require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
-		var tsk gen.Task
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
-
-		dtstart := time.Date(2026, 7, 20, 9, 0, 0, 0, time.UTC).UnixMilli()
-		patchBody := fmt.Sprintf(
-			`{"trigger":{"type":"recurring","config":{"rrule":"FREQ=WEEKLY;INTERVAL=2;BYDAY=MO","dtstart_ms":%d,"tz":"Europe/Berlin"}}}`,
-			dtstart,
-		)
-		wp := patchTask(t, api, tsk.Id, patchBody)
-		require.Equal(t, http.StatusOK, wp.Code, "body=%s", wp.Body.String())
-		var updated gen.Task
-		require.NoError(t, json.Unmarshal(wp.Body.Bytes(), &updated))
-		require.NotNil(t, updated.Trigger)
-		assert.Nil(t, updated.Trigger.Config.CronExpr, "cron_expr must be gone after replacement")
-		require.NotNil(t, updated.Trigger.Config.Rrule)
-
-		require.NoError(t, logger.Close())
-		found := filterAuditEvents(readAuditLog(t, auditDir), "task.trigger.recurrence_changed")
-		require.Len(t, found, 1, "expected exactly one recurrence-change audit entry for the legacy->rrule replacement")
-		details, ok := found[0]["details"].(map[string]any)
-		require.True(t, ok, "audit entry must carry details")
-		assert.Equal(t, tsk.Id, details["task_id"])
-		prior, ok := details["prior_trigger"].(map[string]any)
-		require.True(t, ok, "audit entry must carry the prior trigger")
-		priorConfig, ok := prior["config"].(map[string]any)
-		require.True(t, ok)
-		assert.Equal(t, "0 9 * * MON", priorConfig["cron_expr"])
-		newT, ok := details["new_trigger"].(map[string]any)
-		require.True(t, ok, "audit entry must carry the new trigger")
-		newConfig, ok := newT["config"].(map[string]any)
-		require.True(t, ok)
-		assert.Equal(t, "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO", newConfig["rrule"])
+		require.Equal(t, http.StatusBadRequest, w.Code,
+			"a legacy cron_expr config must be refused: every-del deleted it (spec C-TIMING / DEL-19); body=%s", w.Body.String())
 	})
 
 	t.Run("PATCH RRULE -> different RRULE audits; a title-only edit does not", func(t *testing.T) {
@@ -528,64 +491,6 @@ func TestRestTasks_OccurrencesEndpoint(t *testing.T) {
 		assert.Empty(t, sets,
 			"an exhausted (COUNT reached) recurring series has no future occurrences even though it "+
 				"is now selection-eligible as a repeating trigger — buildOccurrenceSets omits it naturally")
-	})
-
-	t.Run("done every task still returns future occurrences (live NextRunAtMSForTask anchor)", func(t *testing.T) {
-		// Companion to "done recurring task ... still returns future
-		// occurrences" above, for the `every` flavor: unlike `recurring`,
-		// `every`'s occurrence projection is STATE-DEPENDENT (FR-008a) — it
-		// reads the live armed job's NextRunAtMS via
-		// agent.TaskTriggerScheduler.NextRunAtMSForTask, which needs a real
-		// scheduler wired (newTestRestAPIWithTaskTrigger, not
-		// newTestRestAPIAlignedStores). This also doubles as an end-to-end
-		// proof of FIX 1's idempotency guard: every PATCH along
-		// next->in_progress->done calls NotifyTaskUpserted, and each one must
-		// be a no-op (job stays armed, unchanged) rather than re-anchoring the
-		// `every` job's NextRunAtMS to that PATCH's own wall-clock time.
-		api, sched := newTestRestAPIWithTaskTrigger(t)
-		wsID := ensureTestWorkspace(t, api)
-		setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
-
-		body := fmt.Sprintf(
-			`{"title":"EveryDoneStillFires","action":"llm","workspace_id":%q,"agent_id":"mia",`+
-				`"trigger":{"type":"every","config":{"every_ms":60000}},`+singleAttemptJSON+`,`+minimalCriteriaDodJSON+`}`,
-			wsID,
-		)
-		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
-		r.Header.Set("Content-Type", "application/json")
-		r.URL.Path = "/api/v1/tasks"
-		api.HandleTasks(w, r)
-		require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
-		var tsk gen.Task
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &tsk))
-
-		armedBefore, ok := sched.NextRunAtMSForTask(tsk.Id)
-		require.True(t, ok, "an every task must be armed immediately after creation")
-
-		advanceTaskToDone(t, api, tsk.Id)
-
-		armedAfter, ok := sched.NextRunAtMSForTask(tsk.Id)
-		require.True(t, ok, "an every task must remain armed after reaching done (repeating series survives)")
-		assert.Equal(t, armedBefore, armedAfter,
-			"OnTaskUpserted must not re-anchor an already-armed every job on unrelated status PATCHes (FIX 1)")
-
-		from := time.UnixMilli(armedAfter).Add(-time.Minute)
-		to := time.UnixMilli(armedAfter).Add(5 * time.Minute)
-		params := url.Values{
-			"workspace_id": {wsID},
-			"from_ms":      {strconv.FormatInt(from.UnixMilli(), 10)},
-			"to_ms":        {strconv.FormatInt(to.UnixMilli(), 10)},
-			"tz":           {"UTC"},
-		}
-		wOcc := getOccurrences(t, api, params)
-		require.Equal(t, http.StatusOK, wOcc.Code, "body=%s", wOcc.Body.String())
-		var sets []gen.TaskOccurrenceSet
-		require.NoError(t, json.Unmarshal(wOcc.Body.Bytes(), &sets))
-		require.Len(t, sets, 1,
-			"a done every task with a live armed job must still render its future occurrences")
-		assert.Equal(t, tsk.Id, sets[0].TaskId)
-		assert.NotEmpty(t, sets[0].OccurrencesMs)
 	})
 
 	t.Run("done once task still omitted (non-repeating trigger)", func(t *testing.T) {

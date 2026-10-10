@@ -534,7 +534,7 @@ func (al *AgentLoop) applyGoalMarkerRestate(
 	anchorAgentID := route.agentID
 	if anchorAgentID == "" {
 		if meta, merr := store.GetMeta(sessionID); merr == nil && meta != nil {
-			anchorAgentID = meta.ActiveAgentID
+			anchorAgentID = meta.AgentID
 		}
 	}
 	_, _ = al.anchorGoalRecordInTranscript(goalRecordAnchor{

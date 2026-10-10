@@ -23,8 +23,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([
-      { id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', color: '#4488ff', icon: 'compass' },
-      { id: 'ext-1', name: 'ClaudeCode', type: 'subagent_3p', locked: false, status: 'active' },
+      { figure: 'Omnipus', role: 'general', id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', color: '#9CA3AF', icon: 'compass' },
+      { figure: 'Omnipus', role: 'general', id: 'ext-1', name: 'ClaudeCode', type: 'subagent_3p', locked: false, status: 'active' },
     ]),
   }
 })
@@ -326,10 +326,15 @@ describe('ActivityBar — Fix 1: an open panel survives running -> 0', () => {
 })
 
 describe('ActivityBar — Fix 1: a retained failure keeps the pill mounted at idle', () => {
+  // DEL-F27 (commit a5789fb5c): activityStatusForSpan maps by lifecycleState
+  // only, so a genuinely failed child is a span with lifecycleState 'failed'
+  // — that is what the wire carries (subagent_state state 'failed') and what
+  // the fixtures below model. A terminal span without a lifecycleState maps
+  // to 'parked' and is NOT a failure.
   it('shows a red "1 failed" pill (no spinner) when idle with an error item in recentlyFinished', async () => {
     act(() => {
       useChatStore.setState({
-        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'error' })])],
+        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'error', lifecycleState: 'failed' })])],
       })
     })
     renderBar()
@@ -343,14 +348,24 @@ describe('ActivityBar — Fix 1: a retained failure keeps the pill mounted at id
     expect(dot?.getAttribute('class')).toContain('bg-[var(--color-error)]')
   })
 
-  it('also stays mounted for an interrupted or timeout item (not just error)', async () => {
+  // Re-pinned (DEL-F27 + e77c2cc3f): an interrupted child's lifecycle is
+  // 'stopped' (the bracket stays open across Stop/Resume — ADR-20260928 D2),
+  // which maps to 'parked' — a deliberate stop, not a failure, so it does
+  // not join the "N failed" count. It still holds the Agents pill mounted
+  // (ActivityBar.tsx::agentOpen), keeping the interrupted run reachable in
+  // the panel at idle.
+  it('still holds the pill reachable for an interrupted child (lifecycle stopped — parked, not a failure)', async () => {
     act(() => {
       useChatStore.setState({
-        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'interrupted' })])],
+        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'interrupted', lifecycleState: 'stopped' })])],
       })
     })
     renderBar()
-    expect(await screen.findByText('1 failed')).toBeInTheDocument()
+    const bar = await screen.findByTestId('activity-bar')
+    expect(bar).toBeInTheDocument()
+    // Retained-but-not-failed: no failed count, the idle label instead.
+    expect(screen.queryByText('1 failed')).not.toBeInTheDocument()
+    expect(within(bar).getByTestId('activity-bar-label')).toHaveTextContent('Activity')
   })
 
   it('does NOT count a cancelled item as a failure (cancelled is a deliberate stop, not a failure)', () => {
@@ -376,7 +391,7 @@ describe('ActivityBar — Fix 1: a retained failure keeps the pill mounted at id
   it('opening the panel from the failed-state pill still reveals the failed row', async () => {
     act(() => {
       useChatStore.setState({
-        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'error', taskLabel: 'broken task' })])],
+        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'error', lifecycleState: 'failed', taskLabel: 'broken task' })])],
       })
     })
     renderBar()
@@ -401,10 +416,15 @@ describe('ActivityBar — Fix 1: a purely-successful idle history still unmounts
 })
 
 describe('ActivityBar — Fix 1: the spinner only ever shows while running', () => {
+  // Re-pinned fixture (DEL-F27): for agent items the only retained-failure
+  // status is lifecycleState 'failed' ('interrupted'/'timeout' terminals map
+  // to parked/stopped and hold the pill via agentOpen instead — see the
+  // interrupted case above). The asserted rule is unchanged: idle-but-mounted
+  // never spins.
   it('does not render .animate-spin when idle-but-mounted via a retained failure', async () => {
     act(() => {
       useChatStore.setState({
-        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'timeout' })])],
+        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'error', lifecycleState: 'failed' })])],
       })
     })
     renderBar()
@@ -645,7 +665,7 @@ describe('ActivityBar — an unmet judge verdict is not an agent failure (M4)', 
     act(() => {
       unmetGoalVerdict()
       useChatStore.setState({
-        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'error', taskLabel: 'broken task' })])],
+        messages: [makeAssistantMessage([finishedSpan({ agentId: 'ray', status: 'error', lifecycleState: 'failed', taskLabel: 'broken task' })])],
       })
     })
     renderBarWithProbe()

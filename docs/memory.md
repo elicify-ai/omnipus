@@ -80,7 +80,7 @@ The agent uses one recall mode at a time. Range pages are **quoted archive data 
 
 By default, combined tool results trigger relief above an estimated **50% of the model's context window**. The separate total-request budget also reserves space for the reply, safety margin and core instructions. These are estimates, not a promise that the provider will accept the request. See [settings](settings.md) for the tool-result share setting and [troubleshooting](troubleshooting.md#the-provider-rejects-your-model-requests) for provider rejections.
 
-Relief deletes no admitted archive bytes. If the turn is aborted, its archive appends and window metadata are rolled back to the actual turn-start snapshot; do not assume an aborted turn's results remain available for recall.
+Relief deletes no admitted archive bytes. If the turn is aborted, its window metadata is rolled back to the actual turn-start snapshot and the aborted turn's appends are kept out of the model's view — but the bytes stay in the conversation archive, so `recall_conversation` can still reach them.
 
 ```mermaid
 flowchart LR

@@ -26,6 +26,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/google/uuid"
 )
 
 // cancelHardAbortDelay is PHASE B's escalation delay: how long after a
@@ -659,15 +660,14 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 		// independent PHASE A and therefore its OWN accurate
 		// turn_canceled audit event, computed at THE MOMENT it was caught —
 		// not by mutating this single event after the fact.
-		// Mark the last transcript entry as truncated.
 		if rc.store != nil {
-			if err := rc.store.MarkLastEntryTruncated(rc.sessionID, rc.turnID, "cancelled"); err != nil {
-				slog.Warn("agent: RequestCancel: MarkLastEntryTruncated failed",
-					"session_id", rc.sessionID, "turn_id", rc.turnID, "error", err)
-			}
-			// Append a turn_canceled entry to the transcript.
+			// Append a turn_canceled entry to the transcript. It is also what
+			// marks the turn's last assistant entry truncated: the transcript
+			// reader derives that from this record (session.deriveCancelTruncation),
+			// so no earlier line is rewritten. It must stay appended AFTER that
+			// assistant entry.
 			appendErr := rc.store.AppendTranscript(rc.sessionID, session.TranscriptEntry{
-				ID:                   rc.sessionID + "_canceled",
+				ID:                   canceledEntryID(rc.sessionID, rc.turnID),
 				Type:                 session.EntryTypeTurnCancelled,
 				TurnID:               rc.turnID,
 				CancelledByUser:      rc.canceller.UserID,
@@ -986,18 +986,10 @@ func stringSliceSetDiff(a, b []string) (onlyInA, onlyInB []string) {
 // returns every reachable descendant's own session id (rootSessionID itself
 // is never included).
 //
-// [FIX-5, Defect 4, 2026-08-03] Exported and HOISTED: this used to be
-// duplicated byte-for-byte as pkg/gateway/websocket.go's unexported
-// u11CollectDescendantSessionIDs, kept as a separate copy only because a
-// parallel-implementation ownership rule forbade that unit from editing
-// pkg/agent (or this unit from editing pkg/gateway). That rule has expired.
-// websocket.go's buildCancelHooks now calls this function directly;
-// u11CollectDescendantSessionIDs itself survives only as a signature-compat
-// shim (its exact pre-existing name/signature is called directly by
-// pkg/gateway/rest.go's deleteSession handler and by
-// pkg/gateway/websocket_adr057_test.go's U11 unit tests — both outside this
-// fix's file ownership, so the shim is kept rather than requiring edits
-// there).
+// The ONE implementation: the gateway's cancel/approval cascade
+// (buildCancelHooks) and its session-delete handler both call it directly, and
+// it returns the walk error so a partial walk is never mistaken for "no more
+// children".
 //
 // This is the same primitive the cancel/approval-cascade paths in both
 // packages share, because a background bash/exec session (FR-027, see
@@ -1354,4 +1346,15 @@ func (al *AgentLoop) RequestCancelByChannelChat(ctx context.Context, channelName
 		return false, false, fmt.Errorf("RequestCancelByChannelChat: channel and chatID must not be empty")
 	}
 	return al.requestCommandStopByChannelChat(ctx, channelName, chatID, userID, "tree")
+}
+
+// canceledEntryID is the transcript id of one turn_canceled record. Every cancel
+// in a session needs its own id: a shared "<session>_canceled" would let any
+// id-deduplicating writer drop all but the first. The turn id makes it unique per
+// canceled turn; a cancel with no turn id gets a random suffix.
+func canceledEntryID(sessionID, turnID string) string {
+	if turnID == "" {
+		turnID = uuid.NewString()
+	}
+	return sessionID + "_canceled_" + turnID
 }

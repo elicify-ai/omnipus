@@ -823,7 +823,7 @@ func (a *restAPI) handleLibraryUpload(w http.ResponseWriter, r *http.Request, wo
 			rollback()
 			logger.ErrorCF("rest", "library: upload: create file failed",
 				map[string]any{"workspace_id": workspaceID, "path": destRel, "error": createErr.Error()})
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create file: %v", createErr))
+			jsonServerFailure(w, http.StatusInternalServerError, "could not create file", createErr)
 			return
 		}
 
@@ -837,7 +837,7 @@ func (a *restAPI) handleLibraryUpload(w http.ResponseWriter, r *http.Request, wo
 					map[string]any{"workspace_id": workspaceID, "path": finalRel, "error": rmErr.Error()})
 			}
 			rollback()
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("file write failed: %v", copyErr))
+			jsonServerFailure(w, http.StatusInternalServerError, "file write failed", copyErr)
 			return
 		}
 		if written > maxUploadFileSize {

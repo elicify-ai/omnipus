@@ -458,7 +458,7 @@ func TestDeliver_EmptyAnswer_FailedWithError(t *testing.T) {
 
 // TestDeliver_ProgressStoredNotWoken covers US-2/AS-10 (TDD plan test 15):
 // progress is stored but never wakes the parent.
-func TestDeliver_ProgressStoredNotWoken(t *testing.T) {
+func TestDeliver_ProgressWakesIdleParent(t *testing.T) {
 	al, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
 	const parentID, childID = "parent-1", "child-1"
 	seedParentAndChild(t, lifecycle, parentID, childID)
@@ -478,8 +478,10 @@ func TestDeliver_ProgressStoredNotWoken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
-	if delivery.Outcome != steer.DeliveryStoredNotWoken {
-		t.Fatalf("Delivery.Outcome = %q, want stored_not_woken", delivery.Outcome)
+	// FR-012: every accepted report kind — progress included — wakes an idle
+	// non-stopped parent, so the outcome is DeliveryWoke, not stored_not_woken.
+	if delivery.Outcome != steer.DeliveryWoke {
+		t.Fatalf("Delivery.Outcome = %q, want woke (FR-012: progress wakes an idle non-stopped parent)", delivery.Outcome)
 	}
 	msgs, _, _, derr := inbox.Drain(parentID, childID, "", 10)
 	if derr != nil || len(msgs) != 1 {

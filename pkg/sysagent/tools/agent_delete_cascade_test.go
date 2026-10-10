@@ -133,13 +133,29 @@ func TestAgentDelete_PreservesSharedSession(t *testing.T) {
 		t.Fatalf("test setup: create session: %v", metaErr)
 	}
 	sessionID := meta.ID
-	// A mid-conversation agent switch makes this a MULTI-agent (joined)
-	// session: AgentIDs becomes ["victim","survivor"].
-	if err := sessStore.SwitchAgent(sessionID, "survivor"); err != nil {
-		t.Fatalf("test setup: switch agent: %v", err)
-	}
 	if err := sessStore.Close(); err != nil {
 		t.Fatalf("test setup: close session store: %v", err)
+	}
+	// Make this a MULTI-agent (joined) session: AgentIDs becomes
+	// ["victim","survivor"]. The switch_agent tool and UnifiedStore.SwitchAgent
+	// that used to produce this state are deleted (session-core DEL-07), so the
+	// fixture writes the identity file's agent_ids directly.
+	metaPath := filepath.Join(home, "sessions", sessionID, "meta.json")
+	rawMeta, readErr := os.ReadFile(metaPath)
+	if readErr != nil {
+		t.Fatalf("test setup: read meta.json: %v", readErr)
+	}
+	var metaDoc map[string]any
+	if err := json.Unmarshal(rawMeta, &metaDoc); err != nil {
+		t.Fatalf("test setup: parse meta.json: %v", err)
+	}
+	metaDoc["agent_ids"] = []string{"victim", "survivor"}
+	patched, marshalErr := json.Marshal(metaDoc)
+	if marshalErr != nil {
+		t.Fatalf("test setup: marshal meta.json: %v", marshalErr)
+	}
+	if err := os.WriteFile(metaPath, patched, 0o600); err != nil {
+		t.Fatalf("test setup: write meta.json: %v", err)
 	}
 
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
@@ -326,21 +342,23 @@ func TestAgentDelete_CleansWorkspaceCoreTeamAndDelegationEdges(t *testing.T) {
 	}
 }
 
-// TestAgentDelete_StoreDeleteFailure_NoDestructiveCascade proves the bug-1
-// reorder fix: store.Delete(id) — the authoritative entity-record delete —
-// must run BEFORE the irreversible sessions/tasks cascade. This forces
-// store.Delete to fail (by replacing the agent's entity JSON file with a
-// non-empty directory, so the underlying os.Remove fails with ENOTEMPTY —
-// uid-independent, unlike a permission-bit trick, which root ignores; see
-// pkg/agent/plan_engine_test.go's TestPlanEngine_HasActivePlansOwnedBy_
-// FailsClosedOnStoreError for the same technique's rationale) and asserts
-// that a sole-owned session and an assigned task BOTH survive the rejected
-// delete untouched. Before the fix, the cascade ran first: a subsequent
-// store.Delete failure was reported as a bare SAVE_FAILED while the session
-// and task were already destroyed/unassigned — directly contradicting this
-// tool's own Description() promise that "a step that fails partway through
-// is reported in the response rather than silently swallowed".
-func TestAgentDelete_StoreDeleteFailure_NoDestructiveCascade(t *testing.T) {
+// TestAgentDelete_RecordDeleteFailure_CleansDataFirstAndStaysVisible pins the
+// FR-037 / C-DELETE order (cleanup-first, record-last) on the TASK path: when
+// the FINAL authoritative record removal fails, the owned-data cleanup (the
+// session delete AND the task unassign) has ALREADY run, the result is the
+// honest partly-deleted one, and the record stays visible so the same Delete
+// retries.
+//
+// This test previously asserted the RETIRED entity-first order (store.Delete
+// must run BEFORE the cascade, so a rejected delete left the session and task
+// untouched), and its injection — replacing the agent's entity JSON file with a
+// non-empty directory — never reached the cascade at all: validateAndLoad's
+// store.Get (FR-037: required before any write) did os.ReadFile(entityPath) and
+// failed EISDIR first, so the test passed vacuously without pinning either
+// order. It is re-authored here with a real oracle: breakAgentRecordDelete
+// (agent_delete_recordfailure_helper_test.go) forces DeleteState to fail AFTER
+// the cascade has run.
+func TestAgentDelete_RecordDeleteFailure_CleansDataFirstAndStaysVisible(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 	store := agentstore.New(home)
 	if err := store.Create("victim", &config.AgentConfig{ID: "victim", Name: "Victim"}); err != nil {
@@ -378,20 +396,10 @@ func TestAgentDelete_StoreDeleteFailure_NoDestructiveCascade(t *testing.T) {
 		t.Fatalf("test setup: write task: %v", err)
 	}
 
-	// Force store.Delete("victim") to fail: replace the entity's data file
-	// with a non-empty directory so the underlying os.Remove fails with
-	// ENOTEMPTY regardless of the running user's uid.
+	// Read the revision BEFORE breaking the record delete (currentAgentRevision
+	// takes the very lock the rig breaks).
 	revision := currentAgentRevision(t, deps, "victim")
-	entityPath := filepath.Join(home, "entities", "agents", "victim.json")
-	if err := os.Remove(entityPath); err != nil {
-		t.Fatalf("test setup: remove entity file: %v", err)
-	}
-	if err := os.MkdirAll(entityPath, 0o700); err != nil {
-		t.Fatalf("test setup: mkdir in place of entity file: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(entityPath, "blocker.txt"), []byte("x"), 0o600); err != nil {
-		t.Fatalf("test setup: seed blocker file: %v", err)
-	}
+	breakAgentRecordDelete(t, home, "victim")
 
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
 		"id":       "victim",
@@ -399,34 +407,47 @@ func TestAgentDelete_StoreDeleteFailure_NoDestructiveCascade(t *testing.T) {
 		"revision": revision,
 	})
 	if !result.IsError {
-		t.Fatalf("expected error when store.Delete fails, got success: %s", result.ForLLM)
+		t.Fatalf("expected error when the final record removal fails, got success: %s", result.ForLLM)
 	}
 	m := parseError(t, result.ForLLM)
 	errBlock, _ := m["error"].(map[string]any)
 	if errBlock["code"] != "SAVE_FAILED" {
 		t.Errorf("expected error code SAVE_FAILED, got %v", errBlock["code"])
 	}
-
-	// The sole-owned session must survive: it must not have been deleted
-	// before the (failed) authoritative entity delete.
-	sessionDir := filepath.Join(home, "sessions", sessionID)
-	if _, err := os.Stat(sessionDir); err != nil {
-		t.Errorf("session directory %s must survive a rejected delete, stat error = %v", sessionDir, err)
+	if pd, _ := m["partly_deleted"].(bool); !pd {
+		t.Errorf("partly_deleted = %v, want true (the record delete is the failed step)", m["partly_deleted"])
+	}
+	if stage, _ := m["error_stage"].(string); stage != "record_delete" {
+		t.Errorf("error_stage = %v, want %q", m["error_stage"], "record_delete")
+	}
+	if n, _ := m["tasks_unassigned"].(float64); n != 1 {
+		t.Errorf("tasks_unassigned = %v, want 1 (task cleanup must run before the record delete)", m["tasks_unassigned"])
 	}
 
-	// The task's agent_id must still be "victim": it must not have been
-	// unassigned before the (failed) authoritative entity delete.
+	// FR-037 cleanup-first: the task's agent_id reference must ALREADY be cleared
+	// — cleanup ran before the (failed) record removal.
 	data, err := os.ReadFile(filepath.Join(tasksDir, taskID+".json"))
 	if err != nil {
-		t.Fatalf("read task after rejected delete: %v", err)
+		t.Fatalf("read task after failed record delete: %v", err)
 	}
 	var taskData map[string]any
 	if err := json.Unmarshal(data, &taskData); err != nil {
 		t.Fatalf("unmarshal task: %v", err)
 	}
-	if taskData["agent_id"] != "victim" {
-		t.Errorf("task agent_id = %v, want unchanged %q (must survive a rejected delete)",
-			taskData["agent_id"], "victim")
+	if v, ok := taskData["agent_id"]; ok && v != "" {
+		t.Errorf("task agent_id = %v, want cleared (cleanup-first: unassigned before the failed record delete)",
+			taskData["agent_id"])
+	}
+
+	// The sole-owned session must ALREADY have been deleted by the cascade.
+	sessionDir := filepath.Join(home, "sessions", sessionID)
+	if _, err := os.Stat(sessionDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("session directory %s must be cleaned before the failed record delete (err=%v)", sessionDir, err)
+	}
+
+	// The record must remain visible for retry.
+	if _, err := store.Get("victim"); err != nil {
+		t.Errorf("a partly-deleted agent must remain visible for retry, Get error = %v", err)
 	}
 }
 

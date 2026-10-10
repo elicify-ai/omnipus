@@ -15,7 +15,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
   }
 }
 function makeClient() { return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } }) }
-const agents = [{ id: 'jim', name: 'Jim' }]
+const agents = [{ figure: 'Omnipus', role: 'general', id: 'jim', name: 'Jim' }]
 function renderList(tasks: Task[]) {
   return render(<QueryClientProvider client={makeClient()}><ListView tasks={tasks} agents={agents} onTaskClick={vi.fn()} /></QueryClientProvider>)
 }

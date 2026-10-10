@@ -25,9 +25,8 @@ keeping the ceiling COMPLETE for the static catalog: it ADDS the shipped
 default for any catalog tool with no entry (self-healing an old install
 forward), never overwrites an existing entry, and never re-adds a retired
 key (retired names are absent from knownTools by definition).
-`validate.go::MigrateLegacyToolPolicyKeys` MUST run FIRST (load_tool →
-ToolSearch, hand_off/return_to_default → switch_agent, ADR-071), or a
-renamed key gets reconciled as "missing" under its stale name.
+There is no legacy tool-policy key remapping (session-core DEL-21): a retired
+saved key is inert, never rewritten, merged or converted.
 `validate.go::ValidateToolPolicyCoverage` is a never-firing correctness
 tripwire after Reconcile (OR-based: a global ceiling entry covers every
 agent). It cannot 400 a sparse per-agent map — UAT 2026-09-02, a PUT

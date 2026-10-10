@@ -64,7 +64,7 @@ func (al *AgentLoop) assembleMessages(
 			ts.setContextWindowError(fmt.Errorf("context assembly: session store does not support atomic context checkpoints"))
 			return history
 		}
-		snap, err := store.SnapshotWindow(ctx, ts.sessionKey)
+		snap, err := store.WindowView(ctx, ts.sessionKey)
 		if err != nil {
 			ts.setContextWindowError(err)
 			return history
@@ -76,14 +76,18 @@ func (al *AgentLoop) assembleMessages(
 			cs = cfg.Context
 		}
 		history, err = projectMessagesChecked(history, func(i int) int { return lines[i] }, snap.State.Projection.Entries, projectionContext{
-			policy: capPolicyFor(cs, agentContextBudget(ts.agent)), archive: snap.Archive,
+			policy: capPolicyFor(cs, agentContextBudget(ts.agent)), archive: viewArchive{view: snap},
 			sourceRunes: snap.State.Projection.SourceRunes,
 		})
 		if err != nil {
 			ts.setContextWindowError(err)
 			return history
 		}
-		breadcrumb = breadcrumbForWindow(snap, snap.State.Skip)
+		breadcrumb, err = breadcrumbForWindow(ctx, storeSlots{store: store, key: ts.sessionKey}, snap.State.Skip)
+		if err != nil {
+			ts.setContextWindowError(err)
+			return history
+		}
 	}
 	if ts.opts.IsTaskRun && breadcrumb != "" {
 		breadcrumb += "\n\nReminder (task run): when the work is verified, report completion by calling goal_claim (status \"met\", with your one-line evidence) — not by writing a status yourself."

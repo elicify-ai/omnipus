@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -688,7 +689,7 @@ func buildRecallSpanMessages(
 				// — so the model can page the full content.
 				archiveLine := trn.startIdx + j
 				toolName, _ := owningToolCall(out, len(out), m.ToolCallID)
-				turnNum := turnNumberForArchiveLine(archive, archiveLine)
+				turnNum := turnNumberForArchiveLine(denseArchive(archive), archiveLine)
 				m.Content, _ = projectToolResult(m.Content, policy.effectiveCap(surfaceBuiltinSuccess, 1),
 					func(full string) string {
 						return capMarkOrEmpty(toolName, originalID, archiveLine, full, turnNum)
@@ -834,15 +835,9 @@ type ConversationArchiveScanner interface {
 	ScanArchive(ctx context.Context, sessionKey string, fn func(idx int, msg memory.ArchivedMessage) bool) error
 }
 
-// recallProjectionReader is the optional projection-meta side (FR-046 /
-// B-53b): a hydrated session's archive was rebuilt from the UI transcript,
-// so the original tool-result bytes are not available by id.
-type recallProjectionReader interface {
-	Projection(key string) memory.ProjectionMeta
-}
-
-// recallHydratedAnswer is the FR-046 answer for recall by id on a hydrated
-// session. The exact phrase is specified (B-53b).
+// recallHydratedAnswer is the FR-046 answer for recall by id on a record
+// converted from a hydrated source (model_origin == conv_rebuilt). The exact
+// phrase is specified (B-53b).
 const recallHydratedAnswer = "recall_conversation: not available — session was rebuilt from the transcript"
 
 // recallPageFraming is the framing header a tool_call_id page carries in
@@ -948,15 +943,6 @@ func (t *RecallConversationTool) executeToolCallID(
 		length = v
 	}
 
-	// --- FR-046: a hydrated archive has no original result bytes ------
-	if pr, ok := t.archive.(recallProjectionReader); ok {
-		if pr.Projection(sessionKey).Hydrated {
-			incRecallCounter("error")
-			return tools.ErrorResult(fmt.Sprintf(
-				"%s (the original bytes of tool result %s are gone)", recallHydratedAnswer, id))
-		}
-	}
-
 	// --- streaming scan (FR-024, FR-025, B-31b) -----------------------
 	hit, scanErr := t.scanForToolResult(ctx, sessionKey, id, wantLine)
 	if scanErr != nil {
@@ -976,6 +962,12 @@ func (t *RecallConversationTool) executeToolCallID(
 		return tools.ErrorResult(fmt.Sprintf(
 			"recall_conversation: no archived tool result with tool_call_id %q — "+
 				"the id is unknown, or its turn was aborted and rolled back (FR-027)", id))
+	}
+
+	if hit.Rebuilt {
+		incRecallCounter("error")
+		return tools.ErrorResult(fmt.Sprintf(
+			"%s (the original bytes of tool result %s are gone)", recallHydratedAnswer, id))
 	}
 
 	// --- page the content (FR-024; rune-addressed) --------------------
@@ -1093,6 +1085,54 @@ type toolResultHit struct {
 	ToolName string
 	TurnNum  int
 	Found    bool
+	// Rebuilt is true when the located record was converted from a hydrated
+	// source (CONV-P A, model_origin == conv_rebuilt): its original tool-result
+	// bytes are not provable and recall refuses them (FR-046).
+	Rebuilt bool
+}
+
+// toolResultLocator is the indexed side of the tool_call_id lookup: it finds the
+// result from index rows alone, and the one located slot (and its issuer) is
+// then read by ordinal. session.UnifiedStore implements it; a store without an
+// ordinal index falls back to the streaming scan.
+type toolResultLocator interface {
+	LocateToolResult(ctx context.Context, key, id string, wantLine int) (session.ToolResultLocation, error)
+	ReadModelSlots(ctx context.Context, key string, from, to int, fn func(session.ModelSlot, []byte) error) error
+}
+
+// locatedToolResult resolves id through the ordinal index: no archive walk from
+// line zero, only the result slot and its issuing assistant are read.
+func locatedToolResult(ctx context.Context, loc toolResultLocator, sessionKey, id string, wantLine int) (toolResultHit, error) {
+	hit := toolResultHit{Line: -1}
+	l, err := loc.LocateToolResult(ctx, sessionKey, id, wantLine)
+	if err != nil || !l.Found {
+		return hit, err
+	}
+	var slot session.ModelSlot
+	if err := loc.ReadModelSlots(ctx, sessionKey, l.Ordinal, l.Ordinal, func(s session.ModelSlot, _ []byte) error {
+		slot = s
+		return nil
+	}); err != nil {
+		return hit, err
+	}
+	name := ""
+	if l.Issuer >= 0 {
+		if err := loc.ReadModelSlots(ctx, sessionKey, l.Issuer, l.Issuer, func(s session.ModelSlot, _ []byte) error {
+			for _, tc := range s.Message.ToolCalls {
+				if tc.ID == id && tc.Function != nil {
+					name = tc.Function.Name
+				}
+			}
+			return nil
+		}); err != nil {
+			return hit, err
+		}
+	}
+	return toolResultHit{
+		Msg:  memory.ArchivedMessage{Message: slot.Message, TS: slot.TS},
+		Line: l.Ordinal, ToolName: name, TurnNum: l.TurnNum, Found: true,
+		Rebuilt: slot.Origin == session.ModelOriginConvRebuilt,
+	}, nil
 }
 
 // scanForToolResult streams the archive for the tool result addressed by id
@@ -1105,6 +1145,9 @@ type toolResultHit struct {
 func (t *RecallConversationTool) scanForToolResult(
 	ctx context.Context, sessionKey, id string, wantLine int,
 ) (toolResultHit, error) {
+	if loc, ok := t.archive.(toolResultLocator); ok {
+		return locatedToolResult(ctx, loc, sessionKey, id, wantLine)
+	}
 	hit := toolResultHit{Line: -1}
 	userCount := 0
 	pendingName := ""

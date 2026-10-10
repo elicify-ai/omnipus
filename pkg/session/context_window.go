@@ -2,75 +2,29 @@ package session
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/memory"
-	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // ContextWindowStore is the error-returning checkpoint seam. It is separate
 // from the legacy fire-and-forget session interface, not a second archive.
 type ContextWindowStore interface {
-	AppendWindowMessage(ctx context.Context, key string, msg providers.Message) (memory.WindowSnapshot, error)
-	SnapshotWindow(ctx context.Context, key string) (memory.WindowSnapshot, error)
+	// WindowView is the bounded snapshot (live slots, anchor, turn counters).
+	WindowView(ctx context.Context, key string) (WindowView, error)
+	// AppendModelMessage is the checked append: producer-chosen membership,
+	// trusted source and, for a tool result, the issuing assistant's address.
+	AppendModelMessage(ctx context.Context, key string, in ModelAppend) (ModelSlot, WindowView, error)
+	// PlaceSavedInput places a saved chat-only input into model order once.
+	PlaceSavedInput(ctx context.Context, key string, source ArchiveAddress) (ModelSlot, WindowView, error)
+	// ReadModelSlots streams the slots with ordinals in [from, to] through the
+	// ordinal index, with each slot's literal stored model_message JSON.
+	ReadModelSlots(ctx context.Context, key string, from, to int, fn func(ModelSlot, []byte) error) error
+
 	CommitWindow(ctx context.Context, key string, before, after memory.WindowState) error
 	RestoreWindow(ctx context.Context, key string, before, after memory.WindowState) error
 	RollbackWindow(ctx context.Context, key string, start memory.WindowState) error
 }
 
-func (b *JSONLBackend) windowStore() (ContextWindowStore, error) {
-	s, ok := b.store.(ContextWindowStore)
-	if !ok {
-		return nil, fmt.Errorf("session: store does not support atomic context checkpoints")
-	}
-	return s, nil
-}
-
-func (b *JSONLBackend) AppendWindowMessage(ctx context.Context, key string, msg providers.Message) (memory.WindowSnapshot, error) {
-	s, err := b.windowStore()
-	if err != nil {
-		return memory.WindowSnapshot{}, err
-	}
-	return s.AppendWindowMessage(ctx, key, msg)
-}
-
-func (b *JSONLBackend) SnapshotWindow(ctx context.Context, key string) (memory.WindowSnapshot, error) {
-	s, err := b.windowStore()
-	if err != nil {
-		return memory.WindowSnapshot{}, err
-	}
-	return s.SnapshotWindow(ctx, key)
-}
-func (b *JSONLBackend) CommitWindow(ctx context.Context, key string, before, after memory.WindowState) error {
-	s, err := b.windowStore()
-	if err != nil {
-		return err
-	}
-	return s.CommitWindow(ctx, key, before, after)
-}
-func (b *JSONLBackend) RestoreWindow(ctx context.Context, key string, before, after memory.WindowState) error {
-	s, err := b.windowStore()
-	if err != nil {
-		return err
-	}
-	return s.RestoreWindow(ctx, key, before, after)
-}
-
-func (b *JSONLBackend) RollbackWindow(ctx context.Context, key string, start memory.WindowState) error {
-	s, err := b.windowStore()
-	if err != nil {
-		return err
-	}
-	return s.RollbackWindow(ctx, key, start)
-}
-
-func (us *UnifiedStore) AppendWindowMessage(ctx context.Context, key string, msg providers.Message) (memory.WindowSnapshot, error) {
-	return us.backend.AppendWindowMessage(ctx, key, msg)
-}
-
-func (us *UnifiedStore) SnapshotWindow(ctx context.Context, key string) (memory.WindowSnapshot, error) {
-	return us.backend.SnapshotWindow(ctx, key)
-}
 func (us *UnifiedStore) CommitWindow(ctx context.Context, key string, before, after memory.WindowState) error {
 	return us.backend.CommitWindow(ctx, key, before, after)
 }
@@ -80,4 +34,28 @@ func (us *UnifiedStore) RestoreWindow(ctx context.Context, key string, before, a
 
 func (us *UnifiedStore) RollbackWindow(ctx context.Context, key string, start memory.WindowState) error {
 	return us.backend.RollbackWindow(ctx, key, start)
+}
+
+func (us *UnifiedStore) WindowView(ctx context.Context, key string) (WindowView, error) {
+	return us.backend.WindowView(ctx, key)
+}
+
+func (us *UnifiedStore) AppendModelMessage(ctx context.Context, key string, in ModelAppend) (ModelSlot, WindowView, error) {
+	// Effects design D2: a model append is a write to the session archive, so it
+	// takes the session shard first (shard, then backend, then store lock).
+	h := us.lockSession(owningSessionID(key))
+	defer h.Unlock()
+	return us.backend.AppendModelMessage(ctx, key, in)
+}
+
+func (us *UnifiedStore) PlaceSavedInput(ctx context.Context, key string, source ArchiveAddress) (ModelSlot, WindowView, error) {
+	// Effects design D2: a model append is a write to the session archive, so it
+	// takes the session shard first (shard, then backend, then store lock).
+	h := us.lockSession(owningSessionID(key))
+	defer h.Unlock()
+	return us.backend.PlaceSavedInput(ctx, key, source)
+}
+
+func (us *UnifiedStore) ReadModelSlots(ctx context.Context, key string, from, to int, fn func(ModelSlot, []byte) error) error {
+	return us.backend.ReadModelSlots(ctx, key, from, to, fn)
 }

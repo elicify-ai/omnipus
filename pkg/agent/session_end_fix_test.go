@@ -13,6 +13,13 @@
 // genuinely exercised, not vacuously satisfied by a broken fixture.
 //
 // Run: CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestCloseSession' -p 1 ./pkg/agent/
+//
+// session-core U12 port: TestCloseSession_SkipsRecapForDelegatedChild_
+// ButRunsForRealChatSession's Part-B positive lower bound ("a REAL chat session
+// closing must still trigger the recap pipeline") originally used the "explicit"
+// trigger. FR-036 / DEL-08 retired it (recap now fires only for
+// idle/bootstrap/joined), so Part B is ported to the still-valid "idle" trigger
+// with every assertion unchanged.
 package agent
 
 import (
@@ -174,7 +181,7 @@ func TestCloseSession_SkipsRecapForDelegatedChild_ButRunsForRealChatSession(t *t
 		t.Fatalf("AppendTranscript(chat): %v", err)
 	}
 
-	al.CloseSession(chatSessionID, "explicit")
+	al.CloseSession(chatSessionID, "idle")
 
 	waitDeadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte

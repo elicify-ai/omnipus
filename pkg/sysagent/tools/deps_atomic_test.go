@@ -60,10 +60,10 @@ func TestRegistry_ToolDepsContract(t *testing.T) {
 		}
 	})
 
-	t.Run("AllTools_returns_exactly_35", func(t *testing.T) {
+	t.Run("AllTools_returns_exactly_31", func(t *testing.T) {
 		all := AllTools(nil)
-		if len(all) != 35 {
-			t.Errorf("AllTools(nil) returned %d tools; want == 35 (FR-001/FR-002)", len(all))
+		if len(all) != 31 {
+			t.Errorf("AllTools(nil) returned %d tools; want == 31 (FR-001/FR-002; the four *_in_workspace tools retired by DEL-23)", len(all))
 		}
 		for _, tool := range all {
 			// Basic liveness checks — must not panic.

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -70,13 +71,10 @@ func TestCWIdentity_FullResultRemainsAddressableForLaterProjection(t *testing.T)
 				require.Equal(t, archived, h.archive(t), "reopening must preserve full archive bytes")
 			}
 			if mode == "capped_then_emptied" {
-				update := cwIdentityAddressedUpdate(t, session.ToolCallID(older.key.ToolCallID), older.line,
-					"capped", map[string]any{"text": "older occurrence capped"})
-				previous, err := h.store.UpdateToolCallProjections(h.sessionID, []session.ToolCallProjectionUpdate{update})
-				require.NoError(t, err)
+				effect := h.capAddressed(t, older, "older occurrence capped")
 				require.Equal(t, cwIdentityProjectedTranscript(before, older.line, "capped", "older occurrence capped"), h.transcript(t),
 					"later capping must address the formerly full occurrence")
-				cwIdentityAssertUndoAddress(t, previous, older.line)
+				cwIdentityAssertProjectionEffect(t, effect)
 			}
 
 			mark := h.projectOK(t, h.turn("late-projection"), older)
@@ -153,7 +151,7 @@ func TestCWIdentity_RepeatedUpdatesAbortToOriginalAndKeepAddress(t *testing.T) {
 			initialSet := h.store.Projection(h.key).Entries.Clone()
 			initialSkip := len(archived) - len(h.store.GetHistory(h.key))
 			ts := h.turn("abort")
-			require.Equal(t, h.archiveLines, ts.initialArchiveLen, "rollback snapshots the actual turn-start archive")
+			require.Equal(t, h.archiveLines, ts.initialWindow.Count, "rollback snapshots the actual turn-start archive")
 			require.Equal(t, initialSet, ts.initialEmptiedSet, "rollback snapshots the actual turn-start projection set")
 
 			// First real pass: genuine D5 budget pressure empties `older` in
@@ -174,25 +172,31 @@ func TestCWIdentity_RepeatedUpdatesAbortToOriginalAndKeepAddress(t *testing.T) {
 			require.True(t, ok, "the first real D5 pressure check must actually commit a projection change")
 			assert.Equal(t, cwIdentityProjectedTranscript(before, older.line, "emptied", mark), h.transcript(t),
 				"the first real write must reach the addressed older occurrence")
-			require.Len(t, ts.emptiedTranscriptPrev, 1, "the first real write must retain its undo record")
+			require.Len(t, ts.projectionEffects, 1, "the first real write must retain its undo record")
 
 			mark2, ok2 := h.project(t, ts, older)
 			require.False(t, ok2, "a second real pressure check on an already-emptied key must be a genuine no-op")
 			assert.Equal(t, mark, mark2, "the mark is a pure function of the archived content/line/tool/id/turn — identical on repeat")
 			assert.Equal(t, cwIdentityProjectedTranscript(before, older.line, "emptied", mark), h.transcript(t),
 				"the no-op second check must leave that same row exactly as the first write left it")
-			require.Len(t, ts.emptiedTranscriptPrev, 1, "a no-op pressure check retains no further undo record")
+			require.Len(t, ts.projectionEffects, 1, "a no-op pressure check retains no further undo record")
 
-			undo := append([]session.ToolCallProjectionUpdate(nil), ts.emptiedTranscriptPrev...)
+			undo := append([]session.ArchiveAddress(nil), ts.projectionEffects...)
 			h.addArchive(t, providers.Message{Role: "user", Content: "discard this aborted tail"})
 
 			require.NoError(t, ts.restoreSession(h.agent))
-			h.archiveLines-- // exactly the one explicit tail write above is rolled back
-			require.Equal(t, archived, h.archive(t), "abort restores the original full archive, not a projected version")
-			require.Equal(t, initialSkip, len(h.archive(t))-len(h.store.GetHistory(h.key)), "abort restores turn-start Skip")
+			// FR-006: the aborted tail's bytes are RETAINED (append-only). The
+			// abort does not rewrite the prefix; only the model view excludes it.
+			require.Len(t, h.archive(t), len(archived)+1,
+				"FR-006: the aborted tail's bytes must stay in the archive")
+			require.Equal(t, archived, h.archive(t)[:len(archived)],
+				"abort must not rewrite the retained prefix")
+			snapAfter, snapErr := h.store.WindowView(context.Background(), h.key)
+			require.NoError(t, snapErr)
+			require.Equal(t, initialSkip, snapAfter.State.Skip, "abort restores turn-start Skip")
 			require.Equal(t, initialSet, h.store.Projection(h.key).Entries, "abort restores the original projection set")
 			require.Equal(t, before, h.transcript(t), "abort must restore original text and content_state, not the intermediate first write")
-			require.Empty(t, ts.emptiedTranscriptPrev, "undo is consumed exactly once")
+			require.Empty(t, ts.projectionEffects, "undo is consumed exactly once")
 			require.NoError(t, ts.restoreSession(h.agent), "a repeated restore must leave the original state intact")
 			require.Equal(t, before, h.transcript(t))
 
@@ -201,7 +205,7 @@ func TestCWIdentity_RepeatedUpdatesAbortToOriginalAndKeepAddress(t *testing.T) {
 				"restoring projections must not erase the surviving occurrence's transcript address")
 			if tc.name == "reused_id" {
 				for _, record := range undo {
-					cwIdentityAssertUndoAddress(t, []session.ToolCallProjectionUpdate{record}, older.line)
+					cwIdentityAssertProjectionEffect(t, record)
 				}
 				h.assertLines(t, older, newer)
 				h.reopen(t)

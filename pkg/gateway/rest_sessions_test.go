@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,33 +24,43 @@ import (
 // --- moved from rest.go tests 2026-09-15 ---
 
 // ---------------------------------------------------------------------------
-// T-G1: DeleteSession_HeartbeatGuard
+// T-G1: DeleteSession_MainGuard
 // ---------------------------------------------------------------------------
 
-// TestDeleteSession_HeartbeatGuard verifies:
-//   - DELETE on a heartbeat session whose workspace heartbeat is ENABLED → 409
-//     AND an audit entry with event="session.delete.blocked" is written (C-1).
-//   - DELETE on a heartbeat session whose workspace heartbeat is DISABLED → 200.
+// TestDeleteSession_MainGuard verifies C-MAIN's protection guard at DELETE:
+//   - DELETE on a MAIN session → 409 AND an audit entry with
+//     event="session.delete.blocked" (C-1).
+//   - DELETE on a non-main session in the same workspace → 200 (control: the
+//     guard keys on the main identity, not on "any session of a workspace").
 //   - DELETE on a normal chat session → 200 (regression).
-func TestDeleteSession_HeartbeatGuard(t *testing.T) {
+//
+// The pre-U1 "disabled heartbeat allows delete" subcase is gone: FR-002 makes
+// protection a property of the identity, so there is no longer a toggle whose
+// state could unprotect a session.
+func TestDeleteSession_MainGuard(t *testing.T) {
 	api, _ := buildHeartbeatTestAPI(t)
 	auditDir := filepath.Join(api.homePath, "system")
 
 	const agentID = "mia"
+	const wsID = "01JXHBTESTWSID0000000001"
 
-	// ── subcase 1: protected heartbeat session ── //
-	t.Run("enabled heartbeat blocks delete and emits audit", func(t *testing.T) {
-		// Create the heartbeat session.
-		meta := createHeartbeatSessionForAgent(t, api.agentLoop, agentID, "01JXHBTESTWSID0000000001")
+	hbWriteWorkspaceRecord(t, api, workspace.Workspace{
+		ID: wsID, Name: "WS", Status: "active", CoreTeam: []string{agentID},
+		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
+	})
 
-		// Write workspace with enabled heartbeat pointing at this session.
-		seedWorkspaceWithHeartbeat(t, api.homePath, agentID, meta.ID)
+	store := api.agentLoop.GetSessionStore()
+	require.NotNil(t, store)
+	mainMeta, err := store.GetOrCreateMainSession(wsID, agentID)
+	require.NoError(t, err)
 
-		w := deleteSessionViaAPI(t, api, meta.ID)
+	// ── subcase 1: the main is protected ── //
+	t.Run("main blocks delete and emits audit", func(t *testing.T) {
+		w := deleteSessionViaAPI(t, api, mainMeta.ID)
 		assert.Equal(t, http.StatusConflict, w.Code,
-			"DELETE protected heartbeat session must return 409; body=%s", w.Body.String())
-		assert.Contains(t, w.Body.String(), "heartbeat",
-			"409 body must mention heartbeat")
+			"DELETE a protected main must return 409; body=%s", w.Body.String())
+		assert.Contains(t, w.Body.String(), "main",
+			"409 body must say why the session is protected")
 
 		// Flush audit log and check for the blocked event.
 		require.NoError(t, api.auditor.Close())
@@ -63,51 +72,36 @@ func TestDeleteSession_HeartbeatGuard(t *testing.T) {
 				assert.Equal(t, audit.DecisionDeny, e["decision"])
 				details, _ := e["details"].(map[string]any)
 				require.NotNil(t, details, "audit entry must have details")
-				assert.Equal(t, meta.ID, details["session_id"])
+				assert.Equal(t, mainMeta.ID, details["session_id"])
 				assert.Equal(t, agentID, details["agent_id"])
-				assert.Equal(t, "heartbeat enabled", details["reason"])
+				assert.Equal(t, "main session is protected", details["reason"])
 			}
 		}
 		assert.True(t, found, "audit entry session.delete.blocked must be written; entries=%v", entries)
 	})
 
-	// ── subcase 2: disabled heartbeat allows delete ── //
-	t.Run("disabled heartbeat allows delete", func(t *testing.T) {
+	// ── subcase 2: a non-main session in the same workspace is deletable ── //
+	t.Run("non-main session is deletable", func(t *testing.T) {
 		api2, _ := buildHeartbeatTestAPI(t)
 		const agent2 = "mia"
-		meta2 := createHeartbeatSessionForAgent(t, api2.agentLoop, agent2, "01JXHBTESTWSID0000000002")
-
-		// Workspace with disabled heartbeat (session_id does NOT match the live one).
-		wsDir2 := filepath.Join(api2.homePath, "workspaces")
-		require.NoError(t, os.MkdirAll(wsDir2, 0o700))
-		wsID2 := "01JXHBTESTWSID0000000002"
-		ws2 := workspace.Workspace{
-			ID: wsID2, Name: "WS2", Status: "active",
-			CoreTeam: []string{agent2},
-			MemberConfigs: map[string]workspace.MemberConfig{
-				agent2: {Heartbeat: &workspace.MemberHeartbeat{
-					Enabled:         false,
-					IntervalMinutes: 10,
-					Body:            "body",
-					SessionID:       meta2.ID,
-				}},
-			},
+		const ws2 = "01JXHBTESTWSID0000000002"
+		hbWriteWorkspaceRecord(t, api2, workspace.Workspace{
+			ID: ws2, Name: "WS2", Status: "active", CoreTeam: []string{agent2},
 			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
-		}
-		data, err := json.MarshalIndent(ws2, "", "  ")
+		})
+		other, err := api2.agentLoop.GetSessionStore().NewScheduledSession(agent2)
 		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(filepath.Join(wsDir2, wsID2+".json"), data, 0o600))
 
-		w2 := deleteSessionViaAPI(t, api2, meta2.ID)
-		assert.Equal(t, http.StatusOK, w2.Code,
-			"DELETE session with disabled heartbeat must return 200; body=%s", w2.Body.String())
+		w := deleteSessionViaAPI(t, api2, other.ID)
+		assert.Equal(t, http.StatusOK, w.Code,
+			"DELETE a non-main session must return 200; body=%s", w.Body.String())
 	})
 
 	// ── subcase 3: normal chat session always deletable ── //
 	t.Run("normal chat session is deletable", func(t *testing.T) {
 		api3, _ := buildHeartbeatTestAPI(t)
 		const agent3 = "mia"
-		store3 := api3.agentLoop.GetAgentStore(agent3)
+		store3 := api3.agentLoop.GetSessionStore()
 		require.NotNil(t, store3)
 		chatMeta, err := store3.NewSession("chat", "webchat", agent3)
 		require.NoError(t, err)

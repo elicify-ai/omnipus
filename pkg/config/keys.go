@@ -114,4 +114,13 @@ const (
 	// retired OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS import over an
 	// admin's value, so no generic write path may touch it.
 	AgentsDefaultsMaxToolIterationsEnvImported ConfigKey = "agents.defaults.max_tool_iterations_env_imported"
+
+	// WorkspaceSeedDefaults is the config-file-only workspace delegation seed
+	// block (session-core C-DELEGATE, FR-014/015; BDD-05.7). It has NO gateway
+	// or UI write path by design: the generic PUT /api/v1/config refuses it
+	// (pkg/gateway's blockedPaths) and the GET strips it
+	// (wireExcludedConfigFields); set_config refuses it too because it is not
+	// in pkg/sysagent/tools' knownConfigPrefixes allow list. The operator edits
+	// config.json by hand.
+	WorkspaceSeedDefaults ConfigKey = "workspace_seed_defaults"
 )

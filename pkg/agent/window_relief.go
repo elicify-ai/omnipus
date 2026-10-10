@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"sort"
 	"strings"
 
@@ -103,8 +104,8 @@ func (p *windowCheckpoint) slideOldest() bool {
 			lines = append(lines, line)
 		}
 		p.messages, p.lines = out, lines
-		from := turnNumberForArchiveLine(p.snapshot.Archive, p.state.Skip)
-		to := turnNumberForArchiveLine(p.snapshot.Archive, cut-1)
+		from := turnNumberForArchiveLine(p.archive(), p.state.Skip)
+		to := turnNumberForArchiveLine(p.archive(), cut-1)
 		p.notice.addEvicted(from, to)
 		p.state.Skip = cut
 		if p.anchor >= 0 && p.anchor < cut {
@@ -120,9 +121,9 @@ func (p *windowCheckpoint) slideOldest() bool {
 				delete(p.notice.shortened, key)
 			}
 		}
-		for key := range p.state.Projection.TranscriptLine {
+		for key := range p.state.Projection.TranscriptAddr {
 			if key.ArchiveLine < cut {
-				delete(p.state.Projection.TranscriptLine, key)
+				delete(p.state.Projection.TranscriptAddr, key)
 			}
 		}
 		return true
@@ -179,7 +180,7 @@ func (p *windowCheckpoint) shortenResult(i int, halve bool) (bool, error) {
 		kept = k / 2
 	}
 	tool, _ := owningToolCall(p.messages, i, m.ToolCallID)
-	content, err := projectSource(p.snapshot.Archive, line, kept, tool, m.ToolCallID)
+	content, err := projectSource(p.archive(), line, kept, tool, m.ToolCallID)
 	if err != nil {
 		return false, err
 	}
@@ -195,18 +196,21 @@ func (p *windowCheckpoint) shortenResult(i int, halve bool) (bool, error) {
 	return true, nil
 }
 
-func breadcrumbForWindow(snap memory.WindowSnapshot, skip int) string {
-	// The checkpoint may stage a newer Skip than snap.State.Skip. Render that
-	// exact prefix from the same snapshot, without rereading persisted metadata.
-	return buildArchiveBreadcrumb(snap.Archive, skip)
+func breadcrumbForWindow(ctx context.Context, slots slotsBefore, skip int) (string, error) {
+	// The checkpoint may stage a newer Skip than the snapshot's. Render that
+	// exact prefix through the ordinal index, newest evicted slot first.
+	return buildArchiveBreadcrumb(ctx, slots, skip)
 }
 
-func (p *windowCheckpoint) rebuildBreadcrumb() {
+func (p *windowCheckpoint) rebuildBreadcrumb(ctx context.Context) error {
 	if p.state.Skip == p.snapshot.State.Skip || len(p.messages) == 0 || p.messages[0].Role != "system" {
-		return
+		return nil
 	}
 	old := p.breadcrumb
-	next := breadcrumbForWindow(p.snapshot, p.state.Skip)
+	next, err := breadcrumbForWindow(ctx, p.slots, p.state.Skip)
+	if err != nil {
+		return err
+	}
 	m := p.messages[0]
 	m.SystemParts = append([]providers.ContentBlock(nil), m.SystemParts...)
 	found := false
@@ -232,4 +236,5 @@ func (p *windowCheckpoint) rebuildBreadcrumb() {
 	}
 	p.messages[0] = m
 	p.breadcrumb = next
+	return nil
 }

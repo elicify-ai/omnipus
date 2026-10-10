@@ -466,7 +466,7 @@ test('shell: the workspace tabs the plan drives all render', async ({ page }) =>
   await ensureSession(page, `${BASE_URL}/#/workspaces/${wsId}/chat`);
 
   for (const [tab, marker] of [
-    ['chat', /Message|Welcome to omnipus/i],
+    ['chat', /Main chat|Message|Welcome to omnipus/i],
     ['board', /Team Task Backlog|No tasks yet/i],
     ['calendar', /No scheduled items|Today/i],
     ['team', /Team & delegation/i],

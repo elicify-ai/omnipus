@@ -545,7 +545,7 @@ func (sg *startTestGateway) bootUntilReady() {
 	//
 	// Losing that race produced a REAL RED that named an innocent test:
 	//
-	//   TestSwitchAgent_NamedTarget_EmitsAgentSwitchedFrameWithAgentIdSet
+	//   a gateway-booting integration test
 	//   StartTestGateway: gateway at http://127.0.0.1:41301 failed to boot:
 	//   bind shared HTTP server at 127.0.0.1:41301: bind: address already in use
 	//

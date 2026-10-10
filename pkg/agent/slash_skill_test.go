@@ -81,11 +81,11 @@ func TestResolveSlash_Matrix(t *testing.T) {
 		},
 		// A4: /help → builtin wins, not matched by skill parser
 		{id: "A4", input: "/help", wantMatched: false},
-		// A4b: /clear → builtin wins
+		// A4b: /clear → U10a-removed builtin, no skill of that name → unmatched
 		{id: "A4b", input: "/clear", wantMatched: false},
 		// A4c: /skills → builtin wins
 		{id: "A4c", input: "/skills", wantMatched: false},
-		// A4d: /agents → builtin wins
+		// A4d: /agents → U10a-removed builtin, no skill of that name → unmatched
 		{id: "A4d", input: "/agents", wantMatched: false},
 		// A4e: /cancel → builtin wins
 		{id: "A4e", input: "/cancel", wantMatched: false},
@@ -151,8 +151,8 @@ func TestResolveSlash_SkillCannotShadowBuiltin(t *testing.T) {
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
 
-	// Install a skill whose slug is "clear" — same as the /clear built-in.
-	writeSkillFile(t, cfg.Agents.Defaults.Home, "clear")
+	// Install a skill whose slug is "status" — same as the /status built-in.
+	writeSkillFile(t, cfg.Agents.Defaults.Home, "status")
 
 	agent := al.GetRegistry().GetDefaultAgent()
 	if agent == nil {
@@ -160,12 +160,12 @@ func TestResolveSlash_SkillCannotShadowBuiltin(t *testing.T) {
 	}
 
 	opts := &processOptions{SessionKey: "test-session"}
-	matched, _, _ := al.applyExplicitSkillCommand("/clear", agent, opts)
+	matched, _, _ := al.applyExplicitSkillCommand("/status", agent, opts)
 
 	// The skill parser must NOT match — the built-in wins; handleCommand lets
-	// the normal executor handle /clear.
+	// the normal executor handle /status.
 	if matched {
-		t.Fatal("skill named 'clear' must not shadow the /clear built-in (D3)")
+		t.Fatal("skill named 'status' must not shadow the /status built-in (D3)")
 	}
 	if len(opts.ForcedSkills) > 0 {
 		t.Fatalf("ForcedSkills must be empty when builtin wins, got %v", opts.ForcedSkills)
@@ -334,89 +334,6 @@ func TestCmdSkills_WebSurface_AndReplyText(t *testing.T) {
 	}
 	if !strings.Contains(reply, "/<skillname>") {
 		t.Errorf("/skills reply must mention '/<skillname>'; got:\n%s", reply)
-	}
-}
-
-// TestCmdAgents_WebSurface_ClientDelivery verifies that /agents is on SurfaceWeb
-// with DeliveryClient so the SPA opens the in-header agent selector (D7/FR-007).
-//
-// Traces to: FR-007, US5.3.
-func TestCmdAgents_WebSurface_ClientDelivery(t *testing.T) {
-	defs := commands.BuiltinDefinitions()
-
-	var agentsDef *commands.Definition
-	for i := range defs {
-		if defs[i].Name == "agents" {
-			agentsDef = &defs[i]
-			break
-		}
-	}
-	if agentsDef == nil {
-		t.Fatal("/agents command not found in BuiltinDefinitions")
-	}
-
-	if !agentsDef.AllowsSurface(commands.SurfaceWeb) {
-		t.Error("/agents must be on SurfaceWeb (D7)")
-	}
-	if agentsDef.EffectiveDelivery() != commands.DeliveryClient {
-		t.Errorf("/agents delivery=%q, want %q (D7)", agentsDef.EffectiveDelivery(), commands.DeliveryClient)
-	}
-
-	// CLI/Channel: the handler must still work (text list).
-	rt := &commands.Runtime{
-		ListAgentIDs: func() []string {
-			return []string{"mia", "jim"}
-		},
-	}
-	reg := commands.NewRegistry(defs)
-	ex := commands.NewExecutor(reg, rt)
-
-	var reply string
-	res := ex.Execute(context.Background(), commands.Request{
-		Channel: "telegram",
-		Text:    "/agents",
-		Reply: func(text string) error {
-			reply = text
-			return nil
-		},
-	})
-	if res.Outcome != commands.OutcomeHandled {
-		t.Fatalf("/agents on telegram: outcome=%v, want Handled", res.Outcome)
-	}
-	if !strings.Contains(reply, "mia") || !strings.Contains(reply, "jim") {
-		t.Errorf("/agents reply must list agent IDs on CLI/Channel; got:\n%s", reply)
-	}
-}
-
-// TestResolveSlash_HiddenBuiltinWins verifies that a skill whose slug matches a
-// HIDDEN (deprecated) built-in command name cannot shadow it (D3/F4). Hidden
-// back-compat commands like "list" are registered in the registry and must
-// therefore win over a same-named skill even though they are excluded from /help
-// and GET /commands output.
-//
-// Traces to: FR-003, D3, F4 (7-reviewer finding).
-func TestResolveSlash_HiddenBuiltinWins(t *testing.T) {
-	al, cfg, _, _, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-
-	// Install a skill whose slug is "list" — same as the hidden back-compat built-in.
-	writeSkillFile(t, cfg.Agents.Defaults.Home, "list")
-
-	agent := al.GetRegistry().GetDefaultAgent()
-	if agent == nil {
-		t.Fatal("expected default agent")
-	}
-
-	opts := &processOptions{SessionKey: "test-session"}
-	matched, _, _ := al.applyExplicitSkillCommand("/list skills", agent, opts)
-
-	// The skill parser must NOT match — registration-based gate includes hidden
-	// commands (D3 "built-ins win", F4 fix).
-	if matched {
-		t.Fatal("a skill named 'list' must not shadow the hidden /list built-in (D3/F4)")
-	}
-	if len(opts.ForcedSkills) > 0 {
-		t.Fatalf("ForcedSkills must be empty when hidden builtin wins, got %v", opts.ForcedSkills)
 	}
 }
 

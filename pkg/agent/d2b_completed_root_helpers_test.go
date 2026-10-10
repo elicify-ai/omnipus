@@ -107,6 +107,13 @@ func newD2bRoot(t *testing.T) *d2bRoot {
 	for _, entry := range h.prior {
 		require.NoError(t, al.GetSessionStore().AppendTranscript(id, entry))
 	}
+	// The archive writer stamps ViewMembership "chat" on a chat transcript
+	// entry (FR-004 / C-ARCHIVE), so the exact durable form is the read-back —
+	// compare the before/after checks against that, not the unstamped structs.
+	readBack, err := al.GetSessionStore().ReadTranscript(id)
+	require.NoError(t, err)
+	require.Len(t, readBack, len(h.prior), "SETUP: the seeded prior entries must be durable")
+	h.prior = readBack
 	return h
 }
 
@@ -120,7 +127,10 @@ func (h *d2bRoot) seedState(t *testing.T, state session.LifecycleState) {
 	rec := &session.LifecycleRecord{
 		SessionID: h.id, Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, OwnerScopeID: meta.Owner,
-		WorkspaceID: meta.WorkspaceID, AgentID: meta.ActiveAgentID,
+		// session-core U1 / DEL-11: the record's acting agent is the session's
+		// IMMUTABLE owner; ActiveAgentID (the retired handover owner) is empty
+		// on any session that was never switched.
+		WorkspaceID: meta.WorkspaceID, AgentID: meta.AgentID,
 		Origin: &session.Origin{Kind: session.OriginKindChat},
 	}
 	ls := h.al.GetSessionLifecycleStore()

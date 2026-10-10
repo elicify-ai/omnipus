@@ -21,6 +21,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/askuser"
@@ -1319,9 +1320,13 @@ func (wh *wsHandlerReadLoop) handleMessageFrame(data []byte) wsHandlerReadLoopFl
 		})
 		return wsHandlerReadLoopContinue
 	}
-	wh.h.handleChatMessageWithClientID(
+	var recipient *addressing.Pair
+	if f.Recipient != nil {
+		recipient = &addressing.Pair{WorkspaceID: f.Recipient.WorkspaceId, AgentID: f.Recipient.AgentId}
+	}
+	wh.h.handleChatMessageToRecipient(
 		wh.ctx, wh.chatID, sessionID, f.Content, agentID, f.Media,
-		modelName, workspaceID, setupKickoff, clientMessageID, f.AutoApprove, wh.wc,
+		modelName, workspaceID, setupKickoff, clientMessageID, f.AutoApprove, recipient, wh.wc,
 	)
 	return wsHandlerReadLoopNext
 }
@@ -1346,13 +1351,12 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 		if f.SessionId != "" {
 			// #823: the client's cursor for this session ({since_seq, boot_id})
 			// decides incremental catch-up vs snapshot (BE-DESIGN.md §3.3/§4).
-			wh.h.handleAttachSession(wh.ctx, wh.chatID, f.SessionId,
-				&attachCursor{SinceSeq: f.SinceSeq, BootID: f.BootId}, wh.wc)
+			wh.h.handleAttachSessionWithAck(wh.ctx, wh.chatID, f.SessionId,
+				&attachCursor{SinceSeq: f.SinceSeq, BootID: f.BootId},
+				&attachAck{Ack: f.AckAttention != nil && *f.AckAttention, Bound: f.AttentionBound}, wh.wc)
 		} else {
 			slog.Warn("ws: attach_session with empty session_id", "chat_id", wh.chatID)
 		}
-	case string(generated.WsFrameTypeSessionClose):
-		return wh.handleSessionCloseFrame(data)
 	case string(generated.WsFrameTypeSessionModeUpdate):
 		return wh.handleSessionModeUpdateFrame(data)
 	case string(generated.WsFrameTypePing):
@@ -1455,8 +1459,6 @@ func wsFrameSchemaName(frameType string) string {
 		return "AttachSessionFrame"
 	case string(generated.WsFrameTypeDevicePairingResponse):
 		return "DevicePairingResponseFrame"
-	case string(generated.WsFrameTypeSessionClose):
-		return "SessionCloseFrame"
 	case string(generated.WsFrameTypeSessionModeUpdate):
 		return "SessionModeUpdateFrame"
 	case string(generated.WsFrameTypeWhatsappPairingSubscribe):
@@ -1572,6 +1574,14 @@ type wsStreamer struct {
 	// live TokenFrame/DoneFrame's message_id always equals the persisted
 	// entry's id for the same round. Guarded by statsMu like turnID.
 	messageID string
+	// goalID is the goal the producing turn was dispatched under (session-core
+	// FR-039 / C-GOAL), captured at turn start and stamped by the agent loop via
+	// SetGoalID, mirroring SetTurnID's pattern exactly. It rides the live
+	// TokenFrame/DoneFrame (so a bubble joins to its own exact keyed goal
+	// criteria) and the assistant entry Finalize persists, so replay/REST carry
+	// the SAME association. Empty means the turn ran under no proven goal
+	// (UNKNOWN association → neutral indicator). Guarded by statsMu like turnID.
+	goalID string
 	// parentSpawnCallID identifies the spawning "delegate"/"spawn" ToolCall.ID
 	// in the PARENT turn when this streamer belongs to a CHILD delegation
 	// sub-turn (empty for a root/non-delegated turn). Stamped by the agent

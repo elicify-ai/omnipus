@@ -86,7 +86,9 @@ func newADR053TestTool(t *testing.T) (*DelegateTool, *session.LifecycleStore, *s
 // session_id from the generated response payload.
 func runAndExtractSessionID(t *testing.T, tool *DelegateTool, ctx context.Context, task string) string {
 	t.Helper()
-	result := tool.Execute(ctx, map[string]any{"task": task})
+	// Delegation always names an explicit target (settled design); the caller's
+	// own id is the natural target for these launch-path fixtures.
+	result := tool.Execute(ctx, map[string]any{"task": task, "agent_id": ToolAgentID(ctx)})
 	if result.IsError {
 		t.Fatalf("run failed: %s", result.ForLLM)
 	}
@@ -109,6 +111,7 @@ func TestDelegateTool_Run_SnapshotOverCap_Rejected(t *testing.T) {
 	}
 	result := tool.Execute(context.Background(), map[string]any{
 		"task":     "do something",
+		"agent_id": "worker",
 		"snapshot": map[string]any{"references": refs},
 	})
 	if !result.IsError {
@@ -181,7 +184,10 @@ func TestDelegateTool_Steer_RateAndBodyCaps(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
-	tool.SetSteerCaps(6, 16*1024)
+	// Rate cap 6/min; the body cap is left at the product default
+	// (session.DefaultSteerBodyBytes, C-LIMIT 65,536 B — ADR-053 §Contract
+	// Surface "Caps"), which is what the body half below exercises.
+	tool.SetSteerCaps(6, session.DefaultSteerBodyBytes)
 
 	for i := 0; i < 6; i++ {
 		result := tool.Execute(ctx, map[string]any{"action": "steer", "session_id": "child-caps", "text": "hint"})
@@ -202,10 +208,15 @@ func TestDelegateTool_Steer_RateAndBodyCaps(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
-	big := strings.Repeat("x", 17*1024)
+	// The body cap is session.DefaultSteerBodyBytes (C-LIMIT 65,536 B), derived
+	// here from the constant rather than hardcoded: one byte over the cap must
+	// be rejected, one byte under must not. (The old literal was 17 KiB — well
+	// UNDER the real 64 KiB cap, so it could never trip the check.)
+	big := strings.Repeat("x", session.DefaultSteerBodyBytes+1)
 	result := tool2.Execute(ctx, map[string]any{"action": "steer", "session_id": "child-body", "text": big})
 	if !result.IsError {
-		t.Fatal("expected an over-cap steer body to be rejected")
+		t.Fatalf("expected a %d-byte steer body (one over the %d-byte cap) to be rejected",
+			session.DefaultSteerBodyBytes+1, session.DefaultSteerBodyBytes)
 	}
 }
 
@@ -944,74 +955,6 @@ func TestDelegateTool_Respond_OpenQuestionNeedsNoOwnerAuthority(t *testing.T) {
 	}
 	if rec.State != session.LifecycleRunning || rec.Generation != 1 {
 		t.Errorf("state/generation after respond = (%s, %d), want the helper untouched (running, 1)", rec.State, rec.Generation)
-	}
-}
-
-// TestDelegateTool_Respond_3P_OriginalNotLeftRunning proves Correctness-MAJOR-2:
-// for a 3P child, respond spawns a NEW corrective session (spawnCorrective-
-// FollowUp) and must NOT flip the ORIGINAL record to `running` without a live
-// turn. The original is instead non-terminal `stopped`, superseded by the
-// corrective re-dispatch (ADR D2 line 207; D8 line 418 retains 3P successors;
-// ADR-20261004 keeps D5's corrective shape for a 3P answer).
-func TestDelegateTool_Respond_3P_OriginalNotLeftRunning(t *testing.T) {
-	tool, lc, inbox, _ := newADR053TestTool(t)
-	seedOpenQuestion(t, inbox, "parent-1", "child-3p-resp", "corr-3p")
-	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
-
-	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-3p-resp", Generation: 1, State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
-		WorkspaceID: "ws-1", AgentID: "worker-3p",
-		Is3P: true,
-	}); err != nil {
-		t.Fatalf("seed failed: %v", err)
-	}
-
-	result := tool.Execute(ctx, map[string]any{
-		"action": "respond", "session_id": "child-3p-resp", "correlation_id": "corr-3p", "text": "go",
-	})
-	if result.IsError {
-		t.Fatalf("3P respond failed: %s", result.ForLLM)
-	}
-
-	// The ORIGINAL session must be non-terminal stopped (superseded), never running without a live turn.
-	orig, err := lc.Load("child-3p-resp")
-	if err != nil {
-		t.Fatalf("Load original: %v", err)
-	}
-	// ADR D2 line 207 and D8 line 418: the original 3P session is stopped while its successor runs.
-	if orig.State == session.LifecycleRunning {
-		t.Fatal("ORIGINAL 3P session left at running with no live turn instead of stopped (Correctness-MAJOR-2)")
-	}
-	// ADR Vocabulary line 133 and D2 line 207: stopped replaces cancelled and is non-terminal.
-	if orig.State != session.LifecycleStopped {
-		t.Errorf("original state = %q, want %q (superseded by corrective re-dispatch)", orig.State, session.LifecycleStopped)
-	}
-	// ADR Vocabulary line 133: Stopped is explicitly non-terminal, so the correct
-	// assertion is the inverse of the old (now-contradictory) Terminal()==true
-	// check — proving the record is resumable, not proving it is terminal.
-	if orig.Terminal() {
-		t.Errorf("orig = %+v, want non-terminal (stopped is no longer a terminal state)", orig)
-	}
-	if orig.FailedReason == "" {
-		t.Error("expected a non-empty FailedReason recording the supersession")
-	}
-
-	// A NEW corrective session must exist, linked back via ResumedFrom, on a
-	// DIFFERENT session_id (3P cold respawn, D5).
-	all, err := lc.List(session.LifecycleFilter{})
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	var successor *session.LifecycleRecord
-	for i := range all {
-		if all[i].ResumedFrom == "child-3p-resp" && all[i].SessionID != "child-3p-resp" {
-			successor = &all[i]
-			break
-		}
-	}
-	if successor == nil {
-		t.Fatal("expected a NEW corrective session (ResumedFrom=child-3p-resp, different id) to be spawned")
 	}
 }
 

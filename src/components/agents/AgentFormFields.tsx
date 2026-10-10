@@ -6,8 +6,27 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { VoiceProviderSub } from './voice-provider-sub'
 import { useUiStore } from '@/store/ui'
-import { AVATAR_COLORS, AVATAR_COLORS_BY_NAME } from '@/lib/constants'
-import { ICON_OPTIONS, getIconComponent, type IconName } from '@/lib/agentIcons'
+import { AgentIcon } from '@/components/ui/agent-icon'
+import type { AgentColor as AgentColorValue, AgentFigure, AgentRole } from '@/lib/api/generated/openapi-types'
+import { AgentColor } from '@/lib/api/generated/schemas'
+import { ROLE_VOCABULARY } from '@/lib/agentIdentity'
+import { RoleBadgeIcon } from './RoleBadgeIcon'
+
+
+const SWATCH_HEXES = [
+  AgentColor.options[0],
+  AgentColor.options[1],
+  AgentColor.options[2],
+  AgentColor.options[3],
+  AgentColor.options[4],
+  AgentColor.options[5],
+  AgentColor.options[6],
+  AgentColor.options[7],
+  AgentColor.options[8],
+  AgentColor.options[9],
+] as const
+
+const SWATCH_NAMES = ['Azure', 'Sky', 'Cyan', 'Indigo', 'Violet', 'Purple', 'Fuchsia', 'Pink', 'Orange', 'Grey'] as const
 
 // ── AgentFormFields ──────────────────────────────────────────────────────────
 //
@@ -248,49 +267,73 @@ export function BehaviorFields({
 
 export interface AvatarColorPickerProps {
   /** Currently selected color (hex). */
-  value: string
+  value: string | null | undefined
   /** Called with the chosen color (hex) on click. */
   onChange: (color: string) => void
   /** Optional testid prefix; the full id is `${testidPrefix}-${semanticName}`. */
   testIdPrefix?: string
   /** Optional className for the wrapper. */
   className?: string
+  /** Built-in identity lock. Choices stay visible and cannot be changed. */
+  disabled?: boolean
+}
+
+function Swatch({
+  hex,
+  name,
+  pressed,
+  disabled,
+  testId,
+  onChange,
+}: {
+  hex: AgentColorValue
+  name: string
+  pressed: boolean
+  disabled: boolean
+  testId: string
+  onChange: (hex: AgentColorValue) => void
+}) {
+  return (
+    <IconButton
+      variant="ghost"
+      size="sm"
+      disabled={disabled}
+      data-testid={testId}
+      onClick={() => onChange(hex)}
+      className="h-7 w-7 rounded-full p-0"
+      style={{ backgroundColor: hex }}
+      aria-label={name}
+      aria-pressed={pressed}
+      title={name}
+    />
+  )
 }
 
 /**
- * 8-swatch avatar color picker. Uses the brand palette from
- * `src/lib/constants.ts`. Each button's `aria-label` and `title` resolve the
- * semantic name (e.g. "Forge Gold") via `avatarColorName()` so screen
- * readers announce the brand name instead of the raw hex. The selected
- * swatch is highlighted with a double-ring (primary + colour) so the
- * choice is visible against any background.
+ * Ten palette swatches. Names are the published palette order. The fill is
+ * the hex itself, forwarded unchanged from the swatch's own argument.
  */
 export function AvatarColorPicker({
   value,
   onChange,
   testIdPrefix = 'avatar-color',
   className,
+  disabled = false,
 }: AvatarColorPickerProps) {
+  const selected = (value ?? '').toLowerCase()
   return (
-    <div className={className ?? 'flex gap-[var(--space-2)]'}>
-      {AVATAR_COLORS.map((color) => {
-        const name = AVATAR_COLORS_BY_NAME[color] ?? color
-        const isSelected = value === color
+    <div className={className ?? 'flex flex-wrap gap-[var(--space-2)]'}>
+      {SWATCH_HEXES.map((hex, index) => {
+        const name = SWATCH_NAMES[index]
         return (
-          <IconButton
-            key={color}
-            variant="ghost"
-            size="sm"
-            data-testid={`${testIdPrefix}-${name}`}
-            onClick={() => onChange(color)}
-            className="h-7 w-7 rounded-full p-0 transition-transform hover:scale-110 hover:bg-transparent"
-            style={{
-              backgroundColor: color,
-              boxShadow: isSelected ? `0 0 0 2px var(--color-primary), 0 0 0 4px ${color}` : undefined,
-            }}
-            aria-label={name}
-            aria-pressed={isSelected}
-            title={name}
+          <Swatch
+            key={name}
+            hex={hex}
+            name={name}
+            pressed={selected === hex.toLowerCase()}
+            disabled={disabled}
+            testId={`${testIdPrefix}-${name}`}
+            onChange={onChange}
           />
         )
       })}
@@ -298,69 +341,110 @@ export function AvatarColorPicker({
   )
 }
 
-// ── Avatar icon picker (lifted from AgentProfile.tsx:869-878) ──────────────
+/** The founder's figure order: Omnipus (the default) first, Monogram last. */
+const LOOK_ORDER: readonly AgentFigure[] = ['Omnipus', 'Man', 'Robot', 'Woman', 'Monogram']
 
-export interface IconPickerProps {
-  /** Currently selected icon name. */
-  value: IconName
-  /** Called with the chosen icon name on change. */
-  onChange: (icon: IconName) => void
-  /** Optional testid applied to a wrapping div (SmartSelect trigger inherits). */
-  triggerTestId?: string
-  /** Optional className override. */
-  triggerClassName?: string
-}
-
-/**
- * Avatar icon picker — wraps the `SmartSelect` primitive with the
- * `ICON_OPTIONS` vocabulary from `src/lib/agentIcons.ts`. The select value
- * is the wire-shape `IconName` (e.g. `"lightbulb"`, `"robot"`).
- */
-export function IconPicker({
-  value,
-  onChange,
-  triggerTestId,
-  triggerClassName = 'w-48',
-}: IconPickerProps) {
-  return (
-    <div data-testid={triggerTestId}>
-      <SmartSelect
-        value={value}
-        onValueChange={(v) => onChange(v as IconName)}
-        triggerClassName={triggerClassName}
-        ariaLabel="Icon"
-        items={ICON_OPTIONS.map(({ name: iconName }) => ({ value: iconName, label: iconName }))}
-      />
-    </div>
-  )
-}
-
-// ── Avatar header circle (lifted from AgentProfile.tsx:625-630) ───────────
-
-export interface AvatarHeaderProps {
-  /** The hex color for the circle background. */
+export interface AgentLookPickerProps {
+  /** Draft agent name — Monogram draws its initial from it. */
+  name: string
+  figure: AgentFigure
+  role: AgentRole
   color: string | null | undefined
-  /** Optional className override. */
-  className?: string
+  onFigureChange: (figure: AgentFigure) => void
+  onRoleChange: (role: AgentRole) => void
+  onColorChange: (color: string) => void
+  /** Built-in identity locks, one per field (from the server's field descriptors). */
+  figureLocked?: boolean
+  roleLocked?: boolean
+  colorLocked?: boolean
+  /** Draw the big live preview. Off where a header already previews the mark. */
+  showPreview?: boolean
+  /** Prefix for test ids, e.g. `wizard` or `avatar`. */
+  testIdPrefix?: string
 }
 
 /**
- * The 12-px circle with the agent's chosen icon, used in slide-over
- * headers. Background is the agent's color; the icon foreground is the
- * primary (deep black) for contrast. Lifts the inline JSX that was
- * duplicated in `AgentProfile.tsx:625-630`.
+ * AgentLookPicker — the ONE avatar editor, used by the create wizard and the
+ * edit panel alike (founder 2026-10-10, "pick by picture"):
+ *   - a big live preview of the mark;
+ *   - Role badge: one searchable dropdown, each option showing its badge icon;
+ *   - Look: five figure thumbnails, each drawn in the chosen colour and badge;
+ *   - Colour: the ten palette dots.
+ * Every choice is a picture or a short list, never a wall of word buttons.
  */
-export function AvatarHeader({ color, className }: AvatarHeaderProps) {
-  // The static Robot icon matches the wizard's Step 1 default (icon: 'Robot'
-  // per CreateAgentWizard.tsx:initialPayload). When the profile wires this
-  // to a dynamic icon, this can become a prop.
-  const Icon = getIconComponent('Robot')
+export function AgentLookPicker({
+  name,
+  figure,
+  role,
+  color,
+  onFigureChange,
+  onRoleChange,
+  onColorChange,
+  figureLocked = false,
+  roleLocked = false,
+  colorLocked = false,
+  showPreview = true,
+  testIdPrefix = 'avatar',
+}: AgentLookPickerProps) {
+  const ink = (color ?? AgentColor.options[9]) as AgentColorValue
   return (
-    <div
-      className={className ?? 'w-12 h-12 rounded-full flex items-center justify-center shrink-0'}
-      style={{ backgroundColor: color ?? 'var(--color-surface-3)' }}
-    >
-      <Icon size={22} className="text-[var(--color-primary)]" />
+    <div className="space-y-[var(--space-3)]" data-testid={`${testIdPrefix}-look`}>
+      <div className="flex items-center gap-[var(--space-3)]">
+        {showPreview && (
+          <span data-testid={`${testIdPrefix}-look-preview`}>
+            <AgentIcon figure={figure} role={role} color={ink} size={48} name={name} />
+          </span>
+        )}
+        <div className="min-w-0 flex-1 space-y-[var(--space-1)]">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Role badge</p>
+          <div data-testid={`${testIdPrefix}-role-badge`}>
+            <SmartSelect
+              value={role}
+              onValueChange={(next) => onRoleChange(next as AgentRole)}
+              disabled={roleLocked}
+              ariaLabel="Role badge"
+              items={ROLE_VOCABULARY.map((row) => ({
+                value: row.slug,
+                label: row.label,
+                icon: <RoleBadgeIcon role={row.slug} />,
+              }))}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-[var(--space-1)]">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Look</p>
+        <div className="flex flex-wrap gap-[var(--space-1)]" role="group" aria-label="Look">
+          {LOOK_ORDER.map((option) => (
+            <Button
+              key={option}
+              type="button"
+              variant={figure === option ? 'default' : 'outline'}
+              size="sm"
+              disabled={figureLocked}
+              aria-pressed={figure === option}
+              aria-label={option}
+              title={option}
+              data-testid={`${testIdPrefix}-figure-${option}`}
+              onClick={() => onFigureChange(option)}
+              className="h-auto p-[var(--space-1)]"
+            >
+              <AgentIcon figure={option} role={role} color={ink} size={26} name={name} />
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-[var(--space-1)]">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Colour</p>
+        <AvatarColorPicker
+          value={color}
+          disabled={colorLocked}
+          onChange={onColorChange}
+          testIdPrefix={`${testIdPrefix}-color`}
+        />
+      </div>
     </div>
   )
 }

@@ -81,9 +81,9 @@ export function ModelPicker({
   // src/store/session.ts (fixed for agents in 5157e378, "session attach
   // clobbering the picked agent"). `modelSelectionSource` distinguishes a
   // USER pick (`onPickerChange`) from an AUTO/derived seed (this effect).
-  // Without it, ANY activeAgentId change — most commonly the user switching
-  // agents mid-conversation via AgentPicker or the "@" mention menu, which
-  // changes activeAgentId while activeSessionId stays put — looked identical
+  // Without it, ANY activeAgentId change — the composer picker and the "@"
+  // menu no longer do this (FR-007); a session attach or an explicit store
+  // write still can — while activeSessionId stays put looked identical
   // to a genuine navigation and silently re-seeded nextModel to the new
   // agent's default, discarding whatever model the user had just explicitly
   // picked for the next message. That overwritten value is what went out on

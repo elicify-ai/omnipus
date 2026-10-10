@@ -29,7 +29,7 @@ function renderMail() {
 
 describe('F4 — Mail without a configured workspace mailbox', () => {
   beforeEach(() => {
-    fetchAgents.mockReset().mockResolvedValue([{ id: 'mia', name: 'Mia' }])
+    fetchAgents.mockReset().mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }])
     fetchMailboxes.mockReset().mockResolvedValue([])
     fetchMailFolders.mockReset().mockResolvedValue({ folders: [] })
     fetchMailMessages.mockReset().mockResolvedValue({ messages: [], truncated: false, next_before_uid: null })

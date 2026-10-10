@@ -356,8 +356,8 @@ func (al *AgentLoop) emitGoalStatusFrame(sessionID, goalID, condition string, ro
 
 // emitGoalStatusFrameWithCriteria is emitGoalStatusFrame plus the compiled
 // criteria breakdown (ADR-074 D5.2 / FR-011): every current call site passes
-// nil (ADR-088 D9 retired the `queued` pending-confirm emission that used to
-// be the one caller passing a populated slice) — wave 2 (ADR-088 FR-019)
+// nil (the retired pending-confirm emission was the one caller that passed a
+// populated slice) — wave 2 (ADR-088 FR-019)
 // wires a `set_goal`-registered/updated record's criteria/DoD through this
 // path on the `active` emission.
 func (al *AgentLoop) emitGoalStatusFrameWithCriteria(sessionID, goalID, condition string, round, maxRounds int, reason, state string, criteria []task.AcceptanceCriterion) {
@@ -1254,7 +1254,7 @@ func (al *AgentLoop) goalIdleExpirySweep(cfg config.PlanningConfig, now time.Tim
 			}
 			agentID := ""
 			if meta, merr := recStore.GetMeta(sessionID); merr == nil && meta != nil {
-				agentID = meta.ActiveAgentID
+				agentID = meta.AgentID
 			}
 			// clearGoalStatus performs the terminal transition itself, by
 			// goal id, which is correct for BOTH owner kinds — the separate

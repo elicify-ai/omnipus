@@ -14,7 +14,6 @@ export type WsFrameType =
   | "ping"
   | "attach_session"
   | "device_pairing_response"
-  | "session_close"
   | "session_started"
   | "message_status"
   | "token"
@@ -37,7 +36,6 @@ export type WsFrameType =
   | "context_window_notice"
   | "provider_fallback"
   | "media"
-  | "agent_switched"
   | "tool_approval_required"
   | "tool_approval_resolved"
   | "session_state"
@@ -45,7 +43,6 @@ export type WsFrameType =
   | "replay_warning"
   | "cancel_stage"
   | "pong"
-  | "session_close_ack"
   | "session_mode_update"
   | "session_mode_updated"
   | "device_pairing_request"
@@ -91,6 +88,16 @@ export type WsFrameType =
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
+export interface ChatParticipant {
+  kind: "human" | "agent";
+  display_name: string;
+  source?: string;
+  agent?: {
+    workspace_id: string;
+    agent_id: string;
+  };
+}
+
 export interface AuthFrame {
   type: "auth";
   token: string;
@@ -101,6 +108,10 @@ export interface MessageFrame {
   client_message_id?: string;
   content: string;
   session_id?: string;
+  recipient?: {
+    workspace_id: string;
+    agent_id: string;
+  };
   agent_id?: string;
   media?: Array<string>;
   auto_approve?: boolean | null;
@@ -137,6 +148,8 @@ export interface AttachSessionFrame {
   session_id: string;
   since_seq?: number;
   boot_id?: string;
+  ack_attention?: boolean;
+  attention_bound?: number;
 }
 
 export interface DevicePairingResponseFrame {
@@ -159,7 +172,8 @@ export interface MessageStatusFrame {
   type: "message_status";
   session_id: string;
   client_message_id: string;
-  state: "received" | "working" | "failed";
+  state: "received" | "working" | "failed" | "discarded";
+  reason?: "stopped_before_delivery";
   seq?: number;
 }
 
@@ -168,8 +182,11 @@ export interface TokenFrame {
   session_id: string;
   content: string;
   agent_id?: string;
+  reply_to_message_id?: string;
+  reply_to_participant?: ChatParticipant;
   turn_id?: string;
   message_id?: string;
+  goal_id?: string;
   replace?: boolean;
   seq?: number;
 }
@@ -178,7 +195,6 @@ export interface DoneStats {
   tokens?: number;
   cost?: number;
   duration_ms?: number;
-  tokens_dropped?: number;
   frames_emitted?: number;
   orphan_count?: number;
   duplicate_tool_call_id_count?: number;
@@ -196,6 +212,7 @@ export interface DoneFrame {
   stats?: DoneStats;
   turn_id?: string;
   message_id?: string;
+  goal_id?: string;
   seq?: number;
 }
 
@@ -353,7 +370,7 @@ export interface SubagentMessageFrame {
   child_session_id?: string;
   span_id: string;
   message_id: string;
-  kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond" | "goal_status";
+  kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "error" | "handback" | "steer" | "respond" | "goal_status" | "not_delivered";
   text?: string;
   pct?: number;
   correlation_id?: string;
@@ -408,13 +425,23 @@ export interface ReplayMessageFrame {
   content: string;
   role: "user" | "assistant" | "system" | "turn_canceled";
   id?: string;
+  reply_to_message_id?: string;
+  participant?: ChatParticipant;
+  reply_to_participant?: ChatParticipant;
   timestamp?: string;
   agent_id?: string;
   model?: string;
   turn_id?: string;
+  goal_id?: string;
   truncated?: boolean;
   truncation_reason?: "cancelled" | "max_output_tokens";
   client_message_id?: string;
+  input_disposition?: {
+    message_id: string;
+    client_message_id?: string;
+    state: "discarded";
+    reason: "stopped_before_delivery";
+  };
   terminal_outcome?: boolean;
 }
 
@@ -527,15 +554,6 @@ export interface MediaFrame {
   seq?: number;
 }
 
-export interface AgentSwitchedFrame {
-  type: "agent_switched";
-  session_id: string;
-  agent_id?: string;
-  message?: string;
-  producing_session_id?: string;
-  seq?: number;
-}
-
 export interface CommandSegmentInfo {
   segment_index: number;
   command_text: string;
@@ -639,6 +657,7 @@ export interface SessionStateFrame {
   pending_approvals: Array<SessionStatePendingApproval>;
   pending_asks?: Array<AskUserQuestionCard>;
   session_id?: string;
+  attention_bound?: number;
   auto_approve_modifier?: boolean | null;
   active_turn?: SessionStateActiveTurn;
   boot_id?: string;
@@ -678,13 +697,6 @@ export interface CancelStageFrame {
   seq?: number;
 }
 
-export interface SessionCloseAckFrame {
-  type: "session_close_ack";
-  session_id: string;
-  id?: string;
-  producing_session_id?: string;
-}
-
 export interface SessionModeUpdateFrame {
   type: "session_mode_update";
   session_id: string;
@@ -712,11 +724,6 @@ export interface WhatsAppPairingFrame {
   status: "waiting" | "code" | "linked" | "timeout" | "error";
   qr?: string;
   message?: string;
-}
-
-export interface SessionCloseFrame {
-  type: "session_close";
-  session_id: string;
 }
 
 export interface WhatsAppPairingSubscribeFrame {
@@ -931,7 +938,7 @@ export interface GoalStatusFrame {
   latest_reason: string;
   active_loops: number;
   cap: number;
-  state: "queued" | "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared" | "judge_cas_loss" | "blocked" | "claim_overturned" | "expired";
+  state: "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared" | "judge_cas_loss" | "blocked" | "claim_overturned" | "expired";
   criteria?: Array<{
     id?: string;
     kind: "check" | "prose" | "behavior";
@@ -1148,6 +1155,7 @@ export interface UserMessageFrame {
   }>;
   timestamp: string;
   agent_id?: string;
+  participant?: ChatParticipant;
   seq?: number;
 }
 
@@ -1212,7 +1220,6 @@ export type WsFrame =
   | ProviderFallbackNote
   | LibraryChangedFrame
   | MediaFrame
-  | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
@@ -1221,12 +1228,10 @@ export type WsFrame =
   | SystemOverloadFrame
   | ReplayWarningFrame
   | CancelStageFrame
-  | SessionCloseAckFrame
   | SessionModeUpdateFrame
   | SessionModeUpdatedFrame
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame
-  | SessionCloseFrame
   | WhatsAppPairingSubscribeFrame
   | NotificationFrame
   | BrowserAttachFrame
@@ -1276,7 +1281,6 @@ export type ClientFrame =
   | DevicePairingResponseFrame
   | AskUserAnswerFrame
   | SessionModeUpdateFrame
-  | SessionCloseFrame
   | WhatsAppPairingSubscribeFrame
   | BrowserAttachFrame
   | BrowserInputFrame
@@ -1291,7 +1295,7 @@ export type ClientFrame =
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "session_close", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer", "mail_panel_observer"] as const
+export const ClientFrameTypes = ["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer", "mail_panel_observer"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
@@ -1320,7 +1324,6 @@ export type ServerFrame =
   | ProviderFallbackNote
   | LibraryChangedFrame
   | MediaFrame
-  | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
@@ -1328,7 +1331,6 @@ export type ServerFrame =
   | SystemOverloadFrame
   | ReplayWarningFrame
   | CancelStageFrame
-  | SessionCloseAckFrame
   | SessionModeUpdatedFrame
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame

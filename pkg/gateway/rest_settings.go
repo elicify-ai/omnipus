@@ -47,7 +47,7 @@ func (a *restAPI) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		slog.Error("rest: open audit log", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read audit log: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not read audit log", err)
 		return
 	}
 	defer f.Close()
@@ -66,7 +66,7 @@ func (a *restAPI) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := scanner.Err(); err != nil {
 		slog.Error("rest: scan audit log", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read audit log: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not read audit log", err)
 		return
 	}
 
@@ -146,7 +146,7 @@ func (a *restAPI) listCredentials(w http.ResponseWriter) {
 	keys, err := store.List()
 	if err != nil {
 		slog.Error("rest: list credentials", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list credentials: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not list credentials", err)
 		return
 	}
 	if keys == nil {
@@ -192,7 +192,7 @@ func (a *restAPI) setCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := store.Set(req.Key, req.Value); err != nil {
 		slog.Error("rest: set credential", "key", req.Key, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save credential: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save credential", err)
 		return
 	}
 	// Trigger reload AND WAIT for it (triggerReloadAndWaitOutcome, not a bare
@@ -268,7 +268,7 @@ func (a *restAPI) deleteCredential(w http.ResponseWriter, r *http.Request, key s
 			return
 		}
 		slog.Error("rest: delete credential", "key", key, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not delete credential: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not delete credential", err)
 		return
 	}
 	// Trigger reload AND WAIT for it — same reasoning as setCredential above.
@@ -331,7 +331,7 @@ func (a *restAPI) rotateCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := store.RotateWithPassphrase(req.NewPassphrase); err != nil {
 		slog.Error("rest: rotate credentials", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("rotation failed: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "rotation failed", err)
 		return
 	}
 	slog.Info("rest: credential vault rotated")
@@ -356,7 +356,7 @@ func (a *restAPI) HandleCreateBackup(w http.ResponseWriter, r *http.Request) {
 	backupsDir := filepath.Join(a.homePath, "backups")
 	if err := os.MkdirAll(backupsDir, 0o700); err != nil {
 		slog.Error("rest: create backups dir", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create backups directory: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not create backups directory", err)
 		return
 	}
 	timestamp := time.Now().UTC().Format("20060102T150405Z")
@@ -365,13 +365,13 @@ func (a *restAPI) HandleCreateBackup(w http.ResponseWriter, r *http.Request) {
 
 	if err := createTarGz(a.homePath, destPath); err != nil {
 		slog.Error("rest: create backup", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create backup: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not create backup", err)
 		return
 	}
 	info, err := os.Stat(destPath)
 	if err != nil {
 		slog.Error("rest: stat backup file", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not stat backup: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not stat backup", err)
 		return
 	}
 	jsonOK(w, gen.BackupCreateResponse{
@@ -496,7 +496,7 @@ func (a *restAPI) HandleListBackups(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Error("rest: list backups", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list backups: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not list backups", err)
 		return
 	}
 	type backupEntry struct { // not-wire-format: response-only local type used in jsonOK; oapi-codegen inlines the shape; no gen.BackupEntry Go type exists
@@ -574,12 +574,12 @@ func (a *restAPI) HandleRestore(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("backup %q not found", req.Filename))
 			return
 		}
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not access backup: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not access backup", err)
 		return
 	}
 	if err := extractTarGz(backupPath, a.homePath); err != nil {
 		slog.Error("rest: restore backup", "filename", req.Filename, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not restore backup: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not restore backup", err)
 		return
 	}
 	jsonOK(w, map[string]string{"status": "restored", "filename": req.Filename})
@@ -678,8 +678,14 @@ func extractTarGz(archivePath, destDir string) error {
 	return nil
 }
 
+// clearSessionsWarning is the fixed per-agent warning for a clear that failed
+// partway: the cause (paths, OS error) is in the error log, never here.
+func clearSessionsWarning(agentID string) string {
+	return fmt.Sprintf("agent %q: sessions could not be fully cleared; see the server log", agentID)
+}
+
 // HandleClearSessions handles DELETE /api/v1/sessions/all.
-// HandleClearSessions removes all session directories from all agent stores.
+// HandleClearSessions removes every session from the one shared session store.
 func (a *restAPI) HandleClearSessions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -687,18 +693,19 @@ func (a *restAPI) HandleClearSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	totalRemoved := 0
 	var warnings []string
-	for _, id := range a.agentLoop.GetRegistry().ListAgentIDs() {
-		store := a.agentLoop.GetAgentStore(id)
-		if store == nil {
-			continue
-		}
-		n, err := store.ClearAll()
-		if err != nil {
-			slog.Error("rest: clear sessions for agent", "agent_id", id, "error", err)
-			warnings = append(warnings, fmt.Sprintf("agent %q: %v", id, err))
-		}
-		totalRemoved += n
+	store := a.agentLoop.GetSessionStore()
+	if store == nil {
+		jsonErr(w, http.StatusInternalServerError, "session store unavailable")
+		return
 	}
+	n, err := store.ClearAll()
+	if err != nil {
+		// Fixed text: the cause (paths, OS error) is in the error log, never in
+		// the response.
+		slog.Error("rest: clear sessions", "error", err)
+		warnings = append(warnings, clearSessionsWarning("shared"))
+	}
+	totalRemoved += n
 	resp := gen.ClearAllSessionsResponse{
 		Status: gen.ClearAllSessionsResponseStatusCleared,
 		Count:  totalRemoved,

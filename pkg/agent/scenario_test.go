@@ -197,7 +197,7 @@ func TestScenario5RateLimitFiresOnThirdCall(t *testing.T) {
 func TestScenario8SteeringMessageMidTurn(t *testing.T) {
 	// Traces to: temporal-puzzling-melody.md §Layer 2, scenario 8
 	// Test via the steering queue directly — the same queue that runTurn polls.
-	sq := newSteeringQueue(SteeringOneAtATime)
+	sq := newSteeringQueue()
 
 	steeringMsg := providers.Message{Role: "user", Content: "focus on task A only"}
 	err := sq.pushScope("session:test123", steeringMsg)

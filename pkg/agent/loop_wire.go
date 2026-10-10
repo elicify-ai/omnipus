@@ -353,88 +353,11 @@ func registerSharedTools(
 
 		rw.registerCoreTools(agent)
 
-		// Handoff tools — always registered (ScopeCore).
-		getRegistryReader := func() tools.AgentRegistryReader {
-			return rw.rs.al.GetRegistry()
-		}
-		onHandoffFrontend := func(evt tools.HandoffEvent) {
-			// The next turn resolves the active agent via sessionScopeKey(msg):
-			//   webchat inbound carries a SessionID          → "session:"+SessionID
-			//   channel inbound (whatsapp/telegram/…) has NO → "chat:"+channel+":"+chatID
-			// Store the override under the SAME key(s) the inbound path will read.
-			// The session-scoped key backs GetSessionActiveAgent + the in-turn
-			// active-agent resolver; the chat-scoped key is what channel inbound
-			// messages actually look up — without it a channel handoff is silently
-			// dropped and routing falls back to ResolveRoute (the "agent stays" bug).
-			var keys []string
-			if evt.SessionID != "" {
-				keys = append(keys, "session:"+evt.SessionID)
-			}
-			if evt.Channel != "" && evt.Channel != "webchat" && evt.ChatID != "" {
-				keys = append(keys, "chat:"+evt.Channel+":"+evt.ChatID)
-			}
-			for _, k := range keys {
-				if evt.AgentID == "" {
-					rw.rs.al.sessionActiveAgent.Delete(k)
-				} else {
-					rw.rs.al.sessionActiveAgent.Store(k, evt.AgentID)
-				}
-			}
-			// Record the tool's own toDefault intent, keyed the same way
-			// GetSessionActiveAgent is (evt.SessionID, "session:" prefix) so
-			// the WS agent_switched frame builder can read it back via the
-			// exact evtSID it already uses to look up the active agent.
-			if evt.SessionID != "" {
-				rw.rs.al.lastSwitchToDefault.Store("session:"+evt.SessionID, evt.ToDefault)
-			}
-		}
-		// The handoff target's window is the one its own instance resolved
-		// through the ADR-066 D2 ladder (its provider, its model, its
-		// override) — never a config default. An unknown target, an exempt
-		// one or an unknown window yields 0: the handoff then transfers no
-		// recent context and the summary line names what was left out.
-		getContextWindow := func(targetAgentID string) int {
-			liveRegistry := rw.rs.al.GetRegistry()
-			if liveRegistry == nil {
-				return 0
-			}
-			target, ok := liveRegistry.GetAgent(targetAgentID)
-			if !ok || target == nil {
-				return 0
-			}
-			window, _, _ := target.windowSnapshot()
-			return window
-		}
-		getDefaultAgent := func() string {
-			currentCfg := rw.rs.al.GetConfig()
-			if currentCfg.Agents.Defaults.DefaultAgentID != "" {
-				return currentCfg.Agents.Defaults.DefaultAgentID
-			}
-			// No configured override — fall through to the registry's own
-			// resolution ladder (lexicographically-first non-worker agent)
-			// rather than a hardcoded name; SwitchAgentTool.Execute's
-			// target:"default" branch already handles an empty result as
-			// "no default agent configured" rather than silently switching
-			// to a name that doesn't exist.
-			// liveRegistry, not the `registry` parameter this closure could
-			// capture: that one is the boot-time instance, and a full registry
-			// rebuild (TriggerReload, e.g. after the default agent changes)
-			// REPLACES al.registry. This closure runs long after construction,
-			// so reading the captured parameter would resolve the default
-			// against a stale roster. The name difference is deliberate — it
-			// used to shadow, which read as an accident rather than intent.
-			if liveRegistry := rw.rs.al.GetRegistry(); liveRegistry != nil {
-				if def := liveRegistry.GetDefaultAgent(); def != nil {
-					return def.ID
-				}
-			}
-			return ""
-		}
 		// sharedStore is the shared session store; tools handle a nil store by
 		// skipping transcript ops (nil only occurs in tests without a store).
 		sharedStore := rw.rs.al.GetSessionStore()
 
-		rw.registerHandoffAndSkills(agentID, agent, getRegistryReader, onHandoffFrontend, getContextWindow, getDefaultAgent, sharedStore)
+		rw.registerHandoffAndSkills(agentID, agent, sharedStore)
 
 		// `delegate` (ADR-036 merge of the former spawn / run_subagent /
 		// check_spawn_status trio into one tool — docs/internal/specs/
@@ -625,6 +548,13 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 			OwnershipChecked: origin.OwnershipChecked,
 		})
 	})
+	// Peer and reply forms (session-core U8): the router resolves the live
+	// AgentLoop on each call, so a reload never leaves a stale one behind.
+	messageTool.SetPeerRouter(rw.rs.al.NewAddressRouter())
+	messageTool.SetReplyRouter(rw.rs.al.NewAddressRouter())
+	messageTool.SetMainConnectorGuard(func(sessionID, channel string) bool {
+		return rw.rs.al.mainConnectorTurn(channel, sessionID)
+	})
 	// Re-apply the stored resolver: this runs on every reload, and the
 	// MessageTool above is brand new each time (ADR-065).
 	if own := rw.rs.al.ChannelOwnership(); own != nil {
@@ -659,10 +589,8 @@ func (rw *registerSharedToolsWire3) registerCoreTools(agent *AgentInstance) {
 	wireGoalToolsForAgent(rw.rs.al, agent)
 }
 
-// registerHandoffAndSkills registers handoff and skill tools.
-func (rw *registerSharedToolsWire3) registerHandoffAndSkills(agentID string, agent *AgentInstance, getRegistryReader func() tools.AgentRegistryReader, onHandoffFrontend func(evt tools.HandoffEvent), getContextWindow func(targetAgentID string) int, getDefaultAgent func() string, sharedStore *session.UnifiedStore) {
-	agent.Tools.RegisterReplacing(tools.NewSwitchAgentTool(getRegistryReader, sharedStore, getContextWindow, getDefaultAgent, onHandoffFrontend))
-
+// registerHandoffAndSkills registers the send_file and skill tools.
+func (rw *registerSharedToolsWire3) registerHandoffAndSkills(agentID string, agent *AgentInstance, sharedStore *session.UnifiedStore) {
 	// Send file tool (outbound media via MediaStore — store injected later by SetMediaStore).
 	sendFileTool := tools.NewSendFileTool(
 		agent.Home,
@@ -740,25 +668,9 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 		// follow_up/peek — for every agent. The closure re-reads config per
 		// call, so a live kill-switch flip is still honored.
 		delegateTool.SetSessionMessagingEnabled(rw.rs.al.sessionMessagingEnabledLive())
-		// R2-MAJ-015 — the operator kill switch for delegate's FR-015
-		// fail-closed parent-agent-id guard
-		// (tools.delegate.require_parent_agent_id). Same live-closure
-		// discipline as the FR-196 switch immediately above, and for a
-		// sharper reason: this guard's failure mode is "delegation stops
-		// entirely across the install", so the escape hatch is worthless
-		// if escaping it needs a restart. al.GetConfig() is re-read per
-		// call rather than captured here — an eagerly-read value would
-		// freeze at whatever this wiring pass saw, which for a dependency
-		// the gateway assigns AFTER tool wiring means frozen at nil while
-		// registration still looks correct.
-		delegateTool.SetRequireParentAgentID(func() bool {
-			return rw.rs.al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID()
-		})
 		// W2: action:"status" live-progress snapshot for a running native
-		// task. sharedStore mirrors the exact store wiring the
-		// tools.NewSwitchAgentTool(...) call above already uses — the same
-		// *session.UnifiedStore delegated children's transcript entries
-		// are actually written to. It is a plain value captured once at
+		// task. sharedStore is the *session.UnifiedStore delegated children's
+		// transcript entries are actually written to. It is a plain value captured once at
 		// registration time (NOT a live func()), so it does not itself
 		// reflect a later hot reload; SetAgentRegistry below is the one
 		// that gets the live func() treatment, since al.GetRegistry() is
@@ -770,9 +682,7 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 		// graceful-degrade guard would never fire and recentActivityLines
 		// would panic on a nil receiver. Only wire the store when non-nil so
 		// a running-native status snapshot degrades to prompt-only instead
-		// of crashing the whole action:"status" call. (The sibling
-		// NewSwitchAgentTool wiring above shares this pre-existing latent
-		// pattern; tracked separately.)
+		// of crashing the whole action:"status" call.
 		if sharedStore != nil {
 			delegateTool.SetSessionStore(sharedStore)
 		}
@@ -820,7 +730,10 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 				currentAgentID,
 				rw.cfg.Performance,
 				config.DelegationModeBackground,
-				agentExistsChecker(rw.rs.registry),
+				delegationGateDeps{
+					AgentExists:         agentExistsChecker(rw.rs.registry),
+					CallerIsExternalCLI: externalCLICallerResolver(rw.rs.al),
+				},
 			),
 		)
 		// ADR-057: derive the ownership-walk bound from the SAME operator
@@ -843,7 +756,14 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 	// gateway's later SetSessionMessagingStores call re-runs this wiring
 	// with the real stores, mirroring SetPlanStore's late-binding
 	// discipline exactly. Safe on hot-reload (idempotent re-wire).
-	rw.rs.al.wireSessionMessagingForAgent(agent)
+	//
+	// rw.cfg is the config being registered against THIS pass. On a hot reload
+	// (ReloadProviderAndConfig) that is the NEW config — registerSharedTools runs
+	// before al.cfg is swapped, so the wiring must NOT read al.GetConfig() here
+	// or it would apply the previous session_messaging.steer_rate/steer_body
+	// (F1, U3 CHECK). rw.cfg is non-nil (registerSharedTools is only ever called
+	// with a validated config).
+	rw.rs.al.wireSessionMessagingForAgent(agent, rw.cfg)
 }
 
 // registerTaskAndPlanTools registers task and plan tools.
@@ -885,7 +805,7 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 				currentAgentID,
 				rw.cfg.Performance,
 				config.DelegationModeTask,
-				agentExistsChecker(rw.rs.registry),
+				delegationGateDeps{AgentExists: agentExistsChecker(rw.rs.registry)},
 			),
 		)
 		// Task-mode recursion bound (ADR-091 D9): reject a task_create issued
@@ -930,6 +850,7 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 			// Register the task's time trigger (no-op for manual/heartbeat).
 			rw.rs.al.NotifyTaskUpserted(entity)
 		})
+		taskCreate.SetInitiatorFn(func(ctx context.Context) *task.Initiator { return rw.rs.al.initiatorFor(ctx, currentAgentID) })
 		agent.Tools.RegisterReplacing(taskCreate)
 
 		taskUpdate := tools.NewTaskUpdateTool(rw.rs.al.taskStore)
@@ -959,12 +880,13 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 				currentAgentID,
 				rw.cfg.Performance,
 				config.DelegationModeTask,
-				agentExistsChecker(rw.rs.registry),
+				delegationGateDeps{AgentExists: agentExistsChecker(rw.rs.registry)},
 			),
 		)
 		// Same rationale as taskCreate above: the subagent_3p reassignment
 		// guard is retired now that processTaskDirect dispatches an
 		// external-CLI worker's task run through the shared command-line runner.
+		taskUpdate.SetInitiatorFn(func(ctx context.Context) *task.Initiator { return rw.rs.al.initiatorFor(ctx, currentAgentID) })
 		agent.Tools.RegisterReplacing(taskUpdate)
 
 		setTodos := tools.NewSetTodosTool(rw.rs.al.taskStore)
@@ -1807,18 +1729,36 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 	}
 	planExecute := tools.NewPlanExecuteTool(planStore, al.taskStore)
 	planExecute.SetIsAgentIDChecker(al.isRegisteredAgentID)
+	planExecute.SetInitiatorFn(func(ctx context.Context) *task.Initiator { return al.initiatorFor(ctx, agent.ID) })
+	planExecute.SetExecutionAuthorizer(func(ctx context.Context, assigneeAgentID, workspaceID string) *tools.DelegationDenial {
+		_, denial := al.authorizeInitiatedRun(ctx, *al.initiatorFor(ctx, agent.ID), assigneeAgentID, workspaceID)
+		return denial
+	})
 	agent.Tools.RegisterReplacing(planExecute)
 
 	// run_task (FR-019, US-10): dispatches via the real
 	// TaskExecutor.StartTaskNow — the standalone-task full attempt loop.
 	taskRun := tools.NewTaskRunTool(al.taskStore)
 	if al.taskExecutor != nil {
-		taskRun.SetStartTaskNow(al.taskExecutor.StartTaskNow)
+		taskRun.SetStartTaskNow(func(ctx context.Context, taskID string) (string, error) {
+			return al.taskExecutor.StartTaskNowAs(ctx, taskID, al.initiatorFor(ctx, agent.ID))
+		})
 	} else {
 		logger.ErrorCF("agent", "wirePlanToolsForAgent: task executor unavailable — "+
 			"run_task registered but will fail closed (no dispatcher installed)",
 			map[string]any{"agent_id": agent.ID})
 	}
+	// Founder ruling 2026-10-10: the delegation policy always applies. An
+	// agent-initiated run_task is authorized by the one decision function
+	// (authorizeInitiatedRun): caller (this agent, taken from this wiring, not
+	// from ctx) -> assignee needs an edge in the task's workspace graph, a self
+	// run included. This pre-check lets a refusal leave the task untouched; the
+	// executor repeats the decision inside StartTaskNowAs. The scheduler and the
+	// UI do not use this tool and are not gated here.
+	taskRun.SetDelegationDenyChecker(func(ctx context.Context, assigneeAgentID, workspaceID string) *tools.DelegationDenial {
+		_, denial := al.authorizeInitiatedRun(ctx, *al.initiatorFor(ctx, agent.ID), assigneeAgentID, workspaceID)
+		return denial
+	})
 	agent.Tools.RegisterReplacing(taskRun)
 
 	// inspect_session (FR-033, US-13 Acceptance 3): verifier-role-only by
@@ -1830,7 +1770,7 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 	// the SHARED store at $OMNIPUS_HOME/sessions/ (new webchat/channel
 	// sessions), but a task's own session — the exact thing task-scope
 	// verification targets — is created via createTaskSessionSync
-	// (task_executor.go), which writes through al.GetAgentStore(t.AgentID):
+	// (task_executor.go), which writes through al.GetSessionStore():
 	// the ASSIGNEE agent's own per-agent legacy store, a DIFFERENT
 	// directory. A single fixed store can never cover both. agentLoopInspectSessionStore
 	// (below) instead adapts al.ResolveSessionStore — the SAME
@@ -1982,9 +1922,6 @@ func (r agentLoopJobSessionActivityReader) LastActivityBySessionID(
 		stores = append(stores, store)
 	}
 	addStore(r.al.GetSessionStore())
-	for _, agentID := range r.al.GetRegistry().ListAgentIDs() {
-		addStore(r.al.GetAgentStore(agentID))
-	}
 
 	// Mirror ResolveSessionStore's ownership rule without its successful-read
 	// double probe: not-found continues to the next legacy store, while any

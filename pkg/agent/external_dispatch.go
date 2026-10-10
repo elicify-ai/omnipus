@@ -264,7 +264,7 @@ func runExternalCLISubTurn(
 	//    AGENT.md (Project Instructions) and the shared memory room (.omnipus/)
 	//    structurally unreachable — os.Root-confined tools cannot open a path
 	//    outside their root, not merely guarded against.
-	workDir, wsErr := resolveTurnWorkDirOrRefuse(ctx, ed.agent.ID, ed.agent.Home, ed.childTS.opts.WorkspaceID)
+	workDir, workWsID, wsErr := resolveTurnWorkDirAndWorkspaceOrRefuse(ctx, ed.agent.ID, ed.agent.Home, ed.childTS.opts.WorkspaceID)
 	if wsErr != nil {
 		return nil, ed.reportWorkspaceRefusal(wsErr)
 	}
@@ -324,50 +324,6 @@ func runExternalCLISubTurn(
 	ed.childTS.setTurnCancel(cancel)
 	ed.childTS.setProviderCancel(cancel)
 
-	// FIX 4 (concurrency, arch #2 warning): serialize external-CLI runs that
-	// share this workspace directory — see workspaceRunLocks' doc comment.
-	// Held for the whole run (driver instantiation through the drain loop
-	// below) since that is the window during which the child process can
-	// touch the workspace tree. A different workspace path is never blocked
-	// by this.
-	//
-	// Cancel-aware acquire (BLOCK finding, layer 2 of the fix): waits for the
-	// token OR runCtx ending, whichever comes first. Because runCtx's cancel
-	// func was registered on childTS immediately above (layer 1), a cancel
-	// that fires while this run is queued behind another same-workspace run
-	// now unblocks this select right away and the run below is skipped
-	// entirely, rather than silently becoming uncancelable until the lock
-	// eventually frees.
-	releaseWorkspaceLock, acquired := acquireWorkspaceRunLockCtx(runCtx, workDir)
-	if !acquired {
-		cancelErr := fmt.Errorf(
-			"external-cli dispatch: canceled while waiting for the workspace lock: %w",
-			runCtx.Err(),
-		)
-		return &tools.ToolResult{
-			Err: cancelErr,
-			ForLLM: fmt.Sprintf(
-				"External CLI run (%s) canceled while waiting for the workspace lock: %v",
-				cli,
-				cancelErr,
-			),
-		}, cancelErr
-	}
-	defer releaseWorkspaceLock()
-
-	// Belt-and-suspenders (BLOCK finding, layer 3 of the fix): a cancel could
-	// in principle race in between acquireWorkspaceRunLockCtx's ctx-check and
-	// the token actually being received. Re-check immediately after
-	// acquiring, before touching the driver at all, so a run that got its
-	// cancel signal during the wait never starts.
-	if runCtx.Err() != nil {
-		cancelErr := fmt.Errorf("external-cli dispatch: canceled before starting: %w", runCtx.Err())
-		return &tools.ToolResult{
-			Err:    cancelErr,
-			ForLLM: fmt.Sprintf("External CLI run (%s) canceled before starting: %v", cli, cancelErr),
-		}, cancelErr
-	}
-
 	// 2. Build the consent handler. External-CLI permission requests are
 	//    auto-approved unconditionally (issue #488) — see policyApproverConsent's
 	//    type doc for why this is a deliberately different posture from native
@@ -377,18 +333,111 @@ func runExternalCLISubTurn(
 		runID:   ed.runID,
 	}
 
-	// 3. Instantiate the driver for the configured CLI. The factory is a package
-	//    var so in-package tests can inject a fake/stub driver without a real CLI.
-	driver, err := newExternalDriver(cli, consent)
-	if err != nil {
-		return nil, fmt.Errorf("external-cli dispatch: %w", err)
-	}
-
 	ed.prepareRunOptions()
 
-	evCh, err := driver.Run(runCtx, runner.RunOptions{
+	// 3. Select the driver and how to start it (FR-043, N5/N7). A CONTINUATION
+	//    that is delivering a queued follow-up instruction Resumes the session's
+	//    existing native CLI conversation; a later entry of a steered session
+	//    that has no retained driver — or any entry of a session that already
+	//    ran — refuses rather than starting a fresh conversation; only a genuine
+	//    first launch Runs fresh. The selection lives in external_run_session.go
+	//    — one place, keyed per child session, so the resume reuses the SAME
+	//    driver (its captured native conversation id + preserved RunOptions:
+	//    runtime/workspace/model/caps) rather than starting a fresh conversation.
+	//    The factory stays a package var so in-package tests can inject a
+	//    fake/stub driver. cancel is the run's own cancel func, retained on the
+	//    holder so a steer delivery interrupts THIS run (N2). resumeOnly is true
+	//    for a steered (non-task) session, whose every post-launch entry must
+	//    resume-or-refuse.
+	sessionKey := externalRunSessionKey(ed.childTS)
+	resumeOnly, resumeOnlyErr := al.externalRunResumeOnly(sessionKey)
+	if resumeOnlyErr != nil {
+		// NEW-3: an unreadable session record refuses before any driver exists;
+		// it must never fall through to a fresh, unmarked run.
+		return nil, fmt.Errorf("external-cli dispatch: %w", resumeOnlyErr)
+	}
+	sess, resume, beginErr := al.beginExternalRun(sessionKey, ed.childTS, cancel, resumeOnly)
+	if beginErr != nil {
+		return nil, fmt.Errorf("external-cli dispatch: %w", beginErr)
+	}
+	defer al.finishExternalRun(sess, sessionKey)
+
+	// 1 (continued). A CONTINUATION must run in — and lock — the SAME workspace
+	//    the native CLI conversation started in (N1): re-resolve the preserved
+	//    workspace and refuse when the agent is no longer eligible for it, so
+	//    this invocation never authorizes one workspace while the retained driver
+	//    executes in another. A first run records the workspace it resolved for
+	//    the continuation's later check.
+	resolvedWorkDir := workDir
+	if resume {
+		preservedWorkDir, preservedWsID := sess.workspaceSnapshot()
+		rw, _, rwErr := resolveTurnWorkDirAndWorkspaceOrRefuse(ctx, ed.agent.ID, ed.agent.Home, preservedWsID)
+		if rwErr != nil {
+			return nil, ed.reportWorkspaceRefusal(rwErr)
+		}
+		if preservedWorkDir == "" || filepath.Clean(rw) != filepath.Clean(preservedWorkDir) {
+			return nil, ed.reportWorkspaceRefusal(fmt.Errorf(
+				"%w: agent %q: start a new delegation", errExternalWorkspaceChanged, ed.agent.ID))
+		}
+		resolvedWorkDir = preservedWorkDir
+	} else {
+		sess.recordWorkspace(workDir, workWsID)
+	}
+
+	// FIX 4 (concurrency, arch #2 warning): serialize external-CLI runs that
+	// share this workspace directory — see workspaceRunLocks' doc comment. Held
+	// for the whole run (driver instantiation through the drain loop below)
+	// since that is the window during which the child process can touch the
+	// workspace tree; a different workspace path is never blocked by this.
+	// Acquired AFTER driver selection so a CONTINUATION locks the workspace the
+	// conversation actually runs in (resolvedWorkDir == the preserved work dir).
+	//
+	// Cancel-aware acquire (BLOCK finding, layer 2 of the fix): waits for the
+	// token OR runCtx ending, whichever comes first. Because runCtx's cancel
+	// func was registered on childTS above (layer 1), a cancel that fires while
+	// this run is queued behind another same-workspace run now unblocks this
+	// select right away and the run below is skipped entirely, rather than
+	// silently becoming uncancelable until the lock eventually frees.
+	releaseWorkspaceLock, canceled, cancelErr := acquireRunSlot(runCtx, cli, resolvedWorkDir)
+	if canceled != nil {
+		return canceled, cancelErr
+	}
+	defer releaseWorkspaceLock()
+
+	// Obtain the driver only now that the pre-start checks have passed: a fresh
+	// Run creates one (recorded for a later continuation to Resume); a Resume
+	// reuses the retained one. A canceled-before-start run therefore never
+	// instantiates a driver (the belt-and-suspenders check above).
+	if !resume && resumeOnly {
+		// N7: durably record that this steered session's first CLI run is
+		// starting, BEFORE any driver exists, so a revive after a restart
+		// resumes-or-refuses instead of starting a fresh conversation.
+		if markErr := al.markExternalRunStarted(sessionKey); markErr != nil {
+			return nil, fmt.Errorf("external-cli dispatch: %w", markErr)
+		}
+	}
+	driver, driverErr := sess.driverForRun(cli, consent, resume)
+	if driverErr != nil {
+		return nil, fmt.Errorf("external-cli dispatch: %w", driverErr)
+	}
+
+	return ed.startAndDrain(runCtx, driver, consent, cli, resolvedWorkDir, task, resume)
+}
+
+// startAndDrain starts (Run) or continues (Resume) the external CLI on driver,
+// routes its events through the consent dispatcher, drains them into the
+// transcript and waits for the process-exit barrier. Extracted from
+// runExternalCLISubTurn unchanged in behaviour.
+func (ed *runExternalCLISubTurnState) startAndDrain(
+	runCtx context.Context,
+	driver runner.ExternalAgentRunner,
+	consent runner.ConsentHandler,
+	cli, resolvedWorkDir, task string,
+	resume bool,
+) (*tools.ToolResult, error) {
+	runOpts := runner.RunOptions{
 		RunID:          ed.runID,
-		WorkDir:        workDir,
+		WorkDir:        resolvedWorkDir,
 		Input:          task,
 		Env:            ed.childEnv,
 		TimeoutSeconds: ed.timeoutSecs,
@@ -400,13 +449,31 @@ func runExternalCLISubTurn(
 		// CLI invocation. Each driver's buildArgs guards so an unmapped/empty
 		// model string is simply omitted rather than passed as garbage.
 		Model: ed.agentModel,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("external-cli dispatch: driver start (%s): %w", cli, err)
+	}
+
+	var (
+		evCh <-chan runner.RunEvent
+		err  error
+	)
+	if resume {
+		evCh, err = driver.Resume(runCtx, ed.runID, task)
+		if err != nil {
+			// FR-043: a delivery that cannot reach the native conversation —
+			// no captured conversation id, a rejected/crashed resume — is a
+			// VISIBLE failure, never a silent fresh conversation. The driver's
+			// own Resume refusal is the truthful cause and is surfaced here
+			// unchanged (BDD-05.6).
+			return nil, fmt.Errorf("external-cli dispatch: resume native conversation (%s): %w", cli, err)
+		}
+	} else {
+		evCh, err = driver.Run(runCtx, runOpts)
+		if err != nil {
+			return nil, fmt.Errorf("external-cli dispatch: driver start (%s): %w", cli, err)
+		}
 	}
 
 	slog.Info("external-cli dispatch: run started",
-		"run_id", ed.runID, "cli", cli, "work_dir", workDir,
+		"run_id", ed.runID, "cli", cli, "work_dir", resolvedWorkDir,
 		"timeout_s", ed.timeoutSecs, "max_turns", ed.maxTurns, "agent_id", ed.childTS.agentID)
 
 	// 5. Route events through the consent dispatcher and drain into the transcript.
@@ -421,7 +488,53 @@ func runExternalCLISubTurn(
 	}()
 
 	result := drainExternalRun(runCtx, ed.al, ed.childTS, ed.runID, cli, out)
+
+	// N2 process-exit barrier: wait for the driver's OWN event stream to CLOSE.
+	// Each driver's parser goroutine closes that channel only after the child
+	// process has actually exited and its run state has been reset (e.g.
+	// driver_claude.go::Run's deferred d.eventCh = nil / close(ch)). By this
+	// point ConsentDispatcher has stopped reading evCh (it returns on ctx.Done
+	// or evCh close, and drainExternalRun returning means `out` is closed), so
+	// this drain takes evCh to closure — bounded by process exit plus the
+	// existing group-cancel grace. It guarantees a continuation that follows can
+	// call Resume without hitting "Run called while a run is already active",
+	// and the deferred finishExternalRun / releaseWorkspaceLock below release
+	// the driver and the workspace lock only once the process is truly gone.
+	for range evCh {
+	}
 	return result, result.Err
+}
+
+// acquireRunSlot takes the workspace run lock cancel-aware and re-checks the
+// run context right after (layers 2 and 3 of the BLOCK-finding fix): a run that
+// got its cancel signal while queued, or in the instant between the acquire's
+// own check and the token arriving, never starts. On cancellation it returns
+// the canceled ToolResult and its error and no lock is held.
+func acquireRunSlot(runCtx context.Context, cli, workDir string) (release func(), canceled *tools.ToolResult, err error) {
+	releaseWorkspaceLock, acquired := acquireWorkspaceRunLockCtx(runCtx, workDir)
+	if !acquired {
+		cancelErr := fmt.Errorf(
+			"external-cli dispatch: canceled while waiting for the workspace lock: %w",
+			runCtx.Err(),
+		)
+		return nil, &tools.ToolResult{
+			Err: cancelErr,
+			ForLLM: fmt.Sprintf(
+				"External CLI run (%s) canceled while waiting for the workspace lock: %v",
+				cli,
+				cancelErr,
+			),
+		}, cancelErr
+	}
+	if runCtx.Err() != nil {
+		releaseWorkspaceLock()
+		cancelErr := fmt.Errorf("external-cli dispatch: canceled before starting: %w", runCtx.Err())
+		return nil, &tools.ToolResult{
+			Err:    cancelErr,
+			ForLLM: fmt.Sprintf("External CLI run (%s) canceled before starting: %v", cli, cancelErr),
+		}, cancelErr
+	}
+	return releaseWorkspaceLock, nil, nil
 }
 
 // prepareRunOptions derives the run limits, model, scrubbed environment, and configured CLI arguments.
@@ -940,16 +1053,10 @@ func recordExternalToolResultUpdateInPlace(
 	status string,
 	result map[string]any,
 ) bool {
-	return mutateToolCallInTranscript(
-		childTS.transcriptStore,
-		childTS.transcriptSessionID,
-		callID,
-		"completed",
-		func(tc *session.ToolCall) {
-			tc.Status = status
-			tc.Result = result
-		},
-	)
+	return mutateToolCall(childTS, callID, "completed", func(tc *session.ToolCall) {
+		tc.Status = status
+		tc.Result = result
+	})
 }
 
 // resolveExternalMaxTurns resolves agentID's effective tool-iteration limit

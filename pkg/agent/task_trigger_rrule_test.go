@@ -782,11 +782,10 @@ func TestTriggerScheduler_EditDuringFire(t *testing.T) {
 // -----------------------------------------------------------------------------
 
 // TestTriggerScheduler_LegacyPathUnchanged is the byte-for-byte regression
-// guard (Scheduler rule 7) on the at/every/cron job translation for
-// non-RRULE triggers — the seam that also carries workspace heartbeats. It
-// pins triggerToCronSchedule's exact output for once/every/legacy cron_expr
-// (unit level) plus one end-to-end legacy-cron registration (integration
-// level, not previously covered by task_trigger_test.go).
+// guard (Scheduler rule 7) on the `at` job translation for the surviving
+// non-RRULE trigger (`once`) — the seam that also carries workspace
+// heartbeats. The `every` and legacy `cron_expr` branches were deleted by
+// every-del (spec C-TIMING / DEL-19), so their cases are gone with them.
 func TestTriggerScheduler_LegacyPathUnchanged(t *testing.T) {
 	nowMs := time.Now().UnixMilli()
 
@@ -812,44 +811,10 @@ func TestTriggerScheduler_LegacyPathUnchanged(t *testing.T) {
 		}
 	})
 
-	t.Run("every", func(t *testing.T) {
-		every := int64(60000)
-		tr := &task.Trigger{Type: task.TriggerEvery, Config: task.TriggerConfig{EveryMs: &every}}
-		sched, err := triggerToCronSchedule(tr, nowMs)
-		if err != nil {
-			t.Fatalf("triggerToCronSchedule(every): %v", err)
-		}
-		if sched.Kind != "every" || sched.EveryMS == nil || *sched.EveryMS != every {
-			t.Fatalf("every mapping = %+v, want Kind=every EveryMS=%d", sched, every)
-		}
-	})
-
-	t.Run("every_missing_every_ms", func(t *testing.T) {
-		tr := &task.Trigger{Type: task.TriggerEvery, Config: task.TriggerConfig{}}
-		if _, err := triggerToCronSchedule(tr, nowMs); err == nil {
-			t.Fatal("expected an error for an 'every' trigger missing config.every_ms")
-		}
-	})
-
-	t.Run("legacy_cron_expr", func(t *testing.T) {
-		expr := "0 9 * * MON"
-		tr := &task.Trigger{Type: task.TriggerRecurring, Config: task.TriggerConfig{CronExpr: &expr}}
-		sched, err := triggerToCronSchedule(tr, nowMs)
-		if err != nil {
-			t.Fatalf("triggerToCronSchedule(legacy cron): %v", err)
-		}
-		if sched.Kind != "cron" || sched.Expr != expr {
-			t.Fatalf("legacy cron mapping = %+v, want Kind=cron Expr=%q", sched, expr)
-		}
-		if sched.AtMS != nil || sched.EveryMS != nil {
-			t.Fatalf("legacy cron mapping leaked unrelated fields: %+v", sched)
-		}
-	})
-
-	t.Run("recurring_missing_cron_expr_and_rrule", func(t *testing.T) {
+	t.Run("recurring_missing_rrule", func(t *testing.T) {
 		tr := &task.Trigger{Type: task.TriggerRecurring, Config: task.TriggerConfig{}}
 		if _, err := triggerToCronSchedule(tr, nowMs); err == nil {
-			t.Fatal("expected an error for a 'recurring' trigger with neither cron_expr nor rrule")
+			t.Fatal("expected an error for a 'recurring' trigger with no rrule")
 		}
 	})
 
@@ -860,55 +825,6 @@ func TestTriggerScheduler_LegacyPathUnchanged(t *testing.T) {
 		}
 	})
 
-	t.Run("end_to_end_legacy_cron_registration", func(t *testing.T) {
-		sched, store, _, _ := newTriggerSchedulerForTest(t)
-
-		expr := "0 9 * * MON"
-		tsk := makeTask(t, store, "agent-legacy-cron", &task.Trigger{
-			Type:   task.TriggerRecurring,
-			Config: task.TriggerConfig{CronExpr: &expr},
-		})
-		sched.OnTaskUpserted(tsk)
-
-		jobs := jobsForTask(sched, tsk.ID)
-		if len(jobs) != 1 {
-			t.Fatalf("expected exactly 1 job for the legacy cron task, got %d", len(jobs))
-		}
-		if jobs[0].Schedule.Kind != "cron" || jobs[0].Schedule.Expr != expr {
-			t.Fatalf("legacy cron job schedule = %+v, want Kind=cron Expr=%q", jobs[0].Schedule, expr)
-		}
-		if jobs[0].DeleteAfterRun {
-			t.Error("legacy cron job DeleteAfterRun = true, want false (only 'at' jobs auto-delete)")
-		}
-	})
-
-	t.Run("end_to_end_heartbeat_still_unregistered", func(t *testing.T) {
-		// Regression guard: RRULE additions must not affect the heartbeat-surface
-		// skip that TestTriggerHeartbeatNotRegistered already covers for `every`
-		// — pin it here too for a `recurring`+cron_expr heartbeat task, since
-		// that combination was never exercised before this feature.
-		sched, store, _, rec := newTriggerSchedulerForTest(t)
-
-		expr := "*/5 * * * *"
-		surf := task.SurfaceHeartbeat
-		tsk := makeTask(t, store, "agent-heartbeat-cron", &task.Trigger{
-			Type:   task.TriggerRecurring,
-			Config: task.TriggerConfig{CronExpr: &expr},
-		})
-		updated, err := store.Update(tsk.ID, task.Patch{Surface: &surf})
-		if err != nil {
-			t.Fatalf("store.Update surface: %v", err)
-		}
-
-		sched.OnTaskUpserted(updated)
-
-		if jobs := jobsForTask(sched, tsk.ID); len(jobs) != 0 {
-			t.Fatalf("heartbeat-surface recurring task was registered as a cron job, want none (got %d)", len(jobs))
-		}
-		if n := len(rec.calls()); n != 0 {
-			t.Fatalf("heartbeat-surface task dispatched %d time(s), want 0", n)
-		}
-	})
 }
 
 // -----------------------------------------------------------------------------
@@ -1395,7 +1311,7 @@ func TestTriggerOverlapGuard_SuppressesSkipWhenOccurrenceAlreadyRunNow(t *testin
 	// RD8: the user Run-now's this exact FUTURE occurrence ahead of its
 	// natural schedule — OpenRun records a manual, still-open run keyed to
 	// occurrenceMs.
-	manualRun, created, err := store.OpenRun(tsk.ID, &occurrenceMs, task.RunKindManual, "session-manual-run-now")
+	manualRun, created, err := store.OpenRun(tsk.ID, &occurrenceMs, task.RunKindManual, "session-manual-run-now", nil)
 	if err != nil {
 		t.Fatalf("store.OpenRun (manual run-now): %v", err)
 	}

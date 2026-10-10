@@ -222,9 +222,9 @@ func TestBootSweep_ReconcilesCrashedTaskDispatchSession(t *testing.T) {
 		t.Errorf("pre-sweep lifecycle state = %q, want running", preRec.State)
 	}
 
-	sessStore := al.GetAgentStore("native-agent")
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	preMeta, err := sessStore.GetMeta(sessionID)
 	if err != nil {

@@ -197,6 +197,13 @@ func (al *AgentLoop) deliverSubagentEnd(parentSessionID string, childRec *sessio
 // this is the side-panel status line, R2's "sourced only from that
 // child's own subagent_message/subagent_state frames".
 func (al *AgentLoop) deliverSubagentMessage(parentSessionID string, childRec *session.LifecycleRecord, kind, text string, pct *int) {
+	al.deliverSubagentMessageFrame(parentSessionID, childRec, kind, text, pct, true)
+}
+
+// deliverSubagentMessageFrame is deliverSubagentMessage with an explicit
+// untrusted_origin: child-authored frames pass true; a server-authored frame
+// (kind not_delivered, FR-013) passes false.
+func (al *AgentLoop) deliverSubagentMessageFrame(parentSessionID string, childRec *session.LifecycleRecord, kind, text string, pct *int, untrustedOrigin bool) {
 	if al == nil || parentSessionID == "" || childRec == nil || childRec.Origin == nil || childRec.Origin.CallID == "" {
 		return
 	}
@@ -220,7 +227,7 @@ func (al *AgentLoop) deliverSubagentMessage(parentSessionID string, childRec *se
 		Kind:            kind,
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 		SenderIdentity:  childRec.AgentID,
-		UntrustedOrigin: true,
+		UntrustedOrigin: untrustedOrigin,
 	}
 	if text != "" {
 		frame.Text = &text

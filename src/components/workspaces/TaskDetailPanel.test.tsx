@@ -579,9 +579,9 @@ async function assertAgentPickerIncludesWorker(): Promise<void> {
 }
 
 const agentsWithWorker = [
-  { id: 'mia', name: 'Mia', type: 'core', default: false },
-  { id: 'jim', name: 'Jim', type: 'core', default: false },
-  { id: 'builder', name: 'Builder Worker', type: 'Subagent', default: false },
+  { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
+  { figure: 'Omnipus', role: 'general', id: 'jim', name: 'Jim', type: 'core', default: false },
+  { figure: 'Omnipus', role: 'general', id: 'builder', name: 'Builder Worker', type: 'Subagent', default: false },
 ]
 
 describe('TaskDetailPanel — worker-type agents are offered as assignees', () => {
@@ -651,8 +651,8 @@ describe('TaskDetailPanel — worker-type agents are offered as assignees', () =
     // " · Worker" suffix as a native Subagent.
     const { fetchAgents, fetchWorkspaceDelegation } = await import('@/lib/api')
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', default: false },
-      { id: 'ext', name: 'External Runner', type: 'subagent_3p', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'ext', name: 'External Runner', type: 'subagent_3p', default: false },
     ] as never)
     vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
       workspace_id: 'ws-test',
@@ -787,8 +787,8 @@ describe('TaskDetailPanel — assignee picker is workspace-team-scoped (Fix B)',
   it('excludes an agent that is NOT a member of the workspace team, regardless of kind', async () => {
     const { fetchAgents, fetchWorkspaceDelegation } = await import('@/lib/api')
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', default: false },
-      { id: 'offteam', name: 'Off Team Agent', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'offteam', name: 'Off Team Agent', type: 'core', default: false },
     ] as never)
     vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
       workspace_id: 'ws-test',
@@ -815,8 +815,8 @@ describe('TaskDetailPanel — assignee picker is workspace-team-scoped (Fix B)',
   it('falls back to the full unscoped agent list when the workspace-team query errors', async () => {
     const { fetchAgents, fetchWorkspaceDelegation } = await import('@/lib/api')
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', default: false },
-      { id: 'offteam', name: 'Off Team Agent', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'offteam', name: 'Off Team Agent', type: 'core', default: false },
     ] as never)
     vi.mocked(fetchWorkspaceDelegation).mockRejectedValue(new Error('network down'))
 
@@ -842,7 +842,7 @@ describe('TaskDetailPanel — assignee picker is workspace-team-scoped (Fix B)',
       new Promise((resolve) => { resolveDelegation = resolve }) as never,
     )
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
     ] as never)
 
     renderPanel(taskWithPrompt)
@@ -868,7 +868,7 @@ describe('TaskDetailPanel — assignee picker is workspace-team-scoped (Fix B)',
     // indistinguishable from a healthy, unrestricted workspace.
     const { fetchAgents, fetchWorkspaceDelegation } = await import('@/lib/api')
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
     ] as never)
     vi.mocked(fetchWorkspaceDelegation).mockRejectedValue(new Error('network down'))
 
@@ -880,7 +880,7 @@ describe('TaskDetailPanel — assignee picker is workspace-team-scoped (Fix B)',
   it('does NOT show the "team unavailable" hint when the workspace-team query succeeds', async () => {
     const { fetchAgents, fetchWorkspaceDelegation } = await import('@/lib/api')
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
     ] as never)
     vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
       workspace_id: 'ws-test',
@@ -908,8 +908,8 @@ describe('TaskDetailPanel — assignee picker is workspace-team-scoped (Fix B)',
       workspace_id: 'ws-test',
     })
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', default: false },
-      { id: 'retired-agent', name: 'Retired Agent', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'retired-agent', name: 'Retired Agent', type: 'core', default: false },
     ] as never)
     // The team no longer includes 'retired-agent'.
     vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
@@ -955,7 +955,7 @@ describe('TaskDetailPanel — workspace-less task disables the assignee picker (
   it('disables the Agent picker and shows an "assignment unavailable" hint when the task has no workspace_id', async () => {
     const { fetchAgents } = await import('@/lib/api')
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
     ] as never)
 
     const workspacelessTask = makeTask({
@@ -980,7 +980,7 @@ describe('TaskDetailPanel — workspace-less task disables the assignee picker (
   it('does not show the workspace-less hint for a task that has a workspace_id', async () => {
     const { fetchAgents, fetchWorkspaceDelegation } = await import('@/lib/api')
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
     ] as never)
     vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
       workspace_id: 'ws-test',
@@ -1102,22 +1102,6 @@ describe('TaskDetailPanel — FR-023 defensive guard for a force-fed scheduled t
     expect(screen.queryByText(/0 9 \* \* MON/)).toBeNull()
     expect(screen.queryByLabelText(/cron expression/i)).toBeNull()
     // No editable trigger picker for a recurring task.
-    const label = await screen.findByText(/^trigger$/i)
-    const fieldRoot = label.parentElement as HTMLElement
-    expect(fieldRoot.querySelector('[role="combobox"]')).toBeNull()
-  })
-
-  it('renders a read-only summary for an every-interval task, derived from every_ms, with no interval input', async () => {
-    renderPanel(makeTask({
-      id: 'task-every-forced',
-      status: 'next',
-      workspace_id: 'ws-test',
-      trigger: { type: 'every', config: { every_ms: 45 * 60_000 } },
-    }))
-
-    expect(await screen.findByText(/repeats every 45 minutes/i)).toBeInTheDocument()
-    expect(await screen.findByText(/edit in workspace calendar/i)).toBeInTheDocument()
-    expect(screen.queryByLabelText(/interval in minutes/i)).toBeNull()
     const label = await screen.findByText(/^trigger$/i)
     const fieldRoot = label.parentElement as HTMLElement
     expect(fieldRoot.querySelector('[role="combobox"]')).toBeNull()

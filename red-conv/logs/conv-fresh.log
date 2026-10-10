@@ -1,0 +1,4 @@
+=== RUN   TestSessionCoreConv_FreshInstallIsANoOpWithZeroWrites
+--- PASS: TestSessionCoreConv_FreshInstallIsANoOpWithZeroWrites (0.00s)
+PASS
+ok  	github.com/elicify-ai/omnipus/pkg/session	1.303s

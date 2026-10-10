@@ -59,7 +59,7 @@ func orphanACMapEphemeral(t *testing.T) {
 	require.Equal(t, original, candidate, "mapping is read-only, including nested declarations and media")
 	orphanACAssertUnchanged(t, h, before, bytes)
 	// Generic memory selection must remain raw; recovery belongs to the agent.
-	selected, lines := memory.WindowHistory(before)
+	selected, lines := before.History()
 	require.Equal(t, raw, selected, "agent recovery must not change generic WindowHistory semantics")
 	require.Equal(t, []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}, lines)
 }

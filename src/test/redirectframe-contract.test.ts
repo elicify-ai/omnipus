@@ -5,7 +5,7 @@
 // SPEC SOURCES (expected values derive from these, never from the
 // implementation):
 //   - contracts/components/schemas/RedirectFrame.yaml: {type: const
-//     "redirect", session_id: 1..128 required, instruction: minLength 1 /
+//     "redirect", session_id: 1..255 required, instruction: minLength 1 /
 //     maxLength 16384 / pattern \S}, additionalProperties: false, NO scope.
 //   - The Go-side mirror pins live in
 //     pkg/api/generated/redirectframe_contract_test.go; the NBSP and astral
@@ -57,10 +57,10 @@ describe('generated RedirectFrame Zod schema (ws-schemas)', () => {
     expect(redirectFrameSchema.safeParse({ ...VALID, type: 'redirect_x' }).success).toBe(false)
   })
 
-  it('enforces session_id 1..128 (boundary: empty / 128 / 129)', () => {
+  it('enforces session_id 1..255 (boundary: empty / 255 / 256; widened for the computed main id, 5a8def541)', () => {
     expect(redirectFrameSchema.safeParse({ ...VALID, session_id: '' }).success).toBe(false)
-    expect(redirectFrameSchema.safeParse({ ...VALID, session_id: 's'.repeat(128) }).success).toBe(true)
-    expect(redirectFrameSchema.safeParse({ ...VALID, session_id: 's'.repeat(129) }).success).toBe(false)
+    expect(redirectFrameSchema.safeParse({ ...VALID, session_id: 's'.repeat(255) }).success).toBe(true)
+    expect(redirectFrameSchema.safeParse({ ...VALID, session_id: 's'.repeat(256) }).success).toBe(false)
   })
 
   it('enforces instruction maxLength 16384 counted as UTF-16 code units (boundary: 16384 / 16385 / empty)', () => {

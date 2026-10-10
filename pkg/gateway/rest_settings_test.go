@@ -81,7 +81,7 @@ func TestHandleClearSessions_RemovesSessionsAndReportsAccurateCount(t *testing.T
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 
-	store := al.GetAgentStore("agent-a")
+	store := al.GetSessionStore()
 	require.NotNil(t, store, "agent-a must have a registered session store")
 
 	_, err := store.NewSession(session.SessionTypeChat, "test", "agent-a")

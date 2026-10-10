@@ -83,7 +83,7 @@ func orphanACEmptyControl(t *testing.T) {
 	require.Equal(t, 0, before.State.Count)
 	require.Equal(t, 0, before.State.Skip)
 	require.Nil(t, before.State.AnchorLine)
-	require.Len(t, before.Archive, 0)
+	require.Len(t, viewArchived(before), 0)
 	require.Len(t, RecoverOrphanedToolCalls(h.agent.Sessions, h.key, nil), 0, "empty history cannot manufacture a cancellation")
 	out := orphanACAssertView(t, h, h.turn(""), []providers.Message{})
 	require.Equal(t, []int{-1}, mapWindowMessages(before, out, -1, 0), "the only slot is the ephemeral pinned envelope")

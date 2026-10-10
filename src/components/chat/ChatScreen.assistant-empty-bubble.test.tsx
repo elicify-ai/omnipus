@@ -62,7 +62,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([
-      { id: 'agent-1', name: 'Mia', color: '#123456', icon: null },
+      { figure: 'Omnipus', role: 'general', id: 'agent-1', name: 'Mia', color: '#9CA3AF', icon: null },
     ]),
     fetchSessionMessages: vi.fn().mockResolvedValue([]),
     fetchCommands: vi.fn().mockResolvedValue([]),
@@ -85,12 +85,10 @@ vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 // more), so there is nothing left to mock here.
 vi.mock('./ActivityBar', () => ({ ActivityBar: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
 // Composer Redesign (variant A1): this file targets the live AssistantMessage()
 // bubble render, not the composer's picker/model/token sub-components — stub
 // them to null so their workspaces/providers query plumbing doesn't need
 // mocking here (this file uses a real, unmocked QueryClient).
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 // Real MarkdownText pulls in Shiki/Mermaid/KaTeX — far more than this test needs.

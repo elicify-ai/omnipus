@@ -192,7 +192,7 @@ func waitForCompletionContractTerminal(t *testing.T, al *AgentLoop, taskID strin
 			if got.SessionID == "" {
 				return got
 			}
-			sessStore := al.GetAgentStore(got.AgentID)
+			sessStore := al.GetSessionStore()
 			if sessStore == nil {
 				return got
 			}
@@ -516,9 +516,9 @@ func TestTaskCompletionContract_SessionArchivedOnCompletion(t *testing.T) {
 		t.Fatal("final task has no SessionID — cannot verify session archival")
 	}
 
-	sessStore := al.GetAgentStore("native-agent")
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
-		t.Fatal("GetAgentStore(\"native-agent\") returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	meta, err := sessStore.GetMeta(final.SessionID)
 	if err != nil {

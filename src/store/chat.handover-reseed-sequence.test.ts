@@ -16,15 +16,12 @@
 //                           why (deep-link WS-replay regression). The
 //                           component's attach effect is the sole attacher;
 //                           the seeded value is unchanged.
-//   2. WS replay frames   → the gateway replays the transcript; for the handoff
-//                           system entry replay.go emits an `agent_switched`
-//                           (wire `ln`) frame carrying the TARGET agent (Jim),
-//                           plus per-message replay_message frames.
+//   2. WS replay frames   → the gateway replays the transcript as per-message
+//                           replay_message frames.
 //
 // The invariant: after the whole sequence the session store's activeAgentId is
-// 'jim' (last-active) — never the creator 'mia'. The replay's agent_switched
-// frame must REINFORCE Jim, and no frame may downgrade the header to the
-// creating agent.
+// 'jim' (last-active) — never the creator 'mia'. No replay frame may
+// downgrade the header to the creating agent.
 
 import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
@@ -62,8 +59,7 @@ describe('chat store — cold-load attach sequence keeps header on last-active a
 
     act(() => {
       // Step 2 — WS replay. The gateway replays the handoff system entry as a
-      // replay_message (agent_id='jim') followed by an agent_switched frame
-      // whose agent_id is the handoff TARGET ('jim'). Then Jim's own turns.
+      // replay_message (agent_id='jim'). Then Jim's own turns.
       const chat = useChatStore.getState()
       chat.handleFrame({
         type: 'replay_message',
@@ -72,12 +68,6 @@ describe('chat store — cold-load attach sequence keeps header on last-active a
         content: 'Handoff: mia → Jim — General Purpose.',
         agent_id: 'jim',
         timestamp: '2026-06-10T10:00:00Z',
-        session_id: SID,
-      })
-      // replay.go emits this for the "Handoff:" system entry.
-      chat.handleFrame({
-        type: 'agent_switched',
-        agent_id: 'jim',
         session_id: SID,
       })
       chat.handleFrame({
@@ -94,21 +84,5 @@ describe('chat store — cold-load attach sequence keeps header on last-active a
     // The invariant: header/composer agent is the last-active agent, not the creator.
     expect(useSessionStore.getState().activeAgentId).toBe('jim')
     expect(useSessionStore.getState().activeAgentId).not.toBe('mia')
-  })
-
-  it('the replay agent_switched frame never downgrades a Jim header back to the creator', () => {
-    // Even if a stray agent_switched carrying the CREATOR arrived (it must not,
-    // per replay.go which emits the target), the store applies exactly what the
-    // frame carries — so this test documents that the gateway emits the TARGET.
-    // Here we assert the realistic flow: seed jim, replay carries jim, stays jim.
-    act(() => {
-      useSessionStore.getState().setActiveSession(SID, 'jim', null)
-      useChatStore.getState().handleFrame({
-        type: 'agent_switched',
-        agent_id: 'jim',
-        session_id: SID,
-      })
-    })
-    expect(useSessionStore.getState().activeAgentId).toBe('jim')
   })
 })

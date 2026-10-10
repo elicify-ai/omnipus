@@ -92,7 +92,7 @@ import (
 // FlushAndEvictSessionMeta), exactly like every other u6MarkStatsDirtyLocked
 // caller in this store.
 func (us *UnifiedStore) AppendTranscriptStrict(sessionID string, entry TranscriptEntry) error {
-	_, err := us.appendTranscript(sessionID, entry, false, "append transcript strict", nil)
+	_, err := us.appendTranscript(sessionID, entry, "append transcript strict", nil)
 	return err
 }
 

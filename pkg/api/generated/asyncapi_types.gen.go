@@ -21,18 +21,6 @@ type AgentCreatedFrame struct {
 	Type    string `json:"type"`
 }
 
-// AgentSwitchedFrame — Server → client active agent changed. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
-type AgentSwitchedFrame struct {
-	AgentId *string `json:"agent_id,omitempty"`
-	Message *string `json:"message,omitempty"`
-	// ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit (FR-089) — see this frame's description.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/AgentSwitchedFrame.yaml.
-	Seq       *int64 `json:"seq,omitempty"`
-	SessionId string `json:"session_id"`
-	Type      string `json:"type"`
-}
-
 // AskUserAnswerFrame — Client → server (askuserquestion-tool-spec v3 §3). The card's submission: either a full answer set (every question answered exactly once — server-validated by askuser.Registry.Submit, first-valid-wins) or cancel:true (the Cancel affordance — selections discarded, submission-free cancelled resume). Canonical copy — keep in sync by hand with components/schemas/AskUserAnswerFrame.yaml.
 type AskUserAnswerFrame struct {
 	Answers []struct {
@@ -91,6 +79,10 @@ type AskUserQuestionFrame struct {
 
 // AttachSessionFrame — Client → server request to attach to a session and catch it up to the present. #823 catch-up redesign: since_seq/boot_id replace the retired timestamp cursor (`since`, removed). Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
 type AttachSessionFrame struct {
+	// Optional. True means this attach is an acknowledgement of what was shown. It does not choose the bound. Defaults to false. A failed, background, or reconnect attach does not write the seen mark. Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
+	AckAttention *bool `json:"ack_attention,omitempty"`
+	// Optional integer on the acknowledging attach. The saved outcome/entry order, not a new counter. Absent means do not write the seen mark and do not substitute the current order. Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
+	AttentionBound *int64 `json:"attention_bound,omitempty"`
 	// #823 review finding 7. The gateway boot ID the SPA last saw for this session. A mismatch forces a snapshot (reason boot_mismatch) regardless of since_seq.
 	BootId    *string `json:"boot_id,omitempty"`
 	SessionId string  `json:"session_id"`
@@ -459,6 +451,17 @@ type CatchUpCompleteFrame struct {
 	Type      string `json:"type"`
 }
 
+// ChatParticipant — Server-made display record of a chat participant (F15). Display only: no ids, no route. Mirrors contracts/components/schemas/ChatParticipant.yaml.
+type ChatParticipant struct {
+	Agent *struct {
+		AgentId     string `json:"agent_id"`
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"agent,omitempty"`
+	DisplayName string  `json:"display_name"`
+	Kind        string  `json:"kind"`
+	Source      *string `json:"source,omitempty"`
+}
+
 // CommandSegmentInfo — ADR-092 D3/D4. One segment of the bash command awaiting approval, split with the same splitter and program resolution the bash tool itself uses (splitShellSegments / shellCommandHeadDetailed, through the tool's own D3 evaluator), listed inside ToolApprovalRequiredFrame.segments. Every segment of the command is listed, in order, because one decision approves or denies the whole call; the server records no per-segment grant for a chained command. On Windows the whole command is one segment (FR-041).
 type CommandSegmentInfo struct {
 	// Argument tokens following the resolved binary, as split.
@@ -533,6 +536,8 @@ type DevicePairingResponseFrame struct {
 
 // DoneFrame — Server → client turn complete. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
 type DoneFrame struct {
+	// session-core FR-039 / C-GOAL. The goal this producing turn was dispatched under (captured at turn start), spread onto the done frame so a no-stream turn's bubble (created from this frame's message_id, not from tokens) still joins to the exact keyed goal criteria. Absent means UNKNOWN association.
+	GoalId *string `json:"goal_id,omitempty"`
 	// #823 catch-up redesign. The id of the turn's last assistant message.
 	MessageId *string `json:"message_id,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign), published only after the turn's transcript entry is durably persisted. Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/DoneFrame.yaml.
@@ -553,8 +558,6 @@ type DoneStats struct {
 	OrphanCount              *float64 `json:"orphan_count,omitempty"`
 	ReplayError              *bool    `json:"replay_error,omitempty"`
 	Tokens                   *float64 `json:"tokens,omitempty"`
-	// Deprecated (#823 catch-up redesign, Q5): the gateway never drops frames under backpressure now (WS close 4008 + reconnect instead). Never set.
-	TokensDropped *float64 `json:"tokens_dropped,omitempty"`
 	// ADR-087 D2 (finding #10). Mirrors Message.truncation_reason for the live done frame, so a turn cut off while the user is still watching renders the notice immediately instead of only after reload/reattach via replay. Only present when true. Absent on a normal turn.
 	Truncated            *bool    `json:"truncated,omitempty"`
 	TruncatedResultCount *float64 `json:"truncated_result_count,omitempty"`
@@ -866,14 +869,21 @@ type MessageFrame struct {
 	// Optional media:// refs for files the user attached to this message (e.g. images uploaded via POST /api/v1/upload). The server threads each ref into the LLM content array as a multimodal content block so the agent can see the attachment. Empty or omitted for text-only messages.
 	Media []string `json:"media,omitempty"`
 	// Optional per-message metadata. Typed keys today: `model_name` (Phase 1, FR-010) — when the user picks a model in the chat composer, the picker value is sent as `metadata.model_name` so the server routes this turn to the chosen model, falling back to the agent's `model` config when absent; `workspace_id` — the active workspace this chat belongs to; and `workspace_setup_kickoff` (boolean) — a one-time marker that this message is the workspace setup kickoff for `metadata.workspace_id`.
-	Metadata  map[string]any `json:"metadata,omitempty"`
-	SessionId *string        `json:"session_id,omitempty"`
-	Type      string         `json:"type"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// Optional request to a peer agent: the {workspace_id, agent_id} pair the user @-addressed from the chat named by session_id. Valid only together with session_id; the server refuses it otherwise. Mirrors contracts/components/schemas/AgentAddress.yaml.
+	Recipient *struct {
+		AgentId     string `json:"agent_id"`
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"recipient,omitempty"`
+	SessionId *string `json:"session_id,omitempty"`
+	Type      string  `json:"type"`
 }
 
-// MessageStatusFrame — Server → client delivery status for one user message. Session-scoped. received follows durable transcript persistence; working follows successful turn admission; failed means processing stopped before admission. Emitted only when the client supplied client_message_id.
+// MessageStatusFrame — Server → client delivery status for one user message. Session-scoped. received follows durable transcript persistence; working follows successful turn admission; failed means processing stopped before admission; discarded (reason stopped_before_delivery) means Stop discarded the input before delivery (session-core FR-024). Emitted only when the client supplied client_message_id.
 type MessageStatusFrame struct {
 	ClientMessageId string `json:"client_message_id"`
+	// Present only with state=discarded: why the input never reached the agent (session-core FR-024).
+	Reason *string `json:"reason,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/MessageStatusFrame.yaml.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
@@ -1016,23 +1026,36 @@ type ReplayErrorPayload struct {
 	LlmError LLMErrorReplay `json:"llm_error"`
 }
 
-// ReplayMessageFrame — Server → client replayed transcript entry. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the gateway replay path.
+// ReplayMessageFrame — Server → client replayed transcript entry. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the gateway replay path. A CHAT PROJECTION of the session's single append-only archive, not a provider-message or raw-storage type (session-core C-ARCHIVE / U2; FR-004/FR-005): the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance and its disk/byte/view marks are disk-only and are never emitted on this frame, and entries that belong to the model view only are not replayed.
 type ReplayMessageFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	// #823 catch-up redesign §4.7. Present on a replayed user entry persisted with a client-supplied id. Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
 	ClientMessageId *string `json:"client_message_id,omitempty"`
 	Content         string  `json:"content"`
-	Id              *string `json:"id,omitempty"`
+	// session-core FR-039 / C-GOAL. The goal the replayed entry's producing turn was dispatched under (from TranscriptEntry.GoalID). Live, history, REST and replay must retain the SAME association so the SPA joins each bubble to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier replayed message.
+	GoalId *string `json:"goal_id,omitempty"`
+	Id     *string `json:"id,omitempty"`
+	// Read-only record that this user input was DISCARDED by Stop before it was delivered into the agent's model input (session-core FR-024). Absent on every delivered message. There is no client action to release or discard it; the archived message bytes are unchanged and this only labels them.
+	InputDisposition *struct {
+		ClientMessageId *string `json:"client_message_id,omitempty"`
+		MessageId       string  `json:"message_id"`
+		Reason          string  `json:"reason"`
+		State           string  `json:"state"`
+	} `json:"input_disposition,omitempty"`
 	// Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014). Omitted for legacy entries written before per-turn model recording landed.
-	Model     *string `json:"model,omitempty"`
-	Role      string  `json:"role"`
-	SessionId string  `json:"session_id"`
+	Model       *string          `json:"model,omitempty"`
+	Participant *ChatParticipant `json:"participant,omitempty"`
+	// Present only on a guest reply: the message_id of the admitted request this entry answers.
+	ReplyToMessageId   *string          `json:"reply_to_message_id,omitempty"`
+	ReplyToParticipant *ChatParticipant `json:"reply_to_participant,omitempty"`
+	Role               string           `json:"role"`
+	SessionId          string           `json:"session_id"`
 	// Present and true only on an assistant entry that is a turn's distinct terminal outcome sentence (for example the tool-iteration-limit notice) written after the turn's earlier narration was already persisted. Live, the gateway closes the narration bubble with done(<narration id>) before this entry arrives, so it is a separate message; the replay stream has no such boundary, so the SPA must start a new message for this frame instead of merging it into the preceding same-turn assistant entry. Absent on every other frame, including entries written before this field existed.
 	TerminalOutcome *bool   `json:"terminal_outcome,omitempty"`
 	Timestamp       *string `json:"timestamp,omitempty"`
 	// ADR-087 D2. Populated from TranscriptEntry.Truncated when replaying an incomplete assistant entry — see truncation_reason for why. Only present when true. Replay emits this even when content is empty (an entry with Truncated && Content == "" still passes through, so the SPA can render a suffix with no body).
 	Truncated *bool `json:"truncated,omitempty"`
-	// ADR-087 D2. Populated from TranscriptEntry.TruncationReason. Narrows why truncated is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a truncated: true frame means "cancelled" — every entry written before this field existed predates it and was always a cancel.
+	// ADR-087 D2. Populated from TranscriptEntry.TruncationReason. Narrows why truncated is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a truncated: true frame means the reason is not recorded: readers do not default it to "cancelled" or to anything else (session-core DEL-F36).
 	TruncationReason *string `json:"truncation_reason,omitempty"`
 	// Turn-correlation identifier (from TranscriptEntry.TurnID), stamped on assistant entries and turn-cancellation entries. Lets the client match a replayed turn_canceled entry to the specific preceding assistant message it cancels, without relying on stream adjacency (async delegation can interleave other agents'/turns' frames in between). Omitted for legacy entries written before turn-id stamping landed.
 	TurnId *string `json:"turn_id,omitempty"`
@@ -1052,21 +1075,6 @@ type ReplayWarningStats struct {
 	DuplicateToolCallIdCount *int `json:"duplicate_tool_call_id_count,omitempty"`
 }
 
-// SessionCloseAckFrame — Server → client session close acknowledged. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output.
-type SessionCloseAckFrame struct {
-	Id *string `json:"id,omitempty"`
-	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Type               string  `json:"type"`
-}
-
-// SessionCloseFrame — Client → server explicit session close request.
-type SessionCloseFrame struct {
-	SessionId string `json:"session_id"`
-	Type      string `json:"type"`
-}
-
 // SessionModeUpdateFrame — Client → server. Set or clear this session's ADR-092 per-chat Auto-approve modifier — new, session-keyed state (pkg/agent/sessionmode.go), structurally like ApprovalGrantStore, never written into config.json and never a chat_id key on any policy map (Hard Constraint #6). Auto is NOT a tool-policy value — it only has meaning for a tool currently resolved to "ask", and applies to every such tool, not only bash (see SandboxConfig.auto_approve for the full behavioural description). THE ONE EXCEPTION TO TIGHTEN-ONLY in this contract: unlike the global default (SandboxConfig.auto_approve), this frame may LOOSEN — turn Auto ON for this one chat even when the global default has it off — because a human is present in this session to accept that risk. It may also tighten (turn Auto off). Turning Auto on for a chat is deliberately a human-only action: the agent-facing `set_config` tool must never be able to send this frame or reach an equivalent effect (enforced server-side; this frame's shape — a session-scoped WS write, not a config.json path — structurally keeps it outside `set_config`'s reach in the first place). Inherits to a delegated subagent session exactly as approval grants do (ApprovalGrantStore.InheritFrom); clears with the session on restart.
 type SessionModeUpdateFrame struct {
 	// true — turn Auto-approve ON for this chat (may loosen past the global default). false — turn Auto-approve OFF for this chat (tightens, same as every other scope). null — clear this session's modifier; the chat reverts to whatever the global default currently resolves to, and will track future changes to that default rather than staying pinned.
@@ -1075,7 +1083,7 @@ type SessionModeUpdateFrame struct {
 	Type        string `json:"type"`
 }
 
-// SessionModeUpdatedFrame — Server → client. Acknowledges a session_mode_update request with the session's resulting resolved Auto-approve state. A request is always acknowledged here — this is the one frame allowed to loosen, so there is no "rejected for looseness" case the way there is for the global/per-agent scopes; a malformed request still gets the existing, session-scoped ErrorFrame instead. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle/settings frame, not turn output, so producing_session_id is absent (FR-013), matching SessionCloseAckFrame's own precedent.
+// SessionModeUpdatedFrame — Server → client. Acknowledges a session_mode_update request with the session's resulting resolved Auto-approve state. A request is always acknowledged here — this is the one frame allowed to loosen, so there is no "rejected for looseness" case the way there is for the global/per-agent scopes; a malformed request still gets the existing, session-scoped ErrorFrame instead. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle/settings frame, not turn output, so producing_session_id is absent (FR-013).
 type SessionModeUpdatedFrame struct {
 	// The resolved Auto-approve state for THIS session after applying (or clearing) the modifier — the true per-session resolution that SandboxStatus.auto_approve_effective cannot provide (that field is the gateway-wide default only, with no session or agent context). [2026-09-24, founder decision] true here means Auto is genuinely active for this session's "ask" tool calls, whether or not a kernel sandbox is enforcing — combine with SandboxStatus.kernel_sandbox_active only to decide the badge's "Auto" vs "Auto — no sandbox" (warning) rendering, not to predict whether calls still prompt: they do not.
 	AutoApproveEffective bool   `json:"auto_approve_effective"`
@@ -1123,6 +1131,8 @@ type SessionStateActiveTurn struct {
 type SessionStateFrame struct {
 	// ADR-082 D4 — present only when the attached session has a foreground turn in flight at emit time. Absent when idle. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
 	ActiveTurn *SessionStateActiveTurn `json:"active_turn,omitempty"`
+	// Optional. The saved outcome/entry order for this main, echoed so a later acknowledgement can name the same number. Not a new counter. This frame is part of both the incremental catch-up and the full snapshot. 0 when the main has no outcome yet; omitted when this emit is not an attach of a main or the saved order could not be read. An omitted value means unknown, never zero. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
+	AttentionBound *int64 `json:"attention_bound,omitempty"`
 	// ADR-092 — this session's own per-chat Auto-approve modifier (the value last set by session_mode_update and still held by the server), so a reloading or reconnecting SPA re-learns it instead of losing it. Only meaningful when session_id is present (the connection-open emit carries neither). true — Auto-approve forced ON for this chat; false — forced OFF for this chat; null or absent — no per-chat modifier is set, the chat follows the global default (SandboxStatus.auto_approve_effective). Same value space as SessionModeUpdateFrame.auto_approve. The modifier lives in server memory only: after a gateway restart it is gone and this field reads null/absent, so the UI follows the server. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
 	AutoApproveModifier *bool `json:"auto_approve_modifier,omitempty"`
 	// #823 review finding 7. Stable identifier for this gateway process, minted once at startup. Keep in sync by hand with contracts/components/schemas/SessionStateFrame.yaml.
@@ -1255,10 +1265,15 @@ type TaskStatusChangedFrame struct {
 type TokenFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	Content string  `json:"content"`
+	// session-core FR-039 / C-GOAL. The goal this producing turn was dispatched under (captured at turn start from the session's active goal record) and stamped onto every token of the turn. Lets the SPA join the bubble to the EXACT keyed goal criteria (goalPills[goal_id]) instead of the latest-goal scalar. Absent means UNKNOWN association (the turn ran under no proven goal); a later goal's frame must never rebind this bubble.
+	GoalId *string `json:"goal_id,omitempty"`
 	// #823 catch-up redesign. Identifies the specific assistant message (bubble) this token belongs to, stable across reconnect/catch-up.
 	MessageId *string `json:"message_id,omitempty"`
 	// Set only on a catch-up token: REPLACES the open bubble's content for this session instead of appending, making catch-up idempotent.
 	Replace *bool `json:"replace,omitempty"`
+	// Present only on a guest reply: the message_id of the admitted request this answer addresses.
+	ReplyToMessageId   *string          `json:"reply_to_message_id,omitempty"`
+	ReplyToParticipant *ChatParticipant `json:"reply_to_participant,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy (e.g. a projection token inside a snapshot). Keep in sync by hand with contracts/components/schemas/TokenFrame.yaml.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
@@ -1406,9 +1421,10 @@ type UserMessageFrame struct {
 		Size     int64  `json:"size"`
 		Type     string `json:"type"`
 	} `json:"attachments,omitempty"`
-	ClientMessageId *string `json:"client_message_id,omitempty"`
-	Content         string  `json:"content"`
-	Id              string  `json:"id"`
+	ClientMessageId *string          `json:"client_message_id,omitempty"`
+	Content         string           `json:"content"`
+	Id              string           `json:"id"`
+	Participant     *ChatParticipant `json:"participant,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
@@ -1444,7 +1460,6 @@ const (
 	WsFrameTypePing                     WsFrameType = "ping"
 	WsFrameTypeAttachSession            WsFrameType = "attach_session"
 	WsFrameTypeDevicePairingResponse    WsFrameType = "device_pairing_response"
-	WsFrameTypeSessionClose             WsFrameType = "session_close"
 	WsFrameTypeSessionStarted           WsFrameType = "session_started"
 	WsFrameTypeMessageStatus            WsFrameType = "message_status"
 	WsFrameTypeToken                    WsFrameType = "token"
@@ -1467,7 +1482,6 @@ const (
 	WsFrameTypeContextWindowNotice      WsFrameType = "context_window_notice"
 	WsFrameTypeProviderFallback         WsFrameType = "provider_fallback"
 	WsFrameTypeMedia                    WsFrameType = "media"
-	WsFrameTypeAgentSwitched            WsFrameType = "agent_switched"
 	WsFrameTypeToolApprovalRequired     WsFrameType = "tool_approval_required"
 	WsFrameTypeToolApprovalResolved     WsFrameType = "tool_approval_resolved"
 	WsFrameTypeSessionState             WsFrameType = "session_state"
@@ -1475,7 +1489,6 @@ const (
 	WsFrameTypeReplayWarning            WsFrameType = "replay_warning"
 	WsFrameTypeCancelStage              WsFrameType = "cancel_stage"
 	WsFrameTypePong                     WsFrameType = "pong"
-	WsFrameTypeSessionCloseAck          WsFrameType = "session_close_ack"
 	WsFrameTypeSessionModeUpdate        WsFrameType = "session_mode_update"
 	WsFrameTypeSessionModeUpdated       WsFrameType = "session_mode_updated"
 	WsFrameTypeDevicePairingRequest     WsFrameType = "device_pairing_request"

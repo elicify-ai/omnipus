@@ -126,7 +126,7 @@ func (t *DelegateTool) executeDurableStatus(ctx context.Context, sessionID strin
 	// delegateStatusExtra's own doc comment. Computed once and appended to
 	// whichever of the return points below fires; "" for every non-running
 	// state, so it is a no-op append there.
-	extra := t.delegateStatusExtra(rec, sessionID)
+	extra := t.delegateStatusExtra(rec, sessionID) + t.notDeliveredClause(rec)
 	if t.inbox == nil {
 		return NewToolResult(fmt.Sprintf("%s, no message yet, started %s ago", state, formatDelegateStatusAge(t.now().Sub(rec.CreatedAt))) + extra)
 	}
@@ -525,7 +525,7 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 		return ErrorResult(fmt.Sprintf("delegate: inbox: %v", derr)).WithError(derr)
 	}
 
-	resp := generated.DelegateInboxResponse{Messages: msgs, HasMore: hasMore}
+	resp := generated.DelegateInboxResponse{Messages: msgs, HasMore: hasMore, NotDelivered: rec.NotDelivered}
 	if nextCursor != "" {
 		resp.NextCursor = &nextCursor
 	}
@@ -679,4 +679,16 @@ func delegateStateName(rec *session.LifecycleRecord) string {
 		return string(generated.DelegatePeekResponseStateInterrupted)
 	}
 	return string(rec.State)
+}
+
+// notDeliveredClause is the status-text clause for reports this child sent that
+// the parent's inbox refused at a cap (FR-013, #1211 D2): the count and the last
+// refusal, never the refused content. Empty when nothing was ever refused.
+func (t *DelegateTool) notDeliveredClause(rec *session.LifecycleRecord) string {
+	if rec == nil || rec.NotDelivered == nil {
+		return ""
+	}
+	nd := rec.NotDelivered
+	return fmt.Sprintf("; %d report(s) not delivered (last: %s, %s ago)",
+		nd.Count, nd.LastReason, formatDelegateStatusAge(t.now().Sub(nd.LastAt)))
 }
