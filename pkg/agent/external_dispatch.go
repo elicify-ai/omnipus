@@ -398,35 +398,11 @@ func runExternalCLISubTurn(
 	// this run is queued behind another same-workspace run now unblocks this
 	// select right away and the run below is skipped entirely, rather than
 	// silently becoming uncancelable until the lock eventually frees.
-	releaseWorkspaceLock, acquired := acquireWorkspaceRunLockCtx(runCtx, resolvedWorkDir)
-	if !acquired {
-		cancelErr := fmt.Errorf(
-			"external-cli dispatch: canceled while waiting for the workspace lock: %w",
-			runCtx.Err(),
-		)
-		return &tools.ToolResult{
-			Err: cancelErr,
-			ForLLM: fmt.Sprintf(
-				"External CLI run (%s) canceled while waiting for the workspace lock: %v",
-				cli,
-				cancelErr,
-			),
-		}, cancelErr
+	releaseWorkspaceLock, canceled, cancelErr := acquireRunSlot(runCtx, cli, resolvedWorkDir)
+	if canceled != nil {
+		return canceled, cancelErr
 	}
 	defer releaseWorkspaceLock()
-
-	// Belt-and-suspenders (BLOCK finding, layer 3 of the fix): a cancel could
-	// in principle race in between acquireWorkspaceRunLockCtx's ctx-check and
-	// the token actually being received. Re-check immediately after
-	// acquiring, before touching the driver at all, so a run that got its
-	// cancel signal during the wait never starts.
-	if runCtx.Err() != nil {
-		cancelErr := fmt.Errorf("external-cli dispatch: canceled before starting: %w", runCtx.Err())
-		return &tools.ToolResult{
-			Err:    cancelErr,
-			ForLLM: fmt.Sprintf("External CLI run (%s) canceled before starting: %v", cli, cancelErr),
-		}, cancelErr
-	}
 
 	// Obtain the driver only now that the pre-start checks have passed: a fresh
 	// Run creates one (recorded for a later continuation to Resume); a Resume
@@ -445,6 +421,20 @@ func runExternalCLISubTurn(
 		return nil, fmt.Errorf("external-cli dispatch: %w", driverErr)
 	}
 
+	return ed.startAndDrain(runCtx, driver, consent, cli, resolvedWorkDir, task, resume)
+}
+
+// startAndDrain starts (Run) or continues (Resume) the external CLI on driver,
+// routes its events through the consent dispatcher, drains them into the
+// transcript and waits for the process-exit barrier. Extracted from
+// runExternalCLISubTurn unchanged in behaviour.
+func (ed *runExternalCLISubTurnState) startAndDrain(
+	runCtx context.Context,
+	driver runner.ExternalAgentRunner,
+	consent runner.ConsentHandler,
+	cli, resolvedWorkDir, task string,
+	resume bool,
+) (*tools.ToolResult, error) {
 	runOpts := runner.RunOptions{
 		RunID:          ed.runID,
 		WorkDir:        resolvedWorkDir,
@@ -513,6 +503,38 @@ func runExternalCLISubTurn(
 	for range evCh {
 	}
 	return result, result.Err
+}
+
+// acquireRunSlot takes the workspace run lock cancel-aware and re-checks the
+// run context right after (layers 2 and 3 of the BLOCK-finding fix): a run that
+// got its cancel signal while queued, or in the instant between the acquire's
+// own check and the token arriving, never starts. On cancellation it returns
+// the canceled ToolResult and its error and no lock is held.
+func acquireRunSlot(runCtx context.Context, cli, workDir string) (release func(), canceled *tools.ToolResult, err error) {
+	releaseWorkspaceLock, acquired := acquireWorkspaceRunLockCtx(runCtx, workDir)
+	if !acquired {
+		cancelErr := fmt.Errorf(
+			"external-cli dispatch: canceled while waiting for the workspace lock: %w",
+			runCtx.Err(),
+		)
+		return nil, &tools.ToolResult{
+			Err: cancelErr,
+			ForLLM: fmt.Sprintf(
+				"External CLI run (%s) canceled while waiting for the workspace lock: %v",
+				cli,
+				cancelErr,
+			),
+		}, cancelErr
+	}
+	if runCtx.Err() != nil {
+		releaseWorkspaceLock()
+		cancelErr := fmt.Errorf("external-cli dispatch: canceled before starting: %w", runCtx.Err())
+		return nil, &tools.ToolResult{
+			Err:    cancelErr,
+			ForLLM: fmt.Sprintf("External CLI run (%s) canceled before starting: %v", cli, cancelErr),
+		}, cancelErr
+	}
+	return releaseWorkspaceLock, nil, nil
 }
 
 // prepareRunOptions derives the run limits, model, scrubbed environment, and configured CLI arguments.

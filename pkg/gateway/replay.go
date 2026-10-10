@@ -961,17 +961,16 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 	// session-core FR-024: a user input Stop discarded before delivery keeps
 	// its archived bytes; the replayed frame carries the read-only label.
 	if d := entry.InputDisposition; d != nil {
-		disp := &struct {
-			ClientMessageId *string `json:"client_message_id,omitempty"`
-			MessageId       string  `json:"message_id"`
-			Reason          string  `json:"reason"`
-			State           string  `json:"state"`
-		}{MessageId: d.MessageID, Reason: d.Reason, State: d.State}
-		if d.ClientMessageID != "" {
-			cid := d.ClientMessageID
-			disp.ClientMessageId = &cid
+		// The generated frame's input_disposition is an anonymous struct, so it
+		// is filled through its own JSON tags (message_id, client_message_id,
+		// state, reason) instead of a hand-written parallel struct.
+		raw, mErr := json.Marshal(d)
+		if mErr == nil {
+			mErr = json.Unmarshal(raw, &sr.msgFrame.InputDisposition)
 		}
-		sr.msgFrame.InputDisposition = disp
+		if mErr != nil {
+			logsafeError("replay: could not project input_disposition", "session_id", sr.sessionID, "entry_id", entry.ID, "error", mErr)
+		}
 	}
 	// Wave 3 fix 5c/1: surface TranscriptEntry.TurnID — stamped on
 	// every real assistant entry at its three production write sites:
