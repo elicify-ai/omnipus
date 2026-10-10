@@ -6,6 +6,8 @@ package gateway
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -128,4 +131,56 @@ func TestSF1_CreateStorageFailureLeaksNothing(t *testing.T) {
 	sf1Block(t, env.store(t).BaseDir(), 0o500)
 	code, body := sf1Do(env, http.MethodPost, "/api/v1/sessions", `{"type":"chat","agent_id":"mia"}`)
 	sf1AssertFixedStorageMessage(t, env, code, body, "created")
+}
+
+// Deleting a session whose metadata is readable but whose lifecycle journal is
+// not: the Stop that precedes the delete fails. The refusal stays (nothing is
+// deleted) and the client gets the fixed message only.
+func TestSF1_DeleteWithUnreadableLifecycleJournalLeaksNothingAndRefuses(t *testing.T) {
+	env := u1NewEnv(t, false)
+	lc := session.NewLifecycleStore(t.TempDir())
+	env.api.agentLoop.SetSessionMessagingStores(session.NewMessageInboxStore(t.TempDir()), lc)
+	id := sf1NewChat(t, env)
+	require.NoError(t, lc.Persist(&session.LifecycleRecord{
+		SessionID: id, Generation: 1, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeHuman,
+		WorkspaceID: "ws-leak", AgentID: "mia",
+	}))
+	sf1Block(t, filepath.Join(lc.Dir(), id+".jsonl"), 0o000)
+
+	code, body := sf1Do(env, http.MethodDelete, "/api/v1/sessions/"+id, "")
+	assert.Equal(t, http.StatusInternalServerError, code, body)
+	assert.Contains(t, body, "Stop before delete failed; nothing was deleted")
+	assert.Contains(t, body, "retry")
+	sf1AssertNoInternalDetail(t, env, body, id, lc.Dir())
+	_, err := os.Stat(filepath.Join(env.store(t).BaseDir(), id))
+	assert.NoError(t, err, "the delete refusal is kept: the session folder is still there")
+}
+
+// Both failure shapes of the Stop (a returned error and a root error) get the
+// same fixed message, never the raw text.
+func TestSF1_StopBeforeDeleteFailureShapesNeverEchoTheCause(t *testing.T) {
+	const secret = "/secret/place/session_x.jsonl: permission denied"
+	cases := map[string]func(context.Context, agent.StopRequest) (agent.StopResult, error){
+		"error": func(context.Context, agent.StopRequest) (agent.StopResult, error) {
+			return agent.StopResult{}, errors.New(secret)
+		},
+		"root error": func(context.Context, agent.StopRequest) (agent.StopResult, error) {
+			return agent.StopResult{RootErr: errors.New(secret)}, nil
+		},
+	}
+	for name, stop := range cases {
+		t.Run(name, func(t *testing.T) {
+			env := u1NewEnv(t, false)
+			env.api.stopSession = stop
+			id := sf1NewChat(t, env)
+			code, body := sf1Do(env, http.MethodDelete, "/api/v1/sessions/"+id, "")
+			assert.Equal(t, http.StatusInternalServerError, code, body)
+			assert.Contains(t, body, "Stop before delete failed; nothing was deleted")
+			assert.NotContains(t, body, "secret")
+			assert.NotContains(t, body, "permission denied")
+			sf1AssertNoInternalDetail(t, env, body, id)
+			_, err := os.Stat(filepath.Join(env.store(t).BaseDir(), id))
+			assert.NoError(t, err, "nothing was deleted")
+		})
+	}
 }

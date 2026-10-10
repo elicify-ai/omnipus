@@ -978,6 +978,11 @@ func (a *restAPI) resolveSessionStore(sessionID string) *session.UnifiedStore {
 // stopBeforeDelete runs the one Stop (tree scope) for a session about to be
 // deleted and waits for its stopped turns to exit. It returns a non-empty
 // summary when the session may still be running, which refuses the delete.
+// stopBeforeDeleteFailedText is the fixed client message when the Stop that
+// precedes a delete could not run. It names no path, file or id.
+const stopBeforeDeleteFailedText = "Stop before delete failed; nothing was deleted. " +
+	"Check that session storage is available and writable, then retry. Details are in the server log."
+
 func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
 	if a.agentLoop == nil {
 		return ""
@@ -992,11 +997,13 @@ func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
 		Channel:   "web",
 		Tree:      true,
 	})
-	if err != nil {
-		return "Stop before delete failed; nothing was deleted: " + err.Error()
-	}
-	if res.RootErr != nil {
-		return "Stop before delete failed; nothing was deleted: " + res.RootErr.Error()
+	if err != nil || res.RootErr != nil {
+		// The full cause (it can carry the lifecycle journal's path, file name
+		// and the session id) goes to the error log only; the client gets one
+		// fixed message and nothing is deleted.
+		slog.Error("rest: delete session: Stop before delete failed; deletion refused",
+			"session_id", id, "error", err, "root_error", res.RootErr)
+		return stopBeforeDeleteFailedText
 	}
 	// A background shell the tree Stop could not kill would outlive its deleted
 	// row (FR-022: tree Stop kills them), so it refuses the delete visibly.
