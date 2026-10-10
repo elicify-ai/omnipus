@@ -112,7 +112,7 @@ vi.mock('@/components/ui/popover', () => ({
 // the sweep asserts the NODE marks, not the picker.
 vi.mock('@/components/workspaces/team/AgentDelegatePicker', () => ({
   AgentDelegatePicker: ({ source }: { source: { id: string } }) => (
-    <button type="button" data-testid={`mock-delegate-${source.id}`}>Delegate</button>
+    <div data-testid={`mock-delegate-${source.id}`}>Delegate</div>
   ),
 }))
 
