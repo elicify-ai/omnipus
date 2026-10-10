@@ -455,11 +455,14 @@ func (a *restAPI) rollbackLoweredAgents(ctx context.Context, store maxToolIterat
 	return stuck
 }
 
+// rollbackCauseText is the fixed details.cause of a rollback_incomplete answer.
+const rollbackCauseText = "an agent or settings storage write failed; details are in the server log"
+
 // loweringFailure builds the response for a failure after writes began
 // (step 5 or 6): roll back, then 500 rollback_incomplete if any restore
 // failed; else 409 (conflict, fresh list) or 500 lowering_failed (I/O).
-// cause is always logged at ERROR; on rollback_incomplete it is also sent in
-// details.cause.
+// cause is always logged at ERROR and never sent to the client; on
+// rollback_incomplete details.cause carries rollbackCauseText.
 func (a *restAPI) loweringFailure(ctx context.Context, store maxToolIterationsAgentStore, defaults *config.AgentDefaults,
 	upd *maxToolIterationsGlobalUpdate, done []loweredAgent, failingAgent string, cause error,
 ) *performanceWriteError {
@@ -479,7 +482,10 @@ func (a *restAPI) loweringFailure(ctx context.Context, store maxToolIterationsAg
 		logsafeError("rest: PUT /performance: rollback incomplete after a failed tool-iteration lowering",
 			"failed_at", target, "not_restored_count", len(stuck), "cause", cause)
 		code := maxToolIterationsRollbackIncomplete
-		details := map[string]any{"cause": cause.Error()}
+		// The original cause is logged above; the client gets the fixed class
+		// of failure (a storage write), which keeps the rollback-failure signal
+		// without an agent path, file name or OS error.
+		details := map[string]any{"cause": rollbackCauseText}
 		return &performanceWriteError{status: http.StatusInternalServerError, body: gen.ErrorResponse{
 			Error: "limit not changed; could not restore " + strings.Join(parts, ", ") +
 				" — set their limits again on each agent's profile",
@@ -594,15 +600,15 @@ func configWriteFailure(err error) error {
 	var syntaxErr *json.SyntaxError
 	switch {
 	case errors.Is(err, fs.ErrPermission):
-		return errors.New("config.json: permission denied")
+		return errors.New("the settings file is not accessible")
 	case errors.Is(err, fs.ErrNotExist):
-		return errors.New("config.json: file not found")
+		return errors.New("the settings file was not found")
 	case errors.As(err, &syntaxErr):
-		return errors.New("config.json: invalid JSON")
+		return errors.New("the settings file is not valid JSON")
 	case errors.As(err, &pathErr):
-		return fmt.Errorf("config.json: %s failed", pathErr.Op)
+		return fmt.Errorf("the settings file %s failed", pathErr.Op)
 	default:
-		return errors.New("config.json could not be written")
+		return errors.New("the settings could not be written")
 	}
 }
 

@@ -189,8 +189,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 						// pkg/logger instead.
 						logger.ErrorCF("rest", "upload: workspace library load failed",
 							map[string]any{"workspace_id": ru.workspaceID, "error": libErr})
-						jsonErr(ru.w, http.StatusInternalServerError,
-							fmt.Sprintf("workspace media library unavailable: %v", libErr))
+						jsonServerFailure(ru.w, http.StatusInternalServerError, "workspace media library unavailable", libErr)
 						return
 					}
 					ru.workspaceLib = lib
@@ -321,8 +320,7 @@ func (ru *restAPIHandleUpload) finishWorkspaceUpload(fileName string, ref string
 			jsonErr(ru.w, http.StatusBadRequest,
 				fmt.Sprintf("invalid filename: %q", fileName))
 		default:
-			jsonErr(ru.w, http.StatusInternalServerError,
-				fmt.Sprintf("workspace media store failed: %v", uploadErr))
+			jsonServerFailure(ru.w, http.StatusInternalServerError, "workspace media store failed", uploadErr)
 		}
 		return restAPIHandleUploadReturn
 	}
@@ -368,8 +366,7 @@ func (ru *restAPIHandleUpload) finishWorkspaceUpload(fileName string, ref string
 				"media_id", mediaID, "error", delErr)
 		}
 		ru.a.cleanupWorkspaceUploads(&ru.resp, ru.workspaceLib)
-		jsonErr(ru.w, http.StatusInternalServerError,
-			fmt.Sprintf("could not stage uploaded file for agent access: %v", stageErr))
+		jsonServerFailure(ru.w, http.StatusInternalServerError, "could not stage uploaded file for agent access", stageErr)
 		return restAPIHandleUploadReturn
 	}
 	agent.RecordUploadWorkPath(ref, workRelPath)
