@@ -2489,6 +2489,7 @@ type Workspace = {
   updated_at: string;
   owner?: string | undefined;
   member_configs?: {} | undefined;
+  admin_main_session_id?: string | undefined;
 };
 type WorkspaceDelegationEdge = {
   from_agent: string;
@@ -3058,6 +3059,7 @@ type SessionLifecycleRecord = {
           | "task"
           | "chat"
           | "channel"
+          | "main"
           | "scheduled"
           | "heartbeat"
           | "verifier"
@@ -5470,6 +5472,7 @@ export const Workspace: z.ZodType<Workspace> = z
     updated_at: z.string().datetime({ offset: true }),
     owner: z.string().optional(),
     member_configs: z.record(WorkspaceMemberConfig).optional(),
+    admin_main_session_id: z.string().max(255).optional(),
   })
   .passthrough();
 export const WorkspaceCreateRequest = z
@@ -7321,6 +7324,7 @@ export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
           "task",
           "chat",
           "channel",
+          "main",
           "scheduled",
           "heartbeat",
           "verifier",

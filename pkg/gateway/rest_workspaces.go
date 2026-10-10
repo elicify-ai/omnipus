@@ -491,6 +491,14 @@ func workspaceToWireFrom(
 		}
 		wire.MemberConfigs = &wireMC
 	}
+	// C-MAIN: Admin is not a team member (no member_configs entry), so his main
+	// rides on the default workspace as a read-only top-level id, present only
+	// when it resolves — same resolver and validation as a member's address.
+	if w.IsDefault && mains != nil {
+		if id := mains(w, string(coreagent.IDAdmin)); id != "" {
+			wire.AdminMainSessionId = &id
+		}
+	}
 	// FR-5/FR-8.2: mounts, with each entry's status computed live (never
 	// stored — see mountsToWire's doc comment).
 	wire.Mounts = mountsToWire(home, w.ID)
