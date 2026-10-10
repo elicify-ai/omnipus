@@ -29,7 +29,6 @@ import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useSelectSession } from '@/components/chat/useSelectSession'
-import { IconRenderer } from '@/components/shared/IconRenderer'
 import { cn, initialOf } from '@/lib/utils'
 import { SessionTree, SessionExpandToggle, flattenSessionTree, type SessionTreeFlatRow } from '@/components/sessions/SessionTree'
 
@@ -257,11 +256,7 @@ function AgentHeader({ agent, name, isCollapsed, onToggle, panelId }: { agent: A
         style={{ backgroundColor: agent?.color ?? 'var(--color-surface-3)' }}
         aria-hidden="true"
       >
-        {agent?.icon ? (
-          <IconRenderer icon={agent.icon} size={8} />
-        ) : (
-          <span className="text-[var(--color-secondary)] font-bold">{initialOf(name)}</span>
-        )}
+        <span className="text-[var(--color-secondary)] font-bold">{initialOf(name)}</span>
       </span>
       <span className="flex-1 text-left truncate">{name}</span>
     </Button>

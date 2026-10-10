@@ -49,7 +49,7 @@ function makeClient() {
 }
 
 const AGENTS: Agent[] = [
-  { id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', icon: 'compass' } as Agent,
+  { id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active' } as Agent,
 ]
 
 function makeAssistantMessage(spans: SubagentSpan[]): ChatMessage {

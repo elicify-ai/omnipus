@@ -926,11 +926,7 @@ function AssistantMessageAvatar({ agent }: { agent?: Agent }) {
       style={{ backgroundColor: agent?.color ?? 'var(--color-surface-3)' }}
       title={agent?.name}
     >
-      {agent?.icon ? (
-        <IconRenderer icon={agent.icon} size={14} />
-      ) : (
-        <Robot size={14} weight="bold" />
-      )}
+      <Robot size={14} weight="bold" />
     </div>
   )
 }
@@ -1287,11 +1283,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
         style={{ backgroundColor: agent?.color ?? 'var(--color-surface-3)' }}
         title={agent?.name}
       >
-        {agent?.icon ? (
-          <IconRenderer icon={agent.icon} size={14} />
-        ) : (
-          <Robot size={14} weight="bold" />
-        )}
+        <Robot size={14} weight="bold" />
       </div>
       <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
         {agentDisplayName && (

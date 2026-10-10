@@ -36,7 +36,7 @@ import { AVATAR_COLORS, AVATAR_COLORS_BY_NAME } from '@/lib/constants'
 import { ICON_OPTIONS } from '@/lib/agentIcons'
 
 describe('AvatarColorPicker', () => {
-  it('renders one button per AVATAR_COLORS entry (8 swatches)', () => {
+  it('renders one button per AVATAR_COLORS entry (10 swatches)', () => {
     // Traces: wave5a-wire-ui-spec.md US-7 AC1 — Identity section exposes
     // every brand-palette color.
     const onChange = vi.fn()
@@ -71,7 +71,7 @@ describe('AvatarColorPicker', () => {
     // distinguishable for screen readers. aria-pressed is the canonical
     // signal for a toggle button.
     const onChange = vi.fn()
-    const selected = AVATAR_COLORS[3] // Saffron '#EAB308'
+    const selected = AVATAR_COLORS[3] // Violet '#A78BFA'
     render(<AvatarColorPicker value={selected} onChange={onChange} />)
     for (const color of AVATAR_COLORS) {
       const name = AVATAR_COLORS_BY_NAME[color] ?? color
@@ -163,11 +163,11 @@ describe('AvatarHeader', () => {
     // agent's chosen brand color. The wrapper is the first <div> rendered
     // by the component. jsdom normalizes inline `backgroundColor: hex`
     // to its `rgb(...)` form, so we compare on the canonical rgb string.
-    const color = AVATAR_COLORS[7] // Forge Gold '#D4AF37'
+    const color = AVATAR_COLORS[7] // Rose '#F472B6'
     const { container } = render(<AvatarHeader color={color} />)
     const wrapper = container.firstElementChild as HTMLElement
     expect(wrapper).not.toBeNull()
-    expect(wrapper.style.backgroundColor).toBe('rgb(212, 175, 55)')
+    expect(wrapper.style.backgroundColor).toBe('rgb(244, 114, 182)')
   })
 
   it('falls back to a surface token when color is missing', () => {

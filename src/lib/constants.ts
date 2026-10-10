@@ -1,5 +1,7 @@
 // Shared constants and utilities used across multiple components
 
+import type { components } from '@/lib/api/generated/openapi-types'
+
 /** Generate an unguessable ID from a CSPRNG: crypto.randomUUID() where
  *  available, else crypto.getRandomValues() (128-bit — it is not gated to
  *  secure contexts, so it covers plain HTTP). These ids serve as unguessable
@@ -16,37 +18,45 @@ export function generateId(): string {
   throw new Error('generateId: no secure random source available (crypto.randomUUID / crypto.getRandomValues)')
 }
 
-/** Avatar color palette for agent creation and display. */
-export const AVATAR_COLORS = ['#22C55E', '#3B82F6', '#A855F7', '#EAB308', '#F97316', '#EF4444', '#6B7280', '#D4AF37']
+/** One of the ten identity colours the contract allows (`AgentColor`). */
+export type AvatarColor = components['schemas']['AgentColor']
+
+/** Avatar color palette for agent creation and display — exactly the
+ *  contract's `AgentColor` set; the server rejects any other value. */
+export const AVATAR_COLORS: readonly AvatarColor[] = [
+  '#3B82F6', '#38BDF8', '#22D3EE', '#818CF8', '#A78BFA',
+  '#C084FC', '#E879F9', '#F472B6', '#FB923C', '#9CA3AF',
+]
 
 /**
  * Semantic names for each avatar color, indexed by hex. W6-B4 / M7: replaces
  * hex codes in aria-labels and visible labels so screen readers and
- * sighted users get a usable name (e.g. "Forge Gold") instead of a hex
- * string (e.g. "#D4AF37"). The first three match the brand palette
- * (`docs/internal/brand/brand-guidelines.md`); the rest are descriptive
- * shades picked from the Tailwind v4 / Phosphor icon palette to keep the
- * naming consistent with the rest of the design system.
+ * sighted users get a usable name (e.g. "Azure") instead of a hex
+ * string (e.g. "#3B82F6").
  *
  * Wire format and state in formData / Agent.color are unchanged — the hex
- * is the source of truth. The name is presentation-only.
+ * is the source of truth. The name is presentation-only. Typed as a full
+ * Record over `AvatarColor`, so a contract change to the colour set fails
+ * typecheck here until the names are updated.
  */
-export const AVATAR_COLORS_BY_NAME: Record<string, string> = {
-  '#22C55E': 'Verdant',
+export const AVATAR_COLORS_BY_NAME: Record<AvatarColor, string> = {
   '#3B82F6': 'Azure',
-  '#A855F7': 'Amethyst',
-  '#EAB308': 'Saffron',
-  '#F97316': 'Ember',
-  '#EF4444': 'Crimson',
-  '#6B7280': 'Slate',
-  '#D4AF37': 'Forge Gold',
+  '#38BDF8': 'Sky',
+  '#22D3EE': 'Aqua',
+  '#818CF8': 'Periwinkle',
+  '#A78BFA': 'Violet',
+  '#C084FC': 'Orchid',
+  '#E879F9': 'Fuchsia',
+  '#F472B6': 'Rose',
+  '#FB923C': 'Tangerine',
+  '#9CA3AF': 'Slate',
 }
 
 /** Get the semantic name for an avatar color hex; falls back to the hex
  *  itself if the color is not in the palette (defense for free-text). */
 export function avatarColorName(hex: string | undefined): string {
   if (!hex) return 'Default'
-  return AVATAR_COLORS_BY_NAME[hex] ?? hex
+  return (AVATAR_COLORS_BY_NAME as Record<string, string>)[hex] ?? hex
 }
 
 /** Hint text for API key input fields, keyed by canonical CatalogProvider id

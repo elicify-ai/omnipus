@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { VoiceProviderSub } from './voice-provider-sub'
 import { useUiStore } from '@/store/ui'
-import { AVATAR_COLORS, AVATAR_COLORS_BY_NAME } from '@/lib/constants'
+import { AVATAR_COLORS, AVATAR_COLORS_BY_NAME, type AvatarColor } from '@/lib/constants'
 import { ICON_OPTIONS, getIconComponent, type IconName } from '@/lib/agentIcons'
 
 // ── AgentFormFields ──────────────────────────────────────────────────────────
@@ -250,7 +250,7 @@ export interface AvatarColorPickerProps {
   /** Currently selected color (hex). */
   value: string
   /** Called with the chosen color (hex) on click. */
-  onChange: (color: string) => void
+  onChange: (color: AvatarColor) => void
   /** Optional testid prefix; the full id is `${testidPrefix}-${semanticName}`. */
   testIdPrefix?: string
   /** Optional className for the wrapper. */

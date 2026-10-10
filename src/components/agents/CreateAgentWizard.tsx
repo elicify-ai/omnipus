@@ -25,7 +25,7 @@ import { X } from '@phosphor-icons/react'
 
 import { useUiStore } from '@/store/ui'
 import { isApiError, type AgentToolsCfg, type FallbackModel, type RegistryTool } from '@/lib/api'
-import { AVATAR_COLORS_BY_NAME } from '@/lib/constants'
+import { AVATAR_COLORS, type AvatarColor } from '@/lib/constants'
 import { useFocusRestore } from '@/hooks/useFocusRestore'
 import { isBlockingCliReason } from '@/hooks/useCliPathValidation'
 import type { Provider, Skill, CliValidateResponse } from '@/lib/api/generated/openapi-types'
@@ -43,8 +43,7 @@ export interface WizardSubmitPayload {
   cli?: WizardCli
   name: string
   description: string
-  color: string
-  icon: string
+  color: AvatarColor
   model: string
   /** O3 two-field: explicit provider routing key paired with model.
    *  Empty string / absent = resolve via default provider. */
@@ -178,14 +177,13 @@ function initialPayload(initialType: WizardType, initialCli?: WizardCli): Wizard
   // Per spec §4.4 the default color is the first entry of the palette map.
   // `avatarColorName()` resolves its semantic label; the wire format stores
   // the hex value, so we keep the hex.
-  const defaultColorHex = Object.keys(AVATAR_COLORS_BY_NAME)[0] as string
+  const defaultColorHex = AVATAR_COLORS[0]
   return {
     type: initialType,
     cli: initialCli,
     name: '',
     description: '',
     color: defaultColorHex,
-    icon: 'Robot',
     model: '',
     provider: '',
     soul: '',

@@ -23,7 +23,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([
-      { id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', color: '#4488ff', icon: 'compass' },
+      { id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', color: '#3B82F6' },
       { id: 'ext-1', name: 'ClaudeCode', type: 'subagent_3p', locked: false, status: 'active' },
     ]),
   }

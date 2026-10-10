@@ -173,7 +173,7 @@ export type ChatMessage = Message & {
   /** Ordinary first-send status only; workspace kickoffs never use it. */
   firstSendStatus?: FirstSendStatus
   /** SPA-only acknowledgement state for a user-authored message. */
-  deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed'
+  deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed' | 'discarded'
   media?: MediaAttachment[]
   /**
    * Review finding 17 — the `media://` refs (opts.mediaRefs) this user

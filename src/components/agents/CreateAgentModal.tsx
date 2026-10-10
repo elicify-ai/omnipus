@@ -120,7 +120,6 @@ function payloadToCreateRequest(
       type: 'subagent_3p',
       name,
       color: payload.color,
-      icon: payload.icon,
       soul,
       // The external CLI is the runner; the variant requires the block.
       executor: { kind: 'external-cli' },
@@ -150,7 +149,6 @@ function payloadToCreateRequest(
       type: 'Subagent',
       name,
       color: payload.color,
-      icon: payload.icon,
       soul,
     }
     if (description) req.description = description
@@ -173,7 +171,6 @@ function payloadToCreateRequest(
     type: 'Main',
     name,
     color: payload.color,
-    icon: payload.icon,
     soul,
   }
   if (description) req.description = description

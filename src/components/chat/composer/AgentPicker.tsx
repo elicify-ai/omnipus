@@ -1,6 +1,5 @@
 import { useEffect } from 'react'
 import { Robot, CaretDown, Lock } from '@phosphor-icons/react'
-import { IconRenderer } from '@/components/shared/IconRenderer'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -261,9 +260,7 @@ export function AgentPicker({
           className="w-5 h-5 rounded-full flex items-center justify-center text-[length:var(--type-caption-size)] font-bold shrink-0"
           style={{ backgroundColor: lockedWorkerAgent.color ?? 'var(--color-surface-3)' }}
         >
-          {lockedWorkerAgent.icon
-            ? <IconRenderer icon={lockedWorkerAgent.icon} size={11} />
-            : initialOf(lockedWorkerAgent.name)}
+          {initialOf(lockedWorkerAgent.name)}
         </div>
         <span className="truncate">{lockedWorkerAgent.name}</span>
         <Lock size={11} weight="fill" aria-hidden="true" className="shrink-0 opacity-60" />
@@ -337,11 +334,7 @@ export function AgentPicker({
             className="w-5 h-5 rounded-full flex items-center justify-center text-[length:var(--type-caption-size)] font-bold shrink-0"
             style={{ backgroundColor: activeAgent?.color ?? 'var(--color-surface-3)' }}
           >
-            {activeAgent
-              ? activeAgent.icon
-                ? <IconRenderer icon={activeAgent.icon} size={11} />
-                : initialOf(activeAgent.name)
-              : <Robot size={11} />}
+            {activeAgent ? initialOf(activeAgent.name) : <Robot size={11} />}
           </div>
           <span className="truncate">
             {activeAgent ? activeAgent.name : 'Select agent'}
@@ -407,9 +400,7 @@ export function AgentPicker({
               className="w-5 h-5 rounded-full flex items-center justify-center text-[length:var(--type-caption-size)] font-bold shrink-0"
               style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
             >
-              {agent.icon
-                ? <IconRenderer icon={agent.icon} size={11} />
-                : initialOf(agent.name)}
+              {initialOf(agent.name)}
             </div>
             <span className="truncate">{agent.name}</span>
             {agent.id === effectiveAgentId && (

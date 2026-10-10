@@ -2984,7 +2984,7 @@ describe('AgentProfile — locked core agent identity fields: visible read-only 
     renderProfile('mia')
     await screen.findByText('Mia')
     expect((await screen.findAllByTestId('avatar-color-readonly')).length).toBeGreaterThanOrEqual(1)
-    expect(screen.queryByTestId('avatar-color-Forge Gold')).toBeNull()
+    expect(screen.queryByTestId('avatar-color-Azure')).toBeNull()
   })
 
 })
@@ -3131,7 +3131,7 @@ describe('AgentProfile — unlocked Main agent: interactive identity fields rend
     vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#3B82F6' })
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    expect((await screen.findAllByTestId('avatar-color-Forge Gold')).length).toBeGreaterThanOrEqual(1)
+    expect((await screen.findAllByTestId('avatar-color-Azure')).length).toBeGreaterThanOrEqual(1)
     expect(screen.queryAllByTestId('avatar-color-readonly').length).toBe(0)
   })
 

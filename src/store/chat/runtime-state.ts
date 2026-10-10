@@ -105,7 +105,7 @@ export const EMPTY_BUCKET = emptySessionState()
 export const SESSION_SCOPED_FRAME_TYPES = new Set([
   'token', 'done', 'tool_call_start', 'tool_call_result',
   'subagent_start', 'subagent_end', 'replay_message', 'replay_done',
-  'agent_switched', 'task_status_changed',
+  'task_status_changed',
   'tool_approval_required', 'rate_limit', 'media', 'session_started',
   'system_overload', 'cancel_stage',
   'message_status',

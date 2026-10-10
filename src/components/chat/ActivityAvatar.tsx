@@ -14,7 +14,6 @@
 
 import { Terminal, UserCircle, Scales } from '@phosphor-icons/react'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { IconRenderer } from '@/components/shared/IconRenderer'
 import type { ActivityItem } from '@/hooks/useRunningActivity'
 
 export interface ActivityAvatarProps {
@@ -80,11 +79,7 @@ export function ActivityAvatar({ item, size = 'md' }: ActivityAvatarProps) {
           <AvatarFallback
             style={{ backgroundColor: item.agentColor ?? 'var(--color-surface-3)', color: 'var(--color-secondary)' }}
           >
-            {item.agentIcon ? (
-              <IconRenderer icon={item.agentIcon} size={iconSize} />
-            ) : (
-              <UserCircle size={iconSize} aria-hidden="true" />
-            )}
+            <UserCircle size={iconSize} aria-hidden="true" />
           </AvatarFallback>
         </Avatar>
       )

@@ -237,7 +237,7 @@ describe('agent precedence — scope and override', () => {
     expect(useSessionStore.getState().activeAgentId).toBe('jim')
   })
 
-  it('a server-driven handover (WS agent_switched) DOES override the pick — the picker must name whoever is actually answering', () => {
+  it('a server-driven agent switch (applyServerAgentSwitch) DOES override the pick — the picker must name whoever is actually answering', () => {
     const mockSend = connectMock()
 
     act(() => {
@@ -247,11 +247,7 @@ describe('agent precedence — scope and override', () => {
     expect(useSessionStore.getState().activeAgentId).toBe('jim')
 
     act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'agent_switched',
-        agent_id: 'ray',
-        session_id: SESSION_ID,
-      })
+      useSessionStore.getState().applyServerAgentSwitch(SESSION_ID, 'ray')
     })
     expect(useSessionStore.getState().activeAgentId).toBe('ray')
 
