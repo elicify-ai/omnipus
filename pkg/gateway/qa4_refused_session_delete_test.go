@@ -62,8 +62,13 @@ type qa4DeleteFixture struct {
 func qa4SeedOriginalEntries(t *testing.T, store *session.UnifiedStore, id string) []session.TranscriptEntry {
 	t.Helper()
 	entries := []session.TranscriptEntry{
-		{ID: "qa4-original-question-" + id, Type: session.EntryTypeMessage, Role: "user", AgentID: "mia", Content: "Keep the original customer request.", Timestamp: time.Now().UTC()},
-		{ID: "qa4-original-answer-" + id, Type: session.EntryTypeMessage, Role: "assistant", AgentID: "mia", Content: "Keep the original saved answer.", Timestamp: time.Now().UTC()},
+		// ViewMembership is the value the append-only archive WRITER stamps on an
+		// unset membership (pkg/session/daypartition.go: "the writer defaults an
+		// unset one to ViewMembershipBoth"). Carrying it here makes the
+		// before/after whole-struct comparisons against the durable transcript
+		// exact instead of a guaranteed mismatch.
+		{ID: "qa4-original-question-" + id, Type: session.EntryTypeMessage, Role: "user", AgentID: "mia", Content: "Keep the original customer request.", ViewMembership: session.ViewMembershipBoth, Timestamp: time.Now().UTC()},
+		{ID: "qa4-original-answer-" + id, Type: session.EntryTypeMessage, Role: "assistant", AgentID: "mia", Content: "Keep the original saved answer.", ViewMembership: session.ViewMembershipBoth, Timestamp: time.Now().UTC()},
 	}
 	for _, entry := range entries {
 		require.NoError(t, store.AppendTranscript(id, entry))

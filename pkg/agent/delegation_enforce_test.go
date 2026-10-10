@@ -10,6 +10,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // writeWorkspaceFileForTest drops an additional workspace file into an EXISTING
@@ -171,10 +172,9 @@ func TestDelegationDistinction_RealWiringThroughCreateTask(t *testing.T) {
 				},
 				{
 					// worker-agent IS a real registered agent — it simply has
-					// NO trust edge from caller-agent in the workspace graph.
-					// The shared harness workspace (testHarnessWorkspaceMembershipID,
-					// seeded by mustNewAgentLoop -> ensureTestWorkspaceMembership)
-					// populates core_team only, never delegation edges.
+					// NO trust edge from caller-agent in the workspace graph
+					// (this test strips the harness-seeded delegation mesh back
+					// out below, leaving core_team membership only).
 					ID:   "worker-agent",
 					Name: "Worker", Type: config.AgentTypeCustom,
 					Home: filepath.Join(home, "agents", "worker-agent"),
@@ -184,6 +184,14 @@ func TestDelegationDistinction_RealWiringThroughCreateTask(t *testing.T) {
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	t.Cleanup(func() { al.Close() })
+
+	// mustNewAgentLoop now gives the shared harness workspace a delegation mesh
+	// (so the U5a launch gate has a graph to read). THIS test's whole point is
+	// the opposite state — a workspace that carries core_team membership and NO
+	// delegation edges — so strip the mesh back out for this test's own home.
+	if delErr := workspace.DeleteDelegationStore(home, testHarnessWorkspaceMembershipID); delErr != nil {
+		t.Fatalf("strip harness delegation mesh from the shared workspace: %v", delErr)
+	}
 
 	callerInst, ok := al.GetRegistry().GetAgent("caller-agent")
 	if !ok {
@@ -199,9 +207,10 @@ func TestDelegationDistinction_RealWiringThroughCreateTask(t *testing.T) {
 
 	// Bind BOTH the caller agent id and the shared harness workspace on ctx.
 	// create_task reads the caller from tools.ToolAgentID(ctx) and resolves
-	// the governing workspace from tools.ToolWorkspaceID(ctx); the workspace
-	// must be bound explicitly because testHarnessWorkspaceMembershipID is
-	// never flagged is_default (so the no-bound fallback has nothing to find).
+	// the governing workspace from tools.ToolWorkspaceID(ctx); the workspace is
+	// bound explicitly so the check is unambiguous about WHICH graph it reads —
+	// its own, mesh-stripped one (see just above), never the is_default
+	// fallback.
 	ctx := tools.WithWorkspaceID(
 		tools.WithAgentID(context.Background(), "caller-agent"),
 		testHarnessWorkspaceMembershipID,

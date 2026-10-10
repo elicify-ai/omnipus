@@ -184,7 +184,10 @@ func TestDelegateTool_Steer_RateAndBodyCaps(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
-	tool.SetSteerCaps(6, 16*1024)
+	// Rate cap 6/min; the body cap is left at the product default
+	// (session.DefaultSteerBodyBytes, C-LIMIT 65,536 B — ADR-053 §Contract
+	// Surface "Caps"), which is what the body half below exercises.
+	tool.SetSteerCaps(6, session.DefaultSteerBodyBytes)
 
 	for i := 0; i < 6; i++ {
 		result := tool.Execute(ctx, map[string]any{"action": "steer", "session_id": "child-caps", "text": "hint"})
@@ -205,10 +208,15 @@ func TestDelegateTool_Steer_RateAndBodyCaps(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
-	big := strings.Repeat("x", 17*1024)
+	// The body cap is session.DefaultSteerBodyBytes (C-LIMIT 65,536 B), derived
+	// here from the constant rather than hardcoded: one byte over the cap must
+	// be rejected, one byte under must not. (The old literal was 17 KiB — well
+	// UNDER the real 64 KiB cap, so it could never trip the check.)
+	big := strings.Repeat("x", session.DefaultSteerBodyBytes+1)
 	result := tool2.Execute(ctx, map[string]any{"action": "steer", "session_id": "child-body", "text": big})
 	if !result.IsError {
-		t.Fatal("expected an over-cap steer body to be rejected")
+		t.Fatalf("expected a %d-byte steer body (one over the %d-byte cap) to be rejected",
+			session.DefaultSteerBodyBytes+1, session.DefaultSteerBodyBytes)
 	}
 }
 

@@ -119,6 +119,15 @@ func mustNewAgentLoop(
 	if err != nil {
 		t.Fatalf("NewAgentLoop: %v", err)
 	}
+	// The U5a launch gate (steer_launcher.go::startingRemainingDepth) consults
+	// the resolved (default) workspace's delegation graph for the caller→target
+	// edge of every launch whose steering session has an identified owner. These
+	// fixtures predate that gate and declare no graph, so seed the default
+	// workspace's mesh here — the single choke point every shared loop harness
+	// (newTestAgentLoop, newSteerAL, newGoalLoopTestLoop, newDelegateDispatchLoop,
+	// …) passes through. Idempotent and non-clobbering: a test that seeded its
+	// own graph first (seedWorkspaceGraph) is left untouched.
+	seedDefaultDelegationGraphForLoop(t, al)
 	return al
 }
 
@@ -200,6 +209,10 @@ var testHarnessWorkspaceMu sync.Mutex
 type testHarnessWorkspaceRecord struct {
 	ID       string   `json:"id"`
 	CoreTeam []string `json:"core_team"`
+	// IsDefault is round-tripped (the read-merge-write above unmarshals into
+	// this struct) so seedDefaultDelegationGraph's is_default flag survives a
+	// later membership re-seed for another test's newly-registered agents.
+	IsDefault bool `json:"is_default,omitempty"`
 }
 
 // ensureTestWorkspaceMembership makes every agent ID testHarnessAgentIDs(cfg)

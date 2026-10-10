@@ -174,11 +174,17 @@ func q2ConsumerRequireTail(t *testing.T, fixture q2ConsumerFixture, want []sessi
 }
 
 func q2ConsumerInstruction(messageID, text string) session.TranscriptEntry {
-	return session.TranscriptEntry{ID: "instruction-" + messageID, Role: "user", Content: text, AgentID: testDefaultAgentID}
+	// ViewMembership is stamped by the writer, not by this fixture: the
+	// append-only archive's AppendTranscript defaults an unset membership to
+	// ViewMembershipBoth ("an ordinary turn lives in both views",
+	// pkg/session/daypartition.go). The expected entry must therefore carry
+	// the value the writer stores, or the whole-struct comparison against the
+	// durable tail is a guaranteed mismatch.
+	return session.TranscriptEntry{ID: "instruction-" + messageID, Role: "user", Content: text, AgentID: testDefaultAgentID, ViewMembership: session.ViewMembershipBoth}
 }
 
 func q2ConsumerMarker(messageID string) session.TranscriptEntry {
-	return session.TranscriptEntry{ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system", Content: "consumed " + messageID, AgentID: testDefaultAgentID}
+	return session.TranscriptEntry{ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system", Content: "consumed " + messageID, AgentID: testDefaultAgentID, ViewMembership: session.ViewMembershipBoth}
 }
 
 func q2ConsumerRequireQueued(t *testing.T, al *AgentLoop, scope string, want []steeringQueueItem) {
