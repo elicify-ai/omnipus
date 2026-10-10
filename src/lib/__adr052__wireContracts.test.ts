@@ -227,8 +227,9 @@ describe('ADR-052 FR-036 — Session type "verifier" wire contract', () => {
     ['task'],
     ['channel'],
     ['scheduled'],
-    ['heartbeat'],
+    ['main'],
     ['verifier'],
+    ['delegate'],
   ] as const)('accepts session type %s', (type) => {
     const result = SessionSchema.safeParse(baseSession({ type }))
     expect(result.success).toBe(true)
@@ -249,11 +250,17 @@ describe('ADR-052 FR-036 — Session type "verifier" wire contract', () => {
     expect(result.success).toBe(false)
   })
 
-  it('accepts a session with type omitted (legacy sessions default to chat client-side, not enforced here)', () => {
+  // Supersession (Session.yaml: "Required on a stored session; a missing type is
+  // invalid and is not defaulted to chat"; greenfield, no legacy sessions).
+  it('rejects a session with type omitted (type is required and never defaulted)', () => {
     const withoutType = baseSession()
     delete (withoutType as { type?: unknown }).type
     const result = SessionSchema.safeParse(withoutType)
-    expect(result.success).toBe(true)
+    expect(result.success).toBe(false)
+  })
+
+  it('no longer accepts the removed heartbeat session type', () => {
+    expect(SessionSchema.safeParse(baseSession({ type: 'heartbeat' })).success).toBe(false)
   })
 })
 
