@@ -70,7 +70,6 @@ properties:
       - artifact
       - blocker
       - question
-      - decision_request
       - error
       - handback
       - steer
@@ -101,7 +100,7 @@ properties:
   correlation_id:
     type: string
     description: >
-      Present for `question`/`decision_request`/`steer`/`respond` — lets
+      Present for `question`/`steer`/`respond` — lets
       the SPA thread a live reply.
     example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WL"
   sender_identity:

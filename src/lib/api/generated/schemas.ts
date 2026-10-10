@@ -273,7 +273,6 @@ type Message = {
           | "artifact"
           | "blocker"
           | "question"
-          | "decision_request"
           | "error"
           | "handback"
           | "steer"
@@ -2667,7 +2666,6 @@ type SessionMessage =
   | SessionMessageArtifact
   | SessionMessageBlocker
   | SessionMessageQuestion
-  | SessionMessageDecisionRequest
   | SessionMessageError
   | SessionMessageHandback
   | SessionMessageRevisionEntry
@@ -2745,22 +2743,6 @@ type SessionMessageQuestion = {
   untrusted_origin: boolean;
   text: string;
   correlation_id: string;
-};
-type SessionMessageDecisionRequest = {
-  message_id: string;
-  session_id: string;
-  parent_session_id?: (string | null) | undefined;
-  generation?: number | undefined;
-  direction: "child_to_parent";
-  kind: "decision_request";
-  depth: number;
-  created_at: string;
-  sender_identity: string;
-  untrusted_origin: boolean;
-  text: string;
-  options: Array<string>;
-  correlation_id: string;
-  authority?: ("self_ok" | "owner_required") | undefined;
 };
 type SessionMessageError = {
   message_id: string;
@@ -3681,7 +3663,6 @@ export const Message: z.ZodType<Message> = z.object({
         "artifact",
         "blocker",
         "question",
-        "decision_request",
         "error",
         "handback",
         "steer",
@@ -7146,23 +7127,6 @@ export const SessionMessageQuestion =
     text: z.string().max(32768),
     correlation_id: z.string().min(1),
   }) satisfies z.ZodType<SessionMessageQuestion>;
-export const SessionMessageDecisionRequest =
-  z.object({
-    message_id: z.string().min(1),
-    session_id: z.string().min(1),
-    parent_session_id: z.string().nullish(),
-    generation: z.number().int().gte(0).optional(),
-    direction: z.literal("child_to_parent"),
-    kind: z.literal("decision_request"),
-    depth: z.number().int().gte(0).lte(5),
-    created_at: z.string().datetime({ offset: true }),
-    sender_identity: z.string().min(1),
-    untrusted_origin: z.boolean(),
-    text: z.string().max(32768),
-    options: z.array(z.string()).min(2),
-    correlation_id: z.string().min(1),
-    authority: z.enum(["self_ok", "owner_required"]).optional(),
-  }) satisfies z.ZodType<SessionMessageDecisionRequest>;
 export const SessionMessageError = z.object({
   message_id: z.string().min(1),
   session_id: z.string().min(1),
@@ -7285,7 +7249,6 @@ export const SessionMessage = z.discriminatedUnion(
     SessionMessageArtifact,
     SessionMessageBlocker,
     SessionMessageQuestion,
-    SessionMessageDecisionRequest,
     SessionMessageError,
     SessionMessageHandback,
     SessionMessageRevisionEntry,
@@ -16756,7 +16719,7 @@ export const SubagentMessageFrame = z
     child_session_id: z.string().optional(),
     span_id: z.string().min(1),
     message_id: z.string().min(1),
-    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond", "goal_status", "not_delivered"]),
+    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "error", "handback", "steer", "respond", "goal_status", "not_delivered"]),
     text: z.string().optional(),
     pct: z.number().int().min(0).max(100).optional(),
     correlation_id: z.string().optional(),

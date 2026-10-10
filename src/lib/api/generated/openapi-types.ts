@@ -15914,8 +15914,8 @@ export interface components {
              */
             total: number;
         };
-        /** @description The typed, schema-validated envelope carried over the existing pkg/bus MessageBus (no new transport) that derives every control/visibility surface of the session-control plane (ADR-053 S6/US-6). Discriminated by `kind` — 12 variants covering child->parent reporting (progress/checkpoint/artifact/blocker/ question/decision_request/error/handback), engine-emitted control (revision_entry), session->UI propagation (goal_status), and parent->child control (steer/respond). `direction` is one of `child_to_parent | parent_to_child | session_to_ui | engine` — the historical `human` value is dropped (M8); every kind variant maps to exactly one of the four. Every field/kind/direction pairing is the ratified shape from the spec's Contract Surface table — see the individual variant files for full per-kind documentation and caps (10 msgs/min, 32 KiB, depth <=5 for child sends; 6/min, 16 KiB for steer; per-child unacked ceiling 20 open question+blocker, D15). */
-        SessionMessage: components["schemas"]["SessionMessageProgress"] | components["schemas"]["SessionMessageCheckpoint"] | components["schemas"]["SessionMessageArtifact"] | components["schemas"]["SessionMessageBlocker"] | components["schemas"]["SessionMessageQuestion"] | components["schemas"]["SessionMessageDecisionRequest"] | components["schemas"]["SessionMessageError"] | components["schemas"]["SessionMessageHandback"] | components["schemas"]["SessionMessageRevisionEntry"] | components["schemas"]["SessionMessageGoalStatus"] | components["schemas"]["SessionMessageSteer"] | components["schemas"]["SessionMessageRespond"];
+        /** @description The typed, schema-validated envelope carried over the existing pkg/bus MessageBus (no new transport) that derives every control/visibility surface of the session-control plane (ADR-053 S6/US-6). Discriminated by `kind` — 11 variants covering child->parent reporting (progress/checkpoint/artifact/blocker/ question/error/handback), engine-emitted control (revision_entry), session->UI propagation (goal_status), and parent->child control (steer/respond). `direction` is one of `child_to_parent | parent_to_child | session_to_ui | engine` — the historical `human` value is dropped (M8); every kind variant maps to exactly one of the four. Every field/kind/direction pairing is the ratified shape from the spec's Contract Surface table — see the individual variant files for full per-kind documentation and caps (10 msgs/min, 32 KiB, depth <=5 for child sends; 6/min, 16 KiB for steer; per-child unacked ceiling 20 open question+blocker, D15). */
+        SessionMessage: components["schemas"]["SessionMessageProgress"] | components["schemas"]["SessionMessageCheckpoint"] | components["schemas"]["SessionMessageArtifact"] | components["schemas"]["SessionMessageBlocker"] | components["schemas"]["SessionMessageQuestion"] | components["schemas"]["SessionMessageError"] | components["schemas"]["SessionMessageHandback"] | components["schemas"]["SessionMessageRevisionEntry"] | components["schemas"]["SessionMessageGoalStatus"] | components["schemas"]["SessionMessageSteer"] | components["schemas"]["SessionMessageRespond"];
         /**
          * SessionMessageProgress
          * @description SessionMessage `oneOf` variant, `kind: progress` (ADR-053 §Contract Surface — SessionMessage). Child -> parent. A lightweight in-flight narration line; never a claim, never a checkpoint. Envelope fields are duplicated inline on every variant (ADR-034 precedent — oapi-codegen inlines `oneOf` members that are direct component refs into named `As*`/`From*` accessors; a shared base composed via `allOf` across files does not receive the same treatment, so each variant is flat, matching `AgentCreateRequestMain`/`AgentCreateRequestSubagent`).
@@ -16176,65 +16176,6 @@ export interface components {
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
              */
             correlation_id: string;
-        };
-        /**
-         * SessionMessageDecisionRequest
-         * @description SessionMessage `oneOf` variant, `kind: decision_request` (ADR-053 §Contract Surface, R§8.2). Child -> parent. Like `question` but enumerates discrete `options[]`; the answering `respond.text` names the chosen option. Same untrusted-authority handling as `question` (M3). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
-         */
-        SessionMessageDecisionRequest: {
-            /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WM */
-            message_id: string;
-            /** @example 550e8400-e29b-41d4-a716-446655440000 */
-            session_id: string;
-            /** @example 660e8400-e29b-41d4-a716-446655440000 */
-            parent_session_id?: string | null;
-            /** @example 0 */
-            generation?: number;
-            /**
-             * @example child_to_parent
-             * @enum {string}
-             */
-            direction: "child_to_parent";
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "decision_request";
-            /** @example 0 */
-            depth: number;
-            /**
-             * Format: date-time
-             * @example 2026-07-22T10:00:00Z
-             */
-            created_at: string;
-            /** @example ray */
-            sender_identity: string;
-            /** @example true */
-            untrusted_origin: boolean;
-            /**
-             * @description Untrusted decision prompt.
-             * @example Which lint profile should the plan-lint gate use?
-             */
-            text: string;
-            /**
-             * @description The enumerated choices. The answering `respond.text` names the chosen option verbatim.
-             * @example [
-             *       "strict",
-             *       "soft"
-             *     ]
-             */
-            options: string[];
-            /**
-             * @description Routes the eventual `respond` back to this decision request.
-             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WN
-             */
-            correlation_id: string;
-            /**
-             * @description Child-authored authority tag, untrusted (M3) — see SessionMessageQuestion.authority for the identical fail-closed derivation rule.
-             * @example owner_required
-             * @enum {string}
-             */
-            authority?: "self_ok" | "owner_required";
         };
         /**
          * SessionMessageError
@@ -16511,7 +16452,7 @@ export interface components {
         };
         /**
          * SessionMessageRespond
-         * @description SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The text is delivered as an ordinary steering message; the recipient's state decides the effect (ADR-20261004 C1). The former owner-answer authority rejection was withdrawn with the person-question pause (ADR-20261004, locked decision 7). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         * @description SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The text is delivered as an ordinary steering message; the recipient's state decides the effect (ADR-20261004 C1). The former owner-answer authority rejection was withdrawn with the person-question pause (ADR-20261004, locked decision 7). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
          */
         SessionMessageRespond: {
             /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WW */
@@ -16553,12 +16494,12 @@ export interface components {
              */
             untrusted_origin: boolean;
             /**
-             * @description The answer. For a `decision_request`, names the chosen option verbatim from its `options[]`.
+             * @description The answer to the child's question.
              * @example Yes, overwrite it — the backup is stale.
              */
             text: string;
             /**
-             * @description The `correlation_id` of the `question`/`decision_request` being answered.
+             * @description The `correlation_id` of the `question` being answered.
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
              */
             correlation_id: string;
@@ -16714,7 +16655,7 @@ export interface components {
             /** @description Present iff `state == needs_input`; absent otherwise (no schema `nullable: true` — an optional-object field paired with `nullable` generates a `T | null | undefined` Zod type against an openapi-typescript TS type that only ever emits `T | undefined` for a nullable, non-required, non-scalar property, a real codegen mismatch between the two generators for this shape; plain optional-only is unambiguous and matches how every other optional nested object in this contract set is expressed). `reconstructable` is a PARK-TIME HINT ONLY (m5) — the authoritative determination is `isNeedsInputReconstructable(rec)` re-evaluated AT BOOT (R§8.6), never this stored value. */
             needs_input?: {
                 /**
-                 * @description The open question/decision_request this session is parked on.
+                 * @description The open question this session is parked on.
                  * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
                  */
                 correlation_id: string;
@@ -17102,7 +17043,7 @@ export interface components {
         };
         /**
          * DelegateInboxAction
-         * @description `delegate` tool call, `action: inbox` (ADR-053 §5.1). Drains the child->parent typed inbox (progress/checkpoint/artifact/blocker/ question/decision_request/error/handback), durable and keyed to the parent's chat/plan id (D16).
+         * @description `delegate` tool call, `action: inbox` (ADR-053 §5.1). Drains the child->parent typed inbox (progress/checkpoint/artifact/blocker/ question/error/handback), durable and keyed to the parent's chat/plan id (D16).
          */
         DelegateInboxAction: {
             /**
@@ -17191,12 +17132,12 @@ export interface components {
              */
             session_id: string;
             /**
-             * @description The answer. For a `decision_request`, names the chosen option verbatim.
+             * @description The answer to the child's question.
              * @example Yes, overwrite it — the backup is stale.
              */
             text: string;
             /**
-             * @description The `correlation_id` of the question/decision_request being answered.
+             * @description The `correlation_id` of the question being answered.
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
              */
             correlation_id: string;
@@ -17452,7 +17393,7 @@ export interface components {
              */
             latest_progress_pct?: number;
         };
-        /** @description The first-class child-side `message_parent` tool's argument shape, discriminated by `kind` (ADR-053 §5.1). A child uses this exactly ONE tool to push a typed message into its parent's inbox — `progress | checkpoint | artifact | blocker | question | handback`. `decision_request`/`error`/`revision_entry`/ `goal_status`/`steer`/`respond` are SessionMessage kinds the child tool does NOT expose (decision_request is reserved for future use; the other four are engine/parent-only or session- internal). */
+        /** @description The first-class child-side `message_parent` tool's argument shape, discriminated by `kind` (ADR-053 §5.1). A child uses this exactly ONE tool to push a typed message into its parent's inbox — `progress | checkpoint | artifact | blocker | question | handback`. `error`/`revision_entry`/`goal_status`/`steer`/ `respond` are SessionMessage kinds the child tool does NOT expose (they are engine/parent-only or session-internal). */
         MessageParentRequest: components["schemas"]["MessageParentProgress"] | components["schemas"]["MessageParentCheckpoint"] | components["schemas"]["MessageParentArtifact"] | components["schemas"]["MessageParentBlocker"] | components["schemas"]["MessageParentQuestion"] | components["schemas"]["MessageParentHandback"];
         /**
          * MessageParentProgress
@@ -17855,7 +17796,7 @@ export interface components {
              * @example progress
              * @enum {string}
              */
-            kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond" | "goal_status" | "not_delivered";
+            kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "error" | "handback" | "steer" | "respond" | "goal_status" | "not_delivered";
             /**
              * @description Flattened display text (progress.text / checkpoint.summary / blocker.text / question.text / error.text / steer.text / respond.text), when the kind carries one.
              * @example Scanning pkg/plan for the write-set boundary...
@@ -17867,7 +17808,7 @@ export interface components {
              */
             pct?: number;
             /**
-             * @description Present for `question`/`decision_request`/`steer`/`respond` — lets the SPA thread a live reply.
+             * @description Present for `question`/`steer`/`respond` — lets the SPA thread a live reply.
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
              */
             correlation_id?: string;
@@ -26939,7 +26880,6 @@ export type SessionMessageCheckpoint = components["schemas"]["SessionMessageChec
 export type SessionMessageArtifact = components["schemas"]["SessionMessageArtifact"];
 export type SessionMessageBlocker = components["schemas"]["SessionMessageBlocker"];
 export type SessionMessageQuestion = components["schemas"]["SessionMessageQuestion"];
-export type SessionMessageDecisionRequest = components["schemas"]["SessionMessageDecisionRequest"];
 export type SessionMessageError = components["schemas"]["SessionMessageError"];
 export type SessionMessageHandback = components["schemas"]["SessionMessageHandback"];
 export type SessionMessageRevisionEntry = components["schemas"]["SessionMessageRevisionEntry"];

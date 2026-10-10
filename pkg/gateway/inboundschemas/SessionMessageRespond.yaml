@@ -2,7 +2,7 @@ type: object
 title: SessionMessageRespond
 description: >
   SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract
-  Surface). Parent -> child. Answers a `question`/`decision_request` by
+  Surface). Parent -> child. Answers a `question` by
   `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The
   text is delivered as an ordinary steering message; the recipient's state
   decides the effect (ADR-20261004 C1). The former owner-answer authority
@@ -71,11 +71,10 @@ properties:
     type: string
     maxLength: 16384
     description: >
-      The answer. For a `decision_request`, names the chosen option
-      verbatim from its `options[]`.
+      The answer to the child's question.
     example: "Yes, overwrite it — the backup is stale."
   correlation_id:
     type: string
     minLength: 1
-    description: The `correlation_id` of the `question`/`decision_request` being answered.
+    description: The `correlation_id` of the `question` being answered.
     example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WL"

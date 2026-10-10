@@ -198,8 +198,7 @@ func peekEnvelope(msg generated.SessionMessage) (envelopePeek, []byte, error) {
 
 // questionOrBlockerKind reports whether kind counts toward the D15 per-child
 // unacked ceiling ("20 open question+blocker per child" — literal per the
-// ADR/spec wording; decision_request is deliberately NOT counted here,
-// matching the spec's literal "question+blocker" phrasing).
+// ADR/spec wording).
 func questionOrBlockerKind(kind string) bool {
 	return kind == "question" || kind == "blocker"
 }

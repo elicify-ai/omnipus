@@ -5,7 +5,7 @@
 // ADR-053 §5.1 — message_parent is the first-class CHILD-side tool a
 // delegated session uses to push a typed message into its parent's durable
 // inbox: progress | checkpoint | artifact | blocker | question | handback.
-// `decision_request`/`error`/`revision_entry`/`goal_status`/`steer`/`respond`
+// `error`/`revision_entry`/`goal_status`/`steer`/`respond`
 // are SessionMessage kinds this tool deliberately does NOT expose (they are
 // engine/parent-only or session-internal — see generated.MessageParentRequest's
 // doc comment).

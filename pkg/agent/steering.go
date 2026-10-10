@@ -2060,7 +2060,7 @@ func (al *AgentLoop) InjectSteering(msg providers.Message) error {
 // ErrSessionMessageNotTurnInjectable is returned by DeliverSessionMessage
 // for any SessionMessage kind that is not a parent->child turn injection
 // (steer/respond). Every other kind — child->parent reporting
-// (progress/checkpoint/artifact/blocker/question/decision_request/error/
+// (progress/checkpoint/artifact/blocker/question/error/
 // handback) and engine/session_to_ui kinds (revision_entry/goal_status) —
 // is inbox/UI delivery, not a turn injection, and must be routed to the
 // durable inbox (pkg/session.MessageInboxStore) or the bounded typed wake

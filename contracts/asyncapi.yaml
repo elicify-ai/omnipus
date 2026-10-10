@@ -441,7 +441,7 @@ operations:
     summary: >
       ADR-053 §Contract Surface — "Mid-span subagent frames". A mid-span
       typed-message ping (progress/checkpoint/artifact/blocker/question/
-      decision_request/error/handback/steer/respond) riding between the
+      error/handback/steer/respond) riding between the
       subagent_start/subagent_end brackets. Feeds pill/panel/board live;
       full-fidelity data is fetched via delegate.inbox/peek.
     messages:
@@ -3404,7 +3404,6 @@ components:
             - artifact
             - blocker
             - question
-            - decision_request
             - error
             - handback
             - steer
