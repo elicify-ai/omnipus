@@ -39,6 +39,8 @@ var retiredSwitchAgentTokens = []string{
 	"lastSwitchToDefault",
 	".SwitchAgent(",
 	"hubEmitAgentSwitched",
+	"WsFrameTypeAgentSwitched",
+	"AgentSwitchedFrame",
 }
 
 // retiredTokenOnLine reports the first retired token found on a code line, or

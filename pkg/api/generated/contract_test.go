@@ -469,18 +469,6 @@ func TestContract_RateLimitFrame_ZeroValue(t *testing.T) {
 		"zero value has empty required fields")
 }
 
-// ── AgentSwitchedFrame ────────────────────────────────────────────────────────
-// Traces to: contracts/asyncapi.yaml components.schemas.AgentSwitchedFrame
-
-func TestContract_AgentSwitchedFrame_Populated(t *testing.T) {
-	mustPassAsyncAPI(t, "AgentSwitchedFrame", FixtureAgentSwitchedFrame_Populated())
-}
-
-func TestContract_AgentSwitchedFrame_ZeroValue(t *testing.T) {
-	mustFailAsyncAPI(t, "AgentSwitchedFrame", FixtureAgentSwitchedFrame_ZeroValue(),
-		"zero value has empty required type and session_id fields")
-}
-
 // ── TaskStatusChangedFrame ────────────────────────────────────────────────────
 // Traces to: contracts/asyncapi.yaml components.schemas.TaskStatusChangedFrame
 
@@ -704,7 +692,6 @@ func TestContract_AllFrames_TypeFieldPresent(t *testing.T) {
 		{"SubagentEndFrame", FixtureSubagentEndFrame_Populated()},
 		{"ReplayMessageFrame", FixtureReplayMessageFrame_Populated()},
 		{"RateLimitFrame", FixtureRateLimitFrame_Populated()},
-		{"AgentSwitchedFrame", FixtureAgentSwitchedFrame_Populated()},
 		{"TaskStatusChangedFrame", FixtureTaskStatusChangedFrame_Populated()},
 		{"SystemOverloadFrame", FixtureSystemOverloadFrame_Populated()},
 		{"CancelStageFrame", FixtureCancelStageFrame_Populated()},

@@ -27,7 +27,6 @@ enum:
   - replay_message
   - rate_limit
   - media
-  - agent_switched
   - tool_approval_required
   - tool_approval_resolved
   - session_state
