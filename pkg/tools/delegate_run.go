@@ -242,10 +242,10 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 	if dt.t.launcher == nil {
 		return ErrorResult("delegate: no session launcher configured")
 	}
+	// The target is always explicit (validated by validateRequest), so there is
+	// no caller-substitution fallback here: an empty dt.agentID cannot reach this
+	// method. A caller that means to delegate to itself passes its own id.
 	targetAgentID := strings.TrimSpace(dt.agentID)
-	if targetAgentID == "" {
-		targetAgentID = strings.TrimSpace(ToolAgentID(dt.ctx))
-	}
 	launch, err := dt.t.launcher.Launch(dt.ctx, steer.LaunchRequest{
 		SteeringSessionID: strings.TrimSpace(ToolTranscriptSessionID(dt.ctx)),
 		TargetAgentID:     targetAgentID,
@@ -363,25 +363,25 @@ func (dt *delegateToolExecuteRun) validateRequest() (*ToolResult, bool) {
 
 	dt.label, _ = dt.args["label"].(string)
 
-	// agent_id is OPTIONAL (omit it to run a generic subagent under the
-	// caller's own agent), but when the caller DOES supply the key, it must
-	// not be blank — an empty string used to be silently accepted and
-	// treated identically to "omitted", spawning a generic/default subagent
-	// instead of the (presumably named) target the caller intended. Mirrors
-	// the "task is required and must be a non-empty string" / shell.go's
-	// "command is required and must be a non-empty string" validation style,
-	// adapted for an optional field: only PRESENT-but-blank is rejected.
-
-	if rawAgentID, present := dt.args["agent_id"]; present && rawAgentID != nil {
-		s, ok := rawAgentID.(string)
-		if !ok {
-			return ErrorResult("agent_id must be a string"), true
-		}
-		if strings.TrimSpace(s) == "" {
-			return ErrorResult("agent_id must be a non-empty string when provided; omit it to run a generic subagent"), true
-		}
-		dt.agentID = s
+	// agent_id is REQUIRED: delegation always names an explicit target (settled
+	// design). There is no default target and no implicit caller substitution —
+	// a caller delegating to itself passes its OWN id explicitly. An absent,
+	// null, non-string or blank agent_id is refused here, before any
+	// authorization, so the retired untargeted/"generic subagent" path can never
+	// be reached. Mirrors the "task is required and must be a non-empty string"
+	// validation style.
+	rawAgentID, present := dt.args["agent_id"]
+	if !present || rawAgentID == nil {
+		return ErrorResult("agent_id is required and must be a non-empty string"), true
 	}
+	s, ok := rawAgentID.(string)
+	if !ok {
+		return ErrorResult("agent_id must be a string"), true
+	}
+	if strings.TrimSpace(s) == "" {
+		return ErrorResult("agent_id is required and must be a non-empty string"), true
+	}
+	dt.agentID = s
 
 	for _, removed := range []string{"async", "allow_blocking_question"} {
 		if _, present := dt.args[removed]; present {

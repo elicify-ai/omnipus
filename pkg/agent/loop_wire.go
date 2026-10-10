@@ -820,7 +820,10 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 				currentAgentID,
 				rw.cfg.Performance,
 				config.DelegationModeBackground,
-				agentExistsChecker(rw.rs.registry),
+				delegationGateDeps{
+					AgentExists:         agentExistsChecker(rw.rs.registry),
+					CallerIsExternalCLI: externalCLICallerResolver(rw.rs.al),
+				},
 			),
 		)
 		// ADR-057: derive the ownership-walk bound from the SAME operator
@@ -892,7 +895,7 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 				currentAgentID,
 				rw.cfg.Performance,
 				config.DelegationModeTask,
-				agentExistsChecker(rw.rs.registry),
+				delegationGateDeps{AgentExists: agentExistsChecker(rw.rs.registry)},
 			),
 		)
 		// Task-mode recursion bound (ADR-091 D9): reject a task_create issued
@@ -966,7 +969,7 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 				currentAgentID,
 				rw.cfg.Performance,
 				config.DelegationModeTask,
-				agentExistsChecker(rw.rs.registry),
+				delegationGateDeps{AgentExists: agentExistsChecker(rw.rs.registry)},
 			),
 		)
 		// Same rationale as taskCreate above: the subagent_3p reassignment

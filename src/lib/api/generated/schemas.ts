@@ -15100,7 +15100,7 @@ Returns HTTP 201 on success.
     method: "put",
     path: "/workspaces/:id/delegation",
     alias: "updateWorkspaceDelegation",
-    description: `Replaces the workspace&#x27;s delegation edge set wholesale (full replace). Validates that every from_agent / to_agent resolves to a known agent, rejects self-edges, and rejects depths above the global subturn ceiling. Returns the updated graph.
+    description: `Replaces the workspace&#x27;s delegation edge set wholesale (full replace). Validates that every from_agent / to_agent resolves to a known agent, rejects multi-hop cycles (a self-edge is an ordinary edge and is permitted), and rejects depths above the global subturn ceiling. Returns the updated graph.
 `,
     requestFormat: "json",
     parameters: [

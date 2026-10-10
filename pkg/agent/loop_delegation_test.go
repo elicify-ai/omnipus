@@ -237,9 +237,10 @@ func TestEdgeModeCategory_ExhaustiveOverConfigModes(t *testing.T) {
 // It used to be reached only through the deleted sysagent
 // create_task_in_workspace / update_task_in_workspace gate
 // (AgentLoop.NewSysagentDelegationDeny, removed by DEL-23); after that removal
-// this is the gate's direct coverage — self-target and empty-target are no-op
-// reassignments (allowed), a trusted non-self target is allowed, an un-edged
-// non-self target is denied trust_set.
+// this is the gate's direct coverage — a self-target is a no-op reassignment
+// (allowed), an EMPTY target is refused (delegation always names a target; the
+// omitted-target path was removed), a trusted non-self target is allowed, an
+// un-edged non-self target is denied trust_set.
 func TestTaskReassignmentDelegationGate_SelfAllowedNonSelfGated(t *testing.T) {
 	const callerID = "jim"
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
@@ -248,12 +249,15 @@ func TestTaskReassignmentDelegationGate_SelfAllowedNonSelfGated(t *testing.T) {
 	al, _ := wireTestLoopWithGraph(t, callerID)
 	gate := buildDelegationDenyCheckerForTaskReassignment(
 		callerID, config.PerformanceConfig{}, config.DelegationModeTask,
-		agentExistsChecker(al.GetRegistry()),
+		delegationGateDeps{AgentExists: agentExistsChecker(al.GetRegistry())},
 	)
 
-	// Empty target: no-op assignment — allowed.
-	if d := gate(ctxWS(testWS, 0), ""); d != nil {
-		t.Fatalf("empty target must be a no-op (allowed), got deny: %+v", d)
+	// Empty target: REFUSED — the omitted-target path was removed (settled
+	// design). The task tools never pass an empty target in production
+	// (create_task requires agent_id; update_task only gates a non-empty one),
+	// so this is a defensive-uniformity assertion, not a reachable path.
+	if d := gate(ctxWS(testWS, 0), ""); d == nil {
+		t.Fatal("empty target must be refused — delegation always names an explicit target")
 	}
 	// Self-target: a no-op task reassignment to the owner — allowed.
 	if d := gate(ctxWS(testWS, 0), callerID); d != nil {

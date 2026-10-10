@@ -2,25 +2,26 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// RED pack, session-core U5a (native self-delegation through the ordinary
-// launcher). Spec: docs/internal/specs/session-core-spec.md FR-014/015/016,
-// BDD-05.1–05.4, T07. ADR D4
-// (ADR-20261006-session-core-with-an-agent-address-book.md).
+// Session-core U5a — self-delegation, RECONCILED to the settled design
+// (founder ruling 2026-10-09, DESIGN-RULING-delegation-20261009.md). The
+// original U5a RED pack encoded FR-014's "an eligible native agent's
+// self-delegation needs no self-edge" + "an omitted target normalizes to the
+// caller"; that design was SUPERSEDED and is asserted (inverted) below.
 //
-// FR-014: "Omitted target MUST normalize to caller before common authorization.
-// Eligible native MAIN/WORKER self-delegation needs no self-edge; operator Deny
-// wins."
-// FR-015: "Self-helpers MUST use ordinary context/memory/requested-skill/
-// receiver/depth/admission rules and nesting default depth 3."
-// FR-016: "External CLI workers MUST never create Omnipus helpers."
-// BDD-05.1: "Native MAIN in main/extra and native WORKER; no self-edge, delegate
-// permitted; ... omitted and explicit self in each role."
-//
-// Current code: self-delegation is gated by workspace.PermittedSelfDelegationID
-// (a hardcoded jim|worker allowlist) AND STILL requires an explicit self-edge in
-// the workspace graph; every other identity is denied outright. An omitted
-// target is evaluated as untargeted (requires ANY outgoing edge), not normalized
-// to the caller. The expected values below come from the spec, not the code.
+// Settled design:
+//   - Delegation ALWAYS names an explicit target. An omitted agent_id is
+//     refused outright — no caller substitution, no generic subagent.
+//   - Self-delegation is an ORDINARY edge: an agent may name itself and fork a
+//     NEW session running the same agent, authorized iff a caller→caller
+//     self-edge EXISTS in the workspace graph, exactly like any other target.
+//     workspace.PermittedSelfDelegationID (the hardcoded jim||worker allowlist)
+//     was deleted — a self-edge is authorized by existing, not by a name.
+//   - External CLI workers must never create Omnipus helpers (FR-016). The
+//     delegate gate refuses an external-CLI CALLER through the ORDINARY
+//     delegation checker — a caller-eligibility resolver is injected on the
+//     helper-creation wiring (delegationGateDeps.CallerIsExternalCLI), not an
+//     identity allowlist and not a second enforcement path. External-CLI
+//     agents remain valid delegation TARGETS (founder ruling 2026-10-09).
 
 package agent
 
@@ -30,66 +31,109 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
-// FR-014/015/BDD-05.1: an eligible native agent delegating to ITSELF must be
-// permitted WITHOUT any self-edge in the workspace graph. Today "mia"
-// self-targets are denied with trust_set (the id is not the hardcoded
-// jim/worker allowlist), so this fails.
-func TestSessionCoreU5a_NativeSelfDelegationNeedsNoSelfEdge(t *testing.T) {
-	// A graph EXISTS (mia→ray), but there is deliberately NO mia→mia edge.
-	seedWorkspaceGraph(t, testWS, true, []graphEdge{
+// Self-delegation is an ORDINARY edge: the SAME caller→self delegation is
+// DENIED when no caller→caller edge exists, and ALLOWED once one does. This is
+// the settled design — the former "eligible native agents need no self-edge"
+// path was deleted.
+func TestSessionCoreU5a_SelfDelegationRequiresSelfEdge(t *testing.T) {
+	// A graph with a NON-self edge only (mia→ray); deliberately NO mia→mia.
+	home := seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("mia", "ray", []string{"background"}, nil),
 	})
 	check := buildDelegationDenyCheckerForDelegate("mia", config.PerformanceConfig{}, config.DelegationModeBackground)
 
-	if d := check(ctxWS(testWS, 0), "mia"); d != nil {
-		t.Fatalf(
-			"FR-014/015/BDD-05.1: an eligible native agent's self-delegation must be permitted WITHOUT a self-edge; got denial %q (%s)",
-			d.Reason, d.Policy,
-		)
+	if d := check(ctxWS(testWS, 0), "mia"); d == nil {
+		t.Fatal("a self-delegation with NO self-edge must be DENIED — a self-edge is an ordinary edge")
 	}
-
-	// Control (instrument check): the checker CAN still deny — an un-edged,
-	// non-self target stays refused, so a blanket-allow implementation cannot
-	// pass this test vacuously.
+	// Control (instrument check): an un-edged non-self target is also refused,
+	// so a blanket-allow implementation cannot pass this test vacuously.
 	if d := check(ctxWS(testWS, 0), "outsider"); d == nil {
 		t.Fatal("control: an un-edged non-self target must still be denied")
 	}
+
+	// Add the self-edge: the SAME self-delegation is now authorized.
+	rewriteWorkspaceGraph(t, home, testWS, true, []graphEdge{
+		edge("mia", "mia", []string{"background"}, nil),
+	})
+	if d := check(ctxWS(testWS, 0), "mia"); d != nil {
+		t.Fatalf("an explicit mia→mia self-edge must authorize self-delegation; got denial %q (%s)", d.Reason, d.Policy)
+	}
 }
 
-// FR-014/BDD-05.1: an OMITTED target must normalize to the CALLER before
-// authorization — i.e. it is self-delegation and needs no self-edge. With NO
-// outgoing edges at all, today the checker treats "" as untargeted and denies
-// (trust_set "no permitted delegation target"), so this fails.
-func TestSessionCoreU5a_OmittedTargetNormalizesToCaller(t *testing.T) {
-	// No edges at all: under FR-014 an omitted target is the caller (self),
-	// which needs no self-edge.
+// Delegation ALWAYS names a target: an OMITTED agent_id is refused outright —
+// it is neither normalized to the caller nor spawned as a generic subagent.
+func TestSessionCoreU5a_OmittedTargetRefused(t *testing.T) {
 	seedWorkspaceGraph(t, testWS, true, nil)
 	check := buildDelegationDenyCheckerForDelegate("mia", config.PerformanceConfig{}, config.DelegationModeBackground)
 
-	if d := check(ctxWS(testWS, 0), ""); d != nil {
-		t.Fatalf(
-			"FR-014/BDD-05.1: an omitted agent_id must normalize to the caller (self-delegation) before authorization; got denial %q (%s)",
-			d.Reason, d.Policy,
-		)
+	if d := check(ctxWS(testWS, 0), ""); d == nil {
+		t.Fatal("an omitted agent_id must be REFUSED — delegation always names an explicit target")
 	}
-
-	// Control: a NAMED, un-edged target is real delegation and stays refused.
+	// Control: a named, un-edged target is real delegation and stays refused.
 	if d := check(ctxWS(testWS, 0), "ray"); d == nil {
 		t.Fatal("control: a named un-edged target must still be denied")
 	}
 }
 
-// FR-016/BDD-05.3: an external CLI worker MUST never create Omnipus helpers.
+// FR-016/BDD-05.3: an external CLI worker MUST never create Omnipus helpers as
+// a CALLER, while remaining a perfectly valid delegation TARGET.
 //
-// BLOCKED: no guard exists today. registerSharedTools registers the `delegate`
-// tool for EVERY agent in the registry with no external-CLI skip, and no
-// delegation path consults the caller's external status. The mechanism (skip
-// registration for external-CLI workers, or refuse inside the delegate path) is
-// a design decision for the architect. Required by FR-016 / DEL-20-adjacent
-// session-core U5a.
+// The refusal lives in the SAME ordinary delegation gate that enforces trust
+// set / mode / depth (buildDelegationDenyChecker): the delegate wiring injects
+// a caller-eligibility resolver (delegationGateDeps.CallerIsExternalCLI, backed
+// by the registry's dispatch kind). It is neither an identity allowlist nor a
+// second enforcement path — the graph edge, mode and depth checks are untouched.
 func TestSessionCoreU5a_ExternalCLIWorkerCannotCreateHelpers(t *testing.T) {
-	t.Fatal("BLOCKED: no guard prevents an external-CLI worker from creating Omnipus helpers — " +
-		"required by FR-016 / BDD-05.3. Today `delegate` is registered for every agent " +
-		"(pkg/agent/loop_wire.go::registerSharedTools) and no delegation path checks the caller's " +
-		"external-CLI status; the eligibility predicate and its shape are open for the architect.")
+	// A graph that WOULD authorize every call below: extworker→mia, mia→extworker
+	// and extworker→extworker edges. Without a valid edge a denial would prove
+	// nothing about the caller guard (an un-edged target is denied anyway).
+	home := seedWorkspaceGraph(t, testWS, true, []graphEdge{
+		edge("extworker", "mia", []string{"background"}, nil),
+		edge("mia", "extworker", []string{"background"}, nil),
+		edge("extworker", "extworker", []string{"background"}, nil),
+	})
+
+	// The resolver the production delegate wiring installs: "extworker" is an
+	// external CLI worker; every other id is native.
+	externalCLI := func(id string) bool { return id == "extworker" }
+
+	// 1. External-CLI CALLER → refused, even though a valid caller→target edge
+	//    exists and the target is an ordinary native agent.
+	extCaller := buildDelegationDenyCheckerForDelegate("extworker",
+		config.PerformanceConfig{}, config.DelegationModeBackground,
+		delegationGateDeps{CallerIsExternalCLI: externalCLI})
+	if d := extCaller(ctxWS(testWS, 0), "mia"); d == nil {
+		t.Fatal("an external-CLI caller must be REFUSED (FR-016) even with a valid caller→target edge")
+	}
+
+	// 2. Native CALLER, same graph → unaffected, AND delegating TO the
+	//    external-CLI agent is still allowed (the founder ruling that external
+	//    CLI agents may be delegates is preserved — only the caller is barred).
+	nativeCaller := buildDelegationDenyCheckerForDelegate("mia",
+		config.PerformanceConfig{}, config.DelegationModeBackground,
+		delegationGateDeps{CallerIsExternalCLI: externalCLI})
+	if d := nativeCaller(ctxWS(testWS, 0), "extworker"); d != nil {
+		t.Fatalf("a native caller must be unaffected, including delegating to an "+
+			"external-CLI target; got denial %q (%s)", d.Reason, d.Policy)
+	}
+
+	// 3. Instrument check: the guard is the CALLER, not a blanket deny. A native
+	//    caller→native target on a fresh valid edge is allowed. (Re-write the
+	//    graph so a failure here cannot be blamed on the earlier edge set.)
+	rewriteWorkspaceGraph(t, home, testWS, true, []graphEdge{
+		edge("mia", "ray", []string{"background"}, nil),
+	})
+	nativeToNative := buildDelegationDenyCheckerForDelegate("mia",
+		config.PerformanceConfig{}, config.DelegationModeBackground,
+		delegationGateDeps{CallerIsExternalCLI: externalCLI})
+	if d := nativeToNative(ctxWS(testWS, 0), "ray"); d != nil {
+		t.Fatalf("control: a native caller with a valid edge must be allowed; got %+v", d)
+	}
+
+	// 4. Control: the guard fires for the external-CLI caller regardless of the
+	//    target shape — an explicit self-target is refused too (no helper of any
+	//    kind), even though the extworker→extworker self-edge exists.
+	if d := extCaller(ctxWS(testWS, 0), "extworker"); d == nil {
+		t.Fatal("control: an external-CLI caller must be refused for an explicit self-target too")
+	}
 }

@@ -43,9 +43,10 @@ func TestDelegate_RejectsRemovedArgs(t *testing.T) {
 		t.Run(arg, func(t *testing.T) {
 			tool := NewDelegateTool("", 0, 0)
 			result := tool.Execute(context.Background(), map[string]any{
-				"action": "run",
-				"task":   "inspect checkout",
-				arg:      true,
+				"action":   "run",
+				"task":     "inspect checkout",
+				"agent_id": "worker",
+				arg:        true,
 			})
 			if !result.IsError {
 				t.Fatalf("removed argument %q was accepted: %s", arg, result.ForLLM)

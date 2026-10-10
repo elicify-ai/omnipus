@@ -327,6 +327,60 @@ func enforceEdgeModeAndDepth(
 	return nil
 }
 
+// delegationGateDeps carries the OPTIONAL collaborators a delegation deny
+// checker consults. It is passed as the single trailing variadic argument so
+// every pre-existing call site — production and test — that supplies no deps
+// keeps compiling unchanged (the same compatibility rationale the former bare
+// `agentExists ...func(id string) bool` variadic carried).
+//
+// Both fields are optional and independently absent. When a field is nil its
+// collaborator is simply not consulted, exactly as an omitted variadic was
+// before: the graph gate is the authority and these only add a message
+// distinction (AgentExists) or a caller-eligibility refusal
+// (CallerIsExternalCLI).
+type delegationGateDeps struct {
+	// AgentExists is a read-only registry existence probe, consulted ONLY to
+	// distinguish the no-edge denial's MESSAGE — an existing target that has no
+	// trust edge vs. a genuinely nonexistent agent. It NEVER affects the
+	// allow/deny OUTCOME (see findDelegationEdge's own doc comment).
+	AgentExists func(id string) bool
+
+	// CallerIsExternalCLI reports whether the CALLING agent runs as an
+	// external CLI worker (claude-code / codex / opencode). When supplied and
+	// true for the caller, the gate REFUSES the delegation outright (FR-016:
+	// an external CLI worker MUST never create Omnipus helpers). It is
+	// supplied ONLY on the helper-creation (delegate) wiring — the task-tool
+	// checkers pass no resolver, because reassigning a task to its owner is
+	// not creating a helper. Backed by the registry's dispatch-kind resolver
+	// (AgentRegistry.IsExternalCLI → runner.ResolveDispatch), never an
+	// identity allowlist.
+	CallerIsExternalCLI func(agentID string) bool
+}
+
+// firstDelegationGateDeps returns the single deps value a caller supplied, or
+// the zero value (every collaborator absent) when none was passed.
+func firstDelegationGateDeps(deps []delegationGateDeps) delegationGateDeps {
+	if len(deps) > 0 {
+		return deps[0]
+	}
+	return delegationGateDeps{}
+}
+
+// externalCLICallerResolver returns the delegationGateDeps.CallerIsExternalCLI
+// resolver the delegate wiring installs: a live read of the loop's registry
+// dispatch kind (the single authority for an agent's external-CLI status —
+// AgentRegistry.IsExternalCLI). Read per call so a hot reload that changes an
+// agent's executor is honored without rebuilding the checker, matching the
+// gate's own per-call graph read. A nil registry (degraded boot) resolves to
+// false — the same "cannot classify ⇒ not external-CLI" posture
+// AgentRegistry.IsExternalCLI itself takes for an unknown id.
+func externalCLICallerResolver(al *AgentLoop) func(agentID string) bool {
+	return func(agentID string) bool {
+		reg := al.GetRegistry()
+		return reg != nil && reg.IsExternalCLI(agentID)
+	}
+}
+
 // buildDelegationDenyChecker returns the per-workspace, graph-authoritative
 // delegation gate for a targeted delegation tool (delegate with async=true =
 // "background", create_task / update_task = "task"). The per-workspace
@@ -336,6 +390,13 @@ func enforceEdgeModeAndDepth(
 //
 // It enforces, in order, returning the first violation (nil = allowed):
 //
+//  0. caller eligibility — when a CallerIsExternalCLI resolver is supplied (the
+//     delegate helper-creation wiring always supplies one) and it reports the
+//     CALLING agent as an external CLI worker, the delegation is refused
+//     outright (FR-016: an external CLI worker MUST never create Omnipus
+//     helpers), regardless of target or graph. This bans the external CLI
+//     CALLER only; an external CLI agent remains a perfectly valid delegation
+//     TARGET (the graph edge below still authorizes it for a native caller).
 //  1. trust set — an edge caller→target MUST exist in the effective workspace's
 //     delegation graph. No edge ⇒ DENY (trust_set). The workspace is the one
 //     bound to the turn, defaulting to the is_default workspace when none is
@@ -350,30 +411,37 @@ func enforceEdgeModeAndDepth(
 // all DENY — a delegation check with no readable governing graph never falls
 // open.
 //
-// An empty targetAgentID means "no explicit target" (the LLM omitted agent_id);
-// the trust check is then skipped here — untargeted spawns resolve to the default
-// agent — while mode and depth (against any one of the caller's outgoing edges)
-// still apply.
+// Delegation ALWAYS requires an explicit target. An empty targetAgentID (the
+// LLM omitted agent_id) is REFUSED here — there is no default target and no
+// implicit caller substitution (the retired FR-014 normalization). The delegate
+// tool enforces the same rule at its own argument-validation step; this is
+// defense-in-depth for any other caller.
 //
-// selfAssignmentExempt controls the self-target (target == caller) case.
+// A self-target (target == caller) is an ORDINARY delegation: it is authorized
+// by the same caller→caller edge lookup, mode and depth checks as any other
+// target. A self-edge is an ordinary edge — the identity allowlist
+// (workspace.PermittedSelfDelegationID, literally jim||worker) was deleted, so a
+// self-edge authorizes iff it EXISTS in the workspace graph, exactly like every
+// other edge. Self-delegation forks a NEW session running the same agent; the
+// depth cap and turn admission remain the recursion bounds.
+//
+// selfAssignmentExempt controls the TASK-tool self-target case only.
 //
 // DO NOT call this function directly at a wiring site. Use one of the two
 // intent-named wrappers instead, so the exempt value can never be flipped
-// wrong (a delegate-tool site with exempt=true silently reopens the
-// self-delegation bypass — a security regression; a task-tool site with
-// exempt=false merely denies a legitimate self-reassignment — loud and
-// harmless, but still wrong):
+// wrong (a delegate-tool site with exempt=true would wrongly allow a delegate
+// self-reassignment — a security regression; a task-tool site with exempt=false
+// merely denies a legitimate self-reassignment — loud and harmless, but still
+// wrong):
 //
 //   - buildDelegationDenyCheckerForDelegate         (exempt=false) — the
 //     `delegate` tool's background + await gates. delegate(agent_id=self) spawns
-//     a real sub-turn instance, so it IS delegation and is graph-gated (and, for
-//     self, ALWAYS denied — see below).
+//     a real session, so it IS delegation and is gated by the caller→self edge
+//     exactly like any other target.
 //   - buildDelegationDenyCheckerForTaskReassignment (exempt=true)  — the task
-//     tools: create_task / update_task AND the cross-workspace
-//     create_task_in_workspace / update_task_in_workspace via
-//     NewSysagentDelegationDeny. Reassigning a task to the agent that already
-//     owns it is NOT delegation (no new instance is spawned), so it is allowed
-//     without consulting the graph.
+//     tools: create_task / update_task. Reassigning a task to the agent that
+//     already owns it is NOT delegation (no new instance is spawned), so the
+//     self-target is allowed without consulting the graph.
 //
 // The exempt choice is a property of the CALLER (which tool wired this checker),
 // NOT of `mode`. NEVER derive selfAssignmentExempt from `mode` — the two happen
@@ -381,25 +449,22 @@ func enforceEdgeModeAndDepth(
 // is coincidence, not an invariant: a future delegate-in-task-mode would reopen
 // the bypass if someone "simplified" by deriving the flag from the mode.
 //
-// When exempt is false, a self-target is DENIED directly here (defense-in-depth),
-// without relying solely on workspace.DelegationEdge.Validate's self-edge
-// prohibition as the guard, and with a distinct reason so the caught bypass
-// attempt is distinguishable from a routine trust_set denial.
-//
 // performance supplies the process-wide depth cap. There is no per-agent
 // delegation policy to read; the per-workspace graph is the sole authority.
 //
-// agentExists is an optional trailing arg (variadic, same rationale as
-// findDelegationEdge's own doc comment) forwarded to findDelegationEdge
-// purely to distinguish the no-edge denial's message — message-only, never
-// affects the allow/deny decision itself.
+// deps is the optional trailing collaborators bundle (see delegationGateDeps):
+// AgentExists is forwarded to findDelegationEdge purely to distinguish the
+// no-edge denial's MESSAGE (message-only, never affects the allow/deny
+// decision); CallerIsExternalCLI, when supplied, adds the FR-016
+// caller-eligibility refusal described as step 0 above.
 func buildDelegationDenyChecker(
 	currentAgentID string,
 	performance config.PerformanceConfig,
 	mode config.DelegationMode,
 	selfAssignmentExempt bool,
-	agentExists ...func(id string) bool,
+	deps ...delegationGateDeps,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
+	d := firstDelegationGateDeps(deps)
 	globalDepthCap, depthOK := configuredDelegationDepth(performance, "delegation gate (agent "+currentAgentID+")")
 	if !depthOK {
 		// An invalid depth limit fails CLOSED, like an unreadable graph: the
@@ -415,73 +480,87 @@ func buildDelegationDenyChecker(
 	}
 
 	return func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-		if targetAgentID == currentAgentID {
-			// Self-target. For the task tools (exempt=true) this is a no-op
-			// reassignment to the task's existing owner, not delegation — allow.
-			if selfAssignmentExempt {
-				return nil
-			}
-			// Jim and General Purpose may fork bounded helpers only through the
-			// same explicit workspace edge, mode and depth checks as other targets.
-			if workspace.PermittedSelfDelegationID(currentAgentID) {
-				edge, denial := findDelegationEdge(ctx, currentAgentID, targetAgentID, mode, agentExists...)
-				if denial != nil {
-					return denial
-				}
-				return enforceEdgeModeAndDepth(ctx, edge, currentAgentID, targetAgentID, mode, globalDepthCap)
-			}
-			// Every other identity remains denied. Deny directly instead of
-			// falling through to findDelegationEdge and relying on the graph's
-			// self-edge prohibition (DelegationEdge.Validate) as the sole guard. A
-			// distinct reason + log distinguishes this caught self-delegation
-			// bypass attempt from a routine "target not trusted" trust_set denial.
-			logger.WarnCF("agent", "delegation denied: self-delegation is not permitted", map[string]any{
+		// FR-016: an external CLI worker MUST never create Omnipus helpers. This
+		// is a property of the CALLER, checked before anything else and
+		// independent of the target: an external CLI agent may itself be a valid
+		// delegation TARGET (founder ruling 2026-10-09), but it may not be the
+		// delegating party. The resolver is supplied only by the delegate
+		// (helper-creation) wiring; the task-tool checkers pass none, because
+		// reassigning a task is not creating a helper.
+		if d.CallerIsExternalCLI != nil && d.CallerIsExternalCLI(currentAgentID) {
+			logger.WarnCF("agent", "delegation denied: external CLI worker may not create helpers (FR-016)", map[string]any{
 				"agent_id": currentAgentID, "target": targetAgentID, "mode": string(mode),
 			})
 			return &tools.DelegationDenial{
 				Reason: fmt.Sprintf(
-					"an agent cannot delegate to itself (%q): self-delegation is never permitted",
+					"agent %q runs as an external CLI worker and cannot create Omnipus helpers (FR-016)",
 					currentAgentID,
 				),
+				// The wire DelegationFailure.policy enum is trust_set | mode |
+				// depth (asyncapi.yaml) with no dedicated eligibility axis, so
+				// this caller-capability refusal reuses trust_set — the "caller
+				// has no permitted delegation capability" bucket — rather than
+				// inventing an untyped value DelegationDeniedResult would coerce
+				// back to trust_set anyway.
 				Policy:        tools.DenyTrustSet,
 				TargetAgentID: targetAgentID,
 			}
 		}
-
-		if targetAgentID != "" {
-			// Targeted delegation: require an authorizing edge, then enforce its
-			// modes + depth.
-			edge, denial := findDelegationEdge(ctx, currentAgentID, targetAgentID, mode, agentExists...)
-			if denial != nil {
-				return denial
+		// Delegation ALWAYS requires an explicit target (settled design): there
+		// is no default target and no implicit caller substitution, so an empty
+		// target is refused here rather than resolved to the caller. The delegate
+		// tool enforces the same rule at its own argument-validation step; this is
+		// defense-in-depth for any other caller.
+		if targetAgentID == "" {
+			return &tools.DelegationDenial{
+				Reason:        "delegation requires an explicit target agent_id",
+				Policy:        tools.DenyTrustSet,
+				TargetAgentID: "",
 			}
-			return enforceEdgeModeAndDepth(ctx, edge, currentAgentID, targetAgentID, mode, globalDepthCap)
 		}
-
-		// Untargeted (agent_id omitted): trust is "can delegate at all" — the
-		// caller must have at least one outgoing edge that permits this mode.
-		// Mode + depth still apply against that edge.
-		return evalUntargetedDelegation(ctx, currentAgentID, mode, globalDepthCap)
+		// Task tools only: reassigning a task to the agent that already owns it
+		// is not delegation (no new instance is spawned) — allowed WITHOUT
+		// consulting the graph. This is a property of the CALLER (which tool
+		// wired this checker), never of `mode`.
+		if selfAssignmentExempt && targetAgentID == currentAgentID {
+			return nil
+		}
+		// Every target — including the caller's own id — is authorized by the
+		// ORDINARY per-workspace edge lookup, then its mode and depth checks. A
+		// self-edge is an ordinary edge: self-delegation forks a NEW session
+		// running the same agent and is gated exactly like any other delegation.
+		// There is no identity allowlist (PermittedSelfDelegationID was deleted);
+		// a self-edge authorizes iff it EXISTS in the workspace graph.
+		var existsArg []func(id string) bool
+		if d.AgentExists != nil {
+			existsArg = []func(id string) bool{d.AgentExists}
+		}
+		edge, denial := findDelegationEdge(ctx, currentAgentID, targetAgentID, mode, existsArg...)
+		if denial != nil {
+			return denial
+		}
+		return enforceEdgeModeAndDepth(ctx, edge, currentAgentID, targetAgentID, mode, globalDepthCap)
 	}
 }
 
 // buildDelegationDenyCheckerForDelegate is the wiring-site constructor for the
 // `delegate` tool's direct gate. Self-targeting creates a new session and is
 // permitted; depth and concurrency remain the recursion bounds.
-// agentExists is an optional trailing arg (variadic — see findDelegationEdge's
-// own doc comment for why): a read-only existence probe against the live
-// agent registry, consulted only to distinguish "target agent doesn't exist"
-// from "target agent exists but has no trust edge" in the denial MESSAGE —
-// it never affects the allow/deny outcome. Omit it only in tests that don't
-// care about the distinction; every production wiring site passes a real
-// checker (see registerSharedTools / NewSysagentDelegationDeny).
+//
+// deps is an optional trailing bundle (see delegationGateDeps). A production
+// delegate wiring supplies AgentExists (a read-only existence probe against
+// the live agent registry, consulted only to distinguish "target agent doesn't
+// exist" from "target agent exists but has no trust edge" in the denial
+// MESSAGE — it never affects the allow/deny outcome) AND CallerIsExternalCLI
+// (the FR-016 caller-eligibility resolver). Omitting a field only removes that
+// collaborator; tests that don't care about either pass none.
 func buildDelegationDenyCheckerForDelegate(
 	currentAgentID string,
 	performance config.PerformanceConfig,
 	mode config.DelegationMode,
-	agentExists ...func(id string) bool,
+	deps ...delegationGateDeps,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-	return buildDelegationDenyChecker(currentAgentID, performance, mode, false, agentExists...)
+	return buildDelegationDenyChecker(currentAgentID, performance, mode, false, deps...)
 }
 
 // buildDelegationDenyCheckerForTaskReassignment is the wiring-site constructor for the
@@ -492,84 +571,16 @@ func buildDelegationDenyCheckerForDelegate(
 // create_task_in_workspace / update_task_in_workspace path that once shared this
 // constructor was retired by DEL-23.)
 //
-// agentExists: see buildDelegationDenyCheckerForDelegate's doc comment — same
-// optional-trailing-arg, message-only distinction, same "pass a real checker
-// in production" expectation.
+// deps: see buildDelegationDenyCheckerForDelegate's doc comment — same optional
+// bundle. CallerIsExternalCLI is deliberately NOT supplied on this path:
+// reassigning a task is not creating a helper, so FR-016 does not apply.
 func buildDelegationDenyCheckerForTaskReassignment(
 	currentAgentID string,
 	performance config.PerformanceConfig,
 	mode config.DelegationMode,
-	agentExists ...func(id string) bool,
+	deps ...delegationGateDeps,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-	return buildDelegationDenyChecker(currentAgentID, performance, mode, true, agentExists...)
-}
-
-// evalUntargetedDelegation gates an untargeted delegation (no explicit target)
-// against the caller's outgoing edges in the effective workspace graph. It allows
-// iff the caller has AT LEAST ONE outgoing edge whose modes permit the current
-// mode (and whose depth cap is not exceeded). FAIL-CLOSED on graph load failure.
-func evalUntargetedDelegation(
-	ctx context.Context,
-	callerAgentID string,
-	mode config.DelegationMode,
-	globalDepthCap int,
-) *tools.DelegationDenial {
-	wsID, denial := resolveEffectiveWorkspaceID(ctx, "")
-	if denial != nil {
-		return denial
-	}
-	edges, err := workspace.ReadDelegation(omnipusHome(), wsID)
-	if err != nil {
-		logger.WarnCF("agent", "delegation denied: workspace delegation graph unreadable", map[string]any{
-			"agent_id": callerAgentID, "workspace_id": wsID, "mode": string(mode), "error": err.Error(),
-		})
-		return &tools.DelegationDenial{
-			Reason: fmt.Sprintf(
-				"delegation cannot be authorized: workspace %q delegation graph is unreadable",
-				wsID,
-			),
-			Policy: tools.DenyTrustSet,
-		}
-	}
-
-	// Find any outgoing edge that permits this mode and whose depth is OK.
-	var firstModeDenial, firstDepthDenial *tools.DelegationDenial
-	for i := range edges {
-		if edges[i].FromAgent != callerAgentID {
-			continue
-		}
-		e := edges[i]
-		if d := enforceEdgeModeAndDepth(ctx, &e, callerAgentID, "", mode, globalDepthCap); d != nil {
-			switch d.Policy {
-			case tools.DenyMode:
-				if firstModeDenial == nil {
-					firstModeDenial = d
-				}
-			case tools.DenyDepth:
-				if firstDepthDenial == nil {
-					firstDepthDenial = d
-				}
-			}
-			continue
-		}
-		return nil // an edge permits this delegation
-	}
-
-	// No edge permitted it. Surface the most specific reason: a mode/depth
-	// denial if an edge existed but was constrained, else trust_set (no edge).
-	if firstModeDenial != nil {
-		return firstModeDenial
-	}
-	if firstDepthDenial != nil {
-		return firstDepthDenial
-	}
-	logger.WarnCF("agent", "delegation denied: caller has no outgoing edge", map[string]any{
-		"agent_id": callerAgentID, "workspace_id": wsID, "mode": string(mode),
-	})
-	return &tools.DelegationDenial{
-		Reason: "this agent has no permitted delegation target in this workspace",
-		Policy: tools.DenyTrustSet,
-	}
+	return buildDelegationDenyChecker(currentAgentID, performance, mode, true, deps...)
 }
 
 // NewSysagentDelegationDeny and NewSysagentBashPolicyResolver were DELETED with

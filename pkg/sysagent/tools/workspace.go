@@ -353,7 +353,7 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 	if len(w.CoreTeam) > 0 {
 		ceiling := workspaceDelegationDepthCeiling(t.deps)
 		configPresent := configAgentPresenceSet(t.deps)
-		seeded = seedDelegationEdgesForNewMembers(w.CoreTeam, w.CoreTeam, nil, ceiling, configPresent)
+		seeded = seedDelegationEdgesForNewMembers(w.CoreTeam, w.CoreTeam, nil, ceiling, configPresent, selfEdgeExcludedAgentIDs(t.deps))
 	}
 	if delegationPresent {
 		seeded = explicitDelegation
@@ -527,7 +527,7 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 			}
 			ceiling := workspaceDelegationDepthCeiling(t.deps)
 			configPresent := configAgentPresenceSet(t.deps)
-			seeded := seedDelegationEdgesForNewMembers(w.CoreTeam, added, existing, ceiling, configPresent)
+			seeded := seedDelegationEdgesForNewMembers(w.CoreTeam, added, existing, ceiling, configPresent, selfEdgeExcludedAgentIDs(t.deps))
 			if len(seeded) > 0 {
 				pendingDelegation = append(append([]workspacepkg.DelegationEdge(nil), existing...), seeded...)
 				delegationSeedNote = seededEdgesSummary(seeded, added)
@@ -841,8 +841,9 @@ func edgeModeCategory(mode config.DelegationMode) workspacepkg.DelegationMode {
 // newTeam with a compiled-in coreagent.SeedDelegationEdges seed, each seeded
 // target becomes a candidate edge, with modes collapsed/deduped via the
 // local edgeModeCategory. Non-self depth is copied from the seed policy;
-// permitted self-edges are pinned by coreagent.SeededEdgeDepth to min(3,
-// ceiling) (ADR-090 FR-006).
+// self-edges (for any agent — the seed gives every agent except the hidden
+// System Agents a self-edge) are pinned by coreagent.SeededEdgeDepth to
+// min(3, ceiling) (ADR-090 FR-006).
 //
 // A candidate edge is included iff ALL of:
 //   - both endpoints are members of newTeam (an edge never reaches outside
@@ -902,6 +903,7 @@ func seedDelegationEdgesForNewMembers(
 	existing []workspacepkg.DelegationEdge,
 	ceiling int,
 	configPresent map[string]bool,
+	excluded map[string]bool,
 ) []workspacepkg.DelegationEdge {
 	if len(added) == 0 || len(newTeam) == 0 {
 		return nil
@@ -920,6 +922,34 @@ func seedDelegationEdgesForNewMembers(
 	}
 
 	var out []workspacepkg.DelegationEdge
+
+	// Ordinary self-rows for every NEWLY introduced member (session-core
+	// C-DELEGATE FR-014/015): the same shared workspace-graph computation the
+	// install seed and create_agent's join use, so an agent added later gets the
+	// identical ordinary {id→id} row. Only members in `added` are introduced —
+	// a continuing member whose self-row an operator removed is never
+	// resurrected (deletion is authoritative), and SelfEdgeSeedRows also skips
+	// any id already self-edged in `existing`.
+	//
+	// `excluded` is the OPERATOR seed data
+	// (config.workspace_seed_defaults.self_edge.exclude_agent_ids, resolved by
+	// the caller via selfEdgeExcludedAgentIDs and passed in as a set so this
+	// package need not import config). The exclusion is DATA, never a Go
+	// identity predicate: an operator adding an ordinary id such as `mia` takes
+	// effect here with no code change, and an explicit empty list excludes
+	// nobody. It is NOT limited to the hidden system agents — the shipped
+	// default merely happens to name them.
+	var introduced []string
+	for _, id := range newTeam {
+		if configPresent[id] && addedSet[id] {
+			introduced = append(introduced, id)
+		}
+	}
+	out = append(out, workspacepkg.SelfEdgeSeedRows(introduced, existing, excluded, ceiling)...)
+	for _, e := range out {
+		present[e.FromAgent+"\x00"+e.ToAgent] = true
+	}
+
 	for _, from := range newTeam {
 		if !configPresent[from] {
 			continue
@@ -939,7 +969,9 @@ func seedDelegationEdgesForNewMembers(
 			modes = append(modes, wm)
 		}
 		for _, ref := range dp.To {
-			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || (ref.ID == from && !workspacepkg.PermittedSelfDelegationID(from)) {
+			// Self refs are supplied generically above; skip so a policy self ref
+			// does not duplicate the ordinary self-row.
+			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || ref.ID == from {
 				continue
 			}
 			to := ref.ID
@@ -1036,6 +1068,28 @@ func configAgentPresenceSet(d *Deps) map[string]bool {
 		present[cfg.Agents.List[i].ID] = true
 	}
 	return present
+}
+
+// selfEdgeExcludedAgentIDs resolves the operator's self-edge seed exclusion
+// set (config.workspace_seed_defaults.self_edge.exclude_agent_ids) for the
+// sysagent seed writers. It is the ONE resolver the workspace create/update
+// producers and create_agent's membership join read, so every writer honours
+// the same operator data — never a Go identity predicate.
+//
+// A missing/nil live config (deps not wired, or a nil *Config) is treated as
+// "unset", which resolves to the SHIPPED default list (the hidden system agents
+// judge/plansupervisor) rather than an empty set: an empty set would mean
+// "exclude nobody" and seed the very agents the shipped default bars. An
+// explicit operator `[]` is a present-but-empty list and DOES exclude nobody —
+// that distinction lives in config.SelfEdgeExcludeAgentIDSet, which this defers
+// to.
+func selfEdgeExcludedAgentIDs(d *Deps) map[string]bool {
+	if d != nil && d.GetCfg != nil {
+		return d.GetCfg().SelfEdgeExcludeAgentIDSet()
+	}
+	// nil *Config resolves to the shipped default (SelfEdgeExcludeAgentIDSet is
+	// nil-receiver-safe).
+	return (*config.Config)(nil).SelfEdgeExcludeAgentIDSet()
 }
 
 // workspaceDelegationDepthCeilingFallback mirrors the gateway fallback used
